@@ -56,6 +56,9 @@ The [Node-API binding](bindings/napi/README.md) adds an exact C mapping and an
 ergonomic JavaScript/TypeScript layer with native object state, nested machine
 definitions, streaming inspection, I/O leases, and explicit Node scheduling.
 Build and test it with `npm --prefix bindings/napi run check`.
+Its [realtime chat example](bindings/napi/examples/chat/README.md) runs a real
+multi-client browser chat with one directory actor, one actor per room, and
+reconnecting client-session actors.
 
 The [WebSocket example](examples/websocket_connection.c) models one ephemeral
 connection with ready/blocked states, heartbeat and timeout handling. Its host

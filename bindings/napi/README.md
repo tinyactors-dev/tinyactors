@@ -16,7 +16,7 @@ no XML parser, string evaluator, transport implementation, or runtime npm depend
 ```sh
 npm --prefix bindings/napi run check
 node bindings/napi/examples/basic.js
-node bindings/napi/examples/realtime.js
+node bindings/napi/examples/realtime-scenario.js
 node --expose-gc bindings/napi/examples/entities.js 200000
 ```
 
@@ -203,10 +203,21 @@ in [test/statecharts.test.js](test/statecharts.test.js). Inline SCXML children u
 driver is required. Inbound processor events use
 `system.receive({ processor: 'ws', actor }, { type, data, origin, originType })`.
 
-[examples/realtime.js](examples/realtime.js) demonstrates a logical browser
-connection across physical WebSocket reconnects, offline coalescing, resync,
-cancelled grace timers, and terminal release. It uses a deterministic transport
-stub; it does not open a network server or choose a WebSocket package.
+[examples/realtime.js](examples/realtime.js) starts a real multi-client browser
+chat: one directory actor, one actor per room, and one reconnecting actor per
+client session. Room membership, presence and bounded history are native JS
+actor state. Install its isolated WebSocket dependency, then run it:
+
+```sh
+npm --prefix bindings/napi/examples/chat ci
+node bindings/napi/examples/realtime.js
+```
+
+Open `http://127.0.0.1:8080` in multiple tabs. The [chat README](examples/chat/README.md)
+explains reconnects, limits, streaming inspection, tests and demo-only security
+scope. The binding itself still has no runtime npm dependency.
+[examples/realtime-scenario.js](examples/realtime-scenario.js) preserves the
+original deterministic transport stub without opening a network server.
 
 ## Trace hooks and lifecycle
 

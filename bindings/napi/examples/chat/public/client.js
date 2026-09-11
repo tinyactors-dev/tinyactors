@@ -11,7 +11,7 @@
     retry: 0,
     retryTimer: null,
     freshNext: false,
-    replaced: false
+    replaced: false,
   };
 
   function byId(id) {
@@ -19,15 +19,27 @@
   }
 
   function readStorage(key) {
-    try { return sessionStorage.getItem(key) || ""; } catch (error) { return ""; }
+    try {
+      return sessionStorage.getItem(key) || "";
+    } catch (error) {
+      return "";
+    }
   }
 
   function writeStorage(key, value) {
-    try { sessionStorage.setItem(key, value); } catch (error) { /* Storage can be disabled. */ }
+    try {
+      sessionStorage.setItem(key, value);
+    } catch (error) {
+      /* Storage can be disabled. */
+    }
   }
 
   function removeStorage(key) {
-    try { sessionStorage.removeItem(key); } catch (error) { /* Storage can be disabled. */ }
+    try {
+      sessionStorage.removeItem(key);
+    } catch (error) {
+      /* Storage can be disabled. */
+    }
   }
 
   function setStatus(kind, text) {
@@ -54,7 +66,11 @@
   }
 
   function sendCommand(command) {
-    if (!state.socket || state.socket.readyState !== WebSocket.OPEN || !state.ready) {
+    if (
+      !state.socket ||
+      state.socket.readyState !== WebSocket.OPEN ||
+      !state.ready
+    ) {
       setError("You are offline. Wait for the connection before sending.");
       return false;
     }
@@ -69,19 +85,35 @@
 
   function connect(fresh) {
     if (!state.name || !state.wantsConnection) return;
-    if (state.socket && (state.socket.readyState === WebSocket.OPEN || state.socket.readyState === WebSocket.CONNECTING)) return;
+    if (
+      state.socket &&
+      (state.socket.readyState === WebSocket.OPEN ||
+        state.socket.readyState === WebSocket.CONNECTING)
+    )
+      return;
     clearRetry();
     if (fresh) removeStorage("tinyactors-chat-resume");
     state.replaced = false;
     state.ready = false;
-    setStatus(state.retry ? "reconnecting" : "connecting", state.retry ? "Reconnecting…" : "Connecting…");
+    setStatus(
+      state.retry ? "reconnecting" : "connecting",
+      state.retry ? "Reconnecting…" : "Connecting…",
+    );
     byId("connection-note").textContent = "Connecting as " + state.name + "…";
     var socket = new WebSocket(socketUrl());
     state.socket = socket;
-    socket.addEventListener("open", function () { handleOpen(socket); });
-    socket.addEventListener("message", function (event) { handleMessage(socket, event); });
-    socket.addEventListener("close", function (event) { handleClose(socket, event); });
-    socket.addEventListener("error", function () { handleError(socket); });
+    socket.addEventListener("open", function () {
+      handleOpen(socket);
+    });
+    socket.addEventListener("message", function (event) {
+      handleMessage(socket, event);
+    });
+    socket.addEventListener("close", function (event) {
+      handleClose(socket, event);
+    });
+    socket.addEventListener("error", function () {
+      handleError(socket);
+    });
     updateControls();
   }
 
@@ -90,7 +122,11 @@
     var hello = { type: "hello", name: state.name };
     var resume = readStorage("tinyactors-chat-resume");
     if (resume) hello.resume = resume;
-    try { socket.send(JSON.stringify(hello)); } catch (error) { socket.close(); }
+    try {
+      socket.send(JSON.stringify(hello));
+    } catch (error) {
+      socket.close();
+    }
   }
 
   function handleError(socket) {
@@ -109,8 +145,11 @@
       removeStorage("tinyactors-chat-resume");
       clearRetry();
       setStatus("offline", "Replaced by another tab");
-      byId("connection-note").textContent = "This session was replaced. Start a fresh session to continue.";
-      setError("This connection was replaced by another session. Choose Start fresh session to continue.");
+      byId("connection-note").textContent =
+        "This session was replaced. Start a fresh session to continue.";
+      setError(
+        "This connection was replaced by another session. Choose Start fresh session to continue.",
+      );
       updateControls();
       return;
     }
@@ -127,7 +166,10 @@
     if (state.retryTimer || !state.wantsConnection) return;
     var delay = Math.min(10000, 400 * Math.pow(2, state.retry));
     state.retry += 1;
-    setStatus("reconnecting", "Reconnecting in " + Math.ceil(delay / 1000) + "s");
+    setStatus(
+      "reconnecting",
+      "Reconnecting in " + Math.ceil(delay / 1000) + "s",
+    );
     state.retryTimer = window.setTimeout(function () {
       state.retryTimer = null;
       connect(state.freshNext);
@@ -138,7 +180,12 @@
   function handleMessage(socket, event) {
     if (socket !== state.socket || typeof event.data !== "string") return;
     var frame;
-    try { frame = JSON.parse(event.data); } catch (error) { setError("The server sent an invalid frame."); return; }
+    try {
+      frame = JSON.parse(event.data);
+    } catch (error) {
+      setError("The server sent an invalid frame.");
+      return;
+    }
     if (!frame || typeof frame.type !== "string") return;
     if (frame.type === "welcome") handleWelcome(frame);
     else if (frame.type === "rooms") handleRooms(frame);
@@ -147,7 +194,8 @@
   }
 
   function handleWelcome(frame) {
-    if (typeof frame.session === "string" && frame.session) writeStorage("tinyactors-chat-resume", frame.session);
+    if (typeof frame.session === "string" && frame.session)
+      writeStorage("tinyactors-chat-resume", frame.session);
     if (typeof frame.user === "string" && frame.user) {
       state.name = frame.user;
       byId("name-input").value = frame.user;
@@ -163,7 +211,9 @@
     state.retry = 0;
     state.freshNext = false;
     setStatus("online", "Online");
-    byId("connection-note").textContent = frame.resumed ? "Session resumed." : "Connected as " + state.name + ".";
+    byId("connection-note").textContent = frame.resumed
+      ? "Session resumed."
+      : "Connected as " + state.name + ".";
     setError("");
     updateControls();
     sendCommand({ type: "list" });
@@ -178,14 +228,18 @@
     state.room = {
       room: typeof frame.room === "string" ? frame.room : null,
       members: Array.isArray(frame.members) ? frame.members : [],
-      messages: Array.isArray(frame.messages) ? frame.messages : []
+      messages: Array.isArray(frame.messages) ? frame.messages : [],
     };
     renderRoom();
     updateControls();
   }
 
   function handleServerError(frame) {
-    setError(typeof frame.message === "string" ? frame.message : "The server rejected that request.");
+    setError(
+      typeof frame.message === "string"
+        ? frame.message
+        : "The server rejected that request.",
+    );
     if (frame.code === "session_expired") {
       removeStorage("tinyactors-chat-resume");
       state.freshNext = true;
@@ -194,20 +248,32 @@
   }
 
   function updateControls() {
-    var active = state.ready && state.socket && state.socket.readyState === WebSocket.OPEN;
-    var activeSocket = state.socket && (state.socket.readyState === WebSocket.OPEN || state.socket.readyState === WebSocket.CONNECTING);
+    var active =
+      state.ready && state.socket && state.socket.readyState === WebSocket.OPEN;
+    var activeSocket =
+      state.socket &&
+      (state.socket.readyState === WebSocket.OPEN ||
+        state.socket.readyState === WebSocket.CONNECTING);
     var inRoom = active && Boolean(state.room.room);
     byId("name-input").disabled = Boolean(activeSocket);
     byId("connect-button").disabled = Boolean(activeSocket);
-    byId("toggle-connection").textContent = state.replaced ? "Start fresh session" : (activeSocket ? "Disconnect" : "Reconnect");
+    byId("toggle-connection").textContent = state.replaced
+      ? "Start fresh session"
+      : activeSocket
+        ? "Disconnect"
+        : "Reconnect";
     byId("room-input").disabled = !active;
     byId("create-button").disabled = !active;
     byId("refresh-rooms").disabled = !active;
     byId("leave-button").disabled = !inRoom;
     byId("message-input").disabled = !inRoom;
-    byId("message-input").placeholder = inRoom ? "Write a message" : "Connect and join a room to write a message";
+    byId("message-input").placeholder = inRoom
+      ? "Write a message"
+      : "Connect and join a room to write a message";
     byId("send-button").disabled = !inRoom;
-    document.querySelectorAll(".room-button").forEach(function (button) { button.disabled = !active; });
+    document.querySelectorAll(".room-button").forEach(function (button) {
+      button.disabled = !active;
+    });
   }
 
   function renderRooms() {
@@ -223,16 +289,25 @@
     state.rooms.forEach(function (room) {
       var button = document.createElement("button");
       button.type = "button";
-      button.className = "room-button" + (room.name === state.room.room ? " selected" : "");
-      button.disabled = !(state.ready && state.socket && state.socket.readyState === WebSocket.OPEN);
+      button.className =
+        "room-button" + (room.name === state.room.room ? " selected" : "");
+      button.disabled = !(
+        state.ready &&
+        state.socket &&
+        state.socket.readyState === WebSocket.OPEN
+      );
       button.dataset.room = room.name;
       var name = document.createElement("span");
       name.textContent = room.name;
       var count = document.createElement("span");
       count.className = "room-count";
-      count.textContent = String(Number.isFinite(room.members) ? room.members : 0);
+      count.textContent = String(
+        Number.isFinite(room.members) ? room.members : 0,
+      );
       button.append(name, count);
-      button.addEventListener("click", function () { sendCommand({ type: "join", room: room.name }); });
+      button.addEventListener("click", function () {
+        sendCommand({ type: "join", room: room.name });
+      });
       list.appendChild(button);
     });
   }
@@ -240,7 +315,9 @@
   function renderRoom() {
     var room = state.room;
     byId("room-title").textContent = room.room ? room.room : "No room selected";
-    byId("room-note").textContent = room.room ? "" : "Join a room to start chatting.";
+    byId("room-note").textContent = room.room
+      ? ""
+      : "Join a room to start chatting.";
     byId("member-count").textContent = String(room.members.length);
     renderMembers(room.members);
     renderMessages(room.messages);
@@ -263,7 +340,9 @@
       var dot = document.createElement("span");
       dot.className = "presence" + (member.online ? " online" : "");
       var name = document.createElement("span");
-      name.textContent = String(member.name || "(unnamed)") + (member.online ? "" : " (offline)");
+      name.textContent =
+        String(member.name || "(unnamed)") +
+        (member.online ? "" : " (offline)");
       item.append(dot, name);
       list.appendChild(item);
     });
@@ -297,9 +376,13 @@
   function onConnect(event) {
     event.preventDefault();
     var name = byId("name-input").value.trim();
-    if (!validName(name)) { setError("Use a display name from 1 to 32 characters."); return; }
+    if (!validName(name)) {
+      setError("Use a display name from 1 to 32 characters.");
+      return;
+    }
     if (state.replaced) removeStorage("tinyactors-chat-resume");
-    if (name !== readStorage("tinyactors-chat-name")) removeStorage("tinyactors-chat-resume");
+    if (name !== readStorage("tinyactors-chat-name"))
+      removeStorage("tinyactors-chat-resume");
     state.name = name;
     state.wantsConnection = true;
     state.retry = 0;
@@ -313,7 +396,10 @@
     event.preventDefault();
     var input = byId("room-input");
     var room = input.value.trim();
-    if (!validRoom(room)) { setError("Room names use 1–32 lowercase letters, numbers, _ or -."); return; }
+    if (!validRoom(room)) {
+      setError("Room names use 1–32 lowercase letters, numbers, _ or -.");
+      return;
+    }
     if (sendCommand({ type: "create", room: room })) input.value = "";
   }
 
@@ -321,28 +407,44 @@
     event.preventDefault();
     var input = byId("message-input");
     var text = input.value.trim();
-    if (!text || text.length > 2000) { setError("Messages must be between 1 and 2000 characters."); return; }
+    if (!text || text.length > 2000) {
+      setError("Messages must be between 1 and 2000 characters.");
+      return;
+    }
     if (sendCommand({ type: "say", text: text })) input.value = "";
   }
 
-  function onRefresh() { sendCommand({ type: "list" }); }
-  function onLeave() { sendCommand({ type: "leave" }); }
+  function onRefresh() {
+    sendCommand({ type: "list" });
+  }
+  function onLeave() {
+    sendCommand({ type: "leave" });
+  }
 
   function onToggle() {
-    if (state.socket && (state.socket.readyState === WebSocket.OPEN || state.socket.readyState === WebSocket.CONNECTING)) {
+    if (
+      state.socket &&
+      (state.socket.readyState === WebSocket.OPEN ||
+        state.socket.readyState === WebSocket.CONNECTING)
+    ) {
       state.wantsConnection = false;
       writeStorage("tinyactors-chat-connect", "0");
       state.freshNext = false;
       clearRetry();
       state.socket.close(1000, "client disconnect");
       setStatus("offline", "Offline");
-      byId("connection-note").textContent = "Disconnected. Connect when you are ready.";
+      byId("connection-note").textContent =
+        "Disconnected. Connect when you are ready.";
       updateControls();
       return;
     }
     var name = byId("name-input").value.trim();
-    if (!validName(name)) { setError("Use a display name from 1 to 32 characters."); return; }
-    if (name !== readStorage("tinyactors-chat-name")) removeStorage("tinyactors-chat-resume");
+    if (!validName(name)) {
+      setError("Use a display name from 1 to 32 characters.");
+      return;
+    }
+    if (name !== readStorage("tinyactors-chat-name"))
+      removeStorage("tinyactors-chat-resume");
     state.name = name;
     state.wantsConnection = true;
     state.retry = 0;
@@ -361,7 +463,11 @@
     byId("leave-button").addEventListener("click", onLeave);
     byId("toggle-connection").addEventListener("click", onToggle);
     updateControls();
-    if (validName(savedName) && readStorage("tinyactors-chat-resume") && readStorage("tinyactors-chat-connect") !== "0") {
+    if (
+      validName(savedName) &&
+      readStorage("tinyactors-chat-resume") &&
+      readStorage("tinyactors-chat-connect") !== "0"
+    ) {
       state.name = savedName;
       state.wantsConnection = true;
       connect(false);
@@ -369,4 +475,4 @@
   }
 
   start();
-}());
+})();

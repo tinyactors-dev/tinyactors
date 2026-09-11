@@ -39,6 +39,7 @@ Only the host performs JSON serialization. Set send id to connectionId so late
 error.communication from an obsolete transport does not detach a replacement.
 
 Host control I/O messages (request.event.name; request.body.content.native):
+
 - CREATE_ROOM, target 'host:create-room', data {name}. Only directory requests
   allocation after reserving the name, so duplicate concurrent creation is one
   actor. Host spawns room, then posts directory ROOM_CREATED {name,actor:BigInt}.
@@ -49,6 +50,7 @@ Host control I/O messages (request.event.name; request.body.content.native):
   deleting its resume credentials. Defer/retry release if another lease pins it.
 
 Directory events:
+
 - REGISTER {sessionId,user,peer:BigInt}: register/update a connection, preserve
   its existing selected room, mark online, send its room list and current room.
 - DISCONNECTED {sessionId}: mark offline; keep membership during grace.
@@ -56,11 +58,11 @@ Directory events:
 - COMMAND {sessionId,type,room?,text?}: validated client command. Supported types
   list, create, join, leave, say. At most one selected room per session.
 - ROOM_CREATED {name,actor:BigInt}, ROOM_FAILED {name}, ROOM_COUNT {name,count}.
-Room events: JOIN {sessionId,user,peer:BigInt}, LEAVE {sessionId},
-PRESENCE {sessionId,online}, SAY {sessionId,text}, SNAPSHOT {peer:BigInt}.
-Room state tracks members and bounded messages. Validate SAY membership. Use
-monotonic per-room numeric message IDs; messages are {id,room,user,text}.
-Membership/count changes notify directory ROOM_COUNT, which broadcasts lists.
+  Room events: JOIN {sessionId,user,peer:BigInt,online:boolean}, LEAVE {sessionId},
+  PRESENCE {sessionId,online}, SAY {sessionId,text}, SNAPSHOT {peer:BigInt}.
+  Room state tracks members and bounded messages. Validate SAY membership. Use
+  monotonic per-room numeric message IDs; messages are {id,room,user,text}.
+  Membership/count changes notify directory ROOM_COUNT, which broadcasts lists.
 
 Connection chart states: online, grace, closed(final). Online entry sends
 REGISTER to directory, then emits cached room/list frames. ATTACH {connectionId}
@@ -71,6 +73,8 @@ grace sends DISCONNECTED and starts a delayed expiry; closed sends FORGET and
 RETIRE_SESSION. Offline room/list updates only replace cached snapshots.
 COMMAND forwards to directory with server-owned sessionId. Directory/room push
 ROOMS_VIEW/ROOM_VIEW/ERROR_VIEW to peer actors with the JSON frame as event data.
+Directory SELECT_ROOM {room:string|null,version:number} controls the accepted
+selection; views from any other room are discarded, including after a leave.
 LEAVE must clear the old room view (ROOM_VIEW {type:'room',room:null,members:[],messages:[]}).
 
 ## Wire protocol
@@ -87,12 +91,14 @@ events from the old socket must not affect the new incarnation/transport.
 Client commands: {type:'list'}, {type:'create',room:'garden'},
 {type:'join',room:'garden'}, {type:'leave'}, {type:'say',text:'hello'}.
 Server frames:
+
 - {type:'rooms',rooms:[{name,members:number}]}
 - {type:'room',room:string|null,members:[{id,name,online:boolean}],messages:[{id,room,user,text}]}
 - {type:'error',code:string,message:string}
-Unknown/invalid commands produce an error, never become arbitrary actor events.
-Display names: trimmed nonempty 1..32 chars. Room names: [a-z0-9_-]{1,32}.
-Messages: trimmed nonempty <=2000 chars. Frames <=16KiB; reject binary frames.
+  Unknown/invalid commands produce an error, never become arbitrary actor events.
+  Display names: trimmed nonempty 1..32 chars. Room names: [a-z0-9_-]{1,32}.
+  Messages: trimmed nonempty <=2000 chars. Incoming frames <=16KiB; reject binary
+  frames. Outgoing snapshots are bounded by the host's maxBufferedBytes setting.
 
 ## Host safety and test surface
 
