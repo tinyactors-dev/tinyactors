@@ -1,0 +1,28 @@
+{
+  "name": "tinyactors",
+  "version": "0.1.0",
+  "description": "SCXML-semantic actors with native JavaScript state and a Node-API C bridge",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.mjs",
+      "require": "./index.js"
+    },
+    "./lowlevel": {
+      "types": "./lowlevel.d.ts",
+      "default": "./lowlevel.js"
+    }
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "node scripts/build.js",
+    "test": "node --expose-gc --test test/*.test.js",
+    "check": "npm run build && npm test",
+    "example": "node examples/basic.js"
+  },
+  "private": true
+}

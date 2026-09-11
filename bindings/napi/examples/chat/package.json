@@ -1,0 +1,12 @@
+{
+  "name": "tinyactors-realtime-chat-example",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Real WebSocket multi-client chat using tinyactors Node bindings",
+  "scripts": {
+    "start": "node ../realtime.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": { "ws": "8.21.3" }
+}

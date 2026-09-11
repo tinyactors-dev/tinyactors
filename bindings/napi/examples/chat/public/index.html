@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tiny Actors Chat</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <h1>Tiny Actors Chat</h1>
+        <p class="subtitle">A small realtime room for trying the example.</p>
+      </div>
+      <div id="connection-status" class="status status-offline" role="status" aria-live="polite">Offline</div>
+    </header>
+
+    <section class="setup panel" aria-labelledby="setup-title">
+      <h2 id="setup-title">Your name</h2>
+      <form id="connect-form" class="inline-form">
+        <label for="name-input">Display name</label>
+        <input id="name-input" name="name" maxlength="32" autocomplete="nickname" required placeholder="Alice">
+        <button type="submit" id="connect-button">Connect</button>
+        <button type="button" id="toggle-connection" class="secondary-button">Reconnect</button>
+      </form>
+      <p id="connection-note" class="hint">Choose a name to connect.</p>
+    </section>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <section class="panel" aria-labelledby="rooms-title">
+          <div class="section-heading">
+            <h2 id="rooms-title">Rooms</h2>
+            <button id="refresh-rooms" type="button" class="small-button">Refresh</button>
+          </div>
+          <div id="room-list" class="room-list" aria-live="polite">
+            <p class="empty">Connect to see rooms.</p>
+          </div>
+          <form id="create-form" class="stack-form">
+            <label for="room-input">New room</label>
+            <div class="input-row">
+              <input id="room-input" name="room" maxlength="32" pattern="[a-z0-9_-]{1,32}" placeholder="garden" required>
+              <button type="submit" id="create-button">Create</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel" aria-labelledby="members-title">
+          <div class="section-heading">
+            <h2 id="members-title">Members <span id="member-count">0</span></h2>
+          </div>
+          <div id="member-list" class="member-list" aria-live="polite">
+            <p class="empty">No room selected.</p>
+          </div>
+        </section>
+      </aside>
+
+      <section class="chat panel" aria-labelledby="room-title">
+        <div class="chat-heading">
+          <div>
+            <h2 id="room-title">No room selected</h2>
+            <p id="room-note" class="hint">Join a room to start chatting.</p>
+          </div>
+          <button id="leave-button" type="button" disabled>Leave room</button>
+        </div>
+        <div id="message-list" class="message-list" aria-live="polite" aria-label="Messages">
+          <p class="empty">Messages will appear here.</p>
+        </div>
+        <form id="message-form" class="message-form">
+          <label class="sr-only" for="message-input">Message</label>
+          <textarea id="message-input" maxlength="2000" rows="2" placeholder="Connect and join a room to write a message" disabled required></textarea>
+          <button id="send-button" type="submit" disabled>Send</button>
+        </form>
+      </section>
+    </div>
+    <p id="error-message" class="error" role="alert" aria-live="assertive"></p>
+  </main>
+  <script src="/client.js" defer></script>
+</body>
+</html>
