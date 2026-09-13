@@ -67,7 +67,7 @@ Room and directory actors exchange messages with connection actors; they never
 write to sockets. Their state consists of native JS objects, arrays and Maps.
 Names such as `__proto__` are ordinary room names, not object property lookups.
 
-The connection chart is `online → grace → closed`, with `ATTACH` returning
+The connection chart is `online → grace → closed`, with `connection.attach` returning
 `grace → online`. Entering grace marks presence offline and schedules expiry;
 leaving grace cancels that timer. Offline updates replace cached snapshots, not
 an unbounded message backlog. Expiry removes membership and releases the actor.

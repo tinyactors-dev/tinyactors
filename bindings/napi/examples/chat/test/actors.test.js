@@ -25,7 +25,7 @@ function provision(chat, name) {
   const actor = chat.system.spawn(chat.machines.room, {
     input: { name, directory: chat.directory.id },
   });
-  chat.directory.send("ROOM_CREATED", { name, actor: actor.id });
+  chat.directory.send("directory.confirm-room", { name, actor: actor.id });
   return actor;
 }
 function peer(chat, id) {
@@ -66,12 +66,12 @@ function flush(chat) {
 test("pending room provisioning cannot undo a later leave or room selection", (t) => {
   const chat = setup(t),
     alice = peer(chat, "Alice");
-  alice.send("COMMAND", { type: "join", room: "lobby" });
+  alice.send("connection.command", { type: "join", room: "lobby" });
   flush(chat);
-  alice.send("COMMAND", { type: "create", room: "later" });
+  alice.send("connection.command", { type: "create", room: "later" });
   flush(chat);
   assert.equal(chat.controls.length, 1);
-  alice.send("COMMAND", { type: "leave" });
+  alice.send("connection.command", { type: "leave" });
   flush(chat);
   const room = provision(chat, "later");
   chat.controls.shift().complete();
@@ -79,9 +79,9 @@ test("pending room provisioning cannot undo a later leave or room selection", (t
   assert.equal(alice.snapshot().state.room, null);
   assert.equal(room.snapshot().state.members.size, 0);
 
-  alice.send("COMMAND", { type: "create", room: "last" });
+  alice.send("connection.command", { type: "create", room: "last" });
   flush(chat);
-  alice.send("COMMAND", { type: "join", room: "lobby" });
+  alice.send("connection.command", { type: "join", room: "lobby" });
   flush(chat);
   const last = provision(chat, "last");
   chat.controls.shift().complete();
@@ -94,8 +94,8 @@ test("reserved names deduplicate creates and prototype-like names are ordinary r
   const chat = setup(t),
     alice = peer(chat, "Alice"),
     bob = peer(chat, "Bob");
-  alice.send("COMMAND", { type: "create", room: "__proto__" });
-  bob.send("COMMAND", { type: "create", room: "__proto__" });
+  alice.send("connection.command", { type: "create", room: "__proto__" });
+  bob.send("connection.command", { type: "create", room: "__proto__" });
   flush(chat);
   assert.equal(chat.controls.length, 1);
   const room = provision(chat, "__proto__");
@@ -106,7 +106,7 @@ test("reserved names deduplicate creates and prototype-like names are ordinary r
   assert.equal(bob.snapshot().state.room, "__proto__");
   assert.ok(chat.directory.snapshot().state.rooms instanceof Map);
 
-  alice.send("COMMAND", { type: "create", room: "constructor" });
+  alice.send("connection.command", { type: "create", room: "constructor" });
   flush(chat);
   const next = provision(chat, "constructor");
   chat.controls.shift().complete();
@@ -119,18 +119,18 @@ test("offline peers coalesce room and directory snapshots without transport send
   const chat = setup(t),
     alice = peer(chat, "Alice"),
     bob = peer(chat, "Bob");
-  alice.send("COMMAND", { type: "join", room: "lobby" });
+  alice.send("connection.command", { type: "join", room: "lobby" });
   flush(chat);
-  alice.send("DETACH", { connectionId: "Alice" });
+  alice.send("connection.detach", { connectionId: "Alice" });
   flush(chat);
   chat.frames.length = 0;
-  bob.send("COMMAND", { type: "create", room: "new_room" });
+  bob.send("connection.command", { type: "create", room: "new_room" });
   flush(chat);
   provision(chat, "new_room");
   chat.controls.shift().complete();
   flush(chat);
-  bob.send("COMMAND", { type: "join", room: "lobby" });
-  bob.send("COMMAND", { type: "say", text: "missed update" });
+  bob.send("connection.command", { type: "join", room: "lobby" });
+  bob.send("connection.command", { type: "say", text: "missed update" });
   flush(chat);
   assert.equal(
     chat.frames.some((frame) => frame.target === "ws:Alice"),
@@ -139,7 +139,7 @@ test("offline peers coalesce room and directory snapshots without transport send
   assert.ok(
     alice.snapshot().state.rooms.some((room) => room.name === "new_room"),
   );
-  alice.send("ATTACH", { connectionId: "Alice-new" });
+  alice.send("connection.attach", { connectionId: "Alice-new" });
   flush(chat);
   assert.ok(
     chat.frames.some(
@@ -158,12 +158,12 @@ test("old room views and old transport failures cannot replace the current selec
     alice = peer(chat, "Alice");
   provision(chat, "garden");
   flush(chat);
-  alice.send("COMMAND", { type: "join", room: "lobby" });
+  alice.send("connection.command", { type: "join", room: "lobby" });
   flush(chat);
-  alice.send("COMMAND", { type: "join", room: "garden" });
+  alice.send("connection.command", { type: "join", room: "garden" });
   flush(chat);
   chat.frames.length = 0;
-  alice.send("ROOM_VIEW", {
+  alice.send("connection.show-room", {
     type: "room",
     room: "lobby",
     members: [],
@@ -172,7 +172,7 @@ test("old room views and old transport failures cannot replace the current selec
   flush(chat);
   assert.equal(alice.snapshot().state.room, "garden");
   assert.equal(chat.frames.length, 0);
-  alice.send("ATTACH", { connectionId: "Alice-new" });
+  alice.send("connection.attach", { connectionId: "Alice-new" });
   flush(chat);
   chat.system.receive(
     { processor: "ws", actor: alice },
@@ -186,26 +186,26 @@ test("cancelled provisioning retains its reservation but not duplicate waiters",
   const chat = setup(t, { maxRooms: 2 }),
     alice = peer(chat, "Alice");
   for (let i = 0; i < 10; i++)
-    alice.send("COMMAND", { type: "create", room: "pending" });
+  alice.send("connection.command", { type: "create", room: "pending" });
   flush(chat);
   assert.equal(chat.controls.length, 1);
   assert.equal(chat.directory.snapshot().state.pending.get("pending").size, 1);
-  alice.send("COMMAND", { type: "leave" });
+  alice.send("connection.command", { type: "leave" });
   flush(chat);
   assert.equal(chat.directory.snapshot().state.pending.get("pending").size, 0);
-  alice.send("COMMAND", { type: "create", room: "over-limit" });
+  alice.send("connection.command", { type: "create", room: "over-limit" });
   flush(chat);
   assert.equal(chat.controls.length, 1);
   assert.ok(chat.frames.some((frame) => frame.value.code === "room_limit"));
-  alice.send("COMMAND", { type: "join", room: "pending" });
+  alice.send("connection.command", { type: "join", room: "pending" });
   flush(chat);
-  alice.send("DETACH", { connectionId: "Alice" });
+  alice.send("connection.detach", { connectionId: "Alice" });
   flush(chat);
   const room = provision(chat, "pending");
   chat.controls.shift().complete();
   flush(chat);
   assert.equal(room.snapshot().state.members.get("Alice").online, false);
-  alice.send("ATTACH", { connectionId: "new" });
+  alice.send("connection.attach", { connectionId: "new" });
   flush(chat);
   assert.ok(
     chat.frames.some(
@@ -226,14 +226,14 @@ test("online views use flat wire frames and leave rejects obsolete room snapshot
         frame.value.type === "rooms" && frame.value.rooms[0].name === "lobby",
     ),
   );
-  alice.send("COMMAND", { type: "join", room: "lobby" });
+  alice.send("connection.command", { type: "join", room: "lobby" });
   flush(chat);
   assert.ok(
     chat.frames.some(
       (frame) => frame.value.type === "room" && frame.value.room === "lobby",
     ),
   );
-  alice.send("COMMAND", { type: "leave" });
+  alice.send("connection.command", { type: "leave" });
   flush(chat);
   assert.equal(
     chat.frames.filter((frame) => frame.value.type === "room").at(-1).value
@@ -241,7 +241,7 @@ test("online views use flat wire frames and leave rejects obsolete room snapshot
     null,
   );
   chat.frames.length = 0;
-  alice.send("ROOM_VIEW", {
+  alice.send("connection.show-room", {
     type: "room",
     room: "lobby",
     members: [],

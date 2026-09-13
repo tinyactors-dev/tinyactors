@@ -308,7 +308,7 @@ test(
     assert.equal((await fetch(chat.url + "/not-a-file")).status, 404);
     const alice = await connect(t, chat, { name: "Alice" });
     for (const input of [
-      { type: "ROOM_CREATED", name: "spoof" },
+      { type: "directory.confirm-room", name: "spoof" },
       { type: "create", room: "../unsafe" },
       { type: "say", text: "x".repeat(2001) },
     ]) {

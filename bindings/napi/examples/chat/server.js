@@ -261,19 +261,19 @@ async function startChat(options = {}) {
       data = request.body.content.native;
     if (
       request.target === "host:create-room" &&
-      request.event.name === "CREATE_ROOM"
+      request.event.name === "host.create-room"
     ) {
       let actor;
       try {
         actor = system.spawn(machines.room, {
           input: { name: data.name, directory: directory.id },
         });
-        directory.send("ROOM_CREATED", { name: data.name, actor: actor.id });
+        directory.send("directory.confirm-room", { name: data.name, actor: actor.id });
       } catch (error) {
         // A failed publication after allocation requires full host cleanup;
         // do not leave a live room that the directory does not own.
         if (actor) throw error;
-        directory.send("ROOM_FAILED", { name: data.name });
+        directory.send("directory.reject-room", { name: data.name });
         complete(lease, lowlevel.TA_COMMUNICATION_ERROR);
         if (![lowlevel.TA_LIMIT, lowlevel.TA_NO_MEMORY].includes(error.status))
           report(error);
@@ -281,7 +281,7 @@ async function startChat(options = {}) {
       }
     } else if (
       request.target === "host:retire-session" &&
-      request.event.name === "RETIRE_SESSION"
+      request.event.name === "host.retire-session"
     ) {
       const record = sessions.get(data.sessionId);
       if (record && record.actor.id === data.actor) {
@@ -330,7 +330,7 @@ async function startChat(options = {}) {
     record.peer = null;
     if (closing || record.retiring) return;
     try {
-      record.actor.send("DETACH", { connectionId: peer.id });
+      record.actor.send("connection.detach", { connectionId: peer.id });
     } catch (error) {
       if (error.status !== lowlevel.TA_STALE) fatal(error);
     }
@@ -414,7 +414,7 @@ async function startChat(options = {}) {
       sessions.set(record.sessionId, record);
       tokens.set(record.token, record);
     } else {
-      record.actor.send("ATTACH", { connectionId: peer.id });
+      record.actor.send("connection.attach", { connectionId: peer.id });
       const old = record.peer;
       if (old) {
         transports.delete("ws:" + old.id);
@@ -488,7 +488,7 @@ async function startChat(options = {}) {
     );
     try {
       peer.record.actor.send(
-        workflow ? { type: "COMMAND", data: parsed, trace: workflow.context } : "COMMAND",
+        workflow ? { type: "connection.command", data: parsed, trace: workflow.context } : "connection.command",
         workflow ? undefined : parsed,
       );
     } finally {
@@ -642,7 +642,7 @@ async function startChat(options = {}) {
     const lobby = system.spawn(machines.room, {
       input: { name: "lobby", directory: directory.id },
     });
-    directory.send("ROOM_CREATED", { name: "lobby", actor: lobby.id });
+    directory.send("directory.confirm-room", { name: "lobby", actor: lobby.id });
     while (system.run({ workUnits: 1000 }).runnable) {}
     await new Promise((resolve, reject) => {
       server.once("error", reject);

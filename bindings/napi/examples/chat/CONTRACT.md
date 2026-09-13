@@ -34,48 +34,48 @@ The host spawns/registers one initial room named 'lobby'.
 Actor callbacks cannot reenter their System, including spawn/release. Use context
 send to an explicit BigInt actor, or an I/O processor for host allocation work.
 Register ioprocessors [{type:'ws'}, {type:'chat-host'}]. A WS effect is context
-send('FRAME',{processor:'ws',to:'ws:'+connectionId,data:frame,id:connectionId}).
+send('connection.show-frame',{processor:'ws',to:'ws:'+connectionId,data:frame,id:connectionId}).
 Only the host performs JSON serialization. Set send id to connectionId so late
 error.communication from an obsolete transport does not detach a replacement.
 
 Host control I/O messages (request.event.name; request.body.content.native):
 
-- CREATE_ROOM, target 'host:create-room', data {name}. Only directory requests
+- host.create-room, target 'host:create-room', data {name}. Only directory requests
   allocation after reserving the name, so duplicate concurrent creation is one
-  actor. Host spawns room, then posts directory ROOM_CREATED {name,actor:BigInt}.
-  On allocation failure post ROOM_FAILED {name}. Directory retains pending join
+  actor. Host spawns room, then posts directory directory.confirm-room {name,actor:BigInt}.
+  On allocation failure post directory.reject-room {name}. Directory retains pending join
   requests until resolution; maxRooms counts reserved names too.
-- RETIRE_SESSION, target 'host:retire-session', data {sessionId,actor:BigInt}.
+- host.retire-session, target 'host:retire-session', data {sessionId,actor:BigInt}.
   Host completes this lease before releasing the terminal connection actor and
   deleting its resume credentials. Defer/retry release if another lease pins it.
 
 Directory events:
 
-- REGISTER {sessionId,user,peer:BigInt}: register/update a connection, preserve
+- directory.register {sessionId,user,peer:BigInt}: register/update a connection, preserve
   its existing selected room, mark online, send its room list and current room.
-- DISCONNECTED {sessionId}: mark offline; keep membership during grace.
-- FORGET {sessionId}: remove session membership and watcher on expiry.
-- COMMAND {sessionId,type,room?,text?}: validated client command. Supported types
+- directory.disconnect {sessionId}: mark offline; keep membership during grace.
+- directory.forget {sessionId}: remove session membership and watcher on expiry.
+- directory.command {sessionId,type,room?,text?}: validated client command. Supported types
   list, create, join, leave, say. At most one selected room per session.
-- ROOM_CREATED {name,actor:BigInt}, ROOM_FAILED {name}, ROOM_COUNT {name,count}.
-  Room events: JOIN {sessionId,user,peer:BigInt,online:boolean}, LEAVE {sessionId},
-  PRESENCE {sessionId,online}, SAY {sessionId,text}, SNAPSHOT {peer:BigInt}.
-  Room state tracks members and bounded messages. Validate SAY membership. Use
+- directory.confirm-room {name,actor:BigInt}, directory.reject-room {name}, directory.update-room-count {name,count}.
+  Room events: room.join {sessionId,user,peer:BigInt,online:boolean}, room.leave {sessionId},
+  room.presence {sessionId,online}, room.say {sessionId,text}, room.snapshot {peer:BigInt}.
+  Room state tracks members and bounded messages. Validate room.say membership. Use
   monotonic per-room numeric message IDs; messages are {id,room,user,text}.
-  Membership/count changes notify directory ROOM_COUNT, which broadcasts lists.
+  Membership/count changes notify directory directory.update-room-count, which broadcasts lists.
 
 Connection chart states: online, grace, closed(final). Online entry sends
-REGISTER to directory, then emits cached room/list frames. ATTACH {connectionId}
-replaces transport and returns online; grace exit cancels expiry. DETACH
+directory.register to directory, then emits cached room/list frames. connection.attach {connectionId}
+replaces transport and returns online; grace exit cancels expiry. connection.detach
 {connectionId} only applies if it matches the current transport. WS communication
 errors only apply if event.sendId matches the current connectionId. Entering
-grace sends DISCONNECTED and starts a delayed expiry; closed sends FORGET and
-RETIRE_SESSION. Offline room/list updates only replace cached snapshots.
-COMMAND forwards to directory with server-owned sessionId. Directory/room push
-ROOMS_VIEW/ROOM_VIEW/ERROR_VIEW to peer actors with the JSON frame as event data.
-Directory SELECT_ROOM {room:string|null,version:number} controls the accepted
+grace sends directory.disconnect and starts a delayed expiry; closed sends directory.forget and
+host.retire-session. Offline room/list updates only replace cached snapshots.
+connection.command forwards to directory with server-owned sessionId. Directory/room push
+connection.show-rooms/connection.show-room/connection.show-error to peer actors with the JSON frame as event data.
+Directory connection.select-room {room:string|null,version:number} controls the accepted
 selection; views from any other room are discarded, including after a leave.
-LEAVE must clear the old room view (ROOM_VIEW {type:'room',room:null,members:[],messages:[]}).
+room.leave must clear the old room view (connection.show-room {type:'room',room:null,members:[],messages:[]}).
 
 ## Wire protocol
 

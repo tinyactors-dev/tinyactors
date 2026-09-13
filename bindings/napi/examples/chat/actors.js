@@ -4,7 +4,7 @@ const { defineMachine, lowlevel } = require("../..");
 
 const frame = (send, state, value) => {
   if (state.connectionId)
-    send("FRAME", {
+    send("connection.show-frame", {
       processor: "ws",
       to: "ws:" + state.connectionId,
       data: value,
@@ -18,10 +18,10 @@ const peerFrame = (send, peer, value) => {
   try {
     send(
       value.type === "rooms"
-        ? "ROOMS_VIEW"
+        ? "connection.show-rooms"
         : value.type === "room"
-          ? "ROOM_VIEW"
-          : "ERROR_VIEW",
+          ? "connection.show-room"
+          : "connection.show-error",
       { to: peer, data: value },
     );
   } catch (error) {
@@ -60,11 +60,11 @@ const emitCached = (send, state) => {
     });
 };
 const sendRoomView = (send, session, room) => {
-  if (room) send("SNAPSHOT", { to: room.actor, data: { peer: session.peer } });
+  if (room) send("room.snapshot", { to: room.actor, data: { peer: session.peer } });
   else peerFrame(send, session.peer, emptyRoom());
 };
 const notifyCount = (send, state, name) => {
-  send("ROOM_COUNT", {
+  send("directory.update-room-count", {
     to: state.directory,
     data: { name, count: state.members ? state.members.size : 0 },
   });
@@ -111,7 +111,7 @@ function makeDirectory(maxRooms) {
     states: {
       running: {
         on: {
-          REGISTER: ({ state, event, send }) => {
+          "directory.register": ({ state, event, send }) => {
             const input = event.data || {},
               old = state.sessions.get(input.sessionId);
             if (old) {
@@ -131,11 +131,11 @@ function makeDirectory(maxRooms) {
             }
             const session = state.sessions.get(input.sessionId);
             if (session.room && state.rooms.has(session.room))
-              send("PRESENCE", {
+              send("room.presence", {
                 to: state.rooms.get(session.room).actor,
                 data: { sessionId: input.sessionId, online: true },
               });
-            send("SELECT_ROOM", {
+            send("connection.select-room", {
               to: session.peer,
               data: { room: session.room, version: session.version },
             });
@@ -146,22 +146,22 @@ function makeDirectory(maxRooms) {
               session.room ? state.rooms.get(session.room) : null,
             );
           },
-          DISCONNECTED: ({ state, event, send }) => {
+          "directory.disconnect": ({ state, event, send }) => {
             const session = state.sessions.get(event.data?.sessionId);
             if (session) {
               session.online = false;
               if (session.room && state.rooms.has(session.room))
-                send("PRESENCE", {
+                send("room.presence", {
                   to: state.rooms.get(session.room).actor,
                   data: { sessionId: event.data.sessionId, online: false },
                 });
             }
           },
-          FORGET: ({ state, event, send }) => {
+          "directory.forget": ({ state, event, send }) => {
             const session = state.sessions.get(event.data?.sessionId);
             if (session) {
               if (session.room && state.rooms.has(session.room))
-                send("LEAVE", {
+                send("room.leave", {
                   to: state.rooms.get(session.room).actor,
                   data: { sessionId: event.data.sessionId },
                 });
@@ -169,7 +169,7 @@ function makeDirectory(maxRooms) {
               state.sessions.delete(event.data.sessionId);
             }
           },
-          ROOM_CREATED: ({ state, event, send }) => {
+          "directory.confirm-room": ({ state, event, send }) => {
             const input = event.data || {};
             if (!validRoom(input.name) || state.rooms.has(input.name)) return;
             state.rooms.set(input.name, { actor: input.actor, count: 0 });
@@ -186,7 +186,7 @@ function makeDirectory(maxRooms) {
             });
             broadcastLists(send, state);
           },
-          ROOM_FAILED: ({ state, event, send }) => {
+          "directory.reject-room": ({ state, event, send }) => {
             const name = event.data?.name,
               pending = state.pending.get(name) || new Map();
             state.pending.delete(name);
@@ -205,13 +205,13 @@ function makeDirectory(maxRooms) {
               }
             });
           },
-          ROOM_COUNT: ({ state, event, send }) => {
+          "directory.update-room-count": ({ state, event, send }) => {
             const input = event.data || {};
             if (state.rooms.has(input.name))
               state.rooms.get(input.name).count = input.count || 0;
             broadcastLists(send, state);
           },
-          COMMAND: ({ state, event, send }) =>
+          "directory.command": ({ state, event, send }) =>
             handleCommand(send, state, event.data || {}),
         },
       },
@@ -259,7 +259,7 @@ function handleCommand(send, state, input) {
     state.pending.set(input.room, new Map());
     queueJoin(state, session, input.room);
     try {
-      return send("CREATE_ROOM", {
+      return send("host.create-room", {
         processor: "chat-host",
         to: "host:create-room",
         data: { name: input.room },
@@ -274,9 +274,9 @@ function handleCommand(send, state, input) {
     cancelPending(state, session);
     const old = state.rooms.get(session.room);
     if (old)
-      send("LEAVE", { to: old.actor, data: { sessionId: input.sessionId } });
+      send("room.leave", { to: old.actor, data: { sessionId: input.sessionId } });
     session.room = null;
-    send("SELECT_ROOM", {
+    send("connection.select-room", {
       to: session.peer,
       data: { room: null, version: session.version },
     });
@@ -307,7 +307,7 @@ function handleCommand(send, state, input) {
         code: "invalid_message",
         message: "Invalid message",
       });
-    return send("SAY", {
+    return send("room.say", {
       to: room.actor,
       data: { sessionId: input.sessionId, text: input.text.trim() },
     });
@@ -322,16 +322,16 @@ function joinRoom(args) {
   const room = state.rooms.get(name);
   cancelPending(state, session);
   if (session.room && session.room !== name && state.rooms.has(session.room))
-    send("LEAVE", {
+    send("room.leave", {
       to: state.rooms.get(session.room).actor,
       data: { sessionId: session.sessionId },
     });
   session.room = name;
-  send("SELECT_ROOM", {
+  send("connection.select-room", {
     to: session.peer,
     data: { room: name, version: session.version },
   });
-  return send("JOIN", {
+  return send("room.join", {
     to: room.actor,
     data: {
       sessionId: session.sessionId,
@@ -358,7 +358,7 @@ function makeRoom(historyLimit) {
     states: {
       running: {
         on: {
-          JOIN: ({ state, event, send }) => {
+          "room.join": ({ state, event, send }) => {
             const input = event.data || {};
             state.members.set(input.sessionId, {
               name: input.user,
@@ -368,19 +368,19 @@ function makeRoom(historyLimit) {
             notifyCount(send, state, state.name);
             broadcastRoom(send, state, roomView(state));
           },
-          LEAVE: ({ state, event, send }) => {
+          "room.leave": ({ state, event, send }) => {
             state.members.delete(event.data?.sessionId);
             notifyCount(send, state, state.name);
             broadcastRoom(send, state, roomView(state));
           },
-          PRESENCE: ({ state, event, send }) => {
+          "room.presence": ({ state, event, send }) => {
             const member = state.members.get(event.data?.sessionId);
             if (member) {
               member.online = !!event.data.online;
               broadcastRoom(send, state, roomView(state));
             }
           },
-          SAY: ({ state, event, send }) => {
+          "room.say": ({ state, event, send }) => {
             const input = event.data || {},
               member = state.members.get(input.sessionId);
             if (!member || !validText(input.text)) return;
@@ -393,7 +393,7 @@ function makeRoom(historyLimit) {
             while (state.messages.length > historyLimit) state.messages.shift();
             broadcastRoom(send, state, roomView(state));
           },
-          SNAPSHOT: ({ state, event, send }) =>
+          "room.snapshot": ({ state, event, send }) =>
             peerFrame(send, event.data?.peer, roomView(state)),
         },
       },
@@ -423,17 +423,17 @@ function makeConnection(graceMs) {
     states: {
       online: {
         entry: ({ state, send, self }) => {
-          send("REGISTER", {
+          send("directory.register", {
             to: state.directory,
             data: { sessionId: state.sessionId, user: state.user, peer: self },
           });
           emitCached(send, state);
         },
         on: {
-          ATTACH: {
+          "connection.attach": {
             actions: ({ state, event, send, self }) => {
               state.connectionId = event.data.connectionId;
-              send("REGISTER", {
+              send("directory.register", {
                 to: state.directory,
                 data: {
                   sessionId: state.sessionId,
@@ -443,30 +443,30 @@ function makeConnection(graceMs) {
               });
             },
           },
-          DETACH: {
+          "connection.detach": {
             target: "grace",
             guard: ({ state, event }) =>
               event.data?.connectionId === state.connectionId,
           },
-          COMMAND: ({ state, event, send }) =>
-            send("COMMAND", {
+          "connection.command": ({ state, event, send }) =>
+            send("directory.command", {
               to: state.directory,
               data: { ...event.data, sessionId: state.sessionId },
             }),
-          SELECT_ROOM: ({ state, event }) => {
+          "connection.select-room": ({ state, event }) => {
             state.selectedRoom = event.data?.room ?? null;
             state.selectedVersion =
               event.data?.version ?? state.selectedVersion;
           },
-          FRAME: ({ state, event, send }) =>
+          "connection.show-frame": ({ state, event, send }) =>
             applyFrame(send, state, event.data),
-          ROOMS_VIEW: ({ state, event, send }) =>
+          "connection.show-rooms": ({ state, event, send }) =>
             applyFrame(send, state, event.data),
-          ROOM_VIEW: ({ state, event, send }) =>
+          "connection.show-room": ({ state, event, send }) =>
             applyFrame(send, state, event.data),
-          ERROR_VIEW: ({ state, event, send }) =>
+          "connection.show-error": ({ state, event, send }) =>
             applyFrame(send, state, event.data),
-          "error.communication": {
+          "connection.error": {
             target: "grace",
             guard: ({ state, event }) => event.sendId === state.connectionId,
           },
@@ -475,41 +475,41 @@ function makeConnection(graceMs) {
       grace: {
         entry: [
           ({ state, send }) =>
-            send("DISCONNECTED", {
+            send("directory.disconnect", {
               to: state.directory,
               data: { sessionId: state.sessionId },
             }),
           ({ send }) =>
-            send("EXPIRE", { delayMs: graceMs, id: "grace-timeout" }),
+            send("connection.expire", { delayMs: graceMs, id: "grace-timeout" }),
         ],
         exit: ({ cancel }) => cancel("grace-timeout"),
         on: {
-          ATTACH: {
+          "connection.attach": {
             target: "online",
             actions: ({ state, event }) => {
               state.connectionId = event.data.connectionId;
             },
           },
-          FRAME: ({ state, event }) => applyFrame(null, state, event.data),
-          ROOMS_VIEW: ({ state, event }) => applyFrame(null, state, event.data),
-          ROOM_VIEW: ({ state, event }) => applyFrame(null, state, event.data),
-          ERROR_VIEW: ({ state, event }) => applyFrame(null, state, event.data),
-          SELECT_ROOM: ({ state, event }) => {
+          "connection.show-frame": ({ state, event }) => applyFrame(null, state, event.data),
+          "connection.show-rooms": ({ state, event }) => applyFrame(null, state, event.data),
+          "connection.show-room": ({ state, event }) => applyFrame(null, state, event.data),
+          "connection.show-error": ({ state, event }) => applyFrame(null, state, event.data),
+          "connection.select-room": ({ state, event }) => {
             state.selectedRoom = event.data?.room ?? null;
             state.selectedVersion =
               event.data?.version ?? state.selectedVersion;
           },
-          EXPIRE: "closed",
+          "connection.expire": "closed",
         },
       },
       closed: {
         type: "final",
         entry: ({ state, send, self }) => {
-          send("FORGET", {
+          send("directory.forget", {
             to: state.directory,
             data: { sessionId: state.sessionId },
           });
-          send("RETIRE_SESSION", {
+          send("host.retire-session", {
             processor: "chat-host",
             to: "host:retire-session",
             data: { sessionId: state.sessionId, actor: self },
