@@ -10,7 +10,7 @@ LIB_OBJECTS = $(patsubst src/%.c,$(BUILD)/%.o,$(LIB_SOURCES))
 TEST_SOURCES = $(filter-out tests/host.c,$(wildcard tests/*.c))
 TEST_BINS = $(patsubst tests/%.c,$(BUILD)/test-%,$(TEST_SOURCES))
 
-.PHONY: all test check syntax arm symbols sanitize ubsan benchmark arity
+.PHONY: all test check syntax arm symbols sanitize ubsan benchmark benchmark-ring arity
 all: $(BUILD)/libtinyactors.a
 
 $(BUILD):
@@ -51,8 +51,15 @@ arity:
 $(BUILD)/bench-entities: benchmarks/entities.c $(BUILD)/libtinyactors.a
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/libtinyactors.a $(LDFLAGS) -o $@
 
-benchmark: $(BUILD)/bench-entities
+$(BUILD)/tinyactors-bench: benchmarks/ring.c $(BUILD)/libtinyactors.a
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/libtinyactors.a $(LDFLAGS) -lrt -o $@
+
+benchmark-ring: $(BUILD)/tinyactors-bench
+	$(BUILD)/tinyactors-bench
+
+benchmark: $(BUILD)/bench-entities $(BUILD)/tinyactors-bench
 	$(BUILD)/bench-entities
+	$(BUILD)/tinyactors-bench
 
 sanitize:
 	$(MAKE) BUILD=$(BUILD)/asan-host COMPILER_SUPPORT= CFLAGS='-std=c99 -O1 -g -Wall -Wextra -Werror -pedantic -fsanitize=address,undefined -fno-omit-frame-pointer' LDFLAGS='-fsanitize=address,undefined' test
