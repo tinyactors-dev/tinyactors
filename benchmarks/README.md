@@ -21,6 +21,7 @@ Run an individual workload:
 
 ```sh
 build/tinyactors-bench 64 1000000
+build/tinyactors-actors-bench 100000
 ```
 
 Run the complete built-in benchmark set:
@@ -39,6 +40,10 @@ make benchmark-entities
 ## Workloads
 
 ### `actors`
+
+Run it with `build/tinyactors-actors-bench [actors]`; the default is 100,000.
+It reports fixed system bytes, live actor bytes, bytes per actor, peak arena
+capacity, and teardown accounting.
 
 Measures the memory added by live actors at increasing population sizes. The
 suite separates fixed system and definition memory from the per-actor slope,
