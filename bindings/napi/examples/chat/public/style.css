@@ -238,6 +238,40 @@ button:hover:not(:disabled) {
 .message-text {
   white-space: pre-wrap;
 }
+
+chat-message {
+  display: block;
+  position: relative;
+  padding-bottom: 1.5rem;
+}
+
+chat-read-receipts {
+  position: absolute;
+  right: 0.35rem;
+  bottom: 0.15rem;
+}
+
+.receipt-button {
+  border: 0;
+  background: transparent;
+  color: #647282;
+  cursor: pointer;
+  padding: 0.1rem 0.25rem;
+}
+
+.receipt-popover {
+  position: absolute;
+  z-index: 2;
+  right: 0;
+  bottom: 100%;
+  margin-bottom: 0.25rem;
+  padding: 0.5rem 0.65rem;
+  min-width: 12rem;
+  border: 1px solid #cbd5df;
+  border-radius: 0.4rem;
+  background: #fff;
+  box-shadow: 0 4px 16px #0002;
+}
 .message-form {
   display: flex;
   align-items: end;

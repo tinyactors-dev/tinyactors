@@ -24,6 +24,7 @@ function command(value) {
     create: ["room"],
     join: ["room"],
     say: ["text"],
+    read: ["room", "messageId"],
   };
   if (!Object.hasOwn(fields, value.type)) return null;
   if (
@@ -42,6 +43,12 @@ function command(value) {
       value.text.trim().length > 0 &&
       value.text.trim().length <= 2000
       ? { type: "say", text: value.text.trim() }
+      : null;
+  if (value.type === "read")
+    return typeof value.room === "string" &&
+      /^[a-z0-9_-]{1,32}$/.test(value.room) &&
+      Number.isSafeInteger(value.messageId) && value.messageId > 0
+      ? { type: "message.read", room: value.room, messageId: value.messageId }
       : null;
   return { type: value.type };
 }

@@ -19,7 +19,7 @@ const peerFrame = (send, peer, value) => {
     send(
       value.type === "rooms"
         ? "connection.show-rooms"
-        : value.type === "room"
+        : value.type === "room" || value.type === "receipt"
           ? "connection.show-room"
           : "connection.show-error",
       { to: peer, data: value },
@@ -82,7 +82,19 @@ const roomView = (state) => ({
     name: member.name,
     online: !!member.online,
   })),
-  messages: state.messages.slice(),
+  messages: state.messages.map((message) => ({
+    id: message.id,
+    room: message.room,
+    user: message.user,
+    text: message.text,
+    receipts: Array.from(message.seenBy.values()),
+  })),
+});
+const receiptFrame = (state, message) => ({
+  type: "receipt",
+  room: state.name,
+  messageId: message.id,
+  receipts: Array.from(message.seenBy.values()),
 });
 const directoryError = (send, session, detail) =>
   peerFrame(send, session.peer, {
@@ -312,6 +324,15 @@ function handleCommand(send, state, input) {
       data: { sessionId: input.sessionId, text: input.text.trim() },
     });
   }
+  if (input.type === "message.read") {
+    const room = session.room && state.rooms.get(session.room);
+    if (room && Number.isSafeInteger(input.messageId))
+      return send("room.read", {
+        to: room.actor,
+        data: { sessionId: input.sessionId, messageId: input.messageId },
+      });
+    return;
+  }
   return directoryError(send, session, {
     code: "invalid_command",
     message: "Unknown command",
@@ -389,9 +410,22 @@ function makeRoom(historyLimit) {
               room: state.name,
               user: member.name,
               text: input.text.trim(),
+              seenBy: new Map(),
             });
             while (state.messages.length > historyLimit) state.messages.shift();
             broadcastRoom(send, state, roomView(state));
+          },
+          "room.read": ({ state, event, send }) => {
+            const input = event.data || {},
+              member = state.members.get(input.sessionId),
+              message = state.messages.find((item) => item.id === input.messageId);
+            if (!member || !message || message.seenBy.has(input.sessionId)) return;
+            message.seenBy.set(input.sessionId, {
+              sessionId: input.sessionId,
+              user: member.name,
+              seenAt: new Date().toISOString(),
+            });
+            broadcastRoom(send, state, receiptFrame(state, message));
           },
           "room.snapshot": ({ state, event, send }) =>
             peerFrame(send, event.data?.peer, roomView(state)),
@@ -521,13 +555,18 @@ function makeConnection(graceMs) {
 }
 
 function applyFrame(send, state, value) {
-  if (!value || !["rooms", "room", "error"].includes(value.type)) return;
+  if (!value || !["rooms", "room", "receipt", "error"].includes(value.type)) return;
   if (value.type === "rooms") state.rooms = value.rooms;
   if (value.type === "room") {
     if (value.room !== state.selectedRoom) return;
     state.room = value.room;
     state.members = value.members;
     state.messages = value.messages;
+  }
+  if (value.type === "receipt") {
+    if (value.room !== state.selectedRoom) return;
+    const message = state.messages.find((item) => item.id === value.messageId);
+    if (message) message.receipts = value.receipts;
   }
   if (value.type === "error") state.error = value;
   if (send) frame(send, state, value);

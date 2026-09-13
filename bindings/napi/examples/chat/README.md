@@ -75,6 +75,82 @@ Resume credentials and public session IDs are distinct; credentials never enter
 actor state. Transport IDs also change on every WebSocket connection. Late
 close/write-failure events from an old socket cannot detach its replacement.
 
+## Read receipts: topology and protocol
+
+Read receipts extend the existing room topology; they do not require one actor
+per message or per receipt. The room actor remains the authority for both its
+bounded messages and a bounded receipt index:
+
+```text
+directory ── routes commands ──> connection ──> room
+    │                                ▲           │
+    └──── room list/presence          └─ pushes ──┘
+                                      room view,
+                                      message events,
+                                      receipt events
+```
+
+The topology change is:
+
+- `Room` adds `seenBy` to each retained message, keyed by stable session ID,
+  with `{user,seenAt}` as the value. It also removes a session from retained
+  receipt sets when `directory.forget` removes that member.
+- `Connection` keeps the current room view and forwards a client's
+  `message.read` command. It does not authoritatively mark anything read; this
+  prevents a stale or replaced browser from forging another participant's
+  receipt.
+- `Directory` routes `message.read` to the selected room and routes the room's
+  receipt update to every current room member. No new actor is needed unless
+  receipts later become durable, cross-room, or independently queryable.
+
+The client sends a read event when a message becomes visible (for example, an
+`IntersectionObserver` sees it), not merely when it is received. The room
+deduplicates repeated reads by `(messageId, sessionId)`, assigns the server's
+UTC timestamp, and broadcasts the changed receipt set. A receipt is therefore
+an observation of visibility, not an acknowledgement that the message was
+delivered or persisted.
+
+The actor messages involved are:
+
+- `directory.command {sessionId,type:'message.read',room,messageId}`
+- `room.read {sessionId,messageId}` — validate membership and that the message
+  is still in bounded history.
+- `room.receipt {messageId,sessionId,user,seenAt}` — broadcast the newly
+  accepted receipt to room members.
+- `connection.show-frame {type:'receipt',room,messageId,receipts}` — deliver the
+  updated aggregate to each connection; a room snapshot also includes
+  `messages:[{...,receipts:[{sessionId,user,seenAt}]}]` so reconnect and resume
+  do not lose the UI state.
+
+The corresponding browser frames are `{"type":"read","room":"lobby",
+"messageId":42}` and `{"type":"receipt","room":"lobby","messageId":42,
+"receipts":[{"user":"Alice","seenAt":"..."}]}`. The server must ignore
+duplicate reads, reads for another room, reads by non-members, and reads for
+messages outside the retained history. Receipt timestamps should be ISO 8601
+UTC strings; the server, rather than the browser, supplies them.
+
+### Custom elements
+
+The current `chat-composer` remains responsible only for composing messages.
+Add these focused elements:
+
+- `<chat-message>` renders one message, owns its text and metadata, observes
+  visibility, and dispatches a `message-read` event once it is visible. It must
+  render message text with `textContent` and expose the message ID through a
+  property/attribute.
+- `<chat-read-receipts>` renders the compact check marks and receipt count for
+  a message. Its button is keyboard accessible and dispatches/open-controls a
+  popover without making the message row responsible for popover state.
+- `<chat-receipt-popover>` renders the participant names and localized
+  timestamps from the receipt list, closes on Escape or outside click, and
+  manages focus when opened. It should receive data properties rather than
+  reconstructing state from the DOM.
+
+`client.js` should reconcile receipt updates by message ID, preserve them when
+an incremental event arrives before a room snapshot, and close any open
+popover when leaving or switching rooms. The check marks are presentation;
+the authoritative receipt list is always the room actor's latest snapshot.
+
 [server.js](server.js) owns sockets, credentials and native resource lifetimes.
 It implements two I/O processors:
 

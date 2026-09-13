@@ -11,6 +11,56 @@
   if (!customElements.get("chat-composer"))
     customElements.define("chat-composer", ChatComposer);
 
+  class ChatReadReceipts extends HTMLElement {
+    set receipts(value) {
+      this._receipts = Array.isArray(value) ? value : [];
+      this.render();
+    }
+    connectedCallback() { this.render(); }
+    render() {
+      this.replaceChildren();
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = "receipt-button";
+      button.setAttribute("aria-label", "Who has seen this message?");
+      button.textContent = this._receipts?.length ? "✓✓ " + this._receipts.length : "✓";
+      button.addEventListener("click", () => {
+        this.dispatchEvent(new CustomEvent("receipts-open", { bubbles: true, detail: this._receipts }));
+      });
+      this.appendChild(button);
+    }
+  }
+  class ChatMessage extends HTMLElement {
+    connectedCallback() {
+      var id = Number(this.dataset.messageId);
+      if (window.IntersectionObserver) {
+        var observer = new IntersectionObserver((entries) => {
+          if (entries.some((entry) => entry.isIntersecting)) {
+            this.dispatchEvent(new CustomEvent("message-read", { bubbles: true, detail: id }));
+            observer.disconnect();
+          }
+        }, { threshold: 0.5 });
+        observer.observe(this);
+      } else this.dispatchEvent(new CustomEvent("message-read", { bubbles: true, detail: id }));
+    }
+  }
+  class ChatReceiptPopover extends HTMLElement {
+    set receipts(value) { this._receipts = Array.isArray(value) ? value : []; this.render(); }
+    connectedCallback() { this.render(); }
+    render() {
+      this.className = "receipt-popover";
+      this.replaceChildren();
+      this._receipts.forEach(function (receipt) {
+        var row = document.createElement("div");
+        row.textContent = String(receipt.user || "Unknown") + " · " + new Date(receipt.seenAt).toLocaleTimeString();
+        this.appendChild(row);
+      }, this);
+    }
+  }
+  if (!customElements.get("chat-read-receipts")) customElements.define("chat-read-receipts", ChatReadReceipts);
+  if (!customElements.get("chat-message")) customElements.define("chat-message", ChatMessage);
+  if (!customElements.get("chat-receipt-popover")) customElements.define("chat-receipt-popover", ChatReceiptPopover);
+
   var state = {
     socket: null,
     name: "",
@@ -200,6 +250,7 @@
     if (frame.type === "welcome") handleWelcome(frame);
     else if (frame.type === "rooms") handleRooms(frame);
     else if (frame.type === "room") handleRoom(frame);
+    else if (frame.type === "receipt") handleReceipt(frame);
     else if (frame.type === "error") handleServerError(frame);
   }
 
@@ -242,6 +293,14 @@
     };
     renderRoom();
     updateControls();
+  }
+
+  function handleReceipt(frame) {
+    if (frame.room !== state.room.room) return;
+    var message = state.room.messages.find(function (item) { return item.id === frame.messageId; });
+    if (!message) return;
+    message.receipts = Array.isArray(frame.receipts) ? frame.receipts : [];
+    renderMessages(state.room.messages);
   }
 
   function handleServerError(frame) {
@@ -369,15 +428,28 @@
       return;
     }
     messages.forEach(function (message) {
-      var item = document.createElement("article");
+      var item = document.createElement("chat-message");
       item.className = "message";
+      item.dataset.messageId = String(message.id);
       var meta = document.createElement("div");
       meta.className = "message-meta";
       meta.textContent = String(message.user || "Unknown");
       var text = document.createElement("div");
       text.className = "message-text";
       text.textContent = String(message.text || "");
-      item.append(meta, text);
+      var receipts = document.createElement("chat-read-receipts");
+      receipts.receipts = message.receipts || [];
+      item.append(meta, text, receipts);
+      item.addEventListener("message-read", function (event) {
+        if (event.detail) sendCommand({ type: "read", room: state.room.room, messageId: event.detail });
+      });
+      item.addEventListener("receipts-open", function (event) {
+        var popover = document.createElement("chat-receipt-popover");
+        popover.receipts = event.detail;
+        receipts.appendChild(popover);
+        var close = function (click) { if (!popover.contains(click.target) && click.target !== receipts.querySelector("button")) { popover.remove(); document.removeEventListener("click", close); } };
+        setTimeout(function () { document.addEventListener("click", close); }, 0);
+      });
       list.appendChild(item);
     });
     list.scrollTop = list.scrollHeight;
