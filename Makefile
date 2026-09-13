@@ -10,7 +10,7 @@ LIB_OBJECTS = $(patsubst src/%.c,$(BUILD)/%.o,$(LIB_SOURCES))
 TEST_SOURCES = $(filter-out tests/host.c,$(wildcard tests/*.c))
 TEST_BINS = $(patsubst tests/%.c,$(BUILD)/test-%,$(TEST_SOURCES))
 
-.PHONY: all test check syntax arm symbols sanitize ubsan benchmark benchmark-ring benchmark-actors arity
+.PHONY: all test check syntax arm symbols sanitize ubsan benchmark benchmark-ring benchmark-actors arity ruby-interface
 all: $(BUILD)/libtinyactors.a
 
 $(BUILD):
@@ -33,7 +33,10 @@ $(BUILD)/test-%: tests/%.c tests/host.c tests/host.h $(BUILD)/libtinyactors.a
 test: $(TEST_BINS)
 	@set -e; for test in $(TEST_BINS); do echo "RUN $$test"; "$$test"; done
 
-check: test syntax arm symbols arity
+check: test syntax arm symbols arity ruby-interface
+
+ruby-interface:
+	ruby tools/check_ruby_interface.rb
 
 syntax:
 	$(CC) $(CPPFLAGS) $(CFLAGS) -ffreestanding -fsyntax-only $(LIB_SOURCES) examples/*.c $(TEST_SOURCES) tests/host.c
