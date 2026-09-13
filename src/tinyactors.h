@@ -1326,7 +1326,9 @@ typedef struct ta_span_start {
     ta_actor_ref_t actor;
     uint64_t revision;
     uint64_t message_id;
+    ta_text_t definition_name;
     ta_text_t event_name;
+    const ta_payload_t *event_data;
     ta_text_t destination;         /**< Logical name/address, not payload data. */
     ta_text_t processor;
     uint64_t now_ns;

@@ -13,6 +13,28 @@ npm --prefix bindings/napi/examples/chat ci
 npm --prefix bindings/napi/examples/chat start
 ```
 
+To run the chat server with Jaeger and view actor traces, use Docker Compose:
+
+```sh
+docker compose -f bindings/napi/examples/chat/docker-compose.yml up --build
+```
+
+For live development, use Compose Watch:
+
+```sh
+docker compose -f bindings/napi/examples/chat/docker-compose.yml watch
+```
+
+Changes under `public/` sync immediately; JavaScript changes restart the chat
+container; native/core, dependency, Dockerfile changes trigger an image rebuild.
+
+Open the chat at <http://127.0.0.1:8080>, then view traces at
+<http://127.0.0.1:16686>. The example exports OTLP/HTTP traces to Jaeger;
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` can be
+used to point it at another collector. Message payload attributes are disabled
+by default; enable them for local debugging with
+`OTEL_TINYACTORS_CAPTURE_PAYLOAD=true`.
+
 Open <http://127.0.0.1:8080> in two separate tabs, choose different display names,
 and join **lobby**. Create another room to try room isolation. Creating an existing
 room joins it; each session belongs to at most one room.

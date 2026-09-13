@@ -104,7 +104,10 @@ static napi_value traceStartArgs(System &s, const ta_span_start_t *x) {
   s.js.set(o, "actor", s.js.bigint(x->actor.id));
   s.js.set(o, "revision", s.js.bigint(x->revision));
   s.js.set(o, "message_id", s.js.bigint(x->message_id));
+  s.js.set(o, "definition_name", s.js.text(x->definition_name));
   s.js.set(o, "event_name", s.js.text(x->event_name));
+  if (x->event_data)
+    s.js.set(o, "event_data", writePayload(s.js, *x->event_data));
   s.js.set(o, "destination", s.js.text(x->destination));
   s.js.set(o, "processor", s.js.text(x->processor));
   s.js.set(o, "now_ns", s.js.bigint(x->now_ns));

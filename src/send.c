@@ -131,8 +131,11 @@ static void start_send(send_delivery_t *delivery)
     start.kind = TA_SPAN_PRODUCER;
     start.actor.id = actor->id;
     start.revision = actor->definition->revision;
+    start.definition_name = actor->definition->description.name;
     start.message_id = delivery->id;
     start.event_name = delivery->send->event;
+    if (delivery->send->body.kind == TA_BODY_CONTENT)
+        start.event_data = &delivery->send->body.content;
     start.destination = delivery->send->target.text;
     start.processor = delivery->send->type;
     start.now_ns = actor->system->now_ns;

@@ -39,6 +39,7 @@ static ta_status_t copy_start(const tai_value_scope_t *scope, const ta_span_star
     *out = *source;
     out->arena = arena;
     status = tai_text_copy(arena, source->event_name, &out->event_name);
+    if (status == TA_OK) status = tai_text_copy(arena, source->definition_name, &out->definition_name);
     if (status == TA_OK) status = tai_text_copy(arena, source->destination, &out->destination);
     if (status == TA_OK) status = tai_text_copy(arena, source->processor, &out->processor);
     if (status == TA_OK) status = copy_context(scope, source->parent, &out->parent);

@@ -624,8 +624,10 @@ static void begin_process(tai_actor_t *actor)
     start.kind = TA_SPAN_CONSUMER;
     start.actor = (ta_actor_ref_t){actor->id};
     start.revision = actor->definition->revision;
+    start.definition_name = actor->definition->description.name;
     start.message_id = event->message_id;
     start.event_name = event->name;
+    start.event_data = &event->data;
     start.now_ns = actor->system->now_ns;
     start.links = event->trace;
     start.link_count = event->trace == NULL ? 0 : 1;

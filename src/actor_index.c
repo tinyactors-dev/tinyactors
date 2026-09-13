@@ -121,14 +121,17 @@ static uint8_t decimal_id(ta_text_t text, uint64_t *out)
         if (n > (UINT64_MAX - d) / 10u) return 0;
         n = n * 10u + d;
     }
-    if (n == 0) return 0; *out = n; return 1;
+    if (n == 0) return 0;
+    *out = n;
+    return 1;
 }
 
 ta_status_t ta_name_bind(ta_system_t *system, const ta_name_binding_t *binding, ta_actor_ref_t replacement)
 {
     tai_registry_t *entry; tai_actor_t *actor; ta_arena_t *arena; void *memory; ta_status_t st;
     if (system == NULL || binding == NULL || !tai_text_valid(binding->name, 0) || replacement.id == 0) return TA_INVALID;
-    if (system->running) return TA_BUSY; if (system->shutdown) return TA_CANCELLED;
+    if (system->running) return TA_BUSY;
+    if (system->shutdown) return TA_CANCELLED;
     actor = tai_actor_find(system, replacement); if (actor == NULL) return TA_STALE;
     if (!tai_accepting(actor)) return TA_CANCELLED;
     entry = tai_registry_find(system->names, binding->name);
@@ -162,7 +165,8 @@ ta_status_t ta_name_lookup(ta_system_t *system, ta_text_t name, ta_actor_ref_t *
     tai_registry_t *e;
     if (system == NULL || out_actor == NULL || !tai_text_valid(name, 0)) return TA_INVALID;
     *out_actor = (ta_actor_ref_t){0}; e = tai_registry_find(system->names, name);
-    if (e == NULL) return TA_NOT_FOUND; if (tai_actor_find(system, e->actor) == NULL) return TA_STALE;
+    if (e == NULL) return TA_NOT_FOUND;
+    if (tai_actor_find(system, e->actor) == NULL) return TA_STALE;
     *out_actor = e->actor; return TA_OK;
 }
 

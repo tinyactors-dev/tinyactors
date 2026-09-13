@@ -6,6 +6,7 @@ const path = require("node:path");
 const { WebSocketServer, WebSocket } = require("ws");
 const { createSystem, lowlevel } = require("../..");
 const { createChatMachines } = require("./actors");
+const { createTelemetry } = require("./telemetry");
 
 function integer(value, fallback, bounds) {
   if (value === undefined) return fallback;
@@ -64,6 +65,7 @@ async function startChat(options = {}) {
   const writeTimeoutMs = integer(options.writeTimeoutMs, 5000, [20, 30000]);
   const rateLimit = integer(options.rateLimit, 60, [1, 10000]);
   const maxPayload = 16 * 1024;
+  const telemetry = createTelemetry();
   const files = new Map();
   for (const [route, filename, type] of [
     ["/", "index.html", "text/html"],
@@ -77,7 +79,8 @@ async function startChat(options = {}) {
     });
   const machines = createChatMachines({ graceMs, historyLimit, maxRooms });
   const system = createSystem({
-    ioprocessors: [{ type: "ws" }, { type: "chat-host" }],
+      ioprocessors: [{ type: "ws" }, { type: "chat-host" }],
+    trace: telemetry.trace,
     limits: {
       actors: maxRooms + maxSessions + 1,
       queuedEvents: 65536,
@@ -474,7 +477,24 @@ async function startChat(options = {}) {
       );
       return;
     }
-    peer.record.actor.send("COMMAND", parsed);
+    const ingress = telemetry.ingress?.("nodejs websocket receive", {
+      "tinyactors.message.type": parsed.type,
+      "tinyactors.actor.id": String(peer.record.actor.id),
+    });
+    const workflow = telemetry.workflow?.(
+      "tinyactors chat workflow",
+      ingress?.context,
+      { "tinyactors.message.type": parsed.type },
+    );
+    try {
+      peer.record.actor.send(
+        workflow ? { type: "COMMAND", data: parsed, trace: workflow.context } : "COMMAND",
+        workflow ? undefined : parsed,
+      );
+    } finally {
+      workflow?.end();
+      ingress?.end();
+    }
   }
   function connected(socket) {
     const peer = {
@@ -604,6 +624,7 @@ async function startChat(options = {}) {
       ]);
       // Transports are stopped and every taken write lease has been settled.
       system.close({ force: true });
+      await telemetry.shutdown();
       sessions.clear();
       tokens.clear();
       transports.clear();

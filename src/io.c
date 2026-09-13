@@ -53,7 +53,8 @@ static void io_finish(tai_io_t *e, ta_status_t result)
 ta_status_t tai_io_open(tai_actor_t *actor, const ta_io_request_t *request, tai_io_t **out)
 {
     ta_arena_t *arena; tai_io_t *e; tai_value_scope_t scope; ta_memory_stats_t ms; ta_status_t st; void *mem;
-    if(out==NULL) return TA_INVALID; *out=NULL;
+    if(out==NULL) return TA_INVALID;
+    *out=NULL;
     if(actor==NULL||request==NULL||actor->system==NULL||request->request.id!=0) return TA_INVALID;
     if(request->kind==TA_IO_SEND && (actor->status==TA_ACTOR_DONE || actor->status==TA_ACTOR_STOPPED || actor->status==TA_ACTOR_FAILED)) return TA_CANCELLED;
     if(actor->system->next_request==0)return TA_LIMIT;
@@ -95,7 +96,8 @@ ta_status_t ta_io_next(ta_system_t *s, const ta_io_request_t **out)
 ta_status_t ta_io_complete(ta_system_t *s, ta_request_ref_t ref, ta_status_t result)
 {
     tai_io_t *e; tai_actor_t *a; ta_context_t context;
-    if(s==NULL||ref.id==0)return TA_INVALID; if(s->running)return TA_BUSY;
+    if(s==NULL||ref.id==0)return TA_INVALID;
+    if(s->running)return TA_BUSY;
     if(result!=TA_OK&&result!=TA_COMMUNICATION_ERROR&&result!=TA_CANCELLED)return TA_INVALID;
     e=io_find(s,ref.id); if(e==NULL||!e->taken)return TA_STALE;
     a=tai_actor_find(s,e->request.actor);

@@ -1,0 +1,46 @@
+services:
+  chat:
+    build:
+      context: ../../../..
+      dockerfile: bindings/napi/examples/chat/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8080
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://jaeger:4318/v1/traces
+      OTEL_TINYACTORS_CAPTURE_PAYLOAD: "true"
+    depends_on:
+      jaeger:
+        condition: service_started
+    develop:
+      watch:
+        - action: sync
+          path: ./public
+          target: /app/bindings/napi/examples/chat/public
+        - action: sync+restart
+          path: ./server.js
+          target: /app/bindings/napi/examples/chat/server.js
+        - action: sync+restart
+          path: ./actors.js
+          target: /app/bindings/napi/examples/chat/actors.js
+        - action: sync+restart
+          path: ../../realtime.js
+          target: /app/bindings/napi/examples/realtime.js
+        - action: rebuild
+          path: ./package.json
+        - action: rebuild
+          path: ./package-lock.json
+        - action: rebuild
+          path: ./Dockerfile
+        - action: rebuild
+          path: ../../native
+        - action: rebuild
+          path: ../../../../src
+
+  jaeger:
+    image: jaegertracing/jaeger:2.20.0
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
