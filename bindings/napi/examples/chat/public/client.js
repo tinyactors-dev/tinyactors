@@ -1,6 +1,16 @@
 (function () {
   "use strict";
 
+  class ChatComposer extends HTMLElement {
+    connectedCallback() {
+      this.setAttribute("role", "group");
+      this.setAttribute("aria-label", "Message composer");
+    }
+  }
+
+  if (!customElements.get("chat-composer"))
+    customElements.define("chat-composer", ChatComposer);
+
   var state = {
     socket: null,
     name: "",

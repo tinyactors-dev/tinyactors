@@ -95,7 +95,8 @@ static ta_status_t do_send(ta_context_t *c, const ta_send_action_t *a)
     }
     if (a->target_expression != 0u) {
         s = eval_text(c, &(ta_text_expr_t){.literal={0}, .expression=a->target_expression}, &text);
-        if (s != TA_OK) return s; target.text = text;
+        if (s != TA_OK) return s;
+        target.text = text;
     }
     if (a->delay_expression != 0u) {
         s = eval_value(c, a->delay_expression, &v); if (s != TA_OK) return s;
