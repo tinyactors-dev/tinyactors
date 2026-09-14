@@ -26,7 +26,8 @@ static tar_value_record_t *tar_value_record(ta_value_t value) {
      * private registry first; a handle from another extension/system is then
      * rejected without interpreting its address. */
     for (record = tar_value_records; record; record = record->next)
-        if ((uintptr_t)record == value.handle) return record;
+        if ((uintptr_t)record == value.handle &&
+            record->magic == UINT32_C(0x54415652)) return record;
     return NULL;
 }
 static ta_value_t tar_value_handle(tar_value_record_t *record) { ta_value_t value; value.handle=(uintptr_t)record; return value; }
@@ -76,6 +77,10 @@ ta_value_t tar_value_to_native(VALUE object) { tar_value_t *v; TypedData_Get_Str
 static void tar_value_retain(void *user, ta_value_t value) {
     tar_value_record_t *r=tar_value_record(value);
     if (!r || user != r->domain) return;
+    /* A value can only be retained by the domain which admitted it.  The
+     * core supplies the configured user pointer on every callback; do not
+     * turn a foreign handle into a root merely because its bits resemble a
+     * local record. */
     if (r->core_refs++ == 0u) rb_gc_register_address(&r->object);
 }
 static void tar_value_release(void *user, ta_value_t value) {
