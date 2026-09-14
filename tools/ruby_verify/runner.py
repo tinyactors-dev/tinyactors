@@ -54,10 +54,35 @@ def capture(root):
     return files, manifest, digest(manifest)
 
 
+def resolve_mise_ruby(requested):
+    """Resolve the active Ruby through mise; never fall back to system Ruby."""
+    mise = shutil.which("mise")
+    if not mise:
+        raise RuntimeError("mise is required to select Ruby")
+    if requested and requested != "ruby":
+        resolved = shutil.which(requested)
+        if resolved:
+            resolved = Path(resolved).resolve()
+            mise_root = Path(os.environ.get("MISE_DATA_DIR", Path.home() / ".local/share/mise"))
+            ruby_installs = (mise_root / "installs" / "ruby").resolve()
+            try:
+                resolved.relative_to(ruby_installs)
+            except ValueError:
+                raise RuntimeError("Ruby must come from mise: " + str(resolved))
+            return str(resolved)
+    selected = subprocess.run([mise, "which", "ruby"], capture_output=True, text=True,
+                              timeout=10, env=child_env())
+    if selected.returncode:
+        detail = (selected.stderr or selected.stdout).strip()
+        raise RuntimeError("mise could not select Ruby" + (": " + detail if detail else ""))
+    active = selected.stdout.strip().splitlines()[-1] if selected.stdout.strip() else ""
+    if not active or not Path(active).is_file():
+        raise RuntimeError("mise returned no usable Ruby executable")
+    return str(Path(active).resolve())
+
+
 def environment(ruby):
-    resolved = shutil.which(ruby)
-    if not resolved:
-        raise RuntimeError("Ruby executable not found: " + ruby)
+    resolved = resolve_mise_ruby(ruby)
     def version(argv):
         completed = subprocess.run(argv, capture_output=True, text=True, timeout=10, env=child_env())
         if completed.returncode:
