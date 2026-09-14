@@ -17,14 +17,15 @@ struct tar_value_record {
     size_t core_refs;
     size_t retain_calls;
     size_t release_calls;
-    unsigned int rooted;
     tar_value_record_t *next;
 };
 typedef struct { tar_value_record_t *record; } tar_value_t;
+typedef struct { unsigned char unused; } tar_value_registry_data_t;
 static tar_value_domain_t tar_domain = { 0x54415256U };
 static tar_value_record_t *tar_value_records;
 static uintptr_t tar_value_next_handle = 1u;
 static VALUE tar_value_class;
+static VALUE tar_value_root_registry = Qnil;
 static size_t tar_fixture_retain_total;
 static size_t tar_fixture_release_total;
 static size_t tar_fixture_snapshot_total;
@@ -44,8 +45,55 @@ static tar_value_record_t *tar_value_record(ta_value_t value) {
     return NULL;
 }
 static ta_value_t tar_value_handle(tar_value_record_t *record) { ta_value_t value; value.handle=record ? record->handle : 0u; return value; }
-static void tar_value_mark(void *ptr) { tar_value_t *v=ptr; if (v && v->record) rb_gc_mark(v->record->object); }
-static void tar_value_compact(void *ptr) { tar_value_t *v=ptr; if (v && v->record) v->record->object=rb_gc_location(v->record->object); }
+static void tar_value_mark_object(VALUE object)
+{
+    if (!RB_SPECIAL_CONST_P(object)) rb_gc_mark_movable(object);
+}
+
+static void tar_value_registry_mark(void *ptr)
+{
+    tar_value_record_t *record;
+    (void)ptr;
+    for (record = tar_value_records; record; record = record->next)
+        if (record->core_refs) tar_value_mark_object(record->object);
+}
+
+static void tar_value_registry_compact(void *ptr)
+{
+    tar_value_record_t *record;
+    (void)ptr;
+    for (record = tar_value_records; record; record = record->next)
+        if (record->core_refs && !RB_SPECIAL_CONST_P(record->object)) {
+            record->object = rb_gc_location(record->object);
+        }
+}
+
+static void tar_value_registry_free(void *ptr) { xfree(ptr); }
+static size_t tar_value_registry_memsize(const void *ptr)
+{
+    return ptr ? sizeof(tar_value_registry_data_t) : 0u;
+}
+static const rb_data_type_t tar_value_registry_type = {
+    "TinyActors::Raw::ValueRootRegistry",
+    { tar_value_registry_mark, tar_value_registry_free, tar_value_registry_memsize,
+      tar_value_registry_compact },
+    0, 0, RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_WB_PROTECTED
+};
+
+static void tar_value_mark(void *ptr)
+{
+    tar_value_t *value = (tar_value_t *)ptr;
+    if (value && value->record && !value->record->core_refs)
+        tar_value_mark_object(value->record->object);
+}
+
+static void tar_value_compact(void *ptr)
+{
+    tar_value_t *value = (tar_value_t *)ptr;
+    if (value && value->record && !value->record->core_refs &&
+        !RB_SPECIAL_CONST_P(value->record->object))
+        value->record->object = rb_gc_location(value->record->object);
+}
 static void tar_value_dispose(tar_value_record_t *record) {
     tar_value_record_t **slot;
     if (!record) return;
@@ -54,10 +102,6 @@ static void tar_value_dispose(tar_value_record_t *record) {
     }
     record->magic = 0u;
     record->handle = 0u;
-    if (record->rooted) {
-        rb_gc_unregister_address(&record->object);
-        record->rooted = 0u;
-    }
     xfree(record);
 }
 static void tar_value_free(void *ptr) {
@@ -77,7 +121,7 @@ static tar_value_record_t *tar_value_record_new(VALUE object, tar_value_domain_t
     if (tar_value_next_handle == 0u) rb_raise(rb_eRangeError, "native value handle space exhausted");
     record = ALLOC(tar_value_record_t);
     *record = (tar_value_record_t){UINT32_C(0x54415652), tar_value_next_handle++, object, domain,
-                                   0u, core_refs, 0u, 0u, 0u, tar_value_records};
+                                   0u, core_refs, 0u, 0u, tar_value_records};
     tar_value_records = record;
     return record;
 }
@@ -94,7 +138,14 @@ static VALUE tar_value_initialize(VALUE self, VALUE object) {
 }
 static VALUE tar_value_object(VALUE self) { tar_value_t *v; TypedData_Get_Struct(self,tar_value_t,&tar_value_type,v); if (!v->record) rb_raise(rb_eRuntimeError,"released TinyActors::Raw::Value"); return v->record->object; }
 
-ta_value_t tar_value_to_native(VALUE object) { tar_value_t *v; TypedData_Get_Struct(object,tar_value_t,&tar_value_type,v); if (!v->record) rb_raise(rb_eRuntimeError,"released TinyActors::Raw::Value"); return tar_value_handle(v->record); }
+ta_value_t tar_value_to_native(VALUE object)
+{
+    tar_value_t *value;
+    if (NIL_P(object)) return (ta_value_t){0};
+    TypedData_Get_Struct(object, tar_value_t, &tar_value_type, value);
+    if (!value->record) rb_raise(rb_eRuntimeError, "released TinyActors::Raw::Value");
+    return tar_value_handle(value->record);
+}
 static void tar_value_retain(void *user, ta_value_t value) {
     tar_value_record_t *r=tar_value_record(value);
     if (!r || user != r->domain) return;
@@ -108,10 +159,7 @@ static void tar_value_retain(void *user, ta_value_t value) {
         ++tar_fixture_retain_total;
         ++tar_fixture_live_core_refs;
     }
-    if (r->core_refs++ == 0u) {
-        rb_gc_register_address(&r->object);
-        r->rooted = 1u;
-    }
+    ++r->core_refs;
 }
 static void tar_value_release(void *user, ta_value_t value) {
     tar_value_record_t *r=tar_value_record(value);
@@ -123,10 +171,6 @@ static void tar_value_release(void *user, ta_value_t value) {
     if (!r->core_refs) return;
     if (tar_fixture_tracking && tar_fixture_live_core_refs) --tar_fixture_live_core_refs;
     if (--r->core_refs == 0u) {
-        if (r->rooted) {
-            rb_gc_unregister_address(&r->object);
-            r->rooted = 0u;
-        }
         if (!r->wrapper_refs) tar_value_dispose(r);
     }
 }
@@ -143,9 +187,18 @@ static int tar_value_immutable_shared(VALUE object)
     return 0;
 }
 
+static void tar_value_collect_reachable(VALUE object, VALUE seen);
+
+static int tar_value_collect_hash_entry(VALUE key, VALUE value, VALUE seen)
+{
+    tar_value_collect_reachable(key, seen);
+    tar_value_collect_reachable(value, seen);
+    return ST_CONTINUE;
+}
+
 static void tar_value_collect_reachable(VALUE object, VALUE seen)
 {
-    VALUE id, children, child, variables;
+    VALUE id, child, variables;
     long i, length;
 
     if (RB_SPECIAL_CONST_P(object)) return;
@@ -160,13 +213,7 @@ static void tar_value_collect_reachable(VALUE object, VALUE seen)
         goto collect_instance_variables;
     }
     if (RB_TYPE_P(object, T_HASH)) {
-        children = rb_funcall(object, rb_intern("keys"), 0);
-        length = RARRAY_LEN(children);
-        for (i = 0; i < length; ++i) {
-            child = RARRAY_AREF(children, i);
-            tar_value_collect_reachable(child, seen);
-            tar_value_collect_reachable(rb_hash_aref(object, child), seen);
-        }
+        rb_hash_foreach(object, tar_value_collect_hash_entry, seen);
         child = rb_funcall(object, rb_intern("default"), 0);
         if (!NIL_P(child)) tar_value_collect_reachable(child, seen);
         goto collect_instance_variables;
@@ -187,9 +234,27 @@ collect_instance_variables:
     }
 }
 
+static int tar_value_has_shared_reachable(VALUE object, VALUE source_seen);
+
+typedef struct {
+    VALUE source_seen;
+    int shared;
+} tar_value_shared_hash_args_t;
+
+static int tar_value_has_shared_hash_entry(VALUE key, VALUE value, VALUE argument)
+{
+    tar_value_shared_hash_args_t *args = (tar_value_shared_hash_args_t *)argument;
+    if (tar_value_has_shared_reachable(key, args->source_seen) ||
+        tar_value_has_shared_reachable(value, args->source_seen)) {
+        args->shared = 1;
+        return ST_STOP;
+    }
+    return ST_CONTINUE;
+}
+
 static int tar_value_has_shared_reachable(VALUE object, VALUE source_seen)
 {
-    VALUE id, children, child, variables;
+    VALUE id, child, variables;
     long i, length;
 
     if (RB_SPECIAL_CONST_P(object)) return 0;
@@ -204,13 +269,9 @@ static int tar_value_has_shared_reachable(VALUE object, VALUE source_seen)
         goto check_instance_variables;
     }
     if (RB_TYPE_P(object, T_HASH)) {
-        children = rb_funcall(object, rb_intern("keys"), 0);
-        length = RARRAY_LEN(children);
-        for (i = 0; i < length; ++i) {
-            child = RARRAY_AREF(children, i);
-            if (tar_value_has_shared_reachable(child, source_seen) ||
-                tar_value_has_shared_reachable(rb_hash_aref(object, child), source_seen)) return 1;
-        }
+        tar_value_shared_hash_args_t args = { source_seen, 0 };
+        rb_hash_foreach(object, tar_value_has_shared_hash_entry, (VALUE)&args);
+        if (args.shared) return 1;
         child = rb_funcall(object, rb_intern("default"), 0);
         if (!NIL_P(child) && tar_value_has_shared_reachable(child, source_seen)) return 1;
         goto check_instance_variables;
@@ -258,8 +319,6 @@ static VALUE tar_value_snapshot_protected(VALUE argument) {
         rb_raise(rb_eArgError, "native value snapshot changed value type");
     tar_value_require_isolated(src->object, copy);
     r=tar_value_record_new(copy, (tar_value_domain_t *)args->user, 1u);
-    rb_gc_register_address(&r->object);
-    r->rooted = 1u;
     if (tar_fixture_tracking) {
         ++tar_fixture_snapshot_total;
         ++tar_fixture_live_core_refs;
@@ -454,6 +513,13 @@ static VALUE tar_value_fixture_failed_admit(VALUE self, VALUE object, VALUE inva
     ta_value_t invalid;
     ta_status_t status;
     (void)self;
+    tar_fixture_retain_total = 0u;
+    tar_fixture_release_total = 0u;
+    tar_fixture_snapshot_total = 0u;
+    tar_fixture_live_core_refs = 0u;
+    tar_fixture_seen_events = 0u;
+    tar_fixture_last_event_handle = 0u;
+    tar_fixture_tracking = 1u;
     invalid = tar_value_to_native(invalid_object);
     ta_system_config_init(&config);
     config.data_model = ta_text_from_cstr("bytes");
@@ -462,7 +528,10 @@ static VALUE tar_value_fixture_failed_admit(VALUE self, VALUE object, VALUE inva
     config.values = *tar_value_ops();
     options = config.arenas[TA_LIFETIME_SYSTEM];
     status = ta_arena_create(&tar_fixture_allocator, &options, &tar_value_fixture.arena);
-    if (status != TA_OK) return INT2NUM(status);
+    if (status != TA_OK) {
+        tar_fixture_tracking = 0u;
+        return INT2NUM(status);
+    }
     status = ta_system_create(tar_value_fixture.arena, &config, &tar_value_fixture.system);
     if (status == TA_OK) {
         states[0].id = "idle";
@@ -490,10 +559,11 @@ static VALUE tar_value_fixture_failed_admit(VALUE self, VALUE object, VALUE inva
             /* This is a fault-injection guard. A successful admission would
              * own a live actor and must be cleaned through the normal path. */
             (void)tar_value_fixture_close_status();
-            return INT2NUM(TA_EXECUTION_ERROR);
+            status = TA_EXECUTION_ERROR;
         }
     }
     tar_value_fixture_close();
+    tar_fixture_tracking = 0u;
     return INT2NUM(status);
 }
 
@@ -618,6 +688,12 @@ static VALUE tar_value_fixture_queue_counts(VALUE self)
     return result;
 }
 
+static VALUE tar_value_fixture_failure_counts(VALUE self)
+{
+    (void)self;
+    return tar_value_fixture_queue_counts(self);
+}
+
 static VALUE tar_value_fixture_queue_release(VALUE self)
 {
     ta_status_t status;
@@ -663,9 +739,7 @@ static VALUE tar_value_fixture_snapshot(VALUE self, VALUE object)
         if (!record) rb_raise(rb_eRuntimeError, "snapshot returned an unknown native value");
         /* The callback returned one owned root. Transfer that root to the
          * Ruby wrapper; it is not a retained mutable-object claim. */
-        if (record->rooted) rb_gc_unregister_address(&record->object);
         record->core_refs = 0u;
-        record->rooted = 0u;
         record->wrapper_refs = 1u;
         {
             tar_value_t *wrapped = ALLOC(tar_value_t);
@@ -701,7 +775,15 @@ void tar_value_shutdown(void) { tar_value_fixture_close(); }
 void tar_init_value(VALUE raw) {
     ID id=rb_intern("Value");
     VALUE singleton;
+    tar_value_registry_data_t *registry_data;
     (void)raw;
+    if (NIL_P(tar_value_root_registry)) {
+        registry_data = ALLOC(tar_value_registry_data_t);
+        registry_data->unused = 0u;
+        tar_value_root_registry = TypedData_Wrap_Struct(rb_cObject,
+                                                         &tar_value_registry_type, registry_data);
+        rb_gc_register_mark_object(tar_value_root_registry);
+    }
     if (rb_const_defined(tar_mRaw,id)) {
         tar_value_class=rb_const_get(tar_mRaw,id);
         if (!RB_TYPE_P(tar_value_class,T_CLASS)) rb_raise(rb_eTypeError,"TinyActors::Raw::Value must be a class");
@@ -722,5 +804,6 @@ void tar_init_value(VALUE raw) {
     rb_define_private_method(singleton, "__test_queue_step", tar_value_fixture_queue_step, 0);
     rb_define_private_method(singleton, "__test_queue_replace", tar_value_fixture_queue_replace, 0);
     rb_define_private_method(singleton, "__test_queue_counts", tar_value_fixture_queue_counts, 0);
+    rb_define_private_method(singleton, "__test_failure_counts", tar_value_fixture_failure_counts, 0);
     rb_define_private_method(singleton, "__test_queue_release", tar_value_fixture_queue_release, 0);
 }

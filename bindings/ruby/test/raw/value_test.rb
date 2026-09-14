@@ -17,6 +17,12 @@ class RawValueTest < Minitest::Test
     end
   end
 
+  class MalformedKeysHash < Hash
+    def keys
+      1
+    end
+  end
+
   def value_fixture(method, *arguments)
     TinyActors::Raw::Value.__send__(method, *arguments)
   end
@@ -72,7 +78,9 @@ class RawValueTest < Minitest::Test
 
     assert_equal TinyActors::Raw::TA_OK, result.fetch(:status)
     assert_nil result.fetch(:value).object
-    assert_raises(TypeError) { value_fixture(:__test_snapshot, nil) }
+    absent = value_fixture(:__test_snapshot, nil)
+    assert_equal TinyActors::Raw::TA_INVALID, absent.fetch(:status)
+    assert_nil absent.fetch(:value)
     assert_equal TinyActors::Raw::TA_INVALID,
                  value_fixture(:__test_foreign_snapshot).fetch(:status)
   end
@@ -95,6 +103,20 @@ class RawValueTest < Minitest::Test
     assert_nil $!, "a handled snapshot exception must not escape through Ruby's error state"
   ensure
     IdentitySnapshotValue.returned = nil
+  end
+
+  def test_snapshot_graph_walk_does_not_trust_overridden_hash_keys
+    source = MalformedKeysHash.new
+    source[:nested] = ["original"]
+
+    result = value_fixture(:__test_snapshot, TinyActors::Raw::Value.new(source))
+
+    assert_equal TinyActors::Raw::TA_OK, result.fetch(:status)
+    copy = result.fetch(:value).object
+    refute_same source, copy
+    refute_same source.fetch(:nested), copy.fetch(:nested)
+    source.fetch(:nested)[0] = "changed"
+    assert_equal ["original"], copy.fetch(:nested)
   end
 
   def test_public_runtime_retains_value_after_wrapper_is_dropped
@@ -130,6 +152,12 @@ class RawValueTest < Minitest::Test
     assert_equal before.fetch(:retain) + 1, after.fetch(:retain)
     assert_equal before.fetch(:release) + 1, after.fetch(:release)
     assert_equal 0, after.fetch(:core_refs)
+
+    totals = value_fixture(:__test_failure_counts)
+    assert_equal 1, totals.fetch(:retain)
+    assert_equal 1, totals.fetch(:snapshot)
+    assert_equal totals.fetch(:retain) + totals.fetch(:snapshot), totals.fetch(:release)
+    assert_equal 0, totals.fetch(:live_core_refs)
   end
 
   def test_public_runtime_owns_native_payloads_through_queue_current_replacement_and_teardown
