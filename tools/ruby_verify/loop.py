@@ -100,6 +100,10 @@ def owned_files(root, brief):
         body = sections[1].split('\n## ', 1)[0]
         files = ['bindings/ruby/' + value for value in re.findall(r'`([^`]+)`', body) if '/' in value or value == 'README.md']
     files += SHARED_FILES
+    if brief == owner('raw.Memory'):
+        # Memory's compaction-safe native roots live in the shared Value
+        # bridge, so that bridge is part of this milestone's implementation.
+        files += ['bindings/ruby/ext/tinyactors_raw/raw_value.c']
     # Context and infrastructure tests can use private public-C-API fixtures.
     if brief == BASE + '99-integration.md':
         files += ['bindings/ruby/lib/*', 'bindings/ruby/ext/*', 'bindings/ruby/test/*', 'bindings/ruby/examples/*']
