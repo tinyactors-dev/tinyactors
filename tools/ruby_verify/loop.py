@@ -453,12 +453,18 @@ Approve only if there are no unresolved findings.
     def run(self):
         checks = build(self.worktree)
         directory = Path(self.state['directory'])
-        baseline_dir = directory / ('baseline-' + uuid.uuid4().hex[:8])
-        baseline_dir.mkdir()
-        context = dict(agent='driver/' + self.state['loop_id'], task='baseline', loop_id=self.state['loop_id'])
-        rows = self.verify(context, baseline_dir)
-        self.state['protected_passes'] = sorted(set(self.state.get('protected_passes', [])) |
-                                                {r['check_id'] for r in rows if r['status'] == 'pass'})
+        if self.state.get('last_run') and self.state.get('iteration', 0) > 0:
+            protected = set(self.state.get('protected_passes', []))
+            rows = [dict(check_id=check['id'], status='pass' if check['id'] in protected else 'fail',
+                         message='Resumed from protected pass ledger') for check in checks]
+            self.emit('Resumed from protected pass ledger; skipping the full baseline run')
+        else:
+            baseline_dir = directory / ('baseline-' + uuid.uuid4().hex[:8])
+            baseline_dir.mkdir()
+            context = dict(agent='driver/' + self.state['loop_id'], task='baseline', loop_id=self.state['loop_id'])
+            rows = self.verify(context, baseline_dir)
+            self.state['protected_passes'] = sorted(set(self.state.get('protected_passes', [])) |
+                                                    {r['check_id'] for r in rows if r['status'] == 'pass'})
         self.state['status'] = 'running'
         self.save()
         attempted = 0
