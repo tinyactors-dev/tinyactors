@@ -1,26 +1,32 @@
 #include "ruby.h"
 #include "tinyactors.h"
+#include "support.h"
+#include "registrations.h"
 
 #include <stddef.h>
-
-static VALUE mTinyActors;
-static VALUE mRaw;
 
 static VALUE
 raw_text_from_cstr(VALUE self, VALUE value)
 {
     ta_text_t text;
     (void)self;
+    tar_deferred_cleanup_boundary();
     if (NIL_P(value)) return Qnil;
     StringValue(value);
     text = ta_text_from_cstr(RSTRING_PTR(value));
     return rb_str_subseq(value, 0, (long)text.size);
 }
 
+static void raw_shutdown(VALUE unused)
+{
+    (void)unused;
+    tar_deferred_cleanup_boundary();
+}
+
 static void
 define_numeric_constants(void)
 {
-#define DEFINE_ENUM(name) rb_define_const(mRaw, #name, UINT2NUM((unsigned int)(name)))
+#define DEFINE_ENUM(name) rb_define_const(tar_mRaw, #name, UINT2NUM((unsigned int)(name)))
     DEFINE_ENUM(TA_ABI_VERSION);
     DEFINE_ENUM(TA_DATA_NATIVE);
     DEFINE_ENUM(TA_DATA_BYTES);
@@ -135,20 +141,22 @@ define_numeric_constants(void)
     DEFINE_ENUM(TA_IO_INVOKE_START);
     DEFINE_ENUM(TA_IO_INVOKE_CANCEL);
 #undef DEFINE_ENUM
-    rb_define_const(mRaw, "TA_INDEX_NONE", ULL2NUM((unsigned long long)TA_INDEX_NONE));
-    rb_define_const(mRaw, "TA_REVISION_ANY", ULL2NUM((unsigned long long)TA_REVISION_ANY));
-    rb_define_const(mRaw, "TA_TIME_NEVER", ULL2NUM((unsigned long long)TA_TIME_NEVER));
-    rb_define_const(mRaw, "TA_UNLIMITED", ULL2NUM((unsigned long long)TA_UNLIMITED));
+    rb_define_const(tar_mRaw, "TA_INDEX_NONE", ULL2NUM((unsigned long long)TA_INDEX_NONE));
+    rb_define_const(tar_mRaw, "TA_REVISION_ANY", ULL2NUM((unsigned long long)TA_REVISION_ANY));
+    rb_define_const(tar_mRaw, "TA_TIME_NEVER", ULL2NUM((unsigned long long)TA_TIME_NEVER));
+    rb_define_const(tar_mRaw, "TA_UNLIMITED", ULL2NUM((unsigned long long)TA_UNLIMITED));
 }
 
 void
 Init_tinyactors_raw(void)
 {
-    mTinyActors = rb_define_module("TinyActors");
-    mRaw = rb_define_module_under(mTinyActors, "Raw");
-    rb_define_singleton_method(mRaw, "ta_text_from_cstr", raw_text_from_cstr, 1);
+    tar_mTinyActors = rb_define_module("TinyActors");
+    rb_set_end_proc(raw_shutdown, Qnil);
+    tar_mRaw = rb_define_module_under(tar_mTinyActors, "Raw");
+    tar_init_support(tar_mRaw);
+    rb_define_singleton_method(tar_mRaw, "ta_text_from_cstr", raw_text_from_cstr, 1);
     define_numeric_constants();
-    rb_define_const(mRaw, "TA_SCXML_IOPROCESSOR", rb_str_new_cstr(TA_SCXML_IOPROCESSOR));
-    rb_define_const(mRaw, "TA_SCXML_INVOKE_TYPE", rb_str_new_cstr(TA_SCXML_INVOKE_TYPE));
-    rb_define_const(mRaw, "TA_BASIC_HTTP_IOPROCESSOR", rb_str_new_cstr(TA_BASIC_HTTP_IOPROCESSOR));
+    rb_define_const(tar_mRaw, "TA_SCXML_IOPROCESSOR", rb_str_new_cstr(TA_SCXML_IOPROCESSOR));
+    rb_define_const(tar_mRaw, "TA_SCXML_INVOKE_TYPE", rb_str_new_cstr(TA_SCXML_INVOKE_TYPE));
+    rb_define_const(tar_mRaw, "TA_BASIC_HTTP_IOPROCESSOR", rb_str_new_cstr(TA_BASIC_HTTP_IOPROCESSOR));
 }

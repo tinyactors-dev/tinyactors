@@ -8,6 +8,12 @@ end
 require_relative "raw/result"
 require_relative "raw/value"
 
-if (RUBY_VERSION.split('.').map(&:to_i).first(2) <=> [3, 3]) >= 0
-  require_relative "tinyactors_raw"
+begin
+  require "tinyactors/tinyactors_raw"
+rescue LoadError => error
+  # Development builds place the bundle beside extconf.rb.  Installed gems
+  # use the namespaced load path above.
+  raise unless error.path == "tinyactors/tinyactors_raw"
+
+  require File.expand_path("../../ext/tinyactors_raw/tinyactors_raw", __dir__)
 end
