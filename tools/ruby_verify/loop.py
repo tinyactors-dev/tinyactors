@@ -12,7 +12,7 @@ import time
 import uuid
 
 from .catalog import BASE, CLASSES, build, digest, owner
-from .runner import capture, child_env, environment
+from .runner import capture, child_env, environment, select as select_checks
 from .store import Store, now
 
 # Some independent probes require later classes. They remain mandatory at integration.
@@ -301,12 +301,29 @@ class Driver:
         if git(self.root, 'rev-parse', 'HEAD') != head:
             raise DriverError('Main did not fast-forward to the accepted milestone')
 
+    def commit_wip(self, brief, implementation, agent):
+        """Persist and mirror each scoped implementation attempt before verification."""
+        changed = changes(self.worktree)
+        if not changed:
+            return self.state['accepted_head']
+        git(self.worktree, 'add', '--', *changed)
+        message = (f"WIP Ruby milestone: {Path(brief).stem}\n\n"
+                   f"Agent: {agent.get('thread_id')}\n"
+                   f"Summary: {implementation.get('summary', '')}\n")
+        git(self.worktree, 'commit', '-F', '-', input=message.encode())
+        head = git(self.worktree, 'rev-parse', 'HEAD')
+        self.integrate_main(head)
+        self.state['accepted_head'] = head
+        self.save()
+        self.emit('WIP committed and mirrored to main at ' + head[:12])
+        return head
+
     def assert_evidence_current(self):
         row = self.store.db.execute('SELECT * FROM runs WHERE run_id=?', (self.state['last_run'],)).fetchone()
         if not row or row['status'] != 'completed' or row['source_hash'] != capture(self.worktree)[2] or row['catalog_hash'] != digest(build(self.worktree)) or row['environment_hash'] != environment(self.options['ruby'])[1]:
             raise DriverError('Verification evidence changed during review; resume to run fresh verification')
 
-    def verify(self, context, artifact):
+    def verify(self, context, artifact, brief=None):
         self.assert_trusted()
         context_file = artifact / 'context.json'
         context_file.write_text(json.dumps(context))
@@ -314,6 +331,8 @@ class Driver:
                 'run', '--agent', context['agent'], '--model', self.options['model'], '--reasoning', self.options['reasoning'],
                 '--task', context['task'], '--iteration', str(self.state['iteration']), '--context-file', str(context_file),
                 '--jobs', str(self.options['jobs']), '--ruby', self.options['ruby']]
+        if brief:
+            args += ['--brief', brief]
         result = stream(args, self.worktree, artifact / 'verification', self.emit, self.options['verify_timeout'])
         evidence = result['last_json']
         if result['exit_code'] not in (0, 1) or not isinstance(evidence, dict) or 'run_id' not in evidence:
@@ -321,10 +340,11 @@ class Driver:
         row = self.store.db.execute('SELECT * FROM runs WHERE run_id=?', (evidence['run_id'],)).fetchone()
         if not row or row['status'] != 'completed': raise DriverError('Verification run is incomplete')
         checks = build(self.worktree)
+        expected = select_checks(checks, brief) if brief else checks
         if row['source_hash'] != capture(self.worktree)[2] or row['catalog_hash'] != digest(checks) or row['environment_hash'] != environment(self.options['ruby'])[1]:
             raise DriverError('Verification evidence is stale')
         rows = [dict(r) for r in self.store.db.execute('SELECT * FROM results WHERE run_id=?', (row['run_id'],))]
-        if {r['check_id'] for r in rows} != {c['id'] for c in checks}: raise DriverError('Run omitted required checks')
+        if {r['check_id'] for r in rows} != {c['id'] for c in expected}: raise DriverError('Run omitted required checks')
         if any(r['status'] not in ('pass', 'fail', 'error') for r in rows): raise DriverError('Run contains unfinished checks')
         self.state['last_run'] = row['run_id']
         self.save()
@@ -486,9 +506,10 @@ Approve only if there are no unresolved findings.
             self.iteration_record(record)
             self.assert_trusted()
             self.scope(brief)
+            self.commit_wip(brief, implementation, agent)
             new_rows = self.verify(dict(agent=agent.get('thread_id') or 'driver/' + self.state['loop_id'],
                 task=brief, loop_id=self.state['loop_id'], previous_run=record['before_run'],
-                implementation=implementation, codex=agent), artifact)
+                implementation=implementation, codex=agent), artifact, brief)
             selected = task_ids(checks, brief)
             protected = set(self.state['protected_passes'])
             missing, regressions = acceptance([dict(check_id=id, status='pass') for id in protected], new_rows, selected)
@@ -532,7 +553,7 @@ Approve only if there are no unresolved findings.
                 record['status'] = 'repair_required'
                 self.state['feedback'] = feedback + [{'agent_blockers': implementation['blockers']}]
                 self.state['stalls'] = 0 if improved else self.state['stalls'] + 1
-                self.emit('Candidate retained for repair; no implementation commit created')
+                self.emit('Candidate retained for repair; WIP commit remains available for repair')
             record['finished_at'] = now()
             self.iteration_record(record)
             self.save()
