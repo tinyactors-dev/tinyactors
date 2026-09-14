@@ -43,7 +43,8 @@ static void tar_handle_mark(void *ptr)
     tar_handle_t *handle = (tar_handle_t *)ptr;
     tar_root_t *root;
     if (!handle) return;
-    rb_gc_mark(handle->owner);
+    if (!RB_SPECIAL_CONST_P(handle->owner))
+        rb_gc_mark_movable(handle->owner);
     for (root = handle->roots; root; root = root->next) {
         if (root->active) rb_gc_mark(root->value);
     }
@@ -195,6 +196,16 @@ VALUE tar_invocation_ref_wrap(uint64_t id, void *s, tar_lifetime_t *t, VALUE o) 
 
 void tar_init_support(VALUE raw)
 {
+    static unsigned int globals_rooted;
+
+    /* VALUEs held in C statics must participate in compaction.  The extension
+     * invokes its initializer before later wrappers create handles, so root
+     * the namespace once and keep the address stable for the life of Ruby. */
+    if (!globals_rooted) {
+        rb_global_variable(&tar_mTinyActors);
+        rb_global_variable(&tar_mRaw);
+        globals_rooted = 1u;
+    }
     /* These are the stable opaque representations shared by later raw
      * assignments.  No runtime procedures are registered here. */
     (void)tar_make_handle_class("System", &tar_system_type);

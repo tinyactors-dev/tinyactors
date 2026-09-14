@@ -25,6 +25,7 @@ static tar_value_domain_t tar_domain = { 0x54415256U };
 static tar_value_record_t *tar_value_records;
 static uintptr_t tar_value_next_handle = 1u;
 static VALUE tar_value_class;
+static unsigned int tar_value_class_rooted;
 static VALUE tar_value_root_registry = Qnil;
 static size_t tar_fixture_retain_total;
 static size_t tar_fixture_release_total;
@@ -792,6 +793,10 @@ void tar_init_value(VALUE raw) {
         rb_define_alloc_func(tar_value_class,tar_value_alloc);
         rb_define_method(tar_value_class,"initialize",tar_value_initialize,1);
         rb_define_method(tar_value_class,"object",tar_value_object,0);
+    }
+    if (!tar_value_class_rooted) {
+        rb_global_variable(&tar_value_class);
+        tar_value_class_rooted = 1u;
     }
     singleton = rb_singleton_class(tar_value_class);
     rb_define_private_method(singleton, "__test_admit", tar_value_fixture_admit, 1);

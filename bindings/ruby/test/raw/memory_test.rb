@@ -12,6 +12,7 @@ class RawMemoryTest < Minitest::Test
       memory = Memory.allocate(size: 16, alignment: alignment)
       assert_equal 16, memory.size
       refute_predicate memory, :closed?
+      assert Memory.__send__(:__test_aligned?, memory, alignment)
       memory.release
       assert_predicate memory, :closed?
     end
@@ -40,6 +41,21 @@ class RawMemoryTest < Minitest::Test
     assert_equal bytes, memory.read(1, bytes.bytesize)
   ensure
     memory&.release unless memory&.closed?
+  end
+
+  def test_roundtrips_each_supported_size_and_alignment
+    payload = "\x00\xffabc".b
+
+    [8, 16, 64].product([1, 8, 16, 64]).each do |size, alignment|
+      memory = Memory.allocate(size: size, alignment: alignment)
+      offset = size - payload.bytesize
+
+      memory.write(offset, payload)
+      assert_equal payload, memory.read(offset, payload.bytesize)
+      assert_equal "".b, memory.read(size, 0)
+    ensure
+      memory&.release unless memory&.closed?
+    end
   end
 
   def test_rejects_negative_overflow_and_out_of_range_accesses
@@ -124,14 +140,38 @@ class RawMemoryTest < Minitest::Test
   end
 
   def test_release_rejects_an_outstanding_arena_loan
+    require "weakref"
     memory = Memory.__send__(:__test_loaned)
-
-    GC.start
-    GC.compact if GC.respond_to?(:compact)
-    assert_equal 8, memory.size
+    assert_equal 4096, memory.size
     assert_raises(RuntimeError) { memory.release }
-    Memory.__send__(:__test_clear_loan, memory)
+    Memory.__send__(:__test_clear_loan)
     assert_nil memory.release
     assert_predicate memory, :closed?
+
+    memory = Memory.__send__(:__test_loaned)
+    weak = WeakRef.new(memory)
+
+    memory = nil
+    GC.start
+    GC.compact if GC.respond_to?(:compact)
+    assert weak.weakref_alive?, "an outstanding loan must pin its Memory wrapper"
+    Memory.__send__(:__test_clear_loan)
+    GC.start
+    GC.compact if GC.respond_to?(:compact)
+    refute weak.weakref_alive?, "the Memory wrapper remained pinned after loan release"
+  ensure
+    Memory.__send__(:__test_clear_loan)
+  end
+
+  def test_migration_view_is_real_candidate_storage_and_expires_after_upgrade
+    memory = Memory.__send__(:__test_migration_view)
+
+    assert_predicate memory, :closed?
+    assert_equal "migrat\x00\x00".b,
+                 Memory.__send__(:__test_migration_state)
+    assert_raises(RuntimeError) { memory.read(0, 1) }
+    assert_raises(RuntimeError) { memory.write(0, "x") }
+  ensure
+    Memory.__send__(:__test_migration_close)
   end
 end
