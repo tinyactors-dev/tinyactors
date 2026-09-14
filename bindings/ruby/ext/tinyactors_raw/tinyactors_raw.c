@@ -161,6 +161,7 @@ Init_tinyactors_raw(void)
     }
     rb_set_end_proc(raw_shutdown, Qnil);
     tar_init_support(tar_mRaw);
+    tar_init_value(tar_mRaw);
     rb_define_singleton_method(tar_mRaw, "ta_text_from_cstr", raw_text_from_cstr, 1);
     define_numeric_constants();
     rb_define_const(tar_mRaw, "TA_SCXML_IOPROCESSOR", rb_str_new_cstr(TA_SCXML_IOPROCESSOR));

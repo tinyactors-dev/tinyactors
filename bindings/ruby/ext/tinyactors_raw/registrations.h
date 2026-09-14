@@ -7,5 +7,6 @@
  * one header makes load order explicit and makes duplicate registration
  * auditable without inventing exports for unfinished wrappers. */
 void tar_init_support(VALUE raw);
+void tar_init_value(VALUE raw);
 
 #endif
