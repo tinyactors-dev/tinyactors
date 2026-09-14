@@ -1451,5 +1451,80 @@
     "probe": "high_reply",
     "title": "Execute convenience request/reply: missing_origin",
     "case": "missing_origin"
+  },
+  {
+    "id": "result.reject.string",
+    "owner": "raw.Result",
+    "probe": "result_type",
+    "title": "Reject noninteger Result status: string",
+    "value": "0"
+  },
+  {
+    "id": "result.reject.float",
+    "owner": "raw.Result",
+    "probe": "result_type",
+    "title": "Reject noninteger Result status: float",
+    "value": 0.5
+  },
+  {
+    "id": "result.reject.nil",
+    "owner": "raw.Result",
+    "probe": "result_type",
+    "title": "Reject noninteger Result status: nil",
+    "value": null
+  },
+  {
+    "id": "result.reject.boolean",
+    "owner": "raw.Result",
+    "probe": "result_type",
+    "title": "Reject noninteger Result status: boolean",
+    "value": false
+  },
+  {
+    "id": "text.unicode_nul",
+    "owner": "00-bootstrap",
+    "probe": "text",
+    "title": "Stop at the byte NUL boundary: unicode_nul",
+    "input": "\u03bb\u0000suffix",
+    "expected": "\u03bb"
+  },
+  {
+    "id": "text.emoji_nul",
+    "owner": "00-bootstrap",
+    "probe": "text",
+    "title": "Stop at the byte NUL boundary: emoji_nul",
+    "input": "\ud83d\ude00\u03bb\u0000suffix",
+    "expected": "\ud83d\ude00\u03bb"
+  },
+  {
+    "id": "value.native_ownership",
+    "owner": "raw.Value",
+    "probe": "native_value",
+    "title": "Raw::Value supplies the required native ownership implementation"
+  },
+  {
+    "id": "foundation.shared_interfaces",
+    "owner": "00-bootstrap",
+    "probe": "foundation_files",
+    "title": "Bootstrap publishes the required native resource interfaces",
+    "files": [
+      "bindings/ruby/ext/tinyactors_raw/support.h",
+      "bindings/ruby/ext/tinyactors_raw/support.c",
+      "bindings/ruby/ext/tinyactors_raw/registrations.h"
+    ]
+  },
+  {
+    "id": "runtime.native_queue.replacement",
+    "owner": "raw.Value",
+    "probe": "native_queue",
+    "title": "Keep native queued/current roots through compaction and replacement",
+    "case": "replacement"
+  },
+  {
+    "id": "runtime.native_queue.teardown",
+    "owner": "raw.Value",
+    "probe": "native_queue",
+    "title": "Keep native queued/current roots through compaction and teardown",
+    "case": "teardown"
   }
 ]

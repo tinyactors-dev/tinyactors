@@ -6,7 +6,8 @@ module TinyActors
       attr_reader :status, :value
 
       def initialize(status:, value: nil)
-        @status = Integer(status)
+        raise TypeError, "status must be an Integer" unless status.is_a?(Integer)
+        @status = status
         @value = value
         freeze
       end

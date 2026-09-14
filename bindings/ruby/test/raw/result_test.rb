@@ -3,6 +3,11 @@
 require_relative "../test_helper"
 
 class RawResultTest < Minitest::Test
+  def test_rejects_coercible_noninteger_statuses
+    ["0", 0.0, 0.5, nil, false].each do |status|
+      assert_raises(TypeError) { TinyActors::Raw::Result.new(status: status) }
+    end
+  end
   def test_preserves_status_and_output_identity
     value = {diagnostic: "kept"}
     result = TinyActors::Raw::Result.new(status: TinyActors::Raw::TA_BUSY, value: value)

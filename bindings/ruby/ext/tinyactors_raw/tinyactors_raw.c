@@ -14,7 +14,7 @@ raw_text_from_cstr(VALUE self, VALUE value)
     if (NIL_P(value)) return Qnil;
     StringValue(value);
     text = ta_text_from_cstr(RSTRING_PTR(value));
-    return rb_str_substr(value, 0, (long)text.size);
+    return rb_str_subseq(value, 0, (long)text.size);
 }
 
 static void

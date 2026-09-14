@@ -29,18 +29,21 @@ def source_files(root):
     for name in ("src", "tests", "tools", "examples", "bindings/ruby"):
         directory = root / name
         if directory.exists():
-            for path in directory.rglob("*"):
-                relative = path.relative_to(root)
-                if any(p in {".verification", ".git", "__pycache__", "build"} or p.endswith(".dSYM") for p in relative.parts):
-                    continue
-                if path.suffix in {".o", ".so", ".bundle", ".dylib", ".pyc", ".sqlite3", ".sqlite3-wal", ".sqlite3-shm"}:
-                    continue
-                if path.name in {"mkmf.log", "Makefile"}:
-                    continue
-                if path.is_file():
-                    if not path.resolve().is_relative_to(root.resolve()):
-                        raise RuntimeError("Source symlink escapes workspace: " + str(relative))
-                    paths.append(path)
+            # Prune retained run artifacts/worktrees instead of visiting every log.
+            for directory_path, directories, filenames in os.walk(directory):
+                directories[:] = [d for d in directories if d not in
+                                  {".verification", ".git", "__pycache__", "build"} and not d.endswith(".dSYM")]
+                for filename in filenames:
+                    path = Path(directory_path) / filename
+                    relative = path.relative_to(root)
+                    if path.suffix in {".o", ".so", ".bundle", ".dylib", ".pyc", ".sqlite3", ".sqlite3-wal", ".sqlite3-shm"}:
+                        continue
+                    if path.name in {"mkmf.log", "Makefile"}:
+                        continue
+                    if path.is_file():
+                        if not path.resolve().is_relative_to(root.resolve()):
+                            raise RuntimeError("Source symlink escapes workspace: " + str(relative))
+                        paths.append(path)
     paths += [root / name for name in ("Makefile", "README.md", ".gitignore") if (root / name).is_file()]
     return sorted(paths)
 

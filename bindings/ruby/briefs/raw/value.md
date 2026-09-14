@@ -11,6 +11,7 @@ C anchors: `ta_value_t`, `ta_value_ops_t`.
 ## Owned files
 
 - `ext/tinyactors_raw/raw_value.c`
+- `lib/tinyactors/raw/value.rb` (remove the obsolete Ruby-only wrapper)
 - `test/raw/value_test.rb`
 
 Paths are relative to `bindings/ruby/`.

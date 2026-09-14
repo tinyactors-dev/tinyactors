@@ -1,7 +1,7 @@
 # Ruby binding rebuild
 
 The user retired the previous Ruby implementation. Do not restore it from Git.
-The current code defines namespaces only. The briefs describe future implementation.
+The rebuild has partial implementations. The verifier and briefs define the remaining work.
 
 ## Required architecture
 
@@ -70,3 +70,9 @@ relax assertions, substitute test doubles in independent probes, or write
 verification verdicts to SQLite. Propose a correction to the integrator when
 an independent check contradicts the C header or shared contract.
 Use Minitest in the brief's assigned test file. Empty suites and skips do not pass.
+
+When `tools/drive_ruby.py` assigns a milestone, follow its explicit scope and commit instructions.
+The driver owns commits. It requires independent review and checks before each implementation commit.
+Deferred runtime probes remain mandatory at final integration.
+Never modify `$LOADED_FEATURES` to satisfy a verification check.
+Report a verifier defect with a reproducer instead of changing production behavior to mimic evidence.

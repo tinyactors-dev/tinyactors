@@ -33,8 +33,11 @@ class RubyBindingProbes
   def execute(check)
     case check.fetch('probe')
     when 'native_loaded'
-      directory = File.join(@input.fetch('root'), 'bindings/ruby/lib/tinyactors') + '/'
-      assert($LOADED_FEATURES.any? { |f| f.start_with?(directory) && f.match?(/\/tinyactors_raw\.(bundle|so|dylib)\z/) }, 'Shipped loader did not load the freshly built tinyactors_raw extension')
+      directory = File.realpath(File.join(@input.fetch('root'), 'bindings/ruby/lib/tinyactors'))
+      paths = $LOADED_FEATURES.select { |f| f.match?(/\/tinyactors_raw\.(bundle|so|dylib)\z/) }
+      equal(1, paths.length)
+      assert(File.file?(paths.first), 'Loaded native feature must exist')
+      equal(directory, File.dirname(File.realpath(paths.first)))
     when 'constant'
       name = check.fetch('symbol')
       raise ProtocolError, 'C oracle did not produce ' + name unless @input.fetch('expected').key?(name)
@@ -69,6 +72,19 @@ class RubyBindingProbes
     equal(status == constant('TA_OK'), result.ok?)
     assert(result.frozen?, 'Result must be immutable')
     rejects(FrozenError) { result.instance_variable_set(:@status, 99) }
+  end
+  def probe_result_type(c)
+    rejects(TypeError) { raw::Result.new(status: c['value']) }
+  end
+  def probe_native_value(c)
+    equal(nil, raw::Value.instance_method(:initialize).source_location)
+    assert(File.file?(File.join(@input.fetch('root'), 'bindings/ruby/ext/tinyactors_raw/raw_value.c')),
+           'Raw::Value needs the native ownership implementation specified by its brief')
+  end
+  def probe_foundation_files(c)
+    c.fetch('files').each do |path|
+      assert(File.file?(File.join(@input.fetch('root'), path)), 'Missing required foundation interface: ' + path)
+    end
   end
   def probe_value(c)
     value = c['value']

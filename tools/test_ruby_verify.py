@@ -251,7 +251,7 @@ class CatalogAndSnapshotTests(Fixture):
         self.assertEqual(54, len([c for c in checks if c['id'].startswith('raw.export.')]))
         owners = {c['brief'] for c in checks}
         for path in (ROOT / 'bindings/ruby/briefs').rglob('*.md'):
-            if path.name not in ('README.md', 'CONTRACT.md'):
+            if path.name not in ('README.md', 'CONTRACT.md', 'raw-records.md'):
                 self.assertIn(str(path.relative_to(ROOT)), owners)
 
     def test_all_probe_names_resolve_and_ruby_parses(self):
@@ -299,6 +299,21 @@ class CatalogAndSnapshotTests(Fixture):
         (root / 'bindings/ruby/lib/external.rb').symlink_to(self.path / 'external.rb')
         with self.assertRaises(RuntimeError): capture(root)
 
+    def test_snapshot_does_not_descend_into_retained_worktrees(self):
+        root = self.source()
+        nested = root / 'bindings/ruby/.verification/driver/old/worktree'
+        nested.mkdir(parents=True)
+        (nested / 'ignored.rb').write_text('old source')
+        walk = os.walk
+        visited = []
+        def observed(*args, **kwargs):
+            for entry in walk(*args, **kwargs):
+                visited.append(entry[0])
+                yield entry
+        with patch('ruby_verify.runner.os.walk', observed):
+            capture(root)
+        self.assertFalse(any('.verification' in Path(p).parts for p in visited))
+
     def test_end_to_end_run_archives_snapshot_and_context(self):
         root = self.source()
         harness = Harness(root, self.store, RUBY)
@@ -323,6 +338,12 @@ class CatalogAndSnapshotTests(Fixture):
             with self.assertRaisesRegex(RuntimeError, 'modified verification source'):
                 harness.run(dict(agent='fixture'))
         self.assertEqual('interrupted', self.store.latest(SPEC['id'])['run_status'])
+
+
+def load_tests(loader, tests, pattern):
+    import test_ruby_driver
+    tests.addTests(loader.loadTestsFromModule(test_ruby_driver))
+    return tests
 
 
 if __name__ == '__main__':

@@ -7,7 +7,9 @@ class BootstrapTest < Minitest::Test
     require "tinyactors"
     require "tinyactors/raw"
     assert TinyActors::Raw.singleton_methods(false).include?(:ta_text_from_cstr)
-    assert $LOADED_FEATURES.any? { |path| path.end_with?("/tinyactors_raw.bundle", ".so", ".dylib") }
+    native_paths = $LOADED_FEATURES.select { |path| path.match?(%r{/tinyactors_raw\.(bundle|so|dylib)$}) }
+    assert_equal 1, native_paths.length
+    assert File.file?(native_paths.first)
   end
 
   def test_text_helper_preserves_presence_and_stops_at_nul
@@ -15,6 +17,8 @@ class BootstrapTest < Minitest::Test
     assert_equal "", TinyActors::Raw.ta_text_from_cstr("")
     assert_equal "a", TinyActors::Raw.ta_text_from_cstr("a\0b")
     assert_equal "λ", TinyActors::Raw.ta_text_from_cstr("λ")
+    assert_equal "λ", TinyActors::Raw.ta_text_from_cstr("λ\0suffix")
+    assert_equal "😀λ", TinyActors::Raw.ta_text_from_cstr("😀λ\0suffix")
   end
 
   def test_constants_match_the_public_header_contract

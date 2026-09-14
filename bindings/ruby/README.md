@@ -46,3 +46,6 @@ of failing checks for the missing binding and keeps agent-attributed history in
 `bindings/ruby/.verification/checks.sqlite3`. Configure Ruby with
 `python3 tools/verify_ruby.py init --ruby /path/to/ruby`, then use `run`, `next`,
 `show`, and `gate`. A passing coverage plan alone does not pass this verifier.
+
+Use the [implementation driver](driver.md) to run Luna implementation and Sol review.
+See the [review of the initial commits](review-2026-09-14.md) for defects and remaining foundation work.

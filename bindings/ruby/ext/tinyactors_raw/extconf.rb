@@ -11,6 +11,6 @@ $CFLAGS.gsub!(/(?:^|\s)-g(?:\s|$)/, " ")
 $postlink = ""
 RbConfig::CONFIG["POSTLINK"] = ":"
 $VPATH = [src_dir]
-$srcs = ["tinyactors_raw.c"] + Dir[File.join(src_dir, "*.c")].map { |path| File.basename(path) }.sort
+$srcs = (Dir[File.join(__dir__, "*.c")] + Dir[File.join(src_dir, "*.c")]).map { |path| File.basename(path) }.sort
 
 create_makefile("tinyactors_raw")

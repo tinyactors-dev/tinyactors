@@ -9,11 +9,11 @@ module RubyRuntimeProbes
     {initial_chunk_bytes: 4096, maximum_chunk_bytes: 65536,
      maximum_allocation: 65536, maximum_bytes: constant('TA_UNLIMITED')}
   end
-  def with_system(data = {})
+  def with_system(data = {}, **overrides)
     arena = ok(raw.ta_arena_create(raw::Allocator.malloc, arena_options))
     system = nil
     begin
-      config = raw.ta_system_config_init.merge(data_model: 'bytes', session_prefix: 'verify', data: data, host_user: self)
+      config = raw.ta_system_config_init.merge(data_model: 'bytes', session_prefix: 'verify', data: data, host_user: self).merge(overrides)
       system = ok(raw.ta_system_create(arena, config))
       yield system
     ensure
@@ -77,6 +77,56 @@ module RubyRuntimeProbes
       assert(ref != type.new(system, (ref.id + 1) % (2**64)))
       assert(ref.frozen?)
       with_system { |other| assert(ref != type.new(other, ref.id), 'Reference equality lost system identity') }
+    end
+  end
+  def probe_native_queue(c)
+    require 'weakref'
+    balances, weak, seen = Hash.new(0), [], []
+    values = {
+      retain: ->(user, value) { equal(self, user); balances[value.object.object_id] += 1; nil },
+      release: ->(user, value) { equal(self, user); balances[value.object.object_id] -= 1; nil },
+      snapshot: ->(user, value) {
+        equal(self, user)
+        copy = Marshal.load(Marshal.dump(value.object))
+        weak << WeakRef.new(copy)
+        balances[copy.object_id] += 1
+        raw::Result.new(status: constant('TA_OK'), value: raw::Value.new(copy))
+      }
+    }
+    data = {run: ->(ctx, kind, code) {
+      payload = raw.ta_context_inspect(ctx).fetch(:system).fetch(:event).fetch(:data)
+      equal(constant('TA_PAYLOAD_NATIVE'), payload.fetch(:kind))
+      seen << Marshal.load(Marshal.dump(payload.fetch(:as).fetch(:native).object))
+      constant('TA_OK')
+    }}
+    with_system(data, values: values) do |system|
+      actors, definitions = [], []
+      begin
+        definitions << build_raw(system, [{id: 'idle', transitions: [transition('PING', 1)]}])
+        actors << spawn_raw(system, definitions.first)
+        run_raw(system)
+        source = {'nested' => ['original']}
+        ok(raw.ta_post(system, {target: {kind: constant('TA_TARGET_INSTANCE'), instance: actors.first},
+          message: {name: 'PING', data: {kind: constant('TA_PAYLOAD_NATIVE'), as: {native: raw::Value.new(source)}}}}))
+        source['nested'][0].replace('mutated')
+        assert(!weak.empty?, 'Native admission did not call the configured snapshot policy')
+        GC.start
+        GC.compact if GC.respond_to?(:compact)
+        assert(weak.all?(&:weakref_alive?), 'Queued native content lost its C-owned root')
+        run_raw(system)
+        equal([{'nested' => ['original']}], seen)
+        GC.start
+        GC.compact if GC.respond_to?(:compact)
+        assert(weak.all?(&:weakref_alive?), 'Current event lost its C-owned root')
+        if c['case'] == 'replacement'
+          post_raw(system, actors.first, 'UNMATCHED')
+          run_raw(system)
+          assert(balances.values.all?(&:zero?), 'Replacing the current event did not release its roots exactly once')
+        end
+      ensure
+        dispose(system, actors, definitions)
+      end
+      assert(balances.values.all?(&:zero?), 'Actor teardown did not balance native root ownership')
     end
   end
   def probe_arena(c)

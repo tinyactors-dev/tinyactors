@@ -114,3 +114,9 @@ python3 tools/test_ruby_verify.py --ruby /path/to/supported/ruby
 ```
 
 These tests exercise real subprocesses and SQLite transactions: evidence validation, assertion/skip handling, Minitest results, timeouts, signals, output limits, child cleanup, source capture and mutation, fingerprint invalidation, historical context, concurrent writers, interrupted-run recovery, selection errors, and the compiled C constant oracle. Synthetic namespace fixtures belong only to these harness tests and never count as binding acceptance evidence.
+
+The [implementation driver](driver.md) automates milestone selection, independent Sol review,
+and commits on a retained branch. The [initial commit review](review-2026-09-14.md)
+added ten checks for missed status, Unicode, foundation, and native ownership requirements.
+The catalog now contains 733 checks. The original 723-check inventory above remains a baseline.
+The harness gate also runs the driver regression tests.
