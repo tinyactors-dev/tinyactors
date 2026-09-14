@@ -366,10 +366,19 @@ Read the assignment and its dependency briefs.
 Implement the real native behavior described by the assignment.
 Use private public-C-API fixtures when a later wrapper is unavailable.
 Do not create a fake scheduler, dummy result, or placeholder implementation.
+Treat every P1 and P2 finding from prior reviews as required work.
+Prioritize completing the assignment's acceptance requirements over merely making
+the current verifier checks pass.
+Work through all actionable requirements and prior review findings in this turn.
+Implement complete, production-quality behavior and tests within the allowed scope.
+Do not report an item as a blocker if you can resolve it by inspecting the source,
+the public C API, or existing tests. Only stop for genuinely external blockers.
 Change only these paths or patterns:
 {json.dumps(owned_files(self.worktree, brief), indent=2)}
 Explain each necessary shared registration change in your report.
 Run focused tests with this Ruby executable: {self.options['ruby']}.
+Fix focused-test failures before returning, and add the required private
+public-C-API fixtures and behavioral coverage when the assignment calls for them.
 Do not change the verifier, its probes, briefs, task assignments, or check database.
 Do not fabricate loaded features or test evidence.
 Do not remove assertions to make a test pass.
@@ -377,7 +386,9 @@ Do not commit, reset, rebase, merge, push, or start other agents.
 The driver runs full verification after your turn.
 This assignment is a milestone, not completion of the binding.
 The final integration gate still requires every deferred runtime probe.
-Return after one implementation attempt with a summary and concrete blockers.
+Continue until the actionable requirements for this assignment are implemented
+and tested. Return a summary of the completed changes and only concrete blockers
+that are genuinely external to the repository or unavailable runtime.
 Latest verification run: {self.state['last_run']}
 Current failed milestone checks:
 {json.dumps(failed, indent=2)}
@@ -393,6 +404,9 @@ Inspect actual source and tests. Do not trust the implementation report.
 Check native ownership, GC compaction, callback expiry, status conversion, and sender routing where applicable.
 Reject placeholders, discarded fields, fabricated test evidence, and weakened tests.
 For a milestone, inspect every requirement implementable with its dependencies.
+Treat missing acceptance coverage as a defect even when the scoped verifier checks
+pass. Specifically require the assignment's native fixtures, lifetime/GC behavior,
+callback and reentry safety, overflow handling, and cleanup coverage where listed.
 Identify concrete defects with file paths and explanations.
 Do not demand later wrappers when a private public-C-API fixture establishes behavior.
 For final integration, inspect the complete binding against all briefs.
