@@ -303,7 +303,13 @@ class Driver:
         dirty = changes(self.root)
         if dirty:
             raise DriverError('Cannot integrate onto main with uncommitted changes: ' + ', '.join(dirty))
-        if git(self.root, 'rev-parse', 'HEAD') != self.state['accepted_head']:
+        current = git(self.root, 'rev-parse', 'HEAD')
+        # Main may advance with a driver fix while an agent is working. The
+        # candidate is still safe to integrate when it contains that main
+        # commit; require ancestry so unrelated main changes are rejected.
+        ancestry = subprocess.run(['git', 'merge-base', '--is-ancestor', current, head], cwd=self.root,
+                                  capture_output=True)
+        if ancestry.returncode:
             raise DriverError('Main changed outside the driver; inspect it before integrating the accepted milestone')
         git(self.root, 'merge', '--ff-only', head)
         if git(self.root, 'rev-parse', 'HEAD') != head:
