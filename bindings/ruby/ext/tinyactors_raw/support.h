@@ -4,6 +4,9 @@
 #include "ruby.h"
 #include "tinyactors.h"
 
+ta_value_t tar_value_to_native(VALUE object);
+const ta_value_ops_t *tar_value_ops(void);
+
 /* Shared native state.  These records are deliberately private: later
  * wrappers receive them through the factories below and never see an address
  * as a Ruby Integer. */
