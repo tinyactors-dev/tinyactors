@@ -5,6 +5,8 @@ module TinyActors
   end
 end
 
+require_relative "raw/result"
+
 if RUBY_VERSION >= "3.3"
   extension = File.expand_path("tinyactors_raw", __dir__)
   require extension
