@@ -287,6 +287,20 @@ class Driver:
     def driver_manifest(self):
         return {name: hash for name, hash in capture(self.root)[1].items() if name.startswith('tools/')}
 
+    def integrate_main(self, head):
+        """Fast-forward the user's main checkout after a verified milestone."""
+        branch = git(self.root, 'branch', '--show-current')
+        if branch != 'main':
+            raise DriverError('Automatic integration requires the root checkout on main; found ' + (branch or '(detached HEAD)'))
+        dirty = changes(self.root)
+        if dirty:
+            raise DriverError('Cannot integrate onto main with uncommitted changes: ' + ', '.join(dirty))
+        if git(self.root, 'rev-parse', 'HEAD') != self.state['accepted_head']:
+            raise DriverError('Main changed outside the driver; inspect it before integrating the accepted milestone')
+        git(self.root, 'merge', '--ff-only', head)
+        if git(self.root, 'rev-parse', 'HEAD') != head:
+            raise DriverError('Main did not fast-forward to the accepted milestone')
+
     def assert_evidence_current(self):
         row = self.store.db.execute('SELECT * FROM runs WHERE run_id=?', (self.state['last_run'],)).fetchone()
         if not row or row['status'] != 'completed' or row['source_hash'] != capture(self.worktree)[2] or row['catalog_hash'] != digest(build(self.worktree)) or row['environment_hash'] != environment(self.options['ruby'])[1]:
@@ -506,7 +520,9 @@ Approve only if there are no unresolved findings.
                         git(self.worktree, 'commit', '-F', '-', input=message.encode())
                         if changes(self.worktree) or capture(self.worktree)[2] != source_hash:
                             raise DriverError('A commit hook changed verified source; inspect the retained worktree')
-                    self.state['accepted_head'] = git(self.worktree, 'rev-parse', 'HEAD')
+                    accepted_head = git(self.worktree, 'rev-parse', 'HEAD')
+                    self.integrate_main(accepted_head)
+                    self.state['accepted_head'] = accepted_head
                     record.update(status='accepted', commit=self.state['accepted_head'])
                     self.state.update(task=None, feedback=[], stalls=0)
                     self.emit('Accepted milestone at ' + self.state['accepted_head'][:12])
