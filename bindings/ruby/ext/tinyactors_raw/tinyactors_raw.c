@@ -20,6 +20,7 @@ raw_text_from_cstr(VALUE self, VALUE value)
 static void raw_shutdown(VALUE unused)
 {
     (void)unused;
+    tar_value_shutdown();
     tar_deferred_cleanup_boundary();
 }
 
