@@ -32,6 +32,13 @@ SHARED_FILES = ['bindings/ruby/lib/tinyactors.rb', 'bindings/ruby/lib/tinyactors
                 'bindings/ruby/ext/tinyactors_raw/support.h', 'bindings/ruby/ext/tinyactors_raw/support.c',
                 'bindings/ruby/ext/tinyactors_raw/registrations.h',
                 'bindings/ruby/test/test_helper.rb', 'bindings/ruby/test/support/*']
+# The task database is opened by the verification/agent harness. SQLite may
+# leave these journal sidecars behind in the worktree; they are operational
+# artifacts, not assignment changes.
+IGNORED_WORKTREE_ARTIFACTS = {
+    'tasks/tasks.sqlite3-shm',
+    'tasks/tasks.sqlite3-wal',
+}
 IMPLEMENT_SCHEMA = {'type': 'object', 'additionalProperties': False,
                     'properties': {'summary': {'type': 'string'}, 'blockers': {'type': 'array', 'items': {'type': 'string'}}},
                     'required': ['summary', 'blockers']}
@@ -60,7 +67,8 @@ def changes(root):
     # Include staged, unstaged, and untracked source changes. NUL protects unusual filenames.
     tracked = subprocess.check_output(['git', 'diff', '--name-only', '-z', 'HEAD'], cwd=root).split(b'\0')
     untracked = subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard', '-z'], cwd=root).split(b'\0')
-    return sorted({os.fsdecode(p) for p in tracked + untracked if p})
+    return sorted({os.fsdecode(p) for p in tracked + untracked if p}
+                  - IGNORED_WORKTREE_ARTIFACTS)
 
 
 def task_ids(checks, brief):
