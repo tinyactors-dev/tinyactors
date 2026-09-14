@@ -30,9 +30,10 @@ static VALUE eTinyActorsError;
 static VALUE eUnsupported;
 static VALUE rb_hash_get(VALUE h, const char *name);
 static VALUE rb_text_value(VALUE value);
+static ta_status_t rb_data_run(ta_context_t *native, ta_action_kind_t kind, ta_code_t code);
 
 typedef struct { ta_chunk_allocator_t allocator; ta_arena_t *arena; VALUE callbacks; } rb_arena_t;
-typedef struct { ta_system_t *system; ta_arena_t *arena; int closed; } rb_system_t;
+typedef struct { ta_system_t *system; ta_arena_t *arena; int closed; VALUE run_callback; } rb_system_t;
 typedef struct { ta_definition_t *definition; VALUE system; } rb_definition_t;
 
 static ta_status_t rb_acquire(void *user, const ta_layout_t *minimum, ta_chunk_t *out)
@@ -56,7 +57,8 @@ static void rb_system_free(void *ptr) {
     if (s->arena) ta_arena_close(s->arena);
     xfree(s);
 }
-static const rb_data_type_t rb_system_type = { "TinyActors::System", { 0, rb_system_free, 0 }, 0, 0, RUBY_TYPED_FREE_IMMEDIATELY };
+static void rb_system_mark(void *ptr) { rb_system_t *s = ptr; if (s) rb_gc_mark(s->run_callback); }
+static const rb_data_type_t rb_system_type = { "TinyActors::System", { rb_system_mark, rb_system_free, 0 }, 0, 0, RUBY_TYPED_FREE_IMMEDIATELY };
 static void rb_arena_free(void *ptr) { rb_arena_t *a = ptr; if (a->arena) ta_arena_close(a->arena); xfree(a); }
 static void rb_arena_mark(void *ptr) { rb_arena_t *a = ptr; if (a) rb_gc_mark(a->callbacks); }
 static const rb_data_type_t rb_arena_type = { "TinyActors::Arena", { rb_arena_mark, rb_arena_free, 0 }, 0, 0, RUBY_TYPED_FREE_IMMEDIATELY };
@@ -229,6 +231,16 @@ static VALUE system_initialize(int argc, VALUE *argv, VALUE self)
     ta_system_config_t config; ta_system_config_init(&config);
     config.session_prefix = ta_text_from_cstr("ruby");
     config.data_model = ta_text_from_cstr("bytes");
+    if (!NIL_P(options) && TYPE(options) == T_HASH) {
+        VALUE callback = rb_hash_get(options, "run");
+        if (!NIL_P(callback)) {
+            if (!rb_respond_to(callback, rb_intern("call")))
+                rb_raise(rb_eArgError, "run must respond to call");
+            s->run_callback = callback;
+            config.host_user = s;
+            config.data.run = rb_data_run;
+        }
+    }
     for (size_t i = 0; i < TA_LIFETIME_COUNT; ++i)
         config.arenas[i] = (ta_arena_options_t){ 4096, 65536, TA_UNLIMITED, 65536 };
     ta_ioprocessor_desc_t *processors = NULL;
@@ -309,6 +321,26 @@ static ta_visit_t rb_inspect_visit(void *user, const ta_inspect_record_t *record
 static VALUE system_inspect_all(VALUE self) { rb_inspect_sink_t sink={rb_ary_new()}; ta_inspect_options_t o; memset(&o,0,sizeof o); o.work_units=1000; o.details=0; o.sink=(ta_inspect_sink_t){&sink,rb_inspect_visit}; ta_inspect_cursor_t cursor={{0}}; ta_status_t st=ta_system_inspect(get_system(self)->system,&o,&cursor); if(st!=TA_OK) rb_raise(eTinyActorsError,"system_inspect failed (status %d)",st); return sink.records; }
 static VALUE config_default(VALUE klass) { VALUE h=rb_hash_new(); rb_hash_aset(h,ID2SYM(rb_intern("session_prefix")),rb_str_new_cstr("ruby")); rb_hash_aset(h,ID2SYM(rb_intern("data_model")),rb_str_new_cstr("bytes")); rb_hash_aset(h,ID2SYM(rb_intern("limits")),rb_hash_new()); return h; }
 
+static VALUE rb_data_run_call(VALUE argument) {
+    VALUE *values = (VALUE *)argument;
+    return rb_funcall(values[0], rb_intern("call"), 1, values[1]);
+}
+
+static ta_status_t rb_data_run(ta_context_t *native, ta_action_kind_t kind, ta_code_t code) {
+    rb_system_t *s = (rb_system_t *)ta_context_host_user(native);
+    VALUE context, values[2];
+    int error = 0;
+    (void)kind; (void)code;
+    context = rb_obj_alloc(cContext);
+    rb_ivar_set(context, rb_intern("@native_context"), ULL2NUM((uintptr_t)native));
+    rb_ivar_set(context, rb_intern("@event"), Qnil);
+    values[0] = s->run_callback;
+    values[1] = context;
+    rb_protect(rb_data_run_call, (VALUE)values, &error);
+    if (error) return TA_EXECUTION_ERROR;
+    return TA_OK;
+}
+
 static VALUE rb_hash_get(VALUE h, const char *name) {
     VALUE v = rb_hash_aref(h, ID2SYM(rb_intern(name)));
     if (NIL_P(v)) v = rb_hash_aref(h, rb_str_new_cstr(name));
@@ -337,7 +369,7 @@ static void rb_chart_free_states(ta_chart_state_t *states) {
 }
 static ta_block_t rb_chart_actions(VALUE value) {
     ta_block_t block = {0}; if (NIL_P(value)) return block; Check_Type(value, T_ARRAY); long n=RARRAY_LEN(value); ta_action_t *actions=ALLOC_N(ta_action_t,(size_t)n); memset(actions,0,sizeof(*actions)*(size_t)n); long used=0;
-    for(long i=0;i<n;++i){ VALUE a=rb_ary_entry(value,i); if(!RB_TYPE_P(a,T_HASH)) continue; VALUE event=rb_hash_get(a,"event"); VALUE type=rb_hash_get(a,"type"); ID kind=NIL_P(type)?rb_intern("raise"):SYM2ID(rb_to_symbol(type)); if(!NIL_P(event) && kind==rb_intern("raise")){ event=rb_text_value(event); actions[used].kind=TA_ACTION_RAISE; actions[used].as.raise.event=(ta_text_t){StringValueCStr(event),RSTRING_LEN(event)}; used++; } else if(kind==rb_intern("send")){ event=rb_text_value(event); actions[used].kind=TA_ACTION_SEND; actions[used].as.send.event.literal=(ta_text_t){StringValueCStr(event),RSTRING_LEN(event)}; VALUE target=rb_hash_get(a,"target"); if(NIL_P(target)) target=target_make(cTarget,ID2SYM(rb_intern("self")),Qnil); actions[used].as.send.target=rb_target(target); VALUE sendid=rb_hash_get(a,"sendid"); if(!NIL_P(sendid)){sendid=rb_text_value(sendid); actions[used].as.send.id=(ta_text_t){StringValueCStr(sendid),RSTRING_LEN(sendid)};} VALUE delay=rb_hash_get(a,"delay_ns"); if(!NIL_P(delay)) actions[used].as.send.delay_ns=NUM2ULL(delay); used++; } else if(kind==rb_intern("cancel")){ VALUE sendid=rb_hash_get(a,"sendid"); if(!NIL_P(sendid)){sendid=rb_text_value(sendid); actions[used].kind=TA_ACTION_CANCEL; actions[used].as.cancel.sendid.literal=(ta_text_t){StringValueCStr(sendid),RSTRING_LEN(sendid)}; used++; } } }
+    for(long i=0;i<n;++i){ VALUE a=rb_ary_entry(value,i); if(!RB_TYPE_P(a,T_HASH)) continue; VALUE event=rb_hash_get(a,"event"); VALUE type=rb_hash_get(a,"type"); ID kind=NIL_P(type)?rb_intern("raise"):SYM2ID(rb_to_symbol(type)); if(kind==rb_intern("custom")){ VALUE code=rb_hash_get(a,"code"); actions[used].kind=TA_ACTION_CUSTOM; actions[used].as.custom.code=NIL_P(code)?0:NUM2ULL(code); used++; } else if(!NIL_P(event) && kind==rb_intern("raise")){ event=rb_text_value(event); actions[used].kind=TA_ACTION_RAISE; actions[used].as.raise.event=(ta_text_t){StringValueCStr(event),RSTRING_LEN(event)}; used++; } else if(kind==rb_intern("send")){ event=rb_text_value(event); actions[used].kind=TA_ACTION_SEND; actions[used].as.send.event.literal=(ta_text_t){StringValueCStr(event),RSTRING_LEN(event)}; VALUE target=rb_hash_get(a,"target"); if(NIL_P(target)) target=target_make(cTarget,ID2SYM(rb_intern("self")),Qnil); actions[used].as.send.target=rb_target(target); VALUE sendid=rb_hash_get(a,"sendid"); if(!NIL_P(sendid)){sendid=rb_text_value(sendid); actions[used].as.send.id=(ta_text_t){StringValueCStr(sendid),RSTRING_LEN(sendid)};} VALUE delay=rb_hash_get(a,"delay_ns"); if(!NIL_P(delay)) actions[used].as.send.delay_ns=NUM2ULL(delay); used++; } else if(kind==rb_intern("cancel")){ VALUE sendid=rb_hash_get(a,"sendid"); if(!NIL_P(sendid)){sendid=rb_text_value(sendid); actions[used].kind=TA_ACTION_CANCEL; actions[used].as.cancel.sendid.literal=(ta_text_t){StringValueCStr(sendid),RSTRING_LEN(sendid)}; used++; } } }
     block.actions=actions; block.count=(uint32_t)used; return block;
 }
 static ta_chart_state_t *rb_chart_states(VALUE hash) {
