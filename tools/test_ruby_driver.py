@@ -149,6 +149,15 @@ print(json.dumps({'type':'turn.completed','usage':{'output_tokens':7}}))
         (driver.worktree / 'bindings/ruby/lib/unrelated.rb').write_text('unrelated')
         with self.assertRaisesRegex(DriverError, 'outside'): driver.scope(BRIEF)
 
+    def test_task_database_sidecars_are_ignored(self):
+        driver = self.create()
+        for name in ('tasks.sqlite3-shm', 'tasks.sqlite3-wal'):
+            path = driver.worktree / 'tasks' / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'journal')
+        self.assertEqual([], changes(driver.worktree))
+        driver.scope(BRIEF)
+
     def test_agent_commit_is_rejected(self):
         driver = self.create()
         git(driver.worktree, 'commit', '--allow-empty', '-qm', 'Agent bypass')
