@@ -518,11 +518,12 @@ Approve only if there are no unresolved findings.
                 implementation=implementation, codex=agent), artifact, brief)
             selected = task_ids(checks, brief)
             protected = set(self.state['protected_passes'])
-            missing, regressions = acceptance([dict(check_id=id, status='pass') for id in protected], new_rows, selected)
+            previous_selected = protected & selected
+            missing, regressions = acceptance([dict(check_id=id, status='pass') for id in previous_selected], new_rows, selected)
             old_pass = {r['check_id'] for r in rows if r['status'] == 'pass'}
             new_pass = {r['check_id'] for r in new_rows if r['status'] == 'pass'}
             self.state['protected_passes'] = sorted(set(self.state['protected_passes']) | new_pass)
-            improved = new_pass > protected
+            improved = bool(new_pass - previous_selected)
             self.emit(f'Progress: {len(new_pass)}/{len(checks)} passing; {len(new_pass-old_pass)} new passes; {len(regressions)} regressions')
             record.update(after_run=self.state['last_run'], missing=missing, regressions=regressions)
             feedback = []
