@@ -1,34 +1,48 @@
-# TinyActors Ruby binding
+# Ruby binding rebuild
 
-This directory is the bootstrap for a low-level, 1-to-1 Ruby binding of
-`src/tinyactors.h`. The Ruby convenience DSL belongs above this layer and is
-not part of the initial extension.
+The previous Ruby extension and convenience implementation were removed.
+This directory currently contains namespace scaffolding and implementation briefs.
+It cannot create or run actors yet.
 
-The intended boundary is:
+The replacement has two layers:
 
-```text
-Ruby value objects and callback handles
-        |
-        +-- bindings/ruby/tinyactors.c
-        |
-        +-- tinyactors.h / libtinyactors
-        |
-Ruby System, Definition, Actor, Event, Send, Invoke, and I/O leases
+```ruby
+# Procedural C mapping. Runtime failures remain C status results.
+TinyActors::Raw.ta_context_send(raw_context, raw_send)
+
+# Ruby convenience API. Failures carry their C status in TinyActors::Error.
+context.reply("pong", data: { accepted: true })
 ```
 
-The C extension currently contains placeholders. Methods deliberately raise
-`TinyActors::NotImplementedError` until their corresponding ownership,
-GC-rooting, status, and lifetime rules are implemented.
+These examples describe the planned API. They do not run in the current scaffold.
+All opaque raw handles belong under `TinyActors::Raw::*`.
+All convenience classes belong under `TinyActors::*`.
 
-## Local build
+Start with [the brief index](briefs/README.md).
+Read [the shared contract](briefs/CONTRACT.md) before delegating an individual class.
+The index includes dependency order and a reusable assignment prompt for Luna at low reasoning effort.
+No agents were delegated during this reset.
+
+Check the scaffold and the coverage plan from the repository root:
 
 ```sh
-cd bindings/ruby
-ruby extconf.rb
-make
-ruby -Ilib -I. -e 'require "tinyactors"; p TinyActors::VERSION'
+ruby -Ibindings/ruby/lib -e 'require "tinyactors"; p TinyActors::Raw'
+make ruby-interface
+ruby tools/test_check_ruby_interface.rb
 ```
 
-The extension is intentionally not linked against the runtime yet. Linking
-the runtime will happen after the low-level object and callback mapping is
-settled.
+The coverage check reports planned and implemented procedures separately.
+The following check intentionally fails until every raw procedure has implementation evidence:
+
+```sh
+ruby tools/check_ruby_interface.rb --require-complete
+```
+
+The native build will return under `ext/tinyactors_raw/` through the bootstrap brief.
+The loader must never fall back to the retired `tinyactors.bundle`.
+
+The [verification loop](verification.md) is implemented. It starts with hundreds
+of failing checks for the missing binding and keeps agent-attributed history in
+`bindings/ruby/.verification/checks.sqlite3`. Configure Ruby with
+`python3 tools/verify_ruby.py init --ruby /path/to/ruby`, then use `run`, `next`,
+`show`, and `gate`. A passing coverage plan alone does not pass this verifier.

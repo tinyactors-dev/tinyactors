@@ -1,0 +1,438 @@
+{
+  "schema_version": 1,
+  "header": "src/tinyactors.h",
+  "entries": [
+    {
+      "symbol": "ta_actor_inspect",
+      "c_signature": "ta_status_t (ta_system_t *, ta_actor_ref_t, ta_actor_info_t *)",
+      "brief": "bindings/ruby/briefs/raw/actor_ref.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_actor_ref.c",
+      "test": "bindings/ruby/test/raw/actor_ref_test.rb"
+    },
+    {
+      "symbol": "ta_actor_release",
+      "c_signature": "ta_status_t (ta_system_t *, ta_actor_ref_t)",
+      "brief": "bindings/ruby/briefs/raw/actor_ref.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_actor_ref.c",
+      "test": "bindings/ruby/test/raw/actor_ref_test.rb"
+    },
+    {
+      "symbol": "ta_actor_set_limits",
+      "c_signature": "ta_status_t (ta_system_t *, ta_actor_ref_t, const ta_actor_limits_t *)",
+      "brief": "bindings/ruby/briefs/raw/actor_ref.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_actor_ref.c",
+      "test": "bindings/ruby/test/raw/actor_ref_test.rb"
+    },
+    {
+      "symbol": "ta_actor_spawn",
+      "c_signature": "ta_status_t (ta_system_t *, const ta_spawn_options_t *, ta_actor_ref_t *)",
+      "brief": "bindings/ruby/briefs/raw/actor_ref.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_actor_ref.c",
+      "test": "bindings/ruby/test/raw/actor_ref_test.rb"
+    },
+    {
+      "symbol": "ta_actor_stop",
+      "c_signature": "ta_status_t (ta_system_t *, ta_actor_ref_t)",
+      "brief": "bindings/ruby/briefs/raw/actor_ref.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_actor_ref.c",
+      "test": "bindings/ruby/test/raw/actor_ref_test.rb"
+    },
+    {
+      "symbol": "ta_actor_upgrade",
+      "c_signature": "ta_status_t (ta_system_t *, const ta_upgrade_options_t *)",
+      "brief": "bindings/ruby/briefs/raw/actor_ref.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_actor_ref.c",
+      "test": "bindings/ruby/test/raw/actor_ref_test.rb"
+    },
+    {
+      "symbol": "ta_arena_alloc",
+      "c_signature": "ta_status_t (ta_arena_t *, const ta_layout_t *, void **)",
+      "brief": "bindings/ruby/briefs/raw/arena.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_arena.c",
+      "test": "bindings/ruby/test/raw/arena_test.rb"
+    },
+    {
+      "symbol": "ta_arena_close",
+      "c_signature": "void (ta_arena_t *)",
+      "brief": "bindings/ruby/briefs/raw/arena.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_arena.c",
+      "test": "bindings/ruby/test/raw/arena_test.rb"
+    },
+    {
+      "symbol": "ta_arena_create",
+      "c_signature": "ta_status_t (const ta_chunk_allocator_t *, const ta_arena_options_t *, ta_arena_t **)",
+      "brief": "bindings/ruby/briefs/raw/arena.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_arena.c",
+      "test": "bindings/ruby/test/raw/arena_test.rb"
+    },
+    {
+      "symbol": "ta_arena_defer",
+      "c_signature": "ta_status_t (ta_arena_t *, void (*)(void *), void *)",
+      "brief": "bindings/ruby/briefs/raw/arena.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_arena.c",
+      "test": "bindings/ruby/test/raw/arena_test.rb"
+    },
+    {
+      "symbol": "ta_arena_open",
+      "c_signature": "ta_status_t (ta_arena_t *, const ta_arena_options_t *, ta_arena_t **)",
+      "brief": "bindings/ruby/briefs/raw/arena.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_arena.c",
+      "test": "bindings/ruby/test/raw/arena_test.rb"
+    },
+    {
+      "symbol": "ta_arena_set_limit",
+      "c_signature": "ta_status_t (ta_arena_t *, size_t)",
+      "brief": "bindings/ruby/briefs/raw/arena.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_arena.c",
+      "test": "bindings/ruby/test/raw/arena_test.rb"
+    },
+    {
+      "symbol": "ta_arena_stats",
+      "c_signature": "void (const ta_arena_t *, ta_memory_stats_t *)",
+      "brief": "bindings/ruby/briefs/raw/arena.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_arena.c",
+      "test": "bindings/ruby/test/raw/arena_test.rb"
+    },
+    {
+      "symbol": "ta_context_arena",
+      "c_signature": "ta_status_t (ta_context_t *, ta_lifetime_t, ta_arena_t **)",
+      "brief": "bindings/ruby/briefs/raw/context.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_context.c",
+      "test": "bindings/ruby/test/raw/context_test.rb"
+    },
+    {
+      "symbol": "ta_context_bytes",
+      "c_signature": "ta_status_t (ta_context_t *, ta_mut_bytes_t *)",
+      "brief": "bindings/ruby/briefs/raw/context.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_context.c",
+      "test": "bindings/ruby/test/raw/context_test.rb"
+    },
+    {
+      "symbol": "ta_context_cancel",
+      "c_signature": "ta_status_t (ta_context_t *, ta_text_t)",
+      "brief": "bindings/ruby/briefs/raw/context.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_context.c",
+      "test": "bindings/ruby/test/raw/context_test.rb"
+    },
+    {
+      "symbol": "ta_context_host_user",
+      "c_signature": "void *(const ta_context_t *)",
+      "brief": "bindings/ruby/briefs/raw/context.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_context.c",
+      "test": "bindings/ruby/test/raw/context_test.rb"
+    },
+    {
+      "symbol": "ta_context_in",
+      "c_signature": "uint8_t (const ta_context_t *, ta_text_t)",
+      "brief": "bindings/ruby/briefs/raw/context.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_context.c",
+      "test": "bindings/ruby/test/raw/context_test.rb"
+    },
+    {
+      "symbol": "ta_context_inspect",
+      "c_signature": "void (const ta_context_t *, ta_context_view_t *)",
+      "brief": "bindings/ruby/briefs/raw/context.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_context.c",
+      "test": "bindings/ruby/test/raw/context_test.rb"
+    },
+    {
+      "symbol": "ta_context_raise",
+      "c_signature": "ta_status_t (ta_context_t *, ta_text_t, const ta_payload_t *)",
+      "brief": "bindings/ruby/briefs/raw/context.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_context.c",
+      "test": "bindings/ruby/test/raw/context_test.rb"
+    },
+    {
+      "symbol": "ta_context_send",
+      "c_signature": "ta_status_t (ta_context_t *, const ta_send_t *, uint64_t *)",
+      "brief": "bindings/ruby/briefs/raw/context.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_context.c",
+      "test": "bindings/ruby/test/raw/context_test.rb"
+    },
+    {
+      "symbol": "ta_definition_build",
+      "c_signature": "ta_status_t (ta_system_t *, const ta_chart_t *, ta_definition_result_t *)",
+      "brief": "bindings/ruby/briefs/raw/definition.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_definition.c",
+      "test": "bindings/ruby/test/raw/definition_test.rb"
+    },
+    {
+      "symbol": "ta_definition_description",
+      "c_signature": "const ta_definition_desc_t *(const ta_definition_t *)",
+      "brief": "bindings/ruby/briefs/raw/definition.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_definition.c",
+      "test": "bindings/ruby/test/raw/definition_test.rb"
+    },
+    {
+      "symbol": "ta_definition_footprint",
+      "c_signature": "void (const ta_definition_t *, ta_actor_footprint_t *)",
+      "brief": "bindings/ruby/briefs/raw/definition.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_definition.c",
+      "test": "bindings/ruby/test/raw/definition_test.rb"
+    },
+    {
+      "symbol": "ta_definition_lookup",
+      "c_signature": "ta_status_t (ta_system_t *, ta_text_t, ta_definition_t **)",
+      "brief": "bindings/ruby/briefs/raw/definition.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_definition.c",
+      "test": "bindings/ruby/test/raw/definition_test.rb"
+    },
+    {
+      "symbol": "ta_definition_prepare",
+      "c_signature": "ta_status_t (ta_system_t *, const ta_definition_input_t *, ta_definition_result_t *)",
+      "brief": "bindings/ruby/briefs/raw/definition.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_definition.c",
+      "test": "bindings/ruby/test/raw/definition_test.rb"
+    },
+    {
+      "symbol": "ta_definition_publish",
+      "c_signature": "ta_status_t (ta_system_t *, const ta_definition_binding_t *, ta_definition_t *)",
+      "brief": "bindings/ruby/briefs/raw/definition.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_definition.c",
+      "test": "bindings/ruby/test/raw/definition_test.rb"
+    },
+    {
+      "symbol": "ta_definition_release",
+      "c_signature": "void (ta_definition_t *)",
+      "brief": "bindings/ruby/briefs/raw/definition.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_definition.c",
+      "test": "bindings/ruby/test/raw/definition_test.rb"
+    },
+    {
+      "symbol": "ta_definition_retain",
+      "c_signature": "void (ta_definition_t *)",
+      "brief": "bindings/ruby/briefs/raw/definition.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_definition.c",
+      "test": "bindings/ruby/test/raw/definition_test.rb"
+    },
+    {
+      "symbol": "ta_definition_revision",
+      "c_signature": "uint64_t (const ta_definition_t *)",
+      "brief": "bindings/ruby/briefs/raw/definition.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_definition.c",
+      "test": "bindings/ruby/test/raw/definition_test.rb"
+    },
+    {
+      "symbol": "ta_definition_unpublish",
+      "c_signature": "ta_status_t (ta_system_t *, const ta_definition_binding_t *)",
+      "brief": "bindings/ruby/briefs/raw/definition.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_definition.c",
+      "test": "bindings/ruby/test/raw/definition_test.rb"
+    },
+    {
+      "symbol": "ta_invocation_done",
+      "c_signature": "ta_status_t (ta_system_t *, ta_invocation_ref_t, const ta_body_t *)",
+      "brief": "bindings/ruby/briefs/raw/invocation_ref.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_invocation_ref.c",
+      "test": "bindings/ruby/test/raw/invocation_ref_test.rb"
+    },
+    {
+      "symbol": "ta_invocation_emit",
+      "c_signature": "ta_status_t (ta_system_t *, ta_invocation_ref_t, const ta_message_t *)",
+      "brief": "bindings/ruby/briefs/raw/invocation_ref.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_invocation_ref.c",
+      "test": "bindings/ruby/test/raw/invocation_ref_test.rb"
+    },
+    {
+      "symbol": "ta_invocation_fail",
+      "c_signature": "ta_status_t (ta_system_t *, ta_invocation_ref_t)",
+      "brief": "bindings/ruby/briefs/raw/invocation_ref.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_invocation_ref.c",
+      "test": "bindings/ruby/test/raw/invocation_ref_test.rb"
+    },
+    {
+      "symbol": "ta_invocation_is_cancelled",
+      "c_signature": "ta_status_t (ta_system_t *, ta_invocation_ref_t, uint8_t *)",
+      "brief": "bindings/ruby/briefs/raw/invocation_ref.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_invocation_ref.c",
+      "test": "bindings/ruby/test/raw/invocation_ref_test.rb"
+    },
+    {
+      "symbol": "ta_io_complete",
+      "c_signature": "ta_status_t (ta_system_t *, ta_request_ref_t, ta_status_t)",
+      "brief": "bindings/ruby/briefs/raw/request_ref.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_request_ref.c",
+      "test": "bindings/ruby/test/raw/request_ref_test.rb"
+    },
+    {
+      "symbol": "ta_io_next",
+      "c_signature": "ta_status_t (ta_system_t *, const ta_io_request_t **)",
+      "brief": "bindings/ruby/briefs/raw/request_ref.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_request_ref.c",
+      "test": "bindings/ruby/test/raw/request_ref_test.rb"
+    },
+    {
+      "symbol": "ta_io_receive",
+      "c_signature": "ta_status_t (ta_system_t *, const ta_io_route_t *, const ta_event_t *)",
+      "brief": "bindings/ruby/briefs/raw/request_ref.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_request_ref.c",
+      "test": "bindings/ruby/test/raw/request_ref_test.rb"
+    },
+    {
+      "symbol": "ta_io_receive_error",
+      "c_signature": "ta_status_t (ta_system_t *, const ta_io_route_t *, ta_text_t)",
+      "brief": "bindings/ruby/briefs/raw/request_ref.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_request_ref.c",
+      "test": "bindings/ruby/test/raw/request_ref_test.rb"
+    },
+    {
+      "symbol": "ta_name_bind",
+      "c_signature": "ta_status_t (ta_system_t *, const ta_name_binding_t *, ta_actor_ref_t)",
+      "brief": "bindings/ruby/briefs/raw/actor_ref.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_actor_ref.c",
+      "test": "bindings/ruby/test/raw/actor_ref_test.rb"
+    },
+    {
+      "symbol": "ta_name_lookup",
+      "c_signature": "ta_status_t (ta_system_t *, ta_text_t, ta_actor_ref_t *)",
+      "brief": "bindings/ruby/briefs/raw/actor_ref.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_actor_ref.c",
+      "test": "bindings/ruby/test/raw/actor_ref_test.rb"
+    },
+    {
+      "symbol": "ta_name_unbind",
+      "c_signature": "ta_status_t (ta_system_t *, const ta_name_binding_t *)",
+      "brief": "bindings/ruby/briefs/raw/actor_ref.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_actor_ref.c",
+      "test": "bindings/ruby/test/raw/actor_ref_test.rb"
+    },
+    {
+      "symbol": "ta_post",
+      "c_signature": "ta_status_t (ta_system_t *, const ta_post_options_t *, uint64_t *)",
+      "brief": "bindings/ruby/briefs/raw/actor_ref.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_actor_ref.c",
+      "test": "bindings/ruby/test/raw/actor_ref_test.rb"
+    },
+    {
+      "symbol": "ta_session_lookup",
+      "c_signature": "ta_status_t (ta_system_t *, ta_text_t, ta_actor_ref_t *)",
+      "brief": "bindings/ruby/briefs/raw/actor_ref.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_actor_ref.c",
+      "test": "bindings/ruby/test/raw/actor_ref_test.rb"
+    },
+    {
+      "symbol": "ta_system_config_init",
+      "c_signature": "void (ta_system_config_t *)",
+      "brief": "bindings/ruby/briefs/raw/system.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_system.c",
+      "test": "bindings/ruby/test/raw/system_test.rb"
+    },
+    {
+      "symbol": "ta_system_create",
+      "c_signature": "ta_status_t (ta_arena_t *, const ta_system_config_t *, ta_system_t **)",
+      "brief": "bindings/ruby/briefs/raw/system.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_system.c",
+      "test": "bindings/ruby/test/raw/system_test.rb"
+    },
+    {
+      "symbol": "ta_system_destroy",
+      "c_signature": "ta_status_t (ta_system_t *)",
+      "brief": "bindings/ruby/briefs/raw/system.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_system.c",
+      "test": "bindings/ruby/test/raw/system_test.rb"
+    },
+    {
+      "symbol": "ta_system_inspect",
+      "c_signature": "ta_status_t (ta_system_t *, const ta_inspect_options_t *, ta_inspect_cursor_t *)",
+      "brief": "bindings/ruby/briefs/raw/inspect_cursor.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_inspect_cursor.c",
+      "test": "bindings/ruby/test/raw/inspect_cursor_test.rb"
+    },
+    {
+      "symbol": "ta_system_next_deadline",
+      "c_signature": "uint64_t (const ta_system_t *)",
+      "brief": "bindings/ruby/briefs/raw/system.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_system.c",
+      "test": "bindings/ruby/test/raw/system_test.rb"
+    },
+    {
+      "symbol": "ta_system_run",
+      "c_signature": "ta_status_t (ta_system_t *, const ta_run_options_t *, ta_run_result_t *)",
+      "brief": "bindings/ruby/briefs/raw/system.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_system.c",
+      "test": "bindings/ruby/test/raw/system_test.rb"
+    },
+    {
+      "symbol": "ta_system_set_limits",
+      "c_signature": "ta_status_t (ta_system_t *, const ta_system_limits_t *)",
+      "brief": "bindings/ruby/briefs/raw/system.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_system.c",
+      "test": "bindings/ruby/test/raw/system_test.rb"
+    },
+    {
+      "symbol": "ta_system_shutdown",
+      "c_signature": "ta_status_t (ta_system_t *)",
+      "brief": "bindings/ruby/briefs/raw/system.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_system.c",
+      "test": "bindings/ruby/test/raw/system_test.rb"
+    },
+    {
+      "symbol": "ta_system_stats",
+      "c_signature": "void (const ta_system_t *, ta_system_stats_t *)",
+      "brief": "bindings/ruby/briefs/raw/system.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/raw_system.c",
+      "test": "bindings/ruby/test/raw/system_test.rb"
+    },
+    {
+      "symbol": "ta_target_parse",
+      "c_signature": "ta_status_t (ta_text_t, ta_target_t *)",
+      "brief": "bindings/ruby/briefs/01-records.md",
+      "status": "planned",
+      "source": "bindings/ruby/ext/tinyactors_raw/records.c",
+      "test": "bindings/ruby/test/raw/records_test.rb"
+    }
+  ]
+}

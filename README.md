@@ -60,6 +60,10 @@ Its [realtime chat example](bindings/napi/examples/chat/README.md) runs a real
 multi-client browser chat with one directory actor, one actor per room, and
 reconnecting client-session actors.
 
+The [Ruby binding](bindings/ruby/README.md) is being rebuilt. Its previous
+implementation was removed. [Class briefs](bindings/ruby/briefs/README.md)
+specify procedural `TinyActors::Raw` bindings and a Ruby convenience layer.
+
 The [WebSocket example](examples/websocket_connection.c) models one ephemeral
 connection with ready/blocked states, heartbeat and timeout handling. Its host
 callbacks are deliberately transport abstractions, not a networking server.

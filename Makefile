@@ -76,3 +76,11 @@ sanitize:
 
 ubsan:
 	$(MAKE) BUILD=$(BUILD)/ubsan CFLAGS='-std=c99 -O1 -g -Wall -Wextra -Werror -pedantic -fsanitize=undefined -fno-sanitize-recover=all' LDFLAGS='-fsanitize=undefined' test
+
+# Full replacement-binding acceptance is intentionally red during the rebuild.
+.PHONY: ruby-verify ruby-verify-test
+ruby-verify:
+	python3 tools/verify_ruby.py run --agent local
+
+ruby-verify-test:
+	python3 tools/test_ruby_verify.py

@@ -4,3 +4,6 @@ mkmf.log
 *.so
 *.bundle
 *.dylib
+*.dSYM/
+
+.verification/

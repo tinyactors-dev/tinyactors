@@ -1,0 +1,1455 @@
+[
+  {
+    "id": "result.TA_OK",
+    "owner": "raw.Result",
+    "probe": "result",
+    "title": "Preserve status, output identity and immutable Result: TA_OK",
+    "status": "TA_OK"
+  },
+  {
+    "id": "error.TA_OK",
+    "owner": "high.Error",
+    "probe": "error",
+    "title": "Apply explicit error policy for TA_OK",
+    "status": "TA_OK"
+  },
+  {
+    "id": "result.TA_EMPTY",
+    "owner": "raw.Result",
+    "probe": "result",
+    "title": "Preserve status, output identity and immutable Result: TA_EMPTY",
+    "status": "TA_EMPTY"
+  },
+  {
+    "id": "error.TA_EMPTY",
+    "owner": "high.Error",
+    "probe": "error",
+    "title": "Apply explicit error policy for TA_EMPTY",
+    "status": "TA_EMPTY"
+  },
+  {
+    "id": "result.TA_AGAIN",
+    "owner": "raw.Result",
+    "probe": "result",
+    "title": "Preserve status, output identity and immutable Result: TA_AGAIN",
+    "status": "TA_AGAIN"
+  },
+  {
+    "id": "error.TA_AGAIN",
+    "owner": "high.Error",
+    "probe": "error",
+    "title": "Apply explicit error policy for TA_AGAIN",
+    "status": "TA_AGAIN"
+  },
+  {
+    "id": "result.TA_INVALID",
+    "owner": "raw.Result",
+    "probe": "result",
+    "title": "Preserve status, output identity and immutable Result: TA_INVALID",
+    "status": "TA_INVALID"
+  },
+  {
+    "id": "error.TA_INVALID",
+    "owner": "high.Error",
+    "probe": "error",
+    "title": "Apply explicit error policy for TA_INVALID",
+    "status": "TA_INVALID"
+  },
+  {
+    "id": "result.TA_UNSUPPORTED",
+    "owner": "raw.Result",
+    "probe": "result",
+    "title": "Preserve status, output identity and immutable Result: TA_UNSUPPORTED",
+    "status": "TA_UNSUPPORTED"
+  },
+  {
+    "id": "error.TA_UNSUPPORTED",
+    "owner": "high.Error",
+    "probe": "error",
+    "title": "Apply explicit error policy for TA_UNSUPPORTED",
+    "status": "TA_UNSUPPORTED"
+  },
+  {
+    "id": "result.TA_NOT_FOUND",
+    "owner": "raw.Result",
+    "probe": "result",
+    "title": "Preserve status, output identity and immutable Result: TA_NOT_FOUND",
+    "status": "TA_NOT_FOUND"
+  },
+  {
+    "id": "error.TA_NOT_FOUND",
+    "owner": "high.Error",
+    "probe": "error",
+    "title": "Apply explicit error policy for TA_NOT_FOUND",
+    "status": "TA_NOT_FOUND"
+  },
+  {
+    "id": "result.TA_STALE",
+    "owner": "raw.Result",
+    "probe": "result",
+    "title": "Preserve status, output identity and immutable Result: TA_STALE",
+    "status": "TA_STALE"
+  },
+  {
+    "id": "error.TA_STALE",
+    "owner": "high.Error",
+    "probe": "error",
+    "title": "Apply explicit error policy for TA_STALE",
+    "status": "TA_STALE"
+  },
+  {
+    "id": "result.TA_CONFLICT",
+    "owner": "raw.Result",
+    "probe": "result",
+    "title": "Preserve status, output identity and immutable Result: TA_CONFLICT",
+    "status": "TA_CONFLICT"
+  },
+  {
+    "id": "error.TA_CONFLICT",
+    "owner": "high.Error",
+    "probe": "error",
+    "title": "Apply explicit error policy for TA_CONFLICT",
+    "status": "TA_CONFLICT"
+  },
+  {
+    "id": "result.TA_BUSY",
+    "owner": "raw.Result",
+    "probe": "result",
+    "title": "Preserve status, output identity and immutable Result: TA_BUSY",
+    "status": "TA_BUSY"
+  },
+  {
+    "id": "error.TA_BUSY",
+    "owner": "high.Error",
+    "probe": "error",
+    "title": "Apply explicit error policy for TA_BUSY",
+    "status": "TA_BUSY"
+  },
+  {
+    "id": "result.TA_NO_MEMORY",
+    "owner": "raw.Result",
+    "probe": "result",
+    "title": "Preserve status, output identity and immutable Result: TA_NO_MEMORY",
+    "status": "TA_NO_MEMORY"
+  },
+  {
+    "id": "error.TA_NO_MEMORY",
+    "owner": "high.Error",
+    "probe": "error",
+    "title": "Apply explicit error policy for TA_NO_MEMORY",
+    "status": "TA_NO_MEMORY"
+  },
+  {
+    "id": "result.TA_LIMIT",
+    "owner": "raw.Result",
+    "probe": "result",
+    "title": "Preserve status, output identity and immutable Result: TA_LIMIT",
+    "status": "TA_LIMIT"
+  },
+  {
+    "id": "error.TA_LIMIT",
+    "owner": "high.Error",
+    "probe": "error",
+    "title": "Apply explicit error policy for TA_LIMIT",
+    "status": "TA_LIMIT"
+  },
+  {
+    "id": "result.TA_EXECUTION_ERROR",
+    "owner": "raw.Result",
+    "probe": "result",
+    "title": "Preserve status, output identity and immutable Result: TA_EXECUTION_ERROR",
+    "status": "TA_EXECUTION_ERROR"
+  },
+  {
+    "id": "error.TA_EXECUTION_ERROR",
+    "owner": "high.Error",
+    "probe": "error",
+    "title": "Apply explicit error policy for TA_EXECUTION_ERROR",
+    "status": "TA_EXECUTION_ERROR"
+  },
+  {
+    "id": "result.TA_COMMUNICATION_ERROR",
+    "owner": "raw.Result",
+    "probe": "result",
+    "title": "Preserve status, output identity and immutable Result: TA_COMMUNICATION_ERROR",
+    "status": "TA_COMMUNICATION_ERROR"
+  },
+  {
+    "id": "error.TA_COMMUNICATION_ERROR",
+    "owner": "high.Error",
+    "probe": "error",
+    "title": "Apply explicit error policy for TA_COMMUNICATION_ERROR",
+    "status": "TA_COMMUNICATION_ERROR"
+  },
+  {
+    "id": "result.TA_CANCELLED",
+    "owner": "raw.Result",
+    "probe": "result",
+    "title": "Preserve status, output identity and immutable Result: TA_CANCELLED",
+    "status": "TA_CANCELLED"
+  },
+  {
+    "id": "error.TA_CANCELLED",
+    "owner": "high.Error",
+    "probe": "error",
+    "title": "Apply explicit error policy for TA_CANCELLED",
+    "status": "TA_CANCELLED"
+  },
+  {
+    "id": "result.TA_FAULTED",
+    "owner": "raw.Result",
+    "probe": "result",
+    "title": "Preserve status, output identity and immutable Result: TA_FAULTED",
+    "status": "TA_FAULTED"
+  },
+  {
+    "id": "error.TA_FAULTED",
+    "owner": "high.Error",
+    "probe": "error",
+    "title": "Apply explicit error policy for TA_FAULTED",
+    "status": "TA_FAULTED"
+  },
+  {
+    "id": "error.allowed.TA_EMPTY",
+    "owner": "high.Error",
+    "probe": "error",
+    "title": "Keep explicitly allowed TA_EMPTY unchanged",
+    "status": "TA_EMPTY",
+    "allowed": true
+  },
+  {
+    "id": "error.allowed.TA_AGAIN",
+    "owner": "high.Error",
+    "probe": "error",
+    "title": "Keep explicitly allowed TA_AGAIN unchanged",
+    "status": "TA_AGAIN",
+    "allowed": true
+  },
+  {
+    "id": "error.allowed.TA_BUSY",
+    "owner": "high.Error",
+    "probe": "error",
+    "title": "Keep explicitly allowed TA_BUSY unchanged",
+    "status": "TA_BUSY",
+    "allowed": true
+  },
+  {
+    "id": "error.allowed.TA_STALE",
+    "owner": "high.Error",
+    "probe": "error",
+    "title": "Keep explicitly allowed TA_STALE unchanged",
+    "status": "TA_STALE",
+    "allowed": true
+  },
+  {
+    "id": "value.nil",
+    "owner": "raw.Value",
+    "probe": "value",
+    "title": "Retain Ruby nil through GC and compaction",
+    "value": null
+  },
+  {
+    "id": "message.native.nil",
+    "owner": "high.Message",
+    "probe": "message",
+    "title": "Wrap native nil with an explicit native payload tag",
+    "payload": "native",
+    "value": null
+  },
+  {
+    "id": "event.native.nil",
+    "owner": "high.Event",
+    "probe": "event",
+    "title": "Expose native nil without losing its payload tag",
+    "payload": "native",
+    "value": null
+  },
+  {
+    "id": "value.false",
+    "owner": "raw.Value",
+    "probe": "value",
+    "title": "Retain Ruby false through GC and compaction",
+    "value": false
+  },
+  {
+    "id": "message.native.false",
+    "owner": "high.Message",
+    "probe": "message",
+    "title": "Wrap native false with an explicit native payload tag",
+    "payload": "native",
+    "value": false
+  },
+  {
+    "id": "event.native.false",
+    "owner": "high.Event",
+    "probe": "event",
+    "title": "Expose native false without losing its payload tag",
+    "payload": "native",
+    "value": false
+  },
+  {
+    "id": "value.zero",
+    "owner": "raw.Value",
+    "probe": "value",
+    "title": "Retain Ruby zero through GC and compaction",
+    "value": 0
+  },
+  {
+    "id": "message.native.zero",
+    "owner": "high.Message",
+    "probe": "message",
+    "title": "Wrap native zero with an explicit native payload tag",
+    "payload": "native",
+    "value": 0
+  },
+  {
+    "id": "event.native.zero",
+    "owner": "high.Event",
+    "probe": "event",
+    "title": "Expose native zero without losing its payload tag",
+    "payload": "native",
+    "value": 0
+  },
+  {
+    "id": "value.negative",
+    "owner": "raw.Value",
+    "probe": "value",
+    "title": "Retain Ruby negative through GC and compaction",
+    "value": -1
+  },
+  {
+    "id": "message.native.negative",
+    "owner": "high.Message",
+    "probe": "message",
+    "title": "Wrap native negative with an explicit native payload tag",
+    "payload": "native",
+    "value": -1
+  },
+  {
+    "id": "event.native.negative",
+    "owner": "high.Event",
+    "probe": "event",
+    "title": "Expose native negative without losing its payload tag",
+    "payload": "native",
+    "value": -1
+  },
+  {
+    "id": "value.large",
+    "owner": "raw.Value",
+    "probe": "value",
+    "title": "Retain Ruby large through GC and compaction",
+    "value": 9223372036854775809
+  },
+  {
+    "id": "message.native.large",
+    "owner": "high.Message",
+    "probe": "message",
+    "title": "Wrap native large with an explicit native payload tag",
+    "payload": "native",
+    "value": 9223372036854775809
+  },
+  {
+    "id": "event.native.large",
+    "owner": "high.Event",
+    "probe": "event",
+    "title": "Expose native large without losing its payload tag",
+    "payload": "native",
+    "value": 9223372036854775809
+  },
+  {
+    "id": "value.empty",
+    "owner": "raw.Value",
+    "probe": "value",
+    "title": "Retain Ruby empty through GC and compaction",
+    "value": ""
+  },
+  {
+    "id": "message.native.empty",
+    "owner": "high.Message",
+    "probe": "message",
+    "title": "Wrap native empty with an explicit native payload tag",
+    "payload": "native",
+    "value": ""
+  },
+  {
+    "id": "event.native.empty",
+    "owner": "high.Event",
+    "probe": "event",
+    "title": "Expose native empty without losing its payload tag",
+    "payload": "native",
+    "value": ""
+  },
+  {
+    "id": "value.unicode",
+    "owner": "raw.Value",
+    "probe": "value",
+    "title": "Retain Ruby unicode through GC and compaction",
+    "value": "\u03bb\u0301"
+  },
+  {
+    "id": "message.native.unicode",
+    "owner": "high.Message",
+    "probe": "message",
+    "title": "Wrap native unicode with an explicit native payload tag",
+    "payload": "native",
+    "value": "\u03bb\u0301"
+  },
+  {
+    "id": "event.native.unicode",
+    "owner": "high.Event",
+    "probe": "event",
+    "title": "Expose native unicode without losing its payload tag",
+    "payload": "native",
+    "value": "\u03bb\u0301"
+  },
+  {
+    "id": "value.array",
+    "owner": "raw.Value",
+    "probe": "value",
+    "title": "Retain Ruby array through GC and compaction",
+    "value": [
+      false,
+      null,
+      0
+    ]
+  },
+  {
+    "id": "message.native.array",
+    "owner": "high.Message",
+    "probe": "message",
+    "title": "Wrap native array with an explicit native payload tag",
+    "payload": "native",
+    "value": [
+      false,
+      null,
+      0
+    ]
+  },
+  {
+    "id": "event.native.array",
+    "owner": "high.Event",
+    "probe": "event",
+    "title": "Expose native array without losing its payload tag",
+    "payload": "native",
+    "value": [
+      false,
+      null,
+      0
+    ]
+  },
+  {
+    "id": "value.nested",
+    "owner": "raw.Value",
+    "probe": "value",
+    "title": "Retain Ruby nested through GC and compaction",
+    "value": {
+      "items": [
+        1,
+        {
+          "key": "value"
+        }
+      ]
+    }
+  },
+  {
+    "id": "message.native.nested",
+    "owner": "high.Message",
+    "probe": "message",
+    "title": "Wrap native nested with an explicit native payload tag",
+    "payload": "native",
+    "value": {
+      "items": [
+        1,
+        {
+          "key": "value"
+        }
+      ]
+    }
+  },
+  {
+    "id": "event.native.nested",
+    "owner": "high.Event",
+    "probe": "event",
+    "title": "Expose native nested without losing its payload tag",
+    "payload": "native",
+    "value": {
+      "items": [
+        1,
+        {
+          "key": "value"
+        }
+      ]
+    }
+  },
+  {
+    "id": "message.bytes.empty",
+    "owner": "high.Message",
+    "probe": "message",
+    "title": "Preserve empty byte message",
+    "payload": "bytes",
+    "value": []
+  },
+  {
+    "id": "event.bytes.empty",
+    "owner": "high.Event",
+    "probe": "event",
+    "title": "Preserve empty byte event",
+    "payload": "bytes",
+    "value": []
+  },
+  {
+    "id": "message.bytes.nul",
+    "owner": "high.Message",
+    "probe": "message",
+    "title": "Preserve nul byte message",
+    "payload": "bytes",
+    "value": [
+      0
+    ]
+  },
+  {
+    "id": "event.bytes.nul",
+    "owner": "high.Event",
+    "probe": "event",
+    "title": "Preserve nul byte event",
+    "payload": "bytes",
+    "value": [
+      0
+    ]
+  },
+  {
+    "id": "message.bytes.binary",
+    "owner": "high.Message",
+    "probe": "message",
+    "title": "Preserve binary byte message",
+    "payload": "bytes",
+    "value": [
+      255,
+      128,
+      0,
+      65
+    ]
+  },
+  {
+    "id": "event.bytes.binary",
+    "owner": "high.Event",
+    "probe": "event",
+    "title": "Preserve binary byte event",
+    "payload": "bytes",
+    "value": [
+      255,
+      128,
+      0,
+      65
+    ]
+  },
+  {
+    "id": "message.bytes.ascii",
+    "owner": "high.Message",
+    "probe": "message",
+    "title": "Preserve ascii byte message",
+    "payload": "bytes",
+    "value": [
+      72,
+      101,
+      108,
+      108,
+      111
+    ]
+  },
+  {
+    "id": "event.bytes.ascii",
+    "owner": "high.Event",
+    "probe": "event",
+    "title": "Preserve ascii byte event",
+    "payload": "bytes",
+    "value": [
+      72,
+      101,
+      108,
+      108,
+      111
+    ]
+  },
+  {
+    "id": "message.none",
+    "owner": "high.Message",
+    "probe": "message",
+    "title": "Keep absent payload separate from native nil",
+    "payload": "none",
+    "value": null
+  },
+  {
+    "id": "message.reject.origin",
+    "owner": "high.Message",
+    "probe": "message_reject",
+    "title": "Reject invalid host message origin",
+    "case": "origin"
+  },
+  {
+    "id": "message.reject.invokeid",
+    "owner": "high.Message",
+    "probe": "message_reject",
+    "title": "Reject invalid host message invokeid",
+    "case": "invokeid"
+  },
+  {
+    "id": "message.reject.tag",
+    "owner": "high.Message",
+    "probe": "message_reject",
+    "title": "Reject invalid host message tag",
+    "case": "tag"
+  },
+  {
+    "id": "message.reject.bytes",
+    "owner": "high.Message",
+    "probe": "message_reject",
+    "title": "Reject invalid host message bytes",
+    "case": "bytes"
+  },
+  {
+    "id": "event.external.metadata",
+    "owner": "high.Event",
+    "probe": "event",
+    "title": "Copy external event fields with metadata",
+    "type": "external",
+    "case": "metadata"
+  },
+  {
+    "id": "event.external.missing_metadata",
+    "owner": "high.Event",
+    "probe": "event",
+    "title": "Copy external event fields with missing_metadata",
+    "type": "external",
+    "case": "missing_metadata"
+  },
+  {
+    "id": "event.internal.metadata",
+    "owner": "high.Event",
+    "probe": "event",
+    "title": "Copy internal event fields with metadata",
+    "type": "internal",
+    "case": "metadata"
+  },
+  {
+    "id": "event.internal.missing_metadata",
+    "owner": "high.Event",
+    "probe": "event",
+    "title": "Copy internal event fields with missing_metadata",
+    "type": "internal",
+    "case": "missing_metadata"
+  },
+  {
+    "id": "event.platform.metadata",
+    "owner": "high.Event",
+    "probe": "event",
+    "title": "Copy platform event fields with metadata",
+    "type": "platform",
+    "case": "metadata"
+  },
+  {
+    "id": "event.platform.missing_metadata",
+    "owner": "high.Event",
+    "probe": "event",
+    "title": "Copy platform event fields with missing_metadata",
+    "type": "platform",
+    "case": "missing_metadata"
+  },
+  {
+    "id": "event.absent",
+    "owner": "high.Event",
+    "probe": "event",
+    "title": "An absent current event remains nil",
+    "case": "absent"
+  },
+  {
+    "id": "text.nil",
+    "owner": "00-bootstrap",
+    "probe": "text",
+    "title": "Convert counted text correctly: nil",
+    "input": null,
+    "expected": null
+  },
+  {
+    "id": "text.empty",
+    "owner": "00-bootstrap",
+    "probe": "text",
+    "title": "Convert counted text correctly: empty",
+    "input": "",
+    "expected": ""
+  },
+  {
+    "id": "text.plain",
+    "owner": "00-bootstrap",
+    "probe": "text",
+    "title": "Convert counted text correctly: plain",
+    "input": "hello",
+    "expected": "hello"
+  },
+  {
+    "id": "text.nul",
+    "owner": "00-bootstrap",
+    "probe": "text",
+    "title": "Convert counted text correctly: nul",
+    "input": "a\u0000b",
+    "expected": "a"
+  },
+  {
+    "id": "text.leading_nul",
+    "owner": "00-bootstrap",
+    "probe": "text",
+    "title": "Convert counted text correctly: leading_nul",
+    "input": "\u0000b",
+    "expected": ""
+  },
+  {
+    "id": "text.unicode",
+    "owner": "00-bootstrap",
+    "probe": "text",
+    "title": "Convert counted text correctly: unicode",
+    "input": "\u03bb",
+    "expected": "\u03bb"
+  },
+  {
+    "id": "target.raw.parse.self",
+    "owner": "01-records",
+    "probe": "target",
+    "title": "Decode raw target self",
+    "layer": "raw",
+    "input": null,
+    "text": null,
+    "expected_kind": "TA_TARGET_SELF"
+  },
+  {
+    "id": "target.raw.parse.internal",
+    "owner": "01-records",
+    "probe": "target",
+    "title": "Decode raw target internal",
+    "layer": "raw",
+    "input": "#_internal",
+    "text": null,
+    "expected_kind": "TA_TARGET_INTERNAL"
+  },
+  {
+    "id": "target.raw.parse.parent",
+    "owner": "01-records",
+    "probe": "target",
+    "title": "Decode raw target parent",
+    "layer": "raw",
+    "input": "#_parent",
+    "text": null,
+    "expected_kind": "TA_TARGET_PARENT"
+  },
+  {
+    "id": "target.raw.parse.session",
+    "owner": "01-records",
+    "probe": "target",
+    "title": "Decode raw target session",
+    "layer": "raw",
+    "input": "#_scxml_sender.1",
+    "text": "#_scxml_sender.1",
+    "expected_kind": "TA_TARGET_URI"
+  },
+  {
+    "id": "target.raw.parse.invoke",
+    "owner": "01-records",
+    "probe": "target",
+    "title": "Decode raw target invoke",
+    "layer": "raw",
+    "input": "#_worker",
+    "text": "worker",
+    "expected_kind": "TA_TARGET_INVOKE"
+  },
+  {
+    "id": "target.raw.parse.uri",
+    "owner": "01-records",
+    "probe": "target",
+    "title": "Decode raw target uri",
+    "layer": "raw",
+    "input": "https://example.invalid/inbox",
+    "text": "https://example.invalid/inbox",
+    "expected_kind": "TA_TARGET_URI"
+  },
+  {
+    "id": "target.raw.parse.literal",
+    "owner": "01-records",
+    "probe": "target",
+    "title": "Decode raw target literal",
+    "layer": "raw",
+    "input": "registered-name",
+    "text": "registered-name",
+    "expected_kind": "TA_TARGET_URI"
+  },
+  {
+    "id": "target.raw.parse.hash",
+    "owner": "01-records",
+    "probe": "target",
+    "title": "Decode raw target hash",
+    "layer": "raw",
+    "input": "#plain",
+    "text": "#plain",
+    "expected_kind": "TA_TARGET_URI"
+  },
+  {
+    "id": "target.raw.reject.empty",
+    "owner": "01-records",
+    "probe": "target",
+    "title": "Reject raw malformed target empty",
+    "layer": "raw",
+    "input": "",
+    "invalid": true
+  },
+  {
+    "id": "target.raw.reject.empty_session",
+    "owner": "01-records",
+    "probe": "target",
+    "title": "Reject raw malformed target empty_session",
+    "layer": "raw",
+    "input": "#_scxml_",
+    "invalid": true
+  },
+  {
+    "id": "target.high.parse.self",
+    "owner": "high.Target",
+    "probe": "target",
+    "title": "Decode high target self",
+    "layer": "high",
+    "input": null,
+    "text": null,
+    "expected_kind": "TA_TARGET_SELF"
+  },
+  {
+    "id": "target.high.parse.internal",
+    "owner": "high.Target",
+    "probe": "target",
+    "title": "Decode high target internal",
+    "layer": "high",
+    "input": "#_internal",
+    "text": null,
+    "expected_kind": "TA_TARGET_INTERNAL"
+  },
+  {
+    "id": "target.high.parse.parent",
+    "owner": "high.Target",
+    "probe": "target",
+    "title": "Decode high target parent",
+    "layer": "high",
+    "input": "#_parent",
+    "text": null,
+    "expected_kind": "TA_TARGET_PARENT"
+  },
+  {
+    "id": "target.high.parse.session",
+    "owner": "high.Target",
+    "probe": "target",
+    "title": "Decode high target session",
+    "layer": "high",
+    "input": "#_scxml_sender.1",
+    "text": "#_scxml_sender.1",
+    "expected_kind": "TA_TARGET_URI"
+  },
+  {
+    "id": "target.high.parse.invoke",
+    "owner": "high.Target",
+    "probe": "target",
+    "title": "Decode high target invoke",
+    "layer": "high",
+    "input": "#_worker",
+    "text": "worker",
+    "expected_kind": "TA_TARGET_INVOKE"
+  },
+  {
+    "id": "target.high.parse.uri",
+    "owner": "high.Target",
+    "probe": "target",
+    "title": "Decode high target uri",
+    "layer": "high",
+    "input": "https://example.invalid/inbox",
+    "text": "https://example.invalid/inbox",
+    "expected_kind": "TA_TARGET_URI"
+  },
+  {
+    "id": "target.high.parse.literal",
+    "owner": "high.Target",
+    "probe": "target",
+    "title": "Decode high target literal",
+    "layer": "high",
+    "input": "registered-name",
+    "text": "registered-name",
+    "expected_kind": "TA_TARGET_URI"
+  },
+  {
+    "id": "target.high.parse.hash",
+    "owner": "high.Target",
+    "probe": "target",
+    "title": "Decode high target hash",
+    "layer": "high",
+    "input": "#plain",
+    "text": "#plain",
+    "expected_kind": "TA_TARGET_URI"
+  },
+  {
+    "id": "target.high.reject.empty",
+    "owner": "high.Target",
+    "probe": "target",
+    "title": "Reject high malformed target empty",
+    "layer": "high",
+    "input": "",
+    "invalid": true
+  },
+  {
+    "id": "target.high.reject.empty_session",
+    "owner": "high.Target",
+    "probe": "target",
+    "title": "Reject high malformed target empty_session",
+    "layer": "high",
+    "input": "#_scxml_",
+    "invalid": true
+  },
+  {
+    "id": "target.high.construct.self",
+    "owner": "high.Target",
+    "probe": "target",
+    "title": "Preserve constructor target kind self",
+    "layer": "high",
+    "constructor": "self",
+    "expected_kind": "TA_TARGET_SELF"
+  },
+  {
+    "id": "target.high.construct.internal",
+    "owner": "high.Target",
+    "probe": "target",
+    "title": "Preserve constructor target kind internal",
+    "layer": "high",
+    "constructor": "internal",
+    "expected_kind": "TA_TARGET_INTERNAL"
+  },
+  {
+    "id": "target.high.construct.parent",
+    "owner": "high.Target",
+    "probe": "target",
+    "title": "Preserve constructor target kind parent",
+    "layer": "high",
+    "constructor": "parent",
+    "expected_kind": "TA_TARGET_PARENT"
+  },
+  {
+    "id": "target.high.construct.name",
+    "owner": "high.Target",
+    "probe": "target",
+    "title": "Preserve constructor target kind name",
+    "layer": "high",
+    "constructor": "name",
+    "input": "destination",
+    "text": "destination",
+    "expected_kind": "TA_TARGET_NAME"
+  },
+  {
+    "id": "target.high.construct.invoke",
+    "owner": "high.Target",
+    "probe": "target",
+    "title": "Preserve constructor target kind invoke",
+    "layer": "high",
+    "constructor": "invoke",
+    "input": "destination",
+    "text": "destination",
+    "expected_kind": "TA_TARGET_INVOKE"
+  },
+  {
+    "id": "target.high.construct.uri",
+    "owner": "high.Target",
+    "probe": "target",
+    "title": "Preserve constructor target kind uri",
+    "layer": "high",
+    "constructor": "uri",
+    "input": "destination",
+    "text": "destination",
+    "expected_kind": "TA_TARGET_URI"
+  },
+  {
+    "id": "reference.ActorRef.zero",
+    "owner": "raw.ActorRef",
+    "probe": "reference",
+    "title": "Scope ActorRef identity and validate zero",
+    "klass": "raw.ActorRef",
+    "id_value": 0,
+    "invalid": false
+  },
+  {
+    "id": "reference.ActorRef.one",
+    "owner": "raw.ActorRef",
+    "probe": "reference",
+    "title": "Scope ActorRef identity and validate one",
+    "klass": "raw.ActorRef",
+    "id_value": 1,
+    "invalid": false
+  },
+  {
+    "id": "reference.ActorRef.signed_boundary",
+    "owner": "raw.ActorRef",
+    "probe": "reference",
+    "title": "Scope ActorRef identity and validate signed_boundary",
+    "klass": "raw.ActorRef",
+    "id_value": 9223372036854775808,
+    "invalid": false
+  },
+  {
+    "id": "reference.ActorRef.maximum",
+    "owner": "raw.ActorRef",
+    "probe": "reference",
+    "title": "Scope ActorRef identity and validate maximum",
+    "klass": "raw.ActorRef",
+    "id_value": 18446744073709551615,
+    "invalid": false
+  },
+  {
+    "id": "reference.ActorRef.negative",
+    "owner": "raw.ActorRef",
+    "probe": "reference",
+    "title": "Scope ActorRef identity and validate negative",
+    "klass": "raw.ActorRef",
+    "id_value": -1,
+    "invalid": true
+  },
+  {
+    "id": "reference.ActorRef.overflow",
+    "owner": "raw.ActorRef",
+    "probe": "reference",
+    "title": "Scope ActorRef identity and validate overflow",
+    "klass": "raw.ActorRef",
+    "id_value": 18446744073709551616,
+    "invalid": true
+  },
+  {
+    "id": "reference.RequestRef.zero",
+    "owner": "raw.RequestRef",
+    "probe": "reference",
+    "title": "Scope RequestRef identity and validate zero",
+    "klass": "raw.RequestRef",
+    "id_value": 0,
+    "invalid": false
+  },
+  {
+    "id": "reference.RequestRef.one",
+    "owner": "raw.RequestRef",
+    "probe": "reference",
+    "title": "Scope RequestRef identity and validate one",
+    "klass": "raw.RequestRef",
+    "id_value": 1,
+    "invalid": false
+  },
+  {
+    "id": "reference.RequestRef.signed_boundary",
+    "owner": "raw.RequestRef",
+    "probe": "reference",
+    "title": "Scope RequestRef identity and validate signed_boundary",
+    "klass": "raw.RequestRef",
+    "id_value": 9223372036854775808,
+    "invalid": false
+  },
+  {
+    "id": "reference.RequestRef.maximum",
+    "owner": "raw.RequestRef",
+    "probe": "reference",
+    "title": "Scope RequestRef identity and validate maximum",
+    "klass": "raw.RequestRef",
+    "id_value": 18446744073709551615,
+    "invalid": false
+  },
+  {
+    "id": "reference.RequestRef.negative",
+    "owner": "raw.RequestRef",
+    "probe": "reference",
+    "title": "Scope RequestRef identity and validate negative",
+    "klass": "raw.RequestRef",
+    "id_value": -1,
+    "invalid": true
+  },
+  {
+    "id": "reference.RequestRef.overflow",
+    "owner": "raw.RequestRef",
+    "probe": "reference",
+    "title": "Scope RequestRef identity and validate overflow",
+    "klass": "raw.RequestRef",
+    "id_value": 18446744073709551616,
+    "invalid": true
+  },
+  {
+    "id": "reference.InvocationRef.zero",
+    "owner": "raw.InvocationRef",
+    "probe": "reference",
+    "title": "Scope InvocationRef identity and validate zero",
+    "klass": "raw.InvocationRef",
+    "id_value": 0,
+    "invalid": false
+  },
+  {
+    "id": "reference.InvocationRef.one",
+    "owner": "raw.InvocationRef",
+    "probe": "reference",
+    "title": "Scope InvocationRef identity and validate one",
+    "klass": "raw.InvocationRef",
+    "id_value": 1,
+    "invalid": false
+  },
+  {
+    "id": "reference.InvocationRef.signed_boundary",
+    "owner": "raw.InvocationRef",
+    "probe": "reference",
+    "title": "Scope InvocationRef identity and validate signed_boundary",
+    "klass": "raw.InvocationRef",
+    "id_value": 9223372036854775808,
+    "invalid": false
+  },
+  {
+    "id": "reference.InvocationRef.maximum",
+    "owner": "raw.InvocationRef",
+    "probe": "reference",
+    "title": "Scope InvocationRef identity and validate maximum",
+    "klass": "raw.InvocationRef",
+    "id_value": 18446744073709551615,
+    "invalid": false
+  },
+  {
+    "id": "reference.InvocationRef.negative",
+    "owner": "raw.InvocationRef",
+    "probe": "reference",
+    "title": "Scope InvocationRef identity and validate negative",
+    "klass": "raw.InvocationRef",
+    "id_value": -1,
+    "invalid": true
+  },
+  {
+    "id": "reference.InvocationRef.overflow",
+    "owner": "raw.InvocationRef",
+    "probe": "reference",
+    "title": "Scope InvocationRef identity and validate overflow",
+    "klass": "raw.InvocationRef",
+    "id_value": 18446744073709551616,
+    "invalid": true
+  },
+  {
+    "id": "memory.roundtrip.8.1",
+    "owner": "raw.Memory",
+    "probe": "memory",
+    "title": "Bounded binary memory roundtrip size 8, alignment 1",
+    "size": 8,
+    "alignment": 1
+  },
+  {
+    "id": "memory.roundtrip.8.8",
+    "owner": "raw.Memory",
+    "probe": "memory",
+    "title": "Bounded binary memory roundtrip size 8, alignment 8",
+    "size": 8,
+    "alignment": 8
+  },
+  {
+    "id": "memory.roundtrip.8.16",
+    "owner": "raw.Memory",
+    "probe": "memory",
+    "title": "Bounded binary memory roundtrip size 8, alignment 16",
+    "size": 8,
+    "alignment": 16
+  },
+  {
+    "id": "memory.roundtrip.8.64",
+    "owner": "raw.Memory",
+    "probe": "memory",
+    "title": "Bounded binary memory roundtrip size 8, alignment 64",
+    "size": 8,
+    "alignment": 64
+  },
+  {
+    "id": "memory.roundtrip.16.1",
+    "owner": "raw.Memory",
+    "probe": "memory",
+    "title": "Bounded binary memory roundtrip size 16, alignment 1",
+    "size": 16,
+    "alignment": 1
+  },
+  {
+    "id": "memory.roundtrip.16.8",
+    "owner": "raw.Memory",
+    "probe": "memory",
+    "title": "Bounded binary memory roundtrip size 16, alignment 8",
+    "size": 16,
+    "alignment": 8
+  },
+  {
+    "id": "memory.roundtrip.16.16",
+    "owner": "raw.Memory",
+    "probe": "memory",
+    "title": "Bounded binary memory roundtrip size 16, alignment 16",
+    "size": 16,
+    "alignment": 16
+  },
+  {
+    "id": "memory.roundtrip.16.64",
+    "owner": "raw.Memory",
+    "probe": "memory",
+    "title": "Bounded binary memory roundtrip size 16, alignment 64",
+    "size": 16,
+    "alignment": 64
+  },
+  {
+    "id": "memory.roundtrip.64.1",
+    "owner": "raw.Memory",
+    "probe": "memory",
+    "title": "Bounded binary memory roundtrip size 64, alignment 1",
+    "size": 64,
+    "alignment": 1
+  },
+  {
+    "id": "memory.roundtrip.64.8",
+    "owner": "raw.Memory",
+    "probe": "memory",
+    "title": "Bounded binary memory roundtrip size 64, alignment 8",
+    "size": 64,
+    "alignment": 8
+  },
+  {
+    "id": "memory.roundtrip.64.16",
+    "owner": "raw.Memory",
+    "probe": "memory",
+    "title": "Bounded binary memory roundtrip size 64, alignment 16",
+    "size": 64,
+    "alignment": 16
+  },
+  {
+    "id": "memory.roundtrip.64.64",
+    "owner": "raw.Memory",
+    "probe": "memory",
+    "title": "Bounded binary memory roundtrip size 64, alignment 64",
+    "size": 64,
+    "alignment": 64
+  },
+  {
+    "id": "memory.reject.negative",
+    "owner": "raw.Memory",
+    "probe": "memory",
+    "title": "Reject unsafe memory access negative",
+    "invalid": true,
+    "offset": -1,
+    "length": 1,
+    "write_length": 1
+  },
+  {
+    "id": "memory.reject.past_end",
+    "owner": "raw.Memory",
+    "probe": "memory",
+    "title": "Reject unsafe memory access past_end",
+    "invalid": true,
+    "offset": 17,
+    "length": 1,
+    "write_length": 1
+  },
+  {
+    "id": "memory.reject.end_write",
+    "owner": "raw.Memory",
+    "probe": "memory",
+    "title": "Reject unsafe memory access end_write",
+    "invalid": true,
+    "offset": 16,
+    "length": 1,
+    "write_length": 1
+  },
+  {
+    "id": "memory.reject.crossing",
+    "owner": "raw.Memory",
+    "probe": "memory",
+    "title": "Reject unsafe memory access crossing",
+    "invalid": true,
+    "offset": 15,
+    "length": 2,
+    "write_length": 2
+  },
+  {
+    "id": "memory.reject.overflow",
+    "owner": "raw.Memory",
+    "probe": "memory",
+    "title": "Reject unsafe memory access overflow",
+    "invalid": true,
+    "offset": 18446744073709551616,
+    "length": 1,
+    "write_length": 1
+  },
+  {
+    "id": "memory.reject.length_overflow",
+    "owner": "raw.Memory",
+    "probe": "memory",
+    "title": "Reject unsafe memory access length_overflow",
+    "invalid": true,
+    "offset": 0,
+    "length": 18446744073709551616,
+    "write_length": 17
+  },
+  {
+    "id": "registry.action",
+    "owner": "high.CodeRegistry",
+    "probe": "registry",
+    "title": "Keep action tokens scoped, rooted, sealed and type checked",
+    "use": "action"
+  },
+  {
+    "id": "registry.guard",
+    "owner": "high.CodeRegistry",
+    "probe": "registry",
+    "title": "Keep guard tokens scoped, rooted, sealed and type checked",
+    "use": "guard"
+  },
+  {
+    "id": "registry.expression",
+    "owner": "high.CodeRegistry",
+    "probe": "registry",
+    "title": "Keep expression tokens scoped, rooted, sealed and type checked",
+    "use": "expression"
+  },
+  {
+    "id": "registry.location",
+    "owner": "high.CodeRegistry",
+    "probe": "registry",
+    "title": "Keep location tokens scoped, rooted, sealed and type checked",
+    "use": "location"
+  },
+  {
+    "id": "registry.validation",
+    "owner": "high.CodeRegistry",
+    "probe": "registry",
+    "title": "Keep validation tokens scoped, rooted, sealed and type checked",
+    "use": "validation"
+  },
+  {
+    "id": "arena.defer",
+    "owner": "raw.Arena",
+    "probe": "arena",
+    "title": "Enforce arena defer semantics",
+    "case": "defer"
+  },
+  {
+    "id": "arena.siblings",
+    "owner": "raw.Arena",
+    "probe": "arena",
+    "title": "Enforce arena siblings semantics",
+    "case": "siblings"
+  },
+  {
+    "id": "arena.limit",
+    "owner": "raw.Arena",
+    "probe": "arena",
+    "title": "Enforce arena limit semantics",
+    "case": "limit"
+  },
+  {
+    "id": "system.clock",
+    "owner": "raw.System",
+    "probe": "system",
+    "title": "Preserve raw system clock semantics",
+    "case": "clock"
+  },
+  {
+    "id": "system.budget",
+    "owner": "raw.System",
+    "probe": "system",
+    "title": "Preserve raw system budget semantics",
+    "case": "budget"
+  },
+  {
+    "id": "system.unknown_field",
+    "owner": "raw.System",
+    "probe": "system",
+    "title": "Preserve raw system unknown_field semantics",
+    "case": "unknown_field"
+  },
+  {
+    "id": "runtime.reply",
+    "owner": "raw.Context",
+    "probe": "runtime",
+    "title": "Execute real actor request/reply scenario: reply",
+    "case": "reply"
+  },
+  {
+    "id": "runtime.false_guard",
+    "owner": "raw.Context",
+    "probe": "runtime",
+    "title": "Execute real actor request/reply scenario: false_guard",
+    "case": "false_guard"
+  },
+  {
+    "id": "runtime.guard_effect",
+    "owner": "raw.Context",
+    "probe": "runtime",
+    "title": "Execute real actor request/reply scenario: guard_effect",
+    "case": "guard_effect"
+  },
+  {
+    "id": "runtime.delayed_reply",
+    "owner": "raw.Context",
+    "probe": "runtime",
+    "title": "Execute real actor request/reply scenario: delayed_reply",
+    "case": "delayed_reply"
+  },
+  {
+    "id": "runtime.eventless",
+    "owner": "raw.Context",
+    "probe": "runtime",
+    "title": "Execute real actor request/reply scenario: eventless",
+    "case": "eventless"
+  },
+  {
+    "id": "runtime.internal",
+    "owner": "raw.Context",
+    "probe": "runtime",
+    "title": "Execute real actor request/reply scenario: internal",
+    "case": "internal"
+  },
+  {
+    "id": "runtime.bytes",
+    "owner": "raw.Memory",
+    "probe": "runtime",
+    "title": "Execute real actor request/reply scenario: bytes",
+    "case": "bytes"
+  },
+  {
+    "id": "runtime.exception",
+    "owner": "02-callbacks",
+    "probe": "runtime",
+    "title": "Execute real actor request/reply scenario: exception",
+    "case": "exception"
+  },
+  {
+    "id": "runtime.busy",
+    "owner": "raw.System",
+    "probe": "runtime",
+    "title": "Execute real actor request/reply scenario: busy",
+    "case": "busy"
+  },
+  {
+    "id": "runtime.stale",
+    "owner": "raw.ActorRef",
+    "probe": "runtime",
+    "title": "Execute real actor request/reply scenario: stale",
+    "case": "stale"
+  },
+  {
+    "id": "high_reply.reply",
+    "owner": "high.Context",
+    "probe": "high_reply",
+    "title": "Execute convenience request/reply: reply",
+    "case": "reply"
+  },
+  {
+    "id": "high_reply.delayed",
+    "owner": "high.Context",
+    "probe": "high_reply",
+    "title": "Execute convenience request/reply: delayed",
+    "case": "delayed"
+  },
+  {
+    "id": "high_reply.missing_origin",
+    "owner": "high.Context",
+    "probe": "high_reply",
+    "title": "Execute convenience request/reply: missing_origin",
+    "case": "missing_origin"
+  }
+]
