@@ -219,7 +219,8 @@ print(json.dumps({'type':'turn.completed','usage':{'output_tokens':7}}))
             self.assertEqual(0, driver.run())
         self.assertEqual(2, driver.implementations)
         self.assertEqual('complete', driver.state['status'])
-        self.assertEqual('missing\n', (self.root / 'bindings/ruby/lib/fix.rb').read_text())
+        # Accepted milestones are fast-forwarded onto the root main checkout.
+        self.assertEqual('version 2\n', (self.root / 'bindings/ruby/lib/fix.rb').read_text())
         commits = git(driver.worktree, 'log', '--format=%s').splitlines()
         self.assertEqual(1, sum('Implement Ruby milestone' in c for c in commits))
         records = [json.loads(r[0]) for r in self.store.db.execute('SELECT record_json FROM driver_iterations ORDER BY number')]
