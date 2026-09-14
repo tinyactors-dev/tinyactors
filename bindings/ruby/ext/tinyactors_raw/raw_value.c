@@ -93,29 +93,40 @@ static void tar_value_release(void *user, ta_value_t value) {
 }
 static VALUE tar_value_dump(VALUE object) { return rb_marshal_dump(object,Qnil); }
 static VALUE tar_value_load(VALUE bytes) { return rb_marshal_load(bytes); }
-static ta_status_t tar_value_snapshot(void *user, ta_value_t value, ta_value_t *out) {
-    int raised=0;
+typedef struct { void *user; ta_value_t value; ta_value_t *out; } tar_snapshot_args_t;
+
+static VALUE tar_value_snapshot_protected(VALUE argument) {
+    tar_snapshot_args_t *args = (tar_snapshot_args_t *)argument;
+    int raised = 0;
     VALUE dump, copy;
-    tar_value_record_t *src=tar_value_record(value), *r;
-    if (!out) return TA_INVALID;
-    out->handle=0;
-    if (!src || src->domain != user) return TA_INVALID;
+    tar_value_record_t *src=tar_value_record(args->value), *r;
+    args->out->handle=0;
+    if (!src || src->domain != args->user) rb_raise(rb_eArgError, "foreign native value domain");
     dump=tar_protected_call(tar_value_dump, src->object, &raised);
-    if (raised) return TA_EXECUTION_ERROR;
+    if (raised) rb_jump_tag(raised);
     copy=tar_protected_call(tar_value_load, dump, &raised);
-    if (raised) return TA_EXECUTION_ERROR;
+    if (raised) rb_jump_tag(raised);
     r=ALLOC(tar_value_record_t);
     r->magic=UINT32_C(0x54415652);
     r->object=copy;
-    r->domain=(tar_value_domain_t *)user;
+    r->domain=(tar_value_domain_t *)args->user;
     r->wrapper_refs=0;
     r->core_refs=1;
     r->next=tar_value_records;
     tar_value_records=r;
     rb_gc_register_address(&r->object);
-    *out=tar_value_handle(r);
-    return TA_OK;
+    *(args->out)=tar_value_handle(r);
+    return Qnil;
+}
+static ta_status_t tar_value_snapshot(void *user, ta_value_t value, ta_value_t *out) {
+    int state = 0;
+    tar_snapshot_args_t args = { user, value, out };
+    if (!out) return TA_INVALID;
+    out->handle = 0;
+    rb_protect(tar_value_snapshot_protected, (VALUE)&args, &state);
+    return state ? TA_EXECUTION_ERROR : TA_OK;
 }
 const ta_value_ops_t *tar_value_ops(void) { static const ta_value_ops_t ops={tar_value_retain,tar_value_release,tar_value_snapshot}; return &ops; }
+void *tar_value_domain_user(void) { return &tar_domain; }
 
 void tar_init_value(VALUE raw) { ID id=rb_intern("Value"); (void)raw; if (rb_const_defined(tar_mRaw,id)) { tar_value_class=rb_const_get(tar_mRaw,id); if (!RB_TYPE_P(tar_value_class,T_CLASS)) rb_raise(rb_eTypeError,"TinyActors::Raw::Value must be a class"); return; } tar_value_class=rb_define_class_under(tar_mRaw,"Value",rb_cObject); rb_define_alloc_func(tar_value_class,tar_value_alloc); rb_define_method(tar_value_class,"initialize",tar_value_initialize,1); rb_define_method(tar_value_class,"object",tar_value_object,0); }
