@@ -150,9 +150,16 @@ define_numeric_constants(void)
 void
 Init_tinyactors_raw(void)
 {
+    ID raw_id = rb_intern("Raw");
     tar_mTinyActors = rb_define_module("TinyActors");
+    if (rb_const_defined(tar_mTinyActors, raw_id)) {
+        tar_mRaw = rb_const_get(tar_mTinyActors, rb_intern("Raw"));
+        if (!RB_TYPE_P(tar_mRaw, T_MODULE))
+            rb_raise(rb_eTypeError, "TinyActors::Raw must be a module");
+    } else {
+        tar_mRaw = rb_define_module_under(tar_mTinyActors, "Raw");
+    }
     rb_set_end_proc(raw_shutdown, Qnil);
-    tar_mRaw = rb_define_module_under(tar_mTinyActors, "Raw");
     tar_init_support(tar_mRaw);
     rb_define_singleton_method(tar_mRaw, "ta_text_from_cstr", raw_text_from_cstr, 1);
     define_numeric_constants();

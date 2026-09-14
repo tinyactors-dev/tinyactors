@@ -11,12 +11,29 @@ typedef struct tar_deferred {
 } tar_deferred_t;
 static tar_deferred_t *tar_deferred_head;
 
+static void tar_release_roots(tar_root_t *roots)
+{
+    while (roots) {
+        tar_root_t *next = roots->next;
+        rb_gc_unregister_address(&roots->value);
+        xfree(roots);
+        roots = next;
+    }
+}
+
 static void tar_defer(tar_cleanup_fn fn, void *native, tar_root_t *roots)
 {
     tar_deferred_t *item;
     if (!fn || !native) return;
     item = (tar_deferred_t *)malloc(sizeof(*item));
-    if (!item) return;
+    /* A finalizer must not raise, and cleanup functions are deliberately
+     * native-only.  If the bookkeeping allocation fails, perform the native
+     * cleanup synchronously and release the registered roots. */
+    if (!item) {
+        fn(native);
+        tar_release_roots(roots);
+        return;
+    }
     item->fn = fn; item->native = native; item->roots = roots; item->next = tar_deferred_head;
     tar_deferred_head = item;
 }
@@ -28,7 +45,7 @@ static void tar_handle_mark(void *ptr)
     if (!handle) return;
     rb_gc_mark(handle->owner);
     for (root = handle->roots; root; root = root->next) {
-        if (root->active) rb_gc_mark_movable(root->value);
+        if (root->active) rb_gc_mark(root->value);
     }
 }
 
@@ -98,15 +115,31 @@ void tar_lifetime_release(tar_lifetime_t *token) {
     }
 }
 int tar_lifetime_live(const tar_lifetime_t *token) { return token && token->alive && (!token->parent || tar_lifetime_live(token->parent)); }
-void tar_root_add(tar_handle_t *h, VALUE v) { tar_root_t *r = ALLOC(tar_root_t); r->value=v; r->active=1; r->next=h->roots; h->roots=r; rb_gc_register_address(&r->value); }
-void tar_root_remove_all(tar_handle_t *h) { tar_root_t *r=h->roots, *n; while(r){n=r->next; rb_gc_unregister_address(&r->value); xfree(r); r=n;} h->roots=0; }
+void tar_root_add(tar_handle_t *h, VALUE v) {
+    tar_root_t *r;
+    if (!h) return;
+    r = ALLOC(tar_root_t);
+    r->value=v; r->active=1; r->next=h->roots; h->roots=r;
+    rb_gc_register_address(&r->value);
+}
+void tar_root_remove_all(tar_handle_t *h) { if (!h) return; tar_release_roots(h->roots); h->roots=0; }
 /* tar_lifetime_new returns one reference.  A newly-created handle consumes
  * that reference; callers wrapping an already-owned token must retain it
  * before calling this initializer. */
 void tar_handle_init(tar_handle_t *h, void *n, tar_lifetime_t *t) { h->native=n; h->token=t; h->owner=Qnil; h->roots=0; h->kind=0; h->cleanup=0; h->id=0; h->system_identity=t ? t->system_identity : 0; }
-void tar_handle_release(tar_handle_t *h) { if (h) { if (h->native && h->cleanup) { tar_defer(h->cleanup, h->native, h->roots); h->roots=0; } else tar_root_remove_all(h); h->native=0; tar_lifetime_invalidate(h->token); } }
+void tar_handle_release(tar_handle_t *h) {
+    if (!h || !h->native) return;
+    if (h->cleanup) {
+        tar_defer(h->cleanup, h->native, h->roots);
+        h->roots=0;
+    } else {
+        tar_root_remove_all(h);
+    }
+    h->native=0;
+    tar_lifetime_invalidate(h->token);
+}
 void tar_handle_set_cleanup(tar_handle_t *h, tar_cleanup_fn fn) { if (h) h->cleanup=fn; }
-void tar_deferred_cleanup_drain(void) { tar_deferred_t *item; while ((item=tar_deferred_head)) { tar_deferred_head=item->next; item->fn(item->native); while (item->roots) { tar_root_t *root=item->roots; item->roots=root->next; rb_gc_unregister_address(&root->value); xfree(root); } free(item); } }
+void tar_deferred_cleanup_drain(void) { tar_deferred_t *item; while ((item=tar_deferred_head)) { tar_deferred_head=item->next; item->fn(item->native); tar_release_roots(item->roots); free(item); } }
 void tar_deferred_cleanup_boundary(void) { tar_deferred_cleanup_drain(); }
 void tar_check_handle(const tar_handle_t *h) { if (!h || !tar_lifetime_live(h->token)) rb_raise(rb_eRuntimeError, "expired TinyActors native handle"); }
 void tar_callback_enter(tar_lifetime_t *t) { if (t) { t->callback++; if (t->system_state) t->system_state->callback_depth++; } }
@@ -126,7 +159,24 @@ int tar_size_to_size_t(VALUE value, size_t *out) {
     return 1;
 }
 
-VALUE tar_make_handle_class(const char *name, const rb_data_type_t *type) { VALUE klass=rb_define_class_under(tar_mRaw,name,rb_cObject); rb_undef_alloc_func(klass); (void)type; return klass; }
+VALUE tar_make_handle_class(const char *name, const rb_data_type_t *type) {
+    ID id = rb_intern(name);
+    VALUE klass;
+
+    /* Keep native initialization idempotent.  This matters for embedded
+     * loaders and tests that evaluate the entry point more than once: a
+     * redefinition would replace the class's TypedData contract. */
+    if (rb_const_defined(tar_mRaw, id)) {
+        klass = rb_const_get(tar_mRaw, id);
+        if (!RB_TYPE_P(klass, T_CLASS))
+            rb_raise(rb_eTypeError, "TinyActors::Raw::%s is not a class", name);
+        return klass;
+    }
+    klass = rb_define_class_under(tar_mRaw, name, rb_cObject);
+    rb_undef_alloc_func(klass);
+    (void)type;
+    return klass;
+}
 VALUE tar_handle_wrap(const tar_wrap_spec_t *spec, void *n, tar_lifetime_t *t) { tar_handle_t *h=ALLOC(tar_handle_t); tar_handle_init(h,n,t); h->owner=spec->owner; h->kind=spec->kind; return TypedData_Wrap_Struct(spec->klass,spec->type,h); }
 void *tar_handle_get(VALUE object, const rb_data_type_t *type) { tar_handle_t *h; TypedData_Get_Struct(object,tar_handle_t,type,h); tar_check_handle(h); if (!h->native) rb_raise(rb_eRuntimeError, "expired TinyActors native handle"); return h->native; }
 tar_handle_t *tar_handle_from(VALUE object, const rb_data_type_t *type) { tar_handle_t *h; TypedData_Get_Struct(object,tar_handle_t,type,h); return h; }
