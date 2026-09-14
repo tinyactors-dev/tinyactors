@@ -88,6 +88,11 @@ VALUE tar_definition_wrap(void *native, tar_lifetime_t *token, VALUE owner);
 VALUE tar_arena_wrap(void *native, tar_lifetime_t *token, VALUE owner);
 VALUE tar_context_wrap(void *native, tar_lifetime_t *token, VALUE owner);
 VALUE tar_memory_wrap(void *native, tar_lifetime_t *token, VALUE owner);
+VALUE tar_memory_wrap_view(void *data, size_t size, size_t alignment,
+                           tar_lifetime_t *token, VALUE owner,
+                           unsigned int kind, unsigned int writable);
+ta_status_t tar_memory_chunk_acquire(VALUE object, ta_chunk_t *out_chunk);
+ta_status_t tar_memory_chunk_release(VALUE object, const ta_chunk_t *chunk);
 VALUE tar_cursor_wrap(void *native, tar_lifetime_t *token, VALUE owner);
 VALUE tar_actor_ref_wrap(uint64_t id, void *system_identity, tar_lifetime_t *token, VALUE owner);
 VALUE tar_request_ref_wrap(uint64_t id, void *system_identity, tar_lifetime_t *token, VALUE owner);

@@ -162,6 +162,7 @@ Init_tinyactors_raw(void)
     }
     rb_set_end_proc(raw_shutdown, Qnil);
     tar_init_support(tar_mRaw);
+    tar_init_memory(tar_mRaw);
     tar_init_value(tar_mRaw);
     rb_define_singleton_method(tar_mRaw, "ta_text_from_cstr", raw_text_from_cstr, 1);
     define_numeric_constants();
