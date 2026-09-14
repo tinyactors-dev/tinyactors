@@ -202,7 +202,7 @@ print(json.dumps({'type':'turn.completed','usage':{'output_tokens':7}}))
             reviews = 0
             implementations = 0
             def assert_evidence_current(self): pass # Synthetic checks have no native verification run.
-            def verify(self, context, artifact):
+            def verify(self, context, artifact, brief=None):
                 self.state['last_run'] = 'synthetic-' + str(self.state['iteration'])
                 status = 'pass' if (self.worktree / 'bindings/ruby/lib/fix.rb').read_text() != 'missing\n' else 'fail'
                 return [dict(check_id=CHECK['id'], status=status, message='Synthetic verifier fixture')]
@@ -222,7 +222,7 @@ print(json.dumps({'type':'turn.completed','usage':{'output_tokens':7}}))
         # Accepted milestones are fast-forwarded onto the root main checkout.
         self.assertEqual('version 2\n', (self.root / 'bindings/ruby/lib/fix.rb').read_text())
         commits = git(driver.worktree, 'log', '--format=%s').splitlines()
-        self.assertEqual(1, sum('Implement Ruby milestone' in c for c in commits))
+        self.assertEqual(2, sum('WIP Ruby milestone' in c for c in commits))
         records = [json.loads(r[0]) for r in self.store.db.execute('SELECT record_json FROM driver_iterations ORDER BY number')]
         self.assertEqual(['repair_required', 'accepted'], [r['status'] for r in records])
         self.assertEqual('changes_requested', records[0]['review']['verdict'])
@@ -230,7 +230,7 @@ print(json.dumps({'type':'turn.completed','usage':{'output_tokens':7}}))
 
     def test_stall_retains_work_and_never_claims_completion(self):
         class Stalled(Driver):
-            def verify(self, context, artifact):
+            def verify(self, context, artifact, brief=None):
                 self.state['last_run']='synthetic'
                 return [dict(check_id=CHECK['id'], status='fail', message='not implemented')]
             def agent(self, prompt, artifact, review=False):
