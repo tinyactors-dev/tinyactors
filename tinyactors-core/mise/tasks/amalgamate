@@ -1,0 +1,31 @@
+#!/usr/bin/env ruby
+#MISE description="Generate or verify the Tinyactors C amalgamation"
+
+require 'pathname'
+
+root = Pathname.new(__dir__).join('../..').expand_path
+include_dir = root.join('include')
+index = include_dir.join('tinyactors.h')
+modules = index.read.scan(%r{^#include "\.\./src/(\w+)\.h"$}).flatten
+abort "#{index} does not list any source modules" if modules.empty?
+
+def amalgamate(paths)
+  paths.map do |path|
+    raise "missing module: #{path}" unless path.file?
+    path.read.gsub(/^#pragma once\n/, '').gsub(/^#include "[^\n]+"\n/, '')
+  end.join("\n")
+end
+
+sources = amalgamate(modules.map { |name| root.join('src', "#{name}.c") })
+implementation = "/* GENERATED FILE. Module order is defined by include/tinyactors.h. */\n#include \"tinyactors.h\"\n\n#{sources}\n"
+outputs = { include_dir.join('tinyactors.c') => implementation }
+
+if ARGV == ['--check']
+  outputs.each { |path, contents| abort "#{path} is out of date; run mise run amalgamate" unless path.file? && path.read == contents }
+  puts 'Tinyactors amalgamations are current.'
+  exit
+end
+
+abort 'usage: mise run amalgamate [--check]' unless ARGV.empty?
+outputs.each { |path, contents| path.write(contents) }
+puts "generated #{outputs.keys.map { |path| path.relative_path_from(root) }.join(', ')}"

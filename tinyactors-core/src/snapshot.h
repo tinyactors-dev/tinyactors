@@ -1,6 +1,22 @@
 #pragma once
 
 #include "actor.h"
+
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+ta_result ta_snapshot_batch_begin(ta_system *system, ta_snapshot_batch **out);
+ta_result ta_snapshot_batch_unload(ta_snapshot_batch *batch, ta_actor_id actor);
+ta_result ta_snapshot_batch_commit(ta_snapshot_batch *batch);
+void ta_snapshot_batch_abort(ta_snapshot_batch *batch);
+
+#ifdef __cplusplus
+}
+#endif
+
+#include "actor.h"
 #include "timer.h"
 
 typedef struct {

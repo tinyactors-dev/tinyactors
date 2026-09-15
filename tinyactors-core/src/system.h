@@ -1,5 +1,32 @@
 #pragma once
 
+#include "types.h"
+#include "store.h"
+#include "io.h"
+#include "invoke.h"
+
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct { ta_allocator allocator; ta_time initial_time; } ta_system_config;
+typedef struct { ta_event_name_id name; char *buffer; uint32_t capacity; uint32_t *needed; } ta_event_name_format_params;
+
+ta_result ta_system_create(const ta_system_config *config, ta_system **out);
+void ta_system_destroy(ta_system *system);
+ta_result ta_system_set_store(ta_system *system, ta_store store);
+ta_result ta_system_intern_atom(ta_system *system, ta_str text, ta_atom *out);
+ta_result ta_event_name_intern(ta_system *system, const ta_atom_list *segments, ta_event_name_id *out);
+bool ta_event_name_matches(const ta_system *system, ta_event_name_id event, ta_event_name_id prefix);
+ta_result ta_event_name_format(const ta_system *system, const ta_event_name_format_params *params);
+ta_result ta_system_set_time(ta_system *system, ta_time now);
+ta_time ta_system_time(const ta_system *system);
+
+#ifdef __cplusplus
+}
+#endif
+
 #include "arena.h"
 #include "actor.h"
 #include "atom.h"

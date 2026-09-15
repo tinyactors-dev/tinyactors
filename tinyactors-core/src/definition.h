@@ -1,6 +1,7 @@
 #pragma once
 
 #include "configuration.h"
+#include "datamodel.h"
 #include "history.h"
 
 typedef enum {

@@ -19,11 +19,18 @@ This archive captures the C API shape discussed for a tiny in-process actor syst
 
 ## Layout
 
-- `include/tinyactors.h` — embedding/public ABI.
-- `src/*.h` — internal module interfaces.
-- `src/internal.h` — umbrella include for implementation translation units.
-- `tests/smoke.c` — compile-only sanity check.
+- `src/*.{c,h}` — canonical implementation modules; their headers are public.
+- `include/tinyactors.h` — authored public index of `src/*.h`.
+- `include/tinyactors.c` — generated implementation amalgamation of `src/*.c`.
+- `tests/*.c` — compile-only checks for internal and public header use.
 
 ## Intentional omissions
 
 This is a header/API skeleton, not a completed implementation. It intentionally does not ship an XML parser/importer. It also leaves representation choices such as hash tables, actor name indexes, transition-set scratch storage, and snapshot wire encoding to implementation work.
+
+## Public header workflow
+
+Add a module pair to `src/`, then add its header to `include/tinyactors.h` in
+dependency order. Run `mise run amalgamate` from `tinyactors-core` to produce
+the distributable `tinyactors.c`; only that generated file is not edited by
+hand. `mise run amalgamate --check` is suitable for CI.

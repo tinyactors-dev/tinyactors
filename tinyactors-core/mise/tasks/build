@@ -8,7 +8,7 @@ require 'shellwords'
 ROOT = Pathname.new(__dir__).join('../..').expand_path
 
 def run(*command)
-  puts command.shelljoin
+  puts command.join(' ')
   pid = Process.spawn(*command, chdir: ROOT.to_s)
   _pid, status = Process.wait2(pid)
 
@@ -20,6 +20,9 @@ end
 compiler = Shellwords.split(ENV.fetch('CC', 'cc'))
 flags = Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic'))
 
+run('mise', 'run', 'amalgamate')
+run('mise', 'run', 'amalgamate', '--check')
+
 run(
   *compiler,
   *flags,
@@ -30,3 +33,28 @@ run(
   '-o',
   'tests/smoke.o'
 )
+
+run(
+  *compiler,
+  *flags,
+  '-Iinclude',
+  '-Isrc',
+  '-c',
+  'tests/public_smoke.c',
+  '-o',
+  'tests/public_smoke.o'
+)
+
+run(
+  *compiler,
+  *flags,
+  '-Iinclude',
+  '-c',
+  'include/tinyactors.c',
+  '-o',
+  'tests/tinyactors.o'
+)
+
+Dir['src/*.c'].sort.each do |source|
+  run(*compiler, *flags, '-Isrc', '-c', source, '-o', "tests/#{File.basename(source, '.c')}.o")
+end
