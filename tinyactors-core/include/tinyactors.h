@@ -51,8 +51,64 @@ typedef struct {
 typedef struct ta_system ta_system;
 typedef struct ta_definition ta_definition;
 typedef struct ta_definition_builder ta_definition_builder;
-typedef struct ta_snapshot_writer ta_snapshot_writer;
-typedef struct ta_snapshot_reader ta_snapshot_reader;
+
+typedef struct {
+    void *self;
+    ta_result (*write)(void *self, const void *data, size_t size);
+} ta_snapshot_writer;
+
+typedef struct {
+    void *self;
+    ta_result (*read)(void *self, void *data, size_t size);
+} ta_snapshot_reader;
+
+/* A store save is invisible until commit_save succeeds. */
+typedef struct {
+    void *self;
+    ta_snapshot_writer writer;
+} ta_store_save;
+
+typedef struct {
+    void *self;
+    ta_snapshot_reader reader;
+} ta_store_load;
+
+/* A batch is the atomic visibility boundary for staged actor blobs. */
+typedef struct {
+    void *self;
+} ta_store_batch;
+
+typedef struct {
+    ta_store_batch *batch;
+    ta_actor_id actor;
+    ta_store_save *out;
+} ta_store_begin_save_params;
+
+typedef struct {
+    ta_store_batch *batch;
+    ta_actor_id actor;
+} ta_store_remove_params;
+
+typedef struct ta_store_vtable {
+    ta_result (*begin_batch)(void *self, ta_store_batch *out);
+    ta_result (*begin_save)(void *self,
+                            const ta_store_begin_save_params *params);
+    ta_result (*stage_remove)(void *self,
+                              const ta_store_remove_params *params);
+    ta_result (*commit_batch)(void *self, ta_store_batch *batch);
+    void (*abort_batch)(void *self, ta_store_batch *batch);
+    ta_result (*open_load)(void *self,
+                           ta_actor_id actor,
+                           ta_store_load *out);
+    void (*close_load)(void *self, ta_store_load *load);
+} ta_store_vtable;
+
+typedef struct {
+    void *self;
+    const ta_store_vtable *v;
+} ta_store;
+
+typedef struct ta_snapshot_batch ta_snapshot_batch;
 
 typedef struct {
     void *ptr;
@@ -319,8 +375,14 @@ typedef struct {
     ta_run_status *status;
 } ta_actor_resume_params;
 
+typedef struct {
+    ta_snapshot_reader reader;
+    ta_actor_id *out;
+} ta_actor_recover_params;
+
 ta_result ta_system_create(const ta_system_config *config, ta_system **out);
 void ta_system_destroy(ta_system *system);
+ta_result ta_system_set_store(ta_system *system, ta_store store);
 
 ta_result ta_system_intern_atom(ta_system *system, ta_str text, ta_atom *out);
 ta_result ta_event_name_intern(ta_system *system,
@@ -344,9 +406,31 @@ ta_result ta_actor_deliver(ta_system *system,
                            const ta_event *event);
 ta_result ta_actor_resume(ta_system *system,
                           const ta_actor_resume_params *params);
+/*
+ * Unload/load persist and restore one complete actor session.  Delayed sends
+ * are contained in that session; the running system indexes them in memory.
+ */
 ta_result ta_actor_unload(ta_system *system, ta_actor_id actor);
 ta_result ta_actor_load(ta_system *system, ta_actor_id actor);
+/*
+ * Imports one complete snapshot supplied by the host.  Hosts use this while
+ * enumerating persisted actor blobs after a process restart.
+ */
+ta_result ta_actor_recover(ta_system *system,
+                           const ta_actor_recover_params *params);
 ta_result ta_actor_destroy(ta_system *system, ta_actor_id actor);
+
+/*
+ * Stages complete actor snapshots and makes them visible together on commit.
+ * A batch is consumed by commit or abort; ordinary ta_actor_unload() uses an
+ * implicit batch containing one actor.
+ */
+ta_result ta_snapshot_batch_begin(ta_system *system,
+                                  ta_snapshot_batch **out);
+ta_result ta_snapshot_batch_unload(ta_snapshot_batch *batch,
+                                   ta_actor_id actor);
+ta_result ta_snapshot_batch_commit(ta_snapshot_batch *batch);
+void ta_snapshot_batch_abort(ta_snapshot_batch *batch);
 
 #ifdef __cplusplus
 }

@@ -20,10 +20,6 @@ This file is intentionally candid. The headers compile, but they do not yet expo
 - data declarations and early/late binding metadata;
 - extension executable actions.
 
-## Snapshot atomicity
-
-The current API separately snapshots actor state and actor timers. The persistence contract must support one atomic logical snapshot/transaction even if a backend stores timers separately.
-
 ## Stable persisted identity
 
 `ta_snapshot_header` currently contains runtime `ta_definition_id` and `ta_atom name`. Persistence must encode resolvable logical identity/revision rather than assume these table handles survive restart.
@@ -38,7 +34,7 @@ Clarify how reaching a top-level final state differs from explicit `ta_actor_des
 
 ## Timer dispatch API
 
-The timer heap primitives exist internally, but the public host-facing mechanism for observing/dispatching due work and querying the next deadline needs a clear API that does not create an event loop inside Tinyactors.
+The timer heap remains system-owned. The public host-facing mechanism for observing/dispatching due work and querying the next deadline needs a clear API that does not create an event loop inside Tinyactors; it must work equally for resident and unloaded actors.
 
 ## Resident layout
 

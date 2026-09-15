@@ -13,4 +13,4 @@ Extensions may evaluate data, perform host work, raise/send events, and use supp
 
 ## Consequences
 
-Control flow remains inspectable and follows one semantic engine even when data and I/O are highly extensible.
+Control flow remains inspectable and follows one semantic engine even when data and I/O are highly extensible. A session snapshot restores configuration through that same interpreter-owned representation; extensions need only participate in serialization of their own data or service state, not in a separate configuration-restoration path.
