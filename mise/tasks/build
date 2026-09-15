@@ -1,0 +1,28 @@
+#!/usr/bin/env ruby
+#MISE description="Build the project"
+# vim:ft=ruby
+require 'pathname'
+
+ROOT = Pathname.new(__dir__).join('../..').expand_path
+
+class Project
+  def initialize(path)
+    @path = path
+  end
+
+  def root
+    @root ||= Pathname.new(@path).expand_path
+  end
+
+  def run(*command)
+    pid = Process.spawn('mise', 'run', *command, chdir: root.to_s)
+    _pid, status = Process.wait2(pid)
+
+    return if status.success?
+
+    exit(status.exitstatus || 1)
+  end
+end
+
+core = Project.new(ROOT.join('tinyactors-core'))
+core.run('build')

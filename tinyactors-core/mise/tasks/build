@@ -1,0 +1,32 @@
+#!/usr/bin/env ruby
+#MISE description="Build tinyactors-core"
+# vim:ft=ruby
+
+require 'pathname'
+require 'shellwords'
+
+ROOT = Pathname.new(__dir__).join('../..').expand_path
+
+def run(*command)
+  puts command.shelljoin
+  pid = Process.spawn(*command, chdir: ROOT.to_s)
+  _pid, status = Process.wait2(pid)
+
+  return if status.success?
+
+  exit(status.exitstatus || 1)
+end
+
+compiler = Shellwords.split(ENV.fetch('CC', 'cc'))
+flags = Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic'))
+
+run(
+  *compiler,
+  *flags,
+  '-Iinclude',
+  '-Isrc',
+  '-c',
+  'tests/smoke.c',
+  '-o',
+  'tests/smoke.o'
+)

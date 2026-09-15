@@ -1,0 +1,30 @@
+#pragma once
+
+#include "definition.h"
+
+struct ta_definition_builder {
+    ta_system *system;
+    ta_allocator allocator;
+    ta_atom name;
+    void *impl;
+};
+
+ta_result ta_definition_builder_init(ta_definition_builder *builder,
+                                     ta_system *system,
+                                     ta_str name,
+                                     ta_allocator allocator);
+void ta_definition_builder_destroy(ta_definition_builder *builder);
+ta_state_id ta_definition_add_state(ta_definition_builder *builder,
+                                    ta_state_id parent,
+                                    ta_state_kind kind,
+                                    ta_str name);
+ta_transition_id ta_definition_add_transition(ta_definition_builder *builder,
+                                              ta_state_id source,
+                                              ta_event_name_id event_prefix,
+                                              ta_expr_id condition);
+ta_result ta_definition_add_target(ta_definition_builder *builder,
+                                   ta_transition_id transition,
+                                   ta_state_id target);
+ta_result ta_definition_compile(ta_definition_builder *builder,
+                                ta_datamodel datamodel,
+                                ta_definition **out);
