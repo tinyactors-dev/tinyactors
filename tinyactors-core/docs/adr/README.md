@@ -1,38 +1,38 @@
 # Architecture decision records
 
-ADRs are the primary record of TA's design intent. Unless marked otherwise, the decisions below are **Accepted**.
+ADRs are the primary record of Tinyactors's design intent. Unless marked otherwise, the decisions below are **Accepted**.
 
 | ADR | Decision |
 |---|---|
-| 0001 | SCXML semantics without an XML dependency |
-| 0002 | In-process library; embedder owns concurrency and I/O environment |
-| 0003 | Immutable shared definitions and per-actor sessions |
-| 0004 | Named definitions; named and anonymous actors |
-| 0005 | Pluggable data models through fat-pointer vtables |
-| 0006 | Host-defined values own lifetime and serialization |
-| 0007 | Structured interned event names and prefix matching |
-| 0008 | `error.*` events are control flow; C errors are separate |
-| 0009 | Semantic run-to-completion with pausable/resumable execution |
-| 0010 | Parallel configuration is a set of active atomic states |
-| 0011 | The host owns external scheduling; actor owns internal events |
-| 0012 | Logical time and engine-owned delayed-send semantics |
-| 0013 | Snapshot the complete running session |
-| 0014 | Unload is residency change; destroy is termination |
-| 0015 | Synchronous I/O callbacks, asynchronous completion by events |
-| 0016 | Invocation is a pluggable service boundary |
-| 0017 | No implicit thread safety; external synchronization |
-| 0018 | Optimize memory per actor; share everything definition-level |
-| 0019 | Definitions are built/compiled to compact immutable layouts |
-| 0020 | Verification reuses the production transition engine |
-| 0021 | Verification begins as simulation/fuzzing, not proof |
-| 0022 | Actor event origin is the implicit reply address |
-| 0023 | Allocator injection and freestanding-friendly core |
-| 0024 | C ABI targets Node, CPython, CRuby, WASM, and embedded hosts |
-| 0025 | SCXML import/export is optional and separate |
-| 0026 | Delayed sends are semantically actor-owned, physically globally indexed |
-| 0027 | Detailed generated event names remain SCXML-prefix-compatible |
-| 0028 | Runtime IDs are compact handles; persistence must resolve logical identity |
-| 0029 | No per-actor external mailbox is required by the core |
-| 0030 | Interpreter extensions cannot bypass statechart configuration semantics |
+| [0001](0001-scxml-semantics-without-an-xml-dependency.md) | [SCXML semantics without an XML dependency](0001-scxml-semantics-without-an-xml-dependency.md) |
+| [0002](0002-in-process-library-embedder-owns-concurrency-and-i-o-environment.md) | [In-process library; embedder owns concurrency and I/O environment](0002-in-process-library-embedder-owns-concurrency-and-i-o-environment.md) |
+| [0003](0003-immutable-shared-definitions-and-per-actor-sessions.md) | [Immutable shared definitions and per-actor sessions](0003-immutable-shared-definitions-and-per-actor-sessions.md) |
+| [0004](0004-named-definitions-named-and-anonymous-actors.md) | [Named definitions; named and anonymous actors](0004-named-definitions-named-and-anonymous-actors.md) |
+| [0005](0005-pluggable-data-models-through-fat-pointer-vtables.md) | [Pluggable data models through fat-pointer vtables](0005-pluggable-data-models-through-fat-pointer-vtables.md) |
+| [0006](0006-host-defined-values-own-lifetime-and-serialization.md) | [Host-defined values own lifetime and serialization](0006-host-defined-values-own-lifetime-and-serialization.md) |
+| [0007](0007-structured-interned-event-names-and-prefix-matching.md) | [Structured interned event names and prefix matching](0007-structured-interned-event-names-and-prefix-matching.md) |
+| [0008](0008-error-events-are-control-flow-c-errors-are-separate.md) | [`error.*` events are control flow; C errors are separate](0008-error-events-are-control-flow-c-errors-are-separate.md) |
+| [0009](0009-semantic-run-to-completion-with-pausable-resumable-execution.md) | [Semantic run-to-completion with pausable/resumable execution](0009-semantic-run-to-completion-with-pausable-resumable-execution.md) |
+| [0010](0010-parallel-configuration-is-a-set-of-active-atomic-states.md) | [Parallel configuration is a set of active atomic states](0010-parallel-configuration-is-a-set-of-active-atomic-states.md) |
+| [0011](0011-the-host-owns-external-scheduling-actor-owns-internal-events.md) | [The host owns external scheduling; actor owns internal events](0011-the-host-owns-external-scheduling-actor-owns-internal-events.md) |
+| [0012](0012-logical-time-and-engine-owned-delayed-send-semantics.md) | [Logical time and engine-owned delayed-send semantics](0012-logical-time-and-engine-owned-delayed-send-semantics.md) |
+| [0013](0013-snapshot-the-complete-running-session.md) | [Snapshot the complete running session](0013-snapshot-the-complete-running-session.md) |
+| [0014](0014-unload-is-residency-change-destroy-is-termination.md) | [Unload is residency change; destroy is termination](0014-unload-is-residency-change-destroy-is-termination.md) |
+| [0015](0015-synchronous-i-o-callbacks-asynchronous-completion-by-events.md) | [Synchronous I/O callbacks, asynchronous completion by events](0015-synchronous-i-o-callbacks-asynchronous-completion-by-events.md) |
+| [0016](0016-invocation-is-a-pluggable-service-boundary.md) | [Invocation is a pluggable service boundary](0016-invocation-is-a-pluggable-service-boundary.md) |
+| [0017](0017-no-implicit-thread-safety-external-synchronization.md) | [No implicit thread safety; external synchronization](0017-no-implicit-thread-safety-external-synchronization.md) |
+| [0018](0018-optimize-memory-per-actor-share-everything-definition-level.md) | [Optimize memory per actor; share everything definition-level](0018-optimize-memory-per-actor-share-everything-definition-level.md) |
+| [0019](0019-definitions-are-built-compiled-to-compact-immutable-layouts.md) | [Definitions are built/compiled to compact immutable layouts](0019-definitions-are-built-compiled-to-compact-immutable-layouts.md) |
+| [0020](0020-verification-reuses-the-production-transition-engine.md) | [Verification reuses the production transition engine](0020-verification-reuses-the-production-transition-engine.md) |
+| [0021](0021-verification-begins-as-simulation-fuzzing-not-proof.md) | [Verification begins as simulation/fuzzing, not proof](0021-verification-begins-as-simulation-fuzzing-not-proof.md) |
+| [0022](0022-actor-event-origin-is-the-implicit-reply-address.md) | [Actor event origin is the implicit reply address](0022-actor-event-origin-is-the-implicit-reply-address.md) |
+| [0023](0023-allocator-injection-and-freestanding-friendly-core.md) | [Allocator injection and freestanding-friendly core](0023-allocator-injection-and-freestanding-friendly-core.md) |
+| [0024](0024-c-abi-targets-node-cpython-cruby-wasm-and-embedded-hosts.md) | [C ABI targets Node, CPython, CRuby, WASM, and embedded hosts](0024-c-abi-targets-node-cpython-cruby-wasm-and-embedded-hosts.md) |
+| [0025](0025-scxml-import-export-is-optional-and-separate.md) | [SCXML import/export is optional and separate](0025-scxml-import-export-is-optional-and-separate.md) |
+| [0026](0026-delayed-sends-are-semantically-actor-owned-physically-globally-indexed.md) | [Delayed sends are semantically actor-owned, physically globally indexed](0026-delayed-sends-are-semantically-actor-owned-physically-globally-indexed.md) |
+| [0027](0027-detailed-generated-event-names-remain-scxml-prefix-compatible.md) | [Detailed generated event names remain SCXML-prefix-compatible](0027-detailed-generated-event-names-remain-scxml-prefix-compatible.md) |
+| [0028](0028-runtime-ids-are-compact-handles-persistence-must-resolve-logical-identity.md) | [Runtime IDs are compact handles; persistence must resolve logical identity](0028-runtime-ids-are-compact-handles-persistence-must-resolve-logical-identity.md) |
+| [0029](0029-no-per-actor-external-mailbox-is-required-by-the-core.md) | [No per-actor external mailbox is required by the core](0029-no-per-actor-external-mailbox-is-required-by-the-core.md) |
+| [0030](0030-interpreter-extensions-cannot-bypass-statechart-configuration-semantics.md) | [Interpreter extensions cannot bypass statechart configuration semantics](0030-interpreter-extensions-cannot-bypass-statechart-configuration-semantics.md) |
 
-See `../internal/api-gaps.md` for places where the current header skeleton does not yet fully expose these decisions.
+See [the API gaps](../internal/api-gaps.md) for places where the current header skeleton does not yet fully expose these decisions.
