@@ -34,5 +34,10 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0028](0028-runtime-ids-are-compact-handles-persistence-must-resolve-logical-identity.md) | [Runtime IDs are compact handles; persistence must resolve logical identity](0028-runtime-ids-are-compact-handles-persistence-must-resolve-logical-identity.md) |
 | [0029](0029-no-per-actor-external-mailbox-is-required-by-the-core.md) | [No per-actor external mailbox is required by the core](0029-no-per-actor-external-mailbox-is-required-by-the-core.md) |
 | [0030](0030-interpreter-extensions-cannot-bypass-statechart-configuration-semantics.md) | [Interpreter extensions cannot bypass statechart configuration semantics](0030-interpreter-extensions-cannot-bypass-statechart-configuration-semantics.md) |
+| [0031](0031-data-model-vtable-is-semantic-not-syntactic.md) | [Data-model vtable is semantic, not syntactic](0031-data-model-vtable-is-semantic-not-syntactic.md) |
+| [0032](0032-data-bindings-are-declared-before-they-are-initialized.md) | [Data bindings are declared before they are initialized](0032-data-bindings-are-declared-before-they-are-initialized.md) |
+| [0033](0033-foreach-iteration-is-stable-and-resumable.md) | [Foreach iteration is stable and resumable](0033-foreach-iteration-is-stable-and-resumable.md) |
+| [0034](0034-named-parameter-aggregation-is-a-data-model-operation.md) | [Named parameter aggregation is a data-model operation](0034-named-parameter-aggregation-is-a-data-model-operation.md) |
+| [0035](0035-system-variables-are-protected-views.md) | [System variables are protected data-model views](0035-system-variables-are-protected-views.md) |
 
 See [the API gaps](../internal/api-gaps.md) for places where the current header skeleton does not yet fully expose these decisions.

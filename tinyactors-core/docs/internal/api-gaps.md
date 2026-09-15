@@ -21,10 +21,6 @@ This file is intentionally candid. The headers compile, but they do not yet expo
 - data declarations and early/late binding metadata;
 - extension executable actions.
 
-## Data-model surface
-
-The current vtable lacks some full-SCXML operations discussed earlier, including iteration/content import and explicit data initialization hooks. Add only the semantic operations required by the compiled action/data IR; do not copy XML-shaped APIs unnecessarily.
-
 ## Send representation
 
 `ta_send` / `ta_delayed_send` need enough information to select the intended I/O processor/type. The final design should not depend on reconstructing this from transient interpreter context.
