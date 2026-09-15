@@ -1,6 +1,6 @@
 # Verification and simulation
 
-The first tool is a simulator/fuzzer built around the ordinary TA interpreter.
+The first tool is a simulator/fuzzer built around the ordinary Tinyactors interpreter.
 
 ## Controlled environment
 

@@ -20,8 +20,8 @@ An event name is a structured sequence of dot-separated segments, not an opaque 
 
 ## Macrostep and pause
 
-SCXML run-to-completion is a semantic rule: an actor does not begin another external event until the current macrostep reaches a stable configuration. It does **not** require a C call to run without interruption. TA may pause and resume execution at internal interpreter boundaries.
+SCXML run-to-completion is a semantic rule: an actor does not begin another external event until the current macrostep reaches a stable configuration. It does **not** require a C call to run without interruption. Tinyactors may pause and resume execution at internal interpreter boundaries.
 
 ## Parallel states
 
-A statechart configuration is a set of active states. Under a parallel state, multiple atomic descendants are simultaneously active. TA therefore never models the generic actor configuration as a single current-state integer.
+A statechart configuration is a set of active states. Under a parallel state, multiple atomic descendants are simultaneously active. Tinyactors therefore never models the generic actor configuration as a single current-state integer.

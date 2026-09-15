@@ -1,6 +1,6 @@
 # Error model
 
-TA has two orthogonal failure channels.
+Tinyactors has two orthogonal failure channels.
 
 ## `ta_result`
 
@@ -14,6 +14,6 @@ Used for statechart-visible runtime errors. These are ordinary internal platform
 - `error.communication` — failures communicating with external entities;
 - `error.platform` — reserved platform/application namespace.
 
-TA may append structural detail suffixes while retaining those prefixes.
+Tinyactors may append structural detail suffixes while retaining those prefixes.
 
 A callback should not directly enqueue the error. It reports a `ta_fault`; the interpreter maps operation context to the appropriate event and implements the correct local semantic consequence.

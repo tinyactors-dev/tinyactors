@@ -4,7 +4,7 @@
 
 **Definition** — immutable compiled statechart shared by actors.
 
-**Configuration** — the set of active states. Physically TA generally stores active atomic leaves and derives active ancestors.
+**Configuration** — the set of active states. Physically Tinyactors generally stores active atomic leaves and derives active ancestors.
 
 **Atomic state** — state with no child states.
 

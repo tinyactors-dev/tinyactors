@@ -18,4 +18,4 @@ Particularly relevant sections:
 - 6.4 Invoke;
 - Appendix D, Algorithm for SCXML Interpretation (informative algorithm, not a required implementation data structure).
 
-Design note: TA aims to preserve these execution semantics while using a non-XML definition representation and an embedder-controlled runtime environment.
+Design note: Tinyactors aims to preserve these execution semantics while using a non-XML definition representation and an embedder-controlled runtime environment.

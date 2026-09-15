@@ -1,6 +1,6 @@
 # `configuration.h`
 
-The semantic SCXML configuration is a legal set of active states. TA generally stores only active **atomic leaves**; ancestors are derivable from the definition.
+The semantic SCXML configuration is a legal set of active states. Tinyactors generally stores only active **atomic leaves**; ancestors are derivable from the definition.
 
 The compiler chooses a `ta_configuration_layout`:
 

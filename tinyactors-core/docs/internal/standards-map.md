@@ -1,8 +1,8 @@
 # SCXML semantic coverage map
 
-TA intentionally separates SCXML semantics from SCXML XML syntax.
+Tinyactors intentionally separates SCXML semantics from SCXML XML syntax.
 
-| SCXML concept | TA design location |
+| SCXML concept | Tinyactors design location |
 |---|---|
 | hierarchical states | `definition`, `configuration`, `interpreter` |
 | compound/default initial entry | `definition`, `interpreter` |

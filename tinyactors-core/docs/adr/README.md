@@ -1,6 +1,6 @@
 # Architecture decision records
 
-ADRs are the primary record of Tinyactors's design intent. Unless marked otherwise, the decisions below are **Accepted**.
+ADRs are the primary record of Tinyactors design intent. Unless marked otherwise, the decisions below are **Accepted**.
 
 | ADR | Decision |
 |---|---|

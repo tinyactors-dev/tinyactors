@@ -9,8 +9,8 @@ A forced outbox/effects architecture would be portable but makes common Node, CP
 
 ## Decision
 
-I/O processor vtables are called synchronously from the interpreter. They may complete work synchronously or initiate asynchronous host work and return immediately. Later completion re-enters TA as an external event. Delayed-send waiting remains in TA, not the I/O adapter.
+I/O processor vtables are called synchronously from the interpreter. They may complete work synchronously or initiate asynchronous host work and return immediately. Later completion re-enters Tinyactors as an external event. Delayed-send waiting remains in Tinyactors, not the I/O adapter.
 
 ## Consequences
 
-Bindings stay straightforward on host interpreter threads. If an embedder executes TA from worker threads, it is responsible for marshaling callbacks to the host runtime when required.
+Bindings stay straightforward on host interpreter threads. If an embedder executes Tinyactors from worker threads, it is responsible for marshaling callbacks to the host runtime when required.

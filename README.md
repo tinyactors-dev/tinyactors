@@ -1,4 +1,4 @@
-# tinyactors
+# Tinyactors
 
 Tinyactors is an implementation of actor system based on the [SCXML](https://w3.org/TR/scxml) standard.
 
@@ -30,5 +30,4 @@ Using the actor model, you can model just how a websocket connection behaves on 
 *without* having to keep the full system in your head.
 
 This is good for humans and for agents.
-
 

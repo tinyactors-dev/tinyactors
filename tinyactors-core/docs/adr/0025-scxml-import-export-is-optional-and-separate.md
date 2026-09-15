@@ -9,7 +9,7 @@ SCXML XML remains valuable for interchange, tooling, visualization, and compatib
 
 ## Decision
 
-An importer/exporter, when implemented, is a separate library/tool that maps W3C SCXML syntax to/from the TA definition model. The core ships without XML initially.
+An importer/exporter, when implemented, is a separate library/tool that maps W3C SCXML syntax to/from the Tinyactors definition model. The core ships without XML initially.
 
 ## Consequences
 

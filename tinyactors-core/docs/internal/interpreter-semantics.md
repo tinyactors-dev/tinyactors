@@ -1,6 +1,6 @@
 # Interpreter semantics
 
-TA should follow the normative SCXML transition semantics and use Appendix D only as an algorithmic reference, not as a required data structure.
+Tinyactors should follow the normative SCXML transition semantics and use Appendix D only as an algorithmic reference, not as a required data structure.
 
 ## Macrostep outline
 

@@ -9,7 +9,7 @@ SCXML delayed sends must evaluate their arguments when the send executes, suppor
 
 ## Decision
 
-TA stores monotonic logical time supplied by the host. A delayed send is fully materialized at execution time and stored with an absolute logical due time. TA decides when it becomes due; the I/O processor is called only for dispatch. Cancellation is scoped to the actor/session that created the delayed send.
+Tinyactors stores monotonic logical time supplied by the host. A delayed send is fully materialized at execution time and stored with an absolute logical due time. Tinyactors decides when it becomes due; the I/O processor is called only for dispatch. Cancellation is scoped to the actor/session that created the delayed send.
 
 ## Consequences
 

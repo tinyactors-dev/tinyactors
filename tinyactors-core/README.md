@@ -1,4 +1,4 @@
-# ta actor/statechart header skeleton
+# Tinyactors actor/statechart header skeleton
 
 This archive captures the C API shape discussed for a tiny in-process actor system using SCXML-like execution semantics without requiring XML.
 

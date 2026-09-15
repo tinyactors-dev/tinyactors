@@ -1,6 +1,6 @@
 # Names and identity
 
-TA uses several different notions of name; they must not be conflated.
+Tinyactors uses several different notions of name; they must not be conflated.
 
 ## Definition name
 

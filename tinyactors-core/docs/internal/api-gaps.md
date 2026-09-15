@@ -51,7 +51,7 @@ Clarify how reaching a top-level final state differs from explicit `ta_actor_des
 
 ## Timer dispatch API
 
-The timer heap primitives exist internally, but the public host-facing mechanism for observing/dispatching due work and querying the next deadline needs a clear API that does not create an event loop inside TA.
+The timer heap primitives exist internally, but the public host-facing mechanism for observing/dispatching due work and querying the next deadline needs a clear API that does not create an event loop inside Tinyactors.
 
 ## Resident layout
 

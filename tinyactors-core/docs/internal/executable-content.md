@@ -1,6 +1,6 @@
 # Executable content
 
-TA needs an internal executable-content IR rather than XML-shaped runtime objects.
+Tinyactors needs an internal executable-content IR rather than XML-shaped runtime objects.
 
 The IR must be capable of representing the SCXML execution semantics for:
 

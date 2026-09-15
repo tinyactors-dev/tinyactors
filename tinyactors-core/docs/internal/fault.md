@@ -16,6 +16,6 @@ The interpreter knows the operation context and chooses the SCXML event class. E
 - invocation communication failure -> `error.communication...`;
 - application-defined platform failure -> `error.platform...`.
 
-The W3C standard allows suffixes on automatically generated errors, so TA may provide more detail while preserving prefix compatibility.
+The W3C standard allows suffixes on automatically generated errors, so Tinyactors may provide more detail while preserving prefix compatibility.
 
 Error events are appended to the internal event queue and processed in normal FIFO order; they are not exception-like immediate jumps.

@@ -9,7 +9,7 @@ The target environments range from an ESP32 and freestanding WASM to Node, Ruby,
 
 ## Decision
 
-TA is an in-process library. Calls execute on the caller's thread. The embedder decides when actors run, how external events are queued, how storage works, how time advances, and which I/O implementation is used.
+Tinyactors is an in-process library. Calls execute on the caller's thread. The embedder decides when actors run, how external events are queued, how storage works, how time advances, and which I/O implementation is used.
 
 ## Consequences
 

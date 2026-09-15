@@ -9,7 +9,7 @@ SCXML 1.0 provides the desired hierarchical, parallel, history, event, invocatio
 
 ## Decision
 
-TA adopts the SCXML 1.0 **execution model** as its semantic foundation but exposes a C definition/builder representation. The core does not parse XML. An optional importer/exporter may translate between W3C SCXML documents and TA definitions later.
+Tinyactors adopts the SCXML 1.0 **execution model** as its semantic foundation but exposes a C definition/builder representation. The core does not parse XML. An optional importer/exporter may translate between W3C SCXML documents and Tinyactors definitions later.
 
 ## Consequences
 

@@ -1,6 +1,6 @@
 # Values, data models, I/O, and invocation
 
-TA deliberately permits rich host integration.
+Tinyactors deliberately permits rich host integration.
 
 ## Values
 
@@ -14,7 +14,7 @@ A `ta_datamodel` interprets conditions, value expressions, locations, assignment
 
 An I/O processor callback is synchronous as a C call, but the operation it initiates may be asynchronous. For example, a Node callback may start `fetch()` and return; the promise completion later delivers another event to the actor.
 
-Delayed-send timing belongs to TA's statechart semantics. The I/O processor receives a fully materialized send only when it is due.
+Delayed-send timing belongs to Tinyactors statechart semantics. The I/O processor receives a fully materialized send only when it is due.
 
 ## Invoked services
 

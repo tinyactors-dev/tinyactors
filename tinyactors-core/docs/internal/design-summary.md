@@ -1,6 +1,6 @@
 # Design summary
 
-TA can be summarized as one equation:
+Tinyactors can be summarized as one equation:
 
 ```text
 immutable statechart definition

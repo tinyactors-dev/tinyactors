@@ -1,6 +1,6 @@
 # Tinyactors Core design documentation
 
-This documentation describes the intended architecture of **TA**, a tiny in-process actor/statechart library whose execution semantics are based on SCXML 1.0 while deliberately not depending on XML.
+This documentation describes the intended architecture of **Tinyactors**, a tiny in-process actor/statechart library whose execution semantics are based on SCXML 1.0 while deliberately not depending on XML.
 
 The documentation is split by audience:
 

@@ -14,5 +14,5 @@
 12. **Destroy is terminal.** Destroying removes name/state and cancels actor-owned delayed sends and invocations.
 13. **Definition immutability.** Actor execution never mutates the compiled definition.
 14. **No hidden wall clock.** Semantic time comes only from the supplied logical clock.
-15. **No hidden concurrency.** The core starts no threads and invokes no callbacks concurrently unless the caller itself enters TA concurrently.
+15. **No hidden concurrency.** The core starts no threads and invokes no callbacks concurrently unless the caller itself enters Tinyactors concurrently.
 16. **Structured event names.** Hot-path matching never depends on reparsing a formatted event-name string.

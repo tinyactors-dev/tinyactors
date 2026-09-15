@@ -1,6 +1,6 @@
 # Concurrency model
 
-TA provides actor isolation semantically but does not own host concurrency.
+Tinyactors provides actor isolation semantically but does not own host concurrency.
 
 ## Per actor
 

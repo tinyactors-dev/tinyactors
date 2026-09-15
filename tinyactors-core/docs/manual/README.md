@@ -1,6 +1,6 @@
 # Embedder manual
 
-TA is an in-process actor runtime built around hierarchical statecharts. The library owns statechart semantics. **You own the process:** threads, event loops, storage, clocks, network I/O, and when execution receives CPU time.
+Tinyactors is an in-process actor runtime built around hierarchical statecharts. The library owns statechart semantics. **You own the process:** threads, event loops, storage, clocks, network I/O, and when execution receives CPU time.
 
 The smallest useful mental model is:
 
