@@ -25,9 +25,13 @@ The public API still needs registration calls for definitions, I/O processors, i
 
 ## Event names
 
-`ta_event_name_parse` interns a dotted name from a host string boundary.
+`ta_system_intern_atom` interns one reusable name segment. Its resulting atom
+belongs to that system and must not be used with another system.
 
-`ta_event_name_append` structurally adds one segment.
+`ta_event_name_intern` interns an event name from one ordered `ta_atom_list`.
+It is the only event-name construction API; string parsing and incremental
+append APIs are deliberately not exposed. The list must be non-empty and every
+atom must belong to the supplied system; otherwise it returns `TA_ERR_INVALID`.
 
 `ta_event_name_matches` performs SCXML token-prefix matching.
 

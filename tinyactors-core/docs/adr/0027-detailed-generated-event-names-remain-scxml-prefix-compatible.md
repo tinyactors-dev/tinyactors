@@ -14,3 +14,8 @@ Tinyactors generates structured detail suffixes where useful, for example `error
 ## Consequences
 
 Statecharts may handle errors at exactly the granularity they need. Detailed names are cheap because names are structural, not repeatedly parsed strings.
+
+Compiled transition patterns retain atom segments and wildcard segments.
+Consequently, a transition can combine broad handlers such as
+`error.execution` with unrelated descriptors—or use a structural pattern such
+as `error.*.retry`—without losing the prefix compatibility described above.

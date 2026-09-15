@@ -22,9 +22,27 @@ typedef struct {
 } ta_state_def;
 
 typedef struct {
+    ta_span32 segments;
+} ta_event_pattern;
+
+typedef struct {
+    ta_atom atom;
+    uint32_t flags;
+} ta_event_pattern_segment;
+
+enum {
+    TA_EVENT_PATTERN_SEGMENT_WILDCARD = 1u << 0
+};
+
+typedef struct {
+    const ta_event_pattern_segment *segments;
+    uint32_t segment_count;
+} ta_event_pattern_spec;
+
+typedef struct {
     ta_state_id source;
     ta_span32 targets;
-    ta_event_name_id event_prefix;
+    ta_span32 event_patterns;
     ta_expr_id condition;
     ta_span32 actions;
     uint32_t document_order;
@@ -39,6 +57,10 @@ struct ta_definition {
     uint32_t state_count;
     ta_transition_def *transitions;
     uint32_t transition_count;
+    ta_event_pattern *event_patterns;
+    uint32_t event_pattern_count;
+    ta_event_pattern_segment *event_pattern_segments;
+    uint32_t event_pattern_segment_count;
     ta_state_id *targets;
     uint32_t target_count;
     ta_action_id *actions;

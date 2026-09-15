@@ -12,7 +12,6 @@ This file is intentionally candid. The headers compile, but they do not yet expo
 
 - explicit initial transitions and initial executable content;
 - transition type (`internal` / `external`);
-- multiple event descriptors and universal wildcard;
 - onentry/onexit action ranges;
 - executable-content IR;
 - raise/send/cancel actions;
@@ -20,10 +19,6 @@ This file is intentionally candid. The headers compile, but they do not yet expo
 - invocation declarations, finalize blocks, and autoforward;
 - data declarations and early/late binding metadata;
 - extension executable actions.
-
-## Event patterns
-
-`ta_transition_def.event_prefix` currently represents only one prefix. SCXML allows multiple descriptors and `*`. Compile a pattern set or equivalent efficient representation.
 
 ## Snapshot atomicity
 

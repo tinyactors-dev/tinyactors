@@ -8,12 +8,20 @@ Advancing time makes due sends eligible. Loading a snapshot does not itself perf
 
 ## Event names
 
-Use `ta_event_name_parse()` at a string boundary and retain the returned `ta_event_name_id` for hot paths. The core interns names as structured token paths.
+Intern each event-name segment with `ta_system_intern_atom()`, then construct
+the name from one ordered `ta_atom_list` with `ta_event_name_intern()`. The
+core accepts no dotted-string event-name parser, so names are always structured
+token paths. The list must be non-empty and its atoms must come from that same
+system.
 
 Prefix matching follows SCXML semantics:
 
 - `error` matches `error`, `error.execution`, `error.execution.datamodel.condition`, ...
 - `error.execution` does not match `error.communication`;
-- a universal wildcard is represented by transition metadata, not by reparsing every event string.
+- transitions can hold several compiled atom-segment patterns; a wildcard
+  segment can occur anywhere, so `error.*.retry` can match retry events below
+  `error` without reparsing event strings;
+- an eventless transition has no patterns, so it is checked only during
+  stabilization rather than against named events.
 
 Generated names such as `done.state.X`, `done.invoke.X`, and detailed `error.*` names should be built structurally, without formatting and reparsing strings.

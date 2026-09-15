@@ -13,18 +13,21 @@ The root is empty. Built-in roots include `error`, `error.execution`, `error.com
 
 ## Matching
 
-A descriptor `P` matches event `E` if `P` equals `E` or is a token-prefix ancestor of `E`. Matching is case-sensitive. `*` is represented as a wildcard pattern in transition metadata. `foo`, `foo.`, and `foo.*` are equivalent SCXML descriptors at import/build time.
+A prefix descriptor `P` matches event `E` if `P` equals `E` or is a token-prefix ancestor of `E`. Matching is case-sensitive. Compiled transitions store a span of `ta_event_pattern` records, each of which is a sequence of `ta_event_pattern_segment` records. Literal segments contain atoms; segments marked `TA_EVENT_PATTERN_SEGMENT_WILDCARD` match zero or more event-name segments and can occur at any position. Thus the atom sequence `error`, `*`, `retry` matches `error.retry` and `error.network.retry`; remaining event-name segments are allowed to preserve SCXML prefix matching. A transition matches a named event when any of its patterns matches. An empty pattern list is eventless, not a wildcard. SCXML's trailing forms `foo`, `foo.`, and `foo.*` remain equivalent at import/build time.
 
 ## Generated names
 
-Prefer append operations:
+Construct an event name from one ordered `ta_atom_list`:
 
 ```text
-DONE_INVOKE + invoke-id-segment
-ERROR_EXECUTION + datamodel + condition
+[DONE, INVOKE, invoke-id-segment]
+[ERROR, EXECUTION, datamodel, condition]
 ```
 
-Do not format `done.invoke.123` or `error.execution.foo` and then parse it again.
+Use `ta_system_intern_atom()` once for each reusable segment, then pass the
+atom list to `ta_event_name_intern()`. Do not format `done.invoke.123` or
+`error.execution.foo` and parse it again. No string-based event-name parser or
+append API is exposed.
 
 ## Persistence
 

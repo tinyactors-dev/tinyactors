@@ -39,6 +39,11 @@ typedef struct {
 } ta_str;
 
 typedef struct {
+    const ta_atom *atoms;
+    uint32_t count;
+} ta_atom_list;
+
+typedef struct {
     const uint8_t *ptr;
     uint32_t len;
 } ta_bytes;
@@ -317,10 +322,10 @@ typedef struct {
 ta_result ta_system_create(const ta_system_config *config, ta_system **out);
 void ta_system_destroy(ta_system *system);
 
-ta_event_name_id ta_event_name_parse(ta_system *system, ta_str name);
-ta_event_name_id ta_event_name_append(ta_system *system,
-                                      ta_event_name_id parent,
-                                      ta_str segment);
+ta_result ta_system_intern_atom(ta_system *system, ta_str text, ta_atom *out);
+ta_result ta_event_name_intern(ta_system *system,
+                               const ta_atom_list *segments,
+                               ta_event_name_id *out);
 bool ta_event_name_matches(const ta_system *system,
                            ta_event_name_id event,
                            ta_event_name_id prefix);

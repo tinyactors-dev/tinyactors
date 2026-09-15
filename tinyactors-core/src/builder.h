@@ -20,8 +20,11 @@ ta_state_id ta_definition_add_state(ta_definition_builder *builder,
                                     ta_str name);
 ta_transition_id ta_definition_add_transition(ta_definition_builder *builder,
                                               ta_state_id source,
-                                              ta_event_name_id event_prefix,
                                               ta_expr_id condition);
+ta_result ta_definition_add_event_pattern(
+    ta_definition_builder *builder,
+    ta_transition_id transition,
+    const ta_event_pattern_spec *pattern);
 ta_result ta_definition_add_target(ta_definition_builder *builder,
                                    ta_transition_id transition,
                                    ta_state_id target);

@@ -32,11 +32,9 @@ ta_result ta_event_name_table_init(ta_event_name_table *table,
                                    ta_allocator allocator,
                                    ta_atom_table *atoms);
 void ta_event_name_table_destroy(ta_event_name_table *table);
-ta_event_name_id ta_event_name_intern(ta_event_name_table *table,
-                                      ta_event_name_id parent,
-                                      ta_atom segment);
-ta_event_name_id ta_event_name_parse_internal(ta_event_name_table *table,
-                                              ta_str text);
+ta_result ta_event_name_intern_atoms_internal(ta_event_name_table *table,
+                                              const ta_atom_list *segments,
+                                              ta_event_name_id *out);
 bool ta_event_name_matches_internal(const ta_event_name_table *table,
                                     ta_event_name_id event,
                                     ta_event_name_id prefix);
