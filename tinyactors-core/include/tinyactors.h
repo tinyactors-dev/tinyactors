@@ -49,9 +49,15 @@ typedef struct ta_definition_builder ta_definition_builder;
 typedef struct ta_snapshot_writer ta_snapshot_writer;
 typedef struct ta_snapshot_reader ta_snapshot_reader;
 
+typedef struct {
+    void *ptr;
+    size_t size;
+    size_t alignment;
+} ta_allocator_free_params;
+
 typedef struct ta_allocator_vtable {
     void *(*alloc)(void *self, size_t size, size_t alignment);
-    void (*free)(void *self, void *ptr, size_t size, size_t alignment);
+    void (*free)(void *self, const ta_allocator_free_params *params);
 } ta_allocator_vtable;
 
 typedef struct {
@@ -125,36 +131,99 @@ typedef enum {
 
 typedef struct ta_dm_host ta_dm_host;
 
+typedef struct {
+    const ta_definition *definition;
+    ta_allocator allocator;
+    void **shared;
+} ta_datamodel_prepare_definition_params;
+
+typedef struct {
+    void *shared;
+    void *instance;
+    const ta_dm_host *host;
+} ta_datamodel_init_instance_params;
+
+typedef struct {
+    void *shared;
+    void *instance;
+    ta_expr_id expr;
+    const ta_dm_host *host;
+    bool *out;
+    ta_fault *fault;
+} ta_datamodel_eval_condition_params;
+
+typedef struct {
+    void *shared;
+    void *instance;
+    ta_expr_id expr;
+    const ta_dm_host *host;
+    ta_value *out;
+    ta_fault *fault;
+} ta_datamodel_eval_value_params;
+
+typedef struct {
+    void *shared;
+    void *instance;
+    ta_expr_id location;
+    const ta_dm_host *host;
+    ta_value *out;
+    ta_fault *fault;
+} ta_datamodel_read_location_params;
+
+typedef struct {
+    void *shared;
+    void *instance;
+    ta_expr_id location;
+    const ta_value *value;
+    const ta_dm_host *host;
+    ta_fault *fault;
+} ta_datamodel_assign_params;
+
+typedef struct {
+    void *shared;
+    void *instance;
+    ta_expr_id script;
+    const ta_dm_host *host;
+    ta_fault *fault;
+} ta_datamodel_execute_script_params;
+
+typedef struct {
+    void *shared;
+    void *instance;
+    ta_snapshot_writer *writer;
+} ta_datamodel_snapshot_params;
+
+typedef struct {
+    void *shared;
+    void *instance;
+    ta_snapshot_reader *reader;
+} ta_datamodel_restore_params;
+
 typedef struct ta_datamodel_vtable {
-    ta_result (*prepare_definition)(void *self, const ta_definition *definition,
-                                    ta_allocator allocator, void **shared);
+    ta_result (*prepare_definition)(
+        void *self, const ta_datamodel_prepare_definition_params *params);
     void (*destroy_definition)(void *self, void *shared, ta_allocator allocator);
     uint32_t (*instance_size)(void *self, void *shared);
     uint32_t (*instance_alignment)(void *self, void *shared);
-    ta_result (*init_instance)(void *self, void *shared, void *instance,
-                               const ta_dm_host *host);
+    ta_result (*init_instance)(
+        void *self, const ta_datamodel_init_instance_params *params);
     void (*destroy_instance)(void *self, void *shared, void *instance);
 
-    ta_op_status (*eval_condition)(void *self, void *shared, void *instance,
-                                   ta_expr_id expr, const ta_dm_host *host,
-                                   bool *out, ta_fault *fault);
-    ta_op_status (*eval_value)(void *self, void *shared, void *instance,
-                               ta_expr_id expr, const ta_dm_host *host,
-                               ta_value *out, ta_fault *fault);
-    ta_op_status (*read_location)(void *self, void *shared, void *instance,
-                                  ta_expr_id location, const ta_dm_host *host,
-                                  ta_value *out, ta_fault *fault);
-    ta_op_status (*assign)(void *self, void *shared, void *instance,
-                           ta_expr_id location, const ta_value *value,
-                           const ta_dm_host *host, ta_fault *fault);
-    ta_op_status (*execute_script)(void *self, void *shared, void *instance,
-                                   ta_expr_id script, const ta_dm_host *host,
-                                   ta_fault *fault);
+    ta_op_status (*eval_condition)(
+        void *self, const ta_datamodel_eval_condition_params *params);
+    ta_op_status (*eval_value)(
+        void *self, const ta_datamodel_eval_value_params *params);
+    ta_op_status (*read_location)(
+        void *self, const ta_datamodel_read_location_params *params);
+    ta_op_status (*assign)(void *self,
+                           const ta_datamodel_assign_params *params);
+    ta_op_status (*execute_script)(
+        void *self, const ta_datamodel_execute_script_params *params);
 
-    ta_result (*snapshot)(void *self, void *shared, void *instance,
-                          ta_snapshot_writer *writer);
-    ta_result (*restore)(void *self, void *shared, void *instance,
-                         ta_snapshot_reader *reader);
+    ta_result (*snapshot)(void *self,
+                          const ta_datamodel_snapshot_params *params);
+    ta_result (*restore)(void *self,
+                         const ta_datamodel_restore_params *params);
 } ta_datamodel_vtable;
 
 typedef struct {
@@ -188,12 +257,24 @@ typedef struct {
     bool autoforward;
 } ta_invoke_request;
 
+typedef struct {
+    const ta_invoke_request *request;
+    uint64_t *service_handle;
+    ta_fault *fault;
+} ta_invoker_start_params;
+
+typedef struct {
+    uint64_t service_handle;
+    const ta_event *event;
+    ta_fault *fault;
+} ta_invoker_forward_params;
+
 typedef struct ta_invoker_vtable {
-    ta_op_status (*start)(void *self, const ta_invoke_request *request,
-                          uint64_t *service_handle, ta_fault *fault);
+    ta_op_status (*start)(void *self,
+                          const ta_invoker_start_params *params);
     ta_op_status (*cancel)(void *self, uint64_t service_handle, ta_fault *fault);
-    ta_op_status (*forward)(void *self, uint64_t service_handle,
-                            const ta_event *event, ta_fault *fault);
+    ta_op_status (*forward)(void *self,
+                            const ta_invoker_forward_params *params);
 } ta_invoker_vtable;
 
 typedef struct {
@@ -206,6 +287,32 @@ typedef struct {
     ta_time initial_time;
 } ta_system_config;
 
+typedef struct {
+    ta_event_name_id name;
+    char *buffer;
+    uint32_t capacity;
+    uint32_t *needed;
+} ta_event_name_format_params;
+
+typedef struct {
+    ta_definition_id definition;
+    ta_str name;
+    const ta_value *initial_data;
+    ta_actor_id *out;
+} ta_actor_spawn_params;
+
+typedef struct {
+    ta_definition_id definition;
+    ta_str name;
+    ta_actor_id *out;
+} ta_actor_find_params;
+
+typedef struct {
+    ta_actor_id actor;
+    uint32_t budget;
+    ta_run_status *status;
+} ta_actor_resume_params;
+
 ta_result ta_system_create(const ta_system_config *config, ta_system **out);
 void ta_system_destroy(ta_system *system);
 
@@ -217,30 +324,20 @@ bool ta_event_name_matches(const ta_system *system,
                            ta_event_name_id event,
                            ta_event_name_id prefix);
 ta_result ta_event_name_format(const ta_system *system,
-                               ta_event_name_id name,
-                               char *buffer,
-                               uint32_t capacity,
-                               uint32_t *needed);
+                               const ta_event_name_format_params *params);
 
 ta_result ta_system_set_time(ta_system *system, ta_time now);
 ta_time ta_system_time(const ta_system *system);
 
 ta_result ta_actor_spawn(ta_system *system,
-                         ta_definition_id definition,
-                         ta_str name,
-                         const ta_value *initial_data,
-                         ta_actor_id *out);
+                         const ta_actor_spawn_params *params);
 ta_result ta_actor_find(ta_system *system,
-                        ta_definition_id definition,
-                        ta_str name,
-                        ta_actor_id *out);
+                        const ta_actor_find_params *params);
 ta_result ta_actor_deliver(ta_system *system,
                            ta_actor_id actor,
                            const ta_event *event);
 ta_result ta_actor_resume(ta_system *system,
-                          ta_actor_id actor,
-                          uint32_t budget,
-                          ta_run_status *status);
+                          const ta_actor_resume_params *params);
 ta_result ta_actor_unload(ta_system *system, ta_actor_id actor);
 ta_result ta_actor_load(ta_system *system, ta_actor_id actor);
 ta_result ta_actor_destroy(ta_system *system, ta_actor_id actor);

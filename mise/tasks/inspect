@@ -1,0 +1,31 @@
+#!/usr/bin/env ruby
+#MISE description="Inspect repository files and API declarations"
+
+if ARGV.first == '--api-arity'
+  path = ARGV.fetch(1)
+  source = File.read(path).gsub(%r{/\*.*?\*/}m, '').gsub(%r{//.*$}, '')
+  functions = source.scan(/(?:\(\*(\w+)\)|(ta_\w+))\s*\(([^()]*)\)/m)
+  violations = functions.filter_map do |pointer_name, function_name, parameters|
+    parameters = parameters.strip
+    arity = parameters.empty? || parameters == 'void' ? 0 : parameters.count(',') + 1
+    [pointer_name || function_name, arity] if arity > 3
+  end
+
+  if violations.empty?
+    puts "All public functions have at most three parameters."
+    exit
+  end
+
+  violations.each { |name, arity| warn "#{name}: #{arity} parameters" }
+  exit 1
+end
+
+if ARGV.first == '--git-diff'
+  exec 'git', 'diff', '--', *ARGV.drop(1)
+end
+
+if ARGV.first == '--git-status'
+  exec 'git', 'status', '--short'
+end
+
+exec "rg", *ARGV
