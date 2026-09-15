@@ -1,6 +1,8 @@
 # `io.h`
 
-I/O processors are registered by a type atom/identifier and called synchronously by the interpreter when a send is ready to dispatch.
+I/O processors are registered by a type atom/identifier and called synchronously by the interpreter when a send is ready to dispatch. `ta_send.io_type` selects the registration; it is the resolved SCXML `<send>` `type` or `typeexpr` value, interned as a `ta_atom`. The `target`, `event`, and `data` fields are delivery arguments for the selected processor, not the processor selector.
+
+When SCXML omits `type` and `typeexpr`, Tinyactors resolves the type to the SCXML Event I/O Processor URI (`http://www.w3.org/TR/scxml/#SCXMLEventProcessor`) before creating `ta_send`. A delayed send copies that resolved atom into `ta_delayed_send.io_type`, so it dispatches through the same registration after its delay, unload/reload, or persistence round trip.
 
 The callback may:
 

@@ -9,6 +9,7 @@ typedef struct {
     ta_send_id send_id;
     ta_time due;
     ta_event_name_id event;
+    ta_atom io_type;
     ta_value target;
     ta_value data;
     uint32_t heap_index;

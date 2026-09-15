@@ -7,11 +7,13 @@ A delayed send contains the **already evaluated** semantics of a future dispatch
 - send ID;
 - absolute logical due time;
 - structured event name;
+- I/O processor type atom;
 - target value;
 - payload value;
-- I/O processor/type information in the final representation.
 
-The current `ta_delayed_send` skeleton still needs an explicit I/O processor/type field if the send type cannot be recovered elsewhere.
+`ta_delayed_send.io_type` is the resolved SCXML `<send>` type. It is retained with
+the other evaluated send arguments so that due-time dispatch selects the same I/O
+processor without reconstructing information from interpreter state.
 
 ## Global index, actor ownership
 

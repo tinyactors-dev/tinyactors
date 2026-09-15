@@ -21,10 +21,6 @@ This file is intentionally candid. The headers compile, but they do not yet expo
 - data declarations and early/late binding metadata;
 - extension executable actions.
 
-## Send representation
-
-`ta_send` / `ta_delayed_send` need enough information to select the intended I/O processor/type. The final design should not depend on reconstructing this from transient interpreter context.
-
 ## Event patterns
 
 `ta_transition_def.event_prefix` currently represents only one prefix. SCXML allows multiple descriptors and `*`. Compile a pattern set or equivalent efficient representation.

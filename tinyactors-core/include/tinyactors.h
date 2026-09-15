@@ -235,6 +235,7 @@ typedef struct {
     ta_actor_id source;
     ta_send_id send_id;
     ta_event_name_id event;
+    ta_atom io_type;
     ta_value target;
     ta_value data;
 } ta_send;
