@@ -1,18 +1,16 @@
 # ADR 0028: Runtime IDs are compact handles; persistence must resolve logical identity
 
-**Status:** Accepted
+**Status:** Accepted; refined by ADR 0038  
 **Date:** 2026-09-15
 
 ## Context
 
-Compact integer IDs are ideal in RAM but process-local tables may be rebuilt after restart. Persisting raw table indices as if they were universal identifiers risks restoring against the wrong definition/event-name table.
+Compact integer IDs are ideal in RAM but process-local tables may be rebuilt after restart. Treating raw table indices as universal identifiers risks reconstructing against the wrong definition/event-name table.
 
 ## Decision
 
-Use compact numeric IDs as runtime handles. Persistent formats must carry or resolve stable logical identity for definitions, names, and structured event names rather than assuming numeric handles are stable across processes. Actor IDs may be stable if the chosen store explicitly guarantees their allocation scheme.
+Use compact numeric IDs as runtime handles. Session images and portable checkpoint encodings must carry or resolve stable logical identity for definitions, names, and structured event names rather than assuming numeric handles are stable across processes. Definitions are identified by family plus exact revision fingerprint. Named actor addresses remain logical `(family, name)` routes.
 
 ## Consequences
 
-The runtime stays dense. Checkpoint formats need a resolution layer and
-versioning. ADR 0037 defines definition family/session-schema recovery and the
-host-backed named actor directory.
+The runtime stays dense. Optional durability formats need a resolution layer and versioning, but core in-memory structures do not pay for portable identities on every field.

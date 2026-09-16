@@ -8,51 +8,44 @@ A plugin author should be able to answer all applicable questions below.
 - Which semantic capabilities are unsupported?
 - Is shared prepared state immutable after preparation?
 
-## Instance
+## Instance/binding
 
-- What is the per-actor byte cost?
-- How are bindings represented?
+- What is the per-actor adapter byte cost?
+- What host object does `binding` refer to?
+- Who owns that object's lifetime?
+- Can a fresh adapter instance rebind to the same/restored host object during session reconstruction?
 - What is the uninitialized/default value?
-- Can host-provided initial values be imported?
 
 ## Expressions
 
 - Are conditional expressions side-effect-free by contract?
 - How is `In(state)` implemented through `ta_dm_host`?
-- What makes a value legal?
-- What makes a location legal?
+- What makes a value/location legal?
 - How are writes to protected system data rejected?
-
-## Literals
-
-- Which media types/frontends are understood?
-- What is the fallback for text/bytes?
-- Can literal import create host-native objects safely?
 
 ## Foreach
 
 - What counts as iterable?
 - What is the iteration order?
-- How is a shallow snapshot represented?
-- Is the snapshot value serializable if actor unloading is required?
-- What value is exposed as the iteration index?
+- How is a shallow iteration snapshot represented while a macrostep is paused?
+- Does it retain host values safely for the lifetime of an in-process session image?
 
-## Parameters
+## Inspection
 
-- How are ordered named pairs aggregated?
-- How are duplicates represented?
+- Does `inspect` return a useful host-native root view?
+- Can operational tooling inspect a huge object lazily without copying/traversing it in Tinyactors?
 
 ## Events and system data
 
 - How is foreign event data converted?
 - How is an unavailable/illegal payload represented?
-- How are `_event`, session identity, machine name, I/O metadata and platform values exposed?
+- How are `_event`, session identity, machine name, I/O metadata, and platform values exposed?
 
-## Persistence
+## Optional durability
 
-- Can every ordinary plugin value be snapshotted?
-- Which values make an actor temporarily non-unloadable?
-- Is restore deterministic with respect to the serialized form?
+- If process-independent checkpoints are required, how does the higher-level durability component resolve the host binding after restart?
+- How are interpreter-held host values in events/timers/continuations encoded or rebound?
+- Which external I/O results must be journaled for deterministic replay/reconciliation?
 
 ## Errors
 

@@ -13,4 +13,4 @@ Run-to-completion is a **semantic** boundary, not a C stack boundary. `ta_actor_
 
 ## Consequences
 
-Long or non-terminating control flows do not monopolize the caller. Continuation state becomes part of persistence whenever an actor is paused mid-macrostep.
+Long or non-terminating control flows do not monopolize the caller. Continuation state is inspectable and forms part of a core session image when an actor is captured mid-macrostep. ADR 0038 separates that reconstructible interpreter state from portable/durable checkpoint encoding.

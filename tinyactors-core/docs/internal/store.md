@@ -1,15 +1,7 @@
-# Host persistence
+# Durability/store boundary
 
-Storage is host-owned. Tinyactors supplies snapshot reader/writer callback
-types for its session checkpoint codec but does not define a store vtable,
-batch transaction, or persistence lifecycle.
+Tinyactors core defines no storage backend, transaction batch, object store, or universal persistence lifecycle.
 
-A host persists a checkpoint before evicting resident state and materializes a
-checkpoint before routing work to an evicted actor. It coordinates checkpoint
-durability with its actor-directory implementation; this permits database
-transactions, object-store manifests, distributed routers, and embedded stores
-without imposing one storage model on the core.
+`store.h` is currently an empty compatibility/module placeholder. The reusable durability design belongs above core session images and may define its own store interfaces for SQLite, PostgreSQL, object storage, browser storage, embedded flash, or application-specific systems.
 
-Delayed sends are part of the actor checkpoint. A host with evicted actors
-maintains the durable deadline index needed to route due work back to the
-actor.
+Core responsibilities stop at named actor/session semantics, inspection, and reconstructible in-memory session images. A durability component is responsible for turning those images plus stable host-reference identities into portable checkpoints and for coordinating any command journal/effect protocol it chooses.

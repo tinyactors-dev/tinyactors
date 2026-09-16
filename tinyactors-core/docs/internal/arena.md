@@ -1,6 +1,6 @@
 # `arena.h`
 
-The arena is for transient interpreter/build work, not durable actor state.
+The arena is for transient interpreter/build work, not reconstructible session state.
 
 Typical uses:
 
@@ -10,4 +10,4 @@ Typical uses:
 - builder compilation work;
 - formatting event names at API boundaries.
 
-Resetting the arena must never invalidate data retained by an actor, definition, timer, queued event, plugin, or snapshot. Embedded builds may replace the backing allocator with fixed pools.
+Resetting the arena must never invalidate data retained by an actor, definition, timer, queued event, plugin, or session image. Embedded builds may replace the backing allocator with fixed pools.

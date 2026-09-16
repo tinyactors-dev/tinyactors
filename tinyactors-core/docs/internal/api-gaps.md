@@ -4,7 +4,7 @@ This file is intentionally candid. The headers compile, but they do not yet expo
 
 ## Public registration/build surface
 
-`include/tinyactors.h` currently exposes system creation and actor operations, but definition registration, builder operations, I/O registration, invoker registration, and actor-directory configuration are internal declarations. Decide which are public embedder APIs and surface them without requiring `src/internal.h`.
+`include/tinyactors.h` currently exposes system creation and actor operations, but definition registration, builder operations, I/O registration, invoker registration, and actor-directory configuration still need final public-surface review.
 
 ## Full definition semantics
 
@@ -20,9 +20,17 @@ This file is intentionally candid. The headers compile, but they do not yet expo
 - data declarations and early/late binding metadata;
 - extension executable actions.
 
-## Invocation restore
+## Session-image implementation
 
-The invoker interface currently lacks explicit snapshot/rebind/restore semantics for live external services. Define how an invoker participates in unload/restart, or when it may refuse serialization.
+`ta_session_image` is intentionally opaque but not implemented yet. Capture/reconstruction must cover all Tinyactors-owned state in `semantic-state.md`, retain interpreter-held host values without traversing their object graphs, and verify exact definition identity on reconstruction.
+
+## Invocation reconstruction
+
+The invoker interface still needs a structural capture/rebind contract for live invoked services, or a way to report `TA_ERR_NOT_RECONSTRUCTIBLE`. Portable service-handle encoding belongs to the optional durability layer.
+
+## Named actor replacement activation
+
+The directory has `replace`, but the public lifecycle still needs a clean way to prepare a replacement actor with the incumbent logical self-address without publishing it before bootstrap completes. Activation must make the directory swap atomic from the routing perspective.
 
 ## Completion and actor lifecycle
 
@@ -30,9 +38,7 @@ Clarify how reaching a top-level final state differs from explicit `ta_actor_des
 
 ## Timer dispatch API
 
-The host owns the durable deadline index for evicted actors. The public
-host-facing mechanism for observing resident delayed sends and routing due work
-needs a clear API that does not create an event loop inside Tinyactors.
+The public host-facing mechanism for observing resident delayed sends and routing due work needs a clear API that does not create an event loop inside Tinyactors. Durable deadline indexing for non-resident actors belongs to an optional durability layer.
 
 ## Resident layout
 

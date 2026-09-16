@@ -9,16 +9,16 @@ A delayed send contains the **already evaluated** semantics of a future dispatch
 - structured event name;
 - I/O processor type atom;
 - target value;
-- payload value;
+- payload value.
 
-`ta_delayed_send.io_type` is the resolved SCXML `<send>` type. It is retained with
-the other evaluated send arguments so that due-time dispatch selects the same I/O
-processor without reconstructing information from interpreter state.
+`ta_delayed_send.io_type` is the resolved SCXML `<send>` type. It is retained with the other evaluated send arguments so that due-time dispatch selects the same I/O processor without reconstructing information from chart source.
 
 ## Global index, actor ownership
 
 The running system may store all delayed sends in a global heap/wheel so the next deadline is efficient. Ownership remains `(actor, send_id)`, enabling session-scoped cancellation and actor destruction.
 
-## Persistence
+## Session images and durability
 
-Actor snapshot/store transactions must preserve delayed sends together with session state. An unloaded actor's timers remain live. A destroyed actor's timers are cancelled/discarded.
+A session image captures the actor-owned delayed-send semantics needed to reconstruct the interpreter. Host `ta_value` target/payload objects are retained as references, not serialized by core.
+
+A portable durability layer decides how to encode/re-resolve those values and how to index deadlines for non-resident actors. Destroying an actor cancels its delayed sends; capturing/reconstructing the same session does not.

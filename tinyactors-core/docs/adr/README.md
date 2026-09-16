@@ -38,8 +38,9 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0032](0032-data-bindings-are-declared-before-they-are-initialized.md) | [Data bindings are declared before they are initialized](0032-data-bindings-are-declared-before-they-are-initialized.md) |
 | [0033](0033-foreach-iteration-is-stable-and-resumable.md) | [Foreach iteration is stable and resumable](0033-foreach-iteration-is-stable-and-resumable.md) |
 | [0034](0034-named-parameter-aggregation-is-a-data-model-operation.md) | [Named parameter aggregation is a data-model operation](0034-named-parameter-aggregation-is-a-data-model-operation.md) |
-| [0035](0035-system-variables-are-protected-views.md) | [System variables are protected data-model views](0035-system-variables-are-protected-views.md) |
+| [0035](0035-system-variables-are-protected-views.md) | [System variables are protected views](0035-system-variables-are-protected-views.md) |
 | [0036](0036-stable-definition-identity-in-snapshots.md) | [Stable definition identity in snapshots](0036-stable-definition-identity-in-snapshots.md) |
 | [0037](0037-core-owned-actor-protocol-host-backed-directory.md) | [Core-owned actor protocol; host-backed directory](0037-core-owned-actor-protocol-host-backed-directory.md) |
+| [0038](0038-session-images-separate-interpreter-state-from-host-data.md) | [Session images separate interpreter state from host data](0038-session-images-separate-interpreter-state-from-host-data.md) |
 
 See [the API gaps](../internal/api-gaps.md) for places where the current header skeleton does not yet fully expose these decisions.

@@ -28,11 +28,11 @@ enum {
     TA_ERR_INVALID = -1,
     TA_ERR_NOMEM = -2,
     TA_ERR_NOT_FOUND = -3,
-    TA_ERR_NOT_SERIALIZABLE = -4,
+    TA_ERR_NOT_RECONSTRUCTIBLE = -4,
     TA_ERR_BUSY = -5,
     TA_ERR_UNSUPPORTED = -6,
     TA_ERR_CORRUPT = -7,
-    TA_ERR_SESSION_SCHEMA = -8
+    TA_ERR_DEFINITION_MISMATCH = -8
 };
 
 typedef struct { const char *ptr; uint32_t len; } ta_str;
@@ -54,8 +54,7 @@ typedef struct ta_definition ta_definition;
 typedef struct ta_definition_builder ta_definition_builder;
 typedef struct ta_dm_host ta_dm_host;
 typedef struct ta_value ta_value;
-typedef struct { void *self; ta_result (*write)(void *self, const void *data, size_t size); } ta_snapshot_writer;
-typedef struct { void *self; ta_result (*read)(void *self, void *data, size_t size); } ta_snapshot_reader;
+typedef struct ta_session_image ta_session_image;
 
 #ifdef __cplusplus
 }

@@ -1,20 +1,16 @@
 # ADR 0014: Unload is residency change; destroy is termination
 
-**Status:** Accepted  
+**Status:** Accepted; reconstruction mechanics refined by ADR 0038  
 **Date:** 2026-09-15
 
 ## Context
 
-Durable actors should consume no execution-state RAM while idle, yet timers and identity must continue to exist. Treating eviction as termination would cancel semantic state.
+Named actors may consume no execution-state RAM while idle, yet their logical identity must continue to exist. Treating eviction as termination would cancel semantic state.
 
 ## Decision
 
-The host saves a core checkpoint and evicts resident session state without
-changing the actor's logical existence; it later materializes the checkpoint.
-`ta_actor_destroy()` terminates/removes the resident actor. For named actors,
-the core drives removal through the host-backed directory protocol.
+The host may capture a core session image and evict resident interpreter state without changing the actor's logical existence. If the actor must survive process loss, an optional durability layer first makes an equivalent checkpoint durable. `ta_actor_destroy()` terminates/removes the resident actor. For named actors, the core drives removal through the host-backed directory protocol.
 
 ## Consequences
 
-Residency becomes a host cache concern. An evicted named actor can still be
-resolved by address and become runnable when host-scheduled work targets it.
+Residency is a host cache concern. Reconstruction requires the exact definition revision plus the host data-model binding; portable persistence is not implied merely by capturing an in-memory session image.

@@ -18,7 +18,7 @@
 #include "definition.h"
 #include "builder.h"
 #include "actor.h"
-#include "snapshot.h"
+#include "session_image.h"
 #include "store.h"
 #include "system.h"
 #include "interpreter.h"

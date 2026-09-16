@@ -23,6 +23,6 @@
 #include "../src/definition.h"
 #include "../src/builder.h"
 #include "../src/actor.h"
-#include "../src/snapshot.h"
+#include "../src/session_image.h"
 #include "../src/system.h"
 #include "../src/interpreter.h"

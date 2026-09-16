@@ -14,11 +14,11 @@ It should eventually express the entire statechart model needed by the interpret
 Compilation performs structural validation and emits compact immutable tables/layouts.
 
 Before compilation, callers set a `ta_definition_identity` with
-`ta_definition_builder_set_session_identity()`. The identity's family name
-must match the builder name; its session schema changes only when saved
-sessions need transformation. The compiler copies it into the immutable
-definition. This identity, rather than a runtime definition ID, is used to
-recover checkpoints.
+`ta_definition_builder_set_identity()`. The identity's family name must match
+the builder name. Its opaque revision fingerprint identifies the exact compiled
+semantics/layout relevant to session-image interpretation. The compiler copies
+it into the immutable definition. Reconstruction resolves that exact identity;
+newer definitions are actor upgrades, not compatible restores.
 
 `ta_definition_add_transition()` creates a transition with no event patterns.
 It is eventless until at least one pattern is added, so it is considered only

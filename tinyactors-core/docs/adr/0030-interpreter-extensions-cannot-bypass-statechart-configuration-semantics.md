@@ -1,11 +1,11 @@
 # ADR 0030: Interpreter extensions cannot bypass statechart configuration semantics
 
-**Status:** Accepted  
+**Status:** Accepted; reconstruction wording refined by ADR 0038  
 **Date:** 2026-09-15
 
 ## Context
 
-Custom executable content and host callbacks are useful, but allowing extensions to directly mutate the active configuration would make ordering, history, parallel exit/entry behavior, and verification incoherent.
+Custom executable content and host callbacks are useful, but allowing extensions to directly mutate the active configuration would make ordering, history, parallel exit/entry behavior, inspection, and verification incoherent.
 
 ## Decision
 
@@ -13,4 +13,4 @@ Extensions may evaluate data, perform host work, raise/send events, and use supp
 
 ## Consequences
 
-Control flow remains inspectable and follows one semantic engine even when data and I/O are highly extensible. A session snapshot restores configuration through that same interpreter-owned representation; extensions need only participate in serialization of their own data or service state, not in a separate configuration-restoration path.
+Control flow remains inspectable and follows one semantic engine even when data and I/O are highly extensible. Session-image reconstruction restores configuration through that same interpreter-owned representation. Host object graphs remain bound through the data-model adapter rather than being serialized by extensions.

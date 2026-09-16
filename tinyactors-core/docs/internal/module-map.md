@@ -2,7 +2,8 @@
 
 | Header | Responsibility |
 |---|---|
-| `types.h` | low-level internal scalar/layout helpers |
+| `types.h` | low-level scalar/layout helpers |
+| `store.h` | empty compatibility boundary; durability is not a core store API |
 | `arena.h` | transient allocation |
 | `atom.h` | ordinary string interning |
 | `event_name.h` | structured dot-token event-name interning/matching |
@@ -14,14 +15,13 @@
 | `history.h` | shallow/deep history storage layout |
 | `continuation.h` | paused macrostep interpreter state |
 | `timer.h` | delayed-send records and deadline index |
-| `datamodel.h` | host data-model adapter/context |
+| `datamodel.h` | host data-model adapter/binding/context and inspection root |
 | `io.h` | I/O processor registration |
 | `invoke.h` | invoked-service adapters and active records |
-| `definition.h` | immutable compiled statechart |
+| `definition.h` | immutable compiled statechart revision |
 | `builder.h` | mutable construction/compilation front end |
-| `actor.h` | actor directory/resident session state |
-| `snapshot.h` | streaming session serialization |
-| `store.h` | optional host persistence backend |
+| `actor.h` | named actor protocol, resident session state, operational inspection |
+| `session_image.h` | in-memory interpreter capture/reconstruction |
 | `system.h` | shared runtime container/registries |
 | `interpreter.h` | SCXML execution engine |
 | `internal.h` | implementation umbrella include |

@@ -1,6 +1,6 @@
 # Embedding Tinyactors
 
-Tinyactors follows a SQLite-like ownership model: calls run in the caller's thread; the library does not create workers, sockets, files, or event loops for you.
+Tinyactors follows a SQLite-like ownership model: calls run in the caller's thread; the library does not create workers, sockets, files, databases, or event loops for you.
 
 A typical host loop is conceptually:
 
@@ -11,21 +11,22 @@ ta_actor_deliver(system, actor, &event);
 for (;;) {
     ta_run_status status;
     ta_result r = ta_actor_resume(system, actor, budget, &status);
-    if (r != TA_OK) {
-        /* C/runtime/API failure */
+    if (r != TA_OK)
         break;
-    }
     if (status != TA_RUN_PAUSED)
         break;
-    /* host decides when to grant more CPU */
 }
 ```
 
 Statechart-level failures are normally represented as internal `error.*` events, not as `ta_result` failures.
 
+## Data-model binding
+
+Actor creation supplies a host data-model binding. In CPython that can be a wrapper around an already-existing `PyObject *`; in Ruby/Node the analogous host object/reference. Tinyactors does not copy that graph into per-actor storage. The adapter decides how expressions, assignment, and inspection operate on it.
+
 ## Concurrency
 
-Tinyactors does not serialize calls for you. Treat a `ta_system` as externally synchronized unless a future API explicitly states otherwise. A simple embedding uses one thread. A server can shard actors across multiple independent systems or place an external lock/ownership discipline around each system.
+Tinyactors does not serialize calls for you. Treat a `ta_system` as externally synchronized unless an API explicitly states otherwise. A simple embedding uses one thread. A server can shard actors across multiple independent systems or place an external lock/ownership discipline around each system.
 
 An actor processes one external event at a time. If an actor is paused inside a macrostep, the host must not deliver another external event to it.
 

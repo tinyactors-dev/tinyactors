@@ -29,18 +29,8 @@ Examples:
 
 ## Structured names
 
-The engine may specialize the standard prefix while preserving prefix matching, for example:
-
-```text
-error.execution.datamodel.condition
-error.execution.datamodel.location
-error.execution.datamodel.assign
-error.execution.datamodel.foreach
-error.execution.datamodel.event_data
-```
-
-A transition listening to `error.execution` still matches every one of these.
+The engine may specialize the standard prefix while preserving prefix matching, for example `error.execution.datamodel.condition`, `error.execution.datamodel.location`, and `error.execution.datamodel.assign`. A transition listening to `error.execution` still matches them.
 
 ## C/runtime failures
 
-Allocator corruption, invalid API handles, malformed snapshots, or violated C preconditions are `ta_result` failures, not statechart `error.*` events.
+Allocator corruption, invalid API handles, violated C preconditions, exact-definition mismatch during reconstruction, or inability to reconstruct configured service state are `ta_result` failures, not statechart `error.*` events.

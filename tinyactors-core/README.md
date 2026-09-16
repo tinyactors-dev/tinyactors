@@ -13,9 +13,13 @@ This archive captures the C API shape discussed for a tiny in-process actor syst
 - `error.*`, `done.state.*`, and `done.invoke.*` are structured event names.
 - Runtime/plugin faults become SCXML-style internal events; they are distinct from C API misuse/failure.
 - Logical time and delayed sends are runtime state.
-- Actor snapshots include execution continuation; timer snapshot helpers preserve delayed sends across unload/reload.
-- Host values are fat pointers with lifetime and serialization hooks.
-- Data models, I/O processors, invokers, storage, clocks, and concurrency remain under embedder control.
+- Named actor identity and logical addressing are core semantics; storage and physical routing are host-provided.
+- Every resident interpreter can be inspected, including active configuration, history, continuation, queued internal events, invocations, and a host data-model root view.
+- Session images capture/reconstruct Tinyactors-owned interpreter state against one exact immutable definition revision.
+- Host data-model object graphs are bindings, not serialized session-image contents. Python, Ruby, JavaScript, and native hosts keep ownership of their existing objects.
+- Host values are fat pointers with lifetime/clone hooks; core does not require a universal serialization format.
+- Advanced durability—portable checkpoints, command sourcing, replay, effect deduplication, storage transactions—is a separate layer over core session images.
+- Data models, I/O processors, invokers, clocks, storage, and concurrency remain under embedder control.
 
 ## Layout
 
@@ -26,7 +30,7 @@ This archive captures the C API shape discussed for a tiny in-process actor syst
 
 ## Intentional omissions
 
-This is a header/API skeleton, not a completed implementation. It intentionally does not ship an XML parser/importer. It also leaves representation choices such as hash tables, actor name indexes, transition-set scratch storage, and snapshot wire encoding to implementation work.
+This is a header/API skeleton, not a completed implementation. It intentionally does not ship an XML parser/importer or a durability subsystem. It also leaves representation choices such as hash tables, actor name indexes, transition-set scratch storage, and portable checkpoint encoding to implementation work or optional modules.
 
 ## Public header workflow
 

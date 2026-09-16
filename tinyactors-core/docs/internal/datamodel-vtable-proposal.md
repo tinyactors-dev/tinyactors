@@ -16,7 +16,7 @@ typedef struct ta_datamodel_vtable {
         void *shared,
         ta_allocator allocator);
 
-    /* Per-actor data-model storage. */
+    /* Per-actor adapter storage and host binding. */
     uint32_t (*instance_size)(void *self, void *shared);
     uint32_t (*instance_alignment)(void *self, void *shared);
 
@@ -24,6 +24,7 @@ typedef struct ta_datamodel_vtable {
         void *self,
         void *shared,
         void *instance,
+        const ta_value *binding,
         const ta_dm_host *host);
 
     void (*destroy_instance)(
@@ -158,43 +159,51 @@ typedef struct ta_datamodel_vtable {
         ta_value *out,
         ta_fault *fault);
 
-    /* Persistent plugin state. */
-    ta_result (*snapshot)(
+    /* Optional operational root view. */
+    ta_result (*inspect)(
         void *self,
         void *shared,
         void *instance,
-        ta_snapshot_writer *writer);
-
-    ta_result (*restore)(
-        void *self,
-        void *shared,
-        void *instance,
-        ta_snapshot_reader *reader);
+        const ta_dm_host *host,
+        ta_value *out);
 } ta_datamodel_vtable;
 ```
 
-## Notes
+## Host binding
 
-### `declare`
+The per-instance adapter may be only a small binding around a host-owned object.
+For CPython, `binding` can wrap the existing `PyObject *`; for CRuby a `VALUE`;
+for Node a JavaScript reference; for C a native application object. Tinyactors
+does not copy that object graph into interpreter state.
+
+## `declare`
 
 Creates a named data binding without necessarily assigning its eventual initial value. It exists because late binding requires declaration and initialization to be separate semantic steps.
 
-### `set_named`
+## `set_named`
 
 Sets a top-level named binding directly. The core uses it for initializers and environment-provided top-level overrides. It is not a replacement for `assign`, which operates on arbitrary data-model locations.
 
-### `import_literal`
+## `import_literal`
 
 Consumes an opaque typed literal from the definition IR. This is intentionally not named `import_content` because the same mechanism can initialize data, provide assignment values, build content payloads, and support non-XML frontends.
 
-### `foreach_snapshot`
+## `foreach_snapshot`
 
-Must produce the equivalent of SCXML's shallow copy. The returned `ta_value` is retained by the continuation while execution is suspended.
+Must produce the equivalent of SCXML's shallow copy. The returned `ta_value` is retained by the continuation while execution is suspended and by an in-process session image if captured there.
 
-### `make_params`
+## `make_params`
 
 Receives an ordered list and must not assume names are unique.
 
-### Optional operations
+## `inspect`
+
+Returns an independently owned host-native root value for operational tooling; the caller releases it using normal `ta_value` lifetime rules. Inspection is an operational API result, not statechart execution, so failures are `ta_result` values rather than `error.*` events. Tinyactors does not recursively materialize or serialize the graph, which keeps large host models such as LLM transcripts cheap to inspect at the runtime boundary.
+
+## No persistence callbacks in core
+
+There are deliberately no data-model `snapshot` / `restore` callbacks and no universal `ta_value.serialize`. Reconstruction receives the host binding again. Portable checkpoint codecs and host-reference resolution belong to an optional durability component.
+
+## Optional operations
 
 A plugin may leave unsupported capabilities null if the definition compiler can prove that the definition never requires them. Definition preparation must reject a definition that requires an unsupported semantic capability.

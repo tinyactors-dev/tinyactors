@@ -4,11 +4,13 @@ This directory describes implementation responsibilities and invariants. It foll
 
 Important cross-cutting references:
 
-- `semantic-state.md` — what constitutes a running actor/session.
+- `semantic-state.md` — Tinyactors-owned interpreter state vs host-owned data-model state.
+- `session-image.md` — capture/reconstruction boundary.
+- `datamodel-binding.md` — host object binding and large-data-model behavior.
+- `durability.md` — optional portable checkpoint/replay/effect protocols above core.
 - `interpreter-semantics.md` — macrostep/microstep execution.
 - `invariants.md` — rules implementations must never violate.
 - `memory-model.md` — density strategy for millions of actors.
-- `persistence-format.md` — snapshot and identity requirements.
 - `api-gaps.md` — current header skeleton vs intended design.
 - `verification.md` — simulator/fuzzer integration.
-- `scxml.md` - the SCXML standard from https://w3.org/TR/scxml, as markdown.
+- `scxml.md` — the SCXML standard from https://w3.org/TR/scxml, as markdown.

@@ -7,7 +7,11 @@
 extern "C" {
 #endif
 
-/* Snapshot I/O types live in types.h. Persistence storage is host-owned. */
+/*
+ * Tinyactors core deliberately defines no persistence-store protocol.  This
+ * compatibility module remains empty while durable checkpointing, command
+ * sourcing, and storage adapters live in optional higher-level components.
+ */
 
 #ifdef __cplusplus
 }

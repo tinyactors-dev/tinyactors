@@ -9,14 +9,13 @@ extern "C" {
 #endif
 
 typedef struct { const ta_definition *definition; ta_allocator allocator; void **shared; } ta_datamodel_prepare_definition_params;
-typedef struct { void *shared; void *instance; const ta_dm_host *host; } ta_datamodel_init_instance_params;
+typedef struct { void *shared; void *instance; const ta_value *binding; const ta_dm_host *host; } ta_datamodel_init_instance_params;
 typedef struct { void *shared; void *instance; ta_expr_id expr; const ta_dm_host *host; bool *out; ta_fault *fault; } ta_datamodel_eval_condition_params;
 typedef struct { void *shared; void *instance; ta_expr_id expr; const ta_dm_host *host; ta_value *out; ta_fault *fault; } ta_datamodel_eval_value_params;
 typedef struct { void *shared; void *instance; ta_expr_id location; const ta_dm_host *host; ta_value *out; ta_fault *fault; } ta_datamodel_read_location_params;
 typedef struct { void *shared; void *instance; ta_expr_id location; const ta_value *value; const ta_dm_host *host; ta_fault *fault; } ta_datamodel_assign_params;
 typedef struct { void *shared; void *instance; ta_expr_id script; const ta_dm_host *host; ta_fault *fault; } ta_datamodel_execute_script_params;
-typedef struct { void *shared; void *instance; ta_snapshot_writer *writer; } ta_datamodel_snapshot_params;
-typedef struct { void *shared; void *instance; ta_snapshot_reader *reader; } ta_datamodel_restore_params;
+typedef struct { void *shared; void *instance; const ta_dm_host *host; ta_value *out; } ta_datamodel_inspect_params;
 typedef struct ta_datamodel_vtable {
     ta_result (*prepare_definition)(void *self, const ta_datamodel_prepare_definition_params *params);
     void (*destroy_definition)(void *self, void *shared, ta_allocator allocator);
@@ -29,8 +28,7 @@ typedef struct ta_datamodel_vtable {
     ta_op_status (*read_location)(void *self, const ta_datamodel_read_location_params *params);
     ta_op_status (*assign)(void *self, const ta_datamodel_assign_params *params);
     ta_op_status (*execute_script)(void *self, const ta_datamodel_execute_script_params *params);
-    ta_result (*snapshot)(void *self, const ta_datamodel_snapshot_params *params);
-    ta_result (*restore)(void *self, const ta_datamodel_restore_params *params);
+    ta_result (*inspect)(void *self, const ta_datamodel_inspect_params *params);
 } ta_datamodel_vtable;
 typedef struct { void *self; const ta_datamodel_vtable *v; } ta_datamodel;
 

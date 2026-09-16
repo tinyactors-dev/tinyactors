@@ -4,29 +4,22 @@
 
 When Tinyactors is called on the JavaScript thread, plugin callbacks may naturally call N-API. If Tinyactors is run on native worker threads, callbacks that touch JavaScript must marshal to an allowed JS/N-API context. Asynchronous JS work should return from the C callback and later deliver an event.
 
-Named-address directory operations and replacement transactions are host work.
-JavaScript objects remain host-owned data-model values; an application may use
-them as ordinary bootstrap data when it replaces an incompatible actor.
+JavaScript objects remain host-owned data-model values. Session capture does not serialize them; reconstruction receives the existing/restored binding object. A durability add-on may map selected host references to stable application identities.
 
 ## CPython
 
-A binding wraps `PyObject *` with correct reference counts. Calls into Python require the appropriate Python thread state/GIL discipline for the Python version/build. The Tinyactors core does not acquire it on the binding's behalf.
+A binding wraps `PyObject *` with correct reference counts. Calls into Python require the appropriate Python thread state/GIL discipline for the Python version/build. Tinyactors core does not acquire it on the binding's behalf.
 
-The host directory and application migration run under the binding's chosen
-GIL/thread-state discipline. Checkpoint serialization, rather than raw
-`PyObject *`, handles eviction/restart.
+The data-model instance can be a small binding around an existing Python object graph. Capturing a session therefore does not pickle or copy that graph. Reconstruction is performed under the binding's chosen GIL/thread-state discipline and receives the appropriate `PyObject *` binding.
 
 ## CRuby
 
-A binding wraps Ruby values with correct GC visibility/rooting. Calls into Ruby follow GVL rules. Tinyactors itself does not know about the GVL.
-
-Directory operations and replacement bootstrap run with the GVL. Checkpoints
-contain binding serialization, never live `VALUE` handles.
+A binding wraps Ruby values with correct GC visibility/rooting. Calls into Ruby follow GVL rules. Tinyactors itself does not know about the GVL. Session images retain references according to the binding's lifetime rules; they do not serialize arbitrary `VALUE`s.
 
 ## Browser/freestanding WASM
 
-Allocator, I/O, time, and persistence may all be host imports. Imported JS functions can initiate asynchronous browser work and later call exported Tinyactors functions to deliver events. No filesystem or threads are required.
+Allocator, I/O, time, and optional durability may all be host imports. Imported JS functions can initiate asynchronous browser work and later call exported Tinyactors functions to deliver events. No filesystem or threads are required.
 
 ## ESP32
 
-Use a compact allocator/pool, programmatic or generated definitions, a small data model, caller-driven logical time, and RTOS/device-specific I/O adapters. XML is unnecessary.
+Use a compact allocator/pool, programmatic or generated definitions, a small data model, caller-driven logical time, and RTOS/device-specific I/O adapters. XML and a durability module are both optional.

@@ -14,13 +14,14 @@ typedef enum {
 } ta_state_kind;
 
 /*
- * Process-independent checkpoint compatibility identity. `family` identifies
- * a business/statechart family; `session_schema` changes only when a saved
- * session needs transformation. A compiled definition owns its family name.
+ * Process-independent identity of one exact immutable definition revision.
+ * `family` is the stable logical statechart family; `revision` is an opaque
+ * fingerprint copied/owned by the compiled definition.  Any change that can
+ * alter interpretation of a session image must produce a different revision.
  */
 typedef struct {
     ta_definition_family family;
-    uint32_t session_schema;
+    ta_bytes revision;
 } ta_definition_identity;
 
 typedef struct {

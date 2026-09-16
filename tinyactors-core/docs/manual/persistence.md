@@ -1,36 +1,34 @@
-# Persistence and residency
+# Session images and durability
 
-Persistence is optional and host-controlled. Tinyactors serializes/restores a
-complete actor session, while the host owns the storage backend, transactions,
-directory, and eviction policy. A host may write a checkpoint to a SQLite row,
-a PostgreSQL column, an object, or any other blob-shaped store, then release
-the resident actor only after that write is durable.
+Tinyactors core separates **reconstruction** from **durability**.
 
-`unload` means **remove the resident execution state from RAM while preserving the actor's existence**. `destroy` means terminate/remove the actor. These operations are semantically different.
+`ta_actor_capture()` creates an in-memory session image containing Tinyactors-owned interpreter state. `ta_actor_reconstruct()` recreates that session against the exact same immutable definition revision and a host-supplied data-model binding. The image does not serialize the host object graph.
 
-A complete actor checkpoint must preserve enough state that eviction + restore
-under a compatible session schema is observationally invisible to the
-statechart:
+For a Python application, the binding may be an existing `Subscription` or `Conversation` object. A conversation containing hundreds of thousands of messages therefore remains where the application already keeps it; Tinyactors captures only its own interpreter state and any host references held directly by interpreter-owned events/timers/continuations.
 
-- active configuration, including all parallel regions;
-- shallow/deep history values;
-- data-model instance state;
-- current macrostep continuation if paused;
-- current external event and pending internal events if paused;
-- active invocation bookkeeping;
-- delayed sends, including absolute logical due times and already-evaluated payload/target/event information;
-- named self address and definition family/session schema needed to resolve the actor.
+A process-independent checkpoint is a higher-level concern. A durability module can encode a session image, map host references to stable identities, store checkpoints, keep command/input journals, replay deterministic inputs, and assign stable IDs to external effects. Applications that do not need these guarantees do not pay for them in the core ABI.
 
-Timers remain semantically owned by the actor. A host that evicts actors owns
-the durable deadline index and loads/routes an actor when work becomes due. A
-restored timer already due is eligible immediately. Destroying an actor cancels
-its delayed sends; eviction does not.
+## External I/O and partial commits
 
-Host-native `ta_value` implementations decide whether and how their values serialize. If an actor contains a non-serializable value, unloading that actor may fail with `TA_ERR_NOT_SERIALIZABLE`.
+Tinyactors does not pretend unrelated external effects are atomic. A chart can explicitly model:
 
-When a new definition accepts the old checkpoint session schema, the host
-restores it directly. When it does not, the application replaces the actor:
-fence its named address, create a new actor with host-owned migration data,
-bootstrap that actor using normal SCXML behavior, persist it, and atomically
-replace the directory entry. Tinyactors does not prescribe an event log or a
-migration language.
+```text
+Persisting
+  --db.committed--> DatabaseCommitted
+  --publish-->      WaitingForPublish
+  --published-->    Done
+```
+
+`DatabaseCommitted` is useful information: the database write happened while queue publication has not yet completed. An optional durability layer can record the I/O command and completion with a stable operation ID, so after a crash it can reconcile or retry without hiding the intermediate state from the chart.
+
+## Definition upgrades
+
+Reconstruction uses the same definition revision. Upgrading a named actor uses replacement instead:
+
+1. fence the old named route;
+2. create a new interpreter under the new definition, normally bound to the same host data-model object;
+3. bootstrap it without externally visible effects;
+4. atomically replace the directory entry;
+5. retire the old interpreter.
+
+No translation of definition-local state IDs is required.

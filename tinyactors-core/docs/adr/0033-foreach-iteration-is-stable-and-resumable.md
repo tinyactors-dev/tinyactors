@@ -1,6 +1,6 @@
 # ADR 0033: Foreach iteration is stable and resumable
 
-- Status: Accepted
+- Status: Accepted; durability wording refined by ADR 0038
 - Date: 2026-09-15
 
 ## Context
@@ -20,21 +20,21 @@ The core stores:
 - the compiled item and optional index binding names;
 - the executable-content continuation.
 
-The data model exposes indexed semantic access to the snapshot (`foreach_count` and `foreach_item`) rather than a stack-bound iterator cursor.
+The data model exposes indexed semantic access to the snapshot rather than a stack-bound iterator cursor.
 
 Before each iteration, the core asks the data model to bind/update the item variable and optional index variable. The binding operation must create the named variable if it does not already exist.
 
 ## Why indexed access
 
-An opaque snapshot plus integer position is easy to:
+An opaque iteration snapshot plus integer position is easy to:
 
 - pause and resume;
-- snapshot and restore;
+- retain in a session image;
 - inspect in a debugger;
 - fuzz deterministically.
 
-The plugin remains free to implement the snapshot internally as an array, tuple, host object, persistent vector, or custom wrapper.
+The plugin remains free to implement the iteration snapshot internally as an array, tuple, host object, persistent vector, or custom wrapper.
 
 ## Consequences
 
-A foreach snapshot must have the normal `ta_value` lifetime semantics. If an actor with a suspended foreach is unloadable, that value must also be serializable by the host/plugin's persistence mechanism.
+A foreach iteration snapshot has normal `ta_value` lifetime semantics. An in-process `ta_session_image` retains that host value; it does not require the value to serialize. If a process-independent durability layer checkpoints an actor suspended inside foreach, that layer must provide a stable encoding or rebinding rule for the retained value.
