@@ -8,11 +8,11 @@ Responsibilities:
 - logical clock;
 - atom and event-name interning;
 - registered immutable definitions;
-- actor directory/name resolution;
-- resident actor cache;
-- delayed-send deadline index;
+- resident actor cache and runtime IDs;
+- actor-directory protocol delegation;
+- delayed-send state for resident sessions;
 - registered I/O processors and invokers;
-- optional persistence adapter.
+- no persistence adapter or concrete named-address index.
 
 Non-responsibilities:
 
@@ -23,4 +23,8 @@ Non-responsibilities:
 - providing a mandatory filesystem;
 - hiding host concurrency behind locks.
 
-The current skeleton stores arrays directly. Production high-scale implementations may need hash/index structures, segmented storage, slab pools, or store-backed directories without changing public semantics.
+The host installs `ta_actor_directory` operations for named address claim,
+resolution, replacement, and removal. It may use a hash/index structure,
+database, shard router, or other backing implementation. The core keeps only
+resident runtime state; hosts persist checkpoints and index deadlines for
+evicted actors.

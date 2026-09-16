@@ -9,7 +9,11 @@ Actor protocols become noisy if every application payload needs a `reply_to` fie
 
 ## Decision
 
-Actor-to-actor delivery records origin structurally in `ta_event.origin`. Reply helpers may target the current event's actor origin without modifying application payload data. I/O- and invocation-originated events use other origin kinds.
+Actor-to-actor delivery records a tagged actor reference structurally in
+`ta_event.origin`. An ephemeral/live sender uses `ta_actor_id`; a named sender
+uses its logical address. Reply helpers may target the current
+event's actor origin without modifying application payload data. I/O- and
+invocation-originated events use other origin kinds.
 
 ## Consequences
 

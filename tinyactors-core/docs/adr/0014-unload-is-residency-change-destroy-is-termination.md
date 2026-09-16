@@ -9,8 +9,12 @@ Durable actors should consume no execution-state RAM while idle, yet timers and 
 
 ## Decision
 
-`ta_actor_unload()` saves and evicts resident session state without changing the actor's logical existence. `ta_actor_load()` restores it. `ta_actor_destroy()` terminates/removes the actor, removes its name, cancels its delayed sends, and cancels active invocations as required by statechart semantics.
+The host saves a core checkpoint and evicts resident session state without
+changing the actor's logical existence; it later materializes the checkpoint.
+`ta_actor_destroy()` terminates/removes the resident actor. For named actors,
+the core drives removal through the host-backed directory protocol.
 
 ## Consequences
 
-Residency becomes an implementation/cache concern. An unloaded actor can still be found by name and can become runnable when a timer or externally queued event targets it.
+Residency becomes a host cache concern. An evicted named actor can still be
+resolved by address and become runnable when host-scheduled work targets it.

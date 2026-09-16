@@ -7,7 +7,9 @@ The current `include/tinyactors.h` is a compact public skeleton. This page recor
 - `ta_atom` — interned ordinary string handle, process-local unless explicitly persisted through a logical encoding.
 - `ta_event_name_id` — structured event-name handle.
 - `ta_definition_id` — compact runtime definition handle.
-- `ta_actor_id` — actor runtime identity; may internally encode slot + generation.
+- `ta_definition_identity` — persistent definition family and checkpoint session schema.
+- `ta_actor_id` — runtime-local actor identity; may internally encode slot + generation.
+- `ta_actor_address` — durable named actor address scoped by definition family.
 - `ta_invoke_id`, `ta_send_id`, `ta_timer_id` — identities scoped by their semantic subsystem.
 - `ta_time` — caller-supplied monotonic logical time.
 
@@ -21,10 +23,9 @@ The current `include/tinyactors.h` is a compact public skeleton. This page recor
 
 `ta_system_set_time` advances logical time. `ta_system_time` reads the current logical value.
 
-`ta_system_set_store` configures the optional host-owned actor-blob store. Its
-writer/reader callbacks carry complete session snapshots rather than files or
-timer records. The store stages blobs in an atomic batch; a normal unload is a
-batch of one.
+`ta_system_set_actor_directory` installs host-provided operations for named
+actor claim, resolution, replacement, and removal. The host owns the backing
+directory, persistence, routing, and eviction policy.
 
 The public API still needs registration calls for definitions, I/O processors,
 and invokers.
@@ -45,7 +46,9 @@ atom must belong to the supplied system; otherwise it returns `TA_ERR_INVALID`.
 
 ## Actors
 
-`ta_actor_spawn` creates a session from a definition. Empty name means anonymous; non-empty names are unique within the definition namespace.
+`ta_actor_spawn` creates a session from a definition. A null address creates
+an ephemeral actor; a supplied logical address is claimed through the host
+directory.
 
 `ta_actor_find` resolves a named actor.
 
@@ -53,16 +56,8 @@ atom must belong to the supplied system; otherwise it returns `TA_ERR_INVALID`.
 
 `ta_actor_resume` advances the in-progress macrostep for a caller-supplied budget and reports stable/paused/done/error execution status.
 
-`ta_actor_unload` persists/evicts the actor without terminating it.
-
-`ta_actor_load` materializes an unloaded actor.
-
 `ta_actor_recover` imports one host-supplied complete snapshot. Hosts use it
-while enumerating persisted blobs after restart; each recovered actor also
-re-registers its delayed sends with the system timer heap.
-
-`ta_snapshot_batch_begin`, `ta_snapshot_batch_unload`, and
-`ta_snapshot_batch_commit` persist a selected set of actors as one atomic
-visibility operation. `ta_snapshot_batch_abort` discards the staged batch.
+when materializing a checkpoint. It resolves the checkpoint definition family
+and requires that the selected definition accept its session schema.
 
 `ta_actor_destroy` terminates/removes the actor and its actor-owned semantic resources.

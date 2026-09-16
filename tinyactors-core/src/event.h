@@ -9,7 +9,7 @@ extern "C" {
 
 typedef enum { TA_EVENT_EXTERNAL = 0, TA_EVENT_INTERNAL = 1, TA_EVENT_PLATFORM = 2 } ta_event_type;
 typedef enum { TA_ORIGIN_NONE = 0, TA_ORIGIN_ACTOR = 1, TA_ORIGIN_IO = 2, TA_ORIGIN_INVOKE = 3 } ta_origin_kind;
-typedef struct { ta_origin_kind kind; union { ta_actor_id actor; ta_invoke_id invoke; uint64_t opaque; } as; } ta_origin;
+typedef struct { ta_origin_kind kind; union { ta_actor_ref actor; ta_invoke_id invoke; uint64_t opaque; } as; } ta_origin;
 typedef struct { ta_event_name_id name; ta_event_type type; ta_send_id send_id; ta_origin origin; ta_invoke_id invoke_id; ta_value data; } ta_event;
 typedef struct { ta_event_name_id detail; int32_t code; ta_str message; ta_value data; } ta_fault;
 typedef enum { TA_OP_OK = 0, TA_OP_ERROR = 1 } ta_op_status;

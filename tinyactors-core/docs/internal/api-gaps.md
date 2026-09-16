@@ -4,7 +4,7 @@ This file is intentionally candid. The headers compile, but they do not yet expo
 
 ## Public registration/build surface
 
-`include/tinyactors.h` currently exposes system creation and actor operations, but definition registration, builder operations, I/O registration, invoker registration, and store configuration are internal declarations. Decide which are public embedder APIs and surface them without requiring `src/internal.h`.
+`include/tinyactors.h` currently exposes system creation and actor operations, but definition registration, builder operations, I/O registration, invoker registration, and actor-directory configuration are internal declarations. Decide which are public embedder APIs and surface them without requiring `src/internal.h`.
 
 ## Full definition semantics
 
@@ -20,10 +20,6 @@ This file is intentionally candid. The headers compile, but they do not yet expo
 - data declarations and early/late binding metadata;
 - extension executable actions.
 
-## Stable persisted identity
-
-`ta_snapshot_header` currently contains runtime `ta_definition_id` and `ta_atom name`. Persistence must encode resolvable logical identity/revision rather than assume these table handles survive restart.
-
 ## Invocation restore
 
 The invoker interface currently lacks explicit snapshot/rebind/restore semantics for live external services. Define how an invoker participates in unload/restart, or when it may refuse serialization.
@@ -34,7 +30,9 @@ Clarify how reaching a top-level final state differs from explicit `ta_actor_des
 
 ## Timer dispatch API
 
-The timer heap remains system-owned. The public host-facing mechanism for observing/dispatching due work and querying the next deadline needs a clear API that does not create an event loop inside Tinyactors; it must work equally for resident and unloaded actors.
+The host owns the durable deadline index for evicted actors. The public
+host-facing mechanism for observing resident delayed sends and routing due work
+needs a clear API that does not create an event loop inside Tinyactors.
 
 ## Resident layout
 

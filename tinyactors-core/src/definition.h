@@ -13,6 +13,16 @@ typedef enum {
     TA_STATE_HISTORY_DEEP
 } ta_state_kind;
 
+/*
+ * Process-independent checkpoint compatibility identity. `family` identifies
+ * a business/statechart family; `session_schema` changes only when a saved
+ * session needs transformation. A compiled definition owns its family name.
+ */
+typedef struct {
+    ta_definition_family family;
+    uint32_t session_schema;
+} ta_definition_identity;
+
 typedef struct {
     ta_atom name;
     ta_state_id parent;
@@ -52,6 +62,7 @@ typedef struct {
 struct ta_definition {
     ta_definition_id id;
     ta_atom name;
+    ta_definition_identity identity;
     ta_configuration_layout configuration;
     ta_history_layout history;
     ta_state_def *states;

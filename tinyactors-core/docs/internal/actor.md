@@ -2,6 +2,12 @@
 
 `ta_actor_record` is directory/residency metadata. `ta_actor` is the resident session object.
 
+The record's `id` is a runtime-local handle. Its `self` reference is either a
+runtime reference for an ephemeral actor or a named logical address. The core
+defines named-address lifecycle through
+`ta_actor_directory`; the host supplies the backing index and routing/storage
+implementation.
+
 Residency states conceptually include:
 
 - unloaded: logical actor exists, resident state absent;

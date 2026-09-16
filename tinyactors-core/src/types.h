@@ -31,19 +31,31 @@ enum {
     TA_ERR_NOT_SERIALIZABLE = -4,
     TA_ERR_BUSY = -5,
     TA_ERR_UNSUPPORTED = -6,
-    TA_ERR_CORRUPT = -7
+    TA_ERR_CORRUPT = -7,
+    TA_ERR_SESSION_SCHEMA = -8
 };
 
 typedef struct { const char *ptr; uint32_t len; } ta_str;
 typedef struct { const ta_atom *atoms; uint32_t count; } ta_atom_list;
 typedef struct { const uint8_t *ptr; uint32_t len; } ta_bytes;
+typedef struct { ta_str name; } ta_definition_family;
+typedef struct { ta_definition_family family; ta_str name; } ta_actor_address;
+typedef enum { TA_ACTOR_REF_RUNTIME = 0, TA_ACTOR_REF_NAMED = 1 } ta_actor_ref_kind;
+typedef struct {
+    ta_actor_ref_kind kind;
+    union {
+        ta_actor_id runtime;
+        ta_actor_address named;
+    } as;
+} ta_actor_ref;
 
 typedef struct ta_system ta_system;
 typedef struct ta_definition ta_definition;
 typedef struct ta_definition_builder ta_definition_builder;
 typedef struct ta_dm_host ta_dm_host;
 typedef struct ta_value ta_value;
-typedef struct ta_snapshot_batch ta_snapshot_batch;
+typedef struct { void *self; ta_result (*write)(void *self, const void *data, size_t size); } ta_snapshot_writer;
+typedef struct { void *self; ta_result (*read)(void *self, void *data, size_t size); } ta_snapshot_reader;
 
 #ifdef __cplusplus
 }

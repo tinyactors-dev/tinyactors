@@ -1,7 +1,7 @@
 #pragma once
 
 #include "types.h"
-#include "store.h"
+#include "actor.h"
 #include "io.h"
 #include "invoke.h"
 
@@ -15,7 +15,7 @@ typedef struct { ta_event_name_id name; char *buffer; uint32_t capacity; uint32_
 
 ta_result ta_system_create(const ta_system_config *config, ta_system **out);
 void ta_system_destroy(ta_system *system);
-ta_result ta_system_set_store(ta_system *system, ta_store store);
+ta_result ta_system_set_actor_directory(ta_system *system, ta_actor_directory directory);
 ta_result ta_system_intern_atom(ta_system *system, ta_str text, ta_atom *out);
 ta_result ta_event_name_intern(ta_system *system, const ta_atom_list *segments, ta_event_name_id *out);
 bool ta_event_name_matches(const ta_system *system, ta_event_name_id event, ta_event_name_id prefix);
@@ -33,7 +33,6 @@ ta_time ta_system_time(const ta_system *system);
 #include "builder.h"
 #include "event_name.h"
 #include "io.h"
-#include "store.h"
 #include "timer.h"
 
 struct ta_system {
@@ -64,7 +63,7 @@ struct ta_system {
     uint32_t invoker_count;
     uint32_t invoker_capacity;
 
-    ta_store store;
+    ta_actor_directory directory;
     ta_arena scratch;
 };
 
@@ -75,4 +74,4 @@ ta_result ta_system_register_io(ta_system *system, ta_atom type, ta_io io);
 ta_result ta_system_register_invoker(ta_system *system,
                                      ta_atom type,
                                      ta_invoker invoker);
-ta_result ta_system_set_store(ta_system *system, ta_store store);
+ta_result ta_system_set_actor_directory(ta_system *system, ta_actor_directory directory);

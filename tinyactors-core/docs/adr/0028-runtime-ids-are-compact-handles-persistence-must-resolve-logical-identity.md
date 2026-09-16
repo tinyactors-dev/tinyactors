@@ -1,6 +1,6 @@
 # ADR 0028: Runtime IDs are compact handles; persistence must resolve logical identity
 
-**Status:** Accepted; stable definition revision encoding remains open  
+**Status:** Accepted
 **Date:** 2026-09-15
 
 ## Context
@@ -13,4 +13,6 @@ Use compact numeric IDs as runtime handles. Persistent formats must carry or res
 
 ## Consequences
 
-The runtime stays dense. Snapshot/store formats need a resolution layer and versioning. The exact stable-definition revision/hash scheme remains an implementation detail to finalize.
+The runtime stays dense. Checkpoint formats need a resolution layer and
+versioning. ADR 0037 defines definition family/session-schema recovery and the
+host-backed named actor directory.

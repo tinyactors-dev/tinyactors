@@ -14,4 +14,10 @@ The callback may:
 
 The callback returns `TA_OP_ERROR` plus `ta_fault` when dispatch fails. The interpreter converts this to a queued `error.communication...` event.
 
+The actor-delivery processor uses the core logical actor protocol and the
+host-provided actor directory. A named target resolves by durable address; an
+ephemeral target may resolve by `ta_actor_id`. `ta_send.source` records the
+same tagged reference so the receiving host can construct a reply origin
+without putting routing information into application data.
+
 Delayed-send waiting/cancellation is not an I/O processor responsibility.

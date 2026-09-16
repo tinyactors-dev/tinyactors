@@ -2,13 +2,13 @@
 
 Tinyactors uses several different notions of name; they must not be conflated.
 
-## Definition name
+## Definition family
 
-Human/logical identity of an immutable statechart definition. Runtime `ta_definition_id` is a compact handle. Persistent snapshots need a stable definition identity/revision resolver.
+Human/logical identity of a statechart family. Runtime `ta_definition_id` is a compact handle. Checkpoints carry a family and session schema; an implementation may accept more than one schema.
 
 ## Actor name
 
-Optional durable symbolic identity scoped by definition. Examples: `(subscription, "sub_123")` or `(customer, "cus_456")`. Anonymous actors have no symbolic name.
+Optional durable symbolic identity scoped by definition family. Examples: `(subscription, "sub_123")` or `(customer, "cus_456")`. The core owns this logical protocol while a host-provided directory stores/resolves it. Anonymous actors have no symbolic name.
 
 ## Actor ID
 

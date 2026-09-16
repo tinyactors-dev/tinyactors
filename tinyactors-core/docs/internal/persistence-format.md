@@ -4,11 +4,18 @@ No concrete wire format is fixed yet, but any format must satisfy these requirem
 
 ## Versioning
 
-Each snapshot has a format version. Definition identity must include enough stable information to reject or deliberately migrate an incompatible definition revision.
+Each checkpoint has a format version. Its decoded header contains a
+`ta_definition_identity`: UTF-8 definition family plus session schema. The
+schema changes only when a saved session needs transformation; a logic/build
+change may keep the schema compatible. It must not depend on pointers, runtime
+handles, registration order, or callback addresses.
 
 ## Stable encoding
 
-Do not persist raw pointers. Do not assume runtime table handles (`ta_atom`, `ta_event_name_id`, `ta_definition_id`) retain meaning after restart. Encode logical names/segments or a versioned stable dictionary.
+Do not persist raw pointers or native C structs. Do not assume runtime table
+handles (`ta_atom`, `ta_event_name_id`, `ta_definition_id`, or `ta_actor_id`)
+retain meaning after restart. Encode the definition family, session schema,
+named self address, and event-name segments as logical data.
 
 ## Values
 
@@ -24,4 +31,8 @@ Persist invocation identity and interpreter-visible state. Host service handles 
 
 ## Definition upgrades
 
-Automatic statechart migration is not designed yet. Stores should at least detect definition mismatch rather than restoring bytes into an incompatible layout.
+The system resolves a checkpoint's definition family before decoding
+definition-local IDs and verifies that the target accepts its session schema.
+A missing family returns `TA_ERR_NOT_FOUND`; an unsupported schema returns
+`TA_ERR_SESSION_SCHEMA`. Applications migrate incompatible definitions by
+replacing an actor with a newly bootstrapped actor under the target definition.

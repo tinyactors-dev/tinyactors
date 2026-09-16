@@ -4,11 +4,13 @@
 
 static void use_public_types(void) {
     ta_datamodel datamodel = {0};
-    ta_snapshot_batch *batch = 0;
+    ta_actor_directory directory = {0};
+    ta_actor_address address = {0};
     ta_actor_spawn_params spawn = {0};
 
     (void)datamodel;
-    (void)batch;
+    (void)directory;
+    (void)address;
     (void)spawn;
 }
 

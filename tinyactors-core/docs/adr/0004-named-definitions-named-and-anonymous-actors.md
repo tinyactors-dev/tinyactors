@@ -9,7 +9,11 @@ Many actors correspond to durable business entities such as a Stripe subscriptio
 
 ## Decision
 
-Definitions are named. Every actor has a numeric runtime identity. Actors may additionally have a durable name scoped by definition. Named business actors are addressable as `(definition, name)`. Anonymous actors use only their runtime identity.
+Definitions have durable families. Every actor has a numeric runtime identity.
+Actors may additionally have a durable logical address scoped by definition
+family. Named business actors are addressable as `(definition family, name)`.
+Anonymous actors use only their runtime identity. The core defines the address
+protocol while the host provides its directory implementation (ADR 0037).
 
 ## Consequences
 

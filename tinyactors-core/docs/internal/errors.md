@@ -6,6 +6,11 @@ Tinyactors has two orthogonal failure channels.
 
 Used for API/runtime failures such as invalid arguments, allocation failure, corrupt snapshot, unsupported operation, busy actor, or failed persistence mechanics. A negative `ta_result` means the requested C operation itself did not complete normally.
 
+Checkpoint recovery returns `TA_ERR_NOT_FOUND` when no registered definition
+has the checkpoint's family. It returns `TA_ERR_SESSION_SCHEMA` when the
+chosen definition does not accept the checkpoint's session schema. Both are
+C/API errors, not SCXML `error.*` events.
+
 ## SCXML `error.*`
 
 Used for statechart-visible runtime errors. These are ordinary internal platform events. The broad standard categories are:
