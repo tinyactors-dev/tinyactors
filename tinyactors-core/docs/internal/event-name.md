@@ -12,7 +12,7 @@ A wildcard segment marked `TA_EVENT_PATTERN_SEGMENT_WILDCARD` matches zero or mo
 
 ## Generated names
 
-Construct generated names from ordered atom segments such as `[DONE, INVOKE, invoke-id-segment]` or `[ERROR, EXECUTION, datamodel, condition]`. Intern reusable segments once and pass complete segment lists to `ta_event_name_intern()`; do not format and reparse dotted strings.
+Construct generated names from ordered atom segments such as `[DONE, INVOKE, invoke-id-segment]`, `[ERROR, EXECUTION, datamodel, condition]`, or `[ERROR, COMMUNICATION, INVOKE, invoke-id-segment, UNAVAILABLE]`. Intern reusable segments once and pass complete segment lists to `ta_event_name_intern()`; do not format and reparse dotted strings. Invocation-unavailable errors carry the logical invocation identity in the name because their SCXML invoke-ID envelope field must remain empty. Their name describes the service condition without exposing the interpreter mechanism that detected it.
 
 ## Reconstruction/durability
 

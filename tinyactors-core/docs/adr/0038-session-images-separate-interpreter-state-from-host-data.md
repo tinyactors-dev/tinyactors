@@ -31,6 +31,12 @@ A session image does **not** contain or serialize the host data-model object gra
 
 Interpreter-owned event/timer/continuation values may still reference host values. An in-process image retains those references using ordinary `ta_value` lifetime rules. Crossing a process boundary requires a higher-level durability mechanism to encode or resolve such references.
 
+Opaque invoker service handles are runtime resources, not retained host values.
+An image records the logical active invocation, but reconstruction retires it
+and appends `error.communication.invoke.<id>.unavailable` to the internal event queue.
+The chart therefore observes loss of the external service through normal SCXML
+error control flow while the reconstruction API operation succeeds.
+
 ### Reconstruction is exact; upgrades are replacement
 
 A session image is tied to one immutable definition identity: definition family plus exact opaque revision fingerprint. Core reconstruction never silently interprets definition-local IDs against a different revision.

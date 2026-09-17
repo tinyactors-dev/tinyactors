@@ -32,3 +32,12 @@ The chart can be in `DatabaseCommitted` while `E18` is pending. If a crash occur
 ## Replay boundary
 
 Command sourcing/replay requires nondeterministic inputs—time, randomness, HTTP/LLM/database reads, external callbacks—to be recorded or supplied through deterministic boundaries. That requirement belongs to the durability component; plain Tinyactors core remains usable with ordinary synchronous host callbacks.
+
+## Invoked services
+
+Core reconstruction reports every formerly active invocation as
+`error.communication.invoke.<id>.unavailable`; it does not rebind the old service
+handle. A durability component may retain stable external operation identities
+and results so the chart's error transition can reconcile or retry the service
+without duplicating an already completed effect. This recovery is explicit
+statechart protocol, not restoration of an opaque core handle.

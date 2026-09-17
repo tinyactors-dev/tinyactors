@@ -34,6 +34,7 @@ typedef uint64_t ta_time;
 #define TA_STATE_NONE UINT32_MAX
 #define TA_INITIAL_TRANSITION_NONE UINT32_MAX
 #define TA_INITIALIZER_NONE UINT32_MAX
+#define TA_INVOKE_ID_NONE UINT64_MAX
 
 enum {
     TA_OK = 0,

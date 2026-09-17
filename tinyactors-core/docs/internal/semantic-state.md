@@ -10,7 +10,8 @@ The reconstructible session image includes:
 2. exact definition identity (family + revision fingerprint);
 3. active state configuration, including all parallel regions;
 4. shallow and deep history values;
-5. active invocation records and cancellation state;
+5. logical active invocation records and cancellation state, excluding opaque
+   runtime service handles;
 6. delayed sends owned by the actor;
 7. when a macrostep is in progress:
    - the current external event;
@@ -31,3 +32,10 @@ The statechart can still inspect and mutate that object through the adapter. Ope
 ## Reconstruction invariant
 
 Given the exact definition revision, the captured interpreter image, and the corresponding host data-model binding, reconstruction must restore the same interpreter-visible semantic point. Process-independent durability additionally requires a higher-level mechanism to persist/resolve all referenced host values and external-service state.
+
+Reaching that point may reveal that a formerly active external service is no
+longer attached. Reconstruction represents this environmental change by
+retiring the logical invocation and appending
+`error.communication.invoke.<id>.unavailable` to the restored internal queue. It does
+not fail the reconstruction API operation or pretend that an opaque service
+handle remains valid.

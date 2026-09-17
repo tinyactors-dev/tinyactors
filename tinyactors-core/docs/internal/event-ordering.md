@@ -10,4 +10,10 @@ Within an actor, semantic ordering is SCXML-defined and deterministic given dete
 6. `done.state.*` is generated when final/completion rules are met;
 7. `done.invoke.*` arrives through the invoking actor's external event flow on normal invoked-service completion.
 
+Session reconstruction appends one
+`error.communication.invoke.<id>.unavailable` platform event to the internal
+queue per invocation that was active in the image. Existing captured internal
+events remain ahead of these errors. Multiple reconstruction errors follow
+captured invocation-record order.
+
 Across actors, the host decides delivery/scheduling order except where causality and an I/O adapter impose additional guarantees.

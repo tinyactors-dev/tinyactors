@@ -12,14 +12,21 @@ typedef enum {
     TA_FAULT_CONTEXT_SEND_DISPATCH,
     TA_FAULT_CONTEXT_INVOKE_START,
     TA_FAULT_CONTEXT_INVOKE_CANCEL,
-    TA_FAULT_CONTEXT_INVOKE_FORWARD
+    TA_FAULT_CONTEXT_INVOKE_FORWARD,
+    TA_FAULT_CONTEXT_INVOKE_UNAVAILABLE
 } ta_fault_context;
 
+typedef struct {
+    ta_fault_context context;
+    ta_send_id send_id;
+    /* Used for naming/bookkeeping; does not populate ta_event.invoke_id. */
+    ta_invoke_id invoke_id;
+    /* May be null only for a core-generated invocation-unavailable failure. */
+    const ta_fault *fault;
+    ta_event *out;
+} ta_fault_event_params;
+
 ta_event_name_id ta_fault_event_name(ta_system *system,
-                                     ta_fault_context context,
-                                     const ta_fault *fault);
+                                     const ta_fault_event_params *params);
 ta_result ta_fault_to_internal_event(ta_system *system,
-                                     ta_fault_context context,
-                                     ta_send_id send_id,
-                                     const ta_fault *fault,
-                                     ta_event *out);
+                                     const ta_fault_event_params *params);

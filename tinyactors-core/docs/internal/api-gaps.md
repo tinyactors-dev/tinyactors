@@ -10,10 +10,6 @@ This file is intentionally candid. The headers compile, but they do not yet expo
 
 `ta_session_image` is intentionally opaque but not implemented yet. Capture/reconstruction must cover all Tinyactors-owned state in `semantic-state.md`, retain interpreter-held host values without traversing their object graphs, and verify exact definition identity on reconstruction.
 
-## Invocation reconstruction
-
-The invoker interface still needs a structural capture/rebind contract for live invoked services, or a way to report `TA_ERR_NOT_RECONSTRUCTIBLE`. Portable service-handle encoding belongs to the optional durability layer.
-
 ## Named actor replacement activation
 
 The directory has `replace`, but the public lifecycle still needs a clean way to prepare a replacement actor with the incumbent logical self-address without publishing it before bootstrap completes. Activation must make the directory swap atomic from the routing perspective.

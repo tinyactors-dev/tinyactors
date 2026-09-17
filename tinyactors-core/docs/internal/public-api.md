@@ -17,7 +17,7 @@ The current `include/tinyactors.h` is a compact public skeleton. This page recor
 
 `ta_result` reports C/runtime/API success or failure. Statechart-visible execution/communication failures normally become queued `error.*` events instead.
 
-`TA_ERR_DEFINITION_MISMATCH` means reconstruction found the definition family but not the exact image revision. `TA_ERR_NOT_RECONSTRUCTIBLE` is reserved for interpreter/service state that cannot be captured/recreated under the configured adapters.
+`TA_ERR_DEFINITION_MISMATCH` means reconstruction found the definition family but not the exact image revision. `TA_ERR_NOT_RECONSTRUCTIBLE` is reserved for non-invocation interpreter state that cannot be captured or recreated under the configured adapters. Lost active invocations are reported to the chart as `error.communication.invoke.<id>.unavailable`, not as a reconstruction API failure. The event does not expose why the service became unavailable.
 
 ## System
 
@@ -47,11 +47,20 @@ The public API still needs registration calls for definitions, I/O processors, a
 
 `ta_actor_deliver` begins delivery of one external event to an actor that is ready for a new macrostep. It does not imply an unbounded external mailbox.
 
+`ta_actor_report_invoke` is the asynchronous return path for an invoked service.
+It reports an ordinary child event, normal completion, or terminal service
+unavailability. Ordinary and completion reports use the actor's external-event
+flow and may return `TA_ERR_BUSY`; an unavailable report retires the invocation
+and appends a platform error to the internal queue. Reports for stale invocation
+IDs return `TA_ERR_NOT_FOUND` without generating another event. The start
+request supplies the owning system pointer as well as the system-local actor and
+invocation IDs needed for later reports.
+
 `ta_actor_resume` advances the in-progress macrostep for a caller-supplied budget and reports stable/paused/done/error execution status.
 
 `ta_actor_inspect` returns a read-only operational view of one resident interpreter. `ta_system_visit_actors` enumerates resident interpreter instances. The data-model root remains a host value supplied by the adapter.
 
-`ta_actor_capture` creates an opaque in-memory `ta_session_image`. `ta_actor_reconstruct` recreates that same interpreter session from the image, the exact definition revision, and a host-supplied data-model binding. Neither operation defines a persistence wire format.
+`ta_actor_capture` creates an opaque in-memory `ta_session_image`. `ta_actor_reconstruct` recreates that same interpreter session from the image, the exact definition revision, and a host-supplied data-model binding. Opaque invoker service handles are runtime-only: reconstruction retires each captured active invocation and appends `error.communication.invoke.<id>.unavailable` after the image's existing internal events. Neither operation defines a persistence wire format.
 
 `ta_actor_destroy` terminates/removes the actor and its actor-owned semantic resources.
 

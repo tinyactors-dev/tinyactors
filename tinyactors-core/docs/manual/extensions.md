@@ -19,3 +19,14 @@ Delayed-send timing belongs to Tinyactors statechart semantics. The I/O processo
 ## Invoked services
 
 Invokers start, cancel, and forward events to invoked services. A native SCXML/statechart invoker may map invocation directly to spawning a child actor. Other invokers may wrap host services. Completion is represented by structured `done.invoke.<id>` events.
+
+Invoker service handles are valid only in the runtime that created them and are
+not part of a session image. If a session is reconstructed while an invocation
+was active, Tinyactors does not restart or silently reconnect that service. It
+queues `error.communication.invoke.<id>.unavailable`,
+allowing the chart to define its recovery policy.
+
+After `start()` returns, an invoker uses `ta_actor_report_invoke()` to report an
+ordinary event, normal completion, or that the service is unavailable. Network
+failure and reconstruction-discovered loss produce the same chart-visible
+unavailable event.
