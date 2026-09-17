@@ -2,8 +2,11 @@
 #MISE description="Build the project"
 # vim:ft=ruby
 require 'pathname'
+require 'fileutils'
 
 ROOT = Pathname.new(__dir__).join('../..').expand_path
+
+Dir[ROOT.join('{,*/}mise/tasks/*')].each { |task| FileUtils.chmod('+x', task) }
 
 class Project
   def initialize(path)
@@ -26,3 +29,6 @@ end
 
 core = Project.new(ROOT.join('tinyactors-core'))
 core.run('build')
+
+test_host = Project.new(ROOT.join('tinyactors-test'))
+test_host.run('build')

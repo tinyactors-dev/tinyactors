@@ -31,3 +31,12 @@ Using the actor model, you can model just how a websocket connection behaves on 
 
 This is good for humans and for agents.
 
+## Repository layout
+
+- `tinyactors-core/` contains the freestanding-friendly C API and production
+  interpreter implementation.
+- `tinyactors-test/` contains the instrumentable JSON-RPC test host and its
+  Ruby driver.
+
+Run `mise run build` to build both projects and `mise run test` to exercise the
+test-host protocol.

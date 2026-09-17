@@ -1,0 +1,170 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "json_datamodel.h"
+
+static void require(bool condition, const char *message) {
+    if (!condition) {
+        fprintf(stderr, "json datamodel test failed: %s\n", message);
+        exit(1);
+    }
+}
+
+int main(void) {
+    ta_expression expressions[] = {
+        {.kind = TA_EXPRESSION_SOURCE, .as.source = {.ptr = ".ready", .len = 6}},
+        {.kind = TA_EXPRESSION_SOURCE, .as.source = {.ptr = ".count", .len = 6}},
+        {.kind = TA_EXPRESSION_SOURCE, .as.source = {.ptr = ".count + 1", .len = 10}},
+        {.kind = TA_EXPRESSION_SOURCE,
+         .as.source = {.ptr = ".count = .count + 1", .len = 19}},
+    };
+    ta_definition definition = {
+        .expressions = expressions,
+        .expression_count = TA_ARRAY_COUNT(expressions),
+    };
+    ta_datamodel model = tat_json_datamodel();
+    void *shared = NULL;
+    require(model.v->prepare_definition(
+                model.self,
+                &(ta_datamodel_prepare_definition_params){
+                    .definition = &definition,
+                    .shared = &shared,
+                }) == TA_OK,
+            "definition preparation");
+
+    void *instance = calloc(1, model.v->instance_size(model.self, shared));
+    require(instance != NULL, "instance allocation");
+    ta_value binding = {0};
+    require(tat_json_value_parse("{\"ready\":true,\"count\":1}", &binding) == TA_OK,
+            "binding parse");
+    require(model.v->init_instance(
+                model.self,
+                &(ta_datamodel_init_instance_params){
+                    .shared = shared,
+                    .instance = instance,
+                    .binding = &binding,
+                }) == TA_OK,
+            "instance initialization");
+
+    bool condition = false;
+    ta_fault fault = {0};
+    require(model.v->eval_condition(
+                model.self,
+                &(ta_datamodel_eval_condition_params){
+                    .shared = shared,
+                    .instance = instance,
+                    .expr = 0,
+                    .out = &condition,
+                    .fault = &fault,
+                }) == TA_OP_OK && condition,
+            "condition evaluation");
+
+    ta_value evaluated = {0};
+    require(model.v->eval_value(
+                model.self,
+                &(ta_datamodel_eval_value_params){
+                    .shared = shared,
+                    .instance = instance,
+                    .expr = 2,
+                    .out = &evaluated,
+                    .fault = &fault,
+                }) == TA_OP_OK,
+            "value evaluation");
+    char text[128];
+    size_t needed = 0;
+    require(tat_json_value_format(&evaluated, text, sizeof(text), &needed) == TA_OK &&
+                strcmp(text, "2") == 0,
+            "evaluated value");
+    ta_value_release(&evaluated);
+
+    ta_value five = {0};
+    require(tat_json_value_parse("5", &five) == TA_OK, "assignment value parse");
+    require(model.v->assign(
+                model.self,
+                &(ta_datamodel_assign_params){
+                    .shared = shared,
+                    .instance = instance,
+                    .location = 1,
+                    .value = &five,
+                    .fault = &fault,
+                }) == TA_OP_OK,
+            "location assignment");
+    ta_value_release(&five);
+
+    require(model.v->execute_script(
+                model.self,
+                &(ta_datamodel_execute_script_params){
+                    .shared = shared,
+                    .instance = instance,
+                    .script = 3,
+                    .fault = &fault,
+                }) == TA_OP_OK,
+            "script execution");
+
+    ta_value inspected = {0};
+    require(model.v->inspect(
+                model.self,
+                &(ta_datamodel_inspect_params){
+                    .shared = shared,
+                    .instance = instance,
+                    .out = &inspected,
+                }) == TA_OK,
+            "inspection");
+    require(tat_json_value_format(&inspected, text, sizeof(text), &needed) == TA_OK &&
+                strcmp(text, "{\"ready\":true,\"count\":6}") == 0,
+            "mutated root");
+    ta_value_release(&inspected);
+
+    ta_value target_value = {0};
+    require(tat_json_value_parse("\"#_internal\"", &target_value) == TA_OK,
+            "target parse");
+    ta_scxml_target target = {0};
+    require(model.v->decode_scxml_target(
+                model.self,
+                &(ta_datamodel_decode_scxml_target_params){
+                    .shared = shared,
+                    .instance = instance,
+                    .value = &target_value,
+                    .out = &target,
+                    .fault = &fault,
+                }) == TA_OP_OK && target.kind == TA_SCXML_TARGET_INTERNAL,
+            "target decoding");
+    ta_value_release(&target_value);
+
+    ta_value first = {0};
+    ta_value second = {0};
+    require(tat_json_value_parse("1", &first) == TA_OK &&
+                tat_json_value_parse("2", &second) == TA_OK,
+            "parameter values");
+    ta_named_value named[] = {
+        {.name = 7, .value = first},
+        {.name = 7, .value = second},
+    };
+    ta_value parameters = {0};
+    require(model.v->make_params(
+                model.self,
+                &(ta_datamodel_make_params_params){
+                    .shared = shared,
+                    .instance = instance,
+                    .values = named,
+                    .count = TA_ARRAY_COUNT(named),
+                    .out = &parameters,
+                    .fault = &fault,
+                }) == TA_OP_OK,
+            "parameter aggregation");
+    require(tat_json_value_format(&parameters, text, sizeof(text), &needed) == TA_OK &&
+                strcmp(text,
+                       "[{\"name_atom\":7,\"value\":1},{\"name_atom\":7,\"value\":2}]") == 0,
+            "ordered duplicate parameters");
+    ta_value_release(&parameters);
+    ta_value_release(&first);
+    ta_value_release(&second);
+
+    model.v->destroy_instance(model.self, shared, instance);
+    model.v->destroy_definition(model.self, shared, (ta_allocator){0});
+    ta_value_release(&binding);
+    free(instance);
+    puts("tinyactors-test JSON data model test passed");
+    return 0;
+}

@@ -1,0 +1,16 @@
+#!/usr/bin/env ruby
+#MISE description="Run tinyactors-test smoke tests"
+
+require 'pathname'
+
+root = Pathname.new(__dir__).join('../..').expand_path
+
+def run(*command, chdir:)
+  pid = Process.spawn(*command, chdir: chdir.to_s)
+  _pid, status = Process.wait2(pid)
+  exit(status.exitstatus || 1) unless status.success?
+end
+
+run('mise', 'run', 'build', chdir: root)
+run('build/json_datamodel_test', chdir: root)
+run('ruby', 'ruby/smoke.rb', chdir: root)

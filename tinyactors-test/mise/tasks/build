@@ -1,0 +1,86 @@
+#!/usr/bin/env ruby
+#MISE description="Build the tinyactors-test JSON-RPC host"
+
+require 'fileutils'
+require 'pathname'
+require 'shellwords'
+
+ROOT = Pathname.new(__dir__).join('../..').expand_path
+WORKSPACE = ROOT.parent
+JQ_SOURCE = ROOT.join('vendor/jq')
+BUILD = ROOT.join('build')
+JQ_BUILD = BUILD.join('jq')
+PREFIX = BUILD.join('prefix')
+
+def run(*command, chdir: ROOT)
+  puts command.shelljoin
+  pid = Process.spawn(*command, chdir: chdir.to_s)
+  _pid, status = Process.wait2(pid)
+  exit(status.exitstatus || 1) unless status.success?
+end
+
+unless JQ_SOURCE.join('.tinyactors-vendor-version').file?
+  run('mise', 'run', 'vendor-jq', chdir: WORKSPACE)
+end
+
+libjq = PREFIX.join('lib/libjq.a')
+libonig = PREFIX.join('lib/libonig.a')
+unless libjq.file? && libonig.file?
+  FileUtils.mkdir_p(JQ_BUILD)
+  unless JQ_BUILD.join('Makefile').file?
+    run(
+      JQ_SOURCE.join('configure').to_s,
+      '--disable-shared',
+      '--enable-static',
+      '--disable-docs',
+      '--with-oniguruma=builtin',
+      "--prefix=#{PREFIX}",
+      chdir: JQ_BUILD
+    )
+  end
+  run('make', '-j2', 'install', chdir: JQ_BUILD)
+end
+
+run('mise', 'run', 'amalgamate', '--check', chdir: WORKSPACE.join('tinyactors-core'))
+
+compiler = Shellwords.split(ENV.fetch('CC', 'cc'))
+flags = Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic -O2'))
+sources = [
+  ROOT.join('src/main.c'),
+  ROOT.join('src/rpc.c'),
+  ROOT.join('src/server.c'),
+  ROOT.join('src/json_datamodel.c'),
+  ROOT.join('src/allocator.c'),
+  WORKSPACE.join('tinyactors-core/include/tinyactors.c')
+]
+libraries = [libjq, libonig]
+
+run(
+  *compiler,
+  *flags,
+  "-I#{ROOT.join('src')}",
+  "-I#{PREFIX.join('include')}",
+  "-I#{JQ_BUILD.join('src')}",
+  "-I#{WORKSPACE.join('tinyactors-core/include')}",
+  *sources.map(&:to_s),
+  *libraries.map(&:to_s),
+  '-lm',
+  '-o',
+  BUILD.join('tinyactors-test').to_s
+)
+
+# run(
+#   *compiler,
+#   *flags,
+#   "-I#{ROOT.join('src')}",
+#   "-I#{PREFIX.join('include')}",
+#   "-I#{JQ_BUILD.join('src')}",
+#   "-I#{WORKSPACE.join('tinyactors-core/include')}",
+#   ROOT.join('tests/json_datamodel_test.c').to_s,
+#   ROOT.join('src/json_datamodel.c').to_s,
+#   WORKSPACE.join('tinyactors-core/include/tinyactors.c').to_s,
+#   *libraries.map(&:to_s),
+#   '-lm',
+#   '-o',
+#   BUILD.join('json_datamodel_test').to_s
+# )
