@@ -1,0 +1,7 @@
+#!/usr/bin/env ruby
+abort "provide at least one file" if ARGV.empty?
+
+ARGV.each do |file|
+  puts "--- #{file}"
+  puts File.read(file)
+end

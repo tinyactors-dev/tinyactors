@@ -6,20 +6,6 @@ This file is intentionally candid. The headers compile, but they do not yet expo
 
 `include/tinyactors.h` currently exposes system creation and actor operations, but definition registration, builder operations, I/O registration, invoker registration, and actor-directory configuration still need final public-surface review.
 
-## Full definition semantics
-
-`ta_definition` / builder still need representation for:
-
-- explicit initial transitions and initial executable content;
-- transition type (`internal` / `external`);
-- onentry/onexit action ranges;
-- executable-content IR;
-- raise/send/cancel actions;
-- conditional/foreach structures;
-- invocation declarations, finalize blocks, and autoforward;
-- data declarations and early/late binding metadata;
-- extension executable actions.
-
 ## Session-image implementation
 
 `ta_session_image` is intentionally opaque but not implemented yet. Capture/reconstruction must cover all Tinyactors-owned state in `semantic-state.md`, retain interpreter-held host values without traversing their object graphs, and verify exact definition identity on reconstruction.

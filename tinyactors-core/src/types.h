@@ -17,11 +17,23 @@ typedef uint32_t ta_state_id;
 typedef uint32_t ta_transition_id;
 typedef uint32_t ta_expr_id;
 typedef uint32_t ta_action_id;
+typedef uint32_t ta_action_block_id;
+typedef uint32_t ta_initial_transition_id;
+typedef uint32_t ta_data_decl_id;
+typedef uint32_t ta_initializer_id;
+typedef uint32_t ta_content_id;
+typedef uint32_t ta_param_id;
+typedef uint32_t ta_invoke_decl_id;
+typedef uint32_t ta_extension_id;
 typedef uint64_t ta_actor_id;
 typedef uint64_t ta_invoke_id;
 typedef uint64_t ta_send_id;
 typedef uint64_t ta_timer_id;
 typedef uint64_t ta_time;
+
+#define TA_STATE_NONE UINT32_MAX
+#define TA_INITIAL_TRANSITION_NONE UINT32_MAX
+#define TA_INITIALIZER_NONE UINT32_MAX
 
 enum {
     TA_OK = 0,

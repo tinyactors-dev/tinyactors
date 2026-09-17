@@ -1,0 +1,6 @@
+#!/usr/bin/env ruby
+
+abort "usage: mise run find PATTERN FILE..." if ARGV.length < 2
+
+pattern = ARGV.shift
+exec "rg", "-n", "-C", "6", pattern, *ARGV

@@ -1,0 +1,9 @@
+#!/usr/bin/env ruby
+
+abort "usage: mise run slice FILE START END" unless ARGV.length == 3
+
+file, first, last = ARGV
+lines = File.readlines(file, chomp: true)
+lines[(Integer(first) - 1)..(Integer(last) - 1)].each_with_index do |line, index|
+  puts "#{Integer(first) + index}:#{line}"
+end
