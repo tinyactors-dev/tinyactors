@@ -15,6 +15,39 @@ typedef struct { void *shared; void *instance; ta_expr_id expr; const ta_dm_host
 typedef struct { void *shared; void *instance; ta_expr_id location; const ta_dm_host *host; ta_value *out; ta_fault *fault; } ta_datamodel_read_location_params;
 typedef struct { void *shared; void *instance; ta_expr_id location; const ta_value *value; const ta_dm_host *host; ta_fault *fault; } ta_datamodel_assign_params;
 typedef struct { void *shared; void *instance; ta_expr_id script; const ta_dm_host *host; ta_fault *fault; } ta_datamodel_execute_script_params;
+typedef enum {
+    TA_SCXML_TARGET_INVALID = 0,
+    TA_SCXML_TARGET_INTERNAL,
+    TA_SCXML_TARGET_SELF,
+    TA_SCXML_TARGET_PARENT,
+    TA_SCXML_TARGET_INVOKE,
+    TA_SCXML_TARGET_ACTOR
+} ta_scxml_target_kind;
+typedef struct {
+    ta_scxml_target_kind kind;
+    union {
+        ta_invoke_id invoke;
+        ta_actor_ref actor;
+    } as;
+} ta_scxml_target;
+typedef struct {
+    void *shared;
+    void *instance;
+    const ta_value *value;
+    const ta_dm_host *host;
+    ta_scxml_target *out;
+    ta_fault *fault;
+} ta_datamodel_decode_scxml_target_params;
+typedef struct { ta_atom name; ta_value value; } ta_named_value;
+typedef struct {
+    void *shared;
+    void *instance;
+    const ta_named_value *values;
+    uint32_t count;
+    const ta_dm_host *host;
+    ta_value *out;
+    ta_fault *fault;
+} ta_datamodel_make_params_params;
 typedef struct { void *shared; void *instance; const ta_dm_host *host; ta_value *out; } ta_datamodel_inspect_params;
 typedef struct ta_datamodel_vtable {
     ta_result (*prepare_definition)(void *self, const ta_datamodel_prepare_definition_params *params);
@@ -28,6 +61,9 @@ typedef struct ta_datamodel_vtable {
     ta_op_status (*read_location)(void *self, const ta_datamodel_read_location_params *params);
     ta_op_status (*assign)(void *self, const ta_datamodel_assign_params *params);
     ta_op_status (*execute_script)(void *self, const ta_datamodel_execute_script_params *params);
+    ta_op_status (*decode_scxml_target)(void *self,
+                                        const ta_datamodel_decode_scxml_target_params *params);
+    ta_op_status (*make_params)(void *self, const ta_datamodel_make_params_params *params);
     ta_result (*inspect)(void *self, const ta_datamodel_inspect_params *params);
 } ta_datamodel_vtable;
 typedef struct { void *self; const ta_datamodel_vtable *v; } ta_datamodel;

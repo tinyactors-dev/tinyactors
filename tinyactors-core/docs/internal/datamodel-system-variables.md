@@ -39,6 +39,14 @@ Incoming event data may require conversion to a value legal in the receiving dat
 
 System variables are read-only from application code. A plugin must prevent assignment through its location language.
 
+## `_ioprocessors`
+
+Core always exposes an entry for the built-in SCXML Event I/O Processor URI.
+Its location denotes the current actor's externally usable runtime or logical
+address. Custom registered processors may add their own profile-specific
+entries. The data model presents these values in its native representation; it
+does not invent the processor list.
+
 ## Platform extension data
 
 Host-defined system values are conceptually children of `_x`; their concrete representation is data-model-specific.

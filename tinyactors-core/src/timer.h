@@ -3,6 +3,26 @@
 #include "clock.h"
 #include "event.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct {
+    /* Must be nonzero; limits synchronous host callbacks in this call. */
+    uint32_t budget;
+    uint32_t *dispatched;
+    bool *more_due;
+} ta_due_dispatch_params;
+
+/* TA_ERR_NOT_FOUND means that no resident delayed send is pending. */
+ta_result ta_system_next_deadline(const ta_system *system, ta_time *out);
+ta_result ta_system_dispatch_due(ta_system *system,
+                                 const ta_due_dispatch_params *params);
+
+#ifdef __cplusplus
+}
+#endif
+
 typedef struct {
     ta_timer_id id;
     ta_actor_id owner;

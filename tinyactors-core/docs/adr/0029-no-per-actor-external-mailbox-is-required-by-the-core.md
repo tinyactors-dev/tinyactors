@@ -11,6 +11,9 @@ A mailbox object per actor is expensive at multi-million scale and duplicates sc
 
 The core accepts an external event only when the actor is ready to begin a new macrostep. The host may maintain any queueing topology it wants: global queue, shard queue, durable log, per-business-key queue, or none. Internal SCXML events remain actor session state while a macrostep runs.
 
+Core-generated external events use the host external-event router established by
+ADR 0040; this does not imply a mailbox allocation inside each actor.
+
 ## Consequences
 
 Idle actors have zero mailbox overhead. Bindings must document how they queue events that arrive while an actor is busy.

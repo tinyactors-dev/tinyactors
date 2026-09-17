@@ -14,4 +14,5 @@ The smallest useful mental model is:
 - `ta_actor_capture()` / `ta_actor_reconstruct()` operate on Tinyactors interpreter session images, not serialized application objects;
 - portable durability is optional and layers on top of session images.
 
-Read `concepts.md`, `embedding.md`, `inspection.md`, and `persistence.md`. The ADRs contain the normative architectural rationale.
+Read `concepts.md`, `embedding.md`, `inspection.md`, `persistence.md`, and
+`virtual-actors.md`. The ADRs contain the normative architectural rationale.

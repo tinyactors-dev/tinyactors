@@ -12,6 +12,7 @@
 #include "../src/value.h"
 #include "../src/event.h"
 #include "../src/fault.h"
+#include "../src/routing.h"
 #include "../src/clock.h"
 #include "../src/configuration.h"
 #include "../src/history.h"

@@ -37,6 +37,8 @@ It separates statechart semantics from an embedder-selected data language and va
 - host-native representation of system variables;
 - conversion of incoming event data to a legal value;
 - aggregation of named parameter pairs;
+- decoding an evaluated SCXML Event I/O Processor target into a structured
+  internal/self/parent/invoke/actor target;
 - persistence of plugin-owned per-actor state.
 
 ## Important non-goal

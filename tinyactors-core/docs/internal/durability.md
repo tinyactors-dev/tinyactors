@@ -14,6 +14,12 @@ A reusable durability component may add:
 - crash recovery and reconciliation;
 - orchestration of actor-definition replacement/upgrades.
 
+For passivation, that layer writes the encoded image and binding locator before
+allowing `ta_actor_unload()` to publish the `UNLOADED` directory entry. It also
+stores the value returned by `ta_session_image_next_deadline()` in its durable
+deadline index. On wake-up it decodes the image, resolves the binding, and calls
+`ta_actor_load()`.
+
 ## Huge data models
 
 The durability layer should not assume checkpointing means serializing the host data-model graph. The application may already store a conversation transcript in a database, object graph, append-only log, or persistent structure. A checkpoint needs only enough information to re-resolve the binding and any host values directly referenced by interpreter state.

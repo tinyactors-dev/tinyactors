@@ -23,6 +23,7 @@ typedef uint32_t ta_data_decl_id;
 typedef uint32_t ta_initializer_id;
 typedef uint32_t ta_content_id;
 typedef uint32_t ta_param_id;
+typedef uint32_t ta_done_data_id;
 typedef uint32_t ta_invoke_decl_id;
 typedef uint32_t ta_extension_id;
 typedef uint64_t ta_actor_id;
@@ -34,6 +35,7 @@ typedef uint64_t ta_time;
 #define TA_STATE_NONE UINT32_MAX
 #define TA_INITIAL_TRANSITION_NONE UINT32_MAX
 #define TA_INITIALIZER_NONE UINT32_MAX
+#define TA_DONE_DATA_NONE UINT32_MAX
 #define TA_INVOKE_ID_NONE UINT64_MAX
 
 enum {
@@ -45,7 +47,9 @@ enum {
     TA_ERR_BUSY = -5,
     TA_ERR_UNSUPPORTED = -6,
     TA_ERR_CORRUPT = -7,
-    TA_ERR_DEFINITION_MISMATCH = -8
+    TA_ERR_DEFINITION_MISMATCH = -8,
+    TA_ERR_UNLOADED = -9,
+    TA_ERR_STALE = -10
 };
 
 typedef struct { const char *ptr; uint32_t len; } ta_str;

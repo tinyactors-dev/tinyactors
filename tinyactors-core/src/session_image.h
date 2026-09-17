@@ -21,6 +21,9 @@ extern "C" {
  * invoked service.  Those events follow internal events already captured by the
  * image.  An active invocation therefore does not make capture or reconstruction
  * return TA_ERR_NOT_RECONSTRUCTIBLE.
+ *
+ * An unpublished prepared replacement is not a routable session yet and cannot
+ * be captured; ta_actor_capture() returns TA_ERR_BUSY until activation.
  */
 typedef struct {
     ta_actor_id actor;
@@ -35,8 +38,12 @@ typedef struct {
 
 ta_result ta_actor_capture(ta_system *system,
                            const ta_actor_capture_params *params);
+/* Named directory-managed images are restored with ta_actor_load(). */
 ta_result ta_actor_reconstruct(ta_system *system,
                                const ta_actor_reconstruct_params *params);
+/* Returns TA_ERR_NOT_FOUND when the captured actor owns no delayed send. */
+ta_result ta_session_image_next_deadline(const ta_session_image *image,
+                                         ta_time *out);
 void ta_session_image_destroy(ta_session_image *image);
 
 #ifdef __cplusplus

@@ -20,6 +20,9 @@ This archive captures the C API shape discussed for a tiny in-process actor syst
 - Host values are fat pointers with lifetime/clone hooks; core does not require a universal serialization format.
 - Advanced durability—portable checkpoints, command sourcing, replay, effect deduplication, storage transactions—is a separate layer over core session images.
 - Data models, I/O processors, invokers, clocks, storage, and concurrency remain under embedder control.
+- The mandatory SCXML Event I/O Processor is built in; embedders provide its
+  external-event scheduling/routing callback rather than reimplementing SCXML
+  target and envelope semantics.
 
 ## Layout
 

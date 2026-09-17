@@ -8,6 +8,12 @@ Used for API/runtime failures such as invalid arguments, allocation failure, uns
 
 Session reconstruction returns `TA_ERR_NOT_FOUND` when no registered definition has the image's family and `TA_ERR_DEFINITION_MISMATCH` when the family exists but the exact revision is unavailable. `TA_ERR_NOT_RECONSTRUCTIBLE` indicates non-invocation interpreter state cannot be captured or recreated. A runtime-only invoker service handle is not such an API error: reconstruction succeeds, retires that invocation, and queues `error.communication.invoke.<id>.unavailable`. These are C/API errors, not SCXML `error.*` events.
 
+Named routing returns `TA_ERR_UNLOADED` when the address exists but must be
+loaded before it has a runtime actor ID. `TA_ERR_STALE` reports a failed
+directory comparison or an unload image whose source session epoch no longer
+matches. Both are retry/control results for the host and do not generate SCXML
+events.
+
 ## SCXML `error.*`
 
 Used for statechart-visible runtime errors. These are ordinary internal platform events. The broad standard categories are:

@@ -14,6 +14,23 @@ compensate, or move to a failure state. Transitions listening to the broader
 
 A process-independent checkpoint is a higher-level concern. A durability module can encode a session image, map host references to stable identities, store checkpoints, keep command/input journals, replay deterministic inputs, and assign stable IDs to external effects. Applications that do not need these guarantees do not pay for them in the core ABI.
 
+## Unloading named actors
+
+For a named virtual actor, capture and reconstruction are wrapped by the public
+residency protocol:
+
+1. fence the logical address against concurrent routing;
+2. capture the resident actor;
+3. persist the image, binding locator, and earliest image deadline;
+4. call `ta_actor_unload()` with that fresh image;
+5. discard the in-memory image after the durable checkpoint is committed;
+6. on new input or a due deadline, decode the image and resolve the binding;
+7. call `ta_actor_load()` and then deliver or dispatch the triggering work.
+
+The directory address remains claimed as `UNLOADED` between steps 4 and 7. The
+old runtime actor ID is invalid after unload; load returns a new one. See
+`virtual-actors.md` for the complete host call sequence.
+
 ## External I/O and partial commits
 
 Tinyactors does not pretend unrelated external effects are atomic. A chart can explicitly model:

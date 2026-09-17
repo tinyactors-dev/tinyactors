@@ -2,6 +2,10 @@
 
 #include "definition.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
  * Declarative SCXML authoring tree.
  *
@@ -37,6 +41,11 @@ typedef struct {
     void *impl;
 } ta_tree_list;
 
+typedef struct {
+    size_t element_size;
+    size_t element_alignment;
+} ta_tree_list_layout;
+
 /**
  * Initialize storage used while dynamically constructing a specification.
  *
@@ -45,8 +54,10 @@ typedef struct {
  * ta_tree_list states;
  * ta_tree_init(&tree, allocator);
  * ta_tree_list_init(&states, &tree,
- *                   sizeof(ta_scxml_state_spec),
- *                   _Alignof(ta_scxml_state_spec));
+ *                   &(ta_tree_list_layout){
+ *                       .element_size = sizeof(ta_scxml_state_spec),
+ *                       .element_alignment = _Alignof(ta_scxml_state_spec),
+ *                   });
  *
  * ta_scxml_state_spec idle = {
  *     .kind = TA_SCXML_STATE_ATOMIC,
@@ -68,8 +79,7 @@ ta_result ta_tree_result(const ta_tree *tree);
 
 void ta_tree_list_init(ta_tree_list *list,
                        ta_tree *tree,
-                       size_t element_size,
-                       size_t element_alignment);
+                       const ta_tree_list_layout *layout);
 void ta_tree_put(ta_tree_list *list, const void *element);
 const void *ta_tree_close(ta_tree_list *list);
 
@@ -209,6 +219,12 @@ typedef struct {
     ta_scxml_value_spec initializer;
 } ta_scxml_data_spec;
 
+/* Exactly one of content or params may be present, as required by SCXML. */
+typedef struct {
+    ta_scxml_value_spec content;
+    const ta_scxml_param_spec *params;
+} ta_scxml_done_data_spec;
+
 struct ta_scxml_state_spec {
     ta_scxml_state_kind kind;
     ta_str id;
@@ -219,6 +235,7 @@ struct ta_scxml_state_spec {
     const ta_scxml_action_spec *onexit;
     const ta_scxml_data_spec *data;
     const ta_scxml_invoke_spec *invokes;
+    const ta_scxml_done_data_spec *done_data;
 };
 
 typedef struct {
@@ -251,7 +268,8 @@ typedef struct {
  * ta_atom oauth_io;      // registered OAuth token-client I/O processor
  * ta_result result = ta_definition_compile_spec(
  *     system,
- *     &(ta_scxml_spec){
+ *     &(ta_definition_compile_params){
+ *       .spec = &(ta_scxml_spec){
  *         .name = { .ptr = "oauth-login", .len = 11 },
  *         .initial = &(ta_scxml_initial_spec){
  *             .targets = (const ta_str[]){{ .ptr = "idle", .len = 4 }, {0}},
@@ -451,11 +469,24 @@ typedef struct {
  *             },
  *             {0},
  *         },
- *     }, datamodel, allocator, &definition);
+ *       },
+ *         .datamodel = datamodel,
+ *         .allocator = allocator,
+ *         .out = &definition,
+ *     });
  * @endcode
  */
+typedef struct {
+    const ta_scxml_spec *spec;
+    ta_datamodel datamodel;
+    ta_allocator allocator;
+    ta_definition **out;
+} ta_definition_compile_params;
+
 ta_result ta_definition_compile_spec(ta_system *system,
-                                     const ta_scxml_spec *spec,
-                                     ta_datamodel datamodel,
-                                     ta_allocator allocator,
-                                     ta_definition **out);
+                                     const ta_definition_compile_params *params);
+void ta_definition_destroy(ta_definition *definition);
+
+#ifdef __cplusplus
+}
+#endif

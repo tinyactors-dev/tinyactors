@@ -8,6 +8,12 @@ defines named-address lifecycle through
 `ta_actor_directory`; the host supplies the backing index and routing/storage
 implementation.
 
+Directory entries are tagged. A resident entry contains a runtime actor ID; an
+unloaded entry reserves the logical address without pretending a runtime actor
+still exists. Directory replacement and removal are compare-and-swap operations
+against an expected entry, preventing an old actor from deleting or replacing a
+new route.
+
 Residency states conceptually include:
 
 - unloaded: logical actor exists, resident state absent;
@@ -17,4 +23,10 @@ Residency states conceptually include:
 
 A resident actor owns configuration, history, continuation, data-model instance, internal events, and active invocation bookkeeping. Delayed sends may be physically stored in the system timer index but remain semantically part of the actor.
 
-For memory density, future implementations may split uncommon state into sparse side tables rather than carrying vector pointers/capacities in every actor. The current header is intentionally a straightforward skeleton, not the final four-million-actor layout.
+Each semantic mutation advances the actor's session epoch. A captured image
+records that epoch. `ta_actor_unload()` accepts only a matching image, so a host
+cannot publish an older checkpoint after the actor processes another event.
+
+For memory density, uncommon state lives in sparse side storage, while
+configuration and history use definition-sized storage. An unloaded actor has
+no resident `ta_actor`; only the host directory/checkpoint record remains.

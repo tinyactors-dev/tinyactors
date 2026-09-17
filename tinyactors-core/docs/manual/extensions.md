@@ -8,11 +8,25 @@ Tinyactors deliberately permits rich host integration.
 
 ## Data models
 
-A `ta_datamodel` interprets conditions, value expressions, locations, assignments, and scripts. The core does not impose an expression language. Data models may perform arbitrary host work; disciplined embedders should route externally visible effects through I/O processors when they want replayable and testable systems.
+A `ta_datamodel` interprets conditions, value expressions, locations,
+assignments, scripts, and the host representation of SCXML send targets. Target
+decoding produces a structured internal/self/parent/invoke/actor target; core
+then applies the standard semantics. The core does not impose an expression
+language. Data models may perform arbitrary host work; disciplined embedders
+should route externally visible effects through I/O processors when they want
+replayable and testable systems.
 
 ## I/O processors
 
-An I/O processor callback is synchronous as a C call, but the operation it initiates may be asynchronous. For example, a Node callback may start `fetch()` and return; the promise completion later delivers another event to the actor.
+Core supplies the mandatory SCXML Event I/O Processor. External session events
+from it go to the host's `ta_external_event_router`, which schedules resident
+delivery or loads a virtual actor. Embedders do not register their own actor
+router as an I/O processor.
+
+A custom I/O processor callback is synchronous as a C call, but the operation
+it initiates may be asynchronous. For example, a Node callback may start
+`fetch()` and return; the promise completion later delivers another event to the
+actor.
 
 Delayed-send timing belongs to Tinyactors statechart semantics. The I/O processor receives a fully materialized send only when it is due. The send's `io_type` is the resolved SCXML `<send>` type and selects the registered processor; `target`, event, and data are then interpreted by that processor.
 

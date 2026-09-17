@@ -11,7 +11,21 @@ It exists for two reasons:
 
 `ta_actor_capture()` may capture an idle actor or a paused actor mid-macrostep. The image therefore preserves configuration, history, continuation/current/internal events when present, invocations, delayed sends, logical self identity, and exact definition revision.
 
+A terminal actor's final data and an invoked child's pending completion linkage
+are also preserved. An unpublished prepared replacement cannot be captured:
+its held activation effects belong to an incomplete replacement transaction,
+so capture returns `TA_ERR_BUSY` until activation.
+
 The image is not a byte blob. Host values held directly by interpreter structures are retained using `ta_value` lifetime semantics.
+
+The image also records the source actor ID and session epoch. These are local
+freshness metadata, not portable identity. `ta_actor_unload()` rejects an image
+with `TA_ERR_STALE` if the source actor has changed since capture.
+
+`ta_session_image_next_deadline()` returns the earliest captured delayed-send
+deadline, or `TA_ERR_NOT_FOUND`. This is sufficient for a host durability layer
+to maintain a wake-up index for an unloaded actor without exposing the image's
+private structure.
 
 Active invocation records are captured logically, but opaque invoker service
 handles are runtime-only and are not retained by the image.
@@ -19,6 +33,12 @@ handles are runtime-only and are not retained by the image.
 ## Reconstruction
 
 `ta_actor_reconstruct()` requires the exact definition revision and a host-supplied data-model binding. It never treats a newer definition as compatible merely because an application schema appears unchanged. If the family exists but the revision differs, reconstruction returns `TA_ERR_DEFINITION_MISMATCH`.
+
+For a named virtual actor, `ta_actor_load()` wraps reconstruction in the
+directory residency protocol. It prepares the session while the directory still
+says `UNLOADED` and publishes the new runtime ID only after preparation
+succeeds. Direct `ta_actor_reconstruct()` is the lower-level operation for
+anonymous sessions and tooling that does not participate in named routing.
 
 After restoring the captured interpreter state, reconstruction retires each
 invocation that was active in the image and appends an internal

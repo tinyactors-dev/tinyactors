@@ -23,6 +23,12 @@ A sequential definition can store one active leaf. A small parallel definition c
 
 Actors with no active invocation should ideally pay no invocation-vector allocation. Idle actors do not need external mailboxes. Timers live in a shared deadline index. Large paused continuations may be side-allocated if the common continuation is small.
 
+The resident representation enforces that boundary: one definition-sized slab
+backs configuration and history, while internal queues, invocations, invoked-
+child completion state, and replacement activation effects occupy an optional
+`ta_actor_sparse_state`. An actor that does not use those features has no
+vectors for them.
+
 ## Residency
 
 Named durable actors may exist while not resident. The actor directory/name index is distinct from the resident execution cache. The exact directory representation is an implementation concern and may itself be store-backed for populations larger than RAM.

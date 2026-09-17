@@ -26,7 +26,13 @@ The current proposal re-evaluates a location expression for read/assign. A futur
 
 `import_event_data(const ta_value *foreign, ...)` assumes a value can identify its own implementation through its vtable. If transports need byte payloads without creating a `ta_value`, a second literal/bytes path may be added.
 
-## 7. Definition capability discovery
+## 7. SCXML Event I/O targets
+
+The built-in processor cannot inspect an opaque `ta_value`. The data-model
+vtable therefore decodes evaluated targets into `ta_scxml_target`; core, not the
+adapter, implements their routing semantics.
+
+## 8. Definition capability discovery
 
 The compiler should compute a bitset of required data-model capabilities. `prepare_definition` can validate the plugin in O(1) before inspecting detailed IR.
 

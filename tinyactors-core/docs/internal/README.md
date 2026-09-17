@@ -9,6 +9,7 @@ Important cross-cutting references:
 - `datamodel-binding.md` — host object binding and large-data-model behavior.
 - `durability.md` — optional portable checkpoint/replay/effect protocols above core.
 - `interpreter-semantics.md` — macrostep/microstep execution.
+- `routing.md` — normalized external-event scheduling boundary.
 - `invariants.md` — rules implementations must never violate.
 - `memory-model.md` — density strategy for millions of actors.
 - `api-gaps.md` — current header skeleton vs intended design.

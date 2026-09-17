@@ -43,5 +43,6 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0037](0037-core-owned-actor-protocol-host-backed-directory.md) | [Core-owned actor protocol; host-backed directory](0037-core-owned-actor-protocol-host-backed-directory.md) |
 | [0038](0038-session-images-separate-interpreter-state-from-host-data.md) | [Session images separate interpreter state from host data](0038-session-images-separate-interpreter-state-from-host-data.md) |
 | [0039](0039-lost-invocations-become-reconstruction-communication-errors.md) | [Lost invocations become reconstruction communication errors](0039-lost-invocations-become-reconstruction-communication-errors.md) |
+| [0040](0040-built-in-scxml-event-processor-host-routed-external-events.md) | [Built-in SCXML event processor; host-routed external events](0040-built-in-scxml-event-processor-host-routed-external-events.md) |
 
 See [the API gaps](../internal/api-gaps.md) for places where the current header skeleton does not yet fully expose these decisions.

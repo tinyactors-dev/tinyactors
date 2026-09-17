@@ -19,6 +19,11 @@ The current `include/tinyactors.h` is a compact public skeleton. This page recor
 
 `TA_ERR_DEFINITION_MISMATCH` means reconstruction found the definition family but not the exact image revision. `TA_ERR_NOT_RECONSTRUCTIBLE` is reserved for non-invocation interpreter state that cannot be captured or recreated under the configured adapters. Lost active invocations are reported to the chart as `error.communication.invoke.<id>.unavailable`, not as a reconstruction API failure. The event does not expose why the service became unavailable.
 
+`TA_ERR_UNLOADED` means a logical named actor exists but currently has no
+resident runtime ID. `TA_ERR_STALE` means a compare-and-swap directory update or
+an unload image no longer describes the expected actor state. Neither result
+changes the actor.
+
 ## System
 
 `ta_system_create` / `ta_system_destroy` create the shared in-process container. Creation does not start threads or I/O.
@@ -27,7 +32,20 @@ The current `include/tinyactors.h` is a compact public skeleton. This page recor
 
 `ta_system_set_actor_directory` installs host-provided operations for named actor claim, resolution, replacement, and removal. The named-address protocol belongs to Tinyactors; the host owns the backing directory implementation, physical routing, synchronization, and any durable storage.
 
-The public API still needs registration calls for definitions, I/O processors, and invokers.
+`ta_system_set_external_event_router` installs the host scheduling boundary for
+normalized external SCXML-session events. Core provides the mandatory SCXML
+Event I/O Processor; it resolves standard targets and submits external delivery
+through this router. Accepted deliveries have been copied if retained; retry
+pauses and preserves the materialized delivery; error becomes statechart-visible
+communication failure. `ta_system_scxml_io_type` returns the processor's
+reserved type atom.
+
+`ta_system_register_definition`, `ta_system_register_io`, and
+`ta_system_register_invoker` install compiled charts and host adapters. A
+successful definition registration transfers ownership to the system. Adapter
+registrations are borrowed and must remain valid through system destruction.
+The standard SCXML processor atom cannot be replaced with
+`ta_system_register_io`.
 
 ## Event names
 
@@ -43,7 +61,19 @@ The public API still needs registration calls for definitions, I/O processors, a
 
 `ta_actor_spawn` creates a session from an exact definition. `datamodel_binding` is a host-owned value passed to the selected data-model adapter; Tinyactors does not copy its object graph. A null address creates an ephemeral actor; a supplied logical address is claimed through the host directory.
 
+An optional `parent` marks the actor as an invoked child. Normal terminal
+completion then becomes `done.invoke.<id>` in the parent's external-event flow.
+
+`ta_actor_prepare_replacement` creates an unpublished replacement using the
+incumbent named address and holds bootstrap effects behind an activation
+barrier. `ta_actor_activate_replacement` requires that actor to be stable,
+atomically replaces the directory route, and only then releases its effects.
+
 `ta_actor_find` resolves a named actor.
+
+If the directory entry is unloaded, `ta_actor_find` returns
+`TA_ERR_UNLOADED` and leaves its output unchanged. The host obtains the
+checkpoint and binding and calls `ta_actor_load` before retrying delivery.
 
 `ta_actor_deliver` begins delivery of one external event to an actor that is ready for a new macrostep. It does not imply an unbounded external mailbox.
 
@@ -58,11 +88,41 @@ invocation IDs needed for later reports.
 
 `ta_actor_resume` advances the in-progress macrostep for a caller-supplied budget and reports stable/paused/done/error execution status.
 
+`TA_RUN_DONE` leaves the terminal actor resident. `ta_actor_get_completion`
+clones its optional final data. For an invoked child,
+`ta_actor_publish_completion` retries a `done.invoke.<id>` delivery that could
+not be accepted while the parent was busy. Explicit destruction is not normal
+completion and never generates that event.
+
 `ta_actor_inspect` returns a read-only operational view of one resident interpreter. `ta_system_visit_actors` enumerates resident interpreter instances. The data-model root remains a host value supplied by the adapter.
 
 `ta_actor_capture` creates an opaque in-memory `ta_session_image`. `ta_actor_reconstruct` recreates that same interpreter session from the image, the exact definition revision, and a host-supplied data-model binding. Opaque invoker service handles are runtime-only: reconstruction retires each captured active invocation and appends `error.communication.invoke.<id>.unavailable` after the image's existing internal events. Neither operation defines a persistence wire format.
 
+`ta_actor_unload` verifies that its image is a fresh capture of the named actor,
+atomically changes the directory entry from resident to unloaded, removes
+delayed sends from the resident deadline index, cancels runtime service handles,
+and releases resident interpreter memory. It does not consume the image. The old
+runtime actor ID becomes stale while the logical name remains alive.
+
+`ta_actor_load` reconstructs a named image against its exact registered
+definition and a host-supplied binding, then atomically changes the directory
+entry from unloaded to resident. It returns a new runtime actor ID. On failure,
+the directory remains unloaded and the caller retains the image.
+
+`ta_actor_remove_unloaded` terminates a non-resident logical actor by removing
+the expected unloaded directory entry. Core owns no resident resources at that
+point; after success the host deletes its checkpoint, binding record, and
+non-resident deadline entry.
+
+`ta_session_image_next_deadline` exposes the earliest actor-owned delayed-send
+deadline so a durability layer can index unloaded actors without depending on
+the image's private layout.
+
 `ta_actor_destroy` terminates/removes the actor and its actor-owned semantic resources.
+
+`ta_system_next_deadline` and bounded `ta_system_dispatch_due` integrate
+resident delayed sends with the host scheduler. They do not wait or read a
+physical clock.
 
 ## Durability boundary
 

@@ -18,4 +18,6 @@ It must implement:
 - invocation lifecycle and autoforward/finalize semantics;
 - resumable budgeting without changing semantic ordering.
 
-Interpreter phases in the current continuation are an implementation starting point. Full executable content may require nested frames or a small bytecode/IR interpreter rather than a single flat `pc`.
+The continuation's ordered sets and executable-content frame stack are the
+resumption boundary. A budget may stop between semantic operations, but never
+inside a host callback or at a point not fully described by that continuation.

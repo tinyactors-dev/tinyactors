@@ -1,8 +1,49 @@
 # `io.h`
 
-I/O processors are registered by a type atom/identifier and called synchronously by the interpreter when a send is ready to dispatch. `ta_send.io_type` selects the registration; it is the resolved SCXML `<send>` `type` or `typeexpr` value, interned as a `ta_atom`. The `target`, `event`, and `data` fields are delivery arguments for the selected processor, not the processor selector.
+I/O processors are selected by a type atom/identifier when a send is ready to
+dispatch. `ta_send.io_type` is the resolved SCXML `<send>` `type` or `typeexpr`
+value. The `target`, `event`, and `data` fields are delivery arguments, not the
+processor selector.
 
-When SCXML omits `type` and `typeexpr`, Tinyactors resolves the type to the SCXML Event I/O Processor URI (`http://www.w3.org/TR/scxml/#SCXMLEventProcessor`) before creating `ta_send`. A delayed send copies that resolved atom into `ta_delayed_send.io_type`, so it dispatches through the same registration after its delay, unload/reload, or persistence round trip.
+## Built-in SCXML Event I/O Processor
+
+Tinyactors core owns the mandatory SCXML Event I/O Processor. It interns
+`http://www.w3.org/TR/scxml/#SCXMLEventProcessor` during system creation;
+`ta_system_scxml_io_type()` returns that atom. The atom is reserved and cannot
+be replaced through `ta_system_register_io()`.
+
+When SCXML omits `type` and `typeexpr`, Tinyactors selects this processor. It
+implements the standard event-envelope mappings, `_ioprocessors` location,
+default external self-send, `#_internal`, `#_parent`, `#_<invokeid>`, and
+`#_scxml_<sessionid>` semantics. Inaccessible targets produce
+`error.communication` in the sender.
+
+An evaluated target remains a host `ta_value`, so the selected data-model
+adapter decodes it with `decode_scxml_target()` into a `ta_scxml_target`.
+Profiles interpret their own string/value representation; core then owns the
+meaning of the structured target. An omitted target is external self and does
+not require decoding. Any named-address text returned by the adapter is borrowed
+from the evaluated target value and remains valid while that value is retained;
+core deep-copies it when a delivery must outlive the call.
+
+`#_internal` is appended directly to the sender's internal queue. Every external
+SCXML-session delivery becomes a normalized `ta_external_delivery` and is
+submitted to the system's `ta_external_event_router`. The router decides when
+and where to call `ta_actor_deliver()`, including queueing, thread marshalling,
+shard routing, and loading an unloaded named actor. It does not reinterpret
+SCXML target syntax or event metadata.
+
+Normal invoked-child completion and SCXML parent/child external messages use
+the same router boundary. This gives all core-generated external events one
+scheduling and residency policy without creating a core mailbox or event loop.
+
+A delayed send copies the resolved I/O type atom, so it dispatches through the
+same built-in or custom processor after its delay, unload/reload, or persistence
+round trip.
+
+## Custom processors
+
+Other processors are registered by the host and called synchronously:
 
 The callback may:
 
@@ -14,10 +55,9 @@ The callback may:
 
 The callback returns `TA_OP_ERROR` plus `ta_fault` when dispatch fails. The interpreter converts this to a queued `error.communication...` event.
 
-The actor-delivery processor uses the core logical actor protocol and the
-host-provided actor directory. A named target resolves by durable address; an
-ephemeral target may resolve by `ta_actor_id`. `ta_send.source` records the
-same tagged reference so the receiving host can construct a reply origin
+Custom processors serve non-SCXML destinations such as HTTP, client streams,
+transcript stores, and brokers. They do not replace the standard inter-session
+processor. `ta_send.source` still records the actor reference needed for replies
 without putting routing information into application data.
 
 Delayed-send waiting/cancellation is not an I/O processor responsibility.

@@ -16,10 +16,11 @@ Tinyactors intentionally separates SCXML semantics from SCXML XML syntax.
 | raise/internal events | `event`, actor internal queue |
 | assign/script/expressions | `datamodel` |
 | system variables / `In()` | `ta_dm_host` |
-| send | action IR, `timer`, `io` |
+| send | action IR, `timer`, built-in/custom `io` |
+| SCXML Event I/O Processor / special targets | built-in `io`, `datamodel` target decoding, `routing` |
 | cancel | `timer` ownership index |
 | invoke/autoforward/finalize | `invoke`, `interpreter` |
-| `done.invoke.*` | `invoke`, `event_name` |
+| `done.invoke.*` | `invoke`, `event_name`, `routing` |
 | `error.execution` | `fault`, `interpreter` |
 | `error.communication` | `fault`, `io`, `invoke` |
 | platform errors | `fault`, structured `error.platform.*` |

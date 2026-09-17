@@ -2,6 +2,12 @@
 
 Tinyactors follows a SQLite-like ownership model: calls run in the caller's thread; the library does not create workers, sockets, files, databases, or event loops for you.
 
+Core ships the standard SCXML Event I/O Processor. The embedder installs an
+external-event router that schedules its normalized inter-session deliveries.
+On a single thread this may be a small work queue; on a server it may select a
+shard and load an unloaded actor. Custom I/O processors remain for non-SCXML
+destinations such as HTTP, client streams, and application storage.
+
 A typical host loop is conceptually:
 
 ```c
@@ -10,13 +16,21 @@ ta_actor_deliver(system, actor, &event);
 
 for (;;) {
     ta_run_status status;
-    ta_result r = ta_actor_resume(system, actor, budget, &status);
+    ta_result r = ta_actor_resume(system, &(ta_actor_resume_params){
+        .actor = actor,
+        .budget = budget,
+        .status = &status,
+    });
     if (r != TA_OK)
         break;
     if (status != TA_RUN_PAUSED)
         break;
 }
 ```
+
+A named actor may instead resolve as `TA_ERR_UNLOADED`. The host retrieves its
+checkpoint and data-model binding, calls `ta_actor_load()`, and retries delivery
+with the returned runtime actor ID. `virtual-actors.md` shows this path.
 
 Statechart-level failures are normally represented as internal `error.*` events, not as `ta_result` failures.
 

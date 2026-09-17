@@ -196,6 +196,16 @@ Must produce the equivalent of SCXML's shallow copy. The returned `ta_value` is 
 
 Receives an ordered list and must not assume names are unique.
 
+## `decode_scxml_target`
+
+Converts the data model's opaque evaluated target value into a structured
+`ta_scxml_target`. The adapter recognizes the standard lexical targets in its
+own string/value representation and may also expose native named actor values.
+It does not route the event. Core applies standard target semantics and sends
+external deliveries through the host router. Named-address text is borrowed
+from the evaluated input value and must remain valid until that value is
+released.
+
 ## `inspect`
 
 Returns an independently owned host-native root value for operational tooling; the caller releases it using normal `ta_value` lifetime rules. Inspection is an operational API result, not statechart execution, so failures are `ta_result` values rather than `error.*` events. Tinyactors does not recursively materialize or serialize the graph, which keeps large host models such as LLM transcripts cheap to inspect at the runtime boundary.

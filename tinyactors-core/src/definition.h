@@ -165,6 +165,11 @@ typedef struct {
 } ta_initializer_def;
 
 typedef struct {
+    ta_value_source content;
+    ta_span32 params;
+} ta_done_data_def;
+
+typedef struct {
     ta_bytes bytes;
 } ta_content_def;
 
@@ -204,6 +209,7 @@ typedef struct {
     ta_span32 onentry_actions;
     ta_span32 onexit_actions;
     ta_event_name_id done_event;
+    ta_done_data_id done_data;
 } ta_state_def;
 
 typedef struct {
@@ -241,6 +247,7 @@ typedef struct {
 } ta_initial_transition_def;
 
 struct ta_definition {
+    ta_allocator allocator;
     ta_definition_id id;
     ta_atom name;
     ta_definition_identity identity;
@@ -270,6 +277,8 @@ struct ta_definition {
     uint32_t initializer_count;
     ta_content_def *contents;
     uint32_t content_count;
+    ta_done_data_def *done_data;
+    uint32_t done_data_count;
     ta_invoke_decl *invokes;
     uint32_t invoke_decl_count;
     ta_extension_def *extensions;
