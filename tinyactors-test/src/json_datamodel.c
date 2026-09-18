@@ -337,6 +337,42 @@ static void tat_json_destroy_instance(void *self, void *shared, void *instance) 
     *json = (tat_json_instance){0};
 }
 
+static bool tat_json_has_member(jv root, ta_str name) {
+    return name.ptr != NULL && name.len <= INT_MAX &&
+           jv_object_has(jv_copy(root), jv_string_sized(name.ptr, (int)name.len));
+}
+
+/* Top-level named bindings are members of the root object. */
+static ta_op_status tat_json_set_member(tat_json_instance *instance, ta_str name, jv value,
+                                        ta_fault *fault) {
+    if (jv_get_kind(instance->root) != JV_KIND_OBJECT || name.ptr == NULL || name.len > INT_MAX) {
+        jv_free(value);
+        tat_json_fault(fault, TA_ERR_INVALID, "JSON data bindings need an object root");
+        return TA_OP_ERROR;
+    }
+    instance->root = jv_object_set(instance->root, jv_string_sized(name.ptr, (int)name.len), value);
+    return TA_OP_OK;
+}
+
+static ta_op_status tat_json_declare(void *self, const ta_datamodel_declare_params *params) {
+    (void)self;
+    tat_json_instance *instance = params->instance;
+    if (jv_get_kind(instance->root) == JV_KIND_OBJECT && tat_json_has_member(instance->root, params->name)) {
+        return TA_OP_OK;
+    }
+    return tat_json_set_member(instance, params->name, jv_null(), params->fault);
+}
+
+static ta_op_status tat_json_set_named(void *self, const ta_datamodel_set_named_params *params) {
+    (void)self;
+    jv value;
+    if (!tat_json_unwrap(params->value, &value)) {
+        tat_json_fault(params->fault, TA_ERR_INVALID, "data value is not a JSON value");
+        return TA_OP_ERROR;
+    }
+    return tat_json_set_member(params->instance, params->name, value, params->fault);
+}
+
 static ta_op_status tat_json_eval_value(void *self,
                                         const ta_datamodel_eval_value_params *params) {
     (void)self;
@@ -528,6 +564,8 @@ static const ta_datamodel_vtable TAT_JSON_DATAMODEL_VTABLE = {
     .instance_alignment = tat_json_instance_alignment,
     .init_instance = tat_json_init,
     .destroy_instance = tat_json_destroy_instance,
+    .declare = tat_json_declare,
+    .set_named = tat_json_set_named,
     .eval_condition = tat_json_eval_condition,
     .eval_value = tat_json_eval_value,
     .read_location = tat_json_read_location,

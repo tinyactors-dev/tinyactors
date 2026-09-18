@@ -280,6 +280,15 @@ typedef struct {
     void **shared;
 } ta_datamodel_prepare_definition_params;
 typedef struct { void *shared; void *instance; const ta_value *binding; const ta_dm_host *host; } ta_datamodel_init_instance_params;
+/*
+ * Named top-level data bindings (SCXML <data>). `name` is the author's data ID,
+ * borrowed for the call. declare() creates the binding with the data model's
+ * uninitialized representation; set_named() installs an initializer's value.
+ * Late binding declares every binding at bootstrap and sets each one only when
+ * its state is first entered (ADR 0032).
+ */
+typedef struct { void *shared; void *instance; ta_str name; const ta_dm_host *host; ta_fault *fault; } ta_datamodel_declare_params;
+typedef struct { void *shared; void *instance; ta_str name; const ta_value *value; const ta_dm_host *host; ta_fault *fault; } ta_datamodel_set_named_params;
 typedef struct { void *shared; void *instance; ta_expr_id expr; const ta_dm_host *host; bool *out; ta_fault *fault; } ta_datamodel_eval_condition_params;
 typedef struct { void *shared; void *instance; ta_expr_id expr; const ta_dm_host *host; ta_value *out; ta_fault *fault; } ta_datamodel_eval_value_params;
 typedef struct { void *shared; void *instance; ta_expr_id location; const ta_dm_host *host; ta_value *out; ta_fault *fault; } ta_datamodel_read_location_params;
@@ -331,6 +340,8 @@ typedef struct ta_datamodel_vtable {
     uint32_t (*instance_alignment)(void *self, void *shared);
     ta_result (*init_instance)(void *self, const ta_datamodel_init_instance_params *params);
     void (*destroy_instance)(void *self, void *shared, void *instance);
+    ta_op_status (*declare)(void *self, const ta_datamodel_declare_params *params);
+    ta_op_status (*set_named)(void *self, const ta_datamodel_set_named_params *params);
     ta_op_status (*eval_condition)(void *self, const ta_datamodel_eval_condition_params *params);
     ta_op_status (*eval_value)(void *self, const ta_datamodel_eval_value_params *params);
     ta_op_status (*read_location)(void *self, const ta_datamodel_read_location_params *params);

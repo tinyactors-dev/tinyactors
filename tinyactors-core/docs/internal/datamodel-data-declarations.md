@@ -16,13 +16,13 @@ The precise internal structure may differ, but the semantic fields are needed.
 
 Every binding exists from actor initialization, including with late binding.
 
-The core invokes:
+The core invokes the vtable's `declare` for each declaration:
 
 ```c
-dm->declare(..., name, ...);
+v->declare(self, &(ta_datamodel_declare_params){ .name = name, ... });
 ```
 
-for each declaration.
+`name` is the author's data ID as a borrowed `ta_str`; adapters never see atoms.
 
 A data model can represent the uninitialized/default state however it chooses.
 
@@ -46,7 +46,9 @@ An initializer may be:
 - a prepared host value;
 - an environment override.
 
-The engine evaluates/imports the initializer and uses `set_named()` to install the result.
+The engine evaluates the initializer (`eval_value` or `read_location`) and installs the
+result with the vtable's `set_named`. Literal content initializers need a data-model
+import operation that the vtable does not have yet; they queue `error.execution`.
 
 ## Failure
 

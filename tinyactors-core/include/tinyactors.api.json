@@ -1896,6 +1896,62 @@
         }
       ]
     },
+    "ta_datamodel_declare_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "shared",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "instance",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "name",
+          "type": {
+            "type": "ta_str"
+          },
+          "role": "in"
+        },
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "borrowed"
+        },
+        {
+          "name": "fault",
+          "type": {
+            "pointer": {
+              "type": "ta_fault"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
     "ta_datamodel_decode_scxml_target_params": {
       "kind": "struct",
       "fields": [
@@ -2448,6 +2504,73 @@
         }
       ]
     },
+    "ta_datamodel_set_named_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "shared",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "instance",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "name",
+          "type": {
+            "type": "ta_str"
+          },
+          "role": "in"
+        },
+        {
+          "name": "value",
+          "type": {
+            "pointer": {
+              "type": "ta_value"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "borrowed"
+        },
+        {
+          "name": "fault",
+          "type": {
+            "pointer": {
+              "type": "ta_fault"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
     "ta_datamodel_vtable": {
       "kind": "struct",
       "fields": [
@@ -2611,6 +2734,56 @@
                     "builtin": "void"
                   },
                   "const": false
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "declare",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_op_status"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_datamodel_declare_params"
+                  },
+                  "const": true
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "set_named",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_op_status"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_datamodel_set_named_params"
+                  },
+                  "const": true
                 }
               ]
             }
@@ -5975,7 +6148,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_event_clone",
@@ -6007,7 +6180,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_event_release",
@@ -6028,7 +6201,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_external_delivery_clone",
@@ -6067,7 +6240,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_external_delivery_release",
@@ -6095,7 +6268,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_dm_host_in_state",
@@ -6123,7 +6296,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_dm_host_event",
@@ -6147,7 +6320,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_dm_host_actor",
@@ -6168,7 +6341,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_actor_report_invoke",
@@ -6439,7 +6612,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_definition_destroy",
@@ -6460,7 +6633,7 @@
         }
       ],
       "public": true,
-      "implemented": false,
+      "implemented": true,
       "retires": "definition"
     },
     {
@@ -6493,7 +6666,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_actor_prepare_replacement",
@@ -6628,7 +6801,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_actor_resume",
@@ -6660,7 +6833,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_actor_unload",
@@ -6795,7 +6968,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_actor_publish_completion",
@@ -6851,7 +7024,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_actor_inspect",
@@ -6890,7 +7063,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_system_visit_actors",
@@ -6918,7 +7091,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_actor_active_states",
@@ -6950,7 +7123,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_actor_history",
@@ -6982,7 +7155,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_actor_delayed_sends",
@@ -7014,7 +7187,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_definition_state",
@@ -7046,7 +7219,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_actor_capture",
@@ -7199,7 +7372,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_system_destroy",
@@ -7220,7 +7393,7 @@
         }
       ],
       "public": true,
-      "implemented": false,
+      "implemented": true,
       "retires": "system"
     },
     {
@@ -7249,7 +7422,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_system_set_external_event_router",
@@ -7277,7 +7450,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_system_register_definition",
@@ -7321,7 +7494,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_system_register_io",
@@ -7356,7 +7529,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_system_register_invoker",
@@ -7391,7 +7564,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_system_intern_atom",
@@ -7430,7 +7603,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_event_name_intern",
@@ -7473,7 +7646,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_event_name_matches",
@@ -7508,7 +7681,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_event_name_format",
@@ -7540,7 +7713,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_system_set_time",
@@ -7568,7 +7741,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_system_time",
@@ -7589,7 +7762,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_system_scxml_io_type",
@@ -7610,7 +7783,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_system_next_deadline",
@@ -7642,7 +7815,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_system_dispatch_due",
@@ -7674,7 +7847,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     }
   ]
 }

@@ -44,6 +44,7 @@ class FakeHost
 
     case method
     when 'ta.system.create' then ok(out: { '$handle': 'system:1' })
+    when 'ta.system.set_external_event_router' then ok
     when 'ta.definition.compile_spec' then ok(out: { '$handle': 'definition:2' })
     when 'ta.system.register_definition' then ok(out: 0)
     when 'ta.actor.spawn' then ok(out: 5)
@@ -84,14 +85,21 @@ context.instance_exec do
 end
 
 methods = host.calls.map(&:first)
-check(methods.first(3) == %w[ta.system.create ta.definition.compile_spec ta.system.register_definition],
-      "setup sequence: #{methods.first(3)}")
+setup = %w[ta.system.create ta.system.set_external_event_router ta.definition.compile_spec
+           ta.system.register_definition]
+check(methods.first(4) == setup, "setup sequence: #{methods.first(4)}")
+router = host.calls.find { |method, _| method == 'ta.system.set_external_event_router' }.last
+check(router == { system: { '$handle': 'system:1' },
+                  router: { '$adapter' => 'router.direct', 'config' => { 'system' => { '$handle': 'system:1' } } } },
+      "the direct router is installed on the scenario system: #{router}")
 compile = host.calls.find { |method, _| method == 'ta.definition.compile_spec' }.last
 check(compile[:spec][:datamodel] == 'jq', 'the chart spec carries its SCXML datamodel')
 check(compile[:datamodel] == { '$adapter' => 'datamodel.jq' }, 'the jq adapter implements it')
 register = host.calls.find { |method, _| method == 'ta.system.register_definition' }.last
 check(register[:definition] == { '$handle': 'definition:2' }, 'the compiled handle is registered')
 check(methods.count('ta.system.intern_atom') == 2, 'each event segment is interned once')
+name = host.calls.find { |method, _| method == 'ta.event.name_intern' }.last
+check(name[:segments] == { atoms: [1, 2] }, "event names travel as a ta_atom_list: #{name[:segments]}")
 deliver = host.calls.find { |method, _| method == 'ta.actor.deliver' }.last
 check(deliver[:event] == { name: 9, type: 'external', invoke_id: TinyactorsTest::INVOKE_ID_NONE,
                            data: { reason: 'test' } }, "deliver event: #{deliver[:event]}")

@@ -148,8 +148,11 @@ A vtable-bearing value (`ta_allocator`, `ta_datamodel`, `ta_actor_directory`,
 `ta_io`, `ta_invoker`, `ta_external_event_router`, `ta_actor_inspector`) is
 `{"$adapter": "<name>", "config": {...}}`. Adapters are C factories registered
 in `src/adapters.c`. They run synchronously, so callbacks never become nested
-RPC conversations. The current adapters are `allocator.libc` and
-`datamodel.jq`.
+RPC conversations. The current adapters are `allocator.libc`,
+`datamodel.jq`, and `router.direct`. `router.direct` takes
+`{"system": <system handle>}` and hands each external event to
+`ta_actor_deliver()`; a busy actor makes it answer retry, so core keeps the
+event for a later dispatch.
 
 ### Codec methods
 
@@ -179,11 +182,11 @@ maps onto the public C API:
 
 | Step | Calls |
 |---|---|
-| first use of the system | `ta.system.create` with `{"allocator": {"$adapter": "allocator.libc"}, "initial_time": 0}` |
+| first use of the system | `ta.system.create` with `{"allocator": {"$adapter": "allocator.libc"}, "initial_time": 0}`, then `ta.system.set_external_event_router` with `router.direct` |
 | first `spawn` of a chart | `ta.definition.compile_spec` (spec plus `{"$adapter": "datamodel.jq"}`), then `ta.system.register_definition`, which takes ownership |
 | `spawn` | `ta.actor.spawn` |
 | `advance_time` | `ta.system.set_time` with absolute logical time |
-| `deliver` | `ta.system.intern_atom` per segment and `ta.event.name_intern` (cached), then `ta.actor.deliver` with an external event whose `invoke_id` is `TA_INVOKE_ID_NONE` |
+| `deliver` | `ta.system.intern_atom` per segment and `ta.event.name_intern` with `{"atoms": [...]}` (cached), then `ta.actor.deliver` with an external event whose `invoke_id` is `TA_INVOKE_ID_NONE` |
 | after every step | run to quiescence: `ta.actor.resume` each actor until `stable` or `done`, then `ta.system.dispatch_due`; repeat until nothing was dispatched and nothing more is due |
 | `active` | `ta.actor.inspect` for the count, `ta.actor.active_states`, and `ta.definition.state` for each state's ID (cached) |
 | `data` | `ta.actor.inspect`'s `datamodel_root`, then `json.transform` for a filter |

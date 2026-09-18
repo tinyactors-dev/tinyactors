@@ -9,6 +9,11 @@ typedef enum {
     TA_CONFIG_WORDS
 } ta_configuration_kind;
 
+/*
+ * The compiler currently always selects TA_CONFIG_WORDS: one bit per state ID,
+ * of which only atomic and final states are ever set. `atomic_state_count` is
+ * the number of addressable bits, `bytes` the storage size in whole words.
+ */
 typedef struct {
     ta_configuration_kind kind;
     uint16_t bytes;

@@ -97,3 +97,16 @@ void *ta_arena_alloc(ta_arena *arena, size_t size, size_t alignment) {
     arena->head = block;
     return ta_arena_allocate_from_block(block, size, alignment);
 }
+
+ta_result ta_arena_copy_str(ta_arena *arena, ta_str text, ta_str *out) {
+    char *copy = ta_arena_alloc(arena, (size_t)text.len + 1u, 1);
+    if (copy == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    if (text.len != 0) {
+        ta_mem_copy(copy, text.ptr, text.len);
+    }
+    copy[text.len] = '\0';
+    *out = (ta_str){ .ptr = copy, .len = text.len };
+    return TA_OK;
+}

@@ -2,6 +2,10 @@
 
 #include "configuration.h"
 
+/*
+ * One slot per history pseudo-state: a state bitmap of `bytes` at `offset`
+ * within the history storage. An empty bitmap means never recorded.
+ */
 typedef struct {
     uint32_t offset;
     uint16_t bytes;
@@ -19,3 +23,5 @@ struct ta_history_state {
     void *storage;
     const ta_history_layout *layout;
 };
+
+uint64_t *ta_history_slot_words(const ta_history_state *history, uint32_t slot);

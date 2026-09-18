@@ -47,13 +47,15 @@ begin
   check(schema[:function] == 'ta_system_create', 'schema names the C function')
   check(schema.dig(:out, :out) == 'handle:system', 'schema describes handle outputs')
   unimplemented = discovery.fetch(:unimplemented)
-  check(unimplemented.include?('ta.system.create'), 'unimplemented core functions are listed')
+  check(unimplemented.include?('ta.actor.capture'), 'unimplemented core functions are listed')
+  check(!unimplemented.include?('ta.system.create'), 'implemented core functions are not listed')
   check(unimplemented.none? { |name| name.start_with?('codec.') }, 'codecs are never unimplemented')
   check(discovery.fetch(:adapters).include?('datamodel.jq'), 'adapters are listed')
 
   # Calling an unimplemented function validates params, then reports -32001.
-  error = rpc_error(-32_001) { host.ta.system.create(config: { allocator: { '$adapter' => 'allocator.libc' } }) }
-  check(error.data.include?('ta_system_create'), 'unimplemented error names the function')
+  system = host.ta.system.create(config: { allocator: { '$adapter' => 'allocator.libc' } }).dig(:out, :out)
+  error = rpc_error(-32_001) { host.ta.actor.capture(system: system, actor: 1) }
+  check(error.data.include?('ta_actor_capture'), 'unimplemented error names the function')
   error = rpc_error(-32_602) { host.ta.system.create(config: { allocator: { '$adapter' => 'allocator.none' } }) }
   check(error.data == 'params.config.allocator: no ta_allocator adapter named "allocator.none"',
         "adapter errors carry a path: #{error.data}")

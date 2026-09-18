@@ -4,6 +4,8 @@
 #include "datamodel.h"
 #include "history.h"
 
+/* Functions over compiled definitions, shared by the compiler and interpreter. */
+
 typedef enum {
     TA_TRANSITION_EXTERNAL,
     TA_TRANSITION_INTERNAL
@@ -225,6 +227,8 @@ typedef struct {
     ta_span32 onexit_actions;
     ta_event_name_id done_event;
     ta_done_data_id done_data;
+    /* Index into history.slots for history states, else UINT32_MAX. */
+    uint32_t history_slot;
 } ta_state_def;
 
 typedef struct {
@@ -263,6 +267,14 @@ typedef struct {
 
 struct ta_definition {
     ta_allocator allocator;
+    /* Owns every array and string below. */
+    ta_arena arena;
+    /* The system whose atoms and event names this definition uses. */
+    const ta_system *system;
+    bool registered;
+    /* ta_state_def.children ranges index this array. */
+    ta_state_id *children;
+    uint32_t child_count;
     ta_definition_id id;
     ta_atom name;
     ta_definition_identity identity;
@@ -288,9 +300,9 @@ struct ta_definition {
     uint32_t event_pattern_segment_count;
     ta_state_id *targets;
     uint32_t target_count;
-    ta_action_id *actions;
-    uint32_t action_count;
+    /* Action blocks are ta_span32 ranges of action_defs. */
     ta_action_def *action_defs;
+    uint32_t action_count;
     ta_param_def *params;
     uint32_t param_count;
     ta_data_decl *data_decls;
@@ -310,6 +322,14 @@ struct ta_definition {
     ta_datamodel_binding_mode binding_mode;
     ta_datamodel datamodel;
     void *datamodel_shared;
+    bool datamodel_prepared;
     uint32_t datamodel_instance_size;
     uint32_t datamodel_instance_alignment;
 };
+
+const ta_definition *ta_definition_lookup(const ta_system *system, ta_definition_id id);
+bool ta_definition_is_atomic(const ta_definition *definition, ta_state_id state);
+bool ta_definition_is_descendant(const ta_definition *definition, ta_state_id state, ta_state_id ancestor);
+bool ta_event_pattern_matches(const ta_definition *definition,
+                              const ta_event_pattern *pattern,
+                              ta_event_name_id event);

@@ -16,30 +16,26 @@ struct ta_system {
     ta_atom_table atoms;
     ta_event_name_table event_names;
 
+    /* Registered definitions; ta_definition_id indexes this array. */
     ta_definition **definitions;
     uint32_t definition_count;
     uint32_t definition_capacity;
 
-    ta_actor_record *actors;
-    uint32_t actor_count;
-    uint32_t actor_capacity;
-
-    ta_actor **resident;
-    uint32_t resident_count;
-    uint32_t resident_capacity;
+    /* ta_actor_slot; an actor ID is (generation << 32) | slot. */
+    ta_vec actors;
 
     ta_timer_heap timers;
 
-    ta_io_registration *io_processors;
-    uint32_t io_count;
-    uint32_t io_capacity;
-
-    ta_invoker_registration *invokers;
-    uint32_t invoker_count;
-    uint32_t invoker_capacity;
+    ta_vec io_processors; /* ta_io_registration */
+    ta_vec invokers;      /* ta_invoker_registration */
 
     ta_actor_directory directory;
     ta_external_event_router external_events;
     ta_atom scxml_io_type;
+    /* The short form "scxml" also selects the built-in processor. */
+    ta_atom scxml_io_alias;
     ta_arena scratch;
 };
+
+const ta_io *ta_system_find_io(const ta_system *system, ta_atom type);
+bool ta_system_is_scxml_io(const ta_system *system, ta_atom type);

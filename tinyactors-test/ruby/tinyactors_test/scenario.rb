@@ -283,9 +283,19 @@ module TinyactorsTest
             "#{actor} at t=#{@now}ms: expected configuration #{states.join(', ')}, got #{active.join(', ')}"
     end
 
+    # Creates the system on first use and installs the router.direct adapter,
+    # which hands external events (such as due delayed sends) straight to
+    # ta_actor_deliver. Without a router, core reports external sends as
+    # error.communication (ADR 0040).
     def system_handle
-      @system ||= core('ta_system_create',
-                       ta.system.create(config: { allocator: ALLOCATOR, initial_time: 0 })).fetch(:out)
+      @system ||= begin
+        system = core('ta_system_create',
+                      ta.system.create(config: { allocator: ALLOCATOR, initial_time: 0 })).fetch(:out)
+        router = { '$adapter' => 'router.direct', 'config' => { 'system' => system } }
+        core('ta_system_set_external_event_router',
+             ta.system.set_external_event_router(system: system, router: router))
+        system
+      end
     end
 
     # Interns a dotted event name through the public atom and event-name API.
@@ -294,7 +304,7 @@ module TinyactorsTest
         atoms = TinyactorsTest.event_atoms(event).map do |segment|
           core('ta_system_intern_atom', ta.system.intern_atom(system: system_handle, text: segment)).fetch(:out)
         end
-        core('ta_event_name_intern', ta.event.name_intern(system: system_handle, segments: atoms)).fetch(:out)
+        core('ta_event_name_intern', ta.event.name_intern(system: system_handle, segments: { atoms: atoms })).fetch(:out)
       end
     end
 

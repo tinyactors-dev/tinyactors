@@ -5,7 +5,6 @@ TinyactorsTest.scenarios 'traffic light', chart: :traffic_light do
     (light.active & %i[red green yellow flashing]).size == 1
   end
 
-  expect_failure 'core does not implement ta_system_create yet', rpc_error: -32_001, rpc_method: 'ta.system.create'
   scenario 'cycles on logical time' do
     light = spawn
     assert_configuration light, :operating, :red
@@ -24,7 +23,6 @@ TinyactorsTest.scenarios 'traffic light', chart: :traffic_light do
   # The fault arrives 10s into red and the repair 5s later, so the canceled
   # first timer would be due at t=30s: after red was re-entered at t=15s and
   # 15s before the new timer. A leaked timer turns the light green early.
-  expect_failure 'core does not implement ta_system_create yet', rpc_error: -32_001, rpc_method: 'ta.system.create'
   scenario 'repair resumes the interrupted light without stale timers' do
     light = spawn
     advance_time 10_000

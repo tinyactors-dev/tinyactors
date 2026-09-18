@@ -10,3 +10,6 @@ struct ta_arena_block {
     size_t used;
     unsigned char data[];
 };
+
+/* Copies text into the arena. An empty string yields a non-null empty ta_str. */
+ta_result ta_arena_copy_str(ta_arena *arena, ta_str text, ta_str *out);
