@@ -1,5 +1,4 @@
-#include "../src/datamodel.h"
-#include "../src/session_image.h"
+/* Embedders see only the public header; nothing under src/ may be required. */
 #include "../include/tinyactors.h"
 
 static void use_public_types(void) {
@@ -53,15 +52,15 @@ static void use_public_types(void) {
                                  .as.source = { .ptr = "child", .len = 5 } } },
     };
     ta_scxml_spec spec = { .binding = TA_SCXML_BINDING_LATE };
-    ta_fault_event_params fault_event = {
-        .context = TA_FAULT_CONTEXT_INVOKE_UNAVAILABLE,
-        .invoke_id = TA_INVOKE_ID_NONE,
-    };
     ta_invoke_report_params invoke_report = {
         .invoke_id = TA_INVOKE_ID_NONE,
         .kind = TA_INVOKE_REPORT_UNAVAILABLE,
     };
     ta_session_image *image = 0;
+    ta_arena arena = {0};
+    ta_queued_event queued = {0};
+    ta_active_invoke active = {0};
+    ta_actor_inspection inspection = { .residency = TA_ACTOR_IDLE };
 
     (void)datamodel;
     (void)directory;
@@ -82,9 +81,12 @@ static void use_public_types(void) {
     (void)actions;
     (void)invoke;
     (void)spec;
-    (void)fault_event;
     (void)invoke_report;
     (void)image;
+    (void)arena;
+    (void)queued;
+    (void)active;
+    (void)inspection;
 }
 
 int main(void) {

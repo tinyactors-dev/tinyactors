@@ -7,7 +7,8 @@ typedef struct ta_datamodel_vtable {
     /* Definition lifetime. */
     ta_result (*prepare_definition)(
         void *self,
-        const ta_definition *definition,
+        const ta_expression *expressions, /* borrowed until destroy_definition */
+        uint32_t expression_count,
         ta_allocator allocator,
         void **shared);
 

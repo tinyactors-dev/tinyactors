@@ -1,6 +1,6 @@
 # Public API intent
 
-The current `include/tinyactors.h` is a compact public skeleton. This page records intended semantics of the exposed surface, not a promise that the signatures are final.
+`include/tinyactors.h` is the complete, authored public API (ADR 0041). This page records intended semantics of the exposed surface, not a promise that the signatures are final.
 
 ## Scalar handles
 

@@ -6,7 +6,8 @@ This archive captures the C API shape discussed for a tiny in-process actor syst
 
 - `ta_` prefix throughout.
 - `#pragma once` in every header.
-- One internal header per subsystem, collected by `src/internal.h`.
+- One authored public header, `include/tinyactors.h`, in the style of `sqlite3.h`.
+- One private header per subsystem, collected by `src/internal.h`.
 - Immutable statechart definitions, actor/session instances, and explicit resumable execution.
 - Parallel state configurations are represented as sets of active atomic states, with definition-specific compact layouts.
 - Event names are structural trie IDs rather than strings; prefix matching implements SCXML event descriptor semantics efficiently.
@@ -26,8 +27,10 @@ This archive captures the C API shape discussed for a tiny in-process actor syst
 
 ## Layout
 
-- `src/*.{c,h}` — canonical implementation modules; their headers are public.
-- `include/tinyactors.h` — authored public index of `src/*.h`.
+- `include/tinyactors.h` — the complete, authored public API. Every public
+  function is declared here with `TA_API`; nothing else is public.
+- `src/*.{c,h}` — canonical implementation modules. Their headers are private:
+  they include `tinyactors.h` and add layouts and internal functions.
 - `include/tinyactors.c` — generated implementation amalgamation of `src/*.c`.
 - `tests/*.c` — compile-only checks for internal and public header use.
 
@@ -37,7 +40,12 @@ This is a header/API skeleton, not a completed implementation. It intentionally 
 
 ## Public header workflow
 
-Add a module pair to `src/`, then add its header to `include/tinyactors.h` in
-dependency order. Run `mise run amalgamate` from `tinyactors-core` to produce
-the distributable `tinyactors.c`; only that generated file is not edited by
-hand. `mise run amalgamate --check` is suitable for CI.
+Declare public types and `TA_API` functions in `include/tinyactors.h`; keep
+layouts and internal functions in the private module headers. Add a new module
+pair to `src/` and list its header in `src/internal.h` in dependency order.
+
+Run `mise run amalgamate` from `tinyactors-core` to produce the distributable
+`tinyactors.c`, in which every non-public function has internal linkage; only
+that generated file is not edited by hand. `mise run amalgamate --check` is
+suitable for CI and also rejects public prototypes without `TA_API` and private
+redeclarations of public functions. See ADR 0041.

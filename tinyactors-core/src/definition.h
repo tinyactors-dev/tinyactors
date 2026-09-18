@@ -24,37 +24,6 @@ typedef enum {
 } ta_datamodel_binding_mode;
 
 typedef enum {
-    TA_EXPRESSION_NONE = 0,
-    TA_EXPRESSION_SOURCE,
-    TA_EXPRESSION_HOST
-} ta_expression_kind;
-
-typedef struct ta_expression_host_vtable {
-    ta_result (*retain)(void *self, void *value, ta_allocator allocator, void **out);
-    void (*release)(void *self, void *value, ta_allocator allocator);
-} ta_expression_host_vtable;
-
-typedef struct {
-    void *self;
-    const ta_expression_host_vtable *v;
-    void *value;
-} ta_expression_host;
-
-/*
- * A frontend expression retained by a compiled definition. Source expressions
- * are copied by the definition compiler. Host expressions are retained and
- * released through their adapter; for example, a Node-API adapter retains a
- * napi_ref rather than a callback-scoped napi_value.
- */
-typedef struct {
-    ta_expression_kind kind;
-    union {
-        ta_str source;
-        ta_expression_host host;
-    } as;
-} ta_expression;
-
-typedef enum {
     TA_VALUE_SOURCE_NONE,
     TA_VALUE_SOURCE_EXPR,
     TA_VALUE_SOURCE_LOCATION,
@@ -253,17 +222,6 @@ typedef struct {
     ta_atom type;
     ta_bytes payload;
 } ta_extension_def;
-
-/*
- * Process-independent identity of one exact immutable definition revision.
- * `family` is the stable logical statechart family; `revision` is an opaque
- * fingerprint copied/owned by the compiled definition.  Any change that can
- * alter interpretation of a session image must produce a different revision.
- */
-typedef struct {
-    ta_definition_family family;
-    ta_bytes revision;
-} ta_definition_identity;
 
 typedef struct {
     ta_atom name;

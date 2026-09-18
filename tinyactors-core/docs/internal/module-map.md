@@ -1,8 +1,11 @@
 # Module map
 
+The public API is `include/tinyactors.h` (ADR 0041). The module headers below
+are private and hold layouts and internal functions.
+
 | Header | Responsibility |
 |---|---|
-| `types.h` | low-level scalar/layout helpers |
+| `types.h` | private base header: includes `tinyactors.h`, span/key helpers |
 | `store.h` | empty compatibility boundary; durability is not a core store API |
 | `arena.h` | transient allocation |
 | `atom.h` | ordinary string interning |

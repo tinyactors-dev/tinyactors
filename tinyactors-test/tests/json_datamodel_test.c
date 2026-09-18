@@ -5,6 +5,8 @@
 #include "allocator.h"
 #include "json_datamodel.h"
 
+#define ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
+
 static void require(bool condition, const char *message) {
     if (!condition) {
         fprintf(stderr, "json datamodel test failed: %s\n", message);
@@ -43,10 +45,6 @@ int main(void) {
         {.kind = TA_EXPRESSION_SOURCE,
          .as.source = {.ptr = ".count = .count + 1", .len = 19}},
     };
-    ta_definition definition = {
-        .expressions = expressions,
-        .expression_count = TA_ARRAY_COUNT(expressions),
-    };
     tat_json_datamodel_context context = {0};
     require(tat_json_datamodel_context_init(&context, tat_libc_allocator()) == TA_OK,
             "context initialization");
@@ -55,7 +53,9 @@ int main(void) {
     require(model.v->prepare_definition(
                 model.self,
                 &(ta_datamodel_prepare_definition_params){
-                    .definition = &definition,
+                    .expressions = expressions,
+                    .expression_count = (uint32_t)ARRAY_COUNT(expressions),
+                    .allocator = tat_libc_allocator(),
                     .shared = &shared,
                 }) == TA_OK,
             "definition preparation");
@@ -170,7 +170,7 @@ int main(void) {
     const char *invalid_targets[] = {
         "\"#_scxml_\"", "\"#_scxml_4x\"", "\"#_\"", "\"#_abc\"", "\"elsewhere\"", "7",
     };
-    for (size_t index = 0; index < TA_ARRAY_COUNT(invalid_targets); index += 1) {
+    for (size_t index = 0; index < ARRAY_COUNT(invalid_targets); index += 1) {
         require(decode_target(&context, model, shared, instance, invalid_targets[index],
                               &target) == TA_OP_ERROR,
                 invalid_targets[index]);
@@ -192,7 +192,7 @@ int main(void) {
                     .shared = shared,
                     .instance = instance,
                     .values = named,
-                    .count = TA_ARRAY_COUNT(named),
+                    .count = ARRAY_COUNT(named),
                     .out = &parameters,
                     .fault = &fault,
                 }) == TA_OP_OK,
@@ -206,7 +206,7 @@ int main(void) {
     ta_value_release(&second);
 
     model.v->destroy_instance(model.self, shared, instance);
-    model.v->destroy_definition(model.self, shared, (ta_allocator){0});
+    model.v->destroy_definition(model.self, shared, tat_libc_allocator());
     ta_value_release(&binding);
     free(instance);
     tat_json_datamodel_context_destroy(&context);

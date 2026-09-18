@@ -28,7 +28,7 @@ typedef struct {
     ta_value iteration_snapshot;
 } ta_exec_frame;
 
-typedef struct {
+struct ta_continuation {
     uint32_t pc;
     uint32_t cursor;
     uint32_t aux;
@@ -49,4 +49,4 @@ typedef struct {
     uint32_t invoke_count;
     ta_exec_frame *frames;
     uint32_t frame_count;
-} ta_continuation;
+};

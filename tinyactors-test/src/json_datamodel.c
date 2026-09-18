@@ -14,9 +14,15 @@ typedef struct {
     jv value;
 } tat_json_value;
 
+/* Per-definition state; the expression table is borrowed from the definition. */
+typedef struct {
+    const ta_expression *expressions;
+    uint32_t expression_count;
+} tat_json_shared;
+
 typedef struct {
     tat_json_datamodel_context *context;
-    const ta_definition *definition;
+    const tat_json_shared *shared;
     jv root;
 } tat_json_instance;
 
@@ -156,24 +162,23 @@ static void tat_json_fault(ta_fault *fault, int32_t code, const char *message) {
     };
 }
 
-static const ta_expression *tat_json_expression(const tat_json_instance *instance,
-                                                ta_expr_id id) {
-    if (instance == NULL || instance->definition == NULL ||
-        id >= instance->definition->expression_count) {
-        return NULL;
+/* Returns the jq source of a definition expression; ptr is null when unusable. */
+static ta_str tat_json_expression(const tat_json_instance *instance, ta_expr_id id) {
+    if (instance == NULL || instance->shared == NULL ||
+        id >= instance->shared->expression_count) {
+        return (ta_str){0};
     }
-    const ta_expression *expression = &instance->definition->expressions[id];
-    return expression->kind == TA_EXPRESSION_SOURCE ? expression : NULL;
+    const ta_expression *expression = &instance->shared->expressions[id];
+    return expression->kind == TA_EXPRESSION_SOURCE ? expression->as.source : (ta_str){0};
 }
 
-static char *tat_json_source(tat_json_datamodel_context *context,
-                             const ta_expression *expression) {
-    size_t length = expression->as.source.len;
+static char *tat_json_source(tat_json_datamodel_context *context, ta_str expression) {
+    size_t length = expression.len;
     char *source = ta_arena_alloc(&context->scratch, length + 1, _Alignof(char));
     if (source == NULL) {
         return NULL;
     }
-    memcpy(source, expression->as.source.ptr, length);
+    memcpy(source, expression.ptr, length);
     source[length] = '\0';
     return source;
 }
@@ -221,12 +226,12 @@ static ta_op_status tat_json_run_source(const char *source,
 }
 
 static ta_op_status tat_json_run(tat_json_datamodel_context *context,
-                                 const ta_expression *expression,
+                                 ta_str expression,
                                  jv input,
                                  jv arguments,
                                  jv *out,
                                  ta_fault *fault) {
-    if (expression == NULL) {
+    if (expression.ptr == NULL) {
         jv_free(input);
         jv_free(arguments);
         tat_json_fault(fault, TA_ERR_INVALID, "unknown JSON expression");
@@ -245,24 +250,41 @@ static ta_op_status tat_json_run(tat_json_datamodel_context *context,
 
 static ta_result tat_json_prepare(void *self,
                                   const ta_datamodel_prepare_definition_params *params) {
-    if (self == NULL || params == NULL || params->definition == NULL ||
-        params->shared == NULL) {
+    if (self == NULL || params == NULL || params->shared == NULL ||
+        (params->expressions == NULL && params->expression_count != 0) ||
+        params->allocator.v == NULL) {
         return TA_ERR_INVALID;
     }
-    for (uint32_t index = 0; index < params->definition->expression_count; index += 1) {
-        ta_expression_kind kind = params->definition->expressions[index].kind;
+    for (uint32_t index = 0; index < params->expression_count; index += 1) {
+        ta_expression_kind kind = params->expressions[index].kind;
         if (kind != TA_EXPRESSION_NONE && kind != TA_EXPRESSION_SOURCE) {
             return TA_ERR_UNSUPPORTED;
         }
     }
-    *params->shared = (void *)params->definition;
+    tat_json_shared *shared = params->allocator.v->alloc(
+        params->allocator.self, sizeof(*shared), _Alignof(tat_json_shared));
+    if (shared == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    *shared = (tat_json_shared){
+        .expressions = params->expressions,
+        .expression_count = params->expression_count,
+    };
+    *params->shared = shared;
     return TA_OK;
 }
 
 static void tat_json_destroy_definition(void *self, void *shared, ta_allocator allocator) {
     (void)self;
-    (void)shared;
-    (void)allocator;
+    if (shared == NULL || allocator.v == NULL) {
+        return;
+    }
+    allocator.v->free(allocator.self,
+                      &(ta_allocator_free_params){
+                          .ptr = shared,
+                          .size = sizeof(tat_json_shared),
+                          .alignment = _Alignof(tat_json_shared),
+                      });
 }
 
 static uint32_t tat_json_instance_size(void *self, void *shared) {
@@ -284,7 +306,7 @@ static ta_result tat_json_init(void *self, const ta_datamodel_init_instance_para
     }
     tat_json_instance *instance = params->instance;
     instance->context = self;
-    instance->definition = params->shared;
+    instance->shared = params->shared;
     if (params->binding == NULL) {
         instance->root = jv_object();
         return TA_OK;
@@ -354,19 +376,19 @@ static ta_op_status tat_json_assign(void *self,
                                     const ta_datamodel_assign_params *params) {
     (void)self;
     tat_json_instance *instance = params->instance;
-    const ta_expression *location = tat_json_expression(instance, params->location);
+    ta_str location = tat_json_expression(instance, params->location);
     jv assigned;
-    if (location == NULL || !tat_json_unwrap(params->value, &assigned)) {
+    if (location.ptr == NULL || !tat_json_unwrap(params->value, &assigned)) {
         tat_json_fault(params->fault, TA_ERR_INVALID, "invalid JSON assignment");
         return TA_OP_ERROR;
     }
-    if (location->as.source.len > INT_MAX) {
+    if (location.len > INT_MAX) {
         jv_free(assigned);
         tat_json_fault(params->fault, TA_ERR_INVALID, "JSON location is too long");
         return TA_OP_ERROR;
     }
     ta_arena_reset(&instance->context->scratch);
-    size_t program_size = (size_t)location->as.source.len + sizeof("() = $value");
+    size_t program_size = (size_t)location.len + sizeof("() = $value");
     char *program = ta_arena_alloc(&instance->context->scratch, program_size,
                                    _Alignof(char));
     if (program == NULL) {
@@ -374,8 +396,8 @@ static ta_op_status tat_json_assign(void *self,
         tat_json_fault(params->fault, TA_ERR_NOMEM, "could not stage JSON assignment");
         return TA_OP_ERROR;
     }
-    snprintf(program, program_size, "(%.*s) = $value", (int)location->as.source.len,
-             location->as.source.ptr);
+    snprintf(program, program_size, "(%.*s) = $value", (int)location.len,
+             location.ptr);
     jv arguments = jv_object_set(jv_object(), jv_string("value"), assigned);
     jv root;
     ta_op_status status = tat_json_run_source(program, jv_copy(instance->root),

@@ -8,7 +8,13 @@ A data-model implementation has two levels of state.
 
 ## Prepared definition state
 
-`prepare_definition()` may compile or resolve all definition-level data-model artifacts once:
+`prepare_definition()` receives the definition's expression table, indexed by
+`ta_expr_id`, not the compiled definition, which is opaque (ADR 0041). The
+table is borrowed until `destroy_definition()` for the same `shared` state, so
+an adapter may keep the pointer. Everything else the adapter learns about the
+chart arrives through its semantic operations (ADR 0031).
+
+It may compile or resolve all definition-level data-model artifacts once:
 
 - condition expressions;
 - value expressions;

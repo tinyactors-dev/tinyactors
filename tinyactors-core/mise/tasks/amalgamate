@@ -1,23 +1,91 @@
 #!/usr/bin/env ruby
 #MISE description="Generate or verify the Tinyactors C amalgamation"
 
+# include/tinyactors.h is the authored public API. src/*.h are private module
+# headers; src/internal.h lists them in dependency order. The amalgamation
+# inlines the private headers and all module sources after the public header,
+# marks definitions of public functions TA_API and gives every other defined
+# function internal linkage through TA_PRIVATE (static by default).
+
 require 'pathname'
 
 root = Pathname.new(__dir__).join('../..').expand_path
 include_dir = root.join('include')
-index = include_dir.join('tinyactors.h')
-modules = index.read.scan(%r{^#include "\.\./src/(\w+)\.h"$}).flatten
-abort "#{index} does not list any source modules" if modules.empty?
+public_header = include_dir.join('tinyactors.h')
+umbrella = root.join('src/internal.h')
 
-def amalgamate(paths)
-  paths.map do |path|
-    raise "missing module: #{path}" unless path.file?
-    path.read.gsub(/^#pragma once\n/, '').gsub(/^#include "[^\n]+"\n/, '')
-  end.join("\n")
+modules = umbrella.read.scan(/^#include "(\w+)\.h"$/).flatten
+abort "#{umbrella} does not list any source modules" if modules.empty?
+
+# A top-level function declaration or definition: return type at column 0,
+# followed by the ta_ name and its parameter list.
+RETURN_TYPE = /(?!typedef\b|static\b|struct\b|return\b|TA_API\b|TA_PRIVATE\b)(?:const\s+)?[A-Za-z_]\w*(?:\s*\*+\s*|\s+)/
+PROTOTYPE = /^(#{RETURN_TYPE})(ta_\w+)\s*\([^;{]*\)\s*;/m
+DEFINITION = /^(#{RETURN_TYPE})(ta_\w+)(\s*\([^;{]*\)\s*\{)/m
+
+errors = []
+
+api = public_header.read
+public_functions = api.scan(/^TA_API\b[^;{(]*?\b(ta_\w+)\s*\(/).flatten
+api.scan(PROTOTYPE) { errors << "#{public_header.relative_path_from(root)}: #{$2} is declared without TA_API" }
+
+def strip(text)
+  text.gsub(/^#pragma once\n/, '').gsub(/^#include "[^\n]+"\n/, '')
 end
 
-sources = amalgamate(modules.map { |name| root.join('src', "#{name}.c") })
-implementation = "/* GENERATED FILE. Module order is defined by include/tinyactors.h. */\n#include \"tinyactors.h\"\n\n#{sources}\n"
+def read_module(root, name, extension)
+  path = root.join('src', "#{name}.#{extension}")
+  raise "missing module: #{path}" unless path.file?
+  [path, strip(path.read)]
+end
+
+headers = modules.map { |name| read_module(root, name, 'h') }
+sources = modules.map { |name| read_module(root, name, 'c') }
+
+headers.each do |path, text|
+  text.scan(PROTOTYPE) do
+    next unless public_functions.include?($2)
+
+    errors << "#{path.relative_path_from(root)}: #{$2} is public; declare it only in include/tinyactors.h"
+  end
+end
+
+defined = sources.flat_map { |_path, text| text.scan(DEFINITION).map { |match| match[1] } }
+private_functions = defined - public_functions
+
+sources = sources.map do |path, text|
+  [path, text.gsub(DEFINITION) { "#{public_functions.include?($2) ? 'TA_API' : 'TA_PRIVATE'} #{$1}#{$2}#{$3}" }]
+end
+headers = headers.map do |path, text|
+  [path, text.gsub(PROTOTYPE) { |match| private_functions.include?($2) ? "TA_PRIVATE #{match}" : match }.gsub(/^static inline\b/, "TA_PRIVATE inline")]
+end
+
+unless errors.empty?
+  errors.each { |error| warn error }
+  exit 1
+end
+
+implementation = <<~C + (headers + sources).map(&:last).join("\n")
+  /*
+   * GENERATED FILE. Do not edit; run `mise run amalgamate` in tinyactors-core.
+   * The public API is include/tinyactors.h. Private module headers and sources
+   * follow in the order listed by src/internal.h.
+   */
+  #include "tinyactors.h"
+
+  /*
+   * Functions not declared in tinyactors.h are private to this file. Private
+   * helpers may be unused in a given build, so they do not warn.
+   */
+  #ifndef TA_PRIVATE
+  #if defined(__GNUC__) || defined(__clang__)
+  #define TA_PRIVATE static __attribute__((unused))
+  #else
+  #define TA_PRIVATE static
+  #endif
+  #endif
+
+C
 outputs = { include_dir.join('tinyactors.c') => implementation }
 
 if ARGV == ['--check']
