@@ -43,7 +43,8 @@ static const char *rpc_error_message(int code) {
         case RPC_INVALID_PARAMS:
             return "Invalid params";
         default:
-            return "Internal error";
+            /* -32099..-32000 are implementation-defined server errors. */
+            return code >= -32099 && code <= -32000 ? "Server error" : "Internal error";
     }
 }
 

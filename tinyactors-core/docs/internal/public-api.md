@@ -61,6 +61,8 @@ The standard SCXML processor atom cannot be replaced with
 
 `ta_actor_spawn` creates a session from an exact definition. `datamodel_binding` is a host-owned value passed to the selected data-model adapter; Tinyactors does not copy its object graph. A null address creates an ephemeral actor; a supplied logical address is claimed through the host directory.
 
+Bootstrap follows SCXML `interpret()`: declare all data, apply early initializers, run the definition's top-level `<script>` if any, then take the root initial transition. Reconstruction and `ta_actor_load` restore a bootstrapped session and never repeat these steps.
+
 An optional `parent` marks the actor as an invoked child. Normal terminal
 completion then becomes `done.invoke.<id>` in the parent's external-event flow.
 
@@ -94,7 +96,9 @@ clones its optional final data. For an invoked child,
 not be accepted while the parent was busy. Explicit destruction is not normal
 completion and never generates that event.
 
-`ta_actor_inspect` returns a read-only operational view of one resident interpreter. `ta_system_visit_actors` enumerates resident interpreter instances. The data-model root remains a host value supplied by the adapter.
+`ta_actor_inspect` returns a read-only operational view of one resident interpreter: identity, definition, residency, whether a macrostep is paused (and its external event), internal queue, invocations, completion, counts of active states and delayed sends, and the data-model root. `ta_system_visit_actors` enumerates resident interpreter instances. The data-model root remains a host value supplied by the adapter.
+
+`ta_actor_active_states`, `ta_actor_history`, and `ta_actor_delayed_sends` list the active configuration (ancestors included, document order), one history pseudo-state's recorded states, and pending delayed sends. They fill caller-supplied arrays and always report the total count; a too-small array yields `TA_ERR_NOMEM` without writing, so a zero capacity is a size query. `ta_definition_state` resolves a state ID of a registered definition to its author ID, parent, and kind.
 
 `ta_actor_capture` creates an opaque in-memory `ta_session_image`. `ta_actor_reconstruct` recreates that same interpreter session from the image, the exact definition revision, and a host-supplied data-model binding. Opaque invoker service handles are runtime-only: reconstruction retires each captured active invocation and appends `error.communication.invoke.<id>.unavailable` after the image's existing internal events. Neither operation defines a persistence wire format.
 

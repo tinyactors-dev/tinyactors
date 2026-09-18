@@ -1,0 +1,112 @@
+# frozen_string_literal: true
+
+# Drives the scenario runner against a scripted fake host. The fake answers
+# the generated ta.* methods with canned results, while argument names are
+# still checked against the real host's rpc.discover schemas. This covers the
+# runner's use of the bindings before core implements the functions.
+
+require 'pathname'
+require_relative 'tinyactors_test'
+
+root = Pathname.new(__dir__).join('..').expand_path
+load root.join('ruby/charts/traffic_light.rb').to_s
+
+def check(condition, message)
+  raise "runner self-test failed: #{message}" unless condition
+end
+
+real = TinyactorsTest::Driver.new(root.join('build/tinyactors-test'))
+discovery = begin
+  real.call('rpc.discover')
+ensure
+  real.close
+end
+
+# Answers like a host whose core implements the public API.
+class FakeHost
+  STATE_IDS = %w[operating red].freeze
+
+  attr_reader :calls
+  attr_accessor :fail_method
+
+  def initialize(discovery)
+    @proxy = TinyactorsTest::Proxy.new(self, discovery)
+    @calls = []
+    @atoms = 0
+    @resumes = 0
+  end
+
+  def ta = @proxy.ta
+
+  def call(method, params = nil)
+    @calls << [method, params]
+    return { result: 'err_invalid', out: {} } if method == fail_method
+
+    case method
+    when 'ta.system.create' then ok(out: { '$handle': 'system:1' })
+    when 'ta.definition.compile_spec' then ok(out: { '$handle': 'definition:2' })
+    when 'ta.system.register_definition' then ok(out: 0)
+    when 'ta.actor.spawn' then ok(out: 5)
+    when 'ta.actor.resume'
+      # Every other resume leaves the macrostep paused once.
+      @resumes += 1
+      ok(status: @resumes.odd? ? 'paused' : 'stable')
+    when 'ta.system.dispatch_due' then ok(dispatched: 0, more_due: false)
+    when 'ta.system.set_time', 'ta.actor.deliver' then ok
+    when 'ta.system.intern_atom' then ok(out: @atoms += 1)
+    when 'ta.event.name_intern' then ok(out: 9)
+    when 'ta.actor.inspect'
+      ok(out: { active_state_count: 2, delayed_send_count: 1,
+                has_datamodel_root: true, datamodel_root: { cycles: 1 } })
+    when 'ta.actor.active_states'
+      params[:capacity] == 2 ? ok(states: [0, 1], count: 2) : { result: 'err_nomem', out: { count: 2 } }
+    when 'ta.definition.state' then ok(out: { id: STATE_IDS.fetch(params[:state]), parent: 0, kind: 'atomic' })
+    when 'json.transform' then [params[:input].fetch(:cycles)]
+    else raise "fake host: unexpected #{method}"
+    end
+  end
+
+  private
+
+  def ok(**out) = { result: 'ok', out: out }
+end
+
+group = TinyactorsTest::Group.new('runner', chart: :traffic_light)
+host = FakeHost.new(discovery)
+context = TinyactorsTest::Context.new(host, group, TinyactorsTest.charts)
+context.instance_exec do
+  light = spawn
+  assert_configuration light, :operating, :red
+  advance_time 10
+  light.deliver 'fault.minor', data: { reason: 'test' }
+  assert_equal 1, light.data('.cycles')
+  assert_equal 1, light.delayed_sends
+end
+
+methods = host.calls.map(&:first)
+check(methods.first(3) == %w[ta.system.create ta.definition.compile_spec ta.system.register_definition],
+      "setup sequence: #{methods.first(3)}")
+compile = host.calls.find { |method, _| method == 'ta.definition.compile_spec' }.last
+check(compile[:spec][:datamodel] == 'jq', 'the chart spec carries its SCXML datamodel')
+check(compile[:datamodel] == { '$adapter' => 'datamodel.jq' }, 'the jq adapter implements it')
+register = host.calls.find { |method, _| method == 'ta.system.register_definition' }.last
+check(register[:definition] == { '$handle': 'definition:2' }, 'the compiled handle is registered')
+check(methods.count('ta.system.intern_atom') == 2, 'each event segment is interned once')
+deliver = host.calls.find { |method, _| method == 'ta.actor.deliver' }.last
+check(deliver[:event] == { name: 9, type: 'external', invoke_id: TinyactorsTest::INVOKE_ID_NONE,
+                           data: { reason: 'test' } }, "deliver event: #{deliver[:event]}")
+check(methods.count('ta.actor.resume') >= 2 * methods.count('ta.system.dispatch_due'),
+      'paused macrosteps are resumed until stable')
+check(methods.count('ta.definition.state') == 2, 'state names are resolved once per state')
+
+# A non-OK core result fails the step with the function and result.
+failing = FakeHost.new(discovery)
+failing.fail_method = 'ta.actor.spawn'
+begin
+  TinyactorsTest::Context.new(failing, group, TinyactorsTest.charts).instance_exec { spawn }
+  raise 'runner self-test failed: non-OK result was ignored'
+rescue TinyactorsTest::CoreResultError => e
+  check(e.message == 'ta_actor_spawn returned err_invalid', e.message)
+end
+
+puts 'tinyactors-test runner self-test passed'

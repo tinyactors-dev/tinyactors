@@ -11,10 +11,40 @@ adapters, measurements, and calls into the production API.
 
 `rpc.h` and `rpc.c` implement reusable JSON-RPC parsing, dispatch, responses,
 errors, and notifications. `server.h` and `server.c` contain the
-`tinyactors-test` lifecycle and host-specific method set on top of those
-capabilities. The host method set is a libjq `jv` object whose keys are RPC
-method names and whose values select native handlers; discovery is derived
-from the same table.
+`tinyactors-test` lifecycle and the hand-written host methods. The method table
+merges those `{name, handler, schema}` entries with the generated ones; a libjq
+`jv` object maps method names to table entries, and discovery is derived from
+the same table.
+
+## Generated bindings
+
+The host does not bind the Tinyactors C API by hand. The pipeline is:
+
+```text
+tinyactors-core/include/tinyactors.h
+  -> mise run api        (core: clang JSON AST + api/annotations.rb)
+  -> tinyactors-core/include/tinyactors.api.json   (checked in)
+  -> mise run bindings   (this project: mise/tasks/bindings + bindings.rb)
+  -> build/gen/ta_rpc.{c,h}                        (generated, not checked in)
+```
+
+`mise run build` runs both steps. The generator emits a JSON decoder and
+encoder for every public type, a `codec.roundtrip.<type>` method per struct,
+and one `ta.<domain>.<rest>` method per public function. A function that core
+does not implement yet is still bound: its method validates params and then
+answers error -32001, and discovery lists it under `unimplemented`.
+
+`bindings.rb` is the binding policy. Every public function and type must be
+generated, overridden by hand, or skipped with a reason; otherwise the
+generator fails, so new core API cannot silently go unbound. Hand-written
+parts live in `src/binding.{h,c}` (request arena, handle table, primitive
+codecs, and the `ta_str`, `ta_bytes`, `ta_value`, and `ta_expression`
+overrides) and `src/adapters.c` (the `$adapter` registry). The generator also
+writes `build/gen/coverage.json` with the bound, skipped, and unimplemented
+counts.
+
+See `docs/protocol.md` for method naming, result shapes, value encoding,
+handles, and adapters.
 
 The host includes a jq-backed JSON data model. Source expressions and scripts
 are jq filters over the actor's JSON root. A condition uses jq truthiness, an
@@ -35,16 +65,20 @@ mise run build
 mise run test
 ```
 
-The initial protocol methods are:
+The hand-written host methods are:
 
 - `rpc.discover`
 - `system.ping`
 - `json.transform`
 - `metrics.snapshot`
 - `host.shutdown`
+- `handle.fixture`
 
-Actor and definition methods will be added as their production implementations
-become executable.
+Every other method is generated (see above). From Ruby,
+`driver.ta.actor.spawn(...)` and `driver.codec.roundtrip.ta_scxml_spec(value: ...)`
+call methods through a proxy built from `rpc.discover`, which rejects unknown or
+missing arguments before sending. `ruby/bindings_test.rb` covers discovery,
+codecs, 64-bit ID encoding, handles, and the unimplemented list.
 
 See `docs/protocol.md` for framing, lifecycle, and extension rules.
 
@@ -57,7 +91,7 @@ in `ruby/charts` and scenarios in `ruby/scenarios`:
 TinyactorsTest.scenarios 'traffic light', chart: :traffic_light do
   invariant('exactly one light is on') { |light| (light.active & %i[red green yellow]).size == 1 }
 
-  expect_failure 'host has no definition or actor methods yet', rpc_error: -32601
+  expect_failure 'core does not implement ta_system_create yet', rpc_error: -32_001, rpc_method: 'ta.system.create'
   scenario 'cycles on logical time' do
     light = spawn
     advance_time 30_000
@@ -66,8 +100,10 @@ TinyactorsTest.scenarios 'traffic light', chart: :traffic_light do
 end
 ```
 
-Each scenario runs against a fresh host process. The steps are `spawn`,
-`advance_time` (in logical milliseconds), and `actor.deliver`. The assertions
+Each scenario runs against a fresh host process and drives the generated
+`ta.*` bindings of the public C API (see "Scenario runner" in
+`docs/protocol.md`). The steps are `spawn`, `advance_time` (in logical
+milliseconds), and `actor.deliver`. The assertions
 are `assert`, `assert_equal`, `assert_active`, `refute_active`, and
 `assert_configuration`. Invariants are checked after every step.
 
@@ -91,7 +127,8 @@ mise run scenarios -n stale        # scenarios whose "group: name" matches
 ```
 
 `ruby/selftest.rb` verifies the DSL's outcome classification against the live
-host.
+host. `ruby/runner_selftest.rb` runs the steps against a scripted fake host
+whose answers stand in for core functions that are not implemented yet.
 
 ## Vendored dependency
 

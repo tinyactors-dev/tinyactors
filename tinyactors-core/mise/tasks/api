@@ -1,0 +1,354 @@
+#!/usr/bin/env ruby
+#MISE description="Extract or verify the machine-readable public API (include/tinyactors.api.json)"
+
+# Parses include/tinyactors.h with clang's JSON AST dump, normalizes it into a
+# small IR of our own, applies naming conventions and api/annotations.rb, and
+# writes include/tinyactors.api.json. See docs/internal/api-ir.md.
+
+require 'json'
+require 'open3'
+require 'pathname'
+require 'shellwords'
+require_relative '../lib/c_api'
+
+ROOT = Pathname.new(__dir__).join('../..').expand_path
+HEADER = ROOT.join('include/tinyactors.h')
+OUTPUT = ROOT.join('include/tinyactors.api.json')
+require ROOT.join('api/annotations').to_s
+NOTES = TinyactorsApiAnnotations::ANNOTATIONS
+
+compiler = Shellwords.split(ENV.fetch('CC', 'cc'))
+ast_json, errors, status = Open3.capture3(*compiler, '-xc', '-std=c11', '-Xclang', '-ast-dump=json',
+                                          '-fsyntax-only', HEADER.to_s)
+abort "clang could not parse #{HEADER}:\n#{errors}" unless status.success?
+AST = JSON.parse(ast_json)
+
+INDEX = {}
+index = lambda do |node|
+  INDEX[node['id']] = node if node['id']
+  (node['inner'] || []).each { |child| index.call(child) }
+end
+index.call(AST)
+
+BUILTINS = %w[void char bool int unsigned\ char int32_t uint8_t uint16_t uint32_t uint64_t int64_t size_t].freeze
+
+# Parses a clang qualType spelling into an IR type.
+def parse_type(spelling)
+  spelling = spelling.strip
+  if (match = spelling.match(/\A(.+?)\s*\(\*\)\((.*)\)\z/))
+    params = match[2].empty? ? [] : match[2].split(/,\s*/).map { |param| parse_type(param) }
+    return { 'function' => { 'returns' => parse_type(match[1]), 'params' => params } }
+  end
+  if spelling.end_with?('*')
+    inner = spelling.delete_suffix('*').strip
+    inner = inner.delete_suffix(' const').strip
+    const = inner.start_with?('const ')
+    inner = inner.delete_prefix('const ').strip
+    return { 'pointer' => parse_type(inner), 'const' => const }
+  end
+  spelling = spelling.delete_prefix('const ').sub(/\A(struct|enum|union) /, '')
+  return { 'builtin' => spelling } if BUILTINS.include?(spelling)
+  return { 'type' => spelling } if spelling.start_with?('ta_')
+
+  raise "unsupported type spelling: #{spelling.inspect}"
+end
+
+def first_value(node)
+  return node['value'] if node.key?('value')
+
+  (node['inner'] || []).each do |child|
+    value = first_value(child)
+    return value if value
+  end
+  nil
+end
+
+def enum_constants(decl)
+  value = -1
+  (decl['inner'] || []).select { |child| child['kind'] == 'EnumConstantDecl' }.map do |constant|
+    explicit = first_value(constant)
+    value = explicit ? Integer(explicit) : value + 1
+    { 'name' => constant['name'], 'value' => value }
+  end
+end
+
+# Longest common prefix of the constant names, cut at an underscore.
+def enum_prefix(names)
+  return '' if names.empty?
+
+  prefix = names.reduce do |common, name|
+    common = common[0, common.size - 1] until name.start_with?(common)
+    common
+  end
+  prefix = prefix[0..prefix.rindex('_')] if prefix.include?('_')
+  prefix = prefix[0..prefix[0...-1].rindex('_')] if names.include?(prefix.delete_suffix('_'))
+  prefix
+end
+
+def json_names(constants, prefix)
+  constants.map { |constant| constant.merge('json' => constant['name'].delete_prefix(prefix).downcase) }
+end
+
+def record(decl)
+  inner = decl['inner'] || []
+  fields = []
+  inner.each_with_index do |child, position|
+    next unless child['kind'] == 'FieldDecl'
+
+    spelling = child.dig('type', 'qualType')
+    type = if spelling.match?(/\((unnamed|anonymous) (struct|union) at /)
+             nested = inner[0...position].reverse.find { |node| node['kind'] == 'RecordDecl' }
+             { 'record' => record(nested) }
+           else
+             parse_type(spelling)
+           end
+    fields << { 'name' => child['name'], 'type' => type }
+  end
+  { 'kind' => decl['tagUsed'], 'fields' => fields }
+end
+
+types = {}
+constants = []
+functions = []
+tag_names = {}
+
+AST['inner'].each do |decl|
+  case decl['kind']
+  when 'RecordDecl'
+    next unless decl['name']&.start_with?('ta_') && decl['completeDefinition']
+
+    tag_names[decl['name']] = record(decl)
+  when 'EnumDecl'
+    next if decl['name'] && !decl['name'].empty?
+
+    list = enum_constants(decl)
+    next unless list.any? { |constant| constant['name'].start_with?('TA_') }
+
+    typedef = NOTES[:enum_constants].key(list.first['name'])
+    list.each { |constant| constants << constant.merge('enum' => typedef) } unless typedef
+    if typedef
+      underlying = types.dig(typedef, 'type')
+      types[typedef] = { 'kind' => 'enum', 'constants' => json_names(list, 'TA_') }
+      types[typedef]['underlying'] = underlying if underlying
+    end
+  when 'TypedefDecl'
+    name = decl['name']
+    next unless name.start_with?('ta_')
+    next if types.key?(name)
+
+    elaborated = decl['inner']&.first
+    owned = elaborated && elaborated['ownedTagDecl']
+    referenced = elaborated&.dig('inner', 0, 'decl')
+    target = referenced && INDEX[referenced['id']]
+    target = INDEX[owned['id']] if target.nil? && owned
+    if target && target['kind'] == 'EnumDecl'
+      list = enum_constants(target)
+      prefix = enum_prefix(list.map { |constant| constant['name'] })
+      types[name] = { 'kind' => 'enum', 'constants' => json_names(list, prefix) }
+    elsif target && target['kind'] == 'RecordDecl'
+      tag = target['name'].to_s
+      complete = target['completeDefinition'] ? target : nil
+      complete ||= AST['inner'].find do |other|
+        other['kind'] == 'RecordDecl' && other['name'] == tag && other['completeDefinition']
+      end
+      if complete
+        types[name] = { 'kind' => 'struct' }.merge(record(complete).slice('fields'))
+        types[name]['kind'] = 'union' if complete['tagUsed'] == 'union'
+      else
+        types[name] = { 'kind' => 'opaque' }
+      end
+    else
+      types[name] = { 'kind' => 'alias', 'type' => parse_type(decl.dig('type', 'qualType')) }
+    end
+  when 'FunctionDecl'
+    next unless decl['name'].start_with?('ta_')
+
+    params = (decl['inner'] || []).select { |child| child['kind'] == 'ParmVarDecl' }.map do |param|
+      { 'name' => param['name'], 'type' => parse_type(param.dig('type', 'qualType')) }
+    end
+    returns = parse_type(decl.dig('type', 'qualType').sub(/\s*\(.*\z/m, ''))
+    entry = { 'name' => decl['name'], 'returns' => returns, 'params' => params }
+    entry['static_inline'] = true if decl['storageClass'] == 'static' && decl['inline']
+    functions << entry
+  end
+end
+
+# Tagged structs defined without a typedef of the same name (struct ta_x {...}).
+tag_names.each { |name, body| types[name] ||= { 'kind' => body['kind'] }.merge(body.slice('fields')) }
+
+# Simple object-like macros.
+MACRO_VALUES = { 'UINT32_MAX' => 4_294_967_295, 'UINT64_MAX' => 18_446_744_073_709_551_615 }.freeze
+HEADER.read.scan(/^#define (TA_\w+)[ \t]+(\S[^\n]*)$/).each do |name, body|
+  value = MACRO_VALUES[body.strip] || (Integer(body.strip.delete_suffix('u')) rescue nil)
+  constants << { 'name' => name, 'value' => value, 'macro' => true } unless value.nil?
+end
+
+# ---------------------------------------------------------------------------
+# Semantics: conventions first, then annotations.
+
+def named(type) = type['type']
+def pointer?(type) = type.key?('pointer')
+
+def resolve_alias(types, type)
+  type = types.dig(type['type'], 'type') while type['type'] && types.dig(type['type'], 'kind') == 'alias'
+  type
+end
+
+def vtable_or_function?(types, type)
+  type = resolve_alias(types, type)
+  return true if type.key?('function')
+  return false unless pointer?(type)
+
+  target = resolve_alias(types, type['pointer'])
+  target.key?('function') || target['type'].to_s.end_with?('_vtable')
+end
+
+opaque = types.select { |_, body| body['kind'] == 'opaque' }.keys
+opaque.each do |name|
+  borrowed = NOTES[:borrowed].include?(name)
+  types[name]['ownership'] = borrowed ? 'borrowed' : 'handle'
+  types[name]['handle'] = name.delete_prefix('ta_') unless borrowed
+end
+
+types.each do |name, body|
+  next unless body['kind'] == 'struct'
+
+  fields = body['fields']
+  names = fields.map { |field| field['name'] }
+  if name == 'ta_str'
+    body['semantic'] = 'string'
+  elsif name == 'ta_bytes'
+    body['semantic'] = 'bytes'
+  elsif names.first == 'self' && fields.first['type'] == { 'pointer' => { 'builtin' => 'void' }, 'const' => false } &&
+        fields.drop(1).any? { |field| vtable_or_function?(types, field['type']) }
+    body['semantic'] = 'adapter'
+  elsif !fields.empty? && fields.all? { |field| field['type'].key?('function') }
+    body['semantic'] = 'vtable'
+  end
+  body['zero_is_absent'] = true if name.start_with?('ta_scxml_')
+
+  kind_field = fields.find { |field| field['name'] == 'kind' }
+  as_field = fields.find { |field| field['name'] == 'as' && field.dig('type', 'record', 'kind') == 'union' }
+  if kind_field && as_field
+    enum_name = kind_field['type']['type']
+    members = as_field['type']['record']['fields'].map { |field| field['name'] }
+    overrides = NOTES[:union_members].fetch(name, {})
+    mapping = types.fetch(enum_name)['constants'].to_h do |constant|
+      member = overrides[constant['name']] || constant['json']
+      [constant['name'], members.include?(member) ? member : nil]
+    end
+    unmapped = members - mapping.values
+    raise "#{name}: union members #{unmapped.join(', ')} have no #{enum_name} constant" unless unmapped.empty?
+
+    body['tagged_union'] = { 'tag' => 'kind', 'union' => 'as', 'enum' => enum_name, 'members' => mapping }
+  end
+
+  fields.each_with_index do |field, position|
+    path = "#{name}.#{field['name']}"
+    field['release_when'] = NOTES[:owned_outputs][path] if NOTES[:owned_outputs].key?(path)
+  end
+end
+
+# Pointer shape and data direction for a struct field or function parameter.
+def classify(types, owner, entry, sibling_names, next_name)
+  type = entry['type']
+  return entry['role'] = 'in' unless pointer?(type)
+
+  path = "#{owner}.#{entry['name']}"
+  target = type['pointer']
+  entry['role'] = type['const'] ? 'in' : 'out'
+  if NOTES[:buffers].key?(path)
+    entry['role'] = 'out'
+    entry['shape'] = 'buffer'
+    entry['buffer'] = NOTES[:buffers][path].transform_keys(&:to_s)
+  elsif target.key?('function')
+    entry['role'] = 'in'
+    entry['shape'] = 'function'
+  elsif target['builtin'] == 'void'
+    entry['shape'] = 'raw'
+    entry['role'] = 'in'
+  elsif pointer?(target) && (inner = named(target['pointer'])) && types.dig(inner, 'kind') == 'opaque'
+    entry['shape'] = 'handle_out'
+    entry['role'] = 'out'
+  elsif pointer?(target) && target['pointer']['builtin'] == 'void'
+    entry['shape'] = 'raw'
+  elsif named(target) && types.dig(named(target), 'kind') == 'opaque'
+    entry['shape'] = types.dig(named(target), 'ownership') == 'handle' ? 'handle' : 'borrowed'
+    entry['role'] = 'in'
+  elsif target['builtin'] == 'char'
+    entry['shape'] = 'cstring'
+  elsif next_name && (next_name == 'count' || next_name.end_with?('_count')) && type['const']
+    entry['shape'] = 'counted'
+    entry['count'] = next_name
+  elsif owner.start_with?('ta_scxml_') && type['const'] && !NOTES[:single].include?(path)
+    entry['shape'] = 'terminated'
+  else
+    entry['shape'] = 'single'
+  end
+  entry['role'] = 'in' if entry['shape'] == 'handle'
+  entry
+end
+
+walk_fields = lambda do |owner, fields|
+  fields.each_with_index do |field, position|
+    classify(types, owner, field, fields.map { |each| each['name'] }, fields[position + 1]&.dig('name'))
+    walk_fields.call(owner, field['type']['record']['fields']) if field['type'].key?('record')
+  end
+end
+types.each { |name, body| walk_fields.call(name, body['fields']) if body['fields'] }
+
+# Count fields of counted lists are implied by the list and are not inputs.
+types.each_value do |body|
+  next unless body['fields']
+
+  body['fields'].each do |field|
+    next unless field['shape'] == 'counted'
+
+    counter = body['fields'].find { |each| each['name'] == field['count'] }
+    counter['count_of'] = field['name']
+  end
+end
+
+implemented = CApi.defined_functions(ROOT)
+public_names = CApi.public_functions(HEADER.read)
+functions.each do |function|
+  names = function['params'].map { |param| param['name'] }
+  function['params'].each_with_index do |param, position|
+    classify(types, function['name'], param, names, function['params'][position + 1]&.dig('name'))
+    consumed = NOTES[:consumes]["#{function['name']}.#{param['name']}"]
+    param['consumed_on'] = consumed if consumed
+  end
+  function['public'] = public_names.include?(function['name'])
+  function['implemented'] = implemented.include?(function['name']) || function['static_inline'] == true
+  # ta_<type>_destroy(ta_<type> *) retires that handle.
+  owner = function['name'].delete_suffix('_destroy')
+  retired = function['params'].find do |param|
+    param['shape'] == 'handle' && param.dig('type', 'pointer', 'type') == owner
+  end
+  function['retires'] = retired['name'] if function['name'].end_with?('_destroy') && retired
+end
+
+unknown = functions.reject { |function| function['public'] || function['static_inline'] }
+abort "declared without TA_API: #{unknown.map { |function| function['name'] }.join(', ')}" unless unknown.empty?
+
+ir = {
+  'format' => 'tinyactors-api/1',
+  'header' => 'include/tinyactors.h',
+  'constants' => constants,
+  'types' => types.sort.to_h,
+  'functions' => functions
+}
+text = "#{JSON.pretty_generate(ir)}\n"
+
+if ARGV == ['--check']
+  abort "#{OUTPUT} is out of date; run mise run api" unless OUTPUT.file? && OUTPUT.read == text
+  puts 'Tinyactors API description is current.'
+  exit
+end
+abort 'usage: mise run api [--check]' unless ARGV.empty?
+if OUTPUT.file? && OUTPUT.read == text
+  puts "#{OUTPUT.relative_path_from(ROOT)} unchanged"
+  exit
+end
+OUTPUT.write(text)
+puts "generated #{OUTPUT.relative_path_from(ROOT)} (#{types.size} types, #{functions.size} functions, #{constants.size} constants)"

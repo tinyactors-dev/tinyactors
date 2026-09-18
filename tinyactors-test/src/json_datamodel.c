@@ -1,4 +1,4 @@
-#include "json_datamodel.h"
+#include "json_datamodel_jv.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -113,6 +113,18 @@ void tat_json_datamodel_context_destroy(tat_json_datamodel_context *context) {
     ta_arena_destroy(&context->scratch);
     ta_arena_destroy(&context->values);
     *context = (tat_json_datamodel_context){0};
+}
+
+ta_result tat_json_value_from_jv(tat_json_datamodel_context *context, jv value, ta_value *out) {
+    if (context == NULL || out == NULL || !jv_is_valid(value)) {
+        jv_free(value);
+        return TA_ERR_INVALID;
+    }
+    return tat_json_wrap(context, value, out);
+}
+
+bool tat_json_value_to_jv(const ta_value *value, jv *out) {
+    return tat_json_unwrap(value, out);
 }
 
 ta_result tat_json_value_parse(tat_json_datamodel_context *context,
@@ -509,6 +521,7 @@ static ta_result tat_json_inspect(void *self, const ta_datamodel_inspect_params 
 }
 
 static const ta_datamodel_vtable TAT_JSON_DATAMODEL_VTABLE = {
+    .name = {.ptr = "jq", .len = 2},
     .prepare_definition = tat_json_prepare,
     .destroy_definition = tat_json_destroy_definition,
     .instance_size = tat_json_instance_size,

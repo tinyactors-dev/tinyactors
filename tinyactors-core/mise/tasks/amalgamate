@@ -8,25 +8,23 @@
 # function internal linkage through TA_PRIVATE (static by default).
 
 require 'pathname'
+require_relative '../lib/c_api'
 
 root = Pathname.new(__dir__).join('../..').expand_path
 include_dir = root.join('include')
 public_header = include_dir.join('tinyactors.h')
 umbrella = root.join('src/internal.h')
 
-modules = umbrella.read.scan(/^#include "(\w+)\.h"$/).flatten
+modules = CApi.modules(root)
 abort "#{umbrella} does not list any source modules" if modules.empty?
 
-# A top-level function declaration or definition: return type at column 0,
-# followed by the ta_ name and its parameter list.
-RETURN_TYPE = /(?!typedef\b|static\b|struct\b|return\b|TA_API\b|TA_PRIVATE\b)(?:const\s+)?[A-Za-z_]\w*(?:\s*\*+\s*|\s+)/
-PROTOTYPE = /^(#{RETURN_TYPE})(ta_\w+)\s*\([^;{]*\)\s*;/m
-DEFINITION = /^(#{RETURN_TYPE})(ta_\w+)(\s*\([^;{]*\)\s*\{)/m
+PROTOTYPE = CApi::PROTOTYPE
+DEFINITION = CApi::DEFINITION
 
 errors = []
 
 api = public_header.read
-public_functions = api.scan(/^TA_API\b[^;{(]*?\b(ta_\w+)\s*\(/).flatten
+public_functions = CApi.public_functions(api)
 api.scan(PROTOTYPE) { errors << "#{public_header.relative_path_from(root)}: #{$2} is declared without TA_API" }
 
 def strip(text)
@@ -95,5 +93,7 @@ if ARGV == ['--check']
 end
 
 abort 'usage: mise run amalgamate [--check]' unless ARGV.empty?
-outputs.each { |path, contents| path.write(contents) }
-puts "generated #{outputs.keys.map { |path| path.relative_path_from(root) }.join(', ')}"
+changed = outputs.reject { |path, contents| path.file? && path.read == contents }
+changed.each { |path, contents| path.write(contents) }
+names = outputs.keys.map { |path| path.relative_path_from(root) }.join(', ')
+puts changed.empty? ? "#{names} unchanged" : "generated #{names}"

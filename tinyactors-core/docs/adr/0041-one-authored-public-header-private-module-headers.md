@@ -22,8 +22,7 @@ types, and an amalgamation that gives private functions internal linkage.
 - `include/tinyactors.h` is authored by hand and is the complete public API.
   Every public function is declared there, and only there, with `TA_API`.
   Handles whose layout is private (`ta_system`, `ta_definition`,
-  `ta_session_image`, `ta_dm_host`, `ta_configuration`, `ta_history_state`,
-  `ta_continuation`, `ta_arena_block`) are opaque typedefs.
+  `ta_session_image`, `ta_dm_host`, `ta_arena_block`) are opaque typedefs.
 - `src/*.h` are private module headers. They include `tinyactors.h` (through
   `types.h`) and add layouts and internal functions. `src/internal.h` lists them
   in dependency order.
@@ -42,9 +41,11 @@ The public surface is one reviewable file, and an API change is a diff to it.
 Tools such as binding generators parse `tinyactors.h` alone. Shipping
 `tinyactors.h` plus `tinyactors.c` exports exactly the `TA_API` symbols.
 
-Internal layouts can change without affecting embedders. Information that
-inspection exposes only through opaque pointers (configuration, history,
-continuation) needs public accessors before hosts can read it.
+Internal layouts can change without affecting embedders, so inspection cannot
+hand out pointers to them. It reports plain facts in `ta_actor_inspection` and
+variable-length state (active configuration, history, delayed sends) through
+list functions that fill caller buffers; `ta_definition_state()` resolves
+state IDs to the author's names.
 
 White-box tests that need private layouts include `src/` headers explicitly
 and say so.

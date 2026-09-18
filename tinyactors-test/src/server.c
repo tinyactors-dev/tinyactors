@@ -1,43 +1,42 @@
 #include "server.h"
 
+#include <string.h>
+
+#include "binding.h"
 #include "jq.h"
 #include "rpc.h"
-#include "tinyactors.h"
+#include "ta_rpc.h"
 #include "version.h"
 
 typedef struct {
     rpc_server rpc;
+    tat_bind bind;
+    /* Method name -> index into `methods`; discovery is derived from it. */
     jv dispatch;
+    /* Method name -> parsed schema. */
+    jv schemas;
+    const tat_method **methods;
+    size_t method_count;
     bool running;
 } tat_server_impl;
 
-typedef enum {
-    TAT_METHOD_DISCOVER = 1,
-    TAT_METHOD_PING,
-    TAT_METHOD_JSON_TRANSFORM,
-    TAT_METHOD_METRICS,
-    TAT_METHOD_SHUTDOWN,
-    TAT_METHOD_COUNT
-} tat_method;
-
-typedef jv (*tat_handler_fn)(tat_server_impl *server, jv params, int *error_code);
-
-static jv tat_dispatch_table(void) {
-    jv table = jv_object();
-    table = jv_object_set(table, jv_string("rpc.discover"),
-                          jv_number(TAT_METHOD_DISCOVER));
-    table = jv_object_set(table, jv_string("system.ping"),
-                          jv_number(TAT_METHOD_PING));
-    table = jv_object_set(table, jv_string("json.transform"),
-                          jv_number(TAT_METHOD_JSON_TRANSFORM));
-    table = jv_object_set(table, jv_string("metrics.snapshot"),
-                          jv_number(TAT_METHOD_METRICS));
-    return jv_object_set(table, jv_string("host.shutdown"),
-                         jv_number(TAT_METHOD_SHUTDOWN));
+static tat_server_impl *tat_host(tat_bind *bind) {
+    return bind->host;
 }
 
-static jv tat_discover(const tat_server_impl *server) {
-    jv methods = jv_keys(jv_copy(server->dispatch));
+static jv tat_handle_discover(tat_bind *bind, jv params, int *error_code) {
+    (void)params;
+    (void)error_code;
+    const tat_server_impl *server = tat_host(bind);
+    jv unimplemented = jv_object();
+    jv_object_foreach(jv_copy(server->schemas), name, schema) {
+        jv implemented = jv_object_get(schema, jv_string("implemented"));
+        if (jv_get_kind(implemented) == JV_KIND_FALSE) {
+            unimplemented = jv_object_set(unimplemented, jv_copy(name), jv_true());
+        }
+        jv_free(implemented);
+        jv_free(name);
+    }
 
     jv result = jv_object();
     result = jv_object_set(result, jv_string("name"), jv_string("tinyactors-test"));
@@ -46,13 +45,22 @@ static jv tat_discover(const tat_server_impl *server) {
     result = jv_object_set(result, jv_string("jq"), jv_string(JQ_VERSION));
     result = jv_object_set(result, jv_string("datamodels"),
                            jv_array_append(jv_array(), jv_string("json")));
-    result = jv_object_set(result, jv_string("methods"), methods);
+    result = jv_object_set(result, jv_string("methods"), jv_keys(jv_copy(server->dispatch)));
+    result = jv_object_set(result, jv_string("schemas"), jv_copy(server->schemas));
+    result = jv_object_set(result, jv_string("unimplemented"), jv_keys(unimplemented));
+    jv adapters = jv_array();
+    for (size_t index = 0; index < TAT_ADAPTER_COUNT; index += 1) {
+        adapters = jv_array_append(adapters, jv_string(TAT_ADAPTERS[index].name));
+    }
+    result = jv_object_set(result, jv_string("adapters"), adapters);
     return jv_object_set(result, jv_string("tinyactors_actor_id_bytes"),
                          jv_number((double)sizeof(ta_actor_id)));
 }
 
-static jv tat_metrics(const tat_server_impl *server) {
-    const rpc_server *rpc = &server->rpc;
+static jv tat_handle_metrics(tat_bind *bind, jv params, int *error_code) {
+    (void)params;
+    (void)error_code;
+    const rpc_server *rpc = &tat_host(bind)->rpc;
     jv result = jv_object();
     result = jv_object_set(result, jv_string("requests"),
                            jv_number((double)rpc->message_count));
@@ -66,19 +74,19 @@ static jv tat_metrics(const tat_server_impl *server) {
                          jv_number((double)rpc->notifications_sent));
 }
 
-static jv tat_transform(jv params, int *error_code) {
-    if (jv_get_kind(params) != JV_KIND_OBJECT) {
-        jv_free(params);
-        *error_code = RPC_INVALID_PARAMS;
-        return jv_string("params must be an object");
-    }
+static jv tat_handle_ping(tat_bind *bind, jv params, int *error_code) {
+    (void)bind;
+    (void)error_code;
+    return jv_copy(params);
+}
 
+static jv tat_handle_transform(tat_bind *bind, jv params, int *error_code) {
+    (void)bind;
     jv filter = jv_object_get(jv_copy(params), jv_string("filter"));
     jv input = jv_object_get(jv_copy(params), jv_string("input"));
     if (jv_get_kind(filter) != JV_KIND_STRING || !jv_is_valid(input)) {
         jv_free(filter);
         jv_free(input);
-        jv_free(params);
         *error_code = RPC_INVALID_PARAMS;
         return jv_string("params.filter must be a string and params.input is required");
     }
@@ -87,13 +95,11 @@ static jv tat_transform(jv params, int *error_code) {
     if (jq == NULL) {
         jv_free(filter);
         jv_free(input);
-        jv_free(params);
         *error_code = RPC_INTERNAL_ERROR;
         return jv_string("could not initialize libjq");
     }
     int compiled = jq_compile(jq, jv_string_value(filter));
     jv_free(filter);
-    jv_free(params);
     if (!compiled) {
         jv_free(input);
         jq_teardown(&jq);
@@ -122,61 +128,94 @@ static jv tat_transform(jv params, int *error_code) {
     return outputs;
 }
 
-static jv tat_handle_discover(tat_server_impl *server, jv params, int *error_code) {
+static jv tat_handle_shutdown(tat_bind *bind, jv params, int *error_code) {
+    (void)params;
     (void)error_code;
-    jv_free(params);
-    return tat_discover(server);
-}
-
-static jv tat_handle_ping(tat_server_impl *server, jv params, int *error_code) {
-    (void)server;
-    (void)error_code;
-    return params;
-}
-
-static jv tat_handle_transform(tat_server_impl *server, jv params, int *error_code) {
-    (void)server;
-    return tat_transform(params, error_code);
-}
-
-static jv tat_handle_metrics(tat_server_impl *server, jv params, int *error_code) {
-    (void)error_code;
-    jv_free(params);
-    return tat_metrics(server);
-}
-
-static jv tat_handle_shutdown(tat_server_impl *server, jv params, int *error_code) {
-    (void)error_code;
-    jv_free(params);
-    server->running = false;
+    tat_host(bind)->running = false;
     return jv_bool(true);
 }
 
-static const tat_handler_fn TAT_HANDLERS[TAT_METHOD_COUNT] = {
-    [TAT_METHOD_DISCOVER] = tat_handle_discover,
-    [TAT_METHOD_PING] = tat_handle_ping,
-    [TAT_METHOD_JSON_TRANSFORM] = tat_handle_transform,
-    [TAT_METHOD_METRICS] = tat_handle_metrics,
-    [TAT_METHOD_SHUTDOWN] = tat_handle_shutdown,
+/* Test-only: registers a handle of any type that never reaches native code,
+ * so handle validation can be exercised before core functions exist. */
+static jv tat_handle_fixture_method(tat_bind *bind, jv params, int *error_code) {
+    jv type = jv_object_get(jv_copy(params), jv_string("type"));
+    if (jv_get_kind(type) != JV_KIND_STRING) {
+        jv_free(type);
+        *error_code = RPC_INVALID_PARAMS;
+        return jv_string("params.type must be a handle type such as \"system\"");
+    }
+    static const char *const types[] = {"system", "definition", "session_image"};
+    for (size_t index = 0; index < sizeof(types) / sizeof(types[0]); index += 1) {
+        if (strcmp(types[index], jv_string_value(type)) == 0) {
+            jv_free(type);
+            return tat_handle_fixture(bind, types[index]);
+        }
+    }
+    jv_free(type);
+    *error_code = RPC_INVALID_PARAMS;
+    return jv_string("params.type is not a handle type");
+}
+
+static const tat_method TAT_HOST_METHODS[] = {
+    {"rpc.discover", tat_handle_discover, "{\"host\":true,\"params\":{}}"},
+    {"system.ping", tat_handle_ping, "{\"host\":true}"},
+    {"json.transform", tat_handle_transform,
+     "{\"host\":true,\"params\":{\"filter\":{\"type\":\"string\",\"required\":true},"
+     "\"input\":{\"type\":\"json\",\"required\":true}}}"},
+    {"metrics.snapshot", tat_handle_metrics, "{\"host\":true,\"params\":{}}"},
+    {"host.shutdown", tat_handle_shutdown, "{\"host\":true,\"params\":{}}"},
+    {"handle.fixture", tat_handle_fixture_method,
+     "{\"host\":true,\"params\":{\"type\":{\"type\":\"string\",\"required\":true}}}"},
 };
+
+static bool tat_register_methods(tat_server_impl *impl, ta_arena *arena) {
+    size_t host_count = sizeof(TAT_HOST_METHODS) / sizeof(TAT_HOST_METHODS[0]);
+    impl->method_count = host_count + TAT_GENERATED_METHOD_COUNT;
+    impl->methods = ta_arena_alloc(arena, impl->method_count * sizeof(*impl->methods),
+                                   _Alignof(const tat_method *));
+    if (impl->methods == NULL) {
+        return false;
+    }
+    impl->dispatch = jv_object();
+    impl->schemas = jv_object();
+    for (size_t index = 0; index < impl->method_count; index += 1) {
+        const tat_method *method = index < host_count
+                                       ? &TAT_HOST_METHODS[index]
+                                       : &TAT_GENERATED_METHODS[index - host_count];
+        impl->methods[index] = method;
+        impl->dispatch = jv_object_set(impl->dispatch, jv_string(method->name),
+                                       jv_number((double)index));
+        impl->schemas = jv_object_set(impl->schemas, jv_string(method->name),
+                                      jv_parse(method->schema));
+    }
+    return true;
+}
 
 static jv tat_dispatch(void *context, const char *method, jv params, int *error_code) {
     tat_server_impl *server = context;
     jv entry = jv_object_get(jv_copy(server->dispatch), jv_string(method));
-    if (jv_get_kind(entry) == JV_KIND_NUMBER) {
-        tat_method selected = (tat_method)(int)jv_number_value(entry);
+    if (jv_get_kind(entry) != JV_KIND_NUMBER) {
         jv_free(entry);
-        if (selected > 0 && selected < TAT_METHOD_COUNT &&
-            TAT_HANDLERS[selected] != NULL) {
-            return TAT_HANDLERS[selected](server, params, error_code);
-        }
-    } else {
-        jv_free(entry);
+        jv_free(params);
+        *error_code = RPC_METHOD_NOT_FOUND;
+        return jv_string_fmt("unknown method: %s", method);
     }
-
+    size_t selected = (size_t)jv_number_value(entry);
+    jv_free(entry);
+    if (jv_get_kind(params) == JV_KIND_NULL) {
+        jv_free(params);
+        params = jv_object();
+    }
+    if (jv_get_kind(params) != JV_KIND_OBJECT) {
+        jv_free(params);
+        *error_code = RPC_INVALID_PARAMS;
+        return jv_string("params must be an object");
+    }
+    tat_bind_begin(&server->bind);
+    jv result = server->methods[selected]->handler(&server->bind, params, error_code);
+    tat_bind_end(&server->bind);
     jv_free(params);
-    *error_code = RPC_METHOD_NOT_FOUND;
-    return jv_string_fmt("unknown method: %s", method);
+    return result;
 }
 
 ta_result tat_server_init(tat_server *server, FILE *output, ta_allocator allocator) {
@@ -193,9 +232,18 @@ ta_result tat_server_init(tat_server *server, FILE *output, ta_allocator allocat
         ta_arena_destroy(&server->arena);
         return TA_ERR_NOMEM;
     }
+    *impl = (tat_server_impl){.running = true};
+    result = tat_bind_init(&impl->bind, allocator, impl);
+    if (result != TA_OK) {
+        ta_arena_destroy(&server->arena);
+        return result;
+    }
+    if (!tat_register_methods(impl, &server->arena)) {
+        tat_bind_destroy(&impl->bind);
+        ta_arena_destroy(&server->arena);
+        return TA_ERR_NOMEM;
+    }
     server->impl = impl;
-    impl->dispatch = tat_dispatch_table();
-    impl->running = true;
     rpc_server_init(&impl->rpc,
                     &(rpc_server_config){
                         .context = impl,
@@ -204,9 +252,7 @@ ta_result tat_server_init(tat_server *server, FILE *output, ta_allocator allocat
                     });
     jv ready = jv_object_set(jv_object(), jv_string("transport"), jv_string("stdio"));
     if (!rpc_server_send_notification(&impl->rpc, "host.ready", ready)) {
-        jv_free(impl->dispatch);
-        ta_arena_destroy(&server->arena);
-        *server = (tat_server){0};
+        tat_server_destroy(server);
         return TA_ERR_NOMEM;
     }
     return TA_OK;
@@ -218,6 +264,8 @@ void tat_server_destroy(tat_server *server) {
     }
     tat_server_impl *impl = server->impl;
     jv_free(impl->dispatch);
+    jv_free(impl->schemas);
+    tat_bind_destroy(&impl->bind);
     ta_arena_destroy(&server->arena);
     *server = (tat_server){0};
 }

@@ -320,6 +320,11 @@ typedef struct {
 } ta_datamodel_make_params_params;
 typedef struct { void *shared; void *instance; const ta_dm_host *host; ta_value *out; } ta_datamodel_inspect_params;
 typedef struct ta_datamodel_vtable {
+    /*
+     * The SCXML data-model name this adapter implements, e.g. "null" or
+     * "ecmascript". Compared with ta_scxml_spec.datamodel at compile time.
+     */
+    ta_str name;
     ta_result (*prepare_definition)(void *self, const ta_datamodel_prepare_definition_params *params);
     void (*destroy_definition)(void *self, void *shared, ta_allocator allocator);
     uint32_t (*instance_size)(void *self, void *shared);
@@ -705,11 +710,25 @@ struct ta_scxml_state_spec {
 
 typedef struct {
     ta_str name;
+    /*
+     * The <scxml> `datamodel` attribute: the data model this document
+     * requires. Absent means no requirement. The compiler returns
+     * TA_ERR_UNSUPPORTED when it differs from the adapter's name.
+     */
+    ta_str datamodel;
     const ta_definition_identity *identity;
     ta_scxml_binding_kind binding;
     const ta_scxml_initial_spec *initial;
     const ta_scxml_state_spec *states;
     const ta_scxml_data_spec *data;
+    /*
+     * The <scxml> <script> child (SCXML 3.2.2, 5.8), absent when zero. Each
+     * session runs it once at initialization: after early-bound data is
+     * initialized and before the initial transition is taken. A runtime
+     * failure queues error.execution. <script src> is fetched by the importer
+     * and passed as source text; the core performs no I/O.
+     */
+    ta_expression script;
 } ta_scxml_spec;
 
 /**
@@ -961,10 +980,15 @@ typedef enum {
     TA_ACTOR_DONE
 } ta_actor_residency;
 
-/* Interpreter state exposed by inspection; layouts are private. */
-typedef struct ta_configuration ta_configuration;
-typedef struct ta_history_state ta_history_state;
-typedef struct ta_continuation ta_continuation;
+/* The kind of a compiled state, as reported by ta_definition_state(). */
+typedef enum {
+    TA_STATE_ATOMIC,
+    TA_STATE_COMPOUND,
+    TA_STATE_PARALLEL,
+    TA_STATE_FINAL,
+    TA_STATE_HISTORY_SHALLOW,
+    TA_STATE_HISTORY_DEEP
+} ta_state_kind;
 
 typedef enum {
     TA_ACTOR_DIRECTORY_NONE = 0,
@@ -1065,21 +1089,30 @@ TA_API ta_result ta_actor_destroy(ta_system *system, ta_actor_id actor);
 
 
 /*
- * A read-only operational view of one resident interpreter instance.  Core
- * pointers are borrowed and valid only while the actor is externally
- * synchronized against mutation.  When `has_datamodel_root` is true the root
+ * A read-only operational view of one resident interpreter instance.
+ *
+ * Fixed-size facts are fields; variable-length lists (active states, history,
+ * delayed sends) are read with the ta_actor_* list functions below, whose
+ * counts are reported here so a host can size buffers once.
+ *
+ * Core pointers are borrowed and valid only while the actor is externally
+ * synchronized against mutation. When `has_datamodel_root` is true the root
  * is a host value returned by the data-model adapter; release it after use.
  * The completion pointer and its data are borrowed and must not be released.
  */
 typedef struct {
     ta_actor_id actor;
     ta_actor_ref self;
+    ta_definition_id definition_id;
     ta_definition_identity definition;
     ta_actor_residency residency;
     bool published;
-    const ta_configuration *configuration;
-    const ta_history_state *history;
-    const ta_continuation *continuation;
+    /* Number of states in the active configuration, ancestors included. */
+    uint32_t active_state_count;
+    /* True while a macrostep is paused mid-way (ta_actor_resume() continues it). */
+    bool macrostep_in_progress;
+    /* The external event of the paused macrostep, or null. */
+    const ta_event *current_event;
     const ta_queued_event *internal_events;
     uint32_t internal_count;
     const ta_active_invoke *invokes;
@@ -1099,6 +1132,83 @@ TA_API ta_result ta_actor_inspect(ta_system *system,
                                   ta_actor_id actor,
                                   ta_actor_inspection *out);
 TA_API ta_result ta_system_visit_actors(ta_system *system, ta_actor_inspector inspector);
+
+/*
+ * List outputs share one convention: the callee writes at most `capacity`
+ * elements to the caller's array and always stores the total in `*count`.
+ * When the array is too small it returns TA_ERR_NOMEM and writes nothing, so
+ * `capacity = 0` with a null array is a size query.
+ */
+
+/*
+ * The active configuration: every active state, ancestors included, in
+ * document order. Resolve IDs with ta_definition_state().
+ */
+typedef struct {
+    ta_actor_id actor;
+    ta_state_id *states;
+    uint32_t capacity;
+    uint32_t *count;
+} ta_actor_active_states_params;
+TA_API ta_result ta_actor_active_states(ta_system *system,
+                                        const ta_actor_active_states_params *params);
+
+/*
+ * The states recorded by one history pseudo-state, in document order.
+ * `*count` is zero when the history has never been recorded; its default
+ * transition then applies.
+ */
+typedef struct {
+    ta_actor_id actor;
+    ta_state_id history;
+    ta_state_id *states;
+    uint32_t capacity;
+    uint32_t *count;
+} ta_actor_history_params;
+TA_API ta_result ta_actor_history(ta_system *system, const ta_actor_history_params *params);
+
+/*
+ * One pending delayed send owned by an actor. `target` and `data` are
+ * borrowed; retain them with ta_value_retain() to keep them past the call's
+ * synchronization window.
+ */
+typedef struct {
+    ta_send_id send_id;
+    ta_time due;
+    ta_event_name_id event;
+    ta_atom io_type;
+    ta_value target;
+    ta_value data;
+} ta_delayed_send_info;
+
+/* Pending delayed sends of one actor, ordered by due time, then send order. */
+typedef struct {
+    ta_actor_id actor;
+    ta_delayed_send_info *sends;
+    uint32_t capacity;
+    uint32_t *count;
+} ta_actor_delayed_sends_params;
+TA_API ta_result ta_actor_delayed_sends(ta_system *system,
+                                        const ta_actor_delayed_sends_params *params);
+
+/*
+ * Static facts about one state of a registered definition. `id` is the
+ * author's state ID and is borrowed from the system. `parent` is
+ * TA_STATE_NONE for top-level states. TA_ERR_NOT_FOUND ends iteration over
+ * state IDs 0, 1, 2, ... in document order.
+ */
+typedef struct {
+    ta_str id;
+    ta_state_id parent;
+    ta_state_kind kind;
+} ta_state_info;
+typedef struct {
+    ta_definition_id definition;
+    ta_state_id state;
+    ta_state_info *out;
+} ta_definition_state_params;
+TA_API ta_result ta_definition_state(const ta_system *system,
+                                     const ta_definition_state_params *params);
 
 
 /* ========================================================================

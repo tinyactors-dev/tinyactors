@@ -28,6 +28,7 @@ typedef struct {
     ta_value iteration_snapshot;
 } ta_exec_frame;
 
+typedef struct ta_continuation ta_continuation;
 struct ta_continuation {
     uint32_t pc;
     uint32_t cursor;

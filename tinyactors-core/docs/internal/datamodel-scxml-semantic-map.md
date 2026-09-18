@@ -18,6 +18,7 @@ This file records how SCXML 1.0 data semantics map to the `ta` runtime without r
 | location expression read | `read_location` |
 | `<assign>` | evaluate/import value then `assign` |
 | `<script>` | `execute_script` |
+| `<scxml><script>` | `execute_script`, once per session at bootstrap |
 | `<foreach>` | `foreach_snapshot`, `foreach_item`, `bind_iteration` + core continuation |
 | `<param expr>` | `eval_value` -> named pair |
 | `<param location>` | `read_location` -> named pair |

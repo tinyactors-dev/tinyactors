@@ -174,6 +174,7 @@ typedef struct {
     uint32_t atomic_state_count;
 } ta_configuration_layout;
 
+typedef struct ta_configuration ta_configuration;
 struct ta_configuration {
     void *storage;
     const ta_configuration_layout *layout;
@@ -200,6 +201,7 @@ typedef struct {
     uint32_t storage_bytes;
 } ta_history_layout;
 
+typedef struct ta_history_state ta_history_state;
 struct ta_history_state {
     void *storage;
     const ta_history_layout *layout;
@@ -232,6 +234,7 @@ typedef struct {
     ta_value iteration_snapshot;
 } ta_exec_frame;
 
+typedef struct ta_continuation ta_continuation;
 struct ta_continuation {
     uint32_t pc;
     uint32_t cursor;
@@ -314,15 +317,6 @@ typedef struct {
 } ta_invoker_registration;
 
 
-
-typedef enum {
-    TA_STATE_ATOMIC,
-    TA_STATE_COMPOUND,
-    TA_STATE_PARALLEL,
-    TA_STATE_FINAL,
-    TA_STATE_HISTORY_SHALLOW,
-    TA_STATE_HISTORY_DEEP
-} ta_state_kind;
 
 typedef enum {
     TA_TRANSITION_EXTERNAL,
@@ -595,6 +589,13 @@ struct ta_definition {
     ta_initial_transition_def *initial_transitions;
     uint32_t initial_transition_count;
     ta_initial_transition_id root_initial;
+    /*
+     * The <scxml> <script>: a block of zero or one TA_ACTION_SCRIPT in the
+     * action stream, run once per session before the root initial transition.
+     * A block, not a bare ta_expr_id, so it shares executable-content error
+     * semantics (SCXML 4.9) and continuation frames with every other block.
+     */
+    ta_span32 global_script_actions;
     ta_event_pattern *event_patterns;
     uint32_t event_pattern_count;
     ta_event_pattern_segment *event_pattern_segments;

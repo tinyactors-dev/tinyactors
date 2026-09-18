@@ -19,6 +19,68 @@ module TinyactorsTest
     end
   end
 
+  # Dotted RPC method names as nested Ruby calls, built from rpc.discover.
+  class Proxy
+    def initialize(driver, discovery, prefix = [])
+      @driver = driver
+      @discovery = discovery
+      @prefix = prefix
+      @schemas = discovery.fetch(:schemas, {}).transform_keys(&:to_s)
+      # Define every child segment eagerly: method_missing never sees names
+      # that Object already has, such as `ta.actor.inspect`.
+      children.each do |child|
+        define_singleton_method(child) { |*args, **params, &block| method_missing(child.to_sym, *args, **params, &block) }
+      end
+    end
+
+    def to_s = "#<#{self.class.name} #{@prefix.empty? ? '(root)' : @prefix.join('.')}>"
+    alias inspect to_s
+
+    def namespace?(name)
+      path = (@prefix + [name.to_s]).join('.')
+      @schemas.each_key.any? { |method| method == path || method.start_with?("#{path}.") }
+    end
+
+    def schema(name) = @schemas[(@prefix + [name.to_s]).join('.')]
+
+    def respond_to_missing?(name, include_private = false)
+      namespace?(name) || super
+    end
+
+    def method_missing(name, *args, **params, &block)
+      path = (@prefix + [name.to_s]).join('.')
+      return super unless namespace?(name)
+
+      schema = @schemas[path]
+      return Proxy.new(@driver, @discovery, @prefix + [name.to_s]) if schema.nil?
+      raise ArgumentError, "#{path} takes keyword arguments only" unless args.empty?
+
+      check(path, schema, params)
+      @driver.call(path, params)
+    end
+
+    private
+
+    def children
+      depth = @prefix.size
+      @schemas.each_key.filter_map do |method|
+        segments = method.split('.')
+        segments[depth] if segments.size > depth && segments.first(depth) == @prefix
+      end.uniq
+    end
+
+    def check(path, schema, params)
+      declared = schema[:params]
+      return if declared.nil?
+
+      unknown = params.keys.map(&:to_s) - declared.keys.map(&:to_s)
+      raise ArgumentError, "#{path}: unknown argument(s) #{unknown.join(', ')}" unless unknown.empty?
+
+      missing = declared.select { |_, spec| spec[:required] }.keys.map(&:to_s) - params.keys.map(&:to_s)
+      raise ArgumentError, "#{path}: missing argument(s) #{missing.join(', ')}" unless missing.empty?
+    end
+  end
+
   class Driver
     DEFAULT_TIMEOUT = 10
 
@@ -50,6 +112,24 @@ module TinyactorsTest
       request = { jsonrpc: '2.0', method: method }
       request[:params] = params unless params.nil?
       write(request)
+    end
+
+    # A proxy over the methods the host advertises in rpc.discover, e.g.
+    # `driver.api.ta.actor.spawn(system: handle, definition: 1)` or, through
+    # method_missing, `driver.ta.actor.spawn(...)`. Argument names are checked
+    # against the advertised schemas before anything is sent.
+    def api
+      @api ||= Proxy.new(self, call('rpc.discover'))
+    end
+
+    def respond_to_missing?(name, include_private = false)
+      (@api && @api.namespace?(name)) || super
+    end
+
+    def method_missing(name, *args, **kwargs, &block)
+      return api.public_send(name, *args, **kwargs, &block) if api.namespace?(name)
+
+      super
     end
 
     def diagnostics

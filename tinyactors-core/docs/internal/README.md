@@ -14,4 +14,5 @@ Important cross-cutting references:
 - `memory-model.md` — density strategy for millions of actors.
 - `api-gaps.md` — current header skeleton vs intended design.
 - `verification.md` — simulator/fuzzer integration.
+- `api-ir.md` — `include/tinyactors.api.json`, the machine-readable public API for binding generators.
 - `scxml.md` — the SCXML standard from https://w3.org/TR/scxml, as markdown.

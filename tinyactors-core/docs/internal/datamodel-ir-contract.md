@@ -44,6 +44,8 @@ A future SCXML importer can map:
 - `<param name="x" expr="...">` -> named expression parameter;
 - `<content expr="...">` -> content expression;
 - `<script>` -> script action.
+- `<scxml><script>` -> a one-action script block run once per session, after
+  early data initialization and before the root initial transition.
 
 A C builder can generate the same IR directly with no XML representation at any stage.
 

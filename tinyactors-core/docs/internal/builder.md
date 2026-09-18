@@ -45,7 +45,8 @@ required and stops scanning a list at its first zero element.
 
 The shape maps directly to SCXML:
 
-- `ta_scxml_spec` owns root data, root initial, and root states.
+- `ta_scxml_spec` owns root data, root initial, root states, and the optional
+  top-level `<script>`.
 - states own child states, an optional initial transition, transitions,
   entry/exit actions, data, and invokes;
 - initial transitions and transitions own target lists and ordered actions;
@@ -104,6 +105,11 @@ that only exist inside a compiled definition or a running system:
   and are never authored.
 - The datamodel binding is `ta_scxml_binding_kind`, whose zero value selects
   the SCXML default rather than a runtime enum value.
+- `datamodel` is the `<scxml datamodel>` attribute: the name of the data model
+  the document requires, such as `"null"` or `"ecmascript"`. It is compared
+  with the adapter's `ta_datamodel_vtable.name`; a mismatch fails compilation
+  with `TA_ERR_UNSUPPORTED`. Absent means no requirement. The adapter itself is
+  `ta_definition_compile_params.datamodel`.
 
 Every optional field is absent when zero-initialized. There are no special
 sentinel constants to remember; omitting a field is always correct.
@@ -123,6 +129,49 @@ them exactly with existing ones:
 - `<elseif>` becomes a nested `if` in `else_actions`.
 - `<data src>` is fetched by the importer and passed as
   `TA_SCXML_VALUE_CONTENT`; the core performs no I/O.
+- `<script src>`, top-level or as an action, is fetched by the importer and
+  passed as `TA_EXPRESSION_SOURCE`. A fetch failure rejects the document in
+  the importer (SCXML 5.8.2).
+
+## Top-level script
+
+`ta_scxml_spec.script` is the `<scxml>` element's `<script>` child, which
+SCXML allows at most once (3.2.2). It is a `ta_expression`, like the `script`
+action, and is absent when zero.
+
+Semantics, from the SCXML recommendation:
+
+- **When it runs.** The processor evaluates a `<script>` that is a child of
+  `<scxml>` "at document load time" (5.8.2). The interpretation algorithm
+  places it per session, in `interpret()` (Appendix D): early-bound data is
+  initialized, then `executeGlobalScriptElement`, then the root initial
+  transition is taken. Tinyactors therefore runs it once per session during
+  actor bootstrap (`ta_actor_spawn`, `ta_actor_prepare_replacement`), after
+  data declarations and early initializers and before the root initial
+  transition and any `<onentry>`. It is part of the bootstrap macrostep, so a
+  budgeted spawn can pause around it like any other block.
+- **Late binding.** Declarations exist from initialization (5.3.3, ADR 0032),
+  but late initializers run on first entry of their state, which is after the
+  script. With late binding the script sees declared but uninitialized data;
+  what it reads is defined by the data model (5.9).
+- **Errors.** A runtime failure places `error.execution` in the internal queue
+  (3.12.2, 5.9). The queued error is processed in the first macrostep, after
+  the initial states are entered, like any internal event raised before
+  `mainEventLoop`. A data model may instead reject an ill-formed script when
+  the definition is prepared (5.9.4). The Null data model has no scripting
+  language (B.1.5), so a script fails there.
+- **`src`.** `<script src>` must be downloaded at load time, and a document
+  whose script cannot be downloaded is non-conformant and must be rejected
+  (5.8.2). The importer performs that I/O and passes the fetched text as
+  `TA_EXPRESSION_SOURCE`; a failed fetch is an import error, never a core
+  result. `src` and inline content are mutually exclusive, so an importer
+  never has both.
+- **Reconstruction.** The script is bootstrap work, not replayable state:
+  reconstructing or loading a session image never runs it again.
+
+The compiled definition stores it as a block of zero or one script actions
+(`global_script_actions`), so it shares the block-level error behavior of
+4.9 and the continuation frames of all other executable content.
 
 ## Lifetime
 

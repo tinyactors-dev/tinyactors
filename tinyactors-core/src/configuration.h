@@ -16,6 +16,7 @@ typedef struct {
     uint32_t atomic_state_count;
 } ta_configuration_layout;
 
+typedef struct ta_configuration ta_configuration;
 struct ta_configuration {
     void *storage;
     const ta_configuration_layout *layout;

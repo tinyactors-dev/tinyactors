@@ -26,6 +26,7 @@ module TinyactorsTest
       @data = []
       @states = []
       @initial = nil
+      @script = nil
       @send_ids = {}
     end
 
@@ -37,7 +38,15 @@ module TinyactorsTest
     end
 
     # Internal: builder hooks.
-    attr_reader :states, :data
+    attr_reader :states, :data, :script
+
+    # The <scxml> <script>: run once per session, after early data
+    # initialization and before the initial transition.
+    def script=(source)
+      raise ChartError, "chart #{name}: script declared twice; SCXML allows one top-level <script>" if @script
+
+      @script = source.to_s
+    end
 
     def initial=(target)
       raise ChartError, "chart #{name}: initial declared twice" if @initial
@@ -63,6 +72,7 @@ module TinyactorsTest
         states: @states.map(&:to_spec)
       }
       spec[:binding] = binding.to_s if binding
+      spec[:script] = script if script
       spec
     end
 
@@ -223,6 +233,17 @@ module TinyactorsTest
           initializer = value.is_a?(Hash) && value.key?(:expr) ? value[:expr].to_s : JSON.generate(value)
           @chart.data << { name: data_name.to_s, initializer: { expr: initializer } }
         end
+      end
+
+      # Declares the chart's top-level <script>, a data-model script run once
+      # per session at initialization. Inside a state, use an action instead:
+      # `on_entry { script '...' }`.
+      def script(source)
+        if @state
+          raise ChartError, "state #{@state.id}: a top-level script belongs at the chart root; use on_entry { script ... }"
+        end
+
+        @chart.script = source
       end
 
       def initial(target)

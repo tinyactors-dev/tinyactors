@@ -1,0 +1,7680 @@
+{
+  "format": "tinyactors-api/1",
+  "header": "include/tinyactors.h",
+  "constants": [
+    {
+      "name": "TA_ACTOR_REF_RUNTIME",
+      "value": 0,
+      "enum": null
+    },
+    {
+      "name": "TA_ACTOR_REF_NAMED",
+      "value": 1,
+      "enum": null
+    },
+    {
+      "name": "TA_EVENT_EXTERNAL",
+      "value": 0,
+      "enum": null
+    },
+    {
+      "name": "TA_EVENT_INTERNAL",
+      "value": 1,
+      "enum": null
+    },
+    {
+      "name": "TA_EVENT_PLATFORM",
+      "value": 2,
+      "enum": null
+    },
+    {
+      "name": "TA_ORIGIN_NONE",
+      "value": 0,
+      "enum": null
+    },
+    {
+      "name": "TA_ORIGIN_ACTOR",
+      "value": 1,
+      "enum": null
+    },
+    {
+      "name": "TA_ORIGIN_IO",
+      "value": 2,
+      "enum": null
+    },
+    {
+      "name": "TA_ORIGIN_INVOKE",
+      "value": 3,
+      "enum": null
+    },
+    {
+      "name": "TA_OP_OK",
+      "value": 0,
+      "enum": null
+    },
+    {
+      "name": "TA_OP_ERROR",
+      "value": 1,
+      "enum": null
+    },
+    {
+      "name": "TA_RUN_STABLE",
+      "value": 0,
+      "enum": null
+    },
+    {
+      "name": "TA_RUN_PAUSED",
+      "value": 1,
+      "enum": null
+    },
+    {
+      "name": "TA_RUN_DONE",
+      "value": 2,
+      "enum": null
+    },
+    {
+      "name": "TA_RUN_ERROR",
+      "value": 3,
+      "enum": null
+    },
+    {
+      "name": "TA_EVENT_FLAG_OWNS_DATA",
+      "value": 1,
+      "enum": null
+    },
+    {
+      "name": "TA_EVENT_FLAG_GENERATED",
+      "value": 2,
+      "enum": null
+    },
+    {
+      "name": "TA_EXTERNAL_EVENT_ACCEPTED",
+      "value": 0,
+      "enum": null
+    },
+    {
+      "name": "TA_EXTERNAL_EVENT_RETRY",
+      "value": 1,
+      "enum": null
+    },
+    {
+      "name": "TA_EXTERNAL_EVENT_ERROR",
+      "value": 2,
+      "enum": null
+    },
+    {
+      "name": "TA_EXPRESSION_NONE",
+      "value": 0,
+      "enum": null
+    },
+    {
+      "name": "TA_EXPRESSION_SOURCE",
+      "value": 1,
+      "enum": null
+    },
+    {
+      "name": "TA_EXPRESSION_HOST",
+      "value": 2,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_TARGET_INVALID",
+      "value": 0,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_TARGET_INTERNAL",
+      "value": 1,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_TARGET_SELF",
+      "value": 2,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_TARGET_PARENT",
+      "value": 3,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_TARGET_INVOKE",
+      "value": 4,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_TARGET_ACTOR",
+      "value": 5,
+      "enum": null
+    },
+    {
+      "name": "TA_INVOKE_REPORT_EVENT",
+      "value": 0,
+      "enum": null
+    },
+    {
+      "name": "TA_INVOKE_REPORT_DONE",
+      "value": 1,
+      "enum": null
+    },
+    {
+      "name": "TA_INVOKE_REPORT_UNAVAILABLE",
+      "value": 2,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_VALUE_NONE",
+      "value": 0,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_VALUE_EXPR",
+      "value": 1,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_VALUE_LOCATION",
+      "value": 2,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_VALUE_CONTENT",
+      "value": 3,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_STRING_NONE",
+      "value": 0,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_STRING_LITERAL",
+      "value": 1,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_STRING_EXPR",
+      "value": 2,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_ID_NONE",
+      "value": 0,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_ID_LITERAL",
+      "value": 1,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_ID_LOCATION",
+      "value": 2,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_EVENT_NONE",
+      "value": 0,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_EVENT_NAME",
+      "value": 1,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_EVENT_EXPR",
+      "value": 2,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_ACTION_NONE",
+      "value": 0,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_ACTION_RAISE",
+      "value": 1,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_ACTION_SEND",
+      "value": 2,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_ACTION_CANCEL",
+      "value": 3,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_ACTION_ASSIGN",
+      "value": 4,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_ACTION_SCRIPT",
+      "value": 5,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_ACTION_LOG",
+      "value": 6,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_ACTION_IF",
+      "value": 7,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_ACTION_FOREACH",
+      "value": 8,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_ACTION_INVOKE",
+      "value": 9,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_ACTION_EXTENSION",
+      "value": 10,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_TRANSITION_NONE",
+      "value": 0,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_TRANSITION_EXTERNAL",
+      "value": 1,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_TRANSITION_INTERNAL",
+      "value": 2,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_STATE_NONE",
+      "value": 0,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_STATE_ATOMIC",
+      "value": 1,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_STATE_COMPOUND",
+      "value": 2,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_STATE_PARALLEL",
+      "value": 3,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_STATE_FINAL",
+      "value": 4,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_STATE_HISTORY_SHALLOW",
+      "value": 5,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_STATE_HISTORY_DEEP",
+      "value": 6,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_BINDING_DEFAULT",
+      "value": 0,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_BINDING_EARLY",
+      "value": 1,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_BINDING_LATE",
+      "value": 2,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_INVOKE_NONE",
+      "value": 0,
+      "enum": null
+    },
+    {
+      "name": "TA_SCXML_INVOKE",
+      "value": 1,
+      "enum": null
+    },
+    {
+      "name": "TA_ACTOR_UNLOADED",
+      "value": 0,
+      "enum": null
+    },
+    {
+      "name": "TA_ACTOR_IDLE",
+      "value": 1,
+      "enum": null
+    },
+    {
+      "name": "TA_ACTOR_RUNNING",
+      "value": 2,
+      "enum": null
+    },
+    {
+      "name": "TA_ACTOR_DONE",
+      "value": 3,
+      "enum": null
+    },
+    {
+      "name": "TA_STATE_ATOMIC",
+      "value": 0,
+      "enum": null
+    },
+    {
+      "name": "TA_STATE_COMPOUND",
+      "value": 1,
+      "enum": null
+    },
+    {
+      "name": "TA_STATE_PARALLEL",
+      "value": 2,
+      "enum": null
+    },
+    {
+      "name": "TA_STATE_FINAL",
+      "value": 3,
+      "enum": null
+    },
+    {
+      "name": "TA_STATE_HISTORY_SHALLOW",
+      "value": 4,
+      "enum": null
+    },
+    {
+      "name": "TA_STATE_HISTORY_DEEP",
+      "value": 5,
+      "enum": null
+    },
+    {
+      "name": "TA_ACTOR_DIRECTORY_NONE",
+      "value": 0,
+      "enum": null
+    },
+    {
+      "name": "TA_ACTOR_DIRECTORY_RESIDENT",
+      "value": 1,
+      "enum": null
+    },
+    {
+      "name": "TA_ACTOR_DIRECTORY_UNLOADED",
+      "value": 2,
+      "enum": null
+    },
+    {
+      "name": "TA_STATE_NONE",
+      "value": 4294967295,
+      "macro": true
+    },
+    {
+      "name": "TA_INITIAL_TRANSITION_NONE",
+      "value": 4294967295,
+      "macro": true
+    },
+    {
+      "name": "TA_INITIALIZER_NONE",
+      "value": 4294967295,
+      "macro": true
+    },
+    {
+      "name": "TA_DONE_DATA_NONE",
+      "value": 4294967295,
+      "macro": true
+    },
+    {
+      "name": "TA_INVOKE_ID_NONE",
+      "value": 18446744073709551615,
+      "macro": true
+    }
+  ],
+  "types": {
+    "ta_action_block_id": {
+      "kind": "alias",
+      "type": {
+        "builtin": "uint32_t"
+      }
+    },
+    "ta_action_id": {
+      "kind": "alias",
+      "type": {
+        "builtin": "uint32_t"
+      }
+    },
+    "ta_active_invoke": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type": {
+            "type": "ta_invoke_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "type",
+          "type": {
+            "type": "ta_atom"
+          },
+          "role": "in"
+        },
+        {
+          "name": "service_handle",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "role": "in"
+        },
+        {
+          "name": "autoforward",
+          "type": {
+            "builtin": "bool"
+          },
+          "role": "in"
+        },
+        {
+          "name": "active",
+          "type": {
+            "builtin": "bool"
+          },
+          "role": "in"
+        }
+      ]
+    },
+    "ta_actor_activate_replacement_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "incumbent",
+          "type": {
+            "type": "ta_actor_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "replacement",
+          "type": {
+            "type": "ta_actor_id"
+          },
+          "role": "in"
+        }
+      ]
+    },
+    "ta_actor_active_states_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "states",
+          "type": {
+            "pointer": {
+              "type": "ta_state_id"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "buffer",
+          "buffer": {
+            "capacity": "capacity",
+            "needed": "count"
+          }
+        },
+        {
+          "name": "capacity",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "role": "in"
+        },
+        {
+          "name": "count",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_actor_address": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "family",
+          "type": {
+            "type": "ta_definition_family"
+          },
+          "role": "in"
+        },
+        {
+          "name": "name",
+          "type": {
+            "type": "ta_str"
+          },
+          "role": "in"
+        }
+      ]
+    },
+    "ta_actor_capture_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "pointer": {
+                "type": "ta_session_image"
+              },
+              "const": false
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "handle_out"
+        }
+      ]
+    },
+    "ta_actor_completion": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "has_data",
+          "type": {
+            "builtin": "bool"
+          },
+          "role": "in"
+        },
+        {
+          "name": "data",
+          "type": {
+            "type": "ta_value"
+          },
+          "release_when": "has_data",
+          "role": "in"
+        }
+      ]
+    },
+    "ta_actor_delayed_sends_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "sends",
+          "type": {
+            "pointer": {
+              "type": "ta_delayed_send_info"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "buffer",
+          "buffer": {
+            "capacity": "capacity",
+            "needed": "count"
+          }
+        },
+        {
+          "name": "capacity",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "role": "in"
+        },
+        {
+          "name": "count",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_actor_directory": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "self",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "v",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_directory_vtable"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "semantic": "adapter"
+    },
+    "ta_actor_directory_claim_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "address",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_address"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "entry",
+          "type": {
+            "type": "ta_actor_directory_entry"
+          },
+          "role": "in"
+        }
+      ]
+    },
+    "ta_actor_directory_entry": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": {
+            "type": "ta_actor_directory_entry_kind"
+          },
+          "role": "in"
+        },
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          },
+          "role": "in"
+        }
+      ]
+    },
+    "ta_actor_directory_entry_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_ACTOR_DIRECTORY_NONE",
+          "value": 0,
+          "json": "none"
+        },
+        {
+          "name": "TA_ACTOR_DIRECTORY_RESIDENT",
+          "value": 1,
+          "json": "resident"
+        },
+        {
+          "name": "TA_ACTOR_DIRECTORY_UNLOADED",
+          "value": 2,
+          "json": "unloaded"
+        }
+      ]
+    },
+    "ta_actor_directory_remove_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "address",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_address"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "expected",
+          "type": {
+            "type": "ta_actor_directory_entry"
+          },
+          "role": "in"
+        }
+      ]
+    },
+    "ta_actor_directory_replace_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "address",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_address"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "expected",
+          "type": {
+            "type": "ta_actor_directory_entry"
+          },
+          "role": "in"
+        },
+        {
+          "name": "replacement",
+          "type": {
+            "type": "ta_actor_directory_entry"
+          },
+          "role": "in"
+        }
+      ]
+    },
+    "ta_actor_directory_resolve_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "address",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_address"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_directory_entry"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_actor_directory_vtable": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "claim",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_result"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_actor_directory_claim_params"
+                  },
+                  "const": true
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "resolve",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_result"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_actor_directory_resolve_params"
+                  },
+                  "const": true
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "replace",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_result"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_actor_directory_replace_params"
+                  },
+                  "const": true
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "remove",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_result"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_actor_directory_remove_params"
+                  },
+                  "const": true
+                }
+              ]
+            }
+          },
+          "role": "in"
+        }
+      ],
+      "semantic": "vtable"
+    },
+    "ta_actor_find_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "address",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_address"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_id"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_actor_history_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "history",
+          "type": {
+            "type": "ta_state_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "states",
+          "type": {
+            "pointer": {
+              "type": "ta_state_id"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "buffer",
+          "buffer": {
+            "capacity": "capacity",
+            "needed": "count"
+          }
+        },
+        {
+          "name": "capacity",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "role": "in"
+        },
+        {
+          "name": "count",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_actor_id": {
+      "kind": "alias",
+      "type": {
+        "builtin": "uint64_t"
+      }
+    },
+    "ta_actor_inspection": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "self",
+          "type": {
+            "type": "ta_actor_ref"
+          },
+          "role": "in"
+        },
+        {
+          "name": "definition_id",
+          "type": {
+            "type": "ta_definition_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "definition",
+          "type": {
+            "type": "ta_definition_identity"
+          },
+          "role": "in"
+        },
+        {
+          "name": "residency",
+          "type": {
+            "type": "ta_actor_residency"
+          },
+          "role": "in"
+        },
+        {
+          "name": "published",
+          "type": {
+            "builtin": "bool"
+          },
+          "role": "in"
+        },
+        {
+          "name": "active_state_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "role": "in"
+        },
+        {
+          "name": "macrostep_in_progress",
+          "type": {
+            "builtin": "bool"
+          },
+          "role": "in"
+        },
+        {
+          "name": "current_event",
+          "type": {
+            "pointer": {
+              "type": "ta_event"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "internal_events",
+          "type": {
+            "pointer": {
+              "type": "ta_queued_event"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "counted",
+          "count": "internal_count"
+        },
+        {
+          "name": "internal_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "role": "in",
+          "count_of": "internal_events"
+        },
+        {
+          "name": "invokes",
+          "type": {
+            "pointer": {
+              "type": "ta_active_invoke"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "counted",
+          "count": "invoke_count"
+        },
+        {
+          "name": "invoke_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "role": "in",
+          "count_of": "invokes"
+        },
+        {
+          "name": "delayed_send_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "role": "in"
+        },
+        {
+          "name": "has_completion",
+          "type": {
+            "builtin": "bool"
+          },
+          "role": "in"
+        },
+        {
+          "name": "completion",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_completion"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "has_datamodel_root",
+          "type": {
+            "builtin": "bool"
+          },
+          "role": "in"
+        },
+        {
+          "name": "datamodel_root",
+          "type": {
+            "type": "ta_value"
+          },
+          "release_when": "has_datamodel_root",
+          "role": "in"
+        }
+      ]
+    },
+    "ta_actor_inspection_visitor": {
+      "kind": "alias",
+      "type": {
+        "function": {
+          "returns": {
+            "type": "ta_result"
+          },
+          "params": [
+            {
+              "pointer": {
+                "builtin": "void"
+              },
+              "const": false
+            },
+            {
+              "pointer": {
+                "type": "ta_actor_inspection"
+              },
+              "const": true
+            }
+          ]
+        }
+      }
+    },
+    "ta_actor_inspector": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "self",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "visit",
+          "type": {
+            "type": "ta_actor_inspection_visitor"
+          },
+          "role": "in"
+        }
+      ],
+      "semantic": "adapter"
+    },
+    "ta_actor_load_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "image",
+          "type": {
+            "pointer": {
+              "type": "ta_session_image"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "datamodel_binding",
+          "type": {
+            "pointer": {
+              "type": "ta_value"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_id"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_actor_parent": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "invoke_id",
+          "type": {
+            "type": "ta_invoke_id"
+          },
+          "role": "in"
+        }
+      ]
+    },
+    "ta_actor_prepare_replacement_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "incumbent",
+          "type": {
+            "type": "ta_actor_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "definition",
+          "type": {
+            "type": "ta_definition_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "datamodel_binding",
+          "type": {
+            "pointer": {
+              "type": "ta_value"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_id"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_actor_reconstruct_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "image",
+          "type": {
+            "pointer": {
+              "type": "ta_session_image"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "datamodel_binding",
+          "type": {
+            "pointer": {
+              "type": "ta_value"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_id"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_actor_ref": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": {
+            "type": "ta_actor_ref_kind"
+          },
+          "role": "in"
+        },
+        {
+          "name": "as",
+          "type": {
+            "record": {
+              "kind": "union",
+              "fields": [
+                {
+                  "name": "runtime",
+                  "type": {
+                    "type": "ta_actor_id"
+                  },
+                  "role": "in"
+                },
+                {
+                  "name": "named",
+                  "type": {
+                    "type": "ta_actor_address"
+                  },
+                  "role": "in"
+                }
+              ]
+            }
+          },
+          "role": "in"
+        }
+      ],
+      "tagged_union": {
+        "tag": "kind",
+        "union": "as",
+        "enum": "ta_actor_ref_kind",
+        "members": {
+          "TA_ACTOR_REF_RUNTIME": "runtime",
+          "TA_ACTOR_REF_NAMED": "named"
+        }
+      }
+    },
+    "ta_actor_ref_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_ACTOR_REF_RUNTIME",
+          "value": 0,
+          "json": "runtime"
+        },
+        {
+          "name": "TA_ACTOR_REF_NAMED",
+          "value": 1,
+          "json": "named"
+        }
+      ]
+    },
+    "ta_actor_remove_unloaded_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "address",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_address"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_actor_residency": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_ACTOR_UNLOADED",
+          "value": 0,
+          "json": "unloaded"
+        },
+        {
+          "name": "TA_ACTOR_IDLE",
+          "value": 1,
+          "json": "idle"
+        },
+        {
+          "name": "TA_ACTOR_RUNNING",
+          "value": 2,
+          "json": "running"
+        },
+        {
+          "name": "TA_ACTOR_DONE",
+          "value": 3,
+          "json": "done"
+        }
+      ]
+    },
+    "ta_actor_resume_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "budget",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "role": "in"
+        },
+        {
+          "name": "status",
+          "type": {
+            "pointer": {
+              "type": "ta_run_status"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_actor_spawn_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "definition",
+          "type": {
+            "type": "ta_definition_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "address",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_address"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "datamodel_binding",
+          "type": {
+            "pointer": {
+              "type": "ta_value"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "parent",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_parent"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_id"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_actor_unload_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "image",
+          "type": {
+            "pointer": {
+              "type": "ta_session_image"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "handle"
+        }
+      ]
+    },
+    "ta_allocator": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "self",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "v",
+          "type": {
+            "pointer": {
+              "type": "ta_allocator_vtable"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "semantic": "adapter"
+    },
+    "ta_allocator_free_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "ptr",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "size",
+          "type": {
+            "builtin": "size_t"
+          },
+          "role": "in"
+        },
+        {
+          "name": "alignment",
+          "type": {
+            "builtin": "size_t"
+          },
+          "role": "in"
+        }
+      ]
+    },
+    "ta_allocator_vtable": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "alloc",
+          "type": {
+            "function": {
+              "returns": {
+                "pointer": {
+                  "builtin": "void"
+                },
+                "const": false
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "builtin": "size_t"
+                },
+                {
+                  "builtin": "size_t"
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "free",
+          "type": {
+            "function": {
+              "returns": {
+                "builtin": "void"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_allocator_free_params"
+                  },
+                  "const": true
+                }
+              ]
+            }
+          },
+          "role": "in"
+        }
+      ],
+      "semantic": "vtable"
+    },
+    "ta_arena": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "backing",
+          "type": {
+            "type": "ta_allocator"
+          },
+          "role": "in"
+        },
+        {
+          "name": "head",
+          "type": {
+            "pointer": {
+              "type": "ta_arena_block"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "borrowed"
+        },
+        {
+          "name": "block_size",
+          "type": {
+            "builtin": "size_t"
+          },
+          "role": "in"
+        }
+      ]
+    },
+    "ta_arena_block": {
+      "kind": "opaque",
+      "ownership": "borrowed"
+    },
+    "ta_atom": {
+      "kind": "alias",
+      "type": {
+        "builtin": "uint32_t"
+      }
+    },
+    "ta_atom_list": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "atoms",
+          "type": {
+            "pointer": {
+              "type": "ta_atom"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "counted",
+          "count": "count"
+        },
+        {
+          "name": "count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "role": "in",
+          "count_of": "atoms"
+        }
+      ]
+    },
+    "ta_bytes": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "ptr",
+          "type": {
+            "pointer": {
+              "builtin": "uint8_t"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "len",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "role": "in"
+        }
+      ],
+      "semantic": "bytes"
+    },
+    "ta_content_id": {
+      "kind": "alias",
+      "type": {
+        "builtin": "uint32_t"
+      }
+    },
+    "ta_data_decl_id": {
+      "kind": "alias",
+      "type": {
+        "builtin": "uint32_t"
+      }
+    },
+    "ta_datamodel": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "self",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "v",
+          "type": {
+            "pointer": {
+              "type": "ta_datamodel_vtable"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "semantic": "adapter"
+    },
+    "ta_datamodel_assign_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "shared",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "instance",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "location",
+          "type": {
+            "type": "ta_expr_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "value",
+          "type": {
+            "pointer": {
+              "type": "ta_value"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "borrowed"
+        },
+        {
+          "name": "fault",
+          "type": {
+            "pointer": {
+              "type": "ta_fault"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_datamodel_decode_scxml_target_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "shared",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "instance",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "value",
+          "type": {
+            "pointer": {
+              "type": "ta_value"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "borrowed"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_target"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        },
+        {
+          "name": "fault",
+          "type": {
+            "pointer": {
+              "type": "ta_fault"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_datamodel_eval_condition_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "shared",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "instance",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "expr",
+          "type": {
+            "type": "ta_expr_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "borrowed"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "builtin": "bool"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        },
+        {
+          "name": "fault",
+          "type": {
+            "pointer": {
+              "type": "ta_fault"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_datamodel_eval_value_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "shared",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "instance",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "expr",
+          "type": {
+            "type": "ta_expr_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "borrowed"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_value"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        },
+        {
+          "name": "fault",
+          "type": {
+            "pointer": {
+              "type": "ta_fault"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_datamodel_execute_script_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "shared",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "instance",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "script",
+          "type": {
+            "type": "ta_expr_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "borrowed"
+        },
+        {
+          "name": "fault",
+          "type": {
+            "pointer": {
+              "type": "ta_fault"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_datamodel_init_instance_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "shared",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "instance",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "binding",
+          "type": {
+            "pointer": {
+              "type": "ta_value"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "borrowed"
+        }
+      ]
+    },
+    "ta_datamodel_inspect_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "shared",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "instance",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "borrowed"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_value"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_datamodel_make_params_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "shared",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "instance",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "values",
+          "type": {
+            "pointer": {
+              "type": "ta_named_value"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "counted",
+          "count": "count"
+        },
+        {
+          "name": "count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "role": "in",
+          "count_of": "values"
+        },
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "borrowed"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_value"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        },
+        {
+          "name": "fault",
+          "type": {
+            "pointer": {
+              "type": "ta_fault"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_datamodel_prepare_definition_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "expressions",
+          "type": {
+            "pointer": {
+              "type": "ta_expression"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "counted",
+          "count": "expression_count"
+        },
+        {
+          "name": "expression_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "role": "in",
+          "count_of": "expressions"
+        },
+        {
+          "name": "allocator",
+          "type": {
+            "type": "ta_allocator"
+          },
+          "role": "in"
+        },
+        {
+          "name": "shared",
+          "type": {
+            "pointer": {
+              "pointer": {
+                "builtin": "void"
+              },
+              "const": false
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "raw"
+        }
+      ]
+    },
+    "ta_datamodel_read_location_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "shared",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "instance",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "location",
+          "type": {
+            "type": "ta_expr_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "borrowed"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_value"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        },
+        {
+          "name": "fault",
+          "type": {
+            "pointer": {
+              "type": "ta_fault"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_datamodel_vtable": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type": {
+            "type": "ta_str"
+          },
+          "role": "in"
+        },
+        {
+          "name": "prepare_definition",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_result"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_datamodel_prepare_definition_params"
+                  },
+                  "const": true
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "destroy_definition",
+          "type": {
+            "function": {
+              "returns": {
+                "builtin": "void"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "type": "ta_allocator"
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "instance_size",
+          "type": {
+            "function": {
+              "returns": {
+                "builtin": "uint32_t"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "instance_alignment",
+          "type": {
+            "function": {
+              "returns": {
+                "builtin": "uint32_t"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "init_instance",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_result"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_datamodel_init_instance_params"
+                  },
+                  "const": true
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "destroy_instance",
+          "type": {
+            "function": {
+              "returns": {
+                "builtin": "void"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "eval_condition",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_op_status"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_datamodel_eval_condition_params"
+                  },
+                  "const": true
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "eval_value",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_op_status"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_datamodel_eval_value_params"
+                  },
+                  "const": true
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "read_location",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_op_status"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_datamodel_read_location_params"
+                  },
+                  "const": true
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "assign",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_op_status"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_datamodel_assign_params"
+                  },
+                  "const": true
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "execute_script",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_op_status"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_datamodel_execute_script_params"
+                  },
+                  "const": true
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "decode_scxml_target",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_op_status"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_datamodel_decode_scxml_target_params"
+                  },
+                  "const": true
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "make_params",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_op_status"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_datamodel_make_params_params"
+                  },
+                  "const": true
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "inspect",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_result"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_datamodel_inspect_params"
+                  },
+                  "const": true
+                }
+              ]
+            }
+          },
+          "role": "in"
+        }
+      ]
+    },
+    "ta_definition": {
+      "kind": "opaque",
+      "ownership": "handle",
+      "handle": "definition"
+    },
+    "ta_definition_compile_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "spec",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_spec"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "datamodel",
+          "type": {
+            "type": "ta_datamodel"
+          },
+          "role": "in"
+        },
+        {
+          "name": "allocator",
+          "type": {
+            "type": "ta_allocator"
+          },
+          "role": "in"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "pointer": {
+                "type": "ta_definition"
+              },
+              "const": false
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "handle_out"
+        }
+      ]
+    },
+    "ta_definition_family": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type": {
+            "type": "ta_str"
+          },
+          "role": "in"
+        }
+      ]
+    },
+    "ta_definition_id": {
+      "kind": "alias",
+      "type": {
+        "builtin": "uint32_t"
+      }
+    },
+    "ta_definition_identity": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "family",
+          "type": {
+            "type": "ta_definition_family"
+          },
+          "role": "in"
+        },
+        {
+          "name": "revision",
+          "type": {
+            "type": "ta_bytes"
+          },
+          "role": "in"
+        }
+      ]
+    },
+    "ta_definition_state_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "definition",
+          "type": {
+            "type": "ta_definition_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "state",
+          "type": {
+            "type": "ta_state_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_state_info"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_delayed_send_info": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "send_id",
+          "type": {
+            "type": "ta_send_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "due",
+          "type": {
+            "type": "ta_time"
+          },
+          "role": "in"
+        },
+        {
+          "name": "event",
+          "type": {
+            "type": "ta_event_name_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "io_type",
+          "type": {
+            "type": "ta_atom"
+          },
+          "role": "in"
+        },
+        {
+          "name": "target",
+          "type": {
+            "type": "ta_value"
+          },
+          "role": "in"
+        },
+        {
+          "name": "data",
+          "type": {
+            "type": "ta_value"
+          },
+          "role": "in"
+        }
+      ]
+    },
+    "ta_dm_host": {
+      "kind": "opaque",
+      "ownership": "borrowed"
+    },
+    "ta_done_data_id": {
+      "kind": "alias",
+      "type": {
+        "builtin": "uint32_t"
+      }
+    },
+    "ta_due_dispatch_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "budget",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "role": "in"
+        },
+        {
+          "name": "dispatched",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        },
+        {
+          "name": "more_due",
+          "type": {
+            "pointer": {
+              "builtin": "bool"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_event": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type": {
+            "type": "ta_event_name_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "type",
+          "type": {
+            "type": "ta_event_type"
+          },
+          "role": "in"
+        },
+        {
+          "name": "send_id",
+          "type": {
+            "type": "ta_send_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "origin",
+          "type": {
+            "type": "ta_origin"
+          },
+          "role": "in"
+        },
+        {
+          "name": "invoke_id",
+          "type": {
+            "type": "ta_invoke_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "data",
+          "type": {
+            "type": "ta_value"
+          },
+          "role": "in"
+        }
+      ]
+    },
+    "ta_event_name_format_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type": {
+            "type": "ta_event_name_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "buffer",
+          "type": {
+            "pointer": {
+              "builtin": "char"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "buffer",
+          "buffer": {
+            "capacity": "capacity",
+            "needed": "needed"
+          }
+        },
+        {
+          "name": "capacity",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "role": "in"
+        },
+        {
+          "name": "needed",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_event_name_id": {
+      "kind": "alias",
+      "type": {
+        "builtin": "uint32_t"
+      }
+    },
+    "ta_event_type": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_EVENT_EXTERNAL",
+          "value": 0,
+          "json": "external"
+        },
+        {
+          "name": "TA_EVENT_INTERNAL",
+          "value": 1,
+          "json": "internal"
+        },
+        {
+          "name": "TA_EVENT_PLATFORM",
+          "value": 2,
+          "json": "platform"
+        }
+      ]
+    },
+    "ta_expr_id": {
+      "kind": "alias",
+      "type": {
+        "builtin": "uint32_t"
+      }
+    },
+    "ta_expression": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": {
+            "type": "ta_expression_kind"
+          },
+          "role": "in"
+        },
+        {
+          "name": "as",
+          "type": {
+            "record": {
+              "kind": "union",
+              "fields": [
+                {
+                  "name": "source",
+                  "type": {
+                    "type": "ta_str"
+                  },
+                  "role": "in"
+                },
+                {
+                  "name": "host",
+                  "type": {
+                    "type": "ta_expression_host"
+                  },
+                  "role": "in"
+                }
+              ]
+            }
+          },
+          "role": "in"
+        }
+      ],
+      "tagged_union": {
+        "tag": "kind",
+        "union": "as",
+        "enum": "ta_expression_kind",
+        "members": {
+          "TA_EXPRESSION_NONE": null,
+          "TA_EXPRESSION_SOURCE": "source",
+          "TA_EXPRESSION_HOST": "host"
+        }
+      }
+    },
+    "ta_expression_host": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "self",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "v",
+          "type": {
+            "pointer": {
+              "type": "ta_expression_host_vtable"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "value",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        }
+      ],
+      "semantic": "adapter"
+    },
+    "ta_expression_host_vtable": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "retain",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_result"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "type": "ta_allocator"
+                },
+                {
+                  "pointer": {
+                    "pointer": {
+                      "builtin": "void"
+                    },
+                    "const": false
+                  },
+                  "const": false
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "release",
+          "type": {
+            "function": {
+              "returns": {
+                "builtin": "void"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "type": "ta_allocator"
+                }
+              ]
+            }
+          },
+          "role": "in"
+        }
+      ],
+      "semantic": "vtable"
+    },
+    "ta_expression_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_EXPRESSION_NONE",
+          "value": 0,
+          "json": "none"
+        },
+        {
+          "name": "TA_EXPRESSION_SOURCE",
+          "value": 1,
+          "json": "source"
+        },
+        {
+          "name": "TA_EXPRESSION_HOST",
+          "value": 2,
+          "json": "host"
+        }
+      ]
+    },
+    "ta_extension_id": {
+      "kind": "alias",
+      "type": {
+        "builtin": "uint32_t"
+      }
+    },
+    "ta_external_delivery": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "destination",
+          "type": {
+            "type": "ta_actor_ref"
+          },
+          "role": "in"
+        },
+        {
+          "name": "event",
+          "type": {
+            "type": "ta_event"
+          },
+          "role": "in"
+        }
+      ]
+    },
+    "ta_external_event_router": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "self",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "v",
+          "type": {
+            "pointer": {
+              "type": "ta_external_event_router_vtable"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "semantic": "adapter"
+    },
+    "ta_external_event_router_vtable": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "submit",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_external_event_submit_status"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_external_event_submit_params"
+                  },
+                  "const": true
+                }
+              ]
+            }
+          },
+          "role": "in"
+        }
+      ],
+      "semantic": "vtable"
+    },
+    "ta_external_event_submit_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "delivery",
+          "type": {
+            "pointer": {
+              "type": "ta_external_delivery"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "fault",
+          "type": {
+            "pointer": {
+              "type": "ta_fault"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_external_event_submit_status": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_EXTERNAL_EVENT_ACCEPTED",
+          "value": 0,
+          "json": "accepted"
+        },
+        {
+          "name": "TA_EXTERNAL_EVENT_RETRY",
+          "value": 1,
+          "json": "retry"
+        },
+        {
+          "name": "TA_EXTERNAL_EVENT_ERROR",
+          "value": 2,
+          "json": "error"
+        }
+      ]
+    },
+    "ta_fault": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "detail",
+          "type": {
+            "type": "ta_event_name_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "code",
+          "type": {
+            "builtin": "int32_t"
+          },
+          "role": "in"
+        },
+        {
+          "name": "message",
+          "type": {
+            "type": "ta_str"
+          },
+          "role": "in"
+        },
+        {
+          "name": "data",
+          "type": {
+            "type": "ta_value"
+          },
+          "role": "in"
+        }
+      ]
+    },
+    "ta_initial_transition_id": {
+      "kind": "alias",
+      "type": {
+        "builtin": "uint32_t"
+      }
+    },
+    "ta_initializer_id": {
+      "kind": "alias",
+      "type": {
+        "builtin": "uint32_t"
+      }
+    },
+    "ta_invoke_decl_id": {
+      "kind": "alias",
+      "type": {
+        "builtin": "uint32_t"
+      }
+    },
+    "ta_invoke_id": {
+      "kind": "alias",
+      "type": {
+        "builtin": "uint64_t"
+      }
+    },
+    "ta_invoke_report_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_INVOKE_REPORT_EVENT",
+          "value": 0,
+          "json": "event"
+        },
+        {
+          "name": "TA_INVOKE_REPORT_DONE",
+          "value": 1,
+          "json": "done"
+        },
+        {
+          "name": "TA_INVOKE_REPORT_UNAVAILABLE",
+          "value": 2,
+          "json": "unavailable"
+        }
+      ]
+    },
+    "ta_invoke_report_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "invoke_id",
+          "type": {
+            "type": "ta_invoke_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "kind",
+          "type": {
+            "type": "ta_invoke_report_kind"
+          },
+          "role": "in"
+        },
+        {
+          "name": "as",
+          "type": {
+            "record": {
+              "kind": "union",
+              "fields": [
+                {
+                  "name": "event",
+                  "type": {
+                    "pointer": {
+                      "type": "ta_event"
+                    },
+                    "const": true
+                  },
+                  "role": "in",
+                  "shape": "single"
+                },
+                {
+                  "name": "done_data",
+                  "type": {
+                    "pointer": {
+                      "type": "ta_value"
+                    },
+                    "const": true
+                  },
+                  "role": "in",
+                  "shape": "single"
+                },
+                {
+                  "name": "fault",
+                  "type": {
+                    "pointer": {
+                      "type": "ta_fault"
+                    },
+                    "const": true
+                  },
+                  "role": "in",
+                  "shape": "single"
+                }
+              ]
+            }
+          },
+          "role": "in"
+        }
+      ],
+      "tagged_union": {
+        "tag": "kind",
+        "union": "as",
+        "enum": "ta_invoke_report_kind",
+        "members": {
+          "TA_INVOKE_REPORT_EVENT": "event",
+          "TA_INVOKE_REPORT_DONE": "done_data",
+          "TA_INVOKE_REPORT_UNAVAILABLE": "fault"
+        }
+      }
+    },
+    "ta_invoke_request": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "parent",
+          "type": {
+            "type": "ta_actor_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "invoke_id",
+          "type": {
+            "type": "ta_invoke_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "type",
+          "type": {
+            "type": "ta_atom"
+          },
+          "role": "in"
+        },
+        {
+          "name": "src",
+          "type": {
+            "type": "ta_value"
+          },
+          "role": "in"
+        },
+        {
+          "name": "data",
+          "type": {
+            "type": "ta_value"
+          },
+          "role": "in"
+        },
+        {
+          "name": "autoforward",
+          "type": {
+            "builtin": "bool"
+          },
+          "role": "in"
+        }
+      ]
+    },
+    "ta_invoker": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "self",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "v",
+          "type": {
+            "pointer": {
+              "type": "ta_invoker_vtable"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "semantic": "adapter"
+    },
+    "ta_invoker_forward_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "service_handle",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "role": "in"
+        },
+        {
+          "name": "event",
+          "type": {
+            "pointer": {
+              "type": "ta_event"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "fault",
+          "type": {
+            "pointer": {
+              "type": "ta_fault"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_invoker_start_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "request",
+          "type": {
+            "pointer": {
+              "type": "ta_invoke_request"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "service_handle",
+          "type": {
+            "pointer": {
+              "builtin": "uint64_t"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        },
+        {
+          "name": "fault",
+          "type": {
+            "pointer": {
+              "type": "ta_fault"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_invoker_vtable": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "start",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_op_status"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_invoker_start_params"
+                  },
+                  "const": true
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "cancel",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_op_status"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "builtin": "uint64_t"
+                },
+                {
+                  "pointer": {
+                    "type": "ta_fault"
+                  },
+                  "const": false
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "forward",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_op_status"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_invoker_forward_params"
+                  },
+                  "const": true
+                }
+              ]
+            }
+          },
+          "role": "in"
+        }
+      ],
+      "semantic": "vtable"
+    },
+    "ta_io": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "self",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "v",
+          "type": {
+            "pointer": {
+              "type": "ta_io_vtable"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "semantic": "adapter"
+    },
+    "ta_io_vtable": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "send",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_op_status"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_send"
+                  },
+                  "const": true
+                },
+                {
+                  "pointer": {
+                    "type": "ta_fault"
+                  },
+                  "const": false
+                }
+              ]
+            }
+          },
+          "role": "in"
+        }
+      ],
+      "semantic": "vtable"
+    },
+    "ta_named_value": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type": {
+            "type": "ta_atom"
+          },
+          "role": "in"
+        },
+        {
+          "name": "value",
+          "type": {
+            "type": "ta_value"
+          },
+          "role": "in"
+        }
+      ]
+    },
+    "ta_op_status": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_OP_OK",
+          "value": 0,
+          "json": "ok"
+        },
+        {
+          "name": "TA_OP_ERROR",
+          "value": 1,
+          "json": "error"
+        }
+      ]
+    },
+    "ta_origin": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": {
+            "type": "ta_origin_kind"
+          },
+          "role": "in"
+        },
+        {
+          "name": "as",
+          "type": {
+            "record": {
+              "kind": "union",
+              "fields": [
+                {
+                  "name": "actor",
+                  "type": {
+                    "type": "ta_actor_ref"
+                  },
+                  "role": "in"
+                },
+                {
+                  "name": "invoke",
+                  "type": {
+                    "type": "ta_invoke_id"
+                  },
+                  "role": "in"
+                },
+                {
+                  "name": "opaque",
+                  "type": {
+                    "builtin": "uint64_t"
+                  },
+                  "role": "in"
+                }
+              ]
+            }
+          },
+          "role": "in"
+        }
+      ],
+      "tagged_union": {
+        "tag": "kind",
+        "union": "as",
+        "enum": "ta_origin_kind",
+        "members": {
+          "TA_ORIGIN_NONE": null,
+          "TA_ORIGIN_ACTOR": "actor",
+          "TA_ORIGIN_IO": "opaque",
+          "TA_ORIGIN_INVOKE": "invoke"
+        }
+      }
+    },
+    "ta_origin_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_ORIGIN_NONE",
+          "value": 0,
+          "json": "none"
+        },
+        {
+          "name": "TA_ORIGIN_ACTOR",
+          "value": 1,
+          "json": "actor"
+        },
+        {
+          "name": "TA_ORIGIN_IO",
+          "value": 2,
+          "json": "io"
+        },
+        {
+          "name": "TA_ORIGIN_INVOKE",
+          "value": 3,
+          "json": "invoke"
+        }
+      ]
+    },
+    "ta_param_id": {
+      "kind": "alias",
+      "type": {
+        "builtin": "uint32_t"
+      }
+    },
+    "ta_queued_event": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "event",
+          "type": {
+            "type": "ta_event"
+          },
+          "role": "in"
+        },
+        {
+          "name": "flags",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "role": "in"
+        }
+      ]
+    },
+    "ta_result": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_OK",
+          "value": 0,
+          "json": "ok"
+        },
+        {
+          "name": "TA_ERR_INVALID",
+          "value": -1,
+          "json": "err_invalid"
+        },
+        {
+          "name": "TA_ERR_NOMEM",
+          "value": -2,
+          "json": "err_nomem"
+        },
+        {
+          "name": "TA_ERR_NOT_FOUND",
+          "value": -3,
+          "json": "err_not_found"
+        },
+        {
+          "name": "TA_ERR_NOT_RECONSTRUCTIBLE",
+          "value": -4,
+          "json": "err_not_reconstructible"
+        },
+        {
+          "name": "TA_ERR_BUSY",
+          "value": -5,
+          "json": "err_busy"
+        },
+        {
+          "name": "TA_ERR_UNSUPPORTED",
+          "value": -6,
+          "json": "err_unsupported"
+        },
+        {
+          "name": "TA_ERR_CORRUPT",
+          "value": -7,
+          "json": "err_corrupt"
+        },
+        {
+          "name": "TA_ERR_DEFINITION_MISMATCH",
+          "value": -8,
+          "json": "err_definition_mismatch"
+        },
+        {
+          "name": "TA_ERR_UNLOADED",
+          "value": -9,
+          "json": "err_unloaded"
+        },
+        {
+          "name": "TA_ERR_STALE",
+          "value": -10,
+          "json": "err_stale"
+        }
+      ],
+      "underlying": {
+        "builtin": "int32_t"
+      }
+    },
+    "ta_run_status": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_RUN_STABLE",
+          "value": 0,
+          "json": "stable"
+        },
+        {
+          "name": "TA_RUN_PAUSED",
+          "value": 1,
+          "json": "paused"
+        },
+        {
+          "name": "TA_RUN_DONE",
+          "value": 2,
+          "json": "done"
+        },
+        {
+          "name": "TA_RUN_ERROR",
+          "value": 3,
+          "json": "error"
+        }
+      ]
+    },
+    "ta_scxml_action_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_SCXML_ACTION_NONE",
+          "value": 0,
+          "json": "none"
+        },
+        {
+          "name": "TA_SCXML_ACTION_RAISE",
+          "value": 1,
+          "json": "raise"
+        },
+        {
+          "name": "TA_SCXML_ACTION_SEND",
+          "value": 2,
+          "json": "send"
+        },
+        {
+          "name": "TA_SCXML_ACTION_CANCEL",
+          "value": 3,
+          "json": "cancel"
+        },
+        {
+          "name": "TA_SCXML_ACTION_ASSIGN",
+          "value": 4,
+          "json": "assign"
+        },
+        {
+          "name": "TA_SCXML_ACTION_SCRIPT",
+          "value": 5,
+          "json": "script"
+        },
+        {
+          "name": "TA_SCXML_ACTION_LOG",
+          "value": 6,
+          "json": "log"
+        },
+        {
+          "name": "TA_SCXML_ACTION_IF",
+          "value": 7,
+          "json": "if"
+        },
+        {
+          "name": "TA_SCXML_ACTION_FOREACH",
+          "value": 8,
+          "json": "foreach"
+        },
+        {
+          "name": "TA_SCXML_ACTION_INVOKE",
+          "value": 9,
+          "json": "invoke"
+        },
+        {
+          "name": "TA_SCXML_ACTION_EXTENSION",
+          "value": 10,
+          "json": "extension"
+        }
+      ]
+    },
+    "ta_scxml_action_spec": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": {
+            "type": "ta_scxml_action_kind"
+          },
+          "role": "in"
+        },
+        {
+          "name": "as",
+          "type": {
+            "record": {
+              "kind": "union",
+              "fields": [
+                {
+                  "name": "raise",
+                  "type": {
+                    "record": {
+                      "kind": "struct",
+                      "fields": [
+                        {
+                          "name": "event",
+                          "type": {
+                            "type": "ta_str"
+                          },
+                          "role": "in"
+                        },
+                        {
+                          "name": "data",
+                          "type": {
+                            "type": "ta_scxml_value_spec"
+                          },
+                          "role": "in"
+                        }
+                      ]
+                    }
+                  },
+                  "role": "in"
+                },
+                {
+                  "name": "send",
+                  "type": {
+                    "type": "ta_scxml_send_spec"
+                  },
+                  "role": "in"
+                },
+                {
+                  "name": "cancel",
+                  "type": {
+                    "record": {
+                      "kind": "struct",
+                      "fields": [
+                        {
+                          "name": "sendid",
+                          "type": {
+                            "type": "ta_scxml_string_spec"
+                          },
+                          "role": "in"
+                        }
+                      ]
+                    }
+                  },
+                  "role": "in"
+                },
+                {
+                  "name": "assign",
+                  "type": {
+                    "record": {
+                      "kind": "struct",
+                      "fields": [
+                        {
+                          "name": "location",
+                          "type": {
+                            "type": "ta_expression"
+                          },
+                          "role": "in"
+                        },
+                        {
+                          "name": "value",
+                          "type": {
+                            "type": "ta_scxml_value_spec"
+                          },
+                          "role": "in"
+                        }
+                      ]
+                    }
+                  },
+                  "role": "in"
+                },
+                {
+                  "name": "script",
+                  "type": {
+                    "record": {
+                      "kind": "struct",
+                      "fields": [
+                        {
+                          "name": "script",
+                          "type": {
+                            "type": "ta_expression"
+                          },
+                          "role": "in"
+                        }
+                      ]
+                    }
+                  },
+                  "role": "in"
+                },
+                {
+                  "name": "log",
+                  "type": {
+                    "record": {
+                      "kind": "struct",
+                      "fields": [
+                        {
+                          "name": "label",
+                          "type": {
+                            "type": "ta_str"
+                          },
+                          "role": "in"
+                        },
+                        {
+                          "name": "expr",
+                          "type": {
+                            "type": "ta_expression"
+                          },
+                          "role": "in"
+                        }
+                      ]
+                    }
+                  },
+                  "role": "in"
+                },
+                {
+                  "name": "conditional",
+                  "type": {
+                    "record": {
+                      "kind": "struct",
+                      "fields": [
+                        {
+                          "name": "condition",
+                          "type": {
+                            "type": "ta_expression"
+                          },
+                          "role": "in"
+                        },
+                        {
+                          "name": "then_actions",
+                          "type": {
+                            "pointer": {
+                              "type": "ta_scxml_action_spec"
+                            },
+                            "const": true
+                          },
+                          "role": "in",
+                          "shape": "terminated"
+                        },
+                        {
+                          "name": "else_actions",
+                          "type": {
+                            "pointer": {
+                              "type": "ta_scxml_action_spec"
+                            },
+                            "const": true
+                          },
+                          "role": "in",
+                          "shape": "terminated"
+                        }
+                      ]
+                    }
+                  },
+                  "role": "in"
+                },
+                {
+                  "name": "foreach",
+                  "type": {
+                    "record": {
+                      "kind": "struct",
+                      "fields": [
+                        {
+                          "name": "array",
+                          "type": {
+                            "type": "ta_expression"
+                          },
+                          "role": "in"
+                        },
+                        {
+                          "name": "item",
+                          "type": {
+                            "type": "ta_str"
+                          },
+                          "role": "in"
+                        },
+                        {
+                          "name": "index",
+                          "type": {
+                            "type": "ta_str"
+                          },
+                          "role": "in"
+                        },
+                        {
+                          "name": "body",
+                          "type": {
+                            "pointer": {
+                              "type": "ta_scxml_action_spec"
+                            },
+                            "const": true
+                          },
+                          "role": "in",
+                          "shape": "terminated"
+                        }
+                      ]
+                    }
+                  },
+                  "role": "in"
+                },
+                {
+                  "name": "invoke",
+                  "type": {
+                    "type": "ta_scxml_invoke_spec"
+                  },
+                  "role": "in"
+                },
+                {
+                  "name": "extension",
+                  "type": {
+                    "record": {
+                      "kind": "struct",
+                      "fields": [
+                        {
+                          "name": "type",
+                          "type": {
+                            "type": "ta_str"
+                          },
+                          "role": "in"
+                        },
+                        {
+                          "name": "payload",
+                          "type": {
+                            "type": "ta_bytes"
+                          },
+                          "role": "in"
+                        }
+                      ]
+                    }
+                  },
+                  "role": "in"
+                }
+              ]
+            }
+          },
+          "role": "in"
+        }
+      ],
+      "zero_is_absent": true,
+      "tagged_union": {
+        "tag": "kind",
+        "union": "as",
+        "enum": "ta_scxml_action_kind",
+        "members": {
+          "TA_SCXML_ACTION_NONE": null,
+          "TA_SCXML_ACTION_RAISE": "raise",
+          "TA_SCXML_ACTION_SEND": "send",
+          "TA_SCXML_ACTION_CANCEL": "cancel",
+          "TA_SCXML_ACTION_ASSIGN": "assign",
+          "TA_SCXML_ACTION_SCRIPT": "script",
+          "TA_SCXML_ACTION_LOG": "log",
+          "TA_SCXML_ACTION_IF": "conditional",
+          "TA_SCXML_ACTION_FOREACH": "foreach",
+          "TA_SCXML_ACTION_INVOKE": "invoke",
+          "TA_SCXML_ACTION_EXTENSION": "extension"
+        }
+      }
+    },
+    "ta_scxml_binding_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_SCXML_BINDING_DEFAULT",
+          "value": 0,
+          "json": "default"
+        },
+        {
+          "name": "TA_SCXML_BINDING_EARLY",
+          "value": 1,
+          "json": "early"
+        },
+        {
+          "name": "TA_SCXML_BINDING_LATE",
+          "value": 2,
+          "json": "late"
+        }
+      ]
+    },
+    "ta_scxml_data_spec": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type": {
+            "type": "ta_str"
+          },
+          "role": "in"
+        },
+        {
+          "name": "initializer",
+          "type": {
+            "type": "ta_scxml_value_spec"
+          },
+          "role": "in"
+        }
+      ],
+      "zero_is_absent": true
+    },
+    "ta_scxml_done_data_spec": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "content",
+          "type": {
+            "type": "ta_scxml_value_spec"
+          },
+          "role": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_param_spec"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "terminated"
+        }
+      ],
+      "zero_is_absent": true
+    },
+    "ta_scxml_event_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_SCXML_EVENT_NONE",
+          "value": 0,
+          "json": "none"
+        },
+        {
+          "name": "TA_SCXML_EVENT_NAME",
+          "value": 1,
+          "json": "name"
+        },
+        {
+          "name": "TA_SCXML_EVENT_EXPR",
+          "value": 2,
+          "json": "expr"
+        }
+      ]
+    },
+    "ta_scxml_event_spec": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": {
+            "type": "ta_scxml_event_kind"
+          },
+          "role": "in"
+        },
+        {
+          "name": "as",
+          "type": {
+            "record": {
+              "kind": "union",
+              "fields": [
+                {
+                  "name": "name",
+                  "type": {
+                    "type": "ta_str"
+                  },
+                  "role": "in"
+                },
+                {
+                  "name": "expr",
+                  "type": {
+                    "type": "ta_expression"
+                  },
+                  "role": "in"
+                }
+              ]
+            }
+          },
+          "role": "in"
+        }
+      ],
+      "zero_is_absent": true,
+      "tagged_union": {
+        "tag": "kind",
+        "union": "as",
+        "enum": "ta_scxml_event_kind",
+        "members": {
+          "TA_SCXML_EVENT_NONE": null,
+          "TA_SCXML_EVENT_NAME": "name",
+          "TA_SCXML_EVENT_EXPR": "expr"
+        }
+      }
+    },
+    "ta_scxml_id_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_SCXML_ID_NONE",
+          "value": 0,
+          "json": "none"
+        },
+        {
+          "name": "TA_SCXML_ID_LITERAL",
+          "value": 1,
+          "json": "literal"
+        },
+        {
+          "name": "TA_SCXML_ID_LOCATION",
+          "value": 2,
+          "json": "location"
+        }
+      ]
+    },
+    "ta_scxml_id_spec": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": {
+            "type": "ta_scxml_id_kind"
+          },
+          "role": "in"
+        },
+        {
+          "name": "as",
+          "type": {
+            "record": {
+              "kind": "union",
+              "fields": [
+                {
+                  "name": "literal",
+                  "type": {
+                    "type": "ta_str"
+                  },
+                  "role": "in"
+                },
+                {
+                  "name": "location",
+                  "type": {
+                    "type": "ta_expression"
+                  },
+                  "role": "in"
+                }
+              ]
+            }
+          },
+          "role": "in"
+        }
+      ],
+      "zero_is_absent": true,
+      "tagged_union": {
+        "tag": "kind",
+        "union": "as",
+        "enum": "ta_scxml_id_kind",
+        "members": {
+          "TA_SCXML_ID_NONE": null,
+          "TA_SCXML_ID_LITERAL": "literal",
+          "TA_SCXML_ID_LOCATION": "location"
+        }
+      }
+    },
+    "ta_scxml_initial_spec": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "targets",
+          "type": {
+            "pointer": {
+              "type": "ta_str"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "terminated"
+        },
+        {
+          "name": "actions",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_action_spec"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "terminated"
+        }
+      ],
+      "zero_is_absent": true
+    },
+    "ta_scxml_invoke_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_SCXML_INVOKE_NONE",
+          "value": 0,
+          "json": "invoke_none"
+        },
+        {
+          "name": "TA_SCXML_INVOKE",
+          "value": 1,
+          "json": "invoke"
+        }
+      ]
+    },
+    "ta_scxml_invoke_spec": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": {
+            "type": "ta_scxml_invoke_kind"
+          },
+          "role": "in"
+        },
+        {
+          "name": "id",
+          "type": {
+            "type": "ta_scxml_id_spec"
+          },
+          "role": "in"
+        },
+        {
+          "name": "type",
+          "type": {
+            "type": "ta_scxml_string_spec"
+          },
+          "role": "in"
+        },
+        {
+          "name": "src",
+          "type": {
+            "type": "ta_scxml_string_spec"
+          },
+          "role": "in"
+        },
+        {
+          "name": "data",
+          "type": {
+            "type": "ta_scxml_value_spec"
+          },
+          "role": "in"
+        },
+        {
+          "name": "autoforward",
+          "type": {
+            "builtin": "bool"
+          },
+          "role": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_param_spec"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "terminated"
+        },
+        {
+          "name": "finalize",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_action_spec"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "terminated"
+        }
+      ],
+      "zero_is_absent": true
+    },
+    "ta_scxml_param_spec": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type": {
+            "type": "ta_str"
+          },
+          "role": "in"
+        },
+        {
+          "name": "value",
+          "type": {
+            "type": "ta_scxml_value_spec"
+          },
+          "role": "in"
+        }
+      ],
+      "zero_is_absent": true
+    },
+    "ta_scxml_send_spec": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type": {
+            "type": "ta_scxml_id_spec"
+          },
+          "role": "in"
+        },
+        {
+          "name": "type",
+          "type": {
+            "type": "ta_scxml_string_spec"
+          },
+          "role": "in"
+        },
+        {
+          "name": "event",
+          "type": {
+            "type": "ta_scxml_event_spec"
+          },
+          "role": "in"
+        },
+        {
+          "name": "target",
+          "type": {
+            "type": "ta_scxml_string_spec"
+          },
+          "role": "in"
+        },
+        {
+          "name": "delay",
+          "type": {
+            "type": "ta_scxml_string_spec"
+          },
+          "role": "in"
+        },
+        {
+          "name": "data",
+          "type": {
+            "type": "ta_scxml_value_spec"
+          },
+          "role": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_param_spec"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "terminated"
+        }
+      ],
+      "zero_is_absent": true
+    },
+    "ta_scxml_spec": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type": {
+            "type": "ta_str"
+          },
+          "role": "in"
+        },
+        {
+          "name": "datamodel",
+          "type": {
+            "type": "ta_str"
+          },
+          "role": "in"
+        },
+        {
+          "name": "identity",
+          "type": {
+            "pointer": {
+              "type": "ta_definition_identity"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "binding",
+          "type": {
+            "type": "ta_scxml_binding_kind"
+          },
+          "role": "in"
+        },
+        {
+          "name": "initial",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_initial_spec"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "states",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_state_spec"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "terminated"
+        },
+        {
+          "name": "data",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_data_spec"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "terminated"
+        },
+        {
+          "name": "script",
+          "type": {
+            "type": "ta_expression"
+          },
+          "role": "in"
+        }
+      ],
+      "zero_is_absent": true
+    },
+    "ta_scxml_state_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_SCXML_STATE_NONE",
+          "value": 0,
+          "json": "none"
+        },
+        {
+          "name": "TA_SCXML_STATE_ATOMIC",
+          "value": 1,
+          "json": "atomic"
+        },
+        {
+          "name": "TA_SCXML_STATE_COMPOUND",
+          "value": 2,
+          "json": "compound"
+        },
+        {
+          "name": "TA_SCXML_STATE_PARALLEL",
+          "value": 3,
+          "json": "parallel"
+        },
+        {
+          "name": "TA_SCXML_STATE_FINAL",
+          "value": 4,
+          "json": "final"
+        },
+        {
+          "name": "TA_SCXML_STATE_HISTORY_SHALLOW",
+          "value": 5,
+          "json": "history_shallow"
+        },
+        {
+          "name": "TA_SCXML_STATE_HISTORY_DEEP",
+          "value": 6,
+          "json": "history_deep"
+        }
+      ]
+    },
+    "ta_scxml_state_spec": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": {
+            "type": "ta_scxml_state_kind"
+          },
+          "role": "in"
+        },
+        {
+          "name": "id",
+          "type": {
+            "type": "ta_str"
+          },
+          "role": "in"
+        },
+        {
+          "name": "states",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_state_spec"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "terminated"
+        },
+        {
+          "name": "initial",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_initial_spec"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "transitions",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_transition_spec"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "terminated"
+        },
+        {
+          "name": "onentry",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_action_spec"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "terminated"
+        },
+        {
+          "name": "onexit",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_action_spec"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "terminated"
+        },
+        {
+          "name": "data",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_data_spec"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "terminated"
+        },
+        {
+          "name": "invokes",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_invoke_spec"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "terminated"
+        },
+        {
+          "name": "done_data",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_done_data_spec"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "zero_is_absent": true
+    },
+    "ta_scxml_string_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_SCXML_STRING_NONE",
+          "value": 0,
+          "json": "none"
+        },
+        {
+          "name": "TA_SCXML_STRING_LITERAL",
+          "value": 1,
+          "json": "literal"
+        },
+        {
+          "name": "TA_SCXML_STRING_EXPR",
+          "value": 2,
+          "json": "expr"
+        }
+      ]
+    },
+    "ta_scxml_string_spec": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": {
+            "type": "ta_scxml_string_kind"
+          },
+          "role": "in"
+        },
+        {
+          "name": "as",
+          "type": {
+            "record": {
+              "kind": "union",
+              "fields": [
+                {
+                  "name": "literal",
+                  "type": {
+                    "type": "ta_str"
+                  },
+                  "role": "in"
+                },
+                {
+                  "name": "expr",
+                  "type": {
+                    "type": "ta_expression"
+                  },
+                  "role": "in"
+                }
+              ]
+            }
+          },
+          "role": "in"
+        }
+      ],
+      "zero_is_absent": true,
+      "tagged_union": {
+        "tag": "kind",
+        "union": "as",
+        "enum": "ta_scxml_string_kind",
+        "members": {
+          "TA_SCXML_STRING_NONE": null,
+          "TA_SCXML_STRING_LITERAL": "literal",
+          "TA_SCXML_STRING_EXPR": "expr"
+        }
+      }
+    },
+    "ta_scxml_target": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": {
+            "type": "ta_scxml_target_kind"
+          },
+          "role": "in"
+        },
+        {
+          "name": "as",
+          "type": {
+            "record": {
+              "kind": "union",
+              "fields": [
+                {
+                  "name": "invoke",
+                  "type": {
+                    "type": "ta_invoke_id"
+                  },
+                  "role": "in"
+                },
+                {
+                  "name": "actor",
+                  "type": {
+                    "type": "ta_actor_ref"
+                  },
+                  "role": "in"
+                }
+              ]
+            }
+          },
+          "role": "in"
+        }
+      ],
+      "zero_is_absent": true,
+      "tagged_union": {
+        "tag": "kind",
+        "union": "as",
+        "enum": "ta_scxml_target_kind",
+        "members": {
+          "TA_SCXML_TARGET_INVALID": null,
+          "TA_SCXML_TARGET_INTERNAL": null,
+          "TA_SCXML_TARGET_SELF": null,
+          "TA_SCXML_TARGET_PARENT": null,
+          "TA_SCXML_TARGET_INVOKE": "invoke",
+          "TA_SCXML_TARGET_ACTOR": "actor"
+        }
+      }
+    },
+    "ta_scxml_target_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_SCXML_TARGET_INVALID",
+          "value": 0,
+          "json": "invalid"
+        },
+        {
+          "name": "TA_SCXML_TARGET_INTERNAL",
+          "value": 1,
+          "json": "internal"
+        },
+        {
+          "name": "TA_SCXML_TARGET_SELF",
+          "value": 2,
+          "json": "self"
+        },
+        {
+          "name": "TA_SCXML_TARGET_PARENT",
+          "value": 3,
+          "json": "parent"
+        },
+        {
+          "name": "TA_SCXML_TARGET_INVOKE",
+          "value": 4,
+          "json": "invoke"
+        },
+        {
+          "name": "TA_SCXML_TARGET_ACTOR",
+          "value": 5,
+          "json": "actor"
+        }
+      ]
+    },
+    "ta_scxml_transition_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_SCXML_TRANSITION_NONE",
+          "value": 0,
+          "json": "none"
+        },
+        {
+          "name": "TA_SCXML_TRANSITION_EXTERNAL",
+          "value": 1,
+          "json": "external"
+        },
+        {
+          "name": "TA_SCXML_TRANSITION_INTERNAL",
+          "value": 2,
+          "json": "internal"
+        }
+      ]
+    },
+    "ta_scxml_transition_spec": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": {
+            "type": "ta_scxml_transition_kind"
+          },
+          "role": "in"
+        },
+        {
+          "name": "event",
+          "type": {
+            "type": "ta_str"
+          },
+          "role": "in"
+        },
+        {
+          "name": "condition",
+          "type": {
+            "type": "ta_expression"
+          },
+          "role": "in"
+        },
+        {
+          "name": "targets",
+          "type": {
+            "pointer": {
+              "type": "ta_str"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "terminated"
+        },
+        {
+          "name": "actions",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_action_spec"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "terminated"
+        }
+      ],
+      "zero_is_absent": true
+    },
+    "ta_scxml_value_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_SCXML_VALUE_NONE",
+          "value": 0,
+          "json": "none"
+        },
+        {
+          "name": "TA_SCXML_VALUE_EXPR",
+          "value": 1,
+          "json": "expr"
+        },
+        {
+          "name": "TA_SCXML_VALUE_LOCATION",
+          "value": 2,
+          "json": "location"
+        },
+        {
+          "name": "TA_SCXML_VALUE_CONTENT",
+          "value": 3,
+          "json": "content"
+        }
+      ]
+    },
+    "ta_scxml_value_spec": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": {
+            "type": "ta_scxml_value_kind"
+          },
+          "role": "in"
+        },
+        {
+          "name": "as",
+          "type": {
+            "record": {
+              "kind": "union",
+              "fields": [
+                {
+                  "name": "expr",
+                  "type": {
+                    "type": "ta_expression"
+                  },
+                  "role": "in"
+                },
+                {
+                  "name": "location",
+                  "type": {
+                    "type": "ta_expression"
+                  },
+                  "role": "in"
+                },
+                {
+                  "name": "content",
+                  "type": {
+                    "type": "ta_bytes"
+                  },
+                  "role": "in"
+                }
+              ]
+            }
+          },
+          "role": "in"
+        }
+      ],
+      "zero_is_absent": true,
+      "tagged_union": {
+        "tag": "kind",
+        "union": "as",
+        "enum": "ta_scxml_value_kind",
+        "members": {
+          "TA_SCXML_VALUE_NONE": null,
+          "TA_SCXML_VALUE_EXPR": "expr",
+          "TA_SCXML_VALUE_LOCATION": "location",
+          "TA_SCXML_VALUE_CONTENT": "content"
+        }
+      }
+    },
+    "ta_send": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "source",
+          "type": {
+            "type": "ta_actor_ref"
+          },
+          "role": "in"
+        },
+        {
+          "name": "send_id",
+          "type": {
+            "type": "ta_send_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "event",
+          "type": {
+            "type": "ta_event_name_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "io_type",
+          "type": {
+            "type": "ta_atom"
+          },
+          "role": "in"
+        },
+        {
+          "name": "target",
+          "type": {
+            "type": "ta_value"
+          },
+          "role": "in"
+        },
+        {
+          "name": "data",
+          "type": {
+            "type": "ta_value"
+          },
+          "role": "in"
+        }
+      ]
+    },
+    "ta_send_id": {
+      "kind": "alias",
+      "type": {
+        "builtin": "uint64_t"
+      }
+    },
+    "ta_session_image": {
+      "kind": "opaque",
+      "ownership": "handle",
+      "handle": "session_image"
+    },
+    "ta_state_id": {
+      "kind": "alias",
+      "type": {
+        "builtin": "uint32_t"
+      }
+    },
+    "ta_state_info": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type": {
+            "type": "ta_str"
+          },
+          "role": "in"
+        },
+        {
+          "name": "parent",
+          "type": {
+            "type": "ta_state_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "kind",
+          "type": {
+            "type": "ta_state_kind"
+          },
+          "role": "in"
+        }
+      ]
+    },
+    "ta_state_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_STATE_ATOMIC",
+          "value": 0,
+          "json": "atomic"
+        },
+        {
+          "name": "TA_STATE_COMPOUND",
+          "value": 1,
+          "json": "compound"
+        },
+        {
+          "name": "TA_STATE_PARALLEL",
+          "value": 2,
+          "json": "parallel"
+        },
+        {
+          "name": "TA_STATE_FINAL",
+          "value": 3,
+          "json": "final"
+        },
+        {
+          "name": "TA_STATE_HISTORY_SHALLOW",
+          "value": 4,
+          "json": "history_shallow"
+        },
+        {
+          "name": "TA_STATE_HISTORY_DEEP",
+          "value": 5,
+          "json": "history_deep"
+        }
+      ]
+    },
+    "ta_str": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "ptr",
+          "type": {
+            "pointer": {
+              "builtin": "char"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "cstring"
+        },
+        {
+          "name": "len",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "role": "in"
+        }
+      ],
+      "semantic": "string"
+    },
+    "ta_system": {
+      "kind": "opaque",
+      "ownership": "handle",
+      "handle": "system"
+    },
+    "ta_system_config": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "allocator",
+          "type": {
+            "type": "ta_allocator"
+          },
+          "role": "in"
+        },
+        {
+          "name": "initial_time",
+          "type": {
+            "type": "ta_time"
+          },
+          "role": "in"
+        }
+      ]
+    },
+    "ta_time": {
+      "kind": "alias",
+      "type": {
+        "builtin": "uint64_t"
+      }
+    },
+    "ta_timer_id": {
+      "kind": "alias",
+      "type": {
+        "builtin": "uint64_t"
+      }
+    },
+    "ta_transition_id": {
+      "kind": "alias",
+      "type": {
+        "builtin": "uint32_t"
+      }
+    },
+    "ta_tree": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "allocator",
+          "type": {
+            "type": "ta_allocator"
+          },
+          "role": "in"
+        },
+        {
+          "name": "result",
+          "type": {
+            "type": "ta_result"
+          },
+          "role": "in"
+        },
+        {
+          "name": "impl",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        }
+      ]
+    },
+    "ta_tree_list": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "tree",
+          "type": {
+            "pointer": {
+              "type": "ta_tree"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        },
+        {
+          "name": "element_size",
+          "type": {
+            "builtin": "size_t"
+          },
+          "role": "in"
+        },
+        {
+          "name": "element_alignment",
+          "type": {
+            "builtin": "size_t"
+          },
+          "role": "in"
+        },
+        {
+          "name": "impl",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        }
+      ]
+    },
+    "ta_tree_list_layout": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "element_size",
+          "type": {
+            "builtin": "size_t"
+          },
+          "role": "in"
+        },
+        {
+          "name": "element_alignment",
+          "type": {
+            "builtin": "size_t"
+          },
+          "role": "in"
+        }
+      ]
+    },
+    "ta_value": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "self",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "v",
+          "type": {
+            "pointer": {
+              "type": "ta_value_vtable"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "semantic": "adapter"
+    },
+    "ta_value_vtable": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "retain",
+          "type": {
+            "function": {
+              "returns": {
+                "builtin": "void"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "release",
+          "type": {
+            "function": {
+              "returns": {
+                "builtin": "void"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "clone",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_result"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_value"
+                  },
+                  "const": false
+                }
+              ]
+            }
+          },
+          "role": "in"
+        }
+      ],
+      "semantic": "vtable"
+    }
+  },
+  "functions": [
+    {
+      "name": "ta_arena_init",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "arena",
+          "type": {
+            "pointer": {
+              "type": "ta_arena"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        },
+        {
+          "name": "backing",
+          "type": {
+            "type": "ta_allocator"
+          },
+          "role": "in"
+        },
+        {
+          "name": "block_size",
+          "type": {
+            "builtin": "size_t"
+          },
+          "role": "in"
+        }
+      ],
+      "public": true,
+      "implemented": true
+    },
+    {
+      "name": "ta_arena_reset",
+      "returns": {
+        "builtin": "void"
+      },
+      "params": [
+        {
+          "name": "arena",
+          "type": {
+            "pointer": {
+              "type": "ta_arena"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": true
+    },
+    {
+      "name": "ta_arena_destroy",
+      "returns": {
+        "builtin": "void"
+      },
+      "params": [
+        {
+          "name": "arena",
+          "type": {
+            "pointer": {
+              "type": "ta_arena"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": true
+    },
+    {
+      "name": "ta_arena_alloc",
+      "returns": {
+        "pointer": {
+          "builtin": "void"
+        },
+        "const": false
+      },
+      "params": [
+        {
+          "name": "arena",
+          "type": {
+            "pointer": {
+              "type": "ta_arena"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        },
+        {
+          "name": "size",
+          "type": {
+            "builtin": "size_t"
+          },
+          "role": "in"
+        },
+        {
+          "name": "alignment",
+          "type": {
+            "builtin": "size_t"
+          },
+          "role": "in"
+        }
+      ],
+      "public": true,
+      "implemented": true
+    },
+    {
+      "name": "ta_value_retain",
+      "returns": {
+        "builtin": "void"
+      },
+      "params": [
+        {
+          "name": "value",
+          "type": {
+            "pointer": {
+              "type": "ta_value"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ],
+      "static_inline": true,
+      "public": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_value_release",
+      "returns": {
+        "builtin": "void"
+      },
+      "params": [
+        {
+          "name": "value",
+          "type": {
+            "pointer": {
+              "type": "ta_value"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ],
+      "static_inline": true,
+      "public": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_value_clone",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "value",
+          "type": {
+            "pointer": {
+              "type": "ta_value"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_value"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_event_clone",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "event",
+          "type": {
+            "pointer": {
+              "type": "ta_event"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_event"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_event_release",
+      "returns": {
+        "builtin": "void"
+      },
+      "params": [
+        {
+          "name": "event",
+          "type": {
+            "pointer": {
+              "type": "ta_event"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_external_delivery_clone",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "delivery",
+          "type": {
+            "pointer": {
+              "type": "ta_external_delivery"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "allocator",
+          "type": {
+            "type": "ta_allocator"
+          },
+          "role": "in"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_external_delivery"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_external_delivery_release",
+      "returns": {
+        "builtin": "void"
+      },
+      "params": [
+        {
+          "name": "delivery",
+          "type": {
+            "pointer": {
+              "type": "ta_external_delivery"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        },
+        {
+          "name": "allocator",
+          "type": {
+            "type": "ta_allocator"
+          },
+          "role": "in"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_dm_host_in_state",
+      "returns": {
+        "builtin": "bool"
+      },
+      "params": [
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "borrowed"
+        },
+        {
+          "name": "state",
+          "type": {
+            "type": "ta_state_id"
+          },
+          "role": "in"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_dm_host_event",
+      "returns": {
+        "pointer": {
+          "type": "ta_event"
+        },
+        "const": true
+      },
+      "params": [
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "borrowed"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_dm_host_actor",
+      "returns": {
+        "type": "ta_actor_id"
+      },
+      "params": [
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "borrowed"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_actor_report_invoke",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_invoke_report_params"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_tree_init",
+      "returns": {
+        "builtin": "void"
+      },
+      "params": [
+        {
+          "name": "tree",
+          "type": {
+            "pointer": {
+              "type": "ta_tree"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        },
+        {
+          "name": "allocator",
+          "type": {
+            "type": "ta_allocator"
+          },
+          "role": "in"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_tree_destroy",
+      "returns": {
+        "builtin": "void"
+      },
+      "params": [
+        {
+          "name": "tree",
+          "type": {
+            "pointer": {
+              "type": "ta_tree"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_tree_alloc",
+      "returns": {
+        "pointer": {
+          "builtin": "void"
+        },
+        "const": false
+      },
+      "params": [
+        {
+          "name": "tree",
+          "type": {
+            "pointer": {
+              "type": "ta_tree"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        },
+        {
+          "name": "size",
+          "type": {
+            "builtin": "size_t"
+          },
+          "role": "in"
+        },
+        {
+          "name": "alignment",
+          "type": {
+            "builtin": "size_t"
+          },
+          "role": "in"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_tree_result",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "tree",
+          "type": {
+            "pointer": {
+              "type": "ta_tree"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_tree_list_init",
+      "returns": {
+        "builtin": "void"
+      },
+      "params": [
+        {
+          "name": "list",
+          "type": {
+            "pointer": {
+              "type": "ta_tree_list"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        },
+        {
+          "name": "tree",
+          "type": {
+            "pointer": {
+              "type": "ta_tree"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        },
+        {
+          "name": "layout",
+          "type": {
+            "pointer": {
+              "type": "ta_tree_list_layout"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_tree_put",
+      "returns": {
+        "builtin": "void"
+      },
+      "params": [
+        {
+          "name": "list",
+          "type": {
+            "pointer": {
+              "type": "ta_tree_list"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        },
+        {
+          "name": "element",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "raw"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_tree_close",
+      "returns": {
+        "pointer": {
+          "builtin": "void"
+        },
+        "const": true
+      },
+      "params": [
+        {
+          "name": "list",
+          "type": {
+            "pointer": {
+              "type": "ta_tree_list"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_definition_compile_spec",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_definition_compile_params"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_definition_destroy",
+      "returns": {
+        "builtin": "void"
+      },
+      "params": [
+        {
+          "name": "definition",
+          "type": {
+            "pointer": {
+              "type": "ta_definition"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        }
+      ],
+      "public": true,
+      "implemented": false,
+      "retires": "definition"
+    },
+    {
+      "name": "ta_actor_spawn",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_spawn_params"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_actor_prepare_replacement",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_prepare_replacement_params"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_actor_activate_replacement",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_activate_replacement_params"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_actor_find",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_find_params"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_actor_deliver",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "event",
+          "type": {
+            "pointer": {
+              "type": "ta_event"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_actor_resume",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_resume_params"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_actor_unload",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_unload_params"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_actor_load",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_load_params"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_actor_remove_unloaded",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_remove_unloaded_params"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_actor_get_completion",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_completion"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_actor_publish_completion",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          },
+          "role": "in"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_actor_destroy",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          },
+          "role": "in"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_actor_inspect",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_inspection"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_system_visit_actors",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "inspector",
+          "type": {
+            "type": "ta_actor_inspector"
+          },
+          "role": "in"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_actor_active_states",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_active_states_params"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_actor_history",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_history_params"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_actor_delayed_sends",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_delayed_sends_params"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_definition_state",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_definition_state_params"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_actor_capture",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_capture_params"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_actor_reconstruct",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_reconstruct_params"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_session_image_next_deadline",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "image",
+          "type": {
+            "pointer": {
+              "type": "ta_session_image"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_time"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_session_image_destroy",
+      "returns": {
+        "builtin": "void"
+      },
+      "params": [
+        {
+          "name": "image",
+          "type": {
+            "pointer": {
+              "type": "ta_session_image"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        }
+      ],
+      "public": true,
+      "implemented": false,
+      "retires": "image"
+    },
+    {
+      "name": "ta_system_create",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "config",
+          "type": {
+            "pointer": {
+              "type": "ta_system_config"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "pointer": {
+                "type": "ta_system"
+              },
+              "const": false
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "handle_out"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_system_destroy",
+      "returns": {
+        "builtin": "void"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        }
+      ],
+      "public": true,
+      "implemented": false,
+      "retires": "system"
+    },
+    {
+      "name": "ta_system_set_actor_directory",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "directory",
+          "type": {
+            "type": "ta_actor_directory"
+          },
+          "role": "in"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_system_set_external_event_router",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "router",
+          "type": {
+            "type": "ta_external_event_router"
+          },
+          "role": "in"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_system_register_definition",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "definition",
+          "type": {
+            "pointer": {
+              "type": "ta_definition"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle",
+          "consumed_on": "ok"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_definition_id"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_system_register_io",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "type",
+          "type": {
+            "type": "ta_atom"
+          },
+          "role": "in"
+        },
+        {
+          "name": "io",
+          "type": {
+            "type": "ta_io"
+          },
+          "role": "in"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_system_register_invoker",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "type",
+          "type": {
+            "type": "ta_atom"
+          },
+          "role": "in"
+        },
+        {
+          "name": "invoker",
+          "type": {
+            "type": "ta_invoker"
+          },
+          "role": "in"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_system_intern_atom",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "text",
+          "type": {
+            "type": "ta_str"
+          },
+          "role": "in"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_atom"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_event_name_intern",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "segments",
+          "type": {
+            "pointer": {
+              "type": "ta_atom_list"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_event_name_id"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_event_name_matches",
+      "returns": {
+        "builtin": "bool"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "event",
+          "type": {
+            "type": "ta_event_name_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "prefix",
+          "type": {
+            "type": "ta_event_name_id"
+          },
+          "role": "in"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_event_name_format",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_event_name_format_params"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_system_set_time",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "now",
+          "type": {
+            "type": "ta_time"
+          },
+          "role": "in"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_system_time",
+      "returns": {
+        "type": "ta_time"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "handle"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_system_scxml_io_type",
+      "returns": {
+        "type": "ta_atom"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "handle"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_system_next_deadline",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_time"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    },
+    {
+      "name": "ta_system_dispatch_due",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_due_dispatch_params"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": false
+    }
+  ]
+}

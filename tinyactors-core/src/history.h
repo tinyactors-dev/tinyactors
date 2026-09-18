@@ -14,6 +14,7 @@ typedef struct {
     uint32_t storage_bytes;
 } ta_history_layout;
 
+typedef struct ta_history_state ta_history_state;
 struct ta_history_state {
     void *storage;
     const ta_history_layout *layout;

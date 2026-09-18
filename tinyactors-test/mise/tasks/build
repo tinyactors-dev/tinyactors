@@ -1,5 +1,10 @@
 #!/usr/bin/env ruby
 #MISE description="Build the tinyactors-test JSON-RPC host"
+# mise skips this task when both binaries are newer than every source below.
+# The sources include core's src/ and api/ so edits there re-run the
+# amalgamate/api --check steps. Use `mise run --force build` after changing CC/CFLAGS.
+#MISE sources=["mise/tasks/build", "mise/tasks/bindings", "bindings.rb", "src/**/*.c", "src/**/*.h", "tests/**/*.c", "build/prefix/lib/*.a", "../tinyactors-core/include/**/*", "../tinyactors-core/src/**/*", "../tinyactors-core/api/**/*", "../tinyactors-core/mise/lib/**/*", "../tinyactors-core/mise/tasks/amalgamate", "../tinyactors-core/mise/tasks/api"]
+#MISE outputs=["build/tinyactors-test", "build/json_datamodel_test"]
 
 require 'fileutils'
 require 'pathname'
@@ -42,6 +47,11 @@ unless libjq.file? && libonig.file?
 end
 
 run('mise', 'run', 'amalgamate', '--check', chdir: WORKSPACE.join('tinyactors-core'))
+run('mise', 'run', 'api', '--check', chdir: WORKSPACE.join('tinyactors-core'))
+# bindings is cached by mise's own stamp, which survives `rm -rf build`; force it
+# when its outputs are gone.
+generated = %w[ta_rpc.c ta_rpc.h].map { |name| BUILD.join('gen', name) }
+run('mise', 'run', *(generated.all?(&:file?) ? [] : ['--force']), 'bindings', chdir: ROOT)
 
 compiler = Shellwords.split(ENV.fetch('CC', 'cc'))
 flags = Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic -O2'))
@@ -51,6 +61,9 @@ sources = [
   ROOT.join('src/server.c'),
   ROOT.join('src/json_datamodel.c'),
   ROOT.join('src/allocator.c'),
+  ROOT.join('src/binding.c'),
+  ROOT.join('src/adapters.c'),
+  BUILD.join('gen/ta_rpc.c'),
   WORKSPACE.join('tinyactors-core/include/tinyactors.c')
 ]
 libraries = [libjq, libonig]
@@ -59,6 +72,7 @@ run(
   *compiler,
   *flags,
   "-I#{ROOT.join('src')}",
+  "-I#{BUILD.join('gen')}",
   "-I#{PREFIX.join('include')}",
   "-I#{JQ_BUILD.join('src')}",
   "-I#{WORKSPACE.join('tinyactors-core/include')}",

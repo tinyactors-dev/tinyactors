@@ -91,24 +91,47 @@ module TinyactorsTest
     end
   end
 
-  # A spawned actor, seen from a scenario.
-  class Actor
-    attr_reader :handle, :chart
+  # A core function answered with a result other than TA_OK.
+  class CoreResultError < StandardError
+    attr_reader :function, :result
 
-    def initialize(context, handle, chart)
+    def initialize(function, result)
+      @function = function
+      @result = result
+      super("#{function} returned #{result}")
+    end
+  end
+
+  # A spawned actor, seen from a scenario. All observations go through the
+  # public inspection API: ta_actor_inspect, ta_actor_active_states, and
+  # ta_definition_state.
+  class Actor
+    attr_reader :handle, :chart, :definition
+
+    def initialize(context, handle, chart, definition)
       @context = context
       @handle = handle
       @chart = chart
+      @definition = definition
     end
 
-    # The active configuration as state ID symbols.
+    # The active configuration as state ID symbols, ancestors included.
     def active
-      inspect_actor.fetch(:configuration).map(&:to_sym)
+      count = inspect_actor.fetch(:active_state_count)
+      states = @context.core('ta_actor_active_states',
+                             @context.ta.actor.active_states(system: @context.system_handle,
+                                                             actor: handle, capacity: count))
+      states.fetch(:states).map { |state| @context.state_name(definition, state) }
     end
 
     # The data-model root, or the single value a jq filter produces from it.
     def data(filter = '.')
-      root = inspect_actor.fetch(:data)
+      inspection = inspect_actor
+      unless inspection[:has_datamodel_root]
+        raise ScenarioError, "#{self}: the data model reported no inspection root"
+      end
+
+      root = inspection.fetch(:datamodel_root)
       return root if filter == '.'
 
       outputs = @context.rpc('json.transform', filter: filter, input: root)
@@ -120,19 +143,21 @@ module TinyactorsTest
     end
 
     def delayed_sends
-      inspect_actor.fetch(:delayed_sends)
+      inspect_actor.fetch(:delayed_send_count)
     end
 
     # Delivers an external event and runs the system until it is quiescent.
     def deliver(event, data: nil)
-      params = { actor: handle, event: TinyactorsTest.event_atoms(event) }
+      params = { name: @context.event_name(event), type: 'external', invoke_id: INVOKE_ID_NONE }
       params[:data] = data unless data.nil?
-      @context.rpc('actor.send', params)
+      @context.core('ta_actor_deliver',
+                    @context.ta.actor.deliver(system: @context.system_handle, actor: handle, event: params))
       @context.run_system("deliver #{event}")
     end
 
     def inspect_actor
-      @context.rpc('actor.inspect', actor: handle)
+      @context.core('ta_actor_inspect',
+                    @context.ta.actor.inspect(system: @context.system_handle, actor: handle)).fetch(:out)
     end
 
     def to_s
@@ -140,8 +165,20 @@ module TinyactorsTest
     end
   end
 
+  # TA_INVOKE_ID_NONE; 64-bit values above 2^53-1 travel as decimal strings.
+  INVOKE_ID_NONE = '18446744073709551615'
+
   # The receiver of a scenario block: the steps and assertions of the DSL.
+  # Steps drive the generated ta.* bindings of the public C API directly.
   class Context
+    ALLOCATOR = { '$adapter' => 'allocator.libc' }.freeze
+    DATAMODEL = { '$adapter' => 'datamodel.jq' }.freeze
+    # Microsteps per ta_actor_resume call, and dispatch rounds before a step
+    # is declared non-quiescent.
+    RESUME_BUDGET = 1024
+    DISPATCH_BUDGET = 64
+    MAX_ROUNDS = 10_000
+
     attr_reader :now
 
     def initialize(driver, group, charts)
@@ -149,6 +186,8 @@ module TinyactorsTest
       @group = group
       @charts = charts
       @definitions = {}
+      @event_names = {}
+      @state_names = {}
       @system = nil
       @actors = []
       @now = 0
@@ -158,9 +197,9 @@ module TinyactorsTest
       raise ScenarioError, "#{@group.name}: spawn needs a chart name" if chart_name.nil?
 
       chart_name = chart_name.to_sym
-      definition = definition_handle(chart_name)
-      result = rpc('actor.spawn', system: system_handle, definition: definition)
-      actor = Actor.new(self, result.fetch(:actor), chart_name)
+      definition = definition_id(chart_name)
+      id = core('ta_actor_spawn', ta.actor.spawn(system: system_handle, definition: definition)).fetch(:out)
+      actor = Actor.new(self, id, chart_name, definition)
       @actors << actor
       run_system("spawn #{chart_name}")
       actor
@@ -173,7 +212,7 @@ module TinyactorsTest
       end
 
       @now += milliseconds
-      rpc('system.set_time', system: system_handle, time: @now)
+      core('ta_system_set_time', ta.system.set_time(system: system_handle, now: @now))
       run_system("advance_time #{milliseconds} (t=#{@now}ms)")
     end
 
@@ -182,9 +221,30 @@ module TinyactorsTest
       @driver.call(method, params)
     end
 
+    # The generated bindings, e.g. `ta.actor.spawn(system:, definition:)`.
+    def ta
+      @driver.ta
+    end
+
+    # Unwraps a generated ta_result response, failing the step unless it is "ok".
+    def core(function, response)
+      raise CoreResultError.new(function, response[:result]) unless response[:result] == 'ok'
+
+      response.fetch(:out, {})
+    end
+
+    # Runs every actor to a stable state and dispatches due delayed sends
+    # until nothing is left to do at the current logical time.
     def run_system(step)
-      rpc('system.run', system: system_handle)
-      check_invariants(step)
+      MAX_ROUNDS.times do
+        @actors.each { |actor| settle(actor) }
+        due = core('ta_system_dispatch_due', ta.system.dispatch_due(system: system_handle, budget: DISPATCH_BUDGET))
+        next if due.fetch(:dispatched).positive? || due.fetch(:more_due)
+
+        check_invariants(step)
+        return
+      end
+      raise ScenarioError, "#{step}: the system did not become quiescent in #{MAX_ROUNDS} rounds"
     end
 
     def assert(condition, message = 'assertion failed')
@@ -223,16 +283,54 @@ module TinyactorsTest
             "#{actor} at t=#{@now}ms: expected configuration #{states.join(', ')}, got #{active.join(', ')}"
     end
 
-    private
-
     def system_handle
-      @system ||= rpc('system.create', {}).fetch(:system)
+      @system ||= core('ta_system_create',
+                       ta.system.create(config: { allocator: ALLOCATOR, initial_time: 0 })).fetch(:out)
     end
 
-    def definition_handle(chart_name)
+    # Interns a dotted event name through the public atom and event-name API.
+    def event_name(event)
+      @event_names[event.to_s] ||= begin
+        atoms = TinyactorsTest.event_atoms(event).map do |segment|
+          core('ta_system_intern_atom', ta.system.intern_atom(system: system_handle, text: segment)).fetch(:out)
+        end
+        core('ta_event_name_intern', ta.event.name_intern(system: system_handle, segments: atoms)).fetch(:out)
+      end
+    end
+
+    # The author's ID of a state, as a symbol.
+    def state_name(definition, state)
+      @state_names[[definition, state]] ||= begin
+        info = core('ta_definition_state',
+                    ta.definition.state(system: system_handle, definition: definition, state: state))
+        info.fetch(:out).fetch(:id).to_sym
+      end
+    end
+
+    private
+
+    # Resumes an actor until its macrostep is finished.
+    def settle(actor)
+      MAX_ROUNDS.times do
+        status = core('ta_actor_resume',
+                      ta.actor.resume(system: system_handle, actor: actor.handle, budget: RESUME_BUDGET))
+                 .fetch(:status)
+        return if %w[stable done].include?(status)
+        raise CoreResultError.new('ta_actor_resume', "status #{status}") unless status == 'paused'
+      end
+      raise ScenarioError, "#{actor}: macrostep did not finish in #{MAX_ROUNDS} resumes"
+    end
+
+    # Compiles and registers a chart once per scenario; the system then owns it.
+    def definition_id(chart_name)
       @definitions[chart_name] ||= begin
         chart = @charts.fetch(chart_name) { raise ScenarioError, "unknown chart #{chart_name}" }
-        rpc('definition.compile', chart.to_spec).fetch(:definition)
+        compiled = core('ta_definition_compile_spec',
+                        ta.definition.compile_spec(system: system_handle, spec: chart.to_spec,
+                                                   datamodel: DATAMODEL, allocator: ALLOCATOR))
+        core('ta_system_register_definition',
+             ta.system.register_definition(system: system_handle, definition: compiled.fetch(:out)))
+          .fetch(:out)
       end
     end
 

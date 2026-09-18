@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="Build, then run the data model, smoke, DSL self-test, and scenario suites"
+#MISE description="Build, then run the data model, smoke, bindings, DSL and runner self-tests, and scenario suites"
 
 require 'pathname'
 
@@ -14,5 +14,7 @@ end
 run('mise', 'run', 'build', chdir: root)
 run('build/json_datamodel_test', chdir: root)
 run('ruby', 'ruby/smoke.rb', chdir: root)
+run('ruby', 'ruby/bindings_test.rb', chdir: root)
 run('ruby', 'ruby/selftest.rb', chdir: root)
+run('ruby', 'ruby/runner_selftest.rb', chdir: root)
 run('ruby', 'ruby/run_scenarios.rb', chdir: root)

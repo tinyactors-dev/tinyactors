@@ -1,0 +1,938 @@
+#!/usr/bin/env ruby
+#MISE description="Generate RPC bindings (build/gen/ta_rpc.{c,h}) from tinyactors.api.json"
+#MISE sources=["bindings.rb", "mise/tasks/bindings", "../tinyactors-core/include/tinyactors.api.json"]
+#MISE outputs={auto=true}
+
+# Reads tinyactors-core/include/tinyactors.api.json and bindings.rb and emits
+# JSON codecs for every public type plus one RPC handler per public function.
+# See README.md ("Generated bindings") and docs/protocol.md.
+
+require 'json'
+require 'pathname'
+
+ROOT = Pathname.new(__dir__).join('../..').expand_path
+IR_PATH = ROOT.parent.join('tinyactors-core/include/tinyactors.api.json')
+OUT_DIR = ROOT.join('build/gen')
+require ROOT.join('bindings').to_s
+
+IR = JSON.parse(IR_PATH.read)
+TYPES = IR['types']
+POLICY = TinyactorsBindings
+
+def fail!(message)
+  warn "bindings: #{message}"
+  exit 1
+end
+
+# ---------------------------------------------------------------------------
+# Type helpers
+
+def resolve(type)
+  type = TYPES.dig(type['type'], 'type') while type['type'] && TYPES.dig(type['type'], 'kind') == 'alias'
+  type
+end
+
+def pointer?(type) = type.key?('pointer')
+
+def c_type(type)
+  return "#{type['const'] ? 'const ' : ''}#{c_type(type['pointer'])} *" if pointer?(type)
+  return type['builtin'] if type['builtin']
+  return type['type'] if type['type']
+
+  fail!("no C spelling for #{type.inspect}")
+end
+
+BUILTIN_CODECS = {
+  'uint8_t' => 'u8', 'uint16_t' => 'u16', 'uint32_t' => 'u32', 'int32_t' => 'i32', 'int' => 'i32',
+  'uint64_t' => 'u64', 'size_t' => 'size', 'bool' => 'bool'
+}.freeze
+
+def overridden_type?(name) = POLICY.lookup(POLICY::OVERRIDE_TYPES, name)
+def skipped_type?(name) = POLICY.lookup(POLICY::SKIP_TYPES, name)
+
+# Value codec for a non-pointer type: [:primitive|:enum|:struct|:adapter, codec name, C type].
+def value_codec(type)
+  if type['type']
+    name = type['type']
+    body = TYPES.fetch(name)
+    return [:struct, name, name] if overridden_type?(name)
+
+    case body['kind']
+    when 'alias'
+      resolved = resolve(type)
+      return value_codec(resolved).tap { |codec| codec[2] = name } if resolved['builtin']
+      return value_codec(resolved)
+    when 'enum' then return [:enum, name, name]
+    when 'struct'
+      return [:adapter, name, name] if body['semantic'] == 'adapter'
+
+      return [:struct, name, name]
+    end
+    return nil
+  end
+  codec = BUILTIN_CODECS[type['builtin']]
+  codec && [:primitive, codec, type['builtin']]
+end
+
+# ---------------------------------------------------------------------------
+# Codec-ability
+
+@codecable = {}
+def codecable_type?(name)
+  return true if overridden_type?(name)
+  return @codecable[name] if @codecable.key?(name)
+
+  body = TYPES.fetch(name)
+  @codecable[name] = true
+  @codecable[name] = case body['kind']
+                     when 'alias' then !value_codec({ 'type' => name }).nil?
+                     when 'enum' then true
+                     when 'struct' then body['semantic'] == 'adapter' || fields_codecable?(body['fields'])
+                     else false
+                     end
+end
+
+def field_codecable?(field)
+  return true if field['role'] == 'out' || field['count_of']
+
+  type = field['type']
+  return fields_codecable?(type['record']['fields']) if type['record']
+
+  unless pointer?(type)
+    return type['type'] ? codecable_type?(type['type']) : !value_codec(type).nil?
+  end
+
+  case field['shape']
+  when 'single', 'terminated', 'counted'
+    target = type['pointer']
+    target['type'] ? codecable_type?(target['type']) : !value_codec(target).nil?
+  when 'handle', 'borrowed' then true
+  else false
+  end
+end
+
+def fields_codecable?(fields) = fields.all? { |field| field_codecable?(field) }
+
+# ---------------------------------------------------------------------------
+# Tagged unions
+
+def tagged(name) = TYPES.dig(name, 'tagged_union')
+
+def input_fields(fields) = fields.reject { |field| field['role'] == 'out' || field['count_of'] }
+
+# How a union member appears in JSON: flattened into the parent object or
+# keyed by the member name. Struct members flatten unless a member field
+# collides with the parent's own keys.
+def member_layout(struct_name, member)
+  body = TYPES.fetch(struct_name)
+  outer = body['fields'].map { |field| field['name'] } + ['kind']
+  type = member['type']
+  fields = if type['record']
+             type['record']['fields']
+           elsif type['type'] && TYPES.dig(type['type'], 'kind') == 'struct' && !overridden_type?(type['type']) &&
+                 TYPES.dig(type['type'], 'semantic').nil?
+             TYPES.dig(type['type'], 'fields')
+           end
+  return [:keyed, [member['name']]] if fields.nil?
+
+  keys = input_fields(fields).map { |field| field['name'] }
+  return [:keyed, [member['name']]] if keys.intersect?(outer)
+
+  [type['record'] ? :inline : :named, keys]
+end
+
+def union_members(name)
+  union = TYPES.fetch(name)['fields'].find { |field| field['name'] == 'as' }
+  union['type']['record']['fields']
+end
+
+def enum_constant(enum_name, constant_name)
+  TYPES.fetch(enum_name)['constants'].find { |constant| constant['name'] == constant_name }
+end
+
+# ---------------------------------------------------------------------------
+# C emission helpers
+
+def cstr(text) = text.to_json
+
+def keys_array(name, keys)
+  "static const char *const #{name}[] = {#{(keys.map { |key| cstr(key) } + ['NULL']).join(', ')}};"
+end
+
+@list_elements = {}
+@counted_elements = {}
+
+def element_key(type) = c_type(type).gsub(/\W+/, '_')
+
+def element_codec(type)
+  codec = value_codec(type)
+  fail!("no codec for list element #{type.inspect}") unless codec
+  codec
+end
+
+def decode_call(codec, value, target)
+  kind, name, ctype = codec
+  case kind
+  when :primitive
+    "tat_decode_#{name}(b, #{value}, (#{BUILTIN_CODEC_CTYPE[name]} *)#{target})"
+  when :adapter
+    "tat_adapter_decode(b, #{value}, #{cstr(name)}, #{target}, sizeof(#{ctype}))"
+  else
+    "tat_decode_#{name}(b, #{value}, #{target})"
+  end
+end
+
+def encode_call(codec, source)
+  kind, name, ctype = codec
+  case kind
+  when :primitive
+    "tat_encode_#{name}(b, (const #{BUILTIN_CODEC_CTYPE[name]} *)#{source})"
+  when :adapter
+    "tat_adapter_encode(b, #{cstr(name)}, #{source}, sizeof(#{ctype}))"
+  else
+    "tat_encode_#{name}(b, #{source})"
+  end
+end
+
+BUILTIN_CODEC_CTYPE = {
+  'u8' => 'uint8_t', 'u16' => 'uint16_t', 'u32' => 'uint32_t', 'i32' => 'int32_t',
+  'u64' => 'uint64_t', 'size' => 'size_t', 'bool' => 'bool'
+}.freeze
+
+# Statements decoding one input field from object `in` into `target.name`.
+# `required` makes an absent member an error.
+def decode_field(field, target, required: false)
+  name = field['name']
+  type = field['type']
+  lines = []
+  present = "tat_member(in, #{cstr(name)}, &v)"
+  missing = required ? "else { tat_fail(b, \"missing member\"); return tat_at(b, #{cstr(name)}); }" : ''
+  body = lambda do |statements|
+    lines << "if (#{present}) {"
+    lines.concat(statements.map { |statement| "    #{statement}" })
+    lines << "    jv_free(v);"
+    lines << "    if (!ok) return tat_at(b, #{cstr(name)});"
+    lines << "} #{missing}".rstrip
+  end
+
+  unless pointer?(type)
+    codec = value_codec(type) || fail!("no codec for #{name}: #{type.inspect}")
+    body.call(["bool ok = #{decode_call(codec, 'v', "&#{target}.#{name}")};"])
+    return lines
+  end
+
+  target_type = type['pointer']
+  case field['shape']
+  when 'single'
+    codec = value_codec(target_type)
+    ctype = c_type(target_type)
+    body.call(["#{ctype} *p = tat_alloc(b, sizeof(#{ctype}), _Alignof(#{ctype}));",
+               "bool ok = p != NULL && #{decode_call(codec, 'v', 'p')};",
+               "#{target}.#{name} = p;"])
+  when 'terminated'
+    key = element_key(target_type)
+    @list_elements[key] = target_type
+    body.call(["bool ok = tat_decode_list_#{key}(b, v, &#{target}.#{name});"])
+  when 'counted'
+    key = element_key(target_type)
+    @counted_elements[key] = target_type
+    body.call(["bool ok = tat_decode_array_#{key}(b, v, &#{target}.#{name}, &#{target}.#{field['count']});"])
+  when 'handle'
+    handle = TYPES.dig(target_type['type'], 'handle')
+    body.call(['void *h = NULL;', "bool ok = tat_handle_resolve(b, v, #{cstr(handle)}, &h);",
+               "#{target}.#{name} = h;"])
+  when 'borrowed'
+    body.call(["bool ok = tat_fail(b, \"borrowed pointers cannot be supplied\");"])
+  else
+    fail!("cannot decode #{name} with shape #{field['shape']}")
+  end
+  lines
+end
+
+# A caller buffer of characters, encoded as a string, rather than elements.
+def text_buffer?(field)
+  field['type']['pointer']['builtin'] == 'char'
+end
+
+# Statements adding one field of `source` to object `*o`.
+def encode_field(field, source, omit_zero)
+  name = field['name']
+  type = field['type']
+  return [] if field['role'] == 'out' || field['count_of']
+  return [] if %w[raw function buffer handle_out cstring].include?(field['shape'])
+
+  value = unless pointer?(type)
+            codec = value_codec(type)
+            if omit_zero && %i[primitive enum].include?(codec[0])
+              return ["if (#{source}.#{name}) tat_put(o, #{cstr(name)}, #{encode_call(codec, "&#{source}.#{name}")}, true);"]
+            end
+            encode_call(codec, "&#{source}.#{name}")
+          else
+            target_type = type['pointer']
+            case field['shape']
+            when 'single'
+              "#{source}.#{name} ? #{encode_call(value_codec(target_type), "#{source}.#{name}")} : jv_null()"
+            when 'terminated'
+              key = element_key(target_type)
+              @list_elements[key] = target_type
+              "tat_encode_list_#{key}(b, #{source}.#{name})"
+            when 'counted'
+              key = element_key(target_type)
+              @counted_elements[key] = target_type
+              "tat_encode_array_#{key}(b, #{source}.#{name}, #{source}.#{field['count']})"
+            when 'handle'
+              "tat_handle_encode(b, #{cstr(TYPES.dig(target_type['type'], 'handle'))}, #{source}.#{name})"
+            when 'borrowed'
+              "tat_borrowed_encode(#{cstr(target_type['type'].delete_prefix('ta_'))}, #{source}.#{name})"
+            end
+          end
+  ["tat_put(o, #{cstr(name)}, #{value}, #{omit_zero});"]
+end
+
+# ---------------------------------------------------------------------------
+# Emission
+
+decls = []
+defs = []
+methods = []
+report = Hash.new { |hash, key| hash[key] = [] }
+
+# Enums
+TYPES.each do |name, body|
+  next unless body['kind'] == 'enum'
+
+  decls << "bool tat_decode_#{name}(tat_bind *b, jv in, #{name} *out);"
+  decls << "jv tat_encode_#{name}(tat_bind *b, const #{name} *in);"
+  table = body['constants'].map { |constant| "{#{cstr(constant['json'])}, #{constant['name']}}" }
+  names = body['constants'].map { |constant| constant['json'] }.join(', ')
+  defs << <<~C
+    static const tat_enum_entry TAT_ENUM_#{name}[] = {#{table.join(', ')}};
+
+    bool tat_decode_#{name}(tat_bind *b, jv in, #{name} *out) {
+        long long value = 0;
+        if (!tat_enum_decode(b, in, TAT_ENUM_#{name}, #{body['constants'].size}, #{cstr(names)}, &value)) return false;
+        *out = (#{name})value;
+        return true;
+    }
+
+    jv tat_encode_#{name}(tat_bind *b, const #{name} *in) {
+        (void)b;
+        return tat_enum_encode(TAT_ENUM_#{name}, #{body['constants'].size}, (long long)*in);
+    }
+  C
+  report[:types_bound] << name
+end
+
+# Structs
+struct_names = TYPES.select { |_, body| body['kind'] == 'struct' }.keys
+struct_names.each do |name|
+  body = TYPES[name]
+  if overridden_type?(name)
+    report[:types_overridden] << name
+    next
+  end
+  if (reason = skipped_type?(name))
+    report[:types_skipped] << [name, reason]
+    next
+  end
+  if body['semantic'] == 'adapter'
+    report[:types_adapter] << name
+    next
+  end
+  unless codecable_type?(name)
+    offending = body['fields'].reject { |field| field_codecable?(field) }.map { |field| field['name'] }
+    fail!("type #{name} has no JSON mapping (fields: #{offending.join(', ')}); skip it in bindings.rb with a reason")
+  end
+  report[:types_bound] << name
+
+  omit_zero = body['zero_is_absent'] == true
+  union = tagged(name)
+  common = body['fields'].reject { |field| %w[kind as].include?(field['name']) && union }
+  inputs = input_fields(common)
+
+  decls << "bool tat_decode_#{name}(tat_bind *b, jv in, #{name} *out);"
+  decls << "jv tat_encode_#{name}(tat_bind *b, const #{name} *in);"
+  decls << "bool tat_fields_#{name}(tat_bind *b, jv in, #{name} *out);"
+  decls << "void tat_put_fields_#{name}(tat_bind *b, const #{name} *in, jv *o);"
+
+  decode = []
+  encode = []
+  inputs.each { |field| decode.concat(decode_field(field, '(*out)')) }
+  common.each { |field| encode.concat(encode_field(field, '(*in)', omit_zero)) }
+
+  key_checks = []
+  if union.nil?
+    key_checks << keys_array('keys', inputs.map { |field| field['name'] })
+    key_checks << 'if (!tat_check_keys(b, in, keys)) return false;'
+  else
+    enum_name = union['enum']
+    members = union_members(name)
+    inferable = []
+    cases_decode = []
+    cases_encode = []
+    per_kind_keys = []
+    union['members'].each do |constant_name, member_name|
+      json = enum_constant(enum_name, constant_name)['json']
+      member = members.find { |each| each['name'] == member_name }
+      keys = inputs.map { |field| field['name'] } + ['kind']
+      decode_lines = []
+      encode_lines = []
+      if member
+        layout, member_keys = member_layout(name, member)
+        keys += member_keys
+        target = "(*out).as.#{member_name}"
+        source = "(*in).as.#{member_name}"
+        case layout
+        when :inline
+          input_fields(member['type']['record']['fields']).each do |field|
+            decode_lines.concat(decode_field(field, target))
+          end
+          member['type']['record']['fields'].each { |field| encode_lines.concat(encode_field(field, source, false)) }
+        when :named
+          decode_lines << "if (!tat_fields_#{member['type']['type']}(b, in, &#{target})) return false;"
+          encode_lines << "tat_put_fields_#{member['type']['type']}(b, &#{source}, o);"
+        when :keyed
+          inferable << [member_name, constant_name]
+          decode_lines.concat(decode_field(member.merge('shape' => member['shape']), '(*out).as', required: true))
+          encode_lines.concat(encode_field(member, '(*in).as', false))
+        end
+      end
+      per_kind_keys << [constant_name, keys]
+      cases_decode << "case #{constant_name}: {\n#{keys_array('keys', keys)}\n" \
+                      "if (!tat_check_keys(b, in, keys)) return false;\n#{decode_lines.join("\n")}\nbreak;\n}"
+      cases_encode << "case #{constant_name}:\n#{encode_lines.join("\n")}\nbreak;"
+    end
+    infer = inferable.map do |member_name, constant_name|
+      "if (!have_kind && tat_member(in, #{cstr(member_name)}, &probe)) { " \
+        "jv_free(probe); (*out).kind = #{constant_name}; have_kind = true; }"
+    end
+    kind_required = !omit_zero
+    decode << <<~C
+      {
+          bool have_kind = false;
+          jv probe = jv_invalid();
+          (void)probe;
+          if (tat_member(in, "kind", &v)) {
+              bool ok = tat_decode_#{enum_name}(b, v, &(*out).kind);
+              jv_free(v);
+              if (!ok) return tat_at(b, "kind");
+              have_kind = true;
+          }
+          #{infer.join("\n    ")}
+          #{kind_required ? 'if (!have_kind) { tat_fail(b, "missing member"); return tat_at(b, "kind"); }' : '(void)have_kind;'}
+          switch ((*out).kind) {
+          #{cases_decode.join("\n")}
+          default: {
+              #{keys_array('keys', inputs.map { |field| field['name'] } + ['kind'])}
+              if (!tat_check_keys(b, in, keys)) return false;
+              break;
+          }
+          }
+      }
+    C
+    encode.unshift("if (#{omit_zero ? '(*in).kind == 0' : 'false'}) return;")
+    encode << "tat_put(o, \"kind\", tat_encode_#{enum_name}(b, &(*in).kind), false);"
+    encode << "switch ((*in).kind) {\n#{cases_encode.join("\n")}\ndefault: break;\n}"
+  end
+
+  defs << <<~C
+    bool tat_fields_#{name}(tat_bind *b, jv in, #{name} *out) {
+        jv v = jv_invalid();
+        (void)b;
+        (void)v;
+        #{decode.join("\n    ")}
+        return true;
+    }
+
+    bool tat_decode_#{name}(tat_bind *b, jv in, #{name} *out) {
+        memset(out, 0, sizeof(*out));
+        if (!tat_expect_object(b, in)) return false;
+        #{key_checks.join("\n    ")}
+        return tat_fields_#{name}(b, in, out);
+    }
+
+    void tat_put_fields_#{name}(tat_bind *b, const #{name} *in, jv *o) {
+        (void)b;
+        (void)in;
+        (void)o;
+        #{encode.join("\n    ")}
+    }
+
+    jv tat_encode_#{name}(tat_bind *b, const #{name} *in) {
+        #{omit_zero && union ? 'if (in->kind == 0) return jv_null();' : ''}
+        jv o = jv_object();
+        tat_put_fields_#{name}(b, in, &o);
+        return o;
+    }
+  C
+  methods << { name: "codec.roundtrip.#{name}", handler: "tat_roundtrip_#{name}",
+               schema: { 'codec' => name, 'params' => { 'value' => { 'type' => name, 'required' => true } } } }
+  defs << <<~C
+    static jv tat_roundtrip_#{name}(tat_bind *b, jv params, int *error_code) {
+        jv value = jv_invalid();
+        if (!tat_member(params, "value", &value)) {
+            tat_fail(b, "missing member");
+            tat_at(b, "value");
+            return tat_bind_take_error(b, error_code);
+        }
+        #{name} *decoded = tat_alloc(b, sizeof(#{name}), _Alignof(#{name}));
+        bool ok = decoded != NULL && tat_decode_#{name}(b, value, decoded);
+        jv_free(value);
+        if (!ok) {
+            tat_at(b, "value");
+            return tat_bind_take_error(b, error_code);
+        }
+        return tat_encode_#{name}(b, decoded);
+    }
+  C
+end
+
+# List helpers, generated for every element type used above.
+def list_helpers(key, type, counted)
+  ctype = c_type(type)
+  codec = element_codec(type)
+  first = type['type'] && TYPES.dig(type['type'], 'fields')&.first
+  terminator = if codec[1] == 'ta_str' || (first.nil? && codec[0] == :struct)
+                 'item->ptr == NULL'
+               elsif first && (first_codec = value_codec(first['type'])) && first_codec[1] == 'ta_str'
+                 "item->#{first['name']}.ptr == NULL"
+               elsif first
+                 "item->#{first['name']} == 0"
+               else
+                 '*item == 0'
+               end
+  if counted
+    <<~C
+      bool tat_decode_array_#{key}(tat_bind *b, jv in, const #{ctype} **out, uint32_t *count) {
+          size_t length = 0;
+          if (!tat_expect_array(b, in, &length)) return false;
+          #{ctype} *items = tat_alloc(b, sizeof(#{ctype}) * (length == 0 ? 1 : length), _Alignof(#{ctype}));
+          if (items == NULL) return false;
+          for (size_t index = 0; index < length; index += 1) {
+              jv item = jv_array_get(jv_copy(in), (int)index);
+              bool ok = #{decode_call(codec, 'item', '&items[index]')};
+              jv_free(item);
+              if (!ok) return tat_at_index(b, index);
+          }
+          *out = items;
+          *count = (uint32_t)length;
+          return true;
+      }
+
+      jv tat_encode_array_#{key}(tat_bind *b, const #{ctype} *in, uint32_t count) {
+          if (in == NULL) return jv_null();
+          jv array = jv_array();
+          for (uint32_t index = 0; index < count; index += 1) {
+              array = jv_array_append(array, #{encode_call(codec, '&in[index]')});
+          }
+          return array;
+      }
+    C
+  else
+    <<~C
+      static bool tat_end_#{key}(const #{ctype} *item) {
+          return #{terminator};
+      }
+
+      bool tat_decode_list_#{key}(tat_bind *b, jv in, const #{ctype} **out) {
+          size_t length = 0;
+          if (!tat_expect_array(b, in, &length)) return false;
+          /* One extra zeroed element terminates the list. */
+          #{ctype} *items = tat_alloc(b, sizeof(#{ctype}) * (length + 1), _Alignof(#{ctype}));
+          if (items == NULL) return false;
+          for (size_t index = 0; index < length; index += 1) {
+              jv item = jv_array_get(jv_copy(in), (int)index);
+              bool ok = #{decode_call(codec, 'item', '&items[index]')};
+              jv_free(item);
+              if (ok && tat_end_#{key}(&items[index])) ok = tat_fail(b, "element would terminate the list");
+              if (!ok) return tat_at_index(b, index);
+          }
+          *out = items;
+          return true;
+      }
+
+      jv tat_encode_list_#{key}(tat_bind *b, const #{ctype} *in) {
+          if (in == NULL) return jv_null();
+          jv array = jv_array();
+          for (const #{ctype} *item = in; !tat_end_#{key}(item); item += 1) {
+              array = jv_array_append(array, #{encode_call(codec, 'item')});
+          }
+          return array;
+      }
+    C
+  end
+end
+
+# ---------------------------------------------------------------------------
+# Functions
+
+def method_name(function)
+  rest = function.delete_prefix('ta_')
+  domain, operation = rest.split('_', 2)
+  operation ? "ta.#{domain}.#{operation}" : "ta.#{domain}"
+end
+
+def param_schema(field)
+  case field['shape']
+  when 'handle' then "handle:#{TYPES.dig(field['type']['pointer']['type'], 'handle')}"
+  when 'terminated', 'counted' then "list<#{c_type(field['type']['pointer'])}>"
+  else
+    type = pointer?(field['type']) ? field['type']['pointer'] : field['type']
+    codec = value_codec(type)
+    codec && codec[0] == :adapter ? "adapter:#{type['type']}" : c_type(type)
+  end
+end
+
+IR['functions'].each do |function|
+  name = function['name']
+  next unless function['public'] || function['static_inline']
+
+  if (reason = POLICY.lookup(POLICY::SKIP_FUNCTIONS, name))
+    report[:functions_skipped] << [name, reason]
+    next
+  end
+  if POLICY.lookup(POLICY::OVERRIDE_FUNCTIONS, name)
+    report[:functions_overridden] << name
+    methods << { name: method_name(name), handler: "tat_handler_#{name}", external: true,
+                 schema: { 'function' => name, 'implemented' => function['implemented'] } }
+    next
+  end
+
+  params = function['params']
+  flattened = params.find do |param|
+    param['name'] == 'params' && param['shape'] == 'single' && param['role'] == 'in'
+  end
+  flat_type = flattened && flattened['type']['pointer']['type']
+  params.each do |param|
+    next if param == flattened || param['role'] == 'out'
+    next if field_codecable?(param)
+
+    fail!("cannot bind #{name}: parameter #{param['name']} has no JSON mapping; skip or override it in bindings.rb")
+  end
+  if flat_type && !codecable_type?(flat_type)
+    fail!("cannot bind #{name}: #{flat_type} has no JSON mapping")
+  end
+
+  schema_params = {}
+  schema_out = {}
+  lines = []
+  args = []
+  direct_keys = []
+  lines << 'jv v = jv_invalid();'
+  lines << '(void)v;'
+  lines << 'jv in = jv_copy(params);'
+  lines << 'bool ok = true;'
+  lines << '(void)ok;'
+
+  params.each do |param|
+    pname = param['name']
+    local = "a_#{pname}"
+    type = param['type']
+    if param == flattened
+      lines << "#{flat_type} #{local};"
+      args << "&#{local}"
+      next
+    end
+    if param['role'] == 'out'
+      target = type['pointer']
+      if param['shape'] == 'handle_out'
+        inner = target['pointer']['type']
+        lines << "#{inner} *#{local} = NULL;"
+        args << "&#{local}"
+        schema_out[pname] = "handle:#{TYPES.dig(inner, 'handle')}"
+      else
+        ctype = c_type(target)
+        lines << "#{ctype} *#{local} = tat_alloc(b, sizeof(#{ctype}), _Alignof(#{ctype}));"
+        lines << "if (#{local} == NULL) { jv_free(in); return tat_bind_take_error(b, error_code); }"
+        args << local
+        schema_out[pname] = c_type(target)
+      end
+      next
+    end
+
+    direct_keys << pname
+    required = param['shape'] != 'single'
+    schema_params[pname] = { 'type' => param_schema(param), 'required' => required }
+    holder = "h_#{pname}"
+    lines << "struct { #{c_type(type)} #{pname}; } #{holder};"
+    lines << "memset(&#{holder}, 0, sizeof(#{holder}));"
+    decode_field(param, holder, required: required).each do |line|
+      lines << line.gsub('return tat_at(b,', 'ok = tat_at(b,').gsub(/ok = tat_at\(b, ("[^"]*")\);/) do
+        "{ tat_at(b, #{Regexp.last_match(1)}); jv_free(in); return tat_bind_take_error(b, error_code); }"
+      end
+    end
+    args << "#{holder}.#{pname}"
+  end
+
+  if flattened
+    body = TYPES.fetch(flat_type)
+    lines << 'jv sub = jv_copy(in);'
+    direct_keys.each { |key| lines << "sub = jv_object_delete(sub, jv_string(#{cstr(key)}));" }
+    lines << "ok = tat_decode_#{flat_type}(b, sub, &a_params);"
+    lines << 'jv_free(sub);'
+    lines << 'if (!ok) { jv_free(in); return tat_bind_take_error(b, error_code); }'
+    input_fields(body['fields']).each do |field|
+      next if tagged(flat_type) && %w[kind as].include?(field['name'])
+
+      schema_params[field['name']] = { 'type' => param_schema(field), 'required' => false }
+    end
+    if (union = tagged(flat_type))
+      schema_params['kind'] = { 'type' => union['enum'], 'required' => true }
+      union_members(flat_type).each do |member|
+        schema_params[member['name']] = { 'type' => param_schema(member), 'required' => false }
+      end
+    end
+    body['fields'].each do |field|
+      next unless field['role'] == 'out'
+
+      target = field['type']['pointer']
+      case field['shape']
+      when 'handle_out'
+        inner = target['pointer']['type']
+        lines << "a_params.#{field['name']} = tat_alloc(b, sizeof(#{inner} *), _Alignof(#{inner} *));"
+        schema_out[field['name']] = "handle:#{TYPES.dig(inner, 'handle')}"
+      when 'buffer'
+        capacity = field['buffer']['capacity']
+        if text_buffer?(field)
+          lines << "a_params.#{field['name']} = tat_alloc(b, (size_t)a_params.#{capacity} + 1, 1);"
+          schema_out[field['name']] = 'string'
+        else
+          # Typed caller buffer: `capacity` elements (plus one, so the pointer
+          # is never null), encoded as an array after success.
+          element = c_type(target)
+          lines << "a_params.#{field['name']} = tat_alloc(b, sizeof(#{element}) * " \
+                   "((size_t)a_params.#{capacity} + 1), _Alignof(#{element}));"
+          schema_out[field['name']] = "#{element}[]"
+        end
+      else
+        ctype = c_type(target)
+        lines << "a_params.#{field['name']} = tat_alloc(b, sizeof(#{ctype}), _Alignof(#{ctype}));"
+        schema_out[field['name']] = ctype
+      end
+    end
+  else
+    # Without a flattened params struct, the direct parameters are the only keys.
+    check = [keys_array('keys', direct_keys),
+             'if (!tat_check_keys(b, in, keys)) { jv_free(in); return tat_bind_take_error(b, error_code); }']
+    lines.insert(lines.index('(void)ok;') + 1, *check)
+  end
+
+  returns = function['returns']
+  result_label = returns['builtin'] == 'void' ? 'void' : c_type(returns)
+  implemented = function['implemented'] && !function['static_inline']
+
+  if implemented
+    call = "#{name}(#{args.join(', ')})"
+    post = []
+    out_entries = []
+    params.each do |param|
+      next unless param['role'] == 'out'
+
+      local = "a_#{param['name']}"
+      if param['shape'] == 'handle_out'
+        inner = param['type']['pointer']['pointer']['type']
+        out_entries << [param['name'], "tat_handle_register(b, #{cstr(TYPES.dig(inner, 'handle'))}, #{local})"]
+      else
+        target = param['type']['pointer']
+        out_entries << [param['name'], encode_call(value_codec(target), local)]
+        TYPES.dig(target['type'], 'fields')&.each do |field|
+          post << "if (#{local}->#{field['release_when']}) ta_value_release(&#{local}->#{field['name']});" if field['release_when']
+        end
+      end
+    end
+    if flattened
+      TYPES.fetch(flat_type)['fields'].each do |field|
+        next unless field['role'] == 'out'
+
+        source = "a_params.#{field['name']}"
+        case field['shape']
+        when 'handle_out'
+          inner = field['type']['pointer']['pointer']['type']
+          out_entries << [field['name'], "tat_handle_register(b, #{cstr(TYPES.dig(inner, 'handle'))}, *#{source})"]
+        when 'buffer'
+          if text_buffer?(field)
+            out_entries << [field['name'], "tat_encode_buffer(#{source}, a_params.#{field['buffer']['capacity']})"]
+          else
+            key = element_key(field['type']['pointer'])
+            @counted_elements[key] = field['type']['pointer']
+            capacity = "a_params.#{field['buffer']['capacity']}"
+            needed = "*a_params.#{field['buffer']['needed']}"
+            count = "(#{needed} < #{capacity} ? #{needed} : #{capacity})"
+            out_entries << [field['name'], "(r == TA_OK ? tat_encode_array_#{key}(b, #{source}, #{count}) : jv_null())"]
+          end
+        else
+          out_entries << [field['name'], encode_call(value_codec(field['type']['pointer']), source)]
+        end
+      end
+    end
+    retire = []
+    retire << "tat_handle_retire(b, #{args[params.index { |param| param['name'] == function['retires'] }]});" if function['retires']
+    params.each_with_index do |param, position|
+      retire << "if (r == TA_OK) tat_handle_retire(b, #{args[position]});" if param['consumed_on'] == 'ok'
+    end
+    out_object = out_entries.map do |key, value|
+      # New handles exist only after success; plain outputs (zero-initialized
+      # storage) are reported for every result, e.g. `needed` on TA_ERR_NOMEM.
+      value = "(r == TA_OK ? #{value} : jv_null())" if value.start_with?('tat_handle_register') && returns['type'] == 'ta_result'
+      "out = jv_object_set(out, jv_string(#{cstr(key)}), #{value});"
+    end
+    if returns['type'] == 'ta_result'
+      lines << "ta_result r = #{call};"
+      lines << 'jv result = jv_object_set(jv_object(), jv_string("result"), tat_encode_ta_result(b, &r));'
+      unless out_object.empty?
+        lines << 'jv out = jv_object();'
+        lines.concat(out_object)
+        lines << 'result = jv_object_set(result, jv_string("out"), out);'
+        lines.concat(post)
+      end
+    elsif returns['builtin'] == 'void'
+      lines << "#{call};"
+      lines << 'jv result = jv_object();'
+    else
+      lines << "#{c_type(returns)} r = #{call};"
+      lines << "jv result = jv_object_set(jv_object(), jv_string(\"value\"), #{encode_call(value_codec(returns), '&r')});"
+      unless out_object.empty?
+        lines << 'jv out = jv_object();'
+        lines.concat(out_object)
+        lines << 'result = jv_object_set(result, jv_string("out"), out);'
+      end
+    end
+    lines.concat(retire)
+    lines << 'jv_free(in);'
+    lines << 'return result;'
+    report[:functions_bound] << name
+  else
+    args.each { |arg| lines << "(void)#{arg.delete_prefix('&')};" }
+    lines << 'jv_free(in);'
+    lines << "return tat_not_implemented(b, #{cstr(name)}, error_code);"
+    report[:functions_unimplemented] << name
+  end
+
+  handler = "tat_method_#{name}"
+  defs << "static jv #{handler}(tat_bind *b, jv params, int *error_code) {\n    " \
+          "#{lines.join("\n    ")}\n}\n"
+  methods << { name: method_name(name), handler: handler,
+               schema: { 'function' => name, 'implemented' => implemented, 'params' => schema_params,
+                         'result' => result_label, 'out' => schema_out } }
+end
+
+# Types referenced but neither generated, overridden, skipped, nor handled.
+covered = report[:types_bound] + report[:types_overridden] + report[:types_skipped].map(&:first) +
+          report[:types_adapter]
+TYPES.each do |name, body|
+  next unless %w[struct enum].include?(body['kind'])
+  next if covered.include?(name)
+
+  fail!("type #{name} is neither generated, overridden, nor skipped")
+end
+
+helpers = @list_elements.map { |key, type| list_helpers(key, type, false) } +
+          @counted_elements.map { |key, type| list_helpers(key, type, true) }
+list_decls = @list_elements.map do |key, type|
+  ctype = c_type(type)
+  "bool tat_decode_list_#{key}(tat_bind *b, jv in, const #{ctype} **out);\n" \
+    "jv tat_encode_list_#{key}(tat_bind *b, const #{ctype} *in);"
+end + @counted_elements.map do |key, type|
+  ctype = c_type(type)
+  "bool tat_decode_array_#{key}(tat_bind *b, jv in, const #{ctype} **out, uint32_t *count);\n" \
+    "jv tat_encode_array_#{key}(tat_bind *b, const #{ctype} *in, uint32_t count);"
+end
+
+methods.sort_by! { |method| method[:name] }
+external = methods.select { |method| method[:external] }.map { |method| "jv #{method[:handler]}(tat_bind *b, jv params, int *error_code);" }
+table = methods.map do |method|
+  "    {#{cstr(method[:name])}, #{method[:handler]}, #{cstr(JSON.generate(method[:schema]))}},"
+end
+
+header = <<~C
+  /* GENERATED by `mise run bindings` from tinyactors.api.json. Do not edit. */
+  #pragma once
+
+  #include "binding.h"
+
+  #{decls.join("\n")}
+  #{list_decls.join("\n")}
+  #{external.join("\n")}
+
+  extern const tat_method TAT_GENERATED_METHODS[];
+  extern const size_t TAT_GENERATED_METHOD_COUNT;
+C
+
+source = <<~C
+  /* GENERATED by `mise run bindings` from tinyactors.api.json. Do not edit. */
+  #include "ta_rpc.h"
+
+  #include <string.h>
+
+  typedef struct {
+      const char *name;
+      long long value;
+  } tat_enum_entry;
+
+  static bool tat_enum_decode(tat_bind *b, jv in, const tat_enum_entry *entries, size_t count,
+                              const char *names, long long *out) {
+      if (jv_get_kind(in) == JV_KIND_STRING) {
+          for (size_t index = 0; index < count; index += 1) {
+              if (strcmp(entries[index].name, jv_string_value(in)) == 0) {
+                  *out = entries[index].value;
+                  return true;
+              }
+          }
+      }
+      return tat_fail(b, "expected one of: %s", names);
+  }
+
+  static jv tat_enum_encode(const tat_enum_entry *entries, size_t count, long long value) {
+      for (size_t index = 0; index < count; index += 1) {
+          if (entries[index].value == value) {
+              return jv_string(entries[index].name);
+          }
+      }
+      return jv_number((double)value);
+  }
+
+  /* Adds a member; with omit_null, absent (null) values are left out. */
+  static void tat_put(jv *o, const char *key, jv value, bool omit_null) {
+      if (!jv_is_valid(value)) {
+          jv_free(value);
+          value = jv_null();
+      }
+      if (omit_null && jv_get_kind(value) == JV_KIND_NULL) {
+          jv_free(value);
+          return;
+      }
+      *o = jv_object_set(*o, jv_string(key), value);
+  }
+
+  #{defs.join("\n")}
+  #{helpers.join("\n")}
+  const tat_method TAT_GENERATED_METHODS[] = {
+  #{table.join("\n")}
+  };
+
+  const size_t TAT_GENERATED_METHOD_COUNT = sizeof(TAT_GENERATED_METHODS) / sizeof(TAT_GENERATED_METHODS[0]);
+C
+
+OUT_DIR.mkpath
+# Rewrite only on change so an unchanged generation keeps its mtime and does
+# not make downstream compile steps look stale.
+def write_if_changed(path, contents)
+  path.write(contents) unless path.file? && path.read == contents
+end
+
+write_if_changed(OUT_DIR.join('ta_rpc.h'), header)
+write_if_changed(OUT_DIR.join('ta_rpc.c'), source)
+
+summary = {
+  'functions_bound' => report[:functions_bound].size,
+  'functions_unimplemented' => report[:functions_unimplemented].size,
+  'functions_overridden' => report[:functions_overridden].size,
+  'functions_skipped' => report[:functions_skipped].size,
+  'types_bound' => report[:types_bound].size,
+  'types_overridden' => report[:types_overridden].size,
+  'types_adapter' => report[:types_adapter].size,
+  'types_skipped' => report[:types_skipped].size,
+  'methods' => methods.size
+}
+write_if_changed(OUT_DIR.join('coverage.json'), "#{JSON.pretty_generate(summary.merge('skipped' => (report[:functions_skipped] + report[:types_skipped]).to_h))}\n")
+puts "generated build/gen/ta_rpc.{c,h}: #{summary.map { |key, value| "#{key}=#{value}" }.join(' ')}"

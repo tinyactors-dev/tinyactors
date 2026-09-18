@@ -9,8 +9,11 @@ driver = TinyactorsTest::Driver.new(root.join('build/tinyactors-test'))
 discovery = driver.call('rpc.discover')
 raise 'unexpected server name' unless discovery.fetch(:name) == 'tinyactors-test'
 raise 'libjq was not reported' unless discovery.fetch(:jq) == '1.8.2'
-expected_methods = %w[host.shutdown json.transform metrics.snapshot rpc.discover system.ping]
-raise 'dispatch table was not reflected in discovery' unless discovery.fetch(:methods) == expected_methods
+host_methods = %w[handle.fixture host.shutdown json.transform metrics.snapshot rpc.discover system.ping]
+methods = discovery.fetch(:methods)
+raise 'dispatch table was not reflected in discovery' unless (host_methods - methods).empty?
+raise 'discovery lists methods in order' unless methods == methods.sort
+raise 'generated methods are missing' unless methods.any? { |name| name.start_with?('ta.') }
 ready = driver.notifications.first
 raise 'ready notification was not received' unless ready&.fetch(:method) == 'host.ready'
 raise 'ready notification params were lost' unless ready.dig(:params, :transport) == 'stdio'

@@ -1,5 +1,9 @@
 #!/usr/bin/env ruby
 #MISE description="Build tinyactors-core"
+# mise skips this task when every object below is newer than every source.
+# Use `mise run --force build` after changing CC/CFLAGS.
+#MISE sources=["mise/tasks/build", "mise/tasks/amalgamate", "mise/tasks/api", "mise/lib/**/*", "api/**/*", "src/**/*", "include/tinyactors.h", "tests/*.c"]
+#MISE outputs=["tests/smoke.o", "tests/public_smoke.o", "tests/tinyactors.o"]
 # vim:ft=ruby
 
 require 'pathname'
@@ -22,6 +26,8 @@ flags = Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pe
 
 run('mise', 'run', 'amalgamate')
 run('mise', 'run', 'amalgamate', '--check')
+run('mise', 'run', 'api')
+run('mise', 'run', 'api', '--check')
 
 run(
   *compiler,
