@@ -1,0 +1,29 @@
+#!/usr/bin/env ruby
+#MISE description="Run the imported W3C SCXML IRP scenarios and record their failures as the expected baseline"
+
+require 'json'
+require 'pathname'
+require 'stringio'
+
+ENV['SCXML_IRP_IGNORE_BASELINE'] = '1'
+root = Pathname.new(__dir__).join('../..').expand_path
+require root.join('ruby/tinyactors_test').to_s
+require root.join('ruby/scxml_irp/expectations').to_s
+
+host = root.join('build/tinyactors-test')
+abort "tinyactors-test host not found at #{host}; run `mise run build`" unless host.executable?
+
+Dir[root.join('ruby/charts/**/*.rb').to_s].sort.each { |file| require file }
+Dir[root.join('ruby/scenarios/scxml_irp/*.rb').to_s].sort.each { |file| require file }
+
+runner = TinyactorsTest::Runner.new(executable: host, charts: TinyactorsTest.charts, out: StringIO.new)
+results = runner.run(TinyactorsTest.groups, filter: /\Ascxml-irp: /)
+
+failures = results.reject(&:ok?).to_h { |result| [result.scenario.name, result.error&.message.to_s] }
+empty = failures.select { |_, message| message.empty? }.keys
+abort "scenarios failed without an error message (shutdown failures?): #{empty.join(', ')}" unless empty.empty?
+
+ScxmlIrp::BASELINE.write("#{JSON.pretty_generate(failures.sort_by { |name, _| [name[/\d+/].to_i, name] }.to_h)}\n")
+passed = results.size - failures.size
+puts "scxml-irp baseline: #{passed} of #{results.size} scenarios pass; " \
+     "recorded #{failures.size} failures in #{ScxmlIrp::BASELINE.relative_path_from(root)}"

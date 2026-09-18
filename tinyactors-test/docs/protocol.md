@@ -215,11 +215,20 @@ Charts compile from the JSON form of `ta_scxml_spec` (see
 - `script` (optional) is the `<scxml>` element's `<script>`: jq source run
   once per session after early data initialization and before the initial
   transition. The chart DSL declares it with `script '...'` at the chart root.
-- A state is `{"kind", "id", "states"?, "initial"?, "transitions"?, "onentry"?, "onexit"?}`.
+- A state is `{"kind", "id", "states"?, "initial"?, "transitions"?, "onentry"?, "onexit"?, "data"?, "invokes"?, "done_data"?}`.
   `kind` is one of `atomic`, `compound`, `parallel`, `final`,
   `history_shallow`, or `history_deep`. A history state's default transition
   is its single entry in `transitions`.
-- `initial` is `{"targets": [id, ...]}`.
+- `initial` is `{"targets": [id, ...], "actions"?}`; `actions` is the
+  executable content of SCXML's `<initial><transition>`.
+- A data declaration is `{"name", "initializer"?}`, where `initializer` is a
+  value spec. `data` appears at the top level and in states.
+- An invoke is `{"kind": "invoke", "id"?, "type"?, "src"?, "data"?, "autoforward"?, "params"?, "finalize"?}`,
+  where `id` is an ID spec, `type` and `src` are string specs, `data` is the
+  inline `<content>` as a value spec, and `finalize` is a list of actions.
+- `done_data` is `{"content"}` or `{"params"}`.
+- A param is `{"name", "value"}`, where `value` is a value spec. SCXML
+  `namelist` entries are params with `location` values.
 - A transition is `{"kind": "external"|"internal", "event"?, "condition"?, "targets"?, "actions"?}`.
 - A value spec (`ta_scxml_value_spec`) is `{"expr": src}`, `{"location": src}`, or `{"content": text}`.
 - A string spec (`ta_scxml_string_spec`, SCXML's `x` / `xexpr` pairs) is
@@ -228,12 +237,17 @@ Charts compile from the JSON form of `ta_scxml_spec` (see
   `{"literal": text}` or `{"location": src}`.
 - The action kinds are:
   - `raise`: `{"event", "data"?}`
-  - `send`: `{"event": {"name"}, "id"?, "type"?, "target"?, "delay"?, "data"?}`,
-    where `id` is an ID spec and `type`, `target`, and `delay` are string specs
+  - `send`: `{"event"?, "id"?, "type"?, "target"?, "delay"?, "data"?, "params"?}`,
+    where `event` is `{"name"}` or `{"expr"}`, `id` is an ID spec, and
+    `type`, `target`, and `delay` are string specs
   - `cancel`: `{"sendid"}`, where `sendid` is a string spec
   - `assign`: `{"location", "value"}`
   - `script`: `{"script"}`
   - `log`: `{"label"?, "expr"?}`
+  - `if`: `{"condition", "then_actions"?, "else_actions"?}`; `<elseif>` is a
+    nested `if` in `else_actions`
+  - `foreach`: `{"array", "item", "index"?, "body"?}`, where `item` and `index`
+    name the variables bound on each iteration
 
 The spec carries only what an SCXML author writes, never runtime identifiers.
 Send IDs are the author's strings. I/O processors are names, and an absent

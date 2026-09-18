@@ -146,6 +146,19 @@ module TinyactorsTest
       inspect_actor.fetch(:delayed_send_count)
     end
 
+    # True once the actor reached a top-level final state.
+    def done?
+      inspect_actor.fetch(:residency) == 'done'
+    end
+
+    # The done data of a finished actor (its top-level final state's
+    # <donedata>), or nil when it has none.
+    def completion
+      out = @context.core('ta_actor_get_completion',
+                          @context.ta.actor.get_completion(system: @context.system_handle, actor: handle)).fetch(:out)
+      out[:has_data] ? out[:data] : nil
+    end
+
     # Delivers an external event and runs the system until it is quiescent.
     def deliver(event, data: nil)
       params = { name: @context.event_name(event), type: 'external', invoke_id: INVOKE_ID_NONE }
@@ -214,6 +227,27 @@ module TinyactorsTest
       @now += milliseconds
       core('ta_system_set_time', ta.system.set_time(system: system_handle, now: @now))
       run_system("advance_time #{milliseconds} (t=#{@now}ms)")
+    end
+
+    # Advances logical time from one delayed-send deadline to the next until
+    # `actor` is done. Fails when no delayed send is pending while the actor
+    # still runs, or when the next deadline lies beyond `limit` milliseconds
+    # of logical time.
+    def run_to_completion(actor, limit: 600_000)
+      until actor.done?
+        response = ta.system.next_deadline(system: system_handle)
+        if response[:result] == 'err_not_found'
+          raise AssertionFailed, "#{actor} at t=#{@now}ms: not done and no delayed send is pending; " \
+                                 "active: #{actor.active.join(', ')}"
+        end
+
+        deadline = Integer(core('ta_system_next_deadline', response).fetch(:out))
+        if deadline > limit
+          raise AssertionFailed, "#{actor} at t=#{@now}ms: not done before the #{limit}ms limit; " \
+                                 "next deadline #{deadline}ms"
+        end
+        advance_time([deadline - @now, 0].max)
+      end
     end
 
     # Escape hatch for methods the DSL does not wrap yet.

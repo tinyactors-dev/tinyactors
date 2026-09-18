@@ -131,4 +131,58 @@ check(authored[:onexit] == [
   { kind: 'cancel', sendid: { expr: '.sid' } }
 ], "cancel specs\n#{authored[:onexit]}")
 
+check(raises?(TinyactorsTest::ChartError, /declares done_data but is not a final state/) do
+  chart.call { state(:a) { done_data expr: '1' } }
+end, 'done_data outside a final state')
+check(raises?(TinyactorsTest::ChartError, /invoke names chart missing_child, which is not defined yet/) do
+  chart.call { state(:a) { invoke type: 'scxml', chart: :missing_child } }
+end, 'invoke of an undefined chart')
+check(raises?(TinyactorsTest::ChartError, /cancels send ID "t", which no <send> declares/) do
+  chart.call { state(:a) { on_entry { conditional { branch('.x') { cancel :t } } } } }
+end, 'cancel inside a conditional')
+
+structured = TinyactorsTest::Chart.define(:structured) do
+  state :a do
+    data :pending, count: { expr: '1' }
+    initial(:b) { log 'initial' }
+    invoke type: 'scxml', src: 'child', id: 'kid', params: { x: '.x', y: { location: '.y' } }, autoforward: true do
+      log 'finalize'
+    end
+    state :b do
+      on_entry do
+        conditional do
+          branch('.x == 1') { raise_event 'one' }
+          branch('.x == 2') { raise_event 'two' }
+          otherwise { cancel 'elsewhere', unmatched: true }
+        end
+        foreach '.items', item: 'item', index: 'i' do
+          send_event event_expr: '.name', content: '[1,2]'
+        end
+      end
+    end
+    final :c do
+      done_data params: { result: '.x' }
+    end
+  end
+end.to_spec[:states].first
+check(structured[:data] == [{ name: 'pending' }, { name: 'count', initializer: { expr: '1' } }],
+      "state data specs\n#{structured[:data]}")
+check(structured[:initial] == { targets: ['b'], actions: [{ kind: 'log', label: 'initial' }] },
+      "initial with actions\n#{structured[:initial]}")
+check(structured[:invokes] == [
+  { kind: 'invoke', id: { literal: 'kid' }, type: { literal: 'scxml' }, src: { literal: 'child' },
+    autoforward: true,
+    params: [{ name: 'x', value: { expr: '.x' } }, { name: 'y', value: { location: '.y' } }],
+    finalize: [{ kind: 'log', label: 'finalize' }] }
+], "invoke specs\n#{structured[:invokes]}")
+check(structured[:states][0][:onentry] == [
+  { kind: 'if', condition: '.x == 1', then_actions: [{ kind: 'raise', event: 'one' }],
+    else_actions: [{ kind: 'if', condition: '.x == 2', then_actions: [{ kind: 'raise', event: 'two' }],
+                     else_actions: [{ kind: 'cancel', sendid: { literal: 'elsewhere' } }] }] },
+  { kind: 'foreach', array: '.items', item: 'item', index: 'i',
+    body: [{ kind: 'send', event: { expr: '.name' }, data: { content: '[1,2]' } }] }
+], "conditional and foreach specs\n#{structured[:states][0][:onentry]}")
+check(structured[:states][1][:done_data] == { params: [{ name: 'result', value: { expr: '.x' } }] },
+      "done_data specs\n#{structured[:states][1][:done_data]}")
+
 puts 'tinyactors-test scenario DSL self-test passed'

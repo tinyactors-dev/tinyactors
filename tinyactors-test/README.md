@@ -103,9 +103,19 @@ end
 Each scenario runs against a fresh host process and drives the generated
 `ta.*` bindings of the public C API (see "Scenario runner" in
 `docs/protocol.md`). The steps are `spawn`, `advance_time` (in logical
-milliseconds), and `actor.deliver`. The assertions
+milliseconds), `run_to_completion` (advance from one delayed-send deadline to
+the next until an actor is done), and `actor.deliver`. The assertions
 are `assert`, `assert_equal`, `assert_active`, `refute_active`, and
-`assert_configuration`. Invariants are checked after every step.
+`assert_configuration`. `actor.data(filter)`, `actor.done?`, and
+`actor.completion` observe an actor. Invariants are checked after every step.
+
+Charts cover SCXML's structure and executable content: `state`, `parallel`,
+`final`, `history`, `initial` (with actions), `transition`, `on_entry`,
+`on_exit`, `data` (at the root or in a state), `invoke` (with a `finalize`
+block), and `done_data`. The actions are `raise_event`, `send_event`,
+`cancel`, `assign`, `log`, `script`, `conditional` (with `branch` and
+`otherwise`), and `foreach`. See `ruby/tinyactors_test/chart.rb` for their
+options.
 
 `expect_failure` applies to the next scenario only, and it names the failure
 it expects: `rpc_error:` (optionally with `rpc_method:`) and/or `message:`.
@@ -125,6 +135,11 @@ cancels with no matching `<send>` ID), so a typo in a chart cannot hide behind a
 mise run scenarios                 # all scenarios
 mise run scenarios -n stale        # scenarios whose "group: name" matches
 ```
+
+The W3C SCXML conformance tests in `vendor/scxml-irp` are imported as the
+`scxml-irp` scenarios (`mise run import-scxml-irp`), with their known failures
+recorded in `ruby/scxml_irp/baseline.json` (`mise run scxml-irp-baseline`).
+See `ruby/scxml_irp/README.md`.
 
 `ruby/selftest.rb` verifies the DSL's outcome classification against the live
 host. `ruby/runner_selftest.rb` runs the steps against a scripted fake host

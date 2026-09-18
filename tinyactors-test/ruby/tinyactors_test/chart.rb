@@ -13,21 +13,26 @@ module TinyactorsTest
   # processors are names. Expressions are data-model source strings; with the
   # jq data model they are jq filters over the actor's root.
   class Chart
-    attr_reader :name, :datamodel, :binding
+    attr_reader :name, :datamodel, :binding, :document_name
 
     BINDINGS = %i[early late].freeze
 
-    def initialize(name, datamodel: 'jq', binding: nil)
+    # `document_name:` is the SCXML `<scxml name>` (the `_name` system
+    # variable) when it differs from the chart's registry name.
+    # `datamodel: nil` states no data-model requirement.
+    def initialize(name, datamodel: 'jq', binding: nil, document_name: nil)
       raise ChartError, "chart #{name}: binding must be :early or :late" if binding && !BINDINGS.include?(binding)
 
       @name = name.to_s
-      @datamodel = datamodel.to_s
+      @datamodel = datamodel&.to_s
       @binding = binding
+      @document_name = document_name&.to_s
       @data = []
       @states = []
       @initial = nil
       @script = nil
       @send_ids = {}
+      @unmatched_cancels = {}
     end
 
     def self.define(name, **options, &block)
@@ -51,7 +56,7 @@ module TinyactorsTest
     def initial=(target)
       raise ChartError, "chart #{name}: initial declared twice" if @initial
 
-      @initial = target
+      @initial = Array(target).map(&:to_s)
     end
 
     # Records a literal <send> ID so literal cancels can be checked against it.
@@ -63,14 +68,22 @@ module TinyactorsTest
       @send_ids.key?(id)
     end
 
+    # Records a literal cancel that deliberately names no <send> of this
+    # chart, such as a send ID of another session.
+    def declare_unmatched_cancel(id)
+      @unmatched_cancels[id] = true
+    end
+
+    def unmatched_cancel?(id)
+      @unmatched_cancels.key?(id)
+    end
+
     def to_spec
-      spec = {
-        name: name,
-        datamodel: datamodel,
-        data: @data,
-        initial: { targets: [initial_target] },
-        states: @states.map(&:to_spec)
-      }
+      spec = { name: document_name || name }
+      spec[:datamodel] = datamodel if datamodel
+      spec[:data] = @data
+      spec[:initial] = { targets: initial_targets }
+      spec[:states] = @states.map(&:to_spec)
       spec[:binding] = binding.to_s if binding
       spec[:script] = script if script
       spec
@@ -102,11 +115,9 @@ module TinyactorsTest
         raise ChartError, "chart #{name}: #{where} targets unknown state #{target.inspect}" unless known[target]
       end
 
-      root_ids = @states.map(&:id)
-      check_target.call(initial_target, 'root initial')
-      unless root_ids.include?(initial_target)
-        raise ChartError, "chart #{name}: root initial #{initial_target} is not a top-level state"
-      end
+      # SCXML allows the document's initial states to be any descendants,
+      # e.g. one atomic state in each region of a parallel state.
+      initial_targets.each { |target| check_target.call(target, 'root initial') }
 
       each_state do |state|
         state.validate!(self, check_target)
@@ -116,14 +127,14 @@ module TinyactorsTest
 
     private
 
-    def initial_target
-      (@initial || @states.reject(&:history?).first&.id).to_s
+    def initial_targets
+      @initial || [@states.reject(&:history?).first&.id.to_s]
     end
 
     # A state or pseudo-state in the chart tree.
     class State
-      attr_reader :id, :parent, :children, :transitions, :onentry, :onexit
-      attr_accessor :kind, :initial, :history_default
+      attr_reader :id, :parent, :children, :transitions, :onentry, :onexit, :data, :invokes
+      attr_accessor :kind, :initial, :initial_actions, :history_default, :history_actions, :done_data
 
       def initialize(id, kind, parent)
         @id = id.to_s
@@ -133,8 +144,13 @@ module TinyactorsTest
         @transitions = []
         @onentry = []
         @onexit = []
+        @data = []
+        @invokes = []
         @initial = nil
+        @initial_actions = nil
         @history_default = nil
+        @history_actions = nil
+        @done_data = nil
       end
 
       def history?
@@ -160,10 +176,11 @@ module TinyactorsTest
         where = "state #{id}"
         case resolved_kind
         when :compound
-          target = initial_target
-          check_target.call(target, "#{where} initial")
-          unless @children.map(&:id).include?(target) || descendant_ids.include?(target)
-            raise ChartError, "chart #{chart.name}: #{where} initial #{target} is not a descendant"
+          initial_targets.each do |target|
+            check_target.call(target, "#{where} initial")
+            unless descendant_ids.include?(target)
+              raise ChartError, "chart #{chart.name}: #{where} initial #{target} is not a descendant"
+            end
           end
         when :atomic, :final
           raise ChartError, "chart #{chart.name}: #{where} declares initial but has no children" if @initial
@@ -171,16 +188,22 @@ module TinyactorsTest
           raise ChartError, "chart #{chart.name}: history #{id} needs a default target" unless @history_default
           raise ChartError, "chart #{chart.name}: history #{id} must be inside a compound state" if parent.nil?
 
-          check_target.call(@history_default, "history #{id} default")
-          unless parent.descendant_ids.include?(@history_default)
-            raise ChartError, "chart #{chart.name}: history #{id} default #{@history_default} is outside #{parent.id}"
+          @history_default.each do |target|
+            check_target.call(target, "history #{id} default")
+            unless parent.descendant_ids.include?(target)
+              raise ChartError, "chart #{chart.name}: history #{id} default #{target} is outside #{parent.id}"
+            end
           end
+        end
+        if @done_data && resolved_kind != :final
+          raise ChartError, "chart #{chart.name}: #{where} declares done_data but is not a final state"
         end
 
         @transitions.each do |transition|
           transition[:targets]&.each { |target| check_target.call(target, "#{where} transition") }
         end
-        [@onentry, @onexit, *@transitions.map { |t| t[:actions] || [] }].each do |actions|
+        [@onentry, @onexit, @initial_actions, @history_actions,
+         *@transitions.map { |t| t[:actions] }, *@invokes.map { |i| i[:finalize] }].compact.each do |actions|
           Chart.validate_actions!(chart, actions, where)
         end
       end
@@ -188,31 +211,66 @@ module TinyactorsTest
       def to_spec
         spec = { kind: resolved_kind.to_s, id: id }
         if history?
-          spec[:transitions] = [{ kind: 'external', targets: [@history_default] }]
+          transition = { kind: 'external', targets: @history_default }
+          transition[:actions] = @history_actions if @history_actions
+          spec[:transitions] = [transition]
           return spec
         end
 
-        spec[:initial] = { targets: [initial_target] } if resolved_kind == :compound
+        if resolved_kind == :compound
+          spec[:initial] = { targets: initial_targets }
+          spec[:initial][:actions] = @initial_actions if @initial_actions
+        end
         spec[:states] = @children.map(&:to_spec) unless @children.empty?
         spec[:transitions] = @transitions unless @transitions.empty?
         spec[:onentry] = @onentry unless @onentry.empty?
         spec[:onexit] = @onexit unless @onexit.empty?
+        spec[:data] = @data unless @data.empty?
+        spec[:invokes] = @invokes unless @invokes.empty?
+        spec[:done_data] = @done_data if @done_data
         spec
       end
 
       private
 
-      def initial_target
-        (@initial || @children.reject(&:history?).first&.id).to_s
+      def initial_targets
+        @initial || [@children.reject(&:history?).first&.id.to_s]
       end
     end
 
+    # Checks literal cancels, descending into conditional and foreach bodies.
     def self.validate_actions!(chart, actions, where)
       actions.each do |action|
-        literal = action[:kind] == 'cancel' && action.dig(:sendid, :literal)
-        next unless literal && !chart.send_id?(literal)
+        case action[:kind]
+        when 'if'
+          validate_actions!(chart, action[:then_actions] || [], where)
+          validate_actions!(chart, action[:else_actions] || [], where)
+        when 'foreach'
+          validate_actions!(chart, action[:body] || [], where)
+        when 'cancel'
+          literal = action.dig(:sendid, :literal)
+          next unless literal && !chart.send_id?(literal) && !chart.unmatched_cancel?(literal)
 
-        raise ChartError, "chart #{chart.name}: #{where} cancels send ID #{literal.inspect}, which no <send> declares"
+          raise ChartError, "chart #{chart.name}: #{where} cancels send ID #{literal.inspect}, which no <send> declares"
+        end
+      end
+    end
+
+    # Builds a value spec from exactly one of `expr:`, `location:`, or
+    # `content:`; nil when none is given.
+    def self.value_spec(chart, what, expr: nil, location: nil, content: nil)
+      present = { expr: expr, location: location, content: content }.compact
+      raise ChartError, "chart #{chart.name}: #{what} takes one of expr:, location:, content:" if present.size > 1
+
+      present.transform_values(&:to_s).first&.then { |kind, source| { kind => source } }
+    end
+
+    # Lowers `{ name => value }` to ta_scxml_param_spec entries. A String value
+    # is an expression; a Hash is a value spec (`{ location: '.x' }`).
+    def self.param_specs(chart, params)
+      params.map do |param_name, value|
+        value = { expr: value } unless value.is_a?(Hash)
+        { name: param_name.to_s, value: value_spec(chart, "param #{param_name}", **value) }
       end
     end
 
@@ -224,14 +282,24 @@ module TinyactorsTest
         @state = state
       end
 
-      # Declares top-level data. Values are JSON literals; use `expr:` for a
-      # data-model expression evaluated at initialization.
-      def data(values = nil, **literals)
-        raise ChartError, "chart #{@chart.name}: data belongs at the chart root" if @state
-
-        (values || literals).each do |data_name, value|
-          initializer = value.is_a?(Hash) && value.key?(:expr) ? value[:expr].to_s : JSON.generate(value)
-          @chart.data << { name: data_name.to_s, initializer: { expr: initializer } }
+      # Declares data: at the chart root, or in a state (bound on entry to that
+      # state under late binding). Keyword values are JSON literals; a Hash
+      # value with `expr:` or `content:` gives an SCXML expression or inline
+      # content instead. Symbols name data declared without a value.
+      #
+      #   data cycles: 0
+      #   data :pending, total: { expr: '.a + .b' }, doc: { content: '<x/>' }
+      def data(*unbound, **values)
+        target = @state ? @state.data : @chart.data
+        unbound.each { |data_name| target << { name: data_name.to_s } }
+        values.each do |data_name, value|
+          initializer =
+            if value.is_a?(Hash) && (value.key?(:expr) || value.key?(:content))
+              Chart.value_spec(@chart, "data #{data_name}", **value.slice(:expr, :content))
+            else
+              { expr: JSON.generate(value) }
+            end
+          target << { name: data_name.to_s, initializer: initializer }
         end
       end
 
@@ -246,13 +314,18 @@ module TinyactorsTest
         @chart.script = source
       end
 
-      def initial(target)
+      # The initial state(s). Inside a state, a block gives the executable
+      # content of SCXML's `<initial><transition>`.
+      def initial(*targets, &block)
         if @state
           raise ChartError, "state #{@state.id}: initial declared twice" if @state.initial
 
-          @state.initial = target.to_s
+          @state.initial = targets.map(&:to_s)
+          @state.initial_actions = actions(&block) if block
         else
-          @chart.initial = target
+          raise ChartError, "chart #{@chart.name}: the root initial takes no actions" if block
+
+          @chart.initial = targets
         end
       end
 
@@ -268,12 +341,15 @@ module TinyactorsTest
         add_state(id, :final, &block)
       end
 
-      def history(id, default:, type: :shallow)
+      # `default:` is one target or several; a block gives the executable
+      # content of the default transition.
+      def history(id, default:, type: :shallow, &block)
         raise ChartError, "history #{id} must be inside a state" unless @state
         raise ChartError, "history #{id}: type must be :shallow or :deep" unless %i[shallow deep].include?(type)
 
         history = State.new(id, :"history_#{type}", @state)
-        history.history_default = default.to_s
+        history.history_default = Array(default).map(&:to_s)
+        history.history_actions = actions(&block) if block
         @state.children << history
       end
 
@@ -299,6 +375,54 @@ module TinyactorsTest
         @state.onexit.concat(actions(&block))
       end
 
+      # Starts an invocation when the state is entered (SCXML <invoke>).
+      #
+      #   type:, type_expr:     the invoker, e.g. 'scxml'
+      #   src:, src_expr:       the resource to invoke
+      #   chart:                an inline child machine: the named chart's spec,
+      #                         as JSON, becomes the invoke's <content>
+      #   content:, content_expr: other inline <content>
+      #   id:, id_location:     the invoke ID
+      #   params:               { name => expr or value spec }; SCXML namelist
+      #                         entries become `{ location: ... }` params
+      #   autoforward:          forward external events to the child
+      # A block gives the <finalize> executable content.
+      def invoke(type: nil, type_expr: nil, src: nil, src_expr: nil, chart: nil, content: nil,
+                 content_expr: nil, id: nil, id_location: nil, params: nil, autoforward: false, &block)
+        require_state!('invoke')
+        if chart
+          raise ChartError, "chart #{@chart.name}: invoke takes chart: or content:, not both" if content || content_expr
+
+          child = TinyactorsTest.charts.fetch(chart.to_sym) do
+            raise ChartError, "chart #{@chart.name}: invoke names chart #{chart}, which is not defined yet"
+          end
+          content = JSON.generate(child.to_spec)
+        end
+
+        invoke = { kind: 'invoke' }
+        invoke[:id] = Chart.pair(@chart, 'id', { literal: id&.to_s }, { location: id_location })
+        invoke[:type] = Chart.pair(@chart, 'type', { literal: type&.to_s }, { expr: type_expr })
+        invoke[:src] = Chart.pair(@chart, 'src', { literal: src&.to_s }, { expr: src_expr })
+        invoke[:data] = Chart.value_spec(@chart, 'invoke content', expr: content_expr, content: content)
+        invoke[:autoforward] = true if autoforward
+        invoke[:params] = Chart.param_specs(@chart, params) if params
+        invoke[:finalize] = actions(&block) if block
+        @state.invokes << invoke.compact
+      end
+
+      # The <donedata> of a final state: inline content (`content:` or
+      # `expr:`), or `params:`.
+      def done_data(content: nil, expr: nil, params: nil)
+        require_state!('done_data')
+        raise ChartError, "chart #{@chart.name}: done_data takes content or params, not both" if params && (content || expr)
+
+        done = {}
+        value = Chart.value_spec(@chart, 'done_data', expr: expr, content: content)
+        done[:content] = value if value
+        done[:params] = Chart.param_specs(@chart, params) if params
+        @state.done_data = done
+      end
+
       private
 
       def require_state!(what)
@@ -308,7 +432,7 @@ module TinyactorsTest
       def add_state(id, kind, initial: nil, &block)
         parent = @state
         state = State.new(id, kind, parent)
-        state.initial = initial&.to_s
+        state.initial = Array(initial).map(&:to_s) if initial
         (parent ? parent.children : @chart.states) << state
         Builder.new(@chart, state, state).instance_eval(&block) if block
         state
@@ -319,7 +443,14 @@ module TinyactorsTest
       end
     end
 
-    # Evaluates executable content blocks.
+    # Returns the one present side of an `x` / `xexpr` pair, or nil.
+    def self.pair(chart, name, literal, expression)
+      present = [literal, expression].reject { |side| side.values.first.nil? }
+      raise ChartError, "chart #{chart.name}: #{name} and its expression form are exclusive" if present.size > 1
+
+      present.first
+    end
+
     # Evaluates executable content blocks. Keyword pairs mirror SCXML's
     # `x` / `xexpr` attributes: the plain keyword is literal text, the `_expr`
     # (or `_location`) keyword is a data-model expression.
@@ -343,33 +474,48 @@ module TinyactorsTest
       # Sends an event, by default to this actor's external queue through the
       # SCXML Event I/O Processor.
       #
-      #   delay:  an SCXML duration ("5s", "500ms") or Integer milliseconds
-      #   id:     a literal send ID that `cancel` can refer to
-      #   to:     a literal target such as "#_parent"
-      #   type:   a registered I/O processor name
-      def send_event(event, delay: nil, delay_expr: nil, id: nil, id_location: nil,
-                     to: nil, to_expr: nil, type: nil, type_expr: nil, data: nil)
-        action = { kind: 'send', event: { name: event.to_s } }
+      #   event_expr:  an expression for the event name (`eventexpr`)
+      #   delay:       an SCXML duration ("5s", "500ms") or Integer milliseconds
+      #   id:          a literal send ID that `cancel` can refer to
+      #   to:          a literal target such as "#_parent"
+      #   type:        a registered I/O processor name
+      #   data:        an expression for the event data
+      #   content:     inline <content> for the event data
+      #   params:      { name => expr or value spec }; SCXML namelist entries
+      #                become `{ location: ... }` params
+      def send_event(event = nil, event_expr: nil, delay: nil, delay_expr: nil, id: nil, id_location: nil,
+                     to: nil, to_expr: nil, type: nil, type_expr: nil, data: nil, content: nil, params: nil)
+        action = { kind: 'send' }
+        action[:event] = pair('event', { name: event&.to_s }, { expr: event_expr })
         action[:id] = pair('id', { literal: id&.to_s }, { location: id_location })
         action[:type] = pair('type', { literal: type&.to_s }, { expr: type_expr })
         action[:target] = pair('to', { literal: to&.to_s }, { expr: to_expr })
         action[:delay] = pair('delay', { literal: duration(delay) }, { expr: delay_expr })
-        action[:data] = { expr: data } if data
+        action[:data] = Chart.value_spec(@chart, 'send data', expr: data, content: content)
+        action[:params] = Chart.param_specs(@chart, params) if params
         @chart.declare_send_id(id.to_s) if id
         @actions << action.compact
       end
 
       # Cancels a delayed send by its literal ID, or by an expression that
-      # evaluates to the ID.
-      def cancel(id = nil, expr: nil)
+      # evaluates to the ID. A literal ID must match a literal <send> ID of the
+      # chart unless `unmatched: true` says it deliberately does not.
+      def cancel(id = nil, expr: nil, unmatched: false)
         sendid = pair('sendid', { literal: id&.to_s }, { expr: expr })
         raise ChartError, "chart #{@chart.name}: cancel needs an ID or expr:" unless sendid
+        raise ChartError, "chart #{@chart.name}: unmatched: applies to literal IDs" if unmatched && id.nil?
+
+        @chart.declare_unmatched_cancel(id.to_s) if unmatched
 
         @actions << { kind: 'cancel', sendid: sendid }
       end
 
-      def assign(location, expr)
-        @actions << { kind: 'assign', location: location, value: { expr: expr } }
+      # Assigns an expression, or inline content (`content:`), to a location.
+      def assign(location, expr = nil, content: nil)
+        value = Chart.value_spec(@chart, "assign #{location}", expr: expr, content: content)
+        raise ChartError, "chart #{@chart.name}: assign #{location} needs an expression or content:" unless value
+
+        @actions << { kind: 'assign', location: location, value: value }
       end
 
       def script(source)
@@ -383,14 +529,31 @@ module TinyactorsTest
         @actions << action
       end
 
+      # SCXML <if>/<elseif>/<else>, lowered to nested conditionals:
+      #
+      #   conditional do
+      #     branch('.x == 1') { raise_event 'one' }
+      #     branch('.x == 2') { raise_event 'two' }
+      #     otherwise { raise_event 'other' }
+      #   end
+      def conditional(&block)
+        branches = ConditionalBuilder.new(@chart).tap { |builder| builder.instance_eval(&block) }
+        @actions << branches.to_spec
+      end
+
+      # SCXML <foreach>: `item` and `index` name the variables bound on each
+      # iteration.
+      def foreach(array, item:, index: nil, &block)
+        action = { kind: 'foreach', array: array, item: item.to_s }
+        action[:index] = index.to_s if index
+        action[:body] = ActionBuilder.new(@chart).tap { |builder| builder.instance_eval(&block) }.actions if block
+        @actions << action
+      end
+
       private
 
-      # Returns the one present side of an `x` / `xexpr` pair, or nil.
       def pair(name, literal, expression)
-        present = [literal, expression].reject { |side| side.values.first.nil? }
-        raise ChartError, "chart #{@chart.name}: #{name} and its expression form are exclusive" if present.size > 1
-
-        present.first
+        Chart.pair(@chart, name, literal, expression)
       end
 
       def duration(delay)
@@ -399,6 +562,46 @@ module TinyactorsTest
         return delay if delay.is_a?(String) && DURATION.match?(delay)
 
         raise ChartError, "chart #{@chart.name}: delay #{delay.inspect} is not an SCXML duration such as \"5s\" or \"500ms\""
+      end
+    end
+
+    # Collects the branches of one `conditional`.
+    class ConditionalBuilder
+      def initialize(chart)
+        @chart = chart
+        @branches = []
+        @otherwise = nil
+      end
+
+      def branch(condition, &block)
+        raise ChartError, "chart #{@chart.name}: branch after otherwise" if @otherwise
+
+        @branches << [condition, body(&block)]
+      end
+
+      def otherwise(&block)
+        raise ChartError, "chart #{@chart.name}: otherwise given twice" if @otherwise
+
+        @otherwise = body(&block)
+      end
+
+      def to_spec
+        raise ChartError, "chart #{@chart.name}: conditional needs a branch" if @branches.empty?
+
+        @branches.reverse.reduce(@otherwise) do |else_actions, (condition, then_actions)|
+          spec = { kind: 'if', condition: condition }
+          spec[:then_actions] = then_actions unless then_actions.empty?
+          spec[:else_actions] = else_actions if else_actions && !else_actions.empty?
+          [spec]
+        end.first
+      end
+
+      private
+
+      def body(&block)
+        return [] unless block
+
+        ActionBuilder.new(@chart).tap { |builder| builder.instance_eval(&block) }.actions
       end
     end
   end

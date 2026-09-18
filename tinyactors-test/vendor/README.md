@@ -4,3 +4,6 @@
 license and notices are included in that directory. The repository-level
 `mise run vendor-jq` task downloads the release archive, verifies its published
 SHA-256 checksum, and reproduces this directory.
+
+`scxml-irp/` contains the W3C SCXML 1.0 Implementation Report Plan test suite,
+vendored unmodified. Its README records its license and provenance.
