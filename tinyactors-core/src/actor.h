@@ -54,6 +54,11 @@ struct ta_actor {
     bool has_current_event;
     ta_event current_event;
     uint64_t next_send_id;
+    /*
+     * While the interpreter runs, the full active set it is updating (ancestors
+     * included), so In() sees states as SCXML defines them mid-microstep.
+     */
+    const uint64_t *live_active;
 };
 
 typedef struct {

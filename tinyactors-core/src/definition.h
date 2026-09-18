@@ -278,6 +278,8 @@ struct ta_definition {
     ta_definition_id id;
     ta_atom name;
     ta_definition_identity identity;
+    /* The <scxml name> attribute, exposed as _name; TA_ATOM_NONE when absent. */
+    ta_atom document_name;
     ta_configuration_layout configuration;
     ta_history_layout history;
     ta_state_def *states;

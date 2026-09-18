@@ -52,9 +52,14 @@ assignment evaluates its expression as a jq location, and a script must produce
 exactly one replacement root. Values use Tinyactors' normal retain, release,
 and clone contract.
 
-Named SCXML parameters are represented as an ordered JSON array of
-`{"name_atom": number, "value": value}` records. This preserves order and
-duplicate names while the core's atom handles remain the public boundary.
+Named SCXML parameters become a JSON object keyed by parameter name (resolved
+with `ta_dm_host_atom_text`), so `<param name="x">` reads as
+`$_event.data.x`; a later duplicate name replaces an earlier one.
+
+Every jq program sees the SCXML system variables `$_event`, `$_sessionid`,
+`$_name`, and `$_ioprocessors`, read through `ta_dm_host_text`, and can call
+`In("id")`. `$_event` is null before the first event. Literal `<content>`
+is parsed as JSON, or else becomes a whitespace-normalized string.
 
 ## Commands
 

@@ -123,3 +123,35 @@ ta_result ta_vec_push(ta_vec *vec, const void *element) {
 void *ta_vec_at(const ta_vec *vec, uint32_t index) {
     return (unsigned char *)vec->items + (size_t)index * vec->element_size;
 }
+
+void ta_text_put(ta_text_writer *writer, ta_str text) {
+    for (uint32_t index = 0; index < text.len; index += 1) {
+        if (writer->buffer != NULL && writer->length < writer->capacity) {
+            writer->buffer[writer->length] = text.ptr[index];
+        }
+        writer->length += 1;
+    }
+}
+
+void ta_text_put_u64(ta_text_writer *writer, uint64_t value) {
+    char digits[20];
+    uint32_t count = 0;
+    do {
+        digits[count++] = (char)('0' + value % 10u);
+        value /= 10u;
+    } while (value != 0);
+    char ordered[20];
+    for (uint32_t index = 0; index < count; index += 1) {
+        ordered[index] = digits[count - 1u - index];
+    }
+    ta_text_put(writer, (ta_str){ .ptr = ordered, .len = count });
+}
+
+ta_result ta_text_finish(ta_text_writer *writer, uint32_t *needed) {
+    *needed = writer->length + 1u;
+    if (writer->buffer == NULL || writer->capacity < writer->length + 1u) {
+        return TA_ERR_NOMEM;
+    }
+    writer->buffer[writer->length] = '\0';
+    return TA_OK;
+}

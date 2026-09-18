@@ -148,6 +148,56 @@
       "enum": null
     },
     {
+      "name": "TA_DM_TEXT_EVENT_NAME",
+      "value": 0,
+      "enum": null
+    },
+    {
+      "name": "TA_DM_TEXT_EVENT_TYPE",
+      "value": 1,
+      "enum": null
+    },
+    {
+      "name": "TA_DM_TEXT_EVENT_SENDID",
+      "value": 2,
+      "enum": null
+    },
+    {
+      "name": "TA_DM_TEXT_EVENT_ORIGIN",
+      "value": 3,
+      "enum": null
+    },
+    {
+      "name": "TA_DM_TEXT_EVENT_ORIGINTYPE",
+      "value": 4,
+      "enum": null
+    },
+    {
+      "name": "TA_DM_TEXT_EVENT_INVOKEID",
+      "value": 5,
+      "enum": null
+    },
+    {
+      "name": "TA_DM_TEXT_SESSION_ID",
+      "value": 6,
+      "enum": null
+    },
+    {
+      "name": "TA_DM_TEXT_SESSION_NAME",
+      "value": 7,
+      "enum": null
+    },
+    {
+      "name": "TA_DM_TEXT_SCXML_IO_LOCATION",
+      "value": 8,
+      "enum": null
+    },
+    {
+      "name": "TA_DM_TEXT_SCXML_IO_TYPE",
+      "value": 9,
+      "enum": null
+    },
+    {
       "name": "TA_INVOKE_REPORT_EVENT",
       "value": 0,
       "enum": null
@@ -3648,6 +3698,102 @@
       "kind": "opaque",
       "ownership": "borrowed"
     },
+    "ta_dm_text_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_DM_TEXT_EVENT_NAME",
+          "value": 0,
+          "json": "event_name"
+        },
+        {
+          "name": "TA_DM_TEXT_EVENT_TYPE",
+          "value": 1,
+          "json": "event_type"
+        },
+        {
+          "name": "TA_DM_TEXT_EVENT_SENDID",
+          "value": 2,
+          "json": "event_sendid"
+        },
+        {
+          "name": "TA_DM_TEXT_EVENT_ORIGIN",
+          "value": 3,
+          "json": "event_origin"
+        },
+        {
+          "name": "TA_DM_TEXT_EVENT_ORIGINTYPE",
+          "value": 4,
+          "json": "event_origintype"
+        },
+        {
+          "name": "TA_DM_TEXT_EVENT_INVOKEID",
+          "value": 5,
+          "json": "event_invokeid"
+        },
+        {
+          "name": "TA_DM_TEXT_SESSION_ID",
+          "value": 6,
+          "json": "session_id"
+        },
+        {
+          "name": "TA_DM_TEXT_SESSION_NAME",
+          "value": 7,
+          "json": "session_name"
+        },
+        {
+          "name": "TA_DM_TEXT_SCXML_IO_LOCATION",
+          "value": 8,
+          "json": "scxml_io_location"
+        },
+        {
+          "name": "TA_DM_TEXT_SCXML_IO_TYPE",
+          "value": 9,
+          "json": "scxml_io_type"
+        }
+      ]
+    },
+    "ta_dm_text_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": {
+            "type": "ta_dm_text_kind"
+          },
+          "role": "in"
+        },
+        {
+          "name": "buffer",
+          "type": {
+            "pointer": {
+              "builtin": "char"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "cstring"
+        },
+        {
+          "name": "capacity",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "role": "in"
+        },
+        {
+          "name": "needed",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
     "ta_done_data_id": {
       "kind": "alias",
       "type": {
@@ -6827,6 +6973,155 @@
           },
           "role": "in",
           "shape": "borrowed"
+        }
+      ],
+      "public": true,
+      "implemented": true
+    },
+    {
+      "name": "ta_dm_host_text",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "borrowed"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_text_params"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": true
+    },
+    {
+      "name": "ta_dm_host_state_name",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "borrowed"
+        },
+        {
+          "name": "state",
+          "type": {
+            "type": "ta_state_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_str"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": true
+    },
+    {
+      "name": "ta_dm_host_find_state",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "borrowed"
+        },
+        {
+          "name": "id",
+          "type": {
+            "type": "ta_str"
+          },
+          "role": "in"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_state_id"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": true
+    },
+    {
+      "name": "ta_dm_host_atom_text",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "borrowed"
+        },
+        {
+          "name": "atom",
+          "type": {
+            "type": "ta_atom"
+          },
+          "role": "in"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_str"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
         }
       ],
       "public": true,

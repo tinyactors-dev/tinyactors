@@ -21,7 +21,23 @@ ta_result ta_dm_host_platform_value(
     const ta_dm_host *, ta_atom name, ta_value *out);
 ```
 
-The exact public/internal split can change.
+The public API implements this as `ta_dm_host_text()`, which formats one
+field (`_event.name`, `type`, `sendid`, `origin`, `origintype`, `invokeid`,
+`_sessionid`, `_name`, or the SCXML Event I/O Processor's type and location)
+into a caller buffer; `ta_dm_host_state_name()` and `ta_dm_host_find_state()`
+support `In()`; `ta_dm_host_atom_text()` resolves parameter names passed to
+`make_params()`.
+
+While a microstep runs, `In()` and `ta_dm_host_in_state()` see the
+interpreter's live active set, so a state already exited in this microstep
+is inactive in later onexit handlers.
+
+## Send IDs as text
+
+A literal send ID reads as the author's text. A generated one (for
+`idlocation`) reads as `#_send.<n>`, unique per session. Both round-trip
+through `sendidexpr`, and `_event.sendid` shows the same text. A send with
+neither `id` nor `idlocation` has no ID, so its events have a blank sendid.
 
 ## Current event
 

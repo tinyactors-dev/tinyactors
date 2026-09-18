@@ -59,3 +59,25 @@ static inline void ta_bits_put(uint64_t *words, uint32_t bit, bool value) {
 }
 
 #define TA_VEC_LAYOUT(T) (&(ta_tree_list_layout){ .element_size = sizeof(T), .element_alignment = _Alignof(T) })
+
+/*
+ * Bounded text output: writes while there is room and always counts the full
+ * length, so one pass both sizes and fills a caller's buffer.
+ */
+typedef struct {
+    char *buffer;
+    uint32_t capacity;
+    uint32_t length;
+} ta_text_writer;
+
+void ta_text_put(ta_text_writer *writer, ta_str text);
+void ta_text_put_u64(ta_text_writer *writer, uint64_t value);
+/* NUL-terminates; TA_ERR_NOMEM (and nothing useful written) when it did not fit. */
+ta_result ta_text_finish(ta_text_writer *writer, uint32_t *needed);
+static inline ta_str ta_str_from_cstr(const char *text) {
+    ta_str out = { .ptr = text, .len = 0 };
+    while (text[out.len] != '\0') {
+        out.len += 1;
+    }
+    return out;
+}

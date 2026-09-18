@@ -195,10 +195,60 @@ static ta_op_status ta_eval_source(ta_interpreter *it, const ta_value_params *pa
                                         .out = params->out,
                                         .fault = params->fault,
                                     });
+        case TA_VALUE_SOURCE_CONTENT:
+            if (v->import_content == NULL) {
+                return TA_OP_ERROR;
+            }
+            return v->import_content(definition->datamodel.self,
+                                     &(ta_datamodel_import_content_params){
+                                         .shared = definition->datamodel_shared,
+                                         .instance = it->actor->datamodel_instance,
+                                         .content = definition->contents[params->source.as.content].bytes,
+                                         .host = &it->actor->host,
+                                         .out = params->out,
+                                         .fault = params->fault,
+                                     });
         default:
-            /* Literal content needs a data-model import operation, which the vtable lacks. */
             return TA_OP_ERROR;
     }
+}
+
+/*
+ * Evaluates an expression and reads its value as text through value_text.
+ * `*text` is borrowed from `*holder`, which the caller releases after use.
+ */
+typedef struct {
+    ta_expr_id expr;
+    ta_value *holder;
+    ta_str *text;
+    ta_fault *fault;
+} ta_text_eval_params;
+
+static ta_op_status ta_eval_text(ta_interpreter *it, const ta_text_eval_params *params) {
+    const ta_definition *definition = it->definition;
+    const ta_datamodel_vtable *v = definition->datamodel.v;
+    ta_op_status status = ta_eval_source(it, &(ta_value_params){
+                                                 .source = { .kind = TA_VALUE_SOURCE_EXPR, .as.expr = params->expr },
+                                                 .out = params->holder,
+                                                 .fault = params->fault,
+                                             });
+    if (status != TA_OP_OK) {
+        return status;
+    }
+    if (v->value_text == NULL) {
+        return TA_OP_ERROR;
+    }
+    *params->text = (ta_str){0};
+    status = v->value_text(definition->datamodel.self,
+                           &(ta_datamodel_value_text_params){
+                               .shared = definition->datamodel_shared,
+                               .instance = it->actor->datamodel_instance,
+                               .value = params->holder,
+                               .host = &it->actor->host,
+                               .out = params->text,
+                               .fault = params->fault,
+                           });
+    return status == TA_OP_OK && params->text->ptr == NULL && params->text->len != 0 ? TA_OP_ERROR : status;
 }
 
 static ta_op_status ta_eval_condition(ta_interpreter *it, ta_expr_id expr, bool *out, ta_fault *fault) {
@@ -289,6 +339,41 @@ static ta_send_id ta_literal_send_id(ta_atom atom) {
     return (ta_send_id)atom + 1u;
 }
 
+/*
+ * Send IDs as text. A literal ID is the author's text (its atom); a generated
+ * ID is TA_GENERATED_SEND_ID_PREFIX followed by the actor-local counter. Both
+ * forms round-trip, so idlocation, sendidexpr, and _event.sendid agree.
+ */
+#define TA_GENERATED_SEND_ID_BIT ((ta_send_id)1u << 63)
+#define TA_GENERATED_SEND_ID_PREFIX "#_send."
+
+void ta_send_id_write(const ta_system *system, ta_send_id id, ta_text_writer *writer) {
+    if (id & TA_GENERATED_SEND_ID_BIT) {
+        ta_text_put(writer, ta_str_from_cstr(TA_GENERATED_SEND_ID_PREFIX));
+        ta_text_put_u64(writer, id & ~TA_GENERATED_SEND_ID_BIT);
+    } else if (id != 0) {
+        ta_text_put(writer, ta_atom_text(&system->atoms, (ta_atom)(id - 1u)));
+    }
+}
+
+ta_send_id ta_send_id_from_text(const ta_system *system, ta_str text) {
+    ta_str prefix = ta_str_from_cstr(TA_GENERATED_SEND_ID_PREFIX);
+    if (text.len > prefix.len && ta_str_equal((ta_str){ .ptr = text.ptr, .len = prefix.len }, prefix)) {
+        uint64_t number = 0;
+        bool digits = true;
+        for (uint32_t index = prefix.len; index < text.len && digits; index += 1) {
+            char digit = text.ptr[index];
+            digits = digit >= '0' && digit <= '9' && number <= (UINT64_MAX >> 1) / 10u;
+            number = number * 10u + (uint64_t)(digit - '0');
+        }
+        if (digits && number != 0 && (number & TA_GENERATED_SEND_ID_BIT) == 0) {
+            return TA_GENERATED_SEND_ID_BIT | number;
+        }
+    }
+    ta_atom atom = 0;
+    return ta_atom_find(&system->atoms, text, &atom) == TA_OK ? ta_literal_send_id(atom) : 0;
+}
+
 /* Parses the standard lexical SCXML Event I/O Processor targets. */
 static bool ta_parse_scxml_target(ta_bytes text, ta_scxml_target *out) {
     ta_str target = { .ptr = (const char *)text.ptr, .len = text.len };
@@ -320,6 +405,16 @@ static bool ta_parse_scxml_target(ta_bytes text, ta_scxml_target *out) {
     for (uint32_t index = prefix; index < target.len; index += 1) {
         char digit = target.ptr[index];
         if (digit < '0' || digit > '9' || number > (UINT64_MAX - 9u) / 10u) {
+            if (kind == TA_SCXML_TARGET_ACTOR) {
+                /*
+                 * A well-formed session URI naming no session is inaccessible,
+                 * not invalid (SCXML C.1): runtime actor ID 0 never exists, so
+                 * delivery fails with error.communication.
+                 */
+                *out = (ta_scxml_target){ .kind = kind,
+                                          .as.actor = { .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = 0 } };
+                return true;
+            }
             return false;
         }
         number = number * 10u + (uint64_t)(digit - '0');
@@ -472,9 +567,7 @@ static ta_op_status ta_send_payload(ta_interpreter *it, const ta_send_action *se
 static ta_op_status ta_send_target(ta_interpreter *it, const ta_send_action *send, ta_send_state *state,
                                    ta_fault *fault) {
     if (!state->scxml_io) {
-        if (send->target.kind == TA_VALUE_SOURCE_CONTENT) {
-            return TA_OP_ERROR; /* a literal target would need a data-model import */
-        }
+        /* A custom processor receives the target as a value; literal text is imported. */
         return ta_eval_source(it, &(ta_value_params){ .source = send->target, .out = &state->target, .fault = fault });
     }
     if (send->target.kind == TA_VALUE_SOURCE_NONE) {
@@ -531,44 +624,185 @@ static bool ta_send_destination(ta_interpreter *it, const ta_scxml_target *targe
     }
 }
 
+/* Resolves `type` / `typeexpr`; an unknown processor is an execution error. */
+static ta_op_status ta_send_io_type(ta_interpreter *it, const ta_send_action *send, ta_send_state *state,
+                                    ta_fault *fault) {
+    ta_system *system = it->system;
+    ta_atom type = system->scxml_io_type;
+    if (send->type.kind == TA_TEXT_SOURCE_ATOM) {
+        type = send->type.as.atom;
+    } else if (send->type.kind == TA_TEXT_SOURCE_EXPR) {
+        ta_value holder = {0};
+        ta_str text = {0};
+        ta_op_status status = ta_eval_text(it, &(ta_text_eval_params){
+                                                   .expr = send->type.as.expr, .holder = &holder,
+                                                   .text = &text, .fault = fault,
+                                               });
+        if (status == TA_OP_OK && (text.len == 0 || ta_atom_intern(&system->atoms, text, &type) != TA_OK)) {
+            status = TA_OP_ERROR;
+        }
+        ta_value_release(&holder);
+        if (status != TA_OP_OK) {
+            return status;
+        }
+    }
+    state->scxml_io = ta_system_is_scxml_io(system, type);
+    state->io_type = state->scxml_io ? system->scxml_io_type : type;
+    return state->scxml_io || ta_system_find_io(system, type) != NULL ? TA_OP_OK : TA_OP_ERROR;
+}
+
+/* Resolves `event` / `eventexpr`; the expression's text is a dotted event name. */
+static ta_op_status ta_send_event_name(ta_interpreter *it, const ta_send_action *send, ta_event_name_id *out,
+                                       ta_fault *fault) {
+    if (send->event.kind == TA_EVENT_SOURCE_NAME) {
+        *out = send->event.as.name;
+        return TA_OP_OK;
+    }
+    ta_value holder = {0};
+    ta_str text = {0};
+    ta_op_status status = ta_eval_text(it, &(ta_text_eval_params){
+                                               .expr = send->event.as.expr, .holder = &holder,
+                                               .text = &text, .fault = fault,
+                                           });
+    if (status == TA_OP_OK && ta_event_name_intern_dotted(&it->system->event_names, text, out) != TA_OK) {
+        status = TA_OP_ERROR;
+    }
+    ta_value_release(&holder);
+    return status;
+}
+
+/* Resolves `delay` / `delayexpr`; the expression's text is an SCXML duration. */
+static ta_op_status ta_send_delay(ta_interpreter *it, const ta_send_action *send, ta_time *out, ta_fault *fault) {
+    *out = 0;
+    if (send->delay.kind == TA_DELAY_SOURCE_LITERAL) {
+        *out = send->delay.as.literal;
+        return TA_OP_OK;
+    }
+    if (send->delay.kind != TA_DELAY_SOURCE_EXPR) {
+        return TA_OP_OK;
+    }
+    ta_value holder = {0};
+    ta_str text = {0};
+    ta_op_status status = ta_eval_text(it, &(ta_text_eval_params){
+                                               .expr = send->delay.as.expr, .holder = &holder,
+                                               .text = &text, .fault = fault,
+                                           });
+    if (status == TA_OP_OK && ta_duration_parse(text, out) != TA_OK) {
+        status = TA_OP_ERROR;
+    }
+    ta_value_release(&holder);
+    return status;
+}
+
+/* Stores generated text, such as an ID, through a location (`idlocation`). */
+typedef struct {
+    ta_expr_id location;
+    ta_str text;
+    ta_fault *fault;
+} ta_store_text_params;
+
+static ta_op_status ta_store_text(ta_interpreter *it, const ta_store_text_params *params) {
+    const ta_definition *definition = it->definition;
+    const ta_datamodel_vtable *v = definition->datamodel.v;
+    if (v->text_value == NULL || v->assign == NULL) {
+        return TA_OP_ERROR;
+    }
+    ta_value value = {0};
+    ta_op_status status = v->text_value(definition->datamodel.self,
+                                        &(ta_datamodel_text_value_params){
+                                            .shared = definition->datamodel_shared,
+                                            .instance = it->actor->datamodel_instance,
+                                            .text = params->text,
+                                            .host = &it->actor->host,
+                                            .out = &value,
+                                            .fault = params->fault,
+                                        });
+    if (status == TA_OP_OK) {
+        status = v->assign(definition->datamodel.self,
+                           &(ta_datamodel_assign_params){
+                               .shared = definition->datamodel_shared,
+                               .instance = it->actor->datamodel_instance,
+                               .location = params->location,
+                               .value = &value,
+                               .host = &it->actor->host,
+                               .fault = params->fault,
+                           });
+    }
+    ta_value_release(&value);
+    return status;
+}
+
+/*
+ * Assigns the send ID. Without `id` or `idlocation` the send has no ID, so
+ * its events carry a blank sendid (SCXML 5.10.1).
+ */
+static ta_op_status ta_send_assign_id(ta_interpreter *it, const ta_send_action *send, ta_send_state *state,
+                               ta_fault *fault) {
+    state->send_id = 0;
+    if (send->id.kind == TA_ID_SOURCE_LITERAL) {
+        state->send_id = ta_literal_send_id(send->id.as.literal);
+        return TA_OP_OK;
+    }
+    if (send->id.kind != TA_ID_SOURCE_LOCATION) {
+        return TA_OP_OK;
+    }
+    it->actor->next_send_id += 1u;
+    state->send_id = TA_GENERATED_SEND_ID_BIT | it->actor->next_send_id;
+    char buffer[48];
+    ta_text_writer writer = { .buffer = buffer, .capacity = sizeof(buffer) };
+    ta_send_id_write(it->system, state->send_id, &writer);
+    return ta_store_text(it, &(ta_store_text_params){
+                                 .location = send->id.as.location,
+                                 .text = { .ptr = buffer, .len = writer.length },
+                                 .fault = fault,
+                             });
+}
+
+/* An error while evaluating a <send> carries that send's ID (SCXML 5.10.1). */
+static ta_result ta_send_execution_error(ta_interpreter *it, ta_send_id send_id, ta_fault *fault) {
+    ta_result result = ta_raise_error(it->system, it->actor,
+                                      &(ta_error_params){ .name = TA_EVENT_NAME_ERROR_EXECUTION,
+                                                          .send_id = send_id, .fault = fault });
+    return result == TA_OK ? TA_EXEC_FAILED : result;
+}
+
 static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
     ta_system *system = it->system;
     ta_actor *actor = it->actor;
     ta_send_state state = { .io_type = system->scxml_io_type, .scxml_io = true };
     ta_fault fault = {0};
-    if (send->type.kind == TA_TEXT_SOURCE_ATOM) {
-        state.io_type = send->type.as.atom;
-        state.scxml_io = ta_system_is_scxml_io(system, state.io_type);
-        if (state.scxml_io) {
-            state.io_type = system->scxml_io_type;
-        } else if (ta_system_find_io(system, state.io_type) == NULL) {
-            return ta_execution_error(it, NULL);
-        }
+    ta_event_name_id event_name = 0;
+    ta_time delay = 0;
+    ta_op_status status = ta_send_assign_id(it, send, &state, &fault);
+    if (status == TA_OP_OK) {
+        status = ta_send_event_name(it, send, &event_name, &fault);
     }
-    if (send->id.kind == TA_ID_SOURCE_LITERAL) {
-        state.send_id = ta_literal_send_id(send->id.as.literal);
-    } else {
-        actor->next_send_id += 1u;
-        state.send_id = ((ta_send_id)1u << 63) | actor->next_send_id;
+    if (status == TA_OP_OK) {
+        status = ta_send_io_type(it, send, &state, &fault);
     }
-    ta_op_status status = ta_send_payload(it, send, &state, &fault);
+    if (status == TA_OP_OK) {
+        status = ta_send_delay(it, send, &delay, &fault);
+    }
+    if (status != TA_OP_OK) {
+        return ta_send_execution_error(it, state.send_id, &fault);
+    }
+    status = ta_send_payload(it, send, &state, &fault);
     if (status == TA_OP_OK) {
         status = ta_send_target(it, send, &state, &fault);
     }
-    ta_time delay = send->delay.kind == TA_DELAY_SOURCE_LITERAL ? send->delay.as.literal : 0;
     if (status == TA_OP_OK && state.scxml_io && state.scxml.kind == TA_SCXML_TARGET_INTERNAL && delay != 0) {
         status = TA_OP_ERROR; /* a delayed send cannot target the internal queue */
     }
     if (status != TA_OP_OK) {
         ta_value_release(&state.data);
         ta_value_release(&state.target);
-        return ta_execution_error(it, &fault);
+        return ta_send_execution_error(it, state.send_id, &fault);
     }
 
     if (state.scxml_io && state.scxml.kind == TA_SCXML_TARGET_INTERNAL) {
         ta_value_release(&state.target);
         ta_event event = {
-            .name = send->event.as.name,
+            .name = event_name,
             .type = TA_EVENT_INTERNAL,
             .send_id = state.send_id,
             .origin = { .kind = TA_ORIGIN_ACTOR, .as.actor = actor->record.self },
@@ -582,7 +816,7 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
         .owner = actor->record.id,
         .send_id = state.send_id,
         .due = ta_clock_now(&system->clock) + delay,
-        .event = send->event.as.name,
+        .event = event_name,
         .io_type = state.io_type,
         .target = state.target,
         .data = state.data,
@@ -640,10 +874,27 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
         }
         case TA_ACTION_SEND:
             return ta_exec_send(it, &action->as.send);
-        case TA_ACTION_CANCEL:
-            (void)ta_timer_cancel(&it->system->timers, it->actor->record.id,
-                                  ta_literal_send_id(action->as.cancel.sendid.as.atom));
-            return TA_OK;
+        case TA_ACTION_CANCEL: {
+            ta_send_id send_id = 0;
+            if (action->as.cancel.sendid.kind == TA_TEXT_SOURCE_ATOM) {
+                send_id = ta_literal_send_id(action->as.cancel.sendid.as.atom);
+            } else {
+                ta_value holder = {0};
+                ta_str text = {0};
+                status = ta_eval_text(it, &(ta_text_eval_params){
+                                              .expr = action->as.cancel.sendid.as.expr, .holder = &holder,
+                                              .text = &text, .fault = &fault,
+                                          });
+                if (status == TA_OP_OK) {
+                    send_id = ta_send_id_from_text(it->system, text);
+                }
+                ta_value_release(&holder);
+            }
+            if (status == TA_OP_OK && send_id != 0) {
+                (void)ta_timer_cancel(&it->system->timers, it->actor->record.id, send_id);
+            }
+            break;
+        }
         case TA_ACTION_ASSIGN: {
             ta_value value = {0};
             status = ta_eval_source(it, &(ta_value_params){ .source = action->as.assign.value, .out = &value,
@@ -1225,10 +1476,11 @@ static ta_result ta_interpreter_init(ta_interpreter *it, ta_system *system, ta_a
         return TA_ERR_NOMEM;
     }
     ta_load_active(it);
+    actor->live_active = it->active;
     return TA_OK;
 }
 
-ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_actor_resume_params *params) {
+static ta_result ta_interpreter_run(ta_system *system, ta_actor *actor, const ta_actor_resume_params *params) {
     ta_run_status *status = params->status;
     if (actor->finished) {
         *status = TA_RUN_DONE;
@@ -1278,6 +1530,13 @@ ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_act
     }
     result = ta_finish(it);
     *status = result == TA_OK ? TA_RUN_DONE : TA_RUN_ERROR;
+    return result;
+}
+
+ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_actor_resume_params *params) {
+    ta_result result = ta_interpreter_run(system, actor, params);
+    /* The live set lives in scratch memory; between calls In() derives from the configuration. */
+    actor->live_active = NULL;
     return result;
 }
 

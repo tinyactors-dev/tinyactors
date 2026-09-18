@@ -383,6 +383,50 @@ typedef struct { void *self; const ta_datamodel_vtable *v; } ta_datamodel;
 TA_API bool ta_dm_host_in_state(const ta_dm_host *host, ta_state_id state);
 TA_API const ta_event *ta_dm_host_event(const ta_dm_host *host);
 TA_API ta_actor_id ta_dm_host_actor(const ta_dm_host *host);
+
+/*
+ * Text of the SCXML system variables, for data models that expose them
+ * (SCXML 5.10). Each field is formatted into the caller's buffer following
+ * the list-output convention: `*needed` always receives the size including
+ * the terminating NUL, and a too-small buffer yields TA_ERR_NOMEM without
+ * writing. TA_ERR_NOT_FOUND means the field has no value, e.g. no event has
+ * been processed yet, or the current event has no send ID or origin.
+ */
+typedef enum {
+    /* _event.name, dotted. */
+    TA_DM_TEXT_EVENT_NAME = 0,
+    /* _event.type: "platform", "internal", or "external". */
+    TA_DM_TEXT_EVENT_TYPE,
+    /* _event.sendid: the author's send ID, or the generated one. */
+    TA_DM_TEXT_EVENT_SENDID,
+    /* _event.origin, a URI that can be used as a send target. */
+    TA_DM_TEXT_EVENT_ORIGIN,
+    /* _event.origintype, the URI of the processor for origin. */
+    TA_DM_TEXT_EVENT_ORIGINTYPE,
+    /* _event.invokeid. */
+    TA_DM_TEXT_EVENT_INVOKEID,
+    /* _sessionid. */
+    TA_DM_TEXT_SESSION_ID,
+    /* _name: the <scxml> name attribute. */
+    TA_DM_TEXT_SESSION_NAME,
+    /* _ioprocessors: the SCXML Event I/O Processor's location for this session. */
+    TA_DM_TEXT_SCXML_IO_LOCATION,
+    /* _ioprocessors: the SCXML Event I/O Processor's type URI. */
+    TA_DM_TEXT_SCXML_IO_TYPE
+} ta_dm_text_kind;
+typedef struct {
+    ta_dm_text_kind kind;
+    char *buffer;
+    uint32_t capacity;
+    uint32_t *needed;
+} ta_dm_text_params;
+TA_API ta_result ta_dm_host_text(const ta_dm_host *host, const ta_dm_text_params *params);
+/* The author's ID of a state; TA_ERR_NOT_FOUND ends iteration over 0, 1, 2, ... */
+TA_API ta_result ta_dm_host_state_name(const ta_dm_host *host, ta_state_id state, ta_str *out);
+/* Resolves a state by the author's ID, e.g. for In(); TA_ERR_NOT_FOUND if none. */
+TA_API ta_result ta_dm_host_find_state(const ta_dm_host *host, ta_str id, ta_state_id *out);
+/* The text of an atom, e.g. a parameter name passed to make_params(). */
+TA_API ta_result ta_dm_host_atom_text(const ta_dm_host *host, ta_atom atom, ta_str *out);
 /* ========================================================================
  * I/O processors
  */

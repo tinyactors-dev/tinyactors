@@ -227,9 +227,12 @@ static ta_result ta_compiler_send(ta_compiler *compiler, const ta_scxml_send_spe
             out->id.kind = TA_ID_SOURCE_LITERAL;
             result = ta_compiler_atom(compiler, spec->id.as.literal, &out->id.as.literal);
             break;
+        case TA_SCXML_ID_LOCATION:
+            out->id.kind = TA_ID_SOURCE_LOCATION;
+            result = ta_compiler_expression(compiler, &spec->id.as.location, &out->id.as.location);
+            break;
         default:
-            /* idlocation needs a data-model value made from a generated ID. */
-            return TA_ERR_UNSUPPORTED;
+            return TA_ERR_INVALID;
     }
     if (result != TA_OK) {
         return result;
@@ -242,19 +245,28 @@ static ta_result ta_compiler_send(ta_compiler *compiler, const ta_scxml_send_spe
             out->type.kind = TA_TEXT_SOURCE_ATOM;
             result = ta_compiler_atom(compiler, spec->type.as.literal, &out->type.as.atom);
             break;
+        case TA_SCXML_STRING_EXPR:
+            out->type.kind = TA_TEXT_SOURCE_EXPR;
+            result = ta_compiler_expression(compiler, &spec->type.as.expr, &out->type.as.expr);
+            break;
         default:
-            return TA_ERR_UNSUPPORTED;
+            return TA_ERR_INVALID;
     }
     if (result != TA_OK) {
         return result;
     }
-    if (spec->event.kind != TA_SCXML_EVENT_NAME) {
-        return spec->event.kind == TA_SCXML_EVENT_EXPR ? TA_ERR_UNSUPPORTED : TA_ERR_INVALID;
+    ta_compiler_hash_u32(compiler, spec->event.kind);
+    if (spec->event.kind == TA_SCXML_EVENT_EXPR) {
+        out->event.kind = TA_EVENT_SOURCE_EXPR;
+        result = ta_compiler_expression(compiler, &spec->event.as.expr, &out->event.as.expr);
+    } else if (spec->event.kind == TA_SCXML_EVENT_NAME) {
+        out->event.kind = TA_EVENT_SOURCE_NAME;
+        ta_compiler_hash_str(compiler, spec->event.as.name);
+        result = ta_event_name_intern_dotted(&compiler->system->event_names, spec->event.as.name,
+                                             &out->event.as.name);
+    } else {
+        return TA_ERR_INVALID;
     }
-    out->event.kind = TA_EVENT_SOURCE_NAME;
-    ta_compiler_hash_str(compiler, spec->event.as.name);
-    result = ta_event_name_intern_dotted(&compiler->system->event_names, spec->event.as.name,
-                                         &out->event.as.name);
     if (result != TA_OK) {
         return result;
     }
@@ -288,9 +300,12 @@ static ta_result ta_compiler_send(ta_compiler *compiler, const ta_scxml_send_spe
             ta_compiler_hash_str(compiler, spec->delay.as.literal);
             result = ta_duration_parse(spec->delay.as.literal, &out->delay.as.literal);
             break;
+        case TA_SCXML_STRING_EXPR:
+            out->delay.kind = TA_DELAY_SOURCE_EXPR;
+            result = ta_compiler_expression(compiler, &spec->delay.as.expr, &out->delay.as.expr);
+            break;
         default:
-            /* delayexpr needs a data-model value converted to a duration. */
-            return TA_ERR_UNSUPPORTED;
+            return TA_ERR_INVALID;
     }
     if (result == TA_OK) {
         result = ta_compiler_value(compiler, &spec->data, &out->data);
@@ -324,8 +339,9 @@ static ta_result ta_compiler_action(ta_compiler *compiler, const ta_scxml_action
         case TA_SCXML_ACTION_CANCEL:
             out->kind = TA_ACTION_CANCEL;
             if (spec->as.cancel.sendid.kind == TA_SCXML_STRING_EXPR) {
-                /* sendidexpr needs a data-model value converted to a send ID. */
-                return TA_ERR_UNSUPPORTED;
+                out->as.cancel.sendid.kind = TA_TEXT_SOURCE_EXPR;
+                return ta_compiler_expression(compiler, &spec->as.cancel.sendid.as.expr,
+                                              &out->as.cancel.sendid.as.expr);
             }
             if (spec->as.cancel.sendid.kind != TA_SCXML_STRING_LITERAL) {
                 return TA_ERR_INVALID;
@@ -543,7 +559,11 @@ static ta_result ta_compiler_descriptors(ta_compiler *compiler, ta_str text, ta_
         }
         ta_event_pattern pattern = { .segments = { .offset = compiler->segments.count } };
         uint32_t segment_start = start;
-        for (uint32_t at = start; at <= index; at += 1) {
+        if (index - start == 2 && text.ptr[start] == '.' && text.ptr[start + 1u] == '*') {
+            /* ".*" is the empty prefix with the optional ".*" suffix: every event. */
+            segment_start = start + 1u;
+        }
+        for (uint32_t at = segment_start; at <= index; at += 1) {
             if (at < index && text.ptr[at] != '.') {
                 continue;
             }
@@ -839,6 +859,10 @@ static ta_result ta_compiler_identity(ta_compiler *compiler) {
                                                 .len = revision_copy.len };
     if (result == TA_OK) {
         result = ta_atom_intern(ta_compiler_atoms(compiler), family, &definition->name);
+    }
+    definition->document_name = TA_ATOM_NONE;
+    if (result == TA_OK && spec->name.ptr != NULL && spec->name.len != 0) {
+        result = ta_atom_intern(ta_compiler_atoms(compiler), spec->name, &definition->document_name);
     }
     return result;
 }

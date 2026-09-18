@@ -199,8 +199,8 @@ int main(void) {
             "parameter aggregation");
     require(tat_json_value_format(&parameters, text, sizeof(text), &needed) == TA_OK &&
                 strcmp(text,
-                       "[{\"name_atom\":7,\"value\":1},{\"name_atom\":7,\"value\":2}]") == 0,
-            "ordered duplicate parameters");
+                       "{\"7\":2}") == 0,
+            "a later duplicate parameter replaces an earlier one");
     ta_value_release(&parameters);
     ta_value_release(&first);
     ta_value_release(&second);

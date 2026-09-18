@@ -19,6 +19,9 @@ bool ta_actor_state_active(const ta_actor *actor, ta_state_id state) {
     if (state >= definition->state_count) {
         return false;
     }
+    if (actor->live_active != NULL) {
+        return ta_bits_get(actor->live_active, state);
+    }
     if (ta_definition_is_atomic(definition, state)) {
         return ta_configuration_contains_atomic(&actor->configuration, state);
     }

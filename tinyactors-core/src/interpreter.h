@@ -36,3 +36,8 @@ ta_result ta_interpreter_enqueue_internal(ta_system *system, ta_actor *actor, ta
 /* Dispatches a due delayed send; RETRY leaves the send owned by the caller. */
 ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send);
 void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor);
+
+/* Send IDs as text: literal IDs are their author's text; generated ones round-trip. */
+void ta_send_id_write(const ta_system *system, ta_send_id id, ta_text_writer *writer);
+/* Returns 0 when the text names no send ID. */
+ta_send_id ta_send_id_from_text(const ta_system *system, ta_str text);

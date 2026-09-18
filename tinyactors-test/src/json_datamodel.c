@@ -12,6 +12,8 @@ typedef struct {
     void *next_free;
     size_t references;
     jv value;
+    /* value_text() of a non-string: its JSON text, kept while the value lives. */
+    jv text;
 } tat_json_value;
 
 /* Per-definition state; the expression table is borrowed from the definition. */
@@ -54,6 +56,7 @@ static ta_result tat_json_wrap(tat_json_datamodel_context *context,
         .context = context,
         .references = 1,
         .value = value,
+        .text = jv_invalid(),
     };
     *out = (ta_value){.self = wrapped, .v = &TAT_JSON_VALUE_VTABLE};
     return TA_OK;
@@ -78,6 +81,7 @@ static void tat_json_release(void *self) {
     value->references -= 1;
     if (value->references == 0) {
         jv_free(value->value);
+        jv_free(value->text);
         value->next_free = value->context->free_values;
         value->context->free_values = value;
     }
@@ -184,15 +188,100 @@ static ta_str tat_json_expression(const tat_json_instance *instance, ta_expr_id 
     return expression->kind == TA_EXPRESSION_SOURCE ? expression->as.source : (ta_str){0};
 }
 
+/*
+ * Every program starts with this prelude. `In("id")` tests the configuration
+ * through $__ta_active, the author IDs of the active states, which
+ * tat_json_arguments() binds together with the SCXML system variables.
+ */
+#define TAT_JSON_PRELUDE "def In($id): any($__ta_active[]; . == $id); "
+
 static char *tat_json_source(tat_json_datamodel_context *context, ta_str expression) {
+    size_t prelude = sizeof(TAT_JSON_PRELUDE) - 1;
     size_t length = expression.len;
-    char *source = ta_arena_alloc(&context->scratch, length + 1, _Alignof(char));
+    char *source = ta_arena_alloc(&context->scratch, prelude + length + 1, _Alignof(char));
     if (source == NULL) {
         return NULL;
     }
-    memcpy(source, expression.ptr, length);
-    source[length] = '\0';
+    memcpy(source, TAT_JSON_PRELUDE, prelude);
+    memcpy(source + prelude, expression.ptr, length);
+    source[prelude + length] = '\0';
     return source;
+}
+
+/* One system-variable field as a JSON string, or null when it has no value. */
+static jv tat_json_host_text(const ta_dm_host *host, ta_dm_text_kind kind) {
+    char buffer[256];
+    uint32_t needed = 0;
+    ta_dm_text_params params = {.kind = kind, .buffer = buffer, .capacity = sizeof(buffer), .needed = &needed};
+    ta_result result = ta_dm_host_text(host, &params);
+    if (result == TA_ERR_NOMEM && needed != 0) {
+        char *large = malloc(needed);
+        if (large == NULL) {
+            return jv_null();
+        }
+        params.buffer = large;
+        params.capacity = needed;
+        result = ta_dm_host_text(host, &params);
+        jv text = result == TA_OK ? jv_string_sized(large, (int)(needed - 1)) : jv_null();
+        free(large);
+        return text;
+    }
+    return result == TA_OK ? jv_string_sized(buffer, (int)(needed - 1)) : jv_null();
+}
+
+/* $_event: null until the first event, then an object with every SCXML field. */
+static jv tat_json_event(const ta_dm_host *host) {
+    const ta_event *event = ta_dm_host_event(host);
+    if (event == NULL) {
+        return jv_null();
+    }
+    static const struct { const char *name; ta_dm_text_kind kind; } fields[] = {
+        {"name", TA_DM_TEXT_EVENT_NAME},         {"type", TA_DM_TEXT_EVENT_TYPE},
+        {"sendid", TA_DM_TEXT_EVENT_SENDID},     {"origin", TA_DM_TEXT_EVENT_ORIGIN},
+        {"origintype", TA_DM_TEXT_EVENT_ORIGINTYPE}, {"invokeid", TA_DM_TEXT_EVENT_INVOKEID},
+    };
+    jv object = jv_object();
+    for (size_t index = 0; index < sizeof(fields) / sizeof(fields[0]); index += 1) {
+        object = jv_object_set(object, jv_string(fields[index].name), tat_json_host_text(host, fields[index].kind));
+    }
+    jv data;
+    if (!tat_json_unwrap(&event->data, &data)) {
+        data = jv_null();
+    }
+    return jv_object_set(object, jv_string("data"), data);
+}
+
+/* Binds $_event, $_sessionid, $_name, $_ioprocessors, and $__ta_active into `arguments`. */
+static jv tat_json_arguments(const ta_dm_host *host, jv arguments) {
+    if (host == NULL) {
+        arguments = jv_object_set(arguments, jv_string("_event"), jv_null());
+        arguments = jv_object_set(arguments, jv_string("_sessionid"), jv_null());
+        arguments = jv_object_set(arguments, jv_string("_name"), jv_null());
+        arguments = jv_object_set(arguments, jv_string("_ioprocessors"), jv_object());
+        return jv_object_set(arguments, jv_string("__ta_active"), jv_array());
+    }
+    arguments = jv_object_set(arguments, jv_string("_event"), tat_json_event(host));
+    arguments = jv_object_set(arguments, jv_string("_sessionid"), tat_json_host_text(host, TA_DM_TEXT_SESSION_ID));
+    arguments = jv_object_set(arguments, jv_string("_name"), tat_json_host_text(host, TA_DM_TEXT_SESSION_NAME));
+    jv processor = jv_object_set(jv_object(), jv_string("location"),
+                                 tat_json_host_text(host, TA_DM_TEXT_SCXML_IO_LOCATION));
+    jv type = tat_json_host_text(host, TA_DM_TEXT_SCXML_IO_TYPE);
+    jv processors = jv_object();
+    if (jv_get_kind(type) == JV_KIND_STRING) {
+        processors = jv_object_set(processors, jv_copy(type), jv_copy(processor));
+    }
+    jv_free(type);
+    /* The short type name selects the same processor. */
+    processors = jv_object_set(processors, jv_string("scxml"), processor);
+    arguments = jv_object_set(arguments, jv_string("_ioprocessors"), processors);
+    jv active = jv_array();
+    ta_str name = {0};
+    for (ta_state_id state = 0; ta_dm_host_state_name(host, state, &name) == TA_OK; state += 1) {
+        if (ta_dm_host_in_state(host, state)) {
+            active = jv_array_append(active, jv_string_sized(name.ptr, (int)name.len));
+        }
+    }
+    return jv_object_set(arguments, jv_string("__ta_active"), active);
 }
 
 static ta_op_status tat_json_run_source(const char *source,
@@ -380,7 +469,7 @@ static ta_op_status tat_json_eval_value(void *self,
     jv result;
     ta_op_status status = tat_json_run(instance->context,
                                        tat_json_expression(instance, params->expr),
-                                       jv_copy(instance->root), jv_object(), &result,
+                                       jv_copy(instance->root), tat_json_arguments(params->host, jv_object()), &result,
                                        params->fault);
     if (status == TA_OP_OK &&
         tat_json_wrap(instance->context, result, params->out) != TA_OK) {
@@ -397,7 +486,7 @@ static ta_op_status tat_json_eval_condition(
     jv result;
     ta_op_status status = tat_json_run(instance->context,
                                        tat_json_expression(instance, params->expr),
-                                       jv_copy(instance->root), jv_object(), &result,
+                                       jv_copy(instance->root), tat_json_arguments(params->host, jv_object()), &result,
                                        params->fault);
     if (status == TA_OP_OK) {
         jv_kind kind = jv_get_kind(result);
@@ -436,7 +525,7 @@ static ta_op_status tat_json_assign(void *self,
         return TA_OP_ERROR;
     }
     ta_arena_reset(&instance->context->scratch);
-    size_t program_size = (size_t)location.len + sizeof("() = $value");
+    size_t program_size = sizeof(TAT_JSON_PRELUDE) - 1 + (size_t)location.len + sizeof("() = $value");
     char *program = ta_arena_alloc(&instance->context->scratch, program_size,
                                    _Alignof(char));
     if (program == NULL) {
@@ -444,9 +533,9 @@ static ta_op_status tat_json_assign(void *self,
         tat_json_fault(params->fault, TA_ERR_NOMEM, "could not stage JSON assignment");
         return TA_OP_ERROR;
     }
-    snprintf(program, program_size, "(%.*s) = $value", (int)location.len,
+    snprintf(program, program_size, TAT_JSON_PRELUDE "(%.*s) = $value", (int)location.len,
              location.ptr);
-    jv arguments = jv_object_set(jv_object(), jv_string("value"), assigned);
+    jv arguments = tat_json_arguments(params->host, jv_object_set(jv_object(), jv_string("value"), assigned));
     jv root;
     ta_op_status status = tat_json_run_source(program, jv_copy(instance->root),
                                               arguments, &root, params->fault);
@@ -464,7 +553,7 @@ static ta_op_status tat_json_execute_script(
     jv root;
     ta_op_status status = tat_json_run(instance->context,
                                        tat_json_expression(instance, params->script),
-                                       jv_copy(instance->root), jv_object(), &root,
+                                       jv_copy(instance->root), tat_json_arguments(params->host, jv_object()), &root,
                                        params->fault);
     if (status == TA_OP_OK) {
         jv_free(instance->root);
@@ -525,10 +614,15 @@ static ta_op_status tat_json_decode_target(
     return TA_OP_OK;
 }
 
+/*
+ * Named parameters become an object keyed by parameter name, so `<param
+ * name="x">` reads as `$_event.data.x`. A later duplicate name replaces an
+ * earlier one. Without a host (unit tests) the key is the atom's number.
+ */
 static ta_op_status tat_json_make_params(void *self,
                                          const ta_datamodel_make_params_params *params) {
     (void)self;
-    jv values = jv_array();
+    jv values = jv_object();
     for (uint32_t index = 0; index < params->count; index += 1) {
         jv value;
         if (!tat_json_unwrap(&params->values[index].value, &value)) {
@@ -536,15 +630,96 @@ static ta_op_status tat_json_make_params(void *self,
             tat_json_fault(params->fault, TA_ERR_INVALID, "parameter is not a JSON value");
             return TA_OP_ERROR;
         }
-        jv entry = jv_object();
-        entry = jv_object_set(entry, jv_string("name_atom"),
-                              jv_number((double)params->values[index].name));
-        entry = jv_object_set(entry, jv_string("value"), value);
-        values = jv_array_append(values, entry);
+        ta_str name = {0};
+        jv key = params->host != NULL &&
+                         ta_dm_host_atom_text(params->host, params->values[index].name, &name) == TA_OK
+                     ? jv_string_sized(name.ptr, (int)name.len)
+                     : jv_string_fmt("%u", (unsigned)params->values[index].name);
+        values = jv_object_set(values, key, value);
     }
     tat_json_instance *instance = params->instance;
     if (tat_json_wrap(instance->context, values, params->out) != TA_OK) {
         tat_json_fault(params->fault, TA_ERR_NOMEM, "could not retain JSON parameters");
+        return TA_OP_ERROR;
+    }
+    return TA_OP_OK;
+}
+
+/* Strings read as their contents; any other value as its JSON text. */
+static ta_op_status tat_json_value_text(void *self, const ta_datamodel_value_text_params *params) {
+    (void)self;
+    if (params->value == NULL || params->value->v != &TAT_JSON_VALUE_VTABLE || params->value->self == NULL) {
+        tat_json_fault(params->fault, TA_ERR_INVALID, "value is not a JSON value");
+        return TA_OP_ERROR;
+    }
+    tat_json_value *wrapped = params->value->self;
+    if (jv_get_kind(wrapped->value) == JV_KIND_STRING) {
+        *params->out = (ta_str){.ptr = jv_string_value(wrapped->value),
+                                .len = (uint32_t)jv_string_length_bytes(jv_copy(wrapped->value))};
+        return TA_OP_OK;
+    }
+    if (!jv_is_valid(wrapped->text)) {
+        wrapped->text = jv_dump_string(jv_copy(wrapped->value), 0);
+    }
+    *params->out = (ta_str){.ptr = jv_string_value(wrapped->text),
+                            .len = (uint32_t)jv_string_length_bytes(jv_copy(wrapped->text))};
+    return TA_OP_OK;
+}
+
+static ta_op_status tat_json_text_value(void *self, const ta_datamodel_text_value_params *params) {
+    (void)self;
+    tat_json_instance *instance = params->instance;
+    if (params->text.len > INT_MAX || (params->text.ptr == NULL && params->text.len != 0)) {
+        tat_json_fault(params->fault, TA_ERR_INVALID, "text is too long");
+        return TA_OP_ERROR;
+    }
+    jv text = jv_string_sized(params->text.len == 0 ? "" : params->text.ptr, (int)params->text.len);
+    if (tat_json_wrap(instance->context, text, params->out) != TA_OK) {
+        tat_json_fault(params->fault, TA_ERR_NOMEM, "could not retain JSON text");
+        return TA_OP_ERROR;
+    }
+    return TA_OP_OK;
+}
+
+/*
+ * Literal content is JSON when it parses as JSON; otherwise it is a string
+ * with its whitespace normalized, as for the ECMAScript data model (B.2.2).
+ */
+static ta_op_status tat_json_import_content(void *self, const ta_datamodel_import_content_params *params) {
+    (void)self;
+    tat_json_instance *instance = params->instance;
+    if (params->content.len > INT_MAX) {
+        tat_json_fault(params->fault, TA_ERR_INVALID, "content is too long");
+        return TA_OP_ERROR;
+    }
+    const char *bytes = params->content.len == 0 ? "" : (const char *)params->content.ptr;
+    jv value = jv_parse_sized(bytes, (int)params->content.len);
+    if (!jv_is_valid(value)) {
+        jv_free(value);
+        char *normalized = malloc((size_t)params->content.len + 1);
+        if (normalized == NULL) {
+            tat_json_fault(params->fault, TA_ERR_NOMEM, "could not import content");
+            return TA_OP_ERROR;
+        }
+        size_t length = 0;
+        bool space = false;
+        for (uint32_t index = 0; index < params->content.len; index += 1) {
+            char c = bytes[index];
+            if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+                space = length != 0;
+                continue;
+            }
+            if (space) {
+                normalized[length++] = ' ';
+                space = false;
+            }
+            normalized[length++] = c;
+        }
+        value = jv_string_sized(normalized, (int)length);
+        free(normalized);
+    }
+    if (tat_json_wrap(instance->context, value, params->out) != TA_OK) {
+        tat_json_fault(params->fault, TA_ERR_NOMEM, "could not retain JSON content");
         return TA_OP_ERROR;
     }
     return TA_OP_OK;
@@ -574,6 +749,9 @@ static const ta_datamodel_vtable TAT_JSON_DATAMODEL_VTABLE = {
     .decode_scxml_target = tat_json_decode_target,
     .make_params = tat_json_make_params,
     .inspect = tat_json_inspect,
+    .value_text = tat_json_value_text,
+    .text_value = tat_json_text_value,
+    .import_content = tat_json_import_content,
 };
 
 ta_datamodel tat_json_datamodel(tat_json_datamodel_context *context) {

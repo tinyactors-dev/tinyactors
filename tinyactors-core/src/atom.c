@@ -104,3 +104,19 @@ ta_str ta_atom_text(const ta_atom_table *table, ta_atom atom) {
     const ta_atom_entry *entry = ta_vec_at(&table->entries, atom);
     return entry->text;
 }
+
+ta_result ta_atom_find(const ta_atom_table *table, ta_str text, ta_atom *out) {
+    if (text.ptr == NULL && text.len != 0) {
+        return TA_ERR_INVALID;
+    }
+    uint32_t hash = ta_hash_bytes(0, text.ptr, text.len);
+    for (uint32_t atom = table->buckets[hash & (table->bucket_count - 1u)]; atom != TA_ATOM_NONE;) {
+        const ta_atom_entry *entry = ta_vec_at(&table->entries, atom);
+        if (entry->hash == hash && ta_str_equal(entry->text, text)) {
+            *out = atom;
+            return TA_OK;
+        }
+        atom = entry->next;
+    }
+    return TA_ERR_NOT_FOUND;
+}
