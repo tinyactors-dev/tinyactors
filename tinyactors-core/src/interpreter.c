@@ -851,6 +851,53 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
 
 static ta_result ta_run_block(ta_interpreter *it, ta_span32 block);
 
+/*
+ * <foreach> iterates a shallow copy made by the data model. A failed
+ * snapshot or binding, or an error in the body, stops the foreach and the
+ * enclosing block (SCXML 4.6).
+ */
+static ta_result ta_exec_foreach(ta_interpreter *it, const ta_foreach_action *foreach) {
+    const ta_definition *definition = it->definition;
+    const ta_datamodel_vtable *v = definition->datamodel.v;
+    if (v->foreach_snapshot == NULL || v->foreach_bind == NULL) {
+        return ta_execution_error(it, NULL);
+    }
+    ta_fault fault = {0};
+    ta_value snapshot = {0};
+    uint32_t count = 0;
+    if (v->foreach_snapshot(definition->datamodel.self,
+                            &(ta_datamodel_foreach_snapshot_params){
+                                .shared = definition->datamodel_shared,
+                                .instance = it->actor->datamodel_instance,
+                                .array = foreach->array,
+                                .host = &it->actor->host,
+                                .out = &snapshot,
+                                .count = &count,
+                                .fault = &fault,
+                            }) != TA_OP_OK) {
+        return ta_execution_error(it, &fault);
+    }
+    ta_str item = ta_atom_text(&it->system->atoms, foreach->item);
+    ta_str index = foreach->has_index ? ta_atom_text(&it->system->atoms, foreach->index) : (ta_str){0};
+    ta_result result = TA_OK;
+    for (uint32_t position = 0; position < count && result == TA_OK; position += 1) {
+        ta_op_status bound = v->foreach_bind(definition->datamodel.self,
+                                             &(ta_datamodel_foreach_bind_params){
+                                                 .shared = definition->datamodel_shared,
+                                                 .instance = it->actor->datamodel_instance,
+                                                 .snapshot = &snapshot,
+                                                 .index = position,
+                                                 .item = item,
+                                                 .index_name = index,
+                                                 .host = &it->actor->host,
+                                                 .fault = &fault,
+                                             });
+        result = bound == TA_OP_OK ? ta_run_block(it, foreach->body_actions) : ta_execution_error(it, &fault);
+    }
+    ta_value_release(&snapshot);
+    return result;
+}
+
 static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action) {
     const ta_definition *definition = it->definition;
     const ta_datamodel_vtable *v = definition->datamodel.v;
@@ -939,6 +986,8 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
                 ta_value_release(&value);
             }
             break;
+        case TA_ACTION_FOREACH:
+            return ta_exec_foreach(it, &action->as.foreach);
         case TA_ACTION_IF: {
             bool condition = false;
             status = ta_eval_condition(it, action->as.conditional.condition, &condition, &fault);
@@ -1247,13 +1296,118 @@ static bool ta_in_final_state(ta_interpreter *it, ta_state_id state) {
     return false;
 }
 
-static ta_result ta_raise_done(ta_interpreter *it, ta_state_id state) {
+/* Queues done.state.<state>; takes ownership of data, which may be empty. */
+static ta_result ta_raise_done(ta_interpreter *it, ta_state_id state, ta_value *data) {
     ta_event event = {
         .name = ta_state(it, state)->done_event,
         .type = TA_EVENT_INTERNAL,
         .invoke_id = TA_INVOKE_ID_NONE,
+        .data = *data,
     };
+    *data = (ta_value){0};
     return ta_interpreter_enqueue_internal(it->system, it->actor, &event);
+}
+
+/*
+ * <donedata> <param>s: a param whose value fails is ignored after queueing
+ * error.execution (SCXML 5.7); the rest still form the payload.
+ */
+static ta_result ta_done_data_params(ta_interpreter *it, ta_span32 params, ta_value *out) {
+    const ta_definition *definition = it->definition;
+    const ta_datamodel_vtable *v = definition->datamodel.v;
+    ta_named_value *values = ta_arena_alloc(&it->system->scratch, params.length * sizeof(ta_named_value),
+                                            _Alignof(ta_named_value));
+    if (values == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    uint32_t count = 0;
+    ta_result result = TA_OK;
+    for (uint32_t index = 0; index < params.length && result == TA_OK; index += 1) {
+        const ta_param_def *param = &definition->params[params.offset + index];
+        ta_fault fault = {0};
+        values[count].name = param->name;
+        if (ta_eval_source(it, &(ta_value_params){ .source = param->value, .out = &values[count].value,
+                                                   .fault = &fault }) == TA_OP_OK) {
+            count += 1;
+        } else {
+            result = ta_execution_error(it, &fault);
+            result = result == TA_EXEC_FAILED ? TA_OK : result;
+        }
+    }
+    ta_fault fault = {0};
+    if (result == TA_OK && count != 0 &&
+        (v->make_params == NULL ||
+         v->make_params(definition->datamodel.self,
+                        &(ta_datamodel_make_params_params){
+                            .shared = definition->datamodel_shared,
+                            .instance = it->actor->datamodel_instance,
+                            .values = values,
+                            .count = count,
+                            .host = &it->actor->host,
+                            .out = out,
+                            .fault = &fault,
+                        }) != TA_OP_OK)) {
+        *out = (ta_value){0};
+        result = ta_execution_error(it, &fault);
+        result = result == TA_EXEC_FAILED ? TA_OK : result;
+    }
+    for (uint32_t index = 0; index < count; index += 1) {
+        ta_value_release(&values[index].value);
+    }
+    return result;
+}
+
+/*
+ * Evaluates a final state's <donedata> into `out`. A failure queues
+ * error.execution and leaves the data empty; the done event still follows.
+ */
+static ta_result ta_done_data_value(ta_interpreter *it, ta_done_data_id id, ta_value *out) {
+    *out = (ta_value){0};
+    if (id == TA_DONE_DATA_NONE) {
+        return TA_OK;
+    }
+    const ta_definition *definition = it->definition;
+    const ta_done_data_def *done = &definition->done_data[id];
+    if (done->params.length != 0) {
+        return ta_done_data_params(it, done->params, out);
+    }
+    ta_fault fault = {0};
+    ta_op_status status = TA_OP_OK;
+    if (done->content.kind == TA_VALUE_SOURCE_CONTENT) {
+        const ta_datamodel_vtable *v = definition->datamodel.v;
+        status = v->import_content == NULL
+                     ? TA_OP_ERROR
+                     : v->import_content(definition->datamodel.self,
+                                         &(ta_datamodel_import_content_params){
+                                             .shared = definition->datamodel_shared,
+                                             .instance = it->actor->datamodel_instance,
+                                             .content = definition->contents[done->content.as.content].bytes,
+                                             .host = &it->actor->host,
+                                             .out = out,
+                                             .fault = &fault,
+                                         });
+    } else {
+        status = ta_eval_source(it, &(ta_value_params){ .source = done->content, .out = out, .fault = &fault });
+    }
+    if (status == TA_OP_OK) {
+        return TA_OK;
+    }
+    *out = (ta_value){0};
+    ta_result result = ta_execution_error(it, &fault);
+    return result == TA_EXEC_FAILED ? TA_OK : result;
+}
+
+/* Keeps a top-level final state's done data as the actor's completion. */
+static ta_result ta_store_completion(ta_interpreter *it, ta_value *data) {
+    ta_actor_sparse_state *sparse = ta_sparse(it->system, it->actor);
+    if (sparse == NULL) {
+        ta_value_release(data);
+        return TA_ERR_NOMEM;
+    }
+    ta_value_release(&sparse->completion.data);
+    sparse->completion = (ta_actor_completion){ .has_data = data->v != NULL, .data = *data };
+    *data = (ta_value){0};
+    return TA_OK;
 }
 
 static ta_result ta_exit_states(ta_interpreter *it) {
@@ -1348,15 +1502,25 @@ static ta_result ta_enter_states(ta_interpreter *it) {
         if (def->kind != TA_STATE_FINAL) {
             continue;
         }
+        ta_value data = {0};
+        result = ta_done_data_value(it, def->done_data, &data);
+        if (result != TA_OK) {
+            return result;
+        }
         if (def->parent == TA_STATE_NONE) {
             it->actor->finished = true;
+            result = ta_store_completion(it, &data);
+            if (result != TA_OK) {
+                return result;
+            }
             continue;
         }
-        result = ta_raise_done(it, def->parent);
+        result = ta_raise_done(it, def->parent, &data);
         ta_state_id grandparent = ta_state(it, def->parent)->parent;
         if (result == TA_OK && grandparent != TA_STATE_NONE &&
             ta_state(it, grandparent)->kind == TA_STATE_PARALLEL && ta_in_final_state(it, grandparent)) {
-            result = ta_raise_done(it, grandparent);
+            ta_value none = {0};
+            result = ta_raise_done(it, grandparent, &none);
         }
         if (result != TA_OK) {
             return result;
@@ -1557,6 +1721,7 @@ void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor) {
         ta_event_release(&event);
     }
     ta_vec_destroy(&actor->sparse->internal_events);
+    ta_value_release(&actor->sparse->completion.data);
     ta_mem_free(system->allocator, actor->sparse,
                 &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),
                                              .alignment = _Alignof(ta_actor_sparse_state) });

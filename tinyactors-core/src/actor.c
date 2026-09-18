@@ -256,6 +256,8 @@ ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_inspectio
         out->internal_count = actor->sparse->internal_events.count;
         out->invokes = actor->sparse->invokes;
         out->invoke_count = actor->sparse->invoke_count;
+        out->has_completion = actor->finished;
+        out->completion = actor->finished ? &actor->sparse->completion : NULL;
     }
     const ta_datamodel_vtable *v = definition->datamodel.v;
     if (v->inspect != NULL &&
@@ -404,7 +406,11 @@ ta_result ta_actor_get_completion(ta_system *system, ta_actor_id id, ta_actor_co
     if (!actor->finished) {
         return TA_ERR_BUSY;
     }
-    /* <donedata> is not compiled yet, so completion never carries data. */
     *out = (ta_actor_completion){ .has_data = false };
-    return TA_OK;
+    if (actor->sparse == NULL || !actor->sparse->completion.has_data) {
+        return TA_OK;
+    }
+    ta_result result = ta_value_clone(&actor->sparse->completion.data, &out->data);
+    out->has_data = result == TA_OK;
+    return result;
 }

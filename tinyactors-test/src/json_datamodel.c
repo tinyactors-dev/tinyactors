@@ -731,6 +731,84 @@ static ta_result tat_json_inspect(void *self, const ta_datamodel_inspect_params 
     return tat_json_wrap(instance->context, jv_copy(instance->root), params->out);
 }
 
+/*
+ * <foreach>: the snapshot is the evaluated array or object itself (jv values
+ * are immutable, so it is already a shallow copy). Objects iterate their
+ * values in key order.
+ */
+static ta_op_status tat_json_foreach_snapshot(void *self,
+                                              const ta_datamodel_foreach_snapshot_params *params) {
+    (void)self;
+    tat_json_instance *instance = params->instance;
+    jv collection;
+    ta_op_status status = tat_json_run(instance->context,
+                                       tat_json_expression(instance, params->array),
+                                       jv_copy(instance->root), jv_object(), &collection,
+                                       params->fault);
+    if (status != TA_OP_OK) {
+        return status;
+    }
+    jv_kind kind = jv_get_kind(collection);
+    if (kind != JV_KIND_ARRAY && kind != JV_KIND_OBJECT) {
+        jv_free(collection);
+        tat_json_fault(params->fault, TA_ERR_INVALID, "foreach array is not an array or object");
+        return TA_OP_ERROR;
+    }
+    if (kind == JV_KIND_OBJECT) {
+        jv keys = jv_keys(jv_copy(collection));
+        jv values = jv_array();
+        jv_array_foreach(keys, index, key) {
+            values = jv_array_append(values, jv_object_get(jv_copy(collection), key));
+        }
+        jv_free(keys);
+        jv_free(collection);
+        collection = values;
+    }
+    *params->count = (uint32_t)jv_array_length(jv_copy(collection));
+    if (tat_json_wrap(instance->context, collection, params->out) != TA_OK) {
+        tat_json_fault(params->fault, TA_ERR_NOMEM, "could not retain foreach snapshot");
+        return TA_OP_ERROR;
+    }
+    return TA_OP_OK;
+}
+
+/* A legal jq-model variable: a root member named like a jq identifier. */
+static bool tat_json_variable_name(ta_str name) {
+    if (name.ptr == NULL || name.len == 0) {
+        return false;
+    }
+    for (uint32_t index = 0; index < name.len; index += 1) {
+        char c = name.ptr[index];
+        bool alpha = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+        if (!alpha && !(index > 0 && c >= '0' && c <= '9')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static ta_op_status tat_json_foreach_bind(void *self, const ta_datamodel_foreach_bind_params *params) {
+    (void)self;
+    jv snapshot;
+    if (!tat_json_unwrap(params->snapshot, &snapshot)) {
+        tat_json_fault(params->fault, TA_ERR_INVALID, "foreach snapshot is not a JSON value");
+        return TA_OP_ERROR;
+    }
+    bool has_index = params->index_name.ptr != NULL;
+    if (!tat_json_variable_name(params->item) || (has_index && !tat_json_variable_name(params->index_name))) {
+        jv_free(snapshot);
+        tat_json_fault(params->fault, TA_ERR_INVALID, "foreach item or index is not a legal variable name");
+        return TA_OP_ERROR;
+    }
+    jv item = jv_array_get(snapshot, (int)params->index);
+    ta_op_status status = tat_json_set_member(params->instance, params->item, item, params->fault);
+    if (status == TA_OP_OK && has_index) {
+        status = tat_json_set_member(params->instance, params->index_name, jv_number((double)params->index),
+                                     params->fault);
+    }
+    return status;
+}
+
 static const ta_datamodel_vtable TAT_JSON_DATAMODEL_VTABLE = {
     .name = {.ptr = "jq", .len = 2},
     .prepare_definition = tat_json_prepare,
@@ -752,6 +830,8 @@ static const ta_datamodel_vtable TAT_JSON_DATAMODEL_VTABLE = {
     .value_text = tat_json_value_text,
     .text_value = tat_json_text_value,
     .import_content = tat_json_import_content,
+    .foreach_snapshot = tat_json_foreach_snapshot,
+    .foreach_bind = tat_json_foreach_bind,
 };
 
 ta_datamodel tat_json_datamodel(tat_json_datamodel_context *context) {

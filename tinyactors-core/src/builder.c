@@ -28,6 +28,7 @@ typedef struct {
     ta_vec segments;     /* ta_event_pattern_segment */
     ta_vec expressions;  /* ta_expression */
     ta_vec history;      /* ta_history_slot */
+    ta_vec done_data;    /* ta_done_data_def */
     uint64_t hash;
 } ta_compiler;
 
@@ -319,6 +320,29 @@ static ta_result ta_compiler_send(ta_compiler *compiler, const ta_scxml_send_spe
     return result;
 }
 
+/*
+ * <foreach>: the array is an expression; item and index are variable names
+ * whose legality the data model judges when it binds them (SCXML 4.6).
+ */
+static ta_result ta_compiler_foreach(ta_compiler *compiler, const ta_scxml_action_spec *spec,
+                                     ta_foreach_action *out) {
+    if (spec->as.foreach.array.kind == TA_EXPRESSION_NONE) {
+        return TA_ERR_INVALID;
+    }
+    ta_result result = ta_compiler_expression(compiler, &spec->as.foreach.array, &out->array);
+    if (result == TA_OK) {
+        result = ta_compiler_atom(compiler, spec->as.foreach.item, &out->item);
+    }
+    if (result == TA_OK && spec->as.foreach.index.ptr != NULL) {
+        out->has_index = true;
+        result = ta_compiler_atom(compiler, spec->as.foreach.index, &out->index);
+    }
+    if (result == TA_OK) {
+        result = ta_compiler_block(compiler, spec->as.foreach.body, &out->body_actions);
+    }
+    return result;
+}
+
 static ta_result ta_compiler_action(ta_compiler *compiler, const ta_scxml_action_spec *spec,
                                     ta_action_def *out) {
     ta_compiler_hash_u32(compiler, spec->kind);
@@ -387,6 +411,8 @@ static ta_result ta_compiler_action(ta_compiler *compiler, const ta_scxml_action
             }
             return result;
         case TA_SCXML_ACTION_FOREACH:
+            out->kind = TA_ACTION_FOREACH;
+            return ta_compiler_foreach(compiler, spec, &out->as.foreach);
         case TA_SCXML_ACTION_INVOKE:
         case TA_SCXML_ACTION_EXTENSION:
             return TA_ERR_UNSUPPORTED;
@@ -699,6 +725,24 @@ static ta_result ta_compiler_data(ta_compiler *compiler, const ta_scxml_data_spe
     return TA_OK;
 }
 
+/* <donedata>: exactly one of content or params (SCXML 5.5). */
+static ta_result ta_compiler_done_data(ta_compiler *compiler, const ta_scxml_done_data_spec *spec,
+                                       ta_done_data_id *out) {
+    ta_done_data_def done = {0};
+    ta_result result = ta_compiler_value(compiler, &spec->content, &done.content);
+    if (result == TA_OK) {
+        result = ta_compiler_params(compiler, spec->params, &done.params);
+    }
+    if (result == TA_OK && done.params.length != 0 && done.content.kind != TA_VALUE_SOURCE_NONE) {
+        result = TA_ERR_INVALID;
+    }
+    if (result == TA_OK) {
+        *out = compiler->done_data.count;
+        result = ta_vec_push(&compiler->done_data, &done);
+    }
+    return result;
+}
+
 /* Pass two for one state. */
 static ta_result ta_compiler_compile_state(ta_compiler *compiler, ta_state_id id) {
     const ta_scxml_state_spec *spec = *(const ta_scxml_state_spec **)ta_vec_at(&compiler->state_specs, id);
@@ -716,8 +760,8 @@ static ta_result ta_compiler_compile_state(ta_compiler *compiler, ta_state_id id
     if (spec->invokes != NULL && spec->invokes[0].kind != TA_SCXML_INVOKE_NONE) {
         return TA_ERR_UNSUPPORTED;
     }
-    if (spec->done_data != NULL) {
-        return TA_ERR_UNSUPPORTED;
+    if (spec->done_data != NULL && state.kind != TA_STATE_FINAL) {
+        return TA_ERR_INVALID;
     }
     switch (state.kind) {
         case TA_STATE_ATOMIC:
@@ -788,6 +832,9 @@ static ta_result ta_compiler_compile_state(ta_compiler *compiler, ta_state_id id
     if (result == TA_OK) {
         result = ta_compiler_data(compiler, spec->data, id);
     }
+    if (result == TA_OK && spec->done_data != NULL) {
+        result = ta_compiler_done_data(compiler, spec->done_data, &state.done_data);
+    }
     if (result == TA_OK) {
         ta_atom segment = state.name;
         result = ta_event_name_child(&compiler->system->event_names, TA_EVENT_NAME_DONE_STATE, segment,
@@ -822,7 +869,7 @@ static void ta_compiler_destroy(ta_compiler *compiler) {
         &compiler->states, &compiler->state_specs, &compiler->children, &compiler->transitions,
         &compiler->initials, &compiler->targets, &compiler->actions, &compiler->params,
         &compiler->data_decls, &compiler->initializers, &compiler->contents, &compiler->patterns,
-        &compiler->segments, &compiler->expressions, &compiler->history,
+        &compiler->segments, &compiler->expressions, &compiler->history, &compiler->done_data,
     };
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(vecs); index += 1) {
         ta_vec_destroy(vecs[index]);
@@ -883,6 +930,7 @@ static ta_result ta_compiler_finish(ta_compiler *compiler) {
         { &compiler->patterns, (void **)&definition->event_patterns, &definition->event_pattern_count },
         { &compiler->segments, (void **)&definition->event_pattern_segments, &definition->event_pattern_segment_count },
         { &compiler->history, (void **)&definition->history.slots, &definition->history.slot_count },
+        { &compiler->done_data, (void **)&definition->done_data, &definition->done_data_count },
     };
     ta_result result = TA_OK;
     for (uint32_t index = 0; result == TA_OK && index < TA_ARRAY_COUNT(seals); index += 1) {
@@ -1012,6 +1060,7 @@ ta_result ta_definition_compile_spec(ta_system *system, const ta_definition_comp
         { &compiler.segments, TA_VEC_LAYOUT(ta_event_pattern_segment) },
         { &compiler.expressions, TA_VEC_LAYOUT(ta_expression) },
         { &compiler.history, TA_VEC_LAYOUT(ta_history_slot) },
+        { &compiler.done_data, TA_VEC_LAYOUT(ta_done_data_def) },
     };
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(vecs); index += 1) {
         ta_vec_init(vecs[index].vec, params->allocator, vecs[index].layout);
