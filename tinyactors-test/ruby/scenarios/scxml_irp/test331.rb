@@ -12,6 +12,63 @@
 
 require_relative '../../scxml_irp/expectations'
 
+TinyactorsTest.chart :irp_test331, document_name: 'machineName' do
+  initial :s0
+  data :_irp_outcome
+  data :Var1
+  state :s0 do
+    on_entry do
+      raise_event 'foo'
+    end
+    transition on: 'foo', target: :s1 do
+      assign '.Var1', '$_event.type'
+    end
+    transition on: '*', target: :fail
+  end
+  state :s1 do
+    transition target: :s2, cond: '.Var1 == "internal"'
+    transition target: :fail
+  end
+  state :s2 do
+    on_entry do
+      assign 'error("conf:invalidLocation")', '1'
+    end
+    transition on: 'error', target: :s3 do
+      assign '.Var1', '$_event.type'
+    end
+    transition on: '*', target: :fail
+  end
+  state :s3 do
+    transition target: :s4, cond: '.Var1 == "platform"'
+    transition target: :fail
+  end
+  state :s4 do
+    on_entry do
+      send_event 'foo'
+    end
+    transition on: 'foo', target: :s5 do
+      assign '.Var1', '$_event.type'
+    end
+    transition on: '*', target: :fail
+  end
+  state :s5 do
+    transition target: :pass, cond: '.Var1 == "external"'
+    transition target: :fail
+  end
+  final :pass do
+    on_entry do
+      log 'Outcome', expr: '"pass"'
+      assign '._irp_outcome', '"pass"'
+    end
+  end
+  final :fail do
+    on_entry do
+      log 'Outcome', expr: '"fail"'
+      assign '._irp_outcome', '"fail"'
+    end
+  end
+end
+
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test331')
   scenario 'test331' do

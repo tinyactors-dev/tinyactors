@@ -7,9 +7,42 @@
 #   when the parent invoke element is evaluated and treat the result as if it
 #   had been entered as the value of 'src'.
 #
+# Source: vendor/scxml-irp/216/test216sub1.txml
 # Source: vendor/scxml-irp/216/test216.txml
 
 require_relative '../../scxml_irp/expectations'
+
+TinyactorsTest.chart :irp_test216sub1 do
+  initial :final
+  final :final
+end
+
+TinyactorsTest.chart :irp_test216 do
+  initial :s0
+  data :_irp_outcome
+  data Var1: { expr: '"foo"' }
+  state :s0 do
+    on_entry do
+      send_event 'timeout', delay: 5000
+      assign '.Var1', '"file:test216sub1.scxml"'
+    end
+    invoke type: 'http://www.w3.org/TR/scxml', src_expr: '.Var1'
+    transition on: 'done.invoke', target: :pass
+    transition on: '*', target: :fail
+  end
+  final :pass do
+    on_entry do
+      log 'Outcome', expr: '"pass"'
+      assign '._irp_outcome', '"pass"'
+    end
+  end
+  final :fail do
+    on_entry do
+      log 'Outcome', expr: '"fail"'
+      assign '._irp_outcome', '"fail"'
+    end
+  end
+end
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test216')

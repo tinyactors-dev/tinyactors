@@ -15,6 +15,84 @@
 
 require_relative '../../scxml_irp/expectations'
 
+TinyactorsTest.chart :irp_test364 do
+  initial :s1
+  data :_irp_outcome
+  state :s1, initial: [:s11p112, :s11p122] do
+    on_entry do
+      send_event 'timeout', delay: 1000
+    end
+    transition on: 'timeout', target: :fail
+    state :s11, initial: :s111 do
+      state :s111
+      parallel :s11p1 do
+        state :s11p11, initial: :s11p111 do
+          state :s11p111
+          state :s11p112 do
+            on_entry do
+              raise_event 'In-s11p112'
+            end
+          end
+        end
+        state :s11p12, initial: :s11p121 do
+          state :s11p121
+          state :s11p122 do
+            transition on: 'In-s11p112', target: :s2
+          end
+        end
+      end
+    end
+  end
+  state :s2 do
+    initial :s21p112, :s21p122
+    transition on: 'timeout', target: :fail
+    state :s21, initial: :s211 do
+      state :s211
+      parallel :s21p1 do
+        state :s21p11, initial: :s21p111 do
+          state :s21p111
+          state :s21p112 do
+            on_entry do
+              raise_event 'In-s21p112'
+            end
+          end
+        end
+        state :s21p12, initial: :s21p121 do
+          state :s21p121
+          state :s21p122 do
+            transition on: 'In-s21p112', target: :s3
+          end
+        end
+      end
+    end
+  end
+  state :s3 do
+    transition target: :fail
+    state :s31 do
+      state :s311 do
+        state :s3111 do
+          transition target: :pass
+        end
+        state :s3112
+        state :s312
+        state :s32
+      end
+    end
+  end
+  final :pass do
+    on_entry do
+      log 'Outcome', expr: '"pass"'
+      assign '._irp_outcome', '"pass"'
+    end
+  end
+  final :fail do
+    on_entry do
+      log 'Outcome', expr: '"fail"'
+      assign '._irp_outcome', '"fail"'
+    end
+  end
+end
+
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test364')
   scenario 'test364' do

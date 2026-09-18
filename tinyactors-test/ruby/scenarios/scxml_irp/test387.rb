@@ -12,6 +12,92 @@
 
 require_relative '../../scxml_irp/expectations'
 
+TinyactorsTest.chart :irp_test387 do
+  initial :s3
+  data :_irp_outcome
+  state :s0, initial: :s01 do
+    transition on: 'enteringS011', target: :s4
+    transition on: '*', target: :fail
+    history :s0HistShallow, type: :shallow, default: :s01
+    history :s0HistDeep, type: :deep, default: :s022
+    state :s01, initial: :s011 do
+      state :s011 do
+        on_entry do
+          raise_event 'enteringS011'
+        end
+      end
+      state :s012 do
+        on_entry do
+          raise_event 'enteringS012'
+        end
+      end
+    end
+    state :s02, initial: :s021 do
+      state :s021 do
+        on_entry do
+          raise_event 'enteringS021'
+        end
+      end
+      state :s022 do
+        on_entry do
+          raise_event 'enteringS022'
+        end
+      end
+    end
+  end
+  state :s1, initial: :s11 do
+    transition on: 'enteringS122', target: :pass
+    transition on: '*', target: :fail
+    history :s1HistShallow, type: :shallow, default: :s11
+    history :s1HistDeep, type: :deep, default: :s122
+    state :s11, initial: :s111 do
+      state :s111 do
+        on_entry do
+          raise_event 'enteringS111'
+        end
+      end
+      state :s112 do
+        on_entry do
+          raise_event 'enteringS112'
+        end
+      end
+    end
+    state :s12, initial: :s121 do
+      state :s121 do
+        on_entry do
+          raise_event 'enteringS121'
+        end
+      end
+      state :s122 do
+        on_entry do
+          raise_event 'enteringS122'
+        end
+      end
+    end
+  end
+  state :s3 do
+    on_entry do
+      send_event 'timeout', delay: 1000
+    end
+    transition target: :s0HistShallow
+  end
+  state :s4 do
+    transition target: :s1HistDeep
+  end
+  final :pass do
+    on_entry do
+      log 'Outcome', expr: '"pass"'
+      assign '._irp_outcome', '"pass"'
+    end
+  end
+  final :fail do
+    on_entry do
+      log 'Outcome', expr: '"fail"'
+      assign '._irp_outcome', '"fail"'
+    end
+  end
+end
+
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test387')
   scenario 'test387' do

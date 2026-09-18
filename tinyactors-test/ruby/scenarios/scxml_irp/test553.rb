@@ -11,6 +11,31 @@
 
 require_relative '../../scxml_irp/expectations'
 
+TinyactorsTest.chart :irp_test553 do
+  initial :s0
+  data :_irp_outcome
+  state :s0 do
+    on_entry do
+      send_event 'timeout', delay: 1000
+      send_event 'event1', params: { "\"foo" => { location: 'error("conf:invalidNamelist")' } }
+    end
+    transition on: 'timeout', target: :pass
+    transition on: 'event1', target: :fail
+  end
+  final :pass do
+    on_entry do
+      log 'Outcome', expr: '"pass"'
+      assign '._irp_outcome', '"pass"'
+    end
+  end
+  final :fail do
+    on_entry do
+      log 'Outcome', expr: '"fail"'
+      assign '._irp_outcome', '"fail"'
+    end
+  end
+end
+
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test553')
   scenario 'test553' do

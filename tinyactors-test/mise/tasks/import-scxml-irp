@@ -1,12 +1,11 @@
 #!/usr/bin/env ruby
-#MISE description="Convert the vendored W3C SCXML IRP tests into jq charts and scenarios"
+#MISE description="Convert the vendored W3C SCXML IRP tests into jq scenarios"
 
 require 'pathname'
 require_relative '../../ruby/scxml_irp/importer'
 
 root = Pathname.new(__dir__).join('../..').expand_path
 importer = ScxmlIrp::Importer.new(suite: root.join('vendor/scxml-irp'),
-                                  charts_dir: root.join('ruby/charts/scxml_irp'),
                                   scenarios_dir: root.join('ruby/scenarios/scxml_irp'),
                                   root: root)
 imports = importer.write_all

@@ -11,6 +11,31 @@
 
 require_relative '../../scxml_irp/expectations'
 
+TinyactorsTest.chart :irp_test311 do
+  initial :s0
+  data :_irp_outcome
+  state :s0 do
+    on_entry do
+      send_event 'timeout', delay: 1000
+      assign 'error("conf:invalidLocation")', '1'
+    end
+    transition on: 'error.execution', target: :pass
+    transition on: '.*', target: :fail
+  end
+  final :pass do
+    on_entry do
+      log 'Outcome', expr: '"pass"'
+      assign '._irp_outcome', '"pass"'
+    end
+  end
+  final :fail do
+    on_entry do
+      log 'Outcome', expr: '"fail"'
+      assign '._irp_outcome', '"fail"'
+    end
+  end
+end
+
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test311')
   scenario 'test311' do

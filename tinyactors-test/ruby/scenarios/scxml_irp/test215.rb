@@ -11,6 +11,38 @@
 
 require_relative '../../scxml_irp/expectations'
 
+TinyactorsTest.chart :irp_test215_child1 do
+  initial :subFinal
+  final :subFinal
+end
+
+TinyactorsTest.chart :irp_test215 do
+  initial :s0
+  data :_irp_outcome
+  data Var1: { expr: '"foo"' }
+  state :s0 do
+    on_entry do
+      send_event 'timeout', delay: 5000
+      assign '.Var1', '"http://www.w3.org/TR/scxml/"'
+    end
+    invoke type_expr: '.Var1', chart: :irp_test215_child1
+    transition on: 'done.invoke', target: :pass
+    transition on: '*', target: :fail
+  end
+  final :pass do
+    on_entry do
+      log 'Outcome', expr: '"pass"'
+      assign '._irp_outcome', '"pass"'
+    end
+  end
+  final :fail do
+    on_entry do
+      log 'Outcome', expr: '"fail"'
+      assign '._irp_outcome', '"fail"'
+    end
+  end
+end
+
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test215')
   scenario 'test215' do

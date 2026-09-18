@@ -17,6 +17,132 @@
 
 require_relative '../../scxml_irp/expectations'
 
+TinyactorsTest.chart :irp_test403a do
+  initial :s0
+  data :_irp_outcome
+  state :s0, initial: :s01 do
+    on_entry do
+      send_event 'timeout', delay: 1000
+    end
+    transition on: 'timeout', target: :fail
+    transition on: 'event1', target: :fail
+    transition on: 'event2', target: :pass
+    state :s01 do
+      on_entry do
+        raise_event 'event1'
+      end
+      transition on: 'event1', target: :s02
+      transition on: '*', target: :fail
+    end
+    state :s02 do
+      on_entry do
+        raise_event 'event2'
+      end
+      transition on: 'event1', target: :fail
+      transition on: 'event2', target: :fail, cond: 'false'
+    end
+  end
+  final :pass do
+    on_entry do
+      log 'Outcome', expr: '"pass"'
+      assign '._irp_outcome', '"pass"'
+    end
+  end
+  final :fail do
+    on_entry do
+      log 'Outcome', expr: '"fail"'
+      assign '._irp_outcome', '"fail"'
+    end
+  end
+end
+
+TinyactorsTest.chart :irp_test403b do
+  initial :s0
+  data :_irp_outcome
+  data Var1: { expr: '0' }
+  state :s0, initial: :p0 do
+    transition on: 'event1' do
+      assign '.Var1', '.Var1 + 1'
+    end
+    parallel :p0 do
+      on_entry do
+        raise_event 'event1'
+        raise_event 'event2'
+      end
+      transition on: 'event1' do
+        assign '.Var1', '.Var1 + 1'
+      end
+      state :p0s1 do
+        transition on: 'event2', target: :pass, cond: '.Var1 == 1'
+        transition on: 'event2', target: :fail
+      end
+      state :p0s2
+    end
+  end
+  final :pass do
+    on_entry do
+      log 'Outcome', expr: '"pass"'
+      assign '._irp_outcome', '"pass"'
+    end
+  end
+  final :fail do
+    on_entry do
+      log 'Outcome', expr: '"fail"'
+      assign '._irp_outcome', '"fail"'
+    end
+  end
+end
+
+TinyactorsTest.chart :irp_test403c do
+  initial :s0
+  data :_irp_outcome
+  data Var1: { expr: '0' }
+  state :s0, initial: :p0 do
+    on_entry do
+      raise_event 'event1'
+      send_event 'timeout', delay: 1000
+    end
+    transition on: 'event2', target: :fail
+    transition on: 'timeout', target: :fail
+    parallel :p0 do
+      state :p0s1 do
+        transition on: 'event1'
+        transition on: 'event2'
+      end
+      state :p0s2 do
+        transition on: 'event1', target: :p0s1 do
+          raise_event 'event2'
+        end
+      end
+      state :p0s3 do
+        transition on: 'event1', target: :fail
+        transition on: 'event2', target: :s1
+      end
+      state :p0s4 do
+        transition on: '*' do
+          assign '.Var1', '.Var1 + 1'
+        end
+      end
+    end
+  end
+  state :s1 do
+    transition target: :pass, cond: '.Var1 == 2'
+    transition target: :fail
+  end
+  final :pass do
+    on_entry do
+      log 'Outcome', expr: '"pass"'
+      assign '._irp_outcome', '"pass"'
+    end
+  end
+  final :fail do
+    on_entry do
+      log 'Outcome', expr: '"fail"'
+      assign '._irp_outcome', '"fail"'
+    end
+  end
+end
+
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test403a')
   scenario 'test403a' do

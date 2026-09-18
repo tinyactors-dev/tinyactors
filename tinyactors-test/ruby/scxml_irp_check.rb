@@ -4,7 +4,8 @@
 #
 # 1. the generated files match what the importer produces from the vendored
 #    suite (run `mise run import-scxml-irp` after changing the importer);
-# 2. every generated chart passes the chart DSL's load-time checks;
+# 2. every generated scenario file loads, and its charts pass the chart DSL's
+#    load-time checks;
 # 3. every chart spec decodes in the host (codec.roundtrip.ta_scxml_spec), so
 #    the specs are valid input for ta_definition_compile_spec.
 
@@ -17,23 +18,19 @@ root = Pathname.new(__dir__).join('..').expand_path
 host = root.join('build/tinyactors-test')
 abort "tinyactors-test host not found at #{host}; run `mise run build`" unless host.executable?
 
-charts_dir = root.join('ruby/charts/scxml_irp')
 scenarios_dir = root.join('ruby/scenarios/scxml_irp')
 
 Dir.mktmpdir do |tmp|
   tmp = Pathname.new(tmp)
-  ScxmlIrp::Importer.new(suite: root.join('vendor/scxml-irp'), charts_dir: tmp.join('charts'),
-                         scenarios_dir: tmp.join('scenarios'), root: root).write_all
-  stale = [[charts_dir, tmp.join('charts')], [scenarios_dir, tmp.join('scenarios')]].flat_map do |committed, fresh|
-    names = (Dir.children(committed) + Dir.children(fresh)).uniq.sort
-    names.reject do |name|
-      committed.join(name).file? && fresh.join(name).file? && committed.join(name).read == fresh.join(name).read
-    end.map { |name| committed.join(name).relative_path_from(root).to_s }
-  end
+  fresh = tmp.join('scenarios')
+  ScxmlIrp::Importer.new(suite: root.join('vendor/scxml-irp'), scenarios_dir: fresh, root: root).write_all
+  names = (Dir.children(scenarios_dir) + Dir.children(fresh)).uniq.sort
+  stale = names.reject do |name|
+    scenarios_dir.join(name).file? && fresh.join(name).file? && scenarios_dir.join(name).read == fresh.join(name).read
+  end.map { |name| scenarios_dir.join(name).relative_path_from(root).to_s }
   abort "stale generated IRP files; run `mise run import-scxml-irp`:\n  #{stale.join("\n  ")}" unless stale.empty?
 end
 
-Dir[charts_dir.join('*.rb').to_s].sort.each { |file| require file }
 Dir[scenarios_dir.join('*.rb').to_s].sort.each { |file| require file }
 charts = TinyactorsTest.charts.select { |name, _| name.start_with?('irp_') }
 scenarios = TinyactorsTest.groups.sum { |group| group.scenarios.size }

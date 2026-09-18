@@ -6,9 +6,67 @@
 #   Invoked services MUST also treat values specified by 'src' and content
 #   identically.
 #
+# Source: vendor/scxml-irp/242/test242sub1.txml
 # Source: vendor/scxml-irp/242/test242.txml
 
 require_relative '../../scxml_irp/expectations'
+
+TinyactorsTest.chart :irp_test242sub1 do
+  initial :final
+  final :final
+end
+
+TinyactorsTest.chart :irp_test242_child1 do
+  initial :subFinal1
+  final :subFinal1
+end
+
+TinyactorsTest.chart :irp_test242_child2 do
+  initial :subFinal2
+  final :subFinal2
+end
+
+TinyactorsTest.chart :irp_test242 do
+  initial :s0
+  data :_irp_outcome
+  state :s0 do
+    on_entry do
+      send_event 'timeout1', delay: 1000
+    end
+    transition on: 'timeout', target: :fail
+    invoke type: 'http://www.w3.org/TR/scxml/', src: 'file:test242sub1.scxml'
+    transition on: 'done.invoke', target: :s02
+    transition on: 'timeout1', target: :s03
+  end
+  state :s02 do
+    on_entry do
+      send_event 'timeout2', delay: 1000
+    end
+    invoke type: 'http://www.w3.org/TR/scxml/', chart: :irp_test242_child1
+    transition on: 'done.invoke', target: :pass
+    transition on: 'timeout2', target: :fail
+  end
+  state :s03 do
+    on_entry do
+      send_event 'timeout3', delay: 1000
+    end
+    invoke type: 'http://www.w3.org/TR/scxml/', chart: :irp_test242_child2
+    transition on: 'timeout3', target: :pass
+    transition on: 'done.invoke', target: :fail
+  end
+  final :pass do
+    on_entry do
+      log 'Outcome', expr: '"pass"'
+      assign '._irp_outcome', '"pass"'
+    end
+  end
+  final :fail do
+    on_entry do
+      log 'Outcome', expr: '"fail"'
+      assign '._irp_outcome', '"fail"'
+    end
+  end
+end
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test242')

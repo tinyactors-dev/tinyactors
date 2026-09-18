@@ -12,6 +12,74 @@
 
 require_relative '../../scxml_irp/expectations'
 
+TinyactorsTest.chart :irp_test253_child1 do
+  initial :sub0
+  data :Var2
+  state :sub0 do
+    on_entry do
+      send_event 'childRunning', to: '#_parent'
+    end
+    transition on: 'parentToChild', target: :sub1 do
+      assign '.Var2', '$_event.origintype'
+    end
+  end
+  state :sub1 do
+    transition target: :subFinal, cond: '.Var2 == "http://www.w3.org/TR/scxml/#SCXMLEventProcessor"' do
+      send_event 'success', to: '#_parent'
+    end
+    transition target: :subFinal, cond: '.Var2 == "scxml"' do
+      send_event 'success', to: '#_parent'
+    end
+    transition target: :subFinal do
+      send_event 'failure', to: '#_parent'
+    end
+  end
+  final :subFinal
+end
+
+TinyactorsTest.chart :irp_test253 do
+  initial :s0
+  data :_irp_outcome
+  data :Var1
+  state :s0, initial: :s01 do
+    on_entry do
+      send_event 'timeout', delay: 2000
+    end
+    transition on: 'timeout', target: :fail
+    invoke type: 'scxml', id: 'foo', chart: :irp_test253_child1
+    state :s01 do
+      transition on: 'childRunning', target: :s02 do
+        assign '.Var1', '$_event.origintype'
+      end
+    end
+    state :s02 do
+      transition target: :s03, cond: '.Var1 == "http://www.w3.org/TR/scxml/#SCXMLEventProcessor"' do
+        send_event 'parentToChild', to: '#_foo'
+      end
+      transition target: :s03, cond: '.Var1 == "scxml"' do
+        send_event 'parentToChild', to: '#_foo'
+      end
+      transition target: :fail
+    end
+    state :s03 do
+      transition on: 'success', target: :pass
+      transition on: 'fail', target: :fail
+    end
+  end
+  final :pass do
+    on_entry do
+      log 'Outcome', expr: '"pass"'
+      assign '._irp_outcome', '"pass"'
+    end
+  end
+  final :fail do
+    on_entry do
+      log 'Outcome', expr: '"fail"'
+      assign '._irp_outcome', '"fail"'
+    end
+  end
+end
+
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test253')
   scenario 'test253' do

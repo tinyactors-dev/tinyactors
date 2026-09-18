@@ -8,9 +8,51 @@
 #   http://www.w3.org/TR/voicexml21 MUST interpret values specified by the
 #   content element or 'src' attribute as markup to be executed
 #
+# Source: vendor/scxml-irp/239/test239sub1.txml
 # Source: vendor/scxml-irp/239/test239.txml
 
 require_relative '../../scxml_irp/expectations'
+
+TinyactorsTest.chart :irp_test239sub1 do
+  initial :final
+  final :final
+end
+
+TinyactorsTest.chart :irp_test239_child1 do
+  initial :final
+  final :final
+end
+
+TinyactorsTest.chart :irp_test239 do
+  initial :s0
+  data :_irp_outcome
+  state :s0, initial: :s01 do
+    on_entry do
+      send_event 'timeout', delay: 2000
+    end
+    transition on: 'timeout', target: :fail
+    state :s01 do
+      invoke type: 'http://www.w3.org/TR/scxml/', src: 'file:test239sub1.scxml'
+      transition on: 'done.invoke', target: :s02
+    end
+    state :s02 do
+      invoke type: 'http://www.w3.org/TR/scxml/', chart: :irp_test239_child1
+      transition on: 'done.invoke', target: :pass
+    end
+  end
+  final :pass do
+    on_entry do
+      log 'Outcome', expr: '"pass"'
+      assign '._irp_outcome', '"pass"'
+    end
+  end
+  final :fail do
+    on_entry do
+      log 'Outcome', expr: '"fail"'
+      assign '._irp_outcome', '"fail"'
+    end
+  end
+end
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test239')

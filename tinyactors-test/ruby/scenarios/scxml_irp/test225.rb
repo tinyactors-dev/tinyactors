@@ -10,6 +10,47 @@
 
 require_relative '../../scxml_irp/expectations'
 
+TinyactorsTest.chart :irp_test225_child1 do
+  initial :subFinal1
+  final :subFinal1
+end
+
+TinyactorsTest.chart :irp_test225_child2 do
+  initial :subFinal2
+  final :subFinal2
+end
+
+TinyactorsTest.chart :irp_test225 do
+  initial :s0
+  data :_irp_outcome
+  data :Var1
+  data :Var2
+  state :s0 do
+    on_entry do
+      send_event 'timeout', delay: 1000
+    end
+    invoke type: 'http://www.w3.org/TR/scxml/', id_location: '.Var1', chart: :irp_test225_child1
+    invoke type: 'http://www.w3.org/TR/scxml/', id_location: '.Var2', chart: :irp_test225_child2
+    transition on: '*', target: :s1
+  end
+  state :s1 do
+    transition target: :fail, cond: '.Var1 == .Var2'
+    transition target: :pass
+  end
+  final :pass do
+    on_entry do
+      log 'Outcome', expr: '"pass"'
+      assign '._irp_outcome', '"pass"'
+    end
+  end
+  final :fail do
+    on_entry do
+      log 'Outcome', expr: '"fail"'
+      assign '._irp_outcome', '"fail"'
+    end
+  end
+end
+
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test225')
   scenario 'test225' do

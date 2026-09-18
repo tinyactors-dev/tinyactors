@@ -13,6 +13,68 @@
 
 require_relative '../../scxml_irp/expectations'
 
+TinyactorsTest.chart :irp_test240_child1 do
+  initial :sub01
+  data Var1: { expr: '0' }
+  state :sub01 do
+    transition target: :subFinal1, cond: '.Var1 == 1' do
+      send_event 'success', to: '#_parent'
+    end
+    transition target: :subFinal1 do
+      send_event 'failure', to: '#_parent'
+    end
+  end
+  final :subFinal1
+end
+
+TinyactorsTest.chart :irp_test240_child2 do
+  initial :sub02
+  data Var1: { expr: '0' }
+  state :sub02 do
+    transition target: :subFinal2, cond: '.Var1 == 1' do
+      send_event 'success', to: '#_parent'
+    end
+    transition target: :subFinal2 do
+      send_event 'failure', to: '#_parent'
+    end
+  end
+  final :subFinal2
+end
+
+TinyactorsTest.chart :irp_test240 do
+  initial :s0
+  data :_irp_outcome
+  data Var1: { expr: '1' }
+  state :s0, initial: :s01 do
+    on_entry do
+      send_event 'timeout', delay: 2000
+    end
+    transition on: 'timeout', target: :fail
+    state :s01 do
+      invoke type: 'http://www.w3.org/TR/scxml/', chart: :irp_test240_child1, params: { Var1: { location: '.Var1' } }
+      transition on: 'success', target: :s02
+      transition on: 'failure', target: :fail
+    end
+    state :s02 do
+      invoke type: 'http://www.w3.org/TR/scxml/', chart: :irp_test240_child2, params: { Var1: '1' }
+      transition on: 'success', target: :pass
+      transition on: 'failure', target: :fail
+    end
+  end
+  final :pass do
+    on_entry do
+      log 'Outcome', expr: '"pass"'
+      assign '._irp_outcome', '"pass"'
+    end
+  end
+  final :fail do
+    on_entry do
+      log 'Outcome', expr: '"fail"'
+      assign '._irp_outcome', '"fail"'
+    end
+  end
+end
+
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test240')
   scenario 'test240' do

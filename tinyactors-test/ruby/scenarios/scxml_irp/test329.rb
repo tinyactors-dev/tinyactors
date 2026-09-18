@@ -10,6 +10,60 @@
 
 require_relative '../../scxml_irp/expectations'
 
+TinyactorsTest.chart :irp_test329, document_name: 'machineName' do
+  initial :s0
+  data :_irp_outcome
+  data :Var1
+  data :Var2
+  data :Var3
+  data :Var4
+  state :s0 do
+    on_entry do
+      raise_event 'foo'
+      assign '.Var1', '$_sessionid'
+      assign '$_sessionid', '27'
+    end
+    transition on: 'foo', target: :s1, cond: '.Var1 == $_sessionid'
+    transition on: '*', target: :fail
+  end
+  state :s1 do
+    on_entry do
+      assign '.Var2', '$_event'
+      assign '$_event', '27'
+    end
+    transition target: :s2, cond: '.Var2 == $_event'
+    transition target: :fail
+  end
+  state :s2 do
+    on_entry do
+      assign '.Var3', '$_name'
+      assign '$_name', '27'
+    end
+    transition target: :s3, cond: '.Var3 == $_name'
+    transition target: :fail
+  end
+  state :s3 do
+    on_entry do
+      assign '.Var4', '$_ioprocessors'
+      assign '$_ioprocessors', '27'
+    end
+    transition target: :pass, cond: '.Var4 == $_ioprocessors'
+    transition target: :fail
+  end
+  final :pass do
+    on_entry do
+      log 'Outcome', expr: '"pass"'
+      assign '._irp_outcome', '"pass"'
+    end
+  end
+  final :fail do
+    on_entry do
+      log 'Outcome', expr: '"fail"'
+      assign '._irp_outcome', '"fail"'
+    end
+  end
+end
+
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test329')
   scenario 'test329' do

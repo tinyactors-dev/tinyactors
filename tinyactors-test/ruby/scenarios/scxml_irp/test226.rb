@@ -8,9 +8,47 @@
 #   passing it the URL specified by 'src' or the data specified by content, or
 #   param.
 #
+# Source: vendor/scxml-irp/226/test226sub1.txml
 # Source: vendor/scxml-irp/226/test226.txml
 
 require_relative '../../scxml_irp/expectations'
+
+TinyactorsTest.chart :irp_test226sub1 do
+  initial :s0
+  data :Var1
+  state :s0 do
+    transition target: :final, cond: '.Var1' do
+      send_event 'varBound', to: '#_parent'
+    end
+    transition target: :final
+  end
+  final :final
+end
+
+TinyactorsTest.chart :irp_test226 do
+  initial :s0
+  data :_irp_outcome
+  state :s0 do
+    on_entry do
+      send_event 'timeout', delay: 3000
+    end
+    invoke type: 'http://www.w3.org/TR/scxml/', src: 'file:test226sub1.scxml', params: { Var1: '1' }
+    transition on: 'varBound', target: :pass
+    transition on: '*', target: :fail
+  end
+  final :pass do
+    on_entry do
+      log 'Outcome', expr: '"pass"'
+      assign '._irp_outcome', '"pass"'
+    end
+  end
+  final :fail do
+    on_entry do
+      log 'Outcome', expr: '"fail"'
+      assign '._irp_outcome', '"fail"'
+    end
+  end
+end
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test226')

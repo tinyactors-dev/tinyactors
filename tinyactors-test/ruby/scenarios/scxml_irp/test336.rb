@@ -11,6 +11,39 @@
 
 require_relative '../../scxml_irp/expectations'
 
+TinyactorsTest.chart :irp_test336, document_name: 'machineName' do
+  initial :s0
+  data :_irp_outcome
+  state :s0 do
+    on_entry do
+      send_event 'foo'
+    end
+    transition on: 'foo', target: :s1 do
+      send_event 'bar', to_expr: '$_event.origin', type_expr: '$_event.origintype'
+    end
+    transition on: '*', target: :fail
+  end
+  state :s1 do
+    on_entry do
+      send_event 'baz'
+    end
+    transition on: 'bar', target: :pass
+    transition on: '*', target: :fail
+  end
+  final :pass do
+    on_entry do
+      log 'Outcome', expr: '"pass"'
+      assign '._irp_outcome', '"pass"'
+    end
+  end
+  final :fail do
+    on_entry do
+      log 'Outcome', expr: '"fail"'
+      assign '._irp_outcome', '"fail"'
+    end
+  end
+end
+
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test336')
   scenario 'test336' do

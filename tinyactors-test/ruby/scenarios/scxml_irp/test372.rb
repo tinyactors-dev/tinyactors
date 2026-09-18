@@ -11,6 +11,38 @@
 
 require_relative '../../scxml_irp/expectations'
 
+TinyactorsTest.chart :irp_test372 do
+  data :_irp_outcome
+  data Var1: { expr: '1' }
+  state :s0, initial: :s0final do
+    on_entry do
+      send_event 'timeout', delay: 1000
+    end
+    transition on: 'done.state.s0', target: :pass, cond: '.Var1 == 2'
+    transition on: '*', target: :fail
+    final :s0final do
+      on_entry do
+        assign '.Var1', '2'
+      end
+      on_exit do
+        assign '.Var1', '3'
+      end
+    end
+  end
+  final :pass do
+    on_entry do
+      log 'Outcome', expr: '"pass"'
+      assign '._irp_outcome', '"pass"'
+    end
+  end
+  final :fail do
+    on_entry do
+      log 'Outcome', expr: '"fail"'
+      assign '._irp_outcome', '"fail"'
+    end
+  end
+end
+
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test372')
   scenario 'test372' do

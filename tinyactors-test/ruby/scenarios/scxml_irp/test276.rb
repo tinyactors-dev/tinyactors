@@ -9,9 +9,46 @@
 #   scxml). Specifically, the Processor MUST use the values provided at
 #   instantiation time instead of those contained in these data elements.
 #
+# Source: vendor/scxml-irp/276/test276sub1.txml
 # Source: vendor/scxml-irp/276/test276.txml
 
 require_relative '../../scxml_irp/expectations'
+
+TinyactorsTest.chart :irp_test276sub1 do
+  initial :s0
+  data Var1: { expr: '0' }
+  state :s0 do
+    transition target: :final, cond: '.Var1 == 1' do
+      send_event 'event1', to: '#_parent'
+    end
+    transition target: :final do
+      send_event 'event0', to: '#_parent'
+    end
+  end
+  final :final
+end
+
+TinyactorsTest.chart :irp_test276 do
+  initial :s0
+  data :_irp_outcome
+  state :s0 do
+    invoke type: 'scxml', src: 'file:test276sub1.scxml', params: { Var1: '1' }
+    transition on: 'event1', target: :pass
+    transition on: 'event0', target: :fail
+  end
+  final :pass do
+    on_entry do
+      log 'Outcome', expr: '"pass"'
+      assign '._irp_outcome', '"pass"'
+    end
+  end
+  final :fail do
+    on_entry do
+      log 'Outcome', expr: '"fail"'
+      assign '._irp_outcome', '"fail"'
+    end
+  end
+end
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test276')

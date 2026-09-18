@@ -11,6 +11,35 @@
 
 require_relative '../../scxml_irp/expectations'
 
+TinyactorsTest.chart :irp_test155 do
+  initial :s0
+  data :_irp_outcome
+  data Var1: { expr: '0' }
+  data :Var2
+  data Var3: { content: "\n    [1,2,3]\n    " }
+  state :s0 do
+    on_entry do
+      foreach '.Var3', item: 'Var2' do
+        assign '.Var1', '.Var1 + .Var2'
+      end
+    end
+    transition target: :pass, cond: '.Var1 == 6'
+    transition target: :fail
+  end
+  final :pass do
+    on_entry do
+      log 'Outcome', expr: '"pass"'
+      assign '._irp_outcome', '"pass"'
+    end
+  end
+  final :fail do
+    on_entry do
+      log 'Outcome', expr: '"fail"'
+      assign '._irp_outcome', '"fail"'
+    end
+  end
+end
+
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test155')
   scenario 'test155' do

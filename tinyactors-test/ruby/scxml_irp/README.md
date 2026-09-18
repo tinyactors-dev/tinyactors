@@ -1,11 +1,13 @@
 # W3C SCXML IRP import
 
 `ruby/scxml_irp` converts the W3C SCXML 1.0 conformance tests in
-`vendor/scxml-irp` into chart and scenario files for the scenario runner, using
-the jq data model.
+`vendor/scxml-irp` into scenario files for the scenario runner, using the jq
+data model. Each test becomes one file, `ruby/scenarios/scxml_irp/testNNN.rb`.
+The file defines every machine the test needs (the test document, its inline
+child machines, and its sub-documents) followed by the test's scenarios.
 
 ```text
-mise run import-scxml-irp     # regenerate ruby/charts/scxml_irp and ruby/scenarios/scxml_irp
+mise run import-scxml-irp     # regenerate ruby/scenarios/scxml_irp
 mise run scxml-irp-baseline   # run the IRP scenarios and record their failures in baseline.json
 mise run scenarios -n scxml-irp            # run only the IRP scenarios
 mise run scenarios -n 'scxml-irp: test144' # run one
@@ -13,13 +15,14 @@ mise run scenarios -n 'scxml-irp: test144' # run one
 
 The generated files are committed. `ruby/scxml_irp_check.rb` (part of
 `mise run test`) fails when they are stale. It also loads every generated
-chart through the DSL's checks and decodes every chart spec in the host.
+file, which runs the DSL's chart checks, and decodes every chart spec in the
+host.
 
 ## Files
 
 | File | Role |
 |---|---|
-| `importer.rb` | Reads `manifest.xml`, decides what to skip, and writes the charts, scenarios, and `INDEX.md` |
+| `importer.rb` | Reads `manifest.xml`, decides what to skip, and writes the scenario files and `INDEX.md` |
 | `document.rb` | Converts one `.txml` document to chart DSL source |
 | `jq_expressions.rb` | Maps `conf:` markup and small ECMAScript expressions to jq |
 | `expectations.rb` | Applies `baseline.json` to the generated scenarios |
