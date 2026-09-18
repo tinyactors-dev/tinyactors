@@ -209,6 +209,8 @@ typedef struct {
     ta_span32 params;
     ta_span32 finalize_actions;
     bool autoforward;
+    /* The state whose entry starts this invocation. */
+    ta_state_id owner;
 } ta_invoke_decl;
 
 typedef struct {

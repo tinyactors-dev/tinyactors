@@ -58,6 +58,12 @@ returns a handle of that type that never reaches native code. It exists so
 tests can exercise handle validation before the core implements the functions
 that create real handles.
 
+`system.actors` takes `{"system": <handle>, "runnable": bool}` and returns the
+IDs of every resident actor, including children that invokers spawned. With
+`"runnable": true` it lists only actors whose macrostep is in progress. Core's
+own enumeration, `ta_system_visit_actors`, takes a callback and so cannot cross
+the protocol.
+
 ## Generated methods
 
 `mise run bindings` generates one method per public function in
@@ -149,10 +155,21 @@ A vtable-bearing value (`ta_allocator`, `ta_datamodel`, `ta_actor_directory`,
 `{"$adapter": "<name>", "config": {...}}`. Adapters are C factories registered
 in `src/adapters.c`. They run synchronously, so callbacks never become nested
 RPC conversations. The current adapters are `allocator.libc`,
-`datamodel.jq`, and `router.direct`. `router.direct` takes
+`datamodel.jq`, `router.direct`, and `invoker.scxml`. `router.direct` takes
 `{"system": <system handle>}` and hands each external event to
 `ta_actor_deliver()`; a busy actor makes it answer retry, so core keeps the
 event for a later dispatch.
+
+`invoker.scxml` takes `{"system": <system handle>, "charts": {name: spec}}`
+and implements the SCXML invoker type (`http://www.w3.org/TR/scxml/`; core
+normalizes `scxml` to it). Each invocation runs as a child actor spawned with
+`ta_actor_spawn()` and the invoking actor as its `parent`: the machine is the
+chart spec JSON in the invoke's `<content>`, or, for `src="file:NAME.scxml"`,
+the chart `irp_NAME` from `charts`. `<param>`s whose names match the child's
+top-level `<data>` become its data-model binding. Core routes `#_parent`,
+`#_<invokeid>`, autoforwarding, and `done.invoke`; cancelling an invocation
+destroys the child. Markup content, such as an SCXML document as XML text, is
+not supported.
 
 ### Codec methods
 
@@ -182,12 +199,12 @@ maps onto the public C API:
 
 | Step | Calls |
 |---|---|
-| first use of the system | `ta.system.create` with `{"allocator": {"$adapter": "allocator.libc"}, "initial_time": 0}`, then `ta.system.set_external_event_router` with `router.direct` |
+| first use of the system | `ta.system.create` with `{"allocator": {"$adapter": "allocator.libc"}, "initial_time": 0}`, then `ta.system.set_external_event_router` with `router.direct`, and `ta.system.register_invoker` with `invoker.scxml` (every defined chart as `charts`) for the atom of `http://www.w3.org/TR/scxml/` |
 | first `spawn` of a chart | `ta.definition.compile_spec` (spec plus `{"$adapter": "datamodel.jq"}`), then `ta.system.register_definition`, which takes ownership |
 | `spawn` | `ta.actor.spawn` |
 | `advance_time` | `ta.system.set_time` with absolute logical time |
 | `deliver` | `ta.system.intern_atom` per segment and `ta.event.name_intern` with `{"atoms": [...]}` (cached), then `ta.actor.deliver` with an external event whose `invoke_id` is `TA_INVOKE_ID_NONE` |
-| after every step | run to quiescence: `ta.actor.resume` each actor until `stable` or `done`, then `ta.system.dispatch_due`; repeat until nothing was dispatched and nothing more is due |
+| after every step | run to quiescence: `system.actors` with `"runnable": true` lists every resident actor with a macrostep in progress, including invoked children; `ta.actor.resume` each until `stable` or `done` and list again until none is runnable; then `ta.system.dispatch_due`; repeat until nothing was dispatched and nothing more is due |
 | `active` | `ta.actor.inspect` for the count, `ta.actor.active_states`, and `ta.definition.state` for each state's ID (cached) |
 | `data` | `ta.actor.inspect`'s `datamodel_root`, then `json.transform` for a filter |
 

@@ -44,6 +44,10 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
     if (result == TA_OK) {
         result = ta_atom_intern(&system->atoms, ta_cstr("scxml"), &system->scxml_io_alias);
     }
+    if (result == TA_OK) {
+        result = ta_atom_intern(&system->atoms, ta_cstr("http://www.w3.org/TR/scxml/"),
+                                &system->scxml_invoke_type);
+    }
     if (result != TA_OK) {
         ta_system_destroy(system);
         return result;

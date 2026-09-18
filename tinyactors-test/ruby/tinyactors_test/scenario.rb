@@ -271,7 +271,13 @@ module TinyactorsTest
     # until nothing is left to do at the current logical time.
     def run_system(step)
       MAX_ROUNDS.times do
-        @actors.each { |actor| settle(actor) }
+        # Every resident actor with work, including children spawned by
+        # invokers; settling one can make others runnable, so repeat.
+        runnable = rpc('system.actors', system: system_handle, runnable: true)
+        unless runnable.empty?
+          runnable.each { |id| settle(id) }
+          next
+        end
         due = core('ta_system_dispatch_due', ta.system.dispatch_due(system: system_handle, budget: DISPATCH_BUDGET))
         next if due.fetch(:dispatched).positive? || due.fetch(:more_due)
 
@@ -321,6 +327,11 @@ module TinyactorsTest
     # which hands external events (such as due delayed sends) straight to
     # ta_actor_deliver. Without a router, core reports external sends as
     # error.communication (ADR 0040).
+    #
+    # It also registers the invoker.scxml adapter for SCXML <invoke>. The
+    # adapter runs an invoked machine as a child actor: the chart spec inline
+    # in the invoke's <content>, or for src="file:NAME.scxml" the chart
+    # irp_NAME, so it receives every defined chart's spec.
     def system_handle
       @system ||= begin
         system = core('ta_system_create',
@@ -328,8 +339,18 @@ module TinyactorsTest
         router = { '$adapter' => 'router.direct', 'config' => { 'system' => system } }
         core('ta_system_set_external_event_router',
              ta.system.set_external_event_router(system: system, router: router))
+        register_scxml_invoker(system)
         system
       end
+    end
+
+    SCXML_INVOKER_TYPE = 'http://www.w3.org/TR/scxml/'
+
+    def register_scxml_invoker(system)
+      type = core('ta_system_intern_atom', ta.system.intern_atom(system: system, text: SCXML_INVOKER_TYPE)).fetch(:out)
+      charts = @charts.to_h { |name, chart| [name.to_s, chart.to_spec] }
+      invoker = { '$adapter' => 'invoker.scxml', 'config' => { 'system' => system, 'charts' => charts } }
+      core('ta_system_register_invoker', ta.system.register_invoker(system: system, type: type, invoker: invoker))
     end
 
     # Interns a dotted event name through the public atom and event-name API.
@@ -354,15 +375,18 @@ module TinyactorsTest
     private
 
     # Resumes an actor until its macrostep is finished.
-    def settle(actor)
+    # Resumes an actor until its macrostep is finished. An invoked child may
+    # be destroyed while others run, when its parent cancels the invocation.
+    def settle(id)
       MAX_ROUNDS.times do
-        status = core('ta_actor_resume',
-                      ta.actor.resume(system: system_handle, actor: actor.handle, budget: RESUME_BUDGET))
-                 .fetch(:status)
+        response = ta.actor.resume(system: system_handle, actor: id, budget: RESUME_BUDGET)
+        return if response[:result] == 'err_not_found'
+
+        status = core('ta_actor_resume', response).fetch(:status)
         return if %w[stable done].include?(status)
         raise CoreResultError.new('ta_actor_resume', "status #{status}") unless status == 'paused'
       end
-      raise ScenarioError, "#{actor}: macrostep did not finish in #{MAX_ROUNDS} resumes"
+      raise ScenarioError, "actor #{id}: macrostep did not finish in #{MAX_ROUNDS} resumes"
     end
 
     # Compiles and registers a chart once per scenario; the system then owns it.

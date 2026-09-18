@@ -272,7 +272,8 @@ static ta_result ta_initialize_data(ta_interpreter *it, ta_state_id owner) {
     const ta_datamodel_vtable *v = definition->datamodel.v;
     for (uint32_t index = 0; index < definition->data_decl_count; index += 1) {
         const ta_data_decl *decl = &definition->data_decls[index];
-        if (decl->owner_state != owner || decl->initializer == TA_INITIALIZER_NONE) {
+        if (decl->owner_state != owner || decl->initializer == TA_INITIALIZER_NONE ||
+            (it->bound_decls != NULL && ta_bits_get(it->bound_decls, index))) {
             continue;
         }
         ta_fault fault = {0};
@@ -312,6 +313,7 @@ static ta_result ta_declare_data(ta_interpreter *it) {
     const ta_datamodel_vtable *v = definition->datamodel.v;
     for (uint32_t index = 0; index < definition->data_decl_count && v->declare != NULL; index += 1) {
         ta_fault fault = {0};
+        bool bound = false;
         ta_op_status status = v->declare(definition->datamodel.self,
                                          &(ta_datamodel_declare_params){
                                              .shared = definition->datamodel_shared,
@@ -320,7 +322,11 @@ static ta_result ta_declare_data(ta_interpreter *it) {
                                                                   definition->data_decls[index].name),
                                              .host = &it->actor->host,
                                              .fault = &fault,
+                                             .bound = &bound,
                                          });
+        if (bound && it->bound_decls != NULL) {
+            ta_bits_put(it->bound_decls, index, true);
+        }
         if (status != TA_OP_OK) {
             ta_result result = ta_execution_error(it, &fault);
             if (result != TA_EXEC_FAILED) {
@@ -375,7 +381,7 @@ ta_send_id ta_send_id_from_text(const ta_system *system, ta_str text) {
 }
 
 /* Parses the standard lexical SCXML Event I/O Processor targets. */
-static bool ta_parse_scxml_target(ta_bytes text, ta_scxml_target *out) {
+static bool ta_parse_scxml_target(ta_system *system, ta_bytes text, ta_scxml_target *out) {
     ta_str target = { .ptr = (const char *)text.ptr, .len = text.len };
     static const struct { const char *text; ta_scxml_target_kind kind; } fixed[] = {
         { "#_internal", TA_SCXML_TARGET_INTERNAL },
@@ -397,7 +403,10 @@ static bool ta_parse_scxml_target(ta_bytes text, ta_scxml_target *out) {
         prefix = 8;
         kind = TA_SCXML_TARGET_ACTOR;
     } else if (target.len > 2 && target.ptr[0] == '#' && target.ptr[1] == '_') {
-        prefix = 2;
+        /* Invoke: `#_<invokeid>` names an invocation by its SCXML ID text. */
+        *out = (ta_scxml_target){ .kind = TA_SCXML_TARGET_INVOKE };
+        return ta_invoke_id_from_text(system, (ta_str){ .ptr = target.ptr + 2, .len = target.len - 2 },
+                                      &out->as.invoke) == TA_OK;
     } else {
         return false;
     }
@@ -429,7 +438,8 @@ static bool ta_parse_scxml_target(ta_bytes text, ta_scxml_target *out) {
 }
 
 typedef struct {
-    ta_actor *sender;
+    ta_actor_ref origin;
+    ta_invoke_id invoke_id;
     ta_actor_ref destination;
     ta_event_name_id event;
     ta_send_id send_id;
@@ -447,8 +457,8 @@ static ta_external_event_submit_status ta_submit_external(ta_system *system, con
             .name = params->event,
             .type = TA_EVENT_EXTERNAL,
             .send_id = params->send_id,
-            .origin = { .kind = TA_ORIGIN_ACTOR, .as.actor = params->sender->record.self },
-            .invoke_id = TA_INVOKE_ID_NONE,
+            .origin = { .kind = TA_ORIGIN_ACTOR, .as.actor = params->origin },
+            .invoke_id = params->invoke_id,
             .data = *params->data,
         },
     };
@@ -460,6 +470,14 @@ static ta_external_event_submit_status ta_submit_external(ta_system *system, con
 }
 
 static ta_result ta_communication_error(ta_system *system, ta_actor *actor, const ta_error_params *params) {
+    if (actor->finished) {
+        /* A send submitted before termination failed; the session can no longer observe it. */
+        if (params->fault != NULL) {
+            ta_value_release(&params->fault->data);
+            params->fault->data = (ta_value){0};
+        }
+        return TA_OK;
+    }
     ta_error_params error = *params;
     error.name = TA_EVENT_NAME_ERROR_COMMUNICATION;
     ta_result result = ta_raise_error(system, actor, &error);
@@ -475,11 +493,21 @@ ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *syste
     ta_actor *sender = ta_actor_lookup(system, send->owner);
     ta_fault fault = {0};
     ta_external_event_submit_status status = TA_EXTERNAL_EVENT_ERROR;
-    if (sender == NULL) {
+    /*
+     * A submitted send was already sent: it is logically in the receiver's
+     * queue and keeps its envelope even when the sending session is gone.
+     */
+    ta_actor_ref origin = send->submitted || sender == NULL ? send->origin : sender->record.self;
+    /* Invoke: events from an invoked child to its parent carry the invoke ID. */
+    ta_invoke_id invoke_id = send->submitted || sender == NULL
+                                 ? send->invoke_id
+                                 : ta_invoke_parent_id(sender, &send->destination);
+    if (sender == NULL && !send->submitted) {
         status = TA_EXTERNAL_EVENT_ACCEPTED; /* the sender's session is gone; drop the send */
     } else if (ta_system_is_scxml_io(system, send->io_type)) {
         status = ta_submit_external(system, &(ta_submit_params){
-                                                .sender = sender,
+                                                .origin = origin,
+                                                .invoke_id = invoke_id,
                                                 .destination = send->destination,
                                                 .event = send->event,
                                                 .send_id = send->send_id,
@@ -489,7 +517,7 @@ ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *syste
     } else {
         const ta_io *io = ta_system_find_io(system, send->io_type);
         ta_send request = {
-            .source = sender->record.self,
+            .source = origin,
             .send_id = send->send_id,
             .event = send->event,
             .io_type = send->io_type,
@@ -504,7 +532,7 @@ ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *syste
         ta_value_release(&fault.data);
         return status;
     }
-    if (status == TA_EXTERNAL_EVENT_ERROR) {
+    if (status == TA_EXTERNAL_EVENT_ERROR && sender != NULL) {
         (void)ta_communication_error(system, sender,
                                      &(ta_error_params){ .send_id = send->send_id, .fault = &fault });
     }
@@ -575,7 +603,8 @@ static ta_op_status ta_send_target(ta_interpreter *it, const ta_send_action *sen
         return TA_OP_OK;
     }
     if (send->target.kind == TA_VALUE_SOURCE_CONTENT) {
-        return ta_parse_scxml_target(it->definition->contents[send->target.as.content].bytes, &state->scxml)
+        return ta_parse_scxml_target(it->system, it->definition->contents[send->target.as.content].bytes,
+                                     &state->scxml)
                    ? TA_OP_OK
                    : TA_OP_ERROR;
     }
@@ -619,8 +648,10 @@ static bool ta_send_destination(ta_interpreter *it, const ta_scxml_target *targe
         case TA_SCXML_TARGET_ACTOR:
             *out = target->as.actor;
             return true;
+        case TA_SCXML_TARGET_INVOKE:
+            return ta_invoke_destination(it->actor, target->as.invoke, out);
         default:
-            return false; /* invocations are not implemented yet */
+            return false;
     }
 }
 
@@ -836,6 +867,9 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
          * this busy actor. The evaluated send waits in the deadline index,
          * due now, and keeps its order among later sends.
          */
+        record.submitted = true;
+        record.origin = actor->record.self;
+        record.invoke_id = ta_invoke_parent_id(actor, &record.destination);
     }
     ta_result result = ta_timer_schedule(&system->timers, &record);
     if (result != TA_OK) {
@@ -1442,6 +1476,9 @@ static ta_result ta_exit_states(ta_interpreter *it) {
             continue;
         }
         ta_result result = ta_run_block_isolated(it, ta_state(it, state)->onexit_actions);
+        if (result == TA_OK) {
+            result = ta_invoke_state_exited(it, state); /* Invoke: cancel this state's invocations. */
+        }
         if (result != TA_OK) {
             return result;
         }
@@ -1481,7 +1518,7 @@ static ta_result ta_enter_states(ta_interpreter *it) {
         }
         const ta_state_def *def = ta_state(it, state);
         ta_bits_put(it->active, state, true);
-        ta_result result = TA_OK;
+        ta_result result = ta_invoke_state_entered(it, state); /* Invoke: start after the macrostep. */
         if (definition->binding_mode == TA_BINDING_LATE && !ta_bits_get(it->actor->late_initialized, state)) {
             ta_bits_put(it->actor->late_initialized, state, true);
             result = ta_initialize_data(it, state);
@@ -1580,7 +1617,8 @@ static ta_result ta_finish(ta_interpreter *it) {
         ta_bits_put(it->active, state, false);
     }
     ta_store_active(it);
-    ta_timer_cancel_owner(&it->system->timers, it->actor->record.id);
+    /* Sends the router already refused once stay queued: they were sent before termination. */
+    ta_timer_cancel_unsubmitted(&it->system->timers, it->actor->record.id);
     ta_actor_sparse_state *sparse = it->actor->sparse;
     ta_event event;
     while (sparse != NULL && ta_dequeue_internal(it->actor, &event)) {
@@ -1588,12 +1626,20 @@ static ta_result ta_finish(ta_interpreter *it) {
     }
     it->actor->macrostep = false;
     it->actor->record.residency = TA_ACTOR_DONE;
-    return TA_OK;
+    /* Invoke: cancel this session's invocations and report done.invoke to its parent. */
+    return ta_invoke_finished(it);
 }
 
 static ta_result ta_bootstrap(ta_interpreter *it) {
     const ta_definition *definition = it->definition;
     /* Top-level data is initialized at bootstrap under either binding (it belongs to <scxml>). */
+    it->bound_decls = ta_arena_alloc(&it->system->scratch,
+                                     (ta_bits_words(definition->data_decl_count) + 1u) * sizeof(uint64_t),
+                                     _Alignof(uint64_t));
+    if (it->bound_decls == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    ta_mem_zero(it->bound_decls, (ta_bits_words(definition->data_decl_count) + 1u) * sizeof(uint64_t));
     ta_result result = ta_declare_data(it);
     if (result == TA_OK) {
         result = ta_initialize_data(it, TA_STATE_NONE);
@@ -1611,6 +1657,7 @@ static ta_result ta_bootstrap(ta_interpreter *it) {
         it->enabled_count = 1;
         result = ta_microstep(it);
     }
+    it->bound_decls = NULL;
     it->actor->bootstrapped = true;
     return result;
 }
@@ -1672,9 +1719,18 @@ static ta_result ta_interpreter_run(ta_system *system, ta_actor *actor, const ta
         ta_event event;
         if (ta_dequeue_internal(actor, &event)) {
             ta_set_current_event(actor, &event);
+        } else if ((result = ta_invoke_start_pending(it)) != TA_OK) {
+            break; /* Invoke: the macrostep ended, so start its states' invocations. */
+        } else if (ta_interpreter_internal_pending(actor)) {
+            continue;
         } else if (actor->has_external_event) {
             actor->has_external_event = false;
             ta_set_current_event(actor, &actor->external_event);
+            /* Invoke: <finalize> and autoforwarding. */
+            result = ta_invoke_before_external(it);
+            if (result != TA_OK) {
+                break;
+            }
         } else {
             actor->macrostep = false;
             actor->record.residency = TA_ACTOR_IDLE;
@@ -1704,6 +1760,32 @@ ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_act
     return result;
 }
 
+/* ------------------------------------------------------------------------
+ * Services for invoke.c
+ */
+
+ta_actor_sparse_state *ta_interpreter_sparse(ta_system *system, ta_actor *actor) {
+    return ta_sparse(system, actor);
+}
+
+ta_op_status ta_interpreter_eval(ta_interpreter *it, const ta_interpreter_value_params *params) {
+    return ta_eval_source(it, &(ta_value_params){ .source = params->source, .out = params->out,
+                                                  .fault = params->fault });
+}
+
+ta_result ta_interpreter_execution_error(ta_interpreter *it, ta_fault *fault) {
+    ta_result result = ta_execution_error(it, fault);
+    return result == TA_EXEC_FAILED ? TA_OK : result;
+}
+
+ta_result ta_interpreter_run_actions(ta_interpreter *it, ta_span32 block) {
+    return ta_run_block_isolated(it, block);
+}
+
+bool ta_interpreter_internal_pending(const ta_actor *actor) {
+    return actor->sparse != NULL && actor->sparse->internal_events.count != 0;
+}
+
 void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor) {
     if (actor->has_external_event) {
         ta_event_release(&actor->external_event);
@@ -1716,6 +1798,7 @@ void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor) {
     if (actor->sparse == NULL) {
         return;
     }
+    ta_invoke_release(system, actor); /* Invoke: cancel services, free bookkeeping. */
     ta_event event;
     while (ta_dequeue_internal(actor, &event)) {
         ta_event_release(&event);

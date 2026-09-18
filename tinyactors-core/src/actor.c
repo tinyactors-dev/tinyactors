@@ -156,6 +156,10 @@ ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params)
         return result;
     }
     actor->datamodel_initialized = true;
+    if (params->parent != NULL) {
+        /* Invoke: the invoking parent routes #_<invokeid> and autoforwarding to this child. */
+        ta_invoke_attach_child(system, params->parent, id);
+    }
     *params->out = id;
     return TA_OK;
 }
@@ -205,7 +209,8 @@ ta_result ta_actor_destroy(ta_system *system, ta_actor_id id) {
     if (actor == NULL) {
         return TA_ERR_NOT_FOUND;
     }
-    ta_timer_cancel_owner(&system->timers, id);
+    /* Sends already submitted stay queued for their receivers. */
+    ta_timer_cancel_unsubmitted(&system->timers, id);
     ta_actor_slot *entry = ta_vec_at(&system->actors, (uint32_t)(id & 0xffffffffu));
     entry->actor = NULL;
     entry->generation += 1u;

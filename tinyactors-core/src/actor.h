@@ -19,6 +19,10 @@ typedef struct {
     ta_active_invoke *invokes;
     uint32_t invoke_count;
     uint32_t invoke_capacity;
+    /* Parallel to `invokes`; see invoke.h. */
+    ta_invoke_meta *invoke_meta;
+    /* States entered in this macrostep whose invokes start when it ends. */
+    ta_vec pending_invokes;
     ta_activation_effects *activation_effects;
     ta_actor_parent parent;
     ta_actor_completion completion;

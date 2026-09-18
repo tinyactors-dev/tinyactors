@@ -34,6 +34,9 @@ struct ta_system {
     ta_atom scxml_io_type;
     /* The short form "scxml" also selects the built-in processor. */
     ta_atom scxml_io_alias;
+    /* Invoke: the canonical SCXML invoker type and the generated-ID counter. */
+    ta_atom scxml_invoke_type;
+    uint64_t next_invoke_serial;
     ta_arena scratch;
 };
 

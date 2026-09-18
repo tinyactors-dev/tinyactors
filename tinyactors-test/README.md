@@ -77,6 +77,7 @@ The hand-written host methods are:
 - `json.transform`
 - `metrics.snapshot`
 - `host.shutdown`
+- `system.actors` (resident actor IDs; `"runnable": true` lists only those with a macrostep in progress)
 - `handle.fixture`
 
 Every other method is generated (see above). From Ruby,

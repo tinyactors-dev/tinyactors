@@ -29,6 +29,7 @@ typedef struct {
     ta_vec expressions;  /* ta_expression */
     ta_vec history;      /* ta_history_slot */
     ta_vec done_data;    /* ta_done_data_def */
+    ta_vec invokes;      /* ta_invoke_decl */
     uint64_t hash;
 } ta_compiler;
 
@@ -743,6 +744,102 @@ static ta_result ta_compiler_done_data(ta_compiler *compiler, const ta_scxml_don
     return result;
 }
 
+/* ------------------------------------------------------------------------
+ * Invoke
+ */
+
+static ta_result ta_compiler_invoke_text(ta_compiler *compiler, const ta_scxml_string_spec *spec,
+                                         ta_value_source *out) {
+    ta_compiler_hash_u32(compiler, spec->kind);
+    switch (spec->kind) {
+        case TA_SCXML_STRING_NONE:
+            *out = (ta_value_source){ .kind = TA_VALUE_SOURCE_NONE };
+            return TA_OK;
+        case TA_SCXML_STRING_LITERAL:
+            out->kind = TA_VALUE_SOURCE_CONTENT;
+            return ta_compiler_content(compiler,
+                                       (ta_bytes){ .ptr = (const uint8_t *)spec->as.literal.ptr,
+                                                   .len = spec->as.literal.len },
+                                       &out->as.content);
+        case TA_SCXML_STRING_EXPR:
+            out->kind = TA_VALUE_SOURCE_EXPR;
+            return ta_compiler_expression(compiler, &spec->as.expr, &out->as.expr);
+        default:
+            return TA_ERR_INVALID;
+    }
+}
+
+static ta_result ta_compiler_invoke(ta_compiler *compiler, const ta_scxml_invoke_spec *spec,
+                                    ta_invoke_decl *out) {
+    ta_result result = TA_OK;
+    switch (spec->id.kind) {
+        case TA_SCXML_ID_NONE:
+            out->id.kind = TA_ID_SOURCE_GENERATED;
+            break;
+        case TA_SCXML_ID_LITERAL:
+            out->id.kind = TA_ID_SOURCE_LITERAL;
+            result = ta_compiler_atom(compiler, spec->id.as.literal, &out->id.as.literal);
+            break;
+        case TA_SCXML_ID_LOCATION:
+            out->id.kind = TA_ID_SOURCE_LOCATION;
+            result = ta_compiler_expression(compiler, &spec->id.as.location, &out->id.as.location);
+            break;
+        default:
+            return TA_ERR_INVALID;
+    }
+    if (result != TA_OK) {
+        return result;
+    }
+    switch (spec->type.kind) {
+        case TA_SCXML_STRING_NONE:
+            out->type.kind = TA_TEXT_SOURCE_NONE;
+            break;
+        case TA_SCXML_STRING_LITERAL:
+            out->type.kind = TA_TEXT_SOURCE_ATOM;
+            result = ta_compiler_atom(compiler, spec->type.as.literal, &out->type.as.atom);
+            break;
+        case TA_SCXML_STRING_EXPR:
+            out->type.kind = TA_TEXT_SOURCE_EXPR;
+            result = ta_compiler_expression(compiler, &spec->type.as.expr, &out->type.as.expr);
+            break;
+        default:
+            return TA_ERR_INVALID;
+    }
+    if (result == TA_OK) {
+        result = ta_compiler_invoke_text(compiler, &spec->src, &out->src);
+    }
+    if (result == TA_OK) {
+        result = ta_compiler_value(compiler, &spec->data, &out->data);
+    }
+    if (result == TA_OK) {
+        result = ta_compiler_params(compiler, spec->params, &out->params);
+    }
+    if (result == TA_OK) {
+        result = ta_compiler_block(compiler, spec->finalize, &out->finalize_actions);
+    }
+    out->autoforward = spec->autoforward;
+    ta_compiler_hash_u32(compiler, spec->autoforward ? 1u : 0u);
+    /* SCXML: src and inline content are exclusive. */
+    if (result == TA_OK && out->src.kind != TA_VALUE_SOURCE_NONE && out->data.kind != TA_VALUE_SOURCE_NONE) {
+        result = TA_ERR_INVALID;
+    }
+    return result;
+}
+
+static ta_result ta_compiler_invokes(ta_compiler *compiler, const ta_scxml_invoke_spec *specs, ta_state_id owner) {
+    for (uint32_t index = 0; specs[index].kind != TA_SCXML_INVOKE_NONE; index += 1) {
+        ta_invoke_decl decl = { .owner = owner };
+        ta_result result = ta_compiler_invoke(compiler, &specs[index], &decl);
+        if (result == TA_OK) {
+            result = ta_vec_push(&compiler->invokes, &decl);
+        }
+        if (result != TA_OK) {
+            return result;
+        }
+    }
+    return TA_OK;
+}
+
 /* Pass two for one state. */
 static ta_result ta_compiler_compile_state(ta_compiler *compiler, ta_state_id id) {
     const ta_scxml_state_spec *spec = *(const ta_scxml_state_spec **)ta_vec_at(&compiler->state_specs, id);
@@ -757,9 +854,6 @@ static ta_result ta_compiler_compile_state(ta_compiler *compiler, ta_state_id id
         real_children += ta_state_kind_is_history(ta_compiler_state(compiler, child)->kind) ? 0u : 1u;
     }
     bool history = ta_state_kind_is_history(state.kind);
-    if (spec->invokes != NULL && spec->invokes[0].kind != TA_SCXML_INVOKE_NONE) {
-        return TA_ERR_UNSUPPORTED;
-    }
     if (spec->done_data != NULL && state.kind != TA_STATE_FINAL) {
         return TA_ERR_INVALID;
     }
@@ -835,6 +929,10 @@ static ta_result ta_compiler_compile_state(ta_compiler *compiler, ta_state_id id
     if (result == TA_OK && spec->done_data != NULL) {
         result = ta_compiler_done_data(compiler, spec->done_data, &state.done_data);
     }
+    /* Invoke: compile this state's <invoke> children. */
+    if (result == TA_OK && spec->invokes != NULL && spec->invokes[0].kind != TA_SCXML_INVOKE_NONE) {
+        result = history ? TA_ERR_INVALID : ta_compiler_invokes(compiler, spec->invokes, id);
+    }
     if (result == TA_OK) {
         ta_atom segment = state.name;
         result = ta_event_name_child(&compiler->system->event_names, TA_EVENT_NAME_DONE_STATE, segment,
@@ -870,6 +968,7 @@ static void ta_compiler_destroy(ta_compiler *compiler) {
         &compiler->initials, &compiler->targets, &compiler->actions, &compiler->params,
         &compiler->data_decls, &compiler->initializers, &compiler->contents, &compiler->patterns,
         &compiler->segments, &compiler->expressions, &compiler->history, &compiler->done_data,
+        &compiler->invokes,
     };
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(vecs); index += 1) {
         ta_vec_destroy(vecs[index]);
@@ -931,6 +1030,7 @@ static ta_result ta_compiler_finish(ta_compiler *compiler) {
         { &compiler->segments, (void **)&definition->event_pattern_segments, &definition->event_pattern_segment_count },
         { &compiler->history, (void **)&definition->history.slots, &definition->history.slot_count },
         { &compiler->done_data, (void **)&definition->done_data, &definition->done_data_count },
+        { &compiler->invokes, (void **)&definition->invokes, &definition->invoke_decl_count },
     };
     ta_result result = TA_OK;
     for (uint32_t index = 0; result == TA_OK && index < TA_ARRAY_COUNT(seals); index += 1) {
@@ -1061,6 +1161,7 @@ ta_result ta_definition_compile_spec(ta_system *system, const ta_definition_comp
         { &compiler.expressions, TA_VEC_LAYOUT(ta_expression) },
         { &compiler.history, TA_VEC_LAYOUT(ta_history_slot) },
         { &compiler.done_data, TA_VEC_LAYOUT(ta_done_data_def) },
+        { &compiler.invokes, TA_VEC_LAYOUT(ta_invoke_decl) },
     };
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(vecs); index += 1) {
         ta_vec_init(vecs[index].vec, params->allocator, vecs[index].layout);

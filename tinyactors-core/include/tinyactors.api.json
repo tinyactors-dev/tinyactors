@@ -1999,6 +1999,17 @@
           },
           "role": "out",
           "shape": "single"
+        },
+        {
+          "name": "bound",
+          "type": {
+            "pointer": {
+              "builtin": "bool"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
         }
       ]
     },
@@ -4467,6 +4478,13 @@
         },
         {
           "name": "data",
+          "type": {
+            "type": "ta_value"
+          },
+          "role": "in"
+        },
+        {
+          "name": "params",
           "type": {
             "type": "ta_value"
           },
@@ -7157,7 +7175,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_tree_init",
@@ -7780,7 +7798,7 @@
         }
       ],
       "public": true,
-      "implemented": false
+      "implemented": true
     },
     {
       "name": "ta_actor_destroy",

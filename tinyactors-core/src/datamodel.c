@@ -74,7 +74,7 @@ static bool ta_dm_write_event_field(const ta_dm_host *host, ta_dm_text_kind kind
             }
             if (event->origin.kind == TA_ORIGIN_INVOKE) {
                 ta_text_put(writer, ta_str_from_cstr("#_"));
-                ta_text_put_u64(writer, event->origin.as.invoke);
+                ta_text_put(writer, ta_invoke_id_text(system, event->origin.as.invoke));
                 return true;
             }
             return false;
@@ -88,7 +88,8 @@ static bool ta_dm_write_event_field(const ta_dm_host *host, ta_dm_text_kind kind
             if (event->invoke_id == TA_INVOKE_ID_NONE) {
                 return false;
             }
-            ta_text_put_u64(writer, event->invoke_id);
+            /* The SCXML ID text, e.g. the author's ID or `<stateid>.<platformid>`. */
+            ta_text_put(writer, ta_invoke_id_text(system, event->invoke_id));
             return true;
         default:
             return false;

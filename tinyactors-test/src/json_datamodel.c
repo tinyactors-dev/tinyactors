@@ -447,6 +447,10 @@ static ta_op_status tat_json_declare(void *self, const ta_datamodel_declare_para
     (void)self;
     tat_json_instance *instance = params->instance;
     if (jv_get_kind(instance->root) == JV_KIND_OBJECT && tat_json_has_member(instance->root, params->name)) {
+        /* The binding (e.g. an invoked child's <param>s) supplies this value. */
+        if (params->bound != NULL) {
+            *params->bound = true;
+        }
         return TA_OP_OK;
     }
     return tat_json_set_member(instance, params->name, jv_null(), params->fault);

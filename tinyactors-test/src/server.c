@@ -156,7 +156,52 @@ static jv tat_handle_fixture_method(tat_bind *bind, jv params, int *error_code) 
     return jv_string("params.type is not a handle type");
 }
 
+typedef struct {
+    jv ids;
+    bool runnable_only;
+} tat_actor_list;
+
+static ta_result tat_collect_actor(void *self, const ta_actor_inspection *inspection) {
+    tat_actor_list *list = self;
+    if (!list->runnable_only || inspection->macrostep_in_progress) {
+        list->ids = jv_array_append(list->ids, tat_encode_u64(NULL, &inspection->actor));
+    }
+    return TA_OK;
+}
+
+/*
+ * Lists the IDs of every resident actor, including children that invokers
+ * spawned, so a scenario can run all of them to quiescence. With
+ * "runnable": true, only actors with a macrostep in progress are listed.
+ * Core's only enumeration is the ta_system_visit_actors callback, which
+ * cannot cross RPC.
+ */
+static jv tat_handle_system_actors(tat_bind *bind, jv params, int *error_code) {
+    jv system = jv_object_get(jv_copy(params), jv_string("system"));
+    jv runnable = jv_object_get(jv_copy(params), jv_string("runnable"));
+    tat_actor_list list = {.ids = jv_array(), .runnable_only = jv_get_kind(runnable) == JV_KIND_TRUE};
+    jv_free(runnable);
+    void *handle = NULL;
+    bool ok = tat_handle_resolve(bind, system, "system", &handle);
+    jv_free(system);
+    if (!ok) {
+        jv_free(list.ids);
+        return tat_bind_take_error(bind, error_code);
+    }
+    ta_result result = ta_system_visit_actors(handle, (ta_actor_inspector){.self = &list, .visit = tat_collect_actor});
+    jv ids = list.ids;
+    if (result != TA_OK) {
+        jv_free(ids);
+        *error_code = RPC_INTERNAL_ERROR;
+        return jv_string("ta_system_visit_actors failed");
+    }
+    return ids;
+}
+
 static const tat_method TAT_HOST_METHODS[] = {
+    {"system.actors", tat_handle_system_actors,
+     "{\"host\":true,\"params\":{\"system\":{\"type\":\"handle:system\",\"required\":true},"
+     "\"runnable\":{\"type\":\"bool\",\"required\":false}}}"},
     {"rpc.discover", tat_handle_discover, "{\"host\":true,\"params\":{}}"},
     {"system.ping", tat_handle_ping, "{\"host\":true}"},
     {"json.transform", tat_handle_transform,

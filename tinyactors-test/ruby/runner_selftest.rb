@@ -42,9 +42,15 @@ class FakeHost
     @calls << [method, params]
     return { result: 'err_invalid', out: {} } if method == fail_method
 
+    @runnable = true if %w[ta.actor.spawn ta.actor.deliver ta.system.set_time].include?(method)
     case method
     when 'ta.system.create' then ok(out: { '$handle': 'system:1' })
-    when 'ta.system.set_external_event_router' then ok
+    when 'ta.system.set_external_event_router', 'ta.system.register_invoker' then ok
+    when 'system.actors'
+      # Actor 5 has work after each step until it has been listed once.
+      runnable = @runnable ? [5] : []
+      @runnable = false
+      runnable
     when 'ta.definition.compile_spec' then ok(out: { '$handle': 'definition:2' })
     when 'ta.system.register_definition' then ok(out: 0)
     when 'ta.actor.spawn' then ok(out: 5)
@@ -85,9 +91,14 @@ context.instance_exec do
 end
 
 methods = host.calls.map(&:first)
-setup = %w[ta.system.create ta.system.set_external_event_router ta.definition.compile_spec
-           ta.system.register_definition]
-check(methods.first(4) == setup, "setup sequence: #{methods.first(4)}")
+setup = %w[ta.system.create ta.system.set_external_event_router ta.system.intern_atom
+           ta.system.register_invoker ta.definition.compile_spec ta.system.register_definition]
+check(methods.first(6) == setup, "setup sequence: #{methods.first(6)}")
+invoker = host.calls.find { |method, _| method == 'ta.system.register_invoker' }.last
+check(invoker[:type] == 1 && invoker.dig(:invoker, '$adapter') == 'invoker.scxml' &&
+        invoker.dig(:invoker, 'config', 'charts').key?('traffic_light'),
+      'the SCXML invoker is registered with every chart')
+check(methods.include?('system.actors'), 'every resident actor, including invoked children, is settled')
 router = host.calls.find { |method, _| method == 'ta.system.set_external_event_router' }.last
 check(router == { system: { '$handle': 'system:1' },
                   router: { '$adapter' => 'router.direct', 'config' => { 'system' => { '$handle': 'system:1' } } } },
@@ -97,9 +108,12 @@ check(compile[:spec][:datamodel] == 'jq', 'the chart spec carries its SCXML data
 check(compile[:datamodel] == { '$adapter' => 'datamodel.jq' }, 'the jq adapter implements it')
 register = host.calls.find { |method, _| method == 'ta.system.register_definition' }.last
 check(register[:definition] == { '$handle': 'definition:2' }, 'the compiled handle is registered')
-check(methods.count('ta.system.intern_atom') == 2, 'each event segment is interned once')
+segments = host.calls.select do |method, params|
+  method == 'ta.system.intern_atom' && params[:text] != TinyactorsTest::Context::SCXML_INVOKER_TYPE
+end
+check(segments.size == 2, 'each event segment is interned once')
 name = host.calls.find { |method, _| method == 'ta.event.name_intern' }.last
-check(name[:segments] == { atoms: [1, 2] }, "event names travel as a ta_atom_list: #{name[:segments]}")
+check(name[:segments] == { atoms: [2, 3] }, "event names travel as a ta_atom_list: #{name[:segments]}")
 deliver = host.calls.find { |method, _| method == 'ta.actor.deliver' }.last
 check(deliver[:event] == { name: 9, type: 'external', invoke_id: TinyactorsTest::INVOKE_ID_NONE,
                            data: { reason: 'test' } }, "deliver event: #{deliver[:event]}")

@@ -287,7 +287,12 @@ typedef struct { void *shared; void *instance; const ta_value *binding; const ta
  * Late binding declares every binding at bootstrap and sets each one only when
  * its state is first entered (ADR 0032).
  */
-typedef struct { void *shared; void *instance; ta_str name; const ta_dm_host *host; ta_fault *fault; } ta_datamodel_declare_params;
+/*
+ * `bound` may be null. declare() sets `*bound` when the instance's binding
+ * already supplies a value for `name` (e.g. <param>s passed to an invoked
+ * child); the core then skips that binding's initializer.
+ */
+typedef struct { void *shared; void *instance; ta_str name; const ta_dm_host *host; ta_fault *fault; bool *bound; } ta_datamodel_declare_params;
 typedef struct { void *shared; void *instance; ta_str name; const ta_value *value; const ta_dm_host *host; ta_fault *fault; } ta_datamodel_set_named_params;
 typedef struct { void *shared; void *instance; ta_expr_id expr; const ta_dm_host *host; bool *out; ta_fault *fault; } ta_datamodel_eval_condition_params;
 typedef struct { void *shared; void *instance; ta_expr_id expr; const ta_dm_host *host; ta_value *out; ta_fault *fault; } ta_datamodel_eval_value_params;
@@ -442,7 +447,17 @@ typedef struct { void *self; const ta_io_vtable *v; } ta_io;
  */
 
 
-typedef struct { ta_system *system; ta_actor_id parent; ta_invoke_id invoke_id; ta_atom type; ta_value src; ta_value data; bool autoforward; } ta_invoke_request;
+/*
+ * One invocation to start. `type` is the resolved invoker type; the SCXML
+ * aliases "scxml" and "http://www.w3.org/TR/scxml" are normalized to
+ * "http://www.w3.org/TR/scxml/". `src` is the evaluated src/srcexpr, `data`
+ * the evaluated inline <content>, and `params` the data model's aggregate of
+ * <param>/namelist values; each is empty (null vtable) when absent. Values are
+ * borrowed for the call. A service for an SCXML session spawns its child with
+ * ta_actor_spawn() and a `parent` of {parent, invoke_id}; the core then routes
+ * `#_<invokeid>` sends, autoforwarding, and done.invoke itself.
+ */
+typedef struct { ta_system *system; ta_actor_id parent; ta_invoke_id invoke_id; ta_atom type; ta_value src; ta_value data; ta_value params; bool autoforward; } ta_invoke_request;
 typedef struct { const ta_invoke_request *request; uint64_t *service_handle; ta_fault *fault; } ta_invoker_start_params;
 typedef struct { uint64_t service_handle; const ta_event *event; ta_fault *fault; } ta_invoker_forward_params;
 

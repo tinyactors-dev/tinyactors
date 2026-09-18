@@ -103,13 +103,48 @@ ta_result ta_timer_schedule(ta_timer_heap *heap, const ta_delayed_send *send) {
     return TA_OK;
 }
 
+typedef struct {
+    ta_actor_id owner;
+    ta_send_id send_id;
+    bool any_send_id;
+    bool include_submitted;
+} ta_timer_selection;
+
+static bool ta_timer_remove_selected(ta_timer_heap *heap, const ta_timer_selection *selection) {
+    bool found = false;
+    for (uint32_t index = heap->count; index > 0; index -= 1u) {
+        ta_delayed_send *send = &heap->items[index - 1u];
+        if (send->owner == selection->owner && (selection->any_send_id || send->send_id == selection->send_id) &&
+            (selection->include_submitted || !send->submitted)) {
+            ta_timer_release(send);
+            ta_timer_remove_at(heap, index - 1u);
+            found = true;
+            index = heap->count + 1u;
+        }
+    }
+    return found;
+}
+
+ta_result ta_timer_withdraw(ta_timer_heap *heap,
+                            ta_actor_id owner,
+                            ta_send_id send_id) {
+    return ta_timer_remove_selected(heap, &(ta_timer_selection){ .owner = owner, .send_id = send_id,
+                                                                 .include_submitted = true })
+               ? TA_OK
+               : TA_ERR_NOT_FOUND;
+}
+
+void ta_timer_cancel_unsubmitted(ta_timer_heap *heap, ta_actor_id owner) {
+    (void)ta_timer_remove_selected(heap, &(ta_timer_selection){ .owner = owner, .any_send_id = true });
+}
+
 ta_result ta_timer_cancel(ta_timer_heap *heap,
                           ta_actor_id owner,
                           ta_send_id send_id) {
     bool found = false;
     for (uint32_t index = heap->count; index > 0; index -= 1u) {
         ta_delayed_send *send = &heap->items[index - 1u];
-        if (send->owner == owner && send->send_id == send_id) {
+        if (send->owner == owner && send->send_id == send_id && !send->submitted) {
             ta_timer_release(send);
             ta_timer_remove_at(heap, index - 1u);
             found = true;
