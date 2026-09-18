@@ -328,6 +328,25 @@ typedef struct {
     ta_fault *fault;
 } ta_datamodel_make_params_params;
 typedef struct { void *shared; void *instance; const ta_dm_host *host; ta_value *out; } ta_datamodel_inspect_params;
+/*
+ * Conversions the SCXML `*expr` attribute forms need. value_text reads an
+ * evaluated value as text (eventexpr, typeexpr, sendidexpr, srcexpr,
+ * delayexpr); `*out` is borrowed from `value` and valid while it is retained.
+ * text_value makes a value from text, e.g. a generated send or invoke ID
+ * stored through idlocation.
+ */
+typedef struct { void *shared; void *instance; const ta_value *value; const ta_dm_host *host; ta_str *out; ta_fault *fault; } ta_datamodel_value_text_params;
+typedef struct { void *shared; void *instance; ta_str text; const ta_dm_host *host; ta_value *out; ta_fault *fault; } ta_datamodel_text_value_params;
+/* Imports literal <content> or <data> content into a legal data-model value. */
+typedef struct { void *shared; void *instance; ta_bytes content; const ta_dm_host *host; ta_value *out; ta_fault *fault; } ta_datamodel_import_content_params;
+/*
+ * <foreach>: foreach_snapshot evaluates `array` once and returns a shallow
+ * copy and its length; the core keeps the snapshot while iterating.
+ * foreach_bind assigns item `index` of the snapshot to the `item` variable
+ * and, when index_name.ptr is non-null, the index to that variable.
+ */
+typedef struct { void *shared; void *instance; ta_expr_id array; const ta_dm_host *host; ta_value *out; uint32_t *count; ta_fault *fault; } ta_datamodel_foreach_snapshot_params;
+typedef struct { void *shared; void *instance; const ta_value *snapshot; uint32_t index; ta_str item; ta_str index_name; const ta_dm_host *host; ta_fault *fault; } ta_datamodel_foreach_bind_params;
 typedef struct ta_datamodel_vtable {
     /*
      * The SCXML data-model name this adapter implements, e.g. "null" or
@@ -351,6 +370,11 @@ typedef struct ta_datamodel_vtable {
                                         const ta_datamodel_decode_scxml_target_params *params);
     ta_op_status (*make_params)(void *self, const ta_datamodel_make_params_params *params);
     ta_result (*inspect)(void *self, const ta_datamodel_inspect_params *params);
+    ta_op_status (*value_text)(void *self, const ta_datamodel_value_text_params *params);
+    ta_op_status (*text_value)(void *self, const ta_datamodel_text_value_params *params);
+    ta_op_status (*import_content)(void *self, const ta_datamodel_import_content_params *params);
+    ta_op_status (*foreach_snapshot)(void *self, const ta_datamodel_foreach_snapshot_params *params);
+    ta_op_status (*foreach_bind)(void *self, const ta_datamodel_foreach_bind_params *params);
 } ta_datamodel_vtable;
 typedef struct { void *self; const ta_datamodel_vtable *v; } ta_datamodel;
 

@@ -2213,6 +2213,232 @@
         }
       ]
     },
+    "ta_datamodel_foreach_bind_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "shared",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "instance",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "snapshot",
+          "type": {
+            "pointer": {
+              "type": "ta_value"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "index",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "role": "in"
+        },
+        {
+          "name": "item",
+          "type": {
+            "type": "ta_str"
+          },
+          "role": "in"
+        },
+        {
+          "name": "index_name",
+          "type": {
+            "type": "ta_str"
+          },
+          "role": "in"
+        },
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "borrowed"
+        },
+        {
+          "name": "fault",
+          "type": {
+            "pointer": {
+              "type": "ta_fault"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_datamodel_foreach_snapshot_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "shared",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "instance",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "array",
+          "type": {
+            "type": "ta_expr_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "borrowed"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_value"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        },
+        {
+          "name": "count",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        },
+        {
+          "name": "fault",
+          "type": {
+            "pointer": {
+              "type": "ta_fault"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_datamodel_import_content_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "shared",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "instance",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "content",
+          "type": {
+            "type": "ta_bytes"
+          },
+          "role": "in"
+        },
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "borrowed"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_value"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        },
+        {
+          "name": "fault",
+          "type": {
+            "pointer": {
+              "type": "ta_fault"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
     "ta_datamodel_init_instance_params": {
       "kind": "struct",
       "fields": [
@@ -2557,6 +2783,144 @@
           },
           "role": "in",
           "shape": "borrowed"
+        },
+        {
+          "name": "fault",
+          "type": {
+            "pointer": {
+              "type": "ta_fault"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_datamodel_text_value_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "shared",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "instance",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "text",
+          "type": {
+            "type": "ta_str"
+          },
+          "role": "in"
+        },
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "borrowed"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_value"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        },
+        {
+          "name": "fault",
+          "type": {
+            "pointer": {
+              "type": "ta_fault"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ]
+    },
+    "ta_datamodel_value_text_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "shared",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "instance",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "raw"
+        },
+        {
+          "name": "value",
+          "type": {
+            "pointer": {
+              "type": "ta_value"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        },
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "borrowed"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_str"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
         },
         {
           "name": "fault",
@@ -2982,6 +3346,131 @@
                 {
                   "pointer": {
                     "type": "ta_datamodel_inspect_params"
+                  },
+                  "const": true
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "value_text",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_op_status"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_datamodel_value_text_params"
+                  },
+                  "const": true
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "text_value",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_op_status"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_datamodel_text_value_params"
+                  },
+                  "const": true
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "import_content",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_op_status"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_datamodel_import_content_params"
+                  },
+                  "const": true
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "foreach_snapshot",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_op_status"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_datamodel_foreach_snapshot_params"
+                  },
+                  "const": true
+                }
+              ]
+            }
+          },
+          "role": "in"
+        },
+        {
+          "name": "foreach_bind",
+          "type": {
+            "function": {
+              "returns": {
+                "type": "ta_op_status"
+              },
+              "params": [
+                {
+                  "pointer": {
+                    "builtin": "void"
+                  },
+                  "const": false
+                },
+                {
+                  "pointer": {
+                    "type": "ta_datamodel_foreach_bind_params"
                   },
                   "const": true
                 }
