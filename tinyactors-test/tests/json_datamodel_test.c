@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "allocator.h"
 #include "json_datamodel.h"
 
 static void require(bool condition, const char *message) {
@@ -9,6 +10,29 @@ static void require(bool condition, const char *message) {
         fprintf(stderr, "json datamodel test failed: %s\n", message);
         exit(1);
     }
+}
+
+static ta_op_status decode_target(tat_json_datamodel_context *context,
+                                  ta_datamodel model,
+                                  void *shared,
+                                  void *instance,
+                                  const char *json,
+                                  ta_scxml_target *out) {
+    ta_value value = {0};
+    require(tat_json_value_parse(context, json, &value) == TA_OK, "target parse");
+    ta_fault fault = {0};
+    *out = (ta_scxml_target){0};
+    ta_op_status status = model.v->decode_scxml_target(
+        model.self,
+        &(ta_datamodel_decode_scxml_target_params){
+            .shared = shared,
+            .instance = instance,
+            .value = &value,
+            .out = out,
+            .fault = &fault,
+        });
+    ta_value_release(&value);
+    return status;
 }
 
 int main(void) {
@@ -23,7 +47,10 @@ int main(void) {
         .expressions = expressions,
         .expression_count = TA_ARRAY_COUNT(expressions),
     };
-    ta_datamodel model = tat_json_datamodel();
+    tat_json_datamodel_context context = {0};
+    require(tat_json_datamodel_context_init(&context, tat_libc_allocator()) == TA_OK,
+            "context initialization");
+    ta_datamodel model = tat_json_datamodel(&context);
     void *shared = NULL;
     require(model.v->prepare_definition(
                 model.self,
@@ -36,7 +63,7 @@ int main(void) {
     void *instance = calloc(1, model.v->instance_size(model.self, shared));
     require(instance != NULL, "instance allocation");
     ta_value binding = {0};
-    require(tat_json_value_parse("{\"ready\":true,\"count\":1}", &binding) == TA_OK,
+    require(tat_json_value_parse(&context, "{\"ready\":true,\"count\":1}", &binding) == TA_OK,
             "binding parse");
     require(model.v->init_instance(
                 model.self,
@@ -79,7 +106,7 @@ int main(void) {
     ta_value_release(&evaluated);
 
     ta_value five = {0};
-    require(tat_json_value_parse("5", &five) == TA_OK, "assignment value parse");
+    require(tat_json_value_parse(&context, "5", &five) == TA_OK, "assignment value parse");
     require(model.v->assign(
                 model.self,
                 &(ta_datamodel_assign_params){
@@ -116,26 +143,43 @@ int main(void) {
             "mutated root");
     ta_value_release(&inspected);
 
-    ta_value target_value = {0};
-    require(tat_json_value_parse("\"#_internal\"", &target_value) == TA_OK,
-            "target parse");
     ta_scxml_target target = {0};
-    require(model.v->decode_scxml_target(
-                model.self,
-                &(ta_datamodel_decode_scxml_target_params){
-                    .shared = shared,
-                    .instance = instance,
-                    .value = &target_value,
-                    .out = &target,
-                    .fault = &fault,
-                }) == TA_OP_OK && target.kind == TA_SCXML_TARGET_INTERNAL,
-            "target decoding");
-    ta_value_release(&target_value);
+    require(decode_target(&context, model, shared, instance, "\"#_internal\"", &target) ==
+                    TA_OP_OK &&
+                target.kind == TA_SCXML_TARGET_INTERNAL,
+            "internal target");
+    require(decode_target(&context, model, shared, instance, "\"#_self\"", &target) ==
+                    TA_OP_OK &&
+                target.kind == TA_SCXML_TARGET_SELF,
+            "self target");
+    require(decode_target(&context, model, shared, instance, "\"#_parent\"", &target) ==
+                    TA_OP_OK &&
+                target.kind == TA_SCXML_TARGET_PARENT,
+            "parent target");
+    require(decode_target(&context, model, shared, instance, "\"#_scxml_42\"", &target) ==
+                    TA_OP_OK &&
+                target.kind == TA_SCXML_TARGET_ACTOR &&
+                target.as.actor.kind == TA_ACTOR_REF_RUNTIME &&
+                target.as.actor.as.runtime == 42,
+            "actor target");
+    require(decode_target(&context, model, shared, instance, "\"#_17\"", &target) ==
+                    TA_OP_OK &&
+                target.kind == TA_SCXML_TARGET_INVOKE && target.as.invoke == 17,
+            "invoke target");
+
+    const char *invalid_targets[] = {
+        "\"#_scxml_\"", "\"#_scxml_4x\"", "\"#_\"", "\"#_abc\"", "\"elsewhere\"", "7",
+    };
+    for (size_t index = 0; index < TA_ARRAY_COUNT(invalid_targets); index += 1) {
+        require(decode_target(&context, model, shared, instance, invalid_targets[index],
+                              &target) == TA_OP_ERROR,
+                invalid_targets[index]);
+    }
 
     ta_value first = {0};
     ta_value second = {0};
-    require(tat_json_value_parse("1", &first) == TA_OK &&
-                tat_json_value_parse("2", &second) == TA_OK,
+    require(tat_json_value_parse(&context, "1", &first) == TA_OK &&
+                tat_json_value_parse(&context, "2", &second) == TA_OK,
             "parameter values");
     ta_named_value named[] = {
         {.name = 7, .value = first},
@@ -165,6 +209,7 @@ int main(void) {
     model.v->destroy_definition(model.self, shared, (ta_allocator){0});
     ta_value_release(&binding);
     free(instance);
+    tat_json_datamodel_context_destroy(&context);
     puts("tinyactors-test JSON data model test passed");
     return 0;
 }

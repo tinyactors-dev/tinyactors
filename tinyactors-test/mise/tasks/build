@@ -69,18 +69,19 @@ run(
   BUILD.join('tinyactors-test').to_s
 )
 
-# run(
-#   *compiler,
-#   *flags,
-#   "-I#{ROOT.join('src')}",
-#   "-I#{PREFIX.join('include')}",
-#   "-I#{JQ_BUILD.join('src')}",
-#   "-I#{WORKSPACE.join('tinyactors-core/include')}",
-#   ROOT.join('tests/json_datamodel_test.c').to_s,
-#   ROOT.join('src/json_datamodel.c').to_s,
-#   WORKSPACE.join('tinyactors-core/include/tinyactors.c').to_s,
-#   *libraries.map(&:to_s),
-#   '-lm',
-#   '-o',
-#   BUILD.join('json_datamodel_test').to_s
-# )
+run(
+  *compiler,
+  *flags,
+  "-I#{ROOT.join('src')}",
+  "-I#{PREFIX.join('include')}",
+  "-I#{JQ_BUILD.join('src')}",
+  "-I#{WORKSPACE.join('tinyactors-core/include')}",
+  ROOT.join('tests/json_datamodel_test.c').to_s,
+  ROOT.join('src/json_datamodel.c').to_s,
+  ROOT.join('src/allocator.c').to_s,
+  WORKSPACE.join('tinyactors-core/include/tinyactors.c').to_s,
+  *libraries.map(&:to_s),
+  '-lm',
+  '-o',
+  BUILD.join('json_datamodel_test').to_s
+)

@@ -403,6 +403,8 @@ static ta_op_status tat_json_execute_script(
     return status;
 }
 
+#define TAT_SCXML_ACTOR_PREFIX "#_scxml_"
+
 static ta_op_status tat_json_decode_target(
     void *self, const ta_datamodel_decode_scxml_target_params *params) {
     (void)self;
@@ -420,10 +422,12 @@ static ta_op_status tat_json_decode_target(
         decoded.kind = TA_SCXML_TARGET_SELF;
     } else if (strcmp(target, "#_parent") == 0) {
         decoded.kind = TA_SCXML_TARGET_PARENT;
-    } else if (strncmp(target, "#_scxml_", 9) == 0) {
+    } else if (strncmp(target, TAT_SCXML_ACTOR_PREFIX,
+                       sizeof(TAT_SCXML_ACTOR_PREFIX) - 1) == 0) {
+        const char *digits = target + sizeof(TAT_SCXML_ACTOR_PREFIX) - 1;
         char *end = NULL;
-        uint64_t actor = strtoull(target + 9, &end, 10);
-        if (end == target + 9 || *end != '\0') {
+        uint64_t actor = strtoull(digits, &end, 10);
+        if (end == digits || *end != '\0') {
             jv_free(value);
             tat_json_fault(params->fault, TA_ERR_INVALID, "invalid SCXML actor target");
             return TA_OP_ERROR;
