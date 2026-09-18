@@ -76,20 +76,53 @@ processor, not `raise` actions: `raise` creates an internal SCXML event and
 cannot answer an HTTP request. The authenticated state handles protected
 requests and can clear the session token on logout.
 
-State IDs, targets, transition event descriptors, and named send events are
-resolved during compilation. Expressions and locations are `ta_expression`
-values, never preassigned `ta_expr_id` values. An expression is either source
-text, suitable for XML and JSON importers, or a retained host value, suitable
-for language embeddings such as Node-API. A zero-initialized expression is
-absent. The compiler assigns `ta_expr_id` values while it builds the immutable
-definition and retains the corresponding expression table for
-`prepare_definition()`.
+## Authoring values, not runtime identifiers
+
+The spec carries what an SCXML author writes. It never carries identifiers
+that only exist inside a compiled definition or a running system:
+`ta_expr_id`, `ta_send_id`, `ta_invoke_id`, `ta_atom`, `ta_event_name_id`, or
+`ta_state_id`. The compiler derives all of those, so an importer needs no live
+`ta_system` to build a tree.
+
+- State IDs, targets, transition event descriptors, and named send events are
+  `ta_str` values resolved during compilation.
+- I/O processor and invoker types, and extension types, are `ta_str` names;
+  the compiler interns them.
+- Expressions and locations are `ta_expression` values. An expression is
+  either source text, suitable for XML and JSON importers, or a retained host
+  value, suitable for language embeddings such as Node-API. The compiler
+  assigns `ta_expr_id` values while it builds the immutable definition and
+  retains the corresponding expression table for `prepare_definition()`.
+- SCXML `x` / `xexpr` attribute pairs are `ta_scxml_string_spec`: literal
+  text or an expression. This covers `<send>` `type`, `target`, and `delay`,
+  `<cancel>` `sendid`, and `<invoke>` `type` and `src`. A literal delay is an
+  SCXML duration (`"500ms"`, `"5s"`) compiled to logical milliseconds.
+- `<send>` and `<invoke>` `id` / `idlocation` are `ta_scxml_id_spec`: the
+  author's literal ID or a location that receives the ID generated on each
+  execution. Because the pair is a union, specifying both is unrepresentable.
+  The runtime `ta_send_id` / `ta_invoke_id` values are session-local handles
+  and are never authored.
+- The datamodel binding is `ta_scxml_binding_kind`, whose zero value selects
+  the SCXML default rather than a runtime enum value.
+
+Every optional field is absent when zero-initialized. There are no special
+sentinel constants to remember; omitting a field is always correct.
 
 Host expressions use `ta_expression_host_vtable` to retain and release their
 values. A Node-API adapter retains a `napi_ref`, not a callback-scoped
 `napi_value`; the selected datamodel later resolves that reference on its
-owning JavaScript environment thread. `TA_SEND_NONE` and `TA_INVOKE_NONE`
-represent absent optional identifiers.
+owning JavaScript environment thread.
+
+## Lowered SCXML features
+
+Some SCXML features have no dedicated field because an importer can express
+them exactly with existing ones:
+
+- `namelist` on `<send>` and `<invoke>` becomes `params`: each name is a
+  parameter whose value is a `TA_SCXML_VALUE_LOCATION` of that name.
+- `<elseif>` becomes a nested `if` in `else_actions`.
+- `<data src>` is fetched by the importer and passed as
+  `TA_SCXML_VALUE_CONTENT`; the core performs no I/O.
 
 ## Lifetime
 

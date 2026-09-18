@@ -11,7 +11,7 @@ The current `include/tinyactors.h` is a compact public skeleton. This page recor
 - `ta_actor_id` — runtime-local actor identity; may internally encode slot + generation.
 - `ta_actor_address` — logical named actor address scoped by definition family.
 - `ta_invoke_id`, `ta_send_id`, `ta_timer_id` — identities scoped by their semantic subsystem.
-- `ta_time` — caller-supplied monotonic logical time.
+- `ta_time` — caller-supplied monotonic logical time, in milliseconds.
 
 ## Results
 

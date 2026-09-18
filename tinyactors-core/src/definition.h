@@ -83,12 +83,65 @@ typedef struct {
     } as;
 } ta_event_source;
 
+/*
+ * A compiled `x` / `xexpr` attribute pair. ATOM holds interned literal text;
+ * NONE is used only where the attribute is optional.
+ */
+typedef enum {
+    TA_TEXT_SOURCE_NONE,
+    TA_TEXT_SOURCE_ATOM,
+    TA_TEXT_SOURCE_EXPR
+} ta_text_source_kind;
+
+typedef struct {
+    ta_text_source_kind kind;
+    union {
+        ta_atom atom;
+        ta_expr_id expr;
+    } as;
+} ta_text_source;
+
+/*
+ * A compiled <send>/<invoke> `id` / `idlocation`. LITERAL holds the author's
+ * interned ID. GENERATED and LOCATION make the runtime generate an ID on each
+ * execution; LOCATION also assigns it to the location.
+ */
+typedef enum {
+    TA_ID_SOURCE_GENERATED,
+    TA_ID_SOURCE_LITERAL,
+    TA_ID_SOURCE_LOCATION
+} ta_id_source_kind;
+
+typedef struct {
+    ta_id_source_kind kind;
+    union {
+        ta_atom literal;
+        ta_expr_id location;
+    } as;
+} ta_id_source;
+
+/* LITERAL is a duration parsed at compile time, in ta_time milliseconds. */
+typedef enum {
+    TA_DELAY_SOURCE_NONE,
+    TA_DELAY_SOURCE_LITERAL,
+    TA_DELAY_SOURCE_EXPR
+} ta_delay_source_kind;
+
+typedef struct {
+    ta_delay_source_kind kind;
+    union {
+        ta_time literal;
+        ta_expr_id expr;
+    } as;
+} ta_delay_source;
+
 typedef enum {
     TA_ACTION_RAISE,
     TA_ACTION_SEND,
     TA_ACTION_CANCEL,
     TA_ACTION_ASSIGN,
     TA_ACTION_SCRIPT,
+    TA_ACTION_LOG,
     TA_ACTION_IF,
     TA_ACTION_FOREACH,
     TA_ACTION_INVOKE,
@@ -100,20 +153,31 @@ typedef struct {
     ta_value_source data;
 } ta_raise_action;
 
+/*
+ * A NONE type selects the built-in SCXML Event I/O Processor. A literal
+ * target is TA_VALUE_SOURCE_CONTENT.
+ */
 typedef struct {
-    ta_send_id id;
-    ta_atom io_type;
+    ta_id_source id;
+    ta_text_source type;
     ta_event_source event;
     ta_value_source target;
-    ta_expr_id delay_expr;
+    ta_delay_source delay;
     ta_value_source data;
     ta_span32 params;
 } ta_send_action;
 
+/* Never NONE: SCXML requires exactly one of sendid or sendidexpr. */
 typedef struct {
-    ta_send_id id;
-    ta_expr_id id_expr;
+    ta_text_source sendid;
 } ta_cancel_action;
+
+typedef struct {
+    ta_atom label;
+    bool has_label;
+    ta_expr_id expr;
+    bool has_expr;
+} ta_log_action;
 
 typedef struct {
     ta_expr_id location;
@@ -142,6 +206,7 @@ typedef struct {
         ta_cancel_action cancel;
         ta_assign_action assign;
         ta_expr_id script;
+        ta_log_action log;
         ta_if_action conditional;
         ta_foreach_action foreach;
         ta_invoke_decl_id invoke;
@@ -173,9 +238,10 @@ typedef struct {
     ta_bytes bytes;
 } ta_content_def;
 
+/* A literal src is TA_VALUE_SOURCE_CONTENT. */
 typedef struct {
-    ta_invoke_id id;
-    ta_atom type;
+    ta_id_source id;
+    ta_text_source type;
     ta_value_source src;
     ta_value_source data;
     ta_span32 params;

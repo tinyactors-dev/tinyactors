@@ -50,3 +50,58 @@ array because a jq filter can emit zero, one, or many values.
 metrics will be added with the corresponding Tinyactors commands.
 
 `host.shutdown` returns `true` and then exits the request loop.
+
+## Planned scenario methods
+
+The Ruby scenarios in `ruby/scenarios` already drive these methods. Until the
+host implements them, those scenarios are marked `expect_failure` with RPC
+error -32601. Handles are opaque strings.
+
+| Method | Params | Result |
+|---|---|---|
+| `definition.compile` | chart spec (below) | `{"definition": handle}` |
+| `system.create` | `{}` | `{"system": handle}`; logical time starts at 0 |
+| `actor.spawn` | `{"system", "definition"}` | `{"actor": handle}` |
+| `actor.send` | `{"actor", "event": [atom, ...], "data"?}` | enqueues an external event |
+| `actor.inspect` | `{"actor"}` | `{"configuration": [state id, ...], "data": root, "delayed_sends": n}` |
+| `system.set_time` | `{"system", "time": ms}` | sets absolute, monotonic logical time |
+| `system.run` | `{"system"}` | runs until no actor has runnable work |
+
+Event names travel as atom lists (`"error.execution"` becomes
+`["error", "execution"]`) because the core has no dotted-string parser. The
+driver calls `system.run` after every spawn, send, and time change, so
+scenarios observe only quiescent states.
+
+### Chart spec
+
+`definition.compile` takes a JSON form of `ta_scxml_spec` from
+`tinyactors-core/src/builder.h`, so the host can build the spec with `ta_tree`
+without interpretation:
+
+- The top level has `name`, `datamodel` (`"jq"`), `binding` (optional:
+  `"early"` or `"late"`), `data`, `initial`, and `states`.
+- A state is `{"kind", "id", "states"?, "initial"?, "transitions"?, "onentry"?, "onexit"?}`.
+  `kind` is one of `atomic`, `compound`, `parallel`, `final`,
+  `history_shallow`, or `history_deep`. A history state's default transition
+  is its single entry in `transitions`.
+- `initial` is `{"targets": [id, ...]}`.
+- A transition is `{"kind": "external"|"internal", "event"?, "condition"?, "targets"?, "actions"?}`.
+- A value spec (`ta_scxml_value_spec`) is `{"expr": src}`, `{"location": src}`, or `{"content": text}`.
+- A string spec (`ta_scxml_string_spec`, SCXML's `x` / `xexpr` pairs) is
+  `{"literal": text}` or `{"expr": src}`.
+- An ID spec (`ta_scxml_id_spec`, SCXML's `id` / `idlocation`) is
+  `{"literal": text}` or `{"location": src}`.
+- The action kinds are:
+  - `raise`: `{"event", "data"?}`
+  - `send`: `{"event": {"name"}, "id"?, "type"?, "target"?, "delay"?, "data"?}`,
+    where `id` is an ID spec and `type`, `target`, and `delay` are string specs
+  - `cancel`: `{"sendid"}`, where `sendid` is a string spec
+  - `assign`: `{"location", "value"}`
+  - `script`: `{"script"}`
+  - `log`: `{"label"?, "expr"?}`
+
+The spec carries only what an SCXML author writes, never runtime identifiers.
+Send IDs are the author's strings. I/O processors are names, and an absent
+`type` selects the SCXML Event I/O Processor. A literal `delay` is an SCXML
+duration such as `"5s"` or `"500ms"`, which the core compiles to logical
+milliseconds. A `delay` expression is jq that is evaluated when the send runs.

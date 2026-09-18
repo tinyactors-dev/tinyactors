@@ -1,2 +1,7 @@
+monorepo_root = true
+
+[monorepo]
+config_roots = ["tinyactors-core", "tinyactors-test"]
+
 [tools]
 ruby = "4"

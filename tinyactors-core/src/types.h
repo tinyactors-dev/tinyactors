@@ -30,6 +30,7 @@ typedef uint64_t ta_actor_id;
 typedef uint64_t ta_invoke_id;
 typedef uint64_t ta_send_id;
 typedef uint64_t ta_timer_id;
+/* Monotonic logical time in milliseconds, supplied by the embedder. */
 typedef uint64_t ta_time;
 
 #define TA_STATE_NONE UINT32_MAX

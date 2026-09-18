@@ -48,6 +48,51 @@ become executable.
 
 See `docs/protocol.md` for framing, lifecycle, and extension rules.
 
+## Scenarios
+
+Scenarios are written in a Ruby DSL (`ruby/tinyactors_test.rb`). Charts live
+in `ruby/charts` and scenarios in `ruby/scenarios`:
+
+```ruby
+TinyactorsTest.scenarios 'traffic light', chart: :traffic_light do
+  invariant('exactly one light is on') { |light| (light.active & %i[red green yellow]).size == 1 }
+
+  expect_failure 'host has no definition or actor methods yet', rpc_error: -32601
+  scenario 'cycles on logical time' do
+    light = spawn
+    advance_time 30_000
+    assert_active light, :green
+  end
+end
+```
+
+Each scenario runs against a fresh host process. The steps are `spawn`,
+`advance_time` (in logical milliseconds), and `actor.deliver`. The assertions
+are `assert`, `assert_equal`, `assert_active`, `refute_active`, and
+`assert_configuration`. Invariants are checked after every step.
+
+`expect_failure` applies to the next scenario only, and it names the failure
+it expects: `rpc_error:` (optionally with `rpc_method:`) and/or `message:`.
+
+| Outcome | Meaning | Suite |
+|---|---|---|
+| PASS | Passed | passes |
+| XFAIL | Failed as expected | passes |
+| XPASS | Passed although a failure was expected; remove the marker | fails |
+| FAIL | Any other failure, including a failure for a reason other than the expected one | fails |
+
+Charts are checked when they are loaded (for unknown targets, duplicate IDs,
+misplaced initial or history defaults, malformed SCXML durations, and literal
+cancels with no matching `<send>` ID), so a typo in a chart cannot hide behind an expected failure.
+
+```text
+mise run scenarios                 # all scenarios
+mise run scenarios -n stale        # scenarios whose "group: name" matches
+```
+
+`ruby/selftest.rb` verifies the DSL's outcome classification against the live
+host.
+
 ## Vendored dependency
 
 The source release of jq 1.8.2 is stored in `vendor/jq` and statically linked

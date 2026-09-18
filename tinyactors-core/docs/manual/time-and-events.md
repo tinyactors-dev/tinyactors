@@ -2,7 +2,7 @@
 
 ## Logical time
 
-Tinyactors never reads the wall clock. The embedder supplies monotonic logical time with `ta_system_set_time()`. Delayed sends persist an absolute logical due time, not a remaining duration.
+Tinyactors never reads the wall clock. The embedder supplies monotonic logical time in milliseconds with `ta_system_set_time()`. Delayed sends persist an absolute logical due time, not a remaining duration.
 
 Advancing time makes due sends eligible. Loading a snapshot does not itself perform external I/O.
 

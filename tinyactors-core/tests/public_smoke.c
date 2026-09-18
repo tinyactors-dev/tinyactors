@@ -21,6 +21,38 @@ static void use_public_types(void) {
     ta_scxml_target target = {0};
     ta_definition_compile_params compile = {0};
     ta_scxml_done_data_spec done_data = {0};
+    ta_scxml_action_spec actions[] = {
+        {
+            .kind = TA_SCXML_ACTION_SEND,
+            .as.send = {
+                .id = { .kind = TA_SCXML_ID_LITERAL,
+                        .as.literal = { .ptr = "timeout", .len = 7 } },
+                .type = { .kind = TA_SCXML_STRING_LITERAL,
+                          .as.literal = { .ptr = "http", .len = 4 } },
+                .event = { .kind = TA_SCXML_EVENT_NAME,
+                           .as.name = { .ptr = "tick", .len = 4 } },
+                .delay = { .kind = TA_SCXML_STRING_LITERAL,
+                           .as.literal = { .ptr = "5s", .len = 2 } },
+            },
+        },
+        {
+            .kind = TA_SCXML_ACTION_CANCEL,
+            .as.cancel.sendid = { .kind = TA_SCXML_STRING_LITERAL,
+                                  .as.literal = { .ptr = "timeout", .len = 7 } },
+        },
+        {
+            .kind = TA_SCXML_ACTION_LOG,
+            .as.log.label = { .ptr = "entered", .len = 7 },
+        },
+        {0},
+    };
+    ta_scxml_invoke_spec invoke = {
+        .kind = TA_SCXML_INVOKE,
+        .id = { .kind = TA_SCXML_ID_LOCATION,
+                .as.location = { .kind = TA_EXPRESSION_SOURCE,
+                                 .as.source = { .ptr = "child", .len = 5 } } },
+    };
+    ta_scxml_spec spec = { .binding = TA_SCXML_BINDING_LATE };
     ta_fault_event_params fault_event = {
         .context = TA_FAULT_CONTEXT_INVOKE_UNAVAILABLE,
         .invoke_id = TA_INVOKE_ID_NONE,
@@ -47,6 +79,9 @@ static void use_public_types(void) {
     (void)target;
     (void)compile;
     (void)done_data;
+    (void)actions;
+    (void)invoke;
+    (void)spec;
     (void)fault_event;
     (void)invoke_report;
     (void)image;
