@@ -165,6 +165,28 @@ Each scenario's system uses a counting allocator (`allocator.counting`).
 After the scenario, the runner destroys the system. The scenario fails when
 an allocation is still live, or when core freed memory it was not given.
 
+### Session images and named actors
+
+- `spawn(chart, name: 'x')` spawns a named actor at the address (the
+  chart's definition family, `'x'`), and installs a `memory_directory` on
+  first use.
+- `capture(actor)` returns an image handle. `image_deadline(image)` gives
+  the image's earliest deadline, and `destroy_image(image)` frees it.
+- `reconstruct(image, binding:)` rebuilds an anonymous session.
+- `unload(actor, image)`, `load(actor, image, binding:)`,
+  `find(address)`, and `remove_unloaded(address)` drive residency.
+  `load` points the Actor at its new runtime ID.
+- `prepare_replacement(incumbent, chart, binding:)` and
+  `activate_replacement(incumbent, replacement)` upgrade a named actor.
+- `reconstruct_in_place(actor)` and `cycle_residency(actor)` perform a whole
+  round trip with the actor's current data root as the binding. They are
+  meant as `assert_equivalent_runs` interruptions.
+
+Core does not implement these functions yet. The scenarios in
+`ruby/scenarios/residency.rb` and `ruby/scenarios/named_actors.rb` are
+therefore expected failures that name the unimplemented call.
+`ruby/runner_selftest.rb` runs the helpers against a fake host.
+
 ### Instruments
 
 Scenarios that need more than the default adapters install instruments,

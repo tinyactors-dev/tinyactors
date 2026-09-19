@@ -109,12 +109,15 @@ module TinyactorsTest
     attr_reader :chart, :definition
     # The runtime ID; it changes when the actor is reloaded (Context#rebind).
     attr_accessor :handle
+    # The logical address {family: {name:}, name:} of a named actor, or nil.
+    attr_accessor :address
 
-    def initialize(context, handle, chart, definition)
+    def initialize(context, handle, chart, definition, address: nil)
       @context = context
       @handle = handle
       @chart = chart
       @definition = definition
+      @address = address
     end
 
     # The active configuration as state ID symbols, ancestors included.
@@ -288,13 +291,21 @@ module TinyactorsTest
       @trace = trace ? Trace.new(self) : nil
     end
 
-    def spawn(chart_name = @group.chart)
+    # Spawns an actor. With `name:` the actor is named: it claims the address
+    # (the chart definition's family, name) in the actor directory, which is
+    # a memory_directory instrument unless the scenario installed one.
+    def spawn(chart_name = @group.chart, name: nil)
       raise ScenarioError, "#{@group.name}: spawn needs a chart name" if chart_name.nil?
 
       chart_name = chart_name.to_sym
       definition = definition_id(chart_name)
-      id = core('ta_actor_spawn', ta.actor.spawn(system: system_handle, definition: definition)).fetch(:out)
-      actor = Actor.new(self, id, chart_name, definition)
+      params = { system: system_handle, definition: definition }
+      if name
+        memory_directory
+        params[:address] = address(chart_name, name)
+      end
+      id = core('ta_actor_spawn', ta.actor.spawn(**params)).fetch(:out)
+      actor = Actor.new(self, id, chart_name, definition, address: params[:address])
       @actors << actor
       spawned = @actors.count { |other| other.chart == chart_name }
       @actor_labels[id] ||= "#{chart_name}.#{spawned}"
@@ -570,6 +581,119 @@ module TinyactorsTest
       return nil if response[:result] == 'err_not_found'
 
       Integer(core('ta_system_next_deadline', response).fetch(:out))
+    end
+
+    # ----------------------------------------------------------------------
+    # Session images, residency, and named actors (ADRs 0014, 0037, 0038)
+
+    # The actors a scenario spawned that are still resident.
+    def actors = @actors.dup
+
+    # The logical address of the named actor `name` of a chart's family.
+    def address(chart_name, name)
+      { family: { name: family(chart_name) }, name: name.to_s }
+    end
+
+    # The definition family of a chart (its <scxml name>, by default the chart name).
+    def family(chart_name)
+      facts = core('ta_definition_inspect', ta.definition.inspect(system: system_handle, definition: definition(chart_name)))
+      facts.fetch(:out).dig(:identity, :family, :name)
+    end
+
+    # Captures a session image of the actor; returns the image handle.
+    def capture(actor)
+      core('ta_actor_capture', ta.actor.capture(system: system_handle, actor: actor.handle)).fetch(:out)
+    end
+
+    # The earliest delayed-send deadline an image holds, or nil.
+    def image_deadline(image)
+      response = ta.session.image_next_deadline(image: image)
+      return nil if response[:result] == 'err_not_found'
+
+      Integer(core('ta_session_image_next_deadline', response).fetch(:out))
+    end
+
+    def destroy_image(image)
+      ta.session.image_destroy(image: image)
+    end
+
+    # Reconstructs an anonymous session from an image; returns the new runtime ID.
+    def reconstruct(image, binding: nil)
+      params = { system: system_handle, image: image }
+      params[:datamodel_binding] = binding unless binding.nil?
+      core('ta_actor_reconstruct', ta.actor.reconstruct(**params)).fetch(:out)
+    end
+
+    # ta_actor_unload with a captured image; returns the result. On "ok" the
+    # actor is no longer resident: invariants skip it until it is loaded.
+    def unload(actor, image)
+      result = ta.actor.unload(system: system_handle, actor: actor.handle, image: image)[:result]
+      forget(actor) if result == 'ok'
+      result
+    end
+
+    # ta_actor_load of an unloaded named actor; returns the result. On "ok"
+    # the Actor points at its new runtime ID and keeps its trace label.
+    def load(actor, image, binding: nil)
+      params = { system: system_handle, image: image }
+      params[:datamodel_binding] = binding unless binding.nil?
+      response = ta.actor.load(**params)
+      if response[:result] == 'ok'
+        rebind(actor, response.fetch(:out).fetch(:out))
+        @actors << actor unless @actors.include?(actor)
+      end
+      response[:result]
+    end
+
+    # ta_actor_find: [result, runtime ID or nil].
+    def find(address)
+      response = ta.actor.find(system: system_handle, address: address)
+      [response[:result], response[:result] == 'ok' ? response.dig(:out, :out) : nil]
+    end
+
+    def remove_unloaded(address)
+      ta.actor.remove_unloaded(system: system_handle, address: address)[:result]
+    end
+
+    # Prepares an unpublished replacement for a named incumbent under another
+    # chart's definition; returns it as an Actor at the incumbent's address.
+    def prepare_replacement(incumbent, chart_name, binding: nil)
+      definition = definition_id(chart_name.to_sym)
+      params = { system: system_handle, incumbent: incumbent.handle, definition: definition }
+      params[:datamodel_binding] = binding unless binding.nil?
+      id = core('ta_actor_prepare_replacement', ta.actor.prepare_replacement(**params)).fetch(:out)
+      replacement = Actor.new(self, id, chart_name.to_sym, definition, address: incumbent.address)
+      @actor_labels[id] ||= "#{chart_name}.replacement"
+      replacement
+    end
+
+    # Activates a prepared replacement; returns the result. On "ok" the
+    # replacement is checked by invariants from now on.
+    def activate_replacement(incumbent, replacement)
+      result = ta.actor.activate_replacement(system: system_handle, incumbent: incumbent.handle,
+                                             replacement: replacement.handle)[:result]
+      @actors << replacement if result == 'ok' && !@actors.include?(replacement)
+      result
+    end
+
+    # Capture, destroy, and reconstruct an anonymous actor with its current
+    # data root as the binding: the round trip ADR 0038 says is invisible.
+    def reconstruct_in_place(actor)
+      image = capture(actor)
+      binding = actor.data
+      core('ta_actor_destroy', ta.actor.destroy(system: system_handle, actor: actor.handle))
+      rebind(actor, reconstruct(image, binding: binding))
+      destroy_image(image)
+    end
+
+    # Capture, unload, and load a named actor with its current data root as
+    # the binding: the residency change ADR 0014 says is invisible.
+    def cycle_residency(actor)
+      image = capture(actor)
+      binding = actor.data
+      core('ta_actor_unload', { result: unload(actor, image) })
+      core('ta_actor_load', { result: load(actor, image, binding: binding) })
+      destroy_image(image)
     end
 
     # Stops checking invariants against a destroyed actor.

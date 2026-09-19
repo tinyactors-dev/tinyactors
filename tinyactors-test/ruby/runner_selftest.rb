@@ -131,4 +131,82 @@ rescue TinyactorsTest::CoreResultError => e
   check(e.message == 'ta_actor_spawn returned err_invalid', e.message)
 end
 
+# The residency and named-actor helpers call core functions that are not
+# implemented yet, so their scenarios stop at the first such call. This fake
+# answers them in the documented shapes, so the helpers' argument names are
+# checked against the real schemas and their result handling runs.
+class ResidencyFakeHost < FakeHost
+  def initialize(discovery)
+    super
+    @deadlines = [{ result: 'ok', out: { out: 30_000 } }, { result: 'err_not_found', out: { out: nil } }]
+  end
+
+  def call(method, params = nil)
+    case method
+    when 'ta.system.set_actor_directory', 'ta.actor.unload', 'ta.actor.destroy', 'ta.actor.remove_unloaded',
+         'ta.actor.activate_replacement'
+      record(method, params)
+      ok
+    when 'ta.definition.inspect' then record(method, params) && ok(out: { identity: { family: { name: 'traffic_light' } } })
+    when 'ta.actor.capture' then record(method, params) && ok(out: { '$handle': 'session_image:7' })
+    when 'ta.actor.load' then record(method, params) && ok(out: 6)
+    when 'ta.actor.reconstruct' then record(method, params) && ok(out: 8)
+    when 'ta.actor.find' then record(method, params) && ok(out: 6)
+    when 'ta.actor.prepare_replacement' then record(method, params) && ok(out: 9)
+    when 'ta.session.image_next_deadline' then record(method, params) && @deadlines.shift
+    when 'ta.session.image_destroy' then record(method, params) && {}
+    else super
+    end
+  end
+
+  private
+
+  # Checks argument names against the real schema, as the proxy does.
+  def record(method, params)
+    @calls << [method, params]
+    path = method.split('.')
+    schema = path.reduce(@proxy) { |proxy, segment| segment == path.last ? proxy : proxy.public_send(segment) }
+                 .schema(path.last)
+    unknown = params.keys.map(&:to_s) - schema[:params].keys.map(&:to_s)
+    raise "fake host: #{method} got unknown argument(s) #{unknown}" unless unknown.empty?
+
+    true
+  end
+end
+
+residency = ResidencyFakeHost.new(discovery)
+context = TinyactorsTest::Context.new(residency, group, TinyactorsTest.charts)
+context.instance_exec do
+  light = spawn name: 'l1'
+  address = { family: { name: 'traffic_light' }, name: 'l1' }
+  check(light.address == address, "a named actor knows its address: #{light.address}")
+  cycle_residency(light)
+  check(light.handle == 6, 'cycle_residency rebinds the actor to the loaded runtime ID')
+  check(actors.include?(light), 'a loaded actor is checked by invariants again')
+  reconstruct_in_place(light)
+  check(light.handle == 8 && actor_label(8) == 'traffic_light.1', 'a reconstructed actor keeps its trace label')
+  image = capture(light)
+  check(image == { '$handle': 'session_image:7' }, 'capture returns the image handle')
+  check(image_deadline(image) == 30_000 && image_deadline(image).nil?, 'image_deadline reads the deadline or nil')
+  check(find(address) == ['ok', 6], 'find returns the result and the runtime ID')
+  check(remove_unloaded(address) == 'ok', 'remove_unloaded returns the result')
+  replacement = prepare_replacement(light, :traffic_light, binding: { cycles: 1 })
+  check(replacement.handle == 9 && replacement.address == address, 'a replacement shares the incumbent address')
+  check(!actors.include?(replacement), 'an unpublished replacement is not checked by invariants')
+  check(activate_replacement(light, replacement) == 'ok' && actors.include?(replacement),
+        'an activated replacement is checked by invariants')
+end
+calls = residency.calls
+spawn_call = calls.find { |method, _| method == 'ta.actor.spawn' }.last
+check(spawn_call[:address] == { family: { name: 'traffic_light' }, name: 'l1' }, "named spawn address: #{spawn_call}")
+check(calls.any? { |method, _| method == 'ta.system.set_actor_directory' }, 'named spawn installs a directory')
+load_call = calls.find { |method, _| method == 'ta.actor.load' }.last
+check(load_call[:image] == { '$handle': 'session_image:7' } && load_call[:datamodel_binding] == { cycles: 1 },
+      "load passes the image and the captured data root: #{load_call}")
+unload_call = calls.find { |method, _| method == 'ta.actor.unload' }.last
+check(unload_call[:actor] == 5, 'unload names the resident runtime ID')
+destroy_call = calls.find { |method, _| method == 'ta.actor.destroy' }.last
+check(destroy_call[:actor] == 6, 'reconstruct_in_place destroys the resident actor before reconstructing')
+check(calls.count { |method, _| method == 'ta.session.image_destroy' } == 2, 'round trips destroy their images')
+
 puts 'tinyactors-test runner self-test passed'
