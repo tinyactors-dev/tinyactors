@@ -25,10 +25,7 @@ void ta_definition_destroy(ta_definition *definition) {
 }
 
 const ta_definition *ta_definition_lookup(const ta_system *system, ta_definition_id id) {
-    if (system == NULL || id >= system->definition_count) {
-        return NULL;
-    }
-    return system->definitions[id];
+    return ta_system_definition(system, id);
 }
 
 bool ta_definition_is_atomic(const ta_definition *definition, ta_state_id state) {
@@ -97,7 +94,7 @@ ta_result ta_definition_state(const ta_system *system, const ta_definition_state
     }
     const ta_definition *definition = ta_definition_lookup(system, params->definition);
     if (definition == NULL) {
-        return TA_ERR_INVALID;
+        return TA_ERR_NOT_FOUND;
     }
     if (params->state >= definition->state_count) {
         return TA_ERR_NOT_FOUND;
@@ -141,7 +138,7 @@ ta_result ta_definition_inspect(const ta_system *system,
         .datamodel = definition->datamodel,
         .binding = definition->binding_mode == TA_BINDING_LATE ? TA_SCXML_BINDING_LATE : TA_SCXML_BINDING_EARLY,
         .state_count = definition->state_count,
-        .retired = false,
+        .retired = definition->retired,
         .actor_count = definition->actor_count,
         .actor_fixed_bytes = sizeof(ta_actor) + ta_definition_session_bytes(definition) +
                              ta_definition_instance_bytes(definition),

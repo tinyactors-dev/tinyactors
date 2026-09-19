@@ -27,10 +27,22 @@ Definitions should be compiled/validated before registration and never mutated w
 A registered definition is inspectable (ADR 0042): `ta_definition_inspect()`
 reports its ID, identity, `<scxml name>`, data-model adapter, binding mode,
 state count, and lifecycle and memory facts, and `ta_system_find_definition()`
-resolves an exact identity to a registered definition. The only mutable field
-is `actor_count`, a resident-actor counter that `ta_actor_spawn()` increments
-and actor teardown decrements; it is bookkeeping, not program data. See
+resolves an exact identity to a registered definition. The only mutable fields
+are `actor_count`, a resident-actor counter that `ta_actor_spawn()` increments
+and actor teardown decrements, and `retired`, which
+`ta_system_retire_definition()` sets (ADR 0043); they are bookkeeping, not
+program data. A retired definition is freed when `actor_count` reaches zero:
+`ta_actor_free()` uncounts the actor as its last step, after the data-model
+instance, session storage, invocations, and the actor record are released, and
+frees the definition there when it is retired. See
 [definition inspection](definition-inspection.md).
+
+The system keeps registered definitions in a slot table
+(`ta_definition_slot`: definition, generation, free-list link). An ID is
+`(generation << 32) | slot`; freeing a definition bumps its slot's generation
+and pushes the slot on the free list, so `ta_definition_lookup()` rejects stale
+IDs. Because slots are reused, each definition also records a registration
+serial, and `ta_system_find_definition()` picks the newest match by serial.
 
 Each compiled definition owns a `ta_definition_identity`: its UTF-8 logical
 family and an opaque exact revision fingerprint. `ta_definition_builder_set_identity()`

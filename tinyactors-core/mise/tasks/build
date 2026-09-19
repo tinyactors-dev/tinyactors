@@ -3,7 +3,7 @@
 # mise skips this task when every object below is newer than every source.
 # Use `mise run --force build` after changing CC/CFLAGS.
 #MISE sources=["mise/tasks/build", "mise/tasks/amalgamate", "mise/tasks/api", "mise/lib/**/*", "api/**/*", "src/**/*", "include/tinyactors.h", "tests/*.c"]
-#MISE outputs=["tests/smoke.o", "tests/public_smoke.o", "tests/tinyactors.o", "build/inspection_test", "build/export_test"]
+#MISE outputs=["tests/smoke.o", "tests/public_smoke.o", "tests/tinyactors.o", "build/inspection_test", "build/export_test", "build/retirement_test"]
 # vim:ft=ruby
 
 require 'fileutils'
@@ -73,6 +73,15 @@ run(
   'include/tinyactors.c',
   '-o',
   'build/inspection_test'
+)
+run(
+  *compiler,
+  *flags,
+  '-Iinclude',
+  'tests/retirement_test.c',
+  'include/tinyactors.c',
+  '-o',
+  'build/retirement_test'
 )
 run(
   *compiler,

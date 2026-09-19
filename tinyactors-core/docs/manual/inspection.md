@@ -53,7 +53,11 @@ The data-model root is a host value. For CPython it may simply wrap the existing
 | `actor_fixed_bytes` | what each actor costs before it processes events: actor record, session storage, data-model instance |
 | `definition_bytes` | the definition's own storage |
 
-The byte counts are measurements and may change between releases. `ta_system_find_definition()` resolves an exact identity, for example one read from a stored session, to the most recently registered definition with that identity.
+The byte counts are measurements and may change between releases. `ta_system_find_definition()` resolves an exact identity, for example one read from a stored session, to the most recently registered definition with that identity that is not retired.
+
+### Retiring definitions
+
+`ta_system_retire_definition()` stops new use of a definition: spawning it fails with `TA_ERR_NOT_FOUND` and `ta_system_find_definition()` no longer returns it. Actors already running it keep running, and the definition stays inspectable (`retired` is true) and exportable while they exist. The core frees it once no resident actor uses it — immediately if none does. After that its ID is stale: definition IDs carry a generation, so every call that takes the old ID returns `TA_ERR_NOT_FOUND` even after the slot is reused. Retiring twice is harmless. A host that caches definition IDs (for example an invoker that compiles child charts) should treat `TA_ERR_NOT_FOUND` as "compile and register again".
 
 ```c
 ta_definition_inspection facts;

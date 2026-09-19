@@ -829,8 +829,16 @@ struct ta_definition {
     uint32_t datamodel_instance_alignment;
     /* Resident actors whose `definition` points here; see ta_actor_free(). */
     uint32_t actor_count;
+    /*
+     * Set by ta_system_retire_definition(): no new actors, and the system
+     * frees the definition once actor_count reaches zero (ADR 0043).
+     */
+    bool retired;
+    /* Registration order; see ta_system_find_definition(). */
+    uint64_t registration_serial;
 };
 
+/* A registered definition, retired or not; NULL for an unknown or stale ID. */
 TA_PRIVATE const ta_definition *ta_definition_lookup(const ta_system *system, ta_definition_id id);
 /* Bytes of one actor's session storage: two configurations and history. */
 TA_PRIVATE size_t ta_definition_session_bytes(const ta_definition *definition);
@@ -943,16 +951,27 @@ TA_PRIVATE bool ta_actor_state_active(const ta_actor *actor, ta_state_id state);
 
 
 
+typedef struct {
+    ta_definition *definition;
+    uint32_t generation;
+    /* While free: the next free slot, or UINT32_MAX. */
+    uint32_t next_free;
+} ta_definition_slot;
+
 struct ta_system {
     ta_allocator allocator;
     ta_clock clock;
     ta_atom_table atoms;
     ta_event_name_table event_names;
 
-    /* Registered definitions; ta_definition_id indexes this array. */
-    ta_definition **definitions;
-    uint32_t definition_count;
-    uint32_t definition_capacity;
+    /*
+     * ta_definition_slot; a definition ID is (generation << 32) | slot, as
+     * for actors. Freed slots form a list through `next_free`.
+     */
+    ta_vec definitions;
+    uint32_t free_definition_slot;
+    /* Orders registrations, so the newest identity match wins after slot reuse. */
+    uint64_t next_definition_serial;
 
     /* ta_actor_slot; an actor ID is (generation << 32) | slot. */
     ta_vec actors;
@@ -973,6 +992,13 @@ struct ta_system {
     ta_arena scratch;
 };
 
+/*
+ * The registered definition behind a live ID, retired or not; NULL for an
+ * unknown or stale ID.
+ */
+TA_PRIVATE ta_definition *ta_system_definition(const ta_system *system, ta_definition_id id);
+/* Frees a registered definition and its slot; no actor may use it. */
+TA_PRIVATE void ta_system_free_definition(ta_system *system, ta_definition *definition);
 TA_PRIVATE const ta_io *ta_system_find_io(const ta_system *system, ta_atom type);
 TA_PRIVATE bool ta_system_is_scxml_io(const ta_system *system, ta_atom type);
 
@@ -2943,10 +2969,7 @@ TA_API void ta_definition_destroy(ta_definition *definition) {
 }
 
 TA_PRIVATE const ta_definition *ta_definition_lookup(const ta_system *system, ta_definition_id id) {
-    if (system == NULL || id >= system->definition_count) {
-        return NULL;
-    }
-    return system->definitions[id];
+    return ta_system_definition(system, id);
 }
 
 TA_PRIVATE bool ta_definition_is_atomic(const ta_definition *definition, ta_state_id state) {
@@ -3015,7 +3038,7 @@ TA_API ta_result ta_definition_state(const ta_system *system, const ta_definitio
     }
     const ta_definition *definition = ta_definition_lookup(system, params->definition);
     if (definition == NULL) {
-        return TA_ERR_INVALID;
+        return TA_ERR_NOT_FOUND;
     }
     if (params->state >= definition->state_count) {
         return TA_ERR_NOT_FOUND;
@@ -3059,7 +3082,7 @@ TA_API ta_result ta_definition_inspect(const ta_system *system,
         .datamodel = definition->datamodel,
         .binding = definition->binding_mode == TA_BINDING_LATE ? TA_SCXML_BINDING_LATE : TA_SCXML_BINDING_EARLY,
         .state_count = definition->state_count,
-        .retired = false,
+        .retired = definition->retired,
         .actor_count = definition->actor_count,
         .actor_fixed_bytes = sizeof(ta_actor) + ta_definition_session_bytes(definition) +
                              ta_definition_instance_bytes(definition),
@@ -4873,9 +4896,12 @@ static ta_result ta_actor_claim_slot(ta_system *system, ta_actor *actor, ta_acto
     return TA_OK;
 }
 
+/*
+ * Tears the actor down completely, then uncounts it. The last actor of a
+ * retired definition frees the definition, so nothing below may touch it.
+ */
 static void ta_actor_free(ta_system *system, ta_actor *actor) {
     const ta_definition *definition = actor->definition;
-    system->definitions[definition->id]->actor_count -= 1u;
     if (actor->datamodel_initialized) {
         definition->datamodel.v->destroy_instance(definition->datamodel.self, definition->datamodel_shared,
                                                   actor->datamodel_instance);
@@ -4890,15 +4916,20 @@ static void ta_actor_free(ta_system *system, ta_actor *actor) {
     ta_interpreter_release_actor_state(system, actor);
     ta_mem_free(system->allocator, actor,
                 &(ta_allocator_free_params){ .size = sizeof(ta_actor), .alignment = _Alignof(ta_actor) });
+    ta_definition *owner = ta_system_definition(system, definition->id);
+    owner->actor_count -= 1u;
+    if (owner->retired && owner->actor_count == 0) {
+        ta_system_free_definition(system, owner);
+    }
 }
 
 TA_API ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params) {
     if (system == NULL || params == NULL || params->out == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_definition *definition = ta_definition_lookup(system, params->definition);
-    if (definition == NULL) {
-        return TA_ERR_INVALID;
+    ta_definition *definition = ta_system_definition(system, params->definition);
+    if (definition == NULL || definition->retired) {
+        return TA_ERR_NOT_FOUND;
     }
     if (params->address != NULL) {
         /* Named actors require the directory protocol, which is not implemented yet. */
@@ -4910,7 +4941,7 @@ TA_API ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *
     }
     *actor = (ta_actor){ .definition = definition, .published = true, .macrostep = true };
     /* Counted from here so every ta_actor_free() path can uncount it. */
-    system->definitions[definition->id]->actor_count += 1u;
+    definition->actor_count += 1u;
     actor->host_impl = (ta_dm_host_impl){ .system = system, .actor = actor };
     actor->host = (ta_dm_host){ .impl = &actor->host_impl };
 
@@ -5324,6 +5355,8 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
     *system = (ta_system){ .allocator = config->allocator };
     ta_clock_set(&system->clock, config->initial_time);
     ta_vec_init(&system->actors, config->allocator, TA_VEC_LAYOUT(ta_actor_slot));
+    ta_vec_init(&system->definitions, config->allocator, TA_VEC_LAYOUT(ta_definition_slot));
+    system->free_definition_slot = UINT32_MAX;
     ta_vec_init(&system->io_processors, config->allocator, TA_VEC_LAYOUT(ta_io_registration));
     ta_vec_init(&system->invokers, config->allocator, TA_VEC_LAYOUT(ta_invoker_registration));
     ta_result result = ta_atom_table_init(&system->atoms, config->allocator);
@@ -5367,12 +5400,15 @@ TA_API void ta_system_destroy(ta_system *system) {
             (void)ta_actor_destroy(system, ((ta_actor_id)entry->generation << 32) | slot);
         }
     }
-    for (uint32_t index = 0; index < system->definition_count; index += 1) {
-        ta_definition_destroy(system->definitions[index]);
+    /* Every actor is gone, so every definition goes, retired or not. */
+    for (uint32_t slot = 0; slot < system->definitions.count; slot += 1) {
+        ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
+        if (entry->definition != NULL) {
+            ta_definition_destroy(entry->definition);
+            entry->definition = NULL;
+        }
     }
-    ta_mem_free(system->allocator, system->definitions,
-                &(ta_allocator_free_params){ .size = system->definition_capacity * sizeof(ta_definition *),
-                                             .alignment = _Alignof(ta_definition *) });
+    ta_vec_destroy(&system->definitions);
     ta_timer_heap_destroy(&system->timers);
     ta_vec_destroy(&system->actors);
     ta_vec_destroy(&system->io_processors);
@@ -5406,27 +5442,72 @@ TA_API ta_result ta_system_register_definition(ta_system *system, ta_definition 
         definition->registered) {
         return TA_ERR_INVALID;
     }
-    if (system->definition_count == system->definition_capacity) {
-        uint32_t capacity = system->definition_capacity == 0 ? 8u : system->definition_capacity * 2u;
-        ta_definition **grown = ta_mem_alloc(system->allocator, capacity * sizeof(ta_definition *),
-                                             _Alignof(ta_definition *));
-        if (grown == NULL) {
-            return TA_ERR_NOMEM;
+    uint32_t slot = system->free_definition_slot;
+    if (slot == UINT32_MAX) {
+        ta_definition_slot fresh = { .generation = 1, .next_free = UINT32_MAX };
+        ta_result result = ta_vec_push(&system->definitions, &fresh);
+        if (result != TA_OK) {
+            return result;
         }
-        if (system->definitions != NULL) {
-            ta_mem_copy(grown, system->definitions, system->definition_count * sizeof(ta_definition *));
-            ta_mem_free(system->allocator, system->definitions,
-                        &(ta_allocator_free_params){ .size = system->definition_capacity * sizeof(ta_definition *),
-                                                     .alignment = _Alignof(ta_definition *) });
-        }
-        system->definitions = grown;
-        system->definition_capacity = capacity;
+        slot = system->definitions.count - 1u;
     }
-    definition->id = system->definition_count;
+    ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
+    if (slot == system->free_definition_slot) {
+        system->free_definition_slot = entry->next_free;
+    }
+    entry->definition = definition;
+    entry->next_free = UINT32_MAX;
+    definition->id = ((ta_definition_id)entry->generation << 32) | slot;
     definition->registered = true;
-    system->definitions[system->definition_count] = definition;
-    system->definition_count += 1;
+    definition->registration_serial = system->next_definition_serial++;
     *out = definition->id;
+    return TA_OK;
+}
+
+TA_PRIVATE ta_definition *ta_system_definition(const ta_system *system, ta_definition_id id) {
+    if (system == NULL) {
+        return NULL;
+    }
+    uint32_t slot = (uint32_t)(id & 0xffffffffu);
+    uint32_t generation = (uint32_t)(id >> 32);
+    if (slot >= system->definitions.count) {
+        return NULL;
+    }
+    const ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
+    return entry->generation == generation ? entry->definition : NULL;
+}
+
+TA_PRIVATE void ta_system_free_definition(ta_system *system, ta_definition *definition) {
+    uint32_t slot = (uint32_t)(definition->id & 0xffffffffu);
+    ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
+    /* The slot's next occupant gets a new generation, so this ID goes stale. */
+    entry->definition = NULL;
+    entry->generation += 1u;
+    entry->next_free = system->free_definition_slot;
+    system->free_definition_slot = slot;
+    ta_definition_destroy(definition);
+}
+
+TA_API ta_result ta_system_retire_definition(ta_system *system, ta_definition_id id) {
+    if (system == NULL) {
+        return TA_ERR_INVALID;
+    }
+    ta_definition *definition = ta_system_definition(system, id);
+    if (definition == NULL) {
+        /*
+         * A slot's generation advances only when its definition is freed, so
+         * an older generation of an existing slot was retired and freed.
+         */
+        uint32_t slot = (uint32_t)(id & 0xffffffffu);
+        uint32_t generation = (uint32_t)(id >> 32);
+        bool freed = slot < system->definitions.count && generation != 0 &&
+                     generation < ((const ta_definition_slot *)ta_vec_at(&system->definitions, slot))->generation;
+        return freed ? TA_OK : TA_ERR_NOT_FOUND;
+    }
+    definition->retired = true;
+    if (definition->actor_count == 0) {
+        ta_system_free_definition(system, definition);
+    }
     return TA_OK;
 }
 
@@ -5448,16 +5529,25 @@ TA_API ta_result ta_system_find_definition(const ta_system *system,
     if (system == NULL || identity == NULL || out == NULL) {
         return TA_ERR_INVALID;
     }
-    /* Newest first: the most recently registered match wins. */
-    for (uint32_t index = system->definition_count; index > 0; index -= 1) {
-        const ta_definition *definition = system->definitions[index - 1u];
+    /* Slots are reused, so registration order decides: the newest match wins. */
+    const ta_definition *best = NULL;
+    for (uint32_t slot = 0; slot < system->definitions.count; slot += 1) {
+        const ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
+        const ta_definition *definition = entry->definition;
+        if (definition == NULL || definition->retired ||
+            (best != NULL && best->registration_serial > definition->registration_serial)) {
+            continue;
+        }
         if (ta_str_equal(definition->identity.family.name, identity->family.name) &&
             ta_bytes_same(definition->identity.revision, identity->revision)) {
-            *out = definition->id;
-            return TA_OK;
+            best = definition;
         }
     }
-    return TA_ERR_NOT_FOUND;
+    if (best == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    *out = best->id;
+    return TA_OK;
 }
 
 TA_PRIVATE bool ta_system_is_scxml_io(const ta_system *system, ta_atom type) {

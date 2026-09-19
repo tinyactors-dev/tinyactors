@@ -369,8 +369,16 @@ struct ta_definition {
     uint32_t datamodel_instance_alignment;
     /* Resident actors whose `definition` points here; see ta_actor_free(). */
     uint32_t actor_count;
+    /*
+     * Set by ta_system_retire_definition(): no new actors, and the system
+     * frees the definition once actor_count reaches zero (ADR 0043).
+     */
+    bool retired;
+    /* Registration order; see ta_system_find_definition(). */
+    uint64_t registration_serial;
 };
 
+/* A registered definition, retired or not; NULL for an unknown or stale ID. */
 const ta_definition *ta_definition_lookup(const ta_system *system, ta_definition_id id);
 /* Bytes of one actor's session storage: two configurations and history. */
 size_t ta_definition_session_bytes(const ta_definition *definition);

@@ -191,6 +191,18 @@ Semantics:
   `ta_system_retire_definition()`, or when the last actor is destroyed. The
   actor must be fully torn down before the definition it points to is freed.
 - `ta_system_destroy()` frees every definition, retired or not.
+- Retiring is idempotent also after the definition is freed: an ID whose slot
+  has since advanced its generation was issued and freed, so retiring it
+  returns `TA_OK`. An ID that was never issued returns `TA_ERR_NOT_FOUND`.
+- `ta_actor_spawn()` returns `TA_ERR_NOT_FOUND` (not `TA_ERR_INVALID`) for an
+  unknown, stale, or retired ID, and `ta_definition_state()` returns
+  `TA_ERR_NOT_FOUND` for an unknown or stale ID, like every other entry point.
+- Implementation: `ta_actor_free()` releases the data-model instance, session
+  storage, actor state (queues, invocations), and the actor record first, then
+  uncounts the actor and, when the definition is retired and unused, calls
+  `ta_system_free_definition()`. Because slots are reused, each definition
+  carries a registration serial so `ta_system_find_definition()` still returns
+  the most recently registered match.
 
 ### Generational definition IDs
 

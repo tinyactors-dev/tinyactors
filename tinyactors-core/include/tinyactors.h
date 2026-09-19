@@ -33,7 +33,6 @@ extern "C" {
 typedef int32_t ta_result;
 typedef uint32_t ta_atom;
 typedef uint32_t ta_event_name_id;
-typedef uint32_t ta_definition_id;
 typedef uint32_t ta_state_id;
 typedef uint32_t ta_transition_id;
 typedef uint32_t ta_expr_id;
@@ -48,6 +47,12 @@ typedef uint32_t ta_done_data_id;
 typedef uint32_t ta_invoke_decl_id;
 typedef uint32_t ta_extension_id;
 typedef uint64_t ta_actor_id;
+/*
+ * A registered definition: its table slot in the low 32 bits and the slot's
+ * generation in the high 32 bits (ADR 0043). Zero is never a valid ID. A
+ * freed definition's ID goes stale and never names another definition.
+ */
+typedef uint64_t ta_definition_id;
 typedef uint64_t ta_invoke_id;
 typedef uint64_t ta_send_id;
 typedef uint64_t ta_timer_id;
@@ -1086,7 +1091,8 @@ TA_API void ta_definition_destroy(ta_definition *definition);
  * and points to the definition's explicit identity otherwise. Empty lists are
  * exported as null, except that a handler's `actions` is never null.
  *
- * TA_ERR_NOT_FOUND: no registered definition has this ID.
+ * TA_ERR_NOT_FOUND: no existing definition has this ID. A retired definition
+ * exports until it is freed.
  */
 typedef struct {
     ta_definition_id definition;
@@ -1333,7 +1339,9 @@ TA_API ta_result ta_actor_delayed_sends(ta_system *system,
  * Static facts about one state of a registered definition. `id` is the
  * author's state ID and is borrowed from the system. `parent` is
  * TA_STATE_NONE for top-level states. TA_ERR_NOT_FOUND ends iteration over
- * state IDs 0, 1, 2, ... in document order.
+ * state IDs 0, 1, 2, ... in document order; it is also the result when the
+ * definition ID is unknown or stale. A retired definition is readable until
+ * it is freed.
  */
 typedef struct {
     ta_str id;
@@ -1350,7 +1358,8 @@ TA_API ta_result ta_definition_state(const ta_system *system,
 
 /*
  * A read-only view of one registered definition. Text and the adapter are
- * borrowed from the system and stay valid while the definition exists.
+ * borrowed from the system and stay valid while the definition exists (a
+ * retired definition exists until its last resident actor is gone).
  */
 typedef struct {
     ta_definition_id id;
@@ -1384,7 +1393,10 @@ typedef struct {
     size_t definition_bytes;
 } ta_definition_inspection;
 
-/* TA_ERR_NOT_FOUND when the ID names no registered definition. */
+/*
+ * TA_ERR_NOT_FOUND when the ID names no existing definition: never
+ * registered, freed after retirement, or stale.
+ */
 TA_API ta_result ta_definition_inspect(const ta_system *system,
                                        ta_definition_id definition,
                                        ta_definition_inspection *out);
@@ -1455,13 +1467,25 @@ TA_API ta_result ta_system_register_definition(ta_system *system,
                                                ta_definition *definition,
                                                ta_definition_id *out);
 /*
- * The registered definition with exactly this identity; family and revision
- * are compared bytewise. When several match, the most recently registered
- * wins. TA_ERR_NOT_FOUND when none matches.
+ * The registered, non-retired definition with exactly this identity; family
+ * and revision are compared bytewise. When several match, the most recently
+ * registered wins. TA_ERR_NOT_FOUND when none matches.
  */
 TA_API ta_result ta_system_find_definition(const ta_system *system,
                                            const ta_definition_identity *identity,
                                            ta_definition_id *out);
+/*
+ * Ends a definition's availability (ADR 0043). ta_actor_spawn() and
+ * ta_actor_prepare_replacement() naming it fail with TA_ERR_NOT_FOUND, and
+ * ta_system_find_definition() skips it. Resident actors that use it keep
+ * running, and ta_definition_inspect(), ta_definition_state(), and
+ * ta_definition_export() keep working. The system frees the definition (its
+ * data-model state, its storage, and its ID) when no resident actor uses it:
+ * here if none does, otherwise when the last one is destroyed. Idempotent:
+ * retiring a retired definition, even one already freed, returns TA_OK.
+ * TA_ERR_NOT_FOUND when the ID was never issued.
+ */
+TA_API ta_result ta_system_retire_definition(ta_system *system, ta_definition_id definition);
 /* The atom returned by ta_system_scxml_io_type() is reserved. */
 TA_API ta_result ta_system_register_io(ta_system *system, ta_atom type, ta_io io);
 TA_API ta_result ta_system_register_invoker(ta_system *system,

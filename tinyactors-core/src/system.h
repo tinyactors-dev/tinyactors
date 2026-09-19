@@ -10,16 +10,27 @@
 #include "routing.h"
 #include "timer.h"
 
+typedef struct {
+    ta_definition *definition;
+    uint32_t generation;
+    /* While free: the next free slot, or UINT32_MAX. */
+    uint32_t next_free;
+} ta_definition_slot;
+
 struct ta_system {
     ta_allocator allocator;
     ta_clock clock;
     ta_atom_table atoms;
     ta_event_name_table event_names;
 
-    /* Registered definitions; ta_definition_id indexes this array. */
-    ta_definition **definitions;
-    uint32_t definition_count;
-    uint32_t definition_capacity;
+    /*
+     * ta_definition_slot; a definition ID is (generation << 32) | slot, as
+     * for actors. Freed slots form a list through `next_free`.
+     */
+    ta_vec definitions;
+    uint32_t free_definition_slot;
+    /* Orders registrations, so the newest identity match wins after slot reuse. */
+    uint64_t next_definition_serial;
 
     /* ta_actor_slot; an actor ID is (generation << 32) | slot. */
     ta_vec actors;
@@ -40,5 +51,12 @@ struct ta_system {
     ta_arena scratch;
 };
 
+/*
+ * The registered definition behind a live ID, retired or not; NULL for an
+ * unknown or stale ID.
+ */
+ta_definition *ta_system_definition(const ta_system *system, ta_definition_id id);
+/* Frees a registered definition and its slot; no actor may use it. */
+void ta_system_free_definition(ta_system *system, ta_definition *definition);
 const ta_io *ta_system_find_io(const ta_system *system, ta_atom type);
 bool ta_system_is_scxml_io(const ta_system *system, ta_atom type);

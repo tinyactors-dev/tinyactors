@@ -6,7 +6,7 @@
 
 - `ta_atom` — interned ordinary string handle, process-local unless resolved through logical text by a higher layer.
 - `ta_event_name_id` — structured event-name handle.
-- `ta_definition_id` — compact runtime definition handle.
+- `ta_definition_id` — runtime definition handle: slot in the low 32 bits, the slot's generation in the high 32 bits (ADR 0043). A freed definition's ID goes stale and never names another definition; zero is never valid.
 - `ta_definition_identity` — logical definition family plus exact opaque revision fingerprint.
 - `ta_actor_id` — runtime-local actor identity; may internally encode slot + generation.
 - `ta_actor_address` — logical named actor address scoped by definition family.
@@ -98,7 +98,9 @@ completion and never generates that event.
 
 `ta_actor_inspect` returns a read-only operational view of one resident interpreter: identity, definition, residency, whether a macrostep is paused (and its external event), internal queue, invocations, completion, counts of active states and delayed sends, and `allocated_bytes`. `ta_system_visit_actors` enumerates resident interpreter instances. Neither calls the data-model adapter. `ta_actor_datamodel_root` asks the adapter's `inspect` operation for the data-model root, a host value the caller releases; it returns `TA_ERR_UNSUPPORTED` when the adapter has none.
 
-`ta_definition_inspect` returns fixed-size facts about a registered definition (ADR 0042): its ID, exact identity, `<scxml name>`, the data-model adapter it was compiled with (to identify, never to call), its binding mode, state count, lifecycle facts (`retired`, `actor_count`), and memory measurements (`actor_fixed_bytes`, `definition_bytes`). `ta_system_find_definition` resolves an exact identity (family and revision compared bytewise) to the most recently registered matching definition. See [definition inspection](definition-inspection.md).
+`ta_definition_inspect` returns fixed-size facts about a registered definition (ADR 0042): its ID, exact identity, `<scxml name>`, the data-model adapter it was compiled with (to identify, never to call), its binding mode, state count, lifecycle facts (`retired`, `actor_count`), and memory measurements (`actor_fixed_bytes`, `definition_bytes`). `ta_system_find_definition` resolves an exact identity (family and revision compared bytewise) to the most recently registered matching definition that is not retired. See [definition inspection](definition-inspection.md).
+
+`ta_system_retire_definition` ends a definition's availability (ADR 0043): spawns and replacements naming it fail with `TA_ERR_NOT_FOUND` and `ta_system_find_definition` skips it, while resident actors keep running and `ta_definition_inspect`, `ta_definition_state`, and `ta_definition_export` keep working. The core frees the definition when it is retired and no resident actor uses it: at once, or after the last actor is fully torn down. Retiring is idempotent, also after the definition is freed. Every function that takes a `ta_definition_id` returns `TA_ERR_NOT_FOUND` for an unknown, stale, or freed ID; `ta_actor_spawn` also for a retired one.
 
 `ta_actor_active_states`, `ta_actor_history`, and `ta_actor_delayed_sends` list the active configuration (ancestors included, document order), one history pseudo-state's recorded states, and pending delayed sends. They fill caller-supplied arrays and always report the total count; a too-small array yields `TA_ERR_NOMEM` without writing, so a zero capacity is a size query. `ta_definition_state` resolves a state ID of a registered definition to its author ID, parent, and kind.
 

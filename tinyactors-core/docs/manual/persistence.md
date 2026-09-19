@@ -54,4 +54,10 @@ Reconstruction uses the same definition revision. Upgrading a named actor uses r
 4. atomically replace the directory entry;
 5. retire the old interpreter.
 
+Once no new actor should start on the old revision, retire it with
+`ta_system_retire_definition()`: incumbents keep running, and the core frees
+the old revision with its last resident actor (ADR 0043). Unloaded session
+images do not keep a definition alive; they name its exact identity and need
+it registered again to be reconstructed.
+
 No translation of definition-local state IDs is required.

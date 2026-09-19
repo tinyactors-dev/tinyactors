@@ -56,9 +56,12 @@ static ta_result ta_actor_claim_slot(ta_system *system, ta_actor *actor, ta_acto
     return TA_OK;
 }
 
+/*
+ * Tears the actor down completely, then uncounts it. The last actor of a
+ * retired definition frees the definition, so nothing below may touch it.
+ */
 static void ta_actor_free(ta_system *system, ta_actor *actor) {
     const ta_definition *definition = actor->definition;
-    system->definitions[definition->id]->actor_count -= 1u;
     if (actor->datamodel_initialized) {
         definition->datamodel.v->destroy_instance(definition->datamodel.self, definition->datamodel_shared,
                                                   actor->datamodel_instance);
@@ -73,15 +76,20 @@ static void ta_actor_free(ta_system *system, ta_actor *actor) {
     ta_interpreter_release_actor_state(system, actor);
     ta_mem_free(system->allocator, actor,
                 &(ta_allocator_free_params){ .size = sizeof(ta_actor), .alignment = _Alignof(ta_actor) });
+    ta_definition *owner = ta_system_definition(system, definition->id);
+    owner->actor_count -= 1u;
+    if (owner->retired && owner->actor_count == 0) {
+        ta_system_free_definition(system, owner);
+    }
 }
 
 ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params) {
     if (system == NULL || params == NULL || params->out == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_definition *definition = ta_definition_lookup(system, params->definition);
-    if (definition == NULL) {
-        return TA_ERR_INVALID;
+    ta_definition *definition = ta_system_definition(system, params->definition);
+    if (definition == NULL || definition->retired) {
+        return TA_ERR_NOT_FOUND;
     }
     if (params->address != NULL) {
         /* Named actors require the directory protocol, which is not implemented yet. */
@@ -93,7 +101,7 @@ ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params)
     }
     *actor = (ta_actor){ .definition = definition, .published = true, .macrostep = true };
     /* Counted from here so every ta_actor_free() path can uncount it. */
-    system->definitions[definition->id]->actor_count += 1u;
+    definition->actor_count += 1u;
     actor->host_impl = (ta_dm_host_impl){ .system = system, .actor = actor };
     actor->host = (ta_dm_host){ .impl = &actor->host_impl };
 

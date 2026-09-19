@@ -3635,7 +3635,7 @@
     "ta_definition_id": {
       "kind": "alias",
       "type": {
-        "builtin": "uint32_t"
+        "builtin": "uint64_t"
       }
     },
     "ta_definition_identity": {
@@ -8490,6 +8490,34 @@
           },
           "role": "out",
           "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_retire_definition",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "definition",
+          "type": {
+            "type": "ta_definition_id"
+          },
+          "role": "in"
         }
       ],
       "public": true,
