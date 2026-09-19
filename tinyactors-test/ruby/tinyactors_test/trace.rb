@@ -27,6 +27,11 @@ module TinyactorsTest
       @journal_cursors = {}
     end
 
+    # Everything a trace step records about one resident actor.
+    def observe(id)
+      actor_state(id)
+    end
+
     def record(label)
       state = { actors: actors, journals: journals }
       @steps << Step.new(index: @steps.size, label: label, time: @context.now, state: state)
@@ -96,8 +101,8 @@ module TinyactorsTest
         residency: inspection[:residency],
         published: inspection[:published],
         macrostep_in_progress: inspection[:macrostep_in_progress],
-        internal_events: inspection[:internal_count],
-        active: states.fetch(:states).map { |state| @context.state_name(definition, state) },
+        internal_events: Array(inspection[:internal_events]).map { |queued| @context.event_text(queued.dig(:event, :name)) },
+        active: Array(states[:states]).map { |state| @context.state_name(definition, state) },
         data: data(id),
         completion: completion(id, inspection),
         delayed_sends: delayed_sends(id, inspection.fetch(:delayed_send_count)),

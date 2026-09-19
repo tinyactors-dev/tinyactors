@@ -123,7 +123,7 @@ module TinyactorsTest
       states = @context.core('ta_actor_active_states',
                              @context.ta.actor.active_states(system: @context.system_handle,
                                                              actor: handle, capacity: count))
-      states.fetch(:states).map { |state| @context.state_name(definition, state) }
+      Array(states[:states]).map { |state| @context.state_name(definition, state) }
     end
 
     # The data-model root, or the single value a jq filter produces from it.
@@ -163,11 +163,60 @@ module TinyactorsTest
 
     # Delivers an external event and runs the system until it is quiescent.
     def deliver(event, data: nil)
-      params = { name: @context.event_name(event), type: 'external', invoke_id: INVOKE_ID_NONE }
-      params[:data] = data unless data.nil?
-      @context.core('ta_actor_deliver',
-                    @context.ta.actor.deliver(system: @context.system_handle, actor: handle, event: params))
+      @context.core('ta_actor_deliver', offer(event, data: data))
       @context.run_system("deliver #{event}")
+    end
+
+    # Offers an external event without running the system, and returns the
+    # ta_actor_deliver result: "ok", "err_busy", "err_not_found", ...
+    def post(event, data: nil)
+      offer(event, data: data)[:result]
+    end
+
+    # One ta_actor_resume call with `budget` microsteps; returns the status:
+    # "paused", "stable", or "done".
+    def resume(budget:)
+      response = @context.ta.actor.resume(system: @context.system_handle, actor: handle, budget: budget)
+      @context.core('ta_actor_resume', response).fetch(:status)
+    end
+
+    # Destroys the actor and runs the system. The actor is no longer checked
+    # by invariants.
+    def destroy
+      @context.core('ta_actor_destroy', @context.ta.actor.destroy(system: @context.system_handle, actor: handle))
+      @context.forget(self)
+      @context.run_system("destroy #{self}")
+    end
+
+    # False once the runtime ID names no resident actor.
+    def resident?
+      @context.ta.actor.inspect(system: @context.system_handle, actor: handle)[:result] != 'err_not_found'
+    end
+
+    # The states the history pseudo-state `id` recorded, as symbols.
+    def history(id)
+      history = @context.state_id(definition, id)
+      # A size query: capacity 0 answers err_nomem with the count unless it is 0.
+      query = @context.ta.actor.history(system: @context.system_handle, actor: handle, history: history, capacity: 0)
+      raise CoreResultError.new('ta_actor_history', query[:result]) unless %w[ok err_nomem].include?(query[:result])
+
+      count = query.dig(:out, :count)
+      return [] if count.zero?
+
+      states = @context.core('ta_actor_history',
+                             @context.ta.actor.history(system: @context.system_handle, actor: handle,
+                                                       history: history, capacity: count))
+      Array(states[:states]).map { |state| @context.state_name(definition, state) }
+    end
+
+    # Pending delayed sends: [{due:, event:, send_id:, target:, data:}], by due time.
+    def sends
+      observe.fetch(:delayed_sends)
+    end
+
+    # Everything a Trace records about this actor, now.
+    def observe
+      @context.observe(self)
     end
 
     def inspect_actor
@@ -177,6 +226,14 @@ module TinyactorsTest
 
     def to_s
       "#{chart}(#{handle})"
+    end
+
+    private
+
+    def offer(event, data:)
+      params = { name: @context.event_name(event), type: 'external', invoke_id: INVOKE_ID_NONE }
+      params[:data] = data unless data.nil?
+      @context.ta.actor.deliver(system: @context.system_handle, actor: handle, event: params)
     end
   end
 
@@ -500,6 +557,38 @@ module TinyactorsTest
 
       raise AssertionFailed, "#{@run}: ta_system_destroy left #{stats[:live_allocations]} allocation(s) " \
                              "(#{stats[:live_bytes]} bytes) live"
+    end
+
+    # Everything a Trace records about one actor.
+    def observe(actor)
+      Trace.new(self).observe(actor.handle)
+    end
+
+    # The earliest pending delayed-send deadline, or nil when none is pending.
+    def next_deadline
+      response = ta.system.next_deadline(system: system_handle)
+      return nil if response[:result] == 'err_not_found'
+
+      Integer(core('ta_system_next_deadline', response).fetch(:out))
+    end
+
+    # Stops checking invariants against a destroyed actor.
+    def forget(actor)
+      @actors.delete(actor)
+    end
+
+    # The registered definition ID of a chart, compiling it on first use.
+    def definition(chart_name = @group.chart)
+      definition_id(chart_name.to_sym)
+    end
+
+    # The state ID of the author's state `name` in a definition.
+    def state_id(definition, name)
+      (0..).each do |state|
+        response = ta.definition.state(system: system_handle, definition: definition, state: state)
+        raise ScenarioError, "definition #{definition} has no state #{name}" if response[:result] == 'err_not_found'
+        return state if core('ta_definition_state', response).fetch(:out).fetch(:id) == name.to_s
+      end
     end
 
     # The label a Trace shows for a runtime actor ID.

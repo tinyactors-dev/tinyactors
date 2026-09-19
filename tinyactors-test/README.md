@@ -134,6 +134,23 @@ are `assert`, `assert_equal`, `assert_active`, `refute_active`, and
 `assert_configuration`. `actor.data(filter)`, `actor.done?`, and
 `actor.completion` observe an actor. Invariants are checked after every step.
 
+Lower-level steps control a macrostep directly:
+
+- `actor.post(event)` offers an event without running the system, and
+  returns the `ta_actor_deliver` result (`"ok"`, `"err_busy"`, ...).
+- `actor.resume(budget:)` makes one `ta_actor_resume` call and returns its
+  status (`"paused"`, `"stable"`, `"done"`).
+- `actor.destroy` destroys the actor and runs the system.
+
+Further observations:
+
+- `actor.resident?` tells whether the actor still exists.
+- `actor.history(:id)` lists the states a history pseudo-state recorded.
+- `actor.sends` lists the pending delayed sends.
+- `actor.observe` returns everything a trace records about the actor.
+- `next_deadline` is the earliest pending deadline, or nil when none is pending.
+- `definition(chart)` is a chart's registered definition ID.
+
 Charts cover SCXML's structure and executable content: `state`, `parallel`,
 `final`, `history`, `initial` (with actions), `transition`, `on_entry`,
 `on_exit`, `data` (at the root or in a state), `invoke` (with a `finalize`
