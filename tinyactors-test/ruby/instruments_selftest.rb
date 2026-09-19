@@ -171,7 +171,7 @@ router_group = TinyactorsTest.scenarios 'router' do
     actor = spawn :harness_ping
     actor.deliver 'go'
     assert_active actor, :failed
-    assert actor.data('.error').start_with?('error.communication'), "got #{actor.data('.error')}"
+    assert_equal 'error.communication', actor.data('.error')
   end
 end
 
@@ -195,15 +195,15 @@ invoker_group = TinyactorsTest.scenarios 'invoker' do
     actor = spawn :harness_service
     report_invoke service.started.first, :unavailable
     assert_active actor, :failed
-    assert actor.data('.error').start_with?('error.communication'), "got #{actor.data('.error')}"
+    assert_equal 'error.communication.invoke.svc.unavailable', actor.data('.error')
   end
 
-  scenario 'an injected start failure reaches the chart as an error event' do
+  scenario 'an injected start failure reaches the chart as error.execution' do
     service = scripted_invoker(SERVICE)
     service.arm_fault(:start, message: 'no capacity')
     actor = spawn :harness_service
     assert_active actor, :failed
-    assert actor.data('.error').start_with?('error.'), "got #{actor.data('.error')}"
+    assert_equal 'error.execution', actor.data('.error')
     assert_equal [true], service.started.map { |entry| entry[:injected] }
   end
 end
@@ -226,7 +226,7 @@ io_group = TinyactorsTest.scenarios 'io' do
     actor = spawn :harness_io
     actor.deliver 'go'
     assert_active actor, :failed
-    assert actor.data('.error').start_with?('error.communication'), "got #{actor.data('.error')}"
+    assert_equal 'error.communication', actor.data('.error')
   end
 end
 
