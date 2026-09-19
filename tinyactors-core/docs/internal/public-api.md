@@ -53,6 +53,12 @@ registrations are borrowed and must remain valid through system destruction.
 The standard SCXML processor atom cannot be replaced with
 `ta_system_register_io`.
 
+`ta_system_set_log_sink` installs where `<log>` goes (ADR 0045). The record
+carries the logging actor, the label and the evaluated value, borrowed for
+the call; writing it returns nothing, because SCXML 4.7 forbids `<log>`
+from affecting interpretation. Without a sink a `<log>` still evaluates its
+expression, so its errors do not depend on whether a host is listening.
+
 ## Event names
 
 `ta_system_intern_atom` interns one reusable name segment. Its resulting atom belongs to that system and must not be used with another system.

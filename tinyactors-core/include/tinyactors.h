@@ -554,6 +554,42 @@ typedef struct { void *self; const ta_io_vtable *v; } ta_io TA_ADAPTER;
 
 
 /* ========================================================================
+ * Logging
+ *
+ * SCXML <log> (SCXML 4.7): a label and an optional value, with an
+ * implementation-dependent rendering. The record carries the evaluated
+ * value rather than text, as ta_send does, so the host renders it with the
+ * data model it already owns (ADR 0045).
+ */
+
+
+typedef struct {
+    /* The actor that ran the <log>. */
+    ta_actor_ref source;
+    /* <log label>; empty when the author wrote none. */
+    ta_str label;
+    /* False when the <log> has no expr, or when evaluating it failed. */
+    bool has_value;
+    /* Borrowed for the call; retain it to keep it (ADR 0006). */
+    ta_value value;
+} ta_log_record;
+
+/*
+ * Writing a log has no result: SCXML 4.7 requires <log> to have no effect
+ * on document interpretation, so a sink cannot fail the action.
+ */
+typedef struct ta_log_sink_vtable {
+    void (*write)(void *self, TA_IN const ta_log_record *record);
+} ta_log_sink_vtable TA_VTABLE;
+
+typedef struct {
+    void *self;
+    /* Null uninstalls the sink; <log> then only evaluates its expression. */
+    TA_OPTIONAL const ta_log_sink_vtable *v;
+} ta_log_sink TA_ADAPTER;
+
+
+/* ========================================================================
  * Invokers
  */
 
@@ -1612,6 +1648,8 @@ TA_API ta_result ta_system_find_definition(const ta_system *system,
 TA_API ta_result ta_system_retire_definition(ta_system *system, ta_definition_id definition);
 /* The atom returned by ta_system_scxml_io_type() is reserved. */
 TA_API ta_result ta_system_register_io(ta_system *system, ta_atom type, ta_io io);
+/* Installs where <log> goes; without one, a <log> only evaluates its expr. */
+TA_API ta_result ta_system_set_log_sink(ta_system *system, ta_log_sink sink);
 TA_API ta_result ta_system_register_invoker(ta_system *system,
                                             ta_atom type,
                                             ta_invoker invoker);

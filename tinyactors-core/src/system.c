@@ -97,6 +97,14 @@ ta_result ta_system_set_actor_directory(ta_system *system, ta_actor_directory di
     return TA_OK;
 }
 
+ta_result ta_system_set_log_sink(ta_system *system, ta_log_sink sink) {
+    if (system == NULL || (sink.v != NULL && sink.v->write == NULL)) {
+        return TA_ERR_INVALID;
+    }
+    system->log_sink = sink;
+    return TA_OK;
+}
+
 ta_result ta_system_set_external_event_router(ta_system *system, ta_external_event_router router) {
     if (system == NULL || (router.v != NULL && router.v->submit == NULL)) {
         return TA_ERR_INVALID;

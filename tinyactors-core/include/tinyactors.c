@@ -998,6 +998,7 @@ struct ta_system {
 
     ta_actor_directory directory;
     ta_external_event_router external_events;
+    ta_log_sink log_sink;
     ta_atom scxml_io_type;
     /* The short form "scxml" also selects the built-in processor. */
     ta_atom scxml_io_alias;
@@ -5608,6 +5609,14 @@ TA_API ta_result ta_system_set_actor_directory(ta_system *system, ta_actor_direc
     return TA_OK;
 }
 
+TA_API ta_result ta_system_set_log_sink(ta_system *system, ta_log_sink sink) {
+    if (system == NULL || (sink.v != NULL && sink.v->write == NULL)) {
+        return TA_ERR_INVALID;
+    }
+    system->log_sink = sink;
+    return TA_OK;
+}
+
 TA_API ta_result ta_system_set_external_event_router(ta_system *system, ta_external_event_router router) {
     if (system == NULL || (router.v != NULL && router.v->submit == NULL)) {
         return TA_ERR_INVALID;
@@ -6843,18 +6852,30 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
                                                  .fault = &fault,
                                              });
             break;
-        case TA_ACTION_LOG:
-            /* There is no logging sink yet; the expression still runs for its errors. */
+        case TA_ACTION_LOG: {
+            /*
+             * SCXML 4.7: evaluating the expression can fail, which is an
+             * ordinary execution error; writing the record cannot, so a
+             * <log> never changes interpretation.
+             */
+            ta_log_record record = { .source = it->actor->record.self };
+            if (action->as.log.has_label) {
+                record.label = ta_atom_text(&it->system->atoms, action->as.log.label);
+            }
             if (action->as.log.has_expr) {
-                ta_value value = {0};
                 status = ta_eval_source(it, &(ta_value_params){
                                                 .source = { .kind = TA_VALUE_SOURCE_EXPR, .as.expr = action->as.log.expr },
-                                                .out = &value,
+                                                .out = &record.value,
                                                 .fault = &fault,
                                             });
-                ta_value_release(&value);
+                record.has_value = status == TA_OP_OK;
             }
+            if (status == TA_OP_OK && it->system->log_sink.v != NULL) {
+                it->system->log_sink.v->write(it->system->log_sink.self, &record);
+            }
+            ta_value_release(&record.value);
             break;
+        }
         case TA_ACTION_FOREACH:
             return ta_exec_foreach(it, &action->as.foreach);
         case TA_ACTION_IF: {

@@ -48,5 +48,6 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0042](0042-definitions-are-inspectable-and-export-to-their-spec.md) | [Definitions are inspectable and export to their spec](0042-definitions-are-inspectable-and-export-to-their-spec.md) |
 | [0043](0043-definitions-retire-and-definition-ids-are-generational.md) | [Definitions retire; definition IDs are generational](0043-definitions-retire-and-definition-ids-are-generational.md) |
 | [0044](0044-core-owns-the-scxml-target-uri-grammar.md) | [Core owns the SCXML target URI grammar](0044-core-owns-the-scxml-target-uri-grammar.md) |
+| [0045](0045-log-records-go-to-a-host-sink.md) | [`<log>` records go to a host sink](0045-log-records-go-to-a-host-sink.md) |
 
 See [the API gaps](../internal/api-gaps.md) for places where the current header skeleton does not yet fully expose these decisions.

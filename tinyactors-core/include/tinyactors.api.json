@@ -6889,6 +6889,171 @@
         }
       }
     },
+    "ta_log_record": {
+      "kind": "struct",
+      "doc": "======================================================================== Logging\n\nSCXML <log > (SCXML 4.7): a label and an optional value, with an implementation-dependent rendering. The record carries the evaluated value rather than text, as ta_send does, so the host renders it with the data model it already owns (ADR 0045).",
+      "fields": [
+        {
+          "name": "source",
+          "type": {
+            "type": "ta_actor_ref"
+          },
+          "doc": "The actor that ran the <log >."
+        },
+        {
+          "name": "label",
+          "type": {
+            "type": "ta_str"
+          },
+          "doc": "<log label>; empty when the author wrote none."
+        },
+        {
+          "name": "has_value",
+          "type": {
+            "builtin": "bool"
+          },
+          "doc": "False when the <log > has no expr, or when evaluating it failed."
+        },
+        {
+          "name": "value",
+          "type": {
+            "type": "ta_value"
+          },
+          "doc": "Borrowed for the call; retain it to keep it (ADR 0006)."
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "source": 0,
+            "label": 40,
+            "has_value": 56,
+            "value": 64
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "source": 0,
+            "label": 24,
+            "has_value": 32,
+            "value": 36
+          }
+        }
+      }
+    },
+    "ta_log_sink": {
+      "kind": "struct",
+      "semantic": "adapter",
+      "fields": [
+        {
+          "name": "self",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            }
+          },
+          "shape": "raw",
+          "direction": "in"
+        },
+        {
+          "name": "v",
+          "type": {
+            "pointer": {
+              "type": "ta_log_sink_vtable",
+              "const": true
+            }
+          },
+          "shape": "vtable",
+          "direction": "in",
+          "optional": true,
+          "doc": "Null uninstalls the sink; <log > then only evaluates its expression."
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "self": 0,
+            "v": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "self": 0,
+            "v": 4
+          }
+        }
+      }
+    },
+    "ta_log_sink_vtable": {
+      "kind": "struct",
+      "semantic": "vtable",
+      "doc": "Writing a log has no result: SCXML 4.7 requires <log > to have no effect on document interpretation, so a sink cannot fail the action.",
+      "fields": [
+        {
+          "name": "write",
+          "type": {
+            "pointer": {
+              "function": {
+                "returns": {
+                  "type": {
+                    "builtin": "void"
+                  }
+                },
+                "params": [
+                  {
+                    "name": "self",
+                    "type": {
+                      "pointer": {
+                        "builtin": "void"
+                      }
+                    },
+                    "shape": "raw",
+                    "direction": "in"
+                  },
+                  {
+                    "name": "record",
+                    "type": {
+                      "pointer": {
+                        "type": "ta_log_record",
+                        "const": true
+                      }
+                    },
+                    "shape": "single",
+                    "direction": "in"
+                  }
+                ]
+              }
+            }
+          },
+          "shape": "callback",
+          "direction": "in"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 8,
+          "align": 8,
+          "offsets": {
+            "write": 0
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4,
+          "offsets": {
+            "write": 0
+          }
+        }
+      }
+    },
     "ta_named_value": {
       "kind": "struct",
       "doc": "One <param >: `name` is the author's parameter name, borrowed for the call.",
@@ -11894,6 +12059,37 @@
           "name": "io",
           "type": {
             "type": "ta_io"
+          }
+        }
+      ]
+    },
+    {
+      "name": "ta_system_set_log_sink",
+      "doc": "Installs where <log > goes; without one, a <log > only evaluates its expr.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "sink",
+          "type": {
+            "type": "ta_log_sink"
           }
         }
       ]

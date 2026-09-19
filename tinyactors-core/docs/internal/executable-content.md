@@ -9,7 +9,8 @@ The IR must be capable of representing the SCXML execution semantics for:
 - foreach/iteration as supported by the selected data model;
 - assignment;
 - script/data-model execution;
-- log or equivalent host-visible diagnostic action;
+- log or equivalent host-visible diagnostic action, written to the host's
+  log sink when one is installed (ADR 0045);
 - send and delayed send;
 - cancel;
 - invocation-related finalize content;

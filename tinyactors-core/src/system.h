@@ -42,6 +42,7 @@ struct ta_system {
 
     ta_actor_directory directory;
     ta_external_event_router external_events;
+    ta_log_sink log_sink;
     ta_atom scxml_io_type;
     /* The short form "scxml" also selects the built-in processor. */
     ta_atom scxml_io_alias;

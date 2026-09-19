@@ -960,18 +960,30 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
                                                  .fault = &fault,
                                              });
             break;
-        case TA_ACTION_LOG:
-            /* There is no logging sink yet; the expression still runs for its errors. */
+        case TA_ACTION_LOG: {
+            /*
+             * SCXML 4.7: evaluating the expression can fail, which is an
+             * ordinary execution error; writing the record cannot, so a
+             * <log> never changes interpretation.
+             */
+            ta_log_record record = { .source = it->actor->record.self };
+            if (action->as.log.has_label) {
+                record.label = ta_atom_text(&it->system->atoms, action->as.log.label);
+            }
             if (action->as.log.has_expr) {
-                ta_value value = {0};
                 status = ta_eval_source(it, &(ta_value_params){
                                                 .source = { .kind = TA_VALUE_SOURCE_EXPR, .as.expr = action->as.log.expr },
-                                                .out = &value,
+                                                .out = &record.value,
                                                 .fault = &fault,
                                             });
-                ta_value_release(&value);
+                record.has_value = status == TA_OP_OK;
             }
+            if (status == TA_OP_OK && it->system->log_sink.v != NULL) {
+                it->system->log_sink.v->write(it->system->log_sink.self, &record);
+            }
+            ta_value_release(&record.value);
             break;
+        }
         case TA_ACTION_FOREACH:
             return ta_exec_foreach(it, &action->as.foreach);
         case TA_ACTION_IF: {
