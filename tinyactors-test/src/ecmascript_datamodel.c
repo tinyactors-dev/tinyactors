@@ -5,7 +5,6 @@
 #include <string.h>
 
 #include "quickjs.h"
-#include "scxml_target.h"
 
 /* ========================================================================
  * State, values, and memory
@@ -435,9 +434,6 @@ typedef struct {
     JSValue session_id;
     JSValue session_name;
     JSValue ioprocessors;
-    /* Keeps the text of the last decoded SCXML target alive: a named
-     * address borrows its family and name from it. */
-    char target_text[TAT_TARGET_TEXT_MAX + 1];
 } tat_js_instance;
 
 enum {
@@ -1175,37 +1171,6 @@ static ta_op_status tat_js_execute_script(void *self, const ta_datamodel_execute
     return TA_OP_OK;
 }
 
-static ta_op_status tat_js_decode_target(void *self, const ta_datamodel_decode_scxml_target_params *params) {
-    (void)self;
-    tat_js_instance *instance = params->instance;
-    tat_js_begin(instance, params->host);
-    JSContext *context = instance->context;
-    JSValue value = tat_js_import(instance, params->value);
-    if (JS_IsException(value)) {
-        return tat_js_error(instance, params->fault, "ecmascript: target is not an ECMAScript value");
-    }
-    if (!JS_IsString(value)) {
-        JS_FreeValue(context, value);
-        tat_js_fault(params->fault, TA_ERR_INVALID, "ecmascript: SCXML target must be a string");
-        return TA_OP_ERROR;
-    }
-    size_t length = 0;
-    const char *text = JS_ToCStringLen(context, &length, value);
-    JS_FreeValue(context, value);
-    if (text == NULL) {
-        return tat_js_error(instance, params->fault, "ecmascript: could not read target");
-    }
-    const char *error = NULL;
-    ta_scxml_target decoded = {0};
-    bool ok = tat_scxml_target_decode(text, length, instance->target_text, &decoded, &error);
-    JS_FreeCString(context, text);
-    if (!ok) {
-        tat_js_fault(params->fault, TA_ERR_INVALID, error);
-        return TA_OP_ERROR;
-    }
-    *params->out = decoded;
-    return TA_OP_OK;
-}
 
 /* An object keyed by parameter name; a later duplicate replaces an earlier one. Values stay live. */
 static ta_op_status tat_js_make_params(void *self, const ta_datamodel_make_params_params *params) {
@@ -1477,7 +1442,6 @@ static const ta_datamodel_vtable TAT_JS_DATAMODEL_VTABLE = {
     .read_location = tat_js_read_location,
     .assign = tat_js_assign,
     .execute_script = tat_js_execute_script,
-    .decode_scxml_target = tat_js_decode_target,
     .make_params = tat_js_make_params,
     .inspect = tat_js_inspect,
     .value_text = tat_js_value_text,

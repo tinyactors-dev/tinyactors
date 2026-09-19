@@ -252,22 +252,6 @@ static bool text_is(session *s, const ta_value *value, const char *expected) {
     return text.len == strlen(expected) && memcmp(text.ptr, expected, text.len) == 0;
 }
 
-static ta_op_status target(session *s, ta_str text, ta_scxml_target *out) {
-    ta_fault fault = {0};
-    ta_value value;
-    ta_op_status status = s->model.v->text_value(s->model.self, &(ta_datamodel_text_value_params){
-                                                                   .shared = s->shared, .instance = s->instance,
-                                                                   .text = text, .out = &value, .fault = &fault});
-    if (status != TA_OP_OK) {
-        return status;
-    }
-    status = s->model.v->decode_scxml_target(s->model.self, &(ta_datamodel_decode_scxml_target_params){
-                                                                .shared = s->shared, .instance = s->instance,
-                                                                .value = &value, .out = out, .fault = &fault});
-    ta_value_release(&value);
-    return status;
-}
-
 static ta_op_status import_content(session *s, const char *content, ta_value *out) {
     ta_fault fault = {0};
     return s->model.v->import_content(s->model.self, &(ta_datamodel_import_content_params){
@@ -405,26 +389,6 @@ static void test_operations(tat_js_datamodel_context *context) {
     for (size_t index = 0; index < 3; index += 1) {
         ta_value_release(&values[index]);
     }
-
-    /* SCXML targets. */
-    ta_scxml_target decoded;
-    check(target(&s, S("#_parent"), &decoded) == TA_OP_OK && decoded.kind == TA_SCXML_TARGET_PARENT, "#_parent");
-    check(target(&s, S("#_scxml_42"), &decoded) == TA_OP_OK && decoded.kind == TA_SCXML_TARGET_ACTOR &&
-              decoded.as.actor.as.runtime == 42,
-          "#_scxml_42");
-    check(target(&s, S("#_7"), &decoded) == TA_OP_OK && decoded.kind == TA_SCXML_TARGET_INVOKE &&
-              decoded.as.invoke == 7,
-          "#_7");
-    check(target(&s, S("#_actor_door/front"), &decoded) == TA_OP_OK &&
-              decoded.kind == TA_SCXML_TARGET_ACTOR && decoded.as.actor.kind == TA_ACTOR_REF_NAMED &&
-              decoded.as.actor.as.named.family.name.len == 4 &&
-              memcmp(decoded.as.actor.as.named.family.name.ptr, "door", 4) == 0 &&
-              decoded.as.actor.as.named.name.len == 5 &&
-              memcmp(decoded.as.actor.as.named.name.ptr, "front", 5) == 0,
-          "#_actor_door/front");
-    check(target(&s, S("bogus"), &decoded) == TA_OP_ERROR, "an unknown target faults");
-    check(target(&s, S("#_actor_door"), &decoded) == TA_OP_ERROR, "a named target needs a name");
-    check(target(&s, S("#_actor_/front"), &decoded) == TA_OP_ERROR, "a named target needs a family");
 
     /* Foreign values fault. */
     ta_value foreign = {.self = &foreign, .v = &FOREIGN};

@@ -197,15 +197,13 @@ Must produce the equivalent of SCXML's shallow copy. The returned `ta_value` is 
 
 Receives an ordered list and must not assume names are unique.
 
-## `decode_scxml_target`
+## SCXML targets are not a data-model operation
 
-Converts the data model's opaque evaluated target value into a structured
-`ta_scxml_target`. The adapter recognizes the standard lexical targets in its
-own string/value representation and may also expose native named actor values.
-It does not route the event. Core applies standard target semantics and sends
-external deliveries through the host router. Named-address text is borrowed
-from the evaluated input value and must remain valid until that value is
-released.
+There is no `decode_scxml_target`. The target URI grammar is syntax, and this
+vtable is semantic (ADR 0031), so core owns it (ADR 0044). Core reads an
+evaluated target with `value_text` and parses the text itself, which keeps one
+grammar for a literal `target`, for `targetexpr`, and for the URIs core writes
+for a chart to read.
 
 ## `inspect`
 

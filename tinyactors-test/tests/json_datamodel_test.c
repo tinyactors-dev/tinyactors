@@ -14,29 +14,6 @@ static void require(bool condition, const char *message) {
     }
 }
 
-static ta_op_status decode_target(tat_json_datamodel_context *context,
-                                  ta_datamodel model,
-                                  void *shared,
-                                  void *instance,
-                                  const char *json,
-                                  ta_scxml_target *out) {
-    ta_value value = {0};
-    require(tat_json_value_parse(context, json, &value) == TA_OK, "target parse");
-    ta_fault fault = {0};
-    *out = (ta_scxml_target){0};
-    ta_op_status status = model.v->decode_scxml_target(
-        model.self,
-        &(ta_datamodel_decode_scxml_target_params){
-            .shared = shared,
-            .instance = instance,
-            .value = &value,
-            .out = out,
-            .fault = &fault,
-        });
-    ta_value_release(&value);
-    return status;
-}
-
 int main(void) {
     ta_expression expressions[] = {
         {.kind = TA_EXPRESSION_SOURCE, .as.source = {.ptr = ".ready", .len = 6}},
@@ -142,53 +119,6 @@ int main(void) {
                 strcmp(text, "{\"ready\":true,\"count\":6}") == 0,
             "mutated root");
     ta_value_release(&inspected);
-
-    ta_scxml_target target = {0};
-    require(decode_target(&context, model, shared, instance, "\"#_internal\"", &target) ==
-                    TA_OP_OK &&
-                target.kind == TA_SCXML_TARGET_INTERNAL,
-            "internal target");
-    require(decode_target(&context, model, shared, instance, "\"#_self\"", &target) ==
-                    TA_OP_OK &&
-                target.kind == TA_SCXML_TARGET_SELF,
-            "self target");
-    require(decode_target(&context, model, shared, instance, "\"#_parent\"", &target) ==
-                    TA_OP_OK &&
-                target.kind == TA_SCXML_TARGET_PARENT,
-            "parent target");
-    require(decode_target(&context, model, shared, instance, "\"#_scxml_42\"", &target) ==
-                    TA_OP_OK &&
-                target.kind == TA_SCXML_TARGET_ACTOR &&
-                target.as.actor.kind == TA_ACTOR_REF_RUNTIME &&
-                target.as.actor.as.runtime == 42,
-            "actor target");
-    require(decode_target(&context, model, shared, instance, "\"#_17\"", &target) ==
-                    TA_OP_OK &&
-                target.kind == TA_SCXML_TARGET_INVOKE && target.as.invoke == 17,
-            "invoke target");
-
-    /* A named actor's logical address; its text belongs to the instance, so
-     * it stays readable after the target value is gone. */
-    require(decode_target(&context, model, shared, instance, "\"#_actor_door/front\"", &target) ==
-                    TA_OP_OK &&
-                target.kind == TA_SCXML_TARGET_ACTOR &&
-                target.as.actor.kind == TA_ACTOR_REF_NAMED &&
-                target.as.actor.as.named.family.name.len == 4 &&
-                memcmp(target.as.actor.as.named.family.name.ptr, "door", 4) == 0 &&
-                target.as.actor.as.named.name.len == 5 &&
-                memcmp(target.as.actor.as.named.name.ptr, "front", 5) == 0,
-            "named actor target");
-
-    const char *invalid_targets[] = {
-        "\"#_scxml_\"", "\"#_scxml_4x\"", "\"#_\"", "\"#_abc\"", "\"elsewhere\"", "7",
-        "\"#_actor_\"", "\"#_actor_door\"", "\"#_actor_/front\"", "\"#_actor_door/\"",
-        "\"#_actor_a/b/c\"",
-    };
-    for (size_t index = 0; index < ARRAY_COUNT(invalid_targets); index += 1) {
-        require(decode_target(&context, model, shared, instance, invalid_targets[index],
-                              &target) == TA_OP_ERROR,
-                invalid_targets[index]);
-    }
 
     ta_value first = {0};
     ta_value second = {0};

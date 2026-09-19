@@ -2588,103 +2588,6 @@
         }
       }
     },
-    "ta_datamodel_decode_scxml_target_params": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "shared",
-          "type": {
-            "pointer": {
-              "builtin": "void"
-            }
-          },
-          "shape": "raw",
-          "direction": "in"
-        },
-        {
-          "name": "instance",
-          "type": {
-            "pointer": {
-              "builtin": "void"
-            }
-          },
-          "shape": "raw",
-          "direction": "in"
-        },
-        {
-          "name": "value",
-          "type": {
-            "pointer": {
-              "type": "ta_value",
-              "const": true
-            }
-          },
-          "shape": "single",
-          "direction": "in"
-        },
-        {
-          "name": "host",
-          "type": {
-            "pointer": {
-              "type": "ta_dm_host",
-              "const": true
-            }
-          },
-          "shape": "view",
-          "direction": "in"
-        },
-        {
-          "name": "out",
-          "type": {
-            "pointer": {
-              "type": "ta_scxml_target"
-            }
-          },
-          "shape": "single",
-          "direction": "out",
-          "valid_on": "success",
-          "lifetime": "input"
-        },
-        {
-          "name": "fault",
-          "type": {
-            "pointer": {
-              "type": "ta_fault"
-            }
-          },
-          "shape": "single",
-          "direction": "out",
-          "valid_on": "TA_OP_ERROR",
-          "lifetime": "call"
-        }
-      ],
-      "layout": {
-        "x86_64-unknown-linux-gnu": {
-          "size": 48,
-          "align": 8,
-          "offsets": {
-            "shared": 0,
-            "instance": 8,
-            "value": 16,
-            "host": 24,
-            "out": 32,
-            "fault": 40
-          }
-        },
-        "wasm32-unknown-unknown": {
-          "size": 24,
-          "align": 4,
-          "offsets": {
-            "shared": 0,
-            "instance": 4,
-            "value": 8,
-            "host": 12,
-            "out": 16,
-            "fault": 20
-          }
-        }
-      }
-    },
     "ta_datamodel_eval_condition_params": {
       "kind": "struct",
       "fields": [
@@ -3845,7 +3748,7 @@
     },
     "ta_datamodel_value_text_params": {
       "kind": "struct",
-      "doc": "Conversions the SCXML `*expr` attribute forms need. value_text reads an evaluated value as text (eventexpr, typeexpr, sendidexpr, srcexpr, delayexpr); `*out` is borrowed from `value` and valid while it is retained. text_value makes a value from text, e.g. a generated send or invoke ID stored through idlocation.",
+      "doc": "Conversions the SCXML `*expr` attribute forms need. value_text reads an evaluated value as text (eventexpr, typeexpr, sendidexpr, srcexpr, delayexpr, targetexpr); `*out` is borrowed from `value` and valid while it is retained, so core can parse a target URI out of it and keep the named address a send needs (ADR 0044). text_value makes a value from text, e.g. a generated send or invoke ID stored through idlocation.",
       "fields": [
         {
           "name": "shared",
@@ -4481,46 +4384,6 @@
           "direction": "in"
         },
         {
-          "name": "decode_scxml_target",
-          "type": {
-            "pointer": {
-              "function": {
-                "returns": {
-                  "type": {
-                    "type": "ta_op_status"
-                  },
-                  "success": "TA_OP_OK"
-                },
-                "params": [
-                  {
-                    "name": "self",
-                    "type": {
-                      "pointer": {
-                        "builtin": "void"
-                      }
-                    },
-                    "shape": "raw",
-                    "direction": "in"
-                  },
-                  {
-                    "name": "params",
-                    "type": {
-                      "pointer": {
-                        "type": "ta_datamodel_decode_scxml_target_params",
-                        "const": true
-                      }
-                    },
-                    "shape": "single",
-                    "direction": "in"
-                  }
-                ]
-              }
-            }
-          },
-          "shape": "callback",
-          "direction": "in"
-        },
-        {
           "name": "make_params",
           "type": {
             "pointer": {
@@ -4803,7 +4666,7 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 184,
+          "size": 176,
           "align": 8,
           "offsets": {
             "name": 0,
@@ -4820,18 +4683,17 @@
             "read_location": 96,
             "assign": 104,
             "execute_script": 112,
-            "decode_scxml_target": 120,
-            "make_params": 128,
-            "inspect": 136,
-            "value_text": 144,
-            "text_value": 152,
-            "import_content": 160,
-            "foreach_snapshot": 168,
-            "foreach_bind": 176
+            "make_params": 120,
+            "inspect": 128,
+            "value_text": 136,
+            "text_value": 144,
+            "import_content": 152,
+            "foreach_snapshot": 160,
+            "foreach_bind": 168
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 92,
+          "size": 88,
           "align": 4,
           "offsets": {
             "name": 0,
@@ -4848,14 +4710,13 @@
             "read_location": 48,
             "assign": 52,
             "execute_script": 56,
-            "decode_scxml_target": 60,
-            "make_params": 64,
-            "inspect": 68,
-            "value_text": 72,
-            "text_value": 76,
-            "import_content": 80,
-            "foreach_snapshot": 84,
-            "foreach_bind": 88
+            "make_params": 60,
+            "inspect": 64,
+            "value_text": 68,
+            "text_value": 72,
+            "import_content": 76,
+            "foreach_snapshot": 80,
+            "foreach_bind": 84
           }
         }
       }
@@ -8895,6 +8756,72 @@
         }
       }
     },
+    "ta_scxml_target_format_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "target",
+          "type": {
+            "type": "ta_scxml_target"
+          }
+        },
+        {
+          "name": "buffer",
+          "type": {
+            "pointer": {
+              "builtin": "char"
+            }
+          },
+          "capacity": "capacity",
+          "needed": "needed",
+          "shape": "buffer",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success"
+        },
+        {
+          "name": "capacity",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "capacity_of": "buffer"
+        },
+        {
+          "name": "needed",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "always",
+          "needed_of": "buffer"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 72,
+          "align": 8,
+          "offsets": {
+            "target": 0,
+            "buffer": 48,
+            "capacity": 56,
+            "needed": 64
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "target": 0,
+            "buffer": 32,
+            "capacity": 36,
+            "needed": 40
+          }
+        }
+      }
+    },
     "ta_scxml_target_kind": {
       "kind": "enum",
       "constants": [
@@ -10182,6 +10109,86 @@
       "value_model": {
         "kind": "any"
       }
+    },
+    {
+      "name": "ta_scxml_target_parse",
+      "doc": "The SCXML Event I/O Processor target URIs (ADR 0044). Core owns the grammar, so a literal `target`, an evaluated `targetexpr`, and the text core writes for `$_event.origin` agree by construction:\n\n#_internal                 the sender's own internal queue #_parent                   the invoking parent session #_scxml_ <session >          a session by its runtime ID #_actor_ <family >/ <name >    a named actor by its logical address #_ <invokeid >               an invocation of the sending session\n\nA session URI whose text is not a session ID names no session: it parses as runtime actor 0, which never exists, so a send to it is inaccessible (SCXML C.1) rather than invalid. TA_ERR_INVALID means an invalid target, which a send reports as error.execution.\n\nA named address borrows its family and name from `text`, which must stay valid for as long as the target is used.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "text",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_target"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "input"
+        }
+      ]
+    },
+    {
+      "name": "ta_scxml_target_format",
+      "doc": "The URI of a target. TA_ERR_NOT_FOUND when its kind has no URI.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_target_format_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
     },
     {
       "name": "ta_dm_host_in_state",

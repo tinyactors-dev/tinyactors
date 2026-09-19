@@ -1,7 +1,7 @@
 # `datamodel.ecmascript`: design
 
 Status: implemented (phase 2). This document describes the code in
-`src/ecmascript_datamodel.c`, `src/value_codec.c`, `src/scxml_target.c`, and
+`src/ecmascript_datamodel.c`, `src/value_codec.c`, and
 the `invoker.scxml` adapter in `src/adapters.c`. Section 9 lists where the
 implementation differs from the earlier review rounds.
 
@@ -318,7 +318,7 @@ No exception stays pending after a call returns.
 | `read_location` | The same as `eval_value`. |
 | `assign` | Compiles `(function (__tat_assign_value) { "use strict"; <location> = __tat_assign_value; })` as global code in the instance context and calls it with the imported value. Any LHS works (452: `foo.bar`). An undeclared root throws a `ReferenceError` because of strict mode (question 5). Writing to a system variable calls the throwing setter. A bad LHS is a `SyntaxError`. Each of these is a fault. |
 | `execute_script` | `JS_Eval(src, JS_EVAL_TYPE_GLOBAL)`. Function declarations and `var`s persist as globals (452 document `<script>`, 456 `Var1+=1`). |
-| `decode_scxml_target` | Imports the value, which must be a string, and decodes it with `tat_scxml_target_decode` from `src/scxml_target.{c,h}`, which both data models share. The governing rule separates values, not the target URI grammar, which is plain text. The decoder copies the text into the instance, because a named address (`#_actor_<family>/<name>`) borrows its family and name from it. |
+| ~~`decode_scxml_target`~~ | Gone. Core owns the SCXML target URI grammar and parses it from the text `value_text` returns (ADR 0044), so this adapter no longer decodes targets at all. |
 | `make_params` | A new object in the instance context. Each `(name, value)` is imported and defined (C, W, E). A later duplicate replaces an earlier one. **Values stay live objects** and are not snapshotted at send time (decided, question 6). Test 560 reads `_event.data.aParam`. |
 | `inspect` | Returns an **ECMAScript** LIVE value: a plain object (ordinary `Object.prototype`) with one member per name in `declared`, in declaration order. `declared` comes from `declare`, `set_named`, the binding, and `foreach_bind`. Each member holds the current value (question 2). The codec turns it into JSON for RPC (2.3). Unset members encode as `null`, and `._irp_outcome` is read from that JSON. `inspect` fails only on OOM. |
 | `value_text` | Only this model's wrappers are accepted; anything else is a fault. A string gives its UTF-8 text. Any other value gives `ToString(v)`. A WIRE value is imported first. The C string is cached in the wrapper. A symbol is a fault. |
@@ -548,7 +548,7 @@ event on the parent's internal queue**:
 |---|---|
 | `src/ecmascript_datamodel.{c,h}` | The adapter; wire JSON in and out (`tat_js_value_to_json`, `tat_js_value_from_json`). |
 | `src/value_codec.{c,h}` | The codec registry, the actor → model lookup, and receiver selection per request. |
-| `src/scxml_target.{c,h}` | The SCXML target-URI grammar, shared by both data models. |
+| ~~`src/scxml_target.{c,h}`~~ | Deleted: the grammar is core's (`tinyactors-core/src/scxml_uri.{c,h}`, ADR 0044). |
 | `tests/ecmascript_datamodel_test.c` | The unit test (`build/ecmascript_datamodel_test`, run by `mise run test`). |
 | `ruby/scenarios/ecmascript_datamodel.rb` | The boundary scenarios. |
 

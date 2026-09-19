@@ -24,6 +24,9 @@ This archive captures the C API shape discussed for a tiny in-process actor syst
 - The mandatory SCXML Event I/O Processor is built in; embedders provide its
   external-event scheduling/routing callback rather than reimplementing SCXML
   target and envelope semantics.
+- The SCXML target URI grammar is core's, parsed and written in one place, so a
+  literal `target`, an evaluated `targetexpr`, and the URIs core gives a chart
+  all agree.
 
 ## Layout
 

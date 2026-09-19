@@ -28,10 +28,12 @@ interned when a system is created, returned by `ta_system_scxml_io_type()`, and
 reserved from replacement through generic I/O registration. Omitted `type` and
 `typeexpr` select it.
 
-The selected data-model adapter decodes an evaluated opaque target value into a
-structured `ta_scxml_target`. This is a semantic adapter operation, consistent
-with ADR 0031. Core then implements the target and envelope rules. An omitted
-target is external self and requires no decoding; `#_internal` is appended
+Core owns the target URI grammar and parses both spellings of a target
+(ADR 0044, which replaces this paragraph's original rule that the data-model
+adapter decoded an evaluated target). A literal target is the definition's
+text; an evaluated one is the text of its value, which the adapter supplies
+through `value_text`. Core then implements the target and envelope rules. An
+omitted target is external self and needs no text; `#_internal` is appended
 directly to the actor's internal queue.
 
 Every external SCXML-session event becomes a normalized

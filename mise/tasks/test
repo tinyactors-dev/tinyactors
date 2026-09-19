@@ -11,7 +11,7 @@ pid = Process.spawn('mise', 'run', 'build', chdir: root.to_s)
 _pid, status = Process.wait2(pid)
 exit(status.exitstatus || 1) unless status.success?
 
-%w[inspection_test export_test retirement_test].each do |test|
+%w[inspection_test export_test retirement_test scxml_uri_test].each do |test|
   pid = Process.spawn("tinyactors-core/build/#{test}", chdir: root.to_s)
   _pid, status = Process.wait2(pid)
   exit(status.exitstatus || 1) unless status.success?

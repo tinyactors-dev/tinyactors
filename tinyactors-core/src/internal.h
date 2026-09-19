@@ -7,6 +7,7 @@
 #include "value.h"
 #include "event.h"
 #include "fault.h"
+#include "scxml_uri.h"
 #include "routing.h"
 #include "clock.h"
 #include "configuration.h"

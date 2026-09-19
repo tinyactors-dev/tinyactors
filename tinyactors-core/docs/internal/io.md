@@ -18,13 +18,15 @@ default external self-send, `#_internal`, `#_parent`, `#_<invokeid>`, and
 `#_scxml_<sessionid>` semantics. Inaccessible targets produce
 `error.communication` in the sender.
 
-An evaluated target remains a host `ta_value`, so the selected data-model
-adapter decodes it with `decode_scxml_target()` into a `ta_scxml_target`.
-Profiles interpret their own string/value representation; core then owns the
-meaning of the structured target. An omitted target is external self and does
-not require decoding. Any named-address text returned by the adapter is borrowed
-from the evaluated target value and remains valid while that value is retained;
-core deep-copies it when a delivery must outlive the call.
+Core owns the target URI grammar in both directions (ADR 0044):
+`ta_scxml_target_parse()` reads a target and `ta_scxml_target_format()` writes
+one, so the URI a chart reads from `$_event.origin` parses back to its sender.
+A literal target is the definition's text; an evaluated target stays a host
+`ta_value`, and core asks the data model for its text with `value_text()` and
+parses that. An omitted target is external self and needs no text. A named
+address borrows its family and name from that text, which stays valid while the
+value is retained, and the send record retains it; a router that keeps a
+delivery past the call deep-copies it with `ta_external_delivery_clone()`.
 
 `#_internal` is appended directly to the sender's internal queue. Every external
 SCXML-session delivery becomes a normalized `ta_external_delivery` and is

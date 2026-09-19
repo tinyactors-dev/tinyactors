@@ -6,7 +6,6 @@
 #include <stdlib.h>
 
 #include "jq.h"
-#include "scxml_target.h"
 
 typedef struct {
     tat_json_datamodel_context *context;
@@ -27,9 +26,6 @@ typedef struct {
     tat_json_datamodel_context *context;
     const tat_json_shared *shared;
     jv root;
-    /* Keeps the text of the last decoded SCXML target alive: a named
-     * address borrows its family and name from it. */
-    char target_text[TAT_TARGET_TEXT_MAX + 1];
 } tat_json_instance;
 
 static void tat_json_retain(void *self);
@@ -586,29 +582,6 @@ static ta_op_status tat_json_execute_script(
     return status;
 }
 
-static ta_op_status tat_json_decode_target(
-    void *self, const ta_datamodel_decode_scxml_target_params *params) {
-    (void)self;
-    tat_json_instance *instance = params->instance;
-    jv value = jv_invalid();
-    if (!tat_json_unwrap(params->value, &value) || jv_get_kind(value) != JV_KIND_STRING) {
-        jv_free(value);
-        tat_json_fault(params->fault, TA_ERR_INVALID, "SCXML target must be a JSON string");
-        return TA_OP_ERROR;
-    }
-    /* Parsed out of the instance's buffer: a named address borrows its text. */
-    const char *error = NULL;
-    ta_scxml_target decoded = {0};
-    bool ok = tat_scxml_target_decode(jv_string_value(value), (size_t)jv_string_length_bytes(jv_copy(value)),
-                                      instance->target_text, &decoded, &error);
-    jv_free(value);
-    if (!ok) {
-        tat_json_fault(params->fault, TA_ERR_INVALID, error);
-        return TA_OP_ERROR;
-    }
-    *params->out = decoded;
-    return TA_OP_OK;
-}
 
 /*
  * Named parameters become an object keyed by parameter name, so `<param
@@ -823,7 +796,6 @@ static const ta_datamodel_vtable TAT_JSON_DATAMODEL_VTABLE = {
     .read_location = tat_json_read_location,
     .assign = tat_json_assign,
     .execute_script = tat_json_execute_script,
-    .decode_scxml_target = tat_json_decode_target,
     .make_params = tat_json_make_params,
     .inspect = tat_json_inspect,
     .value_text = tat_json_value_text,

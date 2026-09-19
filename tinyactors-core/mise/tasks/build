@@ -3,7 +3,7 @@
 # mise skips this task when every object below is newer than every source.
 # Use `mise run --force build` after changing CC/CFLAGS.
 #MISE sources=["mise/tasks/build", "mise/tasks/amalgamate", "mise/tasks/api", "mise/lib/**/*", "src/**/*", "include/tinyactors.h", "tests/*.c"]
-#MISE outputs=["tests/smoke.o", "tests/public_smoke.o", "tests/tinyactors.o", "build/inspection_test", "build/export_test", "build/retirement_test"]
+#MISE outputs=["tests/smoke.o", "tests/public_smoke.o", "tests/tinyactors.o", "build/inspection_test", "build/export_test", "build/retirement_test", "build/scxml_uri_test"]
 # vim:ft=ruby
 
 require 'fileutils'
@@ -90,6 +90,15 @@ run(
   'tests/export_test.c',
   '-o',
   'build/export_test'
+)
+run(
+  *compiler,
+  *flags,
+  '-Iinclude',
+  'tests/scxml_uri_test.c',
+  'include/tinyactors.c',
+  '-o',
+  'build/scxml_uri_test'
 )
 
 Dir['src/*.c'].sort.each do |source|

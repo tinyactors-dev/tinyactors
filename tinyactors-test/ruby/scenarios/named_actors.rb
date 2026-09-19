@@ -29,15 +29,13 @@ module NamedActorScenarios
 end
 
 TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
-  # A send to a logical address needs no named sender: the host's directory
-  # resolves it. Core refuses such a target today (ta_send_target() rejects
-  # a named address because copying its text is unimplemented), so the chart
-  # gets error.execution and the router never sees the delivery.
+  # A send to a logical address needs no named sender. Core parses the
+  # address and hands the destination to the external-event router, because
+  # the host owns location and residency; here that is the router instrument
+  # resolving it through the directory.
   #
   # Catches: a named target that is dropped, delivered to the wrong actor,
-  # or resolved by core instead of by the host's routing.
-  expect_failure 'core does not resolve named send targets yet',
-                 message: /the named target is resolved and delivered/
+  # or resolved by core instead of handed to the router.
   scenario 'a send to a logical address is routed through the host directory' do
     directory = memory_directory
     router = recording_router(directory: true)
@@ -52,8 +50,11 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
     assert_equal [{ event: 'hello', from: "#_scxml_#{sender.handle}" }], receiver.data('.inbox'),
                  'the named target is resolved and delivered'
     assert_equal [{ event: 'ack', from: "#_scxml_#{receiver.handle}" }], sender.data('.inbox')
+    # The hello goes to the address, which the router resolves; the reply
+    # goes to the sender's session URI, which needs no resolution.
     assert_equal [[{ kind: 'named', family: { name: 'messenger' }, name: 'm2' },
-                   { kind: 'resident', actor: receiver.handle }, 'accepted']],
+                   { kind: 'resident', actor: receiver.handle }, 'accepted'],
+                  [{ kind: 'runtime', runtime: sender.handle }, nil, 'accepted']],
                  router.entries('submit').map { |entry| entry.values_at(:destination, :resolved, :status) }
   end
 

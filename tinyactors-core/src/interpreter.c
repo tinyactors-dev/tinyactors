@@ -380,63 +380,6 @@ ta_send_id ta_send_id_from_text(const ta_system *system, ta_str text) {
     return ta_atom_find(&system->atoms, text, &atom) == TA_OK ? ta_literal_send_id(atom) : 0;
 }
 
-/* Parses the standard lexical SCXML Event I/O Processor targets. */
-static bool ta_parse_scxml_target(ta_system *system, ta_bytes text, ta_scxml_target *out) {
-    ta_str target = { .ptr = (const char *)text.ptr, .len = text.len };
-    static const struct { const char *text; ta_scxml_target_kind kind; } fixed[] = {
-        { "#_internal", TA_SCXML_TARGET_INTERNAL },
-        { "#_parent", TA_SCXML_TARGET_PARENT },
-    };
-    for (uint32_t index = 0; index < TA_ARRAY_COUNT(fixed); index += 1) {
-        ta_str candidate = { .ptr = fixed[index].text, .len = 0 };
-        while (candidate.ptr[candidate.len] != '\0') {
-            candidate.len += 1;
-        }
-        if (ta_str_equal(target, candidate)) {
-            *out = (ta_scxml_target){ .kind = fixed[index].kind };
-            return true;
-        }
-    }
-    uint32_t prefix = 0;
-    ta_scxml_target_kind kind = TA_SCXML_TARGET_INVOKE;
-    if (target.len > 8 && ta_str_equal((ta_str){ .ptr = target.ptr, .len = 8 }, (ta_str){ .ptr = "#_scxml_", .len = 8 })) {
-        prefix = 8;
-        kind = TA_SCXML_TARGET_ACTOR;
-    } else if (target.len > 2 && target.ptr[0] == '#' && target.ptr[1] == '_') {
-        /* Invoke: `#_<invokeid>` names an invocation by its SCXML ID text. */
-        *out = (ta_scxml_target){ .kind = TA_SCXML_TARGET_INVOKE };
-        return ta_invoke_id_from_text(system, (ta_str){ .ptr = target.ptr + 2, .len = target.len - 2 },
-                                      &out->as.invoke) == TA_OK;
-    } else {
-        return false;
-    }
-    uint64_t number = 0;
-    for (uint32_t index = prefix; index < target.len; index += 1) {
-        char digit = target.ptr[index];
-        if (digit < '0' || digit > '9' || number > (UINT64_MAX - 9u) / 10u) {
-            if (kind == TA_SCXML_TARGET_ACTOR) {
-                /*
-                 * A well-formed session URI naming no session is inaccessible,
-                 * not invalid (SCXML C.1): runtime actor ID 0 never exists, so
-                 * delivery fails with error.communication.
-                 */
-                *out = (ta_scxml_target){ .kind = kind,
-                                          .as.actor = { .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = 0 } };
-                return true;
-            }
-            return false;
-        }
-        number = number * 10u + (uint64_t)(digit - '0');
-    }
-    *out = (ta_scxml_target){ .kind = kind };
-    if (kind == TA_SCXML_TARGET_ACTOR) {
-        out->as.actor = (ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = number };
-    } else {
-        out->as.invoke = number;
-    }
-    return true;
-}
-
 typedef struct {
     ta_actor_ref origin;
     ta_invoke_id invoke_id;
@@ -595,42 +538,51 @@ static ta_op_status ta_send_payload(ta_interpreter *it, const ta_send_action *se
 static ta_op_status ta_send_target(ta_interpreter *it, const ta_send_action *send, ta_send_state *state,
                                    ta_fault *fault) {
     if (!state->scxml_io) {
-        /* A custom processor receives the target as a value; literal text is imported. */
-        return ta_eval_source(it, &(ta_value_params){ .source = send->target, .out = &state->target, .fault = fault });
+        /* A custom I/O processor receives the evaluated value, not a URI. */
+        return send->target.kind == TA_VALUE_SOURCE_NONE
+                   ? TA_OP_OK
+                   : ta_eval_source(it, &(ta_value_params){ .source = send->target, .out = &state->target,
+                                                            .fault = fault });
     }
     if (send->target.kind == TA_VALUE_SOURCE_NONE) {
         state->scxml = (ta_scxml_target){ .kind = TA_SCXML_TARGET_SELF };
         return TA_OP_OK;
     }
+    /*
+     * One grammar for both spellings (ADR 0044): a literal target is the
+     * definition's text, and an evaluated one is the text of its value. A
+     * named address borrows that text, which the send record keeps alive by
+     * retaining the value.
+     */
+    ta_str text;
     if (send->target.kind == TA_VALUE_SOURCE_CONTENT) {
-        return ta_parse_scxml_target(it->system, it->definition->contents[send->target.as.content].bytes,
-                                     &state->scxml)
-                   ? TA_OP_OK
-                   : TA_OP_ERROR;
+        ta_bytes content = it->definition->contents[send->target.as.content].bytes;
+        text = (ta_str){ .ptr = (const char *)content.ptr, .len = content.len };
+    } else {
+        const ta_definition *definition = it->definition;
+        const ta_datamodel_vtable *v = definition->datamodel.v;
+        ta_op_status status = ta_eval_source(it, &(ta_value_params){ .source = send->target, .out = &state->target,
+                                                                     .fault = fault });
+        if (status != TA_OP_OK) {
+            return status;
+        }
+        if (v->value_text == NULL) {
+            return TA_OP_ERROR;
+        }
+        status = v->value_text(definition->datamodel.self,
+                               &(ta_datamodel_value_text_params){
+                                   .shared = definition->datamodel_shared,
+                                   .instance = it->actor->datamodel_instance,
+                                   .value = &state->target,
+                                   .host = &it->actor->host,
+                                   .out = &text,
+                                   .fault = fault,
+                               });
+        if (status != TA_OP_OK) {
+            return status;
+        }
     }
-    const ta_definition *definition = it->definition;
-    const ta_datamodel_vtable *v = definition->datamodel.v;
-    ta_op_status status = ta_eval_source(it, &(ta_value_params){ .source = send->target, .out = &state->target,
-                                                                 .fault = fault });
-    if (status == TA_OP_OK) {
-        status = v->decode_scxml_target == NULL
-                     ? TA_OP_ERROR
-                     : v->decode_scxml_target(definition->datamodel.self,
-                                              &(ta_datamodel_decode_scxml_target_params){
-                                                  .shared = definition->datamodel_shared,
-                                                  .instance = it->actor->datamodel_instance,
-                                                  .value = &state->target,
-                                                  .host = &it->actor->host,
-                                                  .out = &state->scxml,
-                                                  .fault = fault,
-                                              });
-    }
-    if (status == TA_OP_OK && state->scxml.kind == TA_SCXML_TARGET_ACTOR &&
-        state->scxml.as.actor.kind == TA_ACTOR_REF_NAMED) {
-        /* Named-address text is borrowed from the target value; copying it is not implemented yet. */
-        status = TA_OP_ERROR;
-    }
-    return status;
+    return ta_scxml_target_parse(it->system, text, &state->scxml) == TA_OK ? TA_OP_OK : TA_OP_ERROR;
 }
 
 /* Resolves an SCXML target to an external destination; false means inaccessible. */

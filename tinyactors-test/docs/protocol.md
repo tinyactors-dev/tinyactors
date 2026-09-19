@@ -403,24 +403,28 @@ Charts compile from the JSON form of `ta_scxml_spec` (see
 
 #### Send targets
 
-Both data models decode a `<send target>` with the same grammar
-(`src/scxml_target.{c,h}`):
+Core owns the target grammar and parses every `<send target>` itself
+(ADR 0044), whether the author wrote `target=` or `targetexpr=`. The data
+models only give core the text of an evaluated value:
 
 | Target | Destination |
 |---|---|
 | (absent) | the actor itself, as an external event |
 | `#_internal` | the actor's own internal queue |
-| `#_self` | the actor itself, as an external event |
 | `#_parent` | the invoking parent |
 | `#_scxml_<actor id>` | that runtime actor |
 | `#_actor_<family>/<name>` | the named actor at that logical address |
 | `#_<invoke id>` | that invoked child |
 
-A named address borrows its family and name from the target text, so each
-data model keeps the decoded text in its instance until the next decode.
-Core resolves the other targets itself and hands a named destination to the
-external-event router, which is where a host's own routing resolves it
-(`router.recording` does so through its `directory` instrument).
+A session URI naming no session, such as `#_scxml_4x`, is inaccessible
+rather than invalid, so the send reports `error.communication` (SCXML C.1).
+Any other unknown target is invalid: `error.execution` (SCXML 6.2). There is
+no `#_self`; an absent target already sends to the actor itself, and
+`#_self` reads as the invocation named "self".
+
+Core hands a named destination to the external-event router, because the
+host owns location and residency: `router.recording` resolves it through
+its `directory` instrument.
 
 The spec carries only what an SCXML author writes, never runtime identifiers.
 Send IDs are the author's strings. I/O processors are names, and an absent

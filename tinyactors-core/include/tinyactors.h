@@ -396,14 +396,40 @@ typedef struct {
         TA_WHEN(TA_SCXML_TARGET_ACTOR) ta_actor_ref actor;
     } as;
 } ta_scxml_target TA_TAGGED(kind, as) TA_ZERO_IS_ABSENT;
+
+/*
+ * The SCXML Event I/O Processor target URIs (ADR 0044). Core owns the
+ * grammar, so a literal `target`, an evaluated `targetexpr`, and the text
+ * core writes for `$_event.origin` agree by construction:
+ *
+ *   #_internal                 the sender's own internal queue
+ *   #_parent                   the invoking parent session
+ *   #_scxml_<session>          a session by its runtime ID
+ *   #_actor_<family>/<name>    a named actor by its logical address
+ *   #_<invokeid>               an invocation of the sending session
+ *
+ * A session URI whose text is not a session ID names no session: it parses
+ * as runtime actor 0, which never exists, so a send to it is inaccessible
+ * (SCXML C.1) rather than invalid. TA_ERR_INVALID means an invalid target,
+ * which a send reports as error.execution.
+ *
+ * A named address borrows its family and name from `text`, which must stay
+ * valid for as long as the target is used.
+ */
+TA_API ta_result ta_scxml_target_parse(ta_system *system,
+                                       ta_str text,
+                                       TA_OUT TA_LIFETIME(input) ta_scxml_target *out);
+
 typedef struct {
-    void *shared;
-    void *instance;
-    TA_IN const ta_value *value;
-    const ta_dm_host *host;
-    TA_OUT TA_LIFETIME(input) ta_scxml_target *out;
-    TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault;
-} ta_datamodel_decode_scxml_target_params;
+    ta_scxml_target target;
+    TA_BUFFER(capacity, needed) TA_OPTIONAL char *buffer;
+    uint32_t capacity;
+    TA_OUT TA_ALWAYS uint32_t *needed;
+} ta_scxml_target_format_params;
+
+/* The URI of a target. TA_ERR_NOT_FOUND when its kind has no URI. */
+TA_API ta_result ta_scxml_target_format(const ta_system *system,
+                                        TA_IN const ta_scxml_target_format_params *params);
 /* One <param>: `name` is the author's parameter name, borrowed for the call. */
 typedef struct { ta_str name; ta_value value; } ta_named_value;
 typedef struct {
@@ -419,7 +445,9 @@ typedef struct { void *shared; void *instance; const ta_dm_host *host; TA_OUT TA
 /*
  * Conversions the SCXML `*expr` attribute forms need. value_text reads an
  * evaluated value as text (eventexpr, typeexpr, sendidexpr, srcexpr,
- * delayexpr); `*out` is borrowed from `value` and valid while it is retained.
+ * delayexpr, targetexpr); `*out` is borrowed from `value` and valid while it
+ * is retained, so core can parse a target URI out of it and keep the named
+ * address a send needs (ADR 0044).
  * text_value makes a value from text, e.g. a generated send or invoke ID
  * stored through idlocation.
  */
@@ -454,8 +482,6 @@ typedef struct ta_datamodel_vtable {
     ta_op_status (*read_location)(void *self, TA_IN const ta_datamodel_read_location_params *params);
     ta_op_status (*assign)(void *self, TA_IN const ta_datamodel_assign_params *params);
     ta_op_status (*execute_script)(void *self, TA_IN const ta_datamodel_execute_script_params *params);
-    ta_op_status (*decode_scxml_target)(void *self,
-                                        TA_IN const ta_datamodel_decode_scxml_target_params *params);
     ta_op_status (*make_params)(void *self, TA_IN const ta_datamodel_make_params_params *params);
     ta_result (*inspect)(void *self, TA_IN const ta_datamodel_inspect_params *params);
     ta_op_status (*value_text)(void *self, TA_IN const ta_datamodel_value_text_params *params);

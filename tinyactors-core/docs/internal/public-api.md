@@ -32,6 +32,12 @@ changes the actor.
 
 `ta_system_set_actor_directory` installs host-provided operations for named actor claim, resolution, replacement, and removal. The named-address protocol belongs to Tinyactors; the host owns the backing directory implementation, physical routing, synchronization, and any durable storage.
 
+`ta_scxml_target_parse` and `ta_scxml_target_format` are the SCXML target URI
+grammar (ADR 0044). Core parses both spellings of a `<send>` target with the
+first and writes every URI it gives a chart, such as `$_event.origin`, with the
+second, so the two are inverses. A named address borrows its text from the
+input and stays valid while that input does.
+
 `ta_system_set_external_event_router` installs the host scheduling boundary for
 normalized external SCXML-session events. Core provides the mandatory SCXML
 Event I/O Processor; it resolves standard targets and submits external delivery

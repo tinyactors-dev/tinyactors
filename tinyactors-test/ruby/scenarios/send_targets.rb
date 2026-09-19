@@ -31,7 +31,7 @@ module SendTargets
   # back: the event itself, or the error the send produced. `spelling` is
   # :literal for `target=`, :expr for `targetexpr=`, and :none for a chart
   # that only receives.
-  def self.chart(target, spelling, datamodel = 'jq')
+  def self.chart(target, spelling, datamodel = 'jq', delay: nil)
     jq = datamodel != 'ecmascript'
     outcome = jq ? '.outcome' : 'outcome'
     hit = jq ? '"hit"' : "'hit'"
@@ -42,8 +42,8 @@ module SendTargets
       state :ready do
         on_entry do
           case spelling
-          when :literal then send_event 'hit', to: target
-          when :expr then send_event 'hit', to_expr: quoted
+          when :literal then send_event 'hit', to: target, delay: delay
+          when :expr then send_event 'hit', to_expr: quoted, delay: delay
           end
         end
         transition on: 'hit', type: :internal do
@@ -68,13 +68,12 @@ module SendTargets
 end
 
 TinyactorsTest.scenarios 'send targets' do
-  # Catches: a target grammar that lives in more than one place. Core parses
-  # a literal target itself; a data model parses an evaluated one. Today
-  # `#_self` is a delivery to one of them and an unreachable invocation to
-  # the other, and a malformed session URI is error.execution to one and
-  # error.communication to the other, which is what test496 requires.
-  expect_failure 'the data model has its own target grammar, which disagrees with core',
-                 message: /every target means the same written either way/
+  # Catches: a target grammar that lives in more than one place again. Core
+  # parses both spellings (ADR 0044): a literal target is the definition's
+  # text, an evaluated one is the text of its value. Before that, `#_self`
+  # was a delivery one way and an unreachable invocation the other, and a
+  # malformed session URI was error.execution one way and error.communication
+  # the other, which is what test496 requires.
   scenario 'a target means the same as a literal and as an expression' do
     assert_equal SendTargets.expected, SendTargets.outcomes(self, 'jq'),
                  'every target means the same written either way'
@@ -82,15 +81,31 @@ TinyactorsTest.scenarios 'send targets' do
 
   # Catches: the same drift in a second data model, which would make the
   # meaning of a target depend on the chart's `datamodel`.
-  expect_failure 'the ECMAScript data model has the same separate grammar',
-                 message: /every target means the same written either way/
   scenario 'a target means the same in the ECMAScript data model' do
     assert_equal SendTargets.expected, SendTargets.outcomes(self, 'ecmascript'),
                  'every target means the same written either way'
   end
 
-  # Catches: a session URI that stops resolving to its session. This row
-  # agrees today, and keeps both spellings honest while the grammar moves.
+  # Catches: a named address that borrows its text from the evaluated target
+  # value and then dangles. A delayed send holds its destination in the timer
+  # heap long after the send ran, so core keeps the address valid by
+  # retaining the value it parsed (ADR 0044).
+  scenario 'a delayed send to a logical address still resolves when it falls due' do
+    directory = memory_directory
+    router = recording_router(directory: true)
+    receiver = spawn(SendTargets.chart(nil, :none))
+    directory.put(family: 'probe', name: 'late', kind: :resident, actor: receiver.handle)
+    spawn(SendTargets.chart('#_actor_probe/late', :expr, 'jq', delay: '10s'))
+
+    assert_equal nil, receiver.data('.outcome'), 'nothing arrives before the delay'
+    advance_time 10_000
+    assert_equal 'hit', receiver.data('.outcome'), 'the address outlived the value it was parsed from'
+    assert_equal [[{ kind: 'named', family: { name: 'probe' }, name: 'late' },
+                   { kind: 'resident', actor: receiver.handle }, 'accepted']],
+                 router.entries('submit').map { |entry| entry.values_at(:destination, :resolved, :status) }
+  end
+
+  # Catches: a session URI that stops resolving to its session.
   scenario 'a session URI delivers to that session, written either way' do
     %i[literal expr].each do |spelling|
       receiver = spawn(SendTargets.chart(nil, :none))

@@ -1,6 +1,7 @@
 #include "datamodel.h"
 #include "actor.h"
 #include "interpreter.h"
+#include "scxml_uri.h"
 
 bool ta_dm_host_in_state(const ta_dm_host *host, ta_state_id state) {
     if (host == NULL || host->impl == NULL || host->impl->actor == NULL) {
@@ -28,10 +29,14 @@ static bool ta_dm_host_valid(const ta_dm_host *host) {
     return host != NULL && host->impl != NULL && host->impl->actor != NULL && host->impl->system != NULL;
 }
 
-/* "#_scxml_<session>", the SCXML Event I/O Processor address of a runtime actor. */
-static void ta_dm_write_session_uri(ta_text_writer *writer, ta_actor_id actor) {
-    ta_text_put(writer, ta_str_from_cstr("#_scxml_"));
-    ta_text_put_u64(writer, actor);
+/*
+ * The URI of an actor reference, written with the grammar core parses
+ * (ADR 0044): a session URI for a runtime actor, a logical address for a
+ * named one. A chart can send to whatever it reads here.
+ */
+static bool ta_dm_write_actor_uri(const ta_system *system, ta_text_writer *writer, ta_actor_ref actor) {
+    ta_scxml_target target = { .kind = TA_SCXML_TARGET_ACTOR, .as.actor = actor };
+    return ta_scxml_uri_write(system, writer, &target);
 }
 
 /* Writes one event field; false when the field has no value. */
@@ -68,14 +73,12 @@ static bool ta_dm_write_event_field(const ta_dm_host *host, ta_dm_text_kind kind
             ta_send_id_write(system, event->send_id, writer);
             return true;
         case TA_DM_TEXT_EVENT_ORIGIN:
-            if (event->origin.kind == TA_ORIGIN_ACTOR && event->origin.as.actor.kind == TA_ACTOR_REF_RUNTIME) {
-                ta_dm_write_session_uri(writer, event->origin.as.actor.as.runtime);
-                return true;
+            if (event->origin.kind == TA_ORIGIN_ACTOR) {
+                return ta_dm_write_actor_uri(system, writer, event->origin.as.actor);
             }
             if (event->origin.kind == TA_ORIGIN_INVOKE) {
-                ta_text_put(writer, ta_str_from_cstr("#_"));
-                ta_text_put(writer, ta_invoke_id_text(system, event->origin.as.invoke));
-                return true;
+                ta_scxml_target target = { .kind = TA_SCXML_TARGET_INVOKE, .as.invoke = event->origin.as.invoke };
+                return ta_scxml_uri_write(system, writer, &target);
             }
             return false;
         case TA_DM_TEXT_EVENT_ORIGINTYPE:
@@ -115,7 +118,7 @@ ta_result ta_dm_host_text(const ta_dm_host *host, const ta_dm_text_params *param
             }
             break;
         case TA_DM_TEXT_SCXML_IO_LOCATION:
-            ta_dm_write_session_uri(&writer, actor->record.id);
+            present = ta_dm_write_actor_uri(system, &writer, actor->record.self);
             break;
         case TA_DM_TEXT_SCXML_IO_TYPE:
             ta_text_put(&writer, ta_atom_text(&system->atoms, system->scxml_io_type));
