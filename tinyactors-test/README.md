@@ -46,7 +46,13 @@ counts.
 See `docs/protocol.md` for method naming, result shapes, value encoding,
 handles, and adapters.
 
-The host includes a jq-backed JSON data model. Source expressions and scripts
+The host includes two data models, chosen per chart by its `datamodel`:
+`datamodel.jq` (below) and `datamodel.ecmascript`, backed by quickjs-ng (see
+`docs/ecmascript-datamodel.md`). The two are fully separate; values cross
+between them, and over the protocol, only as JSON through each model's value
+codec.
+
+In the jq data model, source expressions and scripts
 are jq filters over the actor's JSON root. A condition uses jq truthiness, an
 assignment evaluates its expression as a jq location, and a script must produce
 exactly one replacement root. Values use Tinyactors' normal retain, release,

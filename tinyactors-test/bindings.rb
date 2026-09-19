@@ -28,7 +28,7 @@ module TinyactorsBindings
   OVERRIDE_TYPES = {
     'ta_str' => 'JSON string copied into the request arena',
     'ta_bytes' => 'JSON string copied into the request arena',
-    'ta_value' => 'jq-backed JSON values from the test data model',
+    'ta_value' => 'JSON encoded and decoded by the value codec of the data model (jq or ECMAScript)',
     'ta_expression' => 'source text only; host expressions cannot cross the protocol'
   }.freeze
 
