@@ -1,0 +1,125 @@
+# Invariants
+
+Rules an implementation must never violate. Each one is checkable — by a
+test, by a compiler flag, or by reading a diff — and each names the mechanism
+it protects. A change that breaks one of these is wrong even when the suite is
+green.
+
+## Environment
+
+1. **No C library.** Only `stdint.h`, `stddef.h`, `stdbool.h` appear in
+   `src/`. Checkable: grep the sources for `#include <`; the build links with
+   `-ffreestanding` and `-nostdlib` for the library objects.
+2. **No I/O and no clock.** No call can open, read, write, map, or time
+   anything. There is no callback through which an embedder could supply one.
+   Checkable: the only external symbols an object file references are the
+   embedder's two allocator function pointers.
+3. **No global mutable state.** Every `static` in `src/` is `const`. Two
+   parsers in two threads share nothing and need no locking. Checkable: a
+   test asserts the library's `.data`/`.bss` contribution is zero.
+4. **No recursion.** No function in `src/` reaches itself, directly or
+   through a cycle, and no C-stack depth depends on document nesting.
+   Checkable: a call-graph pass over the sources; a test parses a 100 000-deep
+   document within a limit raised for the purpose.
+5. **No VLAs, no `alloca`.** Every buffer is either a fixed-size struct member
+   or an arena allocation. Checkable: `-Wvla -Werror`.
+6. **Reads stay in bounds.** A scanner may read beyond the last input byte
+   only within the staging window's 64 bytes of padding, or within a caller
+   chunk that set `TXML_INPUT_PADDED`. Checkable: ASan and valgrind runs of
+   the suite.
+
+## Memory
+
+7. **Nothing relocates.** No memory that was handed to a caller, or that any
+   stored offset or index refers to, ever changes address. The allocator
+   vtable has no `realloc` and none is simulated. The one structure rebuilt on
+   growth is the parser's name hash index, which holds name IDs only and is
+   never referenced from outside the parser.
+8. **A string never spans a pool page.** Every `txml_str` a document returns
+   is one contiguous run. An oversized run reserves consecutive directory
+   slots that point into a single arena block.
+9. **Every `txml_str` from a document points into that document's arena.**
+   Never into the staging window, never into a caller chunk, never into
+   static storage — except `txml_document_error.message`, which is documented
+   as static.
+10. **Page directories are allocated once.** Their capacity comes from
+    `limits.max_document_bytes` at initialization, so they never grow and
+    therefore never move.
+11. **Parser and document memory are separate.** Transient parser state lives
+    in the parser's own arena; `txml_doc_arena(doc)->used` counts document
+    bytes only, and `max_document_bytes` bounds exactly that.
+12. **`TXML_STEP_NEED_MEMORY` leaves the parser unchanged.** A step that
+    cannot allocate has appended no partial node, no partial attribute and no
+    partial pool run; calling it again after the allocator recovers produces
+    the same result as if the failure had not happened.
+13. **A borrowed arena is never destroyed by the library.**
+    `txml_doc_destroy` releases to the mark the document took at
+    initialization and returns; the caller owns the arena before and after.
+
+## Document structure
+
+14. **Node indices are dense and monotonic.** Nodes occupy `[0,
+    txml_doc_node_count(doc))` with no holes, and are appended in document
+    order. Node 0 is always `TXML_NODE_DOCUMENT`.
+15. **`parent < index` for every node except node 0**, whose `parent` is
+    `TXML_INDEX_NONE`. A parent is always appended before its children.
+16. **`end > index` for every closed node**, and `end == TXML_INDEX_NONE`
+    exactly while `TXML_NODE_OPEN` is set.
+17. **`end` is written exactly once per node** — at append time for leaves and
+    empty-element tags, at the end tag otherwise — and no other node field is
+    ever rewritten after the node is appended.
+18. **A subtree is a range.** For every node, its descendants are exactly the
+    nodes at `[index + 1, end)`, and `end(child) <= end(parent)` for every
+    child.
+19. **`depth` agrees with `parent`.** `depth(node) == depth(parent) + 1` for
+    every node except node 0, whose depth is 0.
+20. **An element's attributes are contiguous** at `[first_attribute,
+    first_attribute + attribute_count)` and in document order. Non-element
+    nodes have `attribute_count == 0`.
+21. **Name IDs are dense from 0** in interning order, and a name ID is
+    meaningful only for the document that issued it. `txml_doc_find_name` and
+    `txml_node_name_id` agree: resolving a node's expanded name returns that
+    node's name ID.
+22. **Namespace 0 is the empty URI** and exists in every document, used or
+    not. An unprefixed attribute's name always has namespace 0.
+23. **The positions column exists only with `TXML_KEEP_POSITIONS`**, and when
+    it exists it has exactly one entry per node. Without the flag,
+    `txml_node_position` returns `TXML_ERR_NOT_FOUND` for every node.
+24. **A rewind does not renumber names.** `txml_doc_rewind` truncates nodes,
+    attributes and positions, but name and namespace IDs a consumer already
+    holds stay valid.
+
+## Behaviour
+
+25. **No cursor call allocates.** `txml_first_child`, `txml_next_sibling`,
+    `txml_parent`, `txml_next_element`, `txml_find_next`, every reader and
+    every attribute call perform zero allocations and cannot fail for lack of
+    memory. Checkable: run the suite with an allocator that aborts, after the
+    parse completes.
+26. **Cursor calls are total.** They never report misuse; an out-of-range or
+    foreign cursor reads as absent (`TXML_NONE`, empty strings) rather than
+    crashing.
+27. **Document errors are data.** A malformed document produces
+    `TXML_STEP_FAILED` plus a `txml_document_error` with a position; it never
+    produces `TXML_ERR_INVALID`. Conversely, `TXML_ERR_INVALID` is never
+    caused by document content.
+28. **Terminal states are sticky.** After `TXML_STEP_DONE` or
+    `TXML_STEP_FAILED`, further steps repeat the same outcome and append
+    nothing.
+29. **A failed parse leaves a readable document.** Nodes appended before the
+    failure remain valid and navigable.
+30. **Every document-controlled cost is bounded by `txml_limits`.** Nesting,
+    attribute count, name length, distinct names, total bytes, and entity
+    expansion each have a limit, and reaching one produces `TXML_DOC_LIMIT`
+    with the matching `txml_limit_kind` — never an allocation loop.
+31. **The writer emits only what it can read back.** Every byte it produces
+    re-parses to the events it was given, modulo the fidelity table in
+    `conformance.md`. Invalid caller input is refused with `TXML_ERR_INVALID`
+    before any byte of it is written.
+32. **`TXML_NEED_SPACE` is resumable without copying.** The writer holds a
+    pointer and offset into the caller's string; only `txml_writer_output`,
+    `txml_writer_drain` and `txml_writer_destroy` are legal until the
+    operation completes.
+33. **Chunk-split independence.** The document produced by a parse does not
+    depend on how the input was divided into `txml_parse_feed` calls. This is
+    the property the fuzzer targets.

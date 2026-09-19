@@ -1,0 +1,53 @@
+#!/usr/bin/env ruby
+#MISE description="Run the txml test suite"
+# vim:ft=ruby
+
+# Runs every test binary that exists. While src/ has no modules only
+# header_test can be linked, so the suite reports the rest as pending and
+# exits 0. Once an implementation exists every binary runs and any failure
+# fails the task.
+
+require 'pathname'
+
+ROOT = Pathname.new(__dir__).join('../..').expand_path
+
+# name => arguments
+BINARIES = {
+  'header_test' => [],
+  'arena_test' => [],
+  'writer_test' => [],
+  'spec_test' => ['tests/spec']
+}.freeze
+
+def run(*command)
+  puts command.join(' ')
+  pid = Process.spawn(*command, chdir: ROOT.to_s)
+  _pid, status = Process.wait2(pid)
+
+  return if status.success?
+
+  exit(status.exitstatus || 1)
+end
+
+run('mise', 'run', 'build')
+
+ran = []
+pending = []
+
+BINARIES.each do |name, arguments|
+  binary = ROOT.join('build', name)
+
+  unless binary.file?
+    pending << name
+    next
+  end
+
+  run(binary.to_s, *arguments)
+  ran << name
+end
+
+puts "txml: #{ran.length} test binaries passed (#{ran.join(' ')})" unless ran.empty?
+
+unless pending.empty?
+  puts "txml: #{pending.length} pending, waiting for an implementation in src/: #{pending.join(' ')}"
+end

@@ -1,0 +1,80 @@
+#!/usr/bin/env ruby
+#MISE description="Build the txml header checks and test suite"
+# mise skips this task when every output below is newer than every source.
+# Use `mise run --force build` after changing CC/CFLAGS.
+#MISE sources=["mise/tasks/build", "include/txml.h", "src/**/*.c", "src/**/*.h", "tests/*.c"]
+#MISE outputs=["build/header_test", "build/objects/header_test.o", "build/objects/api_surface.o", "build/objects/arena_test.o", "build/objects/writer_test.o", "build/objects/spec_test.o"]
+# vim:ft=ruby
+
+# There is no implementation yet: src/ is empty. Everything that can be built
+# against the header alone is built and run today; the binaries that need the
+# library are linked the moment src/*.c appears. Nothing here weakens a test to
+# make the suite pass — unlinkable tests are reported as pending.
+
+require 'fileutils'
+require 'pathname'
+require 'shellwords'
+
+ROOT = Pathname.new(__dir__).join('../..').expand_path
+BUILD = ROOT.join('build')
+OBJECTS = BUILD.join('objects')
+
+COMPILER = Shellwords.split(ENV.fetch('CC', 'cc'))
+FLAGS = Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic'))
+
+# Links today: it calls no library function.
+FREESTANDING_TESTS = %w[header_test].freeze
+# Compiled, never linked: it only takes the address of every TXML_API function.
+COMPILE_ONLY_TESTS = %w[api_surface].freeze
+# Need the implementation to link.
+LINKED_TESTS = %w[arena_test writer_test spec_test].freeze
+
+def run(*command)
+  puts command.shelljoin
+  pid = Process.spawn(*command, chdir: ROOT.to_s)
+  _pid, status = Process.wait2(pid)
+
+  return if status.success?
+
+  exit(status.exitstatus || 1)
+end
+
+def compile(source, object)
+  run(*COMPILER, *FLAGS, '-Iinclude', '-c', source, '-o', object.to_s)
+end
+
+FileUtils.mkdir_p(OBJECTS)
+
+sources = Dir[ROOT.join('src/*.c').to_s].sort.map { |path| Pathname.new(path).relative_path_from(ROOT).to_s }
+objects = sources.map { |source| OBJECTS.join("#{File.basename(source, '.c')}.o") }
+sources.zip(objects).each { |source, object| compile(source, object) }
+
+# Compiling every test proves the header is usable and that each test matches
+# the declared API, even while nothing can be linked.
+(FREESTANDING_TESTS + COMPILE_ONLY_TESTS + LINKED_TESTS).each do |test|
+  compile("tests/#{test}.c", OBJECTS.join("#{test}.o"))
+end
+
+FREESTANDING_TESTS.each do |test|
+  run(*COMPILER, *FLAGS, OBJECTS.join("#{test}.o").to_s, '-o', BUILD.join(test).to_s)
+end
+
+linked = FREESTANDING_TESTS.length
+total = FREESTANDING_TESTS.length + LINKED_TESTS.length
+
+if sources.empty?
+  # Remove binaries left behind by an earlier implementation so `mise run test`
+  # never runs a stale one.
+  LINKED_TESTS.each { |test| FileUtils.rm_f(BUILD.join(test)) }
+else
+  LINKED_TESTS.each do |test|
+    run(*COMPILER, *FLAGS, OBJECTS.join("#{test}.o").to_s, *objects.map(&:to_s), '-o', BUILD.join(test).to_s)
+    linked += 1
+  end
+end
+
+if sources.empty?
+  puts "implementation pending: linked #{linked} of #{total} test binaries (src/ has no modules yet)"
+else
+  puts "linked #{linked} of #{total} test binaries"
+end

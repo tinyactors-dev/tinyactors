@@ -48,3 +48,10 @@ exit(status.exitstatus || 1) unless status.success?
 pid = Process.spawn('tinyactors-test/build/ecmascript_datamodel_test', chdir: root.to_s)
 _pid, status = Process.wait2(pid)
 exit(status.exitstatus || 1) unless status.success?
+
+# txml: runs the header checks today and the full suite once tinyxml/src has
+# an implementation; it reports unlinkable binaries as pending rather than
+# failing the build.
+pid = Process.spawn('mise', 'run', 'test', chdir: root.join('tinyxml').to_s)
+_pid, status = Process.wait2(pid)
+exit(status.exitstatus || 1) unless status.success?

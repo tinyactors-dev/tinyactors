@@ -1,0 +1,35 @@
+#!/usr/bin/env ruby
+#MISE description="Run one txml spec file, or the whole corpus, verbosely"
+# vim:ft=ruby
+#
+#   mise run spec                        # every file in tests/spec
+#   mise run spec tests/spec/elements.spec
+#
+# The runner prints each case it executes and, on a mismatch, the expected and
+# actual rendering side by side.
+
+require 'pathname'
+
+ROOT = Pathname.new(__dir__).join('../..').expand_path
+RUNNER = ROOT.join('build/spec_test')
+
+def run(*command)
+  puts command.join(' ')
+  pid = Process.spawn(*command, chdir: ROOT.to_s)
+  _pid, status = Process.wait2(pid)
+
+  return if status.success?
+
+  exit(status.exitstatus || 1)
+end
+
+run('mise', 'run', 'build')
+
+unless RUNNER.file?
+  warn 'build/spec_test is not linked: tinyxml/src has no implementation modules yet.'
+  warn 'The spec corpus in tests/spec is the specification that implementation must satisfy.'
+  exit 1
+end
+
+target = ARGV.empty? ? ['tests/spec'] : ARGV
+run(RUNNER.to_s, '-v', *target)
