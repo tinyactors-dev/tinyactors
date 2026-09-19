@@ -32,6 +32,12 @@ module TinyactorsApiAnnotations
       'ta_actor_delayed_sends_params.sends' => { capacity: 'capacity', needed: 'count' }
     },
 
+    # Caller-supplied arenas that receive a function's outputs. A binding
+    # passes storage that lives at least as long as it reads the outputs.
+    arenas: %w[
+      ta_definition_export_params.arena
+    ],
+
     # Tagged-union kinds whose `as` member name differs from the enum
     # constant's suffix.
     union_members: {

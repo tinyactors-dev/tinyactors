@@ -93,7 +93,7 @@ def codecable_type?(name)
 end
 
 def field_codecable?(field)
-  return true if field['role'] == 'out' || field['count_of']
+  return true if field['role'] == 'out' || field['count_of'] || field['shape'] == 'arena'
 
   type = field['type']
   return fields_codecable?(type['record']['fields']) if type['record']
@@ -118,7 +118,10 @@ def fields_codecable?(fields) = fields.all? { |field| field_codecable?(field) }
 
 def tagged(name) = TYPES.dig(name, 'tagged_union')
 
-def input_fields(fields) = fields.reject { |field| field['role'] == 'out' || field['count_of'] }
+# JSON members of a struct. Arenas are not members: the binding supplies its
+# per-request arena (arena_fields), which lives until the response is encoded.
+def input_fields(fields) = fields.reject { |field| field['role'] == 'out' || field['count_of'] || field['shape'] == 'arena' }
+def arena_fields(fields) = fields.select { |field| field['shape'] == 'arena' }
 
 # How a union member appears in JSON: flattened into the parent object or
 # keyed by the member name. Struct members flatten unless a member field
@@ -259,7 +262,7 @@ def encode_field(field, source, omit_zero)
   name = field['name']
   type = field['type']
   return [] if field['role'] == 'out' || field['count_of']
-  return [] if %w[raw function buffer handle_out cstring].include?(field['shape'])
+  return [] if %w[raw function buffer handle_out cstring arena view_out].include?(field['shape'])
 
   value = unless pointer?(type)
             codec = value_codec(type)
@@ -358,6 +361,7 @@ struct_names.each do |name|
   decode = []
   encode = []
   inputs.each { |field| decode.concat(decode_field(field, '(*out)')) }
+  arena_fields(common).each { |field| decode << "(*out).#{field['name']} = &b->arena;" }
   common.each { |field| encode.concat(encode_field(field, '(*in)', omit_zero)) }
 
   key_checks = []
@@ -633,6 +637,10 @@ IR['functions'].each do |function|
       args << "&#{local}"
       next
     end
+    if param['shape'] == 'arena'
+      args << '&b->arena'
+      next
+    end
     if param['role'] == 'out'
       target = type['pointer']
       if param['shape'] == 'handle_out'
@@ -691,6 +699,12 @@ IR['functions'].each do |function|
         inner = target['pointer']['type']
         lines << "a_params.#{field['name']} = tat_alloc(b, sizeof(#{inner} *), _Alignof(#{inner} *));"
         schema_out[field['name']] = "handle:#{TYPES.dig(inner, 'handle')}"
+      when 'view_out'
+        # `const T **out`: the callee stores a pointer to a graph that lives in
+        # the request arena or in the core; it is encoded after the call.
+        ctype = c_type(target)
+        lines << "a_params.#{field['name']} = tat_alloc(b, sizeof(#{ctype}), _Alignof(#{ctype}));"
+        schema_out[field['name']] = c_type(target['pointer'])
       when 'buffer'
         capacity = field['buffer']['capacity']
         if text_buffer?(field)
@@ -751,6 +765,9 @@ IR['functions'].each do |function|
         when 'handle_out'
           inner = field['type']['pointer']['pointer']['type']
           out_entries << [field['name'], "tat_handle_register(b, #{cstr(TYPES.dig(inner, 'handle'))}, *#{source})"]
+        when 'view_out'
+          view = encode_call(value_codec(field['type']['pointer']['pointer']), "*#{source}")
+          out_entries << [field['name'], "(r == TA_OK && *#{source} != NULL ? #{view} : jv_null())"]
         when 'buffer'
           if text_buffer?(field)
             out_entries << [field['name'], "tat_encode_buffer(#{source}, a_params.#{field['buffer']['capacity']})"]

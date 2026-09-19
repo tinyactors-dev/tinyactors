@@ -75,6 +75,8 @@ Fields and parameters carry:
   | `handle` | pointer to an owned opaque type |
   | `borrowed` | pointer to a borrowed opaque type |
   | `handle_out` | `T **` where `T` is opaque; creates a handle |
+  | `view_out` | `const T **` where `T` is a struct; the callee stores a pointer to a borrowed graph |
+  | `arena` | a caller-supplied `ta_arena *` that receives the outputs (role `in`; annotated) |
   | `buffer` | caller-supplied output buffer, with `buffer.capacity` and `buffer.needed` fields |
   | `raw` | `void *` |
   | `function` | callback pointer |
@@ -90,7 +92,7 @@ generators whether calling it links.
 ## Annotations
 
 `api/annotations.rb` holds only what conventions cannot express: `single`
-exceptions inside specifications, output `buffers`, union members whose names
+exceptions inside specifications, output `buffers`, output `arenas`, union members whose names
 differ from their enum constants, `borrowed` opaque types, `owned_outputs`,
 ownership transfers (`consumes`), and `enum_constants`. When the extractor
 cannot map something, for example a union member without an enum constant, it

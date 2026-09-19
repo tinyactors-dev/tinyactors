@@ -148,6 +148,11 @@ The W3C SCXML conformance tests in `vendor/scxml-irp` are imported as the
 recorded in `ruby/scxml_irp/baseline.json` (`mise run scxml-irp-baseline`).
 See `ruby/scxml_irp/README.md`.
 
+`ruby/export_roundtrip_check.rb` compiles every chart the suite defines,
+exports it with `ta.definition.export`, recompiles the export, and checks that
+the revision is unchanged and the export matches the chart's spec (ADR 0042).
+Charts whose data model has no adapter in the host are skipped.
+
 `ruby/selftest.rb` verifies the DSL's outcome classification against the live
 host. `ruby/runner_selftest.rb` runs the steps against a scripted fake host
 whose answers stand in for core functions that are not implemented yet.

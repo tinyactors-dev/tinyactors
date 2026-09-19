@@ -18,6 +18,7 @@
 #include "invoke.h"
 #include "definition.h"
 #include "builder.h"
+#include "export.h"
 #include "actor.h"
 #include "session_image.h"
 #include "store.h"

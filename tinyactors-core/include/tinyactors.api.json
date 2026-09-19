@@ -3583,6 +3583,43 @@
         }
       ]
     },
+    "ta_definition_export_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "definition",
+          "type": {
+            "type": "ta_definition_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "arena",
+          "type": {
+            "pointer": {
+              "type": "ta_arena"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "arena"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "pointer": {
+                "type": "ta_scxml_spec"
+              },
+              "const": true
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "view_out"
+        }
+      ]
+    },
     "ta_definition_family": {
       "kind": "struct",
       "fields": [
@@ -7443,6 +7480,38 @@
       "public": true,
       "implemented": true,
       "retires": "definition"
+    },
+    {
+      "name": "ta_definition_export",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_definition_export_params"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": true
     },
     {
       "name": "ta_actor_spawn",

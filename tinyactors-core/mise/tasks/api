@@ -41,6 +41,15 @@ def parse_type(spelling)
   end
   if spelling.end_with?('*')
     inner = spelling.delete_suffix('*').strip
+    if inner.end_with?('*')
+      # `const T **`: the pointee is itself a (non-const) pointer.
+      return { 'pointer' => parse_type(inner), 'const' => false }
+    end
+    if (match = inner.match(/\A(.*\*)\s*const\z/))
+      # `T *const *`: a const pointee that is a pointer.
+      return { 'pointer' => parse_type(match[1]), 'const' => true }
+    end
+
     inner = inner.delete_suffix(' const').strip
     const = inner.start_with?('const ')
     inner = inner.delete_prefix('const ').strip
@@ -257,7 +266,10 @@ def classify(types, owner, entry, sibling_names, next_name)
   path = "#{owner}.#{entry['name']}"
   target = type['pointer']
   entry['role'] = type['const'] ? 'in' : 'out'
-  if NOTES[:buffers].key?(path)
+  if NOTES[:arenas].include?(path)
+    entry['role'] = 'in'
+    entry['shape'] = 'arena'
+  elsif NOTES[:buffers].key?(path)
     entry['role'] = 'out'
     entry['shape'] = 'buffer'
     entry['buffer'] = NOTES[:buffers][path].transform_keys(&:to_s)
@@ -272,6 +284,9 @@ def classify(types, owner, entry, sibling_names, next_name)
     entry['role'] = 'out'
   elsif pointer?(target) && target['pointer']['builtin'] == 'void'
     entry['shape'] = 'raw'
+  elsif pointer?(target) && (inner = named(target['pointer'])) && types.dig(inner, 'kind') == 'struct'
+    entry['shape'] = 'view_out'
+    entry['role'] = 'out'
   elsif named(target) && types.dig(named(target), 'kind') == 'opaque'
     entry['shape'] = types.dig(named(target), 'ownership') == 'handle' ? 'handle' : 'borrowed'
     entry['role'] = 'in'

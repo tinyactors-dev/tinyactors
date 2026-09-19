@@ -150,6 +150,18 @@ or a retired handle is a -32602 error.
 Borrowed opaque views (`ta_dm_host`, `ta_arena_block`) encode as
 `{"$borrowed": "<type>"}` and cannot be passed back.
 
+### Arenas and borrowed outputs
+
+A `ta_arena *` a function fills with its outputs (annotated `arenas` in the
+core's `api/annotations.rb`) is not a params member: the binding passes its
+per-request arena, which lives until the response is encoded. A `const T **`
+output (`view_out`) is encoded as a `T` after the call, or `null` when the
+result is not `"ok"`. `ta.definition.export` uses both: it answers
+`{"result": "ok", "out": {"out": <spec>}}`, where `<spec>` is the JSON form of
+`ta_scxml_spec` described under [Chart spec](#chart-spec) and can be passed
+back to `ta.definition.compile_spec`. Exported empty lists are omitted, except
+that a handler's `actions` is `[]`; union kinds are always explicit.
+
 ### Adapters
 
 A vtable-bearing value (`ta_allocator`, `ta_datamodel`, `ta_actor_directory`,

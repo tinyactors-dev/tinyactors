@@ -1073,6 +1073,29 @@ TA_API ta_result ta_definition_compile_spec(ta_system *system,
                                             const ta_definition_compile_params *params);
 TA_API void ta_definition_destroy(ta_definition *definition);
 
+/*
+ * Rebuilds the author-level spec of a registered definition (ADR 0042).
+ * Arrays and joined event names are allocated in `arena`; other text and
+ * expressions are borrowed from the definition and the system. Host
+ * expressions are the definition's retained handles, not retained again.
+ * The result stays valid until the arena is reset or the definition is
+ * freed, whichever comes first.
+ *
+ * Export is faithful: compiling the exported spec yields the same revision
+ * as the original. `identity` is null when the definition was fingerprinted
+ * and points to the definition's explicit identity otherwise. Empty lists are
+ * exported as null, except that a handler's `actions` is never null.
+ *
+ * TA_ERR_NOT_FOUND: no registered definition has this ID.
+ */
+typedef struct {
+    ta_definition_id definition;
+    ta_arena *arena;
+    const ta_scxml_spec **out;
+} ta_definition_export_params;
+TA_API ta_result ta_definition_export(const ta_system *system,
+                                      const ta_definition_export_params *params);
+
 
 /* ========================================================================
  * Actors

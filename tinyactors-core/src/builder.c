@@ -31,6 +31,7 @@ typedef struct {
     ta_vec history;      /* ta_history_slot */
     ta_vec done_data;    /* ta_done_data_def */
     ta_vec invokes;      /* ta_invoke_decl */
+    ta_vec texts;        /* ta_str: authored text kept for export */
     uint64_t hash;
 } ta_compiler;
 
@@ -158,6 +159,21 @@ static ta_result ta_compiler_expression(ta_compiler *compiler, const ta_expressi
     return result;
 }
 
+/*
+ * Keeps authored text that the compiler normalizes, so ta_definition_export()
+ * can rebuild the exact input (ADR 0042). The text is copied into the
+ * definition's arena.
+ */
+static ta_result ta_compiler_keep_text(ta_compiler *compiler, ta_str text, ta_authored_text_id *out) {
+    ta_str copy = {0};
+    ta_result result = ta_arena_copy_str(&compiler->definition->arena, text, &copy);
+    if (result == TA_OK) {
+        *out = compiler->texts.count;
+        result = ta_vec_push(&compiler->texts, &copy);
+    }
+    return result;
+}
+
 static ta_result ta_compiler_content(ta_compiler *compiler, ta_bytes bytes, ta_content_id *out) {
     ta_content_def content = {0};
     if (bytes.len != 0) {
@@ -258,6 +274,7 @@ static ta_result ta_compiler_send(ta_compiler *compiler, const ta_scxml_send_spe
     if (result != TA_OK) {
         return result;
     }
+    out->delay.text = TA_AUTHORED_TEXT_NONE;
     ta_compiler_hash_u32(compiler, spec->event.kind);
     if (spec->event.kind == TA_SCXML_EVENT_EXPR) {
         out->event.kind = TA_EVENT_SOURCE_EXPR;
@@ -302,6 +319,9 @@ static ta_result ta_compiler_send(ta_compiler *compiler, const ta_scxml_send_spe
             out->delay.kind = TA_DELAY_SOURCE_LITERAL;
             ta_compiler_hash_str(compiler, spec->delay.as.literal);
             result = ta_duration_parse(spec->delay.as.literal, &out->delay.as.literal);
+            if (result == TA_OK) {
+                result = ta_compiler_keep_text(compiler, spec->delay.as.literal, &out->delay.text);
+            }
             break;
         case TA_SCXML_STRING_EXPR:
             out->delay.kind = TA_DELAY_SOURCE_EXPR;
@@ -659,6 +679,7 @@ static ta_result ta_compiler_transition(ta_compiler *compiler, ta_state_id sourc
         .source = source,
         .condition = UINT32_MAX,
         .document_order = compiler->transitions.count,
+        .event_text = TA_AUTHORED_TEXT_NONE,
     };
     ta_compiler_hash_u32(compiler, spec->kind);
     if (spec->kind == TA_SCXML_TRANSITION_EXTERNAL) {
@@ -669,6 +690,9 @@ static ta_result ta_compiler_transition(ta_compiler *compiler, ta_state_id sourc
         return TA_ERR_INVALID;
     }
     ta_result result = ta_compiler_descriptors(compiler, spec->event, &transition.event_patterns);
+    if (result == TA_OK && spec->event.ptr != NULL) {
+        result = ta_compiler_keep_text(compiler, spec->event, &transition.event_text);
+    }
     if (result == TA_OK && spec->condition.kind != TA_EXPRESSION_NONE) {
         result = ta_compiler_expression(compiler, &spec->condition, &transition.condition);
     }
@@ -699,6 +723,7 @@ static ta_result ta_compiler_initial(ta_compiler *compiler, const ta_compiler_in
     ta_initial_transition_def initial = { .owner = params->owner };
     ta_result result = TA_OK;
     if (params->spec != NULL && params->spec->targets != NULL && params->spec->targets[0].ptr != NULL) {
+        initial.authored_targets = true;
         result = ta_compiler_targets(compiler, &(ta_compiler_targets_params){
                                                    .ids = params->spec->targets,
                                                    .within = params->owner,
@@ -994,7 +1019,7 @@ static void ta_compiler_destroy(ta_compiler *compiler) {
         &compiler->initials, &compiler->targets, &compiler->actions, &compiler->handlers, &compiler->params,
         &compiler->data_decls, &compiler->initializers, &compiler->contents, &compiler->patterns,
         &compiler->segments, &compiler->expressions, &compiler->history, &compiler->done_data,
-        &compiler->invokes,
+        &compiler->invokes, &compiler->texts,
     };
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(vecs); index += 1) {
         ta_vec_destroy(vecs[index]);
@@ -1008,6 +1033,7 @@ static ta_result ta_compiler_identity(ta_compiler *compiler) {
     ta_bytes revision = {0};
     static const char hex[] = "0123456789abcdef";
     char fingerprint[16];
+    definition->fingerprinted = spec->identity == NULL;
     if (spec->identity != NULL) {
         family = spec->identity->family.name;
         revision = spec->identity->revision;
@@ -1036,6 +1062,10 @@ static ta_result ta_compiler_identity(ta_compiler *compiler) {
     if (result == TA_OK && spec->name.ptr != NULL && spec->name.len != 0) {
         result = ta_atom_intern(ta_compiler_atoms(compiler), spec->name, &definition->document_name);
     }
+    definition->authored_binding = spec->binding;
+    if (result == TA_OK && spec->datamodel.ptr != NULL && spec->datamodel.len != 0) {
+        result = ta_arena_copy_str(&definition->arena, spec->datamodel, &definition->authored_datamodel);
+    }
     return result;
 }
 
@@ -1058,6 +1088,7 @@ static ta_result ta_compiler_finish(ta_compiler *compiler) {
         { &compiler->history, (void **)&definition->history.slots, &definition->history.slot_count },
         { &compiler->done_data, (void **)&definition->done_data, &definition->done_data_count },
         { &compiler->invokes, (void **)&definition->invokes, &definition->invoke_decl_count },
+        { &compiler->texts, (void **)&definition->authored_texts, &definition->authored_text_count },
     };
     ta_result result = TA_OK;
     for (uint32_t index = 0; result == TA_OK && index < TA_ARRAY_COUNT(seals); index += 1) {
@@ -1190,6 +1221,7 @@ ta_result ta_definition_compile_spec(ta_system *system, const ta_definition_comp
         { &compiler.history, TA_VEC_LAYOUT(ta_history_slot) },
         { &compiler.done_data, TA_VEC_LAYOUT(ta_done_data_def) },
         { &compiler.invokes, TA_VEC_LAYOUT(ta_invoke_decl) },
+        { &compiler.texts, TA_VEC_LAYOUT(ta_str) },
     };
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(vecs); index += 1) {
         ta_vec_init(vecs[index].vec, params->allocator, vecs[index].layout);

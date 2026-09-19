@@ -24,6 +24,7 @@ are private and hold layouts and internal functions.
 | `invoke.h` | invoked-service adapters and active records |
 | `definition.h` | immutable compiled statechart revision |
 | `builder.h` | mutable construction/compilation front end |
+| `export.h` | rebuilds a compiled definition's authoring spec (`ta_definition_export`) |
 | `actor.h` | named actor protocol, resident session state, operational inspection |
 | `session_image.h` | in-memory interpreter capture/reconstruction |
 | `system.h` | shared runtime container/registries |

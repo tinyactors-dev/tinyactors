@@ -82,7 +82,17 @@ typedef struct {
     } as;
 } ta_id_source;
 
-/* LITERAL is a duration parsed at compile time, in ta_time milliseconds. */
+/*
+ * Index into ta_definition.authored_texts: authored text the compiler
+ * normalizes and the definition keeps for ta_definition_export().
+ */
+typedef uint32_t ta_authored_text_id;
+#define TA_AUTHORED_TEXT_NONE UINT32_MAX
+
+/*
+ * LITERAL is a duration parsed at compile time, in ta_time milliseconds;
+ * `text` is the authored duration (e.g. "2.5s"), which the parse discards.
+ */
 typedef enum {
     TA_DELAY_SOURCE_NONE,
     TA_DELAY_SOURCE_LITERAL,
@@ -91,6 +101,7 @@ typedef enum {
 
 typedef struct {
     ta_delay_source_kind kind;
+    ta_authored_text_id text;
     union {
         ta_time literal;
         ta_expr_id expr;
@@ -260,12 +271,19 @@ typedef struct {
     ta_transition_type type;
     ta_span32 actions;
     uint32_t document_order;
+    /*
+     * The authored event descriptor text, which event_patterns normalize
+     * (whitespace, ".*" forms); TA_AUTHORED_TEXT_NONE when absent.
+     */
+    ta_authored_text_id event_text;
 } ta_transition_def;
 
 typedef struct {
     ta_state_id owner;
     ta_span32 targets;
     ta_span32 actions;
+    /* False when `targets` is the SCXML default (the first child), not authored. */
+    bool authored_targets;
 } ta_initial_transition_def;
 
 struct ta_definition {
@@ -331,6 +349,18 @@ struct ta_definition {
     uint32_t extension_count;
     ta_expression *expressions;
     uint32_t expression_count;
+    /*
+     * Authored input the compiler normalizes, kept so ta_definition_export()
+     * rebuilds a spec with the same fingerprint (ADR 0042).
+     */
+    ta_str *authored_texts;
+    uint32_t authored_text_count;
+    /* The authored <scxml binding>; DEFAULT and EARLY both compile to early. */
+    ta_scxml_binding_kind authored_binding;
+    /* The authored <scxml datamodel>; empty when absent. */
+    ta_str authored_datamodel;
+    /* True when `identity.revision` is the compiler's fingerprint, not an explicit identity. */
+    bool fingerprinted;
     ta_datamodel_binding_mode binding_mode;
     ta_datamodel datamodel;
     void *datamodel_shared;
