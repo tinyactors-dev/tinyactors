@@ -110,3 +110,42 @@ ta_result ta_definition_state(const ta_system *system, const ta_definition_state
     };
     return TA_OK;
 }
+
+size_t ta_definition_session_bytes(const ta_definition *definition) {
+    /* The configuration, the late-binding bits (sized like it), and history. */
+    return definition->configuration.bytes * 2u + definition->history.storage_bytes;
+}
+
+size_t ta_definition_instance_bytes(const ta_definition *definition) {
+    return definition->datamodel_instance_size == 0 ? 1u : definition->datamodel_instance_size;
+}
+
+ta_result ta_definition_inspect(const ta_system *system,
+                                ta_definition_id id,
+                                ta_definition_inspection *out) {
+    if (system == NULL || out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_definition *definition = ta_definition_lookup(system, id);
+    if (definition == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    ta_str document_name = { .ptr = "", .len = 0 };
+    if (definition->document_name != TA_ATOM_NONE) {
+        document_name = ta_atom_text(&system->atoms, definition->document_name);
+    }
+    *out = (ta_definition_inspection){
+        .id = definition->id,
+        .identity = definition->identity,
+        .document_name = document_name,
+        .datamodel = definition->datamodel,
+        .binding = definition->binding_mode == TA_BINDING_LATE ? TA_SCXML_BINDING_LATE : TA_SCXML_BINDING_EARLY,
+        .state_count = definition->state_count,
+        .retired = false,
+        .actor_count = definition->actor_count,
+        .actor_fixed_bytes = sizeof(ta_actor) + ta_definition_session_bytes(definition) +
+                             ta_definition_instance_bytes(definition),
+        .definition_bytes = ta_arena_allocated_bytes(&definition->arena),
+    };
+    return TA_OK;
+}

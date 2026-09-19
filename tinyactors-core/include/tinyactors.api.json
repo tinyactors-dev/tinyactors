@@ -1222,18 +1222,10 @@
           "shape": "single"
         },
         {
-          "name": "has_datamodel_root",
+          "name": "allocated_bytes",
           "type": {
-            "builtin": "bool"
+            "builtin": "size_t"
           },
-          "role": "in"
-        },
-        {
-          "name": "datamodel_root",
-          "type": {
-            "type": "ta_value"
-          },
-          "release_when": "has_datamodel_root",
           "role": "in"
         }
       ]
@@ -3623,6 +3615,81 @@
           "name": "revision",
           "type": {
             "type": "ta_bytes"
+          },
+          "role": "in"
+        }
+      ]
+    },
+    "ta_definition_inspection": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "id",
+          "type": {
+            "type": "ta_definition_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "identity",
+          "type": {
+            "type": "ta_definition_identity"
+          },
+          "role": "in"
+        },
+        {
+          "name": "document_name",
+          "type": {
+            "type": "ta_str"
+          },
+          "role": "in"
+        },
+        {
+          "name": "datamodel",
+          "type": {
+            "type": "ta_datamodel"
+          },
+          "role": "in"
+        },
+        {
+          "name": "binding",
+          "type": {
+            "type": "ta_scxml_binding_kind"
+          },
+          "role": "in"
+        },
+        {
+          "name": "state_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "role": "in"
+        },
+        {
+          "name": "retired",
+          "type": {
+            "builtin": "bool"
+          },
+          "role": "in"
+        },
+        {
+          "name": "actor_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "role": "in"
+        },
+        {
+          "name": "actor_fixed_bytes",
+          "type": {
+            "builtin": "size_t"
+          },
+          "role": "in"
+        },
+        {
+          "name": "definition_bytes",
+          "type": {
+            "builtin": "size_t"
           },
           "role": "in"
         }
@@ -7835,6 +7902,46 @@
       "implemented": true
     },
     {
+      "name": "ta_actor_datamodel_root",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": false
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_value"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single",
+          "release_when": "ok"
+        }
+      ],
+      "public": true,
+      "implemented": true
+    },
+    {
       "name": "ta_actor_active_states",
       "returns": {
         "type": "ta_result"
@@ -7956,6 +8063,45 @@
             "const": true
           },
           "role": "in",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": true
+    },
+    {
+      "name": "ta_definition_inspect",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "definition",
+          "type": {
+            "type": "ta_definition_id"
+          },
+          "role": "in"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_definition_inspection"
+            },
+            "const": false
+          },
+          "role": "out",
           "shape": "single"
         }
       ],
@@ -8221,6 +8367,49 @@
           "role": "in",
           "shape": "handle",
           "consumed_on": "ok"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_definition_id"
+            },
+            "const": false
+          },
+          "role": "out",
+          "shape": "single"
+        }
+      ],
+      "public": true,
+      "implemented": true
+    },
+    {
+      "name": "ta_system_find_definition",
+      "returns": {
+        "type": "ta_result"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "handle"
+        },
+        {
+          "name": "identity",
+          "type": {
+            "pointer": {
+              "type": "ta_definition_identity"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "single"
         },
         {
           "name": "out",

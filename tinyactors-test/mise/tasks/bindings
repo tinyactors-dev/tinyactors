@@ -735,6 +735,8 @@ IR['functions'].each do |function|
       else
         target = param['type']['pointer']
         out_entries << [param['name'], encode_call(value_codec(target), local)]
+        # An owned output parameter (`ta_value *out`) is released after encoding.
+        post << "if (r == TA_OK) ta_value_release(#{local});" if param['release_when'] == 'ok'
         TYPES.dig(target['type'], 'fields')&.each do |field|
           post << "if (#{local}->#{field['release_when']}) ta_value_release(&#{local}->#{field['name']});" if field['release_when']
         end

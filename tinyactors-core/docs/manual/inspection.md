@@ -4,7 +4,7 @@ Inspection is a core operational capability, not a persistence feature.
 
 `ta_actor_inspect()` exposes a read-only view of one resident interpreter instance. `ta_system_visit_actors()` walks the resident actors so an embedder can build an admin endpoint, debugger, REPL, metrics collector, or process inspector without reverse-engineering private memory.
 
-The view reports the logical actor reference, definition ID and exact definition identity, residency, whether a macrostep is paused mid-way and the external event it is processing, the internal queue, invocations, completion, the number of active states and delayed sends, and a data-model root when the selected data-model adapter implements `inspect`.
+The view reports the logical actor reference, definition ID and exact definition identity, residency, whether a macrostep is paused mid-way and the external event it is processing, the internal queue, invocations, completion, the number of active states and delayed sends, and `allocated_bytes`, the memory the core currently holds for the actor. Actor inspection never calls the data-model adapter, so it is cheap and has no adapter side effects. `ta_actor_datamodel_root()` asks the adapter's `inspect` operation for the data-model root; it returns `TA_ERR_UNSUPPORTED` when the adapter has none.
 
 Variable-length state has its own list functions, so the view never points into private layouts:
 
@@ -29,9 +29,36 @@ for (uint32_t i = 0; i < count; i += 1) {
         .definition = view.definition_id, .state = states[i], .out = &info });
     /* info.id is the author's state ID */
 }
-if (view.has_datamodel_root) ta_value_release(&view.datamodel_root);
+ta_value root;
+if (ta_actor_datamodel_root(system, actor, &root) == TA_OK) {
+    /* ... */
+    ta_value_release(&root);
+}
 ```
 
 The data-model root is a host value. For CPython it may simply wrap the existing `PyObject *`; for CRuby a `VALUE`; for Node a host reference. Tinyactors does not traverse or copy it. This matters for large models such as LLM conversation transcripts: inspecting the actor does not imply materializing or serializing the full transcript.
+
+## Definitions
+
+`ta_definition_inspect()` reports fixed-size facts about a registered definition without an actor:
+
+| Field | Meaning |
+|---|---|
+| `id`, `identity` | the runtime ID and the exact revision (family and fingerprint) |
+| `document_name` | the `<scxml name>` attribute; empty when absent |
+| `datamodel` | the adapter instance the definition was compiled with, to identify it (for example to pick a value codec); never call its operations |
+| `binding` | `TA_SCXML_BINDING_EARLY` or `TA_SCXML_BINDING_LATE` |
+| `state_count` | states readable with `ta_definition_state()` |
+| `retired`, `actor_count` | lifecycle: whether the definition is retired, and how many resident actors use it |
+| `actor_fixed_bytes` | what each actor costs before it processes events: actor record, session storage, data-model instance |
+| `definition_bytes` | the definition's own storage |
+
+The byte counts are measurements and may change between releases. `ta_system_find_definition()` resolves an exact identity, for example one read from a stored session, to the most recently registered definition with that identity.
+
+```c
+ta_definition_inspection facts;
+ta_definition_inspect(system, view.definition_id, &facts);
+if (facts.datamodel.self == my_adapter.self) { /* encode values for my_adapter */ }
+```
 
 Inspection views are read-only and require the same external synchronization as other access to a `ta_system`. Borrowed core pointers and borrowed values in listed delayed sends remain valid only while the actor cannot mutate. A returned data-model root follows ordinary `ta_value` lifetime rules.

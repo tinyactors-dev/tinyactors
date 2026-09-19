@@ -63,8 +63,8 @@ class FakeHost
     when 'ta.system.intern_atom' then ok(out: @atoms += 1)
     when 'ta.event.name_intern' then ok(out: 9)
     when 'ta.actor.inspect'
-      ok(out: { active_state_count: 2, delayed_send_count: 1,
-                has_datamodel_root: true, datamodel_root: { cycles: 1 } })
+      ok(out: { active_state_count: 2, delayed_send_count: 1 })
+    when 'ta.actor.datamodel_root' then ok(out: { cycles: 1 })
     when 'ta.actor.active_states'
       params[:capacity] == 2 ? ok(states: [0, 1], count: 2) : { result: 'err_nomem', out: { count: 2 } }
     when 'ta.definition.state' then ok(out: { id: STATE_IDS.fetch(params[:state]), parent: 0, kind: 'atomic' })

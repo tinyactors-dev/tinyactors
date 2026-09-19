@@ -122,6 +122,8 @@ JSON-RPC errors are reserved for the protocol itself:
 - `ta_str` and `ta_bytes` are JSON strings. `ta_expression` is its source text;
   host expressions cannot cross the protocol.
 - `ta_value` is any JSON value, held as a jq data-model value for the request.
+  An owned output value (`ta_actor_completion.data`, the `out` of
+  `ta_actor_datamodel_root`) is encoded, then released by the handler.
 - Enums are the constant names without their common prefix, in lowercase:
   `TA_RUN_PAUSED` is `"paused"`.
 - A struct with a `kind` enum and an `as` union is one object with `"kind"`.
@@ -159,6 +161,11 @@ RPC conversations. The current adapters are `allocator.libc`,
 `{"system": <system handle>}` and hands each external event to
 `ta_actor_deliver()`; a busy actor makes it answer retry, so core keeps the
 event for a later dispatch.
+
+An adapter in an output, such as `ta_definition_inspection.datamodel`, encodes
+as `{"$adapter": "<name>"}` when it matches a registered factory (same vtable)
+and `{"$adapter": null}` otherwise. It identifies the adapter; it has no
+config and cannot call it.
 
 `invoker.scxml` takes `{"system": <system handle>, "charts": {name: spec}}`
 and implements the SCXML invoker type (`http://www.w3.org/TR/scxml/`; core
@@ -206,7 +213,7 @@ maps onto the public C API:
 | `deliver` | `ta.system.intern_atom` per segment and `ta.event.name_intern` with `{"atoms": [...]}` (cached), then `ta.actor.deliver` with an external event whose `invoke_id` is `TA_INVOKE_ID_NONE` |
 | after every step | run to quiescence: `system.actors` with `"runnable": true` lists every resident actor with a macrostep in progress, including invoked children; `ta.actor.resume` each until `stable` or `done` and list again until none is runnable; then `ta.system.dispatch_due`; repeat until nothing was dispatched and nothing more is due |
 | `active` | `ta.actor.inspect` for the count, `ta.actor.active_states`, and `ta.definition.state` for each state's ID (cached) |
-| `data` | `ta.actor.inspect`'s `datamodel_root`, then `json.transform` for a filter |
+| `data` | `ta.actor.datamodel_root`, then `json.transform` for a filter |
 
 A result other than `"ok"` fails the step with `TinyactorsTest::CoreResultError`
 (`"ta_actor_spawn returned err_invalid"`). Until a core function is

@@ -46,10 +46,12 @@ module TinyactorsApiAnnotations
     # Opaque types that are borrowed views, never owned handles.
     borrowed: %w[ta_dm_host ta_arena_block],
 
-    # Output values that the caller must release, guarded by a flag field.
+    # Output values that the caller must release. A struct field names the
+    # flag field that guards it; a function output parameter names 'ok', the
+    # function returning TA_OK.
     owned_outputs: {
       'ta_actor_completion.data' => 'has_data',
-      'ta_actor_inspection.datamodel_root' => 'has_datamodel_root'
+      'ta_actor_datamodel_root.out' => 'ok'
     },
 
     # Handle lifetimes beyond the conventions (`T **out` creates a handle;

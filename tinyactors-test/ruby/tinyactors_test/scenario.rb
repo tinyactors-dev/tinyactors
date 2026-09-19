@@ -103,8 +103,8 @@ module TinyactorsTest
   end
 
   # A spawned actor, seen from a scenario. All observations go through the
-  # public inspection API: ta_actor_inspect, ta_actor_active_states, and
-  # ta_definition_state.
+  # public inspection API: ta_actor_inspect, ta_actor_active_states,
+  # ta_actor_datamodel_root, and ta_definition_state.
   class Actor
     attr_reader :handle, :chart, :definition
 
@@ -126,12 +126,12 @@ module TinyactorsTest
 
     # The data-model root, or the single value a jq filter produces from it.
     def data(filter = '.')
-      inspection = inspect_actor
-      unless inspection[:has_datamodel_root]
-        raise ScenarioError, "#{self}: the data model reported no inspection root"
+      response = @context.ta.actor.datamodel_root(system: @context.system_handle, actor: handle)
+      unless response[:result] == 'ok'
+        raise ScenarioError, "#{self}: the data model reported no inspection root (#{response[:result]})"
       end
 
-      root = inspection.fetch(:datamodel_root)
+      root = response.dig(:out, :out)
       return root if filter == '.'
 
       outputs = @context.rpc('json.transform', filter: filter, input: root)

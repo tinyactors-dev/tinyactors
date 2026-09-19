@@ -98,6 +98,14 @@ void *ta_arena_alloc(ta_arena *arena, size_t size, size_t alignment) {
     return ta_arena_allocate_from_block(block, size, alignment);
 }
 
+size_t ta_arena_allocated_bytes(const ta_arena *arena) {
+    size_t total = 0;
+    for (const ta_arena_block *block = arena->head; block != NULL; block = block->next) {
+        total += block->allocation_size;
+    }
+    return total;
+}
+
 ta_result ta_arena_copy_str(ta_arena *arena, ta_str text, ta_str *out) {
     char *copy = ta_arena_alloc(arena, (size_t)text.len + 1u, 1);
     if (copy == NULL) {

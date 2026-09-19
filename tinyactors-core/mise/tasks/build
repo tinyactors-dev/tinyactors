@@ -3,9 +3,10 @@
 # mise skips this task when every object below is newer than every source.
 # Use `mise run --force build` after changing CC/CFLAGS.
 #MISE sources=["mise/tasks/build", "mise/tasks/amalgamate", "mise/tasks/api", "mise/lib/**/*", "api/**/*", "src/**/*", "include/tinyactors.h", "tests/*.c"]
-#MISE outputs=["tests/smoke.o", "tests/public_smoke.o", "tests/tinyactors.o"]
+#MISE outputs=["tests/smoke.o", "tests/public_smoke.o", "tests/tinyactors.o", "build/inspection_test"]
 # vim:ft=ruby
 
+require 'fileutils'
 require 'pathname'
 require 'shellwords'
 
@@ -59,6 +60,18 @@ run(
   'include/tinyactors.c',
   '-o',
   'tests/tinyactors.o'
+)
+
+# Runtime unit tests link the amalgamation; `mise run test` runs them.
+FileUtils.mkdir_p(ROOT.join('build'))
+run(
+  *compiler,
+  *flags,
+  '-Iinclude',
+  'tests/inspection_test.c',
+  'include/tinyactors.c',
+  '-o',
+  'build/inspection_test'
 )
 
 Dir['src/*.c'].sort.each do |source|

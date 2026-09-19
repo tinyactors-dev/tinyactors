@@ -1201,9 +1201,9 @@ TA_API ta_result ta_actor_destroy(ta_system *system, ta_actor_id actor);
  * counts are reported here so a host can size buffers once.
  *
  * Core pointers are borrowed and valid only while the actor is externally
- * synchronized against mutation. When `has_datamodel_root` is true the root
- * is a host value returned by the data-model adapter; release it after use.
- * The completion pointer and its data are borrowed and must not be released.
+ * synchronized against mutation. The completion pointer and its data are
+ * borrowed and must not be released. Inspection never calls the data-model
+ * adapter; read the data model with ta_actor_datamodel_root().
  */
 typedef struct {
     ta_actor_id actor;
@@ -1225,8 +1225,13 @@ typedef struct {
     uint32_t delayed_send_count;
     bool has_completion;
     const ta_actor_completion *completion;
-    bool has_datamodel_root;
-    ta_value datamodel_root;
+    /*
+     * Bytes the core currently allocates for this actor: the actor record,
+     * session storage (configuration and history), the data-model instance,
+     * sparse state, and queue capacities. Excludes memory the data-model
+     * adapter allocates itself. A measurement: it may change between releases.
+     */
+    size_t allocated_bytes;
 } ta_actor_inspection;
 
 typedef ta_result (*ta_actor_inspection_visitor)(void *self,
@@ -1237,6 +1242,11 @@ TA_API ta_result ta_actor_inspect(ta_system *system,
                                   ta_actor_id actor,
                                   ta_actor_inspection *out);
 TA_API ta_result ta_system_visit_actors(ta_system *system, ta_actor_inspector inspector);
+/*
+ * The data model's inspection root (its `inspect` operation). Release it
+ * with ta_value_release(). TA_ERR_UNSUPPORTED when the adapter has none.
+ */
+TA_API ta_result ta_actor_datamodel_root(ta_system *system, ta_actor_id actor, ta_value *out);
 
 /*
  * List outputs share one convention: the callee writes at most `capacity`
@@ -1315,6 +1325,47 @@ typedef struct {
 TA_API ta_result ta_definition_state(const ta_system *system,
                                      const ta_definition_state_params *params);
 
+/*
+ * A read-only view of one registered definition. Text and the adapter are
+ * borrowed from the system and stay valid while the definition exists.
+ */
+typedef struct {
+    ta_definition_id id;
+    /* The exact revision (ADR 0028, ADR 0038). */
+    ta_definition_identity identity;
+    /* The <scxml name> attribute, which _name reads; empty when absent. */
+    ta_str document_name;
+    /*
+     * The adapter instance the definition was compiled with. `self`
+     * identifies the instance and `v->name` the SCXML data-model name.
+     * Use it to identify the adapter; never call its operations.
+     */
+    ta_datamodel datamodel;
+    /* TA_SCXML_BINDING_EARLY or TA_SCXML_BINDING_LATE, never DEFAULT. */
+    ta_scxml_binding_kind binding;
+    /* States readable with ta_definition_state(). */
+    uint32_t state_count;
+    /* True after the definition is retired (ADR 0043). */
+    bool retired;
+    /* Resident actors using this definition, unpublished replacements included. */
+    uint32_t actor_count;
+    /*
+     * Bytes the core allocates for each actor of this definition before it
+     * processes events: the actor record, session storage (configuration and
+     * history), and the data-model instance. Excludes queues, the sparse
+     * state of invoked actors, and memory the data-model adapter allocates
+     * itself. A measurement: it may change between releases.
+     */
+    size_t actor_fixed_bytes;
+    /* Bytes of the definition's own storage (its arena). A measurement. */
+    size_t definition_bytes;
+} ta_definition_inspection;
+
+/* TA_ERR_NOT_FOUND when the ID names no registered definition. */
+TA_API ta_result ta_definition_inspect(const ta_system *system,
+                                       ta_definition_id definition,
+                                       ta_definition_inspection *out);
+
 
 /* ========================================================================
  * Session images
@@ -1380,6 +1431,14 @@ TA_API ta_result ta_system_set_external_event_router(ta_system *system,
 TA_API ta_result ta_system_register_definition(ta_system *system,
                                                ta_definition *definition,
                                                ta_definition_id *out);
+/*
+ * The registered definition with exactly this identity; family and revision
+ * are compared bytewise. When several match, the most recently registered
+ * wins. TA_ERR_NOT_FOUND when none matches.
+ */
+TA_API ta_result ta_system_find_definition(const ta_system *system,
+                                           const ta_definition_identity *identity,
+                                           ta_definition_id *out);
 /* The atom returned by ta_system_scxml_io_type() is reserved. */
 TA_API ta_result ta_system_register_io(ta_system *system, ta_atom type, ta_io io);
 TA_API ta_result ta_system_register_invoker(ta_system *system,

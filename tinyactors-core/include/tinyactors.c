@@ -112,6 +112,8 @@ struct ta_arena_block {
 
 /* Copies text into the arena. An empty string yields a non-null empty ta_str. */
 TA_PRIVATE ta_result ta_arena_copy_str(ta_arena *arena, ta_str text, ta_str *out);
+/* Bytes the arena holds from its backing allocator, block headers included. */
+TA_PRIVATE size_t ta_arena_allocated_bytes(const ta_arena *arena);
 
 
 
@@ -795,9 +797,15 @@ struct ta_definition {
     bool datamodel_prepared;
     uint32_t datamodel_instance_size;
     uint32_t datamodel_instance_alignment;
+    /* Resident actors whose `definition` points here; see ta_actor_free(). */
+    uint32_t actor_count;
 };
 
 TA_PRIVATE const ta_definition *ta_definition_lookup(const ta_system *system, ta_definition_id id);
+/* Bytes of one actor's session storage: two configurations and history. */
+TA_PRIVATE size_t ta_definition_session_bytes(const ta_definition *definition);
+/* Bytes allocated for one actor's data-model instance (never zero). */
+TA_PRIVATE size_t ta_definition_instance_bytes(const ta_definition *definition);
 TA_PRIVATE bool ta_definition_is_atomic(const ta_definition *definition, ta_state_id state);
 TA_PRIVATE bool ta_definition_is_descendant(const ta_definition *definition, ta_state_id state, ta_state_id ancestor);
 TA_PRIVATE bool ta_event_pattern_matches(const ta_definition *definition,
@@ -1265,6 +1273,14 @@ TA_API void *ta_arena_alloc(ta_arena *arena, size_t size, size_t alignment) {
     };
     arena->head = block;
     return ta_arena_allocate_from_block(block, size, alignment);
+}
+
+TA_PRIVATE size_t ta_arena_allocated_bytes(const ta_arena *arena) {
+    size_t total = 0;
+    for (const ta_arena_block *block = arena->head; block != NULL; block = block->next) {
+        total += block->allocation_size;
+    }
+    return total;
 }
 
 TA_PRIVATE ta_result ta_arena_copy_str(ta_arena *arena, ta_str text, ta_str *out) {
@@ -2974,6 +2990,45 @@ TA_API ta_result ta_definition_state(const ta_system *system, const ta_definitio
     return TA_OK;
 }
 
+TA_PRIVATE size_t ta_definition_session_bytes(const ta_definition *definition) {
+    /* The configuration, the late-binding bits (sized like it), and history. */
+    return definition->configuration.bytes * 2u + definition->history.storage_bytes;
+}
+
+TA_PRIVATE size_t ta_definition_instance_bytes(const ta_definition *definition) {
+    return definition->datamodel_instance_size == 0 ? 1u : definition->datamodel_instance_size;
+}
+
+TA_API ta_result ta_definition_inspect(const ta_system *system,
+                                ta_definition_id id,
+                                ta_definition_inspection *out) {
+    if (system == NULL || out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_definition *definition = ta_definition_lookup(system, id);
+    if (definition == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    ta_str document_name = { .ptr = "", .len = 0 };
+    if (definition->document_name != TA_ATOM_NONE) {
+        document_name = ta_atom_text(&system->atoms, definition->document_name);
+    }
+    *out = (ta_definition_inspection){
+        .id = definition->id,
+        .identity = definition->identity,
+        .document_name = document_name,
+        .datamodel = definition->datamodel,
+        .binding = definition->binding_mode == TA_BINDING_LATE ? TA_SCXML_BINDING_LATE : TA_SCXML_BINDING_EARLY,
+        .state_count = definition->state_count,
+        .retired = false,
+        .actor_count = definition->actor_count,
+        .actor_fixed_bytes = sizeof(ta_actor) + ta_definition_session_bytes(definition) +
+                             ta_definition_instance_bytes(definition),
+        .definition_bytes = ta_arena_allocated_bytes(&definition->arena),
+    };
+    return TA_OK;
+}
+
 
 /*
  * Compiles a ta_scxml_spec in two passes. Pass one assigns state IDs in
@@ -4276,13 +4331,14 @@ static ta_result ta_actor_claim_slot(ta_system *system, ta_actor *actor, ta_acto
 
 static void ta_actor_free(ta_system *system, ta_actor *actor) {
     const ta_definition *definition = actor->definition;
+    system->definitions[definition->id]->actor_count -= 1u;
     if (actor->datamodel_initialized) {
         definition->datamodel.v->destroy_instance(definition->datamodel.self, definition->datamodel_shared,
                                                   actor->datamodel_instance);
     }
     if (actor->datamodel_instance != NULL) {
         ta_mem_free(system->allocator, actor->datamodel_instance,
-                    &(ta_allocator_free_params){ .size = definition->datamodel_instance_size,
+                    &(ta_allocator_free_params){ .size = ta_definition_instance_bytes(definition),
                                                  .alignment = definition->datamodel_instance_alignment });
     }
     ta_mem_free(system->allocator, actor->session_storage,
@@ -4309,12 +4365,13 @@ TA_API ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *
         return TA_ERR_NOMEM;
     }
     *actor = (ta_actor){ .definition = definition, .published = true, .macrostep = true };
+    /* Counted from here so every ta_actor_free() path can uncount it. */
+    system->definitions[definition->id]->actor_count += 1u;
     actor->host_impl = (ta_dm_host_impl){ .system = system, .actor = actor };
     actor->host = (ta_dm_host){ .impl = &actor->host_impl };
 
     size_t config_bytes = definition->configuration.bytes;
-    size_t history_bytes = definition->history.storage_bytes;
-    actor->session_bytes = config_bytes * 2u + history_bytes;
+    actor->session_bytes = ta_definition_session_bytes(definition);
     actor->session_storage = ta_mem_alloc(system->allocator, actor->session_bytes, _Alignof(uint64_t));
     if (actor->session_storage == NULL) {
         ta_actor_free(system, actor);
@@ -4327,7 +4384,7 @@ TA_API ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *
     actor->history = (ta_history_state){ .storage = storage + config_bytes * 2u, .layout = &definition->history };
 
     uint32_t instance_size = definition->datamodel_instance_size;
-    actor->datamodel_instance = ta_mem_alloc(system->allocator, instance_size == 0 ? 1u : instance_size,
+    actor->datamodel_instance = ta_mem_alloc(system->allocator, ta_definition_instance_bytes(definition),
                                              definition->datamodel_instance_alignment);
     if (actor->datamodel_instance == NULL) {
         ta_actor_free(system, actor);
@@ -4449,6 +4506,26 @@ static const ta_event *ta_actor_paused_event(const ta_actor *actor) {
     return NULL;
 }
 
+static size_t ta_vec_bytes(const ta_vec *vec) {
+    return (size_t)vec->capacity * vec->element_size;
+}
+
+/* Everything the core allocates for the actor now; see ta_actor_inspection. */
+static size_t ta_actor_allocated_bytes(const ta_actor *actor) {
+    size_t total = sizeof(ta_actor) + actor->session_bytes;
+    if (actor->datamodel_instance != NULL) {
+        total += ta_definition_instance_bytes(actor->definition);
+    }
+    const ta_actor_sparse_state *sparse = actor->sparse;
+    if (sparse != NULL) {
+        total += sizeof(ta_actor_sparse_state);
+        total += ta_vec_bytes(&sparse->internal_events);
+        total += ta_vec_bytes(&sparse->pending_invokes);
+        total += (size_t)sparse->invoke_capacity * (sizeof(ta_active_invoke) + sizeof(ta_invoke_meta));
+    }
+    return total;
+}
+
 TA_API ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_inspection *out) {
     if (out == NULL) {
         return TA_ERR_INVALID;
@@ -4473,6 +4550,7 @@ TA_API ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_in
         .macrostep_in_progress = actor->macrostep,
         .current_event = ta_actor_paused_event(actor),
         .delayed_send_count = ta_timer_count_owner(&system->timers, id),
+        .allocated_bytes = ta_actor_allocated_bytes(actor),
     };
     if (actor->sparse != NULL) {
         out->internal_events = actor->sparse->internal_events.items;
@@ -4482,20 +4560,34 @@ TA_API ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_in
         out->has_completion = actor->finished;
         out->completion = actor->finished ? &actor->sparse->completion : NULL;
     }
-    const ta_datamodel_vtable *v = definition->datamodel.v;
-    if (v->inspect != NULL &&
-        v->inspect(definition->datamodel.self,
-                   &(ta_datamodel_inspect_params){
-                       .shared = definition->datamodel_shared,
-                       .instance = actor->datamodel_instance,
-                       .host = &actor->host,
-                       .out = &out->datamodel_root,
-                   }) == TA_OK) {
-        out->has_datamodel_root = true;
-    } else {
-        out->datamodel_root = (ta_value){0};
-    }
     return TA_OK;
+}
+
+TA_API ta_result ta_actor_datamodel_root(ta_system *system, ta_actor_id id, ta_value *out) {
+    if (out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    *out = (ta_value){0};
+    ta_actor *actor = ta_actor_lookup(system, id);
+    if (actor == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    const ta_definition *definition = actor->definition;
+    const ta_datamodel_vtable *v = definition->datamodel.v;
+    if (v->inspect == NULL) {
+        return TA_ERR_UNSUPPORTED;
+    }
+    ta_result result = v->inspect(definition->datamodel.self,
+                                  &(ta_datamodel_inspect_params){
+                                      .shared = definition->datamodel_shared,
+                                      .instance = actor->datamodel_instance,
+                                      .host = &actor->host,
+                                      .out = out,
+                                  });
+    if (result != TA_OK) {
+        *out = (ta_value){0};
+    }
+    return result;
 }
 
 TA_API ta_result ta_system_visit_actors(ta_system *system, ta_actor_inspector inspector) {
@@ -4511,9 +4603,6 @@ TA_API ta_result ta_system_visit_actors(ta_system *system, ta_actor_inspector in
         ta_result result = ta_actor_inspect(system, entry->actor->record.id, &inspection);
         if (result == TA_OK) {
             result = inspector.visit(inspector.self, &inspection);
-            if (inspection.has_datamodel_root) {
-                ta_value_release(&inspection.datamodel_root);
-            }
         }
         if (result != TA_OK) {
             return result;
@@ -4795,6 +4884,36 @@ TA_API ta_result ta_system_register_definition(ta_system *system, ta_definition 
     system->definition_count += 1;
     *out = definition->id;
     return TA_OK;
+}
+
+static bool ta_bytes_same(ta_bytes left, ta_bytes right) {
+    if (left.len != right.len) {
+        return false;
+    }
+    for (uint32_t index = 0; index < left.len; index += 1) {
+        if (left.ptr[index] != right.ptr[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+TA_API ta_result ta_system_find_definition(const ta_system *system,
+                                    const ta_definition_identity *identity,
+                                    ta_definition_id *out) {
+    if (system == NULL || identity == NULL || out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    /* Newest first: the most recently registered match wins. */
+    for (uint32_t index = system->definition_count; index > 0; index -= 1) {
+        const ta_definition *definition = system->definitions[index - 1u];
+        if (ta_str_equal(definition->identity.family.name, identity->family.name) &&
+            ta_bytes_same(definition->identity.revision, identity->revision)) {
+            *out = definition->id;
+            return TA_OK;
+        }
+    }
+    return TA_ERR_NOT_FOUND;
 }
 
 TA_PRIVATE bool ta_system_is_scxml_io(const ta_system *system, ta_atom type) {

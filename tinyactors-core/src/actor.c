@@ -58,13 +58,14 @@ static ta_result ta_actor_claim_slot(ta_system *system, ta_actor *actor, ta_acto
 
 static void ta_actor_free(ta_system *system, ta_actor *actor) {
     const ta_definition *definition = actor->definition;
+    system->definitions[definition->id]->actor_count -= 1u;
     if (actor->datamodel_initialized) {
         definition->datamodel.v->destroy_instance(definition->datamodel.self, definition->datamodel_shared,
                                                   actor->datamodel_instance);
     }
     if (actor->datamodel_instance != NULL) {
         ta_mem_free(system->allocator, actor->datamodel_instance,
-                    &(ta_allocator_free_params){ .size = definition->datamodel_instance_size,
+                    &(ta_allocator_free_params){ .size = ta_definition_instance_bytes(definition),
                                                  .alignment = definition->datamodel_instance_alignment });
     }
     ta_mem_free(system->allocator, actor->session_storage,
@@ -91,12 +92,13 @@ ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params)
         return TA_ERR_NOMEM;
     }
     *actor = (ta_actor){ .definition = definition, .published = true, .macrostep = true };
+    /* Counted from here so every ta_actor_free() path can uncount it. */
+    system->definitions[definition->id]->actor_count += 1u;
     actor->host_impl = (ta_dm_host_impl){ .system = system, .actor = actor };
     actor->host = (ta_dm_host){ .impl = &actor->host_impl };
 
     size_t config_bytes = definition->configuration.bytes;
-    size_t history_bytes = definition->history.storage_bytes;
-    actor->session_bytes = config_bytes * 2u + history_bytes;
+    actor->session_bytes = ta_definition_session_bytes(definition);
     actor->session_storage = ta_mem_alloc(system->allocator, actor->session_bytes, _Alignof(uint64_t));
     if (actor->session_storage == NULL) {
         ta_actor_free(system, actor);
@@ -109,7 +111,7 @@ ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params)
     actor->history = (ta_history_state){ .storage = storage + config_bytes * 2u, .layout = &definition->history };
 
     uint32_t instance_size = definition->datamodel_instance_size;
-    actor->datamodel_instance = ta_mem_alloc(system->allocator, instance_size == 0 ? 1u : instance_size,
+    actor->datamodel_instance = ta_mem_alloc(system->allocator, ta_definition_instance_bytes(definition),
                                              definition->datamodel_instance_alignment);
     if (actor->datamodel_instance == NULL) {
         ta_actor_free(system, actor);
@@ -231,6 +233,26 @@ static const ta_event *ta_actor_paused_event(const ta_actor *actor) {
     return NULL;
 }
 
+static size_t ta_vec_bytes(const ta_vec *vec) {
+    return (size_t)vec->capacity * vec->element_size;
+}
+
+/* Everything the core allocates for the actor now; see ta_actor_inspection. */
+static size_t ta_actor_allocated_bytes(const ta_actor *actor) {
+    size_t total = sizeof(ta_actor) + actor->session_bytes;
+    if (actor->datamodel_instance != NULL) {
+        total += ta_definition_instance_bytes(actor->definition);
+    }
+    const ta_actor_sparse_state *sparse = actor->sparse;
+    if (sparse != NULL) {
+        total += sizeof(ta_actor_sparse_state);
+        total += ta_vec_bytes(&sparse->internal_events);
+        total += ta_vec_bytes(&sparse->pending_invokes);
+        total += (size_t)sparse->invoke_capacity * (sizeof(ta_active_invoke) + sizeof(ta_invoke_meta));
+    }
+    return total;
+}
+
 ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_inspection *out) {
     if (out == NULL) {
         return TA_ERR_INVALID;
@@ -255,6 +277,7 @@ ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_inspectio
         .macrostep_in_progress = actor->macrostep,
         .current_event = ta_actor_paused_event(actor),
         .delayed_send_count = ta_timer_count_owner(&system->timers, id),
+        .allocated_bytes = ta_actor_allocated_bytes(actor),
     };
     if (actor->sparse != NULL) {
         out->internal_events = actor->sparse->internal_events.items;
@@ -264,20 +287,34 @@ ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_inspectio
         out->has_completion = actor->finished;
         out->completion = actor->finished ? &actor->sparse->completion : NULL;
     }
-    const ta_datamodel_vtable *v = definition->datamodel.v;
-    if (v->inspect != NULL &&
-        v->inspect(definition->datamodel.self,
-                   &(ta_datamodel_inspect_params){
-                       .shared = definition->datamodel_shared,
-                       .instance = actor->datamodel_instance,
-                       .host = &actor->host,
-                       .out = &out->datamodel_root,
-                   }) == TA_OK) {
-        out->has_datamodel_root = true;
-    } else {
-        out->datamodel_root = (ta_value){0};
-    }
     return TA_OK;
+}
+
+ta_result ta_actor_datamodel_root(ta_system *system, ta_actor_id id, ta_value *out) {
+    if (out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    *out = (ta_value){0};
+    ta_actor *actor = ta_actor_lookup(system, id);
+    if (actor == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    const ta_definition *definition = actor->definition;
+    const ta_datamodel_vtable *v = definition->datamodel.v;
+    if (v->inspect == NULL) {
+        return TA_ERR_UNSUPPORTED;
+    }
+    ta_result result = v->inspect(definition->datamodel.self,
+                                  &(ta_datamodel_inspect_params){
+                                      .shared = definition->datamodel_shared,
+                                      .instance = actor->datamodel_instance,
+                                      .host = &actor->host,
+                                      .out = out,
+                                  });
+    if (result != TA_OK) {
+        *out = (ta_value){0};
+    }
+    return result;
 }
 
 ta_result ta_system_visit_actors(ta_system *system, ta_actor_inspector inspector) {
@@ -293,9 +330,6 @@ ta_result ta_system_visit_actors(ta_system *system, ta_actor_inspector inspector
         ta_result result = ta_actor_inspect(system, entry->actor->record.id, &inspection);
         if (result == TA_OK) {
             result = inspector.visit(inspector.self, &inspection);
-            if (inspection.has_datamodel_root) {
-                ta_value_release(&inspection.datamodel_root);
-            }
         }
         if (result != TA_OK) {
             return result;

@@ -317,6 +317,8 @@ functions.each do |function|
     classify(types, function['name'], param, names, function['params'][position + 1]&.dig('name'))
     consumed = NOTES[:consumes]["#{function['name']}.#{param['name']}"]
     param['consumed_on'] = consumed if consumed
+    owned = NOTES[:owned_outputs]["#{function['name']}.#{param['name']}"]
+    param['release_when'] = owned if owned
   end
   function['public'] = public_names.include?(function['name'])
   function['implemented'] = implemented.include?(function['name']) || function['static_inline'] == true

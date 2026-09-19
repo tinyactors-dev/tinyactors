@@ -83,6 +83,37 @@ begin
   round = JSON.parse(JSON.generate(host.codec.roundtrip.ta_scxml_spec(value: spec)))
   check(without_inferable_kinds(round) == spec, 'traffic light spec round-trips')
 
+  # Definition inspection end to end: the adapter identifies itself, the
+  # identity finds the definition, and the data-model root is its own call.
+  live = host.ta.system.create(config: { allocator: { '$adapter' => 'allocator.libc' } }).dig(:out, :out)
+  compiled = host.ta.definition.compile_spec(system: live, spec: spec, datamodel: { '$adapter' => 'datamodel.jq' },
+                                             allocator: { '$adapter' => 'allocator.libc' })
+  check(compiled[:result] == 'ok', "compile: #{compiled}")
+  registered = host.ta.system.register_definition(system: live, definition: compiled.dig(:out, :out))
+  id = registered.dig(:out, :out)
+  facts = host.ta.definition.inspect(system: live, definition: id)
+  check(facts[:result] == 'ok', "definition inspect: #{facts}")
+  facts = facts[:out][:out]
+  check(facts[:id] == id && facts[:datamodel] == { '$adapter': 'datamodel.jq' } && facts[:retired] == false &&
+          facts[:binding] == 'early' && facts[:state_count].positive? && facts[:actor_count].zero? &&
+          facts[:definition_bytes].positive? && facts.dig(:identity, :family, :name) == 'traffic_light',
+        "definition inspection: #{facts}")
+  found = host.ta.system.find_definition(system: live, identity: facts[:identity])
+  check(found == { result: 'ok', out: { out: id } }, "find definition: #{found}")
+  missing = host.ta.system.find_definition(system: live, identity: { family: { name: 'nope' }, revision: 'x' })
+  check(missing[:result] == 'err_not_found', "find a missing definition: #{missing}")
+  check(host.ta.definition.inspect(system: live, definition: id + 1)[:result] == 'err_not_found',
+        'inspecting an unknown definition')
+  actor = host.ta.actor.spawn(system: live, definition: id).dig(:out, :out)
+  view = host.ta.actor.inspect(system: live, actor: actor).dig(:out, :out)
+  check(!view.key?(:datamodel_root) && view[:allocated_bytes] >= facts[:actor_fixed_bytes],
+        "actor inspection: #{view}")
+  root = host.ta.actor.datamodel_root(system: live, actor: actor)
+  check(root[:result] == 'ok' && root.dig(:out, :out).is_a?(Hash), "datamodel root: #{root}")
+  check(host.ta.definition.inspect(system: live, definition: id).dig(:out, :out, :actor_count) == 1,
+        'the spawned actor is counted')
+  host.ta.system.destroy(system: live)
+
   # The <scxml> <script> is a ta_expression member of the spec.
   scripted = TinyactorsTest::Chart.define(:scripted) do
     data count: 0

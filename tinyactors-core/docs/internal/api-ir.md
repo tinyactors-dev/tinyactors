@@ -79,7 +79,7 @@ Fields and parameters carry:
   | `raw` | `void *` |
   | `function` | callback pointer |
 
-- `release_when`: the flag field that says an output value must be released.
+- `release_when`: when an output value must be released: the flag field that guards a struct field, or `"ok"` for a function output parameter (release after `TA_OK`).
 - `consumed_on`: the function takes ownership of this handle on `"ok"`.
 
 Functions have `name`, `returns`, `params`, `public` (declared with `TA_API`),

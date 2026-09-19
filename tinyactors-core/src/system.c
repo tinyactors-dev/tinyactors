@@ -129,6 +129,36 @@ ta_result ta_system_register_definition(ta_system *system, ta_definition *defini
     return TA_OK;
 }
 
+static bool ta_bytes_same(ta_bytes left, ta_bytes right) {
+    if (left.len != right.len) {
+        return false;
+    }
+    for (uint32_t index = 0; index < left.len; index += 1) {
+        if (left.ptr[index] != right.ptr[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+ta_result ta_system_find_definition(const ta_system *system,
+                                    const ta_definition_identity *identity,
+                                    ta_definition_id *out) {
+    if (system == NULL || identity == NULL || out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    /* Newest first: the most recently registered match wins. */
+    for (uint32_t index = system->definition_count; index > 0; index -= 1) {
+        const ta_definition *definition = system->definitions[index - 1u];
+        if (ta_str_equal(definition->identity.family.name, identity->family.name) &&
+            ta_bytes_same(definition->identity.revision, identity->revision)) {
+            *out = definition->id;
+            return TA_OK;
+        }
+    }
+    return TA_ERR_NOT_FOUND;
+}
+
 bool ta_system_is_scxml_io(const ta_system *system, ta_atom type) {
     return type == system->scxml_io_type || type == system->scxml_io_alias;
 }
