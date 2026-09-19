@@ -274,10 +274,15 @@ them.
 - **`router.recording`** journals every submitted delivery with its
   `status` (`accepted`, `retry`, `error`). With `directory` (the name of a
   `directory.memory` instrument) it resolves a named destination through
-  that directory and journals the entry as `resolved`: a resident entry is
-  delivered, an unloaded one answers `err_unloaded` (this router cannot
-  load an actor; a host would), and an unknown address `err_not_found`.
-  Without a directory, a named destination is unsupported. In mode `direct` it delivers like
+  that directory's `resolve` operation, the one core calls (ADR 0037), so
+  the resolution is journaled by the directory and a fault armed on
+  `resolve` reaches routing too. The submission records the entry as
+  `resolved`: a resident entry is delivered, an unloaded one answers
+  `err_unloaded` (this router cannot load an actor; a host would), and an
+  unknown address answers what `resolve` reported, `err_not_found` by
+  default. Without a directory, a named destination is unsupported.
+  The host resolves a named destination because it owns location and
+  residency: the actor may be unloaded, or live in another process. In mode `direct` it delivers like
   `router.direct`, and it also records the `ta_actor_deliver` result. In mode
   `hold` it clones the delivery and answers accepted. `held` lists the held
   deliveries. `release {id}` delivers one with `ta_actor_deliver`; a busy

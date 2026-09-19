@@ -142,6 +142,29 @@ router_group = TinyactorsTest.scenarios 'router' do
                  router.entries('submit').map { |entry| [entry[:status], (entry[:injected] || false).to_s] }
   end
 
+  scenario 'a named destination resolves through the directory, which can fail' do
+    directory = memory_directory
+    router = recording_router(directory: true)
+    sender = spawn :messenger, binding: { peer: '#_actor_messenger/m2' }
+    receiver = spawn :messenger
+    directory.put(family: 'messenger', name: 'm2', kind: :resident, actor: receiver.handle)
+
+    sender.deliver 'greet'
+    assert_equal [{ event: 'hello', from: "#_scxml_#{sender.handle}" }], receiver.data('.inbox')
+    # The router resolves through the directory's own operation, so the
+    # directory journals it, rather than reading its entries behind its back.
+    assert_equal [['messenger', 'm2', 'ok']],
+                 directory.entries('resolve').map { |entry| entry.values_at(:family, :name, :result) }
+
+    # A fault armed on resolve therefore reaches routing too.
+    directory.arm_fault(:resolve, result: 'err_stale')
+    sender.deliver 'greet'
+    assert_equal 'err_stale', router.entries('submit').last[:result]
+    assert_equal 1, receiver.data('.inbox').size, 'nothing was delivered while resolve failed'
+    assert_equal %w[ok err_stale],
+                 directory.entries('resolve').map { |entry| entry[:result] }
+  end
+
   scenario 'an injected router error reaches the chart as error.communication' do
     router = recording_router
     router.arm_fault(:submit, message: 'link down')

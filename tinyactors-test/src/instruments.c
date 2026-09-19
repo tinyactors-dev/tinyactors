@@ -107,7 +107,7 @@ typedef struct tat_instrument {
     tat_invoker_state invoker;
 } tat_instrument;
 
-static ta_actor_directory_entry tat_directory_current(tat_instrument *instrument, const ta_actor_address *address);
+static ta_result tat_directory_resolve(void *self, const ta_actor_directory_resolve_params *params);
 static jv tat_entry_record(ta_actor_directory_entry entry);
 
 static tat_instrument **tat_instruments;
@@ -530,10 +530,14 @@ static jv tat_allocator_stats(const tat_allocator_state *state) {
 
 /*
  * Delivers to a runtime destination, or resolves a named one through the
- * router's directory instrument: resident delivers, unloaded answers
- * TA_ERR_UNLOADED (this router cannot load an actor: a host would), and an
- * unknown address answers TA_ERR_NOT_FOUND. Without a directory, a named
- * destination is unsupported. The resolved entry is added to `entry`.
+ * router's directory instrument. Resolution goes through the directory's
+ * `resolve` operation, the same one core calls (ADR 0037), so it is
+ * journaled and a fault armed on `resolve` reaches routing too. A resident
+ * entry is delivered; an unloaded one answers TA_ERR_UNLOADED, because this
+ * router cannot load an actor (a host would); an unknown address answers
+ * whatever resolve reported, TA_ERR_NOT_FOUND by default. Without a
+ * directory, a named destination is unsupported. The resolved entry is
+ * added to `entry`.
  */
 static ta_result tat_router_deliver(tat_instrument *instrument, const ta_external_delivery *delivery, jv *entry) {
     ta_actor_id id;
@@ -544,12 +548,15 @@ static ta_result tat_router_deliver(tat_instrument *instrument, const ta_externa
         if (directory == NULL) {
             return TA_ERR_UNSUPPORTED;
         }
-        ta_actor_directory_entry resolved = tat_directory_current(directory, &delivery->destination.as.named);
+        ta_actor_directory_entry resolved = {.kind = TA_ACTOR_DIRECTORY_NONE};
+        ta_result result = tat_directory_resolve(
+            directory, &(ta_actor_directory_resolve_params){.address = &delivery->destination.as.named,
+                                                            .out = &resolved});
         if (entry != NULL) {
             *entry = jv_object_set(*entry, jv_string("resolved"), tat_entry_record(resolved));
         }
-        if (resolved.kind == TA_ACTOR_DIRECTORY_NONE) {
-            return TA_ERR_NOT_FOUND;
+        if (result != TA_OK) {
+            return result;
         }
         if (resolved.kind == TA_ACTOR_DIRECTORY_UNLOADED) {
             return TA_ERR_UNLOADED;
