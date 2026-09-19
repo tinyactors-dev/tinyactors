@@ -31,7 +31,7 @@ Dir[root.join('ruby/charts/**/*.rb').to_s].sort.each { |file| require file }
 Dir[root.join('ruby/scenarios/**/*.rb').to_s].sort.each { |file| require file }
 
 Context = TinyactorsTest::Context
-ALLOCATOR = Context::ALLOCATOR
+ALLOCATOR = { '$adapter' => 'allocator.libc' }.freeze
 
 # The chart DSL's shorthand, removed from both sides before comparing:
 # empty lists and nulls are absent, and `kind` is dropped where the one

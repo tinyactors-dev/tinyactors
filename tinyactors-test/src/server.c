@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "binding.h"
+#include "instruments.h"
 #include "jq.h"
 #include "rpc.h"
 #include "ta_rpc.h"
@@ -210,6 +211,14 @@ static const tat_method TAT_HOST_METHODS[] = {
      "\"input\":{\"type\":\"json\",\"required\":true}}}"},
     {"metrics.snapshot", tat_handle_metrics, "{\"host\":true,\"params\":{}}"},
     {"host.shutdown", tat_handle_shutdown, "{\"host\":true,\"params\":{}}"},
+    {"instrument.list", tat_instrument_list_method, "{\"host\":true,\"params\":{}}"},
+    {"instrument.journal", tat_instrument_journal_method,
+     "{\"host\":true,\"params\":{\"name\":{\"type\":\"string\",\"required\":true},"
+     "\"since\":{\"type\":\"u64\",\"required\":false}}}"},
+    {"instrument.control", tat_instrument_control_method,
+     "{\"host\":true,\"params\":{\"name\":{\"type\":\"string\",\"required\":true},"
+     "\"command\":{\"type\":\"string\",\"required\":true},"
+     "\"args\":{\"type\":\"json\",\"required\":false}}}"},
     {"handle.fixture", tat_handle_fixture_method,
      "{\"host\":true,\"params\":{\"type\":{\"type\":\"string\",\"required\":true}}}"},
 };

@@ -34,7 +34,10 @@ module TinyactorsTest
       driver = Driver.new(@executable, timeout: @timeout)
       error = nil
       begin
-        Context.new(driver, scenario.group, @charts).instance_exec(&scenario.block)
+        context = Context.new(driver, scenario.group, @charts)
+        context.instance_exec(&scenario.block)
+        # Destroying the system checks that it released everything it allocated.
+        context.teardown!
       rescue StandardError => e
         error = e
       end

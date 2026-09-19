@@ -144,6 +144,59 @@ options. Each `on_entry` or `on_exit` call adds a separate handler, as in
 SCXML: an error skips the rest of that handler, and the next handler still
 runs.
 
+Each scenario's system uses a counting allocator (`allocator.counting`).
+After the scenario, the runner destroys the system. The scenario fails when
+an allocation is still live, or when core freed memory it was not given.
+
+### Instruments
+
+Scenarios that need more than the default adapters install instruments,
+which journal every call core makes to them and fail on command (see
+"Instruments" in `docs/protocol.md`):
+
+```ruby
+router  = recording_router(mode: :hold)   # replaces router.direct
+service = scripted_invoker('urn:example:service')
+io      = recording_io('urn:example:io')
+dir     = memory_directory
+allocator                                  # the system's counting allocator
+
+router.held; router.release(id); router.drop(id)
+router.arm_fault(:submit, status: 'retry')
+report_invoke service.started.first, :event, event: 'reply', data: { value: 1 }
+report_invoke service.started.first, :unavailable
+allocator.arm_fault(after: 3, count: 1); allocator.stats
+io.entries('send')
+```
+
+### Traces and equivalent runs
+
+`assert_equivalent_runs` runs a scenario body several times, each run
+against its own system. After every step it records a trace of everything
+it can observe. For every resident actor, invoked children included, that
+is the configuration, residency, data-model root, completion, delayed
+sends, and invocations. It also records the new journal entries of every
+instrument. The runs must produce the same trace as the baseline run, step by step:
+
+```ruby
+assert_equivalent_runs(
+  variants:      { 'paused' => { resume_budget: 1 }, 'one send per dispatch' => { dispatch_budget: 1 } },
+  interruptions: { 'reinstall router' => ->(context) { ... } }  # tried after each baseline step
+) do
+  light = spawn
+  advance_time 30_000
+  light.deliver 'fault'
+end
+```
+
+`variants` are Context options. `interruptions` run once for each step of
+the baseline, after that step only. `normalize:` removes differences that a
+claim allows. On a mismatch, the error names the first step that differs and
+the path of the first difference. Actors appear in traces under labels: a
+spawned actor as `<chart>.<n>`, any other as `actor.<n>`. So runtime IDs do
+not count as differences, and `rebind(actor, new_id)` keeps an actor's label
+after a reload.
+
 `expect_failure` applies to the next scenario only, and it names the failure
 it expects: `rpc_error:` (optionally with `rpc_method:`) and/or `message:`.
 
@@ -176,6 +229,9 @@ Charts whose data model has no adapter in the host are skipped.
 `ruby/selftest.rb` verifies the DSL's outcome classification against the live
 host. `ruby/runner_selftest.rb` runs the steps against a scripted fake host
 whose answers stand in for core functions that are not implemented yet.
+`ruby/instruments_selftest.rb` checks each instrument, the leak check, and
+`assert_equivalent_runs` against the live host, including that a leak and a
+divergent run are detected.
 
 ## Vendored dependencies
 

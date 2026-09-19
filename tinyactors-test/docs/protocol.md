@@ -64,6 +64,15 @@ IDs of every resident actor, including children that invokers spawned. With
 own enumeration, `ta_system_visit_actors`, takes a callback and so cannot cross
 the protocol.
 
+`instrument.list`, `instrument.journal`, and `instrument.control` read and
+steer the instrumented adapters (see [Instruments](#instruments)):
+
+- `instrument.list` returns `[{"name", "kind"}]` for every instrument.
+- `instrument.journal` takes `{"name", "since"?}` and returns the journal
+  entries whose `seq` is greater than `since`, oldest first.
+- `instrument.control` takes `{"name", "command", "args"?}`; the commands of
+  each kind are listed below.
+
 ## Generated methods
 
 `mise run bindings` generates one method per public function in
@@ -198,7 +207,9 @@ A vtable-bearing value (`ta_allocator`, `ta_datamodel`, `ta_actor_directory`,
 in `src/adapters.c`. They run synchronously, so callbacks never become nested
 RPC conversations. The current adapters are `allocator.libc`,
 `datamodel.jq`, `datamodel.ecmascript` (SCXML B.2 on quickjs-ng),
-`router.direct`, and `invoker.scxml`. `router.direct` takes
+`router.direct`, and `invoker.scxml`, plus the instruments
+`allocator.counting`, `router.recording`, `directory.memory`,
+`invoker.scripted`, and `io.recording` (see [Instruments](#instruments)). `router.direct` takes
 `{"system": <system handle>}` and hands each external event to
 `ta_actor_deliver()`; a busy actor makes it answer retry, so core keeps the
 event for a later dispatch.
@@ -223,6 +234,65 @@ names (`jq` or `ecmascript`), or with the parent's when the spec names none.
 encoded with the parent's model and decoded with the child's. The invoker
 refuses a child whose data model differs from the parent's. The parent then
 gets `error.execution`, and no child is spawned.
+
+### Instruments
+
+Instruments are adapters in `src/instruments.c` that record every call core
+makes to them in a journal and answer with faults a test arms beforehand.
+Each one is a named instance that lives as long as the host process. Its
+config always has `"name"`, which must be unique in the process. A later
+adapter argument of `{"name": ...}` alone refers to the same instance, so one
+counting allocator can back a system and every definition it compiles.
+
+A journal entry is an object with `seq`, `op`, and the operation's details.
+`seq` is one counter shared by every instrument, so entries of different
+instruments can be ordered against each other. Events are encoded as
+`ta_event`, plus `name_text` with the dotted name. Actor references are
+encoded as `ta_actor_ref`. Host values are encoded as wire JSON.
+
+Every kind except the allocator arms faults with
+`fail {"op", "count"?, "result"?, "status"?, "message"?}`. The next `count` calls of
+`op` (default 1; 0 means every later call) fail without doing their work,
+and their journal entries carry `"injected": true`. `clear_faults` disarms
+them.
+
+| Kind | Config | Journal ops | Commands |
+|---|---|---|---|
+| `allocator.counting` | `name` | `alloc_failed`, `free_unknown`, `free_mismatch` | `stats`, `fail {after, count}`, `clear_faults` |
+| `router.recording` | `name`, `system`, `mode`? | `submit`, `release`, `drop` | `mode {mode}`, `held`, `release {id}`, `drop {id}`, `fail {op: "submit", status?}`, `clear_faults` |
+| `directory.memory` | `name` | `claim`, `resolve`, `replace`, `remove` | `entries`, `put {family, name, kind, actor?}`, `fail`, `clear_faults` |
+| `invoker.scripted` | `name`, `system` | `start`, `cancel`, `forward` | `services`, `fail`, `clear_faults` |
+| `io.recording` | `name`, `system` | `send` | `fail`, `clear_faults` |
+
+- **`allocator.counting`** wraps libc. It tracks every live allocation by
+  address, and `stats` reports live allocations and bytes, the peak, and
+  totals. A free of an address it did not hand out is journaled as
+  `free_unknown` and never passed to libc. A free with a different size or
+  alignment is journaled as `free_mismatch`. `fail {after: n, count: m}`
+  lets `n` more allocations succeed, then fails `m` of them (`0`: every
+  later one).
+- **`router.recording`** journals every submitted delivery with its
+  `status` (`accepted`, `retry`, `error`). In mode `direct` it delivers like
+  `router.direct`, and it also records the `ta_actor_deliver` result. In mode
+  `hold` it clones the delivery and answers accepted. `held` lists the held
+  deliveries. `release {id}` delivers one with `ta_actor_deliver`; a busy
+  actor keeps it held. `drop {id}` discards one. An injected `submit` fault
+  answers `status` `"retry"` or `"error"` (the default).
+- **`directory.memory`** is a compare-and-swap directory. `claim` fails with
+  `err_stale` when the address has an entry. `replace` and `remove` fail with
+  `err_stale` unless the current entry equals `expected`. `resolve` of an
+  absent address answers `err_not_found` and kind `none`. `put` changes an
+  entry behind core's back, as another process would. Core does not call the
+  directory yet.
+- **`invoker.scripted`** is a service that is not an actor. `start`
+  journals the request (`parent`, `invoke_id`, `type`, `src`, `data`,
+  `params`, `autoforward`) and answers a new `service` handle. The test then
+  reports the service's events, completion, or loss with
+  `ta.actor.report_invoke`. `cancel` and `forward` are journaled with
+  `known`, which tells whether the service was still live.
+- **`io.recording`** is an Event I/O Processor that journals each send
+  (`source`, `send_id`, `event_text`, `io_type`, `target`, `data`) and
+  delivers nothing.
 
 ### Codec methods
 
@@ -253,12 +323,13 @@ maps onto the public C API:
 
 | Step | Calls |
 |---|---|
-| first use of the system | `ta.system.create` with `{"allocator": {"$adapter": "allocator.libc"}, "initial_time": 0}`, then `ta.system.set_external_event_router` with `router.direct`, and `ta.system.register_invoker` with `invoker.scxml` (every defined chart as `charts`) for the atom of `http://www.w3.org/TR/scxml/` |
-| first `spawn` of a chart | `ta.definition.compile_spec` (spec plus `{"$adapter": "datamodel.jq"}`), then `ta.system.register_definition`, which takes ownership |
+| first use of the system | `ta.system.create` with `{"allocator": {"$adapter": "allocator.counting", "config": {"name": "<run>.allocator"}}, "initial_time": 0}`, then `ta.system.set_external_event_router` with `router.direct`, and `ta.system.register_invoker` with `invoker.scxml` (every defined chart as `charts`) for the atom of `http://www.w3.org/TR/scxml/` |
+| first `spawn` of a chart | `ta.definition.compile_spec` (spec plus `{"$adapter": "datamodel.jq"}` and the run's counting allocator), then `ta.system.register_definition`, which takes ownership |
 | `spawn` | `ta.actor.spawn` |
 | `advance_time` | `ta.system.set_time` with absolute logical time |
 | `deliver` | `ta.system.intern_atom` per segment and `ta.event.name_intern` with `{"atoms": [...]}` (cached), then `ta.actor.deliver` with an external event whose `invoke_id` is `TA_INVOKE_ID_NONE` |
 | after every step | run to quiescence: `system.actors` with `"runnable": true` lists every resident actor with a macrostep in progress, including invoked children; `ta.actor.resume` each until `stable` or `done` and list again until none is runnable; then `ta.system.dispatch_due`; repeat until nothing was dispatched and nothing more is due |
+| end of the scenario | `ta.system.destroy`, then `instrument.control` `stats` on the counting allocator: live allocations or a bad free fail the scenario |
 | `active` | `ta.actor.inspect` for the count, `ta.actor.active_states`, and `ta.definition.state` for each state's ID (cached) |
 | `data` | `ta.actor.datamodel_root`, then `json.transform` for a filter |
 

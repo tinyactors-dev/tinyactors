@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="Build, then run the jq and ECMAScript data model, smoke, bindings, bindings generator, DSL and runner self-tests, the SCXML IRP import check, the export round-trip check, and scenario suites"
+#MISE description="Build, then run the jq and ECMAScript data model, smoke, bindings, bindings generator, DSL, runner, and instruments self-tests, the SCXML IRP import check, the export round-trip check, and scenario suites"
 
 require 'pathname'
 
@@ -19,6 +19,7 @@ run('ruby', 'ruby/bindings_test.rb', chdir: root)
 run('ruby', 'ruby/bindings_generator_test.rb', chdir: root)
 run('ruby', 'ruby/selftest.rb', chdir: root)
 run('ruby', 'ruby/runner_selftest.rb', chdir: root)
+run('ruby', 'ruby/instruments_selftest.rb', chdir: root)
 run('ruby', 'ruby/scxml_irp_check.rb', chdir: root)
 run('ruby', 'ruby/export_roundtrip_check.rb', chdir: root)
 run('ruby', 'ruby/run_scenarios.rb', chdir: root)

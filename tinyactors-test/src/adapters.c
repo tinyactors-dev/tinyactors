@@ -3,6 +3,7 @@
 
 #include "allocator.h"
 #include "binding.h"
+#include "instruments.h"
 #include "json_datamodel.h"
 #include "ta_rpc.h"
 #include "value_codec.h"
@@ -374,6 +375,12 @@ const tat_adapter TAT_ADAPTERS[] = {
     {"router.direct", "ta_external_event_router", sizeof(ta_external_event_router),
      tat_make_direct_router},
     {"invoker.scxml", "ta_invoker", sizeof(ta_invoker), tat_make_scxml_invoker},
+    /* Instrumented adapters: src/instruments.c. */
+    {"allocator.counting", "ta_allocator", sizeof(ta_allocator), tat_make_counting_allocator},
+    {"router.recording", "ta_external_event_router", sizeof(ta_external_event_router), tat_make_recording_router},
+    {"directory.memory", "ta_actor_directory", sizeof(ta_actor_directory), tat_make_memory_directory},
+    {"invoker.scripted", "ta_invoker", sizeof(ta_invoker), tat_make_scripted_invoker},
+    {"io.recording", "ta_io", sizeof(ta_io), tat_make_recording_io},
 };
 
 const size_t TAT_ADAPTER_COUNT = sizeof(TAT_ADAPTERS) / sizeof(TAT_ADAPTERS[0]);

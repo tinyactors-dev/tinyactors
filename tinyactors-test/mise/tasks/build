@@ -99,6 +99,7 @@ sources = [
   ROOT.join('src/allocator.c'),
   ROOT.join('src/binding.c'),
   ROOT.join('src/adapters.c'),
+  ROOT.join('src/instruments.c'),
   BUILD.join('gen/ta_rpc.c'),
   WORKSPACE.join('tinyactors-core/include/tinyactors.c')
 ]
