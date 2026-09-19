@@ -68,6 +68,14 @@ it with `chart:`, which embeds that chart's spec as JSON in the invoke's
 `irp_testNNNsub1`. An invoker in the test host maps `file:NAME.scxml` to the
 chart `irp_NAME`.
 
+**Inline `<scxml>` as a value.** An `<scxml>` document can also be the
+content of `<assign>`, `<data>`, or a `<send>`/`<donedata>` `<content>`
+(test530 assigns one and invokes it with `<content expr>`). The host has no
+XML parser (ADR 0025), so the importer converts the document to a child
+chart in the same way and emits `chart:` (`assign '.Var1', chart:
+:irp_test530_child1`). The value is that chart's spec, which the SCXML
+invoker runs.
+
 **`<data src>`.** The importer reads the file (the core performs no I/O) and
 passes it as inline content.
 

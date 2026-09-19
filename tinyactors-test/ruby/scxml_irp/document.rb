@@ -254,10 +254,28 @@ module ScxmlIrp
           "{ expr: #{Ruby.str(expression(attrs, 'expr'))} }"
         elsif attrs['src']
           "{ content: #{Ruby.str(@resolve_file.call(text(attrs, 'src')))} }"
+        elsif (machine = inline_machine(data))
+          "{ chart: #{Ruby.sym(child_chart(machine))} }"
         elsif (content = inline_text(data))
           "{ content: #{Ruby.str(content)} }"
         end
       emitter.line(value ? "data #{Ruby.hash_key(name)} #{value}" : "data #{Ruby.sym(name)}")
+    end
+
+    # The inline <scxml> document that is an element's whole content, or nil
+    # when it has none. The importer converts it to a child chart, whose spec
+    # is the value of the document: the SCXML invoker runs that spec, and the
+    # host has no XML parser for the document text (ADR 0025).
+    def inline_machine(element)
+      machine = elements(element).find { |child| scxml?(child, 'scxml') }
+      return nil unless machine
+
+      text = element.children.grep(REXML::Text).map(&:value).join
+      unless elements(element).size == 1 && text.strip.empty?
+        raise Unsupported, "<#{element.name}> mixes an inline <scxml> document with other content"
+      end
+
+      machine
     end
 
     # The text of an element's inline content, with conf: content elements
@@ -456,6 +474,8 @@ module ScxmlIrp
         raise Unsupported, '<assign> with both expr and content' if inline_text(element)
 
         emitter.line("assign #{Ruby.str(target)}, #{Ruby.str(expression(attrs, 'expr'))}")
+      elsif (machine = inline_machine(element))
+        emitter.line("assign #{Ruby.str(target)}, chart: #{Ruby.sym(child_chart(machine))}")
       else
         content = inline_text(element) or raise Unsupported, '<assign> without a value'
         emitter.line("assign #{Ruby.str(target)}, content: #{Ruby.str(content)}")
@@ -549,6 +569,8 @@ module ScxmlIrp
         raise Unsupported, '<content> with both expr and a body' if inline_text(element)
 
         { :"#{content_key}_expr" => Ruby.str(expression(attrs, 'expr')) }
+      elsif (machine = inline_machine(element))
+        { chart: Ruby.sym(child_chart(machine)) }
       else
         { content_key => Ruby.str(inline_text(element) || '') }
       end
@@ -642,6 +664,7 @@ module ScxmlIrp
       options[:params] = params if params
       if content
         options[:content] = content[:content] if content[:content]
+        options[:chart] = content[:chart] if content[:chart]
         options[:expr] = content[:content_expr] if content[:content_expr]
       end
       emitter.line("done_data #{Ruby.kwargs(options)}")

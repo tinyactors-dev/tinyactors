@@ -11,13 +11,17 @@
 
 require_relative '../../scxml_irp/expectations'
 
+TinyactorsTest.chart :irp_test530_child1, datamodel: nil do
+  final :irp_anonymous_1
+end
+
 TinyactorsTest.chart :irp_test530 do
   initial :s0
   data :_irp_outcome
   data Var1: { expr: '1' }
   state :s0 do
     on_entry do
-      assign '.Var1', content: "\n           <scxml version='1.0'><final/></scxml>\n           "
+      assign '.Var1', chart: :irp_test530_child1
       send_event 'timeout', delay: 2000
     end
     invoke type: 'http://www.w3.org/TR/scxml/', content_expr: '.Var1'

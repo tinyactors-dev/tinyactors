@@ -146,6 +146,27 @@ check(handlers[:onexit] == [{ actions: [{ kind: 'log', label: 'first' }] },
                             { actions: [{ kind: 'log', label: 'second' }] }],
       "each on_exit is a separate handler\n#{handlers[:onexit]}")
 
+TinyactorsTest.chart(:selftest_machine_value) { final :done }
+machine_json = JSON.generate(TinyactorsTest.charts.fetch(:selftest_machine_value).to_spec)
+valued = TinyactorsTest::Chart.define(:valued) do
+  data machine: { chart: :selftest_machine_value }
+  state :a do
+    on_entry do
+      assign '.copy', chart: :selftest_machine_value
+      send_event 'e', chart: :selftest_machine_value
+    end
+  end
+end.to_spec
+check(valued[:data] == [{ name: 'machine', initializer: { content: machine_json } }],
+      "data chart: is the chart spec as content\n#{valued[:data]}")
+check(valued[:states][0][:onentry] == [{ actions: [
+  { kind: 'assign', location: '.copy', value: { content: machine_json } },
+  { kind: 'send', event: { name: 'e' }, data: { content: machine_json } }
+] }], "assign and send chart: are the chart spec as content\n#{valued[:states][0][:onentry]}")
+check(raises?(TinyactorsTest::ChartError, /assign \.x names chart missing, which is not defined yet/) do
+  chart.call { state(:a) { on_entry { assign '.x', chart: :missing } } }
+end, 'assign of an undefined chart')
+
 check(raises?(TinyactorsTest::ChartError, /declares done_data but is not a final state/) do
   chart.call { state(:a) { done_data expr: '1' } }
 end, 'done_data outside a final state')

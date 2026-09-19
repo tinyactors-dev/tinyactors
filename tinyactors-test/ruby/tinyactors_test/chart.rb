@@ -256,13 +256,25 @@ module TinyactorsTest
       end
     end
 
-    # Builds a value spec from exactly one of `expr:`, `location:`, or
-    # `content:`; nil when none is given.
-    def self.value_spec(chart, what, expr: nil, location: nil, content: nil)
-      present = { expr: expr, location: location, content: content }.compact
-      raise ChartError, "chart #{chart.name}: #{what} takes one of expr:, location:, content:" if present.size > 1
+    # Builds a value spec from exactly one of `expr:`, `location:`,
+    # `content:`, or `chart:`; nil when none is given. `chart:` names a
+    # defined chart and gives its spec, as JSON, as inline content: the value
+    # of an inline <scxml> document, which the SCXML invoker can run.
+    def self.value_spec(chart, what, expr: nil, location: nil, content: nil, chart_name: nil)
+      present = { expr: expr, location: location, content: content, chart: chart_name }.compact
+      raise ChartError, "chart #{chart.name}: #{what} takes one of expr:, location:, content:, chart:" if present.size > 1
+
+      return { content: chart_content(chart, what, chart_name) } if chart_name
 
       present.transform_values(&:to_s).first&.then { |kind, source| { kind => source } }
+    end
+
+    # The spec of the chart named `chart_name`, as JSON text.
+    def self.chart_content(chart, what, chart_name)
+      child = TinyactorsTest.charts.fetch(chart_name.to_sym) do
+        raise ChartError, "chart #{chart.name}: #{what} names chart #{chart_name}, which is not defined yet"
+      end
+      JSON.generate(child.to_spec)
     end
 
     # Lowers `{ name => value }` to ta_scxml_param_spec entries. A String value
@@ -284,18 +296,21 @@ module TinyactorsTest
 
       # Declares data: at the chart root, or in a state (bound on entry to that
       # state under late binding). Keyword values are JSON literals; a Hash
-      # value with `expr:` or `content:` gives an SCXML expression or inline
-      # content instead. Symbols name data declared without a value.
+      # value with `expr:`, `content:`, or `chart:` gives an SCXML expression,
+      # inline content, or a chart's spec instead. Symbols name data declared
+      # without a value.
       #
       #   data cycles: 0
       #   data :pending, total: { expr: '.a + .b' }, doc: { content: '<x/>' }
+      #   data machine: { chart: :child }
       def data(*unbound, **values)
         target = @state ? @state.data : @chart.data
         unbound.each { |data_name| target << { name: data_name.to_s } }
         values.each do |data_name, value|
           initializer =
-            if value.is_a?(Hash) && (value.key?(:expr) || value.key?(:content))
-              Chart.value_spec(@chart, "data #{data_name}", **value.slice(:expr, :content))
+            if value.is_a?(Hash) && (value.key?(:expr) || value.key?(:content) || value.key?(:chart))
+              Chart.value_spec(@chart, "data #{data_name}", expr: value[:expr], content: value[:content],
+                                                           chart_name: value[:chart])
             else
               { expr: JSON.generate(value) }
             end
@@ -398,10 +413,7 @@ module TinyactorsTest
         if chart
           raise ChartError, "chart #{@chart.name}: invoke takes chart: or content:, not both" if content || content_expr
 
-          child = TinyactorsTest.charts.fetch(chart.to_sym) do
-            raise ChartError, "chart #{@chart.name}: invoke names chart #{chart}, which is not defined yet"
-          end
-          content = JSON.generate(child.to_spec)
+          content = Chart.chart_content(@chart, 'invoke', chart)
         end
 
         invoke = { kind: 'invoke' }
@@ -415,14 +427,16 @@ module TinyactorsTest
         @state.invokes << invoke.compact
       end
 
-      # The <donedata> of a final state: inline content (`content:` or
-      # `expr:`), or `params:`.
-      def done_data(content: nil, expr: nil, params: nil)
+      # The <donedata> of a final state: inline content (`content:`,
+      # `chart:`, or `expr:`), or `params:`.
+      def done_data(content: nil, chart: nil, expr: nil, params: nil)
         require_state!('done_data')
-        raise ChartError, "chart #{@chart.name}: done_data takes content or params, not both" if params && (content || expr)
+        if params && (content || chart || expr)
+          raise ChartError, "chart #{@chart.name}: done_data takes content or params, not both"
+        end
 
         done = {}
-        value = Chart.value_spec(@chart, 'done_data', expr: expr, content: content)
+        value = Chart.value_spec(@chart, 'done_data', expr: expr, content: content, chart_name: chart)
         done[:content] = value if value
         done[:params] = Chart.param_specs(@chart, params) if params
         @state.done_data = done
@@ -486,17 +500,19 @@ module TinyactorsTest
       #   type:        a registered I/O processor name
       #   data:        an expression for the event data
       #   content:     inline <content> for the event data
+      #   chart:       a chart whose spec is the event data (inline <scxml>)
       #   params:      { name => expr or value spec }; SCXML namelist entries
       #                become `{ location: ... }` params
       def send_event(event = nil, event_expr: nil, delay: nil, delay_expr: nil, id: nil, id_location: nil,
-                     to: nil, to_expr: nil, type: nil, type_expr: nil, data: nil, content: nil, params: nil)
+                     to: nil, to_expr: nil, type: nil, type_expr: nil, data: nil, content: nil, chart: nil,
+                     params: nil)
         action = { kind: 'send' }
         action[:event] = pair('event', { name: event&.to_s }, { expr: event_expr })
         action[:id] = pair('id', { literal: id&.to_s }, { location: id_location })
         action[:type] = pair('type', { literal: type&.to_s }, { expr: type_expr })
         action[:target] = pair('to', { literal: to&.to_s }, { expr: to_expr })
         action[:delay] = pair('delay', { literal: duration(delay) }, { expr: delay_expr })
-        action[:data] = Chart.value_spec(@chart, 'send data', expr: data, content: content)
+        action[:data] = Chart.value_spec(@chart, 'send data', expr: data, content: content, chart_name: chart)
         action[:params] = Chart.param_specs(@chart, params) if params
         @chart.declare_send_id(id.to_s) if id
         @actions << action.compact
@@ -515,10 +531,11 @@ module TinyactorsTest
         @actions << { kind: 'cancel', sendid: sendid }
       end
 
-      # Assigns an expression, or inline content (`content:`), to a location.
-      def assign(location, expr = nil, content: nil)
-        value = Chart.value_spec(@chart, "assign #{location}", expr: expr, content: content)
-        raise ChartError, "chart #{@chart.name}: assign #{location} needs an expression or content:" unless value
+      # Assigns an expression, inline content (`content:`), or a chart's spec
+      # (`chart:`, an inline <scxml> document) to a location.
+      def assign(location, expr = nil, content: nil, chart: nil)
+        value = Chart.value_spec(@chart, "assign #{location}", expr: expr, content: content, chart_name: chart)
+        raise ChartError, "chart #{@chart.name}: assign #{location} needs an expression, content:, or chart:" unless value
 
         @actions << { kind: 'assign', location: location, value: value }
       end
