@@ -3,6 +3,8 @@
 
 require 'pathname'
 
+require_relative '../../../mise/lib/task_stamp'
+
 root = Pathname.new(__dir__).join('../..').expand_path
 
 def run(*command, chdir:)
@@ -11,7 +13,7 @@ def run(*command, chdir:)
   exit(status.exitstatus || 1) unless status.success?
 end
 
-run('mise', 'run', 'build', chdir: root)
+run('mise', 'run', *TaskStamp.force(root, 'build'), 'build', chdir: root)
 run('build/json_datamodel_test', chdir: root)
 run('build/ecmascript_datamodel_test', chdir: root)
 run('ruby', 'ruby/smoke.rb', chdir: root)

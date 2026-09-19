@@ -4,6 +4,8 @@
 require 'pathname'
 require 'fileutils'
 
+require_relative '../lib/task_stamp'
+
 ROOT = Pathname.new(__dir__).join('../..').expand_path
 
 Dir[ROOT.join('{,*/}mise/tasks/*')].each { |task| FileUtils.chmod('+x', task) }
@@ -18,7 +20,8 @@ class Project
   end
 
   def run(*command)
-    pid = Process.spawn('mise', 'run', *command, chdir: root.to_s)
+    # mise skips a task whose outputs were deleted; force it then.
+    pid = Process.spawn('mise', 'run', *TaskStamp.force(root, command.first), *command, chdir: root.to_s)
     _pid, status = Process.wait2(pid)
 
     return if status.success?

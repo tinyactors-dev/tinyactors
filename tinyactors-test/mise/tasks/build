@@ -81,8 +81,9 @@ end
 
 run('mise', 'run', 'amalgamate', '--check', chdir: WORKSPACE.join('tinyactors-core'))
 run('mise', 'run', 'api', '--check', chdir: WORKSPACE.join('tinyactors-core'))
-# bindings is cached by mise's own stamp, which survives `rm -rf build`; force it
-# when its outputs are gone.
+# The generated bindings are cached by mise's own stamp, which survives
+# `rm -rf build`; force the task when what it generates is gone. `bindings`
+# computes its own outputs, so TaskStamp cannot check them.
 generated = %w[ta_rpc.c ta_rpc.h].map { |name| BUILD.join('gen', name) }
 run('mise', 'run', *(generated.all?(&:file?) ? [] : ['--force']), 'bindings', chdir: ROOT)
 
