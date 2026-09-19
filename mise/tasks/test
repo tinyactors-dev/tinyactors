@@ -36,3 +36,7 @@ exit(status.exitstatus || 1) unless status.success?
 pid = Process.spawn('tinyactors-test/build/json_datamodel_test', chdir: root.to_s)
 _pid, status = Process.wait2(pid)
 exit(status.exitstatus || 1) unless status.success?
+
+pid = Process.spawn('tinyactors-test/build/ecmascript_datamodel_test', chdir: root.to_s)
+_pid, status = Process.wait2(pid)
+exit(status.exitstatus || 1) unless status.success?
