@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="Convert the vendored W3C SCXML IRP tests into jq scenarios"
+#MISE description="Convert the vendored W3C SCXML IRP tests into jq and ECMAScript scenarios"
 
 require 'pathname'
 require_relative '../../ruby/scxml_irp/importer'

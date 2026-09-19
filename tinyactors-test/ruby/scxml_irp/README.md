@@ -1,8 +1,9 @@
 # W3C SCXML IRP import
 
 `ruby/scxml_irp` converts the W3C SCXML 1.0 conformance tests in
-`vendor/scxml-irp` into scenario files for the scenario runner, using the jq
-data model. Each test becomes one file, `ruby/scenarios/scxml_irp/testNNN.rb`.
+`vendor/scxml-irp` into scenario files for the scenario runner. Tests written
+in datamodel-neutral `conf:` markup use the jq data model; tests that require
+`datamodel="ecmascript"` use the ECMAScript data model. Each test becomes one file, `ruby/scenarios/scxml_irp/testNNN.rb`.
 The file defines every machine the test needs (the test document, its inline
 child machines, and its sub-documents) followed by the test's scenarios.
 
@@ -25,6 +26,7 @@ host.
 | `importer.rb` | Reads `manifest.xml`, decides what to skip, and writes the scenario files and `INDEX.md` |
 | `document.rb` | Converts one `.txml` document to chart DSL source |
 | `jq_expressions.rb` | Maps `conf:` markup and small ECMAScript expressions to jq |
+| `ecma_expressions.rb` | Maps `conf:` markup to ECMAScript, for `datamodel="ecmascript"` tests |
 | `expectations.rb` | Applies `baseline.json` to the generated scenarios |
 | `baseline.json` | Known failures and their exact error messages (written by `scxml-irp-baseline`) |
 | `../scenarios/scxml_irp/INDEX.md` | Status of all 200 tests: imported or skipped, with the reason |
@@ -54,7 +56,20 @@ define `In`. Tests that use these fail until it does.
 **ECMAScript written directly.** A few tests write ECMAScript expressions
 without `conf:` markup. Small ones are translated: literals, variables,
 member and index access, arithmetic, comparisons, `&&`, `||`, and `In(...)`.
-Anything else, including every `<script>` body, makes the test skipped.
+Anything else, including every `<script>` body, makes a jq test skipped.
+
+**ECMAScript documents.** A document with `datamodel="ecmascript"` becomes
+a chart with `datamodel: 'ecmascript'`, and the scenario harness compiles it
+with the `datamodel.ecmascript` adapter (charts with `datamodel: 'jq'` or no
+datamodel use `datamodel.jq`). Its expressions, locations, conditions, and
+`<script>` bodies are ECMAScript already and pass through verbatim. Its
+`conf:` markup is translated by `ecma_expressions.rb`, which follows
+`confEcma.xsl` template by template and produces the stylesheet's text: data
+are ECMAScript variables (`conf:id="1"` declares `Var1`, `conf:idVal="1=1"`
+is `Var1==1`), and the outcome is assigned as `'pass'` or `'fail'`. A child
+machine without a `datamodel` attribute uses its parent's data model. The
+adapter has no XML DOM, so tests that call DOM methods such as
+`getElementsByTagName` on XML data are skipped.
 
 **Strict conversion.** Every element and attribute must be understood. Any
 other construct makes the test skipped, and its reason is recorded in
@@ -89,6 +104,10 @@ done (`run_to_completion`), and then asserts that `_irp_outcome` is `"pass"`.
 SCXML would report the outcome as `<donedata>`. The data model is used because
 it works before the core compiles `<donedata>`.
 
+A few tests (457, 459, 460) write their own top-level `<final id="pass">` and
+`<final id="fail">` instead of `conf:pass` and `conf:fail`. The importer adds
+the same assignment to the end of their `<onentry>`.
+
 ## Expectations
 
 Every imported scenario is expected to pass unless `baseline.json` lists it
@@ -107,8 +126,10 @@ These tests are skipped; `INDEX.md` has the full list and reasons:
 
 - **Manual tests.** A person judges their log output.
 - **Optional BasicHTTP tests** (SCXML C.2).
-- **ECMAScript-only and null-data-model tests.** These documents hard-code
-  `datamodel="ecmascript"` or `"null"`.
+- **Null-data-model tests.** These documents hard-code `datamodel="null"`,
+  which the harness does not provide.
+- **XML DOM tests** (557, 561). They call `getElementsByTagName` and
+  `getAttribute` on XML data, and the ECMAScript data model has no XML DOM.
 
 ## Known limitations
 

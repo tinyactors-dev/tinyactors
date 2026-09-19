@@ -186,7 +186,7 @@ module ScxmlIrp
       case reason
       when /\Amanual/ then 'manual test'
       when /BasicHTTP/ then 'BasicHTTP Event I/O Processor'
-      when /ecmascript data model/ then 'ECMAScript data model'
+      when /XML DOM/ then 'XML DOM in the ECMAScript data model'
       when /data model/ then 'other data model'
       when /ECMAScript/, /cannot translate/, /call of/ then 'ECMAScript expression or script'
       else reason

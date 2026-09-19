@@ -1,1 +1,19 @@
-{}
+{
+  "test444": "ta.definition.compile_spec: -32602 Invalid params",
+  "test445": "ta.definition.compile_spec: -32602 Invalid params",
+  "test446": "ta.definition.compile_spec: -32602 Invalid params",
+  "test448": "ta.definition.compile_spec: -32602 Invalid params",
+  "test449": "ta.definition.compile_spec: -32602 Invalid params",
+  "test451": "ta.definition.compile_spec: -32602 Invalid params",
+  "test452": "ta.definition.compile_spec: -32602 Invalid params",
+  "test453": "ta.definition.compile_spec: -32602 Invalid params",
+  "test456": "ta.definition.compile_spec: -32602 Invalid params",
+  "test457": "ta.definition.compile_spec: -32602 Invalid params",
+  "test459": "ta.definition.compile_spec: -32602 Invalid params",
+  "test460": "ta.definition.compile_spec: -32602 Invalid params",
+  "test558": "ta.definition.compile_spec: -32602 Invalid params",
+  "test560": "ta.definition.compile_spec: -32602 Invalid params",
+  "test562": "ta.definition.compile_spec: -32602 Invalid params",
+  "test569": "ta.definition.compile_spec: -32602 Invalid params",
+  "test578": "ta.definition.compile_spec: -32602 Invalid params"
+}

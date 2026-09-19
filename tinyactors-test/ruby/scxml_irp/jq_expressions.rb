@@ -22,9 +22,16 @@ module ScxmlIrp
     # confEcma.xsl splits comparisons as ([0-9]+)([=<>]=?)(.*).
     COMPARISON = /\A([0-9]+)([=<>]=?)(.*)\z/m
 
+    DATAMODEL = 'jq'
+
     module_function
 
+    def datamodel = DATAMODEL
+
     def var(id) = "Var#{id}"
+
+    # A data ID as a location, such as the outcome variable.
+    def data_location(name) = ".#{name}"
 
     def location(id) = ".#{var(id)}"
 
@@ -124,6 +131,38 @@ module ScxmlIrp
       when 'illegalContent' then ' xyz '
       else raise Unsupported, "conf:#{name} has no content mapping"
       end
+    end
+
+    # conf:incrementID, conf:concatVars, conf:sumVars, and conf:extendArray
+    # as [location, expr] of an <assign>.
+    def conf_assignment(name, attributes)
+      case name
+      when 'incrementID' then [location(attributes['id']), "#{location(attributes['id'])} + 1"]
+      when 'concatVars', 'sumVars'
+        [location(attributes['id1']), "#{location(attributes['id1'])} + #{location(attributes['id2'])}"]
+      when 'extendArray' then [location(attributes['id']), "#{location(attributes['id'])} + [4]"]
+      end
+    end
+
+    # The body of conf:script.
+    def conf_script = '.Var1 = 1'
+
+    # conf:sendToSender's targetexpr and typeexpr.
+    def sender_exprs = %w[$_event.origin $_event.origintype]
+
+    # Expressions and locations the document writes itself are ECMAScript;
+    # small ones are translated.
+    def plain_expression(source) = ecmascript(source)
+
+    def plain_location(source) = ecmascript_location(source)
+
+    # A namelist entry, used as a location. confEcma.xsl's invalid namelist
+    # `"foo` becomes an evaluation error.
+    def namelist_location(name) = name.start_with?('"') ? error('invalidNamelist') : ecmascript_location(name)
+
+    # <script> bodies are ECMAScript, which jq cannot run.
+    def script_body(text)
+      raise Unsupported, "ECMAScript <script> #{text.to_s.strip.inspect}"
     end
 
     def system_variable(name)

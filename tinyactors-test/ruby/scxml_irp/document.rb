@@ -3,6 +3,7 @@
 require 'json'
 require 'rexml/document'
 require_relative 'jq_expressions'
+require_relative 'ecma_expressions'
 
 module ScxmlIrp
   SCXML_NS = 'http://www.w3.org/2005/07/scxml'
@@ -61,14 +62,20 @@ module ScxmlIrp
     end
   end
 
-  # Converts one SCXML IRP document (a .txml file) into chart DSL source for
-  # the jq data model. Inline child machines of <invoke><content> become
-  # charts of their own, emitted before the chart that invokes them.
+  # Converts one SCXML IRP document (a .txml file) into chart DSL source.
+  # Inline child machines of <invoke><content> become charts of their own,
+  # emitted before the chart that invokes them.
+  #
+  # The document's datamodel picks the dialect that writes its expressions:
+  # JqExpressions for datamodel-neutral and jq documents, which are translated
+  # to jq, and EcmaExpressions for `datamodel="ecmascript"` documents, whose
+  # expressions pass through verbatim. A child machine without a datamodel
+  # uses its parent's dialect.
   #
   # Every element and attribute must be understood; anything else raises
   # Unsupported rather than being dropped silently.
   class Document
-    include JqExpressions
+    DIALECTS = { 'jq' => JqExpressions, 'ecmascript' => EcmaExpressions }.freeze
 
     Result = Data.define(:chart_name, :source, :notes)
 
@@ -84,8 +91,9 @@ module ScxmlIrp
     OUTCOME = '_irp_outcome'
 
     # `top_level:` marks the test's own document, which records its outcome.
-    def initialize(root, chart_name:, top_level:, resolve_file:)
+    def initialize(root, chart_name:, top_level:, resolve_file:, dialect: JqExpressions)
       @root = root
+      @dialect = dialect
       @chart_name = chart_name
       @top_level = top_level
       @resolve_file = resolve_file
@@ -104,6 +112,7 @@ module ScxmlIrp
     def convert
       raise Unsupported, "root element is <#{@root.name}>, not <scxml>" unless scxml?(@root, 'scxml')
 
+      @dialect = dialect_for(plain_attribute(@root, 'datamodel'))
       @send_ids = literal_send_ids(@root)
       emitter = Emitter.new
       emit_chart(emitter)
@@ -124,6 +133,33 @@ module ScxmlIrp
     end
 
     private
+
+    # The dialect of a document's plain `datamodel` attribute; conf:datamodel
+    # is the datamodel-neutral form, which the importer writes as jq.
+    def dialect_for(datamodel)
+      return @dialect if datamodel.nil?
+
+      DIALECTS.fetch(datamodel) do
+        raise Unsupported, "requires the #{datamodel} data model (the harness provides jq and ecmascript)"
+      end
+    end
+
+    # An unprefixed attribute's value. (REXML's `attributes[name]` also finds
+    # conf:name.)
+    def plain_attribute(element, name)
+      found = nil
+      element.attributes.each_attribute do |attribute|
+        found = attribute.value if attribute.name == name && attribute.prefix.to_s.empty?
+      end
+      found
+    end
+
+    def ecmascript? = @dialect == EcmaExpressions
+
+    # Dialect helpers.
+    def conf_attribute(name, value) = @dialect.conf_attribute(name, value)
+    def conf_content(name) = @dialect.conf_content(name)
+    def string(text) = @dialect.string(text)
 
     def scxml?(element, name = nil)
       element.namespace == SCXML_NS && (name.nil? || element.name == name)
@@ -170,14 +206,14 @@ module ScxmlIrp
       value, origin = attrs[name]
       return nil if value.nil?
 
-      origin == :conf ? value : ecmascript(value)
+      origin == :conf ? value : @dialect.plain_expression(value)
     end
 
     def location_attribute(attrs, name)
       value, origin = attrs[name]
       return nil if value.nil?
 
-      origin == :conf ? value : ecmascript_location(value)
+      origin == :conf ? value : @dialect.plain_location(value)
     end
 
     def text(attrs, name) = attrs[name]&.first
@@ -188,11 +224,10 @@ module ScxmlIrp
       attrs = attributes(@root)
       check_attributes!(@root, attrs, %w[initial name datamodel binding xmlns])
       datamodel = text(attrs, 'datamodel')
-      if datamodel && datamodel != 'jq'
-        raise Unsupported, "requires the #{datamodel} data model (the harness provides jq)"
-      end
-
-      options = { datamodel: datamodel ? nil : 'nil' }
+      # A jq chart without a datamodel attribute states no requirement; an
+      # ECMAScript chart always names its data model, since its expressions
+      # are ECMAScript even when a child machine inherits them.
+      options = { datamodel: ecmascript? ? Ruby.str(@dialect.datamodel) : (datamodel ? nil : 'nil') }
       options[:binding] = Ruby.sym(text(attrs, 'binding')) if text(attrs, 'binding')
       options[:document_name] = Ruby.str(text(attrs, 'name')) if text(attrs, 'name')
       header = "TinyactorsTest.chart #{Ruby.sym(@chart_name)}"
@@ -202,7 +237,7 @@ module ScxmlIrp
         emitter.line("data #{Ruby.sym(OUTCOME)}") if @top_level
         elements(@root).each do |child|
           if conf?(child) && child.name == 'script'
-            emitter.line("script #{Ruby.str('.Var1 = 1')}")
+            emitter.line("script #{Ruby.str(@dialect.conf_script)}")
             next
           elsif conf?(child)
             emit_conf_state(emitter, child)
@@ -228,9 +263,24 @@ module ScxmlIrp
       emitter.block("final :#{outcome}") do
         emitter.block('on_entry') do
           emitter.line("log 'Outcome', expr: #{Ruby.str(string(outcome))}")
-          emitter.line("assign #{Ruby.str(".#{OUTCOME}")}, #{Ruby.str(string(outcome))}") if @top_level
+          emit_outcome(emitter, outcome)
         end
       end
+    end
+
+    # Records the test's outcome on entry to its pass or fail final state.
+    def emit_outcome(emitter, outcome)
+      return unless @top_level
+
+      emitter.line("assign #{Ruby.str(@dialect.data_location(OUTCOME))}, #{Ruby.str(string(outcome))}")
+    end
+
+    # A top-level <final id="pass"> or <final id="fail"> that the test writes
+    # itself instead of conf:pass or conf:fail: its outcome, or nil.
+    def written_outcome(element, kind, id)
+      return nil unless @top_level && kind == 'final' && element.parent.equal?(@root)
+
+      id if %w[pass fail].include?(id)
     end
 
     def emit_datamodel(emitter, element)
@@ -304,12 +354,16 @@ module ScxmlIrp
       header += ", initial: #{Ruby.targets(id_list(attrs, 'initial'))}" if attrs['initial']
 
       children = elements(element)
-      if children.empty?
+      outcome = written_outcome(element, kind, id)
+      if children.empty? && outcome.nil?
         emitter.line(header)
         return
       end
 
       emitter.block(header) do
+        if outcome && children.none? { |child| scxml?(child, 'onentry') }
+          emitter.block('on_entry') { emit_outcome(emitter, outcome) }
+        end
         children.each do |child|
           if conf?(child)
             emit_conf_state(emitter, child)
@@ -322,7 +376,8 @@ module ScxmlIrp
           when 'history' then emit_history(emitter, child)
           when 'initial' then emit_initial(emitter, child)
           when 'transition' then emit_transition(emitter, child)
-          when 'onentry' then emit_actions_block(emitter, 'on_entry', child)
+          when 'onentry'
+            emit_actions_block(emitter, 'on_entry', child) { emit_outcome(emitter, outcome) if outcome }
           when 'onexit' then emit_actions_block(emitter, 'on_exit', child)
           when 'datamodel' then emit_datamodel(emitter, child)
           when 'invoke' then emit_invoke(emitter, child)
@@ -392,9 +447,14 @@ module ScxmlIrp
       end
     end
 
+    # Emits an <onentry> or <onexit> block; the block given, if any, adds to
+    # its end.
     def emit_actions_block(emitter, name, element)
       check_attributes!(element, attributes(element), [])
-      emitter.block(name) { emit_actions(emitter, elements(element)) }
+      emitter.block(name) do
+        emit_actions(emitter, elements(element))
+        yield if block_given?
+      end
     end
 
     def emit_actions(emitter, actions)
@@ -438,33 +498,28 @@ module ScxmlIrp
     end
 
     def emit_conf_action(emitter, element)
-      id = element.attributes['id']
       case element.name
-      when 'incrementID'
-        emitter.line("assign #{Ruby.str(location(id))}, #{Ruby.str("#{location(id)} + 1")}")
-      when 'concatVars', 'sumVars'
-        first = element.attributes['id1']
-        second = element.attributes['id2']
-        emitter.line("assign #{Ruby.str(location(first))}, #{Ruby.str("#{location(first)} + #{location(second)}")}")
-      when 'extendArray'
-        emitter.line("assign #{Ruby.str(location(id))}, #{Ruby.str("#{location(id)} + [4]")}")
+      when 'incrementID', 'concatVars', 'sumVars', 'extendArray'
+        target, value = @dialect.conf_assignment(element.name, element.attributes)
+        emitter.line("assign #{Ruby.str(target)}, #{Ruby.str(value)}")
       when 'script'
-        emitter.line("script #{Ruby.str('.Var1 = 1')}")
+        emitter.line("script #{Ruby.str(@dialect.conf_script)}")
       when 'sendToSender'
         name = element.attributes['name']
-        emitter.line("send_event #{Ruby.str(name)}, to_expr: '$_event.origin', type_expr: '$_event.origintype'")
+        to, type = @dialect.sender_exprs
+        emitter.line("send_event #{Ruby.str(name)}, to_expr: #{Ruby.str(to)}, type_expr: #{Ruby.str(type)}")
       else
         raise Unsupported, "conf:#{element.name} as executable content"
       end
     end
 
-    # A conf:script or plain <script> body. The IRP only uses conf:script for
-    # data-model-neutral tests; plain scripts are ECMAScript.
+    # A plain <script> body, which is ECMAScript. (conf:script is handled
+    # where it appears.)
     def script_source(element)
       attrs = attributes(element)
       raise Unsupported, '<script src>' if attrs['src']
 
-      raise Unsupported, "ECMAScript <script> #{inline_text(element).to_s.strip.inspect}"
+      @dialect.script_body(inline_text(element).to_s)
     end
 
     def emit_assign(emitter, element, attrs)
@@ -522,7 +577,7 @@ module ScxmlIrp
     def payload(element, attrs, children = elements(element), content_key: :content)
       params = []
       id_list(attrs, 'namelist')&.each do |name|
-        params << [name, "{ location: #{Ruby.str(name.start_with?('"') ? error('invalidNamelist') : ecmascript_location(name))} }"]
+        params << [name, "{ location: #{Ruby.str(@dialect.namelist_location(name))} }"]
       end
       content = nil
       children.each do |child|
@@ -650,7 +705,8 @@ module ScxmlIrp
 
     def child_chart(machine)
       name = "#{@chart_name}_child#{@children.size + 1}"
-      child = Document.new(machine, chart_name: name, top_level: false, resolve_file: @resolve_file)
+      child = Document.new(machine, chart_name: name, top_level: false, resolve_file: @resolve_file,
+                                    dialect: @dialect)
       source = child.convert
       @children << Result.new(chart_name: name, source: source, notes: child.notes)
       name

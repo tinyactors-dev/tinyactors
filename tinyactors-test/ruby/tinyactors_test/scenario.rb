@@ -185,7 +185,13 @@ module TinyactorsTest
   # Steps drive the generated ta.* bindings of the public C API directly.
   class Context
     ALLOCATOR = { '$adapter' => 'allocator.libc' }.freeze
-    DATAMODEL = { '$adapter' => 'datamodel.jq' }.freeze
+    # The data-model adapter for each chart datamodel. A chart without a
+    # datamodel (`datamodel: nil`) states no requirement and runs with jq.
+    DATAMODELS = {
+      'jq' => { '$adapter' => 'datamodel.jq' }.freeze,
+      'ecmascript' => { '$adapter' => 'datamodel.ecmascript' }.freeze
+    }.freeze
+    DEFAULT_DATAMODEL = 'jq'
     # Microsteps per ta_actor_resume call, and dispatch rounds before a step
     # is declared non-quiescent.
     RESUME_BUDGET = 1024
@@ -331,7 +337,10 @@ module TinyactorsTest
     # It also registers the invoker.scxml adapter for SCXML <invoke>. The
     # adapter runs an invoked machine as a child actor: the chart spec inline
     # in the invoke's <content>, or for src="file:NAME.scxml" the chart
-    # irp_NAME, so it receives every defined chart's spec.
+    # irp_NAME, so it receives every defined chart's spec. Each spec carries
+    # its chart's `datamodel` ("jq", "ecmascript", or none), and the invoker
+    # is expected to compile the child with the adapter that datamodel names,
+    # as datamodel_adapter does here.
     def system_handle
       @system ||= begin
         system = core('ta_system_create',
@@ -395,10 +404,18 @@ module TinyactorsTest
         chart = @charts.fetch(chart_name) { raise ScenarioError, "unknown chart #{chart_name}" }
         compiled = core('ta_definition_compile_spec',
                         ta.definition.compile_spec(system: system_handle, spec: chart.to_spec,
-                                                   datamodel: DATAMODEL, allocator: ALLOCATOR))
+                                                   datamodel: datamodel_adapter(chart), allocator: ALLOCATOR))
         core('ta_system_register_definition',
              ta.system.register_definition(system: system_handle, definition: compiled.fetch(:out)))
           .fetch(:out)
+      end
+    end
+
+    # The data-model adapter config the chart's datamodel names.
+    def datamodel_adapter(chart)
+      datamodel = chart.datamodel || DEFAULT_DATAMODEL
+      DATAMODELS.fetch(datamodel) do
+        raise ScenarioError, "chart #{chart.name}: no data-model adapter for datamodel #{datamodel.inspect}"
       end
     end
 
