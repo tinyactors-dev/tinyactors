@@ -21,27 +21,41 @@ the same table.
 The host does not bind the Tinyactors C API by hand. The pipeline is:
 
 ```text
-tinyactors-core/include/tinyactors.h
-  -> mise run api        (core: clang JSON AST + api/annotations.rb)
-  -> tinyactors-core/include/tinyactors.api.json   (checked in)
-  -> mise run bindings   (this project: mise/tasks/bindings + bindings.rb)
+tinyactors-core/include/tinyactors.h           (annotated with TA_* macros)
+  -> mise run api        (core: clang, annotations, layouts, schema, compile check)
+  -> tinyactors-core/include/tinyactors.api.json   (checked in; the only file between the steps)
+  -> mise run bindings   (this project: mise/lib/rpc + bindings.rb, in memory)
   -> build/gen/ta_rpc.{c,h}                        (generated, not checked in)
 ```
 
-`mise run build` runs both steps. The generator emits a JSON decoder and
-encoder for every public type, a `codec.roundtrip.<type>` method per struct,
-and one `ta.<domain>.<rest>` method per public function. A function that core
-does not implement yet is still bound: its method validates params and then
-answers error -32001, and discovery lists it under `unimplemented`.
+`mise run build` runs both steps. The generator reads nothing about the C API
+except `tinyactors.api.json` (see `tinyactors-core/docs/internal/api-ir.md`):
+pointer shapes, nullability, output validity, releases, handles, enum symbols,
+and the data model of `ta_value` inputs all come from it. `mise/lib/rpc` works
+in three stages. `Rpc::Api` reads the description and checks its format.
+`Rpc::Plan` makes every binding decision: members, codecs, required
+parameters, union layouts, outputs, releases, and value receivers.
+`Rpc::Emit` formats the plan as C without deciding anything.
 
-`bindings.rb` is the binding policy. Every public function and type must be
-generated, overridden by hand, or skipped with a reason; otherwise the
-generator fails, so new core API cannot silently go unbound. Hand-written
-parts live in `src/binding.{h,c}` (request arena, handle table, primitive
-codecs, and the `ta_str`, `ta_bytes`, `ta_value`, and `ta_expression`
-overrides) and `src/adapters.c` (the `$adapter` registry). The generator also
-writes `build/gen/coverage.json` with the bound, skipped, and unimplemented
-counts.
+The generator emits a JSON decoder and encoder for every bound type, a
+`codec.roundtrip.<type>` method per struct, and one `ta.<domain>.<rest>`
+method per public function. A function that core does not implement yet is
+still bound: its method validates params and then answers error -32001, and
+discovery lists it under `unimplemented`.
+
+`bindings.rb` is the binding policy: what the description cannot decide for
+this host. It lists the functions and types that are skipped or implemented by
+hand, each with a reason; the union members that are flattened into their
+parent object; the value-model kinds the host cannot resolve; and the largest
+caller buffer a request may ask for. The generator fails when an item fits no
+decision, when a bound item needs a skipped one, when a flattened member's
+keys collide, and when a policy entry matches nothing, so new core API cannot
+silently go unbound and the policy cannot go stale. `ruby/bindings_generator_test.rb`
+tests these refusals. Hand-written parts live in `src/binding.{h,c}` (request
+arena, handle table, primitive codecs, the codecs of the string, bytes, and
+host value types, and the `ta_expression` override) and `src/adapters.c` (the
+`$adapter` registry). The generator also writes `build/gen/coverage.json` with
+the bound, skipped, and unimplemented counts.
 
 See `docs/protocol.md` for method naming, result shapes, value encoding,
 handles, and adapters.

@@ -11,6 +11,9 @@
 #include <string.h>
 
 enum { TAT_BIND_ARENA_BLOCK = 64 * 1024 };
+/* A request that allocated more than this gives its arena back afterwards,
+ * so one large request does not keep its memory for the process lifetime. */
+enum { TAT_BIND_ARENA_KEEP = 1024 * 1024 };
 
 static const double TAT_MAX_EXACT = 9007199254740991.0; /* 2^53 - 1 */
 
@@ -18,7 +21,7 @@ static const double TAT_MAX_EXACT = 9007199254740991.0; /* 2^53 - 1 */
 static const char TAT_FIXTURE_TARGET = 0;
 
 ta_result tat_bind_init(tat_bind *bind, ta_allocator allocator, void *host) {
-    *bind = (tat_bind){.error = jv_invalid(), .host = host};
+    *bind = (tat_bind){.allocator = allocator, .error = jv_invalid(), .host = host};
     ta_result result = ta_arena_init(&bind->arena, allocator, TAT_BIND_ARENA_BLOCK);
     if (result != TA_OK) {
         return result;
@@ -62,7 +65,16 @@ void tat_bind_end(tat_bind *bind) {
     bind->value_count = 0;
     jv_free(bind->error);
     bind->error = jv_invalid();
-    ta_arena_reset(&bind->arena);
+    if (bind->request_bytes > TAT_BIND_ARENA_KEEP) {
+        /* ta_arena_reset keeps every block; start over with a small arena.
+         * Initialization only checks its arguments, which tat_bind_init
+         * already accepted. */
+        ta_arena_destroy(&bind->arena);
+        (void)ta_arena_init(&bind->arena, bind->allocator, TAT_BIND_ARENA_BLOCK);
+    } else {
+        ta_arena_reset(&bind->arena);
+    }
+    bind->request_bytes = 0;
 }
 
 jv tat_bind_take_error(tat_bind *bind, int *error_code) {
@@ -113,8 +125,17 @@ void *tat_alloc(tat_bind *bind, size_t size, size_t alignment) {
         tat_fail(bind, "out of memory");
         return NULL;
     }
+    bind->request_bytes += size;
     memset(memory, 0, size);
     return memory;
+}
+
+void *tat_alloc_array(tat_bind *bind, size_t count, size_t size, size_t alignment) {
+    if (size != 0 && count > SIZE_MAX / size) {
+        tat_fail(bind, "out of memory");
+        return NULL;
+    }
+    return tat_alloc(bind, count * size, alignment);
 }
 
 bool tat_member(jv object, const char *name, jv *out) {

@@ -21,6 +21,66 @@
 #define TA_API
 #endif
 
+/*
+ * API annotations.
+ *
+ * These macros record what C types cannot say about the API: which pointers
+ * are single elements, lists, or caller buffers; which may be null; which
+ * outputs are valid after which results and who releases them; how handles
+ * are created and destroyed; and the stable symbols of enum constants.
+ * `mise run api` reads them to write include/tinyactors.api.json (see
+ * docs/internal/api-ir.md). They expand to nothing unless TA_API_EXTRACT is
+ * defined, so they never change the compiled API.
+ */
+#ifdef TA_API_EXTRACT
+#define TA_ANNOTATION __attribute__((annotate("tinyactors")))
+#else
+#define TA_ANNOTATION
+#endif
+
+/* Types. */
+#define TA_HANDLE TA_ANNOTATION                      /* opaque object owned through a handle */
+#define TA_VIEW TA_ANNOTATION                        /* opaque object borrowed from the core */
+#define TA_STRING TA_ANNOTATION                      /* {ptr, len} text */
+#define TA_BYTES TA_ANNOTATION                       /* {ptr, len} bytes */
+#define TA_HOST_VALUE TA_ANNOTATION                  /* host value, see ta_value */
+#define TA_ADAPTER TA_ANNOTATION                     /* {self, operations} implemented by the embedder */
+#define TA_VTABLE TA_ANNOTATION                      /* the operations of an adapter */
+#define TA_TAGGED(tag, union_) TA_ANNOTATION         /* field `tag` selects the member of `union_` */
+#define TA_ZERO_IS_ABSENT TA_ANNOTATION              /* members equal to zero are absent */
+#define TA_SYMBOLS(prefix) TA_ANNOTATION             /* enum symbols: names without `prefix`, lowercase */
+#define TA_CONSTANTS_OF(type, prefix) TA_ANNOTATION  /* anonymous enum: the values of integer type `type` */
+#define TA_FLAG_SET(name, prefix) TA_ANNOTATION      /* anonymous enum: a named set of bit flags */
+#define TA_SUCCESS TA_ANNOTATION                     /* enum constant: the result that means success */
+
+/* Members. */
+#define TA_WHEN(constant) TA_ANNOTATION              /* union member selected by `constant` */
+#define TA_FLAGS(set) TA_ANNOTATION                  /* integer holding flags of `set` */
+#define TA_RELEASE_IF(function, flag) TA_ANNOTATION  /* owned value; release with `function` when `flag` */
+
+/* Pointers: exactly one shape. */
+#define TA_IN TA_ANNOTATION                          /* one element the receiver reads */
+#define TA_OUT TA_ANNOTATION                         /* one element the callee writes */
+#define TA_INOUT TA_ANNOTATION                       /* one element the callee reads and writes */
+#define TA_TERMINATED_BY(field) TA_ANNOTATION        /* list ending at the first element whose `field` is zero */
+#define TA_COUNTED_BY(field) TA_ANNOTATION           /* list of `field` elements */
+#define TA_BUFFER(capacity, needed) TA_ANNOTATION    /* caller array of `capacity` elements; total in `needed` */
+#define TA_VIEW_OUT TA_ANNOTATION                    /* the callee stores a pointer to a borrowed graph */
+#define TA_ARENA TA_ANNOTATION                       /* caller arena that receives the outputs */
+
+/* Pointer facts. */
+#define TA_OPTIONAL TA_ANNOTATION                    /* may be null; null means absent */
+#define TA_ALWAYS TA_ANNOTATION                      /* output valid after every result */
+#define TA_VALID_ON(constant) TA_ANNOTATION          /* output valid only after result `constant` */
+#define TA_RELEASE(function) TA_ANNOTATION           /* the receiver releases the output with `function` */
+#define TA_LIFETIME(scope) TA_ANNOTATION             /* borrowed data stays valid for `scope` */
+#define TA_DESTROYS TA_ANNOTATION                    /* the function destroys this handle */
+#define TA_CONSUMED_ON_OK TA_ANNOTATION              /* the callee takes ownership of this handle on TA_OK */
+
+/* Functions. */
+#define TA_VALUE_MODEL(kind, path) TA_ANNOTATION     /* ta_value inputs belong to the data model of `path` */
+#define TA_ANY_VALUE_MODEL TA_ANNOTATION             /* ta_value inputs may belong to any data model */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -59,14 +119,14 @@ typedef uint64_t ta_timer_id;
 /* Monotonic logical time in milliseconds, supplied by the embedder. */
 typedef uint64_t ta_time;
 
-#define TA_STATE_NONE UINT32_MAX
-#define TA_INITIAL_TRANSITION_NONE UINT32_MAX
-#define TA_INITIALIZER_NONE UINT32_MAX
-#define TA_DONE_DATA_NONE UINT32_MAX
-#define TA_INVOKE_ID_NONE UINT64_MAX
+#define TA_STATE_NONE ((ta_state_id)UINT32_MAX)
+#define TA_INITIAL_TRANSITION_NONE ((ta_initial_transition_id)UINT32_MAX)
+#define TA_INITIALIZER_NONE ((ta_initializer_id)UINT32_MAX)
+#define TA_DONE_DATA_NONE ((ta_done_data_id)UINT32_MAX)
+#define TA_INVOKE_ID_NONE ((ta_invoke_id)UINT64_MAX)
 
-enum {
-    TA_OK = 0,
+enum TA_CONSTANTS_OF(ta_result, "TA_") {
+    TA_OK TA_SUCCESS = 0,
     TA_ERR_INVALID = -1,
     TA_ERR_NOMEM = -2,
     TA_ERR_NOT_FOUND = -3,
@@ -79,34 +139,34 @@ enum {
     TA_ERR_STALE = -10
 };
 
-typedef struct { const char *ptr; uint32_t len; } ta_str;
-typedef struct { const ta_atom *atoms; uint32_t count; } ta_atom_list;
-typedef struct { const uint8_t *ptr; uint32_t len; } ta_bytes;
+typedef struct { const char *ptr; uint32_t len; } ta_str TA_STRING;
+typedef struct { TA_COUNTED_BY(count) const ta_atom *atoms; uint32_t count; } ta_atom_list;
+typedef struct { const uint8_t *ptr; uint32_t len; } ta_bytes TA_BYTES;
 typedef struct { ta_str name; } ta_definition_family;
 typedef struct { ta_definition_family family; ta_str name; } ta_actor_address;
-typedef enum { TA_ACTOR_REF_RUNTIME = 0, TA_ACTOR_REF_NAMED = 1 } ta_actor_ref_kind;
+typedef enum { TA_ACTOR_REF_RUNTIME = 0, TA_ACTOR_REF_NAMED = 1 } ta_actor_ref_kind TA_SYMBOLS("TA_ACTOR_REF_");
 typedef struct {
     ta_actor_ref_kind kind;
     union {
-        ta_actor_id runtime;
-        ta_actor_address named;
+        TA_WHEN(TA_ACTOR_REF_RUNTIME) ta_actor_id runtime;
+        TA_WHEN(TA_ACTOR_REF_NAMED) ta_actor_address named;
     } as;
-} ta_actor_ref;
+} ta_actor_ref TA_TAGGED(kind, as);
 
-typedef struct ta_system ta_system;
-typedef struct ta_definition ta_definition;
-typedef struct ta_dm_host ta_dm_host;
-typedef struct ta_value ta_value;
-typedef struct ta_session_image ta_session_image;
+typedef struct ta_system ta_system TA_HANDLE;
+typedef struct ta_definition ta_definition TA_HANDLE;
+typedef struct ta_dm_host ta_dm_host TA_VIEW;
+typedef struct ta_value ta_value TA_HOST_VALUE;
+typedef struct ta_session_image ta_session_image TA_HANDLE;
 
 
 
 typedef struct { void *ptr; size_t size; size_t alignment; } ta_allocator_free_params;
 typedef struct ta_allocator_vtable {
     void *(*alloc)(void *self, size_t size, size_t alignment);
-    void (*free)(void *self, const ta_allocator_free_params *params);
-} ta_allocator_vtable;
-typedef struct { void *self; const ta_allocator_vtable *v; } ta_allocator;
+    void (*free)(void *self, TA_IN const ta_allocator_free_params *params);
+} ta_allocator_vtable TA_VTABLE;
+typedef struct { void *self; const ta_allocator_vtable *v; } ta_allocator TA_ADAPTER;
 
 
 /* ========================================================================
@@ -117,17 +177,19 @@ typedef struct { void *self; const ta_allocator_vtable *v; } ta_allocator;
  * frees everything at reset or destroy.
  */
 
-typedef struct ta_arena_block ta_arena_block;
+typedef struct ta_arena_block ta_arena_block TA_VIEW;
 typedef struct {
     ta_allocator backing;
     ta_arena_block *head;
     size_t block_size;
 } ta_arena;
 
-TA_API ta_result ta_arena_init(ta_arena *arena, ta_allocator backing, size_t block_size);
-TA_API void ta_arena_reset(ta_arena *arena);
-TA_API void ta_arena_destroy(ta_arena *arena);
-TA_API void *ta_arena_alloc(ta_arena *arena, size_t size, size_t alignment);
+TA_API ta_result ta_arena_init(TA_OUT TA_RELEASE(ta_arena_destroy) ta_arena *arena,
+                                ta_allocator backing,
+                                size_t block_size);
+TA_API void ta_arena_reset(TA_INOUT ta_arena *arena);
+TA_API void ta_arena_destroy(TA_INOUT ta_arena *arena);
+TA_API void *ta_arena_alloc(TA_INOUT ta_arena *arena, size_t size, size_t alignment);
 /* ========================================================================
  * Host values
  */
@@ -136,47 +198,59 @@ TA_API void *ta_arena_alloc(ta_arena *arena, size_t size, size_t alignment);
 typedef struct ta_value_vtable {
     void (*retain)(void *self);
     void (*release)(void *self);
-    ta_result (*clone)(void *self, ta_value *out);
-} ta_value_vtable;
+    ta_result (*clone)(void *self, TA_OUT TA_RELEASE(ta_value_release) ta_value *out);
+} ta_value_vtable TA_VTABLE;
 struct ta_value { void *self; const ta_value_vtable *v; };
 
 
-static inline void ta_value_retain(ta_value *value) {
+static inline void ta_value_retain(TA_INOUT TA_OPTIONAL ta_value *value) TA_ANY_VALUE_MODEL {
     if (value && value->v && value->v->retain) value->v->retain(value->self);
 }
 
-static inline void ta_value_release(ta_value *value) {
+static inline void ta_value_release(TA_INOUT TA_OPTIONAL ta_value *value) TA_ANY_VALUE_MODEL {
     if (value && value->v && value->v->release) value->v->release(value->self);
 }
 
-TA_API ta_result ta_value_clone(const ta_value *value, ta_value *out);
+TA_API ta_result ta_value_clone(TA_IN const ta_value *value,
+                                TA_OUT TA_RELEASE(ta_value_release) ta_value *out)
+    TA_ANY_VALUE_MODEL;
 /* ========================================================================
  * Events and faults
  */
 
 
-typedef enum { TA_EVENT_EXTERNAL = 0, TA_EVENT_INTERNAL = 1, TA_EVENT_PLATFORM = 2 } ta_event_type;
-typedef enum { TA_ORIGIN_NONE = 0, TA_ORIGIN_ACTOR = 1, TA_ORIGIN_IO = 2, TA_ORIGIN_INVOKE = 3 } ta_origin_kind;
-typedef struct { ta_origin_kind kind; union { ta_actor_ref actor; ta_invoke_id invoke; uint64_t opaque; } as; } ta_origin;
+typedef enum { TA_EVENT_EXTERNAL = 0, TA_EVENT_INTERNAL = 1, TA_EVENT_PLATFORM = 2 } ta_event_type TA_SYMBOLS("TA_EVENT_");
+typedef enum { TA_ORIGIN_NONE = 0, TA_ORIGIN_ACTOR = 1, TA_ORIGIN_IO = 2, TA_ORIGIN_INVOKE = 3 } ta_origin_kind TA_SYMBOLS("TA_ORIGIN_");
+typedef struct {
+    ta_origin_kind kind;
+    union {
+        TA_WHEN(TA_ORIGIN_ACTOR) ta_actor_ref actor;
+        TA_WHEN(TA_ORIGIN_INVOKE) ta_invoke_id invoke;
+        TA_WHEN(TA_ORIGIN_IO) uint64_t opaque;
+    } as;
+} ta_origin TA_TAGGED(kind, as);
 typedef struct { ta_event_name_id name; ta_event_type type; ta_send_id send_id; ta_origin origin; ta_invoke_id invoke_id; ta_value data; } ta_event;
 /* invoke_id is TA_INVOKE_ID_NONE unless an invoked child generated the event. */
-typedef struct { ta_event_name_id detail; int32_t code; ta_str message; ta_value data; } ta_fault;
-typedef enum { TA_OP_OK = 0, TA_OP_ERROR = 1 } ta_op_status;
-typedef enum { TA_RUN_STABLE = 0, TA_RUN_PAUSED = 1, TA_RUN_DONE = 2, TA_RUN_ERROR = 3 } ta_run_status;
+/* A receiver of a fault owns its data; the message is borrowed. */
+typedef struct { ta_event_name_id detail; int32_t code; ta_str message; TA_RELEASE(ta_value_release) ta_value data; } ta_fault;
+typedef enum { TA_OP_OK TA_SUCCESS = 0, TA_OP_ERROR = 1 } ta_op_status TA_SYMBOLS("TA_OP_");
+typedef enum { TA_RUN_STABLE = 0, TA_RUN_PAUSED = 1, TA_RUN_DONE = 2, TA_RUN_ERROR = 3 } ta_run_status TA_SYMBOLS("TA_RUN_");
 
 
 typedef struct {
     ta_event event;
-    uint32_t flags;
+    TA_FLAGS(ta_event_flags) uint32_t flags;
 } ta_queued_event;
 
-enum {
+enum TA_FLAG_SET(ta_event_flags, "TA_EVENT_FLAG_") {
     TA_EVENT_FLAG_OWNS_DATA = 1u << 0,
     TA_EVENT_FLAG_GENERATED = 1u << 1
 };
 
-TA_API ta_result ta_event_clone(const ta_event *event, ta_event *out);
-TA_API void ta_event_release(ta_event *event);
+TA_API ta_result ta_event_clone(TA_IN const ta_event *event,
+                                TA_OUT TA_RELEASE(ta_event_release) ta_event *out)
+    TA_ANY_VALUE_MODEL;
+TA_API void ta_event_release(TA_INOUT ta_event *event) TA_ANY_VALUE_MODEL;
 /* ========================================================================
  * External SCXML event routing
  */
@@ -189,36 +263,39 @@ typedef struct {
 } ta_external_delivery;
 
 /* Deep-copies a named destination and clones event data. */
-TA_API ta_result ta_external_delivery_clone(const ta_external_delivery *delivery,
+TA_API ta_result ta_external_delivery_clone(TA_IN const ta_external_delivery *delivery,
                                             ta_allocator allocator,
-                                            ta_external_delivery *out);
-TA_API void ta_external_delivery_release(ta_external_delivery *delivery,
-                                         ta_allocator allocator);
+                                            TA_OUT TA_RELEASE(ta_external_delivery_release)
+                                                ta_external_delivery *out)
+    TA_ANY_VALUE_MODEL;
+TA_API void ta_external_delivery_release(TA_INOUT ta_external_delivery *delivery,
+                                         ta_allocator allocator) TA_ANY_VALUE_MODEL;
 
 typedef struct {
-    const ta_external_delivery *delivery;
-    ta_fault *fault;
+    TA_IN const ta_external_delivery *delivery;
+    TA_OUT TA_VALID_ON(TA_EXTERNAL_EVENT_ERROR) TA_LIFETIME(call) ta_fault *fault;
 } ta_external_event_submit_params;
 
 typedef enum {
     /* Delivery was accepted; an asynchronous router copied borrowed fields. */
-    TA_EXTERNAL_EVENT_ACCEPTED = 0,
+    TA_EXTERNAL_EVENT_ACCEPTED TA_SUCCESS = 0,
     /* Nothing was accepted; core retains and retries the delivery. */
     TA_EXTERNAL_EVENT_RETRY,
     /* Nothing was accepted; fault describes a communication failure. */
     TA_EXTERNAL_EVENT_ERROR
-} ta_external_event_submit_status;
+} ta_external_event_submit_status TA_SYMBOLS("TA_EXTERNAL_EVENT_");
 
 typedef struct ta_external_event_router_vtable {
     ta_external_event_submit_status (*submit)(
         void *self,
-        const ta_external_event_submit_params *params);
-} ta_external_event_router_vtable;
+        TA_IN const ta_external_event_submit_params *params);
+} ta_external_event_router_vtable TA_VTABLE;
 
 typedef struct {
     void *self;
-    const ta_external_event_router_vtable *v;
-} ta_external_event_router;
+    /* Null uninstalls the router. */
+    TA_OPTIONAL const ta_external_event_router_vtable *v;
+} ta_external_event_router TA_ADAPTER;
 
 
 /* ========================================================================
@@ -229,18 +306,18 @@ typedef enum {
     TA_EXPRESSION_NONE = 0,
     TA_EXPRESSION_SOURCE,
     TA_EXPRESSION_HOST
-} ta_expression_kind;
+} ta_expression_kind TA_SYMBOLS("TA_EXPRESSION_");
 
 typedef struct ta_expression_host_vtable {
     ta_result (*retain)(void *self, void *value, ta_allocator allocator, void **out);
     void (*release)(void *self, void *value, ta_allocator allocator);
-} ta_expression_host_vtable;
+} ta_expression_host_vtable TA_VTABLE;
 
 typedef struct {
     void *self;
     const ta_expression_host_vtable *v;
     void *value;
-} ta_expression_host;
+} ta_expression_host TA_ADAPTER;
 
 /*
  * A frontend expression retained by a compiled definition. Source expressions
@@ -251,10 +328,10 @@ typedef struct {
 typedef struct {
     ta_expression_kind kind;
     union {
-        ta_str source;
-        ta_expression_host host;
+        TA_WHEN(TA_EXPRESSION_SOURCE) ta_str source;
+        TA_WHEN(TA_EXPRESSION_HOST) ta_expression_host host;
     } as;
-} ta_expression;
+} ta_expression TA_TAGGED(kind, as);
 
 /*
  * Process-independent identity of one exact immutable definition revision.
@@ -279,12 +356,12 @@ typedef struct {
  * compiled definition itself.
  */
 typedef struct {
-    const ta_expression *expressions;
+    TA_COUNTED_BY(expression_count) TA_OPTIONAL TA_LIFETIME(definition) const ta_expression *expressions;
     uint32_t expression_count;
     ta_allocator allocator;
     void **shared;
 } ta_datamodel_prepare_definition_params;
-typedef struct { void *shared; void *instance; const ta_value *binding; const ta_dm_host *host; } ta_datamodel_init_instance_params;
+typedef struct { void *shared; void *instance; TA_IN TA_OPTIONAL const ta_value *binding; const ta_dm_host *host; } ta_datamodel_init_instance_params;
 /*
  * Named top-level data bindings (SCXML <data>). `name` is the author's data ID,
  * borrowed for the call. declare() creates the binding with the data model's
@@ -297,13 +374,13 @@ typedef struct { void *shared; void *instance; const ta_value *binding; const ta
  * already supplies a value for `name` (e.g. <param>s passed to an invoked
  * child); the core then skips that binding's initializer.
  */
-typedef struct { void *shared; void *instance; ta_str name; const ta_dm_host *host; ta_fault *fault; bool *bound; } ta_datamodel_declare_params;
-typedef struct { void *shared; void *instance; ta_str name; const ta_value *value; const ta_dm_host *host; ta_fault *fault; } ta_datamodel_set_named_params;
-typedef struct { void *shared; void *instance; ta_expr_id expr; const ta_dm_host *host; bool *out; ta_fault *fault; } ta_datamodel_eval_condition_params;
-typedef struct { void *shared; void *instance; ta_expr_id expr; const ta_dm_host *host; ta_value *out; ta_fault *fault; } ta_datamodel_eval_value_params;
-typedef struct { void *shared; void *instance; ta_expr_id location; const ta_dm_host *host; ta_value *out; ta_fault *fault; } ta_datamodel_read_location_params;
-typedef struct { void *shared; void *instance; ta_expr_id location; const ta_value *value; const ta_dm_host *host; ta_fault *fault; } ta_datamodel_assign_params;
-typedef struct { void *shared; void *instance; ta_expr_id script; const ta_dm_host *host; ta_fault *fault; } ta_datamodel_execute_script_params;
+typedef struct { void *shared; void *instance; ta_str name; const ta_dm_host *host; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; TA_OUT TA_OPTIONAL bool *bound; } ta_datamodel_declare_params;
+typedef struct { void *shared; void *instance; ta_str name; TA_IN const ta_value *value; const ta_dm_host *host; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_set_named_params;
+typedef struct { void *shared; void *instance; ta_expr_id expr; const ta_dm_host *host; TA_OUT bool *out; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_eval_condition_params;
+typedef struct { void *shared; void *instance; ta_expr_id expr; const ta_dm_host *host; TA_OUT TA_RELEASE(ta_value_release) ta_value *out; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_eval_value_params;
+typedef struct { void *shared; void *instance; ta_expr_id location; const ta_dm_host *host; TA_OUT TA_RELEASE(ta_value_release) ta_value *out; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_read_location_params;
+typedef struct { void *shared; void *instance; ta_expr_id location; TA_IN const ta_value *value; const ta_dm_host *host; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_assign_params;
+typedef struct { void *shared; void *instance; ta_expr_id script; const ta_dm_host *host; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_execute_script_params;
 typedef enum {
     TA_SCXML_TARGET_INVALID = 0,
     TA_SCXML_TARGET_INTERNAL,
@@ -311,34 +388,34 @@ typedef enum {
     TA_SCXML_TARGET_PARENT,
     TA_SCXML_TARGET_INVOKE,
     TA_SCXML_TARGET_ACTOR
-} ta_scxml_target_kind;
+} ta_scxml_target_kind TA_SYMBOLS("TA_SCXML_TARGET_");
 typedef struct {
     ta_scxml_target_kind kind;
     union {
-        ta_invoke_id invoke;
-        ta_actor_ref actor;
+        TA_WHEN(TA_SCXML_TARGET_INVOKE) ta_invoke_id invoke;
+        TA_WHEN(TA_SCXML_TARGET_ACTOR) ta_actor_ref actor;
     } as;
-} ta_scxml_target;
+} ta_scxml_target TA_TAGGED(kind, as) TA_ZERO_IS_ABSENT;
 typedef struct {
     void *shared;
     void *instance;
-    const ta_value *value;
+    TA_IN const ta_value *value;
     const ta_dm_host *host;
-    ta_scxml_target *out;
-    ta_fault *fault;
+    TA_OUT TA_LIFETIME(input) ta_scxml_target *out;
+    TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault;
 } ta_datamodel_decode_scxml_target_params;
 /* One <param>: `name` is the author's parameter name, borrowed for the call. */
 typedef struct { ta_str name; ta_value value; } ta_named_value;
 typedef struct {
     void *shared;
     void *instance;
-    const ta_named_value *values;
+    TA_COUNTED_BY(count) TA_OPTIONAL const ta_named_value *values;
     uint32_t count;
     const ta_dm_host *host;
-    ta_value *out;
-    ta_fault *fault;
+    TA_OUT TA_RELEASE(ta_value_release) ta_value *out;
+    TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault;
 } ta_datamodel_make_params_params;
-typedef struct { void *shared; void *instance; const ta_dm_host *host; ta_value *out; } ta_datamodel_inspect_params;
+typedef struct { void *shared; void *instance; const ta_dm_host *host; TA_OUT TA_RELEASE(ta_value_release) ta_value *out; } ta_datamodel_inspect_params;
 /*
  * Conversions the SCXML `*expr` attribute forms need. value_text reads an
  * evaluated value as text (eventexpr, typeexpr, sendidexpr, srcexpr,
@@ -346,53 +423,53 @@ typedef struct { void *shared; void *instance; const ta_dm_host *host; ta_value 
  * text_value makes a value from text, e.g. a generated send or invoke ID
  * stored through idlocation.
  */
-typedef struct { void *shared; void *instance; const ta_value *value; const ta_dm_host *host; ta_str *out; ta_fault *fault; } ta_datamodel_value_text_params;
-typedef struct { void *shared; void *instance; ta_str text; const ta_dm_host *host; ta_value *out; ta_fault *fault; } ta_datamodel_text_value_params;
+typedef struct { void *shared; void *instance; TA_IN const ta_value *value; const ta_dm_host *host; TA_OUT TA_LIFETIME(input) ta_str *out; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_value_text_params;
+typedef struct { void *shared; void *instance; ta_str text; const ta_dm_host *host; TA_OUT TA_RELEASE(ta_value_release) ta_value *out; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_text_value_params;
 /* Imports literal <content> or <data> content into a legal data-model value. */
-typedef struct { void *shared; void *instance; ta_bytes content; const ta_dm_host *host; ta_value *out; ta_fault *fault; } ta_datamodel_import_content_params;
+typedef struct { void *shared; void *instance; ta_bytes content; const ta_dm_host *host; TA_OUT TA_RELEASE(ta_value_release) ta_value *out; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_import_content_params;
 /*
  * <foreach>: foreach_snapshot evaluates `array` once and returns a shallow
  * copy and its length; the core keeps the snapshot while iterating.
  * foreach_bind assigns item `index` of the snapshot to the `item` variable
  * and, when index_name.ptr is non-null, the index to that variable.
  */
-typedef struct { void *shared; void *instance; ta_expr_id array; const ta_dm_host *host; ta_value *out; uint32_t *count; ta_fault *fault; } ta_datamodel_foreach_snapshot_params;
-typedef struct { void *shared; void *instance; const ta_value *snapshot; uint32_t index; ta_str item; ta_str index_name; const ta_dm_host *host; ta_fault *fault; } ta_datamodel_foreach_bind_params;
+typedef struct { void *shared; void *instance; ta_expr_id array; const ta_dm_host *host; TA_OUT TA_RELEASE(ta_value_release) ta_value *out; TA_OUT uint32_t *count; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_foreach_snapshot_params;
+typedef struct { void *shared; void *instance; TA_IN const ta_value *snapshot; uint32_t index; ta_str item; ta_str index_name; const ta_dm_host *host; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_foreach_bind_params;
 typedef struct ta_datamodel_vtable {
     /*
      * The SCXML data-model name this adapter implements, e.g. "null" or
      * "ecmascript". Compared with ta_scxml_spec.datamodel at compile time.
      */
     ta_str name;
-    ta_result (*prepare_definition)(void *self, const ta_datamodel_prepare_definition_params *params);
+    ta_result (*prepare_definition)(void *self, TA_IN const ta_datamodel_prepare_definition_params *params);
     void (*destroy_definition)(void *self, void *shared, ta_allocator allocator);
     uint32_t (*instance_size)(void *self, void *shared);
     uint32_t (*instance_alignment)(void *self, void *shared);
-    ta_result (*init_instance)(void *self, const ta_datamodel_init_instance_params *params);
+    ta_result (*init_instance)(void *self, TA_IN const ta_datamodel_init_instance_params *params);
     void (*destroy_instance)(void *self, void *shared, void *instance);
-    ta_op_status (*declare)(void *self, const ta_datamodel_declare_params *params);
-    ta_op_status (*set_named)(void *self, const ta_datamodel_set_named_params *params);
-    ta_op_status (*eval_condition)(void *self, const ta_datamodel_eval_condition_params *params);
-    ta_op_status (*eval_value)(void *self, const ta_datamodel_eval_value_params *params);
-    ta_op_status (*read_location)(void *self, const ta_datamodel_read_location_params *params);
-    ta_op_status (*assign)(void *self, const ta_datamodel_assign_params *params);
-    ta_op_status (*execute_script)(void *self, const ta_datamodel_execute_script_params *params);
+    ta_op_status (*declare)(void *self, TA_IN const ta_datamodel_declare_params *params);
+    ta_op_status (*set_named)(void *self, TA_IN const ta_datamodel_set_named_params *params);
+    ta_op_status (*eval_condition)(void *self, TA_IN const ta_datamodel_eval_condition_params *params);
+    ta_op_status (*eval_value)(void *self, TA_IN const ta_datamodel_eval_value_params *params);
+    ta_op_status (*read_location)(void *self, TA_IN const ta_datamodel_read_location_params *params);
+    ta_op_status (*assign)(void *self, TA_IN const ta_datamodel_assign_params *params);
+    ta_op_status (*execute_script)(void *self, TA_IN const ta_datamodel_execute_script_params *params);
     ta_op_status (*decode_scxml_target)(void *self,
-                                        const ta_datamodel_decode_scxml_target_params *params);
-    ta_op_status (*make_params)(void *self, const ta_datamodel_make_params_params *params);
-    ta_result (*inspect)(void *self, const ta_datamodel_inspect_params *params);
-    ta_op_status (*value_text)(void *self, const ta_datamodel_value_text_params *params);
-    ta_op_status (*text_value)(void *self, const ta_datamodel_text_value_params *params);
-    ta_op_status (*import_content)(void *self, const ta_datamodel_import_content_params *params);
-    ta_op_status (*foreach_snapshot)(void *self, const ta_datamodel_foreach_snapshot_params *params);
-    ta_op_status (*foreach_bind)(void *self, const ta_datamodel_foreach_bind_params *params);
-} ta_datamodel_vtable;
-typedef struct { void *self; const ta_datamodel_vtable *v; } ta_datamodel;
+                                        TA_IN const ta_datamodel_decode_scxml_target_params *params);
+    ta_op_status (*make_params)(void *self, TA_IN const ta_datamodel_make_params_params *params);
+    ta_result (*inspect)(void *self, TA_IN const ta_datamodel_inspect_params *params);
+    ta_op_status (*value_text)(void *self, TA_IN const ta_datamodel_value_text_params *params);
+    ta_op_status (*text_value)(void *self, TA_IN const ta_datamodel_text_value_params *params);
+    ta_op_status (*import_content)(void *self, TA_IN const ta_datamodel_import_content_params *params);
+    ta_op_status (*foreach_snapshot)(void *self, TA_IN const ta_datamodel_foreach_snapshot_params *params);
+    ta_op_status (*foreach_bind)(void *self, TA_IN const ta_datamodel_foreach_bind_params *params);
+} ta_datamodel_vtable TA_VTABLE;
+typedef struct { void *self; const ta_datamodel_vtable *v; } ta_datamodel TA_ADAPTER;
 
 
 /* Queries available to a data-model adapter while core calls into it. */
 TA_API bool ta_dm_host_in_state(const ta_dm_host *host, ta_state_id state);
-TA_API const ta_event *ta_dm_host_event(const ta_dm_host *host);
+TA_API const ta_event *ta_dm_host_event(const ta_dm_host *host) TA_OPTIONAL TA_LIFETIME(call);
 TA_API ta_actor_id ta_dm_host_actor(const ta_dm_host *host);
 
 /*
@@ -424,24 +501,30 @@ typedef enum {
     TA_DM_TEXT_SCXML_IO_LOCATION,
     /* _ioprocessors: the SCXML Event I/O Processor's type URI. */
     TA_DM_TEXT_SCXML_IO_TYPE
-} ta_dm_text_kind;
+} ta_dm_text_kind TA_SYMBOLS("TA_DM_TEXT_");
 typedef struct {
     ta_dm_text_kind kind;
-    char *buffer;
+    TA_BUFFER(capacity, needed) TA_OPTIONAL char *buffer;
     uint32_t capacity;
-    uint32_t *needed;
+    TA_OUT TA_ALWAYS uint32_t *needed;
 } ta_dm_text_params;
-TA_API ta_result ta_dm_host_text(const ta_dm_host *host, const ta_dm_text_params *params);
+TA_API ta_result ta_dm_host_text(const ta_dm_host *host, TA_IN const ta_dm_text_params *params);
 /* The author's ID of a state; TA_ERR_NOT_FOUND ends iteration over 0, 1, 2, ... */
-TA_API ta_result ta_dm_host_state_name(const ta_dm_host *host, ta_state_id state, ta_str *out);
+TA_API ta_result ta_dm_host_state_name(const ta_dm_host *host,
+                                       ta_state_id state,
+                                       TA_OUT TA_LIFETIME(definition) ta_str *out);
 /* ========================================================================
  * I/O processors
  */
 
 
 typedef struct { ta_actor_ref source; ta_send_id send_id; ta_event_name_id event; ta_atom io_type; ta_value target; ta_value data; } ta_send;
-typedef struct ta_io_vtable { ta_op_status (*send)(void *self, const ta_send *send, ta_fault *fault); } ta_io_vtable;
-typedef struct { void *self; const ta_io_vtable *v; } ta_io;
+typedef struct ta_io_vtable {
+    ta_op_status (*send)(void *self,
+                         TA_IN const ta_send *send,
+                         TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault);
+} ta_io_vtable TA_VTABLE;
+typedef struct { void *self; const ta_io_vtable *v; } ta_io TA_ADAPTER;
 
 
 /* ========================================================================
@@ -460,8 +543,8 @@ typedef struct { void *self; const ta_io_vtable *v; } ta_io;
  * `#_<invokeid>` sends, autoforwarding, and done.invoke itself.
  */
 typedef struct { ta_system *system; ta_actor_id parent; ta_invoke_id invoke_id; ta_atom type; ta_value src; ta_value data; ta_value params; bool autoforward; } ta_invoke_request;
-typedef struct { const ta_invoke_request *request; uint64_t *service_handle; ta_fault *fault; } ta_invoker_start_params;
-typedef struct { uint64_t service_handle; const ta_event *event; ta_fault *fault; } ta_invoker_forward_params;
+typedef struct { TA_IN const ta_invoke_request *request; TA_OUT uint64_t *service_handle; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_invoker_start_params;
+typedef struct { uint64_t service_handle; TA_IN const ta_event *event; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_invoker_forward_params;
 
 /*
  * Asynchronous outcome of a previously successful invoker start.  EVENT and
@@ -472,30 +555,33 @@ typedef enum {
     TA_INVOKE_REPORT_EVENT = 0,
     TA_INVOKE_REPORT_DONE,
     TA_INVOKE_REPORT_UNAVAILABLE
-} ta_invoke_report_kind;
+} ta_invoke_report_kind TA_SYMBOLS("TA_INVOKE_REPORT_");
 
 typedef struct {
     ta_actor_id actor;
     ta_invoke_id invoke_id;
     ta_invoke_report_kind kind;
     union {
-        const ta_event *event;
-        const ta_value *done_data;
-        const ta_fault *fault;
+        TA_WHEN(TA_INVOKE_REPORT_EVENT) TA_IN const ta_event *event;
+        TA_WHEN(TA_INVOKE_REPORT_DONE) TA_IN TA_OPTIONAL const ta_value *done_data;
+        TA_WHEN(TA_INVOKE_REPORT_UNAVAILABLE) TA_IN TA_OPTIONAL const ta_fault *fault;
     } as;
-} ta_invoke_report_params;
+} ta_invoke_report_params TA_TAGGED(kind, as);
 
 typedef struct ta_invoker_vtable {
     /* start must not report reentrantly through ta_actor_report_invoke(). */
-    ta_op_status (*start)(void *self, const ta_invoker_start_params *params);
-    ta_op_status (*cancel)(void *self, uint64_t service_handle, ta_fault *fault);
-    ta_op_status (*forward)(void *self, const ta_invoker_forward_params *params);
-} ta_invoker_vtable;
-typedef struct { void *self; const ta_invoker_vtable *v; } ta_invoker;
+    ta_op_status (*start)(void *self, TA_IN const ta_invoker_start_params *params);
+    ta_op_status (*cancel)(void *self,
+                           uint64_t service_handle,
+                           TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault);
+    ta_op_status (*forward)(void *self, TA_IN const ta_invoker_forward_params *params);
+} ta_invoker_vtable TA_VTABLE;
+typedef struct { void *self; const ta_invoker_vtable *v; } ta_invoker TA_ADAPTER;
 
 /* Externally synchronize this call; do not call it reentrantly from start. */
 TA_API ta_result ta_actor_report_invoke(ta_system *system,
-                                        const ta_invoke_report_params *params);
+                                        TA_IN const ta_invoke_report_params *params)
+    TA_VALUE_MODEL(actor, params.actor);
 
 
 typedef struct {
@@ -534,7 +620,7 @@ typedef struct {
 
 /* A temporary, type-erased child list owned by a ta_tree. */
 typedef struct {
-    ta_tree *tree;
+    TA_INOUT ta_tree *tree;
     size_t element_size;
     size_t element_alignment;
     void *impl;
@@ -571,32 +657,32 @@ typedef struct {
  * }
  * @endcode
  */
-TA_API void ta_tree_init(ta_tree *tree, ta_allocator allocator);
-TA_API void ta_tree_destroy(ta_tree *tree);
-TA_API void *ta_tree_alloc(ta_tree *tree, size_t size, size_t alignment);
-TA_API ta_result ta_tree_result(const ta_tree *tree);
+TA_API void ta_tree_init(TA_OUT TA_RELEASE(ta_tree_destroy) ta_tree *tree, ta_allocator allocator);
+TA_API void ta_tree_destroy(TA_INOUT ta_tree *tree);
+TA_API void *ta_tree_alloc(TA_INOUT ta_tree *tree, size_t size, size_t alignment);
+TA_API ta_result ta_tree_result(TA_IN const ta_tree *tree);
 
-TA_API void ta_tree_list_init(ta_tree_list *list,
-                              ta_tree *tree,
-                              const ta_tree_list_layout *layout);
-TA_API void ta_tree_put(ta_tree_list *list, const void *element);
-TA_API const void *ta_tree_close(ta_tree_list *list);
+TA_API void ta_tree_list_init(TA_OUT TA_LIFETIME(input) ta_tree_list *list,
+                              TA_INOUT ta_tree *tree,
+                              TA_IN const ta_tree_list_layout *layout);
+TA_API void ta_tree_put(TA_INOUT ta_tree_list *list, const void *element);
+TA_API const void *ta_tree_close(TA_INOUT ta_tree_list *list);
 
 typedef enum {
     TA_SCXML_VALUE_NONE = 0,
     TA_SCXML_VALUE_EXPR,
     TA_SCXML_VALUE_LOCATION,
     TA_SCXML_VALUE_CONTENT
-} ta_scxml_value_kind;
+} ta_scxml_value_kind TA_SYMBOLS("TA_SCXML_VALUE_");
 
 typedef struct {
     ta_scxml_value_kind kind;
     union {
-        ta_expression expr;
-        ta_expression location;
-        ta_bytes content;
+        TA_WHEN(TA_SCXML_VALUE_EXPR) ta_expression expr;
+        TA_WHEN(TA_SCXML_VALUE_LOCATION) ta_expression location;
+        TA_WHEN(TA_SCXML_VALUE_CONTENT) ta_bytes content;
     } as;
-} ta_scxml_value_spec;
+} ta_scxml_value_spec TA_TAGGED(kind, as) TA_ZERO_IS_ABSENT;
 
 /*
  * An SCXML attribute pair of the form `x` / `xexpr`: either literal text
@@ -607,15 +693,15 @@ typedef enum {
     TA_SCXML_STRING_NONE = 0,
     TA_SCXML_STRING_LITERAL,
     TA_SCXML_STRING_EXPR
-} ta_scxml_string_kind;
+} ta_scxml_string_kind TA_SYMBOLS("TA_SCXML_STRING_");
 
 typedef struct {
     ta_scxml_string_kind kind;
     union {
-        ta_str literal;
-        ta_expression expr;
+        TA_WHEN(TA_SCXML_STRING_LITERAL) ta_str literal;
+        TA_WHEN(TA_SCXML_STRING_EXPR) ta_expression expr;
     } as;
-} ta_scxml_string_spec;
+} ta_scxml_string_spec TA_TAGGED(kind, as) TA_ZERO_IS_ABSENT;
 
 /*
  * The `id` / `idlocation` pair of <send> and <invoke>. A literal ID is the
@@ -627,29 +713,29 @@ typedef enum {
     TA_SCXML_ID_NONE = 0,
     TA_SCXML_ID_LITERAL,
     TA_SCXML_ID_LOCATION
-} ta_scxml_id_kind;
+} ta_scxml_id_kind TA_SYMBOLS("TA_SCXML_ID_");
 
 typedef struct {
     ta_scxml_id_kind kind;
     union {
-        ta_str literal;
-        ta_expression location;
+        TA_WHEN(TA_SCXML_ID_LITERAL) ta_str literal;
+        TA_WHEN(TA_SCXML_ID_LOCATION) ta_expression location;
     } as;
-} ta_scxml_id_spec;
+} ta_scxml_id_spec TA_TAGGED(kind, as) TA_ZERO_IS_ABSENT;
 
 typedef enum {
     TA_SCXML_EVENT_NONE = 0,
     TA_SCXML_EVENT_NAME,
     TA_SCXML_EVENT_EXPR
-} ta_scxml_event_kind;
+} ta_scxml_event_kind TA_SYMBOLS("TA_SCXML_EVENT_");
 
 typedef struct {
     ta_scxml_event_kind kind;
     union {
-        ta_str name;
-        ta_expression expr;
+        TA_WHEN(TA_SCXML_EVENT_NAME) ta_str name;
+        TA_WHEN(TA_SCXML_EVENT_EXPR) ta_expression expr;
     } as;
-} ta_scxml_event_spec;
+} ta_scxml_event_spec TA_TAGGED(kind, as) TA_ZERO_IS_ABSENT;
 
 typedef enum {
     TA_SCXML_ACTION_NONE = 0,
@@ -663,13 +749,13 @@ typedef enum {
     TA_SCXML_ACTION_FOREACH,
     TA_SCXML_ACTION_INVOKE,
     TA_SCXML_ACTION_EXTENSION
-} ta_scxml_action_kind;
+} ta_scxml_action_kind TA_SYMBOLS("TA_SCXML_ACTION_");
 
 typedef enum {
     TA_SCXML_TRANSITION_NONE = 0,
     TA_SCXML_TRANSITION_EXTERNAL,
     TA_SCXML_TRANSITION_INTERNAL
-} ta_scxml_transition_kind;
+} ta_scxml_transition_kind TA_SYMBOLS("TA_SCXML_TRANSITION_");
 
 typedef enum {
     TA_SCXML_STATE_NONE = 0,
@@ -679,28 +765,28 @@ typedef enum {
     TA_SCXML_STATE_FINAL,
     TA_SCXML_STATE_HISTORY_SHALLOW,
     TA_SCXML_STATE_HISTORY_DEEP
-} ta_scxml_state_kind;
+} ta_scxml_state_kind TA_SYMBOLS("TA_SCXML_STATE_");
 
 /* Zero selects the SCXML default, early binding. */
 typedef enum {
     TA_SCXML_BINDING_DEFAULT = 0,
     TA_SCXML_BINDING_EARLY,
     TA_SCXML_BINDING_LATE
-} ta_scxml_binding_kind;
+} ta_scxml_binding_kind TA_SYMBOLS("TA_SCXML_BINDING_");
 
 typedef enum {
     TA_SCXML_INVOKE_NONE = 0,
     TA_SCXML_INVOKE
-} ta_scxml_invoke_kind;
+} ta_scxml_invoke_kind TA_SYMBOLS("TA_SCXML_");
 
-typedef struct ta_scxml_action_spec ta_scxml_action_spec;
-typedef struct ta_scxml_transition_spec ta_scxml_transition_spec;
-typedef struct ta_scxml_state_spec ta_scxml_state_spec;
+typedef struct ta_scxml_action_spec ta_scxml_action_spec TA_TAGGED(kind, as) TA_ZERO_IS_ABSENT;
+typedef struct ta_scxml_transition_spec ta_scxml_transition_spec TA_ZERO_IS_ABSENT;
+typedef struct ta_scxml_state_spec ta_scxml_state_spec TA_ZERO_IS_ABSENT;
 
 typedef struct {
     ta_str name;
     ta_scxml_value_spec value;
-} ta_scxml_param_spec;
+} ta_scxml_param_spec TA_ZERO_IS_ABSENT;
 
 /*
  * `type` names a registered I/O processor (`type` / `typeexpr`); absent
@@ -717,8 +803,8 @@ typedef struct {
     ta_scxml_string_spec target;
     ta_scxml_string_spec delay;
     ta_scxml_value_spec data;
-    const ta_scxml_param_spec *params;
-} ta_scxml_send_spec;
+    TA_TERMINATED_BY(name) TA_OPTIONAL const ta_scxml_param_spec *params;
+} ta_scxml_send_spec TA_ZERO_IS_ABSENT;
 
 /*
  * `type` names a registered invoker (`type` / `typeexpr`); `src` is the
@@ -732,48 +818,48 @@ typedef struct {
     ta_scxml_string_spec src;
     ta_scxml_value_spec data;
     bool autoforward;
-    const ta_scxml_param_spec *params;
-    const ta_scxml_action_spec *finalize;
-} ta_scxml_invoke_spec;
+    TA_TERMINATED_BY(name) TA_OPTIONAL const ta_scxml_param_spec *params;
+    TA_TERMINATED_BY(kind) TA_OPTIONAL const ta_scxml_action_spec *finalize;
+} ta_scxml_invoke_spec TA_ZERO_IS_ABSENT;
 
 struct ta_scxml_action_spec {
     ta_scxml_action_kind kind;
     union {
-        struct { ta_str event; ta_scxml_value_spec data; } raise;
-        ta_scxml_send_spec send;
+        TA_WHEN(TA_SCXML_ACTION_RAISE) struct { ta_str event; ta_scxml_value_spec data; } raise;
+        TA_WHEN(TA_SCXML_ACTION_SEND) ta_scxml_send_spec send;
         /* `sendid` / `sendidexpr`; exactly one is required. */
-        struct { ta_scxml_string_spec sendid; } cancel;
-        struct { ta_expression location; ta_scxml_value_spec value; } assign;
-        struct { ta_expression script; } script;
+        TA_WHEN(TA_SCXML_ACTION_CANCEL) struct { ta_scxml_string_spec sendid; } cancel;
+        TA_WHEN(TA_SCXML_ACTION_ASSIGN) struct { ta_expression location; ta_scxml_value_spec value; } assign;
+        TA_WHEN(TA_SCXML_ACTION_SCRIPT) struct { ta_expression script; } script;
         /* Both `label` and `expr` are optional. */
-        struct { ta_str label; ta_expression expr; } log;
-        struct {
+        TA_WHEN(TA_SCXML_ACTION_LOG) struct { ta_str label; ta_expression expr; } log;
+        TA_WHEN(TA_SCXML_ACTION_IF) struct {
             ta_expression condition;
-            const ta_scxml_action_spec *then_actions;
-            const ta_scxml_action_spec *else_actions;
+            TA_TERMINATED_BY(kind) TA_OPTIONAL const ta_scxml_action_spec *then_actions;
+            TA_TERMINATED_BY(kind) TA_OPTIONAL const ta_scxml_action_spec *else_actions;
         } conditional;
-        struct {
+        TA_WHEN(TA_SCXML_ACTION_FOREACH) struct {
             ta_expression array;
             ta_str item;
             ta_str index;
-            const ta_scxml_action_spec *body;
+            TA_TERMINATED_BY(kind) TA_OPTIONAL const ta_scxml_action_spec *body;
         } foreach;
-        ta_scxml_invoke_spec invoke;
-        struct { ta_str type; ta_bytes payload; } extension;
+        TA_WHEN(TA_SCXML_ACTION_INVOKE) ta_scxml_invoke_spec invoke;
+        TA_WHEN(TA_SCXML_ACTION_EXTENSION) struct { ta_str type; ta_bytes payload; } extension;
     } as;
 };
 
 typedef struct {
-    const ta_str *targets;
-    const ta_scxml_action_spec *actions;
-} ta_scxml_initial_spec;
+    TA_TERMINATED_BY(ptr) TA_OPTIONAL const ta_str *targets;
+    TA_TERMINATED_BY(kind) TA_OPTIONAL const ta_scxml_action_spec *actions;
+} ta_scxml_initial_spec TA_ZERO_IS_ABSENT;
 
 struct ta_scxml_transition_spec {
     ta_scxml_transition_kind kind;
     ta_str event;
     ta_expression condition;
-    const ta_str *targets;
-    const ta_scxml_action_spec *actions;
+    TA_TERMINATED_BY(ptr) TA_OPTIONAL const ta_str *targets;
+    TA_TERMINATED_BY(kind) TA_OPTIONAL const ta_scxml_action_spec *actions;
 };
 
 /*
@@ -787,8 +873,8 @@ struct ta_scxml_transition_spec {
  * `(const ta_scxml_action_spec[]){{0}}`, or is left out.
  */
 typedef struct {
-    const ta_scxml_action_spec *actions;
-} ta_scxml_handler_spec;
+    TA_TERMINATED_BY(kind) const ta_scxml_action_spec *actions;
+} ta_scxml_handler_spec TA_ZERO_IS_ABSENT;
 
 /*
  * SCXML `<data src>` is resolved by the importer, which performs any I/O and
@@ -797,25 +883,25 @@ typedef struct {
 typedef struct {
     ta_str name;
     ta_scxml_value_spec initializer;
-} ta_scxml_data_spec;
+} ta_scxml_data_spec TA_ZERO_IS_ABSENT;
 
 /* Exactly one of content or params may be present, as required by SCXML. */
 typedef struct {
     ta_scxml_value_spec content;
-    const ta_scxml_param_spec *params;
-} ta_scxml_done_data_spec;
+    TA_TERMINATED_BY(name) TA_OPTIONAL const ta_scxml_param_spec *params;
+} ta_scxml_done_data_spec TA_ZERO_IS_ABSENT;
 
 struct ta_scxml_state_spec {
     ta_scxml_state_kind kind;
     ta_str id;
-    const ta_scxml_state_spec *states;
-    const ta_scxml_initial_spec *initial;
-    const ta_scxml_transition_spec *transitions;
-    const ta_scxml_handler_spec *onentry;
-    const ta_scxml_handler_spec *onexit;
-    const ta_scxml_data_spec *data;
-    const ta_scxml_invoke_spec *invokes;
-    const ta_scxml_done_data_spec *done_data;
+    TA_TERMINATED_BY(kind) TA_OPTIONAL const ta_scxml_state_spec *states;
+    TA_IN TA_OPTIONAL const ta_scxml_initial_spec *initial;
+    TA_TERMINATED_BY(kind) TA_OPTIONAL const ta_scxml_transition_spec *transitions;
+    TA_TERMINATED_BY(actions) TA_OPTIONAL const ta_scxml_handler_spec *onentry;
+    TA_TERMINATED_BY(actions) TA_OPTIONAL const ta_scxml_handler_spec *onexit;
+    TA_TERMINATED_BY(name) TA_OPTIONAL const ta_scxml_data_spec *data;
+    TA_TERMINATED_BY(kind) TA_OPTIONAL const ta_scxml_invoke_spec *invokes;
+    TA_IN TA_OPTIONAL const ta_scxml_done_data_spec *done_data;
 };
 
 typedef struct {
@@ -826,11 +912,11 @@ typedef struct {
      * TA_ERR_UNSUPPORTED when it differs from the adapter's name.
      */
     ta_str datamodel;
-    const ta_definition_identity *identity;
+    TA_IN TA_OPTIONAL const ta_definition_identity *identity;
     ta_scxml_binding_kind binding;
-    const ta_scxml_initial_spec *initial;
-    const ta_scxml_state_spec *states;
-    const ta_scxml_data_spec *data;
+    TA_IN TA_OPTIONAL const ta_scxml_initial_spec *initial;
+    TA_TERMINATED_BY(kind) TA_OPTIONAL const ta_scxml_state_spec *states;
+    TA_TERMINATED_BY(name) TA_OPTIONAL const ta_scxml_data_spec *data;
     /*
      * The <scxml> <script> child (SCXML 3.2.2, 5.8), absent when zero. Each
      * session runs it once at initialization: after early-bound data is
@@ -839,7 +925,7 @@ typedef struct {
      * and passed as source text; the core performs no I/O.
      */
     ta_expression script;
-} ta_scxml_spec;
+} ta_scxml_spec TA_ZERO_IS_ABSENT;
 
 /**
  * Compile a sentinel-terminated SCXML specification into an immutable
@@ -1068,15 +1154,15 @@ typedef struct {
  * @endcode
  */
 typedef struct {
-    const ta_scxml_spec *spec;
+    TA_IN const ta_scxml_spec *spec;
     ta_datamodel datamodel;
     ta_allocator allocator;
     ta_definition **out;
 } ta_definition_compile_params;
 
 TA_API ta_result ta_definition_compile_spec(ta_system *system,
-                                            const ta_definition_compile_params *params);
-TA_API void ta_definition_destroy(ta_definition *definition);
+                                            TA_IN const ta_definition_compile_params *params);
+TA_API void ta_definition_destroy(TA_DESTROYS ta_definition *definition);
 
 /*
  * Rebuilds the author-level spec of a registered definition (ADR 0042).
@@ -1096,11 +1182,11 @@ TA_API void ta_definition_destroy(ta_definition *definition);
  */
 typedef struct {
     ta_definition_id definition;
-    ta_arena *arena;
-    const ta_scxml_spec **out;
+    TA_ARENA ta_arena *arena;
+    TA_VIEW_OUT TA_LIFETIME(arena) const ta_scxml_spec **out;
 } ta_definition_export_params;
 TA_API ta_result ta_definition_export(const ta_system *system,
-                                      const ta_definition_export_params *params);
+                                      TA_IN const ta_definition_export_params *params);
 
 
 /* ========================================================================
@@ -1112,7 +1198,7 @@ typedef enum {
     TA_ACTOR_IDLE,
     TA_ACTOR_RUNNING,
     TA_ACTOR_DONE
-} ta_actor_residency;
+} ta_actor_residency TA_SYMBOLS("TA_ACTOR_");
 
 /* The kind of a compiled state, as reported by ta_definition_state(). */
 typedef enum {
@@ -1122,39 +1208,39 @@ typedef enum {
     TA_STATE_FINAL,
     TA_STATE_HISTORY_SHALLOW,
     TA_STATE_HISTORY_DEEP
-} ta_state_kind;
+} ta_state_kind TA_SYMBOLS("TA_STATE_");
 
 typedef enum {
     TA_ACTOR_DIRECTORY_NONE = 0,
     TA_ACTOR_DIRECTORY_RESIDENT,
     TA_ACTOR_DIRECTORY_UNLOADED
-} ta_actor_directory_entry_kind;
+} ta_actor_directory_entry_kind TA_SYMBOLS("TA_ACTOR_DIRECTORY_");
 
 typedef struct {
     ta_actor_directory_entry_kind kind;
     /* Meaningful only for TA_ACTOR_DIRECTORY_RESIDENT. */
     ta_actor_id actor;
 } ta_actor_directory_entry;
-typedef struct { const ta_actor_address *address; ta_actor_directory_entry entry; } ta_actor_directory_claim_params;
-typedef struct { const ta_actor_address *address; ta_actor_directory_entry *out; } ta_actor_directory_resolve_params;
+typedef struct { TA_IN const ta_actor_address *address; ta_actor_directory_entry entry; } ta_actor_directory_claim_params;
+typedef struct { TA_IN const ta_actor_address *address; TA_OUT ta_actor_directory_entry *out; } ta_actor_directory_resolve_params;
 typedef struct {
-    const ta_actor_address *address;
+    TA_IN const ta_actor_address *address;
     ta_actor_directory_entry expected;
     ta_actor_directory_entry replacement;
 } ta_actor_directory_replace_params;
 typedef struct {
-    const ta_actor_address *address;
+    TA_IN const ta_actor_address *address;
     ta_actor_directory_entry expected;
 } ta_actor_directory_remove_params;
 typedef struct ta_actor_directory_vtable {
     /* claim succeeds only when the address has no entry. */
-    ta_result (*claim)(void *self, const ta_actor_directory_claim_params *params);
-    ta_result (*resolve)(void *self, const ta_actor_directory_resolve_params *params);
+    ta_result (*claim)(void *self, TA_IN const ta_actor_directory_claim_params *params);
+    ta_result (*resolve)(void *self, TA_IN const ta_actor_directory_resolve_params *params);
     /* replace/remove are atomic comparisons against params->expected. */
-    ta_result (*replace)(void *self, const ta_actor_directory_replace_params *params);
-    ta_result (*remove)(void *self, const ta_actor_directory_remove_params *params);
-} ta_actor_directory_vtable;
-typedef struct { void *self; const ta_actor_directory_vtable *v; } ta_actor_directory;
+    ta_result (*replace)(void *self, TA_IN const ta_actor_directory_replace_params *params);
+    ta_result (*remove)(void *self, TA_IN const ta_actor_directory_remove_params *params);
+} ta_actor_directory_vtable TA_VTABLE;
+typedef struct { void *self; const ta_actor_directory_vtable *v; } ta_actor_directory TA_ADAPTER;
 
 typedef struct {
     ta_actor_id actor;
@@ -1163,56 +1249,60 @@ typedef struct {
 
 typedef struct {
     ta_definition_id definition;
-    const ta_actor_address *address;
-    const ta_value *datamodel_binding;
-    const ta_actor_parent *parent;
-    ta_actor_id *out;
+    TA_IN TA_OPTIONAL const ta_actor_address *address;
+    TA_IN TA_OPTIONAL const ta_value *datamodel_binding;
+    TA_IN TA_OPTIONAL const ta_actor_parent *parent;
+    TA_OUT ta_actor_id *out;
 } ta_actor_spawn_params;
-typedef struct { const ta_actor_address *address; ta_actor_id *out; } ta_actor_find_params;
-typedef struct { ta_actor_id actor; uint32_t budget; ta_run_status *status; } ta_actor_resume_params;
+typedef struct { TA_IN const ta_actor_address *address; TA_OUT ta_actor_id *out; } ta_actor_find_params;
+typedef struct { ta_actor_id actor; uint32_t budget; TA_OUT ta_run_status *status; } ta_actor_resume_params;
 typedef struct {
     ta_actor_id actor;
     const ta_session_image *image;
 } ta_actor_unload_params;
-typedef struct { const ta_actor_address *address; } ta_actor_remove_unloaded_params;
+typedef struct { TA_IN const ta_actor_address *address; } ta_actor_remove_unloaded_params;
 typedef struct {
     const ta_session_image *image;
-    const ta_value *datamodel_binding;
-    ta_actor_id *out;
+    TA_IN TA_OPTIONAL const ta_value *datamodel_binding;
+    TA_OUT ta_actor_id *out;
 } ta_actor_load_params;
 typedef struct {
     ta_actor_id incumbent;
     ta_definition_id definition;
-    const ta_value *datamodel_binding;
-    ta_actor_id *out;
+    TA_IN TA_OPTIONAL const ta_value *datamodel_binding;
+    TA_OUT ta_actor_id *out;
 } ta_actor_prepare_replacement_params;
 typedef struct { ta_actor_id incumbent; ta_actor_id replacement; } ta_actor_activate_replacement_params;
 /* Release data with ta_value_release() when has_data is true. */
-typedef struct { bool has_data; ta_value data; } ta_actor_completion;
+typedef struct { bool has_data; TA_RELEASE_IF(ta_value_release, has_data) ta_value data; } ta_actor_completion;
 
-TA_API ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params);
+TA_API ta_result ta_actor_spawn(ta_system *system, TA_IN const ta_actor_spawn_params *params)
+    TA_VALUE_MODEL(definition, params.definition);
 /* Creates an unpublished actor and holds bootstrap effects until activation. */
 TA_API ta_result ta_actor_prepare_replacement(ta_system *system,
-                                              const ta_actor_prepare_replacement_params *params);
+                                              TA_IN const ta_actor_prepare_replacement_params *params)
+    TA_VALUE_MODEL(definition, params.definition);
 /* Atomically replaces the route, then releases held effects in SCXML order. */
 TA_API ta_result ta_actor_activate_replacement(ta_system *system,
-                                               const ta_actor_activate_replacement_params *params);
-TA_API ta_result ta_actor_find(ta_system *system, const ta_actor_find_params *params);
-TA_API ta_result ta_actor_deliver(ta_system *system, ta_actor_id actor, const ta_event *event);
-TA_API ta_result ta_actor_resume(ta_system *system, const ta_actor_resume_params *params);
+                                               TA_IN const ta_actor_activate_replacement_params *params);
+TA_API ta_result ta_actor_find(ta_system *system, TA_IN const ta_actor_find_params *params);
+TA_API ta_result ta_actor_deliver(ta_system *system, ta_actor_id actor, TA_IN const ta_event *event)
+    TA_VALUE_MODEL(actor, actor);
+TA_API ta_result ta_actor_resume(ta_system *system, TA_IN const ta_actor_resume_params *params);
 /*
  * Evicts a named actor without terminating it. The image must be a fresh
  * capture of actor; TA_ERR_STALE means the actor changed after capture.
  */
-TA_API ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params *params);
+TA_API ta_result ta_actor_unload(ta_system *system, TA_IN const ta_actor_unload_params *params);
 /* Restores an unloaded named actor and atomically republishes its route. */
-TA_API ta_result ta_actor_load(ta_system *system, const ta_actor_load_params *params);
+TA_API ta_result ta_actor_load(ta_system *system, TA_IN const ta_actor_load_params *params)
+    TA_VALUE_MODEL(session_image, params.image);
 /* Releases the name of an unloaded actor; the host then deletes its checkpoint. */
 TA_API ta_result ta_actor_remove_unloaded(ta_system *system,
-                                          const ta_actor_remove_unloaded_params *params);
+                                          TA_IN const ta_actor_remove_unloaded_params *params);
 TA_API ta_result ta_actor_get_completion(ta_system *system,
                                          ta_actor_id actor,
-                                         ta_actor_completion *out);
+                                         TA_OUT ta_actor_completion *out);
 /*
  * Retries an invoked child's completion after TA_ERR_BUSY. TA_ERR_NOT_FOUND
  * retires it when the parent invocation was already cancelled.
@@ -1246,14 +1336,14 @@ typedef struct {
     /* True while a macrostep is paused mid-way (ta_actor_resume() continues it). */
     bool macrostep_in_progress;
     /* The external event of the paused macrostep, or null. */
-    const ta_event *current_event;
-    const ta_queued_event *internal_events;
+    TA_IN TA_OPTIONAL const ta_event *current_event;
+    TA_COUNTED_BY(internal_count) TA_OPTIONAL const ta_queued_event *internal_events;
     uint32_t internal_count;
-    const ta_active_invoke *invokes;
+    TA_COUNTED_BY(invoke_count) TA_OPTIONAL const ta_active_invoke *invokes;
     uint32_t invoke_count;
     uint32_t delayed_send_count;
     bool has_completion;
-    const ta_actor_completion *completion;
+    TA_IN TA_OPTIONAL const ta_actor_completion *completion;
     /*
      * Bytes the core currently allocates for this actor: the actor record,
      * session storage (configuration and history), the data-model instance,
@@ -1264,18 +1354,20 @@ typedef struct {
 } ta_actor_inspection;
 
 typedef ta_result (*ta_actor_inspection_visitor)(void *self,
-                                                 const ta_actor_inspection *inspection);
-typedef struct { void *self; ta_actor_inspection_visitor visit; } ta_actor_inspector;
+                                                 TA_IN const ta_actor_inspection *inspection);
+typedef struct { void *self; ta_actor_inspection_visitor visit; } ta_actor_inspector TA_ADAPTER;
 
 TA_API ta_result ta_actor_inspect(ta_system *system,
                                   ta_actor_id actor,
-                                  ta_actor_inspection *out);
+                                  TA_OUT TA_LIFETIME(system) ta_actor_inspection *out);
 TA_API ta_result ta_system_visit_actors(ta_system *system, ta_actor_inspector inspector);
 /*
  * The data model's inspection root (its `inspect` operation). Release it
  * with ta_value_release(). TA_ERR_UNSUPPORTED when the adapter has none.
  */
-TA_API ta_result ta_actor_datamodel_root(ta_system *system, ta_actor_id actor, ta_value *out);
+TA_API ta_result ta_actor_datamodel_root(ta_system *system,
+                                         ta_actor_id actor,
+                                         TA_OUT TA_RELEASE(ta_value_release) ta_value *out);
 
 /*
  * List outputs share one convention: the callee writes at most `capacity`
@@ -1290,12 +1382,12 @@ TA_API ta_result ta_actor_datamodel_root(ta_system *system, ta_actor_id actor, t
  */
 typedef struct {
     ta_actor_id actor;
-    ta_state_id *states;
+    TA_BUFFER(capacity, count) TA_OPTIONAL ta_state_id *states;
     uint32_t capacity;
-    uint32_t *count;
+    TA_OUT TA_ALWAYS uint32_t *count;
 } ta_actor_active_states_params;
 TA_API ta_result ta_actor_active_states(ta_system *system,
-                                        const ta_actor_active_states_params *params);
+                                        TA_IN const ta_actor_active_states_params *params);
 
 /*
  * The states recorded by one history pseudo-state, in document order.
@@ -1305,11 +1397,11 @@ TA_API ta_result ta_actor_active_states(ta_system *system,
 typedef struct {
     ta_actor_id actor;
     ta_state_id history;
-    ta_state_id *states;
+    TA_BUFFER(capacity, count) TA_OPTIONAL ta_state_id *states;
     uint32_t capacity;
-    uint32_t *count;
+    TA_OUT TA_ALWAYS uint32_t *count;
 } ta_actor_history_params;
-TA_API ta_result ta_actor_history(ta_system *system, const ta_actor_history_params *params);
+TA_API ta_result ta_actor_history(ta_system *system, TA_IN const ta_actor_history_params *params);
 
 /*
  * One pending delayed send owned by an actor. `target` and `data` are
@@ -1328,12 +1420,12 @@ typedef struct {
 /* Pending delayed sends of one actor, ordered by due time, then send order. */
 typedef struct {
     ta_actor_id actor;
-    ta_delayed_send_info *sends;
+    TA_BUFFER(capacity, count) TA_OPTIONAL TA_LIFETIME(system) ta_delayed_send_info *sends;
     uint32_t capacity;
-    uint32_t *count;
+    TA_OUT TA_ALWAYS uint32_t *count;
 } ta_actor_delayed_sends_params;
 TA_API ta_result ta_actor_delayed_sends(ta_system *system,
-                                        const ta_actor_delayed_sends_params *params);
+                                        TA_IN const ta_actor_delayed_sends_params *params);
 
 /*
  * Static facts about one state of a registered definition. `id` is the
@@ -1351,10 +1443,10 @@ typedef struct {
 typedef struct {
     ta_definition_id definition;
     ta_state_id state;
-    ta_state_info *out;
+    TA_OUT TA_LIFETIME(definition) ta_state_info *out;
 } ta_definition_state_params;
 TA_API ta_result ta_definition_state(const ta_system *system,
-                                     const ta_definition_state_params *params);
+                                     TA_IN const ta_definition_state_params *params);
 
 /*
  * A read-only view of one registered definition. Text and the adapter are
@@ -1399,7 +1491,7 @@ typedef struct {
  */
 TA_API ta_result ta_definition_inspect(const ta_system *system,
                                        ta_definition_id definition,
-                                       ta_definition_inspection *out);
+                                       TA_OUT TA_LIFETIME(definition) ta_definition_inspection *out);
 
 
 /* ========================================================================
@@ -1433,19 +1525,20 @@ typedef struct {
 
 typedef struct {
     const ta_session_image *image;
-    const ta_value *datamodel_binding;
-    ta_actor_id *out;
+    TA_IN TA_OPTIONAL const ta_value *datamodel_binding;
+    TA_OUT ta_actor_id *out;
 } ta_actor_reconstruct_params;
 
 TA_API ta_result ta_actor_capture(ta_system *system,
-                                  const ta_actor_capture_params *params);
+                                  TA_IN const ta_actor_capture_params *params);
 /* Named directory-managed images are restored with ta_actor_load(). */
 TA_API ta_result ta_actor_reconstruct(ta_system *system,
-                                      const ta_actor_reconstruct_params *params);
+                                      TA_IN const ta_actor_reconstruct_params *params)
+    TA_VALUE_MODEL(session_image, params.image);
 /* Returns TA_ERR_NOT_FOUND when the captured actor owns no delayed send. */
 TA_API ta_result ta_session_image_next_deadline(const ta_session_image *image,
-                                                ta_time *out);
-TA_API void ta_session_image_destroy(ta_session_image *image);
+                                                TA_OUT ta_time *out);
+TA_API void ta_session_image_destroy(TA_DESTROYS ta_session_image *image);
 
 
 /* ========================================================================
@@ -1454,26 +1547,31 @@ TA_API void ta_session_image_destroy(ta_session_image *image);
 
 
 typedef struct { ta_allocator allocator; ta_time initial_time; } ta_system_config;
-typedef struct { ta_event_name_id name; char *buffer; uint32_t capacity; uint32_t *needed; } ta_event_name_format_params;
+typedef struct {
+    ta_event_name_id name;
+    TA_BUFFER(capacity, needed) TA_OPTIONAL char *buffer;
+    uint32_t capacity;
+    TA_OUT TA_ALWAYS uint32_t *needed;
+} ta_event_name_format_params;
 
-TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **out);
-TA_API void ta_system_destroy(ta_system *system);
+TA_API ta_result ta_system_create(TA_IN const ta_system_config *config, ta_system **out);
+TA_API void ta_system_destroy(TA_DESTROYS ta_system *system);
 TA_API ta_result ta_system_set_actor_directory(ta_system *system, ta_actor_directory directory);
 /* Installs the scheduler for normalized external SCXML-session events. */
 TA_API ta_result ta_system_set_external_event_router(ta_system *system,
                                                       ta_external_event_router router);
 /* Registration takes ownership of definition only when it returns TA_OK. */
 TA_API ta_result ta_system_register_definition(ta_system *system,
-                                               ta_definition *definition,
-                                               ta_definition_id *out);
+                                               TA_CONSUMED_ON_OK ta_definition *definition,
+                                               TA_OUT ta_definition_id *out);
 /*
  * The registered, non-retired definition with exactly this identity; family
  * and revision are compared bytewise. When several match, the most recently
  * registered wins. TA_ERR_NOT_FOUND when none matches.
  */
 TA_API ta_result ta_system_find_definition(const ta_system *system,
-                                           const ta_definition_identity *identity,
-                                           ta_definition_id *out);
+                                           TA_IN const ta_definition_identity *identity,
+                                           TA_OUT ta_definition_id *out);
 /*
  * Ends a definition's availability (ADR 0043). ta_actor_spawn() and
  * ta_actor_prepare_replacement() naming it fail with TA_ERR_NOT_FOUND, and
@@ -1491,10 +1589,13 @@ TA_API ta_result ta_system_register_io(ta_system *system, ta_atom type, ta_io io
 TA_API ta_result ta_system_register_invoker(ta_system *system,
                                             ta_atom type,
                                             ta_invoker invoker);
-TA_API ta_result ta_system_intern_atom(ta_system *system, ta_str text, ta_atom *out);
-TA_API ta_result ta_event_name_intern(ta_system *system, const ta_atom_list *segments, ta_event_name_id *out);
+TA_API ta_result ta_system_intern_atom(ta_system *system, ta_str text, TA_OUT ta_atom *out);
+TA_API ta_result ta_event_name_intern(ta_system *system,
+                                      TA_IN const ta_atom_list *segments,
+                                      TA_OUT ta_event_name_id *out);
 TA_API bool ta_event_name_matches(const ta_system *system, ta_event_name_id event, ta_event_name_id prefix);
-TA_API ta_result ta_event_name_format(const ta_system *system, const ta_event_name_format_params *params);
+TA_API ta_result ta_event_name_format(const ta_system *system,
+                                      TA_IN const ta_event_name_format_params *params);
 TA_API ta_result ta_system_set_time(ta_system *system, ta_time now);
 TA_API ta_time ta_system_time(const ta_system *system);
 /* Returns the built-in SCXML Event I/O Processor's system-local type atom. */
@@ -1509,14 +1610,14 @@ TA_API ta_atom ta_system_scxml_io_type(const ta_system *system);
 typedef struct {
     /* Must be nonzero; limits synchronous host callbacks in this call. */
     uint32_t budget;
-    uint32_t *dispatched;
-    bool *more_due;
+    TA_OUT uint32_t *dispatched;
+    TA_OUT bool *more_due;
 } ta_due_dispatch_params;
 
 /* TA_ERR_NOT_FOUND means that no resident delayed send is pending. */
-TA_API ta_result ta_system_next_deadline(const ta_system *system, ta_time *out);
+TA_API ta_result ta_system_next_deadline(const ta_system *system, TA_OUT ta_time *out);
 TA_API ta_result ta_system_dispatch_due(ta_system *system,
-                                        const ta_due_dispatch_params *params);
+                                        TA_IN const ta_due_dispatch_params *params);
 
 #ifdef __cplusplus
 }

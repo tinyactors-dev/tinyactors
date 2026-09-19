@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# Shared source conventions for the amalgamation and API extraction tasks.
+# Source conventions of the amalgamation task.
 module CApi
   # A top-level function declaration or definition: return type at column 0,
   # followed by the ta_ name and its parameter list.
@@ -19,13 +19,5 @@ module CApi
 
   def public_functions(header_text)
     header_text.scan(PUBLIC_PROTOTYPE).flatten
-  end
-
-  # Names of every non-static function defined in the module sources.
-  def defined_functions(root)
-    modules(root).flat_map do |name|
-      path = root.join('src', "#{name}.c")
-      path.file? ? path.read.scan(DEFINITION).map { |match| match[1] } : []
-    end
   end
 end

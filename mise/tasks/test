@@ -21,7 +21,15 @@ pid = Process.spawn('ruby', 'tinyactors-test/ruby/smoke.rb', chdir: root.to_s)
 _pid, status = Process.wait2(pid)
 exit(status.exitstatus || 1) unless status.success?
 
+pid = Process.spawn('mise', 'run', 'api-test', chdir: root.join('tinyactors-core').to_s)
+_pid, status = Process.wait2(pid)
+exit(status.exitstatus || 1) unless status.success?
+
 pid = Process.spawn('ruby', 'tinyactors-test/ruby/bindings_test.rb', chdir: root.to_s)
+_pid, status = Process.wait2(pid)
+exit(status.exitstatus || 1) unless status.success?
+
+pid = Process.spawn('ruby', 'tinyactors-test/ruby/bindings_generator_test.rb', chdir: root.to_s)
 _pid, status = Process.wait2(pid)
 exit(status.exitstatus || 1) unless status.success?
 

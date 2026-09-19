@@ -114,20 +114,6 @@ ta_result tat_actor_datamodel(ta_system *system, ta_actor_id actor, ta_datamodel
     return result;
 }
 
-/* Methods whose ta_value inputs belong to a receiving actor or definition. */
-typedef enum { TAT_RECEIVER_ACTOR, TAT_RECEIVER_DEFINITION } tat_receiver_kind;
-
-static const struct {
-    const char *method;
-    const char *member;
-    tat_receiver_kind kind;
-} TAT_RECEIVERS[] = {
-    {"ta.actor.deliver", "actor", TAT_RECEIVER_ACTOR},
-    {"ta.actor.report_invoke", "actor", TAT_RECEIVER_ACTOR},
-    {"ta.actor.spawn", "definition", TAT_RECEIVER_DEFINITION},
-    {"ta.actor.prepare_replacement", "definition", TAT_RECEIVER_DEFINITION},
-};
-
 /* A u64/u32 member encoded as a JSON number or a decimal string. */
 static bool tat_member_id(jv params, const char *name, uint64_t *out) {
     jv value = jv_object_get(jv_copy(params), jv_string(name));
@@ -152,8 +138,10 @@ static bool tat_member_id(jv params, const char *name, uint64_t *out) {
 
 void tat_value_codec_select(tat_bind *bind, const char *method, jv params) {
     bind->decode_model = tat_json_datamodel(&bind->json);
-    for (size_t index = 0; index < sizeof(TAT_RECEIVERS) / sizeof(TAT_RECEIVERS[0]); index += 1) {
-        if (strcmp(method, TAT_RECEIVERS[index].method) != 0) {
+    /* The receivers come from the value models in the API description. */
+    for (size_t index = 0; index < TAT_VALUE_RECEIVER_COUNT; index += 1) {
+        const tat_value_receiver *receiver = &TAT_VALUE_RECEIVERS[index];
+        if (strcmp(method, receiver->method) != 0) {
             continue;
         }
         jv system_handle = jv_object_get(jv_copy(params), jv_string("system"));
@@ -164,12 +152,12 @@ void tat_value_codec_select(tat_bind *bind, const char *method, jv params) {
         jv_free(bind->error);
         bind->error = jv_invalid();
         uint64_t id = 0;
-        if (!resolved || !tat_member_id(params, TAT_RECEIVERS[index].member, &id)) {
+        if (!resolved || !tat_member_id(params, receiver->member, &id)) {
             return;
         }
         ta_datamodel model = {0};
         ta_result result = TA_ERR_NOT_FOUND;
-        if (TAT_RECEIVERS[index].kind == TAT_RECEIVER_ACTOR) {
+        if (receiver->model == TAT_VALUE_MODEL_ACTOR) {
             result = tat_actor_datamodel(system, (ta_actor_id)id, &model);
         } else {
             ta_definition_inspection definition;

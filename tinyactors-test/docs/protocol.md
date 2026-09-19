@@ -68,9 +68,9 @@ the protocol.
 
 `mise run bindings` generates one method per public function in
 `tinyactors-core/include/tinyactors.api.json` (see
-`tinyactors-core/docs/internal/api-ir.md`) and one codec method per public
-type. `bindings.rb` lists the functions and types that are skipped, with a
-reason, or implemented by hand.
+`tinyactors-core/docs/internal/api-ir.md`) and one codec method per bound
+struct type. `bindings.rb` lists the functions and types that are skipped, with
+a reason, or implemented by hand, and the layout decisions described below.
 
 ### Naming
 
@@ -91,8 +91,16 @@ parameters.
 ```
 
 Output parameters and output fields (`out`, `status`, `needed`, ...) are never
-accepted as input. Unknown members are errors. Pointers to a single value are
-optional; other direct parameters are required.
+accepted as input. Unknown members are errors. A pointer is required unless
+the header marks it `TA_OPTIONAL` (`optional` in the API description); a
+missing required pointer is a -32602 error. Direct by-value parameters are
+required; by-value members of a params struct default to zero.
+
+A caller buffer (`TA_BUFFER`, such as the `states` of `ta.actor.active_states`)
+is an output, sized by its `capacity` member. `capacity` may be at most 65536
+elements (`MAX_BUFFER_ELEMENTS` in `bindings.rb`); a larger one is a -32602
+error, because the client would otherwise choose how much memory the host
+allocates.
 
 ### Results
 
@@ -100,9 +108,13 @@ A function that returns `ta_result` answers `{"result": <name>, "out": {...}}`.
 The result name is the constant without `TA_`, in lowercase: `"ok"`,
 `"err_busy"`, `"err_not_found"`, and so on. A non-OK result is a normal
 response, not a JSON-RPC error, so tests can assert on it. `out` holds every
-output by its C name. Plain outputs are reported for every result, because
-their storage starts zeroed and some functions report through them on failure
-(`needed` of `ta_event_name_format`). New handles are reported only for `"ok"`.
+output by its C name. An output is reported only after a result that makes it
+valid (its `valid_on` in the API description) and is `null` otherwise. Most
+outputs, new handles included, are valid only after `"ok"`. Counts and sizes
+that a function reports on failure are valid after every result: the `count`
+of `ta.actor.active_states` or the `needed` of `ta.event.name_format` after
+`"err_nomem"`. A buffer output is an array of the reported count, at most
+`capacity` elements, or a string for a text buffer.
 
 Other functions answer `{"value": <return value>}`, plus `out` when they have
 outputs; `void` functions answer `{}`.
@@ -123,25 +135,31 @@ JSON-RPC errors are reserved for the protocol itself:
 - `ta_str` and `ta_bytes` are JSON strings. `ta_expression` is its source text;
   host expressions cannot cross the protocol.
 - `ta_value` is any JSON value. It decodes into a value of the data model of
-  the receiving actor: the `actor` of `ta.actor.deliver` and
-  `ta.actor.report_invoke`, or the `definition` of `ta.actor.spawn` and
-  `ta.actor.prepare_replacement`. Every other method decodes into jq values.
+  the receiving actor, as the function's `value_model` in the API description
+  names it: the `actor` of `ta.actor.deliver` and `ta.actor.report_invoke`, or
+  the `definition` of `ta.actor.spawn` and `ta.actor.prepare_replacement`.
+  Every other method decodes into jq values, including `ta.actor.load` and
+  `ta.actor.reconstruct`, whose session images the host cannot map to a data
+  model (`VALUE_MODEL_FALLBACKS` in `bindings.rb`).
   The wire carries no model tag. On output each value is encoded by its own
   data model. An ECMAScript value that JSON cannot represent encodes as
   `{"$value": "undefined" | "function" | "symbol" | "unserializable"}` at the
   top level, and as `null` when nested. A value of no known data model
   encodes as `{"$value": "foreign"}`. Markers are output-only. See
   `docs/ecmascript-datamodel.md`.
-  An owned output value (`ta_actor_completion.data`, the `out` of
-  `ta_actor_datamodel_root`) is encoded, then released by the handler.
-- Enums are the constant names without their common prefix, in lowercase:
-  `TA_RUN_PAUSED` is `"paused"`.
-- A struct with a `kind` enum and an `as` union is one object with `"kind"`.
-  A struct member of the union is flattened into that object, unless one of its
-  fields collides with the parent's fields; then it is nested under the member
-  name. Other members are keyed by the member name. When `kind` is omitted and
-  exactly one keyed member is present, that member selects the kind:
-  `{"expr": ".x"}` is `{"kind": "expr", "expr": ".x"}`.
+  An owned output value (`TA_RELEASE`/`TA_RELEASE_IF` in the header, such as
+  `ta_actor_completion.data` and the `out` of `ta_actor_datamodel_root`) is
+  encoded, then released by the handler.
+- Enums are their symbols in the API description: the constant name without
+  the prefix its `TA_SYMBOLS` declares, in lowercase. `TA_RUN_PAUSED` is
+  `"paused"`, and `ta_result` constants are `"ok"`, `"err_busy"`, and so on.
+- A tagged union (`TA_TAGGED`) is one object with `"kind"`. A struct member of
+  the union is flattened into that object when `FLATTEN_UNION_MEMBERS` in
+  `bindings.rb` lists it: `ta_actor_ref`'s `named`, and every action of
+  `ta_scxml_action_spec` except `invoke`, whose own `kind` would collide. Other
+  members are keyed by the member name. When `kind` is omitted and exactly one
+  keyed member is present, that member selects the kind: `{"expr": ".x"}` is
+  `{"kind": "expr", "expr": ".x"}`.
 - The `ta_scxml_*` specification structs omit absent (zero) members when
   encoded. Their child pointers are arrays that the decoder terminates with a
   zero element; an element that would itself terminate the list is an error.
@@ -162,8 +180,8 @@ Borrowed opaque views (`ta_dm_host`, `ta_arena_block`) encode as
 
 ### Arenas and borrowed outputs
 
-A `ta_arena *` a function fills with its outputs (annotated `arenas` in the
-core's `api/annotations.rb`) is not a params member: the binding passes its
+A `ta_arena *` a function fills with its outputs (`TA_ARENA` in the header) is
+not a params member: the binding passes its
 per-request arena, which lives until the response is encoded. A `const T **`
 output (`view_out`) is encoded as a `T` after the call, or `null` when the
 result is not `"ok"`. `ta.definition.export` uses both: it answers
@@ -222,9 +240,10 @@ most core functions are still unimplemented.
  "out":{"out":"ta_actor_id"}}
 ```
 
-The Ruby driver builds a proxy from these schemas:
-`driver.ta.actor.spawn(system:, definition:)` checks argument names before
-sending.
+The schema is derived from the same plan as the handler, so `required` matches
+what the handler enforces. The Ruby driver builds a proxy from these schemas:
+`driver.ta.actor.spawn(system:, definition:)` checks argument names and
+required arguments before sending.
 
 ## Scenario runner
 

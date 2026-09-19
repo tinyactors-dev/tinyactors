@@ -47,7 +47,10 @@ typedef struct {
 } tat_adapter;
 
 struct tat_bind {
+    ta_allocator allocator;
     ta_arena arena;
+    /* Bytes the current request allocated; a large request's arena is freed. */
+    size_t request_bytes;
     tat_json_datamodel_context json;
     tat_js_datamodel_context js;
     /* The data model ta_value inputs of the current request decode with. */
@@ -86,6 +89,8 @@ bool tat_at_index(tat_bind *bind, size_t index);
 jv tat_not_implemented(tat_bind *bind, const char *function, int *error_code);
 
 void *tat_alloc(tat_bind *bind, size_t size, size_t alignment);
+/* `count` elements of `size` bytes; fails instead of overflowing. */
+void *tat_alloc_array(tat_bind *bind, size_t count, size_t size, size_t alignment);
 
 /* Object members: true when present and not null; *out is owned. */
 bool tat_member(jv object, const char *name, jv *out);
@@ -132,6 +137,20 @@ jv tat_handle_encode(tat_bind *bind, const char *type, const void *ptr);
 void tat_handle_retire(tat_bind *bind, const void *ptr);
 jv tat_handle_fixture(tat_bind *bind, const char *type);
 jv tat_borrowed_encode(const char *type, const void *ptr);
+
+/* Methods whose ta_value inputs belong to the data model of the actor or
+ * definition named by `member` (the API description's value models). The
+ * generated bindings define the table; value_codec.c consults it. */
+typedef enum { TAT_VALUE_MODEL_ACTOR, TAT_VALUE_MODEL_DEFINITION } tat_value_model;
+
+typedef struct {
+    const char *method;
+    const char *member;
+    tat_value_model model;
+} tat_value_receiver;
+
+extern const tat_value_receiver TAT_VALUE_RECEIVERS[];
+extern const size_t TAT_VALUE_RECEIVER_COUNT;
 
 /* Adapters: {"$adapter": "<name>", "config": {...}}. */
 bool tat_adapter_decode(tat_bind *bind, jv value, const char *type, void *out, size_t size);

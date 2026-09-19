@@ -34,8 +34,9 @@ This archive captures the C API shape discussed for a tiny in-process actor syst
 - `include/tinyactors.c` — generated implementation amalgamation of `src/*.c`.
 - `include/tinyactors.api.json` — generated, checked-in description of the
   public API for binding generators (`mise run api`; see
-  `docs/internal/api-ir.md`). `api/annotations.rb` records what C types
-  cannot express.
+  `docs/internal/api-ir.md`), in the format of
+  `include/tinyactors.api.schema.json`. The `TA_*` annotation macros in the
+  header record what C types cannot express.
 - `tests/*.c` — compile-only checks for internal and public header use.
 
 ## Intentional omissions
