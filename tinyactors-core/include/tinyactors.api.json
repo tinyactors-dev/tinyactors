@@ -5442,6 +5442,23 @@
         }
       }
     },
+    "ta_scxml_handler_spec": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "actions",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_action_spec"
+            },
+            "const": true
+          },
+          "role": "in",
+          "shape": "terminated"
+        }
+      ],
+      "zero_is_absent": true
+    },
     "ta_scxml_id_kind": {
       "kind": "enum",
       "constants": [
@@ -5874,7 +5891,7 @@
           "name": "onentry",
           "type": {
             "pointer": {
-              "type": "ta_scxml_action_spec"
+              "type": "ta_scxml_handler_spec"
             },
             "const": true
           },
@@ -5885,7 +5902,7 @@
           "name": "onexit",
           "type": {
             "pointer": {
-              "type": "ta_scxml_action_spec"
+              "type": "ta_scxml_handler_spec"
             },
             "const": true
           },

@@ -236,6 +236,11 @@ Charts compile from the JSON form of `ta_scxml_spec` (see
   `kind` is one of `atomic`, `compound`, `parallel`, `final`,
   `history_shallow`, or `history_deep`. A history state's default transition
   is its single entry in `transitions`.
+- `onentry` and `onexit` are lists of handlers, one per `<onentry>` or
+  `<onexit>` element, in document order. A handler is `{"actions": [...]}`,
+  and `actions` is required. Each handler is a separate block of executable
+  content: an error skips the rest of that handler, and the next handler
+  still runs.
 - `initial` is `{"targets": [id, ...], "actions"?}`; `actions` is the
   executable content of SCXML's `<initial><transition>`.
 - A data declaration is `{"name", "initializer"?}`, where `initializer` is a

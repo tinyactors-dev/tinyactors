@@ -104,9 +104,5 @@ These tests are skipped; `INDEX.md` has the full list and reasons:
 
 ## Known limitations
 
-- **Handler blocks.** A state with several `<onentry>` or `<onexit>`
-  handlers gets one concatenated action list, because the spec keeps one list
-  per state. An error in one handler therefore also skips the handlers after
-  it. `INDEX.md` notes the affected tests.
 - **Unbound versus null.** jq has no `undefined`. `conf:unboundVar` and
   `conf:eventFieldHasNoValue` therefore compare with `null`.

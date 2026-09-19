@@ -683,8 +683,9 @@ typedef struct {
     ta_span32 children;
     ta_span32 transitions;
     ta_initial_transition_id initial;
-    ta_span32 onentry_actions;
-    ta_span32 onexit_actions;
+    /* Ranges of definition.handlers: one action block per <onentry>/<onexit>. */
+    ta_span32 onentry_handlers;
+    ta_span32 onexit_handlers;
     ta_event_name_id done_event;
     ta_done_data_id done_data;
     /* Index into history.slots for history states, else UINT32_MAX. */
@@ -765,6 +766,13 @@ struct ta_definition {
     /* Action blocks are ta_span32 ranges of action_defs. */
     ta_action_def *action_defs;
     uint32_t action_count;
+    /*
+     * The action block of each <onentry>/<onexit> handler. SCXML runs every
+     * handler as a separate block (3.8, 3.9), so the handlers of a state are
+     * not merged into one block.
+     */
+    ta_span32 *handlers;
+    uint32_t handler_count;
     ta_param_def *params;
     uint32_t param_count;
     ta_data_decl *data_decls;
@@ -2986,6 +2994,7 @@ typedef struct {
     ta_vec initials;     /* ta_initial_transition_def */
     ta_vec targets;      /* ta_state_id */
     ta_vec actions;      /* ta_action_def */
+    ta_vec handlers;     /* ta_span32: one action block per handler */
     ta_vec params;       /* ta_param_def */
     ta_vec data_decls;   /* ta_data_decl */
     ta_vec initializers; /* ta_initializer_def */
@@ -3402,6 +3411,31 @@ static ta_result ta_compiler_block(ta_compiler *compiler, const ta_scxml_action_
         result = ta_compiler_action(compiler, &specs[index], &action);
         if (result == TA_OK) {
             *(ta_action_def *)ta_vec_at(&compiler->actions, base + index) = action;
+        }
+    }
+    *out = (ta_span32){ .offset = base, .length = count };
+    return result;
+}
+
+/*
+ * Compiles a list of <onentry> or <onexit> handlers. Each handler keeps its
+ * own action block, so an error in one handler does not skip the next.
+ */
+static ta_result ta_compiler_handlers(ta_compiler *compiler, const ta_scxml_handler_spec *specs,
+                                      ta_span32 *out) {
+    uint32_t count = 0;
+    while (specs != NULL && specs[count].actions != NULL) {
+        count += 1;
+    }
+    ta_compiler_hash_u32(compiler, count);
+    uint32_t base = 0;
+    ta_result result = ta_vec_extend(&compiler->handlers, count, &base);
+    for (uint32_t index = 0; result == TA_OK && index < count; index += 1) {
+        ta_span32 block = {0};
+        result = ta_compiler_block(compiler, specs[index].actions, &block);
+        if (result == TA_OK) {
+            ta_compiler_hash_u32(compiler, block.length);
+            *(ta_span32 *)ta_vec_at(&compiler->handlers, base + index) = block;
         }
     }
     *out = (ta_span32){ .offset = base, .length = count };
@@ -3884,10 +3918,10 @@ static ta_result ta_compiler_compile_state(ta_compiler *compiler, ta_state_id id
                                                });
     }
     if (result == TA_OK) {
-        result = ta_compiler_block(compiler, spec->onentry, &state.onentry_actions);
+        result = ta_compiler_handlers(compiler, spec->onentry, &state.onentry_handlers);
     }
     if (result == TA_OK) {
-        result = ta_compiler_block(compiler, spec->onexit, &state.onexit_actions);
+        result = ta_compiler_handlers(compiler, spec->onexit, &state.onexit_handlers);
     }
     if (result == TA_OK) {
         result = ta_compiler_data(compiler, spec->data, id);
@@ -3931,7 +3965,7 @@ static ta_result ta_compiler_seal(ta_compiler *compiler, const ta_compiler_seal_
 static void ta_compiler_destroy(ta_compiler *compiler) {
     ta_vec *vecs[] = {
         &compiler->states, &compiler->state_specs, &compiler->children, &compiler->transitions,
-        &compiler->initials, &compiler->targets, &compiler->actions, &compiler->params,
+        &compiler->initials, &compiler->targets, &compiler->actions, &compiler->handlers, &compiler->params,
         &compiler->data_decls, &compiler->initializers, &compiler->contents, &compiler->patterns,
         &compiler->segments, &compiler->expressions, &compiler->history, &compiler->done_data,
         &compiler->invokes,
@@ -3988,6 +4022,7 @@ static ta_result ta_compiler_finish(ta_compiler *compiler) {
         { &compiler->initials, (void **)&definition->initial_transitions, &definition->initial_transition_count },
         { &compiler->targets, (void **)&definition->targets, &definition->target_count },
         { &compiler->actions, (void **)&definition->action_defs, &definition->action_count },
+        { &compiler->handlers, (void **)&definition->handlers, &definition->handler_count },
         { &compiler->params, (void **)&definition->params, &definition->param_count },
         { &compiler->data_decls, (void **)&definition->data_decls, &definition->data_decl_count },
         { &compiler->initializers, (void **)&definition->initializers, &definition->initializer_count },
@@ -4118,6 +4153,7 @@ TA_API ta_result ta_definition_compile_spec(ta_system *system, const ta_definiti
         { &compiler.initials, TA_VEC_LAYOUT(ta_initial_transition_def) },
         { &compiler.targets, TA_VEC_LAYOUT(ta_state_id) },
         { &compiler.actions, TA_VEC_LAYOUT(ta_action_def) },
+        { &compiler.handlers, TA_VEC_LAYOUT(ta_span32) },
         { &compiler.params, TA_VEC_LAYOUT(ta_param_def) },
         { &compiler.data_decls, TA_VEC_LAYOUT(ta_data_decl) },
         { &compiler.initializers, TA_VEC_LAYOUT(ta_initializer_def) },
@@ -5969,6 +6005,21 @@ static ta_result ta_run_block_isolated(ta_interpreter *it, ta_span32 block) {
     return result == TA_EXEC_FAILED ? TA_OK : result;
 }
 
+/*
+ * Runs a state's <onentry> or <onexit> handlers in document order. Each
+ * handler is a separate block (SCXML 3.8, 3.9): an error skips the rest of
+ * its own handler only.
+ */
+static ta_result ta_run_handlers(ta_interpreter *it, ta_span32 handlers) {
+    for (uint32_t index = 0; index < handlers.length; index += 1) {
+        ta_result result = ta_run_block_isolated(it, it->definition->handlers[handlers.offset + index]);
+        if (result != TA_OK) {
+            return result;
+        }
+    }
+    return TA_OK;
+}
+
 /* ------------------------------------------------------------------------
  * Transition selection
  */
@@ -6390,7 +6441,7 @@ static ta_result ta_exit_states(ta_interpreter *it) {
         if (!ta_bits_get(it->to_exit, state)) {
             continue;
         }
-        ta_result result = ta_run_block_isolated(it, ta_state(it, state)->onexit_actions);
+        ta_result result = ta_run_handlers(it, ta_state(it, state)->onexit_handlers);
         if (result == TA_OK) {
             result = ta_invoke_state_exited(it, state); /* Invoke: cancel this state's invocations. */
         }
@@ -6439,7 +6490,7 @@ static ta_result ta_enter_states(ta_interpreter *it) {
             result = ta_initialize_data(it, state);
         }
         if (result == TA_OK) {
-            result = ta_run_block_isolated(it, def->onentry_actions);
+            result = ta_run_handlers(it, def->onentry_handlers);
         }
         if (result == TA_OK && ta_bits_get(it->default_entry, state)) {
             result = ta_run_block_isolated(it, definition->initial_transitions[def->initial].actions);
@@ -6525,7 +6576,7 @@ static ta_result ta_finish(ta_interpreter *it) {
         if (!ta_bits_get(it->active, state)) {
             continue;
         }
-        ta_result result = ta_run_block_isolated(it, ta_state(it, state)->onexit_actions);
+        ta_result result = ta_run_handlers(it, ta_state(it, state)->onexit_handlers);
         if (result != TA_OK) {
             return result;
         }

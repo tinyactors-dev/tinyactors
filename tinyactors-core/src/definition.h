@@ -225,8 +225,9 @@ typedef struct {
     ta_span32 children;
     ta_span32 transitions;
     ta_initial_transition_id initial;
-    ta_span32 onentry_actions;
-    ta_span32 onexit_actions;
+    /* Ranges of definition.handlers: one action block per <onentry>/<onexit>. */
+    ta_span32 onentry_handlers;
+    ta_span32 onexit_handlers;
     ta_event_name_id done_event;
     ta_done_data_id done_data;
     /* Index into history.slots for history states, else UINT32_MAX. */
@@ -307,6 +308,13 @@ struct ta_definition {
     /* Action blocks are ta_span32 ranges of action_defs. */
     ta_action_def *action_defs;
     uint32_t action_count;
+    /*
+     * The action block of each <onentry>/<onexit> handler. SCXML runs every
+     * handler as a separate block (3.8, 3.9), so the handlers of a state are
+     * not merged into one block.
+     */
+    ta_span32 *handlers;
+    uint32_t handler_count;
     ta_param_def *params;
     uint32_t param_count;
     ta_data_decl *data_decls;

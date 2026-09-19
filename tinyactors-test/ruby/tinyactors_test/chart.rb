@@ -202,7 +202,7 @@ module TinyactorsTest
         @transitions.each do |transition|
           transition[:targets]&.each { |target| check_target.call(target, "#{where} transition") }
         end
-        [@onentry, @onexit, @initial_actions, @history_actions,
+        [*@onentry, *@onexit, @initial_actions, @history_actions,
          *@transitions.map { |t| t[:actions] }, *@invokes.map { |i| i[:finalize] }].compact.each do |actions|
           Chart.validate_actions!(chart, actions, where)
         end
@@ -223,8 +223,8 @@ module TinyactorsTest
         end
         spec[:states] = @children.map(&:to_spec) unless @children.empty?
         spec[:transitions] = @transitions unless @transitions.empty?
-        spec[:onentry] = @onentry unless @onentry.empty?
-        spec[:onexit] = @onexit unless @onexit.empty?
+        spec[:onentry] = @onentry.map { |actions| { actions: actions } } unless @onentry.empty?
+        spec[:onexit] = @onexit.map { |actions| { actions: actions } } unless @onexit.empty?
         spec[:data] = @data unless @data.empty?
         spec[:invokes] = @invokes unless @invokes.empty?
         spec[:done_data] = @done_data if @done_data
@@ -365,14 +365,19 @@ module TinyactorsTest
         @state.transitions << transition
       end
 
+      # Adds an <onentry> handler. Each call is a separate handler and a
+      # separate block of executable content (SCXML 3.8): an error skips the
+      # rest of this handler only, and the handlers after it still run.
       def on_entry(&block)
         require_state!('on_entry')
-        @state.onentry.concat(actions(&block))
+        @state.onentry << actions(&block)
       end
 
+      # Adds an <onexit> handler; each call is a separate block, as for
+      # `on_entry` (SCXML 3.9).
       def on_exit(&block)
         require_state!('on_exit')
-        @state.onexit.concat(actions(&block))
+        @state.onexit << actions(&block)
       end
 
       # Starts an invocation when the state is entered (SCXML <invoke>).

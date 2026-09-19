@@ -120,7 +120,9 @@ Charts cover SCXML's structure and executable content: `state`, `parallel`,
 block), and `done_data`. The actions are `raise_event`, `send_event`,
 `cancel`, `assign`, `log`, `script`, `conditional` (with `branch` and
 `otherwise`), and `foreach`. See `ruby/tinyactors_test/chart.rb` for their
-options.
+options. Each `on_entry` or `on_exit` call adds a separate handler, as in
+SCXML: an error skips the rest of that handler, and the next handler still
+runs.
 
 `expect_failure` applies to the next scenario only, and it names the failure
 it expects: `rpc_error:` (optionally with `rpc_method:`) and/or `message:`.

@@ -19,4 +19,6 @@ Executable content can pause because actor execution is budgeted. Therefore nest
 
 If one executable-content element raises an SCXML execution error, the interpreter must follow the standard's block-level error behavior rather than merely queueing an error and blindly executing the remainder of the same block.
 
+A block is the content of one `<onentry>`, `<onexit>`, `<transition>`, `<initial>` transition, `<finalize>`, or top-level `<script>` (SCXML 4.9). A state can have several `<onentry>` and `<onexit>` handlers, and each one is a separate block (3.8, 3.9). The public spec therefore keeps them apart (`ta_scxml_handler_spec`), and the compiled definition stores one action block per handler (`ta_definition.handlers`). The interpreter runs a state's handlers in document order, each with its own error boundary.
+
 Extensions may perform arbitrary host/data work but cannot directly mutate the active state configuration; state changes occur through transitions.

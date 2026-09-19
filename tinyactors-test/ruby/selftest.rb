@@ -119,17 +119,32 @@ authored = TinyactorsTest::Chart.define(:authored) do
     end
   end
 end.to_spec[:states].first
-check(authored[:onentry] == [
+check(authored[:onentry] == [{ actions: [
   { kind: 'send', event: { name: 'e' }, id: { literal: 't' }, type: { literal: 'scxml' },
     target: { literal: '#_parent' }, delay: { literal: '1500ms' } },
   { kind: 'send', event: { name: 'f' }, id: { location: '.sid' }, target: { expr: '.reply_to' },
     delay: { expr: '.timeout' } },
   { kind: 'log', label: 'entered', expr: '.count' }
-], "send and log specs\n#{authored[:onentry]}")
-check(authored[:onexit] == [
+] }], "send and log specs\n#{authored[:onentry]}")
+check(authored[:onexit] == [{ actions: [
   { kind: 'cancel', sendid: { literal: 't' } },
   { kind: 'cancel', sendid: { expr: '.sid' } }
-], "cancel specs\n#{authored[:onexit]}")
+] }], "cancel specs\n#{authored[:onexit]}")
+
+handlers = TinyactorsTest::Chart.define(:handlers) do
+  state :a do
+    on_entry { raise_event 'one' }
+    on_entry { raise_event 'two' }
+    on_exit { log 'first' }
+    on_exit { log 'second' }
+  end
+end.to_spec[:states].first
+check(handlers[:onentry] == [{ actions: [{ kind: 'raise', event: 'one' }] },
+                             { actions: [{ kind: 'raise', event: 'two' }] }],
+      "each on_entry is a separate handler\n#{handlers[:onentry]}")
+check(handlers[:onexit] == [{ actions: [{ kind: 'log', label: 'first' }] },
+                            { actions: [{ kind: 'log', label: 'second' }] }],
+      "each on_exit is a separate handler\n#{handlers[:onexit]}")
 
 check(raises?(TinyactorsTest::ChartError, /declares done_data but is not a final state/) do
   chart.call { state(:a) { done_data expr: '1' } }
@@ -175,13 +190,13 @@ check(structured[:invokes] == [
     params: [{ name: 'x', value: { expr: '.x' } }, { name: 'y', value: { location: '.y' } }],
     finalize: [{ kind: 'log', label: 'finalize' }] }
 ], "invoke specs\n#{structured[:invokes]}")
-check(structured[:states][0][:onentry] == [
+check(structured[:states][0][:onentry] == [{ actions: [
   { kind: 'if', condition: '.x == 1', then_actions: [{ kind: 'raise', event: 'one' }],
     else_actions: [{ kind: 'if', condition: '.x == 2', then_actions: [{ kind: 'raise', event: 'two' }],
                      else_actions: [{ kind: 'cancel', sendid: { literal: 'elsewhere' } }] }] },
   { kind: 'foreach', array: '.items', item: 'item', index: 'i',
     body: [{ kind: 'send', event: { expr: '.name' }, data: { content: '[1,2]' } }] }
-], "conditional and foreach specs\n#{structured[:states][0][:onentry]}")
+] }], "conditional and foreach specs\n#{structured[:states][0][:onentry]}")
 check(structured[:states][1][:done_data] == { params: [{ name: 'result', value: { expr: '.x' } }] },
       "done_data specs\n#{structured[:states][1][:done_data]}")
 

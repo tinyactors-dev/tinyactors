@@ -1054,6 +1054,21 @@ static ta_result ta_run_block_isolated(ta_interpreter *it, ta_span32 block) {
     return result == TA_EXEC_FAILED ? TA_OK : result;
 }
 
+/*
+ * Runs a state's <onentry> or <onexit> handlers in document order. Each
+ * handler is a separate block (SCXML 3.8, 3.9): an error skips the rest of
+ * its own handler only.
+ */
+static ta_result ta_run_handlers(ta_interpreter *it, ta_span32 handlers) {
+    for (uint32_t index = 0; index < handlers.length; index += 1) {
+        ta_result result = ta_run_block_isolated(it, it->definition->handlers[handlers.offset + index]);
+        if (result != TA_OK) {
+            return result;
+        }
+    }
+    return TA_OK;
+}
+
 /* ------------------------------------------------------------------------
  * Transition selection
  */
@@ -1475,7 +1490,7 @@ static ta_result ta_exit_states(ta_interpreter *it) {
         if (!ta_bits_get(it->to_exit, state)) {
             continue;
         }
-        ta_result result = ta_run_block_isolated(it, ta_state(it, state)->onexit_actions);
+        ta_result result = ta_run_handlers(it, ta_state(it, state)->onexit_handlers);
         if (result == TA_OK) {
             result = ta_invoke_state_exited(it, state); /* Invoke: cancel this state's invocations. */
         }
@@ -1524,7 +1539,7 @@ static ta_result ta_enter_states(ta_interpreter *it) {
             result = ta_initialize_data(it, state);
         }
         if (result == TA_OK) {
-            result = ta_run_block_isolated(it, def->onentry_actions);
+            result = ta_run_handlers(it, def->onentry_handlers);
         }
         if (result == TA_OK && ta_bits_get(it->default_entry, state)) {
             result = ta_run_block_isolated(it, definition->initial_transitions[def->initial].actions);
@@ -1610,7 +1625,7 @@ static ta_result ta_finish(ta_interpreter *it) {
         if (!ta_bits_get(it->active, state)) {
             continue;
         }
-        ta_result result = ta_run_block_isolated(it, ta_state(it, state)->onexit_actions);
+        ta_result result = ta_run_handlers(it, ta_state(it, state)->onexit_handlers);
         if (result != TA_OK) {
             return result;
         }

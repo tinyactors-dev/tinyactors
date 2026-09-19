@@ -291,13 +291,6 @@ module ScxmlIrp
         return
       end
 
-      onentry_blocks = children.count { |child| scxml?(child, 'onentry') }
-      onexit_blocks = children.count { |child| scxml?(child, 'onexit') }
-      if onentry_blocks > 1 || onexit_blocks > 1
-        @notes << "state #{id} has several <onentry>/<onexit> handlers; the spec concatenates them, so an " \
-                  'error in one handler also skips the following handlers'
-      end
-
       emitter.block(header) do
         children.each do |child|
           if conf?(child)

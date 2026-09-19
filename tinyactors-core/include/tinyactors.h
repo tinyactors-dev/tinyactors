@@ -772,6 +772,20 @@ struct ta_scxml_transition_spec {
 };
 
 /*
+ * One <onentry> or <onexit> handler. SCXML 3.8 and 3.9 require each handler
+ * to be a separate block of executable content: when an action fails, the
+ * rest of that handler is skipped, and the handlers after it still run. A
+ * state lists its handlers in document order.
+ *
+ * `actions` is required, because a null `actions` terminates the handler
+ * list. An empty handler (`<onentry/>`) points to an empty action list,
+ * `(const ta_scxml_action_spec[]){{0}}`, or is left out.
+ */
+typedef struct {
+    const ta_scxml_action_spec *actions;
+} ta_scxml_handler_spec;
+
+/*
  * SCXML `<data src>` is resolved by the importer, which performs any I/O and
  * passes the result as TA_SCXML_VALUE_CONTENT; the core performs no I/O.
  */
@@ -792,8 +806,8 @@ struct ta_scxml_state_spec {
     const ta_scxml_state_spec *states;
     const ta_scxml_initial_spec *initial;
     const ta_scxml_transition_spec *transitions;
-    const ta_scxml_action_spec *onentry;
-    const ta_scxml_action_spec *onexit;
+    const ta_scxml_handler_spec *onentry;
+    const ta_scxml_handler_spec *onexit;
     const ta_scxml_data_spec *data;
     const ta_scxml_invoke_spec *invokes;
     const ta_scxml_done_data_spec *done_data;

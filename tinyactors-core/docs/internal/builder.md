@@ -35,7 +35,9 @@ invoke, and target lists. The authoring enums reserve zero for the terminator:
 `TA_SCXML_STATE_NONE`, `TA_SCXML_TRANSITION_NONE`, and
 `TA_SCXML_ACTION_NONE`; invoke lists use `TA_SCXML_INVOKE_NONE`. Parameter,
 data, and target lists terminate when their required `name.ptr` or `ptr` is
-null, which is exactly the result of `{0}`.
+null, and handler lists terminate when `actions` is null. That is exactly the
+result of `{0}`. An empty handler (`<onentry/>`) therefore points to an empty
+action list, `(const ta_scxml_action_spec[]){{0}}`, or is left out.
 
 These are distinct from the runtime enums in `definition.h`, whose zero values
 can be meaningful. The compiler rejects a terminator anywhere a real child is
@@ -48,7 +50,12 @@ The shape maps directly to SCXML:
 - `ta_scxml_spec` owns root data, root initial, root states, and the optional
   top-level `<script>`.
 - states own child states, an optional initial transition, transitions,
-  entry/exit actions, data, and invokes;
+  entry and exit handlers, data, and invokes;
+- `onentry` and `onexit` are lists of `ta_scxml_handler_spec`, one per
+  `<onentry>` or `<onexit>` element, in document order. Each handler owns its
+  own action list and is a separate block of executable content (SCXML 3.8,
+  3.9): an error skips the rest of that handler, and the next handler still
+  runs. Merging a state's handlers into one handler changes that behavior;
 - initial transitions and transitions own target lists and ordered actions;
 - `if`, `foreach`, and invokes own their respective action lists;
 - action order is the source order in each list.

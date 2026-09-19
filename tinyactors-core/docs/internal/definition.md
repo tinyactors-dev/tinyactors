@@ -17,7 +17,8 @@ It owns or references:
 - data-model implementation and prepared shared state.
 
 The compiled IR includes initial-transition executable content, transition type
-(`internal`/`external`), entry/exit action ranges, invocation declarations,
+(`internal`/`external`), entry/exit handler ranges (one action block per
+`<onentry>`/`<onexit>` handler), invocation declarations,
 late/early data binding metadata, executable-content opcodes, and final-state
 done-data declarations.
 

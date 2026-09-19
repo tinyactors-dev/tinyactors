@@ -136,10 +136,10 @@
 | 355 | 3.2 | mandatory | imported |  |
 | 364 | 3.3 | mandatory | imported |  |
 | 372 | 3.7 | mandatory | imported |  |
-| 375 | 3.8 | mandatory | imported | state s0 has several <onentry>/<onexit> handlers; the spec concatenates them, so an error in one handler also skips the following handlers |
-| 376 | 3.8 | mandatory | imported | state s0 has several <onentry>/<onexit> handlers; the spec concatenates them, so an error in one handler also skips the following handlers |
-| 377 | 3.9 | mandatory | imported | state s0 has several <onentry>/<onexit> handlers; the spec concatenates them, so an error in one handler also skips the following handlers |
-| 378 | 3.9 | mandatory | imported | state s0 has several <onentry>/<onexit> handlers; the spec concatenates them, so an error in one handler also skips the following handlers |
+| 375 | 3.8 | mandatory | imported |  |
+| 376 | 3.8 | mandatory | imported |  |
+| 377 | 3.9 | mandatory | imported |  |
+| 378 | 3.9 | mandatory | imported |  |
 | 387 | 3.10 | mandatory | imported |  |
 | 388 | 3.10 | mandatory | imported |  |
 | 396 | 3.12 | mandatory | imported |  |
