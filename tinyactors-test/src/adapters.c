@@ -5,6 +5,7 @@
 #include "binding.h"
 #include "json_datamodel.h"
 #include "ta_rpc.h"
+#include "value_codec.h"
 
 /*
  * Hand-written adapter factories. A vtable-bearing argument crosses the
@@ -95,6 +96,13 @@ static bool tat_make_direct_router(tat_bind *bind, jv config, void *out) {
  * "irp_NAME" from config.charts. <param>s become the child's data-model
  * binding. Core routes events between parent and child and reports
  * done.invoke itself. Config: {"system": <handle>, "charts": {name: spec}}.
+ *
+ * Values cross into the child only through the RPC codec: src, content, and
+ * params are encoded with the parent's data model and the binding is decoded
+ * with the child's. The child's data model is the one its spec's `datamodel`
+ * names ("jq" or "ecmascript"), or the parent's when absent; a child whose
+ * data model differs from the parent's is refused, which the core reports to
+ * the parent as error.execution.
  */
 typedef struct {
     tat_bind *bind;
@@ -111,7 +119,11 @@ static void tat_invoker_fault(ta_fault *fault, const char *message) {
 /* The child machine's spec: inline content, or the chart a file: src names. */
 static bool tat_invoker_spec(tat_scxml_invoker *invoker, const ta_invoke_request *request, jv *out) {
     jv value;
-    if (request->data.v != NULL && tat_json_value_to_jv(&request->data, &value)) {
+    if (request->data.v != NULL) {
+        if (tat_value_codec_for_value(&request->data) == NULL) {
+            return false;
+        }
+        value = tat_value_encode(&request->data);
         if (jv_get_kind(value) == JV_KIND_OBJECT) {
             *out = value;
             return true;
@@ -119,9 +131,10 @@ static bool tat_invoker_spec(tat_scxml_invoker *invoker, const ta_invoke_request
         jv_free(value);
         return false;
     }
-    if (request->src.v == NULL || !tat_json_value_to_jv(&request->src, &value)) {
+    if (request->src.v == NULL || tat_value_codec_for_value(&request->src) == NULL) {
         return false;
     }
+    value = tat_value_encode(&request->src);
     if (jv_get_kind(value) != JV_KIND_STRING) {
         jv_free(value);
         return false;
@@ -145,8 +158,27 @@ static bool tat_invoker_spec(tat_scxml_invoker *invoker, const ta_invoke_request
     return ok;
 }
 
-static bool tat_invoker_definition(tat_scxml_invoker *invoker, jv spec, ta_definition_id *out) {
-    jv key = jv_dump_string(jv_copy(spec), JV_PRINT_SORTED);
+/* The child's data model: the one its spec names, or the parent's when it names none. */
+static bool tat_invoker_child_model(tat_scxml_invoker *invoker, jv spec, ta_datamodel parent, ta_datamodel *out) {
+    jv name = jv_object_get(jv_copy(spec), jv_string("datamodel"));
+    bool ok = true;
+    if (jv_get_kind(name) != JV_KIND_STRING) {
+        *out = parent;
+    } else if (strcmp(jv_string_value(name), "ecmascript") == 0) {
+        *out = tat_js_datamodel(&invoker->bind->js);
+    } else if (strcmp(jv_string_value(name), "jq") == 0) {
+        *out = tat_json_datamodel(&invoker->bind->json);
+    } else {
+        ok = false;
+    }
+    jv_free(name);
+    return ok;
+}
+
+static bool tat_invoker_definition(tat_scxml_invoker *invoker, jv spec, ta_datamodel model, ta_definition_id *out) {
+    /* A spec without `datamodel` compiles once per data model that invokes it. */
+    jv key = jv_string_fmt("%.*s:", (int)model.v->name.len, model.v->name.ptr);
+    key = jv_string_concat(key, jv_dump_string(jv_copy(spec), JV_PRINT_SORTED));
     jv cached = jv_object_get(jv_copy(invoker->definitions), jv_copy(key));
     if (jv_get_kind(cached) == JV_KIND_NUMBER) {
         *out = (ta_definition_id)jv_number_value(cached);
@@ -165,7 +197,7 @@ static bool tat_invoker_definition(tat_scxml_invoker *invoker, jv spec, ta_defin
     ok = ok && ta_definition_compile_spec(invoker->system,
                                           &(ta_definition_compile_params){
                                               .spec = &decoded,
-                                              .datamodel = tat_json_datamodel(&bind->json),
+                                              .datamodel = model,
                                               .allocator = tat_libc_allocator(),
                                               .out = &definition,
                                           }) == TA_OK;
@@ -181,16 +213,21 @@ static bool tat_invoker_definition(tat_scxml_invoker *invoker, jv spec, ta_defin
 }
 
 /*
- * <param>s arrive as the jq data model's {name: value} object. Only names that
- * match one of the child's top-level <data> IDs enter its binding (SCXML 6.4).
+ * <param>s arrive as the parent data model's {name: value} object, encoded
+ * as wire JSON. Only names that match one of the child's top-level <data>
+ * IDs enter its binding (SCXML 6.4).
  */
 static bool tat_invoker_binding(const ta_invoke_request *request, jv spec, jv *out) {
     *out = jv_object();
     if (request->params.v == NULL) {
         return true;
     }
-    jv params;
-    if (!tat_json_value_to_jv(&request->params, &params) || jv_get_kind(params) != JV_KIND_OBJECT) {
+    if (tat_value_codec_for_value(&request->params) == NULL) {
+        return false;
+    }
+    jv params = tat_value_encode(&request->params);
+    if (jv_get_kind(params) != JV_KIND_OBJECT) {
+        jv_free(params);
         return false;
     }
     jv data = jv_object_get(jv_copy(spec), jv_string("data"));
@@ -212,13 +249,30 @@ static bool tat_invoker_binding(const ta_invoke_request *request, jv spec, jv *o
 static ta_op_status tat_invoker_start(void *self, const ta_invoker_start_params *params) {
     tat_scxml_invoker *invoker = self;
     const ta_invoke_request *request = params->request;
+    ta_datamodel parent = {0};
+    if (tat_actor_datamodel(invoker->system, request->parent, &parent) != TA_OK ||
+        tat_value_codec_for_model(parent) == NULL) {
+        tat_invoker_fault(params->fault, "invoker.scxml: the parent's data model is unknown");
+        return TA_OP_ERROR;
+    }
     jv spec;
     if (!tat_invoker_spec(invoker, request, &spec)) {
         tat_invoker_fault(params->fault, "invoker.scxml: no chart in the invoke's content or src");
         return TA_OP_ERROR;
     }
+    ta_datamodel model = {0};
+    if (!tat_invoker_child_model(invoker, spec, parent, &model)) {
+        jv_free(spec);
+        tat_invoker_fault(params->fault, "invoker.scxml: the child names an unknown data model");
+        return TA_OP_ERROR;
+    }
+    if (model.v != parent.v || model.self != parent.self) {
+        jv_free(spec);
+        tat_invoker_fault(params->fault, "invoker.scxml: the child's data model differs from the parent's");
+        return TA_OP_ERROR;
+    }
     ta_definition_id definition = 0;
-    if (!tat_invoker_definition(invoker, spec, &definition)) {
+    if (!tat_invoker_definition(invoker, spec, model, &definition)) {
         jv_free(spec);
         tat_invoker_fault(params->fault, "invoker.scxml: the child chart did not compile");
         return TA_OP_ERROR;
@@ -232,7 +286,9 @@ static ta_op_status tat_invoker_start(void *self, const ta_invoker_start_params 
         return TA_OP_ERROR;
     }
     ta_value value;
-    if (tat_json_value_from_jv(&invoker->bind->json, binding, &value) != TA_OK) {
+    ta_result decoded = tat_value_decode(model, binding, &value);
+    jv_free(binding);
+    if (decoded != TA_OK) {
         tat_invoker_fault(params->fault, "invoker.scxml: could not make the child binding");
         return TA_OP_ERROR;
     }

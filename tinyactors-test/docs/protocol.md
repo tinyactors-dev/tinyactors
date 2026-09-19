@@ -121,7 +121,16 @@ JSON-RPC errors are reserved for the protocol itself:
   forms.
 - `ta_str` and `ta_bytes` are JSON strings. `ta_expression` is its source text;
   host expressions cannot cross the protocol.
-- `ta_value` is any JSON value, held as a jq data-model value for the request.
+- `ta_value` is any JSON value. It decodes into a value of the data model of
+  the receiving actor: the `actor` of `ta.actor.deliver` and
+  `ta.actor.report_invoke`, or the `definition` of `ta.actor.spawn` and
+  `ta.actor.prepare_replacement`. Every other method decodes into jq values.
+  The wire carries no model tag. On output each value is encoded by its own
+  data model. An ECMAScript value that JSON cannot represent encodes as
+  `{"$value": "undefined" | "function" | "symbol" | "unserializable"}` at the
+  top level, and as `null` when nested. A value of no known data model
+  encodes as `{"$value": "foreign"}`. Markers are output-only. See
+  `docs/ecmascript-datamodel.md`.
   An owned output value (`ta_actor_completion.data`, the `out` of
   `ta_actor_datamodel_root`) is encoded, then released by the handler.
 - Enums are the constant names without their common prefix, in lowercase:
@@ -169,7 +178,8 @@ A vtable-bearing value (`ta_allocator`, `ta_datamodel`, `ta_actor_directory`,
 `{"$adapter": "<name>", "config": {...}}`. Adapters are C factories registered
 in `src/adapters.c`. They run synchronously, so callbacks never become nested
 RPC conversations. The current adapters are `allocator.libc`,
-`datamodel.jq`, `router.direct`, and `invoker.scxml`. `router.direct` takes
+`datamodel.jq`, `datamodel.ecmascript` (SCXML B.2 on quickjs-ng),
+`router.direct`, and `invoker.scxml`. `router.direct` takes
 `{"system": <system handle>}` and hands each external event to
 `ta_actor_deliver()`; a busy actor makes it answer retry, so core keeps the
 event for a later dispatch.
@@ -188,7 +198,12 @@ the chart `irp_NAME` from `charts`. `<param>`s whose names match the child's
 top-level `<data>` become its data-model binding. Core routes `#_parent`,
 `#_<invokeid>`, autoforwarding, and `done.invoke`; cancelling an invocation
 destroys the child. Markup content, such as an SCXML document as XML text, is
-not supported.
+not supported. The child compiles with the data model its spec's `datamodel`
+names (`jq` or `ecmascript`), or with the parent's when the spec names none.
+`src`, content, and params cross into the child as wire JSON: they are
+encoded with the parent's model and decoded with the child's. The invoker
+refuses a child whose data model differs from the parent's. The parent then
+gets `error.execution`, and no child is spawned.
 
 ### Codec methods
 
