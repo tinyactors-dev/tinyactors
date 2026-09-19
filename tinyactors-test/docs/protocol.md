@@ -116,7 +116,8 @@ JSON-RPC errors are reserved for the protocol itself:
 
 ### Value encoding
 
-- Integers are JSON numbers. 64-bit values (`ta_actor_id`, `ta_time`, ...) are
+- Integers are JSON numbers. 64-bit values (`ta_actor_id`, `ta_definition_id`,
+  `ta_time`, ...) are
   JSON numbers up to 2^53-1 and decimal strings above; decoders accept both
   forms.
 - `ta_str` and `ta_bytes` are JSON strings. `ta_expression` is its source text;

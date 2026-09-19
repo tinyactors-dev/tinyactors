@@ -108,7 +108,7 @@ typedef struct {
     tat_bind *bind;
     ta_system *system;
     jv charts;
-    /* Canonical spec JSON text -> registered ta_definition_id. */
+    /* Canonical spec JSON text -> registered ta_definition_id as decimal text. */
     jv definitions;
 } tat_scxml_invoker;
 
@@ -180,11 +180,15 @@ static bool tat_invoker_definition(tat_scxml_invoker *invoker, jv spec, ta_datam
     jv key = jv_string_fmt("%.*s:", (int)model.v->name.len, model.v->name.ptr);
     key = jv_string_concat(key, jv_dump_string(jv_copy(spec), JV_PRINT_SORTED));
     jv cached = jv_object_get(jv_copy(invoker->definitions), jv_copy(key));
-    if (jv_get_kind(cached) == JV_KIND_NUMBER) {
-        *out = (ta_definition_id)jv_number_value(cached);
-        jv_free(cached);
-        jv_free(key);
-        return true;
+    if (jv_get_kind(cached) == JV_KIND_STRING) {
+        /* A retired and freed definition's ID is stale (ADR 0043): recompile. */
+        *out = (ta_definition_id)strtoull(jv_string_value(cached), NULL, 10);
+        ta_definition_inspection facts;
+        if (ta_definition_inspect(invoker->system, *out, &facts) == TA_OK && !facts.retired) {
+            jv_free(cached);
+            jv_free(key);
+            return true;
+        }
     }
     jv_free(cached);
     tat_bind *bind = invoker->bind;
@@ -206,7 +210,7 @@ static bool tat_invoker_definition(tat_scxml_invoker *invoker, jv spec, ta_datam
         ok = false;
     }
     if (ok) {
-        invoker->definitions = jv_object_set(invoker->definitions, jv_copy(key), jv_number((double)*out));
+        invoker->definitions = jv_object_set(invoker->definitions, jv_copy(key), jv_string_fmt("%llu", (unsigned long long)*out));
     }
     jv_free(key);
     return ok;

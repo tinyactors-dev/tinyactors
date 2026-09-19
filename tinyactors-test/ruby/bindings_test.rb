@@ -112,6 +112,27 @@ begin
   check(root[:result] == 'ok' && root.dig(:out, :out).is_a?(Hash), "datamodel root: #{root}")
   check(host.ta.definition.inspect(system: live, definition: id).dig(:out, :out, :actor_count) == 1,
         'the spawned actor is counted')
+
+  # Retirement and generational IDs (ADR 0043): the ID carries a generation
+  # in its high 32 bits and also travels as a decimal string.
+  check(id >= 2**32, "a definition ID carries its generation: #{id}")
+  check(host.ta.definition.inspect(system: live, definition: id.to_s)[:result] == 'ok',
+        'a definition ID as a decimal string')
+  check(host.ta.definition.inspect(system: live, definition: (id + 2**60).to_s)[:result] == 'err_not_found',
+        'an ID above 2^53 with a future generation is unknown')
+  check(host.ta.system.retire_definition(system: live, definition: id)[:result] == 'ok',
+        'retire a definition with a resident actor')
+  retired = host.ta.definition.inspect(system: live, definition: id).dig(:out, :out)
+  check(retired[:retired] == true && retired[:actor_count] == 1, "a retired definition stays inspectable: #{retired}")
+  check(host.ta.actor.spawn(system: live, definition: id)[:result] == 'err_not_found',
+        'a retired definition spawns no actors')
+  check(host.ta.system.find_definition(system: live, identity: facts[:identity])[:result] == 'err_not_found',
+        'find skips a retired definition')
+  check(host.ta.actor.destroy(system: live, actor: actor)[:result] == 'ok', 'destroy the last actor')
+  check(host.ta.definition.inspect(system: live, definition: id)[:result] == 'err_not_found',
+        'the last actor frees a retired definition')
+  check(host.ta.system.retire_definition(system: live, definition: id)[:result] == 'ok',
+        'retiring a freed definition again is idempotent')
   host.ta.system.destroy(system: live)
 
   # The <scxml> <script> is a ta_expression member of the spec.
