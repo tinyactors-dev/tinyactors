@@ -45,5 +45,7 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0039](0039-lost-invocations-become-reconstruction-communication-errors.md) | [Lost invocations become reconstruction communication errors](0039-lost-invocations-become-reconstruction-communication-errors.md) |
 | [0040](0040-built-in-scxml-event-processor-host-routed-external-events.md) | [Built-in SCXML event processor; host-routed external events](0040-built-in-scxml-event-processor-host-routed-external-events.md) |
 | [0041](0041-one-authored-public-header-private-module-headers.md) | [One authored public header; private module headers](0041-one-authored-public-header-private-module-headers.md) |
+| [0042](0042-definitions-are-inspectable-and-export-to-their-spec.md) | [Definitions are inspectable and export to their spec](0042-definitions-are-inspectable-and-export-to-their-spec.md) |
+| [0043](0043-definitions-retire-and-definition-ids-are-generational.md) | [Definitions retire; definition IDs are generational](0043-definitions-retire-and-definition-ids-are-generational.md) |
 
 See [the API gaps](../internal/api-gaps.md) for places where the current header skeleton does not yet fully expose these decisions.
