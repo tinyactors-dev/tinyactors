@@ -35,6 +35,15 @@ static bool tat_make_jq_datamodel(tat_bind *bind, jv config, void *out) {
     return true;
 }
 
+/* datamodel.ecmascript: SCXML B.2 on quickjs-ng; one runtime per host process. */
+static bool tat_make_ecmascript_datamodel(tat_bind *bind, jv config, void *out) {
+    if (!tat_no_config(bind, config)) {
+        return false;
+    }
+    *(ta_datamodel *)out = tat_js_datamodel(&bind->js);
+    return true;
+}
+
 /*
  * router.direct: delivers each external event straight to a resident runtime
  * actor with ta_actor_deliver(). A busy actor makes the router answer RETRY,
@@ -301,6 +310,7 @@ static bool tat_make_scxml_invoker(tat_bind *bind, jv config, void *out) {
 const tat_adapter TAT_ADAPTERS[] = {
     {"allocator.libc", "ta_allocator", sizeof(ta_allocator), tat_make_libc_allocator},
     {"datamodel.jq", "ta_datamodel", sizeof(ta_datamodel), tat_make_jq_datamodel},
+    {"datamodel.ecmascript", "ta_datamodel", sizeof(ta_datamodel), tat_make_ecmascript_datamodel},
     {"router.direct", "ta_external_event_router", sizeof(ta_external_event_router),
      tat_make_direct_router},
     {"invoker.scxml", "ta_invoker", sizeof(ta_invoker), tat_make_scxml_invoker},

@@ -1,6 +1,7 @@
 #include "binding.h"
 
 #include "rpc.h"
+#include "value_codec.h"
 
 #include <inttypes.h>
 #include <math.h>
@@ -25,14 +26,23 @@ ta_result tat_bind_init(tat_bind *bind, ta_allocator allocator, void *host) {
     result = tat_json_datamodel_context_init(&bind->json, allocator);
     if (result != TA_OK) {
         ta_arena_destroy(&bind->arena);
+        return result;
     }
-    return result;
+    result = tat_js_datamodel_context_init(&bind->js, &(tat_js_datamodel_config){.allocator = allocator});
+    if (result != TA_OK) {
+        tat_json_datamodel_context_destroy(&bind->json);
+        ta_arena_destroy(&bind->arena);
+        return result;
+    }
+    bind->decode_model = tat_json_datamodel(&bind->json);
+    return TA_OK;
 }
 
 void tat_bind_destroy(tat_bind *bind) {
     tat_bind_end(bind);
     free(bind->values);
     free(bind->handles);
+    tat_js_datamodel_context_destroy(&bind->js);
     tat_json_datamodel_context_destroy(&bind->json);
     ta_arena_destroy(&bind->arena);
     *bind = (tat_bind){.error = jv_invalid()};
@@ -40,6 +50,7 @@ void tat_bind_destroy(tat_bind *bind) {
 
 void tat_bind_begin(tat_bind *bind) {
     ta_arena_reset(&bind->arena);
+    bind->decode_model = tat_json_datamodel(&bind->json);
     jv_free(bind->error);
     bind->error = jv_invalid();
 }
@@ -355,8 +366,9 @@ bool tat_decode_ta_value(tat_bind *bind, jv value, ta_value *out) {
         bind->values = grown;
         bind->value_capacity = capacity;
     }
-    if (tat_json_value_from_jv(&bind->json, jv_copy(value), out) != TA_OK) {
-        return tat_fail(bind, "could not create a JSON value");
+    /* The receiving actor's data model (tat_value_codec_select) decodes it. */
+    if (tat_value_decode(bind->decode_model, value, out) != TA_OK) {
+        return tat_fail(bind, "could not create a %s value", bind->decode_model.v->name.ptr);
     }
     /* The request owns the decoded reference; callees retain what they keep. */
     bind->values[bind->value_count] = *out;
@@ -366,14 +378,7 @@ bool tat_decode_ta_value(tat_bind *bind, jv value, ta_value *out) {
 
 jv tat_encode_ta_value(tat_bind *bind, const ta_value *value) {
     (void)bind;
-    if (value->v == NULL) {
-        return jv_null();
-    }
-    jv json;
-    if (tat_json_value_to_jv(value, &json)) {
-        return json;
-    }
-    return jv_object_set(jv_object(), jv_string("$value"), jv_string("foreign"));
+    return tat_value_encode(value);
 }
 
 bool tat_decode_ta_expression(tat_bind *bind, jv value, ta_expression *out) {

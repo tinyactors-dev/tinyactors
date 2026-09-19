@@ -6,6 +6,7 @@
 #include "jq.h"
 #include "rpc.h"
 #include "ta_rpc.h"
+#include "value_codec.h"
 #include "version.h"
 
 typedef struct {
@@ -44,7 +45,7 @@ static jv tat_handle_discover(tat_bind *bind, jv params, int *error_code) {
                            jv_string("JSON-RPC 2.0 subset over NDJSON"));
     result = jv_object_set(result, jv_string("jq"), jv_string(JQ_VERSION));
     result = jv_object_set(result, jv_string("datamodels"),
-                           jv_array_append(jv_array(), jv_string("json")));
+                           jv_array_append(jv_array_append(jv_array(), jv_string("jq")), jv_string("ecmascript")));
     result = jv_object_set(result, jv_string("methods"), jv_keys(jv_copy(server->dispatch)));
     result = jv_object_set(result, jv_string("schemas"), jv_copy(server->schemas));
     result = jv_object_set(result, jv_string("unimplemented"), jv_keys(unimplemented));
@@ -257,6 +258,7 @@ static jv tat_dispatch(void *context, const char *method, jv params, int *error_
         return jv_string("params must be an object");
     }
     tat_bind_begin(&server->bind);
+    tat_value_codec_select(&server->bind, method, params);
     jv result = server->methods[selected]->handler(&server->bind, params, error_code);
     tat_bind_end(&server->bind);
     jv_free(params);

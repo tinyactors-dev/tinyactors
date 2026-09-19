@@ -18,6 +18,7 @@
 #include <stdint.h>
 
 #include "jv.h"
+#include "ecmascript_datamodel.h"
 #include "json_datamodel_jv.h"
 #include "tinyactors.h"
 
@@ -48,6 +49,9 @@ typedef struct {
 struct tat_bind {
     ta_arena arena;
     tat_json_datamodel_context json;
+    tat_js_datamodel_context js;
+    /* The data model ta_value inputs of the current request decode with. */
+    ta_datamodel decode_model;
     tat_handle *handles;
     size_t handle_count;
     size_t handle_capacity;

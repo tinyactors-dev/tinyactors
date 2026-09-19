@@ -246,6 +246,11 @@ static jv tat_json_event(const ta_dm_host *host) {
     }
     jv data;
     if (!tat_json_unwrap(&event->data, &data)) {
+        if (event->data.v != NULL) {
+            /* Another data model's value: fault rather than read it as null. */
+            jv_free(object);
+            return jv_invalid_with_msg(jv_string("event data is not a JSON value"));
+        }
         data = jv_null();
     }
     return jv_object_set(object, jv_string("data"), data);
@@ -260,7 +265,12 @@ static jv tat_json_arguments(const ta_dm_host *host, jv arguments) {
         arguments = jv_object_set(arguments, jv_string("_ioprocessors"), jv_object());
         return jv_object_set(arguments, jv_string("__ta_active"), jv_array());
     }
-    arguments = jv_object_set(arguments, jv_string("_event"), tat_json_event(host));
+    jv event = tat_json_event(host);
+    if (!jv_is_valid(event)) {
+        jv_free(arguments);
+        return event;
+    }
+    arguments = jv_object_set(arguments, jv_string("_event"), event);
     arguments = jv_object_set(arguments, jv_string("_sessionid"), tat_json_host_text(host, TA_DM_TEXT_SESSION_ID));
     arguments = jv_object_set(arguments, jv_string("_name"), tat_json_host_text(host, TA_DM_TEXT_SESSION_NAME));
     jv processor = jv_object_set(jv_object(), jv_string("location"),
@@ -289,6 +299,12 @@ static ta_op_status tat_json_run_source(const char *source,
                                         jv arguments,
                                         jv *out,
                                         ta_fault *fault) {
+    if (!jv_is_valid(arguments)) {
+        jv_free(input);
+        jv_free(arguments);
+        tat_json_fault(fault, TA_ERR_UNSUPPORTED, "event data is not a JSON value");
+        return TA_OP_ERROR;
+    }
     jq_state *jq = jq_init();
     if (jq == NULL) {
         jv_free(input);
