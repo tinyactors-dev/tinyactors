@@ -13,8 +13,10 @@ require 'shellwords'
 ROOT = Pathname.new(__dir__).join('../..').expand_path
 WORKSPACE = ROOT.parent
 JQ_SOURCE = ROOT.join('vendor/jq')
+QUICKJS_SOURCE = ROOT.join('vendor/quickjs-ng')
 BUILD = ROOT.join('build')
 JQ_BUILD = BUILD.join('jq')
+QUICKJS_BUILD = BUILD.join('quickjs-ng')
 PREFIX = BUILD.join('prefix')
 
 def run(*command, chdir: ROOT)
@@ -44,6 +46,37 @@ unless libjq.file? && libonig.file?
     )
   end
   run('make', '-j2', 'install', chdir: JQ_BUILD)
+end
+
+unless QUICKJS_SOURCE.join('.tinyactors-vendor-version').file?
+  run('mise', 'run', 'vendor-quickjs', chdir: WORKSPACE)
+end
+
+# quickjs-ng is compiled straight from its library sources (the same set as
+# its CMake `qjs` target without quickjs-libc) with its own flags; it does not
+# build under the host's -Werror -pedantic. Like jq, this only runs when the
+# archive or its installed header is missing.
+libqjs = PREFIX.join('lib/libqjs.a')
+quickjs_header = PREFIX.join('include/quickjs.h')
+unless libqjs.file? && quickjs_header.file?
+  FileUtils.rm_rf(QUICKJS_BUILD)
+  FileUtils.mkdir_p(QUICKJS_BUILD)
+  FileUtils.mkdir_p(libqjs.dirname)
+  FileUtils.mkdir_p(quickjs_header.dirname)
+  quickjs_compiler = Shellwords.split(ENV.fetch('CC', 'cc'))
+  quickjs_flags = %w[
+    -std=gnu11 -O2 -funsigned-char -D_GNU_SOURCE -DQUICKJS_NG_BUILD
+    -Wno-implicit-fallthrough -Wno-sign-compare -Wno-unused-parameter
+  ]
+  objects = %w[dtoa libregexp libunicode quickjs].map do |name|
+    object = QUICKJS_BUILD.join("#{name}.o")
+    run(*quickjs_compiler, *quickjs_flags, "-I#{QUICKJS_SOURCE}", '-c',
+        QUICKJS_SOURCE.join("#{name}.c").to_s, '-o', object.to_s)
+    object
+  end
+  FileUtils.rm_f(libqjs)
+  run('ar', 'rcs', libqjs.to_s, *objects.map(&:to_s))
+  FileUtils.cp(QUICKJS_SOURCE.join('quickjs.h'), quickjs_header)
 end
 
 run('mise', 'run', 'amalgamate', '--check', chdir: WORKSPACE.join('tinyactors-core'))
@@ -78,7 +111,9 @@ run(
   "-I#{WORKSPACE.join('tinyactors-core/include')}",
   *sources.map(&:to_s),
   *libraries.map(&:to_s),
+  libqjs.to_s,
   '-lm',
+  '-lpthread',
   '-o',
   BUILD.join('tinyactors-test').to_s
 )

@@ -152,8 +152,16 @@ See `ruby/scxml_irp/README.md`.
 host. `ruby/runner_selftest.rb` runs the steps against a scripted fake host
 whose answers stand in for core functions that are not implemented yet.
 
-## Vendored dependency
+## Vendored dependencies
 
 The source release of jq 1.8.2 is stored in `vendor/jq` and statically linked
 into the host. Run `mise run vendor-jq` at the repository root to reproduce the
 vendor directory from its pinned release archive and SHA-256 checksum.
+
+The source release of quickjs-ng 0.17.0 is stored in `vendor/quickjs-ng` and
+statically linked into the host as `build/prefix/lib/libqjs.a`, with
+`quickjs.h` installed into `build/prefix/include`. Run `mise run vendor-quickjs`
+at the repository root to reproduce the vendor directory from its pinned
+release archive and SHA-256 checksum. The build compiles the library only when
+`libqjs.a` or `quickjs.h` is missing from `build/prefix`; delete them to force a
+rebuild.
