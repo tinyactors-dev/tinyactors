@@ -470,8 +470,10 @@ module TinyactorsTest
     # as datamodel_adapter does here.
     def system_handle
       @system ||= begin
+        @creating_system = true
         system = core('ta_system_create',
                       ta.system.create(config: { allocator: allocator.adapter, initial_time: 0 })).fetch(:out)
+        @creating_system = false
         router = { '$adapter' => 'router.direct', 'config' => { 'system' => system } }
         core('ta_system_set_external_event_router',
              ta.system.set_external_event_router(system: system, router: router))
@@ -480,9 +482,14 @@ module TinyactorsTest
       end
     end
 
-    # The counting allocator behind this run's system and definitions.
+    # The counting allocator behind this run's system and definitions. The
+    # host only knows it once the system it backs has been created, so
+    # asking for it creates the system first: `allocator.stats` works from
+    # a scenario's first line.
     def allocator
-      instrument('allocator', 'allocator.counting')
+      counting = instrument('allocator', 'allocator.counting')
+      system_handle unless @creating_system
+      counting
     end
 
     # Replaces router.direct with a router.recording instrument. Mode
@@ -588,6 +595,53 @@ module TinyactorsTest
       return nil if response[:result] == 'err_not_found'
 
       Integer(core('ta_system_next_deadline', response).fetch(:out))
+    end
+
+    # The current logical time core reports (ta_system_time), which the
+    # scenario's own `now` mirrors.
+    def system_time
+      Integer(ta.system.time(system: system_handle).fetch(:value))
+    end
+
+    # ta_definition_inspect facts: identity, counts, and measurements.
+    def definition_facts(chart = @group.chart)
+      id = chart.is_a?(Integer) ? chart : definition(chart)
+      core('ta_definition_inspect', ta.definition.inspect(system: system_handle, definition: id)).fetch(:out)
+    end
+
+    # The author-level spec ta_definition_export rebuilds from a definition.
+    def export(chart = @group.chart)
+      id = chart.is_a?(Integer) ? chart : definition(chart)
+      core('ta_definition_export', ta.definition.export(system: system_handle, definition: id)).fetch(:out)
+    end
+
+    # ta_event_name_matches: does `event` match the descriptor `prefix`?
+    # Both are dotted names, interned through the public atom API.
+    def event_matches?(event, prefix)
+      ta.event.name_matches(system: system_handle, event: event_name(event),
+                            prefix: event_name(prefix)).fetch(:value)
+    end
+
+    # The system-local atom of the built-in SCXML Event I/O Processor.
+    def scxml_io_type
+      ta.system.scxml_io_type(system: system_handle).fetch(:value)
+    end
+
+    # Retries an invoked child's completion; returns the result.
+    def publish_completion(actor)
+      id = actor.is_a?(Actor) ? actor.handle : actor
+      ta.actor.publish_completion(system: system_handle, actor: id)[:result]
+    end
+
+    # Resident actors the scenario did not spawn itself: the children an
+    # invoker started. They are Actors, so they can be inspected and resumed.
+    def invoked_actors
+      known = @actors.map(&:handle)
+      (rpc('system.actors', system: system_handle) - known).map do |id|
+        definition = core('ta_actor_inspect', ta.actor.inspect(system: system_handle, actor: id))
+                     .fetch(:out).fetch(:definition_id)
+        Actor.new(self, id, :invoked, definition)
+      end
     end
 
     # ----------------------------------------------------------------------
