@@ -322,7 +322,8 @@ typedef struct {
     ta_scxml_target *out;
     ta_fault *fault;
 } ta_datamodel_decode_scxml_target_params;
-typedef struct { ta_atom name; ta_value value; } ta_named_value;
+/* One <param>: `name` is the author's parameter name, borrowed for the call. */
+typedef struct { ta_str name; ta_value value; } ta_named_value;
 typedef struct {
     void *shared;
     void *instance;
@@ -428,10 +429,6 @@ typedef struct {
 TA_API ta_result ta_dm_host_text(const ta_dm_host *host, const ta_dm_text_params *params);
 /* The author's ID of a state; TA_ERR_NOT_FOUND ends iteration over 0, 1, 2, ... */
 TA_API ta_result ta_dm_host_state_name(const ta_dm_host *host, ta_state_id state, ta_str *out);
-/* Resolves a state by the author's ID, e.g. for In(); TA_ERR_NOT_FOUND if none. */
-TA_API ta_result ta_dm_host_find_state(const ta_dm_host *host, ta_str id, ta_state_id *out);
-/* The text of an atom, e.g. a parameter name passed to make_params(). */
-TA_API ta_result ta_dm_host_atom_text(const ta_dm_host *host, ta_atom atom, ta_str *out);
 /* ========================================================================
  * I/O processors
  */

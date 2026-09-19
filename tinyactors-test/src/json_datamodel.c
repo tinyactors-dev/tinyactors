@@ -621,7 +621,7 @@ static ta_op_status tat_json_decode_target(
 /*
  * Named parameters become an object keyed by parameter name, so `<param
  * name="x">` reads as `$_event.data.x`. A later duplicate name replaces an
- * earlier one. Without a host (unit tests) the key is the atom's number.
+ * earlier one.
  */
 static ta_op_status tat_json_make_params(void *self,
                                          const ta_datamodel_make_params_params *params) {
@@ -634,11 +634,14 @@ static ta_op_status tat_json_make_params(void *self,
             tat_json_fault(params->fault, TA_ERR_INVALID, "parameter is not a JSON value");
             return TA_OP_ERROR;
         }
-        ta_str name = {0};
-        jv key = params->host != NULL &&
-                         ta_dm_host_atom_text(params->host, params->values[index].name, &name) == TA_OK
-                     ? jv_string_sized(name.ptr, (int)name.len)
-                     : jv_string_fmt("%u", (unsigned)params->values[index].name);
+        ta_str name = params->values[index].name;
+        if (name.len > INT_MAX || (name.ptr == NULL && name.len != 0)) {
+            jv_free(value);
+            jv_free(values);
+            tat_json_fault(params->fault, TA_ERR_INVALID, "invalid parameter name");
+            return TA_OP_ERROR;
+        }
+        jv key = jv_string_sized(name.len == 0 ? "" : name.ptr, (int)name.len);
         values = jv_object_set(values, key, value);
     }
     tat_json_instance *instance = params->instance;

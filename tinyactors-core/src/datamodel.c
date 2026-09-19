@@ -142,32 +142,3 @@ ta_result ta_dm_host_state_name(const ta_dm_host *host, ta_state_id state, ta_st
     *out = ta_atom_text(&host->impl->system->atoms, definition->states[state].name);
     return TA_OK;
 }
-
-ta_result ta_dm_host_find_state(const ta_dm_host *host, ta_str id, ta_state_id *out) {
-    if (!ta_dm_host_valid(host) || out == NULL) {
-        return TA_ERR_INVALID;
-    }
-    ta_atom atom = 0;
-    if (ta_atom_find(&host->impl->system->atoms, id, &atom) != TA_OK) {
-        return TA_ERR_NOT_FOUND;
-    }
-    const ta_definition *definition = host->impl->actor->definition;
-    for (ta_state_id state = 0; state < definition->state_count; state += 1) {
-        if (definition->states[state].name == atom) {
-            *out = state;
-            return TA_OK;
-        }
-    }
-    return TA_ERR_NOT_FOUND;
-}
-
-ta_result ta_dm_host_atom_text(const ta_dm_host *host, ta_atom atom, ta_str *out) {
-    if (!ta_dm_host_valid(host) || out == NULL) {
-        return TA_ERR_INVALID;
-    }
-    if (!ta_atom_valid(&host->impl->system->atoms, atom)) {
-        return TA_ERR_NOT_FOUND;
-    }
-    *out = ta_atom_text(&host->impl->system->atoms, atom);
-    return TA_OK;
-}

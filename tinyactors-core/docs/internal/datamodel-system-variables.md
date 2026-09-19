@@ -24,9 +24,9 @@ ta_result ta_dm_host_platform_value(
 The public API implements this as `ta_dm_host_text()`, which formats one
 field (`_event.name`, `type`, `sendid`, `origin`, `origintype`, `invokeid`,
 `_sessionid`, `_name`, or the SCXML Event I/O Processor's type and location)
-into a caller buffer; `ta_dm_host_state_name()` and `ta_dm_host_find_state()`
-support `In()`; `ta_dm_host_atom_text()` resolves parameter names passed to
-`make_params()`.
+into a caller buffer, and `ta_dm_host_state_name()` supports `In()`.
+`make_params()` receives parameter names as text, so adapters need no atom
+lookup.
 
 While a microstep runs, `In()` and `ta_dm_host_in_state()` see the
 interpreter's live active set, so a state already exited in this microstep

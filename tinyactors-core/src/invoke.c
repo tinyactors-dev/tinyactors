@@ -377,7 +377,7 @@ static ta_op_status ta_invoke_resolve_values(ta_interpreter *it, const ta_invoke
     uint32_t evaluated = 0;
     for (; evaluated < decl->params.length && status == TA_OP_OK; evaluated += 1) {
         const ta_param_def *param = &definition->params[decl->params.offset + evaluated];
-        named[evaluated].name = param->name;
+        named[evaluated].name = ta_atom_text(&it->system->atoms, param->name);
         status = ta_interpreter_eval(it, &(ta_interpreter_value_params){
                                              .source = param->value, .out = &named[evaluated].value,
                                              .fault = &values->fault });

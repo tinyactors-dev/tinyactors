@@ -2061,35 +2061,6 @@ TA_API ta_result ta_dm_host_state_name(const ta_dm_host *host, ta_state_id state
     return TA_OK;
 }
 
-TA_API ta_result ta_dm_host_find_state(const ta_dm_host *host, ta_str id, ta_state_id *out) {
-    if (!ta_dm_host_valid(host) || out == NULL) {
-        return TA_ERR_INVALID;
-    }
-    ta_atom atom = 0;
-    if (ta_atom_find(&host->impl->system->atoms, id, &atom) != TA_OK) {
-        return TA_ERR_NOT_FOUND;
-    }
-    const ta_definition *definition = host->impl->actor->definition;
-    for (ta_state_id state = 0; state < definition->state_count; state += 1) {
-        if (definition->states[state].name == atom) {
-            *out = state;
-            return TA_OK;
-        }
-    }
-    return TA_ERR_NOT_FOUND;
-}
-
-TA_API ta_result ta_dm_host_atom_text(const ta_dm_host *host, ta_atom atom, ta_str *out) {
-    if (!ta_dm_host_valid(host) || out == NULL) {
-        return TA_ERR_INVALID;
-    }
-    if (!ta_atom_valid(&host->impl->system->atoms, atom)) {
-        return TA_ERR_NOT_FOUND;
-    }
-    *out = ta_atom_text(&host->impl->system->atoms, atom);
-    return TA_OK;
-}
-
 
 
 /*
@@ -2468,7 +2439,7 @@ static ta_op_status ta_invoke_resolve_values(ta_interpreter *it, const ta_invoke
     uint32_t evaluated = 0;
     for (; evaluated < decl->params.length && status == TA_OP_OK; evaluated += 1) {
         const ta_param_def *param = &definition->params[decl->params.offset + evaluated];
-        named[evaluated].name = param->name;
+        named[evaluated].name = ta_atom_text(&it->system->atoms, param->name);
         status = ta_interpreter_eval(it, &(ta_interpreter_value_params){
                                              .source = param->value, .out = &named[evaluated].value,
                                              .fault = &values->fault });
@@ -5514,7 +5485,7 @@ static ta_op_status ta_send_payload(ta_interpreter *it, const ta_send_action *se
     ta_op_status status = TA_OP_OK;
     for (; evaluated < send->params.length && status == TA_OP_OK; evaluated += 1) {
         const ta_param_def *param = &definition->params[send->params.offset + evaluated];
-        values[evaluated].name = param->name;
+        values[evaluated].name = ta_atom_text(&it->system->atoms, param->name);
         status = ta_eval_source(it, &(ta_value_params){ .source = param->value, .out = &values[evaluated].value,
                                                         .fault = fault });
     }
@@ -6303,7 +6274,7 @@ static ta_result ta_done_data_params(ta_interpreter *it, ta_span32 params, ta_va
     for (uint32_t index = 0; index < params.length && result == TA_OK; index += 1) {
         const ta_param_def *param = &definition->params[params.offset + index];
         ta_fault fault = {0};
-        values[count].name = param->name;
+        values[count].name = ta_atom_text(&it->system->atoms, param->name);
         if (ta_eval_source(it, &(ta_value_params){ .source = param->value, .out = &values[count].value,
                                                    .fault = &fault }) == TA_OP_OK) {
             count += 1;

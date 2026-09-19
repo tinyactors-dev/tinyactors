@@ -570,7 +570,7 @@ static ta_op_status ta_send_payload(ta_interpreter *it, const ta_send_action *se
     ta_op_status status = TA_OP_OK;
     for (; evaluated < send->params.length && status == TA_OP_OK; evaluated += 1) {
         const ta_param_def *param = &definition->params[send->params.offset + evaluated];
-        values[evaluated].name = param->name;
+        values[evaluated].name = ta_atom_text(&it->system->atoms, param->name);
         status = ta_eval_source(it, &(ta_value_params){ .source = param->value, .out = &values[evaluated].value,
                                                         .fault = fault });
     }
@@ -1359,7 +1359,7 @@ static ta_result ta_done_data_params(ta_interpreter *it, ta_span32 params, ta_va
     for (uint32_t index = 0; index < params.length && result == TA_OK; index += 1) {
         const ta_param_def *param = &definition->params[params.offset + index];
         ta_fault fault = {0};
-        values[count].name = param->name;
+        values[count].name = ta_atom_text(&it->system->atoms, param->name);
         if (ta_eval_source(it, &(ta_value_params){ .source = param->value, .out = &values[count].value,
                                                    .fault = &fault }) == TA_OP_OK) {
             count += 1;

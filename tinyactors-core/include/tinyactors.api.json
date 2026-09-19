@@ -4754,7 +4754,7 @@
         {
           "name": "name",
           "type": {
-            "type": "ta_atom"
+            "type": "ta_str"
           },
           "role": "in"
         },
@@ -7049,84 +7049,6 @@
           "name": "state",
           "type": {
             "type": "ta_state_id"
-          },
-          "role": "in"
-        },
-        {
-          "name": "out",
-          "type": {
-            "pointer": {
-              "type": "ta_str"
-            },
-            "const": false
-          },
-          "role": "out",
-          "shape": "single"
-        }
-      ],
-      "public": true,
-      "implemented": true
-    },
-    {
-      "name": "ta_dm_host_find_state",
-      "returns": {
-        "type": "ta_result"
-      },
-      "params": [
-        {
-          "name": "host",
-          "type": {
-            "pointer": {
-              "type": "ta_dm_host"
-            },
-            "const": true
-          },
-          "role": "in",
-          "shape": "borrowed"
-        },
-        {
-          "name": "id",
-          "type": {
-            "type": "ta_str"
-          },
-          "role": "in"
-        },
-        {
-          "name": "out",
-          "type": {
-            "pointer": {
-              "type": "ta_state_id"
-            },
-            "const": false
-          },
-          "role": "out",
-          "shape": "single"
-        }
-      ],
-      "public": true,
-      "implemented": true
-    },
-    {
-      "name": "ta_dm_host_atom_text",
-      "returns": {
-        "type": "ta_result"
-      },
-      "params": [
-        {
-          "name": "host",
-          "type": {
-            "pointer": {
-              "type": "ta_dm_host"
-            },
-            "const": true
-          },
-          "role": "in",
-          "shape": "borrowed"
-        },
-        {
-          "name": "atom",
-          "type": {
-            "type": "ta_atom"
           },
           "role": "in"
         },

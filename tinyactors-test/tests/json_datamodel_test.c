@@ -182,8 +182,8 @@ int main(void) {
                 tat_json_value_parse(&context, "2", &second) == TA_OK,
             "parameter values");
     ta_named_value named[] = {
-        {.name = 7, .value = first},
-        {.name = 7, .value = second},
+        {.name = {.ptr = "x", .len = 1}, .value = first},
+        {.name = {.ptr = "x", .len = 1}, .value = second},
     };
     ta_value parameters = {0};
     require(model.v->make_params(
@@ -199,7 +199,7 @@ int main(void) {
             "parameter aggregation");
     require(tat_json_value_format(&parameters, text, sizeof(text), &needed) == TA_OK &&
                 strcmp(text,
-                       "{\"7\":2}") == 0,
+                       "{\"x\":2}") == 0,
             "a later duplicate parameter replaces an earlier one");
     ta_value_release(&parameters);
     ta_value_release(&first);

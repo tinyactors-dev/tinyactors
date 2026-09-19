@@ -15,7 +15,7 @@ The core evaluates parameters in the definition's required order and accumulates
 
 ```c
 typedef struct {
-    ta_atom name;
+    ta_str name;
     ta_value value;
 } ta_named_value;
 ```
