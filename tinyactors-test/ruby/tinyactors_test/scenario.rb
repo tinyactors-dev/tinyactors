@@ -291,15 +291,17 @@ module TinyactorsTest
       @trace = trace ? Trace.new(self) : nil
     end
 
-    # Spawns an actor. With `name:` the actor is named: it claims the address
-    # (the chart definition's family, name) in the actor directory, which is
-    # a memory_directory instrument unless the scenario installed one.
+    # Spawns an actor of a chart, named by its registry name or given as a
+    # Chart built by the scenario itself (TinyactorsTest::Chart.define).
+    # With `name:` the actor is named: it claims the address (the chart
+    # definition's family, name) in the actor directory, which is a
+    # memory_directory instrument unless the scenario installed one.
     # `binding:` is the host data-model binding the actor starts from.
-    def spawn(chart_name = @group.chart, name: nil, binding: nil)
-      raise ScenarioError, "#{@group.name}: spawn needs a chart name" if chart_name.nil?
+    def spawn(chart = @group.chart, name: nil, binding: nil)
+      raise ScenarioError, "#{@group.name}: spawn needs a chart" if chart.nil?
 
-      chart_name = chart_name.to_sym
-      definition = definition_id(chart_name)
+      chart_name = chart.is_a?(Chart) ? chart.name.to_sym : chart.to_sym
+      definition = definition_id(chart)
       params = { system: system_handle, definition: definition }
       params[:datamodel_binding] = binding unless binding.nil?
       if name
@@ -707,8 +709,8 @@ module TinyactorsTest
     end
 
     # The registered definition ID of a chart, compiling it on first use.
-    def definition(chart_name = @group.chart)
-      definition_id(chart_name.to_sym)
+    def definition(chart = @group.chart)
+      definition_id(chart)
     end
 
     # The state ID of the author's state `name` in a definition.
@@ -833,10 +835,14 @@ module TinyactorsTest
       raise ScenarioError, "actor #{id}: macrostep did not finish in #{MAX_ROUNDS} resumes"
     end
 
-    # Compiles and registers a chart once per scenario; the system then owns it.
-    def definition_id(chart_name)
-      @definitions[chart_name] ||= begin
-        chart = @charts.fetch(chart_name) { raise ScenarioError, "unknown chart #{chart_name}" }
+    # Compiles and registers a chart once per scenario; the system then owns
+    # it. Takes a registry name or a Chart the scenario built itself.
+    def definition_id(chart)
+      unless chart.is_a?(Chart)
+        name = chart.to_sym
+        chart = @charts.fetch(name) { raise ScenarioError, "unknown chart #{name}" }
+      end
+      @definitions[chart] ||= begin
         compiled = core('ta_definition_compile_spec',
                         ta.definition.compile_spec(system: system_handle, spec: chart.to_spec,
                                                    datamodel: datamodel_adapter(chart), allocator: allocator.adapter))
