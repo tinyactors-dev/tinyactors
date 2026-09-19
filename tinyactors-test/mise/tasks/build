@@ -94,6 +94,7 @@ sources = [
   ROOT.join('src/rpc.c'),
   ROOT.join('src/server.c'),
   ROOT.join('src/json_datamodel.c'),
+  ROOT.join('src/null_datamodel.c'),
   ROOT.join('src/ecmascript_datamodel.c'),
   ROOT.join('src/value_codec.c'),
   ROOT.join('src/allocator.c'),

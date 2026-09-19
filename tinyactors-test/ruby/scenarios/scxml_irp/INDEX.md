@@ -162,7 +162,7 @@
 | 421 | 3.13 | mandatory | imported |  |
 | 422 | 3.13 | mandatory | imported |  |
 | 423 | 3.13 | mandatory | imported |  |
-| 436 | B.1 | mandatory | skipped | requires the null data model (the harness provides jq and ecmascript) |
+| 436 | B.1 | mandatory | skipped | the null data model cannot record a test outcome; it needs a log sink |
 | 444 | B.2 | optional | imported |  |
 | 445 | B.2 | optional | imported |  |
 | 446 | B.2 | optional | imported |  |

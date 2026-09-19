@@ -4,6 +4,7 @@ require 'json'
 require 'rexml/document'
 require_relative 'jq_expressions'
 require_relative 'ecma_expressions'
+require_relative 'null_expressions'
 
 module ScxmlIrp
   SCXML_NS = 'http://www.w3.org/2005/07/scxml'
@@ -75,7 +76,7 @@ module ScxmlIrp
   # Every element and attribute must be understood; anything else raises
   # Unsupported rather than being dropped silently.
   class Document
-    DIALECTS = { 'jq' => JqExpressions, 'ecmascript' => EcmaExpressions }.freeze
+    DIALECTS = { 'jq' => JqExpressions, 'ecmascript' => EcmaExpressions, 'null' => NullExpressions }.freeze
 
     Result = Data.define(:chart_name, :source, :notes)
 
@@ -140,7 +141,8 @@ module ScxmlIrp
       return @dialect if datamodel.nil?
 
       DIALECTS.fetch(datamodel) do
-        raise Unsupported, "requires the #{datamodel} data model (the harness provides jq and ecmascript)"
+        raise Unsupported,
+              "requires the #{datamodel} data model (the harness provides jq, ecmascript and null)"
       end
     end
 
@@ -262,17 +264,37 @@ module ScxmlIrp
                 end
       emitter.block("final :#{outcome}") do
         emitter.block('on_entry') do
-          emitter.line("log 'Outcome', expr: #{Ruby.str(string(outcome))}")
+          emit_log(emitter, outcome)
           emit_outcome(emitter, outcome)
         end
       end
     end
 
+    # Logs the outcome. A dialect with expressions logs the outcome as one;
+    # the null data model has none, so it logs the label alone.
+    def emit_log(emitter, outcome)
+      if records_outcome?
+        emitter.line("log 'Outcome', expr: #{Ruby.str(string(outcome))}")
+      else
+        emitter.line("log #{Ruby.str("Outcome.#{outcome}")}")
+      end
+    end
+
     # Records the test's outcome on entry to its pass or fail final state.
+    # A data model that records nothing (the null profile) cannot: such a
+    # test needs another channel to report its outcome.
     def emit_outcome(emitter, outcome)
       return unless @top_level
+      unless records_outcome?
+        raise Unsupported, 'the null data model cannot record a test outcome; it needs a log sink'
+      end
 
       emitter.line("assign #{Ruby.str(@dialect.data_location(OUTCOME))}, #{Ruby.str(string(outcome))}")
+    end
+
+    # False for a data model that cannot store the outcome variable.
+    def records_outcome?
+      !@dialect.respond_to?(:records_outcome?) || @dialect.records_outcome?
     end
 
     # A top-level <final id="pass"> or <final id="fail"> that the test writes

@@ -250,7 +250,8 @@ module TinyactorsTest
     # datamodel (`datamodel: nil`) states no requirement and runs with jq.
     DATAMODELS = {
       'jq' => { '$adapter' => 'datamodel.jq' }.freeze,
-      'ecmascript' => { '$adapter' => 'datamodel.ecmascript' }.freeze
+      'ecmascript' => { '$adapter' => 'datamodel.ecmascript' }.freeze,
+      'null' => { '$adapter' => 'datamodel.null' }.freeze
     }.freeze
     DEFAULT_DATAMODEL = 'jq'
     # Microsteps per ta_actor_resume call, and dispatch rounds before a step

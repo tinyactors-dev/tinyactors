@@ -207,6 +207,7 @@ A vtable-bearing value (`ta_allocator`, `ta_datamodel`, `ta_actor_directory`,
 in `src/adapters.c`. They run synchronously, so callbacks never become nested
 RPC conversations. The current adapters are `allocator.libc`,
 `datamodel.jq`, `datamodel.ecmascript` (SCXML B.2 on quickjs-ng),
+`datamodel.null` (SCXML B.1: `In(state)` conditions only, no data),
 `router.direct`, and `invoker.scxml`, plus the instruments
 `allocator.counting`, `router.recording`, `directory.memory`,
 `invoker.scripted`, and `io.recording` (see [Instruments](#instruments)). `router.direct` takes

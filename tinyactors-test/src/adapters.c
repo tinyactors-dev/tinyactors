@@ -5,6 +5,7 @@
 #include "binding.h"
 #include "instruments.h"
 #include "json_datamodel.h"
+#include "null_datamodel.h"
 #include "ta_rpc.h"
 #include "value_codec.h"
 
@@ -38,6 +39,15 @@ static bool tat_make_jq_datamodel(tat_bind *bind, jv config, void *out) {
 }
 
 /* datamodel.ecmascript: SCXML B.2 on quickjs-ng; one runtime per host process. */
+/* datamodel.null: SCXML B.1, the minimum profile (src/null_datamodel.c). */
+static bool tat_make_null_datamodel(tat_bind *bind, jv config, void *out) {
+    if (!tat_no_config(bind, config)) {
+        return false;
+    }
+    *(ta_datamodel *)out = tat_null_datamodel();
+    return true;
+}
+
 static bool tat_make_ecmascript_datamodel(tat_bind *bind, jv config, void *out) {
     if (!tat_no_config(bind, config)) {
         return false;
@@ -372,6 +382,7 @@ const tat_adapter TAT_ADAPTERS[] = {
     {"allocator.libc", "ta_allocator", sizeof(ta_allocator), tat_make_libc_allocator},
     {"datamodel.jq", "ta_datamodel", sizeof(ta_datamodel), tat_make_jq_datamodel},
     {"datamodel.ecmascript", "ta_datamodel", sizeof(ta_datamodel), tat_make_ecmascript_datamodel},
+    {"datamodel.null", "ta_datamodel", sizeof(ta_datamodel), tat_make_null_datamodel},
     {"router.direct", "ta_external_event_router", sizeof(ta_external_event_router),
      tat_make_direct_router},
     {"invoker.scxml", "ta_invoker", sizeof(ta_invoker), tat_make_scxml_invoker},
