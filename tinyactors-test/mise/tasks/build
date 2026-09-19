@@ -4,7 +4,7 @@
 # The sources include core's src/ and api/ so edits there re-run the
 # amalgamate/api --check steps. Use `mise run --force build` after changing CC/CFLAGS.
 #MISE sources=["mise/tasks/build", "mise/tasks/bindings", "bindings.rb", "src/**/*.c", "src/**/*.h", "tests/**/*.c", "build/prefix/lib/*.a", "../tinyactors-core/include/**/*", "../tinyactors-core/src/**/*", "../tinyactors-core/api/**/*", "../tinyactors-core/mise/lib/**/*", "../tinyactors-core/mise/tasks/amalgamate", "../tinyactors-core/mise/tasks/api"]
-#MISE outputs=["build/tinyactors-test", "build/json_datamodel_test"]
+#MISE outputs=["build/tinyactors-test", "build/json_datamodel_test", "build/ecmascript_datamodel_test"]
 
 require 'fileutils'
 require 'pathname'
@@ -133,4 +133,22 @@ run(
   '-lm',
   '-o',
   BUILD.join('json_datamodel_test').to_s
+)
+
+run(
+  *compiler,
+  *flags,
+  "-I#{ROOT.join('src')}",
+  "-I#{PREFIX.join('include')}",
+  "-I#{WORKSPACE.join('tinyactors-core/include')}",
+  ROOT.join('tests/ecmascript_datamodel_test.c').to_s,
+  ROOT.join('src/ecmascript_datamodel.c').to_s,
+  ROOT.join('src/scxml_target.c').to_s,
+  ROOT.join('src/allocator.c').to_s,
+  WORKSPACE.join('tinyactors-core/include/tinyactors.c').to_s,
+  libqjs.to_s,
+  '-lm',
+  '-lpthread',
+  '-o',
+  BUILD.join('ecmascript_datamodel_test').to_s
 )
