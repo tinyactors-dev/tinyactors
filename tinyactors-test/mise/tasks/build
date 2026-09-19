@@ -131,6 +131,7 @@ run(
   "-I#{WORKSPACE.join('tinyactors-core/include')}",
   ROOT.join('tests/json_datamodel_test.c').to_s,
   ROOT.join('src/json_datamodel.c').to_s,
+  ROOT.join('src/scxml_target.c').to_s,
   ROOT.join('src/allocator.c').to_s,
   WORKSPACE.join('tinyactors-core/include/tinyactors.c').to_s,
   *libraries.map(&:to_s),

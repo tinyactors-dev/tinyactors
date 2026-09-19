@@ -294,12 +294,14 @@ module TinyactorsTest
     # Spawns an actor. With `name:` the actor is named: it claims the address
     # (the chart definition's family, name) in the actor directory, which is
     # a memory_directory instrument unless the scenario installed one.
-    def spawn(chart_name = @group.chart, name: nil)
+    # `binding:` is the host data-model binding the actor starts from.
+    def spawn(chart_name = @group.chart, name: nil, binding: nil)
       raise ScenarioError, "#{@group.name}: spawn needs a chart name" if chart_name.nil?
 
       chart_name = chart_name.to_sym
       definition = definition_id(chart_name)
       params = { system: system_handle, definition: definition }
+      params[:datamodel_binding] = binding unless binding.nil?
       if name
         memory_directory
         params[:address] = address(chart_name, name)
@@ -482,18 +484,21 @@ module TinyactorsTest
     end
 
     # Replaces router.direct with a router.recording instrument. Mode
-    # :direct delivers at once; :hold keeps deliveries until released.
-    def recording_router(mode: :direct)
+    # :direct delivers at once; :hold keeps deliveries until released. With
+    # `directory: true` the router resolves named destinations through the
+    # memory_directory instrument, as a host's own routing does.
+    def recording_router(mode: :direct, directory: false)
       existing = @instruments['router']
       if existing
         existing.mode(mode)
         return existing
       end
 
+      config = { system: system_handle, mode: mode.to_s }
+      config[:directory] = memory_directory.name if directory
       router = instrument('router', 'router.recording')
       core('ta_system_set_external_event_router',
-           ta.system.set_external_event_router(system: system_handle,
-                                               router: router.adapter(system: system_handle, mode: mode.to_s)))
+           ta.system.set_external_event_router(system: system_handle, router: router.adapter(**config)))
       router
     end
 

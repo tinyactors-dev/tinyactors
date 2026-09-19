@@ -167,8 +167,22 @@ int main(void) {
                 target.kind == TA_SCXML_TARGET_INVOKE && target.as.invoke == 17,
             "invoke target");
 
+    /* A named actor's logical address; its text belongs to the instance, so
+     * it stays readable after the target value is gone. */
+    require(decode_target(&context, model, shared, instance, "\"#_actor_door/front\"", &target) ==
+                    TA_OP_OK &&
+                target.kind == TA_SCXML_TARGET_ACTOR &&
+                target.as.actor.kind == TA_ACTOR_REF_NAMED &&
+                target.as.actor.as.named.family.name.len == 4 &&
+                memcmp(target.as.actor.as.named.family.name.ptr, "door", 4) == 0 &&
+                target.as.actor.as.named.name.len == 5 &&
+                memcmp(target.as.actor.as.named.name.ptr, "front", 5) == 0,
+            "named actor target");
+
     const char *invalid_targets[] = {
         "\"#_scxml_\"", "\"#_scxml_4x\"", "\"#_\"", "\"#_abc\"", "\"elsewhere\"", "7",
+        "\"#_actor_\"", "\"#_actor_door\"", "\"#_actor_/front\"", "\"#_actor_door/\"",
+        "\"#_actor_a/b/c\"",
     };
     for (size_t index = 0; index < ARRAY_COUNT(invalid_targets); index += 1) {
         require(decode_target(&context, model, shared, instance, invalid_targets[index],

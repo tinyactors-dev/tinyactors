@@ -46,3 +46,28 @@ TinyactorsTest.chart :service_client do
 
   state :replied
 end
+
+# Two named actors of the family "messenger" that talk by logical address.
+# The sender's `peer` is its binding; a receiver replies to the address the
+# event came from ($_event.origin), the reply address of ADR 0022. Every
+# received event, errors included, is appended to `.inbox`.
+TinyactorsTest.chart :messenger do
+  data inbox: { expr: '[]' }
+  data peer: nil
+
+  state :ready do
+    transition on: 'greet', type: :internal do
+      send_event 'hello', to_expr: '.peer'
+    end
+    transition on: 'hello', type: :internal do
+      assign '.inbox', '.inbox + [{event: "hello", from: $_event.origin}]'
+      send_event 'ack', to_expr: '$_event.origin'
+    end
+    transition on: 'ack', type: :internal do
+      assign '.inbox', '.inbox + [{event: "ack", from: $_event.origin}]'
+    end
+    transition on: 'error', type: :internal do
+      assign '.inbox', '.inbox + [{event: $_event.name, from: $_event.origin}]'
+    end
+  end
+end

@@ -6,6 +6,7 @@
 #include <stdlib.h>
 
 #include "jq.h"
+#include "scxml_target.h"
 
 typedef struct {
     tat_json_datamodel_context *context;
@@ -26,6 +27,9 @@ typedef struct {
     tat_json_datamodel_context *context;
     const tat_json_shared *shared;
     jv root;
+    /* Keeps the text of the last decoded SCXML target alive: a named
+     * address borrows its family and name from it. */
+    char target_text[TAT_TARGET_TEXT_MAX + 1];
 } tat_json_instance;
 
 static void tat_json_retain(void *self);
@@ -582,54 +586,26 @@ static ta_op_status tat_json_execute_script(
     return status;
 }
 
-#define TAT_SCXML_ACTOR_PREFIX "#_scxml_"
-
 static ta_op_status tat_json_decode_target(
     void *self, const ta_datamodel_decode_scxml_target_params *params) {
     (void)self;
+    tat_json_instance *instance = params->instance;
     jv value = jv_invalid();
     if (!tat_json_unwrap(params->value, &value) || jv_get_kind(value) != JV_KIND_STRING) {
         jv_free(value);
         tat_json_fault(params->fault, TA_ERR_INVALID, "SCXML target must be a JSON string");
         return TA_OP_ERROR;
     }
-    const char *target = jv_string_value(value);
+    /* Parsed out of the instance's buffer: a named address borrows its text. */
+    const char *error = NULL;
     ta_scxml_target decoded = {0};
-    if (strcmp(target, "#_internal") == 0) {
-        decoded.kind = TA_SCXML_TARGET_INTERNAL;
-    } else if (strcmp(target, "#_self") == 0) {
-        decoded.kind = TA_SCXML_TARGET_SELF;
-    } else if (strcmp(target, "#_parent") == 0) {
-        decoded.kind = TA_SCXML_TARGET_PARENT;
-    } else if (strncmp(target, TAT_SCXML_ACTOR_PREFIX,
-                       sizeof(TAT_SCXML_ACTOR_PREFIX) - 1) == 0) {
-        const char *digits = target + sizeof(TAT_SCXML_ACTOR_PREFIX) - 1;
-        char *end = NULL;
-        uint64_t actor = strtoull(digits, &end, 10);
-        if (end == digits || *end != '\0') {
-            jv_free(value);
-            tat_json_fault(params->fault, TA_ERR_INVALID, "invalid SCXML actor target");
-            return TA_OP_ERROR;
-        }
-        decoded.kind = TA_SCXML_TARGET_ACTOR;
-        decoded.as.actor.kind = TA_ACTOR_REF_RUNTIME;
-        decoded.as.actor.as.runtime = actor;
-    } else if (strncmp(target, "#_", 2) == 0) {
-        char *end = NULL;
-        uint64_t invoke = strtoull(target + 2, &end, 10);
-        if (end == target + 2 || *end != '\0') {
-            jv_free(value);
-            tat_json_fault(params->fault, TA_ERR_INVALID, "invalid SCXML invoke target");
-            return TA_OP_ERROR;
-        }
-        decoded.kind = TA_SCXML_TARGET_INVOKE;
-        decoded.as.invoke = invoke;
-    } else {
-        jv_free(value);
-        tat_json_fault(params->fault, TA_ERR_INVALID, "unsupported SCXML target");
+    bool ok = tat_scxml_target_decode(jv_string_value(value), (size_t)jv_string_length_bytes(jv_copy(value)),
+                                      instance->target_text, &decoded, &error);
+    jv_free(value);
+    if (!ok) {
+        tat_json_fault(params->fault, TA_ERR_INVALID, error);
         return TA_OP_ERROR;
     }
-    jv_free(value);
     *params->out = decoded;
     return TA_OP_OK;
 }

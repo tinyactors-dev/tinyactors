@@ -435,6 +435,9 @@ typedef struct {
     JSValue session_id;
     JSValue session_name;
     JSValue ioprocessors;
+    /* Keeps the text of the last decoded SCXML target alive: a named
+     * address borrows its family and name from it. */
+    char target_text[TAT_TARGET_TEXT_MAX + 1];
 } tat_js_instance;
 
 enum {
@@ -1194,7 +1197,7 @@ static ta_op_status tat_js_decode_target(void *self, const ta_datamodel_decode_s
     }
     const char *error = NULL;
     ta_scxml_target decoded = {0};
-    bool ok = tat_scxml_target_parse((ta_str){.ptr = text, .len = (uint32_t)length}, &decoded, &error);
+    bool ok = tat_scxml_target_decode(text, length, instance->target_text, &decoded, &error);
     JS_FreeCString(context, text);
     if (!ok) {
         tat_js_fault(params->fault, TA_ERR_INVALID, error);

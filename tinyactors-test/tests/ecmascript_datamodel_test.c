@@ -415,7 +415,16 @@ static void test_operations(tat_js_datamodel_context *context) {
     check(target(&s, S("#_7"), &decoded) == TA_OP_OK && decoded.kind == TA_SCXML_TARGET_INVOKE &&
               decoded.as.invoke == 7,
           "#_7");
+    check(target(&s, S("#_actor_door/front"), &decoded) == TA_OP_OK &&
+              decoded.kind == TA_SCXML_TARGET_ACTOR && decoded.as.actor.kind == TA_ACTOR_REF_NAMED &&
+              decoded.as.actor.as.named.family.name.len == 4 &&
+              memcmp(decoded.as.actor.as.named.family.name.ptr, "door", 4) == 0 &&
+              decoded.as.actor.as.named.name.len == 5 &&
+              memcmp(decoded.as.actor.as.named.name.ptr, "front", 5) == 0,
+          "#_actor_door/front");
     check(target(&s, S("bogus"), &decoded) == TA_OP_ERROR, "an unknown target faults");
+    check(target(&s, S("#_actor_door"), &decoded) == TA_OP_ERROR, "a named target needs a name");
+    check(target(&s, S("#_actor_/front"), &decoded) == TA_OP_ERROR, "a named target needs a family");
 
     /* Foreign values fault. */
     ta_value foreign = {.self = &foreign, .v = &FOREIGN};

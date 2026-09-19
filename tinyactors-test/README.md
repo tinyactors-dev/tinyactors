@@ -169,7 +169,11 @@ an allocation is still live, or when core freed memory it was not given.
 
 - `spawn(chart, name: 'x')` spawns a named actor at the address (the
   chart's definition family, `'x'`), and installs a `memory_directory` on
-  first use.
+  first use. `spawn(chart, binding: {...})` gives the actor a host
+  data-model binding, as an invoked child's `<param>`s would.
+- A chart sends to a logical address with the target
+  `#_actor_<family>/<name>`; `recording_router(directory: true)` resolves
+  those destinations through the directory, as a host's routing does.
 - `capture(actor)` returns an image handle. `image_deadline(image)` gives
   the image's earliest deadline, and `destroy_image(image)` frees it.
 - `reconstruct(image, binding:)` rebuilds an anonymous session.

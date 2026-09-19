@@ -76,6 +76,8 @@ typedef struct {
     size_t held_count;
     size_t held_capacity;
     uint64_t next_held;
+    /* Resolves named destinations, as a host's own routing does. */
+    struct tat_instrument *directory;
 } tat_router_state;
 
 typedef struct {
@@ -89,7 +91,7 @@ typedef struct {
     uint64_t next_service;
 } tat_invoker_state;
 
-typedef struct {
+typedef struct tat_instrument {
     char *name;
     tat_instrument_kind kind;
     tat_bind *bind;
@@ -104,6 +106,9 @@ typedef struct {
     tat_directory_state directory;
     tat_invoker_state invoker;
 } tat_instrument;
+
+static ta_actor_directory_entry tat_directory_current(tat_instrument *instrument, const ta_actor_address *address);
+static jv tat_entry_record(ta_actor_directory_entry entry);
 
 static tat_instrument **tat_instruments;
 static size_t tat_instrument_count;
@@ -523,11 +528,35 @@ static jv tat_allocator_stats(const tat_allocator_state *state) {
  * (the default) without delivering. Config: {"name", "system", "mode"?}.
  */
 
-static ta_result tat_router_deliver(tat_instrument *instrument, const ta_external_delivery *delivery) {
-    if (delivery->destination.kind != TA_ACTOR_REF_RUNTIME) {
-        return TA_ERR_UNSUPPORTED;
+/*
+ * Delivers to a runtime destination, or resolves a named one through the
+ * router's directory instrument: resident delivers, unloaded answers
+ * TA_ERR_UNLOADED (this router cannot load an actor: a host would), and an
+ * unknown address answers TA_ERR_NOT_FOUND. Without a directory, a named
+ * destination is unsupported. The resolved entry is added to `entry`.
+ */
+static ta_result tat_router_deliver(tat_instrument *instrument, const ta_external_delivery *delivery, jv *entry) {
+    ta_actor_id id;
+    if (delivery->destination.kind == TA_ACTOR_REF_RUNTIME) {
+        id = delivery->destination.as.runtime;
+    } else {
+        tat_instrument *directory = instrument->router.directory;
+        if (directory == NULL) {
+            return TA_ERR_UNSUPPORTED;
+        }
+        ta_actor_directory_entry resolved = tat_directory_current(directory, &delivery->destination.as.named);
+        if (entry != NULL) {
+            *entry = jv_object_set(*entry, jv_string("resolved"), tat_entry_record(resolved));
+        }
+        if (resolved.kind == TA_ACTOR_DIRECTORY_NONE) {
+            return TA_ERR_NOT_FOUND;
+        }
+        if (resolved.kind == TA_ACTOR_DIRECTORY_UNLOADED) {
+            return TA_ERR_UNLOADED;
+        }
+        id = resolved.actor;
     }
-    return ta_actor_deliver(instrument->system, delivery->destination.as.runtime, &delivery->event);
+    return ta_actor_deliver(instrument->system, id, &delivery->event);
 }
 
 static ta_external_event_submit_status tat_recording_submit(void *self, const ta_external_event_submit_params *params) {
@@ -576,7 +605,7 @@ static ta_external_event_submit_status tat_recording_submit(void *self, const ta
         return TA_EXTERNAL_EVENT_ACCEPTED;
     }
 
-    ta_result result = tat_router_deliver(instrument, delivery);
+    ta_result result = tat_router_deliver(instrument, delivery, &entry);
     entry = jv_object_set(entry, jv_string("result"), tat_result_name(result));
     if (result == TA_OK) {
         tat_journal(instrument, "submit", jv_object_set(entry, jv_string("status"), jv_string("accepted")));
@@ -603,7 +632,7 @@ static bool tat_router_set_mode(tat_bind *bind, tat_instrument *instrument, jv m
 }
 
 bool tat_make_recording_router(tat_bind *bind, jv config, void *out) {
-    static const char *const keys[] = {"mode", NULL};
+    static const char *const keys[] = {"mode", "directory", NULL};
     bool created = false;
     tat_instrument *instrument = tat_instrument_resolve(bind, config, TAT_INSTRUMENT_ROUTER, keys, true, &created);
     if (instrument == NULL) {
@@ -616,6 +645,21 @@ bool tat_make_recording_router(tat_bind *bind, jv config, void *out) {
         if (!ok) {
             return false;
         }
+        jv directory = jv_object_get(jv_copy(config), jv_string("directory"));
+        if (jv_get_kind(directory) == JV_KIND_STRING) {
+            tat_instrument *found = tat_instrument_find(jv_string_value(directory));
+            if (found == NULL || found->kind != TAT_INSTRUMENT_DIRECTORY) {
+                tat_fail(bind, "router.recording: config.directory names no directory.memory instrument");
+                jv_free(directory);
+                return false;
+            }
+            instrument->router.directory = found;
+        } else if (jv_is_valid(directory) && jv_get_kind(directory) != JV_KIND_NULL) {
+            tat_fail(bind, "router.recording: config.directory must be an instrument name");
+            jv_free(directory);
+            return false;
+        }
+        jv_free(directory);
     }
     *(ta_external_event_router *)out = (ta_external_event_router){.self = instrument, .v = &TAT_RECORDING_ROUTER};
     return true;
@@ -1097,7 +1141,7 @@ static jv tat_control_router(tat_instrument *instrument, const char *command, jv
             tat_journal(instrument, "drop", jv_copy(entry));
             return entry;
         }
-        ta_result result = tat_router_deliver(instrument, &state->held[index].delivery);
+        ta_result result = tat_router_deliver(instrument, &state->held[index].delivery, &entry);
         /* A busy actor keeps the delivery held; release it again later. */
         if (result != TA_ERR_BUSY) {
             tat_held_remove(state, index);

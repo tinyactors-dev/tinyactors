@@ -259,7 +259,7 @@ them.
 | Kind | Config | Journal ops | Commands |
 |---|---|---|---|
 | `allocator.counting` | `name` | `alloc_failed`, `free_unknown`, `free_mismatch` | `stats`, `fail {after, count}`, `clear_faults` |
-| `router.recording` | `name`, `system`, `mode`? | `submit`, `release`, `drop` | `mode {mode}`, `held`, `release {id}`, `drop {id}`, `fail {op: "submit", status?}`, `clear_faults` |
+| `router.recording` | `name`, `system`, `mode`?, `directory`? | `submit`, `release`, `drop` | `mode {mode}`, `held`, `release {id}`, `drop {id}`, `fail {op: "submit", status?}`, `clear_faults` |
 | `directory.memory` | `name` | `claim`, `resolve`, `replace`, `remove` | `entries`, `put {family, name, kind, actor?}`, `fail`, `clear_faults` |
 | `invoker.scripted` | `name`, `system` | `start`, `cancel`, `forward` | `services`, `fail`, `clear_faults` |
 | `io.recording` | `name`, `system` | `send` | `fail`, `clear_faults` |
@@ -272,7 +272,12 @@ them.
   lets `n` more allocations succeed, then fails `m` of them (`0`: every
   later one).
 - **`router.recording`** journals every submitted delivery with its
-  `status` (`accepted`, `retry`, `error`). In mode `direct` it delivers like
+  `status` (`accepted`, `retry`, `error`). With `directory` (the name of a
+  `directory.memory` instrument) it resolves a named destination through
+  that directory and journals the entry as `resolved`: a resident entry is
+  delivered, an unloaded one answers `err_unloaded` (this router cannot
+  load an actor; a host would), and an unknown address `err_not_found`.
+  Without a directory, a named destination is unsupported. In mode `direct` it delivers like
   `router.direct`, and it also records the `ta_actor_deliver` result. In mode
   `hold` it clones the delivery and answers accepted. `held` lists the held
   deliveries. `release {id}` delivers one with `ta_actor_deliver`; a busy
@@ -395,6 +400,27 @@ Charts compile from the JSON form of `ta_scxml_spec` (see
     nested `if` in `else_actions`
   - `foreach`: `{"array", "item", "index"?, "body"?}`, where `item` and `index`
     name the variables bound on each iteration
+
+#### Send targets
+
+Both data models decode a `<send target>` with the same grammar
+(`src/scxml_target.{c,h}`):
+
+| Target | Destination |
+|---|---|
+| (absent) | the actor itself, as an external event |
+| `#_internal` | the actor's own internal queue |
+| `#_self` | the actor itself, as an external event |
+| `#_parent` | the invoking parent |
+| `#_scxml_<actor id>` | that runtime actor |
+| `#_actor_<family>/<name>` | the named actor at that logical address |
+| `#_<invoke id>` | that invoked child |
+
+A named address borrows its family and name from the target text, so each
+data model keeps the decoded text in its instance until the next decode.
+Core resolves the other targets itself and hands a named destination to the
+external-event router, which is where a host's own routing resolves it
+(`router.recording` does so through its `directory` instrument).
 
 The spec carries only what an SCXML author writes, never runtime identifiers.
 Send IDs are the author's strings. I/O processors are names, and an absent

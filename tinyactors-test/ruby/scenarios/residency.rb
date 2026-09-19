@@ -91,11 +91,13 @@ TinyactorsTest.scenarios 'residency', chart: :traffic_light do
                  pair.data('.errors')
     assert_equal [], pair.observe[:invokes], 'no invocation is active after reconstruction'
 
-    lost = starts[0].merge(parent: pair.handle)
-    report = ta.actor.report_invoke(system: system_handle, actor: lost[:parent], invoke_id: lost[:invoke_id],
+    # The invocation is retired, so reporting for it names no invocation.
+    lost = starts[0]
+    report = ta.actor.report_invoke(system: system_handle, actor: pair.handle, invoke_id: lost[:invoke_id],
                                     kind: 'event', event: { name: event_name('reply'), type: 'external',
                                                             invoke_id: lost[:invoke_id] })
-    run_system("late reply from the lost service (#{report[:result]})")
+    assert_equal 'err_not_found', report[:result]
+    run_system('late reply from the lost service')
     assert_equal [], pair.data('.replies'), 'events from a lost invocation are ignored'
   end
 
