@@ -210,7 +210,7 @@ RPC conversations. The current adapters are `allocator.libc`,
 `datamodel.null` (SCXML B.1: `In(state)` conditions only, no data),
 `router.direct`, and `invoker.scxml`, plus the instruments
 `allocator.counting`, `router.recording`, `directory.memory`,
-`invoker.scripted`, and `io.recording` (see [Instruments](#instruments)). `router.direct` takes
+`invoker.scripted`, `io.recording`, and `log.recording` (see [Instruments](#instruments)). `router.direct` takes
 `{"system": <system handle>}` and hands each external event to
 `ta_actor_deliver()`; a busy actor makes it answer retry, so core keeps the
 event for a later dispatch.
@@ -264,6 +264,7 @@ them.
 | `directory.memory` | `name` | `claim`, `resolve`, `replace`, `remove` | `entries`, `put {family, name, kind, actor?}`, `fail`, `clear_faults` |
 | `invoker.scripted` | `name`, `system` | `start`, `cancel`, `forward` | `services`, `fail`, `clear_faults` |
 | `io.recording` | `name`, `system` | `send` | `fail`, `clear_faults` |
+| `log.recording` | `name`, `system` | `log` | none |
 
 - **`allocator.counting`** wraps libc. It tracks every live allocation by
   address, and `stats` reports live allocations and bytes, the peak, and
@@ -304,6 +305,11 @@ them.
 - **`io.recording`** is an Event I/O Processor that journals each send
   (`source`, `send_id`, `event_text`, `io_type`, `target`, `data`) and
   delivers nothing.
+- **`log.recording`** is the system's `<log>` sink (ADR 0045). It journals
+  each record (`source`, `label`, `value`, `has_value`) and has no
+  commands: writing a log cannot fail, so there is nothing to inject. A
+  `<log>` whose expression fails writes no record; the failure is an
+  ordinary execution error.
 
 ### Codec methods
 

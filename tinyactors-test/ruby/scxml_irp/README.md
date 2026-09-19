@@ -120,6 +120,19 @@ After a core change, run `mise run scxml-irp-baseline` and review the
 `baseline.json` diff. Removed entries are progress; new or changed entries
 need a reason.
 
+## Known failures
+
+`baseline.json` currently records two, both found by automating the manual
+tests once `<log>` had a sink (ADR 0045):
+
+- **test230** — an autoforwarded event must carry the fields of the
+  original. The copy the child receives loses `_event.invokeid`: the parent
+  sees `s0.1`, the forwarded copy sees nothing.
+- **test250** — the `onexit` handlers of a cancelled invocation's child must
+  run. They never do: cancelling an invocation destroys the child actor, and
+  `ta_actor_destroy()` is termination (ADR 0014), not a graceful exit, so
+  core has no way to end a session by running its exit handlers.
+
 ## Skipped tests
 
 These tests are skipped; `INDEX.md` has the full list and reasons:

@@ -74,6 +74,26 @@ TinyactorsTest.chart :harness_io do
   state :failed
 end
 
+# Logs a label with a value, a label alone, and a value alone; `bad` logs a
+# failing expression.
+TinyactorsTest.chart :harness_log do
+  data n: 7
+
+  state :ready do
+    on_entry { log 'entry', expr: '.n' }
+    transition on: 'go', type: :internal do
+      log 'plain'
+      log expr: '{a: .n}'
+    end
+    transition on: 'bad', type: :internal do
+      log 'never', expr: 'error("boom")'
+    end
+    transition on: 'error.execution', target: :failed
+  end
+
+  state :failed
+end
+
 def check(condition, message)
   raise "instruments self-test failed: #{message}" unless condition
 end
@@ -208,6 +228,26 @@ invoker_group = TinyactorsTest.scenarios 'invoker' do
   end
 end
 
+log_group = TinyactorsTest.scenarios 'log' do
+  scenario 'the log sink records label, value, and who logged it' do
+    sink = recording_log
+    actor = spawn :harness_log
+    actor.deliver 'go'
+    assert_equal [['entry', 7], ['plain', nil], ['', { a: 7 }]], sink.logged
+    assert_equal [{ kind: 'runtime', runtime: actor.handle }],
+                 sink.entries('log').map { |entry| entry[:source] }.uniq
+    assert_equal [true, false, true], sink.entries('log').map { |entry| entry[:has_value] }
+  end
+
+  scenario 'a failing log expression raises an error and records nothing' do
+    sink = recording_log
+    actor = spawn :harness_log
+    actor.deliver 'bad'
+    assert_active actor, :failed
+    assert_equal [['entry', 7]], sink.logged, 'only the entry log was recorded'
+  end
+end
+
 io_group = TinyactorsTest.scenarios 'io' do
   scenario 'the recording I/O processor journals sends' do
     io = recording_io(IO_TYPE)
@@ -299,7 +339,7 @@ equivalence_group = TinyactorsTest.scenarios 'equivalence', chart: :traffic_ligh
   end
 end
 
-groups = [allocator_group, router_group, invoker_group, io_group, directory_group, equivalence_group]
+groups = [allocator_group, router_group, invoker_group, io_group, log_group, directory_group, equivalence_group]
 runner = TinyactorsTest::Runner.new(executable: root.join('build/tinyactors-test'), charts: TinyactorsTest.charts)
 results = runner.run(groups)
 failed = results.reject(&:ok?).map { |result| result.scenario.full_name }

@@ -4,6 +4,7 @@ require 'fileutils'
 require 'pathname'
 require 'rexml/document'
 require_relative 'document'
+require_relative 'manual_tests'
 
 module ScxmlIrp
   # One <assert> of vendor/scxml-irp/manifest.xml and its test.
@@ -90,7 +91,11 @@ module ScxmlIrp
     end
 
     def skip_reason(test)
-      return 'manual test: a person judges its log output' if test.manual
+      # A manual test with an objective criterion is imported (ADR 0045).
+      if test.manual
+        manual = ManualTests.skip_reason(test.id)
+        return manual if manual
+      end
 
       sources = (test.starts + test.deps).select { |uri| uri.end_with?('.txml') }.map { |uri| @suite.join(uri).read }
       if sources.any? { |source| source.match?(/BasicHTTPEventProcessor|conf:basicHTTP|conf:testOnServer/) }
@@ -140,9 +145,14 @@ module ScxmlIrp
           emitter.line if index.positive?
           emitter.line("ScxmlIrp.expect_failure(self, #{Ruby.str(label)})")
           emitter.block("scenario #{Ruby.str(label)}") do
-            emitter.line("machine = spawn #{Ruby.sym(chart_name)}")
-            emitter.line('run_to_completion machine')
-            emitter.line("assert_equal 'pass', machine.data('.#{Document::OUTCOME}')")
+            body = ManualTests.body(test.id)
+            if body
+              body.each_line { |line| emitter.line(line.chomp) }
+            else
+              emitter.line("machine = spawn #{Ruby.sym(chart_name)}")
+              emitter.line('run_to_completion machine')
+              emitter.line("assert_equal 'pass', machine.data('.#{Document::OUTCOME}')")
+            end
           end
         end
       end

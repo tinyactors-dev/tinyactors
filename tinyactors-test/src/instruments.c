@@ -31,10 +31,12 @@ typedef enum {
     TAT_INSTRUMENT_DIRECTORY,
     TAT_INSTRUMENT_INVOKER,
     TAT_INSTRUMENT_IO,
+    TAT_INSTRUMENT_LOG,
 } tat_instrument_kind;
 
 static const char *const TAT_INSTRUMENT_KINDS[] = {
-    "allocator.counting", "router.recording", "directory.memory", "invoker.scripted", "io.recording",
+    "allocator.counting", "router.recording", "directory.memory",
+    "invoker.scripted",   "io.recording",     "log.recording",
 };
 
 /* allocator.counting: the size and alignment of every live allocation. */
@@ -997,6 +999,37 @@ bool tat_make_recording_io(tat_bind *bind, jv config, void *out) {
 }
 
 /* ------------------------------------------------------------------------
+ * log.recording
+ *
+ * The system's <log> sink (ADR 0045). It journals each record (op "log":
+ * source, label, value) and has no commands: writing a log cannot fail, so
+ * there is nothing to inject. Config: {"name", "system"}.
+ */
+
+static void tat_recording_log(void *self, const ta_log_record *record) {
+    tat_instrument *instrument = self;
+    jv entry = jv_object();
+    entry = jv_object_set(entry, jv_string("source"), tat_encode_ta_actor_ref(instrument->bind, &record->source));
+    entry = jv_object_set(entry, jv_string("label"), tat_text(record->label));
+    entry = jv_object_set(entry, jv_string("value"),
+                          record->has_value ? tat_value_or_null(&record->value) : jv_null());
+    entry = jv_object_set(entry, jv_string("has_value"), jv_bool(record->has_value));
+    tat_journal(instrument, "log", entry);
+}
+
+static const ta_log_sink_vtable TAT_RECORDING_LOG = {.write = tat_recording_log};
+
+bool tat_make_recording_log(tat_bind *bind, jv config, void *out) {
+    bool created = false;
+    tat_instrument *instrument = tat_instrument_resolve(bind, config, TAT_INSTRUMENT_LOG, NULL, true, &created);
+    if (instrument == NULL) {
+        return false;
+    }
+    *(ta_log_sink *)out = (ta_log_sink){.self = instrument, .v = &TAT_RECORDING_LOG};
+    return true;
+}
+
+/* ------------------------------------------------------------------------
  * Host methods
  */
 
@@ -1245,6 +1278,14 @@ static jv tat_control_invoker(tat_instrument *instrument, const char *command, j
     return tat_invalid(error_code, jv_string("invoker.scripted commands: services, fail {op, ...}, clear_faults"));
 }
 
+static jv tat_control_log(tat_instrument *instrument, const char *command, jv args, int *error_code) {
+    (void)instrument;
+    (void)command;
+    (void)args;
+    return tat_invalid(error_code,
+                       jv_string("log.recording has no commands; read its journal with instrument.journal"));
+}
+
 static jv tat_control_io(tat_instrument *instrument, const char *command, jv args, int *error_code) {
     static const char *const ops[] = {"send", NULL};
     if (strcmp(command, "fail") == 0) {
@@ -1294,6 +1335,9 @@ jv tat_instrument_control_method(tat_bind *bind, jv params, int *error_code) {
             break;
         case TAT_INSTRUMENT_INVOKER:
             result = tat_control_invoker(instrument, jv_string_value(command), args, error_code);
+            break;
+        case TAT_INSTRUMENT_LOG:
+            result = tat_control_log(instrument, jv_string_value(command), args, error_code);
             break;
         case TAT_INSTRUMENT_IO:
         default:

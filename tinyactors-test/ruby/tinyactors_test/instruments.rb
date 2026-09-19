@@ -62,6 +62,9 @@ module TinyactorsTest
     def services = control('services')
     def started = entries('start')
 
+    # log.recording: the entries a chart logged, as [label, value] pairs.
+    def logged = entries('log').map { |entry| [entry[:label], entry[:value]] }
+
     # directory.memory
     def directory_entries = control('entries')
 

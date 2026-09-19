@@ -205,6 +205,7 @@ which journal every call core makes to them and fail on command (see
 router  = recording_router(mode: :hold)   # replaces router.direct
 service = scripted_invoker('urn:example:service')
 io      = recording_io('urn:example:io')
+logs    = recording_log                    # what the charts <log>
 dir     = memory_directory
 allocator                                  # the system's counting allocator
 
@@ -214,6 +215,7 @@ report_invoke service.started.first, :event, event: 'reply', data: { value: 1 }
 report_invoke service.started.first, :unavailable
 allocator.arm_fault(after: 3, count: 1); allocator.stats
 io.entries('send')
+logs.logged                                # [[label, value], ...]
 ```
 
 ### Traces and equivalent runs

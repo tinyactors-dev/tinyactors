@@ -533,6 +533,17 @@ module TinyactorsTest
       end
     end
 
+    # Installs a log.recording instrument as the system's <log> sink, so a
+    # scenario can read what its charts log (ADR 0045).
+    def recording_log
+      @instruments['log'] || begin
+        sink = instrument('log', 'log.recording')
+        core('ta_system_set_log_sink',
+             ta.system.set_log_sink(system: system_handle, sink: sink.adapter(system: system_handle)))
+        sink
+      end
+    end
+
     # Installs a directory.memory instrument as the actor directory.
     def memory_directory
       @instruments['directory'] || begin

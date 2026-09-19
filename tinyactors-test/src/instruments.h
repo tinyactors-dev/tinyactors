@@ -21,6 +21,7 @@ bool tat_make_recording_router(tat_bind *bind, jv config, void *out);
 bool tat_make_memory_directory(tat_bind *bind, jv config, void *out);
 bool tat_make_scripted_invoker(tat_bind *bind, jv config, void *out);
 bool tat_make_recording_io(tat_bind *bind, jv config, void *out);
+bool tat_make_recording_log(tat_bind *bind, jv config, void *out);
 
 /* instrument.list, instrument.journal, instrument.control. */
 jv tat_instrument_list_method(tat_bind *bind, jv params, int *error_code);
