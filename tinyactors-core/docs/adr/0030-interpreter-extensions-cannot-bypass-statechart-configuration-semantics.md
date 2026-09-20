@@ -1,6 +1,9 @@
 # ADR 0030: Interpreter extensions cannot bypass statechart configuration semantics
 
-**Status:** Accepted; reconstruction wording refined by ADR 0038  
+**Status:** Accepted; reconstruction wording refined by ADR 0038; subject
+narrowed by ADR 0046, which removes the extension action — the rule now
+describes I/O processors and invokers, which cannot change a configuration
+by construction  
 **Date:** 2026-09-15
 
 ## Context

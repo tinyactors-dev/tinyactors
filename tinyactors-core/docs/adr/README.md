@@ -49,5 +49,9 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0043](0043-definitions-retire-and-definition-ids-are-generational.md) | [Definitions retire; definition IDs are generational](0043-definitions-retire-and-definition-ids-are-generational.md) |
 | [0044](0044-core-owns-the-scxml-target-uri-grammar.md) | [Core owns the SCXML target URI grammar](0044-core-owns-the-scxml-target-uri-grammar.md) |
 | [0045](0045-log-records-go-to-a-host-sink.md) | [`<log>` records go to a host sink](0045-log-records-go-to-a-host-sink.md) |
+| [0046](0046-platform-specific-executable-content-is-a-send.md) | [Platform-specific executable content is a `<send>` to a host I/O processor](0046-platform-specific-executable-content-is-a-send.md) |
+| [0047](0047-an-interrupted-macrostep-is-retryable.md) | [An allocation failure inside a macrostep is retryable](0047-an-interrupted-macrostep-is-retryable.md) |
+| [0048](0048-core-owns-the-send-id-text.md) | [Core owns the send ID text, in both directions](0048-core-owns-the-send-id-text.md) |
+| [0049](0049-interned-identities-are-readable-back.md) | [Identities core interns are readable back](0049-interned-identities-are-readable-back.md) |
 
 See [the API gaps](../internal/api-gaps.md) for places where the current header skeleton does not yet fully expose these decisions.
