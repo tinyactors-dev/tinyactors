@@ -152,6 +152,46 @@ static void ta_actor_release_address(ta_system *system, const ta_actor *actor) {
 }
 
 /*
+ * The host directory's compare-and-swap. Every residency change is one of
+ * these: the caller states the entry it believes is there, and a directory
+ * that disagrees answers TA_ERR_STALE and changes nothing. That is what
+ * keeps a residency change retryable — a refused swap has done nothing, so
+ * the caller may simply try again (ADR 0014).
+ */
+ta_result ta_actor_directory_swap(ta_system *system, const ta_actor_directory_replace_params *params) {
+    if (system->directory.v == NULL || system->directory.v->replace == NULL) {
+        return TA_ERR_UNSUPPORTED;
+    }
+    return system->directory.v->replace(system->directory.self, params);
+}
+
+/* The same comparison, for an entry that should end up gone. */
+ta_result ta_actor_directory_drop(ta_system *system, const ta_actor_directory_remove_params *params) {
+    if (system->directory.v == NULL || system->directory.v->remove == NULL) {
+        return TA_ERR_UNSUPPORTED;
+    }
+    return system->directory.v->remove(system->directory.self, params);
+}
+
+/*
+ * Releases the name of an actor that is not resident. The comparison is
+ * against UNLOADED, so this cannot remove a name some live actor answers to:
+ * a resident entry, or none at all, is TA_ERR_STALE. Core owns nothing of
+ * the actor at this point — the host deletes its checkpoint afterwards.
+ */
+ta_result ta_actor_remove_unloaded(ta_system *system, const ta_actor_remove_unloaded_params *params) {
+    if (system == NULL || params == NULL || params->address == NULL) {
+        return TA_ERR_INVALID;
+    }
+    return ta_actor_directory_drop(
+        system,
+        &(ta_actor_directory_remove_params){
+            .address = params->address,
+            .expected = { .kind = TA_ACTOR_DIRECTORY_UNLOADED },
+        });
+}
+
+/*
  * Resolves a logical address through the host directory. An unloaded actor
  * exists but has no runtime ID, which is TA_ERR_UNLOADED and leaves *out
  * alone; only a resident entry writes one.

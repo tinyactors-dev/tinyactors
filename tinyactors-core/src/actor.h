@@ -84,6 +84,10 @@ void ta_actor_free(ta_system *system, ta_actor *actor);
 /* Frees the slot an actor was given, so a failed construction reuses it. */
 void ta_actor_release_slot(ta_system *system, ta_actor_id id);
 
+/* The host directory's compare-and-swaps, which every residency change uses. */
+ta_result ta_actor_directory_swap(ta_system *system, const ta_actor_directory_replace_params *params);
+ta_result ta_actor_directory_drop(ta_system *system, const ta_actor_directory_remove_params *params);
+
 /*
  * Advances the session epoch: the actor has changed in a way a session image
  * captured before the change no longer describes. ta_actor_unload() compares

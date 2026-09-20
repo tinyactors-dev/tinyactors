@@ -501,3 +501,117 @@ ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_par
     *params->out = id;
     return TA_OK;
 }
+
+/* ------------------------------------------------------------------------
+ * Residency: unload and load
+ *
+ * A residency change is not a lifecycle change. The actor stays logically
+ * alive throughout, its name stays reserved, and the only thing that moves
+ * is where its session lives. The two operations are mirror images, and
+ * each orders its directory swap against its fallible work so that a
+ * failure anywhere leaves the actor exactly where it started (ADR 0014):
+ *
+ *   unload  swaps first, then discards  — nothing is thrown away until the
+ *                                         route is gone, so a refused swap
+ *                                         leaves a resident actor intact
+ *   load    builds first, then swaps    — nothing is routable until the
+ *                                         session is whole, so a refused
+ *                                         swap leaves an unloaded actor
+ */
+
+ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params *params) {
+    if (system == NULL || params == NULL || params->image == NULL) {
+        return TA_ERR_INVALID;
+    }
+    ta_actor *actor = ta_actor_lookup(system, params->actor);
+    if (actor == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    /* Only a named actor can be unloaded: an anonymous session has no name
+     * to hold its place, so evicting it would simply lose it. */
+    if (actor->record.self.kind != TA_ACTOR_REF_NAMED) {
+        return TA_ERR_INVALID;
+    }
+    const ta_session_image *image = params->image;
+    /*
+     * The image must describe this actor as it is now. An image captured
+     * before the actor processed another event would check-point a session
+     * the actor has already moved past, so the host is sent back to capture
+     * again rather than silently persisting the older one.
+     */
+    if (image->source_actor != actor->record.id || image->source_epoch != actor->session_epoch) {
+        return TA_ERR_STALE;
+    }
+
+    ta_result result = ta_actor_directory_swap(
+        system,
+        &(ta_actor_directory_replace_params){
+            .address = &actor->record.self.as.named,
+            .expected = { .kind = TA_ACTOR_DIRECTORY_RESIDENT, .actor = actor->record.id },
+            .replacement = { .kind = TA_ACTOR_DIRECTORY_UNLOADED },
+        });
+    if (result != TA_OK) {
+        /* Still resident, still routable, and the same image will do. */
+        return result;
+    }
+
+    /*
+     * The route is gone, so the session may go. Its not-yet-submitted sends
+     * live in the image now and must not also sit in the resident heap,
+     * where they would fire for an actor that is not there; a send already
+     * handed to the router is an envelope of its own and stays, exactly as
+     * it does when a session ends.
+     */
+    ta_timer_cancel_unsubmitted(&system->timers, actor->record.id);
+    ta_actor_release_slot(system, actor->record.id);
+    ta_actor_free(system, actor);
+    return TA_OK;
+}
+
+ta_result ta_actor_load(ta_system *system, const ta_actor_load_params *params) {
+    if (system == NULL || params == NULL || params->image == NULL || params->out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_session_image *image = params->image;
+    if (image->self.kind != TA_ACTOR_REF_NAMED) {
+        return TA_ERR_INVALID;
+    }
+
+    /*
+     * Built off-route: the directory still reads UNLOADED, so nothing can
+     * reach this session until it is whole. Everything that can fail —
+     * finding the definition, allocating, binding the data model, restoring
+     * the queue and the timers — happens here.
+     */
+    ta_actor_id id = 0;
+    ta_result result = ta_actor_reconstruct(
+        system,
+        &(ta_actor_reconstruct_params){ .image = image,
+                                        .datamodel_binding = params->datamodel_binding,
+                                        .out = &id });
+    if (result != TA_OK) {
+        return result;
+    }
+
+    result = ta_actor_directory_swap(
+        system,
+        &(ta_actor_directory_replace_params){
+            .address = &image->self.as.named,
+            .expected = { .kind = TA_ACTOR_DIRECTORY_UNLOADED },
+            .replacement = { .kind = TA_ACTOR_DIRECTORY_RESIDENT, .actor = id },
+        });
+    if (result != TA_OK) {
+        /*
+         * Nothing ever routed to this session, so taking it back down leaves
+         * no trace: the actor is still unloaded, the image is untouched, and
+         * the host may load it again.
+         */
+        ta_actor *actor = ta_actor_lookup(system, id);
+        ta_timer_cancel_owner(&system->timers, id);
+        ta_actor_release_slot(system, id);
+        ta_actor_free(system, actor);
+        return result;
+    }
+    *params->out = id;
+    return TA_OK;
+}

@@ -83,7 +83,6 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
   # Catches: unload that terminates the actor or releases its name; timers
   # that fire while the actor is unloaded, are lost, or fire twice; load
   # that reuses the old runtime ID or restores a different configuration.
-  expect_failure 'ta_actor_unload is unimplemented', message: NamedActorScenarios::UNIMPLEMENTED
   scenario 'an unloaded actor keeps its address and its timer, and continues after load' do
     router = recording_router
     light = spawn name: 'l1'
@@ -115,7 +114,6 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
 
   # Catches: unload that accepts an image captured before the actor changed
   # (the host would checkpoint an old session), or that half-applies.
-  expect_failure 'ta_actor_unload is unimplemented', message: NamedActorScenarios::UNIMPLEMENTED
   scenario 'an image captured before a change cannot unload the actor' do
     light = spawn name: 'l1'
     stale = capture(light)
@@ -134,7 +132,6 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
   # Catches: residency transitions that are not compare-and-swaps (a failed
   # directory update that still unloads or loads the actor), or a failed
   # load that leaves a half-built resident session behind.
-  expect_failure 'ta_actor_unload is unimplemented', message: NamedActorScenarios::UNIMPLEMENTED
   scenario 'a failed directory update leaves unload and load retryable' do
     light = spawn name: 'l1'
     directory = instruments.fetch('directory')
@@ -158,7 +155,6 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
 
   # Catches: names released on unload, or never released: an unloaded
   # actor's address must stay reserved until remove_unloaded, then be free.
-  expect_failure 'ta_actor_unload is unimplemented', message: NamedActorScenarios::UNIMPLEMENTED
   scenario 'an unloaded actor reserves its name until it is removed' do
     light = spawn name: 'l1'
     image = capture(light)
@@ -215,7 +211,6 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
   # Catches: a send to an unloaded actor that is silently dropped or
   # delivered to a stale runtime ID instead of reaching the sender as a
   # communication error it can act on.
-  expect_failure 'ta_actor_unload is unimplemented', message: NamedActorScenarios::UNIMPLEMENTED
   scenario 'a send to an unloaded actor reaches the sender as a communication error' do
     router = recording_router(directory: true)
     sender = spawn :messenger, name: 'm1', binding: { peer: '#_actor_messenger/m2' }
@@ -243,10 +238,20 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
 
   # Catches: unload/load that is not invisible at some point of a run: a
   # lost or duplicated timer, history, or internal event (ADR 0014).
-  expect_failure 'ta_actor_unload is unimplemented', message: NamedActorScenarios::UNIMPLEMENTED
   scenario 'unloading and loading at any step is invisible' do
     cycle = ->(context) { context.actors.each { |actor| context.cycle_residency(actor) } }
-    assert_equivalent_runs(interruptions: { 'unload and load' => cycle }) do
+    # A residency change *is* two directory swaps, so comparing them would
+    # only restate what the interruption did. Everything else — the actors,
+    # their timers, and every other instrument — still has to match. Core
+    # writes to the directory only from spawn, unload, load and destroy, so
+    # nothing a chart does can hide here.
+    ignore_swaps = lambda do |state|
+      journals = state[:journals].to_h do |name, entries|
+        [name, name == 'directory' ? entries.reject { |entry| entry[:op] == 'replace' } : entries]
+      end
+      state.merge(journals: journals)
+    end
+    assert_equivalent_runs(interruptions: { 'unload and load' => cycle }, normalize: ignore_swaps) do
       light = spawn name: 'l1'
       relay = spawn :relay, name: 'r1'
       advance_time 30_000
@@ -263,7 +268,7 @@ TinyactorsTest.scenarios 'replacement', chart: :counter_v1 do
   # escape, before activation; activation that is not a compare-and-swap
   # of the incumbent's entry; an incumbent destroyed later that removes the
   # replacement's route; a replacement that does not keep the bound data.
-  expect_failure 'ta_actor_unload is unimplemented', message: NamedActorScenarios::UNIMPLEMENTED
+  expect_failure 'ta_actor_prepare_replacement is unimplemented', message: NamedActorScenarios::UNIMPLEMENTED
   scenario 'a replacement takes over the address only when activated' do
     router = recording_router
     incumbent = spawn name: 'c1'

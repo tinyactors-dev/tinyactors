@@ -615,7 +615,14 @@ static ta_op_status ta_send_target(ta_interpreter *it, const ta_send_action *sen
 static bool ta_send_destination(ta_interpreter *it, const ta_scxml_target *target, ta_actor_ref *out) {
     switch (target->kind) {
         case TA_SCXML_TARGET_SELF:
-            *out = it->actor->record.self;
+            /*
+             * A send to self is a delivery to *this* session, so it names the
+             * runtime ID and needs no directory to resolve — a named actor's
+             * own timers must not depend on one. Reconstruction rebinds such
+             * a send to the new session (ta_image_rebind_self); what a
+             * receiver replies to is the origin, which is the address.
+             */
+            *out = (ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = it->actor->record.id };
             return true;
         case TA_SCXML_TARGET_PARENT:
             if (it->actor->sparse == NULL || !it->actor->sparse->has_parent) {

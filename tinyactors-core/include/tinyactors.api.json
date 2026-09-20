@@ -11313,7 +11313,7 @@
       "doc": "Evicts a named actor without terminating it. The image must be a fresh capture of actor; TA_ERR_STALE means the actor changed after capture.",
       "public": true,
       "static_inline": false,
-      "implemented": false,
+      "implemented": true,
       "returns": {
         "type": {
           "type": "ta_result"
@@ -11349,7 +11349,7 @@
       "doc": "Restores an unloaded named actor and atomically republishes its route.",
       "public": true,
       "static_inline": false,
-      "implemented": false,
+      "implemented": true,
       "returns": {
         "type": {
           "type": "ta_result"
@@ -11392,7 +11392,7 @@
       "doc": "Releases the name of an unloaded actor; the host then deletes its checkpoint.",
       "public": true,
       "static_inline": false,
-      "implemented": false,
+      "implemented": true,
       "returns": {
         "type": {
           "type": "ta_result"
