@@ -313,14 +313,52 @@ makes section boundaries survive a round trip.
 
 `<!DOCTYPE` becomes a `TXML_NODE_DOCTYPE` whose text is everything between
 `<!DOCTYPE` and its closing `>`, streamed into a run exactly as written (line
-ends normalized). A second, byte-driven view of the same bytes finds what
-matters in them: the internal subset between `[` and `]`, and inside it the
-declarations. `<!ENTITY name "value">` (general, internal) and `<!ATTLIST>`
-defaults (`"value"` and `#FIXED "value"`) are assembled whole in the small
-buffer and read from there; comments, processing instructions, `<!ELEMENT>`,
-`<!NOTATION>` and parameter-entity references stream past without being held.
-The first declaration of an entity, or of a default for one element and
-attribute, binds. External entities are never recorded and never fetched.
+ends normalized). A second, byte-driven view of the same bytes walks its
+structure: the name, the external identifier, the internal subset between `[`
+and `]`, and inside it the declarations. The external identifier and every
+`<!ENTITY>`, `<!ATTLIST>`, `<!ELEMENT>` and `<!NOTATION>` declaration are
+assembled whole in the small buffer (the one the XML declaration uses, bounded
+by `max_document_bytes`) and read there against the XML 1.0 grammar by
+`src/subset.c`; comments, processing instructions and parameter-entity
+references are checked as they stream past and never held. Only ENTITY and
+ATTLIST declarations are recorded. The first declaration of an entity, or of a
+default for one element and attribute, binds. External entities are never
+recorded and never fetched.
+
+**A malformed declaration is a well-formedness error**, even though the
+processor does not validate. What is checked:
+
+- the DOCTYPE name, then an optional `SYSTEM "lit"` or `PUBLIC "pubid" "lit"`
+  (a public identifier holds only `PubidChar`s), then an optional subset, then
+  only whitespace before `>`;
+- `<!ENTITY>`: a name (an NCName, so no colon), `%` for a parameter entity, an
+  entity value or an external identifier, and `NDATA name` on a general
+  entity only. An entity value may hold no `%` (parameter-entity references are
+  not allowed inside an internal subset's declarations) and every `&` must
+  begin a well-formed reference; a character reference must be a legal
+  character;
+- `<!ATTLIST>`: an element name, then `name type default` triples, where the
+  type is `CDATA`, `ID`, `IDREF`, `IDREFS`, `ENTITY`, `ENTITIES`, `NMTOKEN`,
+  `NMTOKENS`, `NOTATION (names)` or an enumeration of Nmtokens, and the default
+  is `#REQUIRED`, `#IMPLIED`, `#FIXED "lit"` or `"lit"`. A default may hold no
+  `<` and every `&` must begin a well-formed reference;
+- `<!ELEMENT>`: a name and `EMPTY`, `ANY` or a content model whose
+  parentheses balance, whose items and separators alternate, whose
+  quantifiers follow an item, and which is `(#PCDATA)` or `(#PCDATA|a|b)*`
+  when mixed;
+- `<!NOTATION>`: an NCName and `SYSTEM "lit"` or `PUBLIC "pubid" ("lit")?`;
+- between declarations: only whitespace, comments (no `--` inside, and not
+  ending in `--->`), processing instructions (a legal target that is not
+  `xml`, no colon), and `%name;` references. Conditional sections and any other
+  `<!` keyword are `TXML_DOC_SYNTAX`.
+
+Errors are `TXML_DOC_SYNTAX`, or `TXML_DOC_NAME` for a name that is not legal
+(including a non-ASCII character that cannot be part of one), or
+`TXML_DOC_ENCODING` for a character reference outside the `Char` production,
+at the offending byte. Not checked, because it needs the whole DTD: that a
+referenced entity or notation is declared, that a content model is
+deterministic, and that one group uses only one kind of separator (`,` or `|`),
+which would need a stack as deep as the model.
 
 Both tables are hash tables in the parser arena (`src/tables.c`), charged
 against `max_document_bytes`: entities by name, and defaults by element and by
@@ -389,9 +427,9 @@ Known deviations, each a deviation rather than a design change:
   (in an attribute value `<` is an error anyway). An entity that expands to
   elements is not supported, and is a non-goal.
 - **The small constructs are bounded by `max_document_bytes`, not by a
-  constant.** The XML declaration, an ENTITY or ATTLIST declaration and a
-  namespace URI are gathered whole; a document may make one large, up to that
-  limit.
+  constant.** The XML declaration, the DOCTYPE's external identifier, an
+  ENTITY, ATTLIST, ELEMENT or NOTATION declaration and a namespace URI are
+  gathered whole; a document may make one large, up to that limit.
 - **Error priority follows byte order.** Validation is incremental, so when a
   construct has both an encoding error and an earlier syntax error the syntax
   error is the one reported; the whole-construct scanner reported the encoding

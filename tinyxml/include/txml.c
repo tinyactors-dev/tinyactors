@@ -436,22 +436,33 @@ typedef struct {
 typedef enum { LIT_COMMENT, LIT_CDATA, LIT_DOCTYPE } literal_kind;
 
 typedef enum {
-    DP_SPACE,      /* the whitespace after "<!DOCTYPE" */
+    DP_SPACE,          /* the whitespace after "<!DOCTYPE" */
     DP_SPACE_SKIP,
     DP_NAME,
-    DP_REST,       /* external identifiers, up to '[' or '>' */
-    DP_SUBSET,     /* between declarations */
-    DP_PARAMETER,  /* %name; */
-    DP_LT,         /* after '<' */
-    DP_BANG,       /* after "<!" */
-    DP_DASH,       /* after "<!-" */
-    DP_KEYWORD,    /* the letters of ENTITY, ATTLIST, ... */
+    DP_HEAD,           /* external identifier, collected up to '[' or '>' */
+    DP_SUBSET,         /* between declarations */
+    DP_PARAMETER,      /* the first character of %name; */
+    DP_PARAMETER_NAME, /* the rest of %name; */
+    DP_LT,             /* after '<' */
+    DP_BANG,           /* after "<!" */
+    DP_DASH,           /* after "<!-" */
+    DP_KEYWORD,        /* the letters of ENTITY, ATTLIST, ... */
     DP_COMMENT,
-    DP_PI,
-    DP_SKIP,       /* a declaration that is read over: ELEMENT, NOTATION */
-    DP_COLLECT,    /* a declaration that is kept: ENTITY, ATTLIST */
-    DP_AFTER       /* after ']', up to '>' */
+    DP_PI_START,       /* the first character of a PI target */
+    DP_PI_TARGET,
+    DP_PI,             /* PI data, skipped to "?>" */
+    DP_COLLECT,        /* ENTITY, ATTLIST, ELEMENT, NOTATION: collected, then read whole */
+    DP_AFTER           /* after ']', up to '>' */
 } doctype_phase;
+
+/* What the small buffer holds when it is read (subset.c). */
+typedef enum {
+    DECL_DOCTYPE_HEAD, /* what follows the DOCTYPE name, through '[' or '>' */
+    DECL_ENTITY,
+    DECL_ATTLIST,
+    DECL_ELEMENT,
+    DECL_NOTATION
+} declaration_kind;
 
 typedef struct {
     doctype_phase phase;
@@ -459,7 +470,7 @@ typedef struct {
     uint32_t pending; /* '-' or '?' held back while looking for a terminator */
     char keyword[12];
     uint32_t keyword_length;
-    bool entity_declaration;
+    declaration_kind kind;
     txml_position lt_position;
 } doctype_work;
 
@@ -655,6 +666,21 @@ TXML_PRIVATE scan txp_dec_end(txml_parser *p);
 /* Read the character references of an entity literal, leaving &name;
  * references alone (XML 1.0 §4.5). The result is allocated in the parser arena. */
 TXML_PRIVATE scan txp_expand_character_references(txml_parser *p, txml_str literal, txml_str *expanded);
+
+typedef enum { CHARREF_OK, CHARREF_MALFORMED, CHARREF_ENCODING } charref_check;
+/* Check the body of a numeric reference, "#123" or "#x7B", without the '&' and
+ * ';'. */
+TXML_PRIVATE charref_check txp_check_character_reference(const uint8_t *body, uint32_t length);
+
+/* ------------------------------------------------------------------------
+ * subset.c: reading the declarations of a DOCTYPE
+ */
+
+/* Read the declaration collected in p->small: the bytes after its keyword (or,
+ * for DECL_DOCTYPE_HEAD, after the DOCTYPE name), through the '>' or '[' that
+ * ended it. Entities and attribute defaults are recorded; everything is
+ * checked against the XML 1.0 grammar. */
+TXML_PRIVATE scan txp_read_declaration(txml_parser *p, declaration_kind kind);
 
 /* ------------------------------------------------------------------------
  * tables.c: the DTD tables
@@ -2066,6 +2092,15 @@ static ref_kind parse_character_reference(const uint8_t *name, uint32_t length, 
     return REF_BYTES;
 }
 
+TXML_PRIVATE charref_check txp_check_character_reference(const uint8_t *body, uint32_t length) {
+    uint32_t code = 0u;
+    const ref_kind kind = parse_character_reference(body, length, &code);
+    if (kind == REF_BYTES) {
+        return CHARREF_OK;
+    }
+    return kind == REF_ENCODING ? CHARREF_ENCODING : CHARREF_MALFORMED;
+}
+
 static bool is_ref_byte(uint8_t b) {
     return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == '_' || b == ':' || b == '-' ||
            b == '.' || b == '#';
@@ -3254,198 +3289,18 @@ TXML_PRIVATE txml_result txml_doc_create(txml_doc **out, const txml_parser_confi
  * The DOCTYPE and its internal subset.
  *
  * The declaration's text streams into a pool run exactly as written, while a
- * second view of the same bytes, a small state machine, finds what matters in
- * them: the internal subset, and within it the ENTITY and ATTLIST declarations,
- * which are assembled whole in the small buffer and read from there because
- * they are kept anyway. Comments, processing instructions and the other
- * declarations stream past without being held.
+ * second view of the same bytes, a state machine, walks its structure: the name,
+ * the external identifier, the internal subset, and within it the declarations.
+ * Comments, processing instructions and parameter-entity references are
+ * checked and streamed past. The external identifier and each ENTITY, ATTLIST,
+ * ELEMENT and NOTATION declaration are assembled whole in the small buffer, the
+ * same buffer and bound the XML declaration uses, and read there against the
+ * grammar by subset.c; only ENTITY and ATTLIST declarations are kept.
  *
  * Every byte is interpreted before any of it is emitted, and the run is
  * reserved first, so an allocation that fails can only fail before a byte is
  * consumed.
  */
-
-/* ------------------------------------------------------------------------
- * Reading a collected declaration. The buffer holds the bytes after the
- * keyword, through the closing '>'.
- */
-
-/* Advance past a declaration's closing '>' outside quotes. */
-static bool skip_declaration(const uint8_t *w, uint32_t *i, uint32_t end) {
-    uint8_t quote = 0u;
-    for (; *i < end; *i += 1u) {
-        const uint8_t b = w[*i];
-        if (quote != 0u) {
-            if (b == quote) {
-                quote = 0u;
-            }
-        } else if (b == '"' || b == '\'') {
-            quote = b;
-        } else if (b == '>') {
-            *i += 1u;
-            return true;
-        }
-    }
-    return false;
-}
-
-/* A quoted literal at *i; on success `literal` is its contents. */
-typedef struct {
-    const uint8_t *bytes;
-    uint32_t end;
-} source_range;
-
-static bool read_literal(const source_range *range, uint32_t *i, txml_str *literal) {
-    const uint8_t *w = range->bytes;
-    const uint32_t end = range->end;
-    if (*i >= end || (w[*i] != '"' && w[*i] != '\'')) {
-        return false;
-    }
-    const uint8_t quote = w[*i];
-    uint32_t stop = *i + 1u;
-    while (stop < end && w[stop] != quote) {
-        stop += 1u;
-    }
-    if (stop >= end) {
-        return false;
-    }
-    *literal = (txml_str){ (const char *)w + *i + 1u, stop - *i - 1u };
-    *i = stop + 1u;
-    return true;
-}
-
-/* A name in a collected declaration stopped at `at`: a non-ASCII character
- * there is an illegal name character, since only ASCII delimits markup. */
-static scan bad_name_char(txml_parser *p, const uint8_t *w, uint32_t at) {
-    if (at < p->small.length && w[at] >= 0x80u) {
-        return txp_fail(p, PROBLEM(TXML_DOC_NAME, "not a legal name character"), txp_small_position_at(p, at));
-    }
-    return SCAN_OK;
-}
-
-/* <!ENTITY name "value"> */
-static scan read_entity(txml_parser *p) {
-    const uint8_t *w = p->small.data;
-    const uint32_t end = p->small.length;
-    uint32_t j = txp_skip_space(w, 0u, end);
-
-    if (j == 0u) {
-        return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "expected whitespace after ENTITY"), txp_small_position_at(p, 0u));
-    }
-    if (j < end && w[j] == '%') { /* parameter entities are read over, never expanded */
-        uint32_t i = 0u;
-        return skip_declaration(w, &i, end) ? SCAN_OK
-                                            : txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "unterminated declaration"), txp_small_position_at(p, j));
-    }
-    const uint32_t name_end = txp_scan_name(w, j, end);
-    scan named = bad_name_char(p, w, name_end);
-    if (named != SCAN_OK) {
-        return named;
-    }
-    if (name_end == j) {
-        return txp_fail(p, PROBLEM(TXML_DOC_NAME, "expected an entity name"), txp_small_position_at(p, j));
-    }
-    const txml_str name = { (const char *)w + j, name_end - j };
-    j = txp_skip_space(w, name_end, end);
-    txml_str value;
-    if (j < end && read_literal(&(source_range){ w, end }, &j, &value)) {
-        const scan outcome = txp_add_entity(p, name, value);
-        if (outcome != SCAN_OK) {
-            return outcome;
-        }
-    }
-    /* External entities are recorded nowhere and never fetched. */
-    uint32_t i = j;
-    return skip_declaration(w, &i, end) ? SCAN_OK
-                                        : txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "unterminated declaration"), txp_small_position_at(p, j));
-}
-
-/* <!ATTLIST element (name type default)* > */
-static scan read_attlist(txml_parser *p) {
-    const uint8_t *w = p->small.data;
-    const uint32_t end = p->small.length;
-    uint32_t j = txp_skip_space(w, 0u, end);
-    const uint32_t element_end = txp_scan_name(w, j, end);
-    scan named = bad_name_char(p, w, element_end);
-
-    if (named != SCAN_OK) {
-        return named;
-    }
-    if (j == 0u || element_end == j) {
-        return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "expected an element name in ATTLIST"), txp_small_position_at(p, j));
-    }
-    const txml_str element = { (const char *)w + j, element_end - j };
-    j = element_end;
-
-    for (;;) {
-        j = txp_skip_space(w, j, end);
-        if (j >= end) {
-            return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "unterminated ATTLIST"), txp_small_position_at(p, j));
-        }
-        if (w[j] == '>') {
-            return SCAN_OK;
-        }
-        const uint32_t name_end = txp_scan_name(w, j, end);
-        named = bad_name_char(p, w, name_end);
-        if (named != SCAN_OK) {
-            return named;
-        }
-        if (name_end == j) {
-            return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "expected an attribute name in ATTLIST"), txp_small_position_at(p, j));
-        }
-        const txml_str name = { (const char *)w + j, name_end - j };
-        j = txp_skip_space(w, name_end, end);
-
-        /* The type: a keyword, or an enumeration in parentheses. */
-        if (j < end && w[j] == '(') {
-            while (j < end && w[j] != ')') {
-                j += 1u;
-            }
-            j += 1u;
-        } else {
-            const uint32_t type_end = txp_scan_name(w, j, end);
-            named = bad_name_char(p, w, type_end);
-            if (named != SCAN_OK) {
-                return named;
-            }
-            if (type_end == j) {
-                return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "expected an attribute type"), txp_small_position_at(p, j));
-            }
-            const bool notation = txp_bytes_are(w + j, type_end - j, "NOTATION");
-            j = type_end;
-            if (notation) {
-                j = txp_skip_space(w, j, end);
-                while (j < end && w[j] != ')') {
-                    j += 1u;
-                }
-                j += 1u;
-            }
-        }
-        j = txp_skip_space(w, j, end);
-
-        txml_str value;
-        if (j < end && w[j] == '#') {
-            const uint32_t keyword_end = txp_scan_name(w, j + 1u, end);
-            named = bad_name_char(p, w, keyword_end);
-            if (named != SCAN_OK) {
-                return named;
-            }
-            const bool fixed = txp_bytes_are(w + j + 1u, keyword_end - j - 1u, "FIXED");
-            j = keyword_end;
-            if (!fixed) {
-                continue; /* #REQUIRED and #IMPLIED supply no value */
-            }
-            j = txp_skip_space(w, j, end);
-        }
-        if (j >= end || !read_literal(&(source_range){ w, end }, &j, &value)) {
-            return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "expected a default value"), txp_small_position_at(p, j));
-        }
-        const scan outcome = txp_add_default(p, &(default_request){ element, name, value });
-        if (outcome != SCAN_OK) {
-            return outcome;
-        }
-    }
-}
 
 /* ------------------------------------------------------------------------
  * The DOCTYPE state.
@@ -3473,6 +3328,45 @@ static bool keyword_is(const doctype_work *d, const char *literal) {
 
 static scan unrecognized(txml_parser *p, txml_position at) {
     return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "unrecognized declaration in the internal subset"), at);
+}
+
+/* A name was needed at window[index]: an illegal name character, or plain
+ * syntax. */
+static scan expected_name(txml_parser *p, uint32_t index, const char *message) {
+    uint32_t width = 0u;
+    const uint8_t b = p->window[index];
+    if (b >= 0x80u) {
+        return txp_fail_name_char(p, index);
+    }
+    if (txp_name_char_at(p->window + index, &width)) {
+        return txp_fail(p, PROBLEM(TXML_DOC_NAME, "a name cannot start with this character"), txp_position_at(p, index));
+    }
+    return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, message), txp_position_at(p, index));
+}
+
+/* Track the quotes of a collected declaration. */
+static void follow_quote(doctype_work *d, uint8_t b) {
+    if (d->quote != 0u) {
+        if (b == d->quote) {
+            d->quote = 0u;
+        }
+    } else if (b == '"' || b == '\'') {
+        d->quote = b;
+    }
+}
+
+static bool is_xml_pi_target(const doctype_work *d) {
+    return d->keyword_length == 3u && (((uint8_t)d->keyword[0] | 0x20u) == 'x') &&
+           (((uint8_t)d->keyword[1] | 0x20u) == 'm') && (((uint8_t)d->keyword[2] | 0x20u) == 'l');
+}
+
+/* The byte ending a collected declaration has been appended: read it. */
+static scan finish_collected(txml_parser *p, declaration_kind kind) {
+    const scan outcome = txp_read_declaration(p, kind);
+    if (outcome != SCAN_OK) {
+        p->small.length -= 1u; /* this byte is read again on retry */
+    }
+    return outcome;
 }
 
 static scan doctype_run(txml_parser *p) {
@@ -3504,10 +3398,7 @@ static scan doctype_run(txml_parser *p) {
             if (txp_is_space(b)) {
                 i += 1u;
             } else if (!txp_name_start_at(w + i, &width)) {
-                if (b >= 0x80u) {
-                    return txp_fail_name_char(p, i);
-                }
-                return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "expected a name after DOCTYPE"), txp_position_at(p, i));
+                return expected_name(p, i, "expected a name after DOCTYPE");
             } else {
                 d->phase = DP_NAME;
             }
@@ -3518,24 +3409,41 @@ static scan doctype_run(txml_parser *p) {
             } else if (b >= 0x80u) {
                 return txp_fail_name_char(p, i);
             } else {
-                d->phase = DP_REST;
+                /* Everything up to '[' or '>' is the external identifier. */
+                p->small.length = 0u;
+                p->small_position = txp_cursor_position(p, &cursor, i);
+                d->quote = 0u;
+                d->phase = DP_HEAD;
             }
             break;
-        case DP_REST:
-        case DP_AFTER:
-            if (d->quote != 0u) {
-                if (b == d->quote) {
-                    d->quote = 0u;
+        case DP_HEAD:
+            outcome = txp_buffer_append(p, &b, 1u);
+            if (outcome != SCAN_OK) {
+                goto stop;
+            }
+            follow_quote(d, b);
+            if (d->quote == 0u && (b == '[' || b == '>')) {
+                outcome = finish_collected(p, DECL_DOCTYPE_HEAD);
+                if (outcome != SCAN_OK) {
+                    goto stop;
                 }
-            } else if (b == '"' || b == '\'') {
-                d->quote = b;
-            } else if (b == '[' && d->phase == DP_REST) {
+                if (b == '>') {
+                    ended = true;
+                    goto stop;
+                }
                 d->phase = DP_SUBSET;
+            }
+            i += 1u;
+            break;
+        case DP_AFTER:
+            if (txp_is_space(b)) {
+                i += 1u;
             } else if (b == '>') {
                 ended = true;
                 goto stop;
+            } else {
+                return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "expected '>' after the internal subset"), txp_position_at(p, i));
             }
-            i += 1u;
             break;
         case DP_SUBSET:
             if (txp_is_space(b)) {
@@ -3555,15 +3463,28 @@ static scan doctype_run(txml_parser *p) {
             }
             break;
         case DP_PARAMETER:
-            if (b == ';') {
-                d->phase = DP_SUBSET;
+            if (!txp_name_start_at(w + i, &width)) {
+                return expected_name(p, i, "expected a name in a parameter-entity reference");
             }
-            i += 1u;
+            d->phase = DP_PARAMETER_NAME;
+            i += width;
+            break;
+        case DP_PARAMETER_NAME:
+            if (txp_name_char_at(w + i, &width)) {
+                i += width;
+            } else if (b == ';') {
+                d->phase = DP_SUBSET;
+                i += 1u;
+            } else if (b >= 0x80u) {
+                return txp_fail_name_char(p, i);
+            } else {
+                return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "a parameter-entity reference must end in ';'"),
+                                txp_position_at(p, i));
+            }
             break;
         case DP_LT:
             if (b == '?') {
-                d->phase = DP_PI;
-                d->pending = 0u;
+                d->phase = DP_PI_START;
             } else if (b == '!') {
                 d->phase = DP_BANG;
             } else {
@@ -3578,6 +3499,9 @@ static scan doctype_run(txml_parser *p) {
             } else if (is_upper(b)) {
                 d->keyword_length = 0u;
                 d->phase = DP_KEYWORD;
+            } else if (b == '[') {
+                return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "conditional sections are not allowed in an internal subset"),
+                                d->lt_position);
             } else {
                 return unrecognized(p, d->lt_position);
             }
@@ -3597,29 +3521,68 @@ static scan doctype_run(txml_parser *p) {
                 }
                 d->keyword[d->keyword_length++] = (char)b;
                 i += 1u;
-            } else if (keyword_is(d, "ENTITY") || keyword_is(d, "ATTLIST")) {
-                d->entity_declaration = keyword_is(d, "ENTITY");
+            } else if (keyword_is(d, "ENTITY") || keyword_is(d, "ATTLIST") || keyword_is(d, "ELEMENT") ||
+                       keyword_is(d, "NOTATION")) {
+                d->kind = keyword_is(d, "ENTITY")    ? DECL_ENTITY
+                          : keyword_is(d, "ATTLIST") ? DECL_ATTLIST
+                          : keyword_is(d, "ELEMENT") ? DECL_ELEMENT
+                                                     : DECL_NOTATION;
                 p->small.length = 0u;
                 p->small_position = txp_cursor_position(p, &cursor, i);
                 d->quote = 0u;
                 d->phase = DP_COLLECT;
-            } else if (keyword_is(d, "ELEMENT") || keyword_is(d, "NOTATION")) {
-                d->quote = 0u;
-                d->phase = DP_SKIP;
             } else {
                 return unrecognized(p, d->lt_position);
             }
             break;
-        case DP_COMMENT: /* skip to "-->" */
+        case DP_COMMENT: /* skip to "-->"; a "--" that is not its start is an error */
             if (b == '-') {
-                d->pending = d->pending < 2u ? d->pending + 1u : 2u;
-            } else if (b == '>' && d->pending == 2u) {
+                if (d->pending == 2u) {
+                    return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "'--' inside a comment"), txp_position_at(p, i));
+                }
+                d->pending += 1u;
+            } else if (d->pending == 2u) {
+                if (b != '>') {
+                    return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "'--' inside a comment"), txp_position_at(p, i));
+                }
                 d->phase = DP_SUBSET;
                 d->pending = 0u;
             } else {
                 d->pending = 0u;
             }
             i += 1u;
+            break;
+        case DP_PI_START:
+            if (!txp_name_start_at(w + i, &width)) {
+                if (b >= 0x80u) {
+                    return txp_fail_name_char(p, i);
+                }
+                return txp_fail(p, PROBLEM(TXML_DOC_NAME, "expected a processing instruction target"), txp_position_at(p, i));
+            }
+            d->keyword_length = 0u;
+            d->phase = DP_PI_TARGET;
+            break;
+        case DP_PI_TARGET:
+            if (b == ':') {
+                return txp_fail(p, PROBLEM(TXML_DOC_NAME, "a target cannot contain a colon"), txp_position_at(p, i));
+            }
+            if (txp_name_char_at(w + i, &width)) {
+                if (d->keyword_length < 4u) {
+                    d->keyword[d->keyword_length] = (char)b;
+                }
+                d->keyword_length += 1u;
+                i += width;
+            } else if (b >= 0x80u) {
+                return txp_fail_name_char(p, i);
+            } else if (is_xml_pi_target(d)) {
+                return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "the XML declaration is only allowed at the start of the document"),
+                                d->lt_position);
+            } else if (b == '?' || txp_is_space(b)) {
+                d->phase = DP_PI;
+                d->pending = 0u;
+            } else {
+                return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "expected whitespace after the target"), txp_position_at(p, i));
+            }
             break;
         case DP_PI: /* skip to "?>" */
             if (b == '?') {
@@ -3632,33 +3595,15 @@ static scan doctype_run(txml_parser *p) {
             }
             i += 1u;
             break;
-        case DP_SKIP:
-            if (d->quote != 0u) {
-                if (b == d->quote) {
-                    d->quote = 0u;
-                }
-            } else if (b == '"' || b == '\'') {
-                d->quote = b;
-            } else if (b == '>') {
-                d->phase = DP_SUBSET;
-            }
-            i += 1u;
-            break;
         default: /* DP_COLLECT */
             outcome = txp_buffer_append(p, &b, 1u);
             if (outcome != SCAN_OK) {
                 goto stop;
             }
-            if (d->quote != 0u) {
-                if (b == d->quote) {
-                    d->quote = 0u;
-                }
-            } else if (b == '"' || b == '\'') {
-                d->quote = b;
-            } else if (b == '>') {
-                outcome = d->entity_declaration ? read_entity(p) : read_attlist(p);
+            follow_quote(d, b);
+            if (d->quote == 0u && b == '>') {
+                outcome = finish_collected(p, d->kind);
                 if (outcome != SCAN_OK) {
-                    p->small.length -= 1u; /* this byte is read again on retry */
                     goto stop;
                 }
                 d->phase = DP_SUBSET;
@@ -4133,6 +4078,633 @@ TXML_API txml_result txml_parser_finish(txml_parser *p, txml_doc **out) {
     p->detached = true;
     txml_parser_destroy(p);
     return TXML_OK;
+}
+
+/* ---- src/subset.c ---- */
+/*
+ * The declarations of a DOCTYPE, read whole.
+ *
+ * doctype.c streams the DOCTYPE's bytes through a state machine and, for each
+ * declaration that has structure worth checking, assembles the bytes after its
+ * keyword in the small buffer. This module reads that buffer against the XML 1.0
+ * grammar. ENTITY and ATTLIST declarations are recorded (they change what a
+ * document means); ELEMENT and NOTATION declarations, and the external
+ * identifier of the DOCTYPE itself, are only checked.
+ *
+ * A non-validating processor still rejects a malformed declaration: it is a
+ * well-formedness error. What is not checked is what needs the whole DTD to
+ * decide, and the content model of an ELEMENT declaration beyond its shape:
+ * parentheses balance, items and separators alternate, quantifiers follow an
+ * item, and a mixed model is `(#PCDATA)` or `(#PCDATA|a|b)*`. A group may mix
+ * `,` and `|`, which the grammar forbids, because telling them apart needs a
+ * stack as deep as the model.
+ *
+ * Every function here is iterative and reads only [0, limit), where `limit`
+ * is the index of the byte that ended the declaration.
+ */
+
+typedef struct {
+    txml_parser *p;
+    const uint8_t *w;
+    uint32_t limit; /* the terminating '>' or '[' */
+    uint32_t i;
+} reader;
+
+typedef struct {
+    uint32_t start;
+    uint32_t end;
+} span;
+
+typedef enum {
+    LITERAL_ENTITY_VALUE,
+    LITERAL_ATTRIBUTE_VALUE,
+    LITERAL_SYSTEM,
+    LITERAL_PUBID
+} literal_type;
+
+#define SYNTAX(message) PROBLEM(TXML_DOC_SYNTAX, (message))
+#define BAD_NAME(message) PROBLEM(TXML_DOC_NAME, (message))
+
+static scan raise(const reader *r, const problem *what, uint32_t at) {
+    return txp_fail(r->p, what, txp_small_position_at(r->p, at));
+}
+
+static txml_str text_of(const reader *r, span range) {
+    return (txml_str){ (const char *)r->w + range.start, range.end - range.start };
+}
+
+/* Skip whitespace; the result is how much there was. */
+static uint32_t skip_space(reader *r) {
+    const uint32_t from = r->i;
+    r->i = txp_skip_space(r->w, r->i, r->limit);
+    return r->i - from;
+}
+
+static scan need_space(reader *r) {
+    if (skip_space(r) == 0u) {
+        return raise(r, SYNTAX("expected whitespace"), r->i);
+    }
+    return SCAN_OK;
+}
+
+/* Nothing may follow but whitespace. */
+static scan finish(reader *r) {
+    skip_space(r);
+    if (r->i != r->limit) {
+        return raise(r, SYNTAX("unexpected character in the declaration"), r->i);
+    }
+    return SCAN_OK;
+}
+
+/* ------------------------------------------------------------------------
+ * Names and keywords.
+ */
+
+/* A name where one must be. A non-ASCII character that cannot be part of a
+ * name is illegal, not merely unexpected, since no such character delimits
+ * markup; so is an ASCII name character that cannot start one. */
+static scan bad_name_start(const reader *r, uint32_t at) {
+    uint32_t width = 0u;
+    if (at < r->limit && (r->w[at] >= 0x80u || txp_name_char_at(r->w + at, &width))) {
+        return raise(r, BAD_NAME("not a legal name character here"), at);
+    }
+    return raise(r, SYNTAX("expected a name"), at);
+}
+
+static scan read_name(reader *r, span *out, bool ncname) {
+    const uint32_t at = r->i;
+    uint32_t width = 0u;
+
+    if (at >= r->limit || !txp_name_start_at(r->w + at, &width)) {
+        return bad_name_start(r, at);
+    }
+    const uint32_t stop = txp_scan_name(r->w, at, r->limit);
+    if (stop < r->limit && r->w[stop] >= 0x80u) {
+        return raise(r, BAD_NAME("not a legal name character"), stop);
+    }
+    if (ncname) {
+        for (uint32_t k = at; k < stop; k++) {
+            if (r->w[k] == ':') {
+                return raise(r, BAD_NAME("a colon is not allowed in this name"), k);
+            }
+        }
+    }
+    *out = (span){ at, stop };
+    r->i = stop;
+    return SCAN_OK;
+}
+
+static scan read_nmtoken(reader *r) {
+    const uint32_t at = r->i;
+    uint32_t width = 0u;
+    uint32_t k = at;
+
+    while (k < r->limit && txp_name_char_at(r->w + k, &width)) {
+        k += width;
+    }
+    if (k == at) {
+        return bad_name_start(r, at);
+    }
+    if (k < r->limit && r->w[k] >= 0x80u) {
+        return raise(r, BAD_NAME("not a legal name character"), k);
+    }
+    r->i = k;
+    return SCAN_OK;
+}
+
+/* The run of name characters at r->i, without consuming it. */
+static span peek_word(const reader *r) {
+    return (span){ r->i, txp_scan_name(r->w, r->i, r->limit) };
+}
+
+static bool word_is(const reader *r, span word, const char *literal) {
+    return txp_bytes_are(r->w + word.start, word.end - word.start, literal);
+}
+
+static scan expect_keyword(reader *r, const char *keyword) {
+    const span word = peek_word(r);
+    if (!word_is(r, word, keyword)) {
+        return raise(r, SYNTAX("expected a keyword here"), r->i);
+    }
+    r->i = word.end;
+    return SCAN_OK;
+}
+
+/* ------------------------------------------------------------------------
+ * Literals and references.
+ */
+
+static bool pubid_char(uint8_t b) {
+    if ((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')) {
+        return true;
+    }
+    switch (b) {
+    case ' ': case '\r': case '\n': case '-': case '\'': case '(': case ')': case '+': case ',': case '.':
+    case '/': case ':': case '=': case '?': case ';': case '!': case '*': case '#': case '@': case '$':
+    case '_': case '%':
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* The reference starting at `at` ('&'): well-formed, ending in ';'. `next` is
+ * the index after it. Whether a named entity exists is settled where it is
+ * used, not here. */
+static scan check_reference(const reader *r, uint32_t at, uint32_t *next) {
+    uint32_t stop = at + 1u;
+
+    if (stop < r->limit && r->w[stop] == '#') {
+        while (stop < r->limit && r->w[stop] != ';' && r->w[stop] != '"' && r->w[stop] != '\'') {
+            stop += 1u;
+        }
+        if (stop >= r->limit || r->w[stop] != ';') {
+            return raise(r, SYNTAX("malformed character reference"), at);
+        }
+        const charref_check checked = txp_check_character_reference(r->w + at + 1u, stop - at - 1u);
+        if (checked == CHARREF_ENCODING) {
+            return raise(r, PROBLEM(TXML_DOC_ENCODING, "character reference outside the Char production"), at);
+        }
+        if (checked != CHARREF_OK) {
+            return raise(r, SYNTAX("malformed character reference"), at);
+        }
+    } else {
+        stop = txp_scan_name(r->w, at + 1u, r->limit);
+        if (stop == at + 1u) {
+            return raise(r, SYNTAX("malformed reference"), at);
+        }
+        if (stop < r->limit && r->w[stop] >= 0x80u) {
+            return raise(r, BAD_NAME("not a legal name character"), stop);
+        }
+        if (stop >= r->limit || r->w[stop] != ';') {
+            return raise(r, SYNTAX("a reference must end in ';'"), at);
+        }
+        for (uint32_t k = at + 1u; k < stop; k++) {
+            if (r->w[k] == ':') {
+                return raise(r, BAD_NAME("a colon is not allowed in an entity name"), k);
+            }
+        }
+    }
+    *next = stop + 1u;
+    return SCAN_OK;
+}
+
+/* A quoted literal at r->i; `out` is its contents, checked for the kind. */
+static scan read_literal(reader *r, literal_type type, txml_str *out) {
+    const uint32_t at = r->i;
+
+    if (at >= r->limit || (r->w[at] != '"' && r->w[at] != '\'')) {
+        return raise(r, SYNTAX("expected a quoted literal"), at);
+    }
+    const uint8_t quote = r->w[at];
+    uint32_t k = at + 1u;
+
+    while (k < r->limit && r->w[k] != quote) {
+        const uint8_t b = r->w[k];
+        if (type == LITERAL_ENTITY_VALUE && b == '%') {
+            return raise(r, SYNTAX("a parameter-entity reference is not allowed in an internal-subset entity value"), k);
+        }
+        if (type == LITERAL_ATTRIBUTE_VALUE && b == '<') {
+            return raise(r, SYNTAX("'<' in an attribute default"), k);
+        }
+        if (type == LITERAL_PUBID && !pubid_char(b)) {
+            return raise(r, SYNTAX("not a legal public identifier character"), k);
+        }
+        if ((type == LITERAL_ENTITY_VALUE || type == LITERAL_ATTRIBUTE_VALUE) && b == '&') {
+            const scan checked = check_reference(r, k, &k);
+            if (checked != SCAN_OK) {
+                return checked;
+            }
+            continue;
+        }
+        k += 1u;
+    }
+    if (k >= r->limit) {
+        return raise(r, SYNTAX("unterminated literal"), at);
+    }
+    *out = (txml_str){ (const char *)r->w + at + 1u, k - at - 1u };
+    r->i = k + 1u;
+    return SCAN_OK;
+}
+
+/* SYSTEM "lit" | PUBLIC "pubid" "lit". A notation may leave the system literal
+ * out (`public_alone`). */
+static scan read_external_id(reader *r, bool public_alone) {
+    const uint32_t at = r->i;
+    const span word = peek_word(r);
+    txml_str ignored;
+    scan outcome;
+
+    if (word_is(r, word, "SYSTEM")) {
+        r->i = word.end;
+        outcome = need_space(r);
+        return outcome != SCAN_OK ? outcome : read_literal(r, LITERAL_SYSTEM, &ignored);
+    }
+    if (!word_is(r, word, "PUBLIC")) {
+        return raise(r, SYNTAX("expected SYSTEM or PUBLIC"), at);
+    }
+    r->i = word.end;
+    outcome = need_space(r);
+    if (outcome == SCAN_OK) {
+        outcome = read_literal(r, LITERAL_PUBID, &ignored);
+    }
+    if (outcome != SCAN_OK) {
+        return outcome;
+    }
+    const uint32_t after_pubid = r->i;
+    const uint32_t spaces = skip_space(r);
+    if (r->i < r->limit && (r->w[r->i] == '"' || r->w[r->i] == '\'')) {
+        if (spaces == 0u) {
+            return raise(r, SYNTAX("expected whitespace"), r->i);
+        }
+        return read_literal(r, LITERAL_SYSTEM, &ignored);
+    }
+    if (!public_alone) {
+        return raise(r, SYNTAX("a PUBLIC identifier needs a system literal"), r->i);
+    }
+    r->i = after_pubid;
+    return SCAN_OK;
+}
+
+/* ------------------------------------------------------------------------
+ * <!ENTITY ...>
+ */
+
+static scan read_entity(reader *r) {
+    scan outcome = need_space(r);
+    span name;
+    txml_str value;
+
+    if (outcome != SCAN_OK) {
+        return outcome;
+    }
+    const bool parameter = r->i < r->limit && r->w[r->i] == '%';
+    if (parameter) {
+        r->i += 1u;
+        outcome = need_space(r);
+        if (outcome != SCAN_OK) {
+            return outcome;
+        }
+    }
+    outcome = read_name(r, &name, true);
+    if (outcome == SCAN_OK) {
+        outcome = need_space(r);
+    }
+    if (outcome != SCAN_OK) {
+        return outcome;
+    }
+
+    if (r->i < r->limit && (r->w[r->i] == '"' || r->w[r->i] == '\'')) {
+        outcome = read_literal(r, LITERAL_ENTITY_VALUE, &value);
+        if (outcome == SCAN_OK && !parameter) {
+            outcome = txp_add_entity(r->p, text_of(r, name), value);
+        }
+        return outcome != SCAN_OK ? outcome : finish(r);
+    }
+
+    /* External entities are checked and never fetched, so a reference to one
+     * stays undeclared. Only a general entity may be unparsed. */
+    outcome = read_external_id(r, false);
+    if (outcome != SCAN_OK) {
+        return outcome;
+    }
+    const uint32_t spaces = skip_space(r);
+    if (!parameter && r->i < r->limit) {
+        if (spaces == 0u) {
+            return raise(r, SYNTAX("expected whitespace"), r->i);
+        }
+        outcome = expect_keyword(r, "NDATA");
+        if (outcome == SCAN_OK) {
+            outcome = need_space(r);
+        }
+        if (outcome == SCAN_OK) {
+            outcome = read_name(r, &name, true);
+        }
+        if (outcome != SCAN_OK) {
+            return outcome;
+        }
+    }
+    return finish(r);
+}
+
+/* ------------------------------------------------------------------------
+ * <!ATTLIST ...>
+ */
+
+/* '(' Nmtoken ('|' Nmtoken)* ')', or with Names for a notation type. */
+static scan read_enumeration(reader *r, bool notation) {
+    span name;
+    scan outcome;
+
+    if (r->i >= r->limit || r->w[r->i] != '(') {
+        return raise(r, SYNTAX("expected '('"), r->i);
+    }
+    r->i += 1u;
+    for (;;) {
+        skip_space(r);
+        outcome = notation ? read_name(r, &name, true) : read_nmtoken(r);
+        if (outcome != SCAN_OK) {
+            return outcome;
+        }
+        skip_space(r);
+        if (r->i < r->limit && r->w[r->i] == '|') {
+            r->i += 1u;
+            continue;
+        }
+        if (r->i < r->limit && r->w[r->i] == ')') {
+            r->i += 1u;
+            return SCAN_OK;
+        }
+        return raise(r, SYNTAX("expected '|' or ')'"), r->i);
+    }
+}
+
+static scan read_attribute_type(reader *r) {
+    static const char *const keywords[] = { "CDATA", "ID", "IDREF", "IDREFS", "ENTITY", "ENTITIES", "NMTOKEN", "NMTOKENS" };
+
+    if (r->i < r->limit && r->w[r->i] == '(') {
+        return read_enumeration(r, false);
+    }
+    const span word = peek_word(r);
+    if (word_is(r, word, "NOTATION")) {
+        r->i = word.end;
+        const scan outcome = need_space(r);
+        return outcome != SCAN_OK ? outcome : read_enumeration(r, true);
+    }
+    for (uint32_t k = 0u; k < sizeof(keywords) / sizeof(keywords[0]); k++) {
+        if (word_is(r, word, keywords[k])) {
+            r->i = word.end;
+            return SCAN_OK;
+        }
+    }
+    return raise(r, SYNTAX("unknown attribute type"), r->i);
+}
+
+static scan read_attlist(reader *r) {
+    scan outcome = need_space(r);
+    span element;
+    span name;
+    txml_str value;
+
+    if (outcome == SCAN_OK) {
+        outcome = read_name(r, &element, false);
+    }
+    if (outcome != SCAN_OK) {
+        return outcome;
+    }
+
+    for (;;) {
+        const uint32_t spaces = skip_space(r);
+        if (r->i == r->limit) {
+            return SCAN_OK;
+        }
+        if (spaces == 0u) {
+            return raise(r, SYNTAX("expected whitespace"), r->i);
+        }
+        outcome = read_name(r, &name, false);
+        if (outcome == SCAN_OK) {
+            outcome = need_space(r);
+        }
+        if (outcome == SCAN_OK) {
+            outcome = read_attribute_type(r);
+        }
+        if (outcome == SCAN_OK) {
+            outcome = need_space(r);
+        }
+        if (outcome != SCAN_OK) {
+            return outcome;
+        }
+
+        bool has_value = true;
+        if (r->i < r->limit && r->w[r->i] == '#') {
+            const uint32_t hash = r->i;
+            r->i += 1u;
+            const span word = peek_word(r);
+            if (word_is(r, word, "REQUIRED") || word_is(r, word, "IMPLIED")) {
+                r->i = word.end;
+                has_value = false;
+            } else if (word_is(r, word, "FIXED")) {
+                r->i = word.end;
+                outcome = need_space(r);
+                if (outcome != SCAN_OK) {
+                    return outcome;
+                }
+            } else {
+                return raise(r, SYNTAX("unknown default declaration"), hash);
+            }
+        }
+        if (has_value) {
+            outcome = read_literal(r, LITERAL_ATTRIBUTE_VALUE, &value);
+            if (outcome == SCAN_OK) {
+                outcome = txp_add_default(r->p, &(default_request){ text_of(r, element), text_of(r, name), value });
+            }
+            if (outcome != SCAN_OK) {
+                return outcome;
+            }
+        }
+    }
+}
+
+/* ------------------------------------------------------------------------
+ * <!ELEMENT ...> and <!NOTATION ...>
+ */
+
+static bool is_quantifier(uint8_t b) {
+    return b == '?' || b == '*' || b == '+';
+}
+
+/* A parenthesised content model, read without recursion: only the depth is
+ * kept. */
+static scan read_content_model(reader *r) {
+    uint32_t depth = 0u;
+    bool expect_item = true; /* an item must come next */
+    bool mixed = false;
+    uint32_t mixed_names = 0u;
+    span name;
+
+    for (;;) {
+        skip_space(r);
+        if (r->i >= r->limit) {
+            return raise(r, SYNTAX("unbalanced parentheses in a content model"), r->i);
+        }
+        const uint8_t b = r->w[r->i];
+        const uint32_t at = r->i;
+
+        if (b == '(') {
+            if (!expect_item || mixed) {
+                return raise(r, SYNTAX("unexpected '(' in a content model"), at);
+            }
+            depth += 1u;
+            r->i += 1u;
+            skip_space(r);
+            if (depth == 1u && r->i < r->limit && r->w[r->i] == '#') {
+                const span word = (span){ r->i, txp_scan_name(r->w, r->i + 1u, r->limit) };
+                if (!word_is(r, word, "#PCDATA")) {
+                    return raise(r, SYNTAX("expected #PCDATA"), r->i);
+                }
+                mixed = true;
+                expect_item = false;
+                r->i = word.end;
+            }
+        } else if (b == '|' || b == ',') {
+            if (expect_item || (mixed && b == ',')) {
+                return raise(r, SYNTAX("unexpected separator in a content model"), at);
+            }
+            expect_item = true;
+            r->i += 1u;
+        } else if (b == ')') {
+            if (expect_item || depth == 0u) {
+                return raise(r, SYNTAX("unexpected ')' in a content model"), at);
+            }
+            depth -= 1u;
+            r->i += 1u;
+            if (mixed && depth == 0u) {
+                if (r->i < r->limit && r->w[r->i] == '*') {
+                    r->i += 1u;
+                } else if (mixed_names > 0u) {
+                    return raise(r, SYNTAX("a mixed content model with names must end in ')*'"), r->i);
+                }
+                return SCAN_OK;
+            }
+            if (r->i < r->limit && is_quantifier(r->w[r->i])) {
+                r->i += 1u;
+            }
+            expect_item = false;
+            if (depth == 0u) {
+                return SCAN_OK;
+            }
+        } else if (b == '#') {
+            return raise(r, SYNTAX("#PCDATA must come first in a mixed content model"), at);
+        } else {
+            if (!expect_item) {
+                return raise(r, SYNTAX("expected a separator or ')' in a content model"), at);
+            }
+            const scan outcome = read_name(r, &name, false);
+            if (outcome != SCAN_OK) {
+                return outcome;
+            }
+            expect_item = false;
+            if (mixed) {
+                mixed_names += 1u;
+            } else if (r->i < r->limit && is_quantifier(r->w[r->i])) {
+                r->i += 1u;
+            }
+        }
+    }
+}
+
+static scan read_element(reader *r) {
+    scan outcome = need_space(r);
+    span name;
+
+    if (outcome == SCAN_OK) {
+        outcome = read_name(r, &name, false);
+    }
+    if (outcome == SCAN_OK) {
+        outcome = need_space(r);
+    }
+    if (outcome != SCAN_OK) {
+        return outcome;
+    }
+    const span word = peek_word(r);
+    if (word_is(r, word, "EMPTY") || word_is(r, word, "ANY")) {
+        r->i = word.end;
+    } else if (r->i < r->limit && r->w[r->i] == '(') {
+        outcome = read_content_model(r);
+        if (outcome != SCAN_OK) {
+            return outcome;
+        }
+    } else {
+        return raise(r, SYNTAX("expected EMPTY, ANY or a content model"), r->i);
+    }
+    return finish(r);
+}
+
+static scan read_notation(reader *r) {
+    scan outcome = need_space(r);
+    span name;
+
+    if (outcome == SCAN_OK) {
+        outcome = read_name(r, &name, true);
+    }
+    if (outcome == SCAN_OK) {
+        outcome = need_space(r);
+    }
+    if (outcome == SCAN_OK) {
+        outcome = read_external_id(r, true);
+    }
+    return outcome != SCAN_OK ? outcome : finish(r);
+}
+
+/* What follows the DOCTYPE's name: an optional external identifier. */
+static scan read_doctype_head(reader *r) {
+    const uint32_t spaces = skip_space(r);
+
+    if (r->i == r->limit) {
+        return SCAN_OK;
+    }
+    if (spaces == 0u) {
+        return raise(r, SYNTAX("expected whitespace"), r->i);
+    }
+    const scan outcome = read_external_id(r, false);
+    return outcome != SCAN_OK ? outcome : finish(r);
+}
+
+TXML_PRIVATE scan txp_read_declaration(txml_parser *p, declaration_kind kind) {
+    reader r = { p, p->small.data, p->small.length - 1u, 0u };
+
+    switch (kind) {
+    case DECL_ENTITY:
+        return read_entity(&r);
+    case DECL_ATTLIST:
+        return read_attlist(&r);
+    case DECL_ELEMENT:
+        return read_element(&r);
+    case DECL_NOTATION:
+        return read_notation(&r);
+    default:
+        return read_doctype_head(&r);
+    }
 }
 
 /* ---- src/tables.c ---- */

@@ -48,7 +48,8 @@ the one part of it that was configurable; this is the detail.
 | XPath, XSLT, XInclude, XML Base, xml:id | No. `xml:space` and `xml:lang` are ordinary attributes. |
 | XML 1.1 | No. `version="1.1"` is `TXML_DOC_ENCODING`. |
 | Encodings other than UTF-8 | No. A declaration naming another encoding is `TXML_DOC_ENCODING` rather than a silent reinterpretation. |
-| Parameter entities, conditional sections, notations | Parsed over and ignored inside the internal subset; never expanded. |
+| Parameter entities, notations, `<!ELEMENT>` | Read against the grammar inside the internal subset and then ignored; a parameter entity is never expanded. A malformed declaration is `TXML_DOC_SYNTAX` (or `NAME`), because it is a well-formedness error. |
+| Conditional sections | Not allowed in an internal subset (XML 1.0 §3.4): `TXML_DOC_SYNTAX`. |
 | Standalone declaration | Stored as an attribute of the declaration node, and otherwise ignored — it only matters to a validating processor. |
 | Entity references left unexpanded | No. txml expands; it has no entity-reference node. |
 

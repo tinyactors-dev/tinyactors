@@ -415,6 +415,31 @@ static const char *const corpus[] = {
     "\xef\xbb\xbf",
     "\xef\xbb",
     "\xff\xfe<a/>",
+    /* The DOCTYPE head and every declaration form, whole and malformed; each cut
+     * lands inside a literal, a keyword, a name, a reference and a content
+     * model. */
+    "<!DOCTYPE a PUBLIC \"-//W3C//DTD X 1.0//EN\" 'http://x/y.dtd' [\n"
+    "  <!ENTITY e \"a &amp; &#65; &other; b\"><!ENTITY % pe 'v'><!ENTITY x SYSTEM \"x.ent\" NDATA gif>\n"
+    "  <!ENTITY \xe6\x97\xa5 \"caf\xc3\xa9 &#x1F600;\">\n"
+    "  <!ATTLIST a c CDATA #IMPLIED en (x|y|z) \"x\" f CDATA #FIXED \"v\" nt NOTATION (gif|png) #IMPLIED>\n"
+    "  <!ELEMENT a (b,(c|d)*,e?)><!ELEMENT e (#PCDATA|b|c)*><!NOTATION gif PUBLIC \"p\" \"x\">\n"
+    "  %pe;<!-- c - d --><?pi data?>\n"
+    "]  >\n<a>&\xe6\x97\xa5;</a>",
+    "<!DOCTYPE a[]><a/>",
+    "<!DOCTYPE a SYSTEM><a/>",
+    "<!DOCTYPE a PUBLIC \"a^b\" \"x\"><a/>",
+    "<!DOCTYPE a SYSTEM \"x\" [] junk><a/>",
+    "<!DOCTYPE a [<!ELEMENT a (b|#PCDATA)*>]><a/>",
+    "<!DOCTYPE a [<!ELEMENT a (#PCDATA|b)>]><a/>",
+    "<!DOCTYPE a [<!ATTLIST a b (x y) #IMPLIED>]><a/>",
+    "<!DOCTYPE a [<!ENTITY e \"a % b\">]><a/>",
+    "<!DOCTYPE a [<!ENTITY a$b \"v\">]><a/>",
+    "<!DOCTYPE a [<!ENTITY \xc3\x97 \"v\">]><a/>",
+    "<!DOCTYPE a [%\xc3\x97;]><a/>",
+    "<!DOCTYPE a [<!-- a --->]><a/>",
+    "<!DOCTYPE a [<?xml x?>]><a/>",
+    "<!DOCTYPE a [<![INCLUDE[]]>]><a/>",
+    "<!DOCTYPE a [",
 };
 
 #define CORPUS_COUNT (sizeof(corpus) / sizeof(corpus[0]))

@@ -196,22 +196,33 @@ typedef struct {
 typedef enum { LIT_COMMENT, LIT_CDATA, LIT_DOCTYPE } literal_kind;
 
 typedef enum {
-    DP_SPACE,      /* the whitespace after "<!DOCTYPE" */
+    DP_SPACE,          /* the whitespace after "<!DOCTYPE" */
     DP_SPACE_SKIP,
     DP_NAME,
-    DP_REST,       /* external identifiers, up to '[' or '>' */
-    DP_SUBSET,     /* between declarations */
-    DP_PARAMETER,  /* %name; */
-    DP_LT,         /* after '<' */
-    DP_BANG,       /* after "<!" */
-    DP_DASH,       /* after "<!-" */
-    DP_KEYWORD,    /* the letters of ENTITY, ATTLIST, ... */
+    DP_HEAD,           /* external identifier, collected up to '[' or '>' */
+    DP_SUBSET,         /* between declarations */
+    DP_PARAMETER,      /* the first character of %name; */
+    DP_PARAMETER_NAME, /* the rest of %name; */
+    DP_LT,             /* after '<' */
+    DP_BANG,           /* after "<!" */
+    DP_DASH,           /* after "<!-" */
+    DP_KEYWORD,        /* the letters of ENTITY, ATTLIST, ... */
     DP_COMMENT,
-    DP_PI,
-    DP_SKIP,       /* a declaration that is read over: ELEMENT, NOTATION */
-    DP_COLLECT,    /* a declaration that is kept: ENTITY, ATTLIST */
-    DP_AFTER       /* after ']', up to '>' */
+    DP_PI_START,       /* the first character of a PI target */
+    DP_PI_TARGET,
+    DP_PI,             /* PI data, skipped to "?>" */
+    DP_COLLECT,        /* ENTITY, ATTLIST, ELEMENT, NOTATION: collected, then read whole */
+    DP_AFTER           /* after ']', up to '>' */
 } doctype_phase;
+
+/* What the small buffer holds when it is read (subset.c). */
+typedef enum {
+    DECL_DOCTYPE_HEAD, /* what follows the DOCTYPE name, through '[' or '>' */
+    DECL_ENTITY,
+    DECL_ATTLIST,
+    DECL_ELEMENT,
+    DECL_NOTATION
+} declaration_kind;
 
 typedef struct {
     doctype_phase phase;
@@ -219,7 +230,7 @@ typedef struct {
     uint32_t pending; /* '-' or '?' held back while looking for a terminator */
     char keyword[12];
     uint32_t keyword_length;
-    bool entity_declaration;
+    declaration_kind kind;
     txml_position lt_position;
 } doctype_work;
 
@@ -415,6 +426,21 @@ scan txp_dec_end(txml_parser *p);
 /* Read the character references of an entity literal, leaving &name;
  * references alone (XML 1.0 §4.5). The result is allocated in the parser arena. */
 scan txp_expand_character_references(txml_parser *p, txml_str literal, txml_str *expanded);
+
+typedef enum { CHARREF_OK, CHARREF_MALFORMED, CHARREF_ENCODING } charref_check;
+/* Check the body of a numeric reference, "#123" or "#x7B", without the '&' and
+ * ';'. */
+charref_check txp_check_character_reference(const uint8_t *body, uint32_t length);
+
+/* ------------------------------------------------------------------------
+ * subset.c: reading the declarations of a DOCTYPE
+ */
+
+/* Read the declaration collected in p->small: the bytes after its keyword (or,
+ * for DECL_DOCTYPE_HEAD, after the DOCTYPE name), through the '>' or '[' that
+ * ended it. Entities and attribute defaults are recorded; everything is
+ * checked against the XML 1.0 grammar. */
+scan txp_read_declaration(txml_parser *p, declaration_kind kind);
 
 /* ------------------------------------------------------------------------
  * tables.c: the DTD tables

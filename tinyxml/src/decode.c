@@ -151,6 +151,15 @@ static ref_kind parse_character_reference(const uint8_t *name, uint32_t length, 
     return REF_BYTES;
 }
 
+charref_check txp_check_character_reference(const uint8_t *body, uint32_t length) {
+    uint32_t code = 0u;
+    const ref_kind kind = parse_character_reference(body, length, &code);
+    if (kind == REF_BYTES) {
+        return CHARREF_OK;
+    }
+    return kind == REF_ENCODING ? CHARREF_ENCODING : CHARREF_MALFORMED;
+}
+
 static bool is_ref_byte(uint8_t b) {
     return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == '_' || b == ':' || b == '-' ||
            b == '.' || b == '#';

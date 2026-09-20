@@ -10,7 +10,8 @@ Implementation modules. Headers here are private; the public API is
 - `decode.c`     sinks, and the reference / entity / line-end decoder
 - `content.c`    text, `<` dispatch, comments, CDATA, PIs, the XML declaration
 - `tag.c`        start tags and end tags
-- `doctype.c`    the DOCTYPE and its internal subset
+- `doctype.c`    the DOCTYPE and its internal subset: the state machine
+- `subset.c`     the declarations of a DOCTYPE, read whole against the XML 1.0 grammar
 - `tables.c`     the entity and ATTLIST tables
 - `writer.c`     the event writer, escaping, resumable output
 
