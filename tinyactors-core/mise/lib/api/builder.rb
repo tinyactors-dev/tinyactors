@@ -87,10 +87,20 @@ module Api
     end
 
     def owned_enum?(node)
-      @owned_enum_ids ||= @ast.declarations.select { |each| each['kind'] == 'TypedefDecl' }.filter_map do |typedef|
-        typedef.dig('inner', 0, 'ownedTagDecl', 'id')
-      end
+      @owned_enum_ids ||= @ast.declarations.select { |each| each['kind'] == 'TypedefDecl' }
+                              .filter_map { |typedef| owned_tag_id(typedef) }
       @owned_enum_ids.include?(node['id'])
+    end
+
+    # The tag a typedef declares itself, if any. clang writes the typedef's
+    # inner type two ways: through clang 21 as an ElaboratedType carrying
+    # `ownedTagDecl`, and since clang 22 as the tag type itself, carrying
+    # `decl` and `isTagOwned`.
+    def owned_tag_id(typedef)
+      inner = typedef.dig('inner', 0) or return nil
+      return inner.dig('ownedTagDecl', 'id') if inner.key?('ownedTagDecl')
+
+      inner.dig('decl', 'id') if inner['isTagOwned']
     end
 
     # Annotations keyed by name; duplicates, unknown names, and wrong
@@ -112,9 +122,12 @@ module Api
       end
     end
 
+    # The record or enum a typedef names, following either clang spelling of
+    # the inner type (see owned_tag_id); anything else is an alias. A `decl`
+    # that is not a tag -- a TypedefType's, say -- falls through to :alias.
     def typedef_target(node)
-      elaborated = node.dig('inner', 0)
-      reference = elaborated && (elaborated['ownedTagDecl'] || elaborated.dig('inner', 0, 'decl'))
+      inner = node.dig('inner', 0)
+      reference = inner && (inner['ownedTagDecl'] || inner['decl'] || inner.dig('inner', 0, 'decl'))
       return [:alias, nil] unless reference && %w[RecordDecl EnumDecl].include?(reference['kind'])
 
       decl = @ast.node(reference['id'])
@@ -333,7 +346,9 @@ module Api
         path = "#{owner}.#{child['name']}"
         spelling = child.dig('type', 'qualType')
         annotations = @ast.annotations(child)
-        type = if spelling.match?(/\((unnamed|anonymous) (struct|union) at /)
+        # clang 22 spells an inline tag `union (unnamed at file:line:col)`;
+        # earlier releases repeat the keyword, `union (anonymous union at ...)`.
+        type = if spelling.match?(/\((?:unnamed|anonymous)(?: (?:struct|union))? at /)
                  nested = children[position - 1]
                  next error(path, 'anonymous record must precede its field') unless nested&.dig('kind') == 'RecordDecl'
 
