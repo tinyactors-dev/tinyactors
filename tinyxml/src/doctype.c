@@ -56,6 +56,15 @@ static bool read_literal(const uint8_t *w, uint32_t *i, uint32_t end, txml_str *
     return true;
 }
 
+/* A name in a collected declaration stopped at `at`: a non-ASCII character
+ * there is an illegal name character, since only ASCII delimits markup. */
+static scan bad_name_char(txml_parser *p, const uint8_t *w, uint32_t at) {
+    if (at < p->small.length && w[at] >= 0x80u) {
+        return txp_fail(p, PROBLEM(TXML_DOC_NAME, "not a legal name character"), txp_small_position_at(p, at));
+    }
+    return SCAN_OK;
+}
+
 /* <!ENTITY name "value"> */
 static scan read_entity(txml_parser *p) {
     const uint8_t *w = p->small.data;
@@ -71,6 +80,10 @@ static scan read_entity(txml_parser *p) {
                                             : txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "unterminated declaration"), txp_small_position_at(p, j));
     }
     const uint32_t name_end = txp_scan_name(w, j, end);
+    scan named = bad_name_char(p, w, name_end);
+    if (named != SCAN_OK) {
+        return named;
+    }
     if (name_end == j) {
         return txp_fail(p, PROBLEM(TXML_DOC_NAME, "expected an entity name"), txp_small_position_at(p, j));
     }
@@ -95,7 +108,11 @@ static scan read_attlist(txml_parser *p) {
     const uint32_t end = p->small.length;
     uint32_t j = txp_skip_space(w, 0u, end);
     const uint32_t element_end = txp_scan_name(w, j, end);
+    scan named = bad_name_char(p, w, element_end);
 
+    if (named != SCAN_OK) {
+        return named;
+    }
     if (j == 0u || element_end == j) {
         return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "expected an element name in ATTLIST"), txp_small_position_at(p, j));
     }
@@ -111,6 +128,10 @@ static scan read_attlist(txml_parser *p) {
             return SCAN_OK;
         }
         const uint32_t name_end = txp_scan_name(w, j, end);
+        named = bad_name_char(p, w, name_end);
+        if (named != SCAN_OK) {
+            return named;
+        }
         if (name_end == j) {
             return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "expected an attribute name in ATTLIST"), txp_small_position_at(p, j));
         }
@@ -125,6 +146,10 @@ static scan read_attlist(txml_parser *p) {
             j += 1u;
         } else {
             const uint32_t type_end = txp_scan_name(w, j, end);
+            named = bad_name_char(p, w, type_end);
+            if (named != SCAN_OK) {
+                return named;
+            }
             if (type_end == j) {
                 return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "expected an attribute type"), txp_small_position_at(p, j));
             }
@@ -143,6 +168,10 @@ static scan read_attlist(txml_parser *p) {
         txml_str value;
         if (j < end && w[j] == '#') {
             const uint32_t keyword_end = txp_scan_name(w, j + 1u, end);
+            named = bad_name_char(p, w, keyword_end);
+            if (named != SCAN_OK) {
+                return named;
+            }
             const bool fixed = txp_bytes_are(w + j + 1u, keyword_end - j - 1u, "FIXED");
             j = keyword_end;
             if (!fixed) {
@@ -204,6 +233,7 @@ static scan doctype_run(txml_parser *p) {
 
     while (i < limit) {
         const uint8_t b = w[i];
+        uint32_t width = 0u;
         switch (d->phase) {
         case DP_SPACE:
             if (!txp_is_space(b)) {
@@ -215,15 +245,20 @@ static scan doctype_run(txml_parser *p) {
         case DP_SPACE_SKIP:
             if (txp_is_space(b)) {
                 i += 1u;
-            } else if (!txp_is_name_start(b)) {
+            } else if (!txp_name_start_at(w + i, &width)) {
+                if (b >= 0x80u) {
+                    return txp_fail_name_char(p, i);
+                }
                 return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "expected a name after DOCTYPE"), txp_position_at(p, i));
             } else {
                 d->phase = DP_NAME;
             }
             break;
         case DP_NAME:
-            if (txp_is_name_char(b)) {
-                i += 1u;
+            if (txp_name_char_at(w + i, &width)) {
+                i += width;
+            } else if (b >= 0x80u) {
+                return txp_fail_name_char(p, i);
             } else {
                 d->phase = DP_REST;
             }

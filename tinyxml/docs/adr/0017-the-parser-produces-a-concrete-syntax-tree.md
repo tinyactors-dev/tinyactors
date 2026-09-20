@@ -24,6 +24,7 @@ The parser produces a **concrete syntax tree**: every construct in the input bec
 - **The XML declaration is a node**, `TXML_NODE_DECLARATION`, whose `version`, `encoding` and `standalone` pseudo-attributes are ordinary attributes in namespace 0. It is read with `txml_first_attribute` and `txml_find_attribute` like any element, so it needs no accessors of its own. It reverses nothing about ADR 0003's separate point that it is not a processing instruction: it has its own kind.
 - **The DOCTYPE is a node**, `TXML_NODE_DOCTYPE`, whose text is the declaration as written, and **the internal subset is always read**. Internal general entity declarations and `ATTLIST` defaults always take effect; expansion stays bounded by `entity_expansion_budget` (ADR 0010).
 - **Positions are always recorded.** `txml_node_position` never returns `TXML_ERR_NOT_FOUND`.
+- **An encoding signature is not content.** A leading UTF-8 byte order mark is consumed, counted in the byte offset and given no node, and the writer does not emit one. It is the one thing in the input that is not kept: it says how the bytes are encoded, not what the document says, and XML §4.3.3 puts it outside the document entity's content. U+FEFF anywhere else is ordinary character data.
 
 `txml_parser_flags` therefore has one member left, `TXML_INPUT_PADDED`, which is not a retention decision at all: it is a promise about the caller's buffer (ADR 0008).
 

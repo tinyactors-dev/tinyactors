@@ -115,6 +115,27 @@ static scan content_eof(txml_parser *p) {
 
 const state txp_state_content = { "content", content_run, content_eof };
 
+/*
+ * The start of the input. A UTF-8 byte order mark is an encoding signature,
+ * not content: it is consumed without a node, counted in the offset, and does
+ * not move the column. U+FEFF anywhere else is character data. The first
+ * character below `valid` is whole, so all three bytes are here. UTF-16 marks
+ * are not valid UTF-8 and fail as encoding errors before this state runs.
+ */
+static scan start_run(txml_parser *p) {
+    const uint8_t *w = p->window + p->start;
+
+    if (w[0] == 0xEFu && w[1] == 0xBBu && w[2] == 0xBFu) {
+        txp_commit(p, p->start + 3u);
+        p->column = 1u;
+        p->bom_length = 3u;
+    }
+    p->state = &txp_state_content;
+    return SCAN_OK;
+}
+
+const state txp_state_start = { "start", start_run, content_eof };
+
 /* ------------------------------------------------------------------------
  * After '<': which construct is this?
  */
@@ -386,7 +407,7 @@ static scan target_done(txml_parser *p, uint8_t delimiter) {
         return txp_fail(p, PROBLEM(TXML_DOC_NAME, "a target cannot contain a colon"), p->pi.colon_position);
     }
     if (any_xml) {
-        if (txp_bytes_are(name, 3u, "xml") && p->construct.offset == 0u && txp_is_space(delimiter)) {
+        if (txp_bytes_are(name, 3u, "xml") && p->construct.offset == p->bom_length && txp_is_space(delimiter)) {
             return begin_declaration(p);
         }
         return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "the XML declaration is only allowed at the start of the document"),
@@ -413,25 +434,31 @@ static scan pi_target_run(txml_parser *p) {
     while (i < limit) {
         const uint8_t b = w[i];
 
+        uint32_t width = 0u;
         if (p->name_length == 0u) {
-            if (!txp_is_name_start(b)) {
+            if (!txp_name_start_at(w + i, &width)) {
                 return txp_fail(p, PROBLEM(TXML_DOC_NAME, "expected a processing instruction target"), txp_position_at(p, i));
             }
             p->name_position = position_of(p, i);
         }
-        if (!txp_is_name_char(b)) {
+        if (!txp_name_char_at(w + i, &width)) {
+            if (b >= 0x80u) {
+                return txp_fail_name_char(p, i);
+            }
             txp_commit(p, i);
             return target_done(p, b);
         }
-        if (p->name_length >= p->limits.max_name_length) {
+        if (p->name_length + width > p->limits.max_name_length) {
             return txp_fail(p, PROBLEM_LIMIT(TXML_LIMIT_NAME_LENGTH, "name too long"), p->name_position);
         }
         if (b == ':' && !p->pi.has_colon) {
             p->pi.has_colon = true;
             p->pi.colon_position = position_of(p, i);
         }
-        p->name[p->name_length++] = b;
-        i += 1u;
+        for (uint32_t k = 0u; k < width; k++) {
+            p->name[p->name_length++] = w[i + k];
+        }
+        i += width;
     }
     txp_commit(p, limit);
     return SCAN_OK;

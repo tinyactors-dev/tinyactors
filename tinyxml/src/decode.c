@@ -106,7 +106,7 @@ static bool is_xml_char(uint32_t code) {
            (code >= 0xE000u && code <= 0xFFFDu) || (code >= 0x10000u && code <= 0x10FFFFu);
 }
 
-typedef enum { REF_BYTES, REF_ENTITY, REF_MALFORMED, REF_ENCODING, REF_UNDECLARED } ref_kind;
+typedef enum { REF_BYTES, REF_ENTITY, REF_MALFORMED, REF_ENCODING, REF_UNDECLARED, REF_NAME } ref_kind;
 
 typedef struct {
     ref_kind kind;
@@ -151,6 +151,11 @@ static ref_kind parse_character_reference(const uint8_t *name, uint32_t length, 
     return REF_BYTES;
 }
 
+static bool is_ref_byte(uint8_t b) {
+    return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == '_' || b == ':' || b == '-' ||
+           b == '.' || b == '#';
+}
+
 /* Classify the text between '&' and ';'. */
 static void classify_reference(const txml_parser *p, const uint8_t *name, uint32_t length, ref_result *out) {
     out->count = 0u;
@@ -183,6 +188,8 @@ static void classify_reference(const txml_parser *p, const uint8_t *name, uint32
         out->kind = REF_BYTES;
         out->bytes[0] = '"';
         out->count = 1u;
+    } else if (txp_scan_name(name, 0u, length) != length) {
+        out->kind = REF_NAME;
     } else {
         out->entity = txp_find_entity(p, (txml_str){ (const char *)name, length });
         out->kind = out->entity == NULL ? REF_UNDECLARED : REF_ENTITY;
@@ -196,6 +203,8 @@ static scan fail_reference(txml_parser *p, ref_kind kind) {
         return txp_fail(p, PROBLEM(TXML_DOC_ENCODING, "character reference outside the Char production"), at);
     case REF_UNDECLARED:
         return txp_fail(p, PROBLEM(TXML_DOC_UNDECLARED_ENTITY, "undeclared entity"), at);
+    case REF_NAME:
+        return txp_fail(p, PROBLEM(TXML_DOC_NAME, "not a legal entity name"), at);
     default:
         return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "malformed reference"), at);
     }
@@ -435,7 +444,9 @@ scan txp_dec_feed(txml_parser *p, const dec_input *input, uint32_t *consumed) {
                 *consumed = (outcome == SCAN_NOMEM && !d->in_ref) ? i + 1u : i;
                 return outcome;
             }
-            if (d->ref_length >= p->reference_capacity || !(txp_is_name_char(b) || b == '#')) {
+            /* The characters are checked as a whole name when the ';' arrives;
+             * here only what could never be part of one is refused. */
+            if (d->ref_length >= p->reference_capacity || !(b >= 0x80u || is_ref_byte(b))) {
                 return fail_reference(p, REF_MALFORMED);
             }
             p->reference[d->ref_length++] = b;

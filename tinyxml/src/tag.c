@@ -130,8 +130,25 @@ static scan finish_value(txml_parser *p, attribute_record *record) {
     const txml_str declared = bare ? (txml_str){ "", 0u } : record->local;
     const txml_str value = { (const char *)p->small.data, p->small.length };
 
-    if (!bare && (txml_str_equal(declared, TXML_STR("xml")) || txml_str_equal(declared, TXML_STR("xmlns")))) {
-        return txp_fail(p, PROBLEM(TXML_DOC_UNDECLARED_PREFIX, "the xml and xmlns prefixes cannot be rebound"), record->position);
+    /* Namespaces in XML 1.0 §3: the xmlns prefix is never declared; the xml
+     * prefix is declared only as its own namespace; and neither reserved
+     * namespace is bound to any other prefix or to the default. */
+    const bool is_xml_uri = txml_str_equal(value, TXML_STR(XML_URI));
+    const bool is_xmlns_uri = txml_str_equal(value, TXML_STR(XMLNS_URI));
+
+    if (!bare && txml_str_equal(declared, TXML_STR("xmlns"))) {
+        return txp_fail(p, PROBLEM(TXML_DOC_UNDECLARED_PREFIX, "the xmlns prefix cannot be declared"), record->position);
+    }
+    if (!bare && txml_str_equal(declared, TXML_STR("xml"))) {
+        if (!is_xml_uri) {
+            return txp_fail(p, PROBLEM(TXML_DOC_UNDECLARED_PREFIX, "the xml prefix can only be bound to the XML namespace"),
+                            record->position);
+        }
+    } else if (is_xml_uri) {
+        return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "the XML namespace can only be bound to the xml prefix"), record->position);
+    }
+    if (is_xmlns_uri) {
+        return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "the xmlns namespace cannot be bound"), record->position);
     }
     if (!bare && value.length == 0u) {
         return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "a prefix cannot be bound to the empty namespace"), record->position);
@@ -368,8 +385,9 @@ scan txp_begin_start_tag(txml_parser *p) {
     if (p->depth >= p->limits.max_depth) {
         return txp_fail(p, PROBLEM_LIMIT(TXML_LIMIT_DEPTH, "elements nested too deeply"), p->construct);
     }
-    if (!txp_is_name_start(b)) {
-        if (txp_is_name_char(b)) {
+    uint32_t width = 0u;
+    if (!txp_name_start_at(p->window + p->start, &width)) {
+        if (b >= 0x80u || txp_name_char_at(p->window + p->start, &width)) {
             return txp_fail(p, PROBLEM(TXML_DOC_NAME, "a name cannot start with this character"), txp_position_now(p));
         }
         return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "'<' does not start markup here"), p->construct);
@@ -397,18 +415,25 @@ static scan start_tag_run(txml_parser *p) {
 
     while (i < limit) {
         const uint8_t b = w[i];
+        uint32_t width = 0u;
         bool finish = false;
 
         switch (t->phase) {
         case TP_ELEMENT_NAME:
         case TP_ATTRIBUTE_NAME:
-            if (txp_is_name_char(b)) {
-                if (p->name_length >= p->limits.max_name_length) {
+            if (txp_name_char_at(w + i, &width)) {
+                if (p->name_length + width > p->limits.max_name_length) {
                     return txp_fail(p, PROBLEM_LIMIT(TXML_LIMIT_NAME_LENGTH, "name too long"), p->name_position);
                 }
-                p->name[p->name_length++] = b;
-                i += 1u;
+                for (uint32_t k = 0u; k < width; k++) {
+                    p->name[p->name_length++] = w[i + k];
+                }
+                i += width;
                 break;
+            }
+            if (b >= 0x80u) {
+                txp_commit(p, i);
+                return txp_fail_name_char(p, i);
             }
             /* The name is complete; the delimiter is read again in the next phase. */
             outcome = t->phase == TP_ELEMENT_NAME ? finish_element_name(p) : finish_attribute_name(p);
@@ -431,7 +456,10 @@ static scan start_tag_run(txml_parser *p) {
                 i += 1u;
             } else if (!t->seen_space) {
                 return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "attributes must be separated by whitespace"), txp_position_at(p, i));
-            } else if (!txp_is_name_start(b)) {
+            } else if (!txp_name_start_at(w + i, &width)) {
+                if (b >= 0x80u) {
+                    return txp_fail_name_char(p, i);
+                }
                 return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "expected an attribute name"), txp_position_at(p, i));
             } else if (t->count >= p->limits.max_attributes) {
                 return txp_fail(p, PROBLEM_LIMIT(TXML_LIMIT_ATTRIBUTES, "too many attributes"), txp_position_at(p, i));
@@ -543,8 +571,12 @@ static scan end_tag_run(txml_parser *p) {
     while (i < limit) {
         const uint8_t b = w[i];
 
+        uint32_t width = 0u;
         if (p->end_tag.phase == 0u) {
-            if (!txp_is_name_start(b)) {
+            if (!txp_name_start_at(w + i, &width)) {
+                if (b >= 0x80u) {
+                    return txp_fail_name_char(p, i);
+                }
                 return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "expected an element name"), txp_position_at(p, i));
             }
             if (p->depth == 0u) {
@@ -553,12 +585,17 @@ static scan end_tag_run(txml_parser *p) {
             p->end_tag.phase = 1u;
         } else if (p->end_tag.phase == 1u) {
             const txml_str raw = p->stack[p->depth - 1u].raw_name;
-            if (txp_is_name_char(b)) {
-                if (p->end_tag.matched >= raw.length || (uint8_t)raw.ptr[p->end_tag.matched] != b) {
-                    return txp_fail(p, PROBLEM(TXML_DOC_TAG_MISMATCH, "end tag does not match the open element"), p->construct);
+            if (txp_name_char_at(w + i, &width)) {
+                for (uint32_t k = 0u; k < width; k++) {
+                    if (p->end_tag.matched >= raw.length || (uint8_t)raw.ptr[p->end_tag.matched] != w[i + k]) {
+                        return txp_fail(p, PROBLEM(TXML_DOC_TAG_MISMATCH, "end tag does not match the open element"),
+                                        p->construct);
+                    }
+                    p->end_tag.matched += 1u;
                 }
-                p->end_tag.matched += 1u;
-                i += 1u;
+                i += width;
+            } else if (b >= 0x80u) {
+                return txp_fail_name_char(p, i);
             } else {
                 if (p->end_tag.matched != raw.length) {
                     return txp_fail(p, PROBLEM(TXML_DOC_TAG_MISMATCH, "end tag does not match the open element"), p->construct);

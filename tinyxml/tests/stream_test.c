@@ -378,6 +378,41 @@ static const char *const corpus[] = {
     "<a k=\"&amp\"/>",
     "<a>&#x110000;</a>",
     "<p:a/>",
+    /* Names are code-point ranges: legal and illegal non-ASCII names, in every
+     * place a name is scanned, so every cut lands inside a multi-byte name. */
+    "<\xc3\xa9/>",
+    "<a\xc2\xb7\x62 \xe6\x97\xa5\xe6\x9c\xac=\"1\"/>",
+    "<\xf0\x90\x80\x80 \xe2\x82\xac=\"1\"></\xf0\x90\x80\x80>",
+    "<p:\xc3\xa9 xmlns:p=\"urn:x\"/>",
+    "<a><?\xc3\xa9 d?></a>",
+    "<!DOCTYPE a [<!ENTITY \xc3\xa9 \"v\"><!ATTLIST a \xc3\xa9 CDATA \"d\">]><a>&\xc3\xa9;</a>",
+    "<a\xc3\x97\x62/>",
+    "<a\xe2\x80\x94\x62/>",
+    "<\xc2\xb7\x61/>",
+    "<\xcc\x81\x61/>",
+    "<a b\xc3\x97\x63=\"1\"/>",
+    "<a></a\xc3\x97>",
+    "<?p\xc3\x97q d?><a/>",
+    "<a>&a\xc3\x97\x62;</a>",
+    "<!DOCTYPE a\xc3\x97\x62><a/>",
+    "<!DOCTYPE a [<!ENTITY a\xc3\x97\x62 \"v\">]><a/>",
+    "<!DOCTYPE a [<!ATTLIST a b\xc3\x97\x63 CDATA \"v\">]><a/>",
+    /* Reserved namespaces. */
+    "<a xmlns:xml=\"http://www.w3.org/XML/1998/namespace\" xml:lang=\"en\"/>",
+    "<a xmlns:xmlns=\"urn:x\"/>",
+    "<a xmlns:xml=\"urn:x\"/>",
+    "<a xmlns:p=\"http://www.w3.org/XML/1998/namespace\"/>",
+    "<a xmlns=\"http://www.w3.org/2000/xmlns/\"/>",
+    "<!DOCTYPE a [<!ATTLIST a xmlns:p CDATA \"http://www.w3.org/2000/xmlns/\">]><a/>",
+    /* The byte order mark, alone and with what may follow it. */
+    "\xef\xbb\xbf<a/>",
+    "\xef\xbb\xbf<?xml version=\"1.0\"?><a>\xef\xbb\xbf</a>",
+    "\xef\xbb\xbf  <a/>",
+    "\xef\xbb\xbfx<a/>",
+    "\xef\xbb\xbf\xef\xbb\xbf<a/>",
+    "\xef\xbb\xbf",
+    "\xef\xbb",
+    "\xff\xfe<a/>",
 };
 
 #define CORPUS_COUNT (sizeof(corpus) / sizeof(corpus[0]))
@@ -808,10 +843,46 @@ static void test_throughput(void) {
     free(xml.data);
 }
 
+/* A byte order mark is an encoding signature: no node, three bytes of offset,
+ * no column. Whatever the feed does to it, including a cut inside it, the
+ * document is the one that came without it, and nothing is written back. */
+static void test_bom(void) {
+    static const uint8_t xml[] = { 0xEFu, 0xBBu, 0xBFu, '<', 'a', '/', '>' };
+    static const uint32_t chunks[] = { 1u, 2u, 3u, 4u, 0u };
+
+    for (size_t c = 0; c < sizeof(chunks) / sizeof(chunks[0]); c++) {
+        for (uint32_t cut = 0u; cut < sizeof(xml); cut++) {
+            plan p = default_plan();
+            p.chunk = chunks[c];
+            p.cut = cut;
+            p.staging = 64u;
+            txml_document_error error;
+            bool failed = false;
+            txml_doc *doc = drive(xml, sizeof(xml), &p, &error, &failed);
+
+            CHECK(doc != NULL && !failed);
+            if (doc == NULL) {
+                continue;
+            }
+            CHECK(txml_doc_node_count(doc) == 2u);
+            txml_position at = { 0, 0, 0 };
+            CHECK(txml_node_position(txml_cursor_at(doc, 1u), &at) == TXML_OK);
+            CHECK(at.offset == 3u && at.line == 1u && at.column == 1u);
+
+            buf written = { NULL, 0, 0 };
+            render_xml(&written, doc);
+            CHECK(written.length == 4u && memcmp(written.data, "<a/>", 4u) == 0);
+            free(written.data);
+            txml_doc_destroy(doc);
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     const char *spec = argc > 1 ? argv[1] : "tests/spec";
 
     test_corpus();
+    test_bom();
     test_spec_inputs(spec);
     test_sizes();
     test_throughput();

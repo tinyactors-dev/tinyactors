@@ -90,6 +90,16 @@ fails the same way at its lead byte.
 front of the window at the next feed. No state keeps an index into the window
 across a call, which is what makes that move safe.
 
+**The byte order mark.** A leading `EF BB BF` is an encoding signature, not
+content (ADR 0017). The `start` state consumes it: no node, three bytes in
+`txml_position.offset` and `txml_parser_offset`, and the column stays 1. It
+may be split across chunks like any character, because the first character is
+not readable until it is whole. U+FEFF anywhere else is character data, so
+text before the document element that begins with one is still an error. The
+XML declaration must be the first construct after the mark. UTF-16 marks
+(`FF FE`, `FE FF`) are not UTF-8 and are `TXML_DOC_ENCODING` at offset 0. The
+writer never emits a mark.
+
 `txml_parser_offset` reports bytes accepted by feeds so far, which is also the
 base for `txml_position.offset`.
 
@@ -114,6 +124,7 @@ ask for input, or run `at_eof`; otherwise run the current state.
 
 | State | Reads | Then |
 |---|---|---|
+| `start` | the first character: a UTF-8 byte order mark, if there is one | `content` |
 | `content` | text up to `<`; whitespace only outside the document element | `lt` |
 | `lt` | the byte after `<` | `end-tag`, `bang`, `pi-target`, or `start-tag` |
 | `bang` | the byte after `<!` | `literal` |
@@ -208,10 +219,37 @@ records, so a tag of any length costs what its names and values cost.
 the stack arena, released in LIFO order with the element that pushed them.
 Resolution scans it from the top, which is correct because inner declarations
 shadow outer ones. `xmlns=""` binds the empty prefix to namespace 0. A prefix
-that resolves to nothing is `TXML_DOC_UNDECLARED_PREFIX`; `xml` is
-pre-bound to `http://www.w3.org/XML/1998/namespace` and `xmlns` to
-`http://www.w3.org/2000/xmlns/`, and rebinding either is
-`TXML_DOC_UNDECLARED_PREFIX` as well.
+that resolves to nothing is `TXML_DOC_UNDECLARED_PREFIX`; `xml` resolves to
+`http://www.w3.org/XML/1998/namespace` without a declaration.
+
+**Reserved namespaces** (Namespaces in XML 1.0 §3) are checked when a
+declaration is read, wherever it comes from, including an `ATTLIST` default:
+
+| Declaration | Result |
+|---|---|
+| `xmlns:xmlns="…"`, any value | `TXML_DOC_UNDECLARED_PREFIX` |
+| `xmlns:xml="http://www.w3.org/XML/1998/namespace"` | legal, and binds `xml` |
+| `xmlns:xml="…"`, any other value | `TXML_DOC_UNDECLARED_PREFIX` |
+| any other prefix bound to the XML namespace | `TXML_DOC_SYNTAX` |
+| the default namespace bound to the XML namespace | `TXML_DOC_SYNTAX` |
+| any prefix or the default bound to `http://www.w3.org/2000/xmlns/` | `TXML_DOC_SYNTAX` |
+
+The prefix cases keep `UNDECLARED_PREFIX`, which is where the catalogue
+already put rebinding `xml` and `xmlns`; the URI cases are `SYNTAX` because no
+prefix is undeclared in them and nothing else in the catalogue fits. The
+position is the declaration, or the start tag that receives an `ATTLIST`
+default.
+
+**Names** follow XML 1.0 (fifth edition): `NameStartChar` and `NameChar` are
+code-point ranges (`src/text.c`), and every place that scans a name decodes
+one whole character at the current position. That is safe across chunk
+boundaries because feed-time validation only moves `valid` past whole
+characters, so a state never sees half of one. A non-ASCII character that
+cannot be part of a name is `TXML_DOC_NAME` at that character, in an element,
+attribute, end-tag, PI-target, DOCTYPE, `ENTITY`, `ATTLIST` or reference name;
+no non-ASCII character delimits markup, so it is never something else. An
+ASCII byte that ends a name ends it, as before, and the state that follows
+judges it.
 
 **Interning** hashes the expanded name (FNV-1a over the URI bytes, `0xFF`,
 then the local bytes) and probes an open-addressed table of name IDs held in
@@ -322,12 +360,12 @@ impossible) and a static message.
 
 | Code | Raised when |
 |---|---|
-| `TXML_DOC_ENCODING` | ill-formed UTF-8; an overlong or surrogate encoding; a byte sequence or character reference outside the XML `Char` production; an XML declaration naming an encoding other than UTF-8 |
-| `TXML_DOC_SYNTAX` | malformed markup: an unquoted attribute value, a missing `=`, `--` inside a comment, `]]>` in text, a bad PI, a malformed reference, recursive entity expansion, a second root element, a feed after `final` |
-| `TXML_DOC_NAME` | a name that violates `NameStartChar`/`NameChar`, or a QName with more than one colon or an empty part |
+| `TXML_DOC_ENCODING` | ill-formed UTF-8, which includes a UTF-16 byte order mark; an overlong or surrogate encoding; a byte sequence or character reference outside the XML `Char` production; an XML declaration naming an encoding other than UTF-8 |
+| `TXML_DOC_SYNTAX` | malformed markup: a reserved namespace bound to the wrong name, an unquoted attribute value, a missing `=`, `--` inside a comment, `]]>` in text, a bad PI, a malformed reference, recursive entity expansion, a second root element, a feed after `final` |
+| `TXML_DOC_NAME` | a name that violates `NameStartChar`/`NameChar` (at the offending character), including an entity reference name, or a QName with more than one colon or an empty part |
 | `TXML_DOC_TAG_MISMATCH` | an end tag whose written name differs from the open element's, or an end tag with no open element |
 | `TXML_DOC_DUPLICATE_ATTRIBUTE` | two attributes on one tag with the same expanded name, including two prefixes bound to the same URI |
-| `TXML_DOC_UNDECLARED_PREFIX` | a prefix with no binding in scope, or an attempt to rebind `xml` or `xmlns` |
+| `TXML_DOC_UNDECLARED_PREFIX` | a prefix with no binding in scope, an attempt to declare `xmlns`, or to bind `xml` to anything but its own namespace |
 | `TXML_DOC_UNDECLARED_ENTITY` | a general entity that is neither predefined nor declared in the internal subset |
 | `TXML_DOC_UNEXPECTED_EOF` | `final` arrived inside markup, or with elements still open |
 | `TXML_DOC_NO_ROOT` | `final` arrived with no document element |
@@ -360,3 +398,7 @@ Known deviations, each a deviation rather than a design change:
   error is the one reported; the whole-construct scanner reported the encoding
   error first.
 - **Namespaces are bounded by `max_names`.**
+- **Names, reserved namespaces and the byte order mark** follow the rules above
+  (they used to be an approximation: any non-ASCII byte was a name character,
+  any declaration of `xml` or `xmlns` was refused, and a leading U+FEFF was text
+  before the root).

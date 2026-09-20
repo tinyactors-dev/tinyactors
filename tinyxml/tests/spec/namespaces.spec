@@ -151,3 +151,118 @@ UNDECLARED_PREFIX 1:2 offset=1
 @error
 UNDECLARED_PREFIX 1:4 offset=3
 @end
+
+# Reserved namespaces (Namespaces in XML 1.0 §3). The xmlns prefix is never
+# declared. The xml prefix may be declared, but only as its own namespace.
+# Neither reserved namespace may be bound to any other prefix or to the
+# default. Rebinding a reserved prefix is UNDECLARED_PREFIX; binding a reserved
+# URI to the wrong name is SYNTAX. The error is at the offending attribute, or
+# for an ATTLIST default at the start tag that receives it.
+
+@case the xml prefix may be declared as its own namespace
+@xml
+<a xmlns:xml="http://www.w3.org/XML/1998/namespace" xml:lang="en"/>
+@nodes
+0 document - end=2 parent=- depth=0
+1 element {}a end=2 parent=0 depth=1 attributes=2 flags=EMPTY
+@attributes
+1.0 {http://www.w3.org/2000/xmlns/}xml "http://www.w3.org/XML/1998/namespace" flags=NS_DECL
+1.1 {http://www.w3.org/XML/1998/namespace}lang "en"
+@names
+0 {}a
+1 {http://www.w3.org/2000/xmlns/}xml
+2 {http://www.w3.org/XML/1998/namespace}lang
+@end
+
+@case the xml prefix needs no declaration
+@xml
+<a xml:lang="en"/>
+@nodes
+0 document - end=2 parent=- depth=0
+1 element {}a end=2 parent=0 depth=1 attributes=1 flags=EMPTY
+@attributes
+1.0 {http://www.w3.org/XML/1998/namespace}lang "en"
+@end
+
+@case the xmlns prefix cannot be declared
+@xml
+<a xmlns:xmlns="urn:x"/>
+@error
+UNDECLARED_PREFIX 1:4 offset=3
+@end
+
+@case the xmlns prefix cannot be declared even as its own namespace
+@xml
+<a xmlns:xmlns="http://www.w3.org/2000/xmlns/"/>
+@error
+UNDECLARED_PREFIX 1:4 offset=3
+@end
+
+@case the xml prefix cannot be bound to another namespace
+@xml
+<a xmlns:xml="urn:x"/>
+@error
+UNDECLARED_PREFIX 1:4 offset=3
+@end
+
+@case the xml prefix cannot be bound to the xmlns namespace
+@xml
+<a xmlns:xml="http://www.w3.org/2000/xmlns/"/>
+@error
+UNDECLARED_PREFIX 1:4 offset=3
+@end
+
+@case no other prefix may be bound to the XML namespace
+@xml
+<a xmlns:p="http://www.w3.org/XML/1998/namespace"/>
+@error
+SYNTAX 1:4 offset=3
+@end
+
+@case the default namespace may not be the XML namespace
+@xml
+<a xmlns="http://www.w3.org/XML/1998/namespace"/>
+@error
+SYNTAX 1:4 offset=3
+@end
+
+@case no prefix may be bound to the xmlns namespace
+@xml
+<a xmlns:p="http://www.w3.org/2000/xmlns/"/>
+@error
+SYNTAX 1:4 offset=3
+@end
+
+@case the default namespace may not be the xmlns namespace
+@xml
+<a xmlns="http://www.w3.org/2000/xmlns/"/>
+@error
+SYNTAX 1:4 offset=3
+@end
+
+@case a reserved namespace on an inner element is refused there
+@xml
+<a><b xmlns:p="http://www.w3.org/XML/1998/namespace"/></a>
+@error
+SYNTAX 1:7 offset=6
+@end
+
+@case an ATTLIST default that declares the xml prefix correctly is fine
+@xml
+<!DOCTYPE a [<!ATTLIST a xmlns:xml CDATA "http://www.w3.org/XML/1998/namespace">]><a xml:lang="en"/>
+@error
+@end
+
+@case an ATTLIST default cannot bind a reserved namespace to another prefix
+@xml
+<!DOCTYPE a [<!ATTLIST a xmlns:p CDATA "http://www.w3.org/XML/1998/namespace">]><a/>
+@error
+SYNTAX 1:81 offset=80
+@end
+
+@case an ATTLIST default cannot declare the xmlns prefix
+@xml
+<!DOCTYPE a [<!ATTLIST a xmlns:xmlns CDATA "urn:x">]><a/>
+@error
+UNDECLARED_PREFIX 1:54 offset=53
+@end

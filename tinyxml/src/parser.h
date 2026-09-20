@@ -257,6 +257,7 @@ struct txml_parser {
     stage stage;
     bool seen_root;
     bool seen_doctype;
+    uint32_t bom_length; /* 3 when the input began with a UTF-8 byte order mark, else 0 */
     open_element *stack;
     uint32_t depth;
     binding *bindings;
@@ -370,12 +371,19 @@ typedef struct {
 /* Intern a name; a full names table is a TXML_DOC_LIMIT at `request->at`. */
 scan txp_intern(txml_parser *p, const intern_request *request, uint32_t *id);
 
+/* The character at window[index] cannot be part of a name where one must be
+ * (or continue): TXML_DOC_NAME at that character. Only ever raised for
+ * non-ASCII characters, since no non-ASCII character delimits markup. */
+scan txp_fail_name_char(txml_parser *p, uint32_t index);
+
 uint32_t txp_skip_space(const uint8_t *bytes, uint32_t from, uint32_t limit);
 uint32_t txp_scan_name(const uint8_t *bytes, uint32_t from, uint32_t limit);
 
 bool txp_is_space(uint8_t byte);
-bool txp_is_name_start(uint8_t byte);
-bool txp_is_name_char(uint8_t byte);
+/* Whether the whole character at `bytes` starts, or continues, a Name; `width`
+ * is its length. `bytes` must be at a character boundary below `valid`. */
+bool txp_name_start_at(const uint8_t *bytes, uint32_t *width);
+bool txp_name_char_at(const uint8_t *bytes, uint32_t *width);
 uint32_t txp_literal_length(const char *literal);
 bool txp_bytes_are(const uint8_t *bytes, uint32_t length, const char *literal);
 
@@ -429,6 +437,8 @@ scan txp_add_default(txml_parser *p, const default_request *request);
  * content.c
  */
 
+/* The state a parse begins in: it consumes a UTF-8 byte order mark, if any. */
+extern const state txp_state_start;
 extern const state txp_state_content;
 extern const state txp_state_lt;
 extern const state txp_state_bang;

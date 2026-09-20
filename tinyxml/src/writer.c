@@ -163,23 +163,23 @@ static txml_str str_of(const char *literal) {
     return (txml_str){ literal, literal_length(literal) };
 }
 
-static bool is_name_start(uint8_t byte) {
-    return (byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') || byte == '_' || byte >= 0x80u;
-}
-
-static bool is_name_char(uint8_t byte) {
-    return is_name_start(byte) || (byte >= '0' && byte <= '9') || byte == '-' || byte == '.';
-}
-
-/* A Name without a colon: the shape of a prefix, a local part, a PI target. */
+/* A Name without a colon: the shape of a prefix, a local part, a PI target.
+ * The bytes must be well-formed UTF-8, which is checked first. */
 static bool is_ncname(txml_str name) {
-    if (name.length == 0u || !is_name_start((uint8_t)name.ptr[0])) {
+    const uint8_t *bytes = (const uint8_t *)name.ptr;
+    uint32_t i = 0u;
+
+    if (name.length == 0u || txml_text_first_invalid(bytes, name.length) != name.length) {
         return false;
     }
-    for (uint32_t i = 1u; i < name.length; i++) {
-        if (!is_name_char((uint8_t)name.ptr[i])) {
+    while (i < name.length) {
+        uint32_t width = 0u;
+        const uint32_t code = txml_text_decode(bytes + i, &width);
+        const bool ok = i == 0u ? txml_text_is_name_start(code) : txml_text_is_name_char(code);
+        if (!ok || code == ':') {
             return false;
         }
+        i += width;
     }
     return true;
 }

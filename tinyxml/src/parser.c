@@ -17,12 +17,16 @@ bool txp_is_space(uint8_t byte) {
     return byte == ' ' || byte == '\t' || byte == '\n' || byte == '\r';
 }
 
-bool txp_is_name_start(uint8_t byte) {
-    return (byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') || byte == '_' || byte == ':' || byte >= 0x80u;
+bool txp_name_start_at(const uint8_t *bytes, uint32_t *width) {
+    return txml_text_is_name_start(txml_text_decode(bytes, width));
 }
 
-bool txp_is_name_char(uint8_t byte) {
-    return txp_is_name_start(byte) || (byte >= '0' && byte <= '9') || byte == '-' || byte == '.';
+bool txp_name_char_at(const uint8_t *bytes, uint32_t *width) {
+    return txml_text_is_name_char(txml_text_decode(bytes, width));
+}
+
+scan txp_fail_name_char(txml_parser *p, uint32_t index) {
+    return txp_fail(p, PROBLEM(TXML_DOC_NAME, "not a legal name character"), txp_position_at(p, index));
 }
 
 uint32_t txp_skip_space(const uint8_t *bytes, uint32_t from, uint32_t limit) {
@@ -33,12 +37,13 @@ uint32_t txp_skip_space(const uint8_t *bytes, uint32_t from, uint32_t limit) {
 }
 
 uint32_t txp_scan_name(const uint8_t *bytes, uint32_t from, uint32_t limit) {
-    if (from >= limit || !txp_is_name_start(bytes[from])) {
+    uint32_t width = 0u;
+    if (from >= limit || !txp_name_start_at(bytes + from, &width)) {
         return from;
     }
-    uint32_t i = from + 1u;
-    while (i < limit && txp_is_name_char(bytes[i])) {
-        i += 1u;
+    uint32_t i = from + width;
+    while (i < limit && txp_name_char_at(bytes + i, &width)) {
+        i += width;
     }
     return i;
 }
@@ -233,7 +238,7 @@ txml_result txml_parser_init(txml_parser **out, const txml_parser_config *config
     p->staging_length = staging;
     p->bad = IDX_NONE;
     p->line = p->column = 1u;
-    p->state = &txp_state_content;
+    p->state = &txp_state_start;
     p->stage = STAGE_PROLOG;
     p->error = (txml_document_error){ TXML_DOC_OK, TXML_LIMIT_NONE, { 0u, 1u, 1u }, { "", 0u } };
     p->reference_capacity = config->limits.max_name_length + 2u;

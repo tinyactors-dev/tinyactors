@@ -20,3 +20,15 @@ typedef struct {
 } txml_text_scan;
 
 txml_text_scan txml_text_scan_utf8(const uint8_t *bytes, uint32_t length);
+
+/*
+ * One character of well-formed UTF-8. `bytes` must start at a character
+ * boundary with the whole character present, which the parser guarantees for
+ * everything below `valid` and the writer by checking its input first. Returns
+ * the code point and sets `width` to its length in bytes.
+ */
+uint32_t txml_text_decode(const uint8_t *bytes, uint32_t *width);
+
+/* XML 1.0 (fifth edition) NameStartChar and NameChar, which include ':'. */
+bool txml_text_is_name_start(uint32_t code);
+bool txml_text_is_name_char(uint32_t code);

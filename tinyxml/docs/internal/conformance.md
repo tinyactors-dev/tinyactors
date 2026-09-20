@@ -14,9 +14,17 @@ the one part of it that was configurable; this is the detail.
   `TXML_DOC_ENCODING`. Transcoding is an adapter the embedder puts in front of
   `txml_parse_feed`.
 - **Namespaces in XML 1.0**: prefix resolution, default declarations,
-  `xmlns=""` undeclaration, the pre-bound `xml` and `xmlns` prefixes,
+  `xmlns=""` undeclaration, the reserved `xml` and `xmlns` prefixes and both
+  reserved namespace URIs (§3: `xmlns` is never declared, `xml` only as its own
+  namespace, and neither URI is bound to anything else, defaults included),
   duplicate-attribute detection on **expanded** names, and the rule that an
   unprefixed attribute has no namespace.
+- **XML 1.0 names**: `NameStartChar` and `NameChar` as the fifth edition's code
+  point ranges, so `a×b` and `a—b` are not names and `é`, `a·b`, `日本` and
+  `𐀀` are.
+- **A UTF-8 byte order mark** at the start of the input is an encoding
+  signature: consumed without a node, counted in the offset, and not written
+  back. It is the one thing in the input that is not kept (ADR 0017).
 - **The five predefined entities** and numeric character references, decimal
   and hexadecimal.
 - **Line-end and attribute-value normalization** exactly as XML §2.11 and
@@ -27,7 +35,8 @@ the one part of it that was configurable; this is the detail.
   `TXML_NODE_DOCTYPE` node whose text is the declaration as written.
 - **A concrete syntax tree** (ADR 0017): comments, processing instructions,
   every text run including whitespace-only ones, the XML declaration and the
-  DOCTYPE are all nodes. Nothing the input contains is discarded.
+  DOCTYPE are all nodes. Nothing the input contains is discarded, except a
+  leading byte order mark, which is an encoding signature.
 
 ## Not implemented
 

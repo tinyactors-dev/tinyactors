@@ -92,3 +92,43 @@ uint32_t txml_text_first_invalid(const uint8_t *s, uint32_t length) {
     const txml_text_scan scan = txml_text_scan_utf8(s, length);
     return scan.invalid != UINT32_MAX ? scan.invalid : scan.complete;
 }
+
+uint32_t txml_text_decode(const uint8_t *s, uint32_t *width) {
+    const uint8_t b = s[0];
+
+    if (b < 0x80u) {
+        *width = 1u;
+        return b;
+    }
+    if (b < 0xE0u) {
+        *width = 2u;
+        return ((uint32_t)(b & 0x1Fu) << 6) | (uint32_t)(s[1] & 0x3Fu);
+    }
+    if (b < 0xF0u) {
+        *width = 3u;
+        return ((uint32_t)(b & 0x0Fu) << 12) | ((uint32_t)(s[1] & 0x3Fu) << 6) | (uint32_t)(s[2] & 0x3Fu);
+    }
+    *width = 4u;
+    return ((uint32_t)(b & 0x07u) << 18) | ((uint32_t)(s[1] & 0x3Fu) << 12) | ((uint32_t)(s[2] & 0x3Fu) << 6) |
+           (uint32_t)(s[3] & 0x3Fu);
+}
+
+static bool in(uint32_t code, uint32_t low, uint32_t high) {
+    return code >= low && code <= high;
+}
+
+bool txml_text_is_name_start(uint32_t c) {
+    if (c < 0x80u) {
+        return in(c, 'a', 'z') || in(c, 'A', 'Z') || c == '_' || c == ':';
+    }
+    return in(c, 0xC0u, 0xD6u) || in(c, 0xD8u, 0xF6u) || in(c, 0xF8u, 0x2FFu) || in(c, 0x370u, 0x37Du) ||
+           in(c, 0x37Fu, 0x1FFFu) || in(c, 0x200Cu, 0x200Du) || in(c, 0x2070u, 0x218Fu) || in(c, 0x2C00u, 0x2FEFu) ||
+           in(c, 0x3001u, 0xD7FFu) || in(c, 0xF900u, 0xFDCFu) || in(c, 0xFDF0u, 0xFFFDu) || in(c, 0x10000u, 0xEFFFFu);
+}
+
+bool txml_text_is_name_char(uint32_t c) {
+    if (c < 0x80u) {
+        return txml_text_is_name_start(c) || in(c, '0', '9') || c == '-' || c == '.';
+    }
+    return txml_text_is_name_start(c) || c == 0xB7u || in(c, 0x300u, 0x36Fu) || in(c, 0x203Fu, 0x2040u);
+}
