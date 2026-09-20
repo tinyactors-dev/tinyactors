@@ -342,7 +342,7 @@ static void test_executable_content(roundtrip *trip) {
                 .params = (const ta_scxml_param_spec[]){
                     { .name = S("a"), .value = VEXPR("1") },
                     { .name = S("b"), .value = VLOC("count") },
-                    {0},
+                    { .name = {0} },
                 },
             },
         },
@@ -377,7 +377,7 @@ static void test_executable_content(roundtrip *trip) {
             { .name = S("count"), .initializer = VEXPR("0") },
             { .name = S("items"), .initializer = VCONTENT("[1,2,3]") },
             { .name = S("unset") },
-            {0},
+            { .name = {0} },
         },
         .initial = &(ta_scxml_initial_spec){ .targets = TARGETS(S("running")) },
         .states = (const ta_scxml_state_spec[]){
@@ -386,7 +386,7 @@ static void test_executable_content(roundtrip *trip) {
                 .id = S("running"),
                 .data = (const ta_scxml_data_spec[]){
                     { .name = S("local"), .initializer = VEXPR("{}") },
-                    {0},
+                    { .name = {0} },
                 },
                 .onentry = (const ta_scxml_handler_spec[]){
                     { .actions = entry_actions },
@@ -457,7 +457,7 @@ static void test_invokes_and_done_data(roundtrip *trip) {
                         .type = LIT("scxml"),
                         .src = LIT("file:child.scxml"),
                         .autoforward = true,
-                        .params = (const ta_scxml_param_spec[]){ { .name = S("x"), .value = VEXPR("1") }, {0} },
+                        .params = (const ta_scxml_param_spec[]){ { .name = S("x"), .value = VEXPR("1") }, { .name = {0} } },
                         .finalize = ACTIONS({ .kind = TA_SCXML_ACTION_ASSIGN,
                                               .as.assign = { .location = E("result"), .value = VEXPR("_event.data") } }),
                     },
@@ -495,11 +495,11 @@ static void test_invokes_and_done_data(roundtrip *trip) {
                             .params = (const ta_scxml_param_spec[]){
                                 { .name = S("code"), .value = VCONTENT("42") },
                                 { .name = S("where"), .value = VLOC("location") },
-                                {0},
+                                { .name = {0} },
                             },
                         },
                     },
-                    { .kind = TA_SCXML_STATE_FINAL, .id = S("empty_done"), .done_data = &(ta_scxml_done_data_spec){0} },
+                    { .kind = TA_SCXML_STATE_FINAL, .id = S("empty_done"), .done_data = &(ta_scxml_done_data_spec){ .params = NULL } },
                     {0},
                 },
             },
