@@ -62,11 +62,10 @@ static bool str_is(txml_str text, const char *literal) {
 }
 
 /* Parse a whole document, or return NULL having reported why not. */
-static txml_doc *parse(const char *xml, uint32_t flags) {
+static txml_doc *parse(const char *xml) {
     txml_parser_config config = {
         .allocator = heap,
         .limits = TXML_LIMITS_DEFAULT,
-        .flags = flags,
         .staging_length = 0u,
         .chunk_size = 0u,
         .step_budget = 0u,
@@ -578,7 +577,7 @@ static void test_find_attribute(const txml_doc *doc) {
 /* ------------------------------------------------------------------------ */
 
 int main(void) {
-    txml_doc *doc = parse(CATALOG, 0u);
+    txml_doc *doc = parse(CATALOG);
     if (doc == NULL) {
         fprintf(stderr, "cursor_test: the fixture document did not parse\n");
         return 1;

@@ -25,9 +25,8 @@ green.
    or an arena allocation. Checkable: `-Wvla -Werror`.
 6. **Reads stay in bounds.** A state reads only `[start, limit)` of the
    staging window, which is whole valid characters. A scanner may read beyond
-   the last input byte only within the window's 64 bytes of padding, or within
-   a caller chunk that set `TXML_INPUT_PADDED`. Checkable: ASan and valgrind runs of
-   the suite.
+   the last input byte only within the window's 64 bytes of padding. Checkable:
+   ASan and valgrind runs of the suite.
 
 ## Memory
 

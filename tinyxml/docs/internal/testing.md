@@ -63,10 +63,8 @@ A `.spec` file is a sequence of cases. Outside a section, a line starting with
 ```
 
 - `@case <name>` opens a case, `@end` closes it. `@xml` and `@end` are required.
-- `@flags` takes `txml_parser_flags` names without the `TXML_` prefix, separated
-  by spaces. Since ADR 0017 there is one such name, `INPUT_PADDED`, and no case
-  in the corpus needs it; a case naming a flag that no longer exists is an
-  error rather than a no-op.
+- There is no `@flags` directive: the parser has no flags (ADR 0022), and a
+  case that still writes one is an unknown directive, which is an error.
 - `@limits` takes `field=value` pairs using the `txml_limits` field names.
   Unlisted fields keep `TXML_LIMITS_DEFAULT`.
 - `@chunk N` feeds the input `N` bytes at a time; `0` or absent feeds it whole.

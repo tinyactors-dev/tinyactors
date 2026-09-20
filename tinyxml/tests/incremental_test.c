@@ -100,7 +100,6 @@ static txml_parser_config log_config(void) {
     txml_parser_config config = {
         .allocator = heap,
         .limits = TXML_LIMITS_DEFAULT,
-        .flags = 0u,
         .staging_length = 0u,
         .chunk_size = 4096u,
         /* One node per step, so the test inspects the document between every

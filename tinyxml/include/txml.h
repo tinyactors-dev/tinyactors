@@ -261,14 +261,6 @@ typedef struct {
         .max_document_bytes = 64u * 1024u * 1024u,   \
         .entity_expansion_budget = 8u * 1024u * 1024u })
 
-/*
- * There is one flag, and it is not a retention decision: the parse always
- * keeps everything (ADR 0017). It is a promise about the caller's buffer.
- */
-enum TXML_FLAG_SET(txml_parser_flags, "TXML_") {
-    TXML_INPUT_PADDED = 1u << 0 /* every fed chunk has 64 readable bytes past its end */
-};
-
 /* ========================================================================
  * Parser
  *
@@ -295,7 +287,6 @@ typedef struct {
      * them with itself; the caller supplies no arena of its own. */
     txml_allocator allocator;
     txml_limits limits;
-    uint32_t flags TXML_FLAGS(txml_parser_flags);
     uint32_t staging_length; /* input window in bytes; sizes a chunk, not a construct; 0 selects 64 KiB */
     size_t chunk_size;       /* chunk size for both arenas; 0 selects TXML_ARENA_CHUNK_DEFAULT */
     uint32_t step_budget;    /* nodes appended per step; 0 means until the step blocks */

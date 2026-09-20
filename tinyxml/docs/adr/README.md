@@ -27,6 +27,7 @@ ADRs 0016–0019 revise earlier ones. 0016 replaces the single-arena and borrowe
 | [0019](0019-the-writer-emits-declarations-and-doctypes-from-the-document.md) | [The writer emits declarations and doctypes from the document](0019-the-writer-emits-declarations-and-doctypes-from-the-document.md) |
 | [0020](0020-prefixes-are-recorded-per-node-and-per-attribute.md) | [Prefixes are recorded per node and per attribute](0020-prefixes-are-recorded-per-node-and-per-attribute.md) |
 | [0021](0021-the-scanner-is-a-table-of-resumable-states.md) | [The scanner is a table of resumable states](0021-the-scanner-is-a-table-of-resumable-states.md) |
+| [0022](0022-the-input-padded-escape-hatch-is-withdrawn.md) | [The input-padded escape hatch is withdrawn](0022-the-input-padded-escape-hatch-is-withdrawn.md) |
 
 txml is the XML front end that `tinyactors-core` deliberately lacks: core ADR 0001 adopts SCXML semantics without an XML dependency, core ADR 0025 defers an importer/exporter to a separate component, and core ADR 0023 sets the freestanding constraints txml inherits. Where a decision here mirrors one there, the text says so.
 

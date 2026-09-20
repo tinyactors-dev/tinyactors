@@ -171,7 +171,6 @@ static void render_quoted(buffer *out, txml_str text) {
 
 typedef struct {
     char name[160];
-    uint32_t flags;
     txml_limits limits;
     uint32_t chunk; /* 0 feeds the whole input at once */
 
@@ -194,44 +193,6 @@ static void spec_case_free(spec_case *item) {
     buffer_free(&item->positions);
     buffer_free(&item->error);
     buffer_free(&item->roundtrip);
-}
-
-typedef struct {
-    const char *name;
-    uint32_t flag;
-} flag_name;
-
-/* ADR 0017 removed the retention flags, so @flags has one word left. A case
- * that still names a removed flag is an error, not a no-op: parse_flags()
- * rejects anything not listed here. */
-static const flag_name parser_flag_names[] = {
-    { "INPUT_PADDED", TXML_INPUT_PADDED },
-};
-
-static bool parse_flags(const char *text, uint32_t *out, const char *path, int line) {
-    const char *at = text;
-    while (*at != '\0') {
-        while (*at == ' ' || *at == '\t') at++;
-        if (*at == '\0') break;
-        const char *start = at;
-        while (*at != '\0' && *at != ' ' && *at != '\t') at++;
-        size_t length = (size_t)(at - start);
-
-        bool found = false;
-        for (size_t i = 0; i < sizeof(parser_flag_names) / sizeof(parser_flag_names[0]); i++) {
-            if (strlen(parser_flag_names[i].name) == length &&
-                memcmp(parser_flag_names[i].name, start, length) == 0) {
-                *out |= parser_flag_names[i].flag;
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            fprintf(stderr, "%s:%d: unknown flag %.*s\n", path, line, (int)length, start);
-            return false;
-        }
-    }
-    return true;
 }
 
 static bool parse_limits(const char *text, txml_limits *limits, const char *path, int line) {
@@ -394,10 +355,7 @@ static bool read_spec_file(const char *path, case_handler handle) {
                 break;
             }
 
-            if (strcmp(directive, "flags") == 0) {
-                if (!parse_flags(argument, &item.flags, path, line_number)) { ok = false; break; }
-                current = SECTION_NONE;
-            } else if (strcmp(directive, "limits") == 0) {
+            if (strcmp(directive, "limits") == 0) {
                 if (!parse_limits(argument, &item.limits, path, line_number)) { ok = false; break; }
                 current = SECTION_NONE;
             } else if (strcmp(directive, "chunk") == 0) {
@@ -780,7 +738,6 @@ static bool parse_and_render(const spec_case *item, uint32_t chunk, rendering *o
     txml_parser_config config = {
         .allocator = heap,
         .limits = item->limits,
-        .flags = item->flags,
         .staging_length = 0u,
         .chunk_size = 0u,
         .step_budget = 0u,

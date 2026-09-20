@@ -31,7 +31,7 @@ require 'pathname'
 ROOT = Pathname.new(__dir__).join('../..').expand_path
 KINDS = %w[document element text comment pi declaration doctype].freeze
 HAS_ATTRIBUTES = %w[element declaration].freeze
-DIRECTIVES = %w[case flags limits chunk xml nodes attributes names positions error roundtrip end].freeze
+DIRECTIVES = %w[case limits chunk xml nodes attributes names positions error roundtrip end].freeze
 NODE_ROW = /\A(\d+) (\w+) (.*?) end=(\d+|-) parent=(\d+|-) depth=(\d+)(.*)\z/
 
 problems = []

@@ -185,9 +185,8 @@ node, attribute, position and prefix-exception columns   (tree arena)
 
 The copy into the staging window is what frees the caller's chunk immediately
 and what gives the scanner a padded buffer it may over-read by up to 64 bytes
-without undefined behaviour — the property a future SIMD scanner needs. A
-caller that keeps its input alive and guarantees the same padding can set
-`TXML_INPUT_PADDED`, and the scanner reads the caller's bytes in place.
+without undefined behaviour — the property a future SIMD scanner needs. There
+is no zero-copy path: the input is always copied (ADR 0022).
 
 Names and attribute values are copied into the pool once, during the same
 pass; nothing is copied a second time when a node is appended.
@@ -236,7 +235,6 @@ These are the exact rules; the header states them per function.
 | `txml_cursor`, `txml_attr_cursor` | created | same as above; they are values and survive any amount of further parsing |
 | Name IDs (`uint32_t`) | interned | the document is destroyed; never valid for another document |
 | A chunk passed to `txml_parse_feed` | — | the call returns; the caller may reuse or free it immediately |
-| A chunk passed to `txml_parse_feed` under `TXML_INPUT_PADDED` | — | the next `txml_parse_step` returns `TXML_STEP_NEED_INPUT` |
 | `txml_str` passed to a writer call that returned `TXML_OK` | — | the call returns |
 | `txml_str` passed to a writer call that returned `TXML_NEED_SPACE` | — | the drain sequence for that call finally returns `TXML_OK` |
 | `txml_bytes` from `txml_writer_output` | the call returns | the next `txml_writer_drain` |

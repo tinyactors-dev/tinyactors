@@ -198,16 +198,6 @@
         }
       ]
     },
-    "txml_parser_flags": {
-      "constants": [
-        {
-          "name": "TXML_INPUT_PADDED",
-          "value": 1,
-          "symbol": "input_padded",
-          "doc": "every fed chunk has 64 readable bytes past its end"
-        }
-      ]
-    },
     "txml_writer_flags": {
       "constants": [
         {
@@ -1227,13 +1217,6 @@
           }
         },
         {
-          "name": "flags",
-          "type": {
-            "builtin": "uint32_t"
-          },
-          "flags": "txml_parser_flags"
-        },
-        {
           "name": "staging_length",
           "type": {
             "builtin": "uint32_t"
@@ -1262,8 +1245,7 @@
           "offsets": {
             "allocator": 0,
             "limits": 16,
-            "flags": 48,
-            "staging_length": 52,
+            "staging_length": 48,
             "chunk_size": 56,
             "step_budget": 64
           }
@@ -1274,10 +1256,9 @@
           "offsets": {
             "allocator": 0,
             "limits": 8,
-            "flags": 40,
-            "staging_length": 44,
-            "chunk_size": 48,
-            "step_budget": 52
+            "staging_length": 40,
+            "chunk_size": 44,
+            "step_budget": 48
           }
         }
       }

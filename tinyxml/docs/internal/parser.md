@@ -392,7 +392,6 @@ Known deviations, each a deviation rather than a design change:
   constant.** The XML declaration, an ENTITY or ATTLIST declaration and a
   namespace URI are gathered whole; a document may make one large, up to that
   limit.
-- **`TXML_INPUT_PADDED`** is accepted and ignored: input is always copied.
 - **Error priority follows byte order.** Validation is incremental, so when a
   construct has both an encoding error and an earlier syntax error the syntax
   error is the one reported; the whole-construct scanner reported the encoding

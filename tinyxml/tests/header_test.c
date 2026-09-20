@@ -103,8 +103,6 @@ _Static_assert(TXML_LIMIT_NONE == 0, "no limit is zero");
 
 /* ADR 0017 removed every retention flag; what is left is a promise about the
  * caller's buffer, not a choice about what the tree contains. */
-SINGLE_BIT(TXML_INPUT_PADDED);
-_Static_assert(TXML_INPUT_PADDED == 0x1u, "the one parser flag is the low bit");
 
 SINGLE_BIT(TXML_NODE_EMPTY);
 SINGLE_BIT(TXML_NODE_CDATA);
@@ -193,17 +191,15 @@ int main(void) {
     CHECK(limits.entity_expansion_budget > 0u);
 
     /* TXML_LIMITS_DEFAULT inside a configuration, next to designated
-     * initializers and a flag set. */
+     * initializers. */
     const txml_parser_config parser_config = {
         .allocator = allocator,
         .limits = TXML_LIMITS_DEFAULT,
-        .flags = TXML_INPUT_PADDED,
         .staging_length = 0u,
         .chunk_size = 0u,
         .step_budget = 0u,
     };
     CHECK(parser_config.limits.max_depth == 256u);
-    CHECK((parser_config.flags & TXML_INPUT_PADDED) != 0u);
     CHECK(parser_config.allocator.v == &unused_vtable);
 
     /* A zero-initialized configuration must mean "defaults everywhere the
@@ -212,7 +208,6 @@ int main(void) {
     CHECK(zeroed.staging_length == 0u);
     CHECK(zeroed.chunk_size == 0u);
     CHECK(zeroed.step_budget == 0u);
-    CHECK(zeroed.flags == 0u);
 
     unsigned char output_bytes[8];
     const txml_writer_config writer_config = {

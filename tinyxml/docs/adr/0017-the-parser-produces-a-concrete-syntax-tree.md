@@ -26,7 +26,7 @@ The parser produces a **concrete syntax tree**: every construct in the input bec
 - **Positions are always recorded.** `txml_node_position` never returns `TXML_ERR_NOT_FOUND`.
 - **An encoding signature is not content.** A leading UTF-8 byte order mark is consumed, counted in the byte offset and given no node, and the writer does not emit one. It is the one thing in the input that is not kept: it says how the bytes are encoded, not what the document says, and XML §4.3.3 puts it outside the document entity's content. U+FEFF anywhere else is ordinary character data.
 
-`txml_parser_flags` therefore has one member left, `TXML_INPUT_PADDED`, which is not a retention decision at all: it is a promise about the caller's buffer (ADR 0008).
+`txml_parser_flags` therefore had one member left, `TXML_INPUT_PADDED`, which was not a retention decision at all: it was a promise about the caller's buffer (ADR 0008). ADR 0022 withdrew it, and the parser now has no flags.
 
 ## Consequences
 
@@ -40,4 +40,4 @@ The internal subset is no longer optional, so every document pays for the entity
 
 Consumers that wanted the lean tree lose nothing they cannot get back in a walk. `txml_next_element` and `txml_find_next` skip text, comments, PIs, the declaration and the doctype without the caller testing a kind, which is the same code an elements-only consumer was already writing.
 
-The spec corpus pays the transition cost: `@flags` loses almost all of its vocabulary and most node tables gain the nodes that used to be dropped. That is a one-time edit against fixtures whose whole purpose is to pin this kind of decision, and after it the tables say what the parser does rather than what one configuration of it does.
+The spec corpus pays the transition cost: `@flags` lost its vocabulary (and, with ADR 0022, the directive itself) and most node tables gain the nodes that used to be dropped. That is a one-time edit against fixtures whose whole purpose is to pin this kind of decision, and after it the tables say what the parser does rather than what one configuration of it does.
