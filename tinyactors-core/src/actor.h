@@ -72,3 +72,23 @@ typedef struct {
 
 ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id);
 bool ta_actor_state_active(const ta_actor *actor, ta_state_id state);
+
+/*
+ * A blank, unbootstrapped actor of `definition` with its slot claimed; the
+ * data-model instance is allocated but not initialized. ta_actor_spawn()
+ * bootstraps it, ta_actor_reconstruct() fills it from a session image.
+ */
+ta_result ta_actor_new(ta_system *system, ta_definition *definition, ta_actor **out);
+/* Tears the actor down completely and uncounts it against its definition. */
+void ta_actor_free(ta_system *system, ta_actor *actor);
+/* Frees the slot an actor was given, so a failed construction reuses it. */
+void ta_actor_release_slot(ta_system *system, ta_actor_id id);
+
+/*
+ * Advances the session epoch: the actor has changed in a way a session image
+ * captured before the change no longer describes. ta_actor_unload() compares
+ * epochs to refuse a stale image (ADR 0014), so this marks every semantic
+ * mutation and nothing else — a read, an inspection, or a capture must not
+ * move it.
+ */
+static inline void ta_actor_touch(ta_actor *actor) { actor->session_epoch += 1u; }

@@ -8,9 +8,10 @@
 # the expected entry, so a failed step leaves everything as it was.
 # Replacement upgrades a named actor to another revision of its family.
 #
-# Core claims, resolves and releases addresses, so a named actor is routable
-# and replies by address. It does not implement session images yet, so every
-# scenario that changes residency stops at ta_actor_capture with RPC -32001,
+# Core claims, resolves and releases addresses, and captures and reconstructs
+# sessions, so a named actor is routable, replies by address, and can be
+# imaged. It does not implement the residency protocol itself yet: every
+# scenario that changes residency stops at ta_actor_unload with RPC -32001,
 # and replacement stops at ta_actor_prepare_replacement. The code after the
 # first such call has not run against a real core; runner_selftest.rb checks
 # the helpers it uses.
@@ -82,7 +83,7 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
   # Catches: unload that terminates the actor or releases its name; timers
   # that fire while the actor is unloaded, are lost, or fire twice; load
   # that reuses the old runtime ID or restores a different configuration.
-  expect_failure 'ta_actor_capture is unimplemented', message: NamedActorScenarios::UNIMPLEMENTED
+  expect_failure 'ta_actor_unload is unimplemented', message: NamedActorScenarios::UNIMPLEMENTED
   scenario 'an unloaded actor keeps its address and its timer, and continues after load' do
     router = recording_router
     light = spawn name: 'l1'
@@ -114,7 +115,7 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
 
   # Catches: unload that accepts an image captured before the actor changed
   # (the host would checkpoint an old session), or that half-applies.
-  expect_failure 'ta_actor_capture is unimplemented', message: NamedActorScenarios::UNIMPLEMENTED
+  expect_failure 'ta_actor_unload is unimplemented', message: NamedActorScenarios::UNIMPLEMENTED
   scenario 'an image captured before a change cannot unload the actor' do
     light = spawn name: 'l1'
     stale = capture(light)
@@ -133,7 +134,7 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
   # Catches: residency transitions that are not compare-and-swaps (a failed
   # directory update that still unloads or loads the actor), or a failed
   # load that leaves a half-built resident session behind.
-  expect_failure 'ta_actor_capture is unimplemented', message: NamedActorScenarios::UNIMPLEMENTED
+  expect_failure 'ta_actor_unload is unimplemented', message: NamedActorScenarios::UNIMPLEMENTED
   scenario 'a failed directory update leaves unload and load retryable' do
     light = spawn name: 'l1'
     directory = instruments.fetch('directory')
@@ -157,7 +158,7 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
 
   # Catches: names released on unload, or never released: an unloaded
   # actor's address must stay reserved until remove_unloaded, then be free.
-  expect_failure 'ta_actor_capture is unimplemented', message: NamedActorScenarios::UNIMPLEMENTED
+  expect_failure 'ta_actor_unload is unimplemented', message: NamedActorScenarios::UNIMPLEMENTED
   scenario 'an unloaded actor reserves its name until it is removed' do
     light = spawn name: 'l1'
     image = capture(light)
@@ -214,7 +215,7 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
   # Catches: a send to an unloaded actor that is silently dropped or
   # delivered to a stale runtime ID instead of reaching the sender as a
   # communication error it can act on.
-  expect_failure 'ta_actor_capture is unimplemented', message: NamedActorScenarios::UNIMPLEMENTED
+  expect_failure 'ta_actor_unload is unimplemented', message: NamedActorScenarios::UNIMPLEMENTED
   scenario 'a send to an unloaded actor reaches the sender as a communication error' do
     router = recording_router(directory: true)
     sender = spawn :messenger, name: 'm1', binding: { peer: '#_actor_messenger/m2' }
@@ -242,7 +243,7 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
 
   # Catches: unload/load that is not invisible at some point of a run: a
   # lost or duplicated timer, history, or internal event (ADR 0014).
-  expect_failure 'ta_actor_capture is unimplemented', message: NamedActorScenarios::UNIMPLEMENTED
+  expect_failure 'ta_actor_unload is unimplemented', message: NamedActorScenarios::UNIMPLEMENTED
   scenario 'unloading and loading at any step is invisible' do
     cycle = ->(context) { context.actors.each { |actor| context.cycle_residency(actor) } }
     assert_equivalent_runs(interruptions: { 'unload and load' => cycle }) do
@@ -262,7 +263,7 @@ TinyactorsTest.scenarios 'replacement', chart: :counter_v1 do
   # escape, before activation; activation that is not a compare-and-swap
   # of the incumbent's entry; an incumbent destroyed later that removes the
   # replacement's route; a replacement that does not keep the bound data.
-  expect_failure 'ta_actor_capture is unimplemented', message: NamedActorScenarios::UNIMPLEMENTED
+  expect_failure 'ta_actor_unload is unimplemented', message: NamedActorScenarios::UNIMPLEMENTED
   scenario 'a replacement takes over the address only when activated' do
     router = recording_router
     incumbent = spawn name: 'c1'

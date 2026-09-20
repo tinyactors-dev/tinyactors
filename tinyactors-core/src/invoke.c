@@ -703,8 +703,8 @@ void ta_invoke_release(ta_system *system, ta_actor *actor) {
  * Host reports
  */
 
-static ta_result ta_invoke_unavailable(ta_system *system, ta_actor *actor, const ta_invoke_report_params *params) {
-    /* error.communication.invoke.<id>.unavailable */
+/* error.communication.invoke.<id>.unavailable */
+static ta_result ta_invoke_unavailable_name(ta_system *system, ta_invoke_id invoke, ta_event_name_id *out) {
     ta_event_name_id name = 0;
     ta_atom invoke_atom = 0;
     ta_atom unavailable = 0;
@@ -715,7 +715,7 @@ static ta_result ta_invoke_unavailable(ta_system *system, ta_actor *actor, const
     if (result == TA_OK) {
         result = ta_event_name_child(&system->event_names, TA_EVENT_NAME_ERROR_COMMUNICATION, invoke_atom, &name);
     }
-    ta_str text = ta_invoke_id_text(system, params->invoke_id);
+    ta_str text = ta_invoke_id_text(system, invoke);
     ta_atom id_atom = 0;
     if (result == TA_OK) {
         result = ta_atom_intern(&system->atoms, text, &id_atom);
@@ -726,6 +726,28 @@ static ta_result ta_invoke_unavailable(ta_system *system, ta_actor *actor, const
     if (result == TA_OK) {
         result = ta_event_name_child(&system->event_names, name, unavailable, &name);
     }
+    *out = name;
+    return result;
+}
+
+/*
+ * Reconstruction lost the service behind an invocation: it is retired and
+ * reported once, with no fault data, because nothing failed — the invocation
+ * simply did not survive the image (ADR 0038).
+ */
+ta_result ta_invoke_report_lost(ta_system *system, ta_actor *actor, ta_invoke_id invoke) {
+    ta_event_name_id name = 0;
+    ta_result result = ta_invoke_unavailable_name(system, invoke, &name);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_event event = { .name = name, .type = TA_EVENT_PLATFORM, .invoke_id = TA_INVOKE_ID_NONE };
+    return ta_interpreter_enqueue_internal(system, actor, &event);
+}
+
+static ta_result ta_invoke_unavailable(ta_system *system, ta_actor *actor, const ta_invoke_report_params *params) {
+    ta_event_name_id name = 0;
+    ta_result result = ta_invoke_unavailable_name(system, params->invoke_id, &name);
     if (result != TA_OK) {
         return result;
     }

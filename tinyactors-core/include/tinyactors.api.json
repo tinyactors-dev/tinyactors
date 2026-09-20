@@ -11867,7 +11867,7 @@
       "name": "ta_actor_capture",
       "public": true,
       "static_inline": false,
-      "implemented": false,
+      "implemented": true,
       "returns": {
         "type": {
           "type": "ta_result"
@@ -11903,7 +11903,7 @@
       "doc": "Named directory-managed images are restored with ta_actor_load().",
       "public": true,
       "static_inline": false,
-      "implemented": false,
+      "implemented": true,
       "returns": {
         "type": {
           "type": "ta_result"
@@ -11946,7 +11946,7 @@
       "doc": "Returns TA_ERR_NOT_FOUND when the captured actor owns no delayed send.",
       "public": true,
       "static_inline": false,
-      "implemented": false,
+      "implemented": true,
       "returns": {
         "type": {
           "type": "ta_result"
@@ -11982,7 +11982,7 @@
       "name": "ta_session_image_destroy",
       "public": true,
       "static_inline": false,
-      "implemented": false,
+      "implemented": true,
       "returns": {
         "type": {
           "builtin": "void"

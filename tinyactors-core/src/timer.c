@@ -174,6 +174,21 @@ uint32_t ta_timer_count_owner(const ta_timer_heap *heap, ta_actor_id owner) {
     return count;
 }
 
+uint32_t ta_timer_copy_unsubmitted(const ta_timer_heap *heap, ta_actor_id owner, ta_delayed_send *out) {
+    uint32_t count = 0;
+    for (uint32_t index = 0; index < heap->count; index += 1) {
+        const ta_delayed_send *send = &heap->items[index];
+        if (send->owner != owner || send->submitted) {
+            continue;
+        }
+        if (out != NULL) {
+            out[count] = *send;
+        }
+        count += 1u;
+    }
+    return count;
+}
+
 const ta_delayed_send *ta_timer_peek(const ta_timer_heap *heap) {
     return heap->count == 0 ? NULL : &heap->items[0];
 }

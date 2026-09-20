@@ -60,7 +60,7 @@ static ta_result ta_actor_claim_slot(ta_system *system, ta_actor *actor, ta_acto
  * Tears the actor down completely, then uncounts it. The last actor of a
  * retired definition frees the definition, so nothing below may touch it.
  */
-static void ta_actor_free(ta_system *system, ta_actor *actor) {
+void ta_actor_free(ta_system *system, ta_actor *actor) {
     const ta_definition *definition = actor->definition;
     if (actor->datamodel_initialized) {
         definition->datamodel.v->destroy_instance(definition->datamodel.self, definition->datamodel_shared,
@@ -124,7 +124,7 @@ static ta_result ta_actor_claim_address(ta_system *system,
 }
 
 /* Frees the slot an actor was given, so a failed spawn reuses it. */
-static void ta_actor_release_slot(ta_system *system, ta_actor_id id) {
+void ta_actor_release_slot(ta_system *system, ta_actor_id id) {
     ta_actor_slot *entry = ta_vec_at(&system->actors, (uint32_t)(id & 0xffffffffu));
     entry->actor = NULL;
     entry->generation += 1u;
@@ -177,14 +177,13 @@ ta_result ta_actor_find(ta_system *system, const ta_actor_find_params *params) {
     return entry.kind == TA_ACTOR_DIRECTORY_UNLOADED ? TA_ERR_UNLOADED : TA_ERR_NOT_FOUND;
 }
 
-ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params) {
-    if (system == NULL || params == NULL || params->out == NULL) {
-        return TA_ERR_INVALID;
-    }
-    ta_definition *definition = ta_system_definition(system, params->definition);
-    if (definition == NULL || definition->retired) {
-        return TA_ERR_NOT_FOUND;
-    }
+/*
+ * A blank actor of `definition`: session storage zeroed, a data-model
+ * instance allocated but not initialized, a slot claimed, and a record that
+ * answers to its runtime ID. Spawn bootstraps it; reconstruction fills it
+ * from an image instead, so both start here.
+ */
+ta_result ta_actor_new(ta_system *system, ta_definition *definition, ta_actor **out) {
     ta_actor *actor = ta_mem_alloc(system->allocator, sizeof(ta_actor), _Alignof(ta_actor));
     if (actor == NULL) {
         return TA_ERR_NOMEM;
@@ -208,25 +207,13 @@ ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params)
     actor->late_initialized = (uint64_t *)(storage + config_bytes);
     actor->history = (ta_history_state){ .storage = storage + config_bytes * 2u, .layout = &definition->history };
 
-    uint32_t instance_size = definition->datamodel_instance_size;
     actor->datamodel_instance = ta_mem_alloc(system->allocator, ta_definition_instance_bytes(definition),
                                              definition->datamodel_instance_alignment);
     if (actor->datamodel_instance == NULL) {
         ta_actor_free(system, actor);
         return TA_ERR_NOMEM;
     }
-    ta_mem_zero(actor->datamodel_instance, instance_size);
-
-    if (params->parent != NULL) {
-        actor->sparse = ta_mem_alloc(system->allocator, sizeof(ta_actor_sparse_state),
-                                     _Alignof(ta_actor_sparse_state));
-        if (actor->sparse == NULL) {
-            ta_actor_free(system, actor);
-            return TA_ERR_NOMEM;
-        }
-        *actor->sparse = (ta_actor_sparse_state){ .parent = *params->parent, .has_parent = true };
-        ta_vec_init(&actor->sparse->internal_events, system->allocator, TA_VEC_LAYOUT(ta_queued_event));
-    }
+    ta_mem_zero(actor->datamodel_instance, definition->datamodel_instance_size);
 
     ta_actor_id id = 0;
     ta_result result = ta_actor_claim_slot(system, actor, &id);
@@ -236,10 +223,41 @@ ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params)
     }
     actor->record = (ta_actor_record){
         .id = id,
-        .definition = params->definition,
+        .definition = definition->id,
         .self = { .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = id },
         .residency = TA_ACTOR_RUNNING,
     };
+    *out = actor;
+    return TA_OK;
+}
+
+ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params) {
+    if (system == NULL || params == NULL || params->out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    ta_definition *definition = ta_system_definition(system, params->definition);
+    if (definition == NULL || definition->retired) {
+        return TA_ERR_NOT_FOUND;
+    }
+    ta_actor *actor = NULL;
+    ta_result result = ta_actor_new(system, definition, &actor);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_actor_id id = actor->record.id;
+
+    if (params->parent != NULL) {
+        actor->sparse = ta_mem_alloc(system->allocator, sizeof(ta_actor_sparse_state),
+                                     _Alignof(ta_actor_sparse_state));
+        if (actor->sparse == NULL) {
+            ta_actor_release_slot(system, id);
+            ta_actor_free(system, actor);
+            return TA_ERR_NOMEM;
+        }
+        *actor->sparse = (ta_actor_sparse_state){ .parent = *params->parent, .has_parent = true };
+        ta_vec_init(&actor->sparse->internal_events, system->allocator, TA_VEC_LAYOUT(ta_queued_event));
+    }
+
     result = definition->datamodel.v->init_instance(
         definition->datamodel.self,
         &(ta_datamodel_init_instance_params){
@@ -294,6 +312,7 @@ ta_result ta_actor_deliver(ta_system *system, ta_actor_id id, const ta_event *ev
     actor->external_event = copy;
     actor->has_external_event = true;
     actor->macrostep = true;
+    ta_actor_touch(actor);
     actor->record.residency = TA_ACTOR_RUNNING;
     return TA_OK;
 }

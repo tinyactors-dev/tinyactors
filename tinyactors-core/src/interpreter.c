@@ -92,6 +92,7 @@ static ta_actor_sparse_state *ta_sparse(ta_system *system, ta_actor *actor) {
 }
 
 ta_result ta_interpreter_enqueue_internal(ta_system *system, ta_actor *actor, ta_event *event) {
+    ta_actor_touch(actor);
     ta_actor_sparse_state *sparse = ta_sparse(system, actor);
     ta_queued_event queued = {
         .event = *event,
@@ -1594,6 +1595,9 @@ static void ta_store_active(ta_interpreter *it) {
 }
 
 static ta_result ta_microstep(ta_interpreter *it) {
+    /* A microstep changes the configuration, history, or the queue: an image
+     * taken before it no longer describes this actor. */
+    ta_actor_touch(it->actor);
     ta_result result = ta_exit_states(it);
     for (uint32_t index = 0; result == TA_OK && index < it->enabled_count; index += 1) {
         result = ta_run_block_isolated(it, ta_view(it, it->enabled[index]).actions);

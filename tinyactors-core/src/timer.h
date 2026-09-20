@@ -55,6 +55,14 @@ void ta_timer_cancel_unsubmitted(ta_timer_heap *heap, ta_actor_id owner);
 /* Removes and releases every pending send of owner. */
 void ta_timer_cancel_owner(ta_timer_heap *heap, ta_actor_id owner);
 uint32_t ta_timer_count_owner(const ta_timer_heap *heap, ta_actor_id owner);
+/*
+ * Copies the owner's not yet submitted sends, and returns how many there are;
+ * a null `out` only counts. These are the sends a session belongs to, the
+ * same set ta_timer_cancel_unsubmitted() drops when the session ends — a
+ * submitted send outlives it and is the system's to re-offer. The copies
+ * borrow their values; the caller takes its own references.
+ */
+uint32_t ta_timer_copy_unsubmitted(const ta_timer_heap *heap, ta_actor_id owner, ta_delayed_send *out);
 const ta_delayed_send *ta_timer_peek(const ta_timer_heap *heap);
 /* Transfers ownership of the earliest send's values to *out. */
 ta_result ta_timer_pop(ta_timer_heap *heap, ta_delayed_send *out);
