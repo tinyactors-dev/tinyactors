@@ -23,9 +23,10 @@ green.
    document within a limit raised for the purpose.
 5. **No VLAs, no `alloca`.** Every buffer is either a fixed-size struct member
    or an arena allocation. Checkable: `-Wvla -Werror`.
-6. **Reads stay in bounds.** A scanner may read beyond the last input byte
-   only within the staging window's 64 bytes of padding, or within a caller
-   chunk that set `TXML_INPUT_PADDED`. Checkable: ASan and valgrind runs of
+6. **Reads stay in bounds.** A state reads only `[start, limit)` of the
+   staging window, which is whole valid characters. A scanner may read beyond
+   the last input byte only within the window's 64 bytes of padding, or within
+   a caller chunk that set `TXML_INPUT_PADDED`. Checkable: ASan and valgrind runs of
    the suite.
 
 ## Memory
@@ -37,7 +38,9 @@ green.
    never referenced from outside the parser.
 8. **A string never spans a pool page.** Every `txml_str` a document returns
    is one contiguous run. An oversized run reserves consecutive directory
-   slots that point into a single arena block.
+   slots that point into a single arena block. A run that streams in moves to
+   a bigger block as it grows, but only while pending, before anything can
+   refer to it.
 9. **Every `txml_str` from a document points into that document's values
    arena.** Never into the tree arena, never into the staging window, never
    into a caller chunk, never into static storage — except

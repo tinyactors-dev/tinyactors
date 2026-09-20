@@ -90,7 +90,7 @@ of the writer rather than of the parser.
 | `\r\n` and lone `\r` | normalized to `\n`, as the spec requires |
 | Attribute-value whitespace | normalized to spaces, as the spec requires |
 | Quote style, spacing inside tags, attribute line breaks | not in the Infoset |
-| A second spelling of one expanded name | the name's prefix is the first one seen |
+| A second spelling of one expanded name | shares the name ID; each node and attribute keeps its own prefix (ADR 0020) |
 
 ### Declarations and doctypes have no event
 

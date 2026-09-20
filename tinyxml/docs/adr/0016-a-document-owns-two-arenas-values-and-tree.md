@@ -19,7 +19,7 @@ Underneath both is a fact the single arena obscured: the things a document store
 A document owns **two** arenas, both created over `config.allocator` at `txml_parser_init` and both destroyed by `txml_doc_destroy`:
 
 - The **values arena** holds everything interned and write-once: the byte pool (name local parts, prefixes, namespace URIs, attribute values and text), the names column and the namespaces column, with their page directories.
-- The **tree arena** holds the structure: the node, attribute and position columns and their page directories.
+- The **tree arena** holds the structure: the node, attribute, position and prefix-exception columns and their page directories.
 
 The split is by lifetime, not by type. The test for which arena something belongs in is whether it can ever be discarded independently of the rest of the document: if not, it is a value.
 

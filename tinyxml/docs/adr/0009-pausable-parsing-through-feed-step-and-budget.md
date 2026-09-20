@@ -1,6 +1,6 @@
 # ADR 0009: Pausable parsing through feed, step, and budget
 
-**Status:** Accepted  
+**Status:** Accepted; amended by [ADR 0021](0021-the-scanner-is-a-table-of-resumable-states.md): a pause also preserves the scanner's own state, which lives in the parser  
 **Date:** 2026-09-20
 
 ## Context
@@ -27,7 +27,7 @@ No callback ever crosses the API. The caller supplies the CPU, exactly as it sup
 
 The driving loop is a `switch` over five cases, and each of the three pause reasons has a distinct, obvious response. Nothing about the loop changes between a 200-byte document and a 200-megabyte one; only the number of iterations does.
 
-Suspension is free rather than special: because a step appends whole nodes and the document columns are the only state, pausing costs nothing to save and nothing to restore. There is no continuation to encode, unlike the core's mid-macrostep case.
+Suspension is free rather than special: the document columns are the only result and the scanner's own state (ADR 0021) lives in the parser, so pausing costs nothing to save and nothing to restore. There is no continuation to encode, unlike the core's mid-macrostep case.
 
 Bindings are straightforward — five enum values and no callbacks — and a WASM build needs no host function imports at all.
 

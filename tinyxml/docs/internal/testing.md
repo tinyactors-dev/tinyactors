@@ -139,6 +139,14 @@ catches boundary bugs: a name split across two feeds, a CRLF pair straddling
 the staging window, a partial UTF-8 sequence, an entity reference cut in half.
 It costs nothing to write and it is the reason the fixtures are worth having.
 
+`tests/stream_test.c` takes that property much further (ADR 0021): every spec
+input and a corpus of awkward ones through a 64-byte window at several feed
+sizes and step budgets; every corpus input cut in two at every byte; every
+allocation of a parse refused in turn, then retried; and multi-megabyte text,
+attribute values, comments, CDATA sections, PIs and DOCTYPEs, run with the
+default window as well as a tiny one, which is where work that grows with the
+window shows up.
+
 `spec_test` also checks that `txml_parser_offset()` matches the number of bytes
 actually fed, and that the parser never asks for input after the final chunk.
 

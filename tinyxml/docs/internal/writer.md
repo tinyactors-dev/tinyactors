@@ -172,3 +172,46 @@ the document alive, since every string the walk emits is borrowed from it.
 children and no wrapper. On a node that is still `TXML_NODE_OPEN` it returns
 `TXML_ERR_INVALID`: an incomplete subtree has no `end`, so the walk has no
 bound.
+
+## Status
+
+Implemented in `src/writer.c`: the whole event vocabulary, escaping, prefix
+selection and deferred declarations, indentation, the resumable output
+protocol, and `txml_write_subtree` for every node kind (declaration, doctype,
+comments, PIs, CDATA, text at document level). `writer_test` and the
+`@roundtrip` half of the spec corpus pass; a mutation fuzz over parse, write
+with 1-, 7- and 4096-byte buffers, re-parse and re-write finds the output
+identical across buffer sizes and a fixed point after one round trip.
+
+How it is built, where that differs from the sections above:
+
+- **Operations, not re-entrant calls.** An emit call does all its state
+  changes (frames, bindings, needs) when it is made and compiles the bytes it
+  owes into a short segment queue; only byte production is deferred. A drain
+  resumes at the exact segment, byte and half-written escape. The pending
+  escape buffer is 16 bytes, not 6, because a split CDATA terminator
+  (`]]]]><![CDATA[>`) is written through it.
+- **Names are copied at the call.** A start tag's name is copied into the
+  element frame, an attribute's name and prefix into the tag's storage, so
+  only *values and text* obey the borrowed-input rule. The frame's storage is
+  released when the operation that closes the element completes, not when the
+  call returns, so a pending end tag never reads freed memory.
+- **Document-driven names are exact.** `txml_write_subtree` passes each
+  element's and attribute's own prefix (ADR 0020) and an empty prefix means
+  unprefixed. Declarations then appear only where the document had them, and
+  are added only when a subtree root's ancestors declared what it needs.
+  Attributes flagged `TXML_ATTR_DEFAULTED` are skipped: they were not written.
+- **`<a/>` versus `<a></a>`.** A document node flagged `TXML_NODE_EMPTY`
+  is written self-closed and one that is not is written as a pair, whatever
+  `TXML_WRITE_EMPTY_TAGS` says; the flag governs event producers only.
+- **An invented attribute prefix is declared immediately** before the
+  attribute (`<a xmlns:ns1="u" ns1:k="v"/>`, as `writer_test` requires), since
+  the attribute's text needs the prefix now. Declarations needed by an
+  element's name or by an explicitly prefixed attribute are settled when the
+  tag closes, so a later explicit `xmlns` attribute satisfies them.
+- **After `TXML_ERR_NOMEM` from a call that had already settled the previous
+  tag, the writer is unusable** and later calls return `TXML_ERR_INVALID`;
+  destroy it.
+- `TXML_WRITE_INDENT` also suppresses indentation in every descendant of an
+  element that received text, and writes a newline after a declaration it
+  emits itself.

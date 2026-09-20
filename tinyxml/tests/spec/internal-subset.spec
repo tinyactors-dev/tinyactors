@@ -127,3 +127,84 @@ UNDECLARED_ENTITY 1:31 offset=30
 @names
 0 {}a
 @end
+
+# Character references in an entity's literal are read when the entity is
+# declared (XML 1.0 4.5), and what is left is read again at each reference, so
+# a reference can be spelled in two steps. &name; references in the literal are
+# kept, and read at the reference like any other.
+
+@case a character reference in an entity literal is read at the declaration
+@xml
+<!DOCTYPE a [<!ENTITY e "&#38;#60;">]><a>&e;</a>
+@nodes
+0 document - end=4 parent=- depth=0
+1 doctype " a [<!ENTITY e \"&#38;#60;\">]" end=2 parent=0 depth=1
+2 element {}a end=4 parent=0 depth=1 attributes=0
+3 text "<" end=4 parent=2 depth=2
+@names
+0 {}a
+@end
+
+@case a reference spelled through a character reference is still a reference
+@xml
+<!DOCTYPE a [<!ENTITY e "&#38;amp;">]><a>&e;</a>
+@nodes
+0 document - end=4 parent=- depth=0
+1 doctype " a [<!ENTITY e \"&#38;amp;\">]" end=2 parent=0 depth=1
+2 element {}a end=4 parent=0 depth=1 attributes=0
+3 text "&" end=4 parent=2 depth=2
+@names
+0 {}a
+@end
+
+@case a predefined reference in an entity literal is kept until it is used
+@xml
+<!DOCTYPE a [<!ENTITY e "x&lt;y">]><a>&e;</a>
+@nodes
+0 document - end=4 parent=- depth=0
+1 doctype " a [<!ENTITY e \"x&lt;y\">]" end=2 parent=0 depth=1
+2 element {}a end=4 parent=0 depth=1 attributes=0
+3 text "x<y" end=4 parent=2 depth=2
+@names
+0 {}a
+@end
+
+@case an entity reference spelled through a character reference expands
+@xml
+<!DOCTYPE a [<!ENTITY f "F"><!ENTITY e "x&#38;f;y">]><a>&e;</a>
+@nodes
+0 document - end=4 parent=- depth=0
+1 doctype " a [<!ENTITY f \"F\"><!ENTITY e \"x&#38;f;y\">]" end=2 parent=0 depth=1
+2 element {}a end=4 parent=0 depth=1 attributes=0
+3 text "xFy" end=4 parent=2 depth=2
+@names
+0 {}a
+@end
+
+@case an entity read through a character reference in an attribute value
+@xml
+<!DOCTYPE a [<!ENTITY e "&#38;#60;&#38;#38;">]><a k="&e;"/>
+@nodes
+0 document - end=3 parent=- depth=0
+1 doctype " a [<!ENTITY e \"&#38;#60;&#38;#38;\">]" end=2 parent=0 depth=1
+2 element {}a end=3 parent=0 depth=1 attributes=1 flags=EMPTY
+@attributes
+2.0 {}k "<&"
+@names
+0 {}a
+1 {}k
+@end
+
+@case a character reference outside the Char production is an error at the declaration
+@xml
+<!DOCTYPE a [<!ENTITY e "&#0;">]><a/>
+@error
+ENCODING 1:26 offset=25
+@end
+
+@case a malformed character reference in an entity literal is an error at the declaration
+@xml
+<!DOCTYPE a [<!ENTITY e "&#x;">]><a/>
+@error
+SYNTAX 1:26 offset=25
+@end

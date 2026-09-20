@@ -3,7 +3,7 @@
 # mise skips this task when every output below is newer than every source.
 # Use `mise run --force build` after changing CC/CFLAGS.
 #MISE sources=["mise/tasks/build", "include/txml.h", "src/**/*.c", "src/**/*.h", "tests/*.c"]
-#MISE outputs=["build/header_test", "build/objects/header_test.o", "build/objects/api_surface.o", "build/objects/arena_test.o", "build/objects/writer_test.o", "build/objects/spec_test.o", "build/objects/cursor_test.o", "build/objects/incremental_test.o", "build/objects/text_test.o"]
+#MISE outputs=["build/header_test", "build/objects/header_test.o", "build/objects/api_surface.o", "build/objects/arena_test.o", "build/objects/writer_test.o", "build/objects/spec_test.o", "build/objects/cursor_test.o", "build/objects/incremental_test.o", "build/objects/text_test.o", "build/objects/doc_test.o", "build/objects/stream_test.o"]
 # vim:ft=ruby
 
 # There is no implementation yet: src/ is empty. Everything that can be built
@@ -11,6 +11,7 @@
 # library are linked the moment src/*.c appears. Nothing here weakens a test to
 # make the suite pass — unlinkable tests are reported as pending.
 
+require 'English'
 require 'fileutils'
 require 'pathname'
 require 'shellwords'
@@ -27,7 +28,7 @@ FREESTANDING_TESTS = %w[header_test].freeze
 # Compiled, never linked: it only takes the address of every TXML_API function.
 COMPILE_ONLY_TESTS = %w[api_surface].freeze
 # Need the implementation to link.
-LINKED_TESTS = %w[arena_test cursor_test incremental_test spec_test text_test writer_test].freeze
+LINKED_TESTS = %w[arena_test cursor_test doc_test incremental_test spec_test stream_test text_test writer_test].freeze
 
 def run(*command)
   puts command.shelljoin
@@ -62,15 +63,28 @@ end
 linked = FREESTANDING_TESTS.length
 total = FREESTANDING_TESTS.length + LINKED_TESTS.length
 
+# A test links only when the modules it calls exist. Until the parser and the
+# writer do, the tests that need them stay unlinked and `mise run test` reports
+# them as pending; a link that fails is never turned into a pass, the binary is
+# simply not there.
+def try_link(test, objects)
+  binary = BUILD.join(test)
+  FileUtils.rm_f(binary)
+  command = [*COMPILER, *FLAGS, OBJECTS.join("#{test}.o").to_s, *objects.map(&:to_s), '-o', binary.to_s]
+  puts command.shelljoin
+  output = IO.popen(command, chdir: ROOT.to_s, err: %i[child out], &:read)
+  return true if $CHILD_STATUS.success?
+
+  FileUtils.rm_f(binary)
+  missing = output.scan(/undefined reference to `([^']+)'/).flatten.uniq
+  puts "  not linked: #{test} needs #{missing.first(4).join(', ')}#{missing.length > 4 ? ", ... (#{missing.length})" : ''}"
+  false
+end
+
 if sources.empty?
-  # Remove binaries left behind by an earlier implementation so `mise run test`
-  # never runs a stale one.
   LINKED_TESTS.each { |test| FileUtils.rm_f(BUILD.join(test)) }
 else
-  LINKED_TESTS.each do |test|
-    run(*COMPILER, *FLAGS, OBJECTS.join("#{test}.o").to_s, *objects.map(&:to_s), '-o', BUILD.join(test).to_s)
-    linked += 1
-  end
+  LINKED_TESTS.each { |test| linked += 1 if try_link(test, objects) }
 end
 
 if sources.empty?

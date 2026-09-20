@@ -1,6 +1,6 @@
 # ADR 0006: Names are interned per document
 
-**Status:** Accepted  
+**Status:** Accepted; the prefix rule is superseded by [ADR 0020](0020-prefixes-are-recorded-per-node-and-per-attribute.md)  
 **Date:** 2026-09-20
 
 ## Context
@@ -13,7 +13,7 @@ An earlier draft answered this with a *profile*: a caller-supplied vocabulary, i
 
 The profile is dropped. Names are interned per document, always, with no prior knowledge required.
 
-Every distinct expanded name in a document gets one entry in that document's name table. A name ID is an index into that table and is meaningful only for that document, which the header states and which ADR 0005 repeats as a cursor rule. Namespace URIs are deduplicated in their own column, so two names in the same namespace share a namespace index and namespace comparison is an integer comparison. The prefix as written is retained for round-tripping (`txml_node_prefix`) but is not part of a name's identity, so `a:foo` and `b:foo` bound to the same URI are one name.
+Every distinct expanded name in a document gets one entry in that document's name table. A name ID is an index into that table and is meaningful only for that document, which the header states and which ADR 0005 repeats as a cursor rule. Namespace URIs are deduplicated in their own column, so two names in the same namespace share a namespace index and namespace comparison is an integer comparison. The prefix as written is retained for round-tripping (`txml_node_prefix`) but is not part of a name's identity, so `a:foo` and `b:foo` bound to the same URI are one name. Each node and attribute keeps the prefix it was written with (ADR 0020); the name entry holds only the first as a default.
 
 Queries resolve strings to integers once. `txml_doc_find_name` takes a `txml_qname` and returns a name ID, after which `txml_find_next`, `txml_find_attribute`, and any hand-written scan compare `uint32_t`s. `txml_doc_name_count` and `txml_doc_name_at` enumerate the table, so a tool can discover a document's vocabulary instead of declaring it.
 

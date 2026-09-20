@@ -11,7 +11,7 @@ Which arena holds which column follows the lifetime split of ADR 0016:
 | Arena | Holds |
 |---|---|
 | values | the pool, the names column, the namespaces column |
-| tree | the nodes column, the attributes column, the positions column |
+| tree | the nodes column, the attributes column, the positions column, the two prefix-exception columns |
 
 ## Columns
 
@@ -66,11 +66,20 @@ Every other field is final the moment the node is appended.
 | `value_offset` | `uint32_t` | pool offset of the normalized value |
 | `value_length` | `uint32_t` | value length in bytes |
 
-Attribute flags (`TXML_ATTR_NS_DECL`, `TXML_ATTR_DEFAULTED`) are not stored per
+Two bits of `name` are flags (`src/doc.h`). The top bit,
+`TXML_ATTRIBUTE_LAST`, is set on the **last** attribute of each element: a
+`txml_attr_cursor` is only a document and an index, so it cannot carry a
+bound, and this bit is how `txml_next_attribute` reports `TXML_NONE` at the end
+of one element's run without a back-pointer or a wider entry. The next bit,
+`TXML_ATTRIBUTE_DEFAULTED`, marks a value supplied by an `ATTLIST` default.
+Name IDs are therefore limited to 2^30 - 1, and readers mask both bits off.
+
+The public attribute flags (`TXML_ATTR_NS_DECL`, `TXML_ATTR_DEFAULTED`) are not stored as a field per
 attribute. `TXML_ATTR_NS_DECL` is derived: the attribute's name lies in the
-XMLNS namespace (see below). `TXML_ATTR_DEFAULTED` is derived from the
-internal-subset default table, which every document keeps, because the subset
-is always read (ADR 0017). `txml_attribute_read` computes both.
+XMLNS namespace (see below). `TXML_ATTR_DEFAULTED` is the `TXML_ATTRIBUTE_DEFAULTED` bit described above;
+the parser sets it while reading the internal subset, which is always read
+(ADR 0017), and the document keeps no table of its own. `txml_attribute_read`
+reports both.
 
 The attributes of one element are **contiguous**: `first_attribute` through
 `first_attribute + attribute_count - 1`, in document order, declarations
@@ -93,10 +102,24 @@ bytes in the namespaces column.
 | `prefix_length` | `uint32_t` | prefix length; 0 when there was none |
 | `hash` | `uint32_t` | FNV-1a over `namespace URI`, `0xFF`, `local`; stored so a hash-index rebuild never re-reads the pool |
 
-Identity is `(namespace, local)` only. The prefix is recorded for round
-tripping and for `txml_node_prefix`, and is the one the name was **first**
-written with; a later element that spells the same expanded name with a
-different prefix shares the name ID and does not change the recorded prefix.
+Identity is `(namespace, local)` only. The name entry's prefix is the one the
+name was **first** written with, and is only a default: `p:b` and `q:b` share
+a name ID, and each element or attribute still reports the prefix it was
+written with (ADR 0020).
+
+### prefix exceptions — 12 bytes
+
+Two sparse columns, one for nodes and one for attributes, in the tree arena:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `index` | `uint32_t` | the node or attribute index; entries are sorted by it |
+| `offset` | `uint32_t` | pool offset of the prefix as written |
+| `length` | `uint32_t` | prefix length; 0 when the spelling was unprefixed |
+
+An entry exists only where the written prefix differs from the name entry's
+default, so a document that spells each name one way has none. A read is a
+binary search and, on a miss, the name entry.
 
 Name IDs are dense from 0 in interning order. `txml_doc_name_count` is the
 count; `txml_doc_name_at` resolves one; `txml_doc_find_name` hashes and

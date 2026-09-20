@@ -296,7 +296,7 @@ typedef struct {
     txml_allocator allocator;
     txml_limits limits;
     uint32_t flags TXML_FLAGS(txml_parser_flags);
-    uint32_t staging_length; /* input window in bytes; 0 selects 64 KiB */
+    uint32_t staging_length; /* input window in bytes; sizes a chunk, not a construct; 0 selects 64 KiB */
     size_t chunk_size;       /* chunk size for both arenas; 0 selects TXML_ARENA_CHUNK_DEFAULT */
     uint32_t step_budget;    /* nodes appended per step; 0 means until the step blocks */
 } txml_parser_config;

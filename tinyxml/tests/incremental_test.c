@@ -62,7 +62,7 @@ static bool str_is(txml_str text, const char *literal) {
 
 /*
  * A log of independent records: <log><e i="0">r0</e>...</log>, written with no
- * whitespace between tags so the node table is exactly three nodes per record
+ * whitespace between tags so the node table is exactly two nodes per record
  * and the document node and <log> above them. Under ADR 0017 every whitespace
  * run would otherwise be a node of its own.
  */
@@ -302,8 +302,8 @@ static void test_incremental_consumption(const char *xml, size_t length, stats *
     out->final_count = txml_doc_node_count(doc);
 
     /* Nothing was reclaimed, so the finished document holds every record:
-     * the document node, <log>, and three nodes per record. */
-    CHECK(out->final_count == 2u + 3u * RECORDS);
+     * the document node, <log>, and two nodes per record (the element and its text). */
+    CHECK(out->final_count == 2u + 2u * RECORDS);
 
     /* <log> is closed now, and containment answers for real. */
     const txml_cursor log = txml_cursor_at(doc, LOG_ELEMENT);

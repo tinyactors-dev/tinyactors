@@ -108,12 +108,13 @@
 3 {}d
 @end
 
-@case whitespace around the document element is not content
+@case whitespace around the document element is a text node
 @xml
   <a/>
 @nodes
-0 document - end=2 parent=- depth=0
-1 element {}a end=2 parent=0 depth=1 attributes=0 flags=EMPTY
+0 document - end=3 parent=- depth=0
+1 text "  " end=2 parent=0 depth=1
+2 element {}a end=3 parent=0 depth=1 attributes=0 flags=EMPTY
 @names
 0 {}a
 @end

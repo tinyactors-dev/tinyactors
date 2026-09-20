@@ -57,7 +57,7 @@ spare.
 
 ## Paged columns
 
-A document is five columns, each addressed by a dense `uint32_t` index. A
+A document is seven columns (the last two, the prefix exceptions of ADR 0020, are sparse), each addressed by a dense `uint32_t` index. A
 column is a **page directory** plus fixed-size pages allocated from whichever
 of the document's two arenas owns it (ADR 0016) — the tree arena for the node,
 attribute and position columns, the values arena for the name and namespace
@@ -90,7 +90,7 @@ lives at
 size is `chunk_size` clamped to `[1024, 65536]` and rounded down to a power of
 two.
 
-Two rules keep pool references usable:
+Three rules keep pool references usable:
 
 1. **A string never spans a page.** If a run does not fit in the remainder of
    the current page, that remainder is abandoned and the run starts a fresh
@@ -99,6 +99,16 @@ Two rules keep pool references usable:
    than a page is allocated as a single arena block covering *n* whole pages,
    and slots *k..k+n-1* point at `base + k * page_size`. Offset arithmetic
    stays uniform and the run stays contiguous.
+3. **A run whose length is not known moves as it grows.** Text that streams in
+   (ADR 0021) is built through a *run*: it starts in the tail of the current
+   page and, when it outgrows its block, moves to a fresh block of whole
+   pages at least twice the size, copying what it holds. The old space is
+   abandoned but stays counted in the values arena's `used`, so a run costs at
+   most about twice its final size against `max_document_bytes`. This is not
+   relocation in the sense of the rule above: a pending run is invisible, so
+   no offset, index or `txml_str` refers to it until it is finished, and
+   nothing a reader holds moves. There is at most one pending run, and nothing
+   else appends to the pool while it is.
 
 Pool offsets are `uint32_t` and address the values arena alone, so the pool is
 limited to 4 GiB. A `max_document_bytes` above `UINT32_MAX` is rejected with
@@ -108,14 +118,14 @@ limited to 4 GiB. A `max_document_bytes` above `UINT32_MAX` is rejected with
 
 | | Parser (transient) | Document (the product) |
 |---|---|---|
-| Storage | the parser's **own** arena, created over `config.allocator` | **two** arenas, values and tree, both created over `config.allocator` |
-| Holds | staging window, lexer state, open-element stack, start-tag scratch, namespace binding stack, name hash index | values: the pool and the name and namespace columns. tree: the node, attribute and position columns |
+| Storage | three arenas of its own, created over `config.allocator`: one for the window, buffers and DTD tables, one for open-element names and namespace bindings (released in LIFO order), one for the names of the start tag being read | **two** arenas, values and tree, both created over `config.allocator` |
+| Holds | staging window, scanner state, open-element stack, start-tag records and names, namespace binding stack, the small buffer, the DTD tables | values: the pool and the name and namespace columns. tree: the node, attribute, position and prefix-exception columns |
 | Sizing | fixed from `config` and `limits`, except the binding stack and hash index | grows with the document; the **sum** of the two arenas' `used` is capped by `max_document_bytes` |
 | Freed by | `txml_parser_finish` (after handing the document over) or `txml_parser_destroy` | `txml_doc_destroy`, or `txml_parser_destroy` when the document was never detached — both arenas, unconditionally |
 
 **Why the document has two.** The split is by lifetime, not by type. A name, a
 prefix, a namespace URI and an attribute value are written once and live as
-long as the document; node, attribute and position entries are appended in
+long as the document; node, attribute, position and prefix-exception entries are appended in
 order and are, in principle, truncatable. One bump allocator tied the first
 group's lifetime to the second's. The test for which arena something belongs
 in is whether it could ever be discarded independently of the rest of the
@@ -155,10 +165,11 @@ that was ever handed out changes.
 
 ```text
 caller chunk
-   │  txml_parse_feed: copy, bounded by free staging space
+   │  txml_parse_feed: copy, bounded by free staging space;
+   │  validate as UTF-8 and Char, hold back a cut-off character
    ▼
 staging window  [ unconsumed bytes ][ 64 bytes of padding ]
-   │  scan: find the next delimiter for the current lexer state
+   │  the current state's run(): read what is readable
    ▼
 normalize: expand entities and character references,
            CRLF and lone CR to LF, attribute-value whitespace to space
@@ -169,7 +180,7 @@ pool run in the values arena
    │
    ▼
 name and namespace columns   (values arena)
-node, attribute and position columns   (tree arena)
+node, attribute, position and prefix-exception columns   (tree arena)
 ```
 
 The copy into the staging window is what frees the caller's chunk immediately

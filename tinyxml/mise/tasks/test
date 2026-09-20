@@ -17,8 +17,10 @@ BINARIES = {
   'arena_test' => [],
   'text_test' => [],
   'cursor_test' => [],
+  'doc_test' => [],
   'incremental_test' => [],
   'writer_test' => [],
+  'stream_test' => ['tests/spec'],
   'spec_test' => ['tests/spec']
 }.freeze
 

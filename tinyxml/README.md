@@ -66,9 +66,12 @@ while (txml_find_next(&c, &query) == TXML_MOVED) {
 
 ## Status
 
-The public header is authored; there is no implementation yet. `tests/` is the
-specification an implementation will be written against: `mise run test`
-reports the suite as pending until `src/` has modules, then runs it in full.
+Implemented: the arena, string helpers, document columns, the whole cursor read
+side, a streaming parser (a table of resumable states, ADR 0021) including the
+DOCTYPE and internal subset, and the writer. No construct has to fit in the
+input window: text, attribute values, comments and DOCTYPEs of any size flow
+through it. Known deviations are listed under "Status" in
+`docs/internal/parser.md` and `docs/internal/writer.md`.
 
 ## Documentation
 

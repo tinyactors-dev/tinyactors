@@ -1,6 +1,6 @@
 # ADR 0008: Input is copied into a padded staging window
 
-**Status:** Accepted; amended by [ADR 0017](0017-the-parser-produces-a-concrete-syntax-tree.md): the internal subset is always expanded, not only under a flag  
+**Status:** Accepted; amended by [ADR 0017](0017-the-parser-produces-a-concrete-syntax-tree.md): the internal subset is always expanded, not only under a flag; amended by [ADR 0021](0021-the-scanner-is-a-table-of-resumable-states.md): the window is the size of a chunk, not of a construct, and validation happens as bytes are fed  
 **Date:** 2026-09-20
 
 ## Context
