@@ -176,8 +176,8 @@ typedef struct {
 
     buffer xml;
 
-    bool has_nodes, has_attributes, has_names, has_positions, has_error, has_roundtrip;
-    buffer nodes, attributes, names, positions, error, roundtrip;
+    bool has_nodes, has_attributes, has_names, has_positions, has_prefixes, has_error, has_roundtrip;
+    buffer nodes, attributes, names, positions, prefixes, error, roundtrip;
 } spec_case;
 
 static void spec_case_init(spec_case *item) {
@@ -191,6 +191,7 @@ static void spec_case_free(spec_case *item) {
     buffer_free(&item->attributes);
     buffer_free(&item->names);
     buffer_free(&item->positions);
+    buffer_free(&item->prefixes);
     buffer_free(&item->error);
     buffer_free(&item->roundtrip);
 }
@@ -249,6 +250,7 @@ typedef enum {
     SECTION_ATTRIBUTES,
     SECTION_NAMES,
     SECTION_POSITIONS,
+    SECTION_PREFIXES,
     SECTION_ERROR,
     SECTION_ROUNDTRIP
 } section;
@@ -375,6 +377,9 @@ static bool read_spec_file(const char *path, case_handler handle) {
             } else if (strcmp(directive, "positions") == 0) {
                 current = SECTION_POSITIONS;
                 item.has_positions = true;
+            } else if (strcmp(directive, "prefixes") == 0) {
+                current = SECTION_PREFIXES;
+                item.has_prefixes = true;
             } else if (strcmp(directive, "error") == 0) {
                 current = SECTION_ERROR;
                 item.has_error = true;
@@ -418,6 +423,10 @@ static bool read_spec_file(const char *path, case_handler handle) {
         case SECTION_POSITIONS:
             buffer_put(&item.positions, line, line_length);
             buffer_putc(&item.positions, '\n');
+            break;
+        case SECTION_PREFIXES:
+            buffer_put(&item.prefixes, line, line_length);
+            buffer_putc(&item.prefixes, '\n');
             break;
         case SECTION_ERROR:
             buffer_put(&item.error, line, line_length);
@@ -477,6 +486,7 @@ typedef struct {
     buffer attributes;
     buffer names;
     buffer positions;
+    buffer prefixes;
     buffer error;
     buffer roundtrip;
 } rendering;
@@ -486,6 +496,7 @@ static void rendering_free(rendering *r) {
     buffer_free(&r->attributes);
     buffer_free(&r->names);
     buffer_free(&r->positions);
+    buffer_free(&r->prefixes);
     buffer_free(&r->error);
     buffer_free(&r->roundtrip);
 }
@@ -658,6 +669,10 @@ static void render_nodes(rendering *out, const txml_doc *doc) {
                     render_quoted(&out->attributes, view.value);
                     render_attribute_flags(&out->attributes, view.flags);
                     buffer_putc(&out->attributes, '\n');
+                    if (view.prefix.length > 0u) {
+                        buffer_printf(&out->prefixes, "%u.%u %.*s\n", index, position, (int)view.prefix.length,
+                                      view.prefix.ptr);
+                    }
                     position++;
                 } while (txml_next_attribute(&attribute) == TXML_MOVED);
             }
@@ -877,6 +892,8 @@ static void concatenate(buffer *out, const rendering *r) {
     buffer_put(out, buffer_text(&r->names), r->names.length);
     buffer_puts(out, "@positions\n");
     buffer_put(out, buffer_text(&r->positions), r->positions.length);
+    buffer_puts(out, "@prefixes\n");
+    buffer_put(out, buffer_text(&r->prefixes), r->prefixes.length);
     buffer_puts(out, "@error\n");
     buffer_put(out, buffer_text(&r->error), r->error.length);
     buffer_puts(out, "@roundtrip\n");
@@ -898,6 +915,7 @@ static void run_case(const spec_case *item, const char *path) {
     check_section(path, item->name, "attributes", item->has_attributes, &item->attributes, &first.attributes);
     check_section(path, item->name, "names", item->has_names, &item->names, &first.names);
     check_section(path, item->name, "positions", item->has_positions, &item->positions, &first.positions);
+    check_section(path, item->name, "prefixes", item->has_prefixes, &item->prefixes, &first.prefixes);
 
     /* An absent or empty @error section means the parse must succeed. */
     if (item->has_error && item->error.length > 0u) {

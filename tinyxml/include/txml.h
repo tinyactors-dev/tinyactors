@@ -424,6 +424,12 @@ enum TXML_FLAG_SET(txml_attribute_flags, "TXML_ATTR_") {
 typedef struct {
     uint32_t name;
     txml_str value;
+    /* The prefix this attribute was written with, empty when there was none.
+     * Not part of the name's identity: `p:k` and `q:k` in one namespace are one
+     * name ID with two prefixes. A namespace declaration reports "xmlns" (or
+     * empty for a default declaration); a defaulted attribute reports the
+     * prefix its ATTLIST default was written with. */
+    txml_str prefix;
     uint32_t flags TXML_FLAGS(txml_attribute_flags);
 } txml_attribute_view TXML_VALUE;
 

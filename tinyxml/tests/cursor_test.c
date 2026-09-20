@@ -574,6 +574,34 @@ static void test_find_attribute(const txml_doc *doc) {
     }
 }
 
+/* ------------------------------------------------------------------------
+ * The prefix an attribute was written with is part of what it reads back.
+ */
+
+static void test_attribute_prefixes(const txml_doc *doc) {
+    txml_attr_cursor attribute;
+    txml_attribute_view view;
+
+    /* <item id="a" m:rank="1">: an unprefixed attribute and a prefixed one. */
+    const txml_cursor item_a = txml_cursor_at(doc, N_ITEM_A);
+    CHECK(txml_first_attribute(item_a, &attribute) == TXML_MOVED);
+    CHECK(txml_attribute_read(attribute, &view) == TXML_OK);
+    CHECK(str_is(view.value, "a") && view.prefix.length == 0u);
+    CHECK(txml_next_attribute(&attribute) == TXML_MOVED);
+    CHECK(txml_attribute_read(attribute, &view) == TXML_OK);
+    CHECK(str_is(view.value, "1") && str_is(view.prefix, "m"));
+
+    /* Declarations report the prefix their names carry: none for a default
+     * declaration, "xmlns" for xmlns:m. */
+    const txml_cursor catalog = txml_cursor_at(doc, N_CATALOG);
+    CHECK(txml_first_attribute(catalog, &attribute) == TXML_MOVED);
+    CHECK(txml_attribute_read(attribute, &view) == TXML_OK);
+    CHECK(str_is(view.value, "urn:cat") && view.prefix.length == 0u);
+    CHECK(txml_next_attribute(&attribute) == TXML_MOVED);
+    CHECK(txml_attribute_read(attribute, &view) == TXML_OK);
+    CHECK(str_is(view.value, "urn:meta") && str_is(view.prefix, "xmlns"));
+}
+
 /* ------------------------------------------------------------------------ */
 
 int main(void) {
@@ -590,6 +618,7 @@ int main(void) {
     test_names(doc);
     test_find_next(doc);
     test_find_attribute(doc);
+    test_attribute_prefixes(doc);
 
     txml_doc_destroy(doc);
 

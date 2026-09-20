@@ -178,7 +178,8 @@ bound.
 Implemented in `src/writer.c`: the whole event vocabulary, escaping, prefix
 selection and deferred declarations, indentation, the resumable output
 protocol, and `txml_write_subtree` for every node kind (declaration, doctype,
-comments, PIs, CDATA, text at document level). `writer_test` and the
+comments, PIs, CDATA, text at document level); attribute prefixes come from
+`txml_attribute_view.prefix`, the same record a consumer reads (ADR 0020). `writer_test` and the
 `@roundtrip` half of the spec corpus pass; a mutation fuzz over parse, write
 with 1-, 7- and 4096-byte buffers, re-parse and re-write finds the output
 identical across buffer sizes and a fixed point after one round trip.

@@ -117,7 +117,9 @@ Two sparse columns, one for nodes and one for attributes, in the tree arena:
 | `offset` | `uint32_t` | pool offset of the prefix as written |
 | `length` | `uint32_t` | prefix length; 0 when the spelling was unprefixed |
 
-An entry exists only where the written prefix differs from the name entry's
+`txml_attribute_read` returns the attribute's prefix in `txml_attribute_view`
+and `txml_node_prefix` returns a node's; both go through this lookup. An entry
+exists only where the written prefix differs from the name entry's
 default, so a document that spells each name one way has none. A read is a
 binary search and, on a miss, the name entry.
 

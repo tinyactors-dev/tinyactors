@@ -221,6 +221,7 @@ txml_result txml_attribute_read(txml_attr_cursor attribute, txml_attribute_view 
     const uint32_t name = entry->name & TXML_ATTRIBUTE_NAME_MASK;
     out->name = name;
     out->value = txml_doc_pool_str(attribute.doc, entry->value_offset, entry->value_length);
+    out->prefix = txml_doc_prefix_of(attribute.doc, true, attribute.index);
     out->flags = txml_doc_attribute_flags(attribute.doc, entry);
     return TXML_OK;
 }

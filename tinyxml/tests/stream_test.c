@@ -186,7 +186,9 @@ static void dump_doc(buf *out, const txml_doc *doc) {
         while (move == TXML_MOVED) {
             txml_attribute_view view;
             if (txml_attribute_read(attribute, &view) == TXML_OK) {
-                buf_printf(out, "  a name=%u f=%u value=", view.name, view.flags);
+                buf_printf(out, "  a name=%u f=%u prefix=", view.name, view.flags);
+                buf_str(out, view.prefix);
+                buf_printf(out, " value=");
                 buf_str(out, view.value);
                 buf_printf(out, "\n");
             }

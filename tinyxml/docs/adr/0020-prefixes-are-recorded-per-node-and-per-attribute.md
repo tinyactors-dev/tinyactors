@@ -22,7 +22,7 @@ Identity is unchanged. What changes is where the spelling lives.
 
 - The **name entry** still records a prefix: the one the name was first written with. It is now only the *default* prefix.
 - Every element and every attribute reports the prefix **it** was written with. When that equals its name entry's default, nothing is stored. When it differs, a `{index, prefix offset, prefix length}` entry is appended to a sparse, index-sorted column — one for nodes, one for attributes — in the tree arena. A lookup is a binary search of that column and, on a miss, the name entry.
-- `txml_node_prefix` returns the per-node answer. Attribute prefixes are read by the library itself (the writer needs them to round trip) through a private accessor; the public attribute view is unchanged.
+- `txml_node_prefix` returns the per-node answer. Attribute prefixes are read through `txml_attribute_view.prefix`, which `txml_attribute_read` fills from the same records the writer uses, so there is one source of truth. (This ADR first kept them behind a private accessor and left the view unchanged; the field was added once the writer and the spec corpus both needed to see them.)
 
 The dense alternatives were rejected. A 4-byte prefix per node grows every node for a case that is rare in real documents, and the 24-byte node has no spare bytes. Making the prefix part of a name's identity would split `{urn:x}b` into one name per spelling and break name scans.
 

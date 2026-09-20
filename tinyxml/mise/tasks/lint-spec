@@ -19,6 +19,8 @@
 #     element carries it;
 #   - a present @attributes section numbers each node's rows 0..n-1 and agrees
 #     with that node's `attributes=` count;
+#   - @prefixes rows are `node.position prefix` and, when @attributes is
+#     present, name an attribute row that exists;
 #   - @names rows are numbered in sequence, and a present @positions section
 #     has exactly one row per node.
 #
@@ -31,7 +33,7 @@ require 'pathname'
 ROOT = Pathname.new(__dir__).join('../..').expand_path
 KINDS = %w[document element text comment pi declaration doctype].freeze
 HAS_ATTRIBUTES = %w[element declaration].freeze
-DIRECTIVES = %w[case limits chunk xml nodes attributes names positions error roundtrip end].freeze
+DIRECTIVES = %w[case limits chunk xml nodes attributes names positions prefixes error roundtrip end].freeze
 NODE_ROW = /\A(\d+) (\w+) (.*?) end=(\d+|-) parent=(\d+|-) depth=(\d+)(.*)\z/
 
 problems = []
@@ -146,6 +148,15 @@ Dir[ROOT.join('tests/spec/*.spec').to_s].sort.each do |file|
           if sections['positions'] && !sections['positions'].empty? && sections['positions'].length != nodes.length
             note(problems, path, name,
                  "@positions has #{sections['positions'].length} row(s) for #{nodes.length} node(s)")
+          end
+          # A prefixed attribute names a row of @attributes, when that is present.
+          sections['prefixes']&.each do |row|
+            match = /\A(\d+\.\d+) \S+\z/.match(row)
+            if match.nil?
+              note(problems, path, name, "unparsable @prefixes row: #{row}")
+            elsif sections['attributes'] && sections['attributes'].none? { |a| a.start_with?("#{match[1]} ") }
+              note(problems, path, name, "@prefixes row #{match[1]} has no @attributes row")
+            end
           end
         end
         sections['names']&.each_with_index do |row, index|

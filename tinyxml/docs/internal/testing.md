@@ -72,7 +72,7 @@ A `.spec` file is a sequence of cases. Outside a section, a line starting with
   newline. `\n`, `\r`, `\t`, `\"`, `\\`, and `\xNN` are decoded, which is how a
   case writes CRLF, a control byte, or invalid UTF-8. A line inside `@xml` that
   starts with `@` would be read as a directive; write `\x40` instead.
-- `@nodes`, `@attributes`, `@names`, `@positions`, `@roundtrip`: **absent means
+- `@nodes`, `@attributes`, `@names`, `@positions`, `@prefixes`, `@roundtrip`: **absent means
   not checked; present means exact match**, so a present-but-empty section
   asserts that the renderer produces nothing.
 - `@error` is special: absent, or present and empty, asserts that the parse
@@ -105,6 +105,15 @@ Attributes, numbered within their element:
 
 ```
 <node-index>.<attribute-index> {namespace}local "value"[ flags=NS_DECL[,DEFAULTED]]
+```
+
+Attribute prefixes (ADR 0020), one row per attribute that has one and none
+for the rest, so an empty `@prefixes` asserts that no attribute was written
+with a prefix. A namespace declaration `xmlns:p` reports `xmlns`; a default
+declaration reports nothing:
+
+```
+<node-index>.<attribute-index> <prefix>
 ```
 
 Names, in the order they were interned, and positions, one per node — every

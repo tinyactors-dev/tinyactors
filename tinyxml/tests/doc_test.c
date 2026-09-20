@@ -391,6 +391,14 @@ static void test_prefixes_are_per_node(void) {
     CHECK(str_is(txml_doc_prefix_of(doc, true, 3u), "q"));
     CHECK(str_is(txml_doc_prefix_of(doc, true, 4u), ""));
     CHECK(str_is(txml_doc_prefix_of(doc, true, 0u), "xmlns"));
+
+    /* The public view reads the same records. */
+    static const char *const attribute_prefixes[] = { "xmlns", "xmlns", "p", "q", "" };
+    for (uint32_t i = 0u; i < 5u; i++) {
+        txml_attribute_view view;
+        CHECK(txml_attribute_read((txml_attr_cursor){ doc, i }, &view) == TXML_OK);
+        CHECK(str_is(view.prefix, attribute_prefixes[i]));
+    }
     txml_doc_destroy(doc);
 }
 

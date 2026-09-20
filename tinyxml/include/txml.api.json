@@ -618,6 +618,13 @@
           }
         },
         {
+          "name": "prefix",
+          "type": {
+            "type": "txml_str"
+          },
+          "doc": "The prefix this attribute was written with, empty when there was none. Not part of the name's identity: `p:k` and `q:k` in one namespace are one name ID with two prefixes. A namespace declaration reports \"xmlns\" (or empty for a default declaration); a defaulted attribute reports the prefix its ATTLIST default was written with."
+        },
+        {
           "name": "flags",
           "type": {
             "builtin": "uint32_t"
@@ -627,21 +634,23 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 32,
+          "size": 48,
           "align": 8,
           "offsets": {
             "name": 0,
             "value": 8,
-            "flags": 24
+            "prefix": 24,
+            "flags": 40
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 16,
+          "size": 24,
           "align": 4,
           "offsets": {
             "name": 0,
             "value": 4,
-            "flags": 12
+            "prefix": 12,
+            "flags": 20
           }
         }
       }

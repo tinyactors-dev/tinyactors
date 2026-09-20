@@ -266,3 +266,49 @@ SYNTAX 1:81 offset=80
 @error
 UNDECLARED_PREFIX 1:54 offset=53
 @end
+
+# Attribute prefixes are recorded per attribute (ADR 0020), so `p:k`, `q:k` and
+# `k` each report the prefix they were written with even though the first two
+# share one name. @prefixes lists only the attributes that have one, as
+# `node.position prefix`; a namespace declaration reports "xmlns" (a default
+# declaration reports none).
+
+@case each attribute reports the prefix it was written with
+@xml
+<a xmlns:p="urn:x" xmlns:q="urn:x"><b p:k="1"/><c q:k="2"/><d k="3"/></a>
+@prefixes
+1.0 xmlns
+1.1 xmlns
+2.0 p
+3.0 q
+@names
+0 {}a
+1 {http://www.w3.org/2000/xmlns/}p
+2 {http://www.w3.org/2000/xmlns/}q
+3 {}b
+4 {urn:x}k
+5 {}c
+6 {}d
+7 {}k
+@end
+
+@case a default declaration and unprefixed attributes report no prefix
+@xml
+<a xmlns="urn:x" k="1"/>
+@prefixes
+@end
+
+@case a defaulted attribute reports the prefix its default was written with
+@xml
+<!DOCTYPE a [<!ATTLIST b q:k CDATA "d">]><a xmlns:p="urn:x" xmlns:q="urn:x"><c p:k="1"/><b/></a>
+@attributes
+2.0 {http://www.w3.org/2000/xmlns/}p "urn:x" flags=NS_DECL
+2.1 {http://www.w3.org/2000/xmlns/}q "urn:x" flags=NS_DECL
+3.0 {urn:x}k "1"
+4.0 {urn:x}k "d" flags=DEFAULTED
+@prefixes
+2.0 xmlns
+2.1 xmlns
+3.0 p
+4.0 q
+@end

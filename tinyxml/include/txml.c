@@ -1893,6 +1893,7 @@ TXML_API txml_result txml_attribute_read(txml_attr_cursor attribute, txml_attrib
     const uint32_t name = entry->name & TXML_ATTRIBUTE_NAME_MASK;
     out->name = name;
     out->value = txml_doc_pool_str(attribute.doc, entry->value_offset, entry->value_length);
+    out->prefix = txml_doc_prefix_of(attribute.doc, true, attribute.index);
     out->flags = txml_doc_attribute_flags(attribute.doc, entry);
     return TXML_OK;
 }
@@ -6228,7 +6229,6 @@ static txml_result walk_attribute(txml_writer *w) {
     if (txml_attribute_read(walk->attribute, &view) != TXML_OK || txml_doc_name_at(walk->doc, view.name, &name) != TXML_OK) {
         return TXML_ERR_INVALID;
     }
-    const txml_str prefix = txml_doc_prefix_of(walk->doc, true, walk->attribute.index);
     walk->attributes_left -= 1u;
     if (walk->attributes_left != 0u) {
         txml_next_attribute(&walk->attribute);
@@ -6236,7 +6236,7 @@ static txml_result walk_attribute(txml_writer *w) {
     if ((view.flags & TXML_ATTR_DEFAULTED) != 0u) {
         return TXML_OK; /* supplied by the DTD, not written */
     }
-    return compile_attribute(w, &(attribute_request){ { name.ns, name.local, prefix, true }, view.value, true });
+    return compile_attribute(w, &(attribute_request){ { name.ns, name.local, view.prefix, true }, view.value, true });
 }
 
 static txml_result walk_node(txml_writer *w) {
