@@ -408,23 +408,29 @@ static void test_operations(tat_js_datamodel_context *context) {
           "inspect reports the declared data");
     ta_value_release(&root);
 
-    /* Clone shares; values from another session keep their realm. */
+    /* A retained handle shares; values from another session keep their realm. */
     session b = open_session(NULL, &result);
     require(result == TA_OK, "second instance");
     ta_value object;
-    ta_value cloned;
+    ta_value shared;
     check(declare(&s, S("obj"), NULL) == TA_OP_OK && eval(&s, E_OBJECT, &object) == TA_OP_OK &&
               set_named(&s, S("obj"), &object) == TA_OP_OK,
           "obj in session A");
-    check(ta_value_clone(&object, &cloned) == TA_OK && cloned.self != object.self, "clone makes a new wrapper");
-    check(set_named(&b, S("o2"), &cloned) == TA_OP_OK, "shared object into session B");
-    check(assign(&s, E_OBJ_N, E_FIVE) == TA_OP_OK && holds(&b, E_SHARED_SEES_5), "clone shares the object");
+    /* A value is a handle: retain is the whole contract, and clone is gone
+     * (ADR 0050), so asking for an independent copy is unsupported. */
+    ta_value copied;
+    check(ta_value_clone(&object, &copied) == TA_ERR_UNSUPPORTED, "this adapter offers no clone");
+    shared = object;
+    ta_value_retain(&shared);
+    check(shared.self == object.self, "retain shares the handle");
+    check(set_named(&b, S("o2"), &shared) == TA_OP_OK, "shared object into session B");
+    check(assign(&s, E_OBJ_N, E_FIVE) == TA_OP_OK && holds(&b, E_SHARED_SEES_5), "a retained handle shares the object");
     ta_value array;
     check(eval(&s, E_ARRAY, &array) == TA_OP_OK && set_named(&b, S("y"), &array) == TA_OP_OK &&
               holds(&b, E_CROSS_REALM),
           "a shared array keeps its realm");
     ta_value_release(&array);
-    ta_value_release(&cloned);
+    ta_value_release(&shared);
 
     /* A value outlives its session. */
     close_session(&s);

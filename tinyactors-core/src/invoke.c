@@ -545,12 +545,11 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
                                                                   : delivery->sender->record.self,
         .invoke_id = delivery->event.invoke_id,
     };
-    ta_result result = ta_value_clone(&delivery->event.data, &record.data);
-    if (result == TA_OK) {
-        result = ta_timer_schedule(&system->timers, &record);
-        if (result != TA_OK) {
-            ta_value_release(&record.data);
-        }
+    record.data = delivery->event.data;
+    ta_value_retain(&record.data);
+    ta_result result = ta_timer_schedule(&system->timers, &record);
+    if (result != TA_OK) {
+        ta_value_release(&record.data);
     }
     return result;
 }
@@ -732,10 +731,8 @@ static ta_result ta_invoke_unavailable(ta_system *system, ta_actor *actor, const
     }
     ta_event event = { .name = name, .type = TA_EVENT_PLATFORM, .invoke_id = TA_INVOKE_ID_NONE };
     if (params->as.fault != NULL) {
-        result = ta_value_clone(&params->as.fault->data, &event.data);
-        if (result != TA_OK) {
-            return result;
-        }
+        event.data = params->as.fault->data;
+        ta_value_retain(&event.data);
     }
     result = ta_interpreter_enqueue_internal(system, actor, &event);
     if (result == TA_OK && !actor->macrostep) {

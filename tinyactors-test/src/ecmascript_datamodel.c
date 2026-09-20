@@ -134,12 +134,15 @@ static void tat_js_begin_work(tat_js_state *state) {
 
 static void tat_js_value_retain(void *self);
 static void tat_js_value_release(void *self);
-static ta_result tat_js_value_clone(void *self, ta_value *out);
 
+/*
+ * No clone: a value is a handle, and retain/release is the whole contract
+ * (ADR 0050). The old clone shared anyway — a new wrapper around the same
+ * JS value — so nothing here loses isolation it ever had.
+ */
 static const ta_value_vtable TAT_JS_VALUE_VTABLE = {
     .retain = tat_js_value_retain,
     .release = tat_js_value_release,
-    .clone = tat_js_value_clone,
 };
 
 /* Wraps `value`, consuming it. */
@@ -206,12 +209,6 @@ static void tat_js_value_release(void *self) {
     }
     *value = (tat_js_value){.next = state->free_values};
     state->free_values = value;
-}
-
-/* Clone shares: a new wrapper around the same JS value. */
-static ta_result tat_js_value_clone(void *self, ta_value *out) {
-    tat_js_value *value = self;
-    return tat_js_wrap(value->state, JS_DupValueRT(value->state->runtime, value->value), value->wire, out);
 }
 
 /* ========================================================================

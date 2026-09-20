@@ -54,14 +54,13 @@ ta_result ta_external_delivery_clone(const ta_external_delivery *delivery,
         return TA_ERR_INVALID;
     }
     ta_external_delivery copy = *delivery;
+    /* Only the address can refuse memory; retaining the event cannot. */
     ta_result result = ta_address_copy(&copy.destination, allocator);
-    if (result == TA_OK) {
-        result = ta_event_clone(&delivery->event, &copy.event);
-    }
     if (result != TA_OK) {
         ta_address_release(&copy.destination, allocator);
         return result;
     }
+    ta_event_retain(&delivery->event, &copy.event);
     *out = copy;
     return TA_OK;
 }

@@ -14,6 +14,11 @@ ta_result ta_event_clone(const ta_event *event, ta_event *out) {
     return TA_OK;
 }
 
+void ta_event_retain(const ta_event *event, ta_event *out) {
+    *out = *event;
+    ta_value_retain(&out->data);
+}
+
 void ta_event_release(ta_event *event) {
     if (event == NULL) {
         return;

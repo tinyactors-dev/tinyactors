@@ -30,12 +30,15 @@ typedef struct {
 
 static void tat_json_retain(void *self);
 static void tat_json_release(void *self);
-static ta_result tat_json_clone(void *self, ta_value *out);
 
+/*
+ * No clone: a value is a handle, and retain/release is the whole contract
+ * (ADR 0050). Core never asks for an independent copy, so leaving the slot
+ * null makes any code that does fail with TA_ERR_UNSUPPORTED.
+ */
 static const ta_value_vtable TAT_JSON_VALUE_VTABLE = {
     .retain = tat_json_retain,
     .release = tat_json_release,
-    .clone = tat_json_clone,
 };
 
 static ta_result tat_json_wrap(tat_json_datamodel_context *context,
@@ -85,11 +88,6 @@ static void tat_json_release(void *self) {
         value->next_free = value->context->free_values;
         value->context->free_values = value;
     }
-}
-
-static ta_result tat_json_clone(void *self, ta_value *out) {
-    tat_json_value *value = self;
-    return tat_json_wrap(value->context, jv_copy(value->value), out);
 }
 
 ta_result tat_json_datamodel_context_init(tat_json_datamodel_context *context,

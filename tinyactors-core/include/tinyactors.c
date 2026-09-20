@@ -239,6 +239,15 @@ TA_PRIVATE uint32_t ta_event_name_segments(const ta_event_name_table *table,
 
 /* Events, faults, and queued events are fully public. */
 
+/*
+ * Core's own co-ownership of an event's data (ADR 0050): the envelope is
+ * copied and its host value retained, so the copy outlives the caller's.
+ * It cannot fail, because ta_value_retain() cannot. The public
+ * ta_event_clone() asks the host for an independent copy instead; core does
+ * not use it.
+ */
+TA_PRIVATE void ta_event_retain(const ta_event *event, ta_event *out);
+
 
 
 typedef enum {
@@ -1955,6 +1964,11 @@ TA_API ta_result ta_event_clone(const ta_event *event, ta_event *out) {
     return TA_OK;
 }
 
+TA_PRIVATE void ta_event_retain(const ta_event *event, ta_event *out) {
+    *out = *event;
+    ta_value_retain(&out->data);
+}
+
 TA_API void ta_event_release(ta_event *event) {
     if (event == NULL) {
         return;
@@ -2181,14 +2195,13 @@ TA_API ta_result ta_external_delivery_clone(const ta_external_delivery *delivery
         return TA_ERR_INVALID;
     }
     ta_external_delivery copy = *delivery;
+    /* Only the address can refuse memory; retaining the event cannot. */
     ta_result result = ta_address_copy(&copy.destination, allocator);
-    if (result == TA_OK) {
-        result = ta_event_clone(&delivery->event, &copy.event);
-    }
     if (result != TA_OK) {
         ta_address_release(&copy.destination, allocator);
         return result;
     }
+    ta_event_retain(&delivery->event, &copy.event);
     *out = copy;
     return TA_OK;
 }
@@ -3126,12 +3139,11 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
                                                                   : delivery->sender->record.self,
         .invoke_id = delivery->event.invoke_id,
     };
-    ta_result result = ta_value_clone(&delivery->event.data, &record.data);
-    if (result == TA_OK) {
-        result = ta_timer_schedule(&system->timers, &record);
-        if (result != TA_OK) {
-            ta_value_release(&record.data);
-        }
+    record.data = delivery->event.data;
+    ta_value_retain(&record.data);
+    ta_result result = ta_timer_schedule(&system->timers, &record);
+    if (result != TA_OK) {
+        ta_value_release(&record.data);
     }
     return result;
 }
@@ -3313,10 +3325,8 @@ static ta_result ta_invoke_unavailable(ta_system *system, ta_actor *actor, const
     }
     ta_event event = { .name = name, .type = TA_EVENT_PLATFORM, .invoke_id = TA_INVOKE_ID_NONE };
     if (params->as.fault != NULL) {
-        result = ta_value_clone(&params->as.fault->data, &event.data);
-        if (result != TA_OK) {
-            return result;
-        }
+        event.data = params->as.fault->data;
+        ta_value_retain(&event.data);
     }
     result = ta_interpreter_enqueue_internal(system, actor, &event);
     if (result == TA_OK && !actor->macrostep) {
@@ -5592,10 +5602,7 @@ TA_API ta_result ta_actor_deliver(ta_system *system, ta_actor_id id, const ta_ev
         return TA_ERR_BUSY;
     }
     ta_event copy;
-    ta_result result = ta_event_clone(event, &copy);
-    if (result != TA_OK) {
-        return result;
-    }
+    ta_event_retain(event, &copy);
     actor->external_event = copy;
     actor->has_external_event = true;
     actor->macrostep = true;
@@ -5856,9 +5863,10 @@ TA_API ta_result ta_actor_get_completion(ta_system *system, ta_actor_id id, ta_a
     if (actor->sparse == NULL || !actor->sparse->completion.has_data) {
         return TA_OK;
     }
-    ta_result result = ta_value_clone(&actor->sparse->completion.data, &out->data);
-    out->has_data = result == TA_OK;
-    return result;
+    out->data = actor->sparse->completion.data;
+    ta_value_retain(&out->data);
+    out->has_data = true;
+    return TA_OK;
 }
 
 

@@ -290,10 +290,7 @@ ta_result ta_actor_deliver(ta_system *system, ta_actor_id id, const ta_event *ev
         return TA_ERR_BUSY;
     }
     ta_event copy;
-    ta_result result = ta_event_clone(event, &copy);
-    if (result != TA_OK) {
-        return result;
-    }
+    ta_event_retain(event, &copy);
     actor->external_event = copy;
     actor->has_external_event = true;
     actor->macrostep = true;
@@ -554,7 +551,8 @@ ta_result ta_actor_get_completion(ta_system *system, ta_actor_id id, ta_actor_co
     if (actor->sparse == NULL || !actor->sparse->completion.has_data) {
         return TA_OK;
     }
-    ta_result result = ta_value_clone(&actor->sparse->completion.data, &out->data);
-    out->has_data = result == TA_OK;
-    return result;
+    out->data = actor->sparse->completion.data;
+    ta_value_retain(&out->data);
+    out->has_data = true;
+    return TA_OK;
 }
