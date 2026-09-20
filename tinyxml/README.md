@@ -17,6 +17,13 @@ embedder-supplied allocator, and never moves what it has allocated.
   and skipping a subtree is one jump.
 - **Write** XML from events into a caller buffer, resumable when the buffer
   fills. Writing does not require a parsed document.
+- **Stream** a document of unbounded length in flat memory: mark a point,
+  process the record that follows it, then rewind to the mark to drop those
+  nodes and reuse their arena bytes. Peak memory is the largest record, not
+  the whole input.
+- **Allocate** through the arena itself, which is public: an embedder can
+  hand the parser an arena it already owns, or use the same linked-chunk bump
+  allocator — with marks and release — for its own data.
 
 ## What it does not do
 
