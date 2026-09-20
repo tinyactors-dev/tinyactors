@@ -108,6 +108,27 @@ ta_result ta_definition_state(const ta_system *system, const ta_definition_state
     return TA_OK;
 }
 
+ta_result ta_definition_find_state(const ta_system *system, const ta_definition_find_state_params *params) {
+    if (system == NULL || params == NULL || params->out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_definition *definition = ta_definition_lookup(system, params->definition);
+    if (definition == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    ta_atom name = 0;
+    if (ta_atom_find(&system->atoms, params->id, &name) != TA_OK) {
+        return TA_ERR_NOT_FOUND;
+    }
+    for (ta_state_id state = 0; state < definition->state_count; state += 1) {
+        if (definition->states[state].name == name) {
+            *params->out = state;
+            return TA_OK;
+        }
+    }
+    return TA_ERR_NOT_FOUND;
+}
+
 size_t ta_definition_session_bytes(const ta_definition *definition) {
     /* The configuration, the late-binding bits (sized like it), and history. */
     return definition->configuration.bytes * 2u + definition->history.storage_bytes;

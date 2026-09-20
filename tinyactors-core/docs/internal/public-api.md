@@ -38,6 +38,15 @@ first and writes every URI it gives a chart, such as `$_event.origin`, with the
 second, so the two are inverses. A named address borrows its text from the
 input and stays valid while that input does.
 
+`ta_send_id_parse` and `ta_send_id_format` are the send ID text, for the same
+reason (ADR 0048). A chart sees a send ID as text — `idlocation` stores it,
+`_event.sendid` carries it, `<cancel sendidexpr>` reads it — while a host
+holds `ta_send.send_id`, so core renders one into the other rather than
+letting each host re-derive `#_send.<n>`. Parsing the generated form always
+succeeds; a literal ID must already be interned, otherwise `TA_ERR_NOT_FOUND`,
+and text that is no send ID is `TA_ERR_INVALID`. Formatting follows the buffer
+convention and answers `TA_ERR_NOT_FOUND` for a send with no ID.
+
 `ta_system_set_external_event_router` installs the host scheduling boundary for
 normalized external SCXML-session events. Core provides the mandatory SCXML
 Event I/O Processor; it resolves standard targets and submits external delivery
@@ -61,7 +70,7 @@ expression, so its errors do not depend on whether a host is listening.
 
 ## Event names
 
-`ta_system_intern_atom` interns one reusable name segment. Its resulting atom belongs to that system and must not be used with another system.
+`ta_system_intern_atom` interns one reusable name segment. Its resulting atom belongs to that system and must not be used with another system. `ta_system_atom_text` reads one back, borrowed from the system, so a host handed `ta_send.io_type` or `ta_invoke_request.type` can say what it was given (ADR 0049); an atom of another system is `TA_ERR_NOT_FOUND`.
 
 `ta_event_name_intern` interns an event name from one ordered `ta_atom_list`. It is the only event-name construction API; string parsing and incremental append APIs are deliberately not exposed. The list must be non-empty and every atom must belong to the supplied system; otherwise it returns `TA_ERR_INVALID`.
 
@@ -108,13 +117,15 @@ clones its optional final data. For an invoked child,
 not be accepted while the parent was busy. Explicit destruction is not normal
 completion and never generates that event.
 
-`ta_actor_inspect` returns a read-only operational view of one resident interpreter: identity, definition, residency, whether a macrostep is paused (and its external event), internal queue, invocations, completion, counts of active states and delayed sends, and `allocated_bytes`. `ta_system_visit_actors` enumerates resident interpreter instances. Neither calls the data-model adapter. `ta_actor_datamodel_root` asks the adapter's `inspect` operation for the data-model root, a host value the caller releases; it returns `TA_ERR_UNSUPPORTED` when the adapter has none.
+`ta_system_invoke_id_text` says which invocation a `ta_invoke_id` is — the author's `<invoke id>` or the generated `<stateid>.<platformid>` — so a host reading `ta_active_invoke.id` can name it (ADR 0049).
+
+`ta_actor_inspect` returns a read-only operational view of one resident interpreter: identity, definition, residency, whether a macrostep is paused (and its external event), internal queue, invocations, completion, counts of active states and delayed sends, and `allocated_bytes`. `ta_system_visit_actors` enumerates resident interpreter instances: every resident actor once, invoked children included, with the view `ta_actor_inspect` would give; the walk stops at the first visit that does not answer `TA_OK` and returns that result, and a null `visit` is `TA_ERR_INVALID`. Its order is not part of the contract. Neither calls the data-model adapter. `ta_actor_datamodel_root` asks the adapter's `inspect` operation for the data-model root, a host value the caller releases; it returns `TA_ERR_UNSUPPORTED` when the adapter has none.
 
 `ta_definition_inspect` returns fixed-size facts about a registered definition (ADR 0042): its ID, exact identity, `<scxml name>`, the data-model adapter it was compiled with (to identify, never to call), its binding mode, state count, lifecycle facts (`retired`, `actor_count`), and memory measurements (`actor_fixed_bytes`, `definition_bytes`). `ta_system_find_definition` resolves an exact identity (family and revision compared bytewise) to the most recently registered matching definition that is not retired. See [definition inspection](definition-inspection.md).
 
 `ta_system_retire_definition` ends a definition's availability (ADR 0043): spawns and replacements naming it fail with `TA_ERR_NOT_FOUND` and `ta_system_find_definition` skips it, while resident actors keep running and `ta_definition_inspect`, `ta_definition_state`, and `ta_definition_export` keep working. The core frees the definition when it is retired and no resident actor uses it: at once, or after the last actor is fully torn down. Retiring is idempotent, also after the definition is freed. Every function that takes a `ta_definition_id` returns `TA_ERR_NOT_FOUND` for an unknown, stale, or freed ID; `ta_actor_spawn` also for a retired one.
 
-`ta_actor_active_states`, `ta_actor_history`, and `ta_actor_delayed_sends` list the active configuration (ancestors included, document order), one history pseudo-state's recorded states, and pending delayed sends. They fill caller-supplied arrays and always report the total count; a too-small array yields `TA_ERR_NOMEM` without writing, so a zero capacity is a size query. `ta_definition_state` resolves a state ID of a registered definition to its author ID, parent, and kind.
+`ta_actor_active_states`, `ta_actor_history`, and `ta_actor_delayed_sends` list the active configuration (ancestors included, document order), one history pseudo-state's recorded states, and pending delayed sends. They fill caller-supplied arrays and always report the total count; a too-small array yields `TA_ERR_NOMEM` without writing, so a zero capacity is a size query. `ta_definition_state` resolves a state ID of a registered definition to its author ID, parent, and kind, and `ta_definition_find_state` is its inverse (ADR 0049). Inside a data-model callback, `ta_dm_host_find_state` does the same for the running definition, which is what `In()` needs: core owns that mapping, so an adapter does not scan for it.
 
 `ta_actor_capture` creates an opaque in-memory `ta_session_image`. `ta_actor_reconstruct` recreates that same interpreter session from the image, the exact definition revision, and a host-supplied data-model binding. Opaque invoker service handles are runtime-only: reconstruction retires each captured active invocation and appends `error.communication.invoke.<id>.unavailable` after the image's existing internal events. Neither operation defines a persistence wire format.
 

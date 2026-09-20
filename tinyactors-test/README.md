@@ -142,9 +142,10 @@ Each scenario runs against a fresh host process and drives the generated
 `docs/protocol.md`). The steps are `spawn`, `advance_time` (in logical
 milliseconds), `run_to_completion` (advance from one delayed-send deadline to
 the next until an actor is done), and `actor.deliver`. The assertions
-are `assert`, `assert_equal`, `assert_active`, `refute_active`, and
-`assert_configuration`. `actor.data(filter)`, `actor.done?`, and
-`actor.completion` observe an actor. Invariants are checked after every step.
+are `assert`, `assert_equal`, `assert_active`, `refute_active`,
+`assert_configuration`, `assert_logs`, and `assert_logged`.
+`actor.data(filter)`, `actor.done?`, and `actor.completion` observe an
+actor. Invariants are checked after every step.
 
 Lower-level steps control a macrostep directly:
 
@@ -156,6 +157,15 @@ Lower-level steps control a macrostep directly:
 
 Further observations:
 
+- `logs` is what the charts logged since `recording_log` installed the sink:
+  `[{label:, value:, actor:}]`. `assert_logs(['phase', 'start'], ...)` states
+  the records in order, `assert_logged(label, value, actor:, times:)` one of
+  them.
+- `visit_actors` walks the resident actors with `recording_inspector`, whose
+  `visits` are the views core handed the callback (`ta_system_visit_actors`).
+- `parse_target(text)` and `format_target(target, capacity:)` are core's
+  SCXML target URI grammar (ADR 0044), the parser and the writer that a
+  `<send>` target and `$_event.origin` both go through.
 - `actor.resident?` tells whether the actor still exists.
 - `actor.history(:id)` lists the states a history pseudo-state recorded.
 - `actor.sends` lists the pending delayed sends.
@@ -163,13 +173,19 @@ Further observations:
 - `next_deadline` is the earliest pending deadline, or nil when none is pending.
 - `definition(chart)` is a chart's registered definition ID.
 
+A definition is the host's until it registers it (ADR 0043):
+`compile_only(chart)` compiles one without registering, `destroy_definition`
+releases it, `register_definition` hands it to the system, and
+`retire_definition` ends its availability.
+
 Charts cover SCXML's structure and executable content: `state`, `parallel`,
 `final`, `history`, `initial` (with actions), `transition`, `on_entry`,
 `on_exit`, `data` (at the root or in a state), `invoke` (with a `finalize`
 block), and `done_data`. The actions are `raise_event`, `send_event`,
 `cancel`, `assign`, `log`, `script`, `conditional` (with `branch` and
-`otherwise`), and `foreach`. See `ruby/tinyactors_test/chart.rb` for their
-options. Each `on_entry` or `on_exit` call adds a separate handler, as in
+`otherwise`), and `foreach`. Platform-specific executable content is a
+`<send>` to a host I/O processor (ADR 0046); `ruby/scenarios/extensions.rb`
+shows the pattern. See `ruby/tinyactors_test/chart.rb` for their options. Each `on_entry` or `on_exit` call adds a separate handler, as in
 SCXML: an error skips the rest of that handler, and the next handler still
 runs.
 
@@ -214,7 +230,8 @@ which journal every call core makes to them and fail on command (see
 router  = recording_router(mode: :hold)   # replaces router.direct
 service = scripted_invoker('urn:example:service')
 io      = recording_io('urn:example:io')
-logs    = recording_log                    # what the charts <log>
+sink    = recording_log                    # what the charts <log>
+walk    = recording_inspector              # the ta_actor_inspector of a walk
 dir     = memory_directory
 allocator                                  # the system's counting allocator
 
@@ -223,8 +240,10 @@ router.arm_fault(:submit, status: 'retry')
 report_invoke service.started.first, :event, event: 'reply', data: { value: 1 }
 report_invoke service.started.first, :unavailable
 allocator.arm_fault(after: 3, count: 1); allocator.stats
+allocator.budget(4096)                     # refuse what does not fit (ADR 0023)
+walk.arm_fault(after: 1, result: 'err_busy')
 io.entries('send')
-logs.logged                                # [[label, value], ...]
+sink.logged                                # [[label, value], ...]
 ```
 
 ### Traces and equivalent runs

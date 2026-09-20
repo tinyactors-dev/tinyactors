@@ -592,8 +592,7 @@ typedef enum {
     TA_ACTION_LOG,
     TA_ACTION_IF,
     TA_ACTION_FOREACH,
-    TA_ACTION_INVOKE,
-    TA_ACTION_EXTENSION
+    TA_ACTION_INVOKE
 } ta_action_kind;
 
 typedef struct {
@@ -658,7 +657,6 @@ typedef struct {
         ta_if_action conditional;
         ta_foreach_action foreach;
         ta_invoke_decl_id invoke;
-        ta_extension_id extension;
     } as;
 } ta_action_def;
 
@@ -2330,6 +2328,25 @@ TA_API ta_result ta_dm_host_state_name(const ta_dm_host *host, ta_state_id state
     return TA_OK;
 }
 
+TA_API ta_result ta_dm_host_find_state(const ta_dm_host *host, ta_str id, ta_state_id *out) {
+    if (!ta_dm_host_valid(host) || out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_system *system = host->impl->system;
+    const ta_definition *definition = host->impl->actor->definition;
+    ta_atom name = 0;
+    if (ta_atom_find(&system->atoms, id, &name) != TA_OK) {
+        return TA_ERR_NOT_FOUND;
+    }
+    for (ta_state_id state = 0; state < definition->state_count; state += 1) {
+        if (definition->states[state].name == name) {
+            *out = state;
+            return TA_OK;
+        }
+    }
+    return TA_ERR_NOT_FOUND;
+}
+
 
 
 /*
@@ -2364,6 +2381,18 @@ TA_PRIVATE ta_str ta_invoke_id_text(const ta_system *system, ta_invoke_id invoke
         return (ta_str){0};
     }
     return ta_atom_text(&system->atoms, (ta_atom)(invoke - 1u));
+}
+
+TA_API ta_result ta_system_invoke_id_text(const ta_system *system, ta_invoke_id invoke, ta_str *out) {
+    if (system == NULL || out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    if (invoke == 0 || invoke == TA_INVOKE_ID_NONE || invoke - 1u >= TA_ATOM_NONE ||
+        !ta_atom_valid(&system->atoms, (ta_atom)(invoke - 1u))) {
+        return TA_ERR_NOT_FOUND;
+    }
+    *out = ta_invoke_id_text(system, invoke);
+    return TA_OK;
 }
 
 /* done.invoke.<id>, one event-name segment per dotted part of the ID text. */
@@ -3232,6 +3261,27 @@ TA_API ta_result ta_definition_state(const ta_system *system, const ta_definitio
     return TA_OK;
 }
 
+TA_API ta_result ta_definition_find_state(const ta_system *system, const ta_definition_find_state_params *params) {
+    if (system == NULL || params == NULL || params->out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_definition *definition = ta_definition_lookup(system, params->definition);
+    if (definition == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    ta_atom name = 0;
+    if (ta_atom_find(&system->atoms, params->id, &name) != TA_OK) {
+        return TA_ERR_NOT_FOUND;
+    }
+    for (ta_state_id state = 0; state < definition->state_count; state += 1) {
+        if (definition->states[state].name == name) {
+            *params->out = state;
+            return TA_OK;
+        }
+    }
+    return TA_ERR_NOT_FOUND;
+}
+
 TA_PRIVATE size_t ta_definition_session_bytes(const ta_definition *definition) {
     /* The configuration, the late-binding bits (sized like it), and history. */
     return definition->configuration.bytes * 2u + definition->history.storage_bytes;
@@ -3707,7 +3757,6 @@ static ta_result ta_compiler_action(ta_compiler *compiler, const ta_scxml_action
             out->kind = TA_ACTION_FOREACH;
             return ta_compiler_foreach(compiler, spec, &out->as.foreach);
         case TA_SCXML_ACTION_INVOKE:
-        case TA_SCXML_ACTION_EXTENSION:
             return TA_ERR_UNSUPPORTED;
         default:
             return TA_ERR_INVALID;
@@ -5790,6 +5839,17 @@ TA_API ta_result ta_system_intern_atom(ta_system *system, ta_str text, ta_atom *
     return ta_atom_intern(&system->atoms, text, out);
 }
 
+TA_API ta_result ta_system_atom_text(const ta_system *system, ta_atom atom, ta_str *out) {
+    if (system == NULL || out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    if (!ta_atom_valid(&system->atoms, atom)) {
+        return TA_ERR_NOT_FOUND;
+    }
+    *out = ta_atom_text(&system->atoms, atom);
+    return TA_OK;
+}
+
 TA_API ta_result ta_event_name_intern(ta_system *system, const ta_atom_list *segments, ta_event_name_id *out) {
     if (system == NULL || out == NULL) {
         return TA_ERR_INVALID;
@@ -6270,6 +6330,31 @@ TA_PRIVATE ta_send_id ta_send_id_from_text(const ta_system *system, ta_str text)
     }
     ta_atom atom = 0;
     return ta_atom_find(&system->atoms, text, &atom) == TA_OK ? ta_literal_send_id(atom) : 0;
+}
+
+TA_API ta_result ta_send_id_parse(const ta_system *system, ta_str text, ta_send_id *out) {
+    if (system == NULL || out == NULL || text.ptr == NULL || text.len == 0) {
+        return TA_ERR_INVALID;
+    }
+    ta_send_id id = ta_send_id_from_text(system, text);
+    if (id == 0) {
+        return TA_ERR_NOT_FOUND;
+    }
+    *out = id;
+    return TA_OK;
+}
+
+TA_API ta_result ta_send_id_format(const ta_system *system, const ta_send_id_format_params *params) {
+    if (system == NULL || params == NULL || params->needed == NULL) {
+        return TA_ERR_INVALID;
+    }
+    if (params->send_id == 0) {
+        *params->needed = 0;
+        return TA_ERR_NOT_FOUND;
+    }
+    ta_text_writer writer = { .buffer = params->buffer, .capacity = params->capacity };
+    ta_send_id_write(system, params->send_id, &writer);
+    return ta_text_finish(&writer, params->needed);
 }
 
 typedef struct {

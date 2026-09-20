@@ -38,6 +38,9 @@ A literal send ID reads as the author's text. A generated one (for
 `idlocation`) reads as `#_send.<n>`, unique per session. Both round-trip
 through `sendidexpr`, and `_event.sendid` shows the same text. A send with
 neither `id` nor `idlocation` has no ID, so its events have a blank sendid.
+The same text is public through `ta_send_id_parse`/`ta_send_id_format`
+(ADR 0048), so a host holding a `ta_send_id` renders exactly what the chart
+holds.
 
 ## Current event
 

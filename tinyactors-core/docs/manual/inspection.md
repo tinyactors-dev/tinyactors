@@ -2,7 +2,7 @@
 
 Inspection is a core operational capability, not a persistence feature.
 
-`ta_actor_inspect()` exposes a read-only view of one resident interpreter instance. `ta_system_visit_actors()` walks the resident actors so an embedder can build an admin endpoint, debugger, REPL, metrics collector, or process inspector without reverse-engineering private memory.
+`ta_actor_inspect()` exposes a read-only view of one resident interpreter instance. `ta_system_visit_actors()` walks the resident actors so an embedder can build an admin endpoint, debugger, REPL, metrics collector, or process inspector without reverse-engineering private memory. It visits every resident actor once, invoked children included, with the same view `ta_actor_inspect()` gives for it, and stops at the first visit that answers anything but `TA_OK`, returning that result — so an inspector that has seen enough, or that cannot go on, ends the walk. The order is not part of the contract.
 
 The view reports the logical actor reference, definition ID and exact definition identity, residency, whether a macrostep is paused mid-way and the external event it is processing, the internal queue, invocations, completion, the number of active states and delayed sends, and `allocated_bytes`, the memory the core currently holds for the actor. Actor inspection never calls the data-model adapter, so it is cheap and has no adapter side effects. `ta_actor_datamodel_root()` asks the adapter's `inspect` operation for the data-model root; it returns `TA_ERR_UNSUPPORTED` when the adapter has none.
 
@@ -14,7 +14,7 @@ Variable-length state has its own list functions, so the view never points into 
 | `ta_actor_history()` | the states one history pseudo-state recorded (empty until recorded) |
 | `ta_actor_delayed_sends()` | pending delayed sends: send ID, due time, event, I/O type, target, and data |
 
-Each fills a caller-supplied array and always reports the total count. A too-small array returns `TA_ERR_NOMEM` without writing anything, so a zero capacity is a size query; the counts in the inspection view let a host size the array up front. `ta_definition_state()` resolves a state ID to the author's state ID, its parent, and its kind.
+Each fills a caller-supplied array and always reports the total count. A too-small array returns `TA_ERR_NOMEM` without writing anything, so a zero capacity is a size query; the counts in the inspection view let a host size the array up front. `ta_definition_state()` resolves a state ID to the author's state ID, its parent, and its kind; `ta_definition_find_state()` goes the other way, from the author's ID to the state.
 
 ```c
 ta_actor_inspection view;

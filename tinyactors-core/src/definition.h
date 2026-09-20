@@ -117,8 +117,7 @@ typedef enum {
     TA_ACTION_LOG,
     TA_ACTION_IF,
     TA_ACTION_FOREACH,
-    TA_ACTION_INVOKE,
-    TA_ACTION_EXTENSION
+    TA_ACTION_INVOKE
 } ta_action_kind;
 
 typedef struct {
@@ -183,7 +182,6 @@ typedef struct {
         ta_if_action conditional;
         ta_foreach_action foreach;
         ta_invoke_decl_id invoke;
-        ta_extension_id extension;
     } as;
 } ta_action_def;
 

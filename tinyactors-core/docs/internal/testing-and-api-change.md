@@ -109,6 +109,19 @@ Rules that keep such markers honest:
   against the real schemas.
 - Do not use an expected failure to park a harness limitation. See §7.
 
+A C test cannot carry that marker, and not every public function is reachable
+from a scenario: `tinyactors-test/bindings.rb` skips the spec-construction
+tree (`ta_tree*`), because JSON specifications decode straight into the spec
+tree. Write the C test anyway and list it in `PENDING_TESTS` in
+`tinyactors-core/mise/tasks/build`. It is compiled against the public header
+like every other test, so a renamed type or a changed signature still fails
+the build and the test cannot rot; only its link may fail, and the build says
+it is pending. `mise run test` runs it — and holds it to every check it makes
+— from the day `src/` implements the API. `tests/tree_test.c` is the worked
+example. Prove such a test the way §4 requires: write a throwaway
+implementation outside the repo, see it pass, then break the implementation
+and see which checks fire.
+
 ## 6. Conformance tests
 
 `tinyactors-test/ruby/scxml_irp/baseline.json` records known IRP failures
@@ -157,8 +170,11 @@ Change core when:
   nine mandatory tests stayed manual.
 - **The same rule lives in core and in every host.** Core owns such a rule
   once, and in both directions — if core prints a URI, core parses it.
-- **A host must re-implement what core already knows**, such as splitting a
-  dotted event name that core can already format.
+- **A host must re-implement what core already knows**, such as resolving a
+  state's author ID to its `ta_state_id`, which every data model used to scan
+  for (ADR 0049). Splitting a dotted event name is *not* an example: names are
+  structured token paths, a segment may never contain a dot, and core takes an
+  atom list by design (ADR 0049).
 - **Inspection cannot show what the documentation promises.**
 
 Do not change core when:

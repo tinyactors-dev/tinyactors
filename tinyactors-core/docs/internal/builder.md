@@ -94,8 +94,9 @@ that only exist inside a compiled definition or a running system:
 
 - State IDs, targets, transition event descriptors, and named send events are
   `ta_str` values resolved during compilation.
-- I/O processor and invoker types, and extension types, are `ta_str` names;
-  the compiler interns them.
+- I/O processor and invoker types are `ta_str` names; the compiler interns
+  them. A host vocabulary's actions are sends to one of those processors
+  (ADR 0046), so they need no type of their own.
 - Expressions and locations are `ta_expression` values. An expression is
   either source text, suitable for XML and JSON importers, or a retained host
   value, suitable for language embeddings such as Node-API. The compiler
@@ -192,7 +193,7 @@ it. The compiled definition retains no pointer into either authoring form.
 
 The source tree is discarded after compilation. The compiler emits the compact
 `ta_definition` IR: normalized state and transition spans, flattened action
-streams, initial transitions, data initializers, content, parameters, invokes,
-and extensions. Compilation performs cross-tree validation including target
+streams, initial transitions, data initializers, content, parameters, and
+invokes. Compilation performs cross-tree validation including target
 resolution, state-kind rules, duplicate IDs, transition semantics, and data
 binding timing.

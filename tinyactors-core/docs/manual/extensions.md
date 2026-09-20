@@ -28,6 +28,36 @@ it initiates may be asynchronous. For example, a Node callback may start
 `fetch()` and return; the promise completion later delivers another event to the
 actor.
 
+### Platform-specific executable content
+
+SCXML 4.10 lets an implementation add executable content of its own, in a
+foreign namespace. Tinyactors has no such action: a custom action is a
+`<send>` to one of your I/O processors (ADR 0046), which is the lowering
+SCXML's appendix G.7 describes and what implementations do in practice.
+
+```text
+<ccxml:accept connectionid="_event.data.connectionid"/>
+```
+
+becomes
+
+```text
+<send type="urn:example:telephony" event="accept" idlocation="requestid">
+  <param name="connectionid" expr="_event.data.connectionid"/>
+</send>
+```
+
+The element's namespace is the processor type you registered, its local name
+is the event, and its attributes are `<param>`s the data model evaluates.
+Report the outcome as an ordinary event: `<vocabulary>.<action>.done` on
+success and `error.platform.<vocabulary>.<action>` on failure, which keeps a
+vocabulary's errors inside the namespace ADR 0027 reserves for them, so a
+chart can catch them with the plain `error` descriptor. Correlate a reply
+with a token the chart passes as a `<param>`, or with the send's own ID:
+`idlocation` gives the chart its text, your processor holds the same ID as
+`ta_send.send_id`, and `ta_send_id_format()` renders one into the other
+(ADR 0048).
+
 Delayed-send timing belongs to Tinyactors statechart semantics. The I/O processor receives a fully materialized send only when it is due. The send's `io_type` is the resolved SCXML `<send>` type and selects the registered processor; `target`, event, and data are then interpreted by that processor.
 
 ## Invoked services

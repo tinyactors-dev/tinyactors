@@ -132,8 +132,9 @@ empty IDs, so none are generated), targets, literal IDs, types, names and
 labels (atoms), raise and send event names (dotted names without empty
 segments, joined again in the export arena), literal content and literal
 `target`/`src` (content bytes), expressions (the definition's table), and
-list shapes. The compiler rejects `<invoke>` and extensions as executable
-content, so export never meets them.
+list shapes. The compiler rejects `<invoke>` as executable content, and
+core has no extension action at all (ADR 0046), so export never meets
+either.
 
 The unit test `tests/export_test.c` and the harness check
 `tinyactors-test/ruby/export_roundtrip_check.rb` exercise the invariant.

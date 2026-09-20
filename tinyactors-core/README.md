@@ -40,7 +40,13 @@ This archive captures the C API shape discussed for a tiny in-process actor syst
   `docs/internal/api-ir.md`), in the format of
   `include/tinyactors.api.schema.json`. The `TA_*` annotation macros in the
   header record what C types cannot express.
-- `tests/*.c` — compile-only checks for internal and public header use.
+- `tests/*.c` — compile-only checks for internal and public header use
+  (`smoke.c`, `public_smoke.c`) and runtime unit tests that link the
+  amalgamation (`mise run test` runs them). A test written against a public
+  API that `src/` does not implement yet still has to compile, but its link
+  may fail: the build lists it in `PENDING_TESTS`, reports it as pending, and
+  the suite runs it as soon as it links. `tests/tree_test.c` is that case
+  today.
 
 ## Intentional omissions
 

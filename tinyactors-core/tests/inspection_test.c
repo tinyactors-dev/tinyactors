@@ -349,6 +349,96 @@ static void test_actor_inspection(ta_system *system, counting_model *model) {
     CHECK(facts.actor_count == 1);
 }
 
+/* A ta_str as a call argument; STR() above is an initializer. */
+#define S(text) ((ta_str){ .ptr = (text), .len = (uint32_t)(sizeof(text) - 1u) })
+
+/* ------------------------------------------------------------------------
+ * Reading identities back (ADR 0049): the inverses of ta_definition_state
+ * and ta_system_intern_atom.
+ *
+ * Catches: a lookup that scans text instead of comparing the atom the
+ * compiler interned (it would answer for a state of another definition, or
+ * miss one whose text a caller spelled with a different buffer), an atom
+ * table that hands out text for a handle it never issued, and a state ID
+ * that does not round-trip through its author's ID.
+ */
+static void test_reading_identities_back(ta_system *system, counting_model *model) {
+    ta_datamodel counting = { .self = model, .v = &counting_vtable };
+    ta_definition_id two = 0;
+    CHECK(compile(system, (compile_request){&(ta_scxml_spec){ .name = STR("round"), .states = two_states },
+                  counting, &two}) == TA_OK);
+
+    /* Every state of the definition round-trips: id -> text -> id. */
+    ta_definition_inspection facts;
+    CHECK(ta_definition_inspect(system, two, &facts) == TA_OK);
+    for (uint32_t index = 0; index < facts.state_count; index += 1) {
+        ta_state_info info;
+        CHECK(ta_definition_state(system, &(ta_definition_state_params){
+                                              .definition = two, .state = index, .out = &info }) == TA_OK);
+        ta_state_id found = UINT32_MAX;
+        CHECK(ta_definition_find_state(system, &(ta_definition_find_state_params){
+                                                   .definition = two, .id = info.id, .out = &found }) == TA_OK);
+        CHECK(found == index);
+    }
+
+    /* A state the definition does not have is a question, not a failure. */
+    ta_state_id missing = 4242;
+    CHECK(ta_definition_find_state(system, &(ta_definition_find_state_params){
+                                               .definition = two, .id = S("nowhere"),
+                                               .out = &missing }) == TA_ERR_NOT_FOUND);
+    CHECK(missing == 4242);
+    /* Including one whose text this system has interned for something else. */
+    ta_atom elsewhere = 0;
+    CHECK(ta_system_intern_atom(system, S("interned-but-not-a-state"), &elsewhere) == TA_OK);
+    CHECK(ta_definition_find_state(system, &(ta_definition_find_state_params){
+                                               .definition = two, .id = S("interned-but-not-a-state"),
+                                               .out = &missing }) == TA_ERR_NOT_FOUND);
+    CHECK(ta_definition_find_state(system, &(ta_definition_find_state_params){
+                                               .definition = 999999u, .id = S("idle"),
+                                               .out = &missing }) == TA_ERR_NOT_FOUND);
+    CHECK(ta_definition_find_state(system, NULL) == TA_ERR_INVALID);
+
+    /* An atom reads back as the text it interns, and interning it again is
+     * the same atom (ADR 0007). */
+    ta_atom first = 0;
+    ta_atom again = 0;
+    CHECK(ta_system_intern_atom(system, S("client-stream"), &first) == TA_OK);
+    CHECK(ta_system_intern_atom(system, S("client-stream"), &again) == TA_OK);
+    CHECK(first == again);
+    ta_str text = {0};
+    CHECK(ta_system_atom_text(system, first, &text) == TA_OK);
+    CHECK(str_is(text, "client-stream"));
+    /* The type core reserves for its own processor reads back too. */
+    CHECK(ta_system_atom_text(system, ta_system_scxml_io_type(system), &text) == TA_OK);
+    CHECK(text.len != 0);
+    /* A handle this system never issued is not text. */
+    text = (ta_str){ .ptr = "stale", .len = 5 };
+    CHECK(ta_system_atom_text(system, 987654u, &text) == TA_ERR_NOT_FOUND);
+    CHECK(str_is(text, "stale"));
+    CHECK(ta_system_atom_text(system, first, NULL) == TA_ERR_INVALID);
+
+    /* An invocation's ID reads back as the text that names it: what
+     * `done.invoke.<id>` carries and what a `#_<invokeid>` target spells.
+     * Parsing such a target is how a caller without a running invocation
+     * gets an ID to ask about, and the two grammars agree. */
+    ta_scxml_target target = {0};
+    CHECK(ta_scxml_target_parse(system, S("#_fetchUser"), &target) == TA_OK);
+    CHECK(target.kind == TA_SCXML_TARGET_INVOKE);
+    CHECK(ta_system_invoke_id_text(system, target.as.invoke, &text) == TA_OK);
+    CHECK(str_is(text, "fetchUser"));
+    /* The dotted form core generates for an <invoke> without an author ID is
+     * one ID, not a path. */
+    CHECK(ta_scxml_target_parse(system, S("#_work.2"), &target) == TA_OK);
+    CHECK(ta_system_invoke_id_text(system, target.as.invoke, &text) == TA_OK);
+    CHECK(str_is(text, "work.2"));
+
+    text = (ta_str){ .ptr = "stale", .len = 5 };
+    CHECK(ta_system_invoke_id_text(system, 0, &text) == TA_ERR_NOT_FOUND);
+    CHECK(ta_system_invoke_id_text(system, 987654u, &text) == TA_ERR_NOT_FOUND);
+    CHECK(str_is(text, "stale"));
+    CHECK(ta_system_invoke_id_text(system, target.as.invoke, NULL) == TA_ERR_INVALID);
+}
+
 int main(void) {
     ta_system *system = NULL;
     if (ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) != TA_OK) {
@@ -359,6 +449,7 @@ int main(void) {
     test_definition_inspect(system, &model);
     test_find_definition(system, &model);
     test_actor_inspection(system, &model);
+    test_reading_identities_back(system, &model);
     ta_system_destroy(system);
     if (failures != 0) {
         fprintf(stderr, "inspection test: %d check(s) failed\n", failures);

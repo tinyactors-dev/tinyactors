@@ -3,7 +3,7 @@
 # mise skips this task when every object below is newer than every source.
 # Use `mise run --force build` after changing CC/CFLAGS.
 #MISE sources=["mise/tasks/build", "mise/tasks/amalgamate", "mise/tasks/api", "mise/lib/**/*", "src/**/*", "include/tinyactors.h", "tests/*.c"]
-#MISE outputs=["tests/smoke.o", "tests/public_smoke.o", "tests/tinyactors.o", "build/inspection_test", "build/export_test", "build/retirement_test", "build/scxml_uri_test"]
+#MISE outputs=["tests/smoke.o", "tests/public_smoke.o", "tests/tinyactors.o", "tests/tree_test.o", "build/inspection_test", "build/export_test", "build/retirement_test", "build/scxml_uri_test", "build/send_id_test"]
 # vim:ft=ruby
 
 require 'fileutils'
@@ -14,13 +14,27 @@ ROOT = Pathname.new(__dir__).join('../..').expand_path
 
 def run(*command)
   puts command.join(' ')
+
+  return if try_run(*command)
+
+  exit(1)
+end
+
+# Runs a command and reports whether it succeeded, without ending the build.
+def try_run(*command)
   pid = Process.spawn(*command, chdir: ROOT.to_s)
   _pid, status = Process.wait2(pid)
-
-  return if status.success?
-
-  exit(status.exitstatus || 1)
+  status.success?
 end
+
+# Tests written against a public API that src/ does not implement yet: they
+# are compiled against the header like every other test, but their link fails
+# on the missing symbols. The build reports those as pending instead of
+# failing, as tinyxml does for its unwritten modules, and `mise run test`
+# runs each one as soon as it links (name => why it does not link yet).
+PENDING_TESTS = {
+  'tree_test' => 'ta_tree/ta_tree_list are unimplemented in src/'
+}.freeze
 
 compiler = Shellwords.split(ENV.fetch('CC', 'cc'))
 flags = Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic'))
@@ -100,6 +114,28 @@ run(
   '-o',
   'build/scxml_uri_test'
 )
+run(
+  *compiler,
+  *flags,
+  '-Iinclude',
+  'tests/send_id_test.c',
+  'include/tinyactors.c',
+  '-o',
+  'build/send_id_test'
+)
+
+# A pending test must still compile against the public header, so a renamed
+# type or a changed signature fails the build rather than hiding as "pending";
+# only its link is allowed to fail.
+PENDING_TESTS.each do |test, reason|
+  run(*compiler, *flags, '-Iinclude', '-c', "tests/#{test}.c", '-o', "tests/#{test}.o")
+
+  binary = "build/#{test}"
+  next if try_run(*compiler, *flags, '-Iinclude', "tests/#{test}.c", 'include/tinyactors.c', '-o', binary)
+
+  FileUtils.rm_f(ROOT.join(binary))
+  puts "tinyactors-core: #{test} is pending: #{reason}"
+end
 
 Dir['src/*.c'].sort.each do |source|
   run(*compiler, *flags, '-Isrc', '-c', source, '-o', "tests/#{File.basename(source, '.c')}.o")

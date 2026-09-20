@@ -13,8 +13,11 @@ The IR must be capable of representing the SCXML execution semantics for:
   log sink when one is installed (ADR 0045);
 - send and delayed send;
 - cancel;
-- invocation-related finalize content;
-- extension actions.
+- invocation-related finalize content.
+
+Platform-specific executable content (SCXML 4.10) is **not** in this list:
+it is a `<send>` to a host I/O processor (ADR 0046), so it needs no IR of its
+own.
 
 Executable content can pause because actor execution is budgeted. Therefore nested constructs require resumable frames/program counters that become part of the actor continuation.
 

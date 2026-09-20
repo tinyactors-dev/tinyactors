@@ -145,3 +145,22 @@ ta_result ta_dm_host_state_name(const ta_dm_host *host, ta_state_id state, ta_st
     *out = ta_atom_text(&host->impl->system->atoms, definition->states[state].name);
     return TA_OK;
 }
+
+ta_result ta_dm_host_find_state(const ta_dm_host *host, ta_str id, ta_state_id *out) {
+    if (!ta_dm_host_valid(host) || out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_system *system = host->impl->system;
+    const ta_definition *definition = host->impl->actor->definition;
+    ta_atom name = 0;
+    if (ta_atom_find(&system->atoms, id, &name) != TA_OK) {
+        return TA_ERR_NOT_FOUND;
+    }
+    for (ta_state_id state = 0; state < definition->state_count; state += 1) {
+        if (definition->states[state].name == name) {
+            *out = state;
+            return TA_OK;
+        }
+    }
+    return TA_ERR_NOT_FOUND;
+}

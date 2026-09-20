@@ -53,7 +53,7 @@ module TinyactorsBindings
   # ta_scxml_action_spec.invoke stays keyed: its own `kind` would collide.
   FLATTEN_UNION_MEMBERS = {
     'ta_actor_ref.named' => 'an address reads as the actor reference itself',
-    'ta_scxml_action_spec.{raise,send,cancel,assign,script,log,conditional,foreach,extension}' =>
+    'ta_scxml_action_spec.{raise,send,cancel,assign,script,log,conditional,foreach}' =>
       'an action is one object, as in SCXML markup'
   }.freeze
 

@@ -4899,6 +4899,55 @@
         }
       }
     },
+    "ta_definition_find_state_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "definition",
+          "type": {
+            "type": "ta_definition_id"
+          }
+        },
+        {
+          "name": "id",
+          "type": {
+            "type": "ta_str"
+          },
+          "doc": "The author's state ID, as `ta_definition_state` reports it."
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_state_id"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "definition": 0,
+            "id": 8,
+            "out": 24
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "definition": 0,
+            "id": 8,
+            "out": 16
+          }
+        }
+      }
+    },
     "ta_definition_id": {
       "kind": "alias",
       "doc": "A registered definition: its table slot in the low 32 bits and the slot's generation in the high 32 bits (ADR 0043). Zero is never a valid ID. A freed definition's ID goes stale and never names another definition.",
@@ -5861,22 +5910,6 @@
         }
       ],
       "doc": "======================================================================== Expressions and definition identity",
-      "layout": {
-        "x86_64-unknown-linux-gnu": {
-          "size": 4,
-          "align": 4
-        },
-        "wasm32-unknown-unknown": {
-          "size": 4,
-          "align": 4
-        }
-      }
-    },
-    "ta_extension_id": {
-      "kind": "alias",
-      "type": {
-        "builtin": "uint32_t"
-      },
       "layout": {
         "x86_64-unknown-linux-gnu": {
           "size": 4,
@@ -7442,11 +7475,6 @@
           "name": "TA_SCXML_ACTION_INVOKE",
           "value": 9,
           "symbol": "invoke"
-        },
-        {
-          "name": "TA_SCXML_ACTION_EXTENSION",
-          "value": 10,
-          "symbol": "extension"
         }
       ],
       "layout": {
@@ -7676,29 +7704,6 @@
                     "type": "ta_scxml_invoke_spec"
                   },
                   "when": "TA_SCXML_ACTION_INVOKE"
-                },
-                {
-                  "name": "extension",
-                  "type": {
-                    "record": {
-                      "kind": "struct",
-                      "fields": [
-                        {
-                          "name": "type",
-                          "type": {
-                            "type": "ta_str"
-                          }
-                        },
-                        {
-                          "name": "payload",
-                          "type": {
-                            "type": "ta_bytes"
-                          }
-                        }
-                      ]
-                    }
-                  },
-                  "when": "TA_SCXML_ACTION_EXTENSION"
                 }
               ]
             }
@@ -7720,8 +7725,7 @@
           "TA_SCXML_ACTION_LOG": "log",
           "TA_SCXML_ACTION_IF": "conditional",
           "TA_SCXML_ACTION_FOREACH": "foreach",
-          "TA_SCXML_ACTION_INVOKE": "invoke",
-          "TA_SCXML_ACTION_EXTENSION": "extension"
+          "TA_SCXML_ACTION_INVOKE": "invoke"
         }
       },
       "layout": {
@@ -7754,10 +7758,7 @@
             "as.foreach.item": 40,
             "as.foreach.index": 56,
             "as.foreach.body": 72,
-            "as.invoke": 8,
-            "as.extension": 8,
-            "as.extension.type": 8,
-            "as.extension.payload": 24
+            "as.invoke": 8
           }
         },
         "wasm32-unknown-unknown": {
@@ -7789,10 +7790,7 @@
             "as.foreach.item": 20,
             "as.foreach.index": 28,
             "as.foreach.body": 36,
-            "as.invoke": 4,
-            "as.extension": 4,
-            "as.extension.type": 4,
-            "as.extension.payload": 12
+            "as.invoke": 4
           }
         }
       }
@@ -9333,6 +9331,72 @@
         }
       }
     },
+    "ta_send_id_format_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "send_id",
+          "type": {
+            "type": "ta_send_id"
+          }
+        },
+        {
+          "name": "buffer",
+          "type": {
+            "pointer": {
+              "builtin": "char"
+            }
+          },
+          "capacity": "capacity",
+          "needed": "needed",
+          "shape": "buffer",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success"
+        },
+        {
+          "name": "capacity",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "capacity_of": "buffer"
+        },
+        {
+          "name": "needed",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "always",
+          "needed_of": "buffer"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "send_id": 0,
+            "buffer": 8,
+            "capacity": 16,
+            "needed": 24
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "send_id": 0,
+            "buffer": 8,
+            "capacity": 12,
+            "needed": 16
+          }
+        }
+      }
+    },
     "ta_session_image": {
       "kind": "handle",
       "handle": "session_image",
@@ -10356,6 +10420,86 @@
       ]
     },
     {
+      "name": "ta_send_id_parse",
+      "doc": "Send IDs as text (ADR 0048). A literal ` <send id>` is the author's text; a generated ID is `#_send. <n >`, the sending actor's counter. Core writes this text for `idlocation` and `_event.sendid` and reads it back for ` <cancel sendidexpr>`, so the two forms name the same send by construction: a host holding a `ta_send_id`, such as an I/O processor looking at `ta_send.send_id`, can render the text its chart holds, and a host holding that text can name the send core knows.\n\nParsing the generated form always succeeds, whether or not such a send exists, as a session URI does. A literal ID must already be interned in this system, since no send of it can carry text it has never seen: otherwise TA_ERR_NOT_FOUND. TA_ERR_INVALID means the text is no send ID at all, such as an empty string.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "text",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_send_id"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success"
+        }
+      ]
+    },
+    {
+      "name": "ta_send_id_format",
+      "doc": "The text of a send ID, following the buffer convention: `*needed` receives the size including the terminating NUL, and a too-small buffer yields TA_ERR_NOMEM without writing, so a zero capacity is a size query. TA_ERR_NOT_FOUND when the send has no ID.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_send_id_format_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
       "name": "ta_dm_host_in_state",
       "doc": "Queries available to a data-model adapter while core calls into it.",
       "public": true,
@@ -10383,6 +10527,49 @@
           "type": {
             "type": "ta_state_id"
           }
+        }
+      ]
+    },
+    {
+      "name": "ta_dm_host_find_state",
+      "doc": "The state of the running definition with this author ID, for In() (ADR 0049). TA_ERR_NOT_FOUND when the chart has no such state: SCXML B.1 makes In() of it simply false, so an adapter answers that without a lookup of its own.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host",
+              "const": true
+            }
+          },
+          "shape": "view",
+          "direction": "in"
+        },
+        {
+          "name": "id",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_state_id"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success"
         }
       ]
     },
@@ -11382,6 +11569,7 @@
     },
     {
       "name": "ta_system_visit_actors",
+      "doc": "Visits every resident actor once, invoked children included, with the same view ta_actor_inspect() gives for it. The walk stops at the first visit that answers anything but TA_OK and returns that result, so an inspector can end it early; a null `visit` is TA_ERR_INVALID. The order of the walk is not part of the contract.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -11586,6 +11774,43 @@
           "type": {
             "pointer": {
               "type": "ta_definition_state_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_definition_find_state",
+      "doc": "The state of a definition with this author ID: the inverse of ta_definition_state (ADR 0049). TA_ERR_NOT_FOUND when the definition has no such state, which is a question, not a failure.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_definition_find_state_params",
               "const": true
             }
           },
@@ -12168,6 +12393,94 @@
           "shape": "single",
           "direction": "out",
           "valid_on": "success"
+        }
+      ]
+    },
+    {
+      "name": "ta_system_atom_text",
+      "doc": "The text an atom interns (ADR 0049), borrowed from the system's atom table and valid while the system is. Atoms are system-local (ADR 0007): one of another system is TA_ERR_NOT_FOUND, not undefined. This is the inverse of ta_system_intern_atom, so a host that is handed `ta_send.io_type` or `ta_invoke_request.type` can say what it was given.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "atom",
+          "type": {
+            "type": "ta_atom"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_str"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "system"
+        }
+      ]
+    },
+    {
+      "name": "ta_system_invoke_id_text",
+      "doc": "The text of an invocation's ID (ADR 0049): the author's ` <invoke id>`, or the ` <stateid >. <platformid >` core generated for one without. It is what `done.invoke. <id >` names and what the `#_ <invokeid >` target spells, so a host holding `ta_active_invoke.id` can say which invocation it has. Borrowed from the system. TA_ERR_NOT_FOUND for an ID it never issued.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "invoke",
+          "type": {
+            "type": "ta_invoke_id"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_str"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "system"
         }
       ]
     },

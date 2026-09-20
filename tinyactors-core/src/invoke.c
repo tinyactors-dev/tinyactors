@@ -35,6 +35,18 @@ ta_str ta_invoke_id_text(const ta_system *system, ta_invoke_id invoke) {
     return ta_atom_text(&system->atoms, (ta_atom)(invoke - 1u));
 }
 
+ta_result ta_system_invoke_id_text(const ta_system *system, ta_invoke_id invoke, ta_str *out) {
+    if (system == NULL || out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    if (invoke == 0 || invoke == TA_INVOKE_ID_NONE || invoke - 1u >= TA_ATOM_NONE ||
+        !ta_atom_valid(&system->atoms, (ta_atom)(invoke - 1u))) {
+        return TA_ERR_NOT_FOUND;
+    }
+    *out = ta_invoke_id_text(system, invoke);
+    return TA_OK;
+}
+
 /* done.invoke.<id>, one event-name segment per dotted part of the ID text. */
 static ta_result ta_invoke_done_name(ta_system *system, ta_invoke_id invoke, ta_event_name_id *out) {
     ta_str text = ta_invoke_id_text(system, invoke);

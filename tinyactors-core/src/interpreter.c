@@ -380,6 +380,31 @@ ta_send_id ta_send_id_from_text(const ta_system *system, ta_str text) {
     return ta_atom_find(&system->atoms, text, &atom) == TA_OK ? ta_literal_send_id(atom) : 0;
 }
 
+ta_result ta_send_id_parse(const ta_system *system, ta_str text, ta_send_id *out) {
+    if (system == NULL || out == NULL || text.ptr == NULL || text.len == 0) {
+        return TA_ERR_INVALID;
+    }
+    ta_send_id id = ta_send_id_from_text(system, text);
+    if (id == 0) {
+        return TA_ERR_NOT_FOUND;
+    }
+    *out = id;
+    return TA_OK;
+}
+
+ta_result ta_send_id_format(const ta_system *system, const ta_send_id_format_params *params) {
+    if (system == NULL || params == NULL || params->needed == NULL) {
+        return TA_ERR_INVALID;
+    }
+    if (params->send_id == 0) {
+        *params->needed = 0;
+        return TA_ERR_NOT_FOUND;
+    }
+    ta_text_writer writer = { .buffer = params->buffer, .capacity = params->capacity };
+    ta_send_id_write(system, params->send_id, &writer);
+    return ta_text_finish(&writer, params->needed);
+}
+
 typedef struct {
     ta_actor_ref origin;
     ta_invoke_id invoke_id;

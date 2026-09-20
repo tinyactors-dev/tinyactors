@@ -278,6 +278,17 @@ ta_result ta_system_intern_atom(ta_system *system, ta_str text, ta_atom *out) {
     return ta_atom_intern(&system->atoms, text, out);
 }
 
+ta_result ta_system_atom_text(const ta_system *system, ta_atom atom, ta_str *out) {
+    if (system == NULL || out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    if (!ta_atom_valid(&system->atoms, atom)) {
+        return TA_ERR_NOT_FOUND;
+    }
+    *out = ta_atom_text(&system->atoms, atom);
+    return TA_OK;
+}
+
 ta_result ta_event_name_intern(ta_system *system, const ta_atom_list *segments, ta_event_name_id *out) {
     if (system == NULL || out == NULL) {
         return TA_ERR_INVALID;

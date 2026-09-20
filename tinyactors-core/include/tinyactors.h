@@ -105,7 +105,6 @@ typedef uint32_t ta_content_id;
 typedef uint32_t ta_param_id;
 typedef uint32_t ta_done_data_id;
 typedef uint32_t ta_invoke_decl_id;
-typedef uint32_t ta_extension_id;
 typedef uint64_t ta_actor_id;
 /*
  * A registered definition: its table slot in the low 32 bits and the slot's
@@ -430,6 +429,41 @@ typedef struct {
 /* The URI of a target. TA_ERR_NOT_FOUND when its kind has no URI. */
 TA_API ta_result ta_scxml_target_format(const ta_system *system,
                                         TA_IN const ta_scxml_target_format_params *params);
+
+/*
+ * Send IDs as text (ADR 0048). A literal `<send id>` is the author's text; a
+ * generated ID is `#_send.<n>`, the sending actor's counter. Core writes this
+ * text for `idlocation` and `_event.sendid` and reads it back for
+ * `<cancel sendidexpr>`, so the two forms name the same send by
+ * construction: a host holding a `ta_send_id`, such as an I/O processor
+ * looking at `ta_send.send_id`, can render the text its chart holds, and a
+ * host holding that text can name the send core knows.
+ *
+ * Parsing the generated form always succeeds, whether or not such a send
+ * exists, as a session URI does. A literal ID must already be interned in
+ * this system, since no send of it can carry text it has never seen:
+ * otherwise TA_ERR_NOT_FOUND. TA_ERR_INVALID means the text is no send ID at
+ * all, such as an empty string.
+ */
+TA_API ta_result ta_send_id_parse(const ta_system *system,
+                                  ta_str text,
+                                  TA_OUT ta_send_id *out);
+
+typedef struct {
+    ta_send_id send_id;
+    TA_BUFFER(capacity, needed) TA_OPTIONAL char *buffer;
+    uint32_t capacity;
+    TA_OUT TA_ALWAYS uint32_t *needed;
+} ta_send_id_format_params;
+
+/*
+ * The text of a send ID, following the buffer convention: `*needed` receives
+ * the size including the terminating NUL, and a too-small buffer yields
+ * TA_ERR_NOMEM without writing, so a zero capacity is a size query.
+ * TA_ERR_NOT_FOUND when the send has no ID.
+ */
+TA_API ta_result ta_send_id_format(const ta_system *system,
+                                   TA_IN const ta_send_id_format_params *params);
 /* One <param>: `name` is the author's parameter name, borrowed for the call. */
 typedef struct { ta_str name; ta_value value; } ta_named_value;
 typedef struct {
@@ -495,6 +529,15 @@ typedef struct { void *self; const ta_datamodel_vtable *v; } ta_datamodel TA_ADA
 
 /* Queries available to a data-model adapter while core calls into it. */
 TA_API bool ta_dm_host_in_state(const ta_dm_host *host, ta_state_id state);
+/*
+ * The state of the running definition with this author ID, for In() (ADR
+ * 0049). TA_ERR_NOT_FOUND when the chart has no such state: SCXML B.1 makes
+ * In() of it simply false, so an adapter answers that without a lookup of
+ * its own.
+ */
+TA_API ta_result ta_dm_host_find_state(const ta_dm_host *host,
+                                       ta_str id,
+                                       TA_OUT ta_state_id *out);
 TA_API const ta_event *ta_dm_host_event(const ta_dm_host *host) TA_OPTIONAL TA_LIFETIME(call);
 TA_API ta_actor_id ta_dm_host_actor(const ta_dm_host *host);
 
@@ -809,8 +852,7 @@ typedef enum {
     TA_SCXML_ACTION_LOG,
     TA_SCXML_ACTION_IF,
     TA_SCXML_ACTION_FOREACH,
-    TA_SCXML_ACTION_INVOKE,
-    TA_SCXML_ACTION_EXTENSION
+    TA_SCXML_ACTION_INVOKE
 } ta_scxml_action_kind TA_SYMBOLS("TA_SCXML_ACTION_");
 
 typedef enum {
@@ -907,7 +949,6 @@ struct ta_scxml_action_spec {
             TA_TERMINATED_BY(kind) TA_OPTIONAL const ta_scxml_action_spec *body;
         } foreach;
         TA_WHEN(TA_SCXML_ACTION_INVOKE) ta_scxml_invoke_spec invoke;
-        TA_WHEN(TA_SCXML_ACTION_EXTENSION) struct { ta_str type; ta_bytes payload; } extension;
     } as;
 };
 
@@ -1422,6 +1463,13 @@ typedef struct { void *self; ta_actor_inspection_visitor visit; } ta_actor_inspe
 TA_API ta_result ta_actor_inspect(ta_system *system,
                                   ta_actor_id actor,
                                   TA_OUT TA_LIFETIME(system) ta_actor_inspection *out);
+/*
+ * Visits every resident actor once, invoked children included, with the
+ * same view ta_actor_inspect() gives for it. The walk stops at the first
+ * visit that answers anything but TA_OK and returns that result, so an
+ * inspector can end it early; a null `visit` is TA_ERR_INVALID. The order
+ * of the walk is not part of the contract.
+ */
 TA_API ta_result ta_system_visit_actors(ta_system *system, ta_actor_inspector inspector);
 /*
  * The data model's inspection root (its `inspect` operation). Release it
@@ -1509,6 +1557,21 @@ typedef struct {
 } ta_definition_state_params;
 TA_API ta_result ta_definition_state(const ta_system *system,
                                      TA_IN const ta_definition_state_params *params);
+
+typedef struct {
+    ta_definition_id definition;
+    /* The author's state ID, as `ta_definition_state` reports it. */
+    ta_str id;
+    TA_OUT ta_state_id *out;
+} ta_definition_find_state_params;
+
+/*
+ * The state of a definition with this author ID: the inverse of
+ * ta_definition_state (ADR 0049). TA_ERR_NOT_FOUND when the definition has
+ * no such state, which is a question, not a failure.
+ */
+TA_API ta_result ta_definition_find_state(const ta_system *system,
+                                          TA_IN const ta_definition_find_state_params *params);
 
 /*
  * A read-only view of one registered definition. Text and the adapter are
@@ -1654,6 +1717,26 @@ TA_API ta_result ta_system_register_invoker(ta_system *system,
                                             ta_atom type,
                                             ta_invoker invoker);
 TA_API ta_result ta_system_intern_atom(ta_system *system, ta_str text, TA_OUT ta_atom *out);
+/*
+ * The text an atom interns (ADR 0049), borrowed from the system's atom table
+ * and valid while the system is. Atoms are system-local (ADR 0007): one of
+ * another system is TA_ERR_NOT_FOUND, not undefined. This is the inverse of
+ * ta_system_intern_atom, so a host that is handed `ta_send.io_type` or
+ * `ta_invoke_request.type` can say what it was given.
+ */
+TA_API ta_result ta_system_atom_text(const ta_system *system,
+                                     ta_atom atom,
+                                     TA_OUT TA_LIFETIME(system) ta_str *out);
+/*
+ * The text of an invocation's ID (ADR 0049): the author's `<invoke id>`, or
+ * the `<stateid>.<platformid>` core generated for one without. It is what
+ * `done.invoke.<id>` names and what the `#_<invokeid>` target spells, so a
+ * host holding `ta_active_invoke.id` can say which invocation it has.
+ * Borrowed from the system. TA_ERR_NOT_FOUND for an ID it never issued.
+ */
+TA_API ta_result ta_system_invoke_id_text(const ta_system *system,
+                                          ta_invoke_id invoke,
+                                          TA_OUT TA_LIFETIME(system) ta_str *out);
 TA_API ta_result ta_event_name_intern(ta_system *system,
                                       TA_IN const ta_atom_list *segments,
                                       TA_OUT ta_event_name_id *out);

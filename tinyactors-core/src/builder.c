@@ -436,7 +436,6 @@ static ta_result ta_compiler_action(ta_compiler *compiler, const ta_scxml_action
             out->kind = TA_ACTION_FOREACH;
             return ta_compiler_foreach(compiler, spec, &out->as.foreach);
         case TA_SCXML_ACTION_INVOKE:
-        case TA_SCXML_ACTION_EXTENSION:
             return TA_ERR_UNSUPPORTED;
         default:
             return TA_ERR_INVALID;
