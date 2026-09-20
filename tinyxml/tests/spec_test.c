@@ -384,7 +384,8 @@ static bool read_spec_file(const char *path, case_handler handle) {
                     break;
                 }
                 spec_case_init(&item);
-                snprintf(item.name, sizeof(item.name), "%s", argument);
+                /* Truncates like `argument` itself; the precision states that to the compiler. */
+                snprintf(item.name, sizeof(item.name), "%.*s", (int)(sizeof(item.name) - 1u), argument);
                 open_case = true;
                 current = SECTION_NONE;
                 continue;
