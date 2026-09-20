@@ -1,13 +1,13 @@
 #!/usr/bin/env ruby
 #MISE description="Freestanding check of the amalgamation at -O0: no undefined symbols in the objects"
-#MISE depends=["amalgamate"]
-#MISE sources=["src/**/*.c", "src/**/*.h", "include/txml.h", "mise/tasks/amalgamate", "mise/lib/freestanding.rb", "mise/tasks/freestanding/amalgamation/O0"]
+#MISE depends=["generated"]
 # vim:ft=ruby
 #
 # One (target, level) of the freestanding check; see mise/lib/freestanding.rb.
-# mise runs these in parallel and skips one whose sources are unchanged. Run
-# through `mise run freestanding` (quick tier: -O0 -O2 -Os) or
-# `mise run freestanding:full` (all five levels).
+# mise runs these in parallel. Freshness is by content, not modification time
+# (mise/lib/cache.rb): unchanged objects are reused, and the symbol check reruns
+# only when an object's bytes changed. Run through `mise run freestanding` (quick
+# tier) or `mise run freestanding:full` (all five levels, both targets).
 
 require 'pathname'
 require_relative '../../../lib/freestanding'

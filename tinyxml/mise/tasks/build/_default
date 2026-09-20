@@ -1,0 +1,91 @@
+#!/usr/bin/env ruby
+#MISE description="Build the txml header checks and test suite"
+#MISE depends=["build:library", "build:tests"]
+# vim:ft=ruby
+
+# build:library and build:tests compile in parallel, then this links. The test
+# binaries here link the modules; amalgamate-test links the public-API tests
+# against include/txml.c as well. Nothing here reads a generated file; the tasks
+# that do depend on `generated`, which fails if one is out of date.
+#
+# A test whose modules do not exist yet is reported as pending rather than made
+# to pass; nothing here weakens a test. Changing CC/CFLAGS changes the compile
+# and link commands, which are part of every cache key, so it rebuilds.
+#
+# Linking is by content too (mise/lib/cache.rb): a test binary is relinked only
+# when the bytes of its object, of the library objects, or the link command
+# changed, so an object that a comment edit recompiled identically relinks
+# nothing and leaves every test binary's bytes, and so its recorded pass, alone.
+
+require 'English'
+require 'fileutils'
+require 'pathname'
+require 'shellwords'
+require_relative '../../lib/cache'
+
+ROOT = Cache::ROOT
+BUILD = ROOT.join('build')
+OBJECTS = BUILD.join('objects')
+
+COMPILER = Shellwords.split(ENV.fetch('CC', 'cc'))
+FLAGS = Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic'))
+
+# Links today: it calls no library function.
+FREESTANDING_TESTS = %w[header_test].freeze
+# Need the implementation to link.
+LINKED_TESTS = %w[arena_test cursor_test doc_test incremental_test spec_test stream_test text_test writer_test].freeze
+
+sources = Dir[ROOT.join('src/*.c').to_s].sort
+objects = sources.map { |source| OBJECTS.join("#{File.basename(source, '.c')}.o") }
+
+# Relinks `test` from `inputs` unless the last successful link had the same
+# command and object bytes and the binary is still there. Returns :linked,
+# :reused, or a list of the symbols a failed link was missing.
+def link(test, inputs)
+  binary = BUILD.join(test)
+  command = [*COMPILER, *FLAGS, *inputs.map(&:to_s), '-o', binary.to_s]
+  key = Cache.digest(command.map { |part| part.start_with?(ROOT.to_s) ? part.delete_prefix("#{ROOT}/") : part }.join(' '),
+                     Cache.tool_id(COMPILER.first(1)), inputs)
+  name = "link-#{test}"
+  return :reused if binary.file? && Cache.stamped?(name, key)
+
+  Cache.unstamp(name)
+  FileUtils.rm_f(binary)
+  puts command.shelljoin
+  output = IO.popen(command, chdir: ROOT.to_s, err: %i[child out], &:read)
+  unless $CHILD_STATUS.success?
+    FileUtils.rm_f(binary)
+    return output.scan(/undefined reference to `([^']+)'/).flatten.uniq
+  end
+  Cache.stamp(name, key)
+  :linked
+end
+
+linked = 0
+reused = 0
+pending = []
+FREESTANDING_TESTS.each do |test|
+  result = link(test, [OBJECTS.join("#{test}.o")])
+  abort "build: could not link #{test}" unless result.is_a?(Symbol)
+  result == :reused ? reused += 1 : linked += 1
+end
+
+total = FREESTANDING_TESTS.length + LINKED_TESTS.length
+# A test links only when the modules it calls exist; a link that fails is never
+# turned into a pass, the binary is simply not there.
+LINKED_TESTS.each do |test|
+  if sources.empty?
+    FileUtils.rm_f(BUILD.join(test))
+    next
+  end
+  result = link(test, [OBJECTS.join("#{test}.o"), *objects])
+  if result.is_a?(Symbol)
+    result == :reused ? reused += 1 : linked += 1
+  else
+    puts "  not linked: #{test} needs #{result.first(4).join(', ')}#{result.length > 4 ? ", ... (#{result.length})" : ''}"
+    pending << test
+  end
+end
+
+count = FREESTANDING_TESTS.length + LINKED_TESTS.length - pending.length
+puts(sources.empty? ? "implementation pending: linked #{count} of #{total} test binaries (src/ has no modules yet)" : "linked #{count} of #{total} test binaries (#{linked} relinked, #{reused} reused)")

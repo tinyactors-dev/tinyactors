@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+#MISE description="Regenerate the checked-in generated files: include/txml.c, then include/txml.api.json"
+#MISE depends=["api"]
+# vim:ft=bash
+#
+#   mise run generate     # after editing src/ or include/txml.h
+#   mise run test         # `generated` fails if you forgot
+#
+# `api` depends on `amalgamate`, so this writes include/txml.c first and the API
+# description second. Both skip by content when nothing they read changed.
+echo "generate: include/txml.c and include/txml.api.json are current"

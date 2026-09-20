@@ -1,16 +1,20 @@
 #!/usr/bin/env ruby
 #MISE description="Run the txml test suite"
-#MISE depends=["freestanding", "lint-src", "build", "amalgamate-test", "api-test"]
+#MISE depends=["generated", "freestanding", "lint-src", "build", "amalgamate-test", "api-test"]
 # vim:ft=ruby
 
-# The checks are dependencies, which mise runs in parallel (`--jobs`) and skips
-# when their sources are unchanged: the source and object-code constraints
-# (freestanding, quick tier; lint-src), the build, the public-API tests against
-# the amalgamation (amalgamate-test) and the API description (api-test). This
-# task then runs every test binary that exists. A test whose modules do not
-# exist is reported as pending; any failure fails the task. `mise run
-# freestanding:full` adds the -O1 and -O3 levels of the freestanding check, for
-# before a commit and for CI.
+# The checks are dependencies, which mise runs in parallel (`--jobs`): that the
+# checked-in generated files are current (generated), the source and object-code
+# constraints (freestanding, quick tier; lint-src), the build, the public-API
+# tests against the amalgamation (amalgamate-test) and the API description
+# (api-test). Each skips by content, not modification time (mise/lib/cache.rb), so
+# touching a file, or editing a comment, costs a few hashes. This task then runs
+# the test binaries that exist, all at once, and reports them in a fixed order; a
+# binary whose bytes and test data are unchanged since its last pass is not run
+# again (mise/lib/suite.rb). A test whose modules do not exist is reported as
+# pending; any failure fails the task. `mise run freestanding:full` checks every
+# optimisation level of both targets, for before a commit and for CI;
+# `TXML_FORCE=1` ignores every cache.
 
 require 'pathname'
 
@@ -20,18 +24,9 @@ require_relative '../lib/suite'
 
 BINARIES = Suite::BINARIES
 
-def run(*command)
-  puts command.join(' ')
-  pid = Process.spawn(*command, chdir: ROOT.to_s)
-  _pid, status = Process.wait2(pid)
-
-  return if status.success?
-
-  exit(status.exitstatus || 1)
-end
-
 ran = []
 pending = []
+entries = []
 
 BINARIES.each do |name, arguments|
   binary = ROOT.join('build', name)
@@ -41,9 +36,12 @@ BINARIES.each do |name, arguments|
     next
   end
 
-  run(binary.to_s, *arguments)
+  entries << [name, binary, arguments]
   ran << name
 end
+
+failed = Suite.run_all(entries)
+abort "txml: failed: #{failed.join(' ')}" unless failed.empty?
 
 puts "txml: #{ran.length} test binaries passed (#{ran.join(' ')})" unless ran.empty?
 

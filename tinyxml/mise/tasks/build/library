@@ -1,0 +1,33 @@
+#!/usr/bin/env ruby
+#MISE description="Compile the txml modules (src/*.c) into build/objects"
+# vim:ft=ruby
+#
+# Half of `mise run build`; the other half, build:tests, compiles the test
+# programs. mise runs them in parallel. Each module has its own object, reused
+# while its contents and those of the headers it includes are unchanged
+# (mise/lib/cache.rb), so touching a file, or editing a comment, costs a hash
+# and a comment edit that leaves the object's bytes unchanged invalidates
+# nothing downstream. CC and CFLAGS select the compiler and flags; changing them
+# changes the compile command and so recompiles everything.
+
+require 'pathname'
+require 'shellwords'
+require_relative '../../lib/cache'
+
+ROOT = Cache::ROOT
+OBJECTS = ROOT.join('build/objects')
+COMMAND = [*Shellwords.split(ENV.fetch('CC', 'cc')), *Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic')), '-Iinclude'].freeze
+
+compiled = 0
+reused = 0
+Dir[ROOT.join('src/*.c').to_s].sort.each do |path|
+  source = Pathname.new(path).relative_path_from(ROOT)
+  outcome, output = Cache.compile(COMMAND, source, OBJECTS.join("#{source.basename('.c')}.o"))
+  if outcome == :failed
+    puts (COMMAND + ['-c', source.to_s]).shelljoin
+    abort output
+  end
+  puts output unless output.empty?
+  outcome == :compiled ? compiled += 1 : reused += 1
+end
+puts "build:library: #{compiled} compiled, #{reused} reused"

@@ -1,7 +1,6 @@
 #!/usr/bin/env ruby
 #MISE description="Freestanding check: src/ and the amalgamation include nothing but stdint.h, stddef.h and stdbool.h"
-#MISE depends=["amalgamate"]
-#MISE sources=["src/**/*.c", "src/**/*.h", "include/txml.h", "mise/lib/freestanding.rb", "mise/tasks/amalgamate", "mise/tasks/freestanding/includes"]
+#MISE depends=["generated"]
 # vim:ft=ruby
 
 require 'pathname'

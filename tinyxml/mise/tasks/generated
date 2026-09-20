@@ -1,0 +1,24 @@
+#!/usr/bin/env ruby
+#MISE description="Fail if a checked-in generated file (include/txml.c, include/txml.api.json) is out of date"
+# vim:ft=ruby
+#
+# The single-file library and the API description are generated from src/ and
+# include/txml.h and checked in. This task only *checks* them, so a stale file
+# fails the suite instead of being quietly rewritten: it runs the generators in
+# `--check` mode, directly and in order, so nothing regenerates behind it (the
+# `api` task depends on `amalgamate`; going through mise here would hide a stale
+# amalgamation). Everything that reads a generated file depends on this task.
+# Both checks are content-fresh (mise/lib/cache.rb) and cost a few hashes when
+# nothing changed. To bring the files up to date: `mise run amalgamate` and then
+# `mise run api`.
+
+require 'pathname'
+require 'rbconfig'
+
+ROOT = Pathname.new(__dir__).join('../..').expand_path
+
+%w[amalgamate api].each do |generator|
+  next if system(RbConfig.ruby, ROOT.join('mise/tasks', generator).to_s, '--check', chdir: ROOT.to_s)
+
+  abort "generated: #{generator} --check failed; run `mise run #{generator}` and commit the result"
+end

@@ -1,8 +1,63 @@
-#!/usr/bin/env bash
-#MISE description="Prove the library needs no C library at every optimisation level (-O0 -O1 -O2 -O3 -Os)"
-#MISE depends=["freestanding:includes", "freestanding:src:O0", "freestanding:amalgamation:O0", "freestanding:src:O1", "freestanding:amalgamation:O1", "freestanding:src:O2", "freestanding:amalgamation:O2", "freestanding:src:O3", "freestanding:amalgamation:O3", "freestanding:src:Os", "freestanding:amalgamation:Os"]
-# vim:ft=bash
+#!/usr/bin/env ruby
+#MISE description="Prove the library needs no C library at every level (-O0 -O1 -O2 -O3 -Os) for both src and the amalgamation"
+# vim:ft=ruby
 #
-# The full tier of `mise run freestanding`, for before a commit and for CI. Levels
-# already fresh from a quick run are skipped, so only -O1 and -O3 run then.
-echo "freestanding: full tier passed (-O0 -O1 -O2 -O3 -Os)"
+#   mise run freestanding:full
+#   TXML_FORCE=1 mise run freestanding:full   # ignore every cache: a from-scratch measurement
+#
+# The complete matrix and includes check, self-contained: it does not rely on a
+# quick run having happened. It hands the eleven tasks (freestanding:includes and
+# freestanding:{src,amalgamation}:{O0,O1,O2,O3,Os}) to one `mise run a ::: b ...`,
+# which is mise's own parallel scheduler (`MISE_JOBS`, default the CPU count
+# here), then prints one line per (target, level) from the records those tasks
+# wrote and a final line with the wall-clock for the whole set.
+#
+# A level marked `cached` was still verified against the current inputs: its
+# source hashes and those of the headers they include were compared with the
+# ones its objects were built from, and the symbol check is keyed on the objects'
+# bytes. `TXML_FORCE=1` skips all of that and rebuilds and rechecks everything;
+# `rm -rf build/freestanding build/stamps` does the same.
+
+require 'etc'
+require 'fileutils'
+require 'pathname'
+
+ROOT = Pathname.new(__dir__).join('../../..').expand_path
+RESULTS = ROOT.join('build/freestanding/results')
+TARGETS = %w[src amalgamation].freeze
+LEVELS = %w[O0 O1 O2 O3 Os].freeze
+
+def now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+FileUtils.rm_rf(RESULTS)
+tasks = ['freestanding:includes'] + TARGETS.flat_map { |target| LEVELS.map { |level| "freestanding:#{target}:#{level}" } }
+jobs = ENV.fetch('MISE_JOBS', Etc.nprocessors.to_s)
+started = now
+passed = system('mise', 'run', '--jobs', jobs, *tasks.flat_map { |task| [task, ':::'] }.tap(&:pop), chdir: ROOT.to_s)
+elapsed = now - started
+
+rows = [['includes', 'includes']] + TARGETS.flat_map { |target| LEVELS.map { |level| ["#{target}.#{level}", "#{target} #{level}"] } }
+missing = []
+counts = Hash.new(0)
+puts
+puts 'freestanding:full report'
+rows.each do |file, label|
+  path = RESULTS.join(file)
+  unless path.file?
+    missing << label
+    puts format('  %-18s NOT RUN', label)
+    next
+  end
+  status, seconds, detail = path.read.chomp.split("\t", 3)
+  counts[status] += 1
+  puts format('  %-18s %-8s %5ss  %s', label, status, seconds, detail)
+end
+
+unless passed && missing.empty?
+  warn "freestanding:full: FAILED#{missing.empty? ? '' : " (not run: #{missing.join(', ')})"}"
+  exit 1
+end
+
+skipped = counts['skipped'].positive? ? ", #{counts['skipped']} skipped with clang" : ''
+puts "freestanding:full: #{TARGETS.size} targets x #{LEVELS.size} levels, no undefined symbols, " \
+     "#{counts['ran']} ran, #{counts['cached']} cached#{skipped}, #{format('%.1f', elapsed)}s"

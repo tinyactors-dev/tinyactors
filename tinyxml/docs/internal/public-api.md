@@ -2,16 +2,21 @@
 
 `include/txml.h` is the complete, authored public API (ADR 0014). Two files are
 generated from it and from `src/`, checked in, and verified by `mise run
-build`:
+generated` (part of `mise run test`):
 
 | File | Task | What it is |
 |---|---|---|
 | `include/txml.c` | `mise run amalgamate` | the whole library as one translation unit |
 | `include/txml.api.json` | `mise run api` | the API as data, for bindings and tools |
 
-Both tasks take `--check`, which fails when the checked-in file is stale. After
-a change to `src/` or the header: `mise run build`, then commit the regenerated
-files with the change. A diff of `txml.api.json` is an API change to review.
+Both tasks take `--check`, which fails when the checked-in file is stale or was
+edited by hand; `mise run generated` runs both in that mode, directly and in
+order, and everything that reads a generated file depends on it, so a stale file
+fails the suite instead of being rewritten behind it. After a change to `src/`
+or the header: `mise run generate`, then commit the regenerated files with the
+change. Both generators skip by content: they hash their inputs and their own
+output, so a touched file costs a hash, and an output edited by hand does not
+count as up to date. A diff of `txml.api.json` is an API change to review.
 
 ## The amalgamation
 
@@ -35,7 +40,10 @@ are not exported by the API.
 -Werror -pedantic` and links every test that uses only the public API (all but
 `doc_test`) against it instead of the modules, reusing the test objects `build`
 compiled. The amalgamation is held to the freestanding check by
-`freestanding:amalgamation:*`, which `mise run test` runs alongside it.
+`freestanding:amalgamation:*`, which `mise run test` runs alongside it. Its
+object is reused while `include/txml.c` is unchanged, or changed only in
+comments or layout; each binary is relinked only when its inputs' bytes changed
+and run only when its own bytes or the test data did.
 
 ## The freestanding and source checks
 
@@ -44,10 +52,18 @@ Two checks keep AGENTS.md's hard constraints from rotting; both run first in
 
 - `freestanding` compiles every module, and the amalgamation, with
   `-ffreestanding -fno-builtin -fno-stack-protector`, links each with `ld -r`,
-  and fails on any undefined symbol. It runs the quick tier (-O0, -O2, -Os);
-  `freestanding:full` adds -O1 and -O3. Each (target, level) is a task of its
-  own under `mise/tasks/freestanding/`, so mise runs them in parallel and skips
-  the ones whose sources are unchanged. The compiler calls `memset`/`memcpy` on its own
+  and fails on any undefined symbol. The quick tier is the sources at -O0, -O2
+  and -Os and the amalgamation at -O2; `freestanding:full` is the complete set,
+  both targets at all five levels, self-contained, with a per-level report and a
+  final wall-clock line. Each (target, level) is a task of its own under
+  `mise/tasks/freestanding/`, so mise runs them in parallel. Each source has its
+  own object, reused by content (`mise/lib/cache.rb`); the `ld -r` and `nm`
+  step reruns only when the bytes of some object changed, so a comment edit
+  costs a few hashes. The report marks a level `cached` only when its inputs
+  were verified against the last passing run; `TXML_FORCE=1` reruns all of it.
+  The amalgamation is checked at one level in the quick tier because compiling
+  that single file costs 2 s at -O0, 6 s at -Os, 13 s at -O2 and 20 s at -O3
+  (measured; spread over the whole optimiser). The compiler calls `memset`/`memcpy` on its own
   for large struct initialisers, which is why the library zeroes through
   `txml_text_zero` and why only an object-level check can see it. Unoptimised
   clang is excluded, because it lowers every aggregate copy through `memcpy`;

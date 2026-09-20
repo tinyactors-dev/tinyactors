@@ -82,12 +82,19 @@ through it. Known deviations are listed under "Status" in
 ## Tasks
 
 ```sh
-mise run build          # regenerate include/txml.c and txml.api.json, compile, link
-mise run test           # the whole suite, including the checks below
+mise run build          # compile and link the modules and the test binaries
+mise run generate       # regenerate include/txml.c and txml.api.json after a change
+mise run test           # the whole suite, including the checks below (seconds when little changed)
 mise run spec tests/spec/elements.spec
-mise run freestanding   # no libc, quick tier (-O0 -O2 -Os): includes, undefined symbols
-mise run freestanding:full  # all five levels, before a commit and in CI
+mise run generated      # fail if a checked-in generated file is stale
+mise run freestanding   # no libc, quick tier (src -O0 -O2 -Os, amalgamation -O2)
+mise run freestanding:full  # both targets at all five levels, with a report; before a commit and in CI
 mise run lint-src       # no recursion, at most three parameters per function
 mise run amalgamate     # include/txml.c, the single-file library
 mise run api            # include/txml.api.json, the machine-readable API
 ```
+
+Checks skip by content, not modification time, so touching a file or editing a
+comment costs a second, and only the objects and test binaries whose bytes
+changed are rebuilt or rerun. `TXML_FORCE=1 mise run <task>` ignores every
+cache; see AGENTS.md.

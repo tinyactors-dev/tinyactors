@@ -20,6 +20,13 @@
 
 require 'pathname'
 require_relative '../lib/c_scan'
+require_relative '../lib/cache'
+
+# Fresh when the inputs and the checked-in output still hash to what the last
+# successful run recorded (mise/lib/cache.rb); an output edited by hand does not.
+Cache.gate('amalgamate',
+           inputs: Cache.files('src/*.c', 'src/*.h', 'include/txml.h', 'mise/lib/c_scan.rb', 'mise/tasks/amalgamate'),
+           outputs: [Cache::ROOT.join('include/txml.c')])
 
 root = Pathname.new(__dir__).join('../..').expand_path
 include_dir = root.join('include')

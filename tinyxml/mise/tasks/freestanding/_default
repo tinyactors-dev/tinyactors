@@ -1,15 +1,22 @@
 #!/usr/bin/env bash
-#MISE description="Prove the library needs no C library, quick tier (-O0 -O2 -Os): includes and undefined symbols"
-#MISE depends=["freestanding:includes", "freestanding:src:O0", "freestanding:amalgamation:O0", "freestanding:src:O2", "freestanding:amalgamation:O2", "freestanding:src:Os", "freestanding:amalgamation:Os"]
+#MISE description="Prove the library needs no C library, quick tier (src at -O0 -O2 -Os, amalgamation at -O2): includes and undefined symbols"
+#MISE depends=["freestanding:includes", "freestanding:src:O0", "freestanding:src:O2", "freestanding:src:Os", "freestanding:amalgamation:O2"]
 # vim:ft=bash
 #
 #   mise run freestanding        # quick tier, part of `mise run test`
-#   mise run freestanding:full   # all five levels, before a commit and in CI
+#   mise run freestanding:full   # both targets at all five levels, before a commit and in CI
 #
 # AGENTS.md hard constraint 1. The work is in the tasks this depends on, which
-# mise runs in parallel (`--jobs`, `MISE_JOBS`) and skips when their sources are
-# unchanged. The defect this exists for, a compiler-emitted memset from a struct
-# zero-initialiser, appeared at -O0 through -O3, so the quick tier sees it at -O0
-# and -O2; `freestanding:full` adds -O1 and -O3, where an optimiser may turn a
-# loop into a library call.
-echo "freestanding: quick tier passed (-O0 -O2 -Os)"
+# mise runs in parallel (`--jobs`, `MISE_JOBS`) and which reuse work by content
+# (mise/lib/cache.rb): a touched or comment-edited file costs a few hashes.
+#
+# The defect this exists for, a compiler-emitted memset from a struct
+# zero-initialiser, appeared at -O0 through -O3. The sources are checked file by
+# file at -O0, -O2 and -Os, so the quick tier sees it at -O0 and -O2. The
+# amalgamation is the same code in one translation unit, where every function is
+# static and the optimiser inlines across modules; it is checked at -O2 only,
+# because compiling that one 7,000-line file costs 2 s at -O0, 6 s at -Os, 13 s
+# at -O2 and 20 s at -O3 (measured; the time is spread over the whole optimiser,
+# there is nothing pathological to fix), and the sources already cover -O0 and
+# -Os. `freestanding:full` checks every (target, level).
+echo "freestanding: quick tier passed (src at -O0 -O2 -Os, amalgamation at -O2)"

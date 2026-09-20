@@ -1,6 +1,5 @@
 #!/usr/bin/env ruby
 #MISE description="Audit src/ and the header for the hard constraints: at most three parameters, no recursion"
-#MISE sources=["src/**/*.c", "src/**/*.h", "include/txml.h", "mise/lib/c_scan.rb", "mise/tasks/lint-src"]
 # vim:ft=ruby
 #
 #   mise run lint-src
@@ -30,6 +29,10 @@
 
 require 'pathname'
 require_relative '../lib/c_scan'
+require_relative '../lib/cache'
+
+# Content-fresh (mise/lib/cache.rb): the audit only reads these files.
+Cache.gate('lint-src', inputs: Cache.files('src/*.c', 'src/*.h', 'include/txml.h', 'mise/lib/c_scan.rb', 'mise/tasks/lint-src'))
 
 ROOT = Pathname.new(__dir__).join('../..').expand_path
 FILES = (Dir[ROOT.join('src/*.c').to_s] + Dir[ROOT.join('src/*.h').to_s] + [ROOT.join('include/txml.h').to_s]).sort.map { |path| Pathname.new(path) }

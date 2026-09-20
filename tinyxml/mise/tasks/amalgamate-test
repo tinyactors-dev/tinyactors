@@ -1,13 +1,12 @@
 #!/usr/bin/env ruby
 #MISE description="Prove the single-file library: strict build, freestanding, and the public-API tests linked against it"
-#MISE depends=["build"]
-#MISE sources=["include/txml.c", "include/txml.h", "src/**/*.c", "src/**/*.h", "tests/*.c", "tests/spec/**/*", "mise/lib/**/*", "mise/tasks/amalgamate", "mise/tasks/amalgamate-test"]
+#MISE depends=["build", "generated"]
 # vim:ft=ruby
 
 # include/txml.c is what an embedder copies into a project, so it is held to the
 # same rules as src/ and then tested as itself:
 #
-#   1. it is current (mise run amalgamate --check);
+#   1. it is current (the `generated` task, a dependency, fails otherwise);
 #   2. it compiles warning-free under -std=c11 -Wall -Wextra -Werror -pedantic,
 #      alone (-Iinclude is all it needs) and as the only library object;
 #   3. it passes the freestanding check (no libc, no undefined symbols). That is
@@ -22,41 +21,51 @@
 # CC and CFLAGS select the compiler and flags as in mise run build. The binaries
 # land in build/amalgamated/. The test objects are the ones `build` already
 # compiled (a test does not depend on which library it links), so only
-# include/txml.c is compiled here; mise runs `build` first and skips this task
-# when its sources are unchanged.
+# include/txml.c is compiled here, and only when its contents or its headers'
+# changed. Each binary is relinked only when its bytes' inputs changed and run
+# only when its own bytes or the test data did (mise/lib/cache.rb, suite.rb), so
+# a comment edit that regenerates an identical include/txml.c does nothing here.
 
 require 'English'
 require 'fileutils'
 require 'pathname'
 require 'shellwords'
+require_relative '../lib/cache'
 require_relative '../lib/suite'
 
-ROOT = Pathname.new(__dir__).join('../..').expand_path
+ROOT = Cache::ROOT
 OUT = ROOT.join('build/amalgamated')
 COMPILER = Shellwords.split(ENV.fetch('CC', 'cc'))
 FLAGS = Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic'))
 
-def run(*command)
-  puts command.shelljoin
-  pid = Process.spawn(*command, chdir: ROOT.to_s)
-  _pid, status = Process.wait2(pid)
-  return if status.success?
-
-  exit(status.exitstatus || 1)
-end
-
-run('mise', 'run', 'amalgamate', '--check')
 FileUtils.mkdir_p(OUT)
 
 library = OUT.join('txml.o')
-run(*COMPILER, *FLAGS, '-Iinclude', '-c', 'include/txml.c', '-o', library.to_s)
+outcome, output = Cache.compile([*COMPILER, *FLAGS, '-Iinclude'], 'include/txml.c', library)
+if outcome == :failed
+  warn output
+  abort 'amalgamate-test: include/txml.c does not compile'
+end
+puts "amalgamate-test: include/txml.c #{outcome == :compiled ? 'compiled' : 'unchanged, object reused'}"
 
-passed = []
-Suite.public_api_tests.each do |name|
+entries = Suite.public_api_tests.map do |name|
   binary = OUT.join(name)
-  run(*COMPILER, *FLAGS, ROOT.join('build/objects', "#{name}.o").to_s, library.to_s, '-o', binary.to_s)
-  run(binary.to_s, *Suite::BINARIES.fetch(name))
-  passed << name
+  inputs = [ROOT.join('build/objects', "#{name}.o"), library]
+  command = [*COMPILER, *FLAGS, *inputs.map { |path| path.relative_path_from(ROOT).to_s }, '-o', binary.relative_path_from(ROOT).to_s]
+  key = Cache.digest(command.join(' '), Cache.tool_id(COMPILER.first(1)), inputs)
+  link = "link-amalgamated-#{name}"
+  unless binary.file? && Cache.stamped?(link, key)
+    Cache.unstamp(link)
+    FileUtils.rm_f(binary)
+    puts command.shelljoin
+    linked = IO.popen(command, chdir: ROOT.to_s, err: %i[child out], &:read)
+    abort linked unless $CHILD_STATUS.success?
+    Cache.stamp(link, key)
+  end
+  ["amalgamated/#{name}", binary, Suite::BINARIES.fetch(name)]
 end
 
-puts "amalgamate-test: #{passed.length} test binaries passed against include/txml.c (#{passed.join(' ')})"
+failed = Suite.run_all(entries)
+abort "amalgamate-test: failed: #{failed.join(' ')}" unless failed.empty?
+
+puts "amalgamate-test: #{entries.length} test binaries passed against include/txml.c (#{Suite.public_api_tests.join(' ')})"

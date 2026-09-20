@@ -1,0 +1,30 @@
+#!/usr/bin/env ruby
+#MISE description="Compile the txml test programs (tests/*.c) into build/objects"
+# vim:ft=ruby
+#
+# Compiling every test proves the header is usable and that each test matches
+# the declared API, even while nothing can be linked. The other half of
+# `mise run build` is build:library; the two run in parallel. Objects are reused
+# by content, as in build:library (mise/lib/cache.rb).
+
+require 'pathname'
+require 'shellwords'
+require_relative '../../lib/cache'
+
+ROOT = Cache::ROOT
+OBJECTS = ROOT.join('build/objects')
+COMMAND = [*Shellwords.split(ENV.fetch('CC', 'cc')), *Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic')), '-Iinclude'].freeze
+
+compiled = 0
+reused = 0
+Dir[ROOT.join('tests/*.c').to_s].sort.each do |path|
+  source = Pathname.new(path).relative_path_from(ROOT)
+  outcome, output = Cache.compile(COMMAND, source, OBJECTS.join("#{source.basename('.c')}.o"))
+  if outcome == :failed
+    puts (COMMAND + ['-c', source.to_s]).shelljoin
+    abort output
+  end
+  puts output unless output.empty?
+  outcome == :compiled ? compiled += 1 : reused += 1
+end
+puts "build:tests: #{compiled} compiled, #{reused} reused"
