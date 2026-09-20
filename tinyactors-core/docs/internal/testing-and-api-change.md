@@ -118,9 +118,19 @@ like every other test, so a renamed type or a changed signature still fails
 the build and the test cannot rot; only its link may fail, and the build says
 it is pending. `mise run test` runs it — and holds it to every check it makes
 — from the day `src/` implements the API. `tests/tree_test.c` is the worked
-example. Prove such a test the way §4 requires: write a throwaway
-implementation outside the repo, see it pass, then break the implementation
-and see which checks fire.
+example, start to finish: it was written against an unimplemented `ta_tree`,
+sat in `PENDING_TESTS`, and left the list in the change that added
+`src/tree.c`. Clearing the entry is part of implementing the API, exactly as
+an XPASS obliges a scenario to drop its `expect_failure`. Prove such a test
+the way §4 requires: write a throwaway implementation outside the repo, see
+it pass, then break the implementation and see which checks fire.
+
+A pending C test is written before the storage it describes exists, so it can
+leave paths the implementation has and the test does not reach — `tree_test`
+never fills a list past its first staging chunk, and fresh pages read as zero,
+so it cannot tell a missing terminator from a zeroed one. Both were checked
+with a throwaway program at implementation time. Cover them in the test when
+the next change touches that code.
 
 ## 6. Conformance tests
 

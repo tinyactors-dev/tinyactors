@@ -3,7 +3,7 @@
 # mise skips this task when every object below is newer than every source.
 # Use `mise run --force build` after changing CC/CFLAGS.
 #MISE sources=["mise/tasks/build", "mise/tasks/amalgamate", "mise/tasks/api", "mise/lib/**/*", "src/**/*", "include/tinyactors.h", "tests/*.c"]
-#MISE outputs=["tests/smoke.o", "tests/public_smoke.o", "tests/tinyactors.o", "tests/tree_test.o", "build/inspection_test", "build/export_test", "build/retirement_test", "build/scxml_uri_test", "build/send_id_test"]
+#MISE outputs=["tests/smoke.o", "tests/public_smoke.o", "tests/tinyactors.o", "build/inspection_test", "build/export_test", "build/retirement_test", "build/scxml_uri_test", "build/send_id_test", "build/tree_test"]
 # vim:ft=ruby
 
 require 'fileutils'
@@ -32,9 +32,8 @@ end
 # on the missing symbols. The build reports those as pending instead of
 # failing, as tinyxml does for its unwritten modules, and `mise run test`
 # runs each one as soon as it links (name => why it does not link yet).
-PENDING_TESTS = {
-  'tree_test' => 'ta_tree/ta_tree_list are unimplemented in src/'
-}.freeze
+# Empty today: tests/tree_test.c was the last entry, and src/tree.c links it.
+PENDING_TESTS = {}.freeze
 
 compiler = Shellwords.split(ENV.fetch('CC', 'cc'))
 flags = Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic'))
@@ -122,6 +121,15 @@ run(
   'include/tinyactors.c',
   '-o',
   'build/send_id_test'
+)
+run(
+  *compiler,
+  *flags,
+  '-Iinclude',
+  'tests/tree_test.c',
+  'include/tinyactors.c',
+  '-o',
+  'build/tree_test'
 )
 
 # A pending test must still compile against the public header, so a renamed

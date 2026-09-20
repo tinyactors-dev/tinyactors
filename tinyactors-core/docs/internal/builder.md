@@ -27,6 +27,15 @@ The generic construction API is public because every dynamic embedder needs to
 materialize the sentinel-terminated arrays required by `ta_scxml_spec`; it is
 not SCXML-specific and has no knowledge of states, transitions, or actions.
 
+`src/tree.c` implements it. Lists nest — an importer closes a state's
+transitions while the state list is still open — so a list cannot bump its
+elements straight into the arena: the inner list's elements would land among
+the outer list's. Each open list stages into a chain of chunks of its own,
+each chunk twice the last, and `ta_tree_close()` copies the chain into one
+contiguous array with the trailing zero element. The chunks come from the same
+arena as everything else the tree hands out, so `ta_tree_destroy()` returns
+all of it and an abandoned, never-closed list needs no cleanup of its own.
+
 ## Sentinel-terminated lists
 
 Every child-list pointer addresses an array terminated by a literal zero

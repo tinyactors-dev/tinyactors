@@ -10755,7 +10755,7 @@
       "doc": "Initialize storage used while dynamically constructing a specification.",
       "public": true,
       "static_inline": false,
-      "implemented": false,
+      "implemented": true,
       "returns": {
         "type": {
           "builtin": "void"
@@ -10786,7 +10786,7 @@
       "name": "ta_tree_destroy",
       "public": true,
       "static_inline": false,
-      "implemented": false,
+      "implemented": true,
       "returns": {
         "type": {
           "builtin": "void"
@@ -10809,7 +10809,7 @@
       "name": "ta_tree_alloc",
       "public": true,
       "static_inline": false,
-      "implemented": false,
+      "implemented": true,
       "returns": {
         "type": {
           "pointer": {
@@ -10847,7 +10847,7 @@
       "name": "ta_tree_result",
       "public": true,
       "static_inline": false,
-      "implemented": false,
+      "implemented": true,
       "returns": {
         "type": {
           "type": "ta_result"
@@ -10872,7 +10872,7 @@
       "name": "ta_tree_list_init",
       "public": true,
       "static_inline": false,
-      "implemented": false,
+      "implemented": true,
       "returns": {
         "type": {
           "builtin": "void"
@@ -10918,7 +10918,7 @@
       "name": "ta_tree_put",
       "public": true,
       "static_inline": false,
-      "implemented": false,
+      "implemented": true,
       "returns": {
         "type": {
           "builtin": "void"
@@ -10952,7 +10952,7 @@
       "name": "ta_tree_close",
       "public": true,
       "static_inline": false,
-      "implemented": false,
+      "implemented": true,
       "returns": {
         "type": {
           "pointer": {

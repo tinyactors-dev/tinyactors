@@ -45,8 +45,8 @@ This archive captures the C API shape discussed for a tiny in-process actor syst
   amalgamation (`mise run test` runs them). A test written against a public
   API that `src/` does not implement yet still has to compile, but its link
   may fail: the build lists it in `PENDING_TESTS`, reports it as pending, and
-  the suite runs it as soon as it links. `tests/tree_test.c` is that case
-  today.
+  the suite runs it as soon as it links. `PENDING_TESTS` is empty today;
+  `tests/tree_test.c` was the last entry and `src/tree.c` links it.
 
 ## Intentional omissions
 

@@ -5,15 +5,14 @@
  * compiler derives all of those, so an importer needs no live ta_system to
  * build a tree").
  *
- * Core does not implement these seven functions yet, so this binary does not
- * link. tinyactors-core/mise/tasks/build reports it as pending instead of
- * failing the build, and `mise run test` skips it: that is the C-side
- * equivalent of the expected failures in §5 of
- * docs/internal/testing-and-api-change.md, which the scenario suite cannot
- * express here because tinyactors-test skips the tree API by policy (a JSON
- * specification decodes straight into the spec tree, see bindings.rb). As
- * soon as src/ implements them the binary links, the suite runs it, and every
- * check below has to pass.
+ * This test was written before core implemented these seven functions: it sat
+ * in PENDING_TESTS in tinyactors-core/mise/tasks/build, which reports an
+ * unlinkable test instead of failing the build. That is the C-side equivalent
+ * of the expected failures in §5 of docs/internal/testing-and-api-change.md,
+ * which the scenario suite cannot express here because tinyactors-test skips
+ * the tree API by policy (a JSON specification decodes straight into the spec
+ * tree, see bindings.rb). src/tree.c implements them, so it is an ordinary
+ * test now and every check below has to pass.
  *
  * Claims proven here, in order:
  *

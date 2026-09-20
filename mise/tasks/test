@@ -11,7 +11,7 @@ pid = Process.spawn('mise', 'run', 'build', chdir: root.to_s)
 _pid, status = Process.wait2(pid)
 exit(status.exitstatus || 1) unless status.success?
 
-%w[inspection_test export_test retirement_test scxml_uri_test send_id_test].each do |test|
+%w[inspection_test export_test retirement_test scxml_uri_test send_id_test tree_test].each do |test|
   pid = Process.spawn("tinyactors-core/build/#{test}", chdir: root.to_s)
   _pid, status = Process.wait2(pid)
   exit(status.exitstatus || 1) unless status.success?
@@ -19,8 +19,9 @@ end
 
 # Core tests whose API src/ does not implement yet do not link; the core build
 # reports them as pending (tinyactors-core/mise/tasks/build, PENDING_TESTS).
-# Each runs, and must pass, as soon as its binary is there.
-%w[tree_test].each do |test|
+# Each runs, and must pass, as soon as its binary is there. The list is empty
+# today: tree_test was the last pending one and now links against src/tree.c.
+%w[].each do |test|
   binary = root.join("tinyactors-core/build/#{test}")
   unless binary.file?
     puts "tinyactors-core: #{test} is pending (no implementation to link against)"
