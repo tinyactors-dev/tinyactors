@@ -215,10 +215,14 @@ an allocation is still live, or when core freed memory it was not given.
   round trip with the actor's current data root as the binding. They are
   meant as `assert_equivalent_runs` interruptions.
 
-Core does not implement these functions yet. The scenarios in
-`ruby/scenarios/residency.rb` and `ruby/scenarios/named_actors.rb` are
-therefore expected failures that name the unimplemented call.
-`ruby/runner_selftest.rb` runs the helpers against a fake host.
+Core claims, resolves and releases addresses, so `spawn name:`, `find` and a
+named actor's origin work against a real core. It does not implement session
+images yet, so `capture`, `unload`, `load`, `remove_unloaded` and the two
+replacement helpers still answer -32001: the scenarios in
+`ruby/scenarios/residency.rb` and the residency half of
+`ruby/scenarios/named_actors.rb` are expected failures that name the
+unimplemented call. `ruby/runner_selftest.rb` runs the helpers against a fake
+host.
 
 ### Instruments
 

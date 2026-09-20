@@ -11195,7 +11195,7 @@
       "name": "ta_actor_find",
       "public": true,
       "static_inline": false,
-      "implemented": false,
+      "implemented": true,
       "returns": {
         "type": {
           "type": "ta_result"

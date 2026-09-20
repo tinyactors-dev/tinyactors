@@ -1,6 +1,6 @@
 #include "routing.h"
 
-static void ta_address_release(ta_actor_ref *ref, ta_allocator allocator) {
+void ta_address_release(ta_actor_ref *ref, ta_allocator allocator) {
     if (ref->kind != TA_ACTOR_REF_NAMED) {
         return;
     }
@@ -30,6 +30,23 @@ static ta_result ta_address_copy_text(ta_str *text, ta_allocator allocator) {
     return TA_OK;
 }
 
+ta_result ta_address_copy(ta_actor_ref *ref, ta_allocator allocator) {
+    if (ref->kind != TA_ACTOR_REF_NAMED) {
+        return TA_OK;
+    }
+    ta_result result = ta_address_copy_text(&ref->as.named.family.name, allocator);
+    if (result != TA_OK) {
+        /* The family copy left its own text null; the name is still borrowed. */
+        ref->as.named.name = (ta_str){0};
+        return result;
+    }
+    result = ta_address_copy_text(&ref->as.named.name, allocator);
+    if (result != TA_OK) {
+        ta_address_release(ref, allocator);
+    }
+    return result;
+}
+
 ta_result ta_external_delivery_clone(const ta_external_delivery *delivery,
                                      ta_allocator allocator,
                                      ta_external_delivery *out) {
@@ -37,15 +54,7 @@ ta_result ta_external_delivery_clone(const ta_external_delivery *delivery,
         return TA_ERR_INVALID;
     }
     ta_external_delivery copy = *delivery;
-    ta_result result = TA_OK;
-    if (copy.destination.kind == TA_ACTOR_REF_NAMED) {
-        result = ta_address_copy_text(&copy.destination.as.named.family.name, allocator);
-        if (result == TA_OK) {
-            result = ta_address_copy_text(&copy.destination.as.named.name, allocator);
-        } else {
-            copy.destination.as.named.name = (ta_str){0};
-        }
-    }
+    ta_result result = ta_address_copy(&copy.destination, allocator);
     if (result == TA_OK) {
         result = ta_event_clone(&delivery->event, &copy.event);
     }

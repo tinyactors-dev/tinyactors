@@ -73,6 +73,8 @@ static void ta_actor_free(ta_system *system, ta_actor *actor) {
     }
     ta_mem_free(system->allocator, actor->session_storage,
                 &(ta_allocator_free_params){ .size = actor->session_bytes, .alignment = _Alignof(uint64_t) });
+    /* A named actor owns the text of its address; a runtime ref owns nothing. */
+    ta_address_release(&actor->record.self, system->allocator);
     ta_interpreter_release_actor_state(system, actor);
     ta_mem_free(system->allocator, actor,
                 &(ta_allocator_free_params){ .size = sizeof(ta_actor), .alignment = _Alignof(ta_actor) });
@@ -83,6 +85,98 @@ static void ta_actor_free(ta_system *system, ta_actor *actor) {
     }
 }
 
+/*
+ * Takes the address for the actor: copies its text into actor-owned storage
+ * and claims it in the host directory. claim is a compare-and-swap against
+ * "no entry", so an address another actor holds — resident or unloaded —
+ * answers TA_ERR_STALE and this spawn leaves nothing behind.
+ */
+static ta_result ta_actor_claim_address(ta_system *system,
+                                        ta_actor *actor,
+                                        const ta_actor_address *address) {
+    if (system->directory.v == NULL || system->directory.v->claim == NULL) {
+        /* A logical address is only meaningful against a host directory. */
+        return TA_ERR_UNSUPPORTED;
+    }
+    if (address->family.name.ptr == NULL || address->family.name.len == 0 ||
+        address->name.ptr == NULL || address->name.len == 0) {
+        return TA_ERR_INVALID;
+    }
+    ta_actor_ref self = { .kind = TA_ACTOR_REF_NAMED, .as.named = *address };
+    ta_result result = ta_address_copy(&self, system->allocator);
+    if (result != TA_OK) {
+        return result;
+    }
+    result = system->directory.v->claim(
+        system->directory.self,
+        &(ta_actor_directory_claim_params){
+            .address = &self.as.named,
+            .entry = { .kind = TA_ACTOR_DIRECTORY_RESIDENT, .actor = actor->record.id },
+        });
+    if (result != TA_OK) {
+        ta_address_release(&self, system->allocator);
+        return result;
+    }
+    /* From here the actor answers to its address: every origin core writes
+     * for it is the address, so a reply outlives this runtime ID. */
+    actor->record.self = self;
+    return TA_OK;
+}
+
+/* Frees the slot an actor was given, so a failed spawn reuses it. */
+static void ta_actor_release_slot(ta_system *system, ta_actor_id id) {
+    ta_actor_slot *entry = ta_vec_at(&system->actors, (uint32_t)(id & 0xffffffffu));
+    entry->actor = NULL;
+    entry->generation += 1u;
+}
+
+/*
+ * Gives up the route of a named actor that is being destroyed. remove
+ * compares against this actor's own entry, so an incumbent whose address has
+ * already been taken over by an activated replacement removes nothing: the
+ * successor keeps the route. A failed comparison is that case, not an error.
+ */
+static void ta_actor_release_address(ta_system *system, const ta_actor *actor) {
+    if (actor->record.self.kind != TA_ACTOR_REF_NAMED || !actor->published) {
+        return;
+    }
+    if (system->directory.v == NULL || system->directory.v->remove == NULL) {
+        return;
+    }
+    (void)system->directory.v->remove(
+        system->directory.self,
+        &(ta_actor_directory_remove_params){
+            .address = &actor->record.self.as.named,
+            .expected = { .kind = TA_ACTOR_DIRECTORY_RESIDENT, .actor = actor->record.id },
+        });
+}
+
+/*
+ * Resolves a logical address through the host directory. An unloaded actor
+ * exists but has no runtime ID, which is TA_ERR_UNLOADED and leaves *out
+ * alone; only a resident entry writes one.
+ */
+ta_result ta_actor_find(ta_system *system, const ta_actor_find_params *params) {
+    if (system == NULL || params == NULL || params->address == NULL || params->out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    if (system->directory.v == NULL || system->directory.v->resolve == NULL) {
+        return TA_ERR_UNSUPPORTED;
+    }
+    ta_actor_directory_entry entry = { .kind = TA_ACTOR_DIRECTORY_NONE };
+    ta_result result = system->directory.v->resolve(
+        system->directory.self,
+        &(ta_actor_directory_resolve_params){ .address = params->address, .out = &entry });
+    if (result != TA_OK) {
+        return result;
+    }
+    if (entry.kind == TA_ACTOR_DIRECTORY_RESIDENT) {
+        *params->out = entry.actor;
+        return TA_OK;
+    }
+    return entry.kind == TA_ACTOR_DIRECTORY_UNLOADED ? TA_ERR_UNLOADED : TA_ERR_NOT_FOUND;
+}
+
 ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params) {
     if (system == NULL || params == NULL || params->out == NULL) {
         return TA_ERR_INVALID;
@@ -90,10 +184,6 @@ ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params)
     ta_definition *definition = ta_system_definition(system, params->definition);
     if (definition == NULL || definition->retired) {
         return TA_ERR_NOT_FOUND;
-    }
-    if (params->address != NULL) {
-        /* Named actors require the directory protocol, which is not implemented yet. */
-        return TA_ERR_UNSUPPORTED;
     }
     ta_actor *actor = ta_mem_alloc(system->allocator, sizeof(ta_actor), _Alignof(ta_actor));
     if (actor == NULL) {
@@ -159,13 +249,21 @@ ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params)
             .host = &actor->host,
         });
     if (result != TA_OK) {
-        ta_actor_slot *entry = ta_vec_at(&system->actors, (uint32_t)(id & 0xffffffffu));
-        entry->actor = NULL;
-        entry->generation += 1u;
+        ta_actor_release_slot(system, id);
         ta_actor_free(system, actor);
         return result;
     }
     actor->datamodel_initialized = true;
+    /* The claim is the last fallible step: bootstrap has not run yet, so a
+     * refused address leaves no trace of this spawn anywhere. */
+    if (params->address != NULL) {
+        result = ta_actor_claim_address(system, actor, params->address);
+        if (result != TA_OK) {
+            ta_actor_release_slot(system, id);
+            ta_actor_free(system, actor);
+            return result;
+        }
+    }
     if (params->parent != NULL) {
         /* Invoke: the invoking parent routes #_<invokeid> and autoforwarding to this child. */
         ta_invoke_attach_child(system, params->parent, id);
@@ -221,9 +319,8 @@ ta_result ta_actor_destroy(ta_system *system, ta_actor_id id) {
     }
     /* Sends already submitted stay queued for their receivers. */
     ta_timer_cancel_unsubmitted(&system->timers, id);
-    ta_actor_slot *entry = ta_vec_at(&system->actors, (uint32_t)(id & 0xffffffffu));
-    entry->actor = NULL;
-    entry->generation += 1u;
+    ta_actor_release_address(system, actor);
+    ta_actor_release_slot(system, id);
     ta_actor_free(system, actor);
     return TA_OK;
 }

@@ -312,8 +312,9 @@ io_group = TinyactorsTest.scenarios 'io' do
 end
 
 directory_group = TinyactorsTest.scenarios 'directory' do
-  # Core does not call the directory yet (named actors are unimplemented), so
-  # only the host-side store is exercised here.
+  # Core's own directory calls are asserted by ruby/scenarios/named_actors.rb;
+  # this checks the host-side store on its own, including the `put` back door
+  # no core path uses.
   scenario 'the memory directory is installed and stores entries' do
     directory = memory_directory
     directory.put(family: 'door', name: 'd1', kind: :resident, actor: 7)
