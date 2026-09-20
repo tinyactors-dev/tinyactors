@@ -131,10 +131,10 @@ rescue TinyactorsTest::CoreResultError => e
   check(e.message == 'ta_actor_spawn returned err_invalid', e.message)
 end
 
-# The residency and named-actor helpers call core functions that are not
-# implemented yet, so their scenarios stop at the first such call. This fake
-# answers them in the documented shapes, so the helpers' argument names are
-# checked against the real schemas and their result handling runs.
+# The residency and named-actor helpers are thin wrappers over core calls.
+# This fake answers them in the documented shapes, so their argument names are
+# checked against the real schemas and their result handling runs even where a
+# scenario would stop earlier.
 class ResidencyFakeHost < FakeHost
   def initialize(discovery)
     super
@@ -150,7 +150,6 @@ class ResidencyFakeHost < FakeHost
     when 'ta.definition.inspect' then record(method, params) && ok(out: { identity: { family: { name: 'traffic_light' } } })
     when 'ta.actor.capture' then record(method, params) && ok(out: { '$handle': 'session_image:7' })
     when 'ta.actor.load' then record(method, params) && ok(out: 6)
-    when 'ta.actor.reconstruct' then record(method, params) && ok(out: 8)
     when 'ta.actor.find' then record(method, params) && ok(out: 6)
     when 'ta.actor.prepare_replacement' then record(method, params) && ok(out: 9)
     when 'ta.session.image_next_deadline' then record(method, params) && @deadlines.shift
@@ -183,8 +182,7 @@ context.instance_exec do
   cycle_residency(light)
   check(light.handle == 6, 'cycle_residency rebinds the actor to the loaded runtime ID')
   check(actors.include?(light), 'a loaded actor is checked by invariants again')
-  reconstruct_in_place(light)
-  check(light.handle == 8 && actor_label(8) == 'traffic_light.1', 'a reconstructed actor keeps its trace label')
+  check(actor_label(6) == 'traffic_light.1', 'a loaded actor keeps its trace label')
   image = capture(light)
   check(image == { '$handle': 'session_image:7' }, 'capture returns the image handle')
   check(image_deadline(image) == 30_000 && image_deadline(image).nil?, 'image_deadline reads the deadline or nil')
@@ -205,8 +203,6 @@ check(load_call[:image] == { '$handle': 'session_image:7' } && load_call[:datamo
       "load passes the image and the captured data root: #{load_call}")
 unload_call = calls.find { |method, _| method == 'ta.actor.unload' }.last
 check(unload_call[:actor] == 5, 'unload names the resident runtime ID')
-destroy_call = calls.find { |method, _| method == 'ta.actor.destroy' }.last
-check(destroy_call[:actor] == 6, 'reconstruct_in_place destroys the resident actor before reconstructing')
-check(calls.count { |method, _| method == 'ta.session.image_destroy' } == 2, 'round trips destroy their images')
+check(calls.count { |method, _| method == 'ta.session.image_destroy' } == 1, 'a residency cycle destroys its image')
 
 puts 'tinyactors-test runner self-test passed'

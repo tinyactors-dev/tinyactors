@@ -1044,6 +1044,23 @@ TA_PRIVATE inline void ta_actor_touch(ta_actor *actor) { actor->session_epoch +=
 
 /* Session images are opaque; struct ta_session_image is private to session_image.c. */
 
+/*
+ * Restoring an image into a fresh session. This is not public: an image is
+ * restored with ta_actor_load(), which is a residency change of a named
+ * actor, and a session has to have a name to be restored under (ADR 0051).
+ * A reconstructed session gets a new runtime ID, so anything still holding
+ * the old one — a delivery the host kept, a session URI a chart saved — is
+ * addressing a session that no longer exists. A name is what survives that;
+ * an anonymous session has nothing that does.
+ */
+typedef struct {
+    const ta_session_image *image;
+    const ta_value *datamodel_binding;
+    ta_actor_id *out;
+} ta_actor_reconstruct_params;
+
+TA_PRIVATE ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_params *params);
+
 
 
 /*
@@ -6409,7 +6426,7 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
     return TA_OK;
 }
 
-TA_API ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_params *params) {
+TA_PRIVATE ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_params *params) {
     if (system == NULL || params == NULL || params->image == NULL || params->out == NULL) {
         return TA_ERR_INVALID;
     }

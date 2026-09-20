@@ -32,13 +32,15 @@ handles are runtime-only and are not retained by the image.
 
 ## Reconstruction
 
-`ta_actor_reconstruct()` requires the exact definition revision and a host-supplied data-model binding. It never treats a newer definition as compatible merely because an application schema appears unchanged. If the family exists but the revision differs, reconstruction returns `TA_ERR_DEFINITION_MISMATCH`.
+Restoring an image requires the exact definition revision and a host-supplied data-model binding. It never treats a newer definition as compatible merely because an application schema appears unchanged. If the family exists but the revision differs, `ta_actor_load()` returns `TA_ERR_DEFINITION_MISMATCH`.
 
 For a named virtual actor, `ta_actor_load()` wraps reconstruction in the
 directory residency protocol. It prepares the session while the directory still
 says `UNLOADED` and publishes the new runtime ID only after preparation
-succeeds. Direct `ta_actor_reconstruct()` is the lower-level operation for
-anonymous sessions and tooling that does not participate in named routing.
+succeeds. It is the only way to restore an image: reconstruction itself is
+internal (ADR 0051). A restored session is a new runtime ID, so a name is what
+carries identity across the change, and an anonymous session has nothing that
+does.
 
 After restoring the captured interpreter state, reconstruction retires each
 invocation that was active in the image and appends an internal

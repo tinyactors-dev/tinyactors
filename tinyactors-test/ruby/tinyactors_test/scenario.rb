@@ -106,9 +106,10 @@ module TinyactorsTest
   # public inspection API: ta_actor_inspect, ta_actor_active_states,
   # ta_actor_datamodel_root, and ta_definition_state.
   class Actor
-    attr_reader :chart, :definition
-    # The runtime ID; it changes when the actor is reloaded (Context#rebind).
-    attr_accessor :handle
+    attr_reader :chart
+    # The runtime ID, and the registered definition it runs under; both change
+    # when the actor is reloaded (Context#rebind).
+    attr_accessor :handle, :definition
     # The logical address {family: {name:}, name:} of a named actor, or nil.
     attr_accessor :address
 
@@ -806,13 +807,6 @@ module TinyactorsTest
       ta.session.image_destroy(image: image)
     end
 
-    # Reconstructs an anonymous session from an image; returns the new runtime ID.
-    def reconstruct(image, binding: nil)
-      params = { system: system_handle, image: image }
-      params[:datamodel_binding] = binding unless binding.nil?
-      core('ta_actor_reconstruct', ta.actor.reconstruct(**params)).fetch(:out)
-    end
-
     # ta_actor_unload with a captured image; returns the result. On "ok" the
     # actor is no longer resident: invariants skip it until it is loaded.
     def unload(actor, image)
@@ -865,18 +859,9 @@ module TinyactorsTest
       result
     end
 
-    # Capture, destroy, and reconstruct an anonymous actor with its current
-    # data root as the binding: the round trip ADR 0038 says is invisible.
-    def reconstruct_in_place(actor)
-      image = capture(actor)
-      binding = actor.data
-      core('ta_actor_destroy', ta.actor.destroy(system: system_handle, actor: actor.handle))
-      rebind(actor, reconstruct(image, binding: binding))
-      destroy_image(image)
-    end
-
     # Capture, unload, and load a named actor with its current data root as
-    # the binding: the residency change ADR 0014 says is invisible.
+    # the binding: the residency change ADR 0014 says is invisible, and the
+    # only way to restore an image (ADR 0051).
     def cycle_residency(actor)
       image = capture(actor)
       binding = actor.data
@@ -923,9 +908,15 @@ module TinyactorsTest
     ACTOR_ID_KEYS = %i[runtime parent actor].freeze
 
     # Points `actor` at a new runtime ID (after a reload); its trace label stays.
+    # Points an Actor at the session it has become. Load resolves the image's
+    # family and revision against whatever definition is registered for them
+    # now, which need not be the ID the actor was spawned under, so the
+    # definition comes back from core rather than being remembered.
     def rebind(actor, id)
       @actor_labels[id] = actor_label(actor.handle)
       actor.handle = id
+      facts = ta.actor.inspect(system: system_handle, actor: id)
+      actor.definition = facts.dig(:out, :out, :definition_id) if facts[:result] == 'ok'
     end
 
     # The dotted text of an event-name ID.

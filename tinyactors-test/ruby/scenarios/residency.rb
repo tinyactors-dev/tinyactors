@@ -1,14 +1,16 @@
 # frozen_string_literal: true
 
-# Session images (ADR 0038, ADR 0039, ADR 0026): capture records the whole
-# interpreter session without changing it; reconstruction against the exact
-# definition revision and the host's data-model binding continues it as if
-# nothing happened, except that invocations are lost and reported as
+# Session images (ADR 0038, ADR 0039, ADR 0026, ADR 0051): capture records
+# the whole interpreter session without changing it; restoring it against the
+# exact definition revision and the host's data-model binding continues it as
+# if nothing happened, except that invocations are lost and reported as
 # error.communication.invoke.<id>.unavailable.
 #
-# Core implements capture and reconstruction. One scenario remains an
-# expected failure, for a reason that is no longer about an unimplemented
-# function; its marker names it.
+# Restoring is ta_actor_load(), which is a residency change of a *named*
+# actor (ADR 0051): a session has to have a name to be restored under, so
+# every scenario here that restores one uses a named actor and
+# cycle_residency (capture, unload, load). Scenarios that only capture need
+# no name.
 module ResidencyScenarios
 end
 
@@ -28,47 +30,30 @@ TinyactorsTest.scenarios 'residency', chart: :traffic_light do
     end
   end
 
-  # Catches: an image that misses a timer (the light would stall), keeps a
-  # send ID or due time only approximately, drops history (repair would go
-  # to red), or loses data the binding does not carry.
-  scenario 'reconstructing an actor at any step is invisible' do
-    round_trip = ->(context) { context.actors.each { |actor| context.reconstruct_in_place(actor) } }
-    assert_equivalent_runs(interruptions: { 'capture, destroy, reconstruct' => round_trip }) do
-      light = spawn
-      relay = spawn :relay
-      advance_time 30_000
-      light.deliver 'fault'
-      relay.deliver 'go'
-      light.deliver 'repair'
-      advance_time 25_000
-    end
-  end
-
-  # Catches: an image of a paused actor that loses the continuation, the
-  # current external event, or the internal queue, so the macrostep
-  # restarts, repeats a microstep, or skips `counted`.
-  # Everything this scenario was written to catch now holds: the macrostep
-  # continues rather than restarting, `.n` resumes at 3 rather than repeating
-  # a microstep, and `counted` survives in the internal queue. What is left is
-  # the `ping`: the router is holding that delivery from before the capture,
-  # addressed to the runtime ID of the session reconstruction replaced, and
-  # core cannot re-address a delivery the host already holds. Whether an
-  # anonymous reconstruction should instead keep its runtime ID — which is the
-  # only identity such a session has, and so the only way it can be invisible
-  # to a host holding one — is an open question; ta_actor_load() deliberately
-  # does the opposite, and session-image.md calls the captured ID "local
-  # freshness metadata, not portable identity".
-  expect_failure 'a delivery the router already holds names the replaced session',
+  # Catches: an image of a paused actor that loses the current external
+  # event or the internal queue, so the macrostep restarts, repeats a
+  # microstep, or skips `counted`.
+  #
+  # The `ping` is the one thing a residency change does not carry. The relay
+  # sends it to itself, which is a delivery to *this* session and so names a
+  # runtime ID (see ta_send_destination); the router accepted it and is
+  # holding it from before the capture. A delayed self-send survives, because
+  # the image carries it and load rebinds it — but this one is already the
+  # host's, and ADR 0014 makes fencing inbound events across a residency
+  # change the host's job. This router does not re-fence, so the ping is
+  # delivered to the session it named and lost. Core cannot fix it: it does
+  # not know what the host is holding.
+  expect_failure 'the router re-delivers a held ping to the session it named',
                  message: /expected \["go", "n=5", "counted", "ping"\], got \["go", "n=5", "counted"\]/
   scenario 'a macrostep captured while paused continues where it paused' do
     router = recording_router(mode: :hold)
-    relay = spawn :relay
+    relay = spawn :relay, name: 'r1'
     relay.post('go')
     3.times { assert_equal 'paused', relay.resume(budget: 1) }
     before = relay.observe
     assert_equal 2, before.dig(:data, :n)
 
-    reconstruct_in_place(relay)
+    cycle_residency(relay)
     assert_equal before, relay.observe, 'the paused session is restored exactly'
     assert_equal 'go', event_text(relay.inspect_actor.dig(:current_event, :name))
     assert_equal 'paused', relay.resume(budget: 1)
@@ -79,22 +64,22 @@ TinyactorsTest.scenarios 'residency', chart: :traffic_light do
     assert_equal ['go', 'n=5', 'counted', 'ping'], relay.data('.log')
   end
 
-  # Catches: reconstruction that restarts invocations (a duplicate external
+  # Catches: restoration that restarts invocations (a duplicate external
   # effect), rebinds them silently, reports the loss in the wrong order or
   # with the wrong envelope, or still accepts events from a lost service.
-  scenario 'reconstruction reports each lost invocation once, in invocation order' do
+  scenario 'restoration reports each lost invocation once, in invocation order' do
     service = scripted_invoker('urn:tinyactors:test:service')
-    pair = spawn :service_pair
+    pair = spawn :service_pair, name: 'p1'
     starts = service.started
     assert_equal 2, starts.size
 
-    reconstruct_in_place(pair)
-    run_system('reconstructed')
-    assert_equal 2, service.started.size, 'reconstruction starts no service'
+    cycle_residency(pair)
+    run_system('restored')
+    assert_equal 2, service.started.size, 'restoration starts no service'
     assert_equal [{ name: 'error.communication.invoke.first.unavailable', type: 'platform', invokeid: nil },
                   { name: 'error.communication.invoke.second.unavailable', type: 'platform', invokeid: nil }],
                  pair.data('.errors')
-    assert_equal [], pair.observe[:invokes], 'no invocation is active after reconstruction'
+    assert_equal [], pair.observe[:invokes], 'no invocation is active after restoration'
 
     # The invocation is retired, so reporting for it names no invocation.
     lost = starts[0]
@@ -106,16 +91,16 @@ TinyactorsTest.scenarios 'residency', chart: :traffic_light do
     assert_equal [], pair.data('.replies'), 'events from a lost invocation are ignored'
   end
 
-  # Catches: reconstruction against any definition of the same family (a
-  # silent reinterpretation of state IDs), or an image that keeps its
-  # retired definition alive.
-  scenario 'reconstruction needs the exact definition revision' do
-    light = spawn
+  # Catches: restoration against any definition of the same family (a silent
+  # reinterpretation of state IDs), or an image that keeps its retired
+  # definition alive.
+  scenario 'restoration needs the exact definition revision' do
+    light = spawn name: 'l1'
     advance_time 10_000
     image = capture(light)
     binding = light.data
     original = definition
-    light.destroy
+    assert_equal 'ok', unload(light, image)
     ta.system.retire_definition(system: system_handle, definition: original)
     assert_equal 'err_not_found', ta.definition.inspect(system: system_handle, definition: original)[:result],
                  'an image does not keep its definition alive'
@@ -130,36 +115,32 @@ TinyactorsTest.scenarios 'residency', chart: :traffic_light do
            ta.system.register_definition(system: system_handle, definition: compiled.fetch(:out))).fetch(:out)
     end
     register.call(changed)
-    response = ta.actor.reconstruct(system: system_handle, image: image, datamodel_binding: binding)
-    assert_equal 'err_definition_mismatch', response[:result]
+    assert_equal 'err_definition_mismatch', ta.actor.load(system: system_handle, image: image,
+                                                          datamodel_binding: binding)[:result]
 
-    exact = register.call(spec)
-    restored = TinyactorsTest::Actor.new(self, reconstruct(image, binding: binding), :traffic_light, exact)
+    register.call(spec)
+    assert_equal 'ok', load(light, image, binding: binding)
     destroy_image(image)
-    assert_equal [{ due: 30_000, event: 'timer' }], restored.sends.map { |send| send.slice(:due, :event) }
+    assert_equal [{ due: 30_000, event: 'timer' }], light.sends.map { |send| send.slice(:due, :event) }
     advance_time 20_000
-    assert_equal %i[operating green], restored.active, 'the restored timer fires at its original due time'
-    assert_equal({ cycles: 0 }, restored.data)
+    assert_equal %i[operating green], light.active, 'the restored timer fires at its original due time'
+    assert_equal({ cycles: 0 }, light.data)
   end
 
   # Catches: an image that borrows the host values its captured sends carry
-  # instead of retaining them (ADR 0050). The actor is destroyed between
-  # capture and reconstruction, so anything the image only borrowed is freed
-  # under it: the frozen `{v: 1}` is the one host value in play, and it has
-  # to survive its session.
+  # instead of retaining them (ADR 0050). The session that held them is gone
+  # between capture and restoration, so anything the image only borrowed is
+  # freed under it: the frozen `{v: 1}` is the one host value in play, and it
+  # has to survive its session.
   scenario 'an image retains the host values its captured sends carry' do
-    freezer = spawn :freezer
+    freezer = spawn :freezer, name: 'f1'
     freezer.deliver 'arm'
     assert_equal 2, freezer.data('.v'), 'the send froze v=1 before the assignment'
 
-    image = capture(freezer)
-    binding = freezer.data
-    core('ta_actor_destroy', ta.actor.destroy(system: system_handle, actor: freezer.handle))
-    rebind(freezer, reconstruct(image, binding: binding))
-    destroy_image(image)
+    cycle_residency(freezer)
 
     advance_time 10_000
-    assert_equal 1, freezer.data('.got'), 'the reconstructed send carried the value captured with it'
+    assert_equal 1, freezer.data('.got'), 'the restored send carried the value captured with it'
   end
 
   # Catches: an image deadline that is relative, stale, or missing, which a

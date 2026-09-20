@@ -64,7 +64,7 @@ module TinyactorsBindings
   # Value-model kinds the host cannot resolve to a data model; their ta_value
   # inputs decode with the jq data model.
   VALUE_MODEL_FALLBACKS = {
-    'session_image' => 'no core query maps an image to its data model; ta_actor_load and ta_actor_reconstruct are unimplemented'
+    'session_image' => 'no core query maps an image to its data model; a scenario carries the binding alongside it'
   }.freeze
 
   # The largest caller buffer a request may ask for, in elements. It bounds

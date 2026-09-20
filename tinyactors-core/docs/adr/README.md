@@ -54,5 +54,6 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0048](0048-core-owns-the-send-id-text.md) | [Core owns the send ID text, in both directions](0048-core-owns-the-send-id-text.md) |
 | [0049](0049-interned-identities-are-readable-back.md) | [Identities core interns are readable back](0049-interned-identities-are-readable-back.md) |
 | [0050](0050-envelope-data-is-shared-by-retain-not-cloned.md) | [Envelope data is shared by retain, not cloned](0050-envelope-data-is-shared-by-retain-not-cloned.md) |
+| [0051](0051-the-only-public-restore-path-is-ta-actor-load.md) | [The only public restore path is `ta_actor_load`](0051-the-only-public-restore-path-is-ta-actor-load.md) |
 
 See [the API gaps](../internal/api-gaps.md) for places where the current header skeleton does not yet fully expose these decisions.
