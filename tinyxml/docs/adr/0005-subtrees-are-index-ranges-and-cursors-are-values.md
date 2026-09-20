@@ -1,6 +1,6 @@
 # ADR 0005: Subtrees are index ranges and cursors are values
 
-**Status:** Accepted  
+**Status:** Accepted; amended by [ADR 0018](0018-streaming-by-mark-and-rewind-is-withdrawn.md): with `txml_doc_rewind` withdrawn, nothing invalidates an index at all  
 **Date:** 2026-09-20
 
 ## Context

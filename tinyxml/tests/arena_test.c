@@ -244,7 +244,9 @@ static void test_oversized_allocation_is_contiguous(void) {
 }
 
 /* ------------------------------------------------------------------------
- * Mark, release, and reuse. This is what txml_doc_rewind() is built on.
+ * Mark, release, and reuse. No public call reaches this today — ADR 0018
+ * withdrew txml_doc_rewind — but it is what a document-level rewind would
+ * be built on if ADR 0016's split arenas ever bring one back.
  */
 
 static void test_mark_and_release(void) {

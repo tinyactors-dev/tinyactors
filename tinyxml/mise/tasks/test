@@ -15,6 +15,9 @@ ROOT = Pathname.new(__dir__).join('../..').expand_path
 BINARIES = {
   'header_test' => [],
   'arena_test' => [],
+  'text_test' => [],
+  'cursor_test' => [],
+  'incremental_test' => [],
   'writer_test' => [],
   'spec_test' => ['tests/spec']
 }.freeze

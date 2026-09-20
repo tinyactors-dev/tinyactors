@@ -38,23 +38,30 @@ green.
 8. **A string never spans a pool page.** Every `txml_str` a document returns
    is one contiguous run. An oversized run reserves consecutive directory
    slots that point into a single arena block.
-9. **Every `txml_str` from a document points into that document's arena.**
-   Never into the staging window, never into a caller chunk, never into
-   static storage — except `txml_document_error.message`, which is documented
-   as static.
+9. **Every `txml_str` from a document points into that document's values
+   arena.** Never into the tree arena, never into the staging window, never
+   into a caller chunk, never into static storage — except
+   `txml_document_error.message`, which is documented as static.
 10. **Page directories are allocated once.** Their capacity comes from
     `limits.max_document_bytes` at initialization, so they never grow and
     therefore never move.
 11. **Parser and document memory are separate.** Transient parser state lives
-    in the parser's own arena; `txml_doc_arena(doc)->used` counts document
-    bytes only, and `max_document_bytes` bounds exactly that.
+    in the parser's own arena; the two arenas `txml_doc_arena(doc, which)`
+    reports count document bytes only, and `max_document_bytes` bounds the
+    sum of their `used`.
 12. **`TXML_STEP_NEED_MEMORY` leaves the parser unchanged.** A step that
     cannot allocate has appended no partial node, no partial attribute and no
     partial pool run; calling it again after the allocator recovers produces
     the same result as if the failure had not happened.
-13. **A borrowed arena is never destroyed by the library.**
-    `txml_doc_destroy` releases to the mark the document took at
-    initialization and returns; the caller owns the arena before and after.
+13. **A document owns both of its arenas.** Values and tree are created over
+    `config.allocator` at `txml_parser_init` and destroyed by
+    `txml_doc_destroy`, unconditionally; no arena is ever borrowed from the
+    caller and none outlives the document. Checkable: a counting allocator
+    sees every byte returned after the document is destroyed.
+    Correspondingly, a pool offset, a name entry and a namespace entry live in
+    the **values** arena, and a node, attribute and position entry live in the
+    **tree** arena — so a release of one cannot invalidate a reference held by
+    the other.
 
 ## Document structure
 
@@ -82,12 +89,11 @@ green.
     node's name ID.
 22. **Namespace 0 is the empty URI** and exists in every document, used or
     not. An unprefixed attribute's name always has namespace 0.
-23. **The positions column exists only with `TXML_KEEP_POSITIONS`**, and when
-    it exists it has exactly one entry per node. Without the flag,
-    `txml_node_position` returns `TXML_ERR_NOT_FOUND` for every node.
-24. **A rewind does not renumber names.** `txml_doc_rewind` truncates nodes,
-    attributes and positions, but name and namespace IDs a consumer already
-    holds stay valid.
+23. **The positions column always exists**, with exactly one entry per node.
+    `txml_node_position` succeeds for every node of every document; it reports
+    `TXML_ERR_INVALID` only for a cursor that is not on a node.
+24. *Withdrawn with ADR 0018, which removed `txml_doc_rewind`. The number is
+    left in place because ADRs 0016 and 0018 cite it.*
 
 ## Behaviour
 
@@ -123,3 +129,19 @@ green.
 33. **Chunk-split independence.** The document produced by a parse does not
     depend on how the input was divided into `txml_parse_feed` calls. This is
     the property the fuzzer targets.
+
+## The concrete syntax tree
+
+34. **Nothing the input contains is dropped.** Every comment, processing
+    instruction, text run including a whitespace-only one, the XML declaration
+    and the DOCTYPE become nodes, and no configuration changes that, because
+    there is no configuration: two parses of the same bytes produce the same
+    node table. Checkable: the spec corpus carries no retention flag, because
+    there is none left to carry.
+35. **A CDATA section is its own text node.** It is flagged `TXML_NODE_CDATA`
+    and never merges with the character data on either side, so section
+    boundaries survive into the document.
+36. **The declaration and the doctype are leaves.** A `TXML_NODE_DECLARATION`
+    carries its version, encoding and standalone as ordinary attributes in
+    namespace 0 and no text; a `TXML_NODE_DOCTYPE` carries the declaration as
+    written as its text and no attributes. Neither is ever `TXML_NODE_OPEN`.

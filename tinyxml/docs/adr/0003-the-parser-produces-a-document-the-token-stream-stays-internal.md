@@ -1,6 +1,6 @@
 # ADR 0003: The parser produces a document; the token stream stays internal
 
-**Status:** Accepted  
+**Status:** Accepted; the retention flags are superseded by [ADR 0017](0017-the-parser-produces-a-concrete-syntax-tree.md)  
 **Date:** 2026-09-20
 
 ## Context

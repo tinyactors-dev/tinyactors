@@ -5,8 +5,8 @@ The header states the contract; these files state the mechanism. Where the
 header is silent, the choice is recorded here as a decision and is binding
 until an ADR changes it.
 
-- `memory-architecture.md` — the arena, the paged columns, who owns what, and
-  the exact lifetime of every borrowed pointer.
+- `memory-architecture.md` — the arena, the document's two of them, the paged
+  columns, who owns what, and the exact lifetime of every borrowed pointer.
 - `document-layout.md` — the columns byte by byte, with a worked example of a
   parsed document.
 - `cursor.md` — the range algebra behind the cursor, and what makes queries

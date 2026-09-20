@@ -1,9 +1,14 @@
 # Text: entity and character references, line-end normalization, CDATA, and
-# whitespace handling.
+# whitespace.
 #
 # Normalization happens while the bytes are copied into the document's pool,
 # so a text node is always one contiguous, already-normalized string: entity
 # references never split it, and CRLF and lone CR have become LF.
+#
+# Under ADR 0017 no text is ever dropped. Whitespace between elements is a
+# node, whitespace in the prolog and epilog is a node on the document, and a
+# CDATA section is always its own node rather than merging with the text
+# beside it.
 
 @case predefined entities
 @xml
@@ -50,19 +55,7 @@
 0 {}a
 @end
 
-@case a CDATA section is ordinary text by default
-@xml
-<a>p<![CDATA[q<r]]>s</a>
-@nodes
-0 document - end=3 parent=- depth=0
-1 element {}a end=3 parent=0 depth=1 attributes=0
-2 text "pq<rs" end=3 parent=1 depth=2
-@names
-0 {}a
-@end
-
-@case KEEP_CDATA keeps the section as its own node
-@flags KEEP_CDATA
+@case a CDATA section is always its own node
 @xml
 <a>p<![CDATA[q<r]]>s</a>
 @nodes
@@ -75,8 +68,7 @@
 0 {}a
 @end
 
-@case an empty CDATA section is still a node under KEEP_CDATA
-@flags KEEP_CDATA
+@case an empty CDATA section is still a node
 @xml
 <a><![CDATA[]]></a>
 @nodes
@@ -87,7 +79,7 @@
 0 {}a
 @end
 
-@case whitespace between elements is text by default
+@case whitespace between elements is text
 @xml
 <a>
   <b/>
@@ -103,23 +95,7 @@
 1 {}b
 @end
 
-@case SKIP_BLANK_TEXT drops whitespace-only text
-@flags SKIP_BLANK_TEXT
-@xml
-<a>
-  <b/>
-</a>
-@nodes
-0 document - end=3 parent=- depth=0
-1 element {}a end=3 parent=0 depth=1 attributes=0
-2 element {}b end=3 parent=1 depth=2 attributes=0 flags=EMPTY
-@names
-0 {}a
-1 {}b
-@end
-
-@case SKIP_BLANK_TEXT keeps text that is not only whitespace
-@flags SKIP_BLANK_TEXT
+@case text and elements interleave
 @xml
 <a>x <b/></a>
 @nodes
@@ -132,7 +108,19 @@
 1 {}b
 @end
 
-@case a tab and a form feed are ordinary text
+@case whitespace in the prolog and epilog belongs to the document node
+@xml
+\n<a/>\n
+@nodes
+0 document - end=4 parent=- depth=0
+1 text "\n" end=2 parent=0 depth=1
+2 element {}a end=3 parent=0 depth=1 attributes=0 flags=EMPTY
+3 text "\n" end=4 parent=0 depth=1
+@names
+0 {}a
+@end
+
+@case a tab is ordinary text
 @xml
 <a>x\ty</a>
 @nodes

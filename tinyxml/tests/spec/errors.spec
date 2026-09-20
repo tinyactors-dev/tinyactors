@@ -60,7 +60,6 @@ NO_ROOT 1:1 offset=0
 @end
 
 @case a prolog alone has no document element
-@flags KEEP_COMMENTS
 @xml
 <!--x-->
 @error
@@ -124,7 +123,6 @@ SYNTAX 1:7 offset=6
 @end
 
 @case a comment may not contain --
-@flags KEEP_COMMENTS
 @xml
 <a><!-- a -- b --></a>
 @error

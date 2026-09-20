@@ -1,6 +1,6 @@
 # ADR 0012: Conformance scope — UTF-8, namespaces, optional internal subset, no validation
 
-**Status:** Accepted  
+**Status:** Accepted; the optional internal subset is superseded by [ADR 0017](0017-the-parser-produces-a-concrete-syntax-tree.md)  
 **Date:** 2026-09-20
 
 ## Context

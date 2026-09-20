@@ -108,7 +108,6 @@ LIMIT 1:8 offset=7 limit=NAMES
 # The budget counts bytes produced by expansion, so the parse stops at the
 # reference that would exceed it rather than allocating what it asks for.
 @case entity expansion stops at the budget
-@flags INTERNAL_SUBSET
 @limits entity_expansion_budget=64
 @xml
 <!DOCTYPE a [
@@ -121,15 +120,16 @@ LIMIT 5:4 offset=102 limit=ENTITY_EXPANSION
 @end
 
 @case expansion within the budget is fine
-@flags INTERNAL_SUBSET
 @limits entity_expansion_budget=64
 @xml
 <!DOCTYPE a [<!ENTITY e "xxxxx">]>
 <a>&e;&e;</a>
 @nodes
-0 document - end=3 parent=- depth=0
-1 element {}a end=3 parent=0 depth=1 attributes=0
-2 text "xxxxxxxxxx" end=3 parent=1 depth=2
+0 document - end=5 parent=- depth=0
+1 doctype " a [<!ENTITY e \"xxxxx\">]" end=2 parent=0 depth=1
+2 text "\n" end=3 parent=0 depth=1
+3 element {}a end=5 parent=0 depth=1 attributes=0
+4 text "xxxxxxxxxx" end=5 parent=3 depth=2
 @names
 0 {}a
 @end

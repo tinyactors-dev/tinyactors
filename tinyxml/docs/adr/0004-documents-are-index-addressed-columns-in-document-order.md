@@ -1,6 +1,6 @@
 # ADR 0004: Documents are index-addressed columns in document order
 
-**Status:** Accepted  
+**Status:** Accepted; amended by [ADR 0017](0017-the-parser-produces-a-concrete-syntax-tree.md) (the positions column is no longer optional) and [ADR 0016](0016-a-document-owns-two-arenas-values-and-tree.md) (the columns are split across two arenas)  
 **Date:** 2026-09-20
 
 ## Context

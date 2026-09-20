@@ -8,8 +8,9 @@
  *
  * txml is a freestanding XML reader and writer. It performs no I/O, allocates
  * only through an embedder-supplied allocator, never relocates what it has
- * allocated, and never recurses. A parsed document is a set of index-addressed
- * columns in one arena; callers navigate it with cursors, which are values.
+ * allocated, and never recurses. A parse produces a concrete syntax tree: every
+ * construct in the input is a node, stored as index-addressed columns over the
+ * document's two arenas; callers navigate it with cursors, which are values.
  *
  * Every public function is declared with TXML_API. Define TXML_API before
  * including this header to add export attributes, e.g.
@@ -191,9 +192,9 @@ typedef struct { void *self; const txml_allocator_vtable *v; } txml_allocator TX
  * Arena
  *
  * A bump allocator over a linked list of chunks. Growing links a new chunk in
- * front of the old ones; nothing is copied and no address changes. Everything
- * a document owns lives in one arena, which is why every txml_str a document
- * hands out is valid for that document's lifetime.
+ * front of the old ones; nothing is copied and no address changes. A document
+ * owns two of these (ADR 0016) and neither ever relocates, which is why every
+ * txml_str a document hands out is valid for that document's lifetime.
  *
  * A request larger than the chunk size gets a chunk of its own, so a single
  * allocation is always contiguous.
@@ -247,7 +248,7 @@ typedef struct {
     uint32_t max_attributes;          /* attributes on one element */
     uint32_t max_name_length;         /* bytes in one qualified name */
     uint32_t max_names;               /* distinct expanded names per document */
-    uint64_t max_document_bytes;      /* total document arena bytes; at most UINT32_MAX */
+    uint64_t max_document_bytes;      /* values + tree arena bytes; at most UINT32_MAX */
     uint64_t entity_expansion_budget; /* bytes produced by entity expansion */
 } txml_limits;
 
@@ -260,22 +261,22 @@ typedef struct {
         .max_document_bytes = 64u * 1024u * 1024u,   \
         .entity_expansion_budget = 8u * 1024u * 1024u })
 
+/*
+ * There is one flag, and it is not a retention decision: the parse always
+ * keeps everything (ADR 0017). It is a promise about the caller's buffer.
+ */
 enum TXML_FLAG_SET(txml_parser_flags, "TXML_") {
-    TXML_KEEP_COMMENTS = 1u << 0,   /* keep comment nodes */
-    TXML_KEEP_PIS = 1u << 1,        /* keep processing-instruction nodes */
-    TXML_KEEP_CDATA = 1u << 2,      /* mark CDATA text with TXML_NODE_CDATA */
-    TXML_KEEP_POSITIONS = 1u << 3,  /* record a position per node */
-    TXML_SKIP_BLANK_TEXT = 1u << 4, /* drop whitespace-only text between elements */
-    TXML_INTERNAL_SUBSET = 1u << 5, /* read the internal DTD subset: entities and attribute defaults */
-    TXML_INPUT_PADDED = 1u << 6     /* every fed chunk has 64 readable bytes past its end */
+    TXML_INPUT_PADDED = 1u << 0 /* every fed chunk has 64 readable bytes past its end */
 };
 
 /* ========================================================================
  * Parser
  *
- * The parser is fed byte chunks and produces a document. It never reads from a
- * file, socket, or entity resolver: external entities and external DTDs are
- * not fetched, which removes XXE by construction.
+ * The parser is fed byte chunks and produces a concrete syntax tree: comments,
+ * processing instructions, whitespace, the XML declaration and the DOCTYPE are
+ * all nodes, so a parsed document writes back as what it was. It never reads
+ * from a file, socket, or entity resolver: external entities and external DTDs
+ * are not fetched, which removes XXE by construction.
  */
 
 typedef struct txml_parser txml_parser TXML_HANDLE;
@@ -290,15 +291,13 @@ typedef enum {
 } txml_step TXML_SYMBOLS("TXML_STEP_");
 
 typedef struct {
+    /* The document creates both of its arenas over this allocator and destroys
+     * them with itself; the caller supplies no arena of its own. */
     txml_allocator allocator;
-    /* Optional arena for the document. When null, the parser initializes one
-     * over `allocator`. When given, it is borrowed: the caller keeps it alive
-     * until the document is destroyed, and owns it afterwards. */
-    TXML_OPTIONAL txml_arena *arena;
     txml_limits limits;
     uint32_t flags TXML_FLAGS(txml_parser_flags);
     uint32_t staging_length; /* input window in bytes; 0 selects 64 KiB */
-    size_t chunk_size;       /* arena chunk size; 0 selects TXML_ARENA_CHUNK_DEFAULT */
+    size_t chunk_size;       /* chunk size for both arenas; 0 selects TXML_ARENA_CHUNK_DEFAULT */
     uint32_t step_budget;    /* nodes appended per step; 0 means until the step blocks */
 } txml_parser_config;
 
@@ -314,8 +313,9 @@ TXML_API txml_result txml_parser_init(TXML_OUT TXML_RELEASE(txml_parser_destroy)
  * silently truncates its document, which surfaces as TXML_DOC_UNEXPECTED_EOF.
  * Feeding after final is TXML_ERR_INVALID reported by the next step.
  *
- * An XML declaration is validated and then dropped: it is not a node, and no
- * function reports its version, encoding, or standalone flag. A declaration
+ * An XML declaration becomes a TXML_NODE_DECLARATION whose version, encoding
+ * and standalone pseudo-attributes are ordinary attributes, so it is read with
+ * txml_first_attribute and txml_find_attribute like any element. A declaration
  * naming an encoding other than UTF-8 is TXML_DOC_ENCODING. What the writer
  * emits is governed by TXML_WRITE_DECLARATION alone.
  */
@@ -344,16 +344,16 @@ TXML_API txml_result txml_parser_finish(TXML_DESTROYS txml_parser *parser,
 /* Destroy the parser and, unless it was detached, its document. */
 TXML_API void txml_parser_destroy(TXML_DESTROYS txml_parser *parser);
 
-/* Destroy a detached document. Chunks of a borrowed arena are released, the
- * arena itself is not destroyed. */
+/* Destroy a detached document and both of its arenas. */
 TXML_API void txml_doc_destroy(TXML_DESTROYS txml_doc *doc);
 
 /* ========================================================================
  * Document
  *
- * Nodes are stored in document order. A node's index is its identity, and a
- * subtree is the half-open index range [index, end). Names are interned per
- * document: a name ID is meaningless for any other document.
+ * Every construct in the input is a node, stored in document order. A node's
+ * index is its identity, and a subtree is the half-open index range
+ * [index, end). Names are interned per document: a name ID is meaningless for
+ * any other document.
  */
 
 #define TXML_NAME_NONE ((uint32_t)UINT32_MAX)
@@ -371,20 +371,20 @@ TXML_API txml_result txml_doc_name_at(const txml_doc *doc,
 /* Nodes appended so far, including the document node. */
 TXML_API uint32_t txml_doc_node_count(const txml_doc *doc);
 
-/* Accounting for the document's arena, borrowed or owned. */
-TXML_API const txml_arena *txml_doc_arena(const txml_doc *doc) TXML_LIFETIME(document);
-
 /*
- * Streaming: a consumer that has finished with a completed subtree can
- * discard it and reuse its memory. `txml_doc_mark()` returns the next node
- * index; `txml_doc_rewind()` drops every node from `mark` on and releases
- * their arena memory. Rewinding is refused with TXML_ERR_INVALID while any
- * element at or after `mark` is still open, and it invalidates every cursor
- * and txml_str at or after `mark`. Names and namespaces are never renumbered,
- * so a name ID a consumer holds stays valid across a rewind.
+ * A document owns two arenas, split by lifetime (ADR 0016): values are written
+ * once and live as long as the document, the tree is appended as it parses.
+ * Both are destroyed by txml_doc_destroy. `limits.max_document_bytes` bounds
+ * the sum of their `used`.
  */
-TXML_API uint32_t txml_doc_mark(const txml_doc *doc);
-TXML_API txml_result txml_doc_rewind(txml_doc *doc, uint32_t mark);
+typedef enum {
+    TXML_ARENA_VALUES, /* the byte pool, and the name and namespace columns */
+    TXML_ARENA_TREE    /* the node, attribute, and position columns */
+} txml_arena_kind TXML_SYMBOLS("TXML_ARENA_");
+
+/* Accounting for one of the document's arenas. */
+TXML_API const txml_arena *txml_doc_arena(const txml_doc *doc,
+                                          txml_arena_kind which) TXML_LIFETIME(document);
 
 /* ========================================================================
  * Cursors
@@ -395,7 +395,8 @@ TXML_API txml_result txml_doc_rewind(txml_doc *doc, uint32_t mark);
  * Cursor calls are total: they never allocate and never return an API error.
  * A cursor whose index is out of range, or that was made for another
  * document, reads as absent — TXML_NONE, TXML_NAME_NONE, TXML_INDEX_NONE, an
- * empty txml_str, false. Mixing cursors from two documents is still a bug;
+ * empty txml_str, false, and TXML_NODE_DOCUMENT from txml_kind, which has no
+ * absent value of its own. Mixing cursors from two documents is still a bug;
  * it is simply not one the library can report.
  */
 
@@ -409,22 +410,24 @@ typedef enum {
 } txml_move TXML_SYMBOLS("TXML_");
 
 typedef enum {
-    TXML_NODE_DOCUMENT, /* index 0; the parent of the document element */
+    TXML_NODE_DOCUMENT,    /* index 0; the parent of everything else */
     TXML_NODE_ELEMENT,
     TXML_NODE_TEXT,
     TXML_NODE_COMMENT,
-    TXML_NODE_PI
+    TXML_NODE_PI,
+    TXML_NODE_DECLARATION, /* <?xml ...?>; its pseudo-attributes are attributes */
+    TXML_NODE_DOCTYPE      /* <!DOCTYPE ...>; its text is the declaration as written */
 } txml_node_kind TXML_SYMBOLS("TXML_NODE_");
 
 enum TXML_FLAG_SET(txml_node_flags, "TXML_NODE_") {
     TXML_NODE_EMPTY = 1u << 0, /* written as <a/> */
-    TXML_NODE_CDATA = 1u << 1, /* text written as a CDATA section */
+    TXML_NODE_CDATA = 1u << 1, /* text written as a CDATA section; always its own node */
     TXML_NODE_OPEN = 1u << 2   /* the end tag has not been parsed yet */
 };
 
 enum TXML_FLAG_SET(txml_attribute_flags, "TXML_ATTR_") {
     TXML_ATTR_NS_DECL = 1u << 0,  /* xmlns or xmlns:prefix */
-    TXML_ATTR_DEFAULTED = 1u << 1 /* supplied by an internal-subset default */
+    TXML_ATTR_DEFAULTED = 1u << 1 /* supplied by an internal-subset ATTLIST default */
 };
 
 typedef struct {
@@ -468,9 +471,10 @@ TXML_API uint32_t txml_depth(txml_cursor cursor);
 TXML_API uint32_t txml_node_name_id(txml_cursor cursor);
 /* The prefix as written, empty when there was none. Not part of identity. */
 TXML_API txml_str txml_node_prefix(txml_cursor cursor) TXML_LIFETIME(document);
-/* Text of a TEXT, COMMENT, or PI node, normalized; empty for other kinds. */
+/* Text of a TEXT, COMMENT, PI, or DOCTYPE node, normalized; empty for other
+ * kinds. A DECLARATION carries its parts as attributes, not as text. */
 TXML_API txml_str txml_node_text(txml_cursor cursor) TXML_LIFETIME(document);
-/* TXML_ERR_NOT_FOUND unless the document was parsed with TXML_KEEP_POSITIONS. */
+/* Every node has a position; TXML_ERR_INVALID only for an absent cursor. */
 TXML_API txml_result txml_node_position(txml_cursor cursor, TXML_OUT txml_position *out);
 
 /* Attributes, in document order. */

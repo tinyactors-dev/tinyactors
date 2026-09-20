@@ -1,6 +1,6 @@
 # ADR 0008: Input is copied into a padded staging window
 
-**Status:** Accepted  
+**Status:** Accepted; amended by [ADR 0017](0017-the-parser-produces-a-concrete-syntax-tree.md): the internal subset is always expanded, not only under a flag  
 **Date:** 2026-09-20
 
 ## Context

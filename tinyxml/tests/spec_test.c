@@ -201,13 +201,10 @@ typedef struct {
     uint32_t flag;
 } flag_name;
 
+/* ADR 0017 removed the retention flags, so @flags has one word left. A case
+ * that still names a removed flag is an error, not a no-op: parse_flags()
+ * rejects anything not listed here. */
 static const flag_name parser_flag_names[] = {
-    { "KEEP_COMMENTS", TXML_KEEP_COMMENTS },
-    { "KEEP_PIS", TXML_KEEP_PIS },
-    { "KEEP_CDATA", TXML_KEEP_CDATA },
-    { "KEEP_POSITIONS", TXML_KEEP_POSITIONS },
-    { "SKIP_BLANK_TEXT", TXML_SKIP_BLANK_TEXT },
-    { "INTERNAL_SUBSET", TXML_INTERNAL_SUBSET },
     { "INPUT_PADDED", TXML_INPUT_PADDED },
 };
 
@@ -542,6 +539,8 @@ static const char *kind_name(txml_node_kind kind) {
     case TXML_NODE_TEXT: return "text";
     case TXML_NODE_COMMENT: return "comment";
     case TXML_NODE_PI: return "pi";
+    case TXML_NODE_DECLARATION: return "declaration";
+    case TXML_NODE_DOCTYPE: return "doctype";
     }
     return "?";
 }
@@ -614,6 +613,13 @@ static void render_attribute_flags(buffer *out, uint32_t flags) {
     if ((flags & TXML_ATTR_DEFAULTED) != 0u) { buffer_printf(out, "%sDEFAULTED", separator); separator = ","; }
 }
 
+/* The two kinds that carry attributes. A declaration's version/encoding/
+ * standalone are ordinary attributes (ADR 0017), so it renders them the same
+ * way an element does. */
+static bool has_attributes(txml_node_kind kind) {
+    return kind == TXML_NODE_ELEMENT || kind == TXML_NODE_DECLARATION;
+}
+
 static void render_nodes(rendering *out, const txml_doc *doc) {
     const uint32_t count = txml_doc_node_count(doc);
 
@@ -625,6 +631,9 @@ static void render_nodes(rendering *out, const txml_doc *doc) {
 
         switch (kind) {
         case TXML_NODE_DOCUMENT:
+        case TXML_NODE_DECLARATION:
+            /* Neither has a name or text; a declaration's parts are
+             * attributes, rendered below. */
             buffer_putc(&out->nodes, '-');
             break;
         case TXML_NODE_ELEMENT:
@@ -637,6 +646,7 @@ static void render_nodes(rendering *out, const txml_doc *doc) {
             break;
         case TXML_NODE_TEXT:
         case TXML_NODE_COMMENT:
+        case TXML_NODE_DOCTYPE:
             render_quoted(&out->nodes, txml_node_text(cursor));
             break;
         }
@@ -665,15 +675,15 @@ static void render_nodes(rendering *out, const txml_doc *doc) {
 
         buffer_printf(&out->nodes, " depth=%u", txml_depth(cursor));
 
-        if (kind == TXML_NODE_ELEMENT) {
+        if (has_attributes(kind)) {
             buffer_printf(&out->nodes, " attributes=%u", txml_attribute_count(cursor));
         }
 
         render_node_flags(&out->nodes, txml_flags(cursor));
         buffer_putc(&out->nodes, '\n');
 
-        /* Attributes, in document order, numbered within their element. */
-        if (kind == TXML_NODE_ELEMENT) {
+        /* Attributes, in document order, numbered within their node. */
+        if (has_attributes(kind)) {
             txml_attr_cursor attribute;
             uint32_t position = 0u;
             if (txml_first_attribute(cursor, &attribute) == TXML_MOVED) {
@@ -711,8 +721,11 @@ static void render_positions(rendering *out, const txml_doc *doc) {
     for (uint32_t index = 0u; index < count; index++) {
         txml_position position;
         if (txml_node_position(txml_cursor_at(doc, index), &position) != TXML_OK) {
-            /* Positions were not recorded: the section stays empty. */
-            return;
+            /* Every node has a position now (ADR 0017), so a refusal is a bug
+             * rather than a configuration. Render it and keep going: an early
+             * return would silently shorten the section instead. */
+            buffer_printf(&out->positions, "%u <no position>\n", index);
+            continue;
         }
         buffer_printf(&out->positions, "%u %u:%u offset=%llu\n", index, position.line, position.column,
                       (unsigned long long)position.offset);
@@ -766,7 +779,6 @@ static void render_roundtrip(rendering *out, const txml_doc *doc) {
 static bool parse_and_render(const spec_case *item, uint32_t chunk, rendering *out, const char *path) {
     txml_parser_config config = {
         .allocator = heap,
-        .arena = NULL,
         .limits = item->limits,
         .flags = item->flags,
         .staging_length = 0u,

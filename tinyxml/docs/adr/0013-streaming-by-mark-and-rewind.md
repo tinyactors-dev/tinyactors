@@ -1,6 +1,6 @@
 # ADR 0013: Streaming by mark and rewind
 
-**Status:** Accepted  
+**Status:** Superseded by [ADR 0018](0018-streaming-by-mark-and-rewind-is-withdrawn.md)  
 **Date:** 2026-09-20
 
 ## Context

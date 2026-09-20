@@ -1,12 +1,11 @@
-# Positions, recorded only under KEEP_POSITIONS.
+# Positions, which every node has (ADR 0017).
 #
 # A position is the first byte of the construct that produced the node: the
-# `<` of a start tag, the first byte of a text run. Lines and columns count
-# from 1 and columns count bytes, not characters. The document node sits at
-# the start of the input.
+# `<` of a start tag, comment, PI, declaration or doctype, and the first byte
+# of a text run. Lines and columns count from 1 and columns count bytes, not
+# characters. The document node sits at the start of the input.
 
 @case positions across lines
-@flags KEEP_POSITIONS
 @xml
 <a>
   <b/>
@@ -29,7 +28,6 @@
 @end
 
 @case positions on one line
-@flags KEEP_POSITIONS
 @chunk 2
 @xml
 <a k="v">hi</a>
@@ -49,7 +47,6 @@
 @end
 
 @case a column counts bytes, not characters
-@flags KEEP_POSITIONS
 @xml
 <a>é<b/></a>
 @nodes
@@ -67,13 +64,27 @@
 1 {}b
 @end
 
-@case without the flag no position is recorded
+@case every kind of node carries a position
 @xml
-<a/>
+<?xml version="1.0"?><!--c--><a><?p d?>x</a>
 @nodes
-0 document - end=2 parent=- depth=0
-1 element {}a end=2 parent=0 depth=1 attributes=0 flags=EMPTY
+0 document - end=6 parent=- depth=0
+1 declaration - end=2 parent=0 depth=1 attributes=1
+2 comment "c" end=3 parent=0 depth=1
+3 element {}a end=6 parent=0 depth=1 attributes=0
+4 pi {}p "d" end=5 parent=3 depth=2
+5 text "x" end=6 parent=3 depth=2
+@attributes
+1.0 {}version "1.0"
 @positions
+0 1:1 offset=0
+1 1:1 offset=0
+2 1:22 offset=21
+3 1:30 offset=29
+4 1:33 offset=32
+5 1:40 offset=39
 @names
-0 {}a
+0 {}version
+1 {}a
+2 {}p
 @end

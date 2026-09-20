@@ -2,7 +2,8 @@
 
 The parser turns fed bytes into appended nodes. It is a byte-driven state
 machine with no recursion: element nesting lives in an explicit stack bounded
-by `limits.max_depth`, so C stack depth is constant.
+by `limits.max_depth`, so C stack depth is constant. Every construct it scans
+becomes a node — nothing is scanned and thrown away (ADR 0017).
 
 ## The loop the caller writes
 
@@ -35,7 +36,7 @@ Each outcome is precise:
 | `TXML_STEP_PROGRESS` | `step_budget` nodes were appended | consistent; call again |
 | `TXML_STEP_NEED_INPUT` | staged bytes are exhausted (or only a holdback remains) and `final` has not been seen | consistent; feed, then call again |
 | `TXML_STEP_NEED_MEMORY` | an arena allocation failed | consistent and **unchanged**: nothing half-written, retry after freeing memory |
-| `TXML_STEP_DONE` | the document element closed and only whitespace, comments or PIs followed, and `final` was seen | terminal |
+| `TXML_STEP_DONE` | the document element closed, only whitespace, comments or PIs followed — each appended as a node — and `final` was seen | terminal |
 | `TXML_STEP_FAILED` | a document error; read `txml_parser_error` | terminal; the partial document remains readable |
 
 `TXML_STEP_DONE` and `TXML_STEP_FAILED` are sticky: further steps repeat them.
@@ -86,14 +87,14 @@ the loop that vectorizes.
 
 | State | Delimiters | Destination |
 |---|---|---|
-| Prolog / misc | `<` | — (whitespace between items is dropped) |
+| Prolog / misc | `<` | pool run of a text node under the document node; prolog and epilog whitespace is kept like any other text |
 | Text content | `<` `&` `\r` | pool run of the pending text node |
 | Start tag | whitespace `/` `>` `=` `'` `"` | parser scratch |
 | Attribute value | the opening quote, `<` `&` `\r` `\t` `\n` | pool run of the pending attribute |
-| Comment | `-` | pool run (or discarded without `TXML_KEEP_COMMENTS`) |
+| Comment | `-` | pool run of the comment node |
 | CDATA | `]` | pool run of the pending text node |
-| PI | `?` | pool run (or discarded without `TXML_KEEP_PIS`) |
-| DOCTYPE | `<` `>` `'` `"` `[` `]` | internal subset tables, or discarded |
+| PI | `?` | pool run of the PI node |
+| DOCTYPE | `<` `>` `'` `"` `[` `]` | pool run of the doctype node, and the internal subset tables |
 | Entity reference | `;` and the name characters | scratch, then expanded to the destination |
 
 `\r` is a delimiter in text and attribute values because line-end
@@ -159,12 +160,16 @@ outside the XML `Char` production — including a surrogate, `0`, or a C0
 control other than tab, LF and CR — is `TXML_DOC_ENCODING`.
 
 **Entity references.** `&amp;` `&lt;` `&gt;` `&apos;` `&quot;` always resolve.
-Any other name resolves against the internal-subset table when
-`TXML_INTERNAL_SUBSET` is set, and is otherwise `TXML_DOC_UNDECLARED_ENTITY`.
+Any other name resolves against the internal-subset table, which every
+document has because the subset is always read; a name that is not in it is
+`TXML_DOC_UNDECLARED_ENTITY`.
 A general entity's replacement text is scanned like any other input, and
 nested references expand through the same path; every byte an expansion
 produces is charged against `entity_expansion_budget`, so the billion-laughs
-family terminates as `TXML_DOC_LIMIT` with `TXML_LIMIT_ENTITY_EXPANSION`.
+family terminates as `TXML_DOC_LIMIT` with `TXML_LIMIT_ENTITY_EXPANSION`. That
+budget is now the only thing standing between a document and an expansion
+bomb, and it applies to every parse, because there is no longer a
+configuration in which the subset goes unread.
 Recursion is a syntax error rather than a hang: an entity that is already on
 the expansion stack is `TXML_DOC_SYNTAX`.
 
@@ -174,12 +179,16 @@ txml does not know attribute types, so it performs the non-tokenized
 normalization only). Whitespace produced by a character reference is
 **not** normalized, which is what makes `&#x9;` round trip as a tab.
 
-**Text nodes.** Consecutive text, CDATA and resolved references between the
-same pair of tags form **one** text node, because the parser appends the
-node once and keeps extending its pool run. `TXML_NODE_CDATA` is set when any
-part of the run came from a CDATA section and `TXML_KEEP_CDATA` is set. With
-`TXML_SKIP_BLANK_TEXT`, a run that is entirely whitespace and contains no
-reference and no CDATA section is discarded instead of appended.
+**Text nodes.** Consecutive character data and resolved references between the
+same pair of tags form **one** text node: the parser appends the node once and
+keeps extending its pool run. A whitespace-only run is a text node like any
+other, wherever it appears, including between the prolog's items and after the
+document element.
+
+A **CDATA section always breaks the run**. It is appended as its own text node
+flagged `TXML_NODE_CDATA` and never merges with the text on either side, so
+`<a>x<![CDATA[y]]>z</a>` is three text nodes rather than one. That is what
+makes section boundaries survive a round trip.
 
 ## Appending and patching
 
@@ -188,6 +197,11 @@ reference and no CDATA section is discarded instead of appended.
   open-element stack.
 - An empty-element tag appends the element with `TXML_NODE_EMPTY` and `end ==
   index + 1`; it is never open and nothing is pushed.
+- A text, comment, PI or doctype node is appended with `end == index + 1`.
+- The XML declaration appends a `TXML_NODE_DECLARATION` with `end == index +
+  1`, followed by its pseudo-attributes as ordinary attribute entries, exactly
+  as a start tag appends an element's. It is a node, not a PI, and it counts
+  against the step budget like any other append.
 - An end tag pops the open-element stack, checks that the raw qualified name
   matches the one the start tag was written with (`TXML_DOC_TAG_MISMATCH`
   otherwise — the comparison is on the written form, per XML §3.1), writes
@@ -213,10 +227,10 @@ impossible) and a static message.
 | `TXML_DOC_TAG_MISMATCH` | an end tag whose written name differs from the open element's, or an end tag with no open element |
 | `TXML_DOC_DUPLICATE_ATTRIBUTE` | two attributes on one tag with the same expanded name, including two prefixes bound to the same URI |
 | `TXML_DOC_UNDECLARED_PREFIX` | a prefix with no binding in scope, or an attempt to rebind `xml` or `xmlns` |
-| `TXML_DOC_UNDECLARED_ENTITY` | a general entity that is neither predefined nor declared in an internal subset that was read |
+| `TXML_DOC_UNDECLARED_ENTITY` | a general entity that is neither predefined nor declared in the internal subset |
 | `TXML_DOC_UNEXPECTED_EOF` | `final` arrived inside markup, or with elements still open |
 | `TXML_DOC_NO_ROOT` | `final` arrived with no document element |
-| `TXML_DOC_TRAILING_CONTENT` | non-whitespace character data, or a second element, after the document element closed |
+| `TXML_DOC_TRAILING_CONTENT` | non-whitespace character data, or a second element, after the document element closed. Whitespace there is legal and becomes a text node. |
 | `TXML_DOC_LIMIT` | a `txml_limits` value was reached; `limit` says which |
 
 After `TXML_STEP_FAILED` the document is still readable: the nodes appended

@@ -3,7 +3,7 @@
 # mise skips this task when every output below is newer than every source.
 # Use `mise run --force build` after changing CC/CFLAGS.
 #MISE sources=["mise/tasks/build", "include/txml.h", "src/**/*.c", "src/**/*.h", "tests/*.c"]
-#MISE outputs=["build/header_test", "build/objects/header_test.o", "build/objects/api_surface.o", "build/objects/arena_test.o", "build/objects/writer_test.o", "build/objects/spec_test.o"]
+#MISE outputs=["build/header_test", "build/objects/header_test.o", "build/objects/api_surface.o", "build/objects/arena_test.o", "build/objects/writer_test.o", "build/objects/spec_test.o", "build/objects/cursor_test.o", "build/objects/incremental_test.o", "build/objects/text_test.o"]
 # vim:ft=ruby
 
 # There is no implementation yet: src/ is empty. Everything that can be built
@@ -27,7 +27,7 @@ FREESTANDING_TESTS = %w[header_test].freeze
 # Compiled, never linked: it only takes the address of every TXML_API function.
 COMPILE_ONLY_TESTS = %w[api_surface].freeze
 # Need the implementation to link.
-LINKED_TESTS = %w[arena_test writer_test spec_test].freeze
+LINKED_TESTS = %w[arena_test cursor_test incremental_test spec_test text_test writer_test].freeze
 
 def run(*command)
   puts command.shelljoin

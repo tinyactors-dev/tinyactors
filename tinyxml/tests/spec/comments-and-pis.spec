@@ -1,11 +1,12 @@
-# Comments and processing instructions.
+# Comments, processing instructions, and the XML declaration.
 #
-# Both are dropped unless their keep flag is set, and a dropped node's names
-# are never interned. Comments and PIs outside the document element are
-# children of the document node. The XML declaration is not a PI.
+# Every construct in the input is a node (ADR 0017): comments and PIs are
+# always kept, and their names are always interned. Comments and PIs outside
+# the document element are children of the document node. The XML declaration
+# is its own kind rather than a PI, and carries version, encoding and
+# standalone as ordinary attributes in no namespace.
 
-@case comments and PIs are kept on request
-@flags KEEP_COMMENTS KEEP_PIS
+@case comments and PIs are nodes
 @xml
 <a><!-- c --><?p d?></a>
 @nodes
@@ -18,30 +19,7 @@
 1 {}p
 @end
 
-@case comments and PIs are dropped by default
-@xml
-<a><!-- c --><?p d?></a>
-@nodes
-0 document - end=2 parent=- depth=0
-1 element {}a end=2 parent=0 depth=1 attributes=0
-@names
-0 {}a
-@end
-
-@case only comments are kept
-@flags KEEP_COMMENTS
-@xml
-<a><!-- c --><?p d?></a>
-@nodes
-0 document - end=3 parent=- depth=0
-1 element {}a end=3 parent=0 depth=1 attributes=0
-2 comment " c " end=3 parent=1 depth=2
-@names
-0 {}a
-@end
-
 @case prolog and epilog comments belong to the document node
-@flags KEEP_COMMENTS
 @xml
 <!--x--><a/><!--y-->
 @nodes
@@ -53,19 +31,66 @@
 0 {}a
 @end
 
-@case the XML declaration is not a processing instruction
-@flags KEEP_PIS
+@case the XML declaration is a node, not a processing instruction
 @xml
 <?xml version="1.0" encoding="UTF-8"?><a/>
 @nodes
-0 document - end=2 parent=- depth=0
-1 element {}a end=2 parent=0 depth=1 attributes=0 flags=EMPTY
+0 document - end=3 parent=- depth=0
+1 declaration - end=2 parent=0 depth=1 attributes=2
+2 element {}a end=3 parent=0 depth=1 attributes=0 flags=EMPTY
+@attributes
+1.0 {}version "1.0"
+1.1 {}encoding "UTF-8"
 @names
-0 {}a
+0 {}version
+1 {}encoding
+2 {}a
+@end
+
+@case a declaration carries standalone like any other pseudo-attribute
+@xml
+<?xml version="1.0" standalone="yes"?><a/>
+@nodes
+0 document - end=3 parent=- depth=0
+1 declaration - end=2 parent=0 depth=1 attributes=2
+2 element {}a end=3 parent=0 depth=1 attributes=0 flags=EMPTY
+@attributes
+1.0 {}version "1.0"
+1.1 {}standalone "yes"
+@names
+0 {}version
+1 {}standalone
+2 {}a
+@end
+
+@case a declaration with only a version
+@chunk 3
+@xml
+<?xml version="1.0"?><a/>
+@nodes
+0 document - end=3 parent=- depth=0
+1 declaration - end=2 parent=0 depth=1 attributes=1
+2 element {}a end=3 parent=0 depth=1 attributes=0 flags=EMPTY
+@attributes
+1.0 {}version "1.0"
+@names
+0 {}version
+1 {}a
+@end
+
+@case a target that merely begins with xml is a PI
+@xml
+<?xml-stylesheet href="x"?><a/>
+@nodes
+0 document - end=3 parent=- depth=0
+1 pi {}xml-stylesheet "href=\"x\"" end=2 parent=0 depth=1
+2 element {}a end=3 parent=0 depth=1 attributes=0 flags=EMPTY
+@names
+0 {}xml-stylesheet
+1 {}a
 @end
 
 @case a PI may have no data
-@flags KEEP_PIS
 @xml
 <a><?p?></a>
 @nodes
@@ -78,7 +103,6 @@
 @end
 
 @case markup inside a comment is text
-@flags KEEP_COMMENTS
 @chunk 3
 @xml
 <a><!-- <b/> & --></a>
@@ -91,7 +115,6 @@
 @end
 
 @case a PI in the prolog
-@flags KEEP_PIS
 @xml
 <?stylesheet href="x"?><a/>
 @nodes

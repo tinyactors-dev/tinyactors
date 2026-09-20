@@ -1,6 +1,6 @@
 # ADR 0002: One linked-chunk arena per document; nothing relocates
 
-**Status:** Accepted  
+**Status:** Accepted; the single-arena and borrowed-arena parts are superseded by [ADR 0016](0016-a-document-owns-two-arenas-values-and-tree.md)  
 **Date:** 2026-09-20
 
 ## Context

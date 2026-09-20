@@ -11,8 +11,15 @@ has an observable consequence, there is a fixture that pins it.
 | `header_test` | `tests/header_test.c` | no | Layout, constants, flag sets, and the ergonomics of `TXML_STR` and `TXML_LIMITS_DEFAULT`. Calls no library function, so it links and runs today. |
 | — | `tests/api_surface.c` | no (compile only) | One typed function pointer per `TXML_API` function. A missing, renamed, or retyped declaration is a compile error. Never linked: the symbols do not exist yet. |
 | `arena_test` | `tests/arena_test.c` | yes | `txml_arena`: alignment, address stability across growth, contiguous oversized blocks, mark/release/reset/destroy, and refusal handling. |
+| `text_test` | `tests/text_test.c` | yes | `txml_str_equal`, `txml_qname_equal`, `txml_str_starts_with`: length-based and byte-exact, with no `strcmp` semantics. |
+| `cursor_test` | `tests/cursor_test.c` | yes | Navigation, subtree ranges, containment, `txml_find_next`, `txml_find_attribute`, and the name table. One fixture document, written without inter-tag whitespace so no incidental text node stands between the nodes the cases talk about. |
+| `incremental_test` | `tests/incremental_test.c` | yes | Reading a document while it is still being parsed (ADR 0003): `txml_parser_doc` mid-parse, `TXML_NODE_OPEN`, `TXML_PENDING`, and both arenas' accounting. The only place the three-valued `txml_move` is fully observed. |
 | `writer_test` | `tests/writer_test.c` | yes | The writer, every case run with a 4096-byte and a 1-byte output buffer. |
 | `spec_test` | `tests/spec_test.c` | yes | The data-driven corpus in `tests/spec`, plus the chunk sweep. |
+
+Between them the binaries call every function `include/txml.h` declares.
+`tests/api_surface.c` proves each one is *declared*; the binaries above prove
+each one is *exercised*. A new `TXML_API` function needs both.
 
 ```
 mise run build                         # compile everything; link what can be linked
@@ -24,10 +31,10 @@ mise run spec tests/spec/elements.spec # one file
 While `src/` has no modules, `mise run build` prints
 
 ```
-implementation pending: linked 1 of 4 test binaries (src/ has no modules yet)
+implementation pending: linked 1 of 7 test binaries (src/ has no modules yet)
 ```
 
-and `mise run test` runs `header_test`, reports the other three as pending, and
+and `mise run test` runs `header_test`, reports the other six as pending, and
 exits 0. The moment `src/*.c` appears they are linked and any failure fails the
 task. Do not weaken a test to make the suite pass.
 
@@ -38,7 +45,6 @@ A `.spec` file is a sequence of cases. Outside a section, a line starting with
 
 ```
 @case nested elements and text
-@flags KEEP_COMMENTS SKIP_BLANK_TEXT
 @limits max_depth=8 max_names=16
 @chunk 3
 @xml
@@ -58,7 +64,9 @@ A `.spec` file is a sequence of cases. Outside a section, a line starting with
 
 - `@case <name>` opens a case, `@end` closes it. `@xml` and `@end` are required.
 - `@flags` takes `txml_parser_flags` names without the `TXML_` prefix, separated
-  by spaces.
+  by spaces. Since ADR 0017 there is one such name, `INPUT_PADDED`, and no case
+  in the corpus needs it; a case naming a flag that no longer exists is an
+  error rather than a no-op.
 - `@limits` takes `field=value` pairs using the `txml_limits` field names.
   Unlisted fields keep `TXML_LIMITS_DEFAULT`.
 - `@chunk N` feeds the input `N` bytes at a time; `0` or absent feeds it whole.
@@ -81,12 +89,18 @@ change the other.
 <index> <kind> <payload>[ prefix=<p>] end=<n|-> parent=<n|-> depth=<d>[ attributes=<n>][ flags=<f>[,<f>]]
 ```
 
-- `<kind>` is `document`, `element`, `text`, `comment`, or `pi`.
-- `<payload>` is `-` for the document node, `{namespace}local` for an element,
-  `{namespace}local "data"` for a PI, and `"text"` for text and comments.
+- `<kind>` is `document`, `element`, `text`, `comment`, `pi`, `declaration`, or
+  `doctype`.
+- `<payload>` is `-` for the document node and for a declaration (whose parts
+  are attributes), `{namespace}local` for an element, `{namespace}local "data"`
+  for a PI, and `"text"` for text, comments, and doctypes.
+- A doctype's text is the bytes between `<!DOCTYPE` and its matching `>`,
+  verbatim — the same rule a comment's text follows, so the leading space in
+  `<!DOCTYPE a …>` is part of it.
 - `prefix=` appears on an element that was written with one.
 - `end=-` means the node is still open (only reachable mid-parse).
-- `attributes=` appears on elements only.
+- `attributes=` appears on elements and declarations, the two kinds that have
+  attributes.
 - `flags=` lists `EMPTY`, `CDATA`, `OPEN` and is omitted when there are none.
 
 Attributes, numbered within their element:
@@ -95,7 +109,8 @@ Attributes, numbered within their element:
 <node-index>.<attribute-index> {namespace}local "value"[ flags=NS_DECL[,DEFAULTED]]
 ```
 
-Names, in the order they were interned, and positions, one per node:
+Names, in the order they were interned, and positions, one per node — every
+node has one now, so a `@positions` section is always as long as `@nodes`:
 
 ```
 <name-id> {namespace}local
@@ -155,12 +170,16 @@ they are decisions now rather than accidents later.
   declaration and `{http://www.w3.org/2000/xmlns/}<prefix>` for a prefixed one.
 - An unprefixed attribute has no namespace: a default `xmlns` never applies
   to it.
-- Names of dropped nodes are not interned: with `TXML_KEEP_PIS` off, a PI
-  target never reaches the name table.
-- Whitespace outside the document element is never a node.
-- The XML declaration is not a PI node.
-- Under `TXML_KEEP_CDATA` a CDATA section is always its own text node, even
-  when empty; without the flag it merges with the text around it.
+- Nothing is dropped, so every name in the input reaches the name table: a PI
+  target is interned like any other.
+- Whitespace outside the document element is a text node on the document.
+- The XML declaration is its own kind, not a PI, and its version, encoding and
+  standalone pseudo-attributes are ordinary attributes in no namespace,
+  interned in the order written.
+- A CDATA section is always its own text node, flagged `CDATA`, even when
+  empty, and never merges with the text around it.
+- The doctype is a node whether or not it has an internal subset, and the
+  subset is always read.
 - Character references are not subject to attribute-value whitespace
   normalization: `&#9;` stays a tab, a literal tab becomes a space.
 - An error is reported at the first byte of the offending construct: the `<` of
@@ -185,6 +204,12 @@ they are decisions now rather than accidents later.
   refused with `TXML_ERR_INVALID` rather than written as malformed XML.
 - `TXML_WRITE_INDENT` puts each child on its own line, indented two spaces per
   level, with the end tag at the parent's indent and no trailing newline.
+- A declaration and a doctype have no event of their own — the event API is
+  start/attribute/text/cdata/comment/pi/end (ADR 0011) — so
+  `txml_write_subtree` emits them directly from the document. That is what
+  makes those two round-trips exact. `TXML_WRITE_DECLARATION` therefore means
+  "emit one even when the document has no declaration node", and never doubles
+  an existing one.
 
 ## Adding a case
 

@@ -9,7 +9,8 @@
  * This file is compiled, never linked: the symbols do not exist yet. When the
  * implementation lands it keeps its value unchanged, so leave it compile-only.
  *
- * Every function declared in include/txml.h must appear below. Sixty today.
+ * Every function declared in include/txml.h must appear below. Fifty-eight
+ * today: ADR 0018 withdrew txml_doc_mark and txml_doc_rewind.
  */
 #include "../include/txml.h"
 
@@ -38,9 +39,7 @@ struct txml_api_surface {
     uint32_t (*doc_name_count)(const txml_doc *);
     txml_result (*doc_name_at)(const txml_doc *, uint32_t, txml_qname *);
     uint32_t (*doc_node_count)(const txml_doc *);
-    const txml_arena *(*doc_arena)(const txml_doc *);
-    uint32_t (*doc_mark)(const txml_doc *);
-    txml_result (*doc_rewind)(txml_doc *, uint32_t);
+    const txml_arena *(*doc_arena)(const txml_doc *, txml_arena_kind);
 
     /* Cursors. */
     txml_cursor (*doc_root)(const txml_doc *);
@@ -112,8 +111,6 @@ const struct txml_api_surface txml_api_surface = {
     .doc_name_at = txml_doc_name_at,
     .doc_node_count = txml_doc_node_count,
     .doc_arena = txml_doc_arena,
-    .doc_mark = txml_doc_mark,
-    .doc_rewind = txml_doc_rewind,
 
     .doc_root = txml_doc_root,
     .first_child = txml_first_child,
@@ -159,5 +156,5 @@ const struct txml_api_surface txml_api_surface = {
 
 /* A new TXML_API function must be registered above: the struct grows and this
  * assertion is what tells you to update the count in the file header. */
-_Static_assert(sizeof(struct txml_api_surface) == 60u * sizeof(void (*)(void)),
+_Static_assert(sizeof(struct txml_api_surface) == 58u * sizeof(void (*)(void)),
                "every TXML_API function must appear in txml_api_surface");

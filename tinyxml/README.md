@@ -10,28 +10,32 @@ embedder-supplied allocator, and never moves what it has allocated.
 
 ## What it does
 
-- **Parse** UTF-8 XML fed in byte chunks, with namespaces, into a compact
-  document: index-addressed columns in one arena.
+- **Parse** UTF-8 XML fed in byte chunks, with namespaces, into a concrete
+  syntax tree: every construct in the input — comments, processing
+  instructions, whitespace, the XML declaration, the DOCTYPE — is a node, held
+  as index-addressed columns over the document's two arenas.
 - **Navigate** that document with cursors, which are plain values. A subtree
   is the index range `[index, end)`, so an ancestor test is two comparisons
   and skipping a subtree is one jump.
 - **Write** XML from events into a caller buffer, resumable when the buffer
   fills. Writing does not require a parsed document.
-- **Stream** a document of unbounded length in flat memory: mark a point,
-  process the record that follows it, then rewind to the mark to drop those
-  nodes and reuse their arena bytes. Peak memory is the largest record, not
-  the whole input.
-- **Allocate** through the arena itself, which is public: an embedder can
-  hand the parser an arena it already owns, or use the same linked-chunk bump
-  allocator — with marks and release — for its own data.
+- **Read while parsing**: the document is navigable from the first step, an
+  element whose end tag has not arrived is marked open, and a move that needs
+  bytes nobody has fed yet says so instead of lying. A consumer can process
+  each record as it closes.
+- **Allocate** through the arena itself, which is public: the same
+  linked-chunk bump allocator — with marks and release — is available for an
+  embedder's own data. A document's own arenas belong to the document and go
+  away with it.
 
 ## What it does not do
 
-No validation, XPath, XInclude, or DTD beyond the optional internal subset.
-No external entities or external DTDs — they are never fetched, which removes
-XXE by construction rather than defending against it. UTF-8 only; other
-encodings are transcoded by an adapter in front. See
-`docs/internal/conformance.md`.
+No validation, XPath, XInclude, or DTD beyond the internal subset, which is
+always read. No external entities or external DTDs — they are never fetched,
+which removes XXE by construction rather than defending against it. UTF-8
+only; other encodings are transcoded by an adapter in front. Nothing reclaims
+a parsed node, so a document costs what it contains, bounded by
+`max_document_bytes`. See `docs/internal/conformance.md`.
 
 ## Shape of the API
 

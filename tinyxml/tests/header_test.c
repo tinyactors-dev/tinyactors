@@ -85,6 +85,11 @@ _Static_assert(TXML_NAME_NONE == UINT32_MAX, "TXML_NAME_NONE is UINT32_MAX");
 _Static_assert(TXML_INDEX_NONE == UINT32_MAX, "TXML_INDEX_NONE is UINT32_MAX");
 _Static_assert(TXML_ARENA_CHUNK_DEFAULT == 65536u, "the default chunk is 64 KiB");
 _Static_assert(TXML_NODE_DOCUMENT == 0, "the document node kind is the first enumerator");
+/* ADR 0017: the declaration and the doctype are nodes, appended after the
+ * kinds that existed before them so no stored kind value shifts. */
+_Static_assert(TXML_NODE_DECLARATION == TXML_NODE_PI + 1, "declaration follows pi");
+_Static_assert(TXML_NODE_DOCTYPE == TXML_NODE_DECLARATION + 1, "doctype follows declaration");
+_Static_assert(TXML_ARENA_VALUES == 0 && TXML_ARENA_TREE == 1, "two arenas, values first");
 _Static_assert(TXML_DOC_OK == 0, "no document error is zero");
 _Static_assert(TXML_LIMIT_NONE == 0, "no limit is zero");
 
@@ -96,16 +101,10 @@ _Static_assert(TXML_LIMIT_NONE == 0, "no limit is zero");
 #define SINGLE_BIT(flag) \
     _Static_assert(((flag) & ((flag) - 1u)) == 0u && (flag) != 0u, #flag " must be one bit")
 
-SINGLE_BIT(TXML_KEEP_COMMENTS);
-SINGLE_BIT(TXML_KEEP_PIS);
-SINGLE_BIT(TXML_KEEP_CDATA);
-SINGLE_BIT(TXML_KEEP_POSITIONS);
-SINGLE_BIT(TXML_SKIP_BLANK_TEXT);
-SINGLE_BIT(TXML_INTERNAL_SUBSET);
+/* ADR 0017 removed every retention flag; what is left is a promise about the
+ * caller's buffer, not a choice about what the tree contains. */
 SINGLE_BIT(TXML_INPUT_PADDED);
-_Static_assert((TXML_KEEP_COMMENTS | TXML_KEEP_PIS | TXML_KEEP_CDATA | TXML_KEEP_POSITIONS |
-                TXML_SKIP_BLANK_TEXT | TXML_INTERNAL_SUBSET | TXML_INPUT_PADDED) == 0x7fu,
-               "the seven parser flags must be seven distinct bits");
+_Static_assert(TXML_INPUT_PADDED == 0x1u, "the one parser flag is the low bit");
 
 SINGLE_BIT(TXML_NODE_EMPTY);
 SINGLE_BIT(TXML_NODE_CDATA);
@@ -197,17 +196,14 @@ int main(void) {
      * initializers and a flag set. */
     const txml_parser_config parser_config = {
         .allocator = allocator,
-        .arena = NULL,
         .limits = TXML_LIMITS_DEFAULT,
-        .flags = TXML_KEEP_COMMENTS | TXML_KEEP_POSITIONS,
+        .flags = TXML_INPUT_PADDED,
         .staging_length = 0u,
         .chunk_size = 0u,
         .step_budget = 0u,
     };
     CHECK(parser_config.limits.max_depth == 256u);
-    CHECK(parser_config.arena == NULL);
-    CHECK((parser_config.flags & TXML_KEEP_COMMENTS) != 0u);
-    CHECK((parser_config.flags & TXML_KEEP_PIS) == 0u);
+    CHECK((parser_config.flags & TXML_INPUT_PADDED) != 0u);
     CHECK(parser_config.allocator.v == &unused_vtable);
 
     /* A zero-initialized configuration must mean "defaults everywhere the

@@ -57,9 +57,11 @@ spare.
 
 ## Paged columns
 
-A document is five or six columns, each addressed by a dense `uint32_t` index.
-A column is a **page directory** plus fixed-size pages allocated from the
-arena:
+A document is five columns, each addressed by a dense `uint32_t` index. A
+column is a **page directory** plus fixed-size pages allocated from whichever
+of the document's two arenas owns it (ADR 0016) — the tree arena for the node,
+attribute and position columns, the values arena for the name and namespace
+columns:
 
 ```c
 entry i  ──▶  directory[i >> page_shift][i & page_mask]
@@ -81,8 +83,9 @@ position columns. For the defaults in `TXML_LIMITS_DEFAULT` that is a 96 KiB
 node page and a 683-pointer directory (5.5 KiB); for an MCU profile with
 `max_document_bytes = 64 * 1024` the directory is a single pointer.
 
-**The pool** holds bytes rather than entries, and is paged the same way: a
-pool offset is a global byte offset, and the byte lives at
+**The pool** lives in the values arena. It holds bytes rather than entries and
+is paged the same way: a pool offset is a global byte offset, and the byte
+lives at
 `pool_directory[offset >> pool_shift] + (offset & pool_mask)`. The pool page
 size is `chunk_size` clamped to `[1024, 65536]` and rounded down to a power of
 two.
@@ -97,23 +100,41 @@ Two rules keep pool references usable:
    and slots *k..k+n-1* point at `base + k * page_size`. Offset arithmetic
    stays uniform and the run stays contiguous.
 
-Pool offsets are `uint32_t`, so a document arena is limited to 4 GiB. A
-`max_document_bytes` above `UINT32_MAX` is rejected with `TXML_ERR_INVALID` at
-`txml_parser_init`.
+Pool offsets are `uint32_t` and address the values arena alone, so the pool is
+limited to 4 GiB. A `max_document_bytes` above `UINT32_MAX` is rejected with
+`TXML_ERR_INVALID` at `txml_parser_init`.
 
 ## Who owns what
 
 | | Parser (transient) | Document (the product) |
 |---|---|---|
-| Storage | the parser's **own** arena, created over `config.allocator` | the document arena: `config.arena` when given, otherwise one the parser creates |
-| Holds | staging window, lexer state, open-element stack, start-tag scratch, namespace binding stack, name hash index | node, attribute, name, namespace, position columns and the pool |
-| Sizing | fixed from `config` and `limits`, except the binding stack and hash index | grows with the document, capped by `max_document_bytes` |
-| Freed by | `txml_parser_finish` (after handing the document over) or `txml_parser_destroy` | `txml_doc_destroy`, or `txml_parser_destroy` when the document was never detached |
+| Storage | the parser's **own** arena, created over `config.allocator` | **two** arenas, values and tree, both created over `config.allocator` |
+| Holds | staging window, lexer state, open-element stack, start-tag scratch, namespace binding stack, name hash index | values: the pool and the name and namespace columns. tree: the node, attribute and position columns |
+| Sizing | fixed from `config` and `limits`, except the binding stack and hash index | grows with the document; the **sum** of the two arenas' `used` is capped by `max_document_bytes` |
+| Freed by | `txml_parser_finish` (after handing the document over) or `txml_parser_destroy` | `txml_doc_destroy`, or `txml_parser_destroy` when the document was never detached — both arenas, unconditionally |
 
-Keeping the two arenas separate is what makes `txml_doc_arena(doc)->used`
-mean "document bytes" and what makes `max_document_bytes` a document limit
-rather than a process limit. Transient parser state is bounded by the config
-alone:
+**Why the document has two.** The split is by lifetime, not by type. A name, a
+prefix, a namespace URI and an attribute value are written once and live as
+long as the document; node, attribute and position entries are appended in
+order and are, in principle, truncatable. One bump allocator tied the first
+group's lifetime to the second's. The test for which arena something belongs
+in is whether it could ever be discarded independently of the rest of the
+document: if not, it is a value. `txml_doc_arena(doc, TXML_ARENA_VALUES)` and
+`txml_doc_arena(doc, TXML_ARENA_TREE)` report each one, which separates what a
+document spends on content from what it spends on structure — a document that
+is mostly text and one that is mostly deeply nested empty elements are no
+longer indistinguishable in a single number.
+
+**The document owns both.** There is no borrowed arena and no conditional
+ownership: the embedder supplies the allocator, the document creates its
+arenas over it, and `txml_doc_destroy` destroys both. That is what lets every
+`TXML_LIFETIME(document)` annotation in the header mean exactly one thing.
+`txml_arena` remains public for the embedder's **own** data.
+
+Keeping parser and document memory separate is what makes
+`txml_doc_arena(doc, which)->used` mean "document bytes" and what makes
+`max_document_bytes` a document limit rather than a process limit. Transient
+parser state is bounded by the config alone:
 
 ```text
 staging_length + 64          input window plus scanner padding
@@ -130,11 +151,6 @@ the superseded table is abandoned in the arena (total dead space stays below
 the live table's size). Rebuilding an index is not relocation — no address
 that was ever handed out changes.
 
-When `config.arena` is supplied, the document borrows it. `txml_doc_destroy`
-releases the chunks the document allocated (via a mark taken at
-initialization) but does not destroy the arena; the caller owns it before and
-after.
-
 ## The path a byte takes
 
 ```text
@@ -148,10 +164,12 @@ normalize: expand entities and character references,
            CRLF and lone CR to LF, attribute-value whitespace to space
    │
    ▼
-pool run (text, attribute value, name, namespace URI)
+pool run in the values arena
+   (text, attribute value, name local part, prefix, namespace URI)
    │
    ▼
-node / attribute / name / namespace columns
+name and namespace columns   (values arena)
+node, attribute and position columns   (tree arena)
 ```
 
 The copy into the staging window is what frees the caller's chunk immediately
@@ -176,27 +194,26 @@ the caller can extend the budget and call the step again, or destroy the
 parser and reject the document. Nothing is half-written when a step returns
 `TXML_STEP_NEED_MEMORY`.
 
-**Streaming records (MCU).** For a document that is a long sequence of
-records, the consumer processes one record subtree and then discards it:
+**Long inputs (MCU).** A document that is a long sequence of records costs
+what any other document costs: memory grows with the input, bounded by
+`max_document_bytes`, and exceeding it ends the parse with `TXML_DOC_LIMIT`
+and `TXML_LIMIT_DOCUMENT_BYTES`. ADR 0013 once offered mark-and-rewind to
+reclaim finished records; ADR 0018 withdrew it for want of a consumer.
 
-```c
-uint32_t mark = txml_doc_mark(doc);        /* before the record's start tag */
-/* ... step until the record's subtree is closed, then consume it ... */
-txml_doc_rewind(doc, mark);                /* nodes and arena memory reused */
-```
+What remains is incremental **consumption** (ADR 0003), which is unchanged.
+`txml_parser_doc` is readable from `txml_parser_init` onward, an element whose
+end tag has not arrived carries `TXML_NODE_OPEN` with `txml_subtree_end ==
+TXML_INDEX_NONE`, and a move that cannot yet be answered returns
+`TXML_PENDING` rather than `TXML_NONE`. A consumer interleaves
+`txml_parse_step` with cursor walks and processes each record as it closes; it
+simply cannot drop the record afterwards. An embedder whose stream exceeds its
+budget splits the input upstream and parses each record as its own document,
+which costs a parser init per record and loses cross-record name interning.
 
-`txml_doc_rewind` drops every node from `mark` on, truncates the attribute,
-name, namespace and position columns to what those nodes used, and calls
-`txml_arena_release` with the arena mark recorded for node `mark`. Peak memory
-becomes the largest single record rather than the whole document. The rewind
-is refused with `TXML_ERR_INVALID` while any element at or after `mark` is
-still open, which means a consumer rewinds only to a point where the parser's
-open-element stack has unwound to it.
-
-Name IDs are *not* renumbered by a rewind: names interned by discarded nodes
-keep their IDs and their pool bytes. This keeps the "dense from 0" invariant
-and keeps every name ID a consumer captured still valid. It also means a
-document of unique names is still bounded by `max_names`, as intended.
+Should reclamation ever return, the split above makes it sound in a way one
+arena did not: releasing the tree arena to a mark cannot touch a byte that any
+name, namespace or attribute value points at, because those bytes are not in
+it.
 
 ## Lifetimes
 
@@ -204,7 +221,7 @@ These are the exact rules; the header states them per function.
 
 | Thing | Valid from | Valid until |
 |---|---|---|
-| `txml_str` from any document call (`txml_node_text`, `txml_node_prefix`, `txml_doc_name_at`, `txml_attribute_read`, `txml_find_attribute`) | the call returns | `txml_doc_destroy`, `txml_parser_destroy`, or a `txml_doc_rewind` to a mark at or before the owning node |
+| `txml_str` from any document call (`txml_node_text`, `txml_node_prefix`, `txml_doc_name_at`, `txml_attribute_read`, `txml_find_attribute`) | the call returns | `txml_doc_destroy` or `txml_parser_destroy` |
 | `txml_cursor`, `txml_attr_cursor` | created | same as above; they are values and survive any amount of further parsing |
 | Name IDs (`uint32_t`) | interned | the document is destroyed; never valid for another document |
 | A chunk passed to `txml_parse_feed` | — | the call returns; the caller may reuse or free it immediately |
@@ -216,4 +233,4 @@ These are the exact rules; the header states them per function.
 | `txml_arena_mark` | `txml_arena_position` | the marked chunk is freed by a release to an older mark |
 
 Continuing to parse **never** invalidates anything a document already handed
-out. Only destruction and `txml_doc_rewind` do.
+out. Only destruction does — there is no operation that shortens a document.

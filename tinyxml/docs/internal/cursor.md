@@ -68,7 +68,10 @@ node cannot be answered yet:
 
 `TXML_PENDING` is the difference between "there is no such node" and "ask me
 again after the next step". A consumer that walks a finished document never
-sees it; a streaming consumer treats it as "step, then retry".
+sees it; one that reads along with the parse (ADR 0003) treats it as "step,
+then retry". That interleaving is unchanged by ADR 0018, which withdrew only
+the ability to *reclaim* what has been consumed, not the ability to consume
+it as it arrives.
 
 After `TXML_STEP_DONE`, no node is open, and `TXML_PENDING` never occurs
 again.
@@ -104,9 +107,11 @@ indices, that change needs no API change.
 
 ## Worked query
 
-Using the seven-node document from `document-layout.md`: for every
+Using the sixteen-node document from `document-layout.md`: for every
 `<transition>`, report the state it leaves and check whether its target is
-inside that same state.
+inside that same state. The nine whitespace text nodes in that document never
+appear below — the id sweep skips them because they carry no attributes, and
+the name scan skips them because they carry no name.
 
 ```c
 /* 1. An id index. A subtree is a range, so this is one flat loop:
@@ -145,12 +150,13 @@ while (txml_find_next(&t, &query) == TXML_MOVED) {
 }
 ```
 
-On the example document the scan visits nodes 1 through 6 and matches 3, 5 and
-6. For node 3, `source` is node 2 (`[2, 4)`) and the target `opening` is node
-4, so `txml_contains` is `2 <= 4 && 4 < 4` — false, the transition leaves its
-state. For node 6, `source` is node 4 (`[4, 7)`) and the target `closed` is
-node 2: `4 <= 2` is false, so again it leaves. Both answers cost two integer
-comparisons and no tree walking.
+On the example document the scan visits nodes 1 through 14 and matches 5, 10
+and 12. For node 5, `source` is node 3 (`[3, 7)`) and the target `opening` is
+node 8, so `txml_contains` is `3 <= 8 && 8 < 7` — false, the transition leaves
+its state. For node 12, `source` is node 8 (`[8, 14)`) and the target `closed`
+is node 3: `8 <= 3` is false, so again it leaves. Both answers cost two
+integer comparisons and no tree walking, and the whitespace between them costs
+one `uint32_t` compare each.
 
 A pointer-based DOM answers the same containment question by walking parent
 pointers, which is `O(depth)` per test and touches a cache line per hop.

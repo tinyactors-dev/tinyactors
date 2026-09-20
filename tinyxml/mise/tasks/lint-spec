@@ -1,0 +1,177 @@
+#!/usr/bin/env ruby
+#MISE description="Check every tests/spec node table for internal consistency"
+# vim:ft=ruby
+#
+#   mise run lint-spec
+#
+# The corpus is the specification, and until src/ has modules nothing executes
+# it. This task is what stands in for that: it does not know how to parse XML,
+# but it knows what a node table must look like, and almost every hand-editing
+# mistake shows up as an inconsistency inside one case.
+#
+# What it checks, per case:
+#
+#   - node indices run 0, 1, 2, … with no gaps;
+#   - `end` equals what the depth column implies — one past the last row
+#     deeper than this one — which is the whole of ADR 0005's range rule;
+#   - `parent` is the nearest preceding row one level shallower;
+#   - `attributes=` appears only on the kinds that have attributes, and every
+#     element carries it;
+#   - a present @attributes section numbers each node's rows 0..n-1 and agrees
+#     with that node's `attributes=` count;
+#   - @names rows are numbered in sequence, and a present @positions section
+#     has exactly one row per node.
+#
+# It deliberately does not check a section that is absent: "absent means not
+# checked" is part of the format (docs/internal/testing.md), so a case may
+# declare `attributes=1` and omit @attributes.
+
+require 'pathname'
+
+ROOT = Pathname.new(__dir__).join('../..').expand_path
+KINDS = %w[document element text comment pi declaration doctype].freeze
+HAS_ATTRIBUTES = %w[element declaration].freeze
+DIRECTIVES = %w[case flags limits chunk xml nodes attributes names positions error roundtrip end].freeze
+NODE_ROW = /\A(\d+) (\w+) (.*?) end=(\d+|-) parent=(\d+|-) depth=(\d+)(.*)\z/
+
+problems = []
+
+def note(problems, path, name, message)
+  problems << "#{path}: #{name}: #{message}"
+end
+
+# `end` and `parent` are both functions of the depth column; recomputing them
+# is what catches an arithmetic slip in a hand-written table.
+def check_nodes(problems, path, name, rows)
+  nodes = []
+  rows.each do |row|
+    match = NODE_ROW.match(row)
+    if match.nil?
+      note(problems, path, name, "unparsable node row: #{row}")
+      return nil
+    end
+    nodes << {
+      index: match[1].to_i,
+      kind: match[2],
+      ending: match[4] == '-' ? nil : match[4].to_i,
+      parent: match[5] == '-' ? nil : match[5].to_i,
+      depth: match[6].to_i,
+      rest: match[7]
+    }
+  end
+
+  nodes.each_with_index do |node, position|
+    note(problems, path, name, "node index #{node[:index]} out of sequence at row #{position}") if node[:index] != position
+    note(problems, path, name, "unknown kind #{node[:kind]}") unless KINDS.include?(node[:kind])
+
+    following = position + 1
+    following += 1 while following < nodes.length && nodes[following][:depth] > node[:depth]
+    if node[:ending] != following
+      note(problems, path, name, "node #{position}: end=#{node[:ending] || '-'} but the depth column gives #{following}")
+    end
+
+    if position.zero?
+      note(problems, path, name, 'node 0 must have parent=-') unless node[:parent].nil?
+    else
+      expected = (position - 1).downto(0).find { |candidate| nodes[candidate][:depth] == node[:depth] - 1 }
+      if node[:parent] != expected
+        note(problems, path, name, "node #{position}: parent=#{node[:parent] || '-'} but the nesting gives #{expected || '-'}")
+      end
+    end
+
+    declared = node[:rest][/attributes=(\d+)/, 1]
+    if declared && !HAS_ATTRIBUTES.include?(node[:kind])
+      note(problems, path, name, "node #{position}: attributes= on kind #{node[:kind]}")
+    end
+    if node[:kind] == 'element' && declared.nil?
+      note(problems, path, name, "node #{position}: an element must state attributes=")
+    end
+  end
+
+  nodes
+end
+
+def check_attributes(problems, path, name, nodes, rows)
+  declared = {}
+  nodes.each_with_index do |node, position|
+    count = node[:rest][/attributes=(\d+)/, 1]
+    declared[position] = count.to_i if count && count.to_i.positive?
+  end
+
+  seen = Hash.new { |hash, key| hash[key] = [] }
+  rows.each do |row|
+    match = /\A(\d+)\.(\d+) /.match(row)
+    if match.nil?
+      note(problems, path, name, "unparsable attribute row: #{row}")
+      next
+    end
+    seen[match[1].to_i] << match[2].to_i
+  end
+
+  seen.each do |index, positions|
+    if positions != (0...positions.length).to_a
+      note(problems, path, name, "node #{index}: attribute indices #{positions.inspect} are not 0..n-1")
+    end
+    if declared[index] != positions.length
+      note(problems, path, name, "node #{index}: attributes=#{declared[index] || 0} but #{positions.length} row(s)")
+    end
+  end
+
+  declared.each_key do |index|
+    note(problems, path, name, "node #{index}: attributes=#{declared[index]} but no rows") unless seen.key?(index)
+  end
+end
+
+Dir[ROOT.join('tests/spec/*.spec').to_s].sort.each do |file|
+  path = Pathname.new(file).relative_path_from(ROOT).to_s
+  name = nil
+  section = nil
+  sections = {}
+
+  File.readlines(file, chomp: true).each do |line|
+    if line.start_with?('@')
+      directive = line[1..].split(' ').first
+      note(problems, path, name || '?', "unknown directive @#{directive}") unless DIRECTIVES.include?(directive)
+
+      case directive
+      when 'case'
+        name = line[6..]
+        sections = {}
+        section = nil
+      when 'end'
+        note(problems, path, name, 'no @xml') unless sections.key?('xml')
+        nodes = sections['nodes'] ? check_nodes(problems, path, name, sections['nodes']) : nil
+        if nodes
+          check_attributes(problems, path, name, nodes, sections['attributes']) if sections['attributes']
+          if sections['positions'] && !sections['positions'].empty? && sections['positions'].length != nodes.length
+            note(problems, path, name,
+                 "@positions has #{sections['positions'].length} row(s) for #{nodes.length} node(s)")
+          end
+        end
+        sections['names']&.each_with_index do |row, index|
+          note(problems, path, name, "@names row #{index} out of sequence: #{row}") unless row.start_with?("#{index} ")
+        end
+        name = nil
+        section = nil
+      else
+        section = directive
+        sections[directive] = []
+      end
+    elsif section && name
+      # Inside @xml and @roundtrip every line is content, blank ones included.
+      sections[section] << line if %w[xml roundtrip].include?(section) || !line.strip.empty?
+    end
+  end
+end
+
+files = Dir[ROOT.join('tests/spec/*.spec').to_s].length
+cases = Dir[ROOT.join('tests/spec/*.spec').to_s].sum { |file| File.read(file).scan(/^@case /).length }
+
+if problems.empty?
+  puts "lint-spec: #{cases} cases in #{files} files, every node table internally consistent"
+  exit 0
+end
+
+problems.each { |problem| warn(problem) }
+warn "lint-spec: #{problems.length} problem(s)"
+exit 1
