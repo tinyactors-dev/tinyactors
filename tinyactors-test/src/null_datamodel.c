@@ -161,14 +161,10 @@ static bool tat_null_parse_in(ta_str source, ta_str *out) {
 
 /* True when a state of that author ID is in the active configuration. */
 static bool tat_null_in_state(const ta_dm_host *host, ta_str id) {
-    ta_str name = {0};
-    for (ta_state_id state = 0; ta_dm_host_state_name(host, state, &name) == TA_OK; state += 1) {
-        if (name.len == id.len && memcmp(name.ptr, id.ptr, id.len) == 0) {
-            return ta_dm_host_in_state(host, state);
-        }
-    }
-    /* SCXML B.1: In() of a state the machine does not have is simply false. */
-    return false;
+    ta_state_id state = 0;
+    /* SCXML B.1: In() of a state the machine does not have is simply false;
+     * core answers TA_ERR_NOT_FOUND for it (ADR 0049). */
+    return ta_dm_host_find_state(host, id, &state) == TA_OK && ta_dm_host_in_state(host, state);
 }
 
 static ta_op_status tat_null_eval_condition(void *self, const ta_datamodel_eval_condition_params *params) {

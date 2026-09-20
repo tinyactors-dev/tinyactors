@@ -118,6 +118,47 @@ allocator_group = TinyactorsTest.scenarios 'allocator' do
     actor.deliver 'go'
     assert_equal 1, actor.data('.pings')
   end
+
+  scenario 'a byte budget refuses what does not fit and is lifted again' do
+    actor = spawn :harness_ping
+    live = allocator.stats[:live_bytes]
+
+    allocator.budget(live + 16)
+    assert_equal live + 16, allocator.stats[:budget_bytes]
+    response = ta.definition.compile_spec(system: system_handle, spec: TinyactorsTest.charts[:harness_ping].to_spec,
+                                          datamodel: { '$adapter' => 'datamodel.jq' }, allocator: allocator.adapter)
+    assert_equal 'err_nomem', response[:result]
+    refused = allocator.journal.last
+    assert_equal 'alloc_failed', refused[:op]
+    assert_equal 'budget', refused[:reason]
+    assert refused[:size] > 16, 'the refused allocation did not fit in the budget'
+
+    allocator.clear_faults
+    assert_equal 0, allocator.stats[:budget_bytes]
+    actor.deliver 'go'
+    assert_equal 1, actor.data('.pings'), 'the system runs again once the budget is lifted'
+  end
+end
+
+inspector_group = TinyactorsTest.scenarios 'inspector' do
+  scenario 'the recording inspector journals every visit and can stop the walk' do
+    inspector = recording_inspector
+    first = spawn :harness_ping
+    second = spawn :harness_ping
+
+    assert_equal 'ok', visit_actors
+    assert_equal [first.handle, second.handle].sort, inspector.visits.map { |entry| entry[:actor] }.sort
+    assert_equal 2, inspector.control('stats')[:visits]
+    view = inspector.visits.first.fetch(:view)
+    assert_equal 'idle', view[:residency], 'a quiescent actor is idle'
+    assert_equal first.inspect_actor, view, 'the view is the one ta_actor_inspect answers with'
+
+    # Armed before the walk it did not take part in yet: the instrument is
+    # created by the control call itself.
+    inspector.arm_fault(after: 0, result: 'err_not_found')
+    assert_equal 'err_not_found', visit_actors
+    assert_equal 3, inspector.visits.size, 'the failing visit stopped the walk'
+  end
 end
 
 router_group = TinyactorsTest.scenarios 'router' do
@@ -202,7 +243,7 @@ invoker_group = TinyactorsTest.scenarios 'invoker' do
     starts = service.started
     assert_equal 1, starts.size
     assert_equal actor.handle, starts[0][:parent]
-    assert_equal atom(SERVICE), starts[0][:type]
+    assert_equal SERVICE, starts[0][:type]
     report_invoke starts[0], :event, event: 'reply', data: { value: 42 }
     assert_active actor, :replied
     assert_equal 42, actor.data('.reply')
@@ -255,7 +296,7 @@ io_group = TinyactorsTest.scenarios 'io' do
     actor.deliver 'go'
     sends = io.entries('send')
     assert_equal 1, sends.size
-    assert_equal ['ping', 'somewhere', { n: 1 }, atom(IO_TYPE)],
+    assert_equal ['ping', 'somewhere', { n: 1 }, IO_TYPE],
                  sends[0].values_at(:event_text, :target, :data, :io_type)
     assert_equal({ kind: 'runtime', runtime: actor.handle }, sends[0][:source])
   end
@@ -339,7 +380,7 @@ equivalence_group = TinyactorsTest.scenarios 'equivalence', chart: :traffic_ligh
   end
 end
 
-groups = [allocator_group, router_group, invoker_group, io_group, log_group, directory_group, equivalence_group]
+groups = [allocator_group, inspector_group, router_group, invoker_group, io_group, log_group, directory_group, equivalence_group]
 runner = TinyactorsTest::Runner.new(executable: root.join('build/tinyactors-test'), charts: TinyactorsTest.charts)
 results = runner.run(groups)
 failed = results.reject(&:ok?).map { |result| result.scenario.full_name }

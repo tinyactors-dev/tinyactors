@@ -25,6 +25,8 @@ module TinyactorsTest
     end
 
     # Journal entries, oldest first; `since:` skips entries up to that seq.
+    # Reading the journal of an instrument core has never been handed is an
+    # error, so an unused instrument cannot look like a quiet one.
     def journal(since: nil)
       params = { name: name }
       params[:since] = since if since
@@ -36,8 +38,11 @@ module TinyactorsTest
       journal.select { |entry| entry[:op] == op }
     end
 
+    # Steers the instrument. `kind` lets the host create it when core has
+    # not been handed it yet, so a scenario can arm an instrument before the
+    # call that first uses it.
     def control(command, **args)
-      @driver.call('instrument.control', name: name, command: command, args: args)
+      @driver.call('instrument.control', name: name, command: command, kind: kind, args: args)
     end
 
     # Arms a fault. Allocator: `arm_fault(after: n, count: m)`. Others:
@@ -52,6 +57,11 @@ module TinyactorsTest
     # allocator.counting
     def stats = control('stats')
 
+    # Bounds what core may hold at once, as a fixed pool does (ADR 0023):
+    # an allocation that would push live bytes over `bytes` fails. `bytes:
+    # 0`, like `clear_faults`, lifts the budget again.
+    def budget(bytes) = control('budget', bytes: bytes)
+
     # router.recording
     def mode(mode) = control('mode', mode: mode.to_s)
     def held = control('held')
@@ -64,6 +74,9 @@ module TinyactorsTest
 
     # log.recording: the entries a chart logged, as [label, value] pairs.
     def logged = entries('log').map { |entry| [entry[:label], entry[:value]] }
+
+    # inspector.recording: the views ta_system_visit_actors handed it.
+    def visits = entries('visit')
 
     # directory.memory
     def directory_entries = control('entries')

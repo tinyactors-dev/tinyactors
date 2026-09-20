@@ -457,7 +457,58 @@ module TinyactorsTest
             "#{actor} at t=#{@now}ms: expected configuration #{states.join(', ')}, got #{active.join(', ')}"
     end
 
-    # Creates the system on first use and installs the router.direct adapter,
+    # ----------------------------------------------------------------------
+    # Log records (ADR 0045)
+
+    # What the charts logged, oldest first: [{label:, value:, actor:}].
+    # `value` is nil when the <log> had no expression, and `actor` is the
+    # Actor that logged when the scenario spawned it, else its runtime ID.
+    #
+    # The sink only records from the moment it is installed, so a scenario
+    # calls `recording_log` before the steps it wants to read; reading logs
+    # without a sink is an error rather than an empty list.
+    def logs
+      sink = @instruments['log']
+      unless sink
+        raise ScenarioError, 'logs: install the sink with `recording_log` before the steps that log'
+      end
+
+      sink.entries('log').map do |entry|
+        { label: entry[:label], value: entry[:has_value] ? entry[:value] : nil,
+          actor: actor_of_ref(entry[:source]) }
+      end
+    end
+
+    # Passes when the sink recorded exactly these records, in order:
+    # `assert_logs(['phase', 'trial'], ['done', nil])`.
+    def assert_logs(*expected)
+      actual = logs.map { |record| [record[:label], record[:value]] }
+      assert_equal expected.map { |label, value| [label.to_s, value] }, actual, 'the log sink recorded'
+    end
+
+    # Passes when `label` was logged with exactly `value` `times` times, by
+    # `actor` when one is given.
+    def assert_logged(label, value, actor: nil, times: 1)
+      matching = logs.select do |record|
+        record[:label] == label.to_s && record[:value] == value && (actor.nil? || record[:actor] == actor)
+      end
+      return if matching.size == times
+
+      raise AssertionFailed,
+            "expected #{times} log record(s) #{[label.to_s, value].inspect}#{" from #{actor}" if actor}, " \
+            "got #{matching.size} of #{logs.inspect}"
+    end
+
+    # The Actor a log record's source names, or its runtime ID when the
+    # scenario did not spawn it.
+    def actor_of_ref(ref)
+      return nil unless ref.is_a?(Hash) && ref[:kind] == 'runtime'
+
+      id = Integer(ref[:runtime])
+      @actors.find { |actor| actor.handle == id } || id
+    end
+
+    # Creates the system on first use and installs the router.direct adapter,"""
     # which hands external events (such as due delayed sends) straight to
     # ta_actor_deliver. Without a router, core reports external sends as
     # error.communication (ADR 0040).
@@ -654,6 +705,71 @@ module TinyactorsTest
                      .fetch(:out).fetch(:definition_id)
         Actor.new(self, id, :invoked, definition)
       end
+    end
+
+    # ----------------------------------------------------------------------
+    # Definitions the host still owns (ADR 0043)
+
+    # ta_definition_compile_spec alone: the compiled definition is the
+    # host's until it registers it. Returns the ta_definition handle.
+    def compile_only(chart = @group.chart)
+      chart = @charts.fetch(chart.to_sym) { raise ScenarioError, "unknown chart #{chart}" } unless chart.is_a?(Chart)
+      core('ta_definition_compile_spec',
+           ta.definition.compile_spec(system: system_handle, spec: chart.to_spec,
+                                      datamodel: datamodel_adapter(chart),
+                                      allocator: allocator.adapter)).fetch(:out)
+    end
+
+    # ta_definition_destroy: releases a compiled definition the host decided
+    # not to register.
+    def destroy_definition(definition)
+      ta.definition.destroy(definition: definition)
+      nil
+    end
+
+    # ta_system_register_definition: hands a compiled definition to the
+    # system, which owns it from then on. Returns its definition ID.
+    def register_definition(definition)
+      core('ta_system_register_definition',
+           ta.system.register_definition(system: system_handle, definition: definition)).fetch(:out)
+    end
+
+    # ta_system_retire_definition: ends a definition's availability. Takes a
+    # definition ID or a chart name.
+    def retire_definition(chart)
+      id = chart.is_a?(Integer) ? chart : definition(chart)
+      ta.system.retire_definition(system: system_handle, definition: id)[:result]
+    end
+
+    # ----------------------------------------------------------------------
+    # Walking the resident actors (ta_system_visit_actors)
+
+    # The inspector.recording instrument core walks actors with. Its
+    # `entries('visit')` are the views it was handed, in visit order.
+    def recording_inspector
+      @instruments['inspector'] ||= instrument('inspector', 'inspector.recording')
+    end
+
+    # ta_system_visit_actors with that inspector; returns the result.
+    def visit_actors(inspector = recording_inspector)
+      ta.system.visit_actors(system: system_handle, inspector: inspector.adapter)[:result]
+    end
+
+    # ----------------------------------------------------------------------
+    # The SCXML target URI grammar (ADR 0044)
+
+    # ta_scxml_target_parse: [result, the structured target or nil].
+    def parse_target(text)
+      response = ta.scxml.target_parse(system: system_handle, text: text)
+      [response[:result], response[:result] == 'ok' ? response.dig(:out, :out) : nil]
+    end
+
+    # ta_scxml_target_format: [result, the URI or nil, the needed capacity].
+    # A `capacity` smaller than needed answers err_nomem, so 0 is a size query.
+    def format_target(target, capacity: 256)
+      response = ta.scxml.target_format(system: system_handle, target: target, capacity: capacity)
+      out = response.fetch(:out, {})
+      [response[:result], out[:buffer], out[:needed]]
     end
 
     # ----------------------------------------------------------------------

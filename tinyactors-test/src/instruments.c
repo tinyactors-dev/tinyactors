@@ -32,11 +32,13 @@ typedef enum {
     TAT_INSTRUMENT_INVOKER,
     TAT_INSTRUMENT_IO,
     TAT_INSTRUMENT_LOG,
+    TAT_INSTRUMENT_INSPECTOR,
 } tat_instrument_kind;
 
 static const char *const TAT_INSTRUMENT_KINDS[] = {
     "allocator.counting", "router.recording", "directory.memory",
     "invoker.scripted",   "io.recording",     "log.recording",
+    "inspector.recording",
 };
 
 /* allocator.counting: the size and alignment of every live allocation. */
@@ -64,6 +66,12 @@ typedef struct {
     int64_t fail_after;
     /* Failures still to inject once failing; 0 means every later allocation. */
     int64_t fail_remaining;
+    /*
+     * The live-byte budget of a deliberately small host (ADR 0023): an
+     * allocation that would push live_bytes over it fails, as a fixed pool
+     * or an embedded heap does. 0 means unlimited.
+     */
+    uint64_t budget_bytes;
 } tat_allocator_state;
 
 /* router.recording: deliveries held back in "hold" mode. */
@@ -93,6 +101,14 @@ typedef struct {
     uint64_t next_service;
 } tat_invoker_state;
 
+/* inspector.recording: the ta_actor_inspector core walks actors with. */
+typedef struct {
+    uint64_t visits;
+    /* Visits still answered TA_OK before failing; -1 when disarmed. */
+    int64_t fail_after;
+    ta_result fail_result;
+} tat_inspector_state;
+
 typedef struct tat_instrument {
     char *name;
     tat_instrument_kind kind;
@@ -107,6 +123,7 @@ typedef struct tat_instrument {
     tat_router_state router;
     tat_directory_state directory;
     tat_invoker_state invoker;
+    tat_inspector_state inspector;
 } tat_instrument;
 
 static ta_result tat_directory_resolve(void *self, const ta_actor_directory_resolve_params *params);
@@ -190,6 +207,15 @@ static jv tat_event_name_text(const ta_system *system, ta_event_name_id name) {
     jv text = ta_event_name_format(system, &params) == TA_OK ? jv_string(large) : jv_null();
     free(large);
     return text;
+}
+
+/* The text an atom interns, or null when it is none of this system's. */
+static jv tat_atom_text(const ta_system *system, ta_atom atom) {
+    ta_str text = {0};
+    if (system == NULL || ta_system_atom_text(system, atom, &text) != TA_OK) {
+        return jv_null();
+    }
+    return jv_string_sized(text.ptr, (int)text.len);
 }
 
 /* An event as the generated codec encodes it, plus its dotted name. */
@@ -346,6 +372,7 @@ static tat_instrument *tat_instrument_resolve(tat_bind *bind, jv config, tat_ins
     instrument->journal = jv_array();
     instrument->faults = jv_object();
     instrument->allocator.fail_after = -1;
+    instrument->inspector.fail_after = -1;
     instrument->directory.entries = jv_object();
     instrument->invoker.services = jv_object();
     instrument->invoker.next_service = 1;
@@ -431,16 +458,29 @@ static bool tat_slot_insert(tat_allocator_state *state, tat_allocation allocatio
     return true;
 }
 
+/* Journals a refused allocation and counts it. */
+static void tat_alloc_failed(tat_instrument *instrument, size_t size, size_t alignment, const char *reason) {
+    instrument->allocator.failures += 1;
+    jv entry = jv_object_set(jv_object(), jv_string("size"), tat_u64(size));
+    entry = jv_object_set(entry, jv_string("alignment"), tat_u64(alignment));
+    entry = jv_object_set(entry, jv_string("reason"), jv_string(reason));
+    entry = jv_object_set(entry, jv_string("live_bytes"), tat_u64(instrument->allocator.live_bytes));
+    tat_journal(instrument, "alloc_failed", entry);
+}
+
 static void *tat_counting_alloc(void *self, size_t size, size_t alignment) {
     tat_instrument *instrument = self;
     tat_allocator_state *state = &instrument->allocator;
     if (state->fail_after == 0) {
-        state->failures += 1;
-        jv entry = jv_object_set(jv_object(), jv_string("size"), tat_u64(size));
-        tat_journal(instrument, "alloc_failed", jv_object_set(entry, jv_string("alignment"), tat_u64(alignment)));
+        tat_alloc_failed(instrument, size, alignment, "armed");
         if (state->fail_remaining > 0 && --state->fail_remaining == 0) {
             state->fail_after = -1;
         }
+        return NULL;
+    }
+    /* A host with a fixed pool: the budget bounds what core may hold at once. */
+    if (state->budget_bytes != 0 && state->live_bytes + (uint64_t)size > state->budget_bytes) {
+        tat_alloc_failed(instrument, size, alignment, "budget");
         return NULL;
     }
     ta_allocator libc = tat_libc_allocator();
@@ -516,6 +556,7 @@ static jv tat_allocator_stats(const tat_allocator_state *state) {
     stats = jv_object_set(stats, jv_string("frees"), tat_u64(state->frees));
     stats = jv_object_set(stats, jv_string("failures"), tat_u64(state->failures));
     stats = jv_object_set(stats, jv_string("anomalies"), tat_u64(state->anomalies));
+    stats = jv_object_set(stats, jv_string("budget_bytes"), tat_u64(state->budget_bytes));
     return jv_object_set(stats, jv_string("failing"), jv_bool(state->fail_after >= 0));
 }
 
@@ -870,7 +911,7 @@ static ta_op_status tat_scripted_start(void *self, const ta_invoker_start_params
     jv entry = jv_object();
     entry = jv_object_set(entry, jv_string("parent"), tat_u64(request->parent));
     entry = jv_object_set(entry, jv_string("invoke_id"), tat_u64(request->invoke_id));
-    entry = jv_object_set(entry, jv_string("type"), tat_u64(request->type));
+    entry = jv_object_set(entry, jv_string("type"), tat_atom_text(instrument->system, request->type));
     entry = jv_object_set(entry, jv_string("src"), tat_value_or_null(&request->src));
     entry = jv_object_set(entry, jv_string("data"), tat_value_or_null(&request->data));
     entry = jv_object_set(entry, jv_string("params"), tat_value_or_null(&request->params));
@@ -972,7 +1013,7 @@ static ta_op_status tat_recording_send(void *self, const ta_send *send, ta_fault
     entry = jv_object_set(entry, jv_string("send_id"), tat_u64(send->send_id));
     entry = jv_object_set(entry, jv_string("event"), tat_u64(send->event));
     entry = jv_object_set(entry, jv_string("event_text"), tat_event_name_text(instrument->system, send->event));
-    entry = jv_object_set(entry, jv_string("io_type"), tat_u64(send->io_type));
+    entry = jv_object_set(entry, jv_string("io_type"), tat_atom_text(instrument->system, send->io_type));
     entry = jv_object_set(entry, jv_string("target"), tat_value_or_null(&send->target));
     entry = jv_object_set(entry, jv_string("data"), tat_value_or_null(&send->data));
     jv spec;
@@ -1030,6 +1071,44 @@ bool tat_make_recording_log(tat_bind *bind, jv config, void *out) {
 }
 
 /* ------------------------------------------------------------------------
+ * inspector.recording
+ *
+ * The ta_actor_inspector ta_system_visit_actors() walks resident actors
+ * with. It journals the view of every visit (op "visit": "actor" and
+ * "view", the same encoding ta.actor.inspect answers with) and can fail a
+ * visit on command, which stops the walk. Config: {"name"}.
+ */
+
+static ta_result tat_recording_visit(void *self, const ta_actor_inspection *inspection) {
+    tat_instrument *instrument = self;
+    tat_inspector_state *state = &instrument->inspector;
+    ta_result result = TA_OK;
+    if (state->fail_after == 0) {
+        result = state->fail_result;
+        state->fail_after = -1;
+    } else if (state->fail_after > 0) {
+        state->fail_after -= 1;
+    }
+    state->visits += 1;
+    jv entry = jv_object_set(jv_object(), jv_string("actor"), tat_u64(inspection->actor));
+    entry = jv_object_set(entry, jv_string("view"), tat_encode_ta_actor_inspection(instrument->bind, inspection));
+    entry = jv_object_set(entry, jv_string("result"), tat_result_name(result));
+    tat_journal(instrument, "visit", entry);
+    return result;
+}
+
+bool tat_make_recording_inspector(tat_bind *bind, jv config, void *out) {
+    bool created = false;
+    tat_instrument *instrument =
+        tat_instrument_resolve(bind, config, TAT_INSTRUMENT_INSPECTOR, NULL, false, &created);
+    if (instrument == NULL) {
+        return false;
+    }
+    *(ta_actor_inspector *)out = (ta_actor_inspector){.self = instrument, .visit = tat_recording_visit};
+    return true;
+}
+
+/* ------------------------------------------------------------------------
  * Host methods
  */
 
@@ -1038,8 +1117,33 @@ static jv tat_invalid(int *error_code, jv message) {
     return message;
 }
 
-/* params.name resolved to an instrument, or null with *error set. */
-static tat_instrument *tat_named(jv params, int *error_code, jv *error) {
+/*
+ * Kinds an instrument.control may create before core has ever been handed
+ * one: those whose adapter needs no system handle. A scenario steers such
+ * an instrument (arming a fault, setting a budget) before the call that
+ * first passes it to core, instead of having to order the two.
+ */
+static bool tat_kind_creatable(tat_instrument_kind kind) {
+    return kind == TAT_INSTRUMENT_ALLOCATOR || kind == TAT_INSTRUMENT_DIRECTORY ||
+           kind == TAT_INSTRUMENT_INSPECTOR;
+}
+
+static bool tat_kind_parse(const char *name, tat_instrument_kind *out) {
+    for (size_t index = 0; index < sizeof(TAT_INSTRUMENT_KINDS) / sizeof(TAT_INSTRUMENT_KINDS[0]); index += 1) {
+        if (strcmp(TAT_INSTRUMENT_KINDS[index], name) == 0) {
+            *out = (tat_instrument_kind)index;
+            return true;
+        }
+    }
+    return false;
+}
+
+/*
+ * params.name resolved to an instrument, or null with *error set. When
+ * `may_create` is set, params.kind lets an unknown name create that
+ * instrument first, for the kinds tat_kind_creatable() allows.
+ */
+static tat_instrument *tat_named(tat_bind *bind, jv params, bool may_create, int *error_code, jv *error) {
     jv name = jv_object_get(jv_copy(params), jv_string("name"));
     if (jv_get_kind(name) != JV_KIND_STRING) {
         jv_free(name);
@@ -1047,6 +1151,30 @@ static tat_instrument *tat_named(jv params, int *error_code, jv *error) {
         return NULL;
     }
     tat_instrument *instrument = tat_instrument_find(jv_string_value(name));
+    jv kind_name = may_create ? jv_object_get(jv_copy(params), jv_string("kind")) : jv_invalid();
+    if (instrument == NULL && jv_get_kind(kind_name) == JV_KIND_STRING) {
+        tat_instrument_kind kind;
+        if (!tat_kind_parse(jv_string_value(kind_name), &kind) || !tat_kind_creatable(kind)) {
+            *error = tat_invalid(error_code,
+                                 jv_string_fmt("params.kind \"%s\" is not an instrument kind that can be "
+                                               "created before its first use",
+                                               jv_string_value(kind_name)));
+            jv_free(kind_name);
+            jv_free(name);
+            return NULL;
+        }
+        bool created = false;
+        jv config = jv_object_set(jv_object(), jv_string("name"), jv_copy(name));
+        instrument = tat_instrument_resolve(bind, config, kind, NULL, false, &created);
+        jv_free(config);
+        if (instrument == NULL) {
+            *error = tat_bind_take_error(bind, error_code);
+            jv_free(kind_name);
+            jv_free(name);
+            return NULL;
+        }
+    }
+    jv_free(kind_name);
     if (instrument == NULL) {
         *error = tat_invalid(error_code, jv_string_fmt("no instrument named \"%s\"", jv_string_value(name)));
     }
@@ -1069,9 +1197,10 @@ jv tat_instrument_list_method(tat_bind *bind, jv params, int *error_code) {
 
 /* {"name", "since"?: seq}: journal entries with a sequence above `since`. */
 jv tat_instrument_journal_method(tat_bind *bind, jv params, int *error_code) {
-    (void)bind;
     jv error;
-    tat_instrument *instrument = tat_named(params, error_code, &error);
+    /* Never creates: reading the journal of an instrument core has never
+     * been handed is a mistake, not an empty list. */
+    tat_instrument *instrument = tat_named(bind, params, false, error_code, &error);
     if (instrument == NULL) {
         return error;
     }
@@ -1143,11 +1272,20 @@ static jv tat_control_allocator(tat_instrument *instrument, const char *command,
         state->fail_remaining = (int64_t)count;
         return tat_allocator_stats(state);
     }
-    if (strcmp(command, "clear_faults") == 0) {
-        state->fail_after = -1;
+    if (strcmp(command, "budget") == 0) {
+        uint64_t bytes = 0;
+        (void)tat_arg_u64(instrument->bind, args, "bytes", &bytes);
+        state->budget_bytes = bytes;
         return tat_allocator_stats(state);
     }
-    return tat_invalid(error_code, jv_string("allocator.counting commands: stats, fail {after, count}, clear_faults"));
+    if (strcmp(command, "clear_faults") == 0) {
+        state->fail_after = -1;
+        state->budget_bytes = 0;
+        return tat_allocator_stats(state);
+    }
+    return tat_invalid(error_code,
+                       jv_string("allocator.counting commands: stats, fail {after, count}, "
+                                 "budget {bytes}, clear_faults"));
 }
 
 static jv tat_control_router(tat_instrument *instrument, const char *command, jv args, int *error_code) {
@@ -1286,6 +1424,44 @@ static jv tat_control_log(tat_instrument *instrument, const char *command, jv ar
                        jv_string("log.recording has no commands; read its journal with instrument.journal"));
 }
 
+/*
+ * inspector.recording: "fail {after, result}" answers the visit after
+ * `after` successful ones with `result` (default err_busy), and "stats"
+ * reports how many visits it has seen.
+ */
+static jv tat_inspector_stats(const tat_inspector_state *state) {
+    jv stats = jv_object_set(jv_object(), jv_string("visits"), tat_u64(state->visits));
+    return jv_object_set(stats, jv_string("failing"), jv_bool(state->fail_after >= 0));
+}
+
+static jv tat_control_inspector(tat_instrument *instrument, const char *command, jv args, int *error_code) {
+    tat_inspector_state *state = &instrument->inspector;
+    if (strcmp(command, "stats") == 0) {
+        return tat_inspector_stats(state);
+    }
+    if (strcmp(command, "fail") == 0) {
+        uint64_t after = 0;
+        (void)tat_arg_u64(instrument->bind, args, "after", &after);
+        ta_result result = TA_ERR_BUSY;
+        jv name = jv_object_get(jv_copy(args), jv_string("result"));
+        if (jv_get_kind(name) == JV_KIND_STRING && !tat_result_parse(jv_string_value(name), &result)) {
+            jv_free(name);
+            return tat_invalid(error_code,
+                               jv_string("fail: args.result must be a ta_result name such as \"err_busy\""));
+        }
+        jv_free(name);
+        state->fail_after = (int64_t)after;
+        state->fail_result = result;
+        return tat_inspector_stats(state);
+    }
+    if (strcmp(command, "clear_faults") == 0) {
+        state->fail_after = -1;
+        return tat_inspector_stats(state);
+    }
+    return tat_invalid(error_code,
+                       jv_string("inspector.recording commands: stats, fail {after, result}, clear_faults"));
+}
+
 static jv tat_control_io(tat_instrument *instrument, const char *command, jv args, int *error_code) {
     static const char *const ops[] = {"send", NULL};
     if (strcmp(command, "fail") == 0) {
@@ -1301,9 +1477,8 @@ static jv tat_control_io(tat_instrument *instrument, const char *command, jv arg
 
 /* {"name", "command", "args"?}: steers one instrument between steps. */
 jv tat_instrument_control_method(tat_bind *bind, jv params, int *error_code) {
-    (void)bind;
     jv error;
-    tat_instrument *instrument = tat_named(params, error_code, &error);
+    tat_instrument *instrument = tat_named(bind, params, true, error_code, &error);
     if (instrument == NULL) {
         return error;
     }
@@ -1338,6 +1513,9 @@ jv tat_instrument_control_method(tat_bind *bind, jv params, int *error_code) {
             break;
         case TAT_INSTRUMENT_LOG:
             result = tat_control_log(instrument, jv_string_value(command), args, error_code);
+            break;
+        case TAT_INSTRUMENT_INSPECTOR:
+            result = tat_control_inspector(instrument, jv_string_value(command), args, error_code);
             break;
         case TAT_INSTRUMENT_IO:
         default:

@@ -60,18 +60,28 @@ that create real handles.
 
 `system.actors` takes `{"system": <handle>, "runnable": bool}` and returns the
 IDs of every resident actor, including children that invokers spawned. With
-`"runnable": true` it lists only actors whose macrostep is in progress. Core's
-own enumeration, `ta_system_visit_actors`, takes a callback and so cannot cross
-the protocol.
+`"runnable": true` it lists only actors whose macrostep is in progress. It is
+built on core's own enumeration, `ta_system_visit_actors`; that function is
+also bound directly (`ta.system.visit_actors`), and the callback it takes is
+an `inspector.recording` instrument, so a scenario can assert on the walk
+itself.
 
 `instrument.list`, `instrument.journal`, and `instrument.control` read and
 steer the instrumented adapters (see [Instruments](#instruments)):
 
 - `instrument.list` returns `[{"name", "kind"}]` for every instrument.
 - `instrument.journal` takes `{"name", "since"?}` and returns the journal
-  entries whose `seq` is greater than `since`, oldest first.
-- `instrument.control` takes `{"name", "command", "args"?}`; the commands of
-  each kind are listed below.
+  entries whose `seq` is greater than `since`, oldest first. It never
+  creates: reading the journal of an instrument core has never been handed
+  is an error, so an unused instrument cannot look like a quiet one.
+- `instrument.control` takes `{"name", "command", "args"?, "kind"?}`; the
+  commands of each kind are listed below.
+
+An instrument exists once core has been handed its adapter. `instrument.control`
+with `kind` creates one that does not exist yet, so a scenario can arm a fault
+or set a budget before the call that first passes the adapter to core. Only the
+kinds whose adapter needs no system handle can be created this way:
+`allocator.counting`, `directory.memory`, and `inspector.recording`.
 
 ## Generated methods
 
@@ -259,12 +269,13 @@ them.
 
 | Kind | Config | Journal ops | Commands |
 |---|---|---|---|
-| `allocator.counting` | `name` | `alloc_failed`, `free_unknown`, `free_mismatch` | `stats`, `fail {after, count}`, `clear_faults` |
+| `allocator.counting` | `name` | `alloc_failed`, `free_unknown`, `free_mismatch` | `stats`, `fail {after, count}`, `budget {bytes}`, `clear_faults` |
 | `router.recording` | `name`, `system`, `mode`?, `directory`? | `submit`, `release`, `drop` | `mode {mode}`, `held`, `release {id}`, `drop {id}`, `fail {op: "submit", status?}`, `clear_faults` |
 | `directory.memory` | `name` | `claim`, `resolve`, `replace`, `remove` | `entries`, `put {family, name, kind, actor?}`, `fail`, `clear_faults` |
 | `invoker.scripted` | `name`, `system` | `start`, `cancel`, `forward` | `services`, `fail`, `clear_faults` |
 | `io.recording` | `name`, `system` | `send` | `fail`, `clear_faults` |
 | `log.recording` | `name`, `system` | `log` | none |
+| `inspector.recording` | `name` | `visit` | `stats`, `fail {after, result}`, `clear_faults` |
 
 - **`allocator.counting`** wraps libc. It tracks every live allocation by
   address, and `stats` reports live allocations and bytes, the peak, and
@@ -272,7 +283,11 @@ them.
   `free_unknown` and never passed to libc. A free with a different size or
   alignment is journaled as `free_mismatch`. `fail {after: n, count: m}`
   lets `n` more allocations succeed, then fails `m` of them (`0`: every
-  later one).
+  later one). `budget {bytes: n}` bounds what core may hold at once, as a
+  fixed pool or an embedded heap does (ADR 0023): an allocation that would
+  push live bytes over `n` fails, and its `alloc_failed` entry carries
+  `"reason": "budget"` (an armed one carries `"armed"`). `bytes: 0` and
+  `clear_faults` lift it again.
 - **`router.recording`** journals every submitted delivery with its
   `status` (`accepted`, `retry`, `error`). With `directory` (the name of a
   `directory.memory` instrument) it resolves a named destination through
@@ -298,18 +313,26 @@ them.
   directory yet.
 - **`invoker.scripted`** is a service that is not an actor. `start`
   journals the request (`parent`, `invoke_id`, `type`, `src`, `data`,
-  `params`, `autoforward`) and answers a new `service` handle. The test then
+  `params`, `autoforward`), with `type` as the invoker type's name (ADR
+  0049), and answers a new `service` handle. The test then
   reports the service's events, completion, or loss with
   `ta.actor.report_invoke`. `cancel` and `forward` are journaled with
   `known`, which tells whether the service was still live.
 - **`io.recording`** is an Event I/O Processor that journals each send
   (`source`, `send_id`, `event_text`, `io_type`, `target`, `data`) and
-  delivers nothing.
+  delivers nothing. `io_type` is the type's name, read back from its atom
+  with `ta_system_atom_text` (ADR 0049), not the handle.
 - **`log.recording`** is the system's `<log>` sink (ADR 0045). It journals
   each record (`source`, `label`, `value`, `has_value`) and has no
   commands: writing a log cannot fail, so there is nothing to inject. A
   `<log>` whose expression fails writes no record; the failure is an
   ordinary execution error.
+- **`inspector.recording`** is the `ta_actor_inspector` that
+  `ta.system.visit_actors` walks the resident actors with. Each `visit`
+  entry carries the visited `actor` and the whole `view` it was handed, in
+  the encoding `ta.actor.inspect` answers with, so a scenario can compare
+  the two. `fail {after: n, result?}` answers the visit after `n` successful
+  ones with `result` (default `err_busy`), which stops the walk.
 
 ### Codec methods
 

@@ -71,8 +71,13 @@ TinyactorsTest.scenarios 'scxml processor' do
                    "registering an I/O processor for atom #{type} is refused"
     end
 
-    # Both spellings name the one reserved processor.
+    # Both spellings name the one reserved processor, and the atom it
+    # returns reads back as that URI (ADR 0049), so a host can say which
+    # processor a send selected instead of comparing handles.
     assert_equal atom(ScxmlProcessor::URI), scxml_io_type
+    assert_equal ScxmlProcessor::URI,
+                 core('ta_system_atom_text',
+                      ta.system.atom_text(system: system_handle, atom: scxml_io_type)).fetch(:out)
     assert_equal 'hit', spawn(ScxmlProcessor.chart(ScxmlProcessor::SHORT)).data('.outcome'),
                  'the short name still reaches the built-in processor'
   end

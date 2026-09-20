@@ -406,19 +406,9 @@ ta_result tat_js_value_from_json(tat_js_datamodel_context *context, ta_str json,
  */
 
 typedef struct {
-    const char *name;
-    uint32_t len;
-    ta_state_id id;
-} tat_js_state_name;
-
-typedef struct {
     const ta_expression *expressions;
     uint32_t expression_count;
     ta_allocator allocator;
-    tat_js_state_name *names;
-    uint32_t name_count;
-    uint32_t name_capacity;
-    bool names_built;
 } tat_js_shared;
 
 typedef struct {
@@ -765,38 +755,6 @@ static JSValue tat_js_system_set(JSContext *context, JSValueConst this_value, in
     return JS_ThrowTypeError(context, "%s is read-only", TAT_JS_SYSTEM_NAMES[magic]);
 }
 
-/* The author's state IDs of the definition, read once from the host. */
-static bool tat_js_state_names(tat_js_shared *shared, const ta_dm_host *host) {
-    if (shared->names_built) {
-        return true;
-    }
-    ta_str name = {0};
-    for (ta_state_id state = 0; ta_dm_host_state_name(host, state, &name) == TA_OK; state += 1) {
-        if (shared->name_count == shared->name_capacity) {
-            uint32_t capacity = shared->name_capacity == 0 ? 16u : shared->name_capacity * 2u;
-            tat_js_state_name *grown = shared->allocator.v->alloc(shared->allocator.self,
-                                                                  capacity * sizeof(*grown),
-                                                                  _Alignof(tat_js_state_name));
-            if (grown == NULL) {
-                return false;
-            }
-            if (shared->names != NULL) {
-                memcpy(grown, shared->names, shared->name_count * sizeof(*grown));
-                shared->allocator.v->free(shared->allocator.self,
-                                          &(ta_allocator_free_params){
-                                              .ptr = shared->names,
-                                              .size = shared->name_capacity * sizeof(*grown),
-                                              .alignment = _Alignof(tat_js_state_name),
-                                          });
-            }
-            shared->names = grown;
-            shared->name_capacity = capacity;
-        }
-        shared->names[shared->name_count++] = (tat_js_state_name){.name = name.ptr, .len = name.len, .id = state};
-    }
-    shared->names_built = true;
-    return true;
-}
 
 static JSValue tat_js_in(JSContext *context, JSValueConst this_value, int argc, JSValueConst *argv) {
     (void)this_value;
@@ -812,18 +770,11 @@ static JSValue tat_js_in(JSContext *context, JSValueConst this_value, int argc, 
     if (id == NULL) {
         return JS_EXCEPTION;
     }
-    bool active = false;
-    if (!tat_js_state_names(instance->shared, instance->host)) {
-        JS_FreeCString(context, id);
-        return JS_ThrowOutOfMemory(context);
-    }
-    for (uint32_t index = 0; index < instance->shared->name_count; index += 1) {
-        const tat_js_state_name *entry = &instance->shared->names[index];
-        if (entry->len == length && memcmp(entry->name, id, length) == 0) {
-            active = ta_dm_host_in_state(instance->host, entry->id);
-            break;
-        }
-    }
+    /* Core owns the author ID -> state ID mapping (ADR 0049); a state the
+     * chart does not have is TA_ERR_NOT_FOUND, and In() of it is false. */
+    ta_state_id state = 0;
+    bool active = ta_dm_host_find_state(instance->host, (ta_str){.ptr = id, .len = (uint32_t)length}, &state) == TA_OK &&
+                  ta_dm_host_in_state(instance->host, state);
     JS_FreeCString(context, id);
     return JS_NewBool(context, active);
 }
@@ -900,13 +851,6 @@ static void tat_js_destroy_definition(void *self, void *shared_state, ta_allocat
     tat_js_shared *shared = shared_state;
     if (shared == NULL || allocator.v == NULL) {
         return;
-    }
-    if (shared->names != NULL) {
-        allocator.v->free(allocator.self, &(ta_allocator_free_params){
-                                              .ptr = shared->names,
-                                              .size = shared->name_capacity * sizeof(tat_js_state_name),
-                                              .alignment = _Alignof(tat_js_state_name),
-                                          });
     }
     allocator.v->free(allocator.self, &(ta_allocator_free_params){.ptr = shared, .size = sizeof(*shared),
                                                                    .alignment = _Alignof(tat_js_shared)});

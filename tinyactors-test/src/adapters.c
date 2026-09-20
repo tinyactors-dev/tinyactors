@@ -393,6 +393,7 @@ const tat_adapter TAT_ADAPTERS[] = {
     {"invoker.scripted", "ta_invoker", sizeof(ta_invoker), tat_make_scripted_invoker},
     {"io.recording", "ta_io", sizeof(ta_io), tat_make_recording_io},
     {"log.recording", "ta_log_sink", sizeof(ta_log_sink), tat_make_recording_log},
+    {"inspector.recording", "ta_actor_inspector", sizeof(ta_actor_inspector), tat_make_recording_inspector},
 };
 
 const size_t TAT_ADAPTER_COUNT = sizeof(TAT_ADAPTERS) / sizeof(TAT_ADAPTERS[0]);
