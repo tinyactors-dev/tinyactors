@@ -5,3 +5,7 @@ config_roots = ["tinyactors-core", "tinyactors-test", "tinyxml"]
 
 [tools]
 ruby = "4"
+# The API extractor reads clang's JSON AST, whose shape changes between
+# major releases (clang 22 dropped the ElaboratedType wrapper around a
+# typedef's tag). Pin the line the description in include/ was generated with.
+clang = "22"
