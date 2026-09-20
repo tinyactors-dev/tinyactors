@@ -113,7 +113,16 @@ See `docs/protocol.md` for framing, lifecycle, and extension rules.
 ## Scenarios
 
 Scenarios are written in a Ruby DSL (`ruby/tinyactors_test.rb`). Charts live
-in `ruby/charts` and scenarios in `ruby/scenarios`:
+in `ruby/charts` and scenarios in `ruby/scenarios`.
+
+**Before adding scenarios, read
+[`tinyactors-core/docs/internal/testing-and-api-change.md`](../tinyactors-core/docs/internal/testing-and-api-change.md).**
+It describes how to write a scenario that can actually catch a bug, the
+traps that make tests look like they do when they don't, and when a failure
+means the public API should change instead of the test. This page documents
+the machinery; that page documents the method.
+
+A scenario group looks like this:
 
 ```ruby
 TinyactorsTest.scenarios 'traffic light', chart: :traffic_light do
