@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+#MISE description="Prove the library needs no C library, quick tier (-O0 -O2 -Os): includes and undefined symbols"
+#MISE depends=["freestanding:includes", "freestanding:src:O0", "freestanding:amalgamation:O0", "freestanding:src:O2", "freestanding:amalgamation:O2", "freestanding:src:Os", "freestanding:amalgamation:Os"]
+# vim:ft=bash
+#
+#   mise run freestanding        # quick tier, part of `mise run test`
+#   mise run freestanding:full   # all five levels, before a commit and in CI
+#
+# AGENTS.md hard constraint 1. The work is in the tasks this depends on, which
+# mise runs in parallel (`--jobs`, `MISE_JOBS`) and skips when their sources are
+# unchanged. The defect this exists for, a compiler-emitted memset from a struct
+# zero-initialiser, appeared at -O0 through -O3, so the quick tier sees it at -O0
+# and -O2; `freestanding:full` adds -O1 and -O3, where an optimiser may turn a
+# loop into a library call.
+echo "freestanding: quick tier passed (-O0 -O2 -Os)"

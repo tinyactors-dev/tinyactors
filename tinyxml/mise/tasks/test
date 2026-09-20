@@ -1,11 +1,16 @@
 #!/usr/bin/env ruby
 #MISE description="Run the txml test suite"
+#MISE depends=["freestanding", "lint-src", "build", "amalgamate-test", "api-test"]
 # vim:ft=ruby
 
-# Checks the source and object-code constraints (freestanding, lint-src), builds,
-# runs every test binary that exists, then runs the public-API tests against the
-# amalgamation and checks the API description. A test whose modules do not exist
-# is reported as pending; any failure fails the task.
+# The checks are dependencies, which mise runs in parallel (`--jobs`) and skips
+# when their sources are unchanged: the source and object-code constraints
+# (freestanding, quick tier; lint-src), the build, the public-API tests against
+# the amalgamation (amalgamate-test) and the API description (api-test). This
+# task then runs every test binary that exists. A test whose modules do not
+# exist is reported as pending; any failure fails the task. `mise run
+# freestanding:full` adds the -O1 and -O3 levels of the freestanding check, for
+# before a commit and for CI.
 
 require 'pathname'
 
@@ -25,12 +30,6 @@ def run(*command)
   exit(status.exitstatus || 1)
 end
 
-# The constraints that no test binary can see come first: they are properties
-# of the source and of the object code (AGENTS.md hard constraints 1, 5, 10).
-run('mise', 'run', 'freestanding')
-run('mise', 'run', 'lint-src')
-run('mise', 'run', 'build')
-
 ran = []
 pending = []
 
@@ -45,10 +44,6 @@ BINARIES.each do |name, arguments|
   run(binary.to_s, *arguments)
   ran << name
 end
-
-# The same public-API tests against the single-file library.
-run('mise', 'run', 'amalgamate-test')
-run('mise', 'run', 'api-test')
 
 puts "txml: #{ran.length} test binaries passed (#{ran.join(' ')})" unless ran.empty?
 

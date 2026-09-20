@@ -1,5 +1,6 @@
 #!/usr/bin/env ruby
 #MISE description="Audit src/ and the header for the hard constraints: at most three parameters, no recursion"
+#MISE sources=["src/**/*.c", "src/**/*.h", "include/txml.h", "mise/lib/c_scan.rb", "mise/tasks/lint-src"]
 # vim:ft=ruby
 #
 #   mise run lint-src

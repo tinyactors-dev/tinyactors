@@ -1,5 +1,6 @@
 #!/usr/bin/env ruby
 #MISE description="Test the API description: it is current, it covers the header, the extractor rejects what it should"
+#MISE sources=["include/txml.h", "include/txml.api.schema.json", "src/**/*.c", "tests/api_surface.c", "tests/api/**/*", "mise/lib/**/*", "mise/tasks/api", "mise/tasks/api-test"]
 # vim:ft=ruby
 
 # Three checks.

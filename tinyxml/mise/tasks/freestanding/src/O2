@@ -1,0 +1,15 @@
+#!/usr/bin/env ruby
+#MISE description="Freestanding check of src/ at -O2: no undefined symbols in the objects"
+#MISE depends=["amalgamate"]
+#MISE sources=["src/**/*.c", "src/**/*.h", "include/txml.h", "mise/lib/freestanding.rb", "mise/tasks/freestanding/src/O2"]
+# vim:ft=ruby
+#
+# One (target, level) of the freestanding check; see mise/lib/freestanding.rb.
+# mise runs these in parallel and skips one whose sources are unchanged. Run
+# through `mise run freestanding` (quick tier: -O0 -O2 -Os) or
+# `mise run freestanding:full` (all five levels).
+
+require 'pathname'
+require_relative '../../../lib/freestanding'
+
+Freestanding.check_level(Pathname.new(__dir__).join('../../../..').expand_path, '-O2', 'src')

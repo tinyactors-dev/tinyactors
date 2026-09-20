@@ -32,18 +32,22 @@ between modules (`extern` data) stay external; they are data, not functions, and
 are not exported by the API.
 
 `amalgamate-test` is the proof. It builds `include/txml.c` under `-Wall -Wextra
--Werror -pedantic`, holds it to the freestanding check, and links every test
-that uses only the public API (all but `doc_test`) against it instead of the
-modules.
+-Werror -pedantic` and links every test that uses only the public API (all but
+`doc_test`) against it instead of the modules, reusing the test objects `build`
+compiled. The amalgamation is held to the freestanding check by
+`freestanding:amalgamation:*`, which `mise run test` runs alongside it.
 
 ## The freestanding and source checks
 
 Two checks keep AGENTS.md's hard constraints from rotting; both run first in
 `mise run test`.
 
-- `freestanding` compiles every module with `-ffreestanding -fno-builtin
-  -fno-stack-protector` at each optimisation level, links them with `ld -r`, and
-  fails on any undefined symbol. The compiler calls `memset`/`memcpy` on its own
+- `freestanding` compiles every module, and the amalgamation, with
+  `-ffreestanding -fno-builtin -fno-stack-protector`, links each with `ld -r`,
+  and fails on any undefined symbol. It runs the quick tier (-O0, -O2, -Os);
+  `freestanding:full` adds -O1 and -O3. Each (target, level) is a task of its
+  own under `mise/tasks/freestanding/`, so mise runs them in parallel and skips
+  the ones whose sources are unchanged. The compiler calls `memset`/`memcpy` on its own
   for large struct initialisers, which is why the library zeroes through
   `txml_text_zero` and why only an object-level check can see it. Unoptimised
   clang is excluded, because it lowers every aggregate copy through `memcpy`;

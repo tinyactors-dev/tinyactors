@@ -63,19 +63,24 @@ even when it passes the tests.
 
 - `mise run build` — regenerate and check `include/txml.c` and
   `include/txml.api.json`, then compile the header checks, the modules, and
-  the test binaries.
-- `mise run test` — run the whole suite: `freestanding`, `lint-src`, `build`,
-  every test binary, then `amalgamate-test` and `api-test`.
+  the test binaries (`build:library` and `build:tests` run in parallel).
+- `mise run test` — run the whole suite. The checks are `depends` of the task,
+  which mise runs in parallel and skips when their `sources` are unchanged:
+  `freestanding` (quick tier), `lint-src`, `build`, `amalgamate-test` and
+  `api-test`; the task then runs every test binary.
 - `mise run spec <file>` — run one spec file (or all of them) verbosely.
-- `mise run freestanding` — prove constraint 1: no libc includes, and no
-  undefined symbol in the objects at -O0..-O3 and -Os (`--amalgamation <file>`
-  checks a single file instead).
+- `mise run freestanding` — prove constraint 1, quick tier: no libc includes,
+  and no undefined symbol in the objects of `src/` and of the amalgamation at
+  -O0, -O2 and -Os. `mise run freestanding:full` adds -O1 and -O3 and is for
+  before a commit and for CI. The compiler-emitted `memset` this exists for
+  showed at -O0 through -O3, so the quick tier catches it at -O0 and -O2.
 - `mise run lint-src` — audit constraints 5 and 10: no recursion, at most
   three parameters per function.
 - `mise run amalgamate [--check]` — write or verify `include/txml.c`, the
   single-file library.
-- `mise run amalgamate-test` — build the amalgamation strictly and
-  freestanding, and run the public-API tests linked against it.
+- `mise run amalgamate-test` — build the amalgamation strictly and run the
+  public-API tests linked against it (its freestanding check is
+  `freestanding:amalgamation:*`).
 - `mise run api [--check]` — write or verify `include/txml.api.json`, the
   machine-readable API description.
 - `mise run api-test` — check the description is current and covers the
@@ -98,3 +103,9 @@ generated and checked in: after changing `src/` or `include/txml.h`, run
   `src/internal.h`.
 - Prefer growing the spec suite over adding one-off C tests. A case that can
   be expressed as input plus an expected node table belongs in `tests/spec/`.
+
+The tasks use mise's own machinery: file tasks in `mise/tasks/`, `depends` for
+ordering and parallelism (`mise run --jobs N` or `MISE_JOBS` sets the pool; the
+default is 4), and `sources` for skipping work that has not changed
+(`mise run --force <task>` overrides it; change `CC` or `CFLAGS` with
+`--force`). A failed task records nothing, so the next run repeats it.

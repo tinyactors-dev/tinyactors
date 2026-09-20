@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+#MISE description="Prove the library needs no C library at every optimisation level (-O0 -O1 -O2 -O3 -Os)"
+#MISE depends=["freestanding:includes", "freestanding:src:O0", "freestanding:amalgamation:O0", "freestanding:src:O1", "freestanding:amalgamation:O1", "freestanding:src:O2", "freestanding:amalgamation:O2", "freestanding:src:O3", "freestanding:amalgamation:O3", "freestanding:src:Os", "freestanding:amalgamation:Os"]
+# vim:ft=bash
+#
+# The full tier of `mise run freestanding`, for before a commit and for CI. Levels
+# already fresh from a quick run are skipped, so only -O1 and -O3 run then.
+echo "freestanding: full tier passed (-O0 -O1 -O2 -O3 -Os)"

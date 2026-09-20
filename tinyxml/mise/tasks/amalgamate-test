@@ -1,5 +1,7 @@
 #!/usr/bin/env ruby
 #MISE description="Prove the single-file library: strict build, freestanding, and the public-API tests linked against it"
+#MISE depends=["build"]
+#MISE sources=["include/txml.c", "include/txml.h", "src/**/*.c", "src/**/*.h", "tests/*.c", "tests/spec/**/*", "mise/lib/**/*", "mise/tasks/amalgamate", "mise/tasks/amalgamate-test"]
 # vim:ft=ruby
 
 # include/txml.c is what an embedder copies into a project, so it is held to the
@@ -8,13 +10,20 @@
 #   1. it is current (mise run amalgamate --check);
 #   2. it compiles warning-free under -std=c11 -Wall -Wextra -Werror -pedantic,
 #      alone (-Iinclude is all it needs) and as the only library object;
-#   3. it passes the freestanding check (no libc, no undefined symbols);
+#   3. it passes the freestanding check (no libc, no undefined symbols). That is
+#      not repeated here: `mise run freestanding` (quick tier, -O0 -O2 -Os) and
+#      `freestanding:full` check the amalgamation, as freestanding:amalgamation:*,
+#      alongside src/, and `mise run test` runs them in parallel with this task
+#      instead of after it;
 #   4. every test that uses only the public API (Suite.public_api_tests) is built
 #      against it instead of the modules and run. doc_test includes private
 #      headers and stays against src/.
 #
 # CC and CFLAGS select the compiler and flags as in mise run build. The binaries
-# land in build/amalgamated/.
+# land in build/amalgamated/. The test objects are the ones `build` already
+# compiled (a test does not depend on which library it links), so only
+# include/txml.c is compiled here; mise runs `build` first and skips this task
+# when its sources are unchanged.
 
 require 'English'
 require 'fileutils'
@@ -41,14 +50,11 @@ FileUtils.mkdir_p(OUT)
 
 library = OUT.join('txml.o')
 run(*COMPILER, *FLAGS, '-Iinclude', '-c', 'include/txml.c', '-o', library.to_s)
-run('mise', 'run', 'freestanding', '--amalgamation', 'include/txml.c')
 
 passed = []
 Suite.public_api_tests.each do |name|
-  object = OUT.join("#{name}.o")
   binary = OUT.join(name)
-  run(*COMPILER, *FLAGS, '-Iinclude', '-c', "tests/#{name}.c", '-o', object.to_s)
-  run(*COMPILER, *FLAGS, object.to_s, library.to_s, '-o', binary.to_s)
+  run(*COMPILER, *FLAGS, ROOT.join('build/objects', "#{name}.o").to_s, library.to_s, '-o', binary.to_s)
   run(binary.to_s, *Suite::BINARIES.fetch(name))
   passed << name
 end
