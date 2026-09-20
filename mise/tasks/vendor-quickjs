@@ -66,6 +66,9 @@ Zlib::GzipReader.wrap(StringIO.new(archive)) do |gzip|
         FileUtils.mkdir_p(target.dirname)
         target.binwrite(entry.read)
         File.chmod(entry.header.mode, target)
+        # Keep the archive's timestamps: a release tarball dates generated
+        # files after their sources, and make re-runs autotools without that.
+        File.utime(entry.header.mtime, entry.header.mtime, target)
       elsif entry.header.typeflag == '2'
         FileUtils.mkdir_p(target.dirname)
         File.symlink(entry.header.linkname, target)
