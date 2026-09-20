@@ -1,0 +1,146 @@
+#!/usr/bin/env ruby
+#MISE description="Prove the library needs no C library: no libc includes, no undefined symbols"
+# vim:ft=ruby
+#
+#   mise run freestanding
+#
+# AGENTS.md hard constraint 1: no C library. Two independent checks enforce it.
+#
+# 1. Includes. Every `#include <...>` in src/ must be stdint.h, stddef.h or
+#    stdbool.h; a quoted include must name a file that exists in src/ or
+#    include/.
+#
+# 2. Symbols. The compiler can call memset, memcpy or memmove behind the code's
+#    back (zero-initialising or copying a large struct, or turning a byte loop
+#    into a call), and only the object files show it. Every src/*.c is compiled
+#    with `-ffreestanding -fno-builtin -fno-stack-protector` at -O0, -O1, -O2,
+#    -O3 and -Os, the objects of one level are combined into one relocatable
+#    object with `ld -r`, and `nm -u` on it must list nothing: every symbol the
+#    library uses is one it defines.
+#
+# With clang the -O0 level is skipped, see LEVELS below.
+#
+# `-fno-stack-protector` removes __stack_chk_fail, which is the distribution's
+# default flags rather than the code. GCC can still recognise a byte loop as
+# memset at -O2/-O3 (-ftree-loop-distribute-patterns); the check therefore also
+# passes `-fno-tree-loop-distribute-patterns` when the compiler accepts it, and
+# the library's own zeroing helper is written so that no such recognition is
+# needed to keep the result correct.
+#
+# `--amalgamation <file>` checks a single translation unit instead of src/, so
+# the amalgamation is held to the same rule.
+
+require 'English'
+require 'fileutils'
+require 'pathname'
+require 'shellwords'
+require 'tmpdir'
+
+ROOT = Pathname.new(__dir__).join('../..').expand_path
+COMPILER = Shellwords.split(ENV.fetch('CC', 'cc'))
+ALL_LEVELS = %w[-O0 -O1 -O2 -O3 -Os].freeze
+ALLOWED_HEADERS = %w[stdint.h stddef.h stdbool.h].freeze
+BASE = %w[-std=c11 -ffreestanding -fno-builtin -fno-stack-protector -Wall -Wextra -Werror -pedantic].freeze
+
+def run(*command)
+  output = IO.popen(command, err: %i[child out], &:read)
+  [$CHILD_STATUS.success?, output]
+end
+
+def accepted?(flag)
+  Dir.mktmpdir('txml-flag') do |directory|
+    source = File.join(directory, 'probe.c')
+    File.write(source, "int probe(void) { return 0; }\n")
+    ok, output = run(*COMPILER, flag, '-Werror', '-c', source, '-o', File.join(directory, 'probe.o'))
+    ok && !output.include?('unknown') && !output.include?('unrecognized')
+  end
+end
+
+failures = []
+
+# clang lowers every aggregate copy and compound-literal initialiser through
+# memcpy/memset when it is not optimising, and there is no flag that turns that
+# off; GCC does not for this code. Unoptimised clang therefore needs the
+# toolchain's mem* functions, the same contract both compilers document for
+# -ffreestanding, and only optimised clang builds are held to the rule.
+compiler_name = IO.popen([*COMPILER, '--version'], err: %i[child out], &:read).to_s
+LEVELS = compiler_name.include?('clang') ? ALL_LEVELS - ['-O0'] : ALL_LEVELS
+
+if ARGV.first == '--amalgamation'
+  file = Pathname.new(ARGV.fetch(1)).expand_path
+  sources = [file]
+  headers = [file]
+  include_dirs = [ROOT.join('include')]
+else
+  sources = Dir[ROOT.join('src/*.c').to_s].sort.map { |path| Pathname.new(path) }
+  headers = sources + Dir[ROOT.join('src/*.h').to_s].sort.map { |path| Pathname.new(path) }
+  include_dirs = [ROOT.join('include'), ROOT.join('src')]
+end
+abort 'freestanding: no sources' if sources.empty?
+
+# 1. Includes.
+headers.each do |path|
+  path.each_line.with_index(1) do |line, number|
+    next unless (match = line.match(/^\s*#\s*include\s*([<"])([^>"]+)[>"]/))
+
+    kind, name = match[1], match[2]
+    where = "#{path.relative_path_from(ROOT)}:#{number}"
+    if kind == '<'
+      failures << "#{where}: #include <#{name}> is not allowed (only #{ALLOWED_HEADERS.join(', ')})" unless ALLOWED_HEADERS.include?(name)
+    elsif include_dirs.none? { |dir| dir.join(name).file? || path.dirname.join(name).file? }
+      failures << "#{where}: #include \"#{name}\" is not a project header"
+    end
+  end
+end
+
+# 2. Symbols.
+flags = BASE.dup
+flags << '-fno-tree-loop-distribute-patterns' if accepted?('-fno-tree-loop-distribute-patterns')
+work = ROOT.join('build/freestanding')
+FileUtils.rm_rf(work)
+
+LEVELS.each do |level|
+  directory = work.join(level.delete_prefix('-'))
+  FileUtils.mkdir_p(directory)
+  objects = []
+  sources.each do |source|
+    object = directory.join("#{source.basename('.c')}.o")
+    ok, output = run(*COMPILER, *flags, level, *include_dirs.flat_map { |dir| ['-I', dir.to_s] }, '-c', source.to_s, '-o', object.to_s)
+    if ok
+      objects << object
+    else
+      failures << "#{source.relative_path_from(ROOT)} #{level}: does not compile freestanding:\n#{output}"
+    end
+  end
+  next if objects.empty?
+
+  combined = directory.join('library.o')
+  ok, output = run('ld', '-r', *objects.map(&:to_s), '-o', combined.to_s)
+  unless ok
+    failures << "#{level}: ld -r failed:\n#{output}"
+    next
+  end
+  ok, output = run('nm', '--undefined-only', '--format=posix', combined.to_s)
+  unless ok
+    failures << "#{level}: nm failed:\n#{output}"
+    next
+  end
+  undefined = output.lines.map { |line| line.split.first }.compact.uniq
+  next if undefined.empty?
+
+  # Say which source asked for each symbol.
+  culprits = undefined.map do |symbol|
+    users = objects.select do |object|
+      _ok, listing = run('nm', '--undefined-only', '--format=posix', object.to_s)
+      listing.lines.any? { |line| line.split.first == symbol }
+    end
+    "#{symbol} (from #{users.map { |object| object.basename('.o') }.join(', ')})"
+  end
+  failures << "#{level}: the library references symbols it does not define: #{culprits.join(', ')}"
+end
+
+unless failures.empty?
+  warn failures.join("\n")
+  abort "freestanding: #{failures.size} problem(s)"
+end
+puts "freestanding: #{sources.size} source(s), #{LEVELS.size} optimization levels, no undefined symbols"

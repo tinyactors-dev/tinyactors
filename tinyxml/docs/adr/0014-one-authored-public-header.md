@@ -19,7 +19,7 @@ Three types are deliberately transparent, because callers must place them: `txml
 
 The header also carries the `TXML_*` annotation macros, which record what C types cannot: which pointers are single elements or caller buffers, which may be null, which outputs are valid after which result, who releases what, and how long borrowed data lives. They expand to nothing unless `TXML_API_EXTRACT` is defined, so they never change the compiled API.
 
-The amalgamation and the machine-readable `api.json` extraction are deferred until `src/` has modules. When they arrive they mirror `tinyactors-core/mise/tasks/amalgamate` and `.../api`, including the `--check` modes that fail when a public prototype lacks `TXML_API` or a private header redeclares a public function.
+The amalgamation and the machine-readable `txml.api.json` extraction were deferred until `src/` had modules. They now exist and mirror `tinyactors-core/mise/tasks/amalgamate` and `.../api`, including the `--check` modes that fail when a public prototype lacks `TXML_API` or a private header redeclares a public function. `docs/internal/public-api.md` describes them and where txml's vocabulary differs from the core's.
 
 ## Consequences
 

@@ -1,0 +1,287 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://txml.invalid/txml-api/1",
+  "title": "Tinyactors API description",
+  "description": "The format of include/txml.api.json. See docs/internal/api-ir.md.",
+  "type": "object",
+  "required": ["format", "header", "targets", "constants", "flag_sets", "types", "functions"],
+  "additionalProperties": false,
+  "properties": {
+    "format": { "const": "txml-api/1" },
+    "header": { "type": "string" },
+    "targets": { "type": "object", "additionalProperties": { "$ref": "#/$defs/target" } },
+    "constants": { "type": "array", "items": { "$ref": "#/$defs/macro_constant" } },
+    "flag_sets": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["constants"],
+        "additionalProperties": false,
+        "properties": { "constants": { "type": "array", "items": { "$ref": "#/$defs/enum_constant" } } }
+      }
+    },
+    "types": { "type": "object", "additionalProperties": { "$ref": "#/$defs/type_entry" } },
+    "functions": { "type": "array", "items": { "$ref": "#/$defs/function" } }
+  },
+  "$defs": {
+    "doc": { "type": "string" },
+    "size": {
+      "type": "object",
+      "required": ["size", "align"],
+      "additionalProperties": false,
+      "properties": { "size": { "type": "integer" }, "align": { "type": "integer" } }
+    },
+    "target": {
+      "type": "object",
+      "required": ["pointer", "builtins"],
+      "additionalProperties": false,
+      "properties": {
+        "pointer": { "$ref": "#/$defs/size" },
+        "builtins": { "type": "object", "additionalProperties": { "$ref": "#/$defs/size" } }
+      }
+    },
+    "layout": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["size", "align"],
+        "additionalProperties": false,
+        "properties": {
+          "size": { "type": "integer" },
+          "align": { "type": "integer" },
+          "offsets": { "type": "object", "additionalProperties": { "type": "integer" } }
+        }
+      }
+    },
+    "type_ref": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["builtin"],
+          "additionalProperties": false,
+          "properties": {
+            "builtin": { "enum": ["void", "char", "bool", "int", "int8_t", "int16_t", "int32_t", "int64_t", "uint8_t", "uint16_t", "uint32_t", "uint64_t", "size_t"] },
+            "const": { "const": true }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type"],
+          "additionalProperties": false,
+          "properties": { "type": { "type": "string" }, "const": { "const": true } }
+        },
+        {
+          "type": "object",
+          "required": ["pointer"],
+          "additionalProperties": false,
+          "properties": { "pointer": { "$ref": "#/$defs/type_ref" }, "const": { "const": true } }
+        },
+        {
+          "type": "object",
+          "required": ["function"],
+          "additionalProperties": false,
+          "properties": { "function": { "$ref": "#/$defs/signature" } }
+        },
+        {
+          "type": "object",
+          "required": ["record"],
+          "additionalProperties": false,
+          "properties": {
+            "record": {
+              "type": "object",
+              "required": ["kind", "fields"],
+              "additionalProperties": false,
+              "properties": {
+                "kind": { "enum": ["struct", "union"] },
+                "fields": { "type": "array", "items": { "$ref": "#/$defs/slot" } }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "scope": { "enum": ["call", "system", "definition", "arena", "input", "document", "parser", "drain", "process"] },
+    "slot": {
+      "type": "object",
+      "required": ["name", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "$ref": "#/$defs/type_ref" },
+        "doc": { "$ref": "#/$defs/doc" },
+        "shape": {
+          "enum": ["single", "terminated", "counted", "buffer", "view_out", "arena", "handle", "handle_out", "view", "raw", "vtable", "callback"]
+        },
+        "direction": { "enum": ["in", "out", "inout"] },
+        "optional": { "const": true },
+        "terminator": { "type": "string" },
+        "count": { "type": "string" },
+        "capacity": { "type": "string" },
+        "needed": { "type": "string" },
+        "count_of": { "type": "string" },
+        "capacity_of": { "type": "string" },
+        "needed_of": { "type": "string" },
+        "valid_on": { "type": "string" },
+        "release": { "type": "string" },
+        "release_if": {
+          "type": "object",
+          "required": ["function", "flag"],
+          "additionalProperties": false,
+          "properties": { "function": { "type": "string" }, "flag": { "type": "string" } }
+        },
+        "lifetime": { "$ref": "#/$defs/scope" },
+        "destroys": { "const": true },
+        "consumed_on": { "type": "string" },
+        "when": { "type": "string" },
+        "flags": { "type": "string" }
+      }
+    },
+    "returns": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "$ref": "#/$defs/type_ref" },
+        "shape": { "enum": ["single", "raw"] },
+        "optional": { "const": true },
+        "lifetime": { "$ref": "#/$defs/scope" },
+        "flags": { "type": "string" },
+        "success": { "type": "string" }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "required": ["returns", "params"],
+      "additionalProperties": false,
+      "properties": {
+        "returns": { "$ref": "#/$defs/returns" },
+        "params": { "type": "array", "items": { "$ref": "#/$defs/slot" } }
+      }
+    },
+    "enum_constant": {
+      "type": "object",
+      "required": ["name", "value", "symbol"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "value": { "type": "integer" },
+        "symbol": { "type": "string" },
+        "success": { "const": true },
+        "doc": { "$ref": "#/$defs/doc" }
+      }
+    },
+    "macro_constant": {
+      "type": "object",
+      "required": ["name", "type", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "$ref": "#/$defs/type_ref" },
+        "value": { "type": "integer" }
+      }
+    },
+    "use": {
+      "type": "object",
+      "required": ["function", "path"],
+      "additionalProperties": false,
+      "properties": {
+        "function": { "type": "string" },
+        "path": { "type": "array", "items": { "type": "string" } },
+        "on": { "type": "string" }
+      }
+    },
+    "type_entry": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "type"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "alias" },
+            "type": { "$ref": "#/$defs/type_ref" },
+            "doc": { "$ref": "#/$defs/doc" },
+            "layout": { "$ref": "#/$defs/layout" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "constants"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "enum" },
+            "underlying": { "$ref": "#/$defs/type_ref" },
+            "constants": { "type": "array", "items": { "$ref": "#/$defs/enum_constant" } },
+            "doc": { "$ref": "#/$defs/doc" },
+            "layout": { "$ref": "#/$defs/layout" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "handle", "created_by", "destroyed_by"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "handle" },
+            "handle": { "type": "string" },
+            "created_by": { "type": "array", "items": { "$ref": "#/$defs/use" } },
+            "destroyed_by": { "type": "array", "items": { "$ref": "#/$defs/use" } },
+            "consumed_by": { "type": "array", "items": { "$ref": "#/$defs/use" } },
+            "doc": { "$ref": "#/$defs/doc" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": { "kind": { "const": "view" }, "doc": { "$ref": "#/$defs/doc" } }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "fields"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "enum": ["struct", "union"] },
+            "semantic": { "enum": ["string", "bytes", "host_value", "adapter", "vtable"] },
+            "tagged": {
+              "type": "object",
+              "required": ["tag", "union", "enum", "members"],
+              "additionalProperties": false,
+              "properties": {
+                "tag": { "type": "string" },
+                "union": { "type": "string" },
+                "enum": { "type": "string" },
+                "members": { "type": "object", "additionalProperties": { "type": ["string", "null"] } }
+              }
+            },
+            "zero_is_absent": { "const": true },
+            "fields": { "type": "array", "items": { "$ref": "#/$defs/slot" } },
+            "doc": { "$ref": "#/$defs/doc" },
+            "layout": { "$ref": "#/$defs/layout" }
+          }
+        }
+      ]
+    },
+    "function": {
+      "type": "object",
+      "required": ["name", "public", "static_inline", "implemented", "returns", "params"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "doc": { "$ref": "#/$defs/doc" },
+        "public": { "type": "boolean" },
+        "static_inline": { "type": "boolean" },
+        "implemented": { "type": "boolean" },
+        "returns": { "$ref": "#/$defs/returns" },
+        "params": { "type": "array", "items": { "$ref": "#/$defs/slot" } },
+        "value_model": {
+          "type": "object",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "enum": ["any", "actor", "definition", "session_image"] },
+            "path": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    }
+  }
+}

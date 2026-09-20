@@ -17,6 +17,8 @@ until an ADR changes it.
   resumable subtree walk.
 - `conformance.md` — what txml implements, what it does not, and what survives
   a round trip.
+- `public-api.md` — the amalgamation and the API description, and how the
+  header's annotations are consumed.
 - `invariants.md` — numbered rules an implementation must never violate.
 - `testing.md` — the suite and how to read a spec file.
 

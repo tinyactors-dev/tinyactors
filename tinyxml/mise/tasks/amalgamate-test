@@ -1,0 +1,56 @@
+#!/usr/bin/env ruby
+#MISE description="Prove the single-file library: strict build, freestanding, and the public-API tests linked against it"
+# vim:ft=ruby
+
+# include/txml.c is what an embedder copies into a project, so it is held to the
+# same rules as src/ and then tested as itself:
+#
+#   1. it is current (mise run amalgamate --check);
+#   2. it compiles warning-free under -std=c11 -Wall -Wextra -Werror -pedantic,
+#      alone (-Iinclude is all it needs) and as the only library object;
+#   3. it passes the freestanding check (no libc, no undefined symbols);
+#   4. every test that uses only the public API (Suite.public_api_tests) is built
+#      against it instead of the modules and run. doc_test includes private
+#      headers and stays against src/.
+#
+# CC and CFLAGS select the compiler and flags as in mise run build. The binaries
+# land in build/amalgamated/.
+
+require 'English'
+require 'fileutils'
+require 'pathname'
+require 'shellwords'
+require_relative '../lib/suite'
+
+ROOT = Pathname.new(__dir__).join('../..').expand_path
+OUT = ROOT.join('build/amalgamated')
+COMPILER = Shellwords.split(ENV.fetch('CC', 'cc'))
+FLAGS = Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic'))
+
+def run(*command)
+  puts command.shelljoin
+  pid = Process.spawn(*command, chdir: ROOT.to_s)
+  _pid, status = Process.wait2(pid)
+  return if status.success?
+
+  exit(status.exitstatus || 1)
+end
+
+run('mise', 'run', 'amalgamate', '--check')
+FileUtils.mkdir_p(OUT)
+
+library = OUT.join('txml.o')
+run(*COMPILER, *FLAGS, '-Iinclude', '-c', 'include/txml.c', '-o', library.to_s)
+run('mise', 'run', 'freestanding', '--amalgamation', 'include/txml.c')
+
+passed = []
+Suite.public_api_tests.each do |name|
+  object = OUT.join("#{name}.o")
+  binary = OUT.join(name)
+  run(*COMPILER, *FLAGS, '-Iinclude', '-c', "tests/#{name}.c", '-o', object.to_s)
+  run(*COMPILER, *FLAGS, object.to_s, library.to_s, '-o', binary.to_s)
+  run(binary.to_s, *Suite::BINARIES.fetch(name))
+  passed << name
+end
+
+puts "amalgamate-test: #{passed.length} test binaries passed against include/txml.c (#{passed.join(' ')})"

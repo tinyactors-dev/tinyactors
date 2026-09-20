@@ -39,7 +39,14 @@ static bool skip_declaration(const uint8_t *w, uint32_t *i, uint32_t end) {
 }
 
 /* A quoted literal at *i; on success `literal` is its contents. */
-static bool read_literal(const uint8_t *w, uint32_t *i, uint32_t end, txml_str *literal) {
+typedef struct {
+    const uint8_t *bytes;
+    uint32_t end;
+} source_range;
+
+static bool read_literal(const source_range *range, uint32_t *i, txml_str *literal) {
+    const uint8_t *w = range->bytes;
+    const uint32_t end = range->end;
     if (*i >= end || (w[*i] != '"' && w[*i] != '\'')) {
         return false;
     }
@@ -90,7 +97,7 @@ static scan read_entity(txml_parser *p) {
     const txml_str name = { (const char *)w + j, name_end - j };
     j = txp_skip_space(w, name_end, end);
     txml_str value;
-    if (j < end && read_literal(w, &j, end, &value)) {
+    if (j < end && read_literal(&(source_range){ w, end }, &j, &value)) {
         const scan outcome = txp_add_entity(p, name, value);
         if (outcome != SCAN_OK) {
             return outcome;
@@ -179,7 +186,7 @@ static scan read_attlist(txml_parser *p) {
             }
             j = txp_skip_space(w, j, end);
         }
-        if (j >= end || !read_literal(w, &j, end, &value)) {
+        if (j >= end || !read_literal(&(source_range){ w, end }, &j, &value)) {
             return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "expected a default value"), txp_small_position_at(p, j));
         }
         const scan outcome = txp_add_default(p, &(default_request){ element, name, value });

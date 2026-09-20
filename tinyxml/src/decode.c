@@ -157,7 +157,10 @@ static bool is_ref_byte(uint8_t b) {
 }
 
 /* Classify the text between '&' and ';'. */
-static void classify_reference(const txml_parser *p, const uint8_t *name, uint32_t length, ref_result *out) {
+static void classify_reference(const txml_parser *p, txml_str text, ref_result *out) {
+    const uint8_t *name = (const uint8_t *)text.ptr;
+    const uint32_t length = text.length;
+
     out->count = 0u;
     out->entity = NULL;
     if (length == 0u) {
@@ -324,7 +327,7 @@ scan txp_dec_resume(txml_parser *p) {
                 return fail_reference(p, REF_MALFORMED);
             }
             ref_result ref;
-            classify_reference(p, f->source + f->position + 1u, semicolon - f->position - 1u, &ref);
+            classify_reference(p, (txml_str){ (const char *)f->source + f->position + 1u, semicolon - f->position - 1u }, &ref);
             if (ref.kind == REF_BYTES) {
                 const scan outcome = emit_expansion(p, ref.bytes, ref.count);
                 if (outcome != SCAN_OK) {
@@ -391,7 +394,7 @@ static scan finish_reference(txml_parser *p) {
     decoder *d = &p->dec;
     ref_result ref;
 
-    classify_reference(p, p->reference, d->ref_length, &ref);
+    classify_reference(p, (txml_str){ (const char *)p->reference, d->ref_length }, &ref);
     if (ref.kind == REF_BYTES) {
         const scan outcome = p->sink->put(p, ref.bytes, ref.count);
         if (outcome == SCAN_OK) {

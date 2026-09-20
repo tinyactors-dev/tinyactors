@@ -2,14 +2,18 @@
 #MISE description="Build the txml header checks and test suite"
 # mise skips this task when every output below is newer than every source.
 # Use `mise run --force build` after changing CC/CFLAGS.
-#MISE sources=["mise/tasks/build", "include/txml.h", "src/**/*.c", "src/**/*.h", "tests/*.c"]
+#MISE sources=["mise/tasks/build", "mise/tasks/amalgamate", "mise/tasks/api", "mise/lib/**/*", "include/txml.h", "include/txml.api.schema.json", "src/**/*.c", "src/**/*.h", "tests/*.c"]
 #MISE outputs=["build/header_test", "build/objects/header_test.o", "build/objects/api_surface.o", "build/objects/arena_test.o", "build/objects/writer_test.o", "build/objects/spec_test.o", "build/objects/cursor_test.o", "build/objects/incremental_test.o", "build/objects/text_test.o", "build/objects/doc_test.o", "build/objects/stream_test.o"]
 # vim:ft=ruby
 
-# There is no implementation yet: src/ is empty. Everything that can be built
-# against the header alone is built and run today; the binaries that need the
-# library are linked the moment src/*.c appears. Nothing here weakens a test to
-# make the suite pass — unlinkable tests are reported as pending.
+# The generated files come first, as in the core: include/txml.c (the
+# amalgamation) and include/txml.api.json are written from src/ and the header,
+# and checked, so a build never runs against a stale one. The test binaries here
+# link the modules; mise run amalgamate-test links the public-API tests against
+# include/txml.c as well.
+#
+# A test whose modules do not exist yet is reported as pending rather than made
+# to pass; nothing here weakens a test.
 
 require 'English'
 require 'fileutils'
@@ -43,6 +47,11 @@ end
 def compile(source, object)
   run(*COMPILER, *FLAGS, '-Iinclude', '-c', source, '-o', object.to_s)
 end
+
+run('mise', 'run', 'amalgamate')
+run('mise', 'run', 'amalgamate', '--check')
+run('mise', 'run', 'api')
+run('mise', 'run', 'api', '--check')
 
 FileUtils.mkdir_p(OBJECTS)
 

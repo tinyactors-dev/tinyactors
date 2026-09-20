@@ -1,0 +1,3333 @@
+{
+  "format": "txml-api/1",
+  "header": "include/txml.h",
+  "targets": {
+    "x86_64-unknown-linux-gnu": {
+      "pointer": {
+        "size": 8,
+        "align": 8
+      },
+      "builtins": {
+        "char": {
+          "size": 1,
+          "align": 1
+        },
+        "bool": {
+          "size": 1,
+          "align": 1
+        },
+        "int": {
+          "size": 4,
+          "align": 4
+        },
+        "int8_t": {
+          "size": 1,
+          "align": 1
+        },
+        "int16_t": {
+          "size": 2,
+          "align": 2
+        },
+        "int32_t": {
+          "size": 4,
+          "align": 4
+        },
+        "int64_t": {
+          "size": 8,
+          "align": 8
+        },
+        "uint8_t": {
+          "size": 1,
+          "align": 1
+        },
+        "uint16_t": {
+          "size": 2,
+          "align": 2
+        },
+        "uint32_t": {
+          "size": 4,
+          "align": 4
+        },
+        "uint64_t": {
+          "size": 8,
+          "align": 8
+        },
+        "size_t": {
+          "size": 8,
+          "align": 8
+        }
+      }
+    },
+    "wasm32-unknown-unknown": {
+      "pointer": {
+        "size": 4,
+        "align": 4
+      },
+      "builtins": {
+        "char": {
+          "size": 1,
+          "align": 1
+        },
+        "bool": {
+          "size": 1,
+          "align": 1
+        },
+        "int": {
+          "size": 4,
+          "align": 4
+        },
+        "int8_t": {
+          "size": 1,
+          "align": 1
+        },
+        "int16_t": {
+          "size": 2,
+          "align": 2
+        },
+        "int32_t": {
+          "size": 4,
+          "align": 4
+        },
+        "int64_t": {
+          "size": 8,
+          "align": 8
+        },
+        "uint8_t": {
+          "size": 1,
+          "align": 1
+        },
+        "uint16_t": {
+          "size": 2,
+          "align": 2
+        },
+        "uint32_t": {
+          "size": 4,
+          "align": 4
+        },
+        "uint64_t": {
+          "size": 8,
+          "align": 8
+        },
+        "size_t": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    }
+  },
+  "constants": [
+    {
+      "name": "TXML_ARENA_CHUNK_DEFAULT",
+      "type": {
+        "builtin": "size_t"
+      },
+      "value": 65536
+    },
+    {
+      "name": "TXML_INDEX_NONE",
+      "type": {
+        "builtin": "uint32_t"
+      },
+      "value": 4294967295
+    },
+    {
+      "name": "TXML_NAME_NONE",
+      "type": {
+        "builtin": "uint32_t"
+      },
+      "value": 4294967295
+    },
+    {
+      "name": "TXML_VERSION_MAJOR",
+      "type": {
+        "builtin": "int"
+      },
+      "value": 0
+    },
+    {
+      "name": "TXML_VERSION_MINOR",
+      "type": {
+        "builtin": "int"
+      },
+      "value": 1
+    },
+    {
+      "name": "TXML_VERSION_PATCH",
+      "type": {
+        "builtin": "int"
+      },
+      "value": 0
+    }
+  ],
+  "flag_sets": {
+    "txml_attribute_flags": {
+      "constants": [
+        {
+          "name": "TXML_ATTR_NS_DECL",
+          "value": 1,
+          "symbol": "ns_decl",
+          "doc": "xmlns or xmlns:prefix"
+        },
+        {
+          "name": "TXML_ATTR_DEFAULTED",
+          "value": 2,
+          "symbol": "defaulted",
+          "doc": "supplied by an internal-subset ATTLIST default"
+        }
+      ]
+    },
+    "txml_node_flags": {
+      "constants": [
+        {
+          "name": "TXML_NODE_EMPTY",
+          "value": 1,
+          "symbol": "empty",
+          "doc": "written as"
+        },
+        {
+          "name": "TXML_NODE_CDATA",
+          "value": 2,
+          "symbol": "cdata",
+          "doc": "text written as a CDATA section; always its own node"
+        },
+        {
+          "name": "TXML_NODE_OPEN",
+          "value": 4,
+          "symbol": "open",
+          "doc": "the end tag has not been parsed yet"
+        }
+      ]
+    },
+    "txml_parser_flags": {
+      "constants": [
+        {
+          "name": "TXML_INPUT_PADDED",
+          "value": 1,
+          "symbol": "input_padded",
+          "doc": "every fed chunk has 64 readable bytes past its end"
+        }
+      ]
+    },
+    "txml_writer_flags": {
+      "constants": [
+        {
+          "name": "TXML_WRITE_DECLARATION",
+          "value": 1,
+          "symbol": "declaration",
+          "doc": "emit < ?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        },
+        {
+          "name": "TXML_WRITE_INDENT",
+          "value": 2,
+          "symbol": "indent",
+          "doc": "indent element content by depth"
+        },
+        {
+          "name": "TXML_WRITE_EMPTY_TAGS",
+          "value": 4,
+          "symbol": "empty_tags",
+          "doc": "write childless elements as"
+        }
+      ]
+    }
+  },
+  "types": {
+    "txml_allocator": {
+      "kind": "struct",
+      "semantic": "adapter",
+      "fields": [
+        {
+          "name": "self",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            }
+          },
+          "shape": "raw",
+          "direction": "in"
+        },
+        {
+          "name": "v",
+          "type": {
+            "pointer": {
+              "type": "txml_allocator_vtable",
+              "const": true
+            }
+          },
+          "shape": "vtable",
+          "direction": "in"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "self": 0,
+            "v": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "self": 0,
+            "v": 4
+          }
+        }
+      }
+    },
+    "txml_allocator_free_params": {
+      "kind": "struct",
+      "doc": "======================================================================== Allocation\n\nThe embedder supplies one allocator. There is no realloc: txml never moves what it has allocated, so every pointer it hands out stays valid until the owning object is destroyed.",
+      "fields": [
+        {
+          "name": "ptr",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            }
+          },
+          "shape": "raw",
+          "direction": "in"
+        },
+        {
+          "name": "size",
+          "type": {
+            "builtin": "size_t"
+          }
+        },
+        {
+          "name": "alignment",
+          "type": {
+            "builtin": "size_t"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "ptr": 0,
+            "size": 8,
+            "alignment": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 12,
+          "align": 4,
+          "offsets": {
+            "ptr": 0,
+            "size": 4,
+            "alignment": 8
+          }
+        }
+      }
+    },
+    "txml_allocator_vtable": {
+      "kind": "struct",
+      "semantic": "vtable",
+      "fields": [
+        {
+          "name": "alloc",
+          "type": {
+            "pointer": {
+              "function": {
+                "returns": {
+                  "type": {
+                    "pointer": {
+                      "builtin": "void"
+                    }
+                  },
+                  "shape": "raw"
+                },
+                "params": [
+                  {
+                    "name": "self",
+                    "type": {
+                      "pointer": {
+                        "builtin": "void"
+                      }
+                    },
+                    "shape": "raw",
+                    "direction": "in"
+                  },
+                  {
+                    "name": "size",
+                    "type": {
+                      "builtin": "size_t"
+                    }
+                  },
+                  {
+                    "name": "alignment",
+                    "type": {
+                      "builtin": "size_t"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "shape": "callback",
+          "direction": "in",
+          "doc": "Return `size` bytes aligned to `alignment`, or NULL."
+        },
+        {
+          "name": "free",
+          "type": {
+            "pointer": {
+              "function": {
+                "returns": {
+                  "type": {
+                    "builtin": "void"
+                  }
+                },
+                "params": [
+                  {
+                    "name": "self",
+                    "type": {
+                      "pointer": {
+                        "builtin": "void"
+                      }
+                    },
+                    "shape": "raw",
+                    "direction": "in"
+                  },
+                  {
+                    "name": "params",
+                    "type": {
+                      "pointer": {
+                        "type": "txml_allocator_free_params",
+                        "const": true
+                      }
+                    },
+                    "shape": "single",
+                    "direction": "in"
+                  }
+                ]
+              }
+            }
+          },
+          "shape": "callback",
+          "direction": "in",
+          "doc": "Release a block obtained from alloc(); `params` repeats its size and alignment, so the embedder needs no header of its own."
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "alloc": 0,
+            "free": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "alloc": 0,
+            "free": 4
+          }
+        }
+      }
+    },
+    "txml_arena": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "backing",
+          "type": {
+            "type": "txml_allocator"
+          }
+        },
+        {
+          "name": "head",
+          "type": {
+            "pointer": {
+              "type": "txml_arena_chunk"
+            }
+          },
+          "shape": "view",
+          "direction": "in",
+          "doc": "newest chunk; each chunk links to the previous"
+        },
+        {
+          "name": "chunk_size",
+          "type": {
+            "builtin": "size_t"
+          },
+          "doc": "minimum payload size of the next chunk"
+        },
+        {
+          "name": "used",
+          "type": {
+            "builtin": "size_t"
+          },
+          "doc": "bytes handed out to callers"
+        },
+        {
+          "name": "reserved",
+          "type": {
+            "builtin": "size_t"
+          },
+          "doc": "bytes obtained from the backing allocator"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "backing": 0,
+            "head": 16,
+            "chunk_size": 24,
+            "used": 32,
+            "reserved": 40
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 24,
+          "align": 4,
+          "offsets": {
+            "backing": 0,
+            "head": 8,
+            "chunk_size": 12,
+            "used": 16,
+            "reserved": 20
+          }
+        }
+      }
+    },
+    "txml_arena_chunk": {
+      "kind": "view",
+      "doc": "======================================================================== Arena\n\nA bump allocator over a linked list of chunks. Growing links a new chunk in front of the old ones; nothing is copied and no address changes. A document owns two of these (ADR 0016) and neither ever relocates, which is why every txml_str a document hands out is valid for that document's lifetime.\n\nA request larger than the chunk size gets a chunk of its own, so a single allocation is always contiguous."
+    },
+    "txml_arena_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TXML_ARENA_VALUES",
+          "value": 0,
+          "symbol": "values",
+          "doc": "the byte pool, and the name and namespace columns"
+        },
+        {
+          "name": "TXML_ARENA_TREE",
+          "value": 1,
+          "symbol": "tree",
+          "doc": "the node, attribute, and position columns"
+        }
+      ],
+      "doc": "A document owns two arenas, split by lifetime (ADR 0016): values are written once and live as long as the document, the tree is appended as it parses. Both are destroyed by txml_doc_destroy. `limits.max_document_bytes` bounds the sum of their `used`.",
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
+    "txml_arena_mark": {
+      "kind": "struct",
+      "doc": "A position in an arena, for releasing everything allocated after it.",
+      "fields": [
+        {
+          "name": "chunk",
+          "type": {
+            "pointer": {
+              "type": "txml_arena_chunk"
+            }
+          },
+          "shape": "view",
+          "direction": "in"
+        },
+        {
+          "name": "offset",
+          "type": {
+            "builtin": "size_t"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "chunk": 0,
+            "offset": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "chunk": 0,
+            "offset": 4
+          }
+        }
+      }
+    },
+    "txml_attr_cursor": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "doc",
+          "type": {
+            "pointer": {
+              "type": "txml_doc",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "index",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "doc": 0,
+            "index": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "doc": 0,
+            "index": 4
+          }
+        }
+      }
+    },
+    "txml_attribute_view": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "value",
+          "type": {
+            "type": "txml_str"
+          }
+        },
+        {
+          "name": "flags",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "flags": "txml_attribute_flags"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "value": 8,
+            "flags": 24
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "name": 0,
+            "value": 4,
+            "flags": 12
+          }
+        }
+      }
+    },
+    "txml_buffer": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "ptr",
+          "type": {
+            "pointer": {
+              "builtin": "uint8_t"
+            }
+          },
+          "capacity": "capacity",
+          "shape": "buffer",
+          "direction": "out",
+          "valid_on": "success"
+        },
+        {
+          "name": "capacity",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "capacity_of": "ptr"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "ptr": 0,
+            "capacity": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "ptr": 0,
+            "capacity": 4
+          }
+        }
+      }
+    },
+    "txml_bytes": {
+      "kind": "struct",
+      "semantic": "bytes",
+      "fields": [
+        {
+          "name": "ptr",
+          "type": {
+            "pointer": {
+              "builtin": "uint8_t",
+              "const": true
+            }
+          }
+        },
+        {
+          "name": "length",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "ptr": 0,
+            "length": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "ptr": 0,
+            "length": 4
+          }
+        }
+      }
+    },
+    "txml_cursor": {
+      "kind": "struct",
+      "doc": "======================================================================== Cursors\n\nA cursor is a value: a document and a node index. Copy it, store it, compare indices for document order. It owns nothing and allocates nothing.\n\nCursor calls are total: they never allocate and never return an API error. A cursor whose index is out of range, or that was made for another document, reads as absent — TXML_NONE, TXML_NAME_NONE, TXML_INDEX_NONE, an empty txml_str, false, and TXML_NODE_DOCUMENT from txml_kind, which has no absent value of its own. Mixing cursors from two documents is still a bug; it is simply not one the library can report.",
+      "fields": [
+        {
+          "name": "doc",
+          "type": {
+            "pointer": {
+              "type": "txml_doc",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "node",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "doc": 0,
+            "node": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "doc": 0,
+            "node": 4
+          }
+        }
+      }
+    },
+    "txml_doc": {
+      "kind": "handle",
+      "handle": "doc",
+      "created_by": [
+        {
+          "function": "txml_parser_finish",
+          "path": [
+            "out"
+          ]
+        }
+      ],
+      "destroyed_by": [
+        {
+          "function": "txml_doc_destroy",
+          "path": [
+            "doc"
+          ]
+        }
+      ]
+    },
+    "txml_document_error": {
+      "kind": "struct",
+      "doc": "A well-formedness failure. `message` is a fixed English phrase owned by the library and valid for the process lifetime; it is a diagnostic, not an API contract. Document errors are data: they never arrive as a txml_result from a cursor call.",
+      "fields": [
+        {
+          "name": "code",
+          "type": {
+            "type": "txml_document_error_code"
+          }
+        },
+        {
+          "name": "limit",
+          "type": {
+            "type": "txml_limit_kind"
+          }
+        },
+        {
+          "name": "at",
+          "type": {
+            "type": "txml_position"
+          }
+        },
+        {
+          "name": "message",
+          "type": {
+            "type": "txml_str"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "code": 0,
+            "limit": 4,
+            "at": 8,
+            "message": 24
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "code": 0,
+            "limit": 4,
+            "at": 8,
+            "message": 24
+          }
+        }
+      }
+    },
+    "txml_document_error_code": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TXML_DOC_OK",
+          "value": 0,
+          "symbol": "ok"
+        },
+        {
+          "name": "TXML_DOC_ENCODING",
+          "value": 1,
+          "symbol": "encoding",
+          "doc": "not well-formed UTF-8, or a forbidden character"
+        },
+        {
+          "name": "TXML_DOC_SYNTAX",
+          "value": 2,
+          "symbol": "syntax",
+          "doc": "malformed markup"
+        },
+        {
+          "name": "TXML_DOC_NAME",
+          "value": 3,
+          "symbol": "name",
+          "doc": "not a legal XML name"
+        },
+        {
+          "name": "TXML_DOC_TAG_MISMATCH",
+          "value": 4,
+          "symbol": "tag_mismatch",
+          "doc": "end tag does not match the open element"
+        },
+        {
+          "name": "TXML_DOC_DUPLICATE_ATTRIBUTE",
+          "value": 5,
+          "symbol": "duplicate_attribute"
+        },
+        {
+          "name": "TXML_DOC_UNDECLARED_PREFIX",
+          "value": 6,
+          "symbol": "undeclared_prefix"
+        },
+        {
+          "name": "TXML_DOC_UNDECLARED_ENTITY",
+          "value": 7,
+          "symbol": "undeclared_entity"
+        },
+        {
+          "name": "TXML_DOC_UNEXPECTED_EOF",
+          "value": 8,
+          "symbol": "unexpected_eof",
+          "doc": "input ended inside markup or with elements open"
+        },
+        {
+          "name": "TXML_DOC_NO_ROOT",
+          "value": 9,
+          "symbol": "no_root",
+          "doc": "no document element"
+        },
+        {
+          "name": "TXML_DOC_TRAILING_CONTENT",
+          "value": 10,
+          "symbol": "trailing_content",
+          "doc": "content after the document element"
+        },
+        {
+          "name": "TXML_DOC_LIMIT",
+          "value": 11,
+          "symbol": "limit",
+          "doc": "a txml_limits value was reached; see `limit`"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
+    "txml_find": {
+      "kind": "struct",
+      "doc": "A name scan over a node range: the fastest query the document supports.",
+      "fields": [
+        {
+          "name": "name",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "the name ID to match"
+        },
+        {
+          "name": "bound",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "stop before this index; TXML_INDEX_NONE means the whole document"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "name": 0,
+            "bound": 4
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "name": 0,
+            "bound": 4
+          }
+        }
+      }
+    },
+    "txml_limit_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TXML_LIMIT_NONE",
+          "value": 0,
+          "symbol": "none"
+        },
+        {
+          "name": "TXML_LIMIT_DEPTH",
+          "value": 1,
+          "symbol": "depth"
+        },
+        {
+          "name": "TXML_LIMIT_ATTRIBUTES",
+          "value": 2,
+          "symbol": "attributes"
+        },
+        {
+          "name": "TXML_LIMIT_NAME_LENGTH",
+          "value": 3,
+          "symbol": "name_length"
+        },
+        {
+          "name": "TXML_LIMIT_NAMES",
+          "value": 4,
+          "symbol": "names"
+        },
+        {
+          "name": "TXML_LIMIT_DOCUMENT_BYTES",
+          "value": 5,
+          "symbol": "document_bytes"
+        },
+        {
+          "name": "TXML_LIMIT_ENTITY_EXPANSION",
+          "value": 6,
+          "symbol": "entity_expansion"
+        }
+      ],
+      "doc": "Which limit a TXML_DOC_LIMIT error reached.",
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
+    "txml_limits": {
+      "kind": "struct",
+      "doc": "Two limits have representation ceilings, because a node's depth is stored as uint16_t and pool offsets are uint32_t: max_depth may not exceed 65535 and max_document_bytes may not exceed UINT32_MAX. A configuration that exceeds either is rejected by txml_parser_init() with TXML_ERR_INVALID.",
+      "fields": [
+        {
+          "name": "max_depth",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "element nesting; at most 65535"
+        },
+        {
+          "name": "max_attributes",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "attributes on one element"
+        },
+        {
+          "name": "max_name_length",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "bytes in one qualified name"
+        },
+        {
+          "name": "max_names",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "distinct expanded names per document"
+        },
+        {
+          "name": "max_document_bytes",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "values + tree arena bytes; at most UINT32_MAX"
+        },
+        {
+          "name": "entity_expansion_budget",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "bytes produced by entity expansion"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "max_depth": 0,
+            "max_attributes": 4,
+            "max_name_length": 8,
+            "max_names": 12,
+            "max_document_bytes": 16,
+            "entity_expansion_budget": 24
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "max_depth": 0,
+            "max_attributes": 4,
+            "max_name_length": 8,
+            "max_names": 12,
+            "max_document_bytes": 16,
+            "entity_expansion_budget": 24
+          }
+        }
+      }
+    },
+    "txml_move": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TXML_MOVED",
+          "value": 0,
+          "symbol": "moved",
+          "success": true,
+          "doc": "the cursor now points at the requested node"
+        },
+        {
+          "name": "TXML_NONE",
+          "value": 1,
+          "symbol": "none",
+          "doc": "there is no such node; the cursor did not move"
+        },
+        {
+          "name": "TXML_PENDING",
+          "value": 2,
+          "symbol": "pending",
+          "doc": "the answer needs input not parsed yet; the cursor did not move"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
+    "txml_node_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TXML_NODE_DOCUMENT",
+          "value": 0,
+          "symbol": "document",
+          "doc": "index 0; the parent of everything else"
+        },
+        {
+          "name": "TXML_NODE_ELEMENT",
+          "value": 1,
+          "symbol": "element"
+        },
+        {
+          "name": "TXML_NODE_TEXT",
+          "value": 2,
+          "symbol": "text"
+        },
+        {
+          "name": "TXML_NODE_COMMENT",
+          "value": 3,
+          "symbol": "comment"
+        },
+        {
+          "name": "TXML_NODE_PI",
+          "value": 4,
+          "symbol": "pi"
+        },
+        {
+          "name": "TXML_NODE_DECLARATION",
+          "value": 5,
+          "symbol": "declaration",
+          "doc": "< ?xml ...?>; its pseudo-attributes are attributes"
+        },
+        {
+          "name": "TXML_NODE_DOCTYPE",
+          "value": 6,
+          "symbol": "doctype",
+          "doc": "< !DOCTYPE ...>; its text is the declaration as written"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
+    "txml_parser": {
+      "kind": "handle",
+      "handle": "parser",
+      "doc": "======================================================================== Parser\n\nThe parser is fed byte chunks and produces a concrete syntax tree: comments, processing instructions, whitespace, the XML declaration and the DOCTYPE are all nodes, so a parsed document writes back as what it was. It never reads from a file, socket, or entity resolver: external entities and external DTDs are not fetched, which removes XXE by construction.",
+      "created_by": [
+        {
+          "function": "txml_parser_init",
+          "path": [
+            "out"
+          ]
+        }
+      ],
+      "destroyed_by": [
+        {
+          "function": "txml_parser_finish",
+          "path": [
+            "parser"
+          ]
+        },
+        {
+          "function": "txml_parser_destroy",
+          "path": [
+            "parser"
+          ]
+        }
+      ]
+    },
+    "txml_parser_config": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "allocator",
+          "type": {
+            "type": "txml_allocator"
+          },
+          "doc": "The document creates both of its arenas over this allocator and destroys them with itself; the caller supplies no arena of its own."
+        },
+        {
+          "name": "limits",
+          "type": {
+            "type": "txml_limits"
+          }
+        },
+        {
+          "name": "flags",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "flags": "txml_parser_flags"
+        },
+        {
+          "name": "staging_length",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "input window in bytes; sizes a chunk, not a construct; 0 selects 64 KiB"
+        },
+        {
+          "name": "chunk_size",
+          "type": {
+            "builtin": "size_t"
+          },
+          "doc": "chunk size for both arenas; 0 selects TXML_ARENA_CHUNK_DEFAULT"
+        },
+        {
+          "name": "step_budget",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "nodes appended per step; 0 means until the step blocks"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 72,
+          "align": 8,
+          "offsets": {
+            "allocator": 0,
+            "limits": 16,
+            "flags": 48,
+            "staging_length": 52,
+            "chunk_size": 56,
+            "step_budget": 64
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "allocator": 0,
+            "limits": 8,
+            "flags": 40,
+            "staging_length": 44,
+            "chunk_size": 48,
+            "step_budget": 52
+          }
+        }
+      }
+    },
+    "txml_position": {
+      "kind": "struct",
+      "doc": "A location in the input. `offset` counts bytes from the first byte fed to the parser; `line` and `column` count from 1, and `column` counts bytes.",
+      "fields": [
+        {
+          "name": "offset",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "line",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "column",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "offset": 0,
+            "line": 8,
+            "column": 12
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "offset": 0,
+            "line": 8,
+            "column": 12
+          }
+        }
+      }
+    },
+    "txml_qname": {
+      "kind": "struct",
+      "doc": "An expanded name: the namespace URI (empty when there is none) and the local part. Prefixes are not part of a name's identity.",
+      "fields": [
+        {
+          "name": "ns",
+          "type": {
+            "type": "txml_str"
+          }
+        },
+        {
+          "name": "local",
+          "type": {
+            "type": "txml_str"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "ns": 0,
+            "local": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "ns": 0,
+            "local": 8
+          }
+        }
+      }
+    },
+    "txml_result": {
+      "kind": "enum",
+      "underlying": {
+        "builtin": "int32_t"
+      },
+      "constants": [
+        {
+          "name": "TXML_OK",
+          "value": 0,
+          "symbol": "ok",
+          "success": true,
+          "doc": "The call succeeded."
+        },
+        {
+          "name": "TXML_NEED_SPACE",
+          "value": 1,
+          "symbol": "need_space",
+          "doc": "Writer only: the output buffer is full. Drain it and continue."
+        },
+        {
+          "name": "TXML_ERR_INVALID",
+          "value": -1,
+          "symbol": "err_invalid",
+          "doc": "API misuse: a null handle, a cursor from another document, a call in the wrong order. Never caused by document content."
+        },
+        {
+          "name": "TXML_ERR_NOMEM",
+          "value": -2,
+          "symbol": "err_nomem",
+          "doc": "The backing allocator refused a request."
+        },
+        {
+          "name": "TXML_ERR_LIMIT",
+          "value": -3,
+          "symbol": "err_limit",
+          "doc": "A txml_limits value was reached."
+        },
+        {
+          "name": "TXML_ERR_NOT_FOUND",
+          "value": -4,
+          "symbol": "err_not_found",
+          "doc": "The requested name, attribute, or node does not exist."
+        },
+        {
+          "name": "TXML_ERR_PENDING",
+          "value": -5,
+          "symbol": "err_pending",
+          "doc": "The answer depends on input that has not been parsed yet."
+        },
+        {
+          "name": "TXML_ERR_DOCUMENT",
+          "value": -6,
+          "symbol": "err_document",
+          "doc": "The document is not well-formed; read txml_parser_error() for details."
+        }
+      ],
+      "doc": "======================================================================== Results, text, and positions",
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
+    "txml_step": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TXML_STEP_PROGRESS",
+          "value": 0,
+          "symbol": "progress",
+          "doc": "the step budget was used up; call again"
+        },
+        {
+          "name": "TXML_STEP_NEED_INPUT",
+          "value": 1,
+          "symbol": "need_input",
+          "doc": "feed more bytes, or feed final = true"
+        },
+        {
+          "name": "TXML_STEP_NEED_MEMORY",
+          "value": 2,
+          "symbol": "need_memory",
+          "doc": "the allocator refused; give it more and call again"
+        },
+        {
+          "name": "TXML_STEP_DONE",
+          "value": 3,
+          "symbol": "done",
+          "doc": "the document is complete"
+        },
+        {
+          "name": "TXML_STEP_FAILED",
+          "value": 4,
+          "symbol": "failed",
+          "doc": "not well-formed; read txml_parser_error()"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
+    "txml_str": {
+      "kind": "struct",
+      "semantic": "string",
+      "doc": "Text and bytes. Both are borrowed views: the `ptr`/`length` pair never owns its storage. Lengths are byte counts, never character counts.",
+      "fields": [
+        {
+          "name": "ptr",
+          "type": {
+            "pointer": {
+              "builtin": "char",
+              "const": true
+            }
+          }
+        },
+        {
+          "name": "length",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "ptr": 0,
+            "length": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "ptr": 0,
+            "length": 4
+          }
+        }
+      }
+    },
+    "txml_write_attr": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "name",
+          "type": {
+            "type": "txml_write_name"
+          }
+        },
+        {
+          "name": "value",
+          "type": {
+            "type": "txml_str"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "value": 48
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 32,
+          "align": 4,
+          "offsets": {
+            "name": 0,
+            "value": 24
+          }
+        }
+      }
+    },
+    "txml_write_name": {
+      "kind": "struct",
+      "doc": "A name to write. An empty `prefix` with a non-empty `ns` asks the writer to pick or reuse a prefix; an empty `ns` writes an unqualified name.",
+      "fields": [
+        {
+          "name": "ns",
+          "type": {
+            "type": "txml_str"
+          }
+        },
+        {
+          "name": "local",
+          "type": {
+            "type": "txml_str"
+          }
+        },
+        {
+          "name": "prefix",
+          "type": {
+            "type": "txml_str"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "ns": 0,
+            "local": 16,
+            "prefix": 32
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 24,
+          "align": 4,
+          "offsets": {
+            "ns": 0,
+            "local": 8,
+            "prefix": 16
+          }
+        }
+      }
+    },
+    "txml_writer": {
+      "kind": "handle",
+      "handle": "writer",
+      "doc": "======================================================================== Writer\n\nThe writer takes events and fills a caller buffer. It knows nothing about documents: anything that can emit start/attribute/text/end can produce XML. txml_write_subtree() is the bridge from a parsed document.",
+      "created_by": [
+        {
+          "function": "txml_writer_init",
+          "path": [
+            "out"
+          ]
+        }
+      ],
+      "destroyed_by": [
+        {
+          "function": "txml_writer_destroy",
+          "path": [
+            "writer"
+          ]
+        }
+      ]
+    },
+    "txml_writer_config": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "allocator",
+          "type": {
+            "type": "txml_allocator"
+          },
+          "doc": "backs the writer's element and namespace stack"
+        },
+        {
+          "name": "output",
+          "type": {
+            "type": "txml_buffer"
+          },
+          "doc": "filled by the writer, drained by the caller"
+        },
+        {
+          "name": "limits",
+          "type": {
+            "type": "txml_limits"
+          }
+        },
+        {
+          "name": "flags",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "flags": "txml_writer_flags"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 72,
+          "align": 8,
+          "offsets": {
+            "allocator": 0,
+            "output": 16,
+            "limits": 32,
+            "flags": 64
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "allocator": 0,
+            "output": 8,
+            "limits": 16,
+            "flags": 48
+          }
+        }
+      }
+    }
+  },
+  "functions": [
+    {
+      "name": "txml_arena_init",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_result"
+        },
+        "success": "TXML_OK"
+      },
+      "params": [
+        {
+          "name": "arena",
+          "type": {
+            "pointer": {
+              "type": "txml_arena"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "release": "txml_arena_destroy"
+        },
+        {
+          "name": "backing",
+          "type": {
+            "type": "txml_allocator"
+          }
+        },
+        {
+          "name": "chunk_size",
+          "type": {
+            "builtin": "size_t"
+          }
+        }
+      ]
+    },
+    {
+      "name": "txml_arena_alloc",
+      "doc": "Allocate `size` bytes aligned to `alignment` (a power of two). Returns NULL only when the backing allocator refuses.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "pointer": {
+            "builtin": "void"
+          }
+        },
+        "shape": "raw"
+      },
+      "params": [
+        {
+          "name": "arena",
+          "type": {
+            "pointer": {
+              "type": "txml_arena"
+            }
+          },
+          "shape": "single",
+          "direction": "inout"
+        },
+        {
+          "name": "size",
+          "type": {
+            "builtin": "size_t"
+          }
+        },
+        {
+          "name": "alignment",
+          "type": {
+            "builtin": "size_t"
+          }
+        }
+      ]
+    },
+    {
+      "name": "txml_arena_position",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_arena_mark"
+        }
+      },
+      "params": [
+        {
+          "name": "arena",
+          "type": {
+            "pointer": {
+              "type": "txml_arena",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "txml_arena_release",
+      "doc": "Free every chunk newer than `mark` and resume bump allocation there. One spare chunk is retained to avoid churn.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "void"
+        }
+      },
+      "params": [
+        {
+          "name": "arena",
+          "type": {
+            "pointer": {
+              "type": "txml_arena"
+            }
+          },
+          "shape": "single",
+          "direction": "inout"
+        },
+        {
+          "name": "mark",
+          "type": {
+            "type": "txml_arena_mark"
+          }
+        }
+      ]
+    },
+    {
+      "name": "txml_arena_reset",
+      "doc": "Free every chunk but keep the arena usable.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "void"
+        }
+      },
+      "params": [
+        {
+          "name": "arena",
+          "type": {
+            "pointer": {
+              "type": "txml_arena"
+            }
+          },
+          "shape": "single",
+          "direction": "inout"
+        }
+      ]
+    },
+    {
+      "name": "txml_arena_destroy",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "void"
+        }
+      },
+      "params": [
+        {
+          "name": "arena",
+          "type": {
+            "pointer": {
+              "type": "txml_arena"
+            }
+          },
+          "shape": "single",
+          "direction": "inout"
+        }
+      ]
+    },
+    {
+      "name": "txml_parser_init",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_result"
+        },
+        "success": "TXML_OK"
+      },
+      "params": [
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "pointer": {
+                "type": "txml_parser"
+              }
+            }
+          },
+          "shape": "handle_out",
+          "direction": "out",
+          "valid_on": "success"
+        },
+        {
+          "name": "config",
+          "type": {
+            "pointer": {
+              "type": "txml_parser_config",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "txml_parse_feed",
+      "doc": "Copy up to `chunk.length` bytes into the parser's staging window and return how many were taken. The caller may reuse or free the chunk as soon as the call returns. Pass `final = true` only with the chunk that ends the document; if fewer bytes than offered are accepted, the flag is ignored and the caller repeats it with the rest. A caller that ignores the return value silently truncates its document, which surfaces as TXML_DOC_UNEXPECTED_EOF. Feeding after final is TXML_ERR_INVALID reported by the next step.\n\nAn XML declaration becomes a TXML_NODE_DECLARATION whose version, encoding and standalone pseudo-attributes are ordinary attributes, so it is read with txml_first_attribute and txml_find_attribute like any element. A declaration naming an encoding other than UTF-8 is TXML_DOC_ENCODING. What the writer emits is governed by TXML_WRITE_DECLARATION alone.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "uint32_t"
+        }
+      },
+      "params": [
+        {
+          "name": "parser",
+          "type": {
+            "pointer": {
+              "type": "txml_parser"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "chunk",
+          "type": {
+            "type": "txml_bytes"
+          }
+        },
+        {
+          "name": "final",
+          "type": {
+            "builtin": "bool"
+          }
+        }
+      ]
+    },
+    {
+      "name": "txml_parse_step",
+      "doc": "Parse staged input. Each call appends nodes until the step budget is used up or the parser blocks.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_step"
+        }
+      },
+      "params": [
+        {
+          "name": "parser",
+          "type": {
+            "pointer": {
+              "type": "txml_parser"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "txml_parser_doc",
+      "doc": "The document under construction. Valid from init until the parser is destroyed or the document is detached; readable while parsing.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "pointer": {
+            "type": "txml_doc",
+            "const": true
+          }
+        },
+        "shape": "single",
+        "lifetime": "parser"
+      },
+      "params": [
+        {
+          "name": "parser",
+          "type": {
+            "pointer": {
+              "type": "txml_parser",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "txml_parser_error",
+      "doc": "The failure that ended the parse. TXML_ERR_NOT_FOUND while none happened.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_result"
+        },
+        "success": "TXML_OK"
+      },
+      "params": [
+        {
+          "name": "parser",
+          "type": {
+            "pointer": {
+              "type": "txml_parser",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "txml_document_error"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "TXML_OK",
+          "lifetime": "process"
+        }
+      ]
+    },
+    {
+      "name": "txml_parser_offset",
+      "doc": "Bytes accepted by txml_parse_feed() so far.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "uint64_t"
+        }
+      },
+      "params": [
+        {
+          "name": "parser",
+          "type": {
+            "pointer": {
+              "type": "txml_parser",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "txml_parser_finish",
+      "doc": "Detach the finished document and destroy the parser. Only after TXML_STEP_DONE; otherwise TXML_ERR_INVALID and nothing is destroyed.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_result"
+        },
+        "success": "TXML_OK"
+      },
+      "params": [
+        {
+          "name": "parser",
+          "type": {
+            "pointer": {
+              "type": "txml_parser"
+            }
+          },
+          "shape": "handle",
+          "direction": "in",
+          "destroys": true
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "pointer": {
+                "type": "txml_doc"
+              }
+            }
+          },
+          "shape": "handle_out",
+          "direction": "out",
+          "valid_on": "success"
+        }
+      ]
+    },
+    {
+      "name": "txml_parser_destroy",
+      "doc": "Destroy the parser and, unless it was detached, its document.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "void"
+        }
+      },
+      "params": [
+        {
+          "name": "parser",
+          "type": {
+            "pointer": {
+              "type": "txml_parser"
+            }
+          },
+          "shape": "handle",
+          "direction": "in",
+          "destroys": true
+        }
+      ]
+    },
+    {
+      "name": "txml_doc_destroy",
+      "doc": "Destroy a detached document and both of its arenas.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "void"
+        }
+      },
+      "params": [
+        {
+          "name": "doc",
+          "type": {
+            "pointer": {
+              "type": "txml_doc"
+            }
+          },
+          "shape": "handle",
+          "direction": "in",
+          "destroys": true
+        }
+      ]
+    },
+    {
+      "name": "txml_doc_find_name",
+      "doc": "Resolve an expanded name to this document's name ID, or TXML_NAME_NONE when the document does not contain it. A query that resolves to TXML_NAME_NONE can be answered without scanning anything.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "uint32_t"
+        }
+      },
+      "params": [
+        {
+          "name": "doc",
+          "type": {
+            "pointer": {
+              "type": "txml_doc",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "name",
+          "type": {
+            "pointer": {
+              "type": "txml_qname",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "txml_doc_name_count",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "uint32_t"
+        }
+      },
+      "params": [
+        {
+          "name": "doc",
+          "type": {
+            "pointer": {
+              "type": "txml_doc",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "txml_doc_name_at",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_result"
+        },
+        "success": "TXML_OK"
+      },
+      "params": [
+        {
+          "name": "doc",
+          "type": {
+            "pointer": {
+              "type": "txml_doc",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "name",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "txml_qname"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "document"
+        }
+      ]
+    },
+    {
+      "name": "txml_doc_node_count",
+      "doc": "Nodes appended so far, including the document node.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "uint32_t"
+        }
+      },
+      "params": [
+        {
+          "name": "doc",
+          "type": {
+            "pointer": {
+              "type": "txml_doc",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "txml_doc_arena",
+      "doc": "Accounting for one of the document's arenas.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "pointer": {
+            "type": "txml_arena",
+            "const": true
+          }
+        },
+        "shape": "single",
+        "lifetime": "document"
+      },
+      "params": [
+        {
+          "name": "doc",
+          "type": {
+            "pointer": {
+              "type": "txml_doc",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "which",
+          "type": {
+            "type": "txml_arena_kind"
+          }
+        }
+      ]
+    },
+    {
+      "name": "txml_doc_root",
+      "doc": "Navigation. Every function moves the cursor only on TXML_MOVED.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_cursor"
+        }
+      },
+      "params": [
+        {
+          "name": "doc",
+          "type": {
+            "pointer": {
+              "type": "txml_doc",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "txml_first_child",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_move"
+        },
+        "success": "TXML_MOVED"
+      },
+      "params": [
+        {
+          "name": "cursor",
+          "type": {
+            "pointer": {
+              "type": "txml_cursor"
+            }
+          },
+          "shape": "single",
+          "direction": "inout"
+        }
+      ]
+    },
+    {
+      "name": "txml_next_sibling",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_move"
+        },
+        "success": "TXML_MOVED"
+      },
+      "params": [
+        {
+          "name": "cursor",
+          "type": {
+            "pointer": {
+              "type": "txml_cursor"
+            }
+          },
+          "shape": "single",
+          "direction": "inout"
+        }
+      ]
+    },
+    {
+      "name": "txml_parent",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_move"
+        },
+        "success": "TXML_MOVED"
+      },
+      "params": [
+        {
+          "name": "cursor",
+          "type": {
+            "pointer": {
+              "type": "txml_cursor"
+            }
+          },
+          "shape": "single",
+          "direction": "inout"
+        }
+      ]
+    },
+    {
+      "name": "txml_next_element",
+      "doc": "The next sibling that is an element, skipping text, comments, and PIs.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_move"
+        },
+        "success": "TXML_MOVED"
+      },
+      "params": [
+        {
+          "name": "cursor",
+          "type": {
+            "pointer": {
+              "type": "txml_cursor"
+            }
+          },
+          "shape": "single",
+          "direction": "inout"
+        }
+      ]
+    },
+    {
+      "name": "txml_index",
+      "doc": "Ranges. A subtree is [txml_index(c), txml_subtree_end(c)).",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "uint32_t"
+        }
+      },
+      "params": [
+        {
+          "name": "cursor",
+          "type": {
+            "type": "txml_cursor"
+          }
+        }
+      ]
+    },
+    {
+      "name": "txml_cursor_at",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_cursor"
+        }
+      },
+      "params": [
+        {
+          "name": "doc",
+          "type": {
+            "pointer": {
+              "type": "txml_doc",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "index",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        }
+      ]
+    },
+    {
+      "name": "txml_subtree_end",
+      "doc": "One past the last descendant, or TXML_INDEX_NONE while the node is open.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "uint32_t"
+        }
+      },
+      "params": [
+        {
+          "name": "cursor",
+          "type": {
+            "type": "txml_cursor"
+          }
+        }
+      ]
+    },
+    {
+      "name": "txml_contains",
+      "doc": "Whether `node` is `ancestor` itself or one of its descendants. False while `ancestor` is still open.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "bool"
+        },
+        "success": "true"
+      },
+      "params": [
+        {
+          "name": "ancestor",
+          "type": {
+            "type": "txml_cursor"
+          }
+        },
+        {
+          "name": "node",
+          "type": {
+            "type": "txml_cursor"
+          }
+        }
+      ]
+    },
+    {
+      "name": "txml_find_next",
+      "doc": "Move to the next element after the cursor, below `bound`, whose name matches. TXML_NONE when there is none.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_move"
+        },
+        "success": "TXML_MOVED"
+      },
+      "params": [
+        {
+          "name": "cursor",
+          "type": {
+            "pointer": {
+              "type": "txml_cursor"
+            }
+          },
+          "shape": "single",
+          "direction": "inout"
+        },
+        {
+          "name": "query",
+          "type": {
+            "pointer": {
+              "type": "txml_find",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "txml_kind",
+      "doc": "Reading.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_node_kind"
+        }
+      },
+      "params": [
+        {
+          "name": "cursor",
+          "type": {
+            "type": "txml_cursor"
+          }
+        }
+      ]
+    },
+    {
+      "name": "txml_flags",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "uint32_t"
+        },
+        "flags": "txml_node_flags"
+      },
+      "params": [
+        {
+          "name": "cursor",
+          "type": {
+            "type": "txml_cursor"
+          }
+        }
+      ]
+    },
+    {
+      "name": "txml_depth",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "uint32_t"
+        }
+      },
+      "params": [
+        {
+          "name": "cursor",
+          "type": {
+            "type": "txml_cursor"
+          }
+        }
+      ]
+    },
+    {
+      "name": "txml_node_name_id",
+      "doc": "The element's or PI target's name ID; TXML_NAME_NONE for other kinds.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "uint32_t"
+        }
+      },
+      "params": [
+        {
+          "name": "cursor",
+          "type": {
+            "type": "txml_cursor"
+          }
+        }
+      ]
+    },
+    {
+      "name": "txml_node_prefix",
+      "doc": "The prefix as written, empty when there was none. Not part of identity.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_str"
+        },
+        "lifetime": "document"
+      },
+      "params": [
+        {
+          "name": "cursor",
+          "type": {
+            "type": "txml_cursor"
+          }
+        }
+      ]
+    },
+    {
+      "name": "txml_node_text",
+      "doc": "Text of a TEXT, COMMENT, PI, or DOCTYPE node, normalized; empty for other kinds. A DECLARATION carries its parts as attributes, not as text.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_str"
+        },
+        "lifetime": "document"
+      },
+      "params": [
+        {
+          "name": "cursor",
+          "type": {
+            "type": "txml_cursor"
+          }
+        }
+      ]
+    },
+    {
+      "name": "txml_node_position",
+      "doc": "Every node has a position; TXML_ERR_INVALID only for an absent cursor.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_result"
+        },
+        "success": "TXML_OK"
+      },
+      "params": [
+        {
+          "name": "cursor",
+          "type": {
+            "type": "txml_cursor"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "txml_position"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success"
+        }
+      ]
+    },
+    {
+      "name": "txml_attribute_count",
+      "doc": "Attributes, in document order.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "uint32_t"
+        }
+      },
+      "params": [
+        {
+          "name": "cursor",
+          "type": {
+            "type": "txml_cursor"
+          }
+        }
+      ]
+    },
+    {
+      "name": "txml_first_attribute",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_move"
+        },
+        "success": "TXML_MOVED"
+      },
+      "params": [
+        {
+          "name": "cursor",
+          "type": {
+            "type": "txml_cursor"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "txml_attr_cursor"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "document"
+        }
+      ]
+    },
+    {
+      "name": "txml_next_attribute",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_move"
+        },
+        "success": "TXML_MOVED"
+      },
+      "params": [
+        {
+          "name": "attribute",
+          "type": {
+            "pointer": {
+              "type": "txml_attr_cursor"
+            }
+          },
+          "shape": "single",
+          "direction": "inout"
+        }
+      ]
+    },
+    {
+      "name": "txml_attribute_read",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_result"
+        },
+        "success": "TXML_OK"
+      },
+      "params": [
+        {
+          "name": "attribute",
+          "type": {
+            "type": "txml_attr_cursor"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "txml_attribute_view"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "document"
+        }
+      ]
+    },
+    {
+      "name": "txml_find_attribute",
+      "doc": "Look up one attribute by name ID. An unprefixed attribute has no namespace, so a default xmlns does not apply to it.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "bool"
+        },
+        "success": "true"
+      },
+      "params": [
+        {
+          "name": "cursor",
+          "type": {
+            "type": "txml_cursor"
+          }
+        },
+        {
+          "name": "name",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "value",
+          "type": {
+            "pointer": {
+              "type": "txml_str"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "document"
+        }
+      ]
+    },
+    {
+      "name": "txml_writer_init",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_result"
+        },
+        "success": "TXML_OK"
+      },
+      "params": [
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "pointer": {
+                "type": "txml_writer"
+              }
+            }
+          },
+          "shape": "handle_out",
+          "direction": "out",
+          "valid_on": "success"
+        },
+        {
+          "name": "config",
+          "type": {
+            "pointer": {
+              "type": "txml_writer_config",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "txml_write_start",
+      "doc": "Every emit call returns TXML_OK or TXML_NEED_SPACE. On TXML_NEED_SPACE the caller writes out txml_writer_output() and calls txml_writer_drain(), which continues the interrupted call and may return TXML_NEED_SPACE again. Text passed to a call that returned TXML_NEED_SPACE must stay valid until that call finally returns TXML_OK.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_result"
+        },
+        "success": "TXML_OK"
+      },
+      "params": [
+        {
+          "name": "writer",
+          "type": {
+            "pointer": {
+              "type": "txml_writer"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "name",
+          "type": {
+            "pointer": {
+              "type": "txml_write_name",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "txml_write_attribute",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_result"
+        },
+        "success": "TXML_OK"
+      },
+      "params": [
+        {
+          "name": "writer",
+          "type": {
+            "pointer": {
+              "type": "txml_writer"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "attribute",
+          "type": {
+            "pointer": {
+              "type": "txml_write_attr",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "txml_write_text",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_result"
+        },
+        "success": "TXML_OK"
+      },
+      "params": [
+        {
+          "name": "writer",
+          "type": {
+            "pointer": {
+              "type": "txml_writer"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "text",
+          "type": {
+            "type": "txml_str"
+          }
+        }
+      ]
+    },
+    {
+      "name": "txml_write_cdata",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_result"
+        },
+        "success": "TXML_OK"
+      },
+      "params": [
+        {
+          "name": "writer",
+          "type": {
+            "pointer": {
+              "type": "txml_writer"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "text",
+          "type": {
+            "type": "txml_str"
+          }
+        }
+      ]
+    },
+    {
+      "name": "txml_write_comment",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_result"
+        },
+        "success": "TXML_OK"
+      },
+      "params": [
+        {
+          "name": "writer",
+          "type": {
+            "pointer": {
+              "type": "txml_writer"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "text",
+          "type": {
+            "type": "txml_str"
+          }
+        }
+      ]
+    },
+    {
+      "name": "txml_write_pi",
+      "doc": "A processing instruction: ` < ?target data?>`. The target is an unqualified name; the data is written verbatim and may not contain \"?>\".",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_result"
+        },
+        "success": "TXML_OK"
+      },
+      "params": [
+        {
+          "name": "writer",
+          "type": {
+            "pointer": {
+              "type": "txml_writer"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "target",
+          "type": {
+            "type": "txml_str"
+          }
+        },
+        {
+          "name": "data",
+          "type": {
+            "type": "txml_str"
+          }
+        }
+      ]
+    },
+    {
+      "name": "txml_write_end",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_result"
+        },
+        "success": "TXML_OK"
+      },
+      "params": [
+        {
+          "name": "writer",
+          "type": {
+            "pointer": {
+              "type": "txml_writer"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "txml_write_subtree",
+      "doc": "Write a node and its descendants. Resumable: the writer remembers where in the walk it stopped, and drains continue it.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_result"
+        },
+        "success": "TXML_OK"
+      },
+      "params": [
+        {
+          "name": "writer",
+          "type": {
+            "pointer": {
+              "type": "txml_writer"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "cursor",
+          "type": {
+            "type": "txml_cursor"
+          }
+        }
+      ]
+    },
+    {
+      "name": "txml_writer_output",
+      "doc": "Bytes produced and not yet consumed.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_bytes"
+        },
+        "lifetime": "drain"
+      },
+      "params": [
+        {
+          "name": "writer",
+          "type": {
+            "pointer": {
+              "type": "txml_writer",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "txml_writer_drain",
+      "doc": "Consume them and continue any interrupted operation.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_result"
+        },
+        "success": "TXML_OK"
+      },
+      "params": [
+        {
+          "name": "writer",
+          "type": {
+            "pointer": {
+              "type": "txml_writer"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "txml_writer_finish",
+      "doc": "Check that every element was closed. Remaining bytes stay in the output.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_result"
+        },
+        "success": "TXML_OK"
+      },
+      "params": [
+        {
+          "name": "writer",
+          "type": {
+            "pointer": {
+              "type": "txml_writer"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "txml_writer_destroy",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "void"
+        }
+      },
+      "params": [
+        {
+          "name": "writer",
+          "type": {
+            "pointer": {
+              "type": "txml_writer"
+            }
+          },
+          "shape": "handle",
+          "direction": "in",
+          "destroys": true
+        }
+      ]
+    },
+    {
+      "name": "txml_str_equal",
+      "doc": "======================================================================== Text helpers\n\ntxml uses no C library, so these are the comparisons it needs internally and callers usually want too.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "bool"
+        },
+        "success": "true"
+      },
+      "params": [
+        {
+          "name": "left",
+          "type": {
+            "type": "txml_str"
+          }
+        },
+        {
+          "name": "right",
+          "type": {
+            "type": "txml_str"
+          }
+        }
+      ]
+    },
+    {
+      "name": "txml_qname_equal",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "bool"
+        },
+        "success": "true"
+      },
+      "params": [
+        {
+          "name": "left",
+          "type": {
+            "pointer": {
+              "type": "txml_qname",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        },
+        {
+          "name": "right",
+          "type": {
+            "pointer": {
+              "type": "txml_qname",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "txml_str_starts_with",
+      "doc": "Whether `text` begins with `prefix`; the SCXML event-descriptor case.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "bool"
+        },
+        "success": "true"
+      },
+      "params": [
+        {
+          "name": "text",
+          "type": {
+            "type": "txml_str"
+          }
+        },
+        {
+          "name": "prefix",
+          "type": {
+            "type": "txml_str"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -82,7 +82,11 @@ through it. Known deviations are listed under "Status" in
 ## Tasks
 
 ```sh
-mise run build   # compile the header checks and whatever can be linked
-mise run test    # run the suite
+mise run build          # regenerate include/txml.c and txml.api.json, compile, link
+mise run test           # the whole suite, including the checks below
 mise run spec tests/spec/elements.spec
+mise run freestanding   # no libc: includes, and undefined symbols in the objects
+mise run lint-src       # no recursion, at most three parameters per function
+mise run amalgamate     # include/txml.c, the single-file library
+mise run api            # include/txml.api.json, the machine-readable API
 ```

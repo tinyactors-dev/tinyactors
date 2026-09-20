@@ -112,7 +112,7 @@ enum TXML_CONSTANTS_OF(txml_result, "TXML_") {
  */
 typedef struct { const char *ptr; uint32_t length; } txml_str TXML_STRING;
 typedef struct { const uint8_t *ptr; uint32_t length; } txml_bytes TXML_BYTES;
-typedef struct { uint8_t *ptr; uint32_t capacity; } txml_buffer;
+typedef struct { TXML_BUFFER(capacity) uint8_t *ptr; uint32_t capacity; } txml_buffer;
 
 /* A string literal as a txml_str. The trailing NUL is not part of the text. */
 #define TXML_STR(literal) ((txml_str){ (literal), (uint32_t)(sizeof(literal) - 1u) })
@@ -228,7 +228,7 @@ TXML_API txml_arena_mark txml_arena_position(TXML_IN const txml_arena *arena);
 TXML_API void txml_arena_release(TXML_INOUT txml_arena *arena, txml_arena_mark mark);
 /* Free every chunk but keep the arena usable. */
 TXML_API void txml_arena_reset(TXML_INOUT txml_arena *arena);
-TXML_API void txml_arena_destroy(TXML_INOUT TXML_DESTROYS txml_arena *arena);
+TXML_API void txml_arena_destroy(TXML_INOUT txml_arena *arena);
 
 /* ========================================================================
  * Limits and flags
@@ -301,7 +301,7 @@ typedef struct {
     uint32_t step_budget;    /* nodes appended per step; 0 means until the step blocks */
 } txml_parser_config;
 
-TXML_API txml_result txml_parser_init(TXML_OUT TXML_RELEASE(txml_parser_destroy) txml_parser **out,
+TXML_API txml_result txml_parser_init(txml_parser **out,
                                       TXML_IN const txml_parser_config *config);
 
 /*
@@ -327,11 +327,11 @@ TXML_API txml_step txml_parse_step(txml_parser *parser);
 
 /* The document under construction. Valid from init until the parser is
  * destroyed or the document is detached; readable while parsing. */
-TXML_API const txml_doc *txml_parser_doc(const txml_parser *parser);
+TXML_API const txml_doc *txml_parser_doc(const txml_parser *parser) TXML_LIFETIME(parser);
 
 /* The failure that ended the parse. TXML_ERR_NOT_FOUND while none happened. */
 TXML_API txml_result txml_parser_error(const txml_parser *parser,
-                                       TXML_OUT TXML_VALID_ON(TXML_OK) txml_document_error *out);
+                                       TXML_OUT TXML_VALID_ON(TXML_OK) TXML_LIFETIME(process) txml_document_error *out);
 
 /* Bytes accepted by txml_parse_feed() so far. */
 TXML_API uint64_t txml_parser_offset(const txml_parser *parser);
@@ -339,7 +339,7 @@ TXML_API uint64_t txml_parser_offset(const txml_parser *parser);
 /* Detach the finished document and destroy the parser. Only after
  * TXML_STEP_DONE; otherwise TXML_ERR_INVALID and nothing is destroyed. */
 TXML_API txml_result txml_parser_finish(TXML_DESTROYS txml_parser *parser,
-                                        TXML_OUT TXML_RELEASE(txml_doc_destroy) txml_doc **out);
+                                        txml_doc **out);
 
 /* Destroy the parser and, unless it was detached, its document. */
 TXML_API void txml_parser_destroy(TXML_DESTROYS txml_parser *parser);
@@ -404,7 +404,7 @@ typedef struct { const txml_doc *doc; uint32_t node; } txml_cursor TXML_VALUE;
 typedef struct { const txml_doc *doc; uint32_t index; } txml_attr_cursor TXML_VALUE;
 
 typedef enum {
-    TXML_MOVED,  /* the cursor now points at the requested node */
+    TXML_MOVED TXML_SUCCESS, /* the cursor now points at the requested node */
     TXML_NONE,   /* there is no such node; the cursor did not move */
     TXML_PENDING /* the answer needs input not parsed yet; the cursor did not move */
 } txml_move TXML_SYMBOLS("TXML_");
@@ -479,7 +479,7 @@ TXML_API txml_result txml_node_position(txml_cursor cursor, TXML_OUT txml_positi
 
 /* Attributes, in document order. */
 TXML_API uint32_t txml_attribute_count(txml_cursor cursor);
-TXML_API txml_move txml_first_attribute(txml_cursor cursor, TXML_OUT txml_attr_cursor *out);
+TXML_API txml_move txml_first_attribute(txml_cursor cursor, TXML_OUT TXML_LIFETIME(document) txml_attr_cursor *out);
 TXML_API txml_move txml_next_attribute(TXML_INOUT txml_attr_cursor *attribute);
 TXML_API txml_result txml_attribute_read(txml_attr_cursor attribute,
                                          TXML_OUT TXML_LIFETIME(document) txml_attribute_view *out);
@@ -517,7 +517,7 @@ typedef struct {
 typedef struct { txml_str ns; txml_str local; txml_str prefix; } txml_write_name TXML_VALUE;
 typedef struct { txml_write_name name; txml_str value; } txml_write_attr TXML_VALUE;
 
-TXML_API txml_result txml_writer_init(TXML_OUT TXML_RELEASE(txml_writer_destroy) txml_writer **out,
+TXML_API txml_result txml_writer_init(txml_writer **out,
                                       TXML_IN const txml_writer_config *config);
 
 /*

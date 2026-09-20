@@ -1,0 +1,125 @@
+#!/usr/bin/env ruby
+#MISE description="Generate or verify the txml single-file amalgamation, include/txml.c"
+# vim:ft=ruby
+
+# include/txml.h is the authored public API (ADR 0014). src/*.h are private
+# module headers; src/internal.h lists them in dependency order. The
+# amalgamation inlines the private headers and then every src/*.c, in name
+# order, after the public header: definitions of public functions get TXML_API
+# and every other function gets internal linkage through TXML_PRIVATE (static by
+# default), exactly as the core's amalgamate does.
+#
+#   mise run amalgamate           write include/txml.c
+#   mise run amalgamate --check   fail if the checked-in file is out of date
+#
+# Two things are not handled by rewriting and are therefore rules for src/:
+# a file-scope name (typedef, macro, static object or static function) must not
+# be defined twice with different meanings in two modules, because the
+# amalgamation is one translation unit. The compiler reports a violation when
+# the task's proof step builds the result; the fix is a rename in src/.
+
+require 'pathname'
+require_relative '../lib/c_scan'
+
+root = Pathname.new(__dir__).join('../..').expand_path
+include_dir = root.join('include')
+public_header = include_dir.join('txml.h')
+umbrella = root.join('src/internal.h')
+
+header_names = umbrella.read.scan(/^#include "(\w+)\.h"$/).flatten
+abort "#{umbrella} lists no private headers" if header_names.empty?
+
+errors = []
+
+public_text = public_header.read
+public_functions = CScan.functions(public_text).select { |function| public_text[function.start...function.name_at].include?('TXML_API') }.map(&:name)
+CScan.functions(public_text).each do |function|
+  errors << "#{public_header.relative_path_from(root)}: #{function.name} is declared without TXML_API" unless public_functions.include?(function.name)
+end
+
+def strip_includes(text)
+  text.gsub(/^#pragma once\n/, '').gsub(/^#include "[^\n]+"\n/, '')
+end
+
+# Rewrites function heads in `text`: public definitions get TXML_API, other
+# functions (definitions and prototypes) that are not already static get
+# TXML_PRIVATE. Returns the rewritten text.
+def rewrite(text, public_functions, errors, origin)
+  edits = []
+  CScan.functions(text).each do |function|
+    head = text[function.start...function.name_at]
+    if public_functions.include?(function.name)
+      errors << "#{origin}: #{function.name} is public; declare it only in include/txml.h" unless function.definition?
+      edits << [function.start, 'TXML_API '] if function.definition? && !head.include?('TXML_API')
+    elsif head.match?(/\bstatic\b/)
+      next
+    else
+      edits << [function.start, 'TXML_PRIVATE ']
+    end
+  end
+  edits.sort_by(&:first).reverse_each { |offset, insertion| text = text.dup.insert(offset, insertion) }
+  text
+end
+
+headers = header_names.map do |name|
+  path = root.join('src', "#{name}.h")
+  errors << "missing module header: #{path}" unless path.file?
+  [path, path.file? ? path.read : '']
+end
+sources = Dir[root.join('src/*.c').to_s].sort.map { |path| Pathname.new(path) }.map { |path| [path, path.read] }
+
+# Every quoted include in src/ must resolve to a header that is inlined.
+(headers + sources).each do |path, text|
+  text.scan(/^#include "([^"]+)"$/).flatten.each do |included|
+    base = File.basename(included)
+    next if base == 'txml.h' || header_names.include?(base.delete_suffix('.h'))
+
+    errors << "#{path.relative_path_from(root)}: includes #{included}, which src/internal.h does not list"
+  end
+end
+
+headers = headers.map { |path, text| [path, rewrite(strip_includes(text), public_functions, errors, path.relative_path_from(root))] }
+sources = sources.map { |path, text| [path, rewrite(strip_includes(text), public_functions, errors, path.relative_path_from(root))] }
+
+unless errors.empty?
+  errors.each { |error| warn error }
+  exit 1
+end
+
+banner = <<~C
+  /*
+   * GENERATED FILE. Do not edit; run `mise run amalgamate` in tinyxml.
+   * The public API is include/txml.h. The private module headers (listed by
+   * src/internal.h) and every module source follow, in that order.
+   */
+  #include "txml.h"
+
+  /*
+   * Functions not declared in txml.h are private to this file. Private helpers
+   * may be unused in a given build, so they do not warn.
+   */
+  #ifndef TXML_PRIVATE
+  #if defined(__GNUC__) || defined(__clang__)
+  #define TXML_PRIVATE static __attribute__((unused))
+  #else
+  #define TXML_PRIVATE static
+  #endif
+  #endif
+
+C
+
+pieces = headers.map { |path, text| "/* ---- #{path.relative_path_from(root)} ---- */\n#{text}" } +
+         sources.map { |path, text| "/* ---- #{path.relative_path_from(root)} ---- */\n#{text}" }
+implementation = banner + pieces.join("\n")
+output = include_dir.join('txml.c')
+
+if ARGV == ['--check']
+  abort "#{output.relative_path_from(root)} is out of date; run mise run amalgamate" unless output.file? && output.read == implementation
+  puts 'txml amalgamation is current.'
+  exit
+end
+
+abort 'usage: mise run amalgamate [--check]' unless ARGV.empty?
+changed = !(output.file? && output.read == implementation)
+output.write(implementation) if changed
+puts changed ? "generated #{output.relative_path_from(root)}" : "#{output.relative_path_from(root)} unchanged"

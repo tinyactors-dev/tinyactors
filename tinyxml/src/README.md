@@ -14,5 +14,10 @@ Implementation modules. Headers here are private; the public API is
 - `tables.c`     the entity and ATTLIST tables
 - `writer.c`     the event writer, escaping, resumable output
 
+`internal.h` lists the private headers in dependency order for
+`mise run amalgamate`, which inlines them and every `.c` into
+`../include/txml.c`. That file is one translation unit, so a file-scope name
+must mean one thing across all of `src/`.
+
 The scanner is a table of resumable states (ADR 0021): see
 `../docs/internal/parser.md`.

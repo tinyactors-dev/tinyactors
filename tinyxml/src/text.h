@@ -32,3 +32,12 @@ uint32_t txml_text_decode(const uint8_t *bytes, uint32_t *width);
 /* XML 1.0 (fifth edition) NameStartChar and NameChar, which include ':'. */
 bool txml_text_is_name_start(uint32_t code);
 bool txml_text_is_name_char(uint32_t code);
+
+/*
+ * Set `length` bytes to zero. The compiler calls memset behind the code's back
+ * for a large struct initialiser, and can turn a plain byte loop into the same
+ * call; either would make the library depend on the C library. This is the
+ * loop, with the recognition that would undo it switched off where the compiler
+ * offers a way to say so.
+ */
+void txml_text_zero(void *destination, size_t length);

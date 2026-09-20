@@ -132,3 +132,18 @@ bool txml_text_is_name_char(uint32_t c) {
     }
     return txml_text_is_name_start(c) || c == 0xB7u || in(c, 0x300u, 0x36Fu) || in(c, 0x203Fu, 0x2040u);
 }
+
+#if defined(__clang__)
+#define TXML_NO_LOOP_IDIOMS __attribute__((no_builtin))
+#elif defined(__GNUC__)
+#define TXML_NO_LOOP_IDIOMS __attribute__((optimize("no-tree-loop-distribute-patterns")))
+#else
+#define TXML_NO_LOOP_IDIOMS
+#endif
+
+TXML_NO_LOOP_IDIOMS void txml_text_zero(void *destination, size_t length) {
+    unsigned char *bytes = (unsigned char *)destination;
+    for (size_t i = 0u; i < length; i++) {
+        bytes[i] = 0u;
+    }
+}

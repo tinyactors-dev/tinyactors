@@ -1,0 +1,40 @@
+#!/usr/bin/env ruby
+#MISE description="Describe the public API as include/txml.api.json, or verify the checked-in description"
+
+# Reads include/txml.h with clang, applies its TXML_* annotations, adds
+# per-target layouts, validates the result against
+# include/txml.api.schema.json, and compiles it back against the header before
+# writing it. The pipeline is the core's (tinyactors-core/docs/internal/api-ir.md)
+# with the txml vocabulary; docs/internal/public-api.md describes what differs.
+# `--check` fails when the checked-in description is out of date.
+
+require 'pathname'
+require_relative '../lib/api'
+
+ROOT = Pathname.new(__dir__).join('../..').expand_path
+HEADER = ROOT.join('include/txml.h')
+LIBRARY = ROOT.join('include/txml.c')
+SCHEMA = ROOT.join('include/txml.api.schema.json')
+OUTPUT = ROOT.join('include/txml.api.json')
+
+check = ARGV == ['--check']
+abort 'usage: mise run api [--check]' unless ARGV.empty? || check
+
+begin
+  description = Api.describe(HEADER, library: LIBRARY.file? ? LIBRARY : nil, schema: SCHEMA)
+rescue Api::Error, Api::Clang::Error => e
+  abort "api: #{HEADER.relative_path_from(ROOT)} cannot be described:\n#{e.message}"
+end
+text = Api.render(description)
+current = OUTPUT.file? && OUTPUT.read == text
+
+if check
+  abort "#{OUTPUT.relative_path_from(ROOT)} is out of date; run mise run api" unless current
+  puts 'txml API description is current.'
+elsif current
+  puts "#{OUTPUT.relative_path_from(ROOT)} unchanged"
+else
+  OUTPUT.write(text)
+  puts "generated #{OUTPUT.relative_path_from(ROOT)} (#{description['types'].size} types, " \
+       "#{description['functions'].size} functions, #{description['constants'].size} constants)"
+end

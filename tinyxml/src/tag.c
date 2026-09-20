@@ -18,7 +18,16 @@ static const char XML_URI[] = "http://www.w3.org/XML/1998/namespace";
  * Names and bindings.
  */
 
-static bool split_qname(const uint8_t *s, uint32_t length, txml_str *prefix, txml_str *local) {
+typedef struct {
+    txml_str prefix;
+    txml_str local;
+} split_name;
+
+static bool split_qname(txml_str written, split_name *out) {
+    const uint8_t *s = (const uint8_t *)written.ptr;
+    const uint32_t length = written.length;
+    txml_str *prefix = &out->prefix;
+    txml_str *local = &out->local;
     uint32_t colon = length;
     for (uint32_t i = 0u; i < length; i++) {
         if (s[i] == ':') {
@@ -173,13 +182,13 @@ static scan add_defaults(txml_parser *p) {
         return SCAN_OK;
     }
     for (const attlist_default *d = list->first; d != NULL; d = d->next) {
-        txml_str prefix, local;
-        if (!split_qname((const uint8_t *)d->name.ptr, d->name.length, &prefix, &local)) {
+        split_name parts;
+        if (!split_qname(d->name, &parts)) {
             return txp_fail(p, PROBLEM(TXML_DOC_NAME, "not a legal qualified name"), p->construct);
         }
         bool written = false;
         for (uint32_t k = 0u; k < t->count; k++) {
-            if (txml_str_equal(prefix, p->records[k].prefix) && txml_str_equal(local, p->records[k].local)) {
+            if (txml_str_equal(parts.prefix, p->records[k].prefix) && txml_str_equal(parts.local, p->records[k].local)) {
                 written = true;
                 break;
             }
@@ -192,8 +201,8 @@ static scan add_defaults(txml_parser *p) {
         }
 
         attribute_record *record = &p->records[t->count];
-        record->prefix = prefix;
-        record->local = local;
+        record->prefix = parts.prefix;
+        record->local = parts.local;
         record->position = p->construct;
         record->defaulted = true;
         begin_value(p, record);
@@ -341,9 +350,12 @@ static scan finish_element_name(txml_parser *p) {
         copy[i] = (char)p->name[i];
     }
     t->raw_name = (txml_str){ copy, p->name_length };
-    if (!split_qname((const uint8_t *)copy, p->name_length, &t->element_prefix, &t->element_local)) {
+    split_name element;
+    if (!split_qname(t->raw_name, &element)) {
         return txp_fail(p, PROBLEM(TXML_DOC_NAME, "not a legal qualified name"), p->name_position);
     }
+    t->element_prefix = element.prefix;
+    t->element_local = element.local;
     t->name_position = p->name_position;
     t->phase = TP_SPACE;
     t->seen_space = false;
@@ -364,9 +376,12 @@ static scan finish_attribute_name(txml_parser *p) {
     record->defaulted = false;
     record->declaration = false;
     record->position = p->name_position;
-    if (!split_qname((const uint8_t *)copy, p->name_length, &record->prefix, &record->local)) {
+    split_name attribute;
+    if (!split_qname((txml_str){ copy, p->name_length }, &attribute)) {
         return txp_fail(p, PROBLEM(TXML_DOC_NAME, "not a legal qualified name"), p->name_position);
     }
+    record->prefix = attribute.prefix;
+    record->local = attribute.local;
     t->phase = TP_AFTER_NAME;
     return SCAN_OK;
 }

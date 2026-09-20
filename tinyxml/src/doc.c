@@ -15,8 +15,14 @@
  * Columns.
  */
 
-static txml_result column_init(txml_column *column, txml_arena *arena, uint32_t entry_size,
-                               uint64_t max_document_bytes) {
+typedef struct {
+    uint32_t entry_size;
+    uint64_t max_document_bytes;
+} column_shape;
+
+static txml_result column_init(txml_column *column, txml_arena *arena, const column_shape *shape) {
+    const uint32_t entry_size = shape->entry_size;
+    const uint64_t max_document_bytes = shape->max_document_bytes;
     const uint64_t page_bytes = (uint64_t)COLUMN_PAGE_ENTRIES * entry_size;
     const uint64_t capacity = max_document_bytes / page_bytes + 1u;
 
@@ -320,8 +326,16 @@ txml_result txml_doc_intern_namespace(txml_doc *doc, txml_str uri, uint32_t *id)
     return TXML_OK;
 }
 
-static uint32_t probe_name(const txml_doc *doc, uint32_t namespace_id, txml_str local, uint32_t hash,
-                           uint32_t *free_slot) {
+typedef struct {
+    uint32_t namespace_id;
+    txml_str local;
+    uint32_t hash;
+} name_key;
+
+static uint32_t probe_name(const txml_doc *doc, const name_key *key, uint32_t *free_slot) {
+    const uint32_t namespace_id = key->namespace_id;
+    const txml_str local = key->local;
+    const uint32_t hash = key->hash;
     const uint32_t mask = doc->name_slot_capacity - 1u;
     uint32_t slot = hash & mask;
 
@@ -369,7 +383,7 @@ txml_result txml_doc_intern_name(txml_doc *doc, const txml_intern_params *params
     }
     const uint32_t hash = name_hash(namespace_uri(doc, params->namespace_id), params->local);
     uint32_t free_slot = 0u;
-    const uint32_t found = probe_name(doc, params->namespace_id, params->local, hash, &free_slot);
+    const uint32_t found = probe_name(doc, &(name_key){ params->namespace_id, params->local, hash }, &free_slot);
     if (found != TXML_NAME_NONE) {
         *id = found;
         return TXML_OK;
@@ -383,7 +397,7 @@ txml_result txml_doc_intern_name(txml_doc *doc, const txml_intern_params *params
         if (grown != TXML_OK) {
             return grown;
         }
-        probe_name(doc, params->namespace_id, params->local, hash, &free_slot);
+        probe_name(doc, &(name_key){ params->namespace_id, params->local, hash }, &free_slot);
     }
 
     uint32_t local_offset = 0u;
@@ -421,7 +435,7 @@ uint32_t txml_doc_find_name(const txml_doc *doc, const txml_qname *name) {
         return TXML_NAME_NONE;
     }
     uint32_t unused = 0u;
-    return probe_name(doc, namespace_id, name->local, name_hash(name->ns, name->local), &unused);
+    return probe_name(doc, &(name_key){ namespace_id, name->local, name_hash(name->ns, name->local) }, &unused);
 }
 
 uint32_t txml_doc_name_count(const txml_doc *doc) {
@@ -602,24 +616,24 @@ void txml_doc_destroy(txml_doc *doc) {
 static txml_result doc_build(txml_doc *doc) {
     const uint64_t budget = doc->limits.max_document_bytes;
 
-    txml_result result = column_init(&doc->nodes, &doc->tree, sizeof(txml_node), budget);
+    txml_result result = column_init(&doc->nodes, &doc->tree, &(column_shape){ sizeof(txml_node), budget });
     if (result == TXML_OK) {
-        result = column_init(&doc->attributes, &doc->tree, sizeof(txml_attribute_entry), budget);
+        result = column_init(&doc->attributes, &doc->tree, &(column_shape){ sizeof(txml_attribute_entry), budget });
     }
     if (result == TXML_OK) {
-        result = column_init(&doc->positions, &doc->tree, sizeof(txml_position), budget);
+        result = column_init(&doc->positions, &doc->tree, &(column_shape){ sizeof(txml_position), budget });
     }
     if (result == TXML_OK) {
-        result = column_init(&doc->node_prefixes, &doc->tree, sizeof(txml_prefix_entry), budget);
+        result = column_init(&doc->node_prefixes, &doc->tree, &(column_shape){ sizeof(txml_prefix_entry), budget });
     }
     if (result == TXML_OK) {
-        result = column_init(&doc->attribute_prefixes, &doc->tree, sizeof(txml_prefix_entry), budget);
+        result = column_init(&doc->attribute_prefixes, &doc->tree, &(column_shape){ sizeof(txml_prefix_entry), budget });
     }
     if (result == TXML_OK) {
-        result = column_init(&doc->names, &doc->values, sizeof(txml_name_entry), budget);
+        result = column_init(&doc->names, &doc->values, &(column_shape){ sizeof(txml_name_entry), budget });
     }
     if (result == TXML_OK) {
-        result = column_init(&doc->namespaces, &doc->values, sizeof(txml_namespace_entry), budget);
+        result = column_init(&doc->namespaces, &doc->values, &(column_shape){ sizeof(txml_namespace_entry), budget });
     }
     if (result != TXML_OK) {
         return result;

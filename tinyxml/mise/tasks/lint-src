@@ -1,0 +1,96 @@
+#!/usr/bin/env ruby
+#MISE description="Audit src/ and the header for the hard constraints: at most three parameters, no recursion"
+# vim:ft=ruby
+#
+#   mise run lint-src
+#
+# Two of AGENTS.md's hard constraints are properties of the source text and are
+# cheap to keep from rotting:
+#
+#   10. At most three parameters per function.
+#    5. No recursion, anywhere.
+#
+# Parameters. Every function definition and declaration in src/*.c, src/*.h and
+# include/txml.h is found by mise/lib/c_scan.rb on comment- and string-stripped
+# text: a `)` that closes a parameter list and is followed by `{` or `;` at file
+# level, or a function-pointer declarator `(*name)(...)`. Its parameters are counted at
+# top-level commas, `(void)` is none, and more than three is an error.
+# `// lint: allow-params` on the line that names the function silences one, for
+# a case that truly cannot use a request struct; there are none today.
+#
+# Recursion. The call graph is built from the source: for every function
+# definition, each name in its body that is followed by `(` and is itself a
+# function defined in src/ is an edge. Any cycle (a function that reaches
+# itself, directly or through others) is an error, and the cycle is printed.
+# Only direct calls count. A call through a function pointer is not an edge:
+# the parser dispatches its states through `p->state->run` in a loop, which is
+# iteration and not recursion, and treating "could be any address-taken
+# function" as an edge would report every state machine as a cycle.
+
+require 'pathname'
+require_relative '../lib/c_scan'
+
+ROOT = Pathname.new(__dir__).join('../..').expand_path
+FILES = (Dir[ROOT.join('src/*.c').to_s] + Dir[ROOT.join('src/*.h').to_s] + [ROOT.join('include/txml.h').to_s]).sort.map { |path| Pathname.new(path) }
+LIMIT = 3
+
+errors = []
+definitions = {} # name => [file, stripped body]
+
+FILES.each do |path|
+  original = path.read
+  lines = original.lines
+  relative = path.relative_path_from(ROOT)
+  stripped = CScan.strip(original)
+
+  report = lambda do |what, count, offset|
+    line = CScan.line_of(original, offset)
+    errors << "#{relative}:#{line}: #{what} takes #{count} parameters (at most #{LIMIT})" unless lines[line - 1].include?('lint: allow-params')
+  end
+
+  CScan.function_pointers(original).each do |name, params, offset|
+    count = CScan.count_parameters(params)
+    report.call("function pointer #{name}", count, offset) if count > LIMIT
+  end
+  CScan.functions(original).each do |function|
+    count = CScan.count_parameters(function.params)
+    report.call(function.name, count, function.name_at) if count > LIMIT
+    definitions[function.name] = [relative, stripped[function.body]] if function.definition?
+  end
+end
+
+# Call graph: definition body -> names it calls that are defined in src/.
+edges = definitions.transform_values do |(_file, body)|
+  body.scan(/(?<![\w.>&])(\w+)\s*\(/).flatten.uniq.select { |name| definitions.key?(name) }
+end
+
+state = {}
+stack = []
+cycles = []
+visit = lambda do |name|
+  state[name] = :active
+  stack.push(name)
+  edges.fetch(name, []).each do |callee|
+    if state[callee] == :active
+      cycles << (stack[stack.index(callee)..] + [callee])
+    elsif state[callee].nil?
+      visit.call(callee)
+    end
+  end
+  stack.pop
+  state[name] = :done
+end
+# The scan below recurses over the call graph, which is fine: this task is not
+# part of the library, and the graph it walks is shallow.
+definitions.each_key { |name| visit.call(name) if state[name].nil? }
+
+cycles.uniq.each do |cycle|
+  file, = definitions.fetch(cycle.first)
+  errors << "#{file}: recursion: #{cycle.join(' -> ')}"
+end
+
+unless errors.empty?
+  warn errors.join("\n")
+  abort "lint-src: #{errors.size} problem(s)"
+end
+puts "lint-src: #{FILES.size} files, #{definitions.size} functions, none with more than #{LIMIT} parameters, no recursion"

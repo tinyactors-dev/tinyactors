@@ -1,0 +1,104 @@
+#!/usr/bin/env ruby
+#MISE description="Test the API description: it is current, it covers the header, the extractor rejects what it should"
+# vim:ft=ruby
+
+# Three checks.
+#
+#   1. include/txml.api.json is current (`mise run api --check`).
+#   2. Coverage. Every TXML_API function declared in include/txml.h is in the
+#      description, is marked public and implemented (include/txml.c exports
+#      it), and appears in tests/api_surface.c, which takes the address of each
+#      one so that a signature change breaks a test compile. And the other way:
+#      nothing is in the description or the surface test that the header does
+#      not declare.
+#   3. The extractor, against the fixture headers in tests/api. Each fixture
+#      states what it expects in `// expect` lines:
+#
+#        // expect error: <text that one reported problem contains>
+#        // expect <path> = <JSON>
+#
+#      A path walks the description: object keys by name, and list entries
+#      (fields, params, constants, functions) by their "name". Fixtures get the
+#      annotation macros of include/txml.h prepended, so they use the real
+#      vocabulary.
+
+require 'json'
+require 'pathname'
+require 'tmpdir'
+require_relative '../lib/api'
+require_relative '../lib/c_scan'
+
+ROOT = Pathname.new(__dir__).join('../..').expand_path
+SCHEMA = ROOT.join('include/txml.api.schema.json')
+HEADER = ROOT.join('include/txml.h')
+DESCRIPTION = ROOT.join('include/txml.api.json')
+
+failures = []
+
+# 1. Current.
+unless system('mise', 'run', 'api', '--check', chdir: ROOT.to_s)
+  abort 'api-test: include/txml.api.json is out of date; run mise run api'
+end
+
+# 2. Coverage.
+header_text = HEADER.read
+declared = CScan.functions(header_text).select { |function| header_text[function.start...function.name_at].include?('TXML_API') }.map(&:name).sort
+described = JSON.parse(DESCRIPTION.read)['functions']
+surface = ROOT.join('tests/api_surface.c').read
+surface_names = surface.scan(/\btxml_\w+\b/).uniq
+
+(declared - described.map { |function| function['name'] }).each { |name| failures << "#{name} is declared in txml.h but missing from txml.api.json" }
+(described.map { |function| function['name'] } - declared).each { |name| failures << "#{name} is in txml.api.json but not declared in txml.h" }
+described.each do |function|
+  failures << "#{function['name']} is not marked public" unless function['public']
+  failures << "#{function['name']} is not implemented by include/txml.c" unless function['implemented']
+end
+(declared - surface_names).each { |name| failures << "#{name} is not taken by tests/api_surface.c" }
+# The surface test may mention only what exists (types are allowed to appear).
+surface_calls = surface.scan(/\.\w+\s*=\s*(txml_\w+)\s*,/).flatten
+(surface_calls - declared).each { |name| failures << "tests/api_surface.c takes #{name}, which txml.h does not declare" }
+
+# 3. The extractor.
+macros = header_text[/^#ifdef TXML_API_EXTRACT\n.*?^#define TXML_DESTROYS [^\n]*\n/m] or
+  abort 'api-test: cannot find the annotation macros in include/txml.h'
+
+def lookup(value, path)
+  path.split('.').reduce(value) do |current, key|
+    case current
+    when Hash then current.fetch(key) { raise KeyError, "no #{key}" }
+    when Array then current.find { |each| each['name'] == key } || raise(KeyError, "no entry named #{key}")
+    else raise KeyError, "cannot descend into #{current.inspect} with #{key}"
+    end
+  end
+end
+
+fixtures = Dir[ROOT.join('tests/api/*.h')].sort
+Dir.mktmpdir('txml-api-test') do |directory|
+  fixtures.each do |fixture|
+    name = File.basename(fixture)
+    source = File.read(fixture)
+    errors = source.scan(%r{^// expect error: (.+)$}).flatten
+    facts = source.scan(%r{^// expect ([\w.]+) = (.+)$})
+    path = File.join(directory, name)
+    File.write(path, "#pragma once\n#{macros}\n#{source}")
+    begin
+      description = Api.describe(path, library: nil, schema: SCHEMA)
+      failures << "#{name}: expected errors, but it was described" unless errors.empty?
+      facts.each do |key, json|
+        actual = lookup(description, key)
+        expected = JSON.parse(json)
+        failures << "#{name}: #{key} is #{actual.to_json}, expected #{expected.to_json}" unless actual == expected
+      rescue KeyError => e
+        failures << "#{name}: #{key}: #{e.message}"
+      end
+    rescue Api::Error, Api::Clang::Error => e
+      failures << "#{name}: unexpected failure:\n#{e.message}" if errors.empty?
+      errors.each do |text|
+        failures << "#{name}: expected an error containing #{text.inspect}; got:\n#{e.message}" unless e.message.include?(text)
+      end
+    end
+  end
+end
+
+abort "api-test: #{failures.size} failure(s)\n#{failures.join("\n")}" unless failures.empty?
+puts "api-test: description current, #{declared.size} functions covered, #{fixtures.size} fixtures passed"

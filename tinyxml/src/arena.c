@@ -64,8 +64,15 @@ static txml_arena_chunk *chunk_new(txml_arena *arena, size_t capacity) {
     return chunk;
 }
 
+typedef struct {
+    size_t size;
+    size_t alignment;
+} bump_request;
+
 /* Bump inside `chunk`. Returns NULL when the request does not fit. */
-static void *chunk_bump(txml_arena *arena, txml_arena_chunk *chunk, size_t size, size_t alignment) {
+static void *chunk_bump(txml_arena *arena, txml_arena_chunk *chunk, const bump_request *request) {
+    const size_t size = request->size;
+    const size_t alignment = request->alignment;
     const uintptr_t base = (uintptr_t)chunk_payload(chunk);
     const uintptr_t mask = (uintptr_t)alignment - 1u;
     const uintptr_t address = (base + chunk->offset + mask) & ~mask;
@@ -96,7 +103,7 @@ void *txml_arena_alloc(txml_arena *arena, size_t size, size_t alignment) {
         return NULL;
     }
     if (arena->head != NULL) {
-        void *ptr = chunk_bump(arena, arena->head, size, alignment);
+        void *ptr = chunk_bump(arena, arena->head, &(bump_request){ size, alignment });
         if (ptr != NULL) {
             return ptr;
         }
@@ -124,7 +131,7 @@ void *txml_arena_alloc(txml_arena *arena, size_t size, size_t alignment) {
             arena->head->prev = big;
         }
         big->used_base = arena->used;
-        return chunk_bump(arena, big, size, alignment);
+        return chunk_bump(arena, big, &(bump_request){ size, alignment });
     }
 
     txml_arena_chunk *chunk = NULL;
@@ -147,7 +154,7 @@ void *txml_arena_alloc(txml_arena *arena, size_t size, size_t alignment) {
     chunk->prev = arena->head;
     chunk->used_base = arena->used;
     arena->head = chunk;
-    return chunk_bump(arena, chunk, size, alignment);
+    return chunk_bump(arena, chunk, &(bump_request){ size, alignment });
 }
 
 txml_arena_mark txml_arena_position(const txml_arena *arena) {

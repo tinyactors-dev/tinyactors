@@ -43,7 +43,14 @@ static void *table_find(const hashed *table, const table_kind *kind, const table
     return NULL;
 }
 
-static void place(void **slots, uint32_t capacity, uint32_t hash, void *item) {
+typedef struct {
+    void **slots;
+    uint32_t capacity;
+} slot_array;
+
+static void place(const slot_array *array, uint32_t hash, void *item) {
+    void **slots = array->slots;
+    const uint32_t capacity = array->capacity;
     const uint32_t mask = capacity - 1u;
     uint32_t slot = hash & mask;
     while (slots[slot] != NULL) {
@@ -52,7 +59,14 @@ static void place(void **slots, uint32_t capacity, uint32_t hash, void *item) {
     slots[slot] = item;
 }
 
-static scan table_insert(txml_parser *p, hashed *table, const table_kind *kind, void *item) {
+typedef struct {
+    hashed *table;
+    const table_kind *kind;
+} table_target;
+
+static scan table_insert(txml_parser *p, const table_target *target, void *item) {
+    hashed *table = target->table;
+    const table_kind *kind = target->kind;
     if ((table->count + 1u) * 2u > table->capacity) {
         const uint32_t capacity = table->capacity == 0u ? 64u : table->capacity * 2u;
         void **slots = (void **)txml_arena_alloc(&p->parser_arena, (size_t)capacity * sizeof(void *), sizeof(void *));
@@ -65,14 +79,14 @@ static scan table_insert(txml_parser *p, hashed *table, const table_kind *kind, 
         for (uint32_t i = 0u; i < table->capacity; i++) {
             if (table->slots[i] != NULL) {
                 const table_key key = kind->key(table->slots[i]);
-                place(slots, capacity, hash_key(&key), table->slots[i]);
+                place(&(slot_array){ slots, capacity }, hash_key(&key), table->slots[i]);
             }
         }
         table->slots = slots;
         table->capacity = capacity;
     }
     const table_key key = kind->key(item);
-    place(table->slots, table->capacity, hash_key(&key), item);
+    place(&(slot_array){ table->slots, table->capacity }, hash_key(&key), item);
     table->count += 1u;
     return SCAN_OK;
 }
@@ -150,7 +164,7 @@ scan txp_add_entity(txml_parser *p, txml_str name, txml_str value) {
         return SCAN_NOMEM;
     }
     e->value = expanded;
-    return table_insert(p, &p->entities, &entity_kind, e);
+    return table_insert(p, &(table_target){ &p->entities, &entity_kind }, e);
 }
 
 scan txp_add_default(txml_parser *p, const default_request *request) {
@@ -178,12 +192,12 @@ scan txp_add_default(txml_parser *p, const default_request *request) {
         }
         list->element = d->element;
         list->first = list->last = NULL;
-        const scan inserted = table_insert(p, &p->element_defaults, &element_kind, list);
+        const scan inserted = table_insert(p, &(table_target){ &p->element_defaults, &element_kind }, list);
         if (inserted != SCAN_OK) {
             return inserted;
         }
     }
-    const scan keyed = table_insert(p, &p->default_keys, &default_kind, d);
+    const scan keyed = table_insert(p, &(table_target){ &p->default_keys, &default_kind }, d);
     if (keyed != SCAN_OK) {
         return keyed;
     }

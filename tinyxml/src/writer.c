@@ -23,8 +23,8 @@
 #define ESCAPE_MAX 16u
 #define ARENA_CHUNK ((size_t)8192u)
 
-static const char XMLNS_URI[] = "http://www.w3.org/2000/xmlns/";
-static const char XML_URI[] = "http://www.w3.org/XML/1998/namespace";
+static const char WRITER_XMLNS_URI[] = "http://www.w3.org/2000/xmlns/";
+static const char WRITER_XML_URI[] = "http://www.w3.org/XML/1998/namespace";
 
 /* ------------------------------------------------------------------------
  * Types.
@@ -60,7 +60,7 @@ typedef struct {
     bool self_close;      /* txml_write_subtree: the source was <a/> */
     bool had_child;
     bool suppress; /* an ancestor or this element received text: no indentation */
-} frame;
+} writer_frame;
 
 typedef enum { STATE_PROLOG, STATE_TAG, STATE_CONTENT, STATE_EPILOG } writer_state;
 typedef enum { CLOSE_NONE, CLOSE_GT, CLOSE_SELF } close_mode;
@@ -128,7 +128,7 @@ struct txml_writer {
     uint32_t output_length; /* produced and not yet consumed */
 
     txml_arena arena;
-    frame *frames;
+    writer_frame *frames;
     uint32_t depth;
     wbinding *bindings;
     writer_state state;
@@ -337,7 +337,7 @@ static binding_lookup lookup_prefix(const txml_writer *w, txml_str prefix) {
         }
     }
     if (txml_str_equal(prefix, TXML_STR("xml"))) {
-        return (binding_lookup){ true, TXML_STR(XML_URI), 0u, NULL };
+        return (binding_lookup){ true, TXML_STR(WRITER_XML_URI), 0u, NULL };
     }
     return (binding_lookup){ false, { "", 0u }, 0u, NULL };
 }
@@ -359,7 +359,7 @@ typedef struct {
     txml_str uri;
 } declaration_request;
 
-static txml_result push_binding(txml_writer *w, const declaration_request *request) {
+static txml_result push_writer_binding(txml_writer *w, const declaration_request *request) {
     wbinding *b = (wbinding *)txml_arena_alloc(&w->arena, sizeof(wbinding), _Alignof(wbinding));
     if (b == NULL || !copy_str(w, request->prefix, &b->prefix) || !copy_str(w, request->uri, &b->uri)) {
         w->broken = true;
@@ -409,7 +409,14 @@ static txml_result require_binding(txml_writer *w, const declaration_request *re
 
 /* The innermost, unshadowed binding of `uri` to a non-default prefix (or, if
  * allowed, the default one). */
-static bool find_prefix_for(const txml_writer *w, txml_str uri, bool allow_default, txml_str *prefix) {
+typedef struct {
+    txml_str uri;
+    bool allow_default;
+} prefix_query;
+
+static bool find_prefix_for(const txml_writer *w, const prefix_query *query, txml_str *prefix) {
+    const txml_str uri = query->uri;
+    const bool allow_default = query->allow_default;
     for (const wbinding *b = w->bindings; b != NULL; b = b->prev) {
         if (!txml_str_equal(b->uri, uri) || (b->prefix.length == 0u && !allow_default)) {
             continue;
@@ -470,7 +477,7 @@ static bool invent_prefix(txml_writer *w, txml_str *prefix) {
  */
 
 static void op_begin(txml_writer *w, op_kind kind) {
-    w->op = (operation){ 0 };
+    txml_text_zero(&w->op, sizeof(w->op));
     w->op.kind = kind;
     w->op.indent = -1;
     queue_clear(&w->queue);
@@ -500,7 +507,7 @@ static txml_result settle_tag(txml_writer *w, close_mode mode) {
             continue; /* undeclaring a default that is not there */
         }
         n->emit = true;
-        const txml_result pushed = push_binding(w, &(declaration_request){ n->prefix, n->uri });
+        const txml_result pushed = push_writer_binding(w, &(declaration_request){ n->prefix, n->uri });
         if (pushed != TXML_OK) {
             return pushed;
         }
@@ -526,7 +533,7 @@ typedef struct {
 } name_spec;
 
 static bool ns_is_xmlns(txml_str ns) {
-    return txml_str_equal(ns, TXML_STR(XMLNS_URI));
+    return txml_str_equal(ns, TXML_STR(WRITER_XMLNS_URI));
 }
 
 /* Checks that need no state. */
@@ -541,7 +548,7 @@ static txml_result validate_name(const name_spec *name, bool trusted) {
         if (!is_ncname(name->prefix) || name->ns.length == 0u || txml_str_equal(name->prefix, TXML_STR("xmlns"))) {
             return TXML_ERR_INVALID;
         }
-        if (txml_str_equal(name->prefix, TXML_STR("xml")) != txml_str_equal(name->ns, TXML_STR(XML_URI))) {
+        if (txml_str_equal(name->prefix, TXML_STR("xml")) != txml_str_equal(name->ns, TXML_STR(WRITER_XML_URI))) {
             return TXML_ERR_INVALID;
         }
     }
@@ -566,11 +573,11 @@ static txml_result plan_element(txml_writer *w, const name_spec *name, txml_str 
     if (name->exact) {
         return require_binding(w, &(declaration_request){ { "", 0u }, name->ns });
     }
-    if (txml_str_equal(name->ns, TXML_STR(XML_URI))) {
+    if (txml_str_equal(name->ns, TXML_STR(WRITER_XML_URI))) {
         *prefix = TXML_STR("xml");
         return TXML_OK;
     }
-    if (find_prefix_for(w, name->ns, true, prefix)) {
+    if (find_prefix_for(w, &(prefix_query){ name->ns, true }, prefix)) {
         return TXML_OK;
     }
     const binding_lookup found = lookup_prefix(w, (txml_str){ "", 0u });
@@ -638,7 +645,7 @@ static txml_result compile_start(txml_writer *w, const start_request *request) {
 
     /* The new tag's declarations belong to the new depth. */
     const txml_arena_mark mark = txml_arena_position(&w->arena);
-    frame *f = &w->frames[w->depth];
+    writer_frame *f = &w->frames[w->depth];
     f->bindings = w->bindings;
     f->mark = mark;
     tag_reset(w);
@@ -713,9 +720,9 @@ static txml_result compile_attribute(txml_writer *w, const attribute_request *re
         if (!txml_str_equal(name->prefix, TXML_STR("xml"))) {
             result = require_binding(w, &(declaration_request){ name->prefix, name->ns });
         }
-    } else if (txml_str_equal(name->ns, TXML_STR(XML_URI))) {
+    } else if (txml_str_equal(name->ns, TXML_STR(WRITER_XML_URI))) {
         prefix = TXML_STR("xml");
-    } else if (!find_prefix_for(w, name->ns, false, &prefix)) {
+    } else if (!find_prefix_for(w, &(prefix_query){ name->ns, false }, &prefix)) {
         /* An attribute cannot use the default namespace: it needs a prefix now. */
         invent = invent_prefix(w, &invented);
         if (!invent) {
@@ -738,17 +745,17 @@ static txml_result compile_attribute(txml_writer *w, const attribute_request *re
     w->attribute_count += 1u;
 
     if (declaration) {
-        result = push_binding(w, &(declaration_request){ default_declaration ? (txml_str){ "", 0u } : name->local, request->value });
+        result = push_writer_binding(w, &(declaration_request){ default_declaration ? (txml_str){ "", 0u } : name->local, request->value });
         w->op.prefix = prefix;
     } else {
         if (invent) {
-            result = push_binding(w, &(declaration_request){ invented, name->ns });
+            result = push_writer_binding(w, &(declaration_request){ invented, name->ns });
             w->op.has_attribute_declaration = true;
             w->op.declared_prefix = invented;
             w->op.declared_uri = name->ns;
             /* The invented prefix is also an expanded-name entry on this tag. */
             attribute_name *declared = (attribute_name *)txml_arena_alloc(&w->arena, sizeof(attribute_name), _Alignof(attribute_name));
-            if (declared == NULL || !copy_str(w, TXML_STR(XMLNS_URI), &declared->ns) || !copy_str(w, invented, &declared->local)) {
+            if (declared == NULL || !copy_str(w, TXML_STR(WRITER_XMLNS_URI), &declared->ns) || !copy_str(w, invented, &declared->local)) {
                 w->broken = true;
                 return TXML_ERR_NOMEM;
             }
@@ -858,7 +865,7 @@ static txml_result compile_end(txml_writer *w, const end_request *request) {
         return TXML_ERR_INVALID;
     }
     op_begin(w, OP_END);
-    const frame *top = &w->frames[w->depth - 1u];
+    const writer_frame *top = &w->frames[w->depth - 1u];
     bool self = false;
 
     if (w->state == STATE_TAG) {
@@ -1225,14 +1232,14 @@ txml_result txml_writer_init(txml_writer **out, const txml_writer_config *config
     w->pending = false;
     w->broken = false;
     tag_reset(w);
-    w->op = (operation){ 0 };
+    txml_text_zero(&w->op, sizeof(w->op));
     queue_clear(&w->queue);
-    w->walk = (walk_state){ 0 };
+    txml_text_zero(&w->walk, sizeof(w->walk));
     w->arena.head = NULL;
 
     txml_result result = txml_arena_init(&w->arena, config->allocator, ARENA_CHUNK);
     if (result == TXML_OK) {
-        w->frames = (frame *)txml_arena_alloc(&w->arena, (size_t)config->limits.max_depth * sizeof(frame), _Alignof(frame));
+        w->frames = (writer_frame *)txml_arena_alloc(&w->arena, (size_t)config->limits.max_depth * sizeof(writer_frame), _Alignof(writer_frame));
         if (w->frames == NULL) {
             result = TXML_ERR_NOMEM;
         }

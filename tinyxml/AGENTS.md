@@ -61,21 +61,40 @@ even when it passes the tests.
 
 ## Tasks
 
-- `mise run build` — compile the header checks, any implementation modules,
-  and the test binaries that can be linked.
-- `mise run test` — run the whole suite.
+- `mise run build` — regenerate and check `include/txml.c` and
+  `include/txml.api.json`, then compile the header checks, the modules, and
+  the test binaries.
+- `mise run test` — run the whole suite: `freestanding`, `lint-src`, `build`,
+  every test binary, then `amalgamate-test` and `api-test`.
 - `mise run spec <file>` — run one spec file (or all of them) verbosely.
+- `mise run freestanding` — prove constraint 1: no libc includes, and no
+  undefined symbol in the objects at -O0..-O3 and -Os (`--amalgamation <file>`
+  checks a single file instead).
+- `mise run lint-src` — audit constraints 5 and 10: no recursion, at most
+  three parameters per function.
+- `mise run amalgamate [--check]` — write or verify `include/txml.c`, the
+  single-file library.
+- `mise run amalgamate-test` — build the amalgamation strictly and
+  freestanding, and run the public-API tests linked against it.
+- `mise run api [--check]` — write or verify `include/txml.api.json`, the
+  machine-readable API description.
+- `mise run api-test` — check the description is current and covers the
+  header, and test the extractor against `tests/api/*.h`.
 
-The suite is written against the header and is expected to fail until the
-implementation exists. Report it as pending, never by weakening a test.
+A test whose modules do not exist yet is reported as pending, never made to
+pass by weakening it. `include/txml.c` and `include/txml.api.json` are
+generated and checked in: after changing `src/` or `include/txml.h`, run
+`mise run build` and commit the regenerated files with the change.
 
 ## Working rules
 
 - Keep `docs/internal/memory-architecture.md` and the header in agreement. If
   a change makes them disagree, the ADR-backed document wins and the header
   follows.
-- Do not add an amalgamation or API-extraction step until `src/` has modules;
-  when it arrives, mirror `tinyactors-core/mise/tasks/amalgamate` and
-  `.../api`.
+- The amalgamation is one translation unit, so a file-scope name (a typedef,
+  macro, static function or static object) must mean one thing across all of
+  `src/`. Prefix a module-local name that another module also uses. Every
+  quoted include in `src/` must resolve to a header listed in
+  `src/internal.h`.
 - Prefer growing the spec suite over adding one-off C tests. A case that can
   be expressed as input plus an expected node table belongs in `tests/spec/`.

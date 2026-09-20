@@ -2,27 +2,18 @@
 #MISE description="Run the txml test suite"
 # vim:ft=ruby
 
-# Runs every test binary that exists. While src/ has no modules only
-# header_test can be linked, so the suite reports the rest as pending and
-# exits 0. Once an implementation exists every binary runs and any failure
-# fails the task.
+# Checks the source and object-code constraints (freestanding, lint-src), builds,
+# runs every test binary that exists, then runs the public-API tests against the
+# amalgamation and checks the API description. A test whose modules do not exist
+# is reported as pending; any failure fails the task.
 
 require 'pathname'
 
 ROOT = Pathname.new(__dir__).join('../..').expand_path
 
-# name => arguments
-BINARIES = {
-  'header_test' => [],
-  'arena_test' => [],
-  'text_test' => [],
-  'cursor_test' => [],
-  'doc_test' => [],
-  'incremental_test' => [],
-  'writer_test' => [],
-  'stream_test' => ['tests/spec'],
-  'spec_test' => ['tests/spec']
-}.freeze
+require_relative '../lib/suite'
+
+BINARIES = Suite::BINARIES
 
 def run(*command)
   puts command.join(' ')
@@ -34,6 +25,10 @@ def run(*command)
   exit(status.exitstatus || 1)
 end
 
+# The constraints that no test binary can see come first: they are properties
+# of the source and of the object code (AGENTS.md hard constraints 1, 5, 10).
+run('mise', 'run', 'freestanding')
+run('mise', 'run', 'lint-src')
 run('mise', 'run', 'build')
 
 ran = []
@@ -50,6 +45,10 @@ BINARIES.each do |name, arguments|
   run(binary.to_s, *arguments)
   ran << name
 end
+
+# The same public-API tests against the single-file library.
+run('mise', 'run', 'amalgamate-test')
+run('mise', 'run', 'api-test')
 
 puts "txml: #{ran.length} test binaries passed (#{ran.join(' ')})" unless ran.empty?
 

@@ -231,7 +231,7 @@ txml_result txml_parser_init(txml_parser **out, const txml_parser_config *config
     if (p == NULL) {
         return TXML_ERR_NOMEM;
     }
-    *p = (txml_parser){ 0 };
+    txml_text_zero(p, sizeof(*p));
     p->allocator = config->allocator;
     p->limits = config->limits;
     p->step_budget = config->step_budget;
