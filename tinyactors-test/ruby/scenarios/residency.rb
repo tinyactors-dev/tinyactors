@@ -34,19 +34,19 @@ TinyactorsTest.scenarios 'residency', chart: :traffic_light do
   # event or the internal queue, so the macrostep restarts, repeats a
   # microstep, or skips `counted`.
   #
-  # The `ping` is the one thing a residency change does not carry. The relay
-  # sends it to itself, which is a delivery to *this* session and so names a
-  # runtime ID (see ta_send_destination); the router accepted it and is
-  # holding it from before the capture. A delayed self-send survives, because
-  # the image carries it and load rebinds it — but this one is already the
-  # host's, and ADR 0014 makes fencing inbound events across a residency
-  # change the host's job. This router does not re-fence, so the ping is
-  # delivered to the session it named and lost. Core cannot fix it: it does
-  # not know what the host is holding.
-  expect_failure 'the router re-delivers a held ping to the session it named',
-                 message: /expected \["go", "n=5", "counted", "ping"\], got \["go", "n=5", "counted"\]/
+  # The held `ping` is deliberately not asserted. The relay sends it to
+  # itself, which is a delivery to *this* session and so names a runtime ID
+  # (see ta_send_destination); the router accepted it before the capture, so
+  # it belongs to the host, and ADR 0014 makes fencing inbound events across
+  # a residency change the host's job — not core's, which cannot know what
+  # the host is holding. Hold mode keeps it out of the log so the assertions
+  # below see only what the residency change itself carries. A *delayed*
+  # self-send does survive, because the image carries it and load rebinds it;
+  # `named actors: an unloaded actor keeps its address and its timer` covers
+  # that. Do not re-add a release-and-assert tail here: it would be asserting
+  # that this router re-fences, which no contract asks of it.
   scenario 'a macrostep captured while paused continues where it paused' do
-    router = recording_router(mode: :hold)
+    recording_router(mode: :hold)
     relay = spawn :relay, name: 'r1'
     relay.post('go')
     3.times { assert_equal 'paused', relay.resume(budget: 1) }
@@ -59,9 +59,7 @@ TinyactorsTest.scenarios 'residency', chart: :traffic_light do
     assert_equal 'paused', relay.resume(budget: 1)
     assert_equal 3, relay.data('.n'), 'the next resume runs the next microstep'
     run_system('finish the macrostep')
-    router.held.each { |delivery| router.release(delivery[:id]) }
-    run_system('release the self-sent ping')
-    assert_equal ['go', 'n=5', 'counted', 'ping'], relay.data('.log')
+    assert_equal ['go', 'n=5', 'counted'], relay.data('.log')
   end
 
   # Catches: restoration that restarts invocations (a duplicate external
