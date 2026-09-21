@@ -422,6 +422,31 @@ module TinyactorsTest
       baseline
     end
 
+    # Runs one interruption after baseline step `at` and passes only when its
+    # trace differs. An optional message matcher checks the reported difference.
+    def assert_runs_diverge(interruptions:, at:, message: nil, normalize: nil, &body)
+      raise ScenarioError, 'assert_runs_diverge needs a block' unless body
+      raise ScenarioError, 'assert_runs_diverge needs exactly one interruption' unless interruptions.size == 1
+
+      baseline = traced_run('baseline', normalize, &body)
+      unless at.is_a?(Integer) && at >= 0 && at < baseline.steps.size
+        raise ScenarioError, "assert_runs_diverge step #{at.inspect} is outside a #{baseline.steps.size}-step trace"
+      end
+
+      name, hook = interruptions.first
+      step = baseline.steps[at]
+      run_name = "#{name} after #{step.describe}"
+      step_hook = ->(context, index) { hook.call(context) if index == at }
+      trace = traced_run(run_name, normalize, after_step: step_hook, &body)
+      difference = Trace.difference(baseline, trace, actual_name: run_name)
+      raise AssertionFailed, "#{run_name} did not diverge from baseline" unless difference
+      if message && !(message === difference)
+        raise AssertionFailed, "trace difference did not match #{message.inspect}:\n#{difference}"
+      end
+
+      difference
+    end
+
     def assert(condition, message = 'assertion failed')
       raise AssertionFailed, message unless condition
     end

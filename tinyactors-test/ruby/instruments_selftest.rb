@@ -2,8 +2,7 @@
 
 # Verifies the test harness's own instruments against the live host: the
 # instrumented adapters (src/instruments.c), the teardown leak check, the
-# trace recorder, and assert_equivalent_runs. Each check is a scenario; the
-# ones marked expect_failure prove that a check can fail.
+# trace recorder, and the run-comparison assertions. Each check is a scenario.
 
 require 'pathname'
 require_relative 'tinyactors_test'
@@ -364,9 +363,9 @@ equivalence_group = TinyactorsTest.scenarios 'equivalence', chart: :traffic_ligh
     assert_equivalent_runs(interruptions: { 'reinstall the router' => reinstall }, &LIGHT_BODY)
   end
 
-  expect_failure 'a stray event after the first step changes the trace', message: /diverges from baseline at step 0 \(spawn traffic_light/
   scenario 'an interruption that changes behaviour is reported at the step it follows' do
-    assert_equivalent_runs(interruptions: { 'stray fault' => STRAY_FAULT }, &LIGHT_BODY)
+    assert_runs_diverge(interruptions: { 'stray fault' => STRAY_FAULT }, at: 0,
+                        message: /diverges from baseline at step 0 \(spawn traffic_light/, &LIGHT_BODY)
   end
 
   scenario 'journals appear in the trace with actor labels instead of runtime IDs' do
@@ -385,5 +384,5 @@ runner = TinyactorsTest::Runner.new(executable: root.join('build/tinyactors-test
 results = runner.run(groups)
 failed = results.reject(&:ok?).map { |result| result.scenario.full_name }
 check(failed.empty?, "#{failed.size} check(s) failed: #{failed.join('; ')}")
-check(results.count { |result| result.outcome == :xfail } == 1, 'the deliberate failure was detected')
+check(results.none? { |result| result.outcome == :xfail }, 'no expected failures remain')
 puts 'tinyactors-test instruments self-test passed'
