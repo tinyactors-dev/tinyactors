@@ -33,6 +33,8 @@ typedef struct {
 } ta_interpreter;
 
 ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_actor_resume_params *params);
+/* Runs SCXML exitInterpreter for a cancelled invoked session, without done.invoke. */
+ta_result ta_interpreter_cancel(ta_system *system, ta_actor *actor);
 /* Takes ownership of the event's data. */
 ta_result ta_interpreter_enqueue_internal(ta_system *system, ta_actor *actor, ta_event *event);
 /* Dispatches a due delayed send; RETRY leaves the send owned by the caller. */
@@ -79,6 +81,10 @@ ta_result ta_invoke_finished(ta_interpreter *it);
 bool ta_invoke_destination(const ta_actor *actor, ta_invoke_id invoke, ta_actor_ref *out);
 /* The invoke ID an event from `sender` to `destination` carries: set for child-to-parent events. */
 ta_invoke_id ta_invoke_parent_id(const ta_actor *sender, const ta_actor_ref *destination);
+/* False after a parent has retired the invocation that identifies this child. */
+bool ta_invoke_parent_accepts(const ta_system *system,
+                              const ta_actor *sender,
+                              const ta_actor_ref *destination);
 void ta_invoke_attach_child(ta_system *system, const ta_actor_parent *parent, ta_actor_id child);
 /* Cancels the actor's services and frees its invoke bookkeeping. */
 void ta_invoke_release(ta_system *system, ta_actor *actor);

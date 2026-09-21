@@ -1,4 +1,1 @@
-{
-  "test230": "an autoforwarded event carries the original fields: expected [[\"name is \", \"childToParent\"], [\"type is \", \"external\"], [\"sendid is \", nil], [\"origin is \", \"#_scxml_4294967297\"], [\"origintype is \", \"http://www.w3.org/TR/scxml/#SCXMLEventProcessor\"], [\"invokeid is \", \"s0.1\"], [\"data is \", nil]], got [[\"name is \", \"childToParent\"], [\"type is \", \"external\"], [\"sendid is \", nil], [\"origin is \", \"#_scxml_4294967297\"], [\"origintype is \", \"http://www.w3.org/TR/scxml/#SCXMLEventProcessor\"], [\"invokeid is \", nil], [\"data is \", nil]]",
-  "test250": "the cancelled child ran its onexit handlers, innermost first: expected [\"Exiting sub01\", \"Exiting sub0\"], got []"
-}
+{}

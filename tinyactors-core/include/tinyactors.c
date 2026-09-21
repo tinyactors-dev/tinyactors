@@ -1037,6 +1037,8 @@ typedef struct {
 
 TA_PRIVATE ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id);
 TA_PRIVATE bool ta_actor_state_active(const ta_actor *actor, ta_state_id state);
+/* Runs an invoked child's exitInterpreter path with isolated scratch storage. */
+TA_PRIVATE void ta_actor_exit_invoked(ta_system *system, ta_actor_id id);
 
 /*
  * A blank, unbootstrapped actor of `definition` with its slot claimed; the
@@ -1165,6 +1167,8 @@ typedef struct {
 } ta_interpreter;
 
 TA_PRIVATE ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_actor_resume_params *params);
+/* Runs SCXML exitInterpreter for a cancelled invoked session, without done.invoke. */
+TA_PRIVATE ta_result ta_interpreter_cancel(ta_system *system, ta_actor *actor);
 /* Takes ownership of the event's data. */
 TA_PRIVATE ta_result ta_interpreter_enqueue_internal(ta_system *system, ta_actor *actor, ta_event *event);
 /* Dispatches a due delayed send; RETRY leaves the send owned by the caller. */
@@ -1211,6 +1215,10 @@ TA_PRIVATE ta_result ta_invoke_finished(ta_interpreter *it);
 TA_PRIVATE bool ta_invoke_destination(const ta_actor *actor, ta_invoke_id invoke, ta_actor_ref *out);
 /* The invoke ID an event from `sender` to `destination` carries: set for child-to-parent events. */
 TA_PRIVATE ta_invoke_id ta_invoke_parent_id(const ta_actor *sender, const ta_actor_ref *destination);
+/* False after a parent has retired the invocation that identifies this child. */
+TA_PRIVATE bool ta_invoke_parent_accepts(const ta_system *system,
+                              const ta_actor *sender,
+                              const ta_actor_ref *destination);
 TA_PRIVATE void ta_invoke_attach_child(ta_system *system, const ta_actor_parent *parent, ta_actor_id child);
 /* Cancels the actor's services and frees its invoke bookkeeping. */
 TA_PRIVATE void ta_invoke_release(ta_system *system, ta_actor *actor);
@@ -2826,11 +2834,14 @@ static void ta_invoke_remove_at(ta_actor_sparse_state *sparse, uint32_t index) {
 }
 
 /* Cancels the service and forgets the invocation. */
-static void ta_invoke_cancel_at(ta_actor_sparse_state *sparse, uint32_t index) {
+static void ta_invoke_cancel_at(ta_system *system, ta_actor_sparse_state *sparse, uint32_t index) {
     ta_active_invoke active = sparse->invokes[index];
     ta_invoke_meta meta = sparse->invoke_meta[index];
     /* Remove first: the service may destroy a child that reports back reentrantly. */
     ta_invoke_remove_at(sparse, index);
+    if (meta.has_child) {
+        ta_actor_exit_invoked(system, meta.child);
+    }
     if (meta.invoker.v != NULL && meta.invoker.v->cancel != NULL) {
         ta_fault fault = {0};
         (void)meta.invoker.v->cancel(meta.invoker.self, active.service_handle, &fault);
@@ -2911,7 +2922,7 @@ TA_PRIVATE ta_result ta_invoke_state_exited(ta_interpreter *it, ta_state_id stat
     }
     for (uint32_t index = sparse->invoke_count; index > 0; index -= 1u) {
         if (sparse->invoke_meta[index - 1u].state == state) {
-            ta_invoke_cancel_at(sparse, index - 1u);
+            ta_invoke_cancel_at(it->system, sparse, index - 1u);
         }
     }
     return TA_OK;
@@ -3222,6 +3233,18 @@ typedef struct {
  * the sender, so ta_system_dispatch_due() offers it again.
  */
 static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *delivery) {
+    const ta_actor_sparse_state *sender_sparse = delivery->sender->sparse;
+    if (sender_sparse != NULL && sender_sparse->has_parent &&
+        delivery->destination.kind == TA_ACTOR_REF_RUNTIME &&
+        delivery->destination.as.runtime == sender_sparse->parent.actor &&
+        delivery->event.invoke_id == sender_sparse->parent.invoke_id) {
+        ta_actor *parent = ta_actor_lookup(system, sender_sparse->parent.actor);
+        if (parent == NULL || ta_invoke_find(parent, sender_sparse->parent.invoke_id) < 0) {
+            /* SCXML 6.4: once the parent cancels an invocation, events the
+             * child emits while running onexit are discarded. */
+            return TA_OK;
+        }
+    }
     ta_external_event_submit_status status = TA_EXTERNAL_EVENT_ERROR;
     ta_fault fault = {0};
     if (system->external_events.v != NULL) {
@@ -3272,6 +3295,18 @@ TA_PRIVATE ta_invoke_id ta_invoke_parent_id(const ta_actor *sender, const ta_act
     return sender->sparse->parent.invoke_id;
 }
 
+TA_PRIVATE bool ta_invoke_parent_accepts(const ta_system *system,
+                              const ta_actor *sender,
+                              const ta_actor_ref *destination) {
+    if (sender == NULL || sender->sparse == NULL || !sender->sparse->has_parent ||
+        destination->kind != TA_ACTOR_REF_RUNTIME ||
+        destination->as.runtime != sender->sparse->parent.actor) {
+        return true;
+    }
+    ta_actor *parent = ta_actor_lookup(system, sender->sparse->parent.actor);
+    return parent != NULL && ta_invoke_find(parent, sender->sparse->parent.invoke_id) >= 0;
+}
+
 TA_PRIVATE void ta_invoke_attach_child(ta_system *system, const ta_actor_parent *parent, ta_actor_id child) {
     ta_actor *actor = ta_actor_lookup(system, parent->actor);
     int64_t index = actor == NULL ? -1 : ta_invoke_find(actor, parent->invoke_id);
@@ -3285,9 +3320,9 @@ static ta_result ta_invoke_forward(ta_interpreter *it, uint32_t index, const ta_
     ta_actor_sparse_state *sparse = it->actor->sparse;
     ta_invoke_meta meta = sparse->invoke_meta[index];
     if (meta.has_child) {
-        /* The forwarded event keeps its envelope; it is not an event of the child's own invocation. */
+        /* Autoforwarding is an exact envelope copy, including the invoke ID
+         * that identifies the child which originally sent the event. */
         ta_event copy = *event;
-        copy.invoke_id = TA_INVOKE_ID_NONE;
         return ta_invoke_submit(it->system, &(ta_invoke_delivery){
                                                 .sender = it->actor,
                                                 .destination = { .kind = TA_ACTOR_REF_RUNTIME,
@@ -3368,7 +3403,7 @@ TA_PRIVATE ta_result ta_invoke_finished(ta_interpreter *it) {
         return TA_OK;
     }
     while (sparse->invoke_count != 0) {
-        ta_invoke_cancel_at(sparse, sparse->invoke_count - 1u);
+        ta_invoke_cancel_at(it->system, sparse, sparse->invoke_count - 1u);
     }
     sparse->pending_invokes.count = 0;
     if (!sparse->has_parent) {
@@ -3384,7 +3419,7 @@ TA_PRIVATE void ta_invoke_release(ta_system *system, ta_actor *actor) {
         return;
     }
     while (sparse->invoke_count != 0) {
-        ta_invoke_cancel_at(sparse, sparse->invoke_count - 1u);
+        ta_invoke_cancel_at(system, sparse, sparse->invoke_count - 1u);
     }
     ta_mem_free(system->allocator, sparse->invokes,
                 &(ta_allocator_free_params){ .size = sparse->invoke_capacity * sizeof(ta_active_invoke),
@@ -5553,6 +5588,25 @@ TA_PRIVATE bool ta_actor_state_active(const ta_actor *actor, ta_state_id state) 
         }
     }
     return false;
+}
+
+TA_PRIVATE void ta_actor_exit_invoked(ta_system *system, ta_actor_id id) {
+    ta_actor *actor = ta_actor_lookup(system, id);
+    if (actor == NULL || actor->finished) {
+        return;
+    }
+    /* Invocation cancellation is reentrant from the parent's interpreter.
+     * Preserve its scratch arena while the child runs exitInterpreter. */
+    ta_arena outer = system->scratch;
+    ta_arena nested = {0};
+    if (ta_arena_init(&nested, system->allocator, outer.block_size) != TA_OK) {
+        return;
+    }
+    system->scratch = nested;
+    (void)ta_interpreter_cancel(system, actor);
+    nested = system->scratch;
+    system->scratch = outer;
+    ta_arena_destroy(&nested);
 }
 
 static ta_result ta_actor_claim_slot(ta_system *system, ta_actor *actor, ta_actor_id *out) {
@@ -7765,6 +7819,9 @@ TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_sy
                                  : ta_invoke_parent_id(sender, &send->destination);
     if (sender == NULL && !send->submitted) {
         status = TA_EXTERNAL_EVENT_ACCEPTED; /* the sender's session is gone; drop the send */
+    } else if (!send->submitted && !ta_invoke_parent_accepts(system, sender, &send->destination)) {
+        /* The parent already cancelled this invoked child. */
+        status = TA_EXTERNAL_EVENT_ACCEPTED;
     } else if (ta_system_is_scxml_io(system, send->io_type)) {
         status = ta_submit_external(system, &(ta_submit_params){
                                                 .origin = origin,
@@ -9081,6 +9138,34 @@ static ta_result ta_interpreter_run(ta_system *system, ta_actor *actor, const ta
 TA_PRIVATE ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_actor_resume_params *params) {
     ta_result result = ta_interpreter_run(system, actor, params);
     /* The live set lives in scratch memory; between calls In() derives from the configuration. */
+    actor->live_active = NULL;
+    return result;
+}
+
+TA_PRIVATE ta_result ta_interpreter_cancel(ta_system *system, ta_actor *actor) {
+    ta_interpreter interpreter;
+    ta_interpreter *it = &interpreter;
+    ta_result result = ta_interpreter_init(it, system, actor);
+    if (result != TA_OK) {
+        actor->live_active = NULL;
+        return result;
+    }
+    const ta_definition *definition = it->definition;
+    for (ta_state_id index = definition->state_count; index > 0; index -= 1u) {
+        ta_state_id state = index - 1u;
+        if (!ta_bits_get(it->active, state)) {
+            continue;
+        }
+        result = ta_run_handlers(it, ta_state(it, state)->onexit_handlers);
+        if (result == TA_OK) {
+            result = ta_invoke_state_exited(it, state);
+        }
+        ta_bits_put(it->active, state, false);
+        if (result != TA_OK) {
+            break;
+        }
+    }
+    ta_store_active(it);
     actor->live_active = NULL;
     return result;
 }

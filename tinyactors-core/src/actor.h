@@ -93,6 +93,8 @@ typedef struct {
 
 ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id);
 bool ta_actor_state_active(const ta_actor *actor, ta_state_id state);
+/* Runs an invoked child's exitInterpreter path with isolated scratch storage. */
+void ta_actor_exit_invoked(ta_system *system, ta_actor_id id);
 
 /*
  * A blank, unbootstrapped actor of `definition` with its slot claimed; the

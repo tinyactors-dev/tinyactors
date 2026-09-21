@@ -130,11 +130,14 @@ static void ta_invoke_remove_at(ta_actor_sparse_state *sparse, uint32_t index) {
 }
 
 /* Cancels the service and forgets the invocation. */
-static void ta_invoke_cancel_at(ta_actor_sparse_state *sparse, uint32_t index) {
+static void ta_invoke_cancel_at(ta_system *system, ta_actor_sparse_state *sparse, uint32_t index) {
     ta_active_invoke active = sparse->invokes[index];
     ta_invoke_meta meta = sparse->invoke_meta[index];
     /* Remove first: the service may destroy a child that reports back reentrantly. */
     ta_invoke_remove_at(sparse, index);
+    if (meta.has_child) {
+        ta_actor_exit_invoked(system, meta.child);
+    }
     if (meta.invoker.v != NULL && meta.invoker.v->cancel != NULL) {
         ta_fault fault = {0};
         (void)meta.invoker.v->cancel(meta.invoker.self, active.service_handle, &fault);
@@ -215,7 +218,7 @@ ta_result ta_invoke_state_exited(ta_interpreter *it, ta_state_id state) {
     }
     for (uint32_t index = sparse->invoke_count; index > 0; index -= 1u) {
         if (sparse->invoke_meta[index - 1u].state == state) {
-            ta_invoke_cancel_at(sparse, index - 1u);
+            ta_invoke_cancel_at(it->system, sparse, index - 1u);
         }
     }
     return TA_OK;
@@ -526,6 +529,18 @@ typedef struct {
  * the sender, so ta_system_dispatch_due() offers it again.
  */
 static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *delivery) {
+    const ta_actor_sparse_state *sender_sparse = delivery->sender->sparse;
+    if (sender_sparse != NULL && sender_sparse->has_parent &&
+        delivery->destination.kind == TA_ACTOR_REF_RUNTIME &&
+        delivery->destination.as.runtime == sender_sparse->parent.actor &&
+        delivery->event.invoke_id == sender_sparse->parent.invoke_id) {
+        ta_actor *parent = ta_actor_lookup(system, sender_sparse->parent.actor);
+        if (parent == NULL || ta_invoke_find(parent, sender_sparse->parent.invoke_id) < 0) {
+            /* SCXML 6.4: once the parent cancels an invocation, events the
+             * child emits while running onexit are discarded. */
+            return TA_OK;
+        }
+    }
     ta_external_event_submit_status status = TA_EXTERNAL_EVENT_ERROR;
     ta_fault fault = {0};
     if (system->external_events.v != NULL) {
@@ -576,6 +591,18 @@ ta_invoke_id ta_invoke_parent_id(const ta_actor *sender, const ta_actor_ref *des
     return sender->sparse->parent.invoke_id;
 }
 
+bool ta_invoke_parent_accepts(const ta_system *system,
+                              const ta_actor *sender,
+                              const ta_actor_ref *destination) {
+    if (sender == NULL || sender->sparse == NULL || !sender->sparse->has_parent ||
+        destination->kind != TA_ACTOR_REF_RUNTIME ||
+        destination->as.runtime != sender->sparse->parent.actor) {
+        return true;
+    }
+    ta_actor *parent = ta_actor_lookup(system, sender->sparse->parent.actor);
+    return parent != NULL && ta_invoke_find(parent, sender->sparse->parent.invoke_id) >= 0;
+}
+
 void ta_invoke_attach_child(ta_system *system, const ta_actor_parent *parent, ta_actor_id child) {
     ta_actor *actor = ta_actor_lookup(system, parent->actor);
     int64_t index = actor == NULL ? -1 : ta_invoke_find(actor, parent->invoke_id);
@@ -589,9 +616,9 @@ static ta_result ta_invoke_forward(ta_interpreter *it, uint32_t index, const ta_
     ta_actor_sparse_state *sparse = it->actor->sparse;
     ta_invoke_meta meta = sparse->invoke_meta[index];
     if (meta.has_child) {
-        /* The forwarded event keeps its envelope; it is not an event of the child's own invocation. */
+        /* Autoforwarding is an exact envelope copy, including the invoke ID
+         * that identifies the child which originally sent the event. */
         ta_event copy = *event;
-        copy.invoke_id = TA_INVOKE_ID_NONE;
         return ta_invoke_submit(it->system, &(ta_invoke_delivery){
                                                 .sender = it->actor,
                                                 .destination = { .kind = TA_ACTOR_REF_RUNTIME,
@@ -672,7 +699,7 @@ ta_result ta_invoke_finished(ta_interpreter *it) {
         return TA_OK;
     }
     while (sparse->invoke_count != 0) {
-        ta_invoke_cancel_at(sparse, sparse->invoke_count - 1u);
+        ta_invoke_cancel_at(it->system, sparse, sparse->invoke_count - 1u);
     }
     sparse->pending_invokes.count = 0;
     if (!sparse->has_parent) {
@@ -688,7 +715,7 @@ void ta_invoke_release(ta_system *system, ta_actor *actor) {
         return;
     }
     while (sparse->invoke_count != 0) {
-        ta_invoke_cancel_at(sparse, sparse->invoke_count - 1u);
+        ta_invoke_cancel_at(system, sparse, sparse->invoke_count - 1u);
     }
     ta_mem_free(system->allocator, sparse->invokes,
                 &(ta_allocator_free_params){ .size = sparse->invoke_capacity * sizeof(ta_active_invoke),

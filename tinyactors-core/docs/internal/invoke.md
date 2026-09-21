@@ -14,7 +14,14 @@ The service handle is runtime-only. A session image records the logical active
 invocation, including its invoke ID, type, and autoforward state, but it does not
 retain, serialize, or rebind the service handle.
 
-For a statechart child actor, the service handle can resolve to another `ta_actor_id`. Parent/child communication still uses ordinary events and origin/invoke metadata. Normal child completion sends `done.invoke.<id>` to the parent's **external** event flow; cancellation on parent-state exit must not manufacture a normal completion event.
+For a statechart child actor, the service handle can resolve to another
+`ta_actor_id`. Parent/child communication still uses ordinary events and
+origin/invoke metadata. Normal child completion sends `done.invoke.<id>` to the
+parent's **external** event flow. Cancellation on parent-state exit runs the
+child's active-state `onexit` handlers in exit order before calling the
+invoker's cancellation hook, but does not manufacture a normal completion
+event. Events the child emits after its parent has retired the invocation are
+discarded.
 
 Active invocation bookkeeping is persistent session state. Whether an external service itself can survive process restart is a contract of that invoker/store integration.
 

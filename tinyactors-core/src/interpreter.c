@@ -473,6 +473,9 @@ ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *syste
                                  : ta_invoke_parent_id(sender, &send->destination);
     if (sender == NULL && !send->submitted) {
         status = TA_EXTERNAL_EVENT_ACCEPTED; /* the sender's session is gone; drop the send */
+    } else if (!send->submitted && !ta_invoke_parent_accepts(system, sender, &send->destination)) {
+        /* The parent already cancelled this invoked child. */
+        status = TA_EXTERNAL_EVENT_ACCEPTED;
     } else if (ta_system_is_scxml_io(system, send->io_type)) {
         status = ta_submit_external(system, &(ta_submit_params){
                                                 .origin = origin,
@@ -1789,6 +1792,34 @@ static ta_result ta_interpreter_run(ta_system *system, ta_actor *actor, const ta
 ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_actor_resume_params *params) {
     ta_result result = ta_interpreter_run(system, actor, params);
     /* The live set lives in scratch memory; between calls In() derives from the configuration. */
+    actor->live_active = NULL;
+    return result;
+}
+
+ta_result ta_interpreter_cancel(ta_system *system, ta_actor *actor) {
+    ta_interpreter interpreter;
+    ta_interpreter *it = &interpreter;
+    ta_result result = ta_interpreter_init(it, system, actor);
+    if (result != TA_OK) {
+        actor->live_active = NULL;
+        return result;
+    }
+    const ta_definition *definition = it->definition;
+    for (ta_state_id index = definition->state_count; index > 0; index -= 1u) {
+        ta_state_id state = index - 1u;
+        if (!ta_bits_get(it->active, state)) {
+            continue;
+        }
+        result = ta_run_handlers(it, ta_state(it, state)->onexit_handlers);
+        if (result == TA_OK) {
+            result = ta_invoke_state_exited(it, state);
+        }
+        ta_bits_put(it->active, state, false);
+        if (result != TA_OK) {
+            break;
+        }
+    }
+    ta_store_active(it);
     actor->live_active = NULL;
     return result;
 }
