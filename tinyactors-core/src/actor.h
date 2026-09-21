@@ -76,6 +76,8 @@ struct ta_actor {
     bool finished;
     bool has_external_event;
     ta_event external_event;
+    bool has_macrostep_event;
+    ta_event macrostep_event;
     bool has_current_event;
     ta_event current_event;
     uint64_t next_send_id;

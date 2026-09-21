@@ -99,7 +99,6 @@ def check(condition, message)
 end
 
 allocator_group = TinyactorsTest.scenarios 'allocator' do
-  expect_failure 'a compiled definition that is never registered leaks', message: /allocation\(s\) \(\d+ bytes\) live/
   scenario 'teardown reports memory the system did not release' do
     compiled = ta.definition.compile_spec(system: system_handle, spec: TinyactorsTest.charts[:harness_ping].to_spec,
                                           datamodel: { '$adapter' => 'datamodel.jq' }, allocator: allocator.adapter)
@@ -386,5 +385,5 @@ runner = TinyactorsTest::Runner.new(executable: root.join('build/tinyactors-test
 results = runner.run(groups)
 failed = results.reject(&:ok?).map { |result| result.scenario.full_name }
 check(failed.empty?, "#{failed.size} check(s) failed: #{failed.join('; ')}")
-check(results.count { |result| result.outcome == :xfail } == 2, 'both deliberate failures were detected')
+check(results.count { |result| result.outcome == :xfail } == 1, 'the deliberate failure was detected')
 puts 'tinyactors-test instruments self-test passed'

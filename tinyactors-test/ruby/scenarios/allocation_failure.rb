@@ -117,17 +117,9 @@ TinyactorsTest.scenarios 'allocation failure', chart: :relay do
   # have had without the interruption. Memory pressure is the host's
   # concern; the chart cannot observe that it happened.
   #
-  # Today core forgets the failure: the next resume answers ok/stable and
-  # leaves the actor idle with an empty configuration, holding the half of
-  # the macrostep that ran before the pool was full, while still accepting
-  # events that can no longer match anything (ADR 0010: a running
-  # interpreter is never in no state at all).
-  #
-  # Catches: exactly that - a failure reported once and then lost, and any
+  # Catches: a failure reported once and then lost, and any
   # retry that restarts the macrostep instead of continuing it, which the
   # comparison with the uninterrupted run would show as a repeated effect.
-  expect_failure 'core ends the macrostep instead of suspending it (ADR 0047)',
-                 message: /is in no state at all after an interrupted macrostep/
   scenario 'an allocation failure suspends a macrostep, and a later resume continues it' do
     reference = spawn
     reference.deliver 'go'
@@ -152,6 +144,7 @@ TinyactorsTest.scenarios 'allocation failure', chart: :relay do
     status = 'paused'
     20.times { status = actor.resume(budget: 1024); break unless status == 'paused' }
     assert_equal 'stable', status
+    run_system('dispatch effects after the resumed macrostep')
     assert !actor.active.empty?,
            "#{actor} is in no state at all after an interrupted macrostep: #{actor.data.inspect}"
     assert_equal [reference.active, reference.data], [actor.active, actor.data],

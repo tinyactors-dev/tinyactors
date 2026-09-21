@@ -289,8 +289,11 @@ struct ta_definition {
     /* Owns every array and string below. */
     ta_arena arena;
     /* The system whose atoms and event names this definition uses. */
-    const ta_system *system;
+    ta_system *system;
     bool registered;
+    /* Intrusive list of compiled definitions not yet registered. */
+    ta_definition *unregistered_previous;
+    ta_definition *unregistered_next;
     /* ta_state_def.children ranges index this array. */
     ta_state_id *children;
     uint32_t child_count;

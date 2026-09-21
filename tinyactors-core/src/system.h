@@ -29,6 +29,8 @@ struct ta_system {
      */
     ta_vec definitions;
     uint32_t free_definition_slot;
+    /* Compiled definitions still owned by callers, reclaimed at teardown. */
+    ta_definition *unregistered_definitions;
     /* Orders registrations, so the newest identity match wins after slot reuse. */
     uint64_t next_definition_serial;
 

@@ -118,6 +118,28 @@ static bool ta_dequeue_internal(ta_actor *actor, ta_event *out) {
     return true;
 }
 
+/* Puts the event selected for a failed microstep back where resume finds it. */
+static void ta_restore_current_event(ta_actor *actor, bool external) {
+    if (external) {
+        /* ta_set_current_event moved the retained external_event into current_event. */
+        actor->has_external_event = true;
+    } else {
+        ta_vec *queue = &actor->sparse->internal_events;
+        ta_queued_event *events = queue->items;
+        for (uint32_t index = queue->count; index > 0; index -= 1u) {
+            events[index] = events[index - 1u];
+        }
+        events[0] = (ta_queued_event){
+            .event = actor->current_event,
+            .flags = TA_EVENT_FLAG_OWNS_DATA |
+                     (actor->current_event.type == TA_EVENT_PLATFORM ? TA_EVENT_FLAG_GENERATED : 0u),
+        };
+        queue->count += 1u;
+    }
+    actor->current_event = (ta_event){0};
+    actor->has_current_event = false;
+}
+
 typedef struct {
     ta_event_name_id name;
     ta_send_id send_id;
@@ -1622,11 +1644,57 @@ static void ta_store_active(ta_interpreter *it) {
     }
 }
 
+/*
+ * Internal events are the only persistent interpreter storage that an
+ * ordinary transition commonly has to grow.  Reserve its first slot before
+ * exit/actions/entry make the microstep visible, so a full allocator pauses
+ * at the boundary and retry can start the same microstep again.
+ */
+static ta_result ta_prepare_microstep_queue(ta_interpreter *it) {
+    ta_actor *actor = it->actor;
+    bool created = actor->sparse == NULL;
+    ta_actor_sparse_state *sparse = ta_sparse(it->system, actor);
+    if (sparse == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    ta_result result = ta_vec_reserve(&sparse->internal_events, sparse->internal_events.count + 1u);
+    if (result != TA_OK && created) {
+        ta_vec_destroy(&sparse->internal_events);
+        ta_mem_free(it->system->allocator, sparse,
+                    &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),
+                                                 .alignment = _Alignof(ta_actor_sparse_state) });
+        actor->sparse = NULL;
+    }
+    return result;
+}
+
+static void ta_compact_sparse(ta_interpreter *it) {
+    ta_actor_sparse_state *sparse = it->actor->sparse;
+    if (sparse == NULL || sparse->internal_events.count != 0 || sparse->invoke_count != 0 ||
+        sparse->pending_invokes.count != 0 || sparse->activation_effects != NULL || sparse->has_parent ||
+        sparse->completion_pending || sparse->completion.has_data) {
+        return;
+    }
+    ta_invoke_release(it->system, it->actor);
+    ta_vec_destroy(&sparse->internal_events);
+    ta_mem_free(it->system->allocator, sparse,
+                &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),
+                                             .alignment = _Alignof(ta_actor_sparse_state) });
+    it->actor->sparse = NULL;
+}
+
 static ta_result ta_microstep(ta_interpreter *it) {
     /* A microstep changes the configuration, history, or the queue: an image
      * taken before it no longer describes this actor. */
+    ta_result result = TA_OK;
+    if (it->actor->bootstrapped) {
+        result = ta_prepare_microstep_queue(it);
+    }
+    if (result != TA_OK) {
+        return result;
+    }
     ta_actor_touch(it->actor);
-    ta_result result = ta_exit_states(it);
+    result = ta_exit_states(it);
     for (uint32_t index = 0; result == TA_OK && index < it->enabled_count; index += 1) {
         result = ta_run_block_isolated(it, ta_view(it, it->enabled[index]).actions);
     }
@@ -1659,6 +1727,10 @@ static ta_result ta_finish(ta_interpreter *it) {
     ta_event event;
     while (sparse != NULL && ta_dequeue_internal(it->actor, &event)) {
         ta_event_release(&event);
+    }
+    if (it->actor->has_macrostep_event) {
+        ta_event_release(&it->actor->macrostep_event);
+        it->actor->has_macrostep_event = false;
     }
     it->actor->macrostep = false;
     it->actor->record.residency = TA_ACTOR_DONE;
@@ -1753,8 +1825,11 @@ static ta_result ta_interpreter_run(ta_system *system, ta_actor *actor, const ta
             continue;
         }
         ta_event event;
+        bool restore_internal = false;
+        bool restore_external = false;
         if (ta_dequeue_internal(actor, &event)) {
             ta_set_current_event(actor, &event);
+            restore_internal = true;
         } else if ((result = ta_invoke_start_pending(it)) != TA_OK) {
             break; /* Invoke: the macrostep ended, so start its states' invocations. */
         } else if (ta_interpreter_internal_pending(actor)) {
@@ -1762,12 +1837,18 @@ static ta_result ta_interpreter_run(ta_system *system, ta_actor *actor, const ta
         } else if (actor->has_external_event) {
             actor->has_external_event = false;
             ta_set_current_event(actor, &actor->external_event);
+            restore_external = true;
             /* Invoke: <finalize> and autoforwarding. */
             result = ta_invoke_before_external(it);
             if (result != TA_OK) {
                 break;
             }
         } else {
+            ta_compact_sparse(it);
+            if (actor->has_macrostep_event) {
+                ta_event_release(&actor->macrostep_event);
+                actor->has_macrostep_event = false;
+            }
             actor->macrostep = false;
             actor->record.residency = TA_ACTOR_IDLE;
             *status = TA_RUN_STABLE;
@@ -1776,6 +1857,9 @@ static ta_result ta_interpreter_run(ta_system *system, ta_actor *actor, const ta
         result = ta_select_transitions(it, &actor->current_event);
         if (result == TA_OK && it->enabled_count != 0) {
             result = ta_microstep(it);
+            if (result == TA_ERR_NOMEM && (restore_internal || restore_external)) {
+                ta_restore_current_event(actor, restore_external);
+            }
         } else {
             it->steps += 1u;
         }
@@ -1854,6 +1938,10 @@ void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor) {
     if (actor->has_external_event) {
         ta_event_release(&actor->external_event);
         actor->has_external_event = false;
+    }
+    if (actor->has_macrostep_event) {
+        ta_event_release(&actor->macrostep_event);
+        actor->has_macrostep_event = false;
     }
     if (actor->has_current_event) {
         ta_event_release(&actor->current_event);

@@ -5,6 +5,17 @@ void ta_definition_destroy(ta_definition *definition) {
     if (definition == NULL) {
         return;
     }
+    if (!definition->registered && definition->system != NULL) {
+        ta_system *system = definition->system;
+        if (definition->unregistered_previous != NULL) {
+            definition->unregistered_previous->unregistered_next = definition->unregistered_next;
+        } else if (system->unregistered_definitions == definition) {
+            system->unregistered_definitions = definition->unregistered_next;
+        }
+        if (definition->unregistered_next != NULL) {
+            definition->unregistered_next->unregistered_previous = definition->unregistered_previous;
+        }
+    }
     const ta_datamodel_vtable *v = definition->datamodel.v;
     if (definition->datamodel_prepared) {
         v->destroy_definition(definition->datamodel.self, definition->datamodel_shared,

@@ -51,12 +51,6 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
     assert_equal ['go', 'n=5', 'counted', 'ping', 'extra'], relay.data('.log')
   end
 
-  # ta_actor_inspection.current_event is "the external event of the paused
-  # macrostep". Core reports it only while the external event itself is
-  # being processed: once the macrostep moves on to the internal `counted`,
-  # the actor is still paused in the `go` macrostep but reports no event.
-  expect_failure 'core drops the external event from inspection once an internal event is processed',
-                 message: /pause 8 .*expected "go", got nil/
   # Catches: inspection that loses (or misreports) the macrostep's external
   # event while the actor is paused, which a host needs to know what a
   # busy actor is working on.

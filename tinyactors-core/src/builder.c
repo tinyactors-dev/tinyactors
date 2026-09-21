@@ -1271,6 +1271,11 @@ ta_result ta_definition_compile_spec(ta_system *system, const ta_definition_comp
         ta_definition_destroy(definition);
         return result;
     }
+    definition->unregistered_next = system->unregistered_definitions;
+    if (definition->unregistered_next != NULL) {
+        definition->unregistered_next->unregistered_previous = definition;
+    }
+    system->unregistered_definitions = definition;
     *params->out = definition;
     return TA_OK;
 }

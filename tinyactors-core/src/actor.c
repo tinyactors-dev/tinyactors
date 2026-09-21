@@ -594,6 +594,8 @@ ta_result ta_actor_deliver(ta_system *system, ta_actor_id id, const ta_event *ev
     ta_event_retain(event, &copy);
     actor->external_event = copy;
     actor->has_external_event = true;
+    ta_event_retain(event, &actor->macrostep_event);
+    actor->has_macrostep_event = true;
     actor->macrostep = true;
     ta_actor_touch(actor);
     actor->record.residency = TA_ACTOR_RUNNING;
@@ -635,11 +637,8 @@ static const ta_event *ta_actor_paused_event(const ta_actor *actor) {
     if (!actor->macrostep) {
         return NULL;
     }
-    if (actor->has_external_event) {
-        return &actor->external_event;
-    }
-    if (actor->has_current_event && actor->current_event.type == TA_EVENT_EXTERNAL) {
-        return &actor->current_event;
+    if (actor->has_macrostep_event) {
+        return &actor->macrostep_event;
     }
     return NULL;
 }

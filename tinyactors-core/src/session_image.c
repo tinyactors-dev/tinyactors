@@ -38,6 +38,8 @@ struct ta_session_image {
     bool finished;
     bool has_external_event;
     ta_event external_event;
+    bool has_macrostep_event;
+    ta_event macrostep_event;
     bool has_current_event;
     ta_event current_event;
     uint64_t next_send_id;
@@ -206,6 +208,7 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor, t
 /* The second half of a capture: infallible, so it cannot leave a half-image. */
 static void ta_image_retain(ta_session_image *image) {
     ta_value_retain(&image->external_event.data);
+    ta_value_retain(&image->macrostep_event.data);
     ta_value_retain(&image->current_event.data);
     ta_value_retain(&image->completion.data);
     for (uint32_t index = 0; index < image->internal_count; index += 1) {
@@ -250,6 +253,8 @@ ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_params *par
         .finished = actor->finished,
         .has_external_event = actor->has_external_event,
         .external_event = actor->external_event,
+        .has_macrostep_event = actor->has_macrostep_event,
+        .macrostep_event = actor->macrostep_event,
         .has_current_event = actor->has_current_event,
         .current_event = actor->current_event,
         .next_send_id = actor->next_send_id,
@@ -302,6 +307,7 @@ void ta_session_image_destroy(ta_session_image *image) {
     }
     /* The mirror of ta_image_retain(), in the same order. */
     ta_value_release(&image->external_event.data);
+    ta_value_release(&image->macrostep_event.data);
     ta_value_release(&image->current_event.data);
     ta_value_release(&image->completion.data);
     for (uint32_t index = 0; index < image->internal_count; index += 1) {
@@ -449,6 +455,10 @@ ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_par
     if (image->has_external_event) {
         ta_event_retain(&image->external_event, &actor->external_event);
         actor->has_external_event = true;
+    }
+    if (image->has_macrostep_event) {
+        ta_event_retain(&image->macrostep_event, &actor->macrostep_event);
+        actor->has_macrostep_event = true;
     }
     if (image->has_current_event) {
         ta_event_retain(&image->current_event, &actor->current_event);

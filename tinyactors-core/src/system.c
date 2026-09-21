@@ -68,6 +68,9 @@ void ta_system_destroy(ta_system *system) {
             (void)ta_actor_destroy(system, ((ta_actor_id)entry->generation << 32) | slot);
         }
     }
+    while (system->unregistered_definitions != NULL) {
+        ta_definition_destroy(system->unregistered_definitions);
+    }
     /* Every actor is gone, so every definition goes, retired or not. */
     for (uint32_t slot = 0; slot < system->definitions.count; slot += 1) {
         ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
@@ -133,6 +136,16 @@ ta_result ta_system_register_definition(ta_system *system, ta_definition *defini
     }
     entry->definition = definition;
     entry->next_free = UINT32_MAX;
+    if (definition->unregistered_previous != NULL) {
+        definition->unregistered_previous->unregistered_next = definition->unregistered_next;
+    } else {
+        system->unregistered_definitions = definition->unregistered_next;
+    }
+    if (definition->unregistered_next != NULL) {
+        definition->unregistered_next->unregistered_previous = definition->unregistered_previous;
+    }
+    definition->unregistered_previous = NULL;
+    definition->unregistered_next = NULL;
     definition->id = ((ta_definition_id)entry->generation << 32) | slot;
     definition->registered = true;
     definition->registration_serial = system->next_definition_serial++;
