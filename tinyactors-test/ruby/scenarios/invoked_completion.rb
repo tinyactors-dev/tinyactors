@@ -79,17 +79,8 @@ TinyactorsTest.scenarios 'invoked completion' do
     assert_equal 'err_not_found', publish_completion(999_999), 'an unknown ID names no actor'
   end
 
-  # `docs/internal/actor-lifecycle.md`: "destruction is busy while the
-  # parent invocation remains active". Core does not implement it: the
-  # child's `completion_pending` flag is set in src/invoke.c and never read
-  # again, and `ta_actor_destroy` has no such check. A host that reclaims
-  # a child between its final state and its parent's done.invoke therefore
-  # gets no warning.
-  #
   # Catches: reclamation of a child whose parent still expects its
   # completion.
-  expect_failure 'core does not refuse to destroy a child whose completion is pending',
-                 message: /destroying a child with a pending completion is busy: expected "err_busy", got "ok"/
   scenario 'a child with a pending completion cannot be destroyed' do
     _parent, child = InvokedCompletion.park(self)
 

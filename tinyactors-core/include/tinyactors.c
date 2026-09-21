@@ -6092,6 +6092,13 @@ TA_API ta_result ta_actor_destroy(ta_system *system, ta_actor_id id) {
     if (actor == NULL) {
         return TA_ERR_NOT_FOUND;
     }
+    ta_actor_sparse_state *sparse = actor->sparse;
+    if (sparse != NULL && sparse->completion_pending && sparse->has_parent) {
+        ta_actor_ref parent = { .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = sparse->parent.actor };
+        if (ta_invoke_parent_accepts(system, actor, &parent)) {
+            return TA_ERR_BUSY;
+        }
+    }
     /* Sends already submitted stay queued for their receivers. */
     ta_timer_cancel_unsubmitted(&system->timers, id);
     ta_actor_release_address(system, actor);
