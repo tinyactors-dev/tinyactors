@@ -106,6 +106,13 @@ txml_position txp_position_at(const txml_parser *p, uint32_t index) {
     return position;
 }
 
+txml_position txp_position_after(const txml_parser *p, uint32_t index) {
+    txml_position position = txp_position_at(p, index);
+    position.offset += 1u;
+    position.column += 1u;
+    return position;
+}
+
 txml_position txp_cursor_position(const txml_parser *p, position_cursor *cursor, uint32_t index) {
     if (!cursor->valid || index < cursor->index) {
         cursor->at = txp_position_now(p);
@@ -188,6 +195,7 @@ scan txp_append_leaf(txml_parser *p, const leaf *what) {
             .as.text = { p->run.offset, p->run.length },
         },
         .position = what->position,
+        .end = what->end,
     };
     const txml_result result = txml_doc_append_node(p->doc, &append, &index);
     if (result != TXML_OK) {
@@ -207,6 +215,7 @@ void txp_rollback_nodes(txml_parser *p, const snapshot *s) {
     p->doc->nodes.count = s->nodes;
     p->doc->positions.count = s->nodes;
     p->doc->attributes.count = s->attributes;
+    p->doc->attribute_sources.count = s->attributes;
     p->doc->node_prefixes.count = s->node_prefixes;
     p->doc->attribute_prefixes.count = s->attribute_prefixes;
 }

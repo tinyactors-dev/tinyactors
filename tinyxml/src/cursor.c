@@ -183,6 +183,18 @@ txml_result txml_node_position(txml_cursor cursor, txml_position *out) {
     return TXML_OK;
 }
 
+txml_result txml_node_span(txml_cursor cursor, txml_span *out) {
+    const txml_node *node = node_of(cursor);
+    if (node == NULL) {
+        return TXML_ERR_INVALID;
+    }
+    if (is_open(node)) {
+        return TXML_ERR_PENDING;
+    }
+    *out = *txml_doc_span(cursor.doc, cursor.node);
+    return TXML_OK;
+}
+
 /* ------------------------------------------------------------------------
  * Attributes.
  */
@@ -223,6 +235,39 @@ txml_result txml_attribute_read(txml_attr_cursor attribute, txml_attribute_view 
     out->value = txml_doc_pool_str(attribute.doc, entry->value_offset, entry->value_length);
     out->prefix = txml_doc_prefix_of(attribute.doc, true, attribute.index);
     out->flags = txml_doc_attribute_flags(attribute.doc, entry);
+    return TXML_OK;
+}
+
+/* `count` bytes on from `at`, on the same line. */
+static txml_position advance_within_line(txml_position at, uint32_t count) {
+    at.offset += count;
+    at.column += count;
+    return at;
+}
+
+txml_result txml_attribute_span_read(txml_attr_cursor attribute, txml_attribute_span *out) {
+    const txml_attribute_entry *entry = txml_doc_attribute(attribute.doc, attribute.index);
+    const txml_attribute_source *source = txml_doc_attribute_source(attribute.doc, attribute.index);
+    if (entry == NULL || source == NULL) {
+        return TXML_ERR_INVALID;
+    }
+    if (source->start.line == 0u) {
+        return TXML_ERR_NOT_FOUND;
+    }
+    const txml_name_entry *name = txml_doc_name(attribute.doc, entry->name & TXML_ATTRIBUTE_NAME_MASK);
+    if (name == NULL) {
+        return TXML_ERR_INVALID;
+    }
+    const txml_str prefix = txml_doc_prefix_of(attribute.doc, true, attribute.index);
+    const uint32_t written = prefix.length + (prefix.length != 0u ? 1u : 0u) + name->local_length;
+    out->start = source->start;
+    out->name_end = advance_within_line(source->start, written);
+    out->value_start = source->value_start;
+    /* The closing quote is the byte before `end`, and is never a line end. */
+    out->value_end = source->end;
+    out->value_end.offset -= 1u;
+    out->value_end.column -= 1u;
+    out->end = source->end;
     return TXML_OK;
 }
 

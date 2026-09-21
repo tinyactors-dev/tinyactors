@@ -141,7 +141,8 @@ struct txml_doc {
 
     txml_column nodes;      /* tree */
     txml_column attributes; /* tree */
-    txml_column positions;  /* tree */
+    txml_column positions;  /* tree; one txml_span per node */
+    txml_column attribute_sources; /* tree; one txml_attribute_source per attribute */
     txml_column node_prefixes;      /* tree; sorted by node index */
     txml_column attribute_prefixes; /* tree; sorted by attribute index */
     txml_column names;      /* values */
@@ -169,16 +170,34 @@ TXML_PRIVATE txml_result txml_doc_create(txml_doc **out, const txml_parser_confi
 typedef struct {
     txml_node node;
     txml_position position;
+    txml_position end; /* unset for a node that is appended open */
 } txml_node_append;
 TXML_PRIVATE txml_result txml_doc_append_node(txml_doc *doc, const txml_node_append *append, uint32_t *index);
-/* Set `end` on an open node and clear TXML_NODE_OPEN. */
-TXML_PRIVATE void txml_doc_close_node(txml_doc *doc, uint32_t index, uint32_t end);
-/* Mark the parse finished: closes the document node and stops PENDING. */
-TXML_PRIVATE void txml_doc_complete(txml_doc *doc);
+/* Where an open node stops: its `end` index and the position after its end tag. */
+typedef struct {
+    uint32_t end;
+    txml_position position;
+} txml_close;
+/* Set `end` on an open node, record where it ends and clear TXML_NODE_OPEN. */
+TXML_PRIVATE void txml_doc_close_node(txml_doc *doc, uint32_t index, const txml_close *close);
+/* Mark the parse finished: closes the document node, which ends at `end`, and
+ * stops PENDING. */
+TXML_PRIVATE void txml_doc_complete(txml_doc *doc, txml_position end);
+
+/* Where an attribute was written; `start.line` is 0 when it has no source. */
+typedef struct {
+    txml_position start;
+    txml_position value_start;
+    txml_position end;
+} txml_attribute_source;
 
 /* Append one attribute. The caller ORs TXML_ATTRIBUTE_LAST and
- * TXML_ATTRIBUTE_DEFAULTED into `entry->name`. */
-TXML_PRIVATE txml_result txml_doc_append_attribute(txml_doc *doc, const txml_attribute_entry *entry, uint32_t *index);
+ * TXML_ATTRIBUTE_DEFAULTED into `entry.name`. */
+typedef struct {
+    txml_attribute_entry entry;
+    txml_attribute_source source;
+} txml_attribute_append;
+TXML_PRIVATE txml_result txml_doc_append_attribute(txml_doc *doc, const txml_attribute_append *append, uint32_t *index);
 
 /* Copy bytes into the pool; the run never spans a page unless it is larger
  * than one, in which case it occupies consecutive whole pages. */
@@ -198,6 +217,8 @@ TXML_PRIVATE const txml_attribute_entry *txml_doc_attribute(const txml_doc *doc,
 TXML_PRIVATE const txml_name_entry *txml_doc_name(const txml_doc *doc, uint32_t id);
 TXML_PRIVATE txml_str txml_doc_pool_str(const txml_doc *doc, uint32_t offset, uint32_t length);
 TXML_PRIVATE const txml_position *txml_doc_position(const txml_doc *doc, uint32_t index);
+TXML_PRIVATE const txml_span *txml_doc_span(const txml_doc *doc, uint32_t index);
+TXML_PRIVATE const txml_attribute_source *txml_doc_attribute_source(const txml_doc *doc, uint32_t index);
 /* TXML_ATTR_NS_DECL is derived from the name's namespace, TXML_ATTR_DEFAULTED
  * from the entry's flag bit. */
 TXML_PRIVATE uint32_t txml_doc_attribute_flags(const txml_doc *doc, const txml_attribute_entry *entry);
@@ -361,6 +382,8 @@ typedef struct {
     uint32_t value_length;
     uint32_t name_id;
     txml_position position;
+    txml_position value_start; /* first byte inside the quotes */
+    txml_position value_end;   /* the closing quote */
     bool declaration;
     bool defaulted;
 } attribute_record;
@@ -575,6 +598,8 @@ TXML_PRIVATE uint32_t txp_limit(const txml_parser *p);
 TXML_PRIVATE txml_position txp_position_at(const txml_parser *p, uint32_t index);
 /* The position of window[start]. */
 TXML_PRIVATE txml_position txp_position_now(const txml_parser *p);
+/* The position one past window[index], a delimiter that is not a line end. */
+TXML_PRIVATE txml_position txp_position_after(const txml_parser *p, uint32_t index);
 /* Consume up to `index`, keeping line, column and offset current. */
 TXML_PRIVATE void txp_commit(txml_parser *p, uint32_t index);
 
@@ -602,6 +627,7 @@ typedef struct {
     uint32_t flags;
     uint32_t name;
     txml_position position;
+    txml_position end; /* one past the closing delimiter */
 } leaf;
 
 /* Append a node whose text is `p->run`. Finishes the run first; safe to retry. */
@@ -1001,7 +1027,7 @@ static scan flush_text(txml_parser *p) {
     if (outcome != SCAN_OK) {
         return outcome;
     }
-    outcome = txp_append_leaf(p, &(leaf){ TXML_NODE_TEXT, 0u, TXML_NAME_NONE, p->construct });
+    outcome = txp_append_leaf(p, &(leaf){ TXML_NODE_TEXT, 0u, TXML_NAME_NONE, p->construct, txp_position_now(p) });
     if (outcome == SCAN_OK) {
         p->text_active = false;
     }
@@ -1064,7 +1090,7 @@ static scan content_eof(txml_parser *p) {
     if (!p->seen_root) {
         return txp_fail(p, PROBLEM(TXML_DOC_NO_ROOT, "no document element"), txp_position_now(p));
     }
-    txml_doc_complete(p->doc);
+    txml_doc_complete(p->doc, txp_position_now(p));
     return SCAN_DONE;
 }
 
@@ -1230,7 +1256,7 @@ static scan comment_run(txml_parser *p) {
                 if (b != '>') {
                     return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "'--' inside a comment"), p->comment.first_dash);
                 }
-                outcome = txp_append_leaf(p, &(leaf){ TXML_NODE_COMMENT, 0u, TXML_NAME_NONE, p->construct });
+                outcome = txp_append_leaf(p, &(leaf){ TXML_NODE_COMMENT, 0u, TXML_NAME_NONE, p->construct, txp_position_after(p, i) });
                 txp_commit(p, outcome == SCAN_OK ? i + 1u : i);
                 if (outcome == SCAN_OK) {
                     p->state = &txp_state_content;
@@ -1294,7 +1320,7 @@ static scan cdata_run(txml_parser *p) {
             continue;
         }
         if (p->cdata.brackets == 2u && b == '>') {
-            outcome = txp_append_leaf(p, &(leaf){ TXML_NODE_TEXT, TXML_NODE_CDATA, TXML_NAME_NONE, p->construct });
+            outcome = txp_append_leaf(p, &(leaf){ TXML_NODE_TEXT, TXML_NODE_CDATA, TXML_NAME_NONE, p->construct, txp_position_after(p, i) });
             txp_commit(p, outcome == SCAN_OK ? i + 1u : i);
             if (outcome == SCAN_OK) {
                 p->state = &txp_state_content;
@@ -1329,7 +1355,8 @@ const state txp_state_cdata = { "cdata", cdata_run, txp_eof_in_markup };
  * Processing instructions.
  */
 
-static scan finish_pi(txml_parser *p) {
+/* `close` is the index of the '>' that ends the instruction. */
+static scan finish_pi(txml_parser *p, uint32_t close) {
     uint32_t name_id = 0u;
 
     /* The target is interned after the data run is finished, because the pool
@@ -1340,7 +1367,7 @@ static scan finish_pi(txml_parser *p) {
     if (outcome != SCAN_OK) {
         return outcome;
     }
-    return txp_append_leaf(p, &(leaf){ TXML_NODE_PI, 0u, name_id, p->construct });
+    return txp_append_leaf(p, &(leaf){ TXML_NODE_PI, 0u, name_id, p->construct, txp_position_after(p, close) });
 }
 
 static scan begin_declaration(txml_parser *p) {
@@ -1427,7 +1454,7 @@ static scan pi_question_run(txml_parser *p) {
         return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "expected whitespace after the target"), p->pi.question_position);
     }
     txml_doc_run_begin(p->doc, &p->run);
-    const scan outcome = finish_pi(p);
+    const scan outcome = finish_pi(p, p->start);
     if (outcome != SCAN_OK) {
         return outcome;
     }
@@ -1476,7 +1503,7 @@ static scan pi_data_run(txml_parser *p) {
             continue;
         }
         if (p->pi.question == 1u && b == '>') {
-            outcome = finish_pi(p);
+            outcome = finish_pi(p, i);
             txp_commit(p, outcome == SCAN_OK ? i + 1u : i);
             if (outcome == SCAN_OK) {
                 p->state = &txp_state_content;
@@ -1542,7 +1569,8 @@ static bool declaration_value_valid(uint32_t which, const uint8_t *value, uint32
     return true;
 }
 
-static scan finish_declaration(txml_parser *p) {
+/* `delimiter` is the index of the '>' that ends the declaration. */
+static scan finish_declaration(txml_parser *p, uint32_t delimiter) {
     static const char *const names[3] = { "version", "encoding", "standalone" };
     const uint8_t *w = p->small.data;
     const uint32_t close = p->small.length;
@@ -1615,6 +1643,7 @@ static scan finish_declaration(txml_parser *p) {
             .as.element = { p->doc->attributes.count, count },
         },
         .position = p->construct,
+        .end = txp_position_after(p, delimiter),
     };
     uint32_t appended_index = 0u;
     txml_result result = txml_doc_append_node(p->doc, &append, &appended_index);
@@ -1629,8 +1658,10 @@ static scan finish_declaration(txml_parser *p) {
             result = txml_doc_pool_append(p->doc, (txml_str){ (const char *)w + parsed[k].offset, parsed[k].length }, &offset);
         }
         if (result == TXML_OK) {
-            const txml_attribute_entry entry = { name_id | (k + 1u == count ? TXML_ATTRIBUTE_LAST : 0u), offset, parsed[k].length };
-            result = txml_doc_append_attribute(p->doc, &entry, &attribute_index);
+            /* Parsed from a buffer, so there is no source position: line 0. */
+            const txml_attribute_append attribute = {
+                { name_id | (k + 1u == count ? TXML_ATTRIBUTE_LAST : 0u), offset, parsed[k].length }, { { 0u, 0u, 0u }, { 0u, 0u, 0u }, { 0u, 0u, 0u } } };
+            result = txml_doc_append_attribute(p->doc, &attribute, &attribute_index);
         }
     }
     if (result != TXML_OK) {
@@ -1664,7 +1695,7 @@ static scan declaration_run(txml_parser *p) {
             continue;
         }
         if (p->declaration.question == 1u && b == '>') {
-            outcome = finish_declaration(p);
+            outcome = finish_declaration(p, i);
             txp_commit(p, outcome == SCAN_OK ? i + 1u : i);
             if (outcome == SCAN_OK) {
                 p->state = &txp_state_content;
@@ -1881,6 +1912,18 @@ TXML_API txml_result txml_node_position(txml_cursor cursor, txml_position *out) 
     return TXML_OK;
 }
 
+TXML_API txml_result txml_node_span(txml_cursor cursor, txml_span *out) {
+    const txml_node *node = node_of(cursor);
+    if (node == NULL) {
+        return TXML_ERR_INVALID;
+    }
+    if (is_open(node)) {
+        return TXML_ERR_PENDING;
+    }
+    *out = *txml_doc_span(cursor.doc, cursor.node);
+    return TXML_OK;
+}
+
 /* ------------------------------------------------------------------------
  * Attributes.
  */
@@ -1921,6 +1964,39 @@ TXML_API txml_result txml_attribute_read(txml_attr_cursor attribute, txml_attrib
     out->value = txml_doc_pool_str(attribute.doc, entry->value_offset, entry->value_length);
     out->prefix = txml_doc_prefix_of(attribute.doc, true, attribute.index);
     out->flags = txml_doc_attribute_flags(attribute.doc, entry);
+    return TXML_OK;
+}
+
+/* `count` bytes on from `at`, on the same line. */
+static txml_position advance_within_line(txml_position at, uint32_t count) {
+    at.offset += count;
+    at.column += count;
+    return at;
+}
+
+TXML_API txml_result txml_attribute_span_read(txml_attr_cursor attribute, txml_attribute_span *out) {
+    const txml_attribute_entry *entry = txml_doc_attribute(attribute.doc, attribute.index);
+    const txml_attribute_source *source = txml_doc_attribute_source(attribute.doc, attribute.index);
+    if (entry == NULL || source == NULL) {
+        return TXML_ERR_INVALID;
+    }
+    if (source->start.line == 0u) {
+        return TXML_ERR_NOT_FOUND;
+    }
+    const txml_name_entry *name = txml_doc_name(attribute.doc, entry->name & TXML_ATTRIBUTE_NAME_MASK);
+    if (name == NULL) {
+        return TXML_ERR_INVALID;
+    }
+    const txml_str prefix = txml_doc_prefix_of(attribute.doc, true, attribute.index);
+    const uint32_t written = prefix.length + (prefix.length != 0u ? 1u : 0u) + name->local_length;
+    out->start = source->start;
+    out->name_end = advance_within_line(source->start, written);
+    out->value_start = source->value_start;
+    /* The closing quote is the byte before `end`, and is never a line end. */
+    out->value_end = source->end;
+    out->value_end.offset -= 1u;
+    out->value_end.column -= 1u;
+    out->end = source->end;
     return TXML_OK;
 }
 
@@ -3021,8 +3097,17 @@ TXML_PRIVATE const txml_attribute_entry *txml_doc_attribute(const txml_doc *doc,
     return doc == NULL ? NULL : (const txml_attribute_entry *)column_at(&doc->attributes, index);
 }
 
+TXML_PRIVATE const txml_span *txml_doc_span(const txml_doc *doc, uint32_t index) {
+    return doc == NULL ? NULL : (const txml_span *)column_at(&doc->positions, index);
+}
+
 TXML_PRIVATE const txml_position *txml_doc_position(const txml_doc *doc, uint32_t index) {
-    return doc == NULL ? NULL : (const txml_position *)column_at(&doc->positions, index);
+    const txml_span *span = txml_doc_span(doc, index);
+    return span == NULL ? NULL : &span->start;
+}
+
+TXML_PRIVATE const txml_attribute_source *txml_doc_attribute_source(const txml_doc *doc, uint32_t index) {
+    return doc == NULL ? NULL : (const txml_attribute_source *)column_at(&doc->attribute_sources, index);
 }
 
 TXML_PRIVATE uint32_t txml_doc_attribute_flags(const txml_doc *doc, const txml_attribute_entry *attribute) {
@@ -3053,31 +3138,40 @@ TXML_PRIVATE txml_result txml_doc_append_node(txml_doc *doc, const txml_node_app
         return result;
     }
     *(txml_node *)node_slot = append->node;
-    *(txml_position *)position_slot = append->position;
+    *(txml_span *)position_slot = (txml_span){ append->position, append->end };
     *index = doc->nodes.count - 1u;
     return TXML_OK;
 }
 
-TXML_PRIVATE void txml_doc_close_node(txml_doc *doc, uint32_t index, uint32_t end) {
+TXML_PRIVATE void txml_doc_close_node(txml_doc *doc, uint32_t index, const txml_close *close) {
     txml_node *node = (txml_node *)column_at(&doc->nodes, index);
-    if (node != NULL) {
-        node->end = end;
+    txml_span *span = (txml_span *)column_at(&doc->positions, index);
+    if (node != NULL && span != NULL) {
+        node->end = close->end;
         node->flags = (uint8_t)(node->flags & ~TXML_NODE_OPEN);
+        span->end = close->position;
     }
 }
 
-TXML_PRIVATE void txml_doc_complete(txml_doc *doc) {
-    txml_doc_close_node(doc, 0u, doc->nodes.count);
+TXML_PRIVATE void txml_doc_complete(txml_doc *doc, txml_position end) {
+    txml_doc_close_node(doc, 0u, &(txml_close){ doc->nodes.count, end });
     doc->complete = true;
 }
 
-TXML_PRIVATE txml_result txml_doc_append_attribute(txml_doc *doc, const txml_attribute_entry *entry, uint32_t *index) {
+TXML_PRIVATE txml_result txml_doc_append_attribute(txml_doc *doc, const txml_attribute_append *append, uint32_t *index) {
     void *slot = NULL;
-    const txml_result result = column_push(&doc->attributes, &doc->tree, &slot);
+    void *source_slot = NULL;
+    txml_result result = column_push(&doc->attributes, &doc->tree, &slot);
     if (result != TXML_OK) {
         return result;
     }
-    *(txml_attribute_entry *)slot = *entry;
+    result = column_push(&doc->attribute_sources, &doc->tree, &source_slot);
+    if (result != TXML_OK) {
+        doc->attributes.count -= 1u; /* keep the columns parallel */
+        return result;
+    }
+    *(txml_attribute_source *)source_slot = append->source;
+    *(txml_attribute_entry *)slot = append->entry;
     *index = doc->attributes.count - 1u;
     return TXML_OK;
 }
@@ -3170,7 +3264,10 @@ static txml_result doc_build(txml_doc *doc) {
         result = column_init(&doc->attributes, &doc->tree, &(column_shape){ sizeof(txml_attribute_entry), budget });
     }
     if (result == TXML_OK) {
-        result = column_init(&doc->positions, &doc->tree, &(column_shape){ sizeof(txml_position), budget });
+        result = column_init(&doc->positions, &doc->tree, &(column_shape){ sizeof(txml_span), budget });
+    }
+    if (result == TXML_OK) {
+        result = column_init(&doc->attribute_sources, &doc->tree, &(column_shape){ sizeof(txml_attribute_source), budget });
     }
     if (result == TXML_OK) {
         result = column_init(&doc->node_prefixes, &doc->tree, &(column_shape){ sizeof(txml_prefix_entry), budget });
@@ -3223,7 +3320,7 @@ static txml_result doc_build(txml_doc *doc) {
         .as.element = { 0u, 0u },
     };
     uint32_t index = 0u;
-    const txml_node_append append = { document, { 0u, 1u, 1u } };
+    const txml_node_append append = { document, { 0u, 1u, 1u }, { 0u, 1u, 1u } };
     return txml_doc_append_node(doc, &append, &index);
 }
 
@@ -3264,6 +3361,7 @@ TXML_PRIVATE txml_result txml_doc_create(txml_doc **out, const txml_parser_confi
     doc->nodes = (txml_column){ 0 };
     doc->attributes = (txml_column){ 0 };
     doc->positions = (txml_column){ 0 };
+    doc->attribute_sources = (txml_column){ 0 };
     doc->node_prefixes = (txml_column){ 0 };
     doc->attribute_prefixes = (txml_column){ 0 };
     doc->names = (txml_column){ 0 };
@@ -3626,7 +3724,7 @@ stop:
         return outcome;
     }
 
-    outcome = txp_append_leaf(p, &(leaf){ TXML_NODE_DOCTYPE, 0u, TXML_NAME_NONE, p->construct });
+    outcome = txp_append_leaf(p, &(leaf){ TXML_NODE_DOCTYPE, 0u, TXML_NAME_NONE, p->construct, txp_position_after(p, p->start) });
     if (outcome != SCAN_OK) {
         return outcome;
     }
@@ -3746,6 +3844,13 @@ TXML_PRIVATE txml_position txp_position_at(const txml_parser *p, uint32_t index)
     return position;
 }
 
+TXML_PRIVATE txml_position txp_position_after(const txml_parser *p, uint32_t index) {
+    txml_position position = txp_position_at(p, index);
+    position.offset += 1u;
+    position.column += 1u;
+    return position;
+}
+
 TXML_PRIVATE txml_position txp_cursor_position(const txml_parser *p, position_cursor *cursor, uint32_t index) {
     if (!cursor->valid || index < cursor->index) {
         cursor->at = txp_position_now(p);
@@ -3828,6 +3933,7 @@ TXML_PRIVATE scan txp_append_leaf(txml_parser *p, const leaf *what) {
             .as.text = { p->run.offset, p->run.length },
         },
         .position = what->position,
+        .end = what->end,
     };
     const txml_result result = txml_doc_append_node(p->doc, &append, &index);
     if (result != TXML_OK) {
@@ -3847,6 +3953,7 @@ TXML_PRIVATE void txp_rollback_nodes(txml_parser *p, const snapshot *s) {
     p->doc->nodes.count = s->nodes;
     p->doc->positions.count = s->nodes;
     p->doc->attributes.count = s->attributes;
+    p->doc->attribute_sources.count = s->attributes;
     p->doc->node_prefixes.count = s->node_prefixes;
     p->doc->attribute_prefixes.count = s->attribute_prefixes;
 }
@@ -5148,7 +5255,8 @@ static scan add_defaults(txml_parser *p) {
  * The end of a start tag.
  */
 
-static scan finish_tag(txml_parser *p) {
+/* `close` is the index of the '>' that ends the tag. */
+static scan finish_tag(txml_parser *p, uint32_t close) {
     tag_work *t = &p->tag;
     scan outcome;
 
@@ -5217,6 +5325,7 @@ static scan finish_tag(txml_parser *p) {
             .name = element_name, .as.element = { p->doc->attributes.count, t->count },
         },
         .position = p->construct,
+        .end = t->empty ? txp_position_after(p, close) : (txml_position){ 0u, 0u, 0u },
     };
     uint32_t appended_index = 0u;
     txml_result result = txml_doc_append_node(p->doc, &append, &appended_index);
@@ -5227,9 +5336,16 @@ static scan finish_tag(txml_parser *p) {
         uint32_t name = p->records[k].name_id;
         name |= k + 1u == t->count ? TXML_ATTRIBUTE_LAST : 0u;
         name |= p->records[k].defaulted ? TXML_ATTRIBUTE_DEFAULTED : 0u;
-        const txml_attribute_entry entry = { name, p->records[k].value_offset, p->records[k].value_length };
+        const attribute_record *record = &p->records[k];
+        txml_attribute_append attribute = { { name, record->value_offset, record->value_length }, { { 0u, 0u, 0u }, { 0u, 0u, 0u }, { 0u, 0u, 0u } } };
+        if (!record->defaulted) {
+            txml_position after_quote = record->value_end;
+            after_quote.offset += 1u;
+            after_quote.column += 1u;
+            attribute.source = (txml_attribute_source){ record->position, record->value_start, after_quote };
+        }
         uint32_t attribute_index = 0u;
-        result = txml_doc_append_attribute(p->doc, &entry, &attribute_index);
+        result = txml_doc_append_attribute(p->doc, &attribute, &attribute_index);
         if (result == TXML_OK) {
             result = txml_doc_record_prefix(p->doc, &(txml_prefix_request){ true, attribute_index, p->records[k].prefix });
         }
@@ -5431,6 +5547,7 @@ static scan start_tag_run(txml_parser *p) {
                 i += 1u;
             } else if (b == '"' || b == '\'') {
                 begin_value(p, &p->records[t->count]);
+                p->records[t->count].value_start = txp_position_after(p, i);
                 t->quote = b;
                 t->phase = TP_VALUE;
                 i += 1u;
@@ -5454,6 +5571,7 @@ static scan start_tag_run(txml_parser *p) {
             }
             i = j;
             if (i < limit) { /* the closing quote */
+                p->records[t->count].value_end = txp_position_at(p, i);
                 outcome = txp_dec_end(p);
                 if (outcome == SCAN_OK) {
                     outcome = finish_value(p, &p->records[t->count]);
@@ -5472,7 +5590,7 @@ static scan start_tag_run(txml_parser *p) {
         }
 
         if (finish) {
-            outcome = finish_tag(p);
+            outcome = finish_tag(p, i);
             if (outcome != SCAN_OK) {
                 txp_commit(p, i);
                 return outcome;
@@ -5543,7 +5661,7 @@ static scan end_tag_run(txml_parser *p) {
             i += 1u;
         } else if (b == '>') {
             open_element *top = &p->stack[p->depth - 1u];
-            txml_doc_close_node(p->doc, top->node, p->doc->nodes.count);
+            txml_doc_close_node(p->doc, top->node, &(txml_close){ p->doc->nodes.count, txp_position_after(p, i) });
             p->bindings = top->bindings;
             txml_arena_release(&p->stack_arena, top->mark);
             p->depth -= 1u;

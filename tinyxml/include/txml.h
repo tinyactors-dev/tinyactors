@@ -473,6 +473,19 @@ TXML_API txml_str txml_node_prefix(txml_cursor cursor) TXML_LIFETIME(document);
 TXML_API txml_str txml_node_text(txml_cursor cursor) TXML_LIFETIME(document);
 /* Every node has a position; TXML_ERR_INVALID only for an absent cursor. */
 TXML_API txml_result txml_node_position(txml_cursor cursor, TXML_OUT txml_position *out);
+/* Where a node lies in the input: `start` is what txml_node_position reports,
+ * `end` is the position one past its last byte. An element ends after its end
+ * tag (or after the `/>` of an empty one), a text node where the next markup
+ * begins, a comment, PI, declaration or DOCTYPE after its closing delimiter,
+ * and the document node at the end of the input. Offsets count raw input
+ * bytes, so a byte order mark and unexpanded references are inside a span.
+ * TXML_ERR_PENDING while the node is still open, TXML_ERR_INVALID for an
+ * absent cursor. */
+typedef struct {
+    txml_position start;
+    txml_position end;
+} txml_span TXML_VALUE;
+TXML_API txml_result txml_node_span(txml_cursor cursor, TXML_OUT txml_span *out);
 
 /* Attributes, in document order. */
 TXML_API uint32_t txml_attribute_count(txml_cursor cursor);
@@ -480,6 +493,27 @@ TXML_API txml_move txml_first_attribute(txml_cursor cursor, TXML_OUT TXML_LIFETI
 TXML_API txml_move txml_next_attribute(TXML_INOUT txml_attr_cursor *attribute);
 TXML_API txml_result txml_attribute_read(txml_attr_cursor attribute,
                                          TXML_OUT TXML_LIFETIME(document) txml_attribute_view *out);
+/*
+ * Where an attribute was written, for an attribute that has source text. A
+ * name is never split across lines, so the name's extent is the written
+ * qualified name (prefix, colon, local part) from `start`; `value_start` is the
+ * first byte inside the quotes and `value_end` the closing quote, so a value
+ * that contains references or line ends is longer in the input than in
+ * txml_attribute_view.value.
+ */
+typedef struct {
+    txml_position start;       /* first byte of the name */
+    txml_position name_end;    /* one past the last byte of the name */
+    txml_position value_start; /* first byte inside the quotes */
+    txml_position value_end;   /* the closing quote */
+    txml_position end;         /* one past the closing quote */
+} txml_attribute_span TXML_VALUE;
+
+/* TXML_ERR_NOT_FOUND for an attribute with no source text: one supplied by an
+ * ATTLIST default, or a pseudo-attribute of the XML declaration. */
+TXML_API txml_result txml_attribute_span_read(txml_attr_cursor attribute,
+                                              TXML_OUT txml_attribute_span *out);
+
 /* Look up one attribute by name ID. An unprefixed attribute has no namespace,
  * so a default xmlns does not apply to it. */
 TXML_API bool txml_find_attribute(txml_cursor cursor,

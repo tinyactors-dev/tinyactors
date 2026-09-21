@@ -227,7 +227,8 @@ static scan add_defaults(txml_parser *p) {
  * The end of a start tag.
  */
 
-static scan finish_tag(txml_parser *p) {
+/* `close` is the index of the '>' that ends the tag. */
+static scan finish_tag(txml_parser *p, uint32_t close) {
     tag_work *t = &p->tag;
     scan outcome;
 
@@ -296,6 +297,7 @@ static scan finish_tag(txml_parser *p) {
             .name = element_name, .as.element = { p->doc->attributes.count, t->count },
         },
         .position = p->construct,
+        .end = t->empty ? txp_position_after(p, close) : (txml_position){ 0u, 0u, 0u },
     };
     uint32_t appended_index = 0u;
     txml_result result = txml_doc_append_node(p->doc, &append, &appended_index);
@@ -306,9 +308,16 @@ static scan finish_tag(txml_parser *p) {
         uint32_t name = p->records[k].name_id;
         name |= k + 1u == t->count ? TXML_ATTRIBUTE_LAST : 0u;
         name |= p->records[k].defaulted ? TXML_ATTRIBUTE_DEFAULTED : 0u;
-        const txml_attribute_entry entry = { name, p->records[k].value_offset, p->records[k].value_length };
+        const attribute_record *record = &p->records[k];
+        txml_attribute_append attribute = { { name, record->value_offset, record->value_length }, { { 0u, 0u, 0u }, { 0u, 0u, 0u }, { 0u, 0u, 0u } } };
+        if (!record->defaulted) {
+            txml_position after_quote = record->value_end;
+            after_quote.offset += 1u;
+            after_quote.column += 1u;
+            attribute.source = (txml_attribute_source){ record->position, record->value_start, after_quote };
+        }
         uint32_t attribute_index = 0u;
-        result = txml_doc_append_attribute(p->doc, &entry, &attribute_index);
+        result = txml_doc_append_attribute(p->doc, &attribute, &attribute_index);
         if (result == TXML_OK) {
             result = txml_doc_record_prefix(p->doc, &(txml_prefix_request){ true, attribute_index, p->records[k].prefix });
         }
@@ -510,6 +519,7 @@ static scan start_tag_run(txml_parser *p) {
                 i += 1u;
             } else if (b == '"' || b == '\'') {
                 begin_value(p, &p->records[t->count]);
+                p->records[t->count].value_start = txp_position_after(p, i);
                 t->quote = b;
                 t->phase = TP_VALUE;
                 i += 1u;
@@ -533,6 +543,7 @@ static scan start_tag_run(txml_parser *p) {
             }
             i = j;
             if (i < limit) { /* the closing quote */
+                p->records[t->count].value_end = txp_position_at(p, i);
                 outcome = txp_dec_end(p);
                 if (outcome == SCAN_OK) {
                     outcome = finish_value(p, &p->records[t->count]);
@@ -551,7 +562,7 @@ static scan start_tag_run(txml_parser *p) {
         }
 
         if (finish) {
-            outcome = finish_tag(p);
+            outcome = finish_tag(p, i);
             if (outcome != SCAN_OK) {
                 txp_commit(p, i);
                 return outcome;
@@ -622,7 +633,7 @@ static scan end_tag_run(txml_parser *p) {
             i += 1u;
         } else if (b == '>') {
             open_element *top = &p->stack[p->depth - 1u];
-            txml_doc_close_node(p->doc, top->node, p->doc->nodes.count);
+            txml_doc_close_node(p->doc, top->node, &(txml_close){ p->doc->nodes.count, txp_position_after(p, i) });
             p->bindings = top->bindings;
             txml_arena_release(&p->stack_arena, top->mark);
             p->depth -= 1u;

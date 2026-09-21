@@ -340,7 +340,7 @@ stop:
         return outcome;
     }
 
-    outcome = txp_append_leaf(p, &(leaf){ TXML_NODE_DOCTYPE, 0u, TXML_NAME_NONE, p->construct });
+    outcome = txp_append_leaf(p, &(leaf){ TXML_NODE_DOCTYPE, 0u, TXML_NAME_NONE, p->construct, txp_position_after(p, p->start) });
     if (outcome != SCAN_OK) {
         return outcome;
     }

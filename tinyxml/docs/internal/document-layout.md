@@ -11,7 +11,7 @@ Which arena holds which column follows the lifetime split of ADR 0016:
 | Arena | Holds |
 |---|---|
 | values | the pool, the names column, the namespaces column |
-| tree | the nodes column, the attributes column, the positions column, the two prefix-exception columns |
+| tree | the nodes column, the attributes column, the positions column, the attribute-sources column, the two prefix-exception columns |
 
 ## Columns
 
@@ -154,18 +154,37 @@ This gives declarations a stable identity, keeps them inside the ordinary
 attribute machinery so they round trip in place, and lets a consumer skip them
 with one flag test.
 
-### positions — 16 bytes
+### positions — 32 bytes
 
-`uint64_t offset`, `uint32_t line`, `uint32_t column`, parallel to `nodes`:
-exactly one entry per node, always. The position is that of the node's first
-byte — `<` for an element, comment, PI, declaration or doctype, and the first
-character of the run for text. `txml_node_position` succeeds for every node of
-every document (ADR 0017); it reports `TXML_ERR_INVALID` only for a cursor
-that is not on a node at all.
+A `txml_span`: two `txml_position`s (`uint64_t offset`, `uint32_t line`,
+`uint32_t column`, 16 bytes each), parallel to `nodes`: exactly one entry per
+node, always. The first is the position of the node's first byte — `<` for an
+element, comment, PI, declaration or doctype, and the first character of the
+run for text. `txml_node_position` succeeds for every node of every document
+(ADR 0017); it reports `TXML_ERR_INVALID` only for a cursor that is not on a
+node at all.
 
-The column is 16 bytes against the node's 24, so positions are two thirds
-again on top of the node column. They are a separate column, not a wider node
-record: the scan loops in `cursor.md` still read 24-byte nodes.
+The second is where the node ends (ADR 0023): one past its last byte. An
+element ends after its end tag or after the `/>` of an empty one, text where
+the next markup begins, a comment, PI, declaration, CDATA section or doctype
+after its closing delimiter, and the document node at the end of the input.
+Leaves and empty elements are written with their end when they are appended;
+an element that is appended open has an unset end, which `txml_doc_close_node`
+fills in when the end tag is consumed. `txml_node_span` reports
+`TXML_ERR_PENDING` for a node that is still open.
+
+The column is 32 bytes against the node's 24. It is a separate column, not a
+wider node record: the scan loops in `cursor.md` still read 24-byte nodes.
+
+### attribute sources — 48 bytes
+
+Three `txml_position`s, parallel to `attributes`: the first byte of the name,
+the first byte inside the quotes, and the position one past the closing quote.
+`txml_attribute_span_read` derives the rest: the name ends after the written
+qualified name (a name is never split across lines), and the value ends at the
+closing quote, one byte before the attribute's end. An attribute with no source
+text — a default supplied by an `ATTLIST`, or a pseudo-attribute of the XML
+declaration — has `line == 0` in its first position and no span.
 
 ### pool
 
@@ -277,11 +296,12 @@ Columns, by arena:
 |---|---|---|
 | tree | 16 nodes × 24 | 384 |
 | tree | 10 attributes × 12 | 120 |
-| tree | 16 positions × 16 | 256 |
+| tree | 16 spans × 32 | 512 |
+| tree | 10 attribute sources × 48 | 480 |
 | values | 8 names × 24 | 192 |
 | values | 3 namespaces × 8 | 24 |
 
-760 bytes in the tree arena and 216 in the values arena, plus **204 bytes** of
+1,496 bytes in the tree arena and 216 in the values arena, plus **204 bytes** of
 pool: 45 for the eight local parts, 60 for the two non-empty URIs, 70 for the
 attribute values other than the declaration (which reuses the URI run), and 29
 for the nine whitespace runs. The source document is 303 bytes. Pages and

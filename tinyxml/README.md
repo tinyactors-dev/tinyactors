@@ -73,6 +73,37 @@ input window: text, attribute values, comments and DOCTYPEs of any size flow
 through it. Known deviations are listed under "Status" in
 `docs/internal/parser.md` and `docs/internal/writer.md`.
 
+## Command line
+
+`cli/txml.c` is a small program (it uses libc; the library does not) that
+parses files or standard input and prints the tree the way `tree-sitter parse
+--cst` does: one line per node with its `row:col - row:col` range (0-based, byte
+columns), its kind, and leaf text in backticks.
+
+```sh
+mise run txml -- [-S] [-s] [--color=WHEN] [FILE...]   # no FILE, or "-", reads stdin
+echo '<a x="1">hi</a>' | mise run txml
+# 0:0  - 1:0     document
+# 0:0  - 0:15      element
+# 0:1  - 0:2         name `a`
+# 0:3  - 0:8         attribute
+# 0:3  - 0:4           name `x`
+# 0:6  - 0:7           value `1`
+# 0:9  - 0:11        text `hi`
+# 0:15 - 1:0       text `\n`
+```
+
+`-S` prints the S-expression form of plain `tree-sitter parse`, `-s` drops
+whitespace-only text, and color is on for a terminal unless `NO_COLOR` is set.
+Diagnostics go to stderr as `file:line:column: message`. Exit status is 0 on
+success, 1 when a document is malformed, 2 for a usage or I/O error. `mise run
+build:cli` builds `build/txml`.
+
+Ranges come from the document itself: `txml_node_span` and
+`txml_attribute_span_read` report where every node and attribute starts and ends
+(ADR 0023), so the tool never re-reads its input and streams it through the
+parser in chunks.
+
 ## Documentation
 
 - `docs/adr/` — the design decisions, and the primary record of intent.

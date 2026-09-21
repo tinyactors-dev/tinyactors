@@ -176,8 +176,9 @@ typedef struct {
 
     buffer xml;
 
-    bool has_nodes, has_attributes, has_names, has_positions, has_prefixes, has_error, has_roundtrip;
-    buffer nodes, attributes, names, positions, prefixes, error, roundtrip;
+    bool has_nodes, has_attributes, has_names, has_positions, has_spans, has_attribute_spans, has_prefixes, has_error,
+        has_roundtrip;
+    buffer nodes, attributes, names, positions, spans, attribute_spans, prefixes, error, roundtrip;
 } spec_case;
 
 static void spec_case_init(spec_case *item) {
@@ -191,6 +192,8 @@ static void spec_case_free(spec_case *item) {
     buffer_free(&item->attributes);
     buffer_free(&item->names);
     buffer_free(&item->positions);
+    buffer_free(&item->spans);
+    buffer_free(&item->attribute_spans);
     buffer_free(&item->prefixes);
     buffer_free(&item->error);
     buffer_free(&item->roundtrip);
@@ -250,6 +253,8 @@ typedef enum {
     SECTION_ATTRIBUTES,
     SECTION_NAMES,
     SECTION_POSITIONS,
+    SECTION_SPANS,
+    SECTION_ATTRIBUTE_SPANS,
     SECTION_PREFIXES,
     SECTION_ERROR,
     SECTION_ROUNDTRIP
@@ -377,6 +382,12 @@ static bool read_spec_file(const char *path, case_handler handle) {
             } else if (strcmp(directive, "positions") == 0) {
                 current = SECTION_POSITIONS;
                 item.has_positions = true;
+            } else if (strcmp(directive, "spans") == 0) {
+                current = SECTION_SPANS;
+                item.has_spans = true;
+            } else if (strcmp(directive, "attribute_spans") == 0) {
+                current = SECTION_ATTRIBUTE_SPANS;
+                item.has_attribute_spans = true;
             } else if (strcmp(directive, "prefixes") == 0) {
                 current = SECTION_PREFIXES;
                 item.has_prefixes = true;
@@ -423,6 +434,14 @@ static bool read_spec_file(const char *path, case_handler handle) {
         case SECTION_POSITIONS:
             buffer_put(&item.positions, line, line_length);
             buffer_putc(&item.positions, '\n');
+            break;
+        case SECTION_SPANS:
+            buffer_put(&item.spans, line, line_length);
+            buffer_putc(&item.spans, '\n');
+            break;
+        case SECTION_ATTRIBUTE_SPANS:
+            buffer_put(&item.attribute_spans, line, line_length);
+            buffer_putc(&item.attribute_spans, '\n');
             break;
         case SECTION_PREFIXES:
             buffer_put(&item.prefixes, line, line_length);
@@ -486,6 +505,8 @@ typedef struct {
     buffer attributes;
     buffer names;
     buffer positions;
+    buffer spans;
+    buffer attribute_spans;
     buffer prefixes;
     buffer error;
     buffer roundtrip;
@@ -496,6 +517,8 @@ static void rendering_free(rendering *r) {
     buffer_free(&r->attributes);
     buffer_free(&r->names);
     buffer_free(&r->positions);
+    buffer_free(&r->spans);
+    buffer_free(&r->attribute_spans);
     buffer_free(&r->prefixes);
     buffer_free(&r->error);
     buffer_free(&r->roundtrip);
@@ -705,6 +728,53 @@ static void render_positions(rendering *out, const txml_doc *doc) {
     }
 }
 
+/* `<index> <line>:<column> - <line>:<column> offset=<start>..<end>`, or
+ * `<index> <line>:<column> - pending` while the node is open. */
+static void render_spans(rendering *out, const txml_doc *doc) {
+    const uint32_t count = txml_doc_node_count(doc);
+    for (uint32_t index = 0u; index < count; index++) {
+        txml_span span;
+        const txml_result result = txml_node_span(txml_cursor_at(doc, index), &span);
+        if (result == TXML_ERR_PENDING) {
+            txml_position start;
+            (void)txml_node_position(txml_cursor_at(doc, index), &start);
+            buffer_printf(&out->spans, "%u %u:%u - pending\n", index, start.line, start.column);
+            continue;
+        }
+        if (result != TXML_OK) {
+            buffer_printf(&out->spans, "%u <no span>\n", index);
+            continue;
+        }
+        buffer_printf(&out->spans, "%u %u:%u - %u:%u offset=%llu..%llu\n", index, span.start.line, span.start.column,
+                      span.end.line, span.end.column, (unsigned long long)span.start.offset,
+                      (unsigned long long)span.end.offset);
+    }
+}
+
+/* `<node>.<attribute> name=<l>:<c>..<l>:<c> value=<l>:<c>..<l>:<c> end=<l>:<c> offset=<start>..<end>`,
+ * or `<node>.<attribute> -` for an attribute with no source text. */
+static void render_attribute_spans(rendering *out, const txml_doc *doc) {
+    const uint32_t count = txml_doc_node_count(doc);
+    for (uint32_t index = 0u; index < count; index++) {
+        txml_attr_cursor attribute;
+        uint32_t ordinal = 0u;
+        for (txml_move move = txml_first_attribute(txml_cursor_at(doc, index), &attribute); move == TXML_MOVED;
+             move = txml_next_attribute(&attribute), ordinal++) {
+            txml_attribute_span span;
+            if (txml_attribute_span_read(attribute, &span) != TXML_OK) {
+                buffer_printf(&out->attribute_spans, "%u.%u -\n", index, ordinal);
+                continue;
+            }
+            buffer_printf(&out->attribute_spans,
+                          "%u.%u name=%u:%u..%u:%u value=%u:%u..%u:%u end=%u:%u offset=%llu..%llu\n", index, ordinal,
+                          span.start.line, span.start.column, span.name_end.line, span.name_end.column,
+                          span.value_start.line, span.value_start.column, span.value_end.line, span.value_end.column,
+                          span.end.line, span.end.column, (unsigned long long)span.start.offset,
+                          (unsigned long long)span.end.offset);
+        }
+    }
+}
+
 static void render_roundtrip(rendering *out, const txml_doc *doc) {
     unsigned char bytes[256];
     txml_writer_config config = {
@@ -831,6 +901,7 @@ static bool parse_and_render(const spec_case *item, uint32_t chunk, rendering *o
             render_nodes(out, partial);
             render_names(out, partial);
             render_positions(out, partial);
+            render_spans(out, partial);
         }
         buffer_printf(&out->error, "%s %u:%u offset=%llu", error_code_name(error.code), error.at.line,
                       error.at.column, (unsigned long long)error.at.offset);
@@ -853,6 +924,8 @@ static bool parse_and_render(const spec_case *item, uint32_t chunk, rendering *o
     render_nodes(out, doc);
     render_names(out, doc);
     render_positions(out, doc);
+    render_spans(out, doc);
+    render_attribute_spans(out, doc);
     render_roundtrip(out, doc);
     txml_doc_destroy(doc);
     return true;
@@ -892,6 +965,10 @@ static void concatenate(buffer *out, const rendering *r) {
     buffer_put(out, buffer_text(&r->names), r->names.length);
     buffer_puts(out, "@positions\n");
     buffer_put(out, buffer_text(&r->positions), r->positions.length);
+    buffer_puts(out, "@spans\n");
+    buffer_put(out, buffer_text(&r->spans), r->spans.length);
+    buffer_puts(out, "@attribute_spans\n");
+    buffer_put(out, buffer_text(&r->attribute_spans), r->attribute_spans.length);
     buffer_puts(out, "@prefixes\n");
     buffer_put(out, buffer_text(&r->prefixes), r->prefixes.length);
     buffer_puts(out, "@error\n");
@@ -915,6 +992,9 @@ static void run_case(const spec_case *item, const char *path) {
     check_section(path, item->name, "attributes", item->has_attributes, &item->attributes, &first.attributes);
     check_section(path, item->name, "names", item->has_names, &item->names, &first.names);
     check_section(path, item->name, "positions", item->has_positions, &item->positions, &first.positions);
+    check_section(path, item->name, "spans", item->has_spans, &item->spans, &first.spans);
+    check_section(path, item->name, "attribute_spans", item->has_attribute_spans, &item->attribute_spans,
+                  &first.attribute_spans);
     check_section(path, item->name, "prefixes", item->has_prefixes, &item->prefixes, &first.prefixes);
 
     /* An absent or empty @error section means the parse must succeed. */

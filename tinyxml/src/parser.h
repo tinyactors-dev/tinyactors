@@ -121,6 +121,8 @@ typedef struct {
     uint32_t value_length;
     uint32_t name_id;
     txml_position position;
+    txml_position value_start; /* first byte inside the quotes */
+    txml_position value_end;   /* the closing quote */
     bool declaration;
     bool defaulted;
 } attribute_record;
@@ -335,6 +337,8 @@ uint32_t txp_limit(const txml_parser *p);
 txml_position txp_position_at(const txml_parser *p, uint32_t index);
 /* The position of window[start]. */
 txml_position txp_position_now(const txml_parser *p);
+/* The position one past window[index], a delimiter that is not a line end. */
+txml_position txp_position_after(const txml_parser *p, uint32_t index);
 /* Consume up to `index`, keeping line, column and offset current. */
 void txp_commit(txml_parser *p, uint32_t index);
 
@@ -362,6 +366,7 @@ typedef struct {
     uint32_t flags;
     uint32_t name;
     txml_position position;
+    txml_position end; /* one past the closing delimiter */
 } leaf;
 
 /* Append a node whose text is `p->run`. Finishes the run first; safe to retry. */

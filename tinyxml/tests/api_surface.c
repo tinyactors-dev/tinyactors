@@ -59,10 +59,12 @@ struct txml_api_surface {
     txml_str (*node_prefix)(txml_cursor);
     txml_str (*node_text)(txml_cursor);
     txml_result (*node_position)(txml_cursor, txml_position *);
+    txml_result (*node_span)(txml_cursor, txml_span *);
     uint32_t (*attribute_count)(txml_cursor);
     txml_move (*first_attribute)(txml_cursor, txml_attr_cursor *);
     txml_move (*next_attribute)(txml_attr_cursor *);
     txml_result (*attribute_read)(txml_attr_cursor, txml_attribute_view *);
+    txml_result (*attribute_span_read)(txml_attr_cursor, txml_attribute_span *);
     bool (*find_attribute)(txml_cursor, uint32_t, txml_str *);
 
     /* Writer. */
@@ -129,10 +131,12 @@ const struct txml_api_surface txml_api_surface = {
     .node_prefix = txml_node_prefix,
     .node_text = txml_node_text,
     .node_position = txml_node_position,
+    .node_span = txml_node_span,
     .attribute_count = txml_attribute_count,
     .first_attribute = txml_first_attribute,
     .next_attribute = txml_next_attribute,
     .attribute_read = txml_attribute_read,
+    .attribute_span_read = txml_attribute_span_read,
     .find_attribute = txml_find_attribute,
 
     .writer_init = txml_writer_init,
@@ -156,5 +160,5 @@ const struct txml_api_surface txml_api_surface = {
 
 /* A new TXML_API function must be registered above: the struct grows and this
  * assertion is what tells you to update the count in the file header. */
-_Static_assert(sizeof(struct txml_api_surface) == 58u * sizeof(void (*)(void)),
+_Static_assert(sizeof(struct txml_api_surface) == 60u * sizeof(void (*)(void)),
                "every TXML_API function must appear in txml_api_surface");

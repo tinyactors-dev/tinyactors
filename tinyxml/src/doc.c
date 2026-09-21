@@ -472,8 +472,17 @@ const txml_attribute_entry *txml_doc_attribute(const txml_doc *doc, uint32_t ind
     return doc == NULL ? NULL : (const txml_attribute_entry *)column_at(&doc->attributes, index);
 }
 
+const txml_span *txml_doc_span(const txml_doc *doc, uint32_t index) {
+    return doc == NULL ? NULL : (const txml_span *)column_at(&doc->positions, index);
+}
+
 const txml_position *txml_doc_position(const txml_doc *doc, uint32_t index) {
-    return doc == NULL ? NULL : (const txml_position *)column_at(&doc->positions, index);
+    const txml_span *span = txml_doc_span(doc, index);
+    return span == NULL ? NULL : &span->start;
+}
+
+const txml_attribute_source *txml_doc_attribute_source(const txml_doc *doc, uint32_t index) {
+    return doc == NULL ? NULL : (const txml_attribute_source *)column_at(&doc->attribute_sources, index);
 }
 
 uint32_t txml_doc_attribute_flags(const txml_doc *doc, const txml_attribute_entry *attribute) {
@@ -504,31 +513,40 @@ txml_result txml_doc_append_node(txml_doc *doc, const txml_node_append *append, 
         return result;
     }
     *(txml_node *)node_slot = append->node;
-    *(txml_position *)position_slot = append->position;
+    *(txml_span *)position_slot = (txml_span){ append->position, append->end };
     *index = doc->nodes.count - 1u;
     return TXML_OK;
 }
 
-void txml_doc_close_node(txml_doc *doc, uint32_t index, uint32_t end) {
+void txml_doc_close_node(txml_doc *doc, uint32_t index, const txml_close *close) {
     txml_node *node = (txml_node *)column_at(&doc->nodes, index);
-    if (node != NULL) {
-        node->end = end;
+    txml_span *span = (txml_span *)column_at(&doc->positions, index);
+    if (node != NULL && span != NULL) {
+        node->end = close->end;
         node->flags = (uint8_t)(node->flags & ~TXML_NODE_OPEN);
+        span->end = close->position;
     }
 }
 
-void txml_doc_complete(txml_doc *doc) {
-    txml_doc_close_node(doc, 0u, doc->nodes.count);
+void txml_doc_complete(txml_doc *doc, txml_position end) {
+    txml_doc_close_node(doc, 0u, &(txml_close){ doc->nodes.count, end });
     doc->complete = true;
 }
 
-txml_result txml_doc_append_attribute(txml_doc *doc, const txml_attribute_entry *entry, uint32_t *index) {
+txml_result txml_doc_append_attribute(txml_doc *doc, const txml_attribute_append *append, uint32_t *index) {
     void *slot = NULL;
-    const txml_result result = column_push(&doc->attributes, &doc->tree, &slot);
+    void *source_slot = NULL;
+    txml_result result = column_push(&doc->attributes, &doc->tree, &slot);
     if (result != TXML_OK) {
         return result;
     }
-    *(txml_attribute_entry *)slot = *entry;
+    result = column_push(&doc->attribute_sources, &doc->tree, &source_slot);
+    if (result != TXML_OK) {
+        doc->attributes.count -= 1u; /* keep the columns parallel */
+        return result;
+    }
+    *(txml_attribute_source *)source_slot = append->source;
+    *(txml_attribute_entry *)slot = append->entry;
     *index = doc->attributes.count - 1u;
     return TXML_OK;
 }
@@ -621,7 +639,10 @@ static txml_result doc_build(txml_doc *doc) {
         result = column_init(&doc->attributes, &doc->tree, &(column_shape){ sizeof(txml_attribute_entry), budget });
     }
     if (result == TXML_OK) {
-        result = column_init(&doc->positions, &doc->tree, &(column_shape){ sizeof(txml_position), budget });
+        result = column_init(&doc->positions, &doc->tree, &(column_shape){ sizeof(txml_span), budget });
+    }
+    if (result == TXML_OK) {
+        result = column_init(&doc->attribute_sources, &doc->tree, &(column_shape){ sizeof(txml_attribute_source), budget });
     }
     if (result == TXML_OK) {
         result = column_init(&doc->node_prefixes, &doc->tree, &(column_shape){ sizeof(txml_prefix_entry), budget });
@@ -674,7 +695,7 @@ static txml_result doc_build(txml_doc *doc) {
         .as.element = { 0u, 0u },
     };
     uint32_t index = 0u;
-    const txml_node_append append = { document, { 0u, 1u, 1u } };
+    const txml_node_append append = { document, { 0u, 1u, 1u }, { 0u, 1u, 1u } };
     return txml_doc_append_node(doc, &append, &index);
 }
 
@@ -715,6 +736,7 @@ txml_result txml_doc_create(txml_doc **out, const txml_parser_config *config) {
     doc->nodes = (txml_column){ 0 };
     doc->attributes = (txml_column){ 0 };
     doc->positions = (txml_column){ 0 };
+    doc->attribute_sources = (txml_column){ 0 };
     doc->node_prefixes = (txml_column){ 0 };
     doc->attribute_prefixes = (txml_column){ 0 };
     doc->names = (txml_column){ 0 };

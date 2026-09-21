@@ -93,7 +93,10 @@ green.
     not. An unprefixed attribute's name always has namespace 0.
 23. **The positions column always exists**, with exactly one entry per node.
     `txml_node_position` succeeds for every node of every document; it reports
-    `TXML_ERR_INVALID` only for a cursor that is not on a node.
+    `TXML_ERR_INVALID` only for a cursor that is not on a node. Each entry also
+    holds where the node ends (ADR 0023): `txml_node_span` succeeds for every
+    closed node and is `TXML_ERR_PENDING` for an open one, and the end of a
+    node never precedes its start.
 24. *Withdrawn with ADR 0018, which removed `txml_doc_rewind`. The number is
     left in place because ADRs 0016 and 0018 cite it.*
 

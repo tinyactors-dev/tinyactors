@@ -46,7 +46,7 @@ static scan flush_text(txml_parser *p) {
     if (outcome != SCAN_OK) {
         return outcome;
     }
-    outcome = txp_append_leaf(p, &(leaf){ TXML_NODE_TEXT, 0u, TXML_NAME_NONE, p->construct });
+    outcome = txp_append_leaf(p, &(leaf){ TXML_NODE_TEXT, 0u, TXML_NAME_NONE, p->construct, txp_position_now(p) });
     if (outcome == SCAN_OK) {
         p->text_active = false;
     }
@@ -109,7 +109,7 @@ static scan content_eof(txml_parser *p) {
     if (!p->seen_root) {
         return txp_fail(p, PROBLEM(TXML_DOC_NO_ROOT, "no document element"), txp_position_now(p));
     }
-    txml_doc_complete(p->doc);
+    txml_doc_complete(p->doc, txp_position_now(p));
     return SCAN_DONE;
 }
 
@@ -275,7 +275,7 @@ static scan comment_run(txml_parser *p) {
                 if (b != '>') {
                     return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "'--' inside a comment"), p->comment.first_dash);
                 }
-                outcome = txp_append_leaf(p, &(leaf){ TXML_NODE_COMMENT, 0u, TXML_NAME_NONE, p->construct });
+                outcome = txp_append_leaf(p, &(leaf){ TXML_NODE_COMMENT, 0u, TXML_NAME_NONE, p->construct, txp_position_after(p, i) });
                 txp_commit(p, outcome == SCAN_OK ? i + 1u : i);
                 if (outcome == SCAN_OK) {
                     p->state = &txp_state_content;
@@ -339,7 +339,7 @@ static scan cdata_run(txml_parser *p) {
             continue;
         }
         if (p->cdata.brackets == 2u && b == '>') {
-            outcome = txp_append_leaf(p, &(leaf){ TXML_NODE_TEXT, TXML_NODE_CDATA, TXML_NAME_NONE, p->construct });
+            outcome = txp_append_leaf(p, &(leaf){ TXML_NODE_TEXT, TXML_NODE_CDATA, TXML_NAME_NONE, p->construct, txp_position_after(p, i) });
             txp_commit(p, outcome == SCAN_OK ? i + 1u : i);
             if (outcome == SCAN_OK) {
                 p->state = &txp_state_content;
@@ -374,7 +374,8 @@ const state txp_state_cdata = { "cdata", cdata_run, txp_eof_in_markup };
  * Processing instructions.
  */
 
-static scan finish_pi(txml_parser *p) {
+/* `close` is the index of the '>' that ends the instruction. */
+static scan finish_pi(txml_parser *p, uint32_t close) {
     uint32_t name_id = 0u;
 
     /* The target is interned after the data run is finished, because the pool
@@ -385,7 +386,7 @@ static scan finish_pi(txml_parser *p) {
     if (outcome != SCAN_OK) {
         return outcome;
     }
-    return txp_append_leaf(p, &(leaf){ TXML_NODE_PI, 0u, name_id, p->construct });
+    return txp_append_leaf(p, &(leaf){ TXML_NODE_PI, 0u, name_id, p->construct, txp_position_after(p, close) });
 }
 
 static scan begin_declaration(txml_parser *p) {
@@ -472,7 +473,7 @@ static scan pi_question_run(txml_parser *p) {
         return txp_fail(p, PROBLEM(TXML_DOC_SYNTAX, "expected whitespace after the target"), p->pi.question_position);
     }
     txml_doc_run_begin(p->doc, &p->run);
-    const scan outcome = finish_pi(p);
+    const scan outcome = finish_pi(p, p->start);
     if (outcome != SCAN_OK) {
         return outcome;
     }
@@ -521,7 +522,7 @@ static scan pi_data_run(txml_parser *p) {
             continue;
         }
         if (p->pi.question == 1u && b == '>') {
-            outcome = finish_pi(p);
+            outcome = finish_pi(p, i);
             txp_commit(p, outcome == SCAN_OK ? i + 1u : i);
             if (outcome == SCAN_OK) {
                 p->state = &txp_state_content;
@@ -587,7 +588,8 @@ static bool declaration_value_valid(uint32_t which, const uint8_t *value, uint32
     return true;
 }
 
-static scan finish_declaration(txml_parser *p) {
+/* `delimiter` is the index of the '>' that ends the declaration. */
+static scan finish_declaration(txml_parser *p, uint32_t delimiter) {
     static const char *const names[3] = { "version", "encoding", "standalone" };
     const uint8_t *w = p->small.data;
     const uint32_t close = p->small.length;
@@ -660,6 +662,7 @@ static scan finish_declaration(txml_parser *p) {
             .as.element = { p->doc->attributes.count, count },
         },
         .position = p->construct,
+        .end = txp_position_after(p, delimiter),
     };
     uint32_t appended_index = 0u;
     txml_result result = txml_doc_append_node(p->doc, &append, &appended_index);
@@ -674,8 +677,10 @@ static scan finish_declaration(txml_parser *p) {
             result = txml_doc_pool_append(p->doc, (txml_str){ (const char *)w + parsed[k].offset, parsed[k].length }, &offset);
         }
         if (result == TXML_OK) {
-            const txml_attribute_entry entry = { name_id | (k + 1u == count ? TXML_ATTRIBUTE_LAST : 0u), offset, parsed[k].length };
-            result = txml_doc_append_attribute(p->doc, &entry, &attribute_index);
+            /* Parsed from a buffer, so there is no source position: line 0. */
+            const txml_attribute_append attribute = {
+                { name_id | (k + 1u == count ? TXML_ATTRIBUTE_LAST : 0u), offset, parsed[k].length }, { { 0u, 0u, 0u }, { 0u, 0u, 0u }, { 0u, 0u, 0u } } };
+            result = txml_doc_append_attribute(p->doc, &attribute, &attribute_index);
         }
     }
     if (result != TXML_OK) {
@@ -709,7 +714,7 @@ static scan declaration_run(txml_parser *p) {
             continue;
         }
         if (p->declaration.question == 1u && b == '>') {
-            outcome = finish_declaration(p);
+            outcome = finish_declaration(p, i);
             txp_commit(p, outcome == SCAN_OK ? i + 1u : i);
             if (outcome == SCAN_OK) {
                 p->state = &txp_state_content;

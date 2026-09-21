@@ -2,7 +2,7 @@
 
 ADRs are the primary record of txml design intent. Unless marked otherwise, the decisions below are **Accepted**.
 
-ADRs 0016–0019 revise earlier ones. 0016 replaces the single-arena and borrowed-arena parts of 0002, 0017 replaces the retention flags in 0003 and the optional internal subset in 0012, 0018 withdraws 0013, and 0019 closes the writer gap 0017 opened. Each amended ADR says so in its status line; the rest of its text still stands.
+ADRs 0016–0019 and 0023 revise earlier ones. 0016 replaces the single-arena and borrowed-arena parts of 0002, 0017 replaces the retention flags in 0003 and the optional internal subset in 0012, 0018 withdraws 0013, and 0019 closes the writer gap 0017 opened. Each amended ADR says so in its status line; the rest of its text still stands.
 
 | ADR | Decision |
 |---|---|
@@ -28,6 +28,7 @@ ADRs 0016–0019 revise earlier ones. 0016 replaces the single-arena and borrowe
 | [0020](0020-prefixes-are-recorded-per-node-and-per-attribute.md) | [Prefixes are recorded per node and per attribute](0020-prefixes-are-recorded-per-node-and-per-attribute.md) |
 | [0021](0021-the-scanner-is-a-table-of-resumable-states.md) | [The scanner is a table of resumable states](0021-the-scanner-is-a-table-of-resumable-states.md) |
 | [0022](0022-the-input-padded-escape-hatch-is-withdrawn.md) | [The input-padded escape hatch is withdrawn](0022-the-input-padded-escape-hatch-is-withdrawn.md) |
+| [0023](0023-nodes-and-attributes-record-where-they-end.md) | [Nodes and attributes record where they end](0023-nodes-and-attributes-record-where-they-end.md) |
 
 txml is the XML front end that `tinyactors-core` deliberately lacks: core ADR 0001 adopts SCXML semantics without an XML dependency, core ADR 0025 defers an importer/exporter to a separate component, and core ADR 0023 sets the freestanding constraints txml inherits. Where a decision here mirrors one there, the text says so.
 

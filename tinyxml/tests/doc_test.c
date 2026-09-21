@@ -75,7 +75,7 @@ static uint32_t name(txml_doc *doc, uint32_t namespace_id, const char *local) {
 
 static uint32_t append(txml_doc *doc, txml_node node) {
     uint32_t index = 0u;
-    const txml_node_append request = { node, { 0u, 1u, 1u } };
+    const txml_node_append request = { node, { 0u, 1u, 1u }, { 0u, 1u, 1u } };
     CHECK(txml_doc_append_node(doc, &request, &index) == TXML_OK);
     return index;
 }
@@ -102,7 +102,9 @@ static void attribute(txml_doc *doc, uint32_t name_id, const char *value, bool l
     uint32_t offset = 0u;
     uint32_t index = 0u;
     CHECK(txml_doc_pool_append(doc, S(value), &offset) == TXML_OK);
-    const txml_attribute_entry entry = { last ? (name_id | TXML_ATTRIBUTE_LAST) : name_id, offset, (uint32_t)strlen(value) };
+    const txml_attribute_append entry = {
+        { last ? (name_id | TXML_ATTRIBUTE_LAST) : name_id, offset, (uint32_t)strlen(value) },
+        { { 0u, 0u, 0u }, { 0u, 0u, 0u }, { 0u, 0u, 0u } } };
     CHECK(txml_doc_append_attribute(doc, &entry, &index) == TXML_OK);
 }
 
@@ -133,7 +135,7 @@ static txml_doc *worked_example(uint32_t *ids) {
     attribute(doc, ids[6], "open", false);
     attribute(doc, ids[7], "opening", true);
     text(doc, 3u, 3u, "\n  ");                                          /* 6 */
-    txml_doc_close_node(doc, 3u, 7u);
+    txml_doc_close_node(doc, 3u, &(txml_close){ 7u, { 0u, 1u, 1u } });
     text(doc, 1u, 2u, "\n  ");                                          /* 7 */
     element(doc, 1u, 2u, ids[3], 5u, 1u, false);                        /* 8 */
     attribute(doc, ids[4], "opening", true);
@@ -146,11 +148,11 @@ static txml_doc *worked_example(uint32_t *ids) {
     attribute(doc, ids[6], "error.communication", false);
     attribute(doc, ids[7], "closed", true);
     text(doc, 8u, 3u, "\n  ");                                          /* 13 */
-    txml_doc_close_node(doc, 8u, 14u);
+    txml_doc_close_node(doc, 8u, &(txml_close){ 14u, { 0u, 1u, 1u } });
     text(doc, 1u, 2u, "\n");                                            /* 14 */
-    txml_doc_close_node(doc, 1u, 15u);
+    txml_doc_close_node(doc, 1u, &(txml_close){ 15u, { 0u, 1u, 1u } });
     text(doc, 0u, 1u, "\n");                                            /* 15 */
-    txml_doc_complete(doc);
+    txml_doc_complete(doc, (txml_position){ 0u, 1u, 1u });
     return doc;
 }
 
@@ -298,13 +300,13 @@ static void test_open_document(void) {
     CHECK(txml_find_next(&s, &scan) == TXML_MOVED && txml_index(s) == 1u);
     CHECK(txml_find_next(&s, &scan) == TXML_PENDING);
 
-    txml_doc_close_node(doc, 1u, 3u);
+    txml_doc_close_node(doc, 1u, &(txml_close){ 3u, { 0u, 1u, 1u } });
     c = txml_cursor_at(doc, 2u);
     CHECK(txml_next_sibling(&c) == TXML_NONE);
     c = txml_cursor_at(doc, 1u);
     CHECK(txml_next_sibling(&c) == TXML_PENDING); /* the document is not done */
 
-    txml_doc_complete(doc);
+    txml_doc_complete(doc, (txml_position){ 0u, 1u, 1u });
     CHECK(txml_next_sibling(&c) == TXML_NONE);
     s = txml_cursor_at(doc, 1u);
     CHECK(txml_find_next(&s, &scan) == TXML_NONE);

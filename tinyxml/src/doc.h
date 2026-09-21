@@ -80,7 +80,8 @@ struct txml_doc {
 
     txml_column nodes;      /* tree */
     txml_column attributes; /* tree */
-    txml_column positions;  /* tree */
+    txml_column positions;  /* tree; one txml_span per node */
+    txml_column attribute_sources; /* tree; one txml_attribute_source per attribute */
     txml_column node_prefixes;      /* tree; sorted by node index */
     txml_column attribute_prefixes; /* tree; sorted by attribute index */
     txml_column names;      /* values */
@@ -108,16 +109,34 @@ txml_result txml_doc_create(txml_doc **out, const txml_parser_config *config);
 typedef struct {
     txml_node node;
     txml_position position;
+    txml_position end; /* unset for a node that is appended open */
 } txml_node_append;
 txml_result txml_doc_append_node(txml_doc *doc, const txml_node_append *append, uint32_t *index);
-/* Set `end` on an open node and clear TXML_NODE_OPEN. */
-void txml_doc_close_node(txml_doc *doc, uint32_t index, uint32_t end);
-/* Mark the parse finished: closes the document node and stops PENDING. */
-void txml_doc_complete(txml_doc *doc);
+/* Where an open node stops: its `end` index and the position after its end tag. */
+typedef struct {
+    uint32_t end;
+    txml_position position;
+} txml_close;
+/* Set `end` on an open node, record where it ends and clear TXML_NODE_OPEN. */
+void txml_doc_close_node(txml_doc *doc, uint32_t index, const txml_close *close);
+/* Mark the parse finished: closes the document node, which ends at `end`, and
+ * stops PENDING. */
+void txml_doc_complete(txml_doc *doc, txml_position end);
+
+/* Where an attribute was written; `start.line` is 0 when it has no source. */
+typedef struct {
+    txml_position start;
+    txml_position value_start;
+    txml_position end;
+} txml_attribute_source;
 
 /* Append one attribute. The caller ORs TXML_ATTRIBUTE_LAST and
- * TXML_ATTRIBUTE_DEFAULTED into `entry->name`. */
-txml_result txml_doc_append_attribute(txml_doc *doc, const txml_attribute_entry *entry, uint32_t *index);
+ * TXML_ATTRIBUTE_DEFAULTED into `entry.name`. */
+typedef struct {
+    txml_attribute_entry entry;
+    txml_attribute_source source;
+} txml_attribute_append;
+txml_result txml_doc_append_attribute(txml_doc *doc, const txml_attribute_append *append, uint32_t *index);
 
 /* Copy bytes into the pool; the run never spans a page unless it is larger
  * than one, in which case it occupies consecutive whole pages. */
@@ -137,6 +156,8 @@ const txml_attribute_entry *txml_doc_attribute(const txml_doc *doc, uint32_t ind
 const txml_name_entry *txml_doc_name(const txml_doc *doc, uint32_t id);
 txml_str txml_doc_pool_str(const txml_doc *doc, uint32_t offset, uint32_t length);
 const txml_position *txml_doc_position(const txml_doc *doc, uint32_t index);
+const txml_span *txml_doc_span(const txml_doc *doc, uint32_t index);
+const txml_attribute_source *txml_doc_attribute_source(const txml_doc *doc, uint32_t index);
 /* TXML_ATTR_NS_DECL is derived from the name's namespace, TXML_ATTR_DEFAULTED
  * from the entry's flag bit. */
 uint32_t txml_doc_attribute_flags(const txml_doc *doc, const txml_attribute_entry *entry);

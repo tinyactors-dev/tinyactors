@@ -1,0 +1,6 @@
+#!/usr/bin/env ruby
+#MISE description="Run the txml CLI: mise run txml [-s] [FILE...] (stdin when no FILE)"
+#MISE depends=["build:cli"]
+# vim:ft=ruby
+
+exec(File.expand_path('../../build/txml', __dir__), *ARGV)

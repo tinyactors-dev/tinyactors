@@ -602,6 +602,71 @@
         }
       }
     },
+    "txml_attribute_span": {
+      "kind": "struct",
+      "doc": "Where an attribute was written, for an attribute that has source text. A name is never split across lines, so the name's extent is the written qualified name (prefix, colon, local part) from `start`; `value_start` is the first byte inside the quotes and `value_end` the closing quote, so a value that contains references or line ends is longer in the input than in txml_attribute_view.value.",
+      "fields": [
+        {
+          "name": "start",
+          "type": {
+            "type": "txml_position"
+          },
+          "doc": "first byte of the name"
+        },
+        {
+          "name": "name_end",
+          "type": {
+            "type": "txml_position"
+          },
+          "doc": "one past the last byte of the name"
+        },
+        {
+          "name": "value_start",
+          "type": {
+            "type": "txml_position"
+          },
+          "doc": "first byte inside the quotes"
+        },
+        {
+          "name": "value_end",
+          "type": {
+            "type": "txml_position"
+          },
+          "doc": "the closing quote"
+        },
+        {
+          "name": "end",
+          "type": {
+            "type": "txml_position"
+          },
+          "doc": "one past the closing quote"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "start": 0,
+            "name_end": 16,
+            "value_start": 32,
+            "value_end": 48,
+            "end": 64
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "start": 0,
+            "name_end": 16,
+            "value_start": 32,
+            "value_end": 48,
+            "end": 64
+          }
+        }
+      }
+    },
     "txml_attribute_view": {
       "kind": "struct",
       "fields": [
@@ -1417,6 +1482,42 @@
         "wasm32-unknown-unknown": {
           "size": 4,
           "align": 4
+        }
+      }
+    },
+    "txml_span": {
+      "kind": "struct",
+      "doc": "Where a node lies in the input: `start` is what txml_node_position reports, `end` is the position one past its last byte. An element ends after its end tag (or after the `/>` of an empty one), a text node where the next markup begins, a comment, PI, declaration or DOCTYPE after its closing delimiter, and the document node at the end of the input. Offsets count raw input bytes, so a byte order mark and unexpanded references are inside a span. TXML_ERR_PENDING while the node is still open, TXML_ERR_INVALID for an absent cursor.",
+      "fields": [
+        {
+          "name": "start",
+          "type": {
+            "type": "txml_position"
+          }
+        },
+        {
+          "name": "end",
+          "type": {
+            "type": "txml_position"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "start": 0,
+            "end": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "start": 0,
+            "end": 16
+          }
         }
       }
     },
@@ -2692,6 +2793,37 @@
       ]
     },
     {
+      "name": "txml_node_span",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_result"
+        },
+        "success": "TXML_OK"
+      },
+      "params": [
+        {
+          "name": "cursor",
+          "type": {
+            "type": "txml_cursor"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "txml_span"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success"
+        }
+      ]
+    },
+    {
       "name": "txml_attribute_count",
       "doc": "Attributes, in document order.",
       "public": true,
@@ -2796,6 +2928,38 @@
           "direction": "out",
           "valid_on": "success",
           "lifetime": "document"
+        }
+      ]
+    },
+    {
+      "name": "txml_attribute_span_read",
+      "doc": "TXML_ERR_NOT_FOUND for an attribute with no source text: one supplied by an ATTLIST default, or a pseudo-attribute of the XML declaration.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "txml_result"
+        },
+        "success": "TXML_OK"
+      },
+      "params": [
+        {
+          "name": "attribute",
+          "type": {
+            "type": "txml_attr_cursor"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "txml_attribute_span"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success"
         }
       ]
     },

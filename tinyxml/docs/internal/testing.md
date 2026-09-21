@@ -72,7 +72,7 @@ A `.spec` file is a sequence of cases. Outside a section, a line starting with
   newline. `\n`, `\r`, `\t`, `\"`, `\\`, and `\xNN` are decoded, which is how a
   case writes CRLF, a control byte, or invalid UTF-8. A line inside `@xml` that
   starts with `@` would be read as a directive; write `\x40` instead.
-- `@nodes`, `@attributes`, `@names`, `@positions`, `@prefixes`, `@roundtrip`: **absent means
+- `@nodes`, `@attributes`, `@names`, `@positions`, `@spans`, `@attribute_spans`, `@prefixes`, `@roundtrip`: **absent means
   not checked; present means exact match**, so a present-but-empty section
   asserts that the renderer produces nothing.
 - `@error` is special: absent, or present and empty, asserts that the parse
@@ -123,6 +123,24 @@ node has one now, so a `@positions` section is always as long as `@nodes`:
 <name-id> {namespace}local
 <node-index> <line>:<column> offset=<n>
 ```
+
+Spans (ADR 0023): where each node ends, one row per node, and where each
+attribute was written. Offsets count raw input bytes, so a reference or a line
+end is inside a span at its written length. A node that is still open (only
+reachable in a partial rendering after a failed parse) has `pending` for its
+end:
+
+```
+<node-index> <line>:<column> - <line>:<column> offset=<start>..<end>
+<node-index> <line>:<column> - pending
+<node-index>.<attribute-index> name=<l>:<c>..<l>:<c> value=<l>:<c>..<l>:<c> end=<l>:<c> offset=<start>..<end>
+<node-index>.<attribute-index> -
+```
+
+The last form marks an attribute with no source text: one supplied by an
+`ATTLIST` default, or a pseudo-attribute of the XML declaration. Every section
+is also part of the chunk-split comparison, so a span that depended on where
+the input was cut fails there.
 
 An error, with `limit=` only for `LIMIT`:
 

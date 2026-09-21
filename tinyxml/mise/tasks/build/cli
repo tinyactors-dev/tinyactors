@@ -1,0 +1,46 @@
+#!/usr/bin/env ruby
+#MISE description="Build the txml command-line tool (cli/txml.c) into build/txml"
+#MISE depends=["build:library"]
+# vim:ft=ruby
+#
+# The CLI is a program, not part of the library: it uses the C library, so it is
+# outside the freestanding and lint-src checks. It is compiled and linked like
+# the test binaries, by content (mise/lib/cache.rb).
+
+require 'English'
+require 'fileutils'
+require 'pathname'
+require 'shellwords'
+require_relative '../../lib/cache'
+
+ROOT = Cache::ROOT
+OBJECTS = ROOT.join('build/objects')
+BINARY = ROOT.join('build/txml')
+COMPILER = Shellwords.split(ENV.fetch('CC', 'cc'))
+FLAGS = Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic'))
+
+source = Pathname.new('cli/txml.c')
+object = OBJECTS.join('cli_txml.o')
+outcome, output = Cache.compile([*COMPILER, *FLAGS, '-Iinclude'], source, object)
+if outcome == :failed
+  puts output
+  abort 'build:cli: compile failed'
+end
+puts output unless output.empty?
+
+library = Dir[ROOT.join('src/*.c').to_s].sort.map { |path| OBJECTS.join("#{File.basename(path, '.c')}.o") }
+inputs = [object, *library]
+command = [*COMPILER, *FLAGS, *inputs.map(&:to_s), '-o', BINARY.to_s]
+key = Cache.digest(command.map { |part| part.start_with?(ROOT.to_s) ? part.delete_prefix("#{ROOT}/") : part }.join(' '),
+                   Cache.tool_id(COMPILER.first(1)), inputs)
+if BINARY.file? && Cache.stamped?('link-txml', key)
+  puts 'build:cli: build/txml up to date'
+  exit
+end
+
+Cache.unstamp('link-txml')
+FileUtils.rm_f(BINARY)
+output = IO.popen(command, chdir: ROOT.to_s, err: %i[child out], &:read)
+abort "build:cli: link failed\n#{output}" unless $CHILD_STATUS.success?
+Cache.stamp('link-txml', key)
+puts 'build:cli: linked build/txml'

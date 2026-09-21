@@ -2,6 +2,7 @@
 
 **Status:** Accepted  
 **Date:** 2026-09-20  
+**Amended by:** [ADR 0023](0023-nodes-and-attributes-record-where-they-end.md): a node also records where it ends, taking the per-node cost from 40 bytes to 56  
 **Supersedes:** the retention flags in [ADR 0003](0003-the-parser-produces-a-document-the-token-stream-stays-internal.md) and the optional internal subset in [ADR 0012](0012-conformance-scope-utf-8-namespaces-optional-internal-subset-no-validation.md)
 
 ## Context

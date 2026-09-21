@@ -179,6 +179,10 @@ static void dump_doc(buf *out, const txml_doc *doc) {
         buf_str(out, txml_node_prefix(c));
         buf_printf(out, " text=");
         buf_str(out, txml_node_text(c));
+        txml_span span = { { 0, 0, 0 }, { 0, 0, 0 } };
+        const txml_result spanned = txml_node_span(c, &span);
+        buf_printf(out, " span=%d..%u:%u+%llu", (int)spanned, span.end.line, span.end.column,
+                   (unsigned long long)span.end.offset); /* zeros when the node is still open */
         buf_printf(out, "\n");
 
         txml_attr_cursor attribute;
@@ -190,6 +194,15 @@ static void dump_doc(buf *out, const txml_doc *doc) {
                 buf_str(out, view.prefix);
                 buf_printf(out, " value=");
                 buf_str(out, view.value);
+                txml_attribute_span source;
+                const txml_result found = txml_attribute_span_read(attribute, &source);
+                buf_printf(out, " span=%d", (int)found);
+                if (found == TXML_OK) {
+                    buf_printf(out, " @%u:%u+%llu v%u:%u+%llu e%u:%u+%llu", source.start.line, source.start.column,
+                               (unsigned long long)source.start.offset, source.value_start.line,
+                               source.value_start.column, (unsigned long long)source.value_start.offset,
+                               source.end.line, source.end.column, (unsigned long long)source.end.offset);
+                }
                 buf_printf(out, "\n");
             }
             move = txml_next_attribute(&attribute);
