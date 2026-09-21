@@ -29,6 +29,23 @@ TinyactorsTest.chart :counter_v2, document_name: 'counter' do
   end
 end
 
+# Exercises every externally visible bootstrap effect that replacement holds:
+# a log record, a delayed send, and an invocation.
+TinyactorsTest.chart :counter_effects_v2, document_name: 'counter' do
+  data ready: false
+
+  state :counting do
+    on_entry do
+      log 'revision', expr: '"v2"'
+      send_event 'ready', delay: 1000
+    end
+    invoke type: 'urn:tinyactors:test:replacement'
+    transition on: 'ready', type: :internal do
+      assign '.ready', 'true'
+    end
+  end
+end
+
 # Invokes two services that are not actors (invoker.scripted) and logs
 # every error event with its type and envelope invocation ID, in order.
 TinyactorsTest.chart :service_pair do

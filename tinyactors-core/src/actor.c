@@ -14,6 +14,86 @@ ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id) {
     return entry->generation == generation ? entry->actor : NULL;
 }
 
+static void ta_activation_effect_release(ta_activation_effect *effect) {
+    if (effect->kind == TA_ACTIVATION_SEND) {
+        ta_value_release(&effect->as.send.send.target);
+        ta_value_release(&effect->as.send.send.data);
+    } else if (effect->kind == TA_ACTIVATION_LOG) {
+        ta_value_release(&effect->as.log.value);
+    }
+}
+
+static void ta_actor_discard_activation_effects(ta_actor *actor) {
+    ta_actor_sparse_state *sparse = actor->sparse;
+    if (sparse == NULL || sparse->activation_effects == NULL) {
+        return;
+    }
+    ta_activation_effects *effects = sparse->activation_effects;
+    for (uint32_t index = 0; index < effects->entries.count; index += 1u) {
+        ta_activation_effect_release(ta_vec_at(&effects->entries, index));
+    }
+    ta_allocator allocator = effects->entries.allocator;
+    ta_vec_destroy(&effects->entries);
+    ta_mem_free(allocator, effects,
+                &(ta_allocator_free_params){ .size = sizeof(ta_activation_effects),
+                                             .alignment = _Alignof(ta_activation_effects) });
+    sparse->activation_effects = NULL;
+}
+
+static ta_result ta_actor_hold_effect(ta_system *system, ta_actor *actor, const ta_activation_effect *effect) {
+    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
+    if (sparse == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    if (sparse->activation_effects == NULL) {
+        sparse->activation_effects = ta_mem_alloc(system->allocator, sizeof(ta_activation_effects),
+                                                  _Alignof(ta_activation_effects));
+        if (sparse->activation_effects == NULL) {
+            return TA_ERR_NOMEM;
+        }
+        *sparse->activation_effects = (ta_activation_effects){0};
+        ta_vec_init(&sparse->activation_effects->entries, system->allocator, TA_VEC_LAYOUT(ta_activation_effect));
+    }
+    return ta_vec_push(&sparse->activation_effects->entries, effect);
+}
+
+ta_result ta_actor_hold_send(ta_system *system, ta_actor *actor, const ta_activation_send *send) {
+    return ta_actor_hold_effect(system, actor,
+                                &(ta_activation_effect){ .kind = TA_ACTIVATION_SEND, .as.send = *send });
+}
+
+ta_result ta_actor_hold_log(ta_system *system, ta_actor *actor, const ta_log_record *record) {
+    ta_activation_effect effect = { .kind = TA_ACTIVATION_LOG, .as.log = *record };
+    ta_value_retain(&effect.as.log.value);
+    ta_result result = ta_actor_hold_effect(system, actor, &effect);
+    if (result != TA_OK) {
+        ta_value_release(&effect.as.log.value);
+    }
+    return result;
+}
+
+bool ta_actor_cancel_held_send(ta_actor *actor, ta_send_id send_id) {
+    ta_actor_sparse_state *sparse = actor->sparse;
+    if (sparse == NULL || sparse->activation_effects == NULL) {
+        return false;
+    }
+    ta_vec *entries = &sparse->activation_effects->entries;
+    bool found = false;
+    for (uint32_t index = entries->count; index > 0; index -= 1u) {
+        ta_activation_effect *effect = ta_vec_at(entries, index - 1u);
+        if (effect->kind != TA_ACTIVATION_SEND || effect->as.send.send.send_id != send_id) {
+            continue;
+        }
+        ta_activation_effect_release(effect);
+        for (uint32_t at = index; at < entries->count; at += 1u) {
+            *(ta_activation_effect *)ta_vec_at(entries, at - 1u) = *(ta_activation_effect *)ta_vec_at(entries, at);
+        }
+        entries->count -= 1u;
+        found = true;
+    }
+    return found;
+}
+
 bool ta_actor_state_active(const ta_actor *actor, ta_state_id state) {
     const ta_definition *definition = actor->definition;
     if (state >= definition->state_count) {
@@ -62,6 +142,7 @@ static ta_result ta_actor_claim_slot(ta_system *system, ta_actor *actor, ta_acto
  */
 void ta_actor_free(ta_system *system, ta_actor *actor) {
     const ta_definition *definition = actor->definition;
+    ta_actor_discard_activation_effects(actor);
     if (actor->datamodel_initialized) {
         definition->datamodel.v->destroy_instance(definition->datamodel.self, definition->datamodel_shared,
                                                   actor->datamodel_instance);
@@ -142,6 +223,16 @@ static void ta_actor_release_address(ta_system *system, const ta_actor *actor) {
     }
     if (system->directory.v == NULL || system->directory.v->remove == NULL) {
         return;
+    }
+    if (system->directory.v->resolve != NULL) {
+        ta_actor_directory_entry current = {0};
+        ta_result result = system->directory.v->resolve(
+            system->directory.self,
+            &(ta_actor_directory_resolve_params){ .address = &actor->record.self.as.named, .out = &current });
+        if (result == TA_OK &&
+            (current.kind != TA_ACTOR_DIRECTORY_RESIDENT || current.actor != actor->record.id)) {
+            return;
+        }
     }
     (void)system->directory.v->remove(
         system->directory.self,
@@ -330,6 +421,139 @@ ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params)
     return TA_OK;
 }
 
+ta_result ta_actor_prepare_replacement(ta_system *system, const ta_actor_prepare_replacement_params *params) {
+    if (system == NULL || params == NULL || params->out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    ta_actor *incumbent = ta_actor_lookup(system, params->incumbent);
+    ta_definition *definition = ta_system_definition(system, params->definition);
+    if (incumbent == NULL || definition == NULL || definition->retired) {
+        return TA_ERR_NOT_FOUND;
+    }
+    if (!incumbent->published || incumbent->record.self.kind != TA_ACTOR_REF_NAMED ||
+        !ta_str_equal(incumbent->record.self.as.named.family.name, definition->identity.family.name)) {
+        return TA_ERR_INVALID;
+    }
+    ta_actor *actor = NULL;
+    ta_result result = ta_actor_new(system, definition, &actor);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_actor_id id = actor->record.id;
+    actor->published = false;
+    actor->replacement_of = incumbent->record.id;
+    actor->record.self = incumbent->record.self;
+    result = ta_address_copy(&actor->record.self, system->allocator);
+    if (result == TA_OK) {
+        result = definition->datamodel.v->init_instance(
+            definition->datamodel.self,
+            &(ta_datamodel_init_instance_params){
+                .shared = definition->datamodel_shared,
+                .instance = actor->datamodel_instance,
+                .binding = params->datamodel_binding,
+                .host = &actor->host,
+            });
+        actor->datamodel_initialized = result == TA_OK;
+    }
+    if (result != TA_OK) {
+        ta_actor_release_slot(system, id);
+        ta_actor_free(system, actor);
+        return result;
+    }
+    *params->out = id;
+    return TA_OK;
+}
+
+static uint32_t ta_actor_activation_send_count(const ta_actor *actor) {
+    const ta_actor_sparse_state *sparse = actor->sparse;
+    if (sparse == NULL || sparse->activation_effects == NULL) {
+        return 0;
+    }
+    uint32_t count = 0;
+    const ta_vec *entries = &sparse->activation_effects->entries;
+    for (uint32_t index = 0; index < entries->count; index += 1u) {
+        const ta_activation_effect *effect = ta_vec_at(entries, index);
+        count += effect->kind == TA_ACTIVATION_SEND ? 1u : 0u;
+    }
+    return count;
+}
+
+static void ta_actor_release_activation_effects(ta_system *system, ta_actor *actor) {
+    ta_actor_sparse_state *sparse = actor->sparse;
+    if (sparse == NULL || sparse->activation_effects == NULL) {
+        return;
+    }
+    ta_activation_effects *effects = sparse->activation_effects;
+    for (uint32_t index = 0; index < effects->entries.count; index += 1u) {
+        ta_activation_effect *effect = ta_vec_at(&effects->entries, index);
+        if (effect->kind == TA_ACTIVATION_LOG) {
+            if (system->log_sink.v != NULL) {
+                system->log_sink.v->write(system->log_sink.self, &effect->as.log);
+            }
+            ta_value_release(&effect->as.log.value);
+            continue;
+        }
+        ta_delayed_send *send = &effect->as.send.send;
+        if (effect->as.send.immediate) {
+            ta_external_event_submit_status status = ta_interpreter_dispatch_delayed(system, send);
+            if (status != TA_EXTERNAL_EVENT_RETRY) {
+                continue;
+            }
+            send->submitted = true;
+            send->origin = actor->record.self;
+            send->invoke_id = ta_invoke_parent_id(actor, &send->destination);
+        }
+        (void)ta_timer_schedule(&system->timers, send);
+    }
+    ta_allocator allocator = effects->entries.allocator;
+    ta_vec_destroy(&effects->entries);
+    ta_mem_free(allocator, effects,
+                &(ta_allocator_free_params){ .size = sizeof(ta_activation_effects),
+                                             .alignment = _Alignof(ta_activation_effects) });
+    sparse->activation_effects = NULL;
+}
+
+ta_result ta_actor_activate_replacement(ta_system *system, const ta_actor_activate_replacement_params *params) {
+    if (system == NULL || params == NULL) {
+        return TA_ERR_INVALID;
+    }
+    ta_actor *incumbent = ta_actor_lookup(system, params->incumbent);
+    ta_actor *replacement = ta_actor_lookup(system, params->replacement);
+    if (incumbent == NULL || replacement == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    if (!incumbent->published || replacement->published || replacement->replacement_of != incumbent->record.id ||
+        incumbent->record.self.kind != TA_ACTOR_REF_NAMED || replacement->record.self.kind != TA_ACTOR_REF_NAMED) {
+        return TA_ERR_INVALID;
+    }
+    if (replacement->macrostep || replacement->record.residency != TA_ACTOR_IDLE) {
+        return TA_ERR_BUSY;
+    }
+    ta_result result = ta_timer_reserve(&system->timers, ta_actor_activation_send_count(replacement));
+    if (result != TA_OK) {
+        return result;
+    }
+    result = ta_actor_directory_swap(
+        system,
+        &(ta_actor_directory_replace_params){
+            .address = &replacement->record.self.as.named,
+            .expected = { .kind = TA_ACTOR_DIRECTORY_RESIDENT, .actor = incumbent->record.id },
+            .replacement = { .kind = TA_ACTOR_DIRECTORY_RESIDENT, .actor = replacement->record.id },
+        });
+    if (result != TA_OK) {
+        return result;
+    }
+    replacement->published = true;
+    replacement->replacement_of = 0;
+    ta_actor_touch(replacement);
+    ta_actor_release_activation_effects(system, replacement);
+    if (replacement->sparse != NULL && replacement->sparse->pending_invokes.count != 0) {
+        replacement->macrostep = true;
+        replacement->record.residency = TA_ACTOR_RUNNING;
+    }
+    return TA_OK;
+}
+
 ta_result ta_actor_deliver(ta_system *system, ta_actor_id id, const ta_event *event) {
     if (event == NULL) {
         return TA_ERR_INVALID;
@@ -410,6 +634,10 @@ static size_t ta_actor_allocated_bytes(const ta_actor *actor) {
         total += ta_vec_bytes(&sparse->internal_events);
         total += ta_vec_bytes(&sparse->pending_invokes);
         total += (size_t)sparse->invoke_capacity * (sizeof(ta_active_invoke) + sizeof(ta_invoke_meta));
+        if (sparse->activation_effects != NULL) {
+            total += sizeof(ta_activation_effects);
+            total += ta_vec_bytes(&sparse->activation_effects->entries);
+        }
     }
     return total;
 }

@@ -1370,6 +1370,11 @@ typedef struct {
     TA_OUT ta_actor_id *out;
 } ta_actor_load_params;
 typedef struct {
+    const ta_session_image *image;
+    TA_IN TA_OPTIONAL const ta_value *datamodel_binding;
+    TA_OUT ta_actor_id *out;
+} ta_actor_reconstruct_params;
+typedef struct {
     ta_actor_id incumbent;
     ta_definition_id definition;
     TA_IN TA_OPTIONAL const ta_value *datamodel_binding;
@@ -1399,6 +1404,14 @@ TA_API ta_result ta_actor_resume(ta_system *system, TA_IN const ta_actor_resume_
 TA_API ta_result ta_actor_unload(ta_system *system, TA_IN const ta_actor_unload_params *params);
 /* Restores an unloaded named actor and atomically republishes its route. */
 TA_API ta_result ta_actor_load(ta_system *system, TA_IN const ta_actor_load_params *params)
+    TA_VALUE_MODEL(session_image, params.image);
+/*
+ * Reconstructs an image under a fresh runtime ID without reading or changing
+ * the actor directory. For a named image, the logical self-address is kept;
+ * sends to that address follow the directory's current route.
+ */
+TA_API ta_result ta_actor_reconstruct(ta_system *system,
+                                      TA_IN const ta_actor_reconstruct_params *params)
     TA_VALUE_MODEL(session_image, params.image);
 /* Releases the name of an unloaded actor; the host then deletes its checkpoint. */
 TA_API ta_result ta_actor_remove_unloaded(ta_system *system,
@@ -1640,9 +1653,11 @@ TA_API ta_result ta_definition_inspect(const ta_system *system,
  * image.  An active invocation therefore does not make capture or restoration
  * return TA_ERR_NOT_RECONSTRUCTIBLE.
 
- * ta_actor_load() is the only way to restore an image: a session has to have a
- * name to be restored under (ADR 0051).  An image is still the host's to hold,
- * to index by ta_session_image_next_deadline(), and to destroy.
+ * ta_actor_reconstruct() restores an image without participating in named
+ * routing. ta_actor_load() wraps the same reconstruction in the named-actor
+ * residency protocol and publishes it only when the directory still says
+ * UNLOADED. An image is still the host's to hold, to index by
+ * ta_session_image_next_deadline(), and to destroy.
  *
  * An unpublished prepared replacement is not a routable session yet and cannot
  * be captured; ta_actor_capture() returns TA_ERR_BUSY until activation.

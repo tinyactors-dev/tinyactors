@@ -1,6 +1,6 @@
 # ADR 0051: The only public restore path is ta_actor_load
 
-- Status: Accepted
+- Status: Superseded by ADR 0052
 - Date: 2026-09-21
 
 ## Context

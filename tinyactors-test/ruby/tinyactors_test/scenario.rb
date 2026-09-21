@@ -847,6 +847,7 @@ module TinyactorsTest
       id = core('ta_actor_prepare_replacement', ta.actor.prepare_replacement(**params)).fetch(:out)
       replacement = Actor.new(self, id, chart_name.to_sym, definition, address: incumbent.address)
       @actor_labels[id] ||= "#{chart_name}.replacement"
+      run_system("prepare replacement #{chart_name}")
       replacement
     end
 
@@ -860,8 +861,7 @@ module TinyactorsTest
     end
 
     # Capture, unload, and load a named actor with its current data root as
-    # the binding: the residency change ADR 0014 says is invisible, and the
-    # only way to restore an image (ADR 0051).
+    # the binding: the residency change ADR 0014 says is invisible.
     def cycle_residency(actor)
       image = capture(actor)
       binding = actor.data

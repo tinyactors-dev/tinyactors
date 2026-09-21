@@ -1,20 +1,62 @@
 # frozen_string_literal: true
 
-# Session images (ADR 0038, ADR 0039, ADR 0026, ADR 0051): capture records
+# Session images (ADR 0038, ADR 0039, ADR 0026, ADR 0052): capture records
 # the whole interpreter session without changing it; restoring it against the
 # exact definition revision and the host's data-model binding continues it as
 # if nothing happened, except that invocations are lost and reported as
 # error.communication.invoke.<id>.unavailable.
 #
-# Restoring is ta_actor_load(), which is a residency change of a *named*
-# actor (ADR 0051): a session has to have a name to be restored under, so
-# every scenario here that restores one uses a named actor and
-# cycle_residency (capture, unload, load). Scenarios that only capture need
-# no name.
+# ta_actor_reconstruct() is route-neutral and ta_actor_load() wraps it in the
+# named residency protocol. Most continuation scenarios use cycle_residency
+# (capture, unload, load); reconstruction is exercised separately where its
+# independence from named routing matters.
 module ResidencyScenarios
 end
 
 TinyactorsTest.scenarios 'residency', chart: :traffic_light do
+  # Catches: reconstruction that republishes the captured named actor and
+  # steals its address back from a replacement. A later send to the logical
+  # address must still resolve to the replacement.
+  scenario 'reconstructing a captured incumbent leaves its replacement routed' do
+    router = recording_router(directory: true)
+    incumbent = spawn :freezer, name: 'x'
+    incumbent.deliver 'arm'
+    image = capture(incumbent)
+    binding = incumbent.data
+
+    old_spec = TinyactorsTest.charts[:freezer].to_spec
+    new_spec = old_spec.merge(data: old_spec[:data] + [{ name: 'revision', initializer: { expr: '2' } }])
+    compiled = core('ta_definition_compile_spec',
+                    ta.definition.compile_spec(system: system_handle, spec: new_spec,
+                                               datamodel: { '$adapter' => 'datamodel.jq' }, allocator: allocator.adapter))
+    new_definition = core('ta_system_register_definition',
+                          ta.system.register_definition(system: system_handle,
+                                                        definition: compiled.fetch(:out))).fetch(:out)
+    address = incumbent.address
+    core('ta_actor_unload', { result: unload(incumbent, image) })
+    core('ta_actor_remove_unloaded', { result: remove_unloaded(address) })
+    replacement_id = core('ta_actor_spawn',
+                          ta.actor.spawn(system: system_handle, definition: new_definition,
+                                         address: address)).fetch(:out)
+    assert_equal ['ok', replacement_id], find(incumbent.address)
+
+    reconstructed = core('ta_actor_reconstruct',
+                         ta.actor.reconstruct(system: system_handle, image: image,
+                                              datamodel_binding: binding)).fetch(:out)
+    assert_equal ['ok', replacement_id], find(incumbent.address),
+                 'route-neutral reconstruction does not replace the current actor'
+
+    sender = spawn :messenger, binding: { peer: '#_actor_freezer/x' }
+    submits_before = router.entries('submit').length
+    sender.deliver 'greet'
+    submits = router.entries('submit').drop(submits_before)
+    assert_equal replacement_id, submits.last.dig(:resolved, :actor),
+                 'a send to the logical address follows the replacement route'
+
+    core('ta_actor_destroy', ta.actor.destroy(system: system_handle, actor: reconstructed))
+    destroy_image(image)
+  end
+
   # Catches: capture that mutates the actor (moves its timers out of the
   # heap, clears its queue, advances its epoch observably).
   scenario 'capturing an actor at any step changes nothing' do

@@ -268,7 +268,6 @@ TinyactorsTest.scenarios 'replacement', chart: :counter_v1 do
   # escape, before activation; activation that is not a compare-and-swap
   # of the incumbent's entry; an incumbent destroyed later that removes the
   # replacement's route; a replacement that does not keep the bound data.
-  expect_failure 'ta_actor_prepare_replacement is unimplemented', message: NamedActorScenarios::UNIMPLEMENTED
   scenario 'a replacement takes over the address only when activated' do
     router = recording_router
     incumbent = spawn name: 'c1'
@@ -297,5 +296,44 @@ TinyactorsTest.scenarios 'replacement', chart: :counter_v1 do
     # incumbent's, and destroying the incumbent afterwards changes nothing.
     assert_equal [['claim', nil, 'resident', 'ok'], ['replace', 'resident', 'resident', 'ok']],
                  NamedActorScenarios.updates(instruments.fetch('directory'))
+  end
+
+  scenario 'a refused activation leaves the incumbent routed and is retryable' do
+    router = recording_router
+    incumbent = spawn name: 'c1'
+    replacement = prepare_replacement(incumbent, :counter_v2, binding: incumbent.data)
+    directory = instruments.fetch('directory')
+
+    directory.arm_fault(:replace, result: 'err_stale')
+    assert_equal 'err_stale', activate_replacement(incumbent, replacement)
+    assert_equal ['ok', incumbent.handle], find(incumbent.address)
+    assert_equal false, replacement.inspect_actor[:published]
+    assert_equal [], router.entries('submit'), 'a refused swap releases no held send'
+
+    assert_equal 'ok', activate_replacement(incumbent, replacement)
+    run_system('retry replacement activation')
+    assert_equal ['ok', replacement.handle], find(incumbent.address)
+    assert_equal({ count: 0, greeted: true }, replacement.data)
+  end
+
+  scenario 'bootstrap logs, timers, and invocations wait for activation' do
+    log_sink = recording_log
+    service = scripted_invoker('urn:tinyactors:test:replacement')
+    incumbent = spawn name: 'c1'
+    replacement = prepare_replacement(incumbent, :counter_effects_v2)
+
+    assert_equal [], log_sink.logged
+    assert_equal [], service.started
+    assert_equal 'err_not_found', ta.system.next_deadline(system: system_handle)[:result]
+
+    assert_equal 'ok', activate_replacement(incumbent, replacement)
+    assert_equal [['revision', 'v2']], log_sink.logged
+    assert_equal 1000, next_deadline
+    assert_equal [], service.started, 'the invocation remains queued until the activated actor runs'
+
+    run_system('release the replacement invocation')
+    assert_equal 1, service.started.size
+    advance_time 1000
+    assert_equal true, replacement.data('.ready')
   end
 end

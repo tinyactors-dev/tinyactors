@@ -411,7 +411,7 @@ static void test_operations(tat_js_datamodel_context *context) {
     /* A retained handle shares; values from another session keep their realm. */
     session b = open_session(NULL, &result);
     require(result == TA_OK, "second instance");
-    ta_value object;
+    ta_value object = {0};
     ta_value shared;
     check(declare(&s, S("obj"), NULL) == TA_OP_OK && eval(&s, E_OBJECT, &object) == TA_OP_OK &&
               set_named(&s, S("obj"), &object) == TA_OP_OK,

@@ -3,6 +3,7 @@
 #include "continuation.h"
 #include "definition.h"
 #include "invoke.h"
+#include "timer.h"
 
 typedef struct {
     ta_actor_id id;
@@ -11,7 +12,27 @@ typedef struct {
     ta_actor_residency residency;
 } ta_actor_record;
 
-typedef struct ta_activation_effects ta_activation_effects;
+typedef struct {
+    ta_delayed_send send;
+    bool immediate;
+} ta_activation_send;
+
+typedef enum {
+    TA_ACTIVATION_SEND,
+    TA_ACTIVATION_LOG
+} ta_activation_effect_kind;
+
+typedef struct {
+    ta_activation_effect_kind kind;
+    union {
+        ta_activation_send send;
+        ta_log_record log;
+    } as;
+} ta_activation_effect;
+
+typedef struct ta_activation_effects {
+    ta_vec entries; /* ta_activation_effect, in authored order */
+} ta_activation_effects;
 
 /* Allocated only for actors that use one of these uncommon facilities. */
 typedef struct {
@@ -87,6 +108,11 @@ void ta_actor_release_slot(ta_system *system, ta_actor_id id);
 /* The host directory's compare-and-swaps, which every residency change uses. */
 ta_result ta_actor_directory_swap(ta_system *system, const ta_actor_directory_replace_params *params);
 ta_result ta_actor_directory_drop(ta_system *system, const ta_actor_directory_remove_params *params);
+
+/* Materialized effects of an unpublished replacement's bootstrap. */
+ta_result ta_actor_hold_send(ta_system *system, ta_actor *actor, const ta_activation_send *send);
+ta_result ta_actor_hold_log(ta_system *system, ta_actor *actor, const ta_log_record *record);
+bool ta_actor_cancel_held_send(ta_actor *actor, ta_send_id send_id);
 
 /*
  * Advances the session epoch: the actor has changed in a way a session image

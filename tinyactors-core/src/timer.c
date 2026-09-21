@@ -73,22 +73,44 @@ void ta_timer_heap_destroy(ta_timer_heap *heap) {
     *heap = (ta_timer_heap){0};
 }
 
+ta_result ta_timer_reserve(ta_timer_heap *heap, uint32_t additional) {
+    if (additional > UINT32_MAX - heap->count) {
+        return TA_ERR_NOMEM;
+    }
+    if (additional <= heap->capacity - heap->count) {
+        return TA_OK;
+    }
+    uint32_t needed = heap->count + additional;
+    uint32_t capacity = heap->capacity == 0 ? 16u : heap->capacity;
+    while (capacity < needed) {
+        if (capacity > UINT32_MAX / 2u) {
+            capacity = needed;
+            break;
+        }
+        capacity *= 2u;
+    }
+    ta_delayed_send *items = ta_mem_alloc(heap->allocator, capacity * sizeof(ta_delayed_send),
+                                          _Alignof(ta_delayed_send));
+    if (items == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    if (heap->items != NULL) {
+        ta_mem_copy(items, heap->items, heap->count * sizeof(ta_delayed_send));
+        ta_mem_free(heap->allocator, heap->items,
+                    &(ta_allocator_free_params){ .size = heap->capacity * sizeof(ta_delayed_send),
+                                                 .alignment = _Alignof(ta_delayed_send) });
+    }
+    heap->items = items;
+    heap->capacity = capacity;
+    return TA_OK;
+}
+
 ta_result ta_timer_schedule(ta_timer_heap *heap, const ta_delayed_send *send) {
     if (heap->count == heap->capacity) {
-        uint32_t capacity = heap->capacity == 0 ? 16u : heap->capacity * 2u;
-        ta_delayed_send *items = ta_mem_alloc(heap->allocator, capacity * sizeof(ta_delayed_send),
-                                              _Alignof(ta_delayed_send));
-        if (items == NULL) {
-            return TA_ERR_NOMEM;
+        ta_result result = ta_timer_reserve(heap, 1u);
+        if (result != TA_OK) {
+            return result;
         }
-        if (heap->items != NULL) {
-            ta_mem_copy(items, heap->items, heap->count * sizeof(ta_delayed_send));
-            ta_mem_free(heap->allocator, heap->items,
-                        &(ta_allocator_free_params){ .size = heap->capacity * sizeof(ta_delayed_send),
-                                                     .alignment = _Alignof(ta_delayed_send) });
-        }
-        heap->items = items;
-        heap->capacity = capacity;
     }
     uint32_t index = heap->count;
     heap->items[index] = *send;

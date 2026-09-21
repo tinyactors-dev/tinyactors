@@ -37,10 +37,12 @@ Restoring an image requires the exact definition revision and a host-supplied da
 For a named virtual actor, `ta_actor_load()` wraps reconstruction in the
 directory residency protocol. It prepares the session while the directory still
 says `UNLOADED` and publishes the new runtime ID only after preparation
-succeeds. It is the only way to restore an image: reconstruction itself is
-internal (ADR 0051). A restored session is a new runtime ID, so a name is what
-carries identity across the change, and an anonymous session has nothing that
-does.
+succeeds. `ta_actor_reconstruct()` is the route-neutral primitive underneath:
+it returns a fresh runtime ID without reading or changing the directory (ADR
+0052). A named reconstruction keeps the image's logical self-address, so sends
+to that address follow its current directory entry rather than implicitly
+publishing the reconstructed session. An anonymous reconstruction uses its new
+runtime ID as self; the captured runtime ID remains stale.
 
 After restoring the captured interpreter state, reconstruction retires each
 invocation that was active in the image and appends an internal

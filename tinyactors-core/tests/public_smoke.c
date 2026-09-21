@@ -8,6 +8,7 @@ static void use_public_types(void) {
     ta_actor_spawn_params spawn = {0};
     ta_actor_unload_params unload = {0};
     ta_actor_load_params load = {0};
+    ta_actor_reconstruct_params reconstruct = {0};
     ta_actor_remove_unloaded_params remove_unloaded = {0};
     ta_actor_directory_entry directory_entry = {
         .kind = TA_ACTOR_DIRECTORY_UNLOADED,
@@ -68,6 +69,7 @@ static void use_public_types(void) {
     (void)spawn;
     (void)unload;
     (void)load;
+    (void)reconstruct;
     (void)remove_unloaded;
     (void)directory_entry;
     (void)prepare;

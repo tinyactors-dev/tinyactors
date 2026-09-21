@@ -842,6 +842,15 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
         ta_value_release(&state.target);
         return ta_communication_error(system, actor, &(ta_error_params){ .send_id = state.send_id });
     }
+    if (!actor->published) {
+        ta_result result = ta_actor_hold_send(
+            system, actor, &(ta_activation_send){ .send = record, .immediate = delay == 0 });
+        if (result != TA_OK) {
+            ta_value_release(&state.data);
+            ta_value_release(&state.target);
+        }
+        return result;
+    }
     if (delay == 0) {
         ta_external_event_submit_status submitted = ta_interpreter_dispatch_delayed(system, &record);
         if (submitted != TA_EXTERNAL_EVENT_RETRY) {
@@ -957,6 +966,7 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
                 ta_value_release(&holder);
             }
             if (status == TA_OP_OK && send_id != 0) {
+                (void)ta_actor_cancel_held_send(it->actor, send_id);
                 (void)ta_timer_cancel(&it->system->timers, it->actor->record.id, send_id);
             }
             break;
@@ -1012,7 +1022,15 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
                 record.has_value = status == TA_OP_OK;
             }
             if (status == TA_OP_OK && it->system->log_sink.v != NULL) {
-                it->system->log_sink.v->write(it->system->log_sink.self, &record);
+                if (it->actor->published) {
+                    it->system->log_sink.v->write(it->system->log_sink.self, &record);
+                } else {
+                    ta_result result = ta_actor_hold_log(it->system, it->actor, &record);
+                    if (result != TA_OK) {
+                        ta_value_release(&record.value);
+                        return result;
+                    }
+                }
             }
             ta_value_release(&record.value);
             break;

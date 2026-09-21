@@ -40,6 +40,8 @@ typedef struct {
 
 ta_result ta_timer_heap_init(ta_timer_heap *heap, ta_allocator allocator);
 void ta_timer_heap_destroy(ta_timer_heap *heap);
+/* Makes the next `additional` schedules allocation-free. */
+ta_result ta_timer_reserve(ta_timer_heap *heap, uint32_t additional);
 /* Takes ownership of the send's values; assigns send->id when it is zero. */
 ta_result ta_timer_schedule(ta_timer_heap *heap, const ta_delayed_send *send);
 /* Removes and releases every pending, not yet submitted send of owner with send_id. */

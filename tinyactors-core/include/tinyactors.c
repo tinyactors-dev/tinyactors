@@ -466,6 +466,8 @@ typedef struct {
 
 TA_PRIVATE ta_result ta_timer_heap_init(ta_timer_heap *heap, ta_allocator allocator);
 TA_PRIVATE void ta_timer_heap_destroy(ta_timer_heap *heap);
+/* Makes the next `additional` schedules allocation-free. */
+TA_PRIVATE ta_result ta_timer_reserve(ta_timer_heap *heap, uint32_t additional);
 /* Takes ownership of the send's values; assigns send->id when it is zero. */
 TA_PRIVATE ta_result ta_timer_schedule(ta_timer_heap *heap, const ta_delayed_send *send);
 /* Removes and releases every pending, not yet submitted send of owner with send_id. */
@@ -954,7 +956,27 @@ typedef struct {
     ta_actor_residency residency;
 } ta_actor_record;
 
-typedef struct ta_activation_effects ta_activation_effects;
+typedef struct {
+    ta_delayed_send send;
+    bool immediate;
+} ta_activation_send;
+
+typedef enum {
+    TA_ACTIVATION_SEND,
+    TA_ACTIVATION_LOG
+} ta_activation_effect_kind;
+
+typedef struct {
+    ta_activation_effect_kind kind;
+    union {
+        ta_activation_send send;
+        ta_log_record log;
+    } as;
+} ta_activation_effect;
+
+typedef struct ta_activation_effects {
+    ta_vec entries; /* ta_activation_effect, in authored order */
+} ta_activation_effects;
 
 /* Allocated only for actors that use one of these uncommon facilities. */
 typedef struct {
@@ -1031,6 +1053,11 @@ TA_PRIVATE void ta_actor_release_slot(ta_system *system, ta_actor_id id);
 TA_PRIVATE ta_result ta_actor_directory_swap(ta_system *system, const ta_actor_directory_replace_params *params);
 TA_PRIVATE ta_result ta_actor_directory_drop(ta_system *system, const ta_actor_directory_remove_params *params);
 
+/* Materialized effects of an unpublished replacement's bootstrap. */
+TA_PRIVATE ta_result ta_actor_hold_send(ta_system *system, ta_actor *actor, const ta_activation_send *send);
+TA_PRIVATE ta_result ta_actor_hold_log(ta_system *system, ta_actor *actor, const ta_log_record *record);
+TA_PRIVATE bool ta_actor_cancel_held_send(ta_actor *actor, ta_send_id send_id);
+
 /*
  * Advances the session epoch: the actor has changed in a way a session image
  * captured before the change no longer describes. ta_actor_unload() compares
@@ -1043,23 +1070,6 @@ TA_PRIVATE inline void ta_actor_touch(ta_actor *actor) { actor->session_epoch +=
 
 
 /* Session images are opaque; struct ta_session_image is private to session_image.c. */
-
-/*
- * Restoring an image into a fresh session. This is not public: an image is
- * restored with ta_actor_load(), which is a residency change of a named
- * actor, and a session has to have a name to be restored under (ADR 0051).
- * A reconstructed session gets a new runtime ID, so anything still holding
- * the old one — a delivery the host kept, a session URI a chart saved — is
- * addressing a session that no longer exists. A name is what survives that;
- * an anonymous session has nothing that does.
- */
-typedef struct {
-    const ta_session_image *image;
-    const ta_value *datamodel_binding;
-    ta_actor_id *out;
-} ta_actor_reconstruct_params;
-
-TA_PRIVATE ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_params *params);
 
 
 
@@ -2371,22 +2381,44 @@ TA_PRIVATE void ta_timer_heap_destroy(ta_timer_heap *heap) {
     *heap = (ta_timer_heap){0};
 }
 
+TA_PRIVATE ta_result ta_timer_reserve(ta_timer_heap *heap, uint32_t additional) {
+    if (additional > UINT32_MAX - heap->count) {
+        return TA_ERR_NOMEM;
+    }
+    if (additional <= heap->capacity - heap->count) {
+        return TA_OK;
+    }
+    uint32_t needed = heap->count + additional;
+    uint32_t capacity = heap->capacity == 0 ? 16u : heap->capacity;
+    while (capacity < needed) {
+        if (capacity > UINT32_MAX / 2u) {
+            capacity = needed;
+            break;
+        }
+        capacity *= 2u;
+    }
+    ta_delayed_send *items = ta_mem_alloc(heap->allocator, capacity * sizeof(ta_delayed_send),
+                                          _Alignof(ta_delayed_send));
+    if (items == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    if (heap->items != NULL) {
+        ta_mem_copy(items, heap->items, heap->count * sizeof(ta_delayed_send));
+        ta_mem_free(heap->allocator, heap->items,
+                    &(ta_allocator_free_params){ .size = heap->capacity * sizeof(ta_delayed_send),
+                                                 .alignment = _Alignof(ta_delayed_send) });
+    }
+    heap->items = items;
+    heap->capacity = capacity;
+    return TA_OK;
+}
+
 TA_PRIVATE ta_result ta_timer_schedule(ta_timer_heap *heap, const ta_delayed_send *send) {
     if (heap->count == heap->capacity) {
-        uint32_t capacity = heap->capacity == 0 ? 16u : heap->capacity * 2u;
-        ta_delayed_send *items = ta_mem_alloc(heap->allocator, capacity * sizeof(ta_delayed_send),
-                                              _Alignof(ta_delayed_send));
-        if (items == NULL) {
-            return TA_ERR_NOMEM;
+        ta_result result = ta_timer_reserve(heap, 1u);
+        if (result != TA_OK) {
+            return result;
         }
-        if (heap->items != NULL) {
-            ta_mem_copy(items, heap->items, heap->count * sizeof(ta_delayed_send));
-            ta_mem_free(heap->allocator, heap->items,
-                        &(ta_allocator_free_params){ .size = heap->capacity * sizeof(ta_delayed_send),
-                                                     .alignment = _Alignof(ta_delayed_send) });
-        }
-        heap->items = items;
-        heap->capacity = capacity;
     }
     uint32_t index = heap->count;
     heap->items[index] = *send;
@@ -3143,6 +3175,11 @@ static ta_result ta_invoke_start(ta_interpreter *it, ta_invoke_decl_id decl_id) 
 TA_PRIVATE ta_result ta_invoke_start_pending(ta_interpreter *it) {
     ta_actor_sparse_state *sparse = it->actor->sparse;
     if (sparse == NULL || sparse->pending_invokes.count == 0) {
+        return TA_OK;
+    }
+    /* A prepared replacement materializes its bootstrap off-route. Starting
+     * an invocation is externally visible, so activation releases it. */
+    if (!it->actor->published) {
         return TA_OK;
     }
     const ta_definition *definition = it->definition;
@@ -5418,6 +5455,86 @@ TA_PRIVATE ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id) {
     return entry->generation == generation ? entry->actor : NULL;
 }
 
+static void ta_activation_effect_release(ta_activation_effect *effect) {
+    if (effect->kind == TA_ACTIVATION_SEND) {
+        ta_value_release(&effect->as.send.send.target);
+        ta_value_release(&effect->as.send.send.data);
+    } else if (effect->kind == TA_ACTIVATION_LOG) {
+        ta_value_release(&effect->as.log.value);
+    }
+}
+
+static void ta_actor_discard_activation_effects(ta_actor *actor) {
+    ta_actor_sparse_state *sparse = actor->sparse;
+    if (sparse == NULL || sparse->activation_effects == NULL) {
+        return;
+    }
+    ta_activation_effects *effects = sparse->activation_effects;
+    for (uint32_t index = 0; index < effects->entries.count; index += 1u) {
+        ta_activation_effect_release(ta_vec_at(&effects->entries, index));
+    }
+    ta_allocator allocator = effects->entries.allocator;
+    ta_vec_destroy(&effects->entries);
+    ta_mem_free(allocator, effects,
+                &(ta_allocator_free_params){ .size = sizeof(ta_activation_effects),
+                                             .alignment = _Alignof(ta_activation_effects) });
+    sparse->activation_effects = NULL;
+}
+
+static ta_result ta_actor_hold_effect(ta_system *system, ta_actor *actor, const ta_activation_effect *effect) {
+    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
+    if (sparse == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    if (sparse->activation_effects == NULL) {
+        sparse->activation_effects = ta_mem_alloc(system->allocator, sizeof(ta_activation_effects),
+                                                  _Alignof(ta_activation_effects));
+        if (sparse->activation_effects == NULL) {
+            return TA_ERR_NOMEM;
+        }
+        *sparse->activation_effects = (ta_activation_effects){0};
+        ta_vec_init(&sparse->activation_effects->entries, system->allocator, TA_VEC_LAYOUT(ta_activation_effect));
+    }
+    return ta_vec_push(&sparse->activation_effects->entries, effect);
+}
+
+TA_PRIVATE ta_result ta_actor_hold_send(ta_system *system, ta_actor *actor, const ta_activation_send *send) {
+    return ta_actor_hold_effect(system, actor,
+                                &(ta_activation_effect){ .kind = TA_ACTIVATION_SEND, .as.send = *send });
+}
+
+TA_PRIVATE ta_result ta_actor_hold_log(ta_system *system, ta_actor *actor, const ta_log_record *record) {
+    ta_activation_effect effect = { .kind = TA_ACTIVATION_LOG, .as.log = *record };
+    ta_value_retain(&effect.as.log.value);
+    ta_result result = ta_actor_hold_effect(system, actor, &effect);
+    if (result != TA_OK) {
+        ta_value_release(&effect.as.log.value);
+    }
+    return result;
+}
+
+TA_PRIVATE bool ta_actor_cancel_held_send(ta_actor *actor, ta_send_id send_id) {
+    ta_actor_sparse_state *sparse = actor->sparse;
+    if (sparse == NULL || sparse->activation_effects == NULL) {
+        return false;
+    }
+    ta_vec *entries = &sparse->activation_effects->entries;
+    bool found = false;
+    for (uint32_t index = entries->count; index > 0; index -= 1u) {
+        ta_activation_effect *effect = ta_vec_at(entries, index - 1u);
+        if (effect->kind != TA_ACTIVATION_SEND || effect->as.send.send.send_id != send_id) {
+            continue;
+        }
+        ta_activation_effect_release(effect);
+        for (uint32_t at = index; at < entries->count; at += 1u) {
+            *(ta_activation_effect *)ta_vec_at(entries, at - 1u) = *(ta_activation_effect *)ta_vec_at(entries, at);
+        }
+        entries->count -= 1u;
+        found = true;
+    }
+    return found;
+}
+
 TA_PRIVATE bool ta_actor_state_active(const ta_actor *actor, ta_state_id state) {
     const ta_definition *definition = actor->definition;
     if (state >= definition->state_count) {
@@ -5466,6 +5583,7 @@ static ta_result ta_actor_claim_slot(ta_system *system, ta_actor *actor, ta_acto
  */
 TA_PRIVATE void ta_actor_free(ta_system *system, ta_actor *actor) {
     const ta_definition *definition = actor->definition;
+    ta_actor_discard_activation_effects(actor);
     if (actor->datamodel_initialized) {
         definition->datamodel.v->destroy_instance(definition->datamodel.self, definition->datamodel_shared,
                                                   actor->datamodel_instance);
@@ -5546,6 +5664,16 @@ static void ta_actor_release_address(ta_system *system, const ta_actor *actor) {
     }
     if (system->directory.v == NULL || system->directory.v->remove == NULL) {
         return;
+    }
+    if (system->directory.v->resolve != NULL) {
+        ta_actor_directory_entry current = {0};
+        ta_result result = system->directory.v->resolve(
+            system->directory.self,
+            &(ta_actor_directory_resolve_params){ .address = &actor->record.self.as.named, .out = &current });
+        if (result == TA_OK &&
+            (current.kind != TA_ACTOR_DIRECTORY_RESIDENT || current.actor != actor->record.id)) {
+            return;
+        }
     }
     (void)system->directory.v->remove(
         system->directory.self,
@@ -5734,6 +5862,139 @@ TA_API ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *
     return TA_OK;
 }
 
+TA_API ta_result ta_actor_prepare_replacement(ta_system *system, const ta_actor_prepare_replacement_params *params) {
+    if (system == NULL || params == NULL || params->out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    ta_actor *incumbent = ta_actor_lookup(system, params->incumbent);
+    ta_definition *definition = ta_system_definition(system, params->definition);
+    if (incumbent == NULL || definition == NULL || definition->retired) {
+        return TA_ERR_NOT_FOUND;
+    }
+    if (!incumbent->published || incumbent->record.self.kind != TA_ACTOR_REF_NAMED ||
+        !ta_str_equal(incumbent->record.self.as.named.family.name, definition->identity.family.name)) {
+        return TA_ERR_INVALID;
+    }
+    ta_actor *actor = NULL;
+    ta_result result = ta_actor_new(system, definition, &actor);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_actor_id id = actor->record.id;
+    actor->published = false;
+    actor->replacement_of = incumbent->record.id;
+    actor->record.self = incumbent->record.self;
+    result = ta_address_copy(&actor->record.self, system->allocator);
+    if (result == TA_OK) {
+        result = definition->datamodel.v->init_instance(
+            definition->datamodel.self,
+            &(ta_datamodel_init_instance_params){
+                .shared = definition->datamodel_shared,
+                .instance = actor->datamodel_instance,
+                .binding = params->datamodel_binding,
+                .host = &actor->host,
+            });
+        actor->datamodel_initialized = result == TA_OK;
+    }
+    if (result != TA_OK) {
+        ta_actor_release_slot(system, id);
+        ta_actor_free(system, actor);
+        return result;
+    }
+    *params->out = id;
+    return TA_OK;
+}
+
+static uint32_t ta_actor_activation_send_count(const ta_actor *actor) {
+    const ta_actor_sparse_state *sparse = actor->sparse;
+    if (sparse == NULL || sparse->activation_effects == NULL) {
+        return 0;
+    }
+    uint32_t count = 0;
+    const ta_vec *entries = &sparse->activation_effects->entries;
+    for (uint32_t index = 0; index < entries->count; index += 1u) {
+        const ta_activation_effect *effect = ta_vec_at(entries, index);
+        count += effect->kind == TA_ACTIVATION_SEND ? 1u : 0u;
+    }
+    return count;
+}
+
+static void ta_actor_release_activation_effects(ta_system *system, ta_actor *actor) {
+    ta_actor_sparse_state *sparse = actor->sparse;
+    if (sparse == NULL || sparse->activation_effects == NULL) {
+        return;
+    }
+    ta_activation_effects *effects = sparse->activation_effects;
+    for (uint32_t index = 0; index < effects->entries.count; index += 1u) {
+        ta_activation_effect *effect = ta_vec_at(&effects->entries, index);
+        if (effect->kind == TA_ACTIVATION_LOG) {
+            if (system->log_sink.v != NULL) {
+                system->log_sink.v->write(system->log_sink.self, &effect->as.log);
+            }
+            ta_value_release(&effect->as.log.value);
+            continue;
+        }
+        ta_delayed_send *send = &effect->as.send.send;
+        if (effect->as.send.immediate) {
+            ta_external_event_submit_status status = ta_interpreter_dispatch_delayed(system, send);
+            if (status != TA_EXTERNAL_EVENT_RETRY) {
+                continue;
+            }
+            send->submitted = true;
+            send->origin = actor->record.self;
+            send->invoke_id = ta_invoke_parent_id(actor, &send->destination);
+        }
+        (void)ta_timer_schedule(&system->timers, send);
+    }
+    ta_allocator allocator = effects->entries.allocator;
+    ta_vec_destroy(&effects->entries);
+    ta_mem_free(allocator, effects,
+                &(ta_allocator_free_params){ .size = sizeof(ta_activation_effects),
+                                             .alignment = _Alignof(ta_activation_effects) });
+    sparse->activation_effects = NULL;
+}
+
+TA_API ta_result ta_actor_activate_replacement(ta_system *system, const ta_actor_activate_replacement_params *params) {
+    if (system == NULL || params == NULL) {
+        return TA_ERR_INVALID;
+    }
+    ta_actor *incumbent = ta_actor_lookup(system, params->incumbent);
+    ta_actor *replacement = ta_actor_lookup(system, params->replacement);
+    if (incumbent == NULL || replacement == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    if (!incumbent->published || replacement->published || replacement->replacement_of != incumbent->record.id ||
+        incumbent->record.self.kind != TA_ACTOR_REF_NAMED || replacement->record.self.kind != TA_ACTOR_REF_NAMED) {
+        return TA_ERR_INVALID;
+    }
+    if (replacement->macrostep || replacement->record.residency != TA_ACTOR_IDLE) {
+        return TA_ERR_BUSY;
+    }
+    ta_result result = ta_timer_reserve(&system->timers, ta_actor_activation_send_count(replacement));
+    if (result != TA_OK) {
+        return result;
+    }
+    result = ta_actor_directory_swap(
+        system,
+        &(ta_actor_directory_replace_params){
+            .address = &replacement->record.self.as.named,
+            .expected = { .kind = TA_ACTOR_DIRECTORY_RESIDENT, .actor = incumbent->record.id },
+            .replacement = { .kind = TA_ACTOR_DIRECTORY_RESIDENT, .actor = replacement->record.id },
+        });
+    if (result != TA_OK) {
+        return result;
+    }
+    replacement->published = true;
+    replacement->replacement_of = 0;
+    ta_actor_touch(replacement);
+    ta_actor_release_activation_effects(system, replacement);
+    if (replacement->sparse != NULL && replacement->sparse->pending_invokes.count != 0) {
+        replacement->macrostep = true;
+        replacement->record.residency = TA_ACTOR_RUNNING;
+    }
+    return TA_OK;
+}
+
 TA_API ta_result ta_actor_deliver(ta_system *system, ta_actor_id id, const ta_event *event) {
     if (event == NULL) {
         return TA_ERR_INVALID;
@@ -5814,6 +6075,10 @@ static size_t ta_actor_allocated_bytes(const ta_actor *actor) {
         total += ta_vec_bytes(&sparse->internal_events);
         total += ta_vec_bytes(&sparse->pending_invokes);
         total += (size_t)sparse->invoke_capacity * (sizeof(ta_active_invoke) + sizeof(ta_invoke_meta));
+        if (sparse->activation_effects != NULL) {
+            total += sizeof(ta_activation_effects);
+            total += ta_vec_bytes(&sparse->activation_effects->entries);
+        }
     }
     return total;
 }
@@ -6426,7 +6691,7 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
     return TA_OK;
 }
 
-TA_PRIVATE ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_params *params) {
+TA_API ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_params *params) {
     if (system == NULL || params == NULL || params->image == NULL || params->out == NULL) {
         return TA_ERR_INVALID;
     }
@@ -7869,6 +8134,15 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
         ta_value_release(&state.target);
         return ta_communication_error(system, actor, &(ta_error_params){ .send_id = state.send_id });
     }
+    if (!actor->published) {
+        ta_result result = ta_actor_hold_send(
+            system, actor, &(ta_activation_send){ .send = record, .immediate = delay == 0 });
+        if (result != TA_OK) {
+            ta_value_release(&state.data);
+            ta_value_release(&state.target);
+        }
+        return result;
+    }
     if (delay == 0) {
         ta_external_event_submit_status submitted = ta_interpreter_dispatch_delayed(system, &record);
         if (submitted != TA_EXTERNAL_EVENT_RETRY) {
@@ -7984,6 +8258,7 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
                 ta_value_release(&holder);
             }
             if (status == TA_OP_OK && send_id != 0) {
+                (void)ta_actor_cancel_held_send(it->actor, send_id);
                 (void)ta_timer_cancel(&it->system->timers, it->actor->record.id, send_id);
             }
             break;
@@ -8039,7 +8314,15 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
                 record.has_value = status == TA_OP_OK;
             }
             if (status == TA_OP_OK && it->system->log_sink.v != NULL) {
-                it->system->log_sink.v->write(it->system->log_sink.self, &record);
+                if (it->actor->published) {
+                    it->system->log_sink.v->write(it->system->log_sink.self, &record);
+                } else {
+                    ta_result result = ta_actor_hold_log(it->system, it->actor, &record);
+                    if (result != TA_OK) {
+                        ta_value_release(&record.value);
+                        return result;
+                    }
+                }
             }
             ta_value_release(&record.value);
             break;

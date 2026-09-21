@@ -481,6 +481,11 @@ ta_result ta_invoke_start_pending(ta_interpreter *it) {
     if (sparse == NULL || sparse->pending_invokes.count == 0) {
         return TA_OK;
     }
+    /* A prepared replacement materializes its bootstrap off-route. Starting
+     * an invocation is externally visible, so activation releases it. */
+    if (!it->actor->published) {
+        return TA_OK;
+    }
     const ta_definition *definition = it->definition;
     ta_vec *pending = &sparse->pending_invokes;
     for (ta_state_id state = 0; state < definition->state_count; state += 1) {

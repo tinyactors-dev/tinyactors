@@ -5,16 +5,10 @@
 # outside the actor system, and only the logic that reacts to its events
 # changes (docs/manual/persistence.md, "Definition upgrades").
 #
-# The definition half of that flow is the part core implements today: a
-# compiled definition belongs to the host until it registers it (ADR 0043,
+# A compiled definition belongs to the host until it registers it (ADR 0043,
 # include/tinyactors.h "Registration takes ownership of definition only when
 # it returns TA_OK"), and a registered one is the system's to free.
 module DefinitionUpgrade
-  # The actor half needs named actors and replacement, which core does not
-  # implement: ta_actor_spawn with an address answers err_unsupported, and
-  # ta_actor_prepare_replacement is not implemented at all.
-  UNIMPLEMENTED = /ta_actor_spawn returned err_unsupported|: -32001 /
-
   # Compiles and destroys `chart` once, so the atoms and event names it
   # interns in the system are already there and a later cycle allocates only
   # what the definition itself costs.
@@ -98,7 +92,6 @@ TinyactorsTest.scenarios 'subscription upgrade', chart: :subscription_v1 do
   # a retired incumbent revision that is freed while its actor still runs,
   # or that is not freed once that actor is gone (ADR 0043); a replacement
   # that does not take over the logical address.
-  expect_failure 'named actors and replacement are unimplemented', message: DefinitionUpgrade::UNIMPLEMENTED
   scenario 'the chart of a live subscription is upgraded under its address' do
     v1 = definition(:subscription_v1)
     subscription = spawn name: 'sub_1', binding: { account: 'acct_42', failures: 0 }
@@ -108,7 +101,7 @@ TinyactorsTest.scenarios 'subscription upgrade', chart: :subscription_v1 do
 
     # The host compiles and registers the new revision, then swaps the
     # interpreter under the same address, bound to the same data.
-    v2 = register_definition(compile_only(:subscription_v2))
+    v2 = definition(:subscription_v2)
     replacement = prepare_replacement(subscription, :subscription_v2, binding: subscription.data)
     assert_equal 'ok', activate_replacement(subscription, replacement)
     assert_equal ['ok', replacement.handle], find(subscription.address), 'the address names the new interpreter'
