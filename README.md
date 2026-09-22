@@ -35,6 +35,7 @@ This is good for humans and for agents.
 
 - `tinyactors-core/` contains the freestanding-friendly C API and production
   interpreter implementation.
+- `tinyactors-napi/` contains the Node-API binding for Node.js 22 and Bun.
 - `tinyactors-test/` contains the instrumentable JSON-RPC test host and its
   Ruby driver.
 

@@ -1,0 +1,18 @@
+#!/usr/bin/env ruby
+#MISE description="Build and test the tinyactors Node-API addon with Node.js and Bun"
+# vim:ft=ruby
+
+require 'pathname'
+
+ROOT = Pathname.new(__dir__).join('../..').expand_path
+
+def run(*command)
+  puts command.join(' ')
+  pid = Process.spawn(*command, chdir: ROOT.to_s)
+  _pid, status = Process.wait2(pid)
+  exit(status.exitstatus || 1) unless status.success?
+end
+
+run('mise', 'run', 'build')
+run('node', 'test/version.js')
+run('bun', 'test/version.js')

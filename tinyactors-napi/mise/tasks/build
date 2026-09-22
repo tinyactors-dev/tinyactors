@@ -1,0 +1,54 @@
+#!/usr/bin/env ruby
+#MISE description="Build the tinyactors Node-API addon"
+# vim:ft=ruby
+
+require 'fileutils'
+require 'English'
+require 'json'
+require 'pathname'
+require 'rbconfig'
+require 'shellwords'
+
+ROOT = Pathname.new(__dir__).join('../..').expand_path
+BUILD = ROOT.join('build')
+SOURCE = ROOT.join('src/addon.c')
+OUTPUT = BUILD.join('tinyactors_napi.node')
+
+def capture(*command)
+  output = IO.popen(command, chdir: ROOT.to_s, err: %i[child out], &:read)
+  abort output unless $CHILD_STATUS.success?
+  output.strip
+end
+
+node = Pathname.new(capture('mise', 'which', 'node'))
+include_dir = node.dirname.parent.join('include/node')
+abort "Node-API headers not found under #{include_dir}" unless include_dir.join('node_api.h').file?
+
+version = JSON.parse(ROOT.join('package.json').read).fetch('version')
+compiler = Shellwords.split(ENV.fetch('CC', 'cc'))
+flags = Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic -O2'))
+link_flags = case RbConfig::CONFIG.fetch('host_os')
+             when /darwin/
+               %w[-bundle -undefined dynamic_lookup]
+             when /linux|bsd/
+               %w[-shared -fPIC]
+             else
+               abort 'tinyactors-napi: the bootstrap build supports macOS, Linux, and BSD'
+             end
+
+FileUtils.mkdir_p(BUILD)
+command = [
+  *compiler,
+  *flags,
+  *link_flags,
+  '-DNAPI_VERSION=6',
+  "-DTINYACTORS_NAPI_VERSION=\"#{version}\"",
+  "-I#{include_dir}",
+  SOURCE.to_s,
+  '-o',
+  OUTPUT.to_s
+]
+puts command.shelljoin
+pid = Process.spawn(*command, chdir: ROOT.to_s)
+_pid, status = Process.wait2(pid)
+exit(status.exitstatus || 1) unless status.success?

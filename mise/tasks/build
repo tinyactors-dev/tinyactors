@@ -36,5 +36,8 @@ core.run('build')
 test_host = Project.new(ROOT.join('tinyactors-test'))
 test_host.run('build')
 
+napi = Project.new(ROOT.join('tinyactors-napi'))
+napi.run('build')
+
 xml = Project.new(ROOT.join('tinyxml'))
 xml.run('build')

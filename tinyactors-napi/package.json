@@ -1,0 +1,18 @@
+{
+  "name": "tinyactors-napi",
+  "version": "0.0.0",
+  "description": "Node-API bindings for Tinyactors",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "build/tinyactors_napi.node",
+    "index.js",
+    "index.d.ts",
+    "README.md",
+    "docs"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT"
+}
