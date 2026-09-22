@@ -1,0 +1,30 @@
+#!/usr/bin/env ruby
+#MISE description="Open the interactive workbench on a directory of charts (args: [DIR] [--no-tmux])"
+
+# Builds nothing: the workbench needs a host, and saying so beats rebuilding
+# one behind the user's back while they are trying to look at a chart.
+require 'pathname'
+
+ROOT = Pathname.new(__dir__).join('../..').expand_path
+
+# A directory given on the command line wins; otherwise the directory mise was
+# invoked from, when that is somewhere below the project and holds chart
+# files; otherwise the default scratch directory. The project root itself does
+# not count, because bindings.rb lives there and is not a chart.
+def workbench_directory(argv)
+  return Pathname.new(argv.shift).expand_path if argv.first && !argv.first.start_with?('-')
+
+  invoked = Pathname.new(ENV['MISE_ORIGINAL_CWD'] || Dir.pwd).expand_path
+  return invoked if invoked != ROOT && !Dir[invoked.join('*.rb').to_s].empty?
+
+  ROOT.join('workbench')
+end
+
+argv = ARGV.dup
+dir = workbench_directory(argv)
+dir.mkpath unless dir.directory?
+
+host = ROOT.join('build/tinyactors-test')
+abort "workbench: no host at #{host}; run `mise run build` first" unless host.executable?
+
+exec(ROOT.join('bin/workbench').to_s, '--dir', dir.to_s, *argv)
