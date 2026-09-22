@@ -534,9 +534,10 @@ module TinyactorsTest
       @actors.find { |actor| actor.handle == id } || id
     end
 
-    # Creates the system on first use and installs the router.direct adapter,"""
+    # Creates the system on first use and installs the router.direct adapter,
     # which hands external events (such as due delayed sends) straight to
-    # ta_actor_deliver. Without a router, core reports external sends as
+    # ta_actor_deliver, resolving a named destination through the system's
+    # actor directory first. Without a router, core reports external sends as
     # error.communication (ADR 0040).
     #
     # It also registers the invoker.scxml adapter for SCXML <invoke>. The

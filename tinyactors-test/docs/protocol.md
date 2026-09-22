@@ -223,7 +223,12 @@ RPC conversations. The current adapters are `allocator.libc`,
 `invoker.scripted`, `io.recording`, and `log.recording` (see [Instruments](#instruments)). `router.direct` takes
 `{"system": <system handle>}` and hands each external event to
 `ta_actor_deliver()`; a busy actor makes it answer retry, so core keeps the
-event for a later dispatch.
+event for a later dispatch. A named destination is resolved first with
+`ta_actor_find()`, through whatever actor directory the system has, so a chart
+can address a peer as `#_actor_<family>/<name>` without the host installing a
+routing instrument. Resolution answers unsupported when no directory is
+installed, unloaded for an address the directory holds but has not loaded, and
+not-found for one it does not know.
 
 An adapter in an output, such as `ta_definition_inspection.datamodel`, encodes
 as `{"$adapter": "<name>"}` when it matches a registered factory (same vtable)

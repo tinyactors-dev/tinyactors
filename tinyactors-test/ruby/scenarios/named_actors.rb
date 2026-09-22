@@ -61,6 +61,24 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
                  router.entries('submit').map { |entry| entry.values_at(:destination, :resolved, :status) }
   end
 
+  # The same routing without a routing instrument. router.direct resolves a
+  # named destination with ta_actor_find(), so the directory a named spawn
+  # already installs is enough for one actor to address another; a host only
+  # needs its own router when it owns location, not merely naming.
+  #
+  # Catches: the default router refusing a named destination, resolving it to
+  # the wrong actor, or reporting a resident address as missing.
+  scenario 'the default router resolves a logical address through the directory' do
+    sender = spawn :messenger, name: 'm1', binding: { peer: '#_actor_messenger/m2' }
+    receiver = spawn :messenger, name: 'm2'
+
+    sender.deliver 'greet'
+    assert_equal [{ event: 'hello', from: '#_actor_messenger/m1' }], receiver.data('.inbox'),
+                 'router.direct resolved the named target'
+    assert_equal [{ event: 'ack', from: '#_actor_messenger/m2' }], sender.data('.inbox'),
+                 'the reply went back to the named origin'
+  end
+
   # Catches: a named spawn that does not claim its address, a second claim
   # of the same address that succeeds or disturbs the first actor, or a
   # self reference that is not the logical address.

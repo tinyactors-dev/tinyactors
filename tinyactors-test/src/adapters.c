@@ -57,22 +57,36 @@ static bool tat_make_ecmascript_datamodel(tat_bind *bind, jv config, void *out) 
 }
 
 /*
- * router.direct: delivers each external event straight to a resident runtime
- * actor with ta_actor_deliver(). A busy actor makes the router answer RETRY,
- * so core keeps the event and offers it again on a later dispatch. Config:
+ * router.direct: delivers each external event straight to a resident actor
+ * with ta_actor_deliver(). A runtime destination is delivered by ID; a named
+ * one is resolved first with ta_actor_find(), which goes through the system's
+ * actor directory (ADR 0037), so a chart may address a peer as
+ * `#_actor_<family>/<name>` without the host installing a routing instrument.
+ * Resolution answers TA_ERR_UNSUPPORTED when no directory is installed,
+ * TA_ERR_UNLOADED for an actor the directory holds but has not loaded (this
+ * router cannot load one; a real host would), and TA_ERR_NOT_FOUND for an
+ * address it does not know. A busy actor makes the router answer RETRY, so
+ * core keeps the event and offers it again on a later dispatch. Config:
  * {"system": <system handle>}.
  */
 static ta_external_event_submit_status tat_direct_submit(void *self,
                                                          const ta_external_event_submit_params *params) {
-    static const char not_runtime[] = "router.direct delivers to runtime actor IDs only";
-    static const char not_found[] = "router.direct: no resident actor with that ID";
+    static const char unresolved[] = "router.direct: the destination address resolves to no resident actor";
+    static const char not_found[] = "router.direct: no resident actor at that destination";
     const ta_external_delivery *delivery = params->delivery;
-    if (delivery->destination.kind != TA_ACTOR_REF_RUNTIME) {
-        *params->fault = (ta_fault){.code = TA_ERR_UNSUPPORTED,
-                                    .message = {.ptr = not_runtime, .len = sizeof(not_runtime) - 1}};
-        return TA_EXTERNAL_EVENT_ERROR;
+    ta_actor_id id;
+    if (delivery->destination.kind == TA_ACTOR_REF_RUNTIME) {
+        id = delivery->destination.as.runtime;
+    } else {
+        ta_result found =
+            ta_actor_find(self, &(ta_actor_find_params){.address = &delivery->destination.as.named, .out = &id});
+        if (found != TA_OK) {
+            *params->fault =
+                (ta_fault){.code = found, .message = {.ptr = unresolved, .len = sizeof(unresolved) - 1}};
+            return TA_EXTERNAL_EVENT_ERROR;
+        }
     }
-    ta_result result = ta_actor_deliver(self, delivery->destination.as.runtime, &delivery->event);
+    ta_result result = ta_actor_deliver(self, id, &delivery->event);
     if (result == TA_OK) {
         return TA_EXTERNAL_EVENT_ACCEPTED;
     }
