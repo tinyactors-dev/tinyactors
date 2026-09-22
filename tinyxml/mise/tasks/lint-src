@@ -29,7 +29,7 @@
 
 require 'pathname'
 require_relative '../lib/c_scan'
-require_relative '../lib/cache'
+require 'cache'
 
 # Content-fresh (mise/lib/cache.rb): the audit only reads these files.
 Cache.gate('lint-src', inputs: Cache.files('src/*.c', 'src/*.h', 'include/txml.h', 'mise/lib/c_scan.rb', 'mise/tasks/lint-src'))

@@ -2,7 +2,7 @@
 
 require 'fileutils'
 require 'pathname'
-require_relative 'cache'
+require 'cache'
 
 # The test binaries and their arguments, shared by the tasks that run them.
 module Suite

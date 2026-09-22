@@ -3,7 +3,7 @@
 
 require 'pathname'
 
-require_relative '../../../mise/lib/task_stamp'
+require 'task_stamp'
 
 root = Pathname.new(__dir__).join('../..').expand_path
 

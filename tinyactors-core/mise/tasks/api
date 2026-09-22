@@ -1,5 +1,7 @@
 #!/usr/bin/env ruby
 #MISE description="Describe the public API as include/tinyactors.api.json, or verify the checked-in description"
+#MISE depends=["amalgamate"]
+# vim:ft=ruby
 
 # Reads include/tinyactors.h with clang, applies its TA_* annotations, adds
 # per-target layouts, validates the result against
@@ -8,7 +10,20 @@
 # checked-in description is out of date.
 
 require 'pathname'
+require 'shellwords'
 require_relative '../lib/api'
+require 'cache'
+
+# Fresh when the header, the amalgamation whose exports decide "implemented", the
+# schema, the extractor, clang's identity and the checked-in description still
+# hash to what the last successful run recorded (mise/lib/cache.rb).
+Cache.gate('api',
+           inputs: Cache.files('include/tinyactors.h', 'include/tinyactors.api.schema.json', 'mise/lib/api.rb', 'mise/lib/api/*.rb', 'mise/tasks/api'),
+           outputs: [Cache::ROOT.join('include/tinyactors.api.json')],
+           extra: [Cache.tool_id(Shellwords.split(ENV.fetch('CLANG', 'clang'))),
+                   # The description reads the amalgamation only for which functions it exports, so
+                   # a comment or layout edit that leaves the preprocessed unit alone changes nothing.
+                   Cache.preprocessed_digest(['cc', '-std=c11', '-Iinclude'], 'include/tinyactors.c').to_s])
 
 ROOT = Pathname.new(__dir__).join('../..').expand_path
 HEADER = ROOT.join('include/tinyactors.h')

@@ -12,7 +12,7 @@ root = Pathname.new(__dir__).join('..').expand_path
 require root.join('bindings').to_s
 require root.join('mise/lib/rpc').to_s
 
-DESCRIPTION = root.parent.join('tinyactors-core/include/tinyactors.api.json')
+DESCRIPTION = root.parent.join('tinyactors-core/dist/include/tinyactors.api.json')
 
 def check(condition, message)
   raise "bindings generator test failed: #{message}" unless condition

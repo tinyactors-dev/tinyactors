@@ -1,0 +1,40 @@
+#!/usr/bin/env ruby
+#MISE description="Compile tinyactors-core's test programs (tests/*_test.c) into build/objects"
+# vim:ft=ruby
+#
+# The other half of `mise run build`; build:library compiles src/*.c and the
+# amalgamation, in parallel with this. Each test is compiled against the
+# public header only (-Iinclude, no -Isrc), so a test that reaches into src/
+# would fail to build here exactly as it would for an embedder. Objects are
+# reused by content (mise/lib/cache.rb), same as build:library.
+#
+# PENDING_TESTS (build/_default) is not compiled here: a pending test's link
+# is allowed to fail, which build/_default handles as part of linking, not
+# compiling -- see its own doc comment.
+
+require 'pathname'
+require 'shellwords'
+require 'cache'
+
+ROOT = Cache::ROOT
+OBJECTS = ROOT.join('build/objects')
+COMMAND = [*Shellwords.split(ENV.fetch('CC', 'cc')), *Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic')), '-Iinclude'].freeze
+
+# Kept in sync with build/_default's TESTS_WITH_RUNTIME + STANDALONE_TESTS by
+# hand, the same way the old build task's link calls were hand-maintained; a
+# renamed or removed test here needs the matching entry updated there too.
+TESTS = %w[inspection_test retirement_test export_test scxml_uri_test send_id_test tree_test].freeze
+
+compiled = 0
+reused = 0
+TESTS.each do |test|
+  source = Pathname.new("tests/#{test}.c")
+  outcome, output = Cache.compile(COMMAND, source, OBJECTS.join("#{test}.o"))
+  if outcome == :failed
+    puts (COMMAND + ['-c', source.to_s]).shelljoin
+    abort output
+  end
+  puts output unless output.empty?
+  outcome == :compiled ? compiled += 1 : reused += 1
+end
+puts "build:tests: #{compiled} compiled, #{reused} reused"

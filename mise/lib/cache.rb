@@ -6,7 +6,7 @@ require 'fileutils'
 require 'pathname'
 require 'shellwords'
 
-# Content-based skipping for the txml tasks.
+# Content-based skipping for workspace tasks.
 #
 # mise decides whether a task is fresh from `sources` by modification time: a
 # `touch`, or an editor that rewrites a file with the same bytes, reruns the
@@ -33,23 +33,47 @@ require 'shellwords'
 # comments and no line markers); if that matches the one the existing object was
 # built from the object is kept. Only whitespace at the ends of lines and blank
 # lines are ignored, never whitespace inside a line, so a change to a string
-# literal or a `__LINE__` expansion still recompiles.
+# literal or a `__LINE__` expansion still recompiles. This fallback excuses only
+# a change to the source or headers: the cache key keeps the compile command and
+# compiler identity separate from the source/header digest, and a mismatch in
+# the command half always forces a real recompile, never the preprocessed-digest
+# fallback — an object built by a different command is wrong outright, not a
+# candidate for "only comments changed".
 #
 # Content addressing. Everything downstream (linking, the undefined-symbol
 # check, running a test binary) keys on the *bytes* of what it consumes, not on
 # when it was written. An object that a comment edit recompiled to identical
 # bytes therefore invalidates nothing after it.
 #
-# TXML_FORCE=1 ignores every stamp and every cached object, for a from-scratch
-# run; `rm -rf build` does the same. (`mise run --force` only defeats mise's own
-# `sources` check, and mise does not tell a task it was given.)
+# TXML_FORCE=1 or TA_FORCE=1 ignores every stamp and every cached object, for a
+# from-scratch run; `rm -rf build` does the same. (`mise run --force` only
+# defeats mise's own `sources` check, and mise does not tell a task it was
+# given.)
 module Cache
-  ROOT = Pathname.new(__dir__).join('../..').expand_path
+  # The calling module's root (e.g. tinyxml/, not the workspace root this file
+  # lives in). This library is shared: the root mise.toml puts mise/lib/ on
+  # RUBYLIB, so every module's task files reach it with a plain `require
+  # 'cache'` regardless of where they sit, and ROOT can no longer be `__dir__`
+  # plus a fixed number of `..` — that would resolve to the workspace root for
+  # every module alike, and since `digest` embeds `item.relative_path_from(ROOT)`
+  # in every hash and `STAMPS` is `ROOT.join('build/stamps')`, a wrong ROOT
+  # would silently invalidate every cache in the repo rather than fail loudly.
+  #
+  # mise instead sets MISE_PROJECT_ROOT (and, identically, MISE_CONFIG_ROOT) to
+  # the calling module's root before every file task runs, regardless of how
+  # deep in a monorepo the task lives, so ROOT is derived from those.
+  # TA_CACHE_ROOT overrides both, for a module that needs to state its root
+  # explicitly rather than rely on mise's environment. Dir.pwd is the fallback
+  # for running a task script directly, outside mise: mise itself runs file
+  # tasks with the module root as the working directory, so that fallback
+  # agrees with the mise-driven paths above whenever a task happens to be
+  # invoked without mise from within its module.
+  ROOT = Pathname.new(ENV['TA_CACHE_ROOT'] || ENV['MISE_PROJECT_ROOT'] || ENV['MISE_CONFIG_ROOT'] || Dir.pwd).expand_path
   STAMPS = ROOT.join('build/stamps')
 
   module_function
 
-  def force? = ENV['TXML_FORCE'] == '1'
+  def force? = ENV['TXML_FORCE'] == '1' || ENV['TA_FORCE'] == '1'
 
   # SHA-256 over a mix of files (path and contents) and strings.
   def digest(*items)
@@ -147,29 +171,55 @@ module Cache
     Digest::SHA256.hexdigest(text.lines.map(&:strip).reject(&:empty?).join("\n"))
   end
 
+  # Separator between the two halves of a `.key` file's contents. Both halves
+  # are hex SHA-256 digests, which never contain it, so a one-line (pre-split)
+  # key file can never collide with this format by accident.
+  KEY_SEPARATOR = "\n"
+
   # Compile `source` to `object` with `command` (compiler and flags). Returns
   # [:cached | :compiled, output]; raises nothing: a failing compile returns
   # [:failed, compiler output] and leaves no key behind.
+  #
+  # The `.key` file holds two digests, not one: the compile command and
+  # compiler identity ("command key"), and the source plus every header it
+  # read ("source key"). Keeping them apart is what lets the preprocessed-
+  # digest fallback below be scoped correctly — it may excuse a source/header
+  # change (comments, layout) but never a command change, because an object
+  # built by a different command is wrong outright, not a candidate for "only
+  # comments changed". A `.key` file from before this split has no separator
+  # in it, so it parses as a command key that cannot match any real one:
+  # that's a harmless cache miss, not a crash.
   def compile(command, source, object)
     object = Pathname.new(object)
     dep = object.sub_ext('.d')
     key_file = object.sub_ext('.key')
     source = ROOT.join(source.to_s)
 
-    key = lambda do |headers|
-      digest(command.join(' '), tool_id(command.first(1)), source, headers.map { |header| ROOT.join(header) })
+    command_key = digest(command.join(' '), tool_id(command.first(1)))
+    source_key = lambda do |headers|
+      digest(source, headers.map { |header| ROOT.join(header) })
     end
+    key = ->(headers) { "#{command_key}#{KEY_SEPARATOR}#{source_key.call(headers)}" }
 
     unit_file = object.sub_ext('.unit')
     if !force? && object.file? && dep.file? && key_file.file?
-      headers = dependencies(dep).reject { |header| ROOT.join(header) == source }
-      return [:cached, ''] if key_file.read == key.call(headers)
+      stored_command_key, stored_source_key = key_file.read.split(KEY_SEPARATOR, 2)
 
-      # Something it reads changed. If only comments or layout did, the object
-      # is still right: record the new contents and keep it.
-      if unit_file.file? && (unit = preprocessed_digest(command, source)) && unit_file.read == unit
-        key_file.write(key.call(headers))
-        return [:cached, '']
+      # Only a matching command key makes the object a candidate for reuse at
+      # all: a different (or unparseable, i.e. old-format) command key means
+      # the object was built by a different command and is simply wrong, so
+      # fall straight through to a real recompile below.
+      if stored_command_key == command_key
+        headers = dependencies(dep).reject { |header| ROOT.join(header) == source }
+        return [:cached, ''] if stored_source_key == source_key.call(headers)
+
+        # The source key changed but the command didn't. If only comments or
+        # layout did, the object is still right: record the new contents and
+        # keep it.
+        if unit_file.file? && (unit = preprocessed_digest(command, source)) && unit_file.read == unit
+          key_file.write(key.call(headers))
+          return [:cached, '']
+        end
       end
     end
 

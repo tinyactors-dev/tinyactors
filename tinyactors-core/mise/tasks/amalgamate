@@ -1,14 +1,27 @@
 #!/usr/bin/env ruby
 #MISE description="Generate or verify the Tinyactors C amalgamation"
+# vim:ft=ruby
 
 # include/tinyactors.h is the authored public API. src/*.h are private module
 # headers; src/internal.h lists them in dependency order. The amalgamation
 # inlines the private headers and all module sources after the public header,
 # marks definitions of public functions TA_API and gives every other defined
 # function internal linkage through TA_PRIVATE (static by default).
+#
+#   mise run amalgamate           write include/tinyactors.c
+#   mise run amalgamate --check   fail if the checked-in file is out of date
 
 require 'pathname'
 require_relative '../lib/c_api'
+require 'cache'
+
+# Fresh when the inputs and the checked-in output still hash to what the last
+# successful run recorded (mise/lib/cache.rb); an output edited by hand does
+# not, in either mode: --check then re-derives the implementation and fails
+# because it differs from the (unstamped) checked-in file, exactly as before.
+Cache.gate('amalgamate',
+           inputs: Cache.files('src/*.c', 'src/*.h', 'include/tinyactors.h', 'mise/lib/c_api.rb', 'mise/tasks/amalgamate'),
+           outputs: [Cache::ROOT.join('include/tinyactors.c')])
 
 root = Pathname.new(__dir__).join('../..').expand_path
 include_dir = root.join('include')

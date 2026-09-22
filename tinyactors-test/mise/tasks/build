@@ -1,17 +1,44 @@
 #!/usr/bin/env ruby
 #MISE description="Build the tinyactors-test JSON-RPC host"
-# mise skips this task when both binaries are newer than every source below.
-# The sources include core's src/ and api/ so edits there re-run the
-# amalgamate/api --check steps. Use `mise run --force build` after changing CC/CFLAGS.
-#MISE sources=["mise/tasks/build", "mise/tasks/bindings", "mise/lib/**/*", "bindings.rb", "src/**/*.c", "src/**/*.h", "tests/**/*.c", "build/prefix/lib/*.a", "../tinyactors-core/include/**/*", "../tinyactors-core/src/**/*", "../tinyactors-core/mise/lib/**/*", "../tinyactors-core/mise/tasks/amalgamate", "../tinyactors-core/mise/tasks/api"]
-#MISE outputs=["build/tinyactors-test", "build/json_datamodel_test", "build/ecmascript_datamodel_test"]
+# vim:ft=ruby
+#
+# No `#MISE sources`/`outputs`: this task always runs and skips by content
+# instead (mise/lib/cache.rb), the same way tinyxml/mise/tasks/build/{_default,
+# library,tests} do. That is deliberate, not an oversight. tinyactors-core is
+# consumed only through its published dist/ (../tinyactors-core/mise/tasks/
+# dist), never by compiling its src/ or include/ directly, and the only thing
+# that refreshes that dist/ is the `mise run dist` call below. A `#MISE
+# sources` list keyed on `../tinyactors-core/dist/**` would therefore be
+# circular: mise checks sources' mtimes *before* running this task's body, so
+# it would see core's dist/ as untouched (nothing has published it yet),
+# print "sources up-to-date, skipping", and never reach the `mise run dist`
+# call that would have refreshed it -- silently linking against a stale
+# archive forever after a real core change. Always entering the body avoids
+# that trap: `mise run dist` in core is content-gated (a handful of hashes,
+# not a rebuild, when core did not really change), and `link` below keys on
+# the bytes of whatever it produces, so an unchanged archive still relinks
+# nothing while a changed one propagates immediately.
+# Changing CC/CFLAGS already changes `link`'s cache key (the command is part
+# of it), so it relinks on its own; there is no mtime gate to force past.
+# `TA_FORCE=1 mise run build` (or `rm -rf build`) ignores every stamp for a
+# from-scratch run instead.
 
 require 'fileutils'
 require 'pathname'
 require 'shellwords'
+require 'cache'
 
 ROOT = Pathname.new(__dir__).join('../..').expand_path
 WORKSPACE = ROOT.parent
+CORE = WORKSPACE.join('tinyactors-core')
+CORE_DIST_INCLUDE = CORE.join('dist/include')
+CORE_DIST_HEADER = CORE_DIST_INCLUDE.join('tinyactors.h')
+# The "release" profile specifically: core's dist task publishes one archive
+# per profile (mise/tasks/dist in core), each built with its own hard-coded
+# flags rather than this shell's $CFLAGS. This host always links the release
+# profile (-O2), which is also what a plain `mise run dist` in core publishes
+# by default.
+CORE_DIST_LIBRARY = CORE.join('dist/lib/release/libtinyactors.a')
 JQ_SOURCE = ROOT.join('vendor/jq')
 QUICKJS_SOURCE = ROOT.join('vendor/quickjs-ng')
 BUILD = ROOT.join('build')
@@ -79,8 +106,13 @@ unless libqjs.file? && quickjs_header.file?
   FileUtils.cp(QUICKJS_SOURCE.join('quickjs.h'), quickjs_header)
 end
 
-run('mise', 'run', 'amalgamate', '--check', chdir: WORKSPACE.join('tinyactors-core'))
-run('mise', 'run', 'api', '--check', chdir: WORKSPACE.join('tinyactors-core'))
+# Publishes tinyactors-core's dist/ (dist/include/{tinyactors.h,tinyactors.c,
+# tinyactors.api.json}, dist/lib/<profile>/libtinyactors.a). Content-gated in core, so
+# this is a handful of hash comparisons, not a rebuild, whenever core has not
+# really changed; it is what keeps CORE_DIST_HEADER/CORE_DIST_LIBRARY current
+# before anything below compiles or links against them.
+run('mise', 'run', 'dist', chdir: CORE)
+
 # The generated bindings are cached by mise's own stamp, which survives
 # `rm -rf build`; force the task when what it generates is gone. `bindings`
 # computes its own outputs, so TaskStamp cannot check them.
@@ -89,7 +121,43 @@ run('mise', 'run', *(generated.all?(&:file?) ? [] : ['--force']), 'bindings', ch
 
 compiler = Shellwords.split(ENV.fetch('CC', 'cc'))
 flags = Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic -O2'))
-sources = [
+compiler_id = Cache.tool_id(compiler.first(1))
+
+# Relinks `binary` from `command` unless the last successful link had the same
+# command and the same input bytes (its own sources, headers it reads, and
+# every library it links, core's archive included) and the binary is still
+# there. So an upstream tinyactors-core rebuild that leaves the archive's
+# bytes identical (a comment-only src/*.c edit — see
+# tinyactors-core/mise/tasks/dist's write-only-if-different guard) relinks
+# nothing here, while a real change to the archive's bytes does. Modeled on
+# tinyxml/mise/tasks/build/_default's `link`.
+#
+# Note the deliberate decoupling this migration introduces: this host
+# compiles its own translation units with $CFLAGS (default -O2, see `flags`
+# below), but libtinyactors.a is a prebuilt archive published by
+# tinyactors-core's own `dist` task under a *named profile* (see
+# tinyactors-core/mise/tasks/dist), whose flags are hard-coded there, not read
+# from this shell's environment. Since this consumer no longer compiles
+# tinyactors-core's sources itself, CFLAGS here never reaches core's code at
+# all -- only this module's own .c files. Linking dist/lib/release/... (see
+# CORE_DIST_LIBRARY above) is what restores -O2 for core's code specifically:
+# the "release" profile is defined as -O2, independent of whatever $CFLAGS
+# this host itself happens to be invoked with.
+def link(name, binary, command, inputs, tool_id)
+  root = ROOT
+  key = Cache.digest(command.map { |part| part.start_with?(root.to_s) ? part.delete_prefix("#{root}/") : part }.join(' '),
+                     tool_id, inputs)
+  cache_name = "link-#{name}"
+  if binary.file? && Cache.stamped?(cache_name, key)
+    puts "#{name}: cached (link inputs unchanged)"
+    return
+  end
+  Cache.unstamp(cache_name)
+  run(*command)
+  Cache.stamp(cache_name, key)
+end
+
+host_sources = [
   ROOT.join('src/main.c'),
   ROOT.join('src/rpc.c'),
   ROOT.join('src/server.c'),
@@ -101,58 +169,73 @@ sources = [
   ROOT.join('src/binding.c'),
   ROOT.join('src/adapters.c'),
   ROOT.join('src/instruments.c'),
-  BUILD.join('gen/ta_rpc.c'),
-  WORKSPACE.join('tinyactors-core/include/tinyactors.c')
+  BUILD.join('gen/ta_rpc.c')
 ]
-libraries = [libjq, libonig]
-
-run(
+host_binary = BUILD.join('tinyactors-test')
+host_command = [
   *compiler,
   *flags,
   "-I#{ROOT.join('src')}",
   "-I#{BUILD.join('gen')}",
   "-I#{PREFIX.join('include')}",
   "-I#{JQ_BUILD.join('src')}",
-  "-I#{WORKSPACE.join('tinyactors-core/include')}",
-  *sources.map(&:to_s),
-  *libraries.map(&:to_s),
+  "-I#{CORE_DIST_INCLUDE}",
+  *host_sources.map(&:to_s),
+  CORE_DIST_LIBRARY.to_s,
+  libjq.to_s,
+  libonig.to_s,
   libqjs.to_s,
   '-lm',
   '-lpthread',
   '-o',
-  BUILD.join('tinyactors-test').to_s
-)
+  host_binary.to_s
+]
+link('tinyactors-test', host_binary, host_command,
+     [*host_sources, CORE_DIST_HEADER, CORE_DIST_LIBRARY, libjq, libonig, libqjs], compiler_id)
 
-run(
+json_binary = BUILD.join('json_datamodel_test')
+json_sources = [
+  ROOT.join('tests/json_datamodel_test.c'),
+  ROOT.join('src/json_datamodel.c'),
+  ROOT.join('src/allocator.c')
+]
+json_command = [
   *compiler,
   *flags,
   "-I#{ROOT.join('src')}",
   "-I#{PREFIX.join('include')}",
   "-I#{JQ_BUILD.join('src')}",
-  "-I#{WORKSPACE.join('tinyactors-core/include')}",
-  ROOT.join('tests/json_datamodel_test.c').to_s,
-  ROOT.join('src/json_datamodel.c').to_s,
-  ROOT.join('src/allocator.c').to_s,
-  WORKSPACE.join('tinyactors-core/include/tinyactors.c').to_s,
-  *libraries.map(&:to_s),
+  "-I#{CORE_DIST_INCLUDE}",
+  *json_sources.map(&:to_s),
+  CORE_DIST_LIBRARY.to_s,
+  libjq.to_s,
+  libonig.to_s,
   '-lm',
   '-o',
-  BUILD.join('json_datamodel_test').to_s
-)
+  json_binary.to_s
+]
+link('json_datamodel_test', json_binary, json_command,
+     [*json_sources, CORE_DIST_HEADER, CORE_DIST_LIBRARY, libjq, libonig], compiler_id)
 
-run(
+ecma_binary = BUILD.join('ecmascript_datamodel_test')
+ecma_sources = [
+  ROOT.join('tests/ecmascript_datamodel_test.c'),
+  ROOT.join('src/ecmascript_datamodel.c'),
+  ROOT.join('src/allocator.c')
+]
+ecma_command = [
   *compiler,
   *flags,
   "-I#{ROOT.join('src')}",
   "-I#{PREFIX.join('include')}",
-  "-I#{WORKSPACE.join('tinyactors-core/include')}",
-  ROOT.join('tests/ecmascript_datamodel_test.c').to_s,
-  ROOT.join('src/ecmascript_datamodel.c').to_s,
-  ROOT.join('src/allocator.c').to_s,
-  WORKSPACE.join('tinyactors-core/include/tinyactors.c').to_s,
+  "-I#{CORE_DIST_INCLUDE}",
+  *ecma_sources.map(&:to_s),
+  CORE_DIST_LIBRARY.to_s,
   libqjs.to_s,
   '-lm',
   '-lpthread',
   '-o',
-  BUILD.join('ecmascript_datamodel_test').to_s
-)
+  ecma_binary.to_s
+]
+link('ecmascript_datamodel_test', ecma_binary, ecma_command,
+     [*ecma_sources, CORE_DIST_HEADER, CORE_DIST_LIBRARY, libqjs], compiler_id)

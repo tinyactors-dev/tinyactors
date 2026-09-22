@@ -9,3 +9,18 @@ ruby = "4"
 # major releases (clang 22 dropped the ElaboratedType wrapper around a
 # typedef's tag). Pin the line the description in include/ was generated with.
 clang = "22"
+
+[env]
+# Puts the workspace's shared task library (mise/lib/) on Ruby's load path so
+# every module's task files can `require 'cache'` and `require 'task_stamp'`
+# without a per-module placeholder file or a brittle `../../../` relative
+# path back to the root. `{{config_root}}` is the workspace root here (this is
+# the root config, not a module's), and mise propagates root [env] into tasks
+# belonging to every config_roots module, whether run from inside the module
+# or as `//module:task` from the root. A task script run directly, without
+# mise, will now fail with a LoadError instead of silently working, since
+# RUBYLIB only comes from mise's environment; that is acceptable because
+# Cache::ROOT already depends on mise's MISE_PROJECT_ROOT. A task that spawns
+# another task script as a child Ruby process (e.g. tinyxml/mise/tasks/generated)
+# still works, since the child inherits RUBYLIB from the parent's environment.
+RUBYLIB = "{{config_root}}/mise/lib"

@@ -21,7 +21,7 @@ require 'English'
 require 'fileutils'
 require 'pathname'
 require 'shellwords'
-require_relative '../../lib/cache'
+require 'cache'
 
 ROOT = Cache::ROOT
 BUILD = ROOT.join('build')

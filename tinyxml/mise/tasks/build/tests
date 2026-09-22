@@ -9,7 +9,7 @@
 
 require 'pathname'
 require 'shellwords'
-require_relative '../../lib/cache'
+require 'cache'
 
 ROOT = Cache::ROOT
 OBJECTS = ROOT.join('build/objects')

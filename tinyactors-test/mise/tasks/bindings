@@ -1,17 +1,22 @@
 #!/usr/bin/env ruby
-#MISE description="Generate RPC bindings (build/gen/ta_rpc.{c,h}) from tinyactors.api.json"
-#MISE sources=["bindings.rb", "mise/tasks/bindings", "mise/lib/**/*", "../tinyactors-core/include/tinyactors.api.json"]
+#MISE description="Generate RPC bindings (build/gen/ta_rpc.{c,h}) from tinyactors-core's published tinyactors.api.json"
+#MISE sources=["bindings.rb", "mise/tasks/bindings", "mise/lib/**/*", "../tinyactors-core/dist/include/tinyactors.api.json"]
 #MISE outputs={auto=true}
 
-# Reads tinyactors-core/include/tinyactors.api.json and bindings.rb and writes
-# JSON codecs for every bound type plus one RPC handler per bound function.
-# See README.md ("Generated bindings") and docs/protocol.md.
+# Reads tinyactors-core/dist/include/tinyactors.api.json (published by
+# tinyactors-core's `dist` task, not the copy under its own include/) and
+# bindings.rb, and writes JSON codecs for every bound type plus one RPC
+# handler per bound function. See README.md ("Generated bindings") and
+# docs/protocol.md. `mise run build` runs `mise run dist` in tinyactors-core
+# before this task, so the description is current whenever this runs as part
+# of a normal build; running `mise run bindings` on its own trusts whatever
+# tinyactors-core last published.
 
 require 'json'
 require 'pathname'
 
 ROOT = Pathname.new(__dir__).join('../..').expand_path
-DESCRIPTION = ROOT.parent.join('tinyactors-core/include/tinyactors.api.json')
+DESCRIPTION = ROOT.parent.join('tinyactors-core/dist/include/tinyactors.api.json')
 OUT_DIR = ROOT.join('build/gen')
 require ROOT.join('bindings').to_s
 require ROOT.join('mise/lib/rpc').to_s

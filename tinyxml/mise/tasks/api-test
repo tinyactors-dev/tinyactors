@@ -28,7 +28,7 @@ require 'pathname'
 require 'tmpdir'
 require_relative '../lib/api'
 require_relative '../lib/c_scan'
-require_relative '../lib/cache'
+require 'cache'
 
 # Content-fresh (mise/lib/cache.rb): everything the three checks read, including
 # the two generated files they verify.

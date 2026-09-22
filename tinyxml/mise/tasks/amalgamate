@@ -20,7 +20,7 @@
 
 require 'pathname'
 require_relative '../lib/c_scan'
-require_relative '../lib/cache'
+require 'cache'
 
 # Fresh when the inputs and the checked-in output still hash to what the last
 # successful run recorded (mise/lib/cache.rb); an output edited by hand does not.

@@ -5,7 +5,7 @@ require 'fileutils'
 require 'pathname'
 require 'shellwords'
 require 'tmpdir'
-require_relative 'cache'
+require 'cache'
 
 # The freestanding check (AGENTS.md hard constraint 1). The tasks under
 # mise/tasks/freestanding/ call this; mise schedules them (depends, --jobs) and

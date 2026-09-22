@@ -1,0 +1,105 @@
+#!/usr/bin/env ruby
+#MISE description="Link tinyactors-core's test binaries"
+#MISE depends=["build:library", "build:tests"]
+# vim:ft=ruby
+#
+# build:library and build:tests compile in parallel, then this links. Linking
+# is by content (mise/lib/cache.rb): a test binary is relinked only when the
+# bytes of its object(s) or the link command changed, so an object that a
+# comment edit recompiled identically relinks nothing and leaves every test
+# binary's bytes, and so its recorded pass, alone. export_test needs nothing
+# from the runtime and links standalone; every other test links its own
+# object together with the one amalgamation object build:library compiled
+# (build/objects/tinyactors.o), instead of recompiling include/tinyactors.c
+# once per test binary as the old build task did.
+#
+# Tests written against a public API that src/ does not implement yet: they
+# are compiled against the header like every other test (build:tests), but
+# their link fails on the missing symbols. This task reports those as pending
+# instead of failing the build, as tinyxml does for its unwritten modules, and
+# `mise run test` runs each one as soon as it links (name => why it does not
+# link yet). Empty today: tests/tree_test.c was the last entry, and src/tree.c
+# links it.
+PENDING_TESTS = {}.freeze
+
+require 'English'
+require 'fileutils'
+require 'pathname'
+require 'shellwords'
+require 'cache'
+
+ROOT = Cache::ROOT
+BUILD = ROOT.join('build')
+OBJECTS = BUILD.join('objects')
+
+COMPILER = Shellwords.split(ENV.fetch('CC', 'cc'))
+FLAGS = Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic'))
+
+TINYACTORS_OBJECT = OBJECTS.join('tinyactors.o')
+
+# Tests that link the amalgamation object in alongside their own; the rest
+# (just export_test today) are self-contained.
+TESTS_WITH_RUNTIME = %w[inspection_test retirement_test scxml_uri_test send_id_test tree_test].freeze
+STANDALONE_TESTS = %w[export_test].freeze
+
+FileUtils.mkdir_p(BUILD)
+
+# Relinks `test` from `inputs` unless the last successful link had the same
+# command and object bytes and the binary is still there. Returns :linked,
+# :reused, or the list of undefined symbols a failed link reported.
+def link(test, inputs)
+  binary = BUILD.join(test)
+  command = [*COMPILER, *FLAGS, *inputs.map(&:to_s), '-o', binary.to_s]
+  key = Cache.digest(command.map { |part| part.start_with?(ROOT.to_s) ? part.delete_prefix("#{ROOT}/") : part }.join(' '),
+                     Cache.tool_id(COMPILER.first(1)), inputs)
+  name = "link-#{test}"
+  return :reused if binary.file? && Cache.stamped?(name, key)
+
+  Cache.unstamp(name)
+  FileUtils.rm_f(binary)
+  puts command.shelljoin
+  output = IO.popen(command, chdir: ROOT.to_s, err: %i[child out], &:read)
+  unless $CHILD_STATUS.success?
+    FileUtils.rm_f(binary)
+    return output.scan(/undefined reference to `([^']+)'/).flatten.uniq
+  end
+  Cache.stamp(name, key)
+  :linked
+end
+
+linked = 0
+reused = 0
+(TESTS_WITH_RUNTIME + STANDALONE_TESTS).each do |test|
+  inputs = [OBJECTS.join("#{test}.o")]
+  inputs << TINYACTORS_OBJECT if TESTS_WITH_RUNTIME.include?(test)
+  result = link(test, inputs)
+  unless result.is_a?(Symbol)
+    warn "build: #{test} failed to link: undefined reference to #{result.join(', ')}"
+    exit 1
+  end
+  result == :reused ? reused += 1 : linked += 1
+end
+
+# A pending test must still compile against the public header (build:tests
+# does not compile it, since it is not in TESTS there -- see PENDING_TESTS
+# above), so a renamed type or a changed signature fails the build rather than
+# hiding as "pending"; only its link is allowed to fail.
+PENDING_TESTS.each do |test, reason|
+  outcome, output = Cache.compile([*COMPILER, *FLAGS, '-Iinclude'], "tests/#{test}.c", OBJECTS.join("#{test}.o"))
+  if outcome == :failed
+    puts output
+    abort "build: #{test} does not compile"
+  end
+  puts output unless output.empty?
+
+  result = link(test, [OBJECTS.join("#{test}.o"), TINYACTORS_OBJECT])
+  if result.is_a?(Symbol)
+    result == :reused ? reused += 1 : linked += 1
+  else
+    FileUtils.rm_f(BUILD.join(test))
+    puts "tinyactors-core: #{test} is pending: #{reason}"
+  end
+end
+
+total = TESTS_WITH_RUNTIME.length + STANDALONE_TESTS.length + PENDING_TESTS.length
+puts "build: linked #{linked + reused} of #{total} test binaries (#{linked} relinked, #{reused} reused)"

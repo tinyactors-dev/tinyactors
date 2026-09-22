@@ -30,7 +30,7 @@ require 'English'
 require 'fileutils'
 require 'pathname'
 require 'shellwords'
-require_relative '../lib/cache'
+require 'cache'
 require_relative '../lib/suite'
 
 ROOT = Cache::ROOT
