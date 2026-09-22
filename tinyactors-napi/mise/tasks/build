@@ -13,6 +13,9 @@ require 'cache'
 ROOT = Cache::ROOT
 BUILD = ROOT.join('build')
 SOURCE = ROOT.join('src/addon.c')
+CORE_SOURCE = ROOT.join('../tinyactors-core/include/tinyactors.c').expand_path
+CORE_HEADER = ROOT.join('../tinyactors-core/include/tinyactors.h').expand_path
+SUPPORT_SOURCE = ROOT.join('src/binding.h')
 OUTPUT = BUILD.join('tinyactors_napi.node')
 
 def capture(*command)
@@ -46,6 +49,7 @@ command = [
   "-DTINYACTORS_NAPI_VERSION=\"#{version}\"",
   "-I#{include_dir}",
   SOURCE.to_s,
+  CORE_SOURCE.to_s,
   '-o',
   OUTPUT.to_s
 ]
@@ -60,7 +64,7 @@ normalized_command = command.map do |part|
 end.join(' ')
 Cache.gate(
   'build-addon',
-  inputs: [SOURCE, ROOT.join('package.json'), *headers],
+  inputs: [SOURCE, SUPPORT_SOURCE, CORE_SOURCE, CORE_HEADER, ROOT.join('package.json'), *headers],
   outputs: [OUTPUT],
   extra: [normalized_command, Cache.tool_id(compiler.first(1))]
 )

@@ -1,4 +1,4 @@
-#include <node_api.h>
+#include "binding.h"
 
 #ifndef TINYACTORS_NAPI_VERSION
 #define TINYACTORS_NAPI_VERSION "0.0.0"
