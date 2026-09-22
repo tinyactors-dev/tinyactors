@@ -8,8 +8,9 @@ require 'json'
 require 'pathname'
 require 'rbconfig'
 require 'shellwords'
+require 'cache'
 
-ROOT = Pathname.new(__dir__).join('../..').expand_path
+ROOT = Cache::ROOT
 BUILD = ROOT.join('build')
 SOURCE = ROOT.join('src/addon.c')
 OUTPUT = BUILD.join('tinyactors_napi.node')
@@ -48,6 +49,23 @@ command = [
   '-o',
   OUTPUT.to_s
 ]
+
+# The Node-API headers live outside this module, so include them explicitly in
+# the content key instead of relying on mise's mtime-based sources. The command
+# also captures the selected Node installation, flags, platform linker mode,
+# package version define, and compiler identity.
+headers = Dir[include_dir.join('**/*.h').to_s].sort.map { |path| Pathname.new(path) }
+normalized_command = command.map do |part|
+  part.start_with?(ROOT.to_s) ? part.delete_prefix("#{ROOT}/") : part
+end.join(' ')
+Cache.gate(
+  'build-addon',
+  inputs: [SOURCE, ROOT.join('package.json'), *headers],
+  outputs: [OUTPUT],
+  extra: [normalized_command, Cache.tool_id(compiler.first(1))]
+)
+
+FileUtils.rm_f(OUTPUT)
 puts command.shelljoin
 pid = Process.spawn(*command, chdir: ROOT.to_s)
 _pid, status = Process.wait2(pid)
