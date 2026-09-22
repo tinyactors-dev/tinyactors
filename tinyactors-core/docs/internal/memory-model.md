@@ -29,6 +29,14 @@ child completion state, and replacement activation effects occupy an optional
 `ta_actor_sparse_state`. An actor that does not use those features has no
 vectors for them.
 
+## Per-actor operations cost the same at every population
+
+The target is a population, so no operation on one actor may walk the others
+(invariant 17). Slots in the actor table are found through a free list, not by
+scanning for a hole: a scan is invisible in a unit test and fatal in
+production, where short-lived actors are spawned and destroyed against a large
+resident population and would each pay for all of it.
+
 ## Residency
 
 Named durable actors may exist while not resident. The actor directory/name index is distinct from the resident execution cache. The exact directory representation is an implementation concern and may itself be store-backed for populations larger than RAM.

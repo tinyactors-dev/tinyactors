@@ -16,3 +16,4 @@
 14. **No hidden wall clock.** Semantic time comes only from the supplied logical clock.
 15. **No hidden concurrency.** The core starts no threads and invokes no callbacks concurrently unless the caller itself enters Tinyactors concurrently.
 16. **Structured event names.** Hot-path matching never depends on reparsing a formatted event-name string.
+17. **Population-independent actor cost.** Creating, replacing, or destroying one actor costs the same whether the system holds a hundred actors or four million: no per-actor operation walks the actor table, and freed slots are found through a free list (ADR 0018, ADR 0028, `memory-model.md`).

@@ -133,24 +133,28 @@ void ta_actor_exit_invoked(ta_system *system, ta_actor_id id) {
     ta_arena_destroy(&nested);
 }
 
+/*
+ * Takes the head of the free list, or grows the table when it is empty.
+ * Scanning the table for a hole instead would make every spawn cost a walk
+ * over the live population, which is what invariant 17 forbids: an ephemeral
+ * child of a four-million-actor system must not pay for its siblings.
+ */
 static ta_result ta_actor_claim_slot(ta_system *system, ta_actor *actor, ta_actor_id *out) {
-    uint32_t slot = system->actors.count;
-    for (uint32_t index = 0; index < system->actors.count; index += 1) {
-        const ta_actor_slot *entry = ta_vec_at(&system->actors, index);
-        if (entry->actor == NULL) {
-            slot = index;
-            break;
-        }
-    }
-    if (slot == system->actors.count) {
-        ta_actor_slot fresh = { .generation = 1 };
+    uint32_t slot = system->free_actor_slot;
+    if (slot == UINT32_MAX) {
+        ta_actor_slot fresh = { .generation = 1, .next_free = UINT32_MAX };
         ta_result result = ta_vec_push(&system->actors, &fresh);
         if (result != TA_OK) {
             return result;
         }
+        slot = system->actors.count - 1u;
+    } else {
+        const ta_actor_slot *head = ta_vec_at(&system->actors, slot);
+        system->free_actor_slot = head->next_free;
     }
     ta_actor_slot *entry = ta_vec_at(&system->actors, slot);
     entry->actor = actor;
+    entry->next_free = UINT32_MAX;
     *out = ((ta_actor_id)entry->generation << 32) | slot;
     return TA_OK;
 }
@@ -224,10 +228,14 @@ static ta_result ta_actor_claim_address(ta_system *system,
 }
 
 /* Frees the slot an actor was given, so a failed spawn reuses it. */
+/* The slot's next occupant gets a new generation, so this ID goes stale. */
 void ta_actor_release_slot(ta_system *system, ta_actor_id id) {
-    ta_actor_slot *entry = ta_vec_at(&system->actors, (uint32_t)(id & 0xffffffffu));
+    uint32_t slot = (uint32_t)(id & 0xffffffffu);
+    ta_actor_slot *entry = ta_vec_at(&system->actors, slot);
     entry->actor = NULL;
     entry->generation += 1u;
+    entry->next_free = system->free_actor_slot;
+    system->free_actor_slot = slot;
 }
 
 /*

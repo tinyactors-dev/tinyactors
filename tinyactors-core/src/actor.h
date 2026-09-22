@@ -91,6 +91,9 @@ struct ta_actor {
 typedef struct {
     ta_actor *actor;
     uint32_t generation;
+    /* While free: the next free slot, or UINT32_MAX. Fits the padding the
+     * generation already left, so the table costs no more per actor. */
+    uint32_t next_free;
 } ta_actor_slot;
 
 ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id);

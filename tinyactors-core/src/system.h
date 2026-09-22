@@ -34,8 +34,14 @@ struct ta_system {
     /* Orders registrations, so the newest identity match wins after slot reuse. */
     uint64_t next_definition_serial;
 
-    /* ta_actor_slot; an actor ID is (generation << 32) | slot. */
+    /*
+     * ta_actor_slot; an actor ID is (generation << 32) | slot. Freed slots
+     * form a list through `next_free`, as definitions' do: a spawn takes the
+     * head instead of scanning the table, so it costs the same against four
+     * million actors as against four (invariant 17).
+     */
     ta_vec actors;
+    uint32_t free_actor_slot;
 
     ta_timer_heap timers;
 

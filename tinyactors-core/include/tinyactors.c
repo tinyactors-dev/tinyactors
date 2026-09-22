@@ -1038,6 +1038,9 @@ struct ta_actor {
 typedef struct {
     ta_actor *actor;
     uint32_t generation;
+    /* While free: the next free slot, or UINT32_MAX. Fits the padding the
+     * generation already left, so the table costs no more per actor. */
+    uint32_t next_free;
 } ta_actor_slot;
 
 TA_PRIVATE ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id);
@@ -1112,8 +1115,14 @@ struct ta_system {
     /* Orders registrations, so the newest identity match wins after slot reuse. */
     uint64_t next_definition_serial;
 
-    /* ta_actor_slot; an actor ID is (generation << 32) | slot. */
+    /*
+     * ta_actor_slot; an actor ID is (generation << 32) | slot. Freed slots
+     * form a list through `next_free`, as definitions' do: a spawn takes the
+     * head instead of scanning the table, so it costs the same against four
+     * million actors as against four (invariant 17).
+     */
     ta_vec actors;
+    uint32_t free_actor_slot;
 
     ta_timer_heap timers;
 
@@ -5632,24 +5641,28 @@ TA_PRIVATE void ta_actor_exit_invoked(ta_system *system, ta_actor_id id) {
     ta_arena_destroy(&nested);
 }
 
+/*
+ * Takes the head of the free list, or grows the table when it is empty.
+ * Scanning the table for a hole instead would make every spawn cost a walk
+ * over the live population, which is what invariant 17 forbids: an ephemeral
+ * child of a four-million-actor system must not pay for its siblings.
+ */
 static ta_result ta_actor_claim_slot(ta_system *system, ta_actor *actor, ta_actor_id *out) {
-    uint32_t slot = system->actors.count;
-    for (uint32_t index = 0; index < system->actors.count; index += 1) {
-        const ta_actor_slot *entry = ta_vec_at(&system->actors, index);
-        if (entry->actor == NULL) {
-            slot = index;
-            break;
-        }
-    }
-    if (slot == system->actors.count) {
-        ta_actor_slot fresh = { .generation = 1 };
+    uint32_t slot = system->free_actor_slot;
+    if (slot == UINT32_MAX) {
+        ta_actor_slot fresh = { .generation = 1, .next_free = UINT32_MAX };
         ta_result result = ta_vec_push(&system->actors, &fresh);
         if (result != TA_OK) {
             return result;
         }
+        slot = system->actors.count - 1u;
+    } else {
+        const ta_actor_slot *head = ta_vec_at(&system->actors, slot);
+        system->free_actor_slot = head->next_free;
     }
     ta_actor_slot *entry = ta_vec_at(&system->actors, slot);
     entry->actor = actor;
+    entry->next_free = UINT32_MAX;
     *out = ((ta_actor_id)entry->generation << 32) | slot;
     return TA_OK;
 }
@@ -5723,10 +5736,14 @@ static ta_result ta_actor_claim_address(ta_system *system,
 }
 
 /* Frees the slot an actor was given, so a failed spawn reuses it. */
+/* The slot's next occupant gets a new generation, so this ID goes stale. */
 TA_PRIVATE void ta_actor_release_slot(ta_system *system, ta_actor_id id) {
-    ta_actor_slot *entry = ta_vec_at(&system->actors, (uint32_t)(id & 0xffffffffu));
+    uint32_t slot = (uint32_t)(id & 0xffffffffu);
+    ta_actor_slot *entry = ta_vec_at(&system->actors, slot);
     entry->actor = NULL;
     entry->generation += 1u;
+    entry->next_free = system->free_actor_slot;
+    system->free_actor_slot = slot;
 }
 
 /*
@@ -7017,6 +7034,7 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
     *system = (ta_system){ .allocator = config->allocator };
     ta_clock_set(&system->clock, config->initial_time);
     ta_vec_init(&system->actors, config->allocator, TA_VEC_LAYOUT(ta_actor_slot));
+    system->free_actor_slot = UINT32_MAX;
     ta_vec_init(&system->definitions, config->allocator, TA_VEC_LAYOUT(ta_definition_slot));
     system->free_definition_slot = UINT32_MAX;
     ta_vec_init(&system->io_processors, config->allocator, TA_VEC_LAYOUT(ta_io_registration));

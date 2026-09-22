@@ -23,6 +23,7 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
     *system = (ta_system){ .allocator = config->allocator };
     ta_clock_set(&system->clock, config->initial_time);
     ta_vec_init(&system->actors, config->allocator, TA_VEC_LAYOUT(ta_actor_slot));
+    system->free_actor_slot = UINT32_MAX;
     ta_vec_init(&system->definitions, config->allocator, TA_VEC_LAYOUT(ta_definition_slot));
     system->free_definition_slot = UINT32_MAX;
     ta_vec_init(&system->io_processors, config->allocator, TA_VEC_LAYOUT(ta_io_registration));
