@@ -16,3 +16,5 @@ end
 run('mise', 'run', 'build')
 run('node', 'test/version.js')
 run('bun', 'test/version.js')
+run('node', 'test/system.js')
+run('bun', 'test/system.js')
