@@ -239,3 +239,24 @@ ecma_command = [
 ]
 link('ecmascript_datamodel_test', ecma_binary, ecma_command,
      [*ecma_sources, CORE_DIST_HEADER, CORE_DIST_LIBRARY, libqjs], compiler_id)
+
+# The population benchmark (tests/scale_test.c): core, the null data model,
+# and nothing else, so what it measures is core's own per-actor cost.
+scale_binary = BUILD.join('scale_test')
+scale_sources = [
+  ROOT.join('tests/scale_test.c'),
+  ROOT.join('src/null_datamodel.c'),
+  ROOT.join('src/allocator.c')
+]
+scale_command = [
+  *compiler,
+  *flags,
+  "-I#{ROOT.join('src')}",
+  "-I#{CORE_DIST_INCLUDE}",
+  *scale_sources.map(&:to_s),
+  CORE_DIST_LIBRARY.to_s,
+  '-o',
+  scale_binary.to_s
+]
+link('scale_test', scale_binary, scale_command,
+     [*scale_sources, CORE_DIST_HEADER, CORE_DIST_LIBRARY], compiler_id)

@@ -65,6 +65,12 @@ pid = Process.spawn('tinyactors-test/build/ecmascript_datamodel_test', chdir: ro
 _pid, status = Process.wait2(pid)
 exit(status.exitstatus || 1) unless status.success?
 
+# Invariant 17: per-actor cost does not grow with the population. It links
+# core's release archive, so it measures what a host would get.
+pid = Process.spawn('tinyactors-test/build/scale_test', chdir: root.to_s)
+_pid, status = Process.wait2(pid)
+exit(status.exitstatus || 1) unless status.success?
+
 pid = Process.spawn('mise', 'run', 'test', chdir: root.join('tinyactors-napi').to_s)
 _pid, status = Process.wait2(pid)
 exit(status.exitstatus || 1) unless status.success?

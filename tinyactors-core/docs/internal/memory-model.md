@@ -37,6 +37,12 @@ scanning for a hole: a scan is invisible in a unit test and fatal in
 production, where short-lived actors are spawned and destroyed against a large
 resident population and would each pay for all of it.
 
+`tinyactors-test/tests/scale_test.c` measures spawn, upgrade, and ephemeral
+churn at two populations and fails when per-actor cost grows between them. It
+also reports the target itself: four million resident named actors of a null
+data-model chart cost 558 bytes each, 2.1 GB in all, and a rolling upgrade of
+all of them takes 1.6 s of CPU time.
+
 ## Residency
 
 Named durable actors may exist while not resident. The actor directory/name index is distinct from the resident execution cache. The exact directory representation is an implementation concern and may itself be store-backed for populations larger than RAM.

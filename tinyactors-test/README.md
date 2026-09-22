@@ -99,6 +99,42 @@ mise run test
 `mise run workbench` opens the interactive workbench (below); `mise run
 scenarios` runs the Ruby scenarios alone.
 
+## Population benchmark
+
+`tests/scale_test.c` is what stands behind the four-million-actor target of
+`tinyactors-core/docs/internal/memory-model.md`. It links core's release
+archive and the null data model, and it measures three things per actor
+against a live population: spawning and bootstrapping a named actor,
+upgrading one to a new revision of its chart (`prepare_replacement`, run,
+`activate_replacement`, destroy the incumbent), and an ephemeral actor's
+whole spawn/bootstrap/destroy life.
+
+`mise run test` runs it as a test of invariant 17: it takes each measurement
+at two populations a factor of four apart and fails when the cost of one
+actor grows with the population, which is what an actor-table walk inside a
+spawn looks like. It asserts no absolute time — that would only measure the
+machine — and it measures CPU time, so a loaded machine slows it down
+without changing the verdict. Per-actor memory is held to a budget in the
+same way.
+
+Give it a population to run as a benchmark instead, with no ratios and no
+bounds:
+
+```text
+tinyactors-test/build/scale_test --report 4000000
+```
+
+```text
+              actors      spawn  upgrade    churn     bytes    peak MB
+                             us       us       us    /actor
+report       4000000       0.36     0.39     0.16     557.5     2126.7
+```
+
+That is an Apple M-series laptop: four million resident named actors in
+2.1 GB of core memory, and a rolling upgrade of all four million in 1.6 s of
+CPU time. The bytes are what core asked the allocator for; a real host adds
+its own directory, its names, and whatever its data model keeps per actor.
+
 ## Host methods
 
 Ten methods are written by hand rather than generated:
