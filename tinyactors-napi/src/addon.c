@@ -12,6 +12,12 @@ typedef struct tinyactors_napi_environment tinyactors_napi_environment;
 typedef struct tinyactors_napi_system tinyactors_napi_system;
 typedef struct tinyactors_napi_definition tinyactors_napi_definition;
 typedef struct tinyactors_napi_actor tinyactors_napi_actor;
+typedef struct tinyactors_napi_envelope tinyactors_napi_envelope;
+
+struct tinyactors_napi_envelope {
+    ta_actor_id target;
+    ta_event event;
+};
 
 struct tinyactors_napi_definition {
     tinyactors_napi_system *system;
@@ -42,6 +48,13 @@ struct tinyactors_napi_system {
     size_t runnable_count;
     size_t runnable_head;
     size_t runnable_capacity;
+    tinyactors_napi_envelope *external;
+    size_t external_head;
+    size_t external_count;
+    size_t external_capacity;
+    uint32_t resume_budget;
+    uint32_t message_budget;
+    size_t max_queued_messages;
     tinyactors_napi_system *next;
 };
 
@@ -55,11 +68,11 @@ struct tinyactors_napi_environment {
     bool cleaning;
 };
 
-static bool tinyactors_napi_throw_error(napi_env env, const char *code, const char *message) {
+static bool tinyactors_napi_make_error(napi_env env, const char *code, const char *message,
+                                       napi_value *out) {
     tinyactors_napi_environment *environment = NULL;
     napi_status status = napi_get_instance_data(env, (void **)&environment);
     if (status != napi_ok || environment == NULL || environment->error_constructor == NULL) {
-        (void)napi_throw_error(env, NULL, message);
         return false;
     }
 
@@ -69,12 +82,21 @@ static bool tinyactors_napi_throw_error(napi_env env, const char *code, const ch
     if (napi_get_reference_value(env, environment->error_constructor, &constructor) != napi_ok ||
         napi_create_string_utf8(env, message, NAPI_AUTO_LENGTH, &message_value) != napi_ok ||
         napi_new_instance(env, constructor, 1, &message_value, &error) != napi_ok) {
-        (void)napi_throw_error(env, NULL, message);
         return false;
     }
     napi_value code_value;
     if (napi_create_string_utf8(env, code, NAPI_AUTO_LENGTH, &code_value) == napi_ok) {
         (void)napi_set_named_property(env, error, "code", code_value);
+    }
+    *out = error;
+    return true;
+}
+
+static bool tinyactors_napi_throw_error(napi_env env, const char *code, const char *message) {
+    napi_value error;
+    if (!tinyactors_napi_make_error(env, code, message, &error)) {
+        (void)napi_throw_error(env, NULL, message);
+        return false;
     }
     (void)napi_throw(env, error);
     return false;
@@ -128,6 +150,11 @@ static void tinyactors_napi_destroy_core(tinyactors_napi_system *system) {
         system->runnable_count = 0;
         system->runnable_head = 0;
         system->runnable_capacity = 0;
+        free(system->external);
+        system->external = NULL;
+        system->external_head = 0;
+        system->external_count = 0;
+        system->external_capacity = 0;
     }
 }
 
@@ -282,6 +309,8 @@ static napi_value tinyactors_napi_system_time(napi_env env, napi_callback_info i
 }
 
 #define TINYACTORS_NAPI_RESUME_BUDGET 1024u
+#define TINYACTORS_NAPI_MESSAGE_BUDGET 1024u
+#define TINYACTORS_NAPI_DEFAULT_MAX_QUEUED_MESSAGES SIZE_MAX
 
 static bool tinyactors_napi_runnable_enqueue(napi_env env, tinyactors_napi_system *system,
                                              ta_actor_id id) {
@@ -333,7 +362,7 @@ static ta_result tinyactors_napi_pump_runnable(napi_env env, tinyactors_napi_sys
         ta_run_status status = TA_RUN_ERROR;
         ta_result result = ta_actor_resume(system->core,
             &(ta_actor_resume_params){.actor = id,
-                                      .budget = TINYACTORS_NAPI_RESUME_BUDGET,
+                                      .budget = system->resume_budget,
                                       .status = &status});
         if (result != TA_OK) {
             return result;
@@ -349,6 +378,177 @@ static ta_result tinyactors_napi_pump_runnable(napi_env env, tinyactors_napi_sys
         system->runnable_count = 0;
     }
     return TA_OK;
+}
+
+/* Convert a dotted JavaScript event name into the system-local event name. */
+static ta_result tinyactors_napi_intern_event(ta_system *core, const char *text,
+                                              size_t length, ta_event_name_id *out) {
+    if (core == NULL || text == NULL || length == 0 || out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    ta_atom *atoms = calloc(length + 1u, sizeof(*atoms));
+    if (atoms == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    uint32_t count = 0;
+    size_t start = 0;
+    ta_result result = TA_OK;
+    for (size_t index = 0; index <= length; index += 1u) {
+        if (index < length && text[index] != '.') {
+            continue;
+        }
+        if (index == start || count == 64u) {
+            result = TA_ERR_INVALID;
+            break;
+        }
+        result = ta_system_intern_atom(core,
+            (ta_str){.ptr = text + start, .len = (uint32_t)(index - start)}, &atoms[count]);
+        if (result != TA_OK) {
+            break;
+        }
+        count += 1u;
+        start = index + 1u;
+    }
+    if (result == TA_OK) {
+        result = ta_event_name_intern(core, &(ta_atom_list){.atoms = atoms, .count = count}, out);
+    }
+    free(atoms);
+    return result;
+}
+
+static void tinyactors_napi_external_compact(tinyactors_napi_system *system) {
+    if (system->external_head == system->external_count) {
+        system->external_head = 0;
+        system->external_count = 0;
+    } else if (system->external_head != 0) {
+        size_t pending = system->external_count - system->external_head;
+        memmove(system->external, system->external + system->external_head,
+                pending * sizeof(*system->external));
+        system->external_count = pending;
+        system->external_head = 0;
+    }
+}
+
+static bool tinyactors_napi_external_enqueue(napi_env env, tinyactors_napi_system *system,
+                                             ta_actor_id target, ta_event_name_id name) {
+    size_t pending = system->external_count - system->external_head;
+    if (pending >= system->max_queued_messages) {
+        return tinyactors_napi_throw_error(env, "queue-full", "external message queue is full");
+    }
+    tinyactors_napi_external_compact(system);
+    if (system->external_count == system->external_capacity) {
+        size_t capacity = system->external_capacity == 0 ? 16u : system->external_capacity * 2u;
+        if (capacity < system->external_count + 1u ||
+            capacity > SIZE_MAX / sizeof(*system->external)) {
+            return tinyactors_napi_throw_error(env, "out-of-memory",
+                                               "external message queue is too large");
+        }
+        tinyactors_napi_envelope *queue = realloc(
+            system->external, capacity * sizeof(*system->external));
+        if (queue == NULL) {
+            return tinyactors_napi_throw_error(env, "out-of-memory",
+                                               "out of memory growing external message queue");
+        }
+        system->external = queue;
+        system->external_capacity = capacity;
+    }
+    system->external[system->external_count++] = (tinyactors_napi_envelope){
+        .target = target,
+        .event = {
+            .name = name,
+            .type = TA_EVENT_EXTERNAL,
+            .send_id = 0,
+            .origin = {.kind = TA_ORIGIN_NONE},
+            .invoke_id = TA_INVOKE_ID_NONE,
+            .data = {0},
+        },
+    };
+    return true;
+}
+
+/* One bounded turn. Paused targets stay in the external queue for a later turn. */
+static ta_result tinyactors_napi_pump_external(napi_env env, tinyactors_napi_system *system,
+                                               bool *progress) {
+    uint32_t started = 0;
+    size_t turn_count = system->external_count - system->external_head;
+    for (size_t index = 0; index < turn_count && started < system->message_budget; index += 1u) {
+        tinyactors_napi_envelope envelope = system->external[system->external_head++];
+        ta_actor_inspection inspection;
+        ta_result result = ta_actor_inspect(system->core, envelope.target, &inspection);
+        if (result == TA_ERR_NOT_FOUND || result == TA_ERR_UNLOADED) {
+            /* A target destroyed after post() no longer has a receiver. */
+            ta_event_release(&envelope.event);
+            *progress = true;
+            continue;
+        }
+        if (result != TA_OK) {
+            ta_event_release(&envelope.event);
+            return result;
+        }
+        if (inspection.residency == TA_ACTOR_DONE) {
+            ta_event_release(&envelope.event);
+            *progress = true;
+            continue;
+        }
+        if (inspection.macrostep_in_progress || inspection.residency != TA_ACTOR_IDLE) {
+            if (!tinyactors_napi_external_enqueue(env, system, envelope.target,
+                                                  envelope.event.name)) {
+                ta_event_release(&envelope.event);
+                return TA_ERR_NOMEM;
+            }
+            ta_event_release(&envelope.event);
+            continue;
+        }
+        result = ta_actor_deliver(system->core, envelope.target, &envelope.event);
+        ta_event_release(&envelope.event);
+        if (result == TA_ERR_BUSY) {
+            /* A callback cannot make a stable actor busy between inspect and deliver here. */
+            if (!tinyactors_napi_external_enqueue(env, system, envelope.target,
+                                                  envelope.event.name)) {
+                return TA_ERR_NOMEM;
+            }
+            continue;
+        }
+        if (result != TA_OK) {
+            return result;
+        }
+        if (!tinyactors_napi_runnable_enqueue(env, system, envelope.target)) {
+            return TA_ERR_NOMEM;
+        }
+        started += 1u;
+        *progress = true;
+    }
+    if (system->external_head == system->external_count) {
+        system->external_head = 0;
+        system->external_count = 0;
+    }
+    return TA_OK;
+}
+
+static ta_result tinyactors_napi_pump_to_quiescence(napi_env env,
+                                                     tinyactors_napi_system *system) {
+    for (;;) {
+        bool progress = false;
+        size_t runnable_before = system->runnable_count - system->runnable_head;
+        ta_result result = tinyactors_napi_pump_runnable(env, system);
+        if (result != TA_OK) {
+            return result;
+        }
+        if (runnable_before != 0) {
+            progress = true;
+        }
+        result = tinyactors_napi_pump_external(env, system, &progress);
+        if (result != TA_OK) {
+            return result;
+        }
+        if (!progress) {
+            return TA_OK;
+        }
+        if (system->runnable_count == system->runnable_head &&
+            system->external_count == system->external_head) {
+            return TA_OK;
+        }
+    }
 }
 
 typedef struct {
@@ -1325,6 +1525,199 @@ static napi_value tinyactors_napi_actor_inspect(napi_env env, napi_callback_info
     return inspection;
 }
 
+static bool tinyactors_napi_parse_post_event(napi_env env, tinyactors_napi_system *system,
+                                             ta_actor_id target, napi_value *argv, size_t argc,
+                                             size_t event_index) {
+    if (argc <= event_index) {
+        (void)tinyactors_napi_throw_error(env, "invalid", "post requires an event name");
+        return false;
+    }
+    if (argc > event_index + 3u) {
+        (void)tinyactors_napi_throw_error(env, "invalid", "too many post arguments");
+        return false;
+    }
+    char *event_text = NULL;
+    size_t event_length = 0;
+    napi_valuetype event_type;
+    if (!tinyactors_napi_check(env, napi_typeof(env, argv[event_index], &event_type),
+                               "napi_typeof")) {
+        return false;
+    }
+    if (event_type != napi_string) {
+        (void)tinyactors_napi_throw_error(env, "invalid", "event name must be a string");
+        return false;
+    }
+    if (!tinyactors_napi_get_utf8(env, argv[event_index], &event_text, &event_length)) {
+        return false;
+    }
+    if (event_length > UINT32_MAX) {
+        free(event_text);
+        (void)tinyactors_napi_throw_error(env, "invalid", "event name is too long");
+        return false;
+    }
+    if (argc > event_index + 1u) {
+        napi_valuetype type;
+        if (!tinyactors_napi_check(env, napi_typeof(env, argv[event_index + 1u], &type),
+                                   "napi_typeof")) {
+            free(event_text);
+            return false;
+        }
+        if (type != napi_undefined) {
+            free(event_text);
+            (void)tinyactors_napi_throw_error(env, "unsupported",
+                                               "post data is not implemented yet");
+            return false;
+        }
+    }
+    if (argc > event_index + 2u) {
+        napi_valuetype type;
+        if (!tinyactors_napi_check(env, napi_typeof(env, argv[event_index + 2u], &type),
+                                   "napi_typeof")) {
+            free(event_text);
+            return false;
+        }
+        if (type != napi_undefined) {
+            free(event_text);
+            (void)tinyactors_napi_throw_error(env, "unsupported",
+                                               "post options are not implemented yet");
+            return false;
+        }
+    }
+    ta_event_name_id name = 0;
+    ta_result result = tinyactors_napi_intern_event(system->core, event_text, event_length, &name);
+    free(event_text);
+    if (!tinyactors_napi_throw_result(env, result, "event name intern")) {
+        return false;
+    }
+    ta_actor_inspection inspection;
+    result = ta_actor_inspect(system->core, target, &inspection);
+    if (!tinyactors_napi_throw_result(env, result, "ta_actor_inspect")) {
+        return false;
+    }
+    return tinyactors_napi_external_enqueue(env, system, target, name);
+}
+
+static bool tinyactors_napi_target_id(napi_env env, tinyactors_napi_system *system,
+                                      napi_value value, ta_actor_id *out) {
+    napi_valuetype type;
+    if (!tinyactors_napi_check(env, napi_typeof(env, value, &type), "napi_typeof")) {
+        return false;
+    }
+    if (type == napi_bigint) {
+        if (!tinyactors_napi_get_uint64(env, value, out)) {
+            return false;
+        }
+        return true;
+    }
+    if (type == napi_object) {
+        tinyactors_napi_actor *actor = tinyactors_napi_unwrap_actor(env, value);
+        if (actor == NULL) {
+            return false;
+        }
+        if (actor->system != system) {
+            (void)tinyactors_napi_throw_error(env, "invalid",
+                                               "Actor belongs to another System");
+            return false;
+        }
+        if (actor->destroyed) {
+            (void)tinyactors_napi_throw_error(env, "not-found", "target Actor is destroyed");
+            return false;
+        }
+        *out = actor->id;
+        return true;
+    }
+    (void)tinyactors_napi_throw_error(env, "invalid", "target must be an Actor or ActorId");
+    return false;
+}
+
+static napi_value tinyactors_napi_system_post(napi_env env, napi_callback_info info) {
+    napi_value this_value;
+    napi_value argv[4];
+    size_t argc = 4;
+    if (!tinyactors_napi_check(env,
+            napi_get_cb_info(env, info, &argc, argv, &this_value, NULL), "napi_get_cb_info")) {
+        return NULL;
+    }
+    tinyactors_napi_system *system = tinyactors_napi_unwrap_system(env, this_value);
+    if (system == NULL || !tinyactors_napi_require_open(env, system, "System.post")) {
+        return NULL;
+    }
+    if (argc < 2u) {
+        (void)tinyactors_napi_throw_error(env, "invalid", "System.post requires a target and event");
+        return NULL;
+    }
+    ta_actor_id target = 0;
+    if (!tinyactors_napi_target_id(env, system, argv[0], &target) ||
+        !tinyactors_napi_parse_post_event(env, system, target, argv, argc, 1u)) {
+        return NULL;
+    }
+    return NULL;
+}
+
+static napi_value tinyactors_napi_actor_post(napi_env env, napi_callback_info info) {
+    napi_value this_value;
+    napi_value argv[3];
+    size_t argc = 3;
+    if (!tinyactors_napi_check(env,
+            napi_get_cb_info(env, info, &argc, argv, &this_value, NULL), "napi_get_cb_info")) {
+        return NULL;
+    }
+    tinyactors_napi_actor *actor = tinyactors_napi_unwrap_actor(env, this_value);
+    if (actor == NULL || !tinyactors_napi_require_actor_open(env, actor, "Actor.post")) {
+        return NULL;
+    }
+    if (actor->destroyed) {
+        (void)tinyactors_napi_throw_error(env, "not-found", "Actor is destroyed");
+        return NULL;
+    }
+    if (!tinyactors_napi_parse_post_event(env, actor->system, actor->id, argv, argc, 0u)) {
+        return NULL;
+    }
+    return NULL;
+}
+
+static napi_value tinyactors_napi_system_flush(napi_env env, napi_callback_info info) {
+    napi_value this_value;
+    if (!tinyactors_napi_check(env,
+            napi_get_cb_info(env, info, NULL, NULL, &this_value, NULL), "napi_get_cb_info")) {
+        return NULL;
+    }
+    tinyactors_napi_system *system = tinyactors_napi_unwrap_system(env, this_value);
+    if (system == NULL) {
+        return NULL;
+    }
+    napi_deferred deferred;
+    napi_value promise;
+    if (!tinyactors_napi_check(env, napi_create_promise(env, &deferred, &promise),
+                               "napi_create_promise")) {
+        return NULL;
+    }
+    if (system->closed || system->core == NULL) {
+        napi_value error;
+        if (tinyactors_napi_make_error(env, "closed", "System.flush: system is closed", &error)) {
+            (void)napi_reject_deferred(env, deferred, error);
+        }
+        return promise;
+    }
+    ta_result result = tinyactors_napi_pump_to_quiescence(env, system);
+    if (result != TA_OK) {
+        napi_value error;
+        char message[160];
+        (void)snprintf(message, sizeof(message), "System.flush: %s (%d)",
+                       tinyactors_napi_result_name(result), (int)result);
+        if (tinyactors_napi_make_error(env, tinyactors_napi_result_code(result), message, &error)) {
+            (void)napi_reject_deferred(env, deferred, error);
+        }
+        return promise;
+    }
+    napi_value undefined;
+    if (!tinyactors_napi_check(env, napi_get_undefined(env, &undefined), "napi_get_undefined")) {
+        return NULL;
+    }
+    (void)napi_resolve_deferred(env, deferred, undefined);
+    return promise;
+}
+
 static void tinyactors_napi_actor_drop_after_spawn_failure(tinyactors_napi_actor *actor) {
     if (actor == NULL) {
         return;
@@ -1515,8 +1908,65 @@ static napi_value tinyactors_napi_system_define(napi_env env, napi_callback_info
     return instance;
 }
 
-static bool tinyactors_napi_read_options(napi_env env, napi_value options, ta_time *initial_time) {
-    if (options == NULL || initial_time == NULL) {
+static bool tinyactors_napi_read_budget(napi_env env, napi_value value, const char *name,
+                                        uint32_t *out) {
+    napi_valuetype type;
+    if (!tinyactors_napi_check(env, napi_typeof(env, value, &type), "napi_typeof")) {
+        return false;
+    }
+    if (type == napi_undefined) {
+        return true;
+    }
+    if (type != napi_number) {
+        char message[128];
+        (void)snprintf(message, sizeof(message), "%s must be a positive integer", name);
+        return tinyactors_napi_throw_error(env, "invalid", message);
+    }
+    double number;
+    if (!tinyactors_napi_check(env, napi_get_value_double(env, value, &number),
+                               "napi_get_value_double") ||
+        !isfinite(number) || number < 1 || floor(number) != number ||
+        number > (double)UINT32_MAX) {
+        char message[128];
+        (void)snprintf(message, sizeof(message), "%s must be a positive integer", name);
+        return tinyactors_napi_throw_error(env, "invalid", message);
+    }
+    *out = (uint32_t)number;
+    return true;
+}
+
+static bool tinyactors_napi_read_queue_limit(napi_env env, napi_value value, const char *name,
+                                             size_t *out) {
+    napi_valuetype type;
+    if (!tinyactors_napi_check(env, napi_typeof(env, value, &type), "napi_typeof")) {
+        return false;
+    }
+    if (type == napi_undefined) {
+        return true;
+    }
+    if (type != napi_number) {
+        char message[128];
+        (void)snprintf(message, sizeof(message), "%s must be a positive integer", name);
+        return tinyactors_napi_throw_error(env, "invalid", message);
+    }
+    double number;
+    if (!tinyactors_napi_check(env, napi_get_value_double(env, value, &number),
+                               "napi_get_value_double") ||
+        !isfinite(number) || number < 1 || floor(number) != number ||
+        number > 9007199254740991.0 || number > (double)SIZE_MAX) {
+        char message[128];
+        (void)snprintf(message, sizeof(message), "%s must be a positive integer", name);
+        return tinyactors_napi_throw_error(env, "invalid", message);
+    }
+    *out = (size_t)number;
+    return true;
+}
+
+static bool tinyactors_napi_read_options(napi_env env, napi_value options, ta_time *initial_time,
+                                         uint32_t *resume_budget, uint32_t *message_budget,
+                                         size_t *max_queued_messages) {
+    if (options == NULL || initial_time == NULL || resume_budget == NULL ||
+        message_budget == NULL || max_queued_messages == NULL) {
         return tinyactors_napi_throw_error(env, "invalid", "invalid System options");
     }
 
@@ -1526,11 +1976,26 @@ static bool tinyactors_napi_read_options(napi_env env, napi_value options, ta_ti
     }
     if (type == napi_undefined) {
         *initial_time = 0;
+        *resume_budget = TINYACTORS_NAPI_RESUME_BUDGET;
+        *message_budget = TINYACTORS_NAPI_MESSAGE_BUDGET;
+        *max_queued_messages = TINYACTORS_NAPI_DEFAULT_MAX_QUEUED_MESSAGES;
         return true;
     }
-    if (type != napi_object || options == NULL) {
+    if (type != napi_object || options == NULL || type == napi_null) {
         return tinyactors_napi_throw_error(env, "invalid", "System options must be an object");
     }
+
+    static const char *const keys[] = {
+        "clock", "initialTime", "scheduling", "io", "invokers", "log",
+    };
+    if (!tinyactors_napi_check_keys(env, options, keys, sizeof(keys) / sizeof(keys[0]),
+                                    "System options")) {
+        return false;
+    }
+
+    *resume_budget = TINYACTORS_NAPI_RESUME_BUDGET;
+    *message_budget = TINYACTORS_NAPI_MESSAGE_BUDGET;
+    *max_queued_messages = TINYACTORS_NAPI_DEFAULT_MAX_QUEUED_MESSAGES;
 
     bool has_clock = false;
     if (!tinyactors_napi_check(env, napi_has_named_property(env, options, "clock", &has_clock),
@@ -1539,24 +2004,129 @@ static bool tinyactors_napi_read_options(napi_env env, napi_value options, ta_ti
     }
     if (has_clock) {
         napi_value clock;
+        napi_valuetype clock_type;
         char *clock_text = NULL;
         if (!tinyactors_napi_check(env,
                 napi_get_named_property(env, options, "clock", &clock),
                 "napi_get_named_property") ||
-            !tinyactors_napi_get_utf8(env, clock, &clock_text, NULL)) {
+            !tinyactors_napi_check(env, napi_typeof(env, clock, &clock_type), "napi_typeof")) {
             return false;
         }
-        bool manual = strcmp(clock_text, "manual") == 0;
-        bool realtime = strcmp(clock_text, "realtime") == 0;
-        free(clock_text);
-        if (!manual) {
-            if (realtime) {
-                return tinyactors_napi_throw_error(env, "unsupported",
-                                                   "realtime clock is not implemented yet");
+        if (clock_type != napi_undefined) {
+            if (clock_type != napi_string) {
+                return tinyactors_napi_throw_error(env, "invalid", "clock must be manual");
             }
-            return tinyactors_napi_throw_error(env, "invalid", "clock must be manual");
+            if (!tinyactors_napi_get_utf8(env, clock, &clock_text, NULL)) {
+                return false;
+            }
+            bool manual = strcmp(clock_text, "manual") == 0;
+            bool realtime = strcmp(clock_text, "realtime") == 0;
+            free(clock_text);
+            if (!manual) {
+                if (realtime) {
+                    return tinyactors_napi_throw_error(env, "unsupported",
+                                                       "realtime clock is not implemented yet");
+                }
+                return tinyactors_napi_throw_error(env, "invalid", "clock must be manual");
+            }
         }
     }
+
+    static const char *const unsupported_options[] = {"io", "invokers", "log"};
+    for (const char *const *name = unsupported_options;
+         name < unsupported_options + sizeof(unsupported_options) / sizeof(unsupported_options[0]);
+         name += 1) {
+        bool present = false;
+        if (!tinyactors_napi_has(env, options, *name, &present)) {
+            return false;
+        }
+        if (present) {
+            napi_value value;
+            napi_valuetype value_type;
+            if (!tinyactors_napi_get(env, options, *name, &value) ||
+                !tinyactors_napi_check(env, napi_typeof(env, value, &value_type), "napi_typeof")) {
+                return false;
+            }
+            if (value_type != napi_undefined) {
+                return tinyactors_napi_throw_error(env, "unsupported",
+                                                   "I/O, invoker, and log options are not implemented yet");
+            }
+        }
+    }
+
+    bool has_scheduling = false;
+    if (!tinyactors_napi_has(env, options, "scheduling", &has_scheduling)) {
+        return false;
+    }
+    if (has_scheduling) {
+        napi_value scheduling;
+        if (!tinyactors_napi_get(env, options, "scheduling", &scheduling)) {
+            return false;
+        }
+        napi_valuetype scheduling_type;
+        if (!tinyactors_napi_check(env, napi_typeof(env, scheduling, &scheduling_type),
+                                   "napi_typeof")) {
+            return false;
+        }
+        if (scheduling_type == napi_undefined) {
+            goto scheduling_done;
+        }
+        if (!tinyactors_napi_is_object(env, scheduling, "scheduling must be an object")) {
+            return false;
+        }
+        static const char *const scheduling_keys[] = {
+            "resumeBudget", "messageBudget", "maxQueuedMessages",
+            "dueBudget", "maxRetainedBytes",
+        };
+        if (!tinyactors_napi_check_keys(env, scheduling, scheduling_keys,
+                                        sizeof(scheduling_keys) / sizeof(scheduling_keys[0]),
+                                        "scheduling")) {
+            return false;
+        }
+        bool present = false;
+        napi_value value;
+        if (!tinyactors_napi_has(env, scheduling, "resumeBudget", &present)) {
+            return false;
+        }
+        if (present && (!tinyactors_napi_get(env, scheduling, "resumeBudget", &value) ||
+                        !tinyactors_napi_read_budget(env, value, "resumeBudget", resume_budget))) {
+            return false;
+        }
+        if (!tinyactors_napi_has(env, scheduling, "messageBudget", &present)) {
+            return false;
+        }
+        if (present && (!tinyactors_napi_get(env, scheduling, "messageBudget", &value) ||
+                        !tinyactors_napi_read_budget(env, value, "messageBudget", message_budget))) {
+            return false;
+        }
+        if (!tinyactors_napi_has(env, scheduling, "maxQueuedMessages", &present)) {
+            return false;
+        }
+        if (present && (!tinyactors_napi_get(env, scheduling, "maxQueuedMessages", &value) ||
+                        !tinyactors_napi_read_queue_limit(env, value, "maxQueuedMessages",
+                                                          max_queued_messages))) {
+            return false;
+        }
+        static const char *const unsupported_scheduling[] = {"dueBudget", "maxRetainedBytes"};
+        for (const char *const *name = unsupported_scheduling;
+             name < unsupported_scheduling + sizeof(unsupported_scheduling) /
+                 sizeof(unsupported_scheduling[0]); name += 1) {
+            if (!tinyactors_napi_has(env, scheduling, *name, &present)) {
+                return false;
+            }
+            if (present) {
+                if (!tinyactors_napi_get(env, scheduling, *name, &value) ||
+                    !tinyactors_napi_check(env, napi_typeof(env, value, &type), "napi_typeof")) {
+                    return false;
+                }
+                if (type != napi_undefined) {
+                    return tinyactors_napi_throw_error(env, "unsupported",
+                                                       "this scheduling option is not implemented yet");
+                }
+            }
+        }
+    }
+scheduling_done:
 
     *initial_time = 0;
     bool has_initial_time = false;
@@ -1630,8 +2200,17 @@ static napi_value tinyactors_napi_create_system(napi_env env, napi_callback_info
             "napi_get_cb_info")) {
         return NULL;
     }
+    if (argc > 1u) {
+        (void)tinyactors_napi_throw_error(env, "invalid", "createSystem accepts at most one options object");
+        return NULL;
+    }
     ta_time initial_time = 0;
-    if (argc > 0 && !tinyactors_napi_read_options(env, argv[0], &initial_time)) {
+    uint32_t resume_budget = TINYACTORS_NAPI_RESUME_BUDGET;
+    uint32_t message_budget = TINYACTORS_NAPI_MESSAGE_BUDGET;
+    size_t max_queued_messages = TINYACTORS_NAPI_DEFAULT_MAX_QUEUED_MESSAGES;
+    if (argc > 0 && !tinyactors_napi_read_options(env, argv[0], &initial_time,
+                                                   &resume_budget, &message_budget,
+                                                   &max_queued_messages)) {
         return NULL;
     }
 
@@ -1655,6 +2234,9 @@ static napi_value tinyactors_napi_create_system(napi_env env, napi_callback_info
         free(system);
         return NULL;
     }
+    system->resume_budget = resume_budget;
+    system->message_budget = message_budget;
+    system->max_queued_messages = max_queued_messages;
     system->environment = environment;
     system->next = environment->systems;
     environment->systems = system;
@@ -1767,6 +2349,8 @@ static napi_value tinyactors_napi_init(napi_env env, napi_value exports) {
           .attributes = napi_enumerable },
         { .utf8name = "inspect", .method = tinyactors_napi_actor_inspect,
           .attributes = napi_writable | napi_configurable },
+        { .utf8name = "post", .method = tinyactors_napi_actor_post,
+          .attributes = napi_writable | napi_configurable },
         { .utf8name = "destroy", .method = tinyactors_napi_actor_destroy,
           .attributes = napi_writable | napi_configurable },
     };
@@ -1787,6 +2371,10 @@ static napi_value tinyactors_napi_init(napi_env env, napi_value exports) {
         { .utf8name = "define", .method = tinyactors_napi_system_define,
           .attributes = napi_writable | napi_configurable },
         { .utf8name = "spawn", .method = tinyactors_napi_system_spawn,
+          .attributes = napi_writable | napi_configurable },
+        { .utf8name = "post", .method = tinyactors_napi_system_post,
+          .attributes = napi_writable | napi_configurable },
+        { .utf8name = "flush", .method = tinyactors_napi_system_flush,
           .attributes = napi_writable | napi_configurable },
         { .utf8name = "close", .method = tinyactors_napi_system_close,
           .attributes = napi_writable | napi_configurable },
