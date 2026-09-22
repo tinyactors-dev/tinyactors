@@ -41,7 +41,9 @@ The generator emits a JSON decoder and encoder for every bound type, a
 `codec.roundtrip.<type>` method per struct, and one `ta.<domain>.<rest>`
 method per public function. A function that core does not implement yet is
 still bound: its method validates params and then answers error -32001, and
-discovery lists it under `unimplemented`.
+discovery lists it under `unimplemented`. Core implements every bound
+function today, so that list is empty and no method answers -32001; the
+machinery is what keeps a newly declared function honest until it is written.
 
 `bindings.rb` is the binding policy: what the description cannot decide for
 this host. It lists the functions and types that are skipped or implemented by
@@ -55,7 +57,8 @@ tests these refusals. Hand-written parts live in `src/binding.{h,c}` (request
 arena, handle table, primitive codecs, the codecs of the string, bytes, and
 host value types, and the `ta_expression` override) and `src/adapters.c` (the
 `$adapter` registry). The generator also writes `build/gen/coverage.json` with
-the bound, skipped, and unimplemented counts.
+the bound, overridden, skipped, and unimplemented counts for functions and
+types, the method total, and the reason recorded against every skipped item.
 
 See `docs/protocol.md` for method naming, result shapes, value encoding,
 handles, and adapters.
@@ -65,9 +68,10 @@ The host includes three data models, chosen per chart by its `datamodel`:
 `docs/ecmascript-datamodel.md`), and `datamodel.null`, the minimum SCXML B.1
 profile (`src/null_datamodel.c`): conditions are the `In(state)` predicate
 and nothing else, there are no data bindings, values or scripts, and an
-actor of such a chart carries no data-model instance. The two are fully separate; values cross
-between them, and over the protocol, only as JSON through each model's value
-codec.
+actor of such a chart carries no data-model instance. The three are fully
+separate; values cross between them, and over the protocol, only as JSON
+through each model's value codec. `rpc.discover` lists them under
+`datamodels`.
 
 In the jq data model, source expressions and scripts
 are jq filters over the actor's JSON root. A condition uses jq truthiness, an
@@ -92,7 +96,12 @@ mise run build
 mise run test
 ```
 
-The hand-written host methods are:
+`mise run workbench` opens the interactive workbench (below); `mise run
+scenarios` runs the Ruby scenarios alone.
+
+## Host methods
+
+Ten methods are written by hand rather than generated:
 
 - `rpc.discover`
 - `system.ping`
@@ -101,6 +110,9 @@ The hand-written host methods are:
 - `host.shutdown`
 - `system.actors` (resident actor IDs; `"runnable": true` lists only those with a macrostep in progress)
 - `handle.fixture`
+- `instrument.list`, `instrument.journal`, and `instrument.control`, the
+  instrument protocol (see "Instruments"); `TinyactorsTest::Instrument` is a
+  wrapper over the last two.
 
 Every other method is generated (see above). From Ruby,
 `driver.ta.actor.spawn(...)` and `driver.codec.roundtrip.ta_scxml_spec(value: ...)`
@@ -128,7 +140,6 @@ A scenario group looks like this:
 TinyactorsTest.scenarios 'traffic light', chart: :traffic_light do
   invariant('exactly one light is on') { |light| (light.active & %i[red green yellow]).size == 1 }
 
-  expect_failure 'core does not implement ta_system_create yet', rpc_error: -32_001, rpc_method: 'ta.system.create'
   scenario 'cycles on logical time' do
     light = spawn
     advance_time 30_000
@@ -143,7 +154,8 @@ Each scenario runs against a fresh host process and drives the generated
 milliseconds), `run_to_completion` (advance from one delayed-send deadline to
 the next until an actor is done), and `actor.deliver`. The assertions
 are `assert`, `assert_equal`, `assert_active`, `refute_active`,
-`assert_configuration`, `assert_logs`, and `assert_logged`.
+`assert_configuration`, `assert_logs`, `assert_logged`, and the pair
+`assert_equivalent_runs` / `assert_runs_diverge` (below).
 `actor.data(filter)`, `actor.done?`, and `actor.completion` observe an
 actor. Invariants are checked after every step.
 
@@ -171,7 +183,15 @@ Further observations:
 - `actor.sends` lists the pending delayed sends.
 - `actor.observe` returns everything a trace records about the actor.
 - `next_deadline` is the earliest pending deadline, or nil when none is pending.
-- `definition(chart)` is a chart's registered definition ID.
+- `system_time` is the logical time core reports, which `now` mirrors.
+- `definition(chart)` is a chart's registered definition ID,
+  `definition_facts(chart)` its `ta_definition_inspect` identity and counts,
+  and `export(chart)` its `ta_definition_export` spec.
+- `actors` are the actors the scenario spawned and `invoked_actors` the
+  resident ones it did not; `address(chart, name)` and `family(chart)` build
+  and read a logical address.
+- `rpc(method, params)` and `ta` are the escape hatches: the raw JSON-RPC
+  call and the generated binding proxy, for anything the DSL does not wrap.
 
 A definition is the host's until it registers it (ADR 0043):
 `compile_only(chart)` compiles one without registering, `destroy_definition`
@@ -208,15 +228,19 @@ an allocation is still live, or when core freed memory it was not given.
   it; a host needs its own router when it owns location, not merely naming.
 - `capture(actor)` returns an image handle. `image_deadline(image)` gives
   the image's earliest deadline, and `destroy_image(image)` frees it.
-- `reconstruct(image, binding:)` rebuilds an anonymous session.
+- Reconstruction has no wrapper: a scenario calls
+  `ta.actor.reconstruct(...)` through `rpc`/`core` directly, as
+  `ruby/scenarios/residency.rb` does.
 - `unload(actor, image)`, `load(actor, image, binding:)`,
   `find(address)`, and `remove_unloaded(address)` drive residency.
   `load` points the Actor at its new runtime ID.
 - `prepare_replacement(incumbent, chart, binding:)` and
   `activate_replacement(incumbent, replacement)` upgrade a named actor.
-- `reconstruct_in_place(actor)` and `cycle_residency(actor)` perform a whole
-  round trip with the actor's current data root as the binding. They are
-  meant as `assert_equivalent_runs` interruptions.
+- `cycle_residency(actor)` performs a whole capture/unload/load round trip
+  with the actor's current data root as the binding. It is meant as an
+  `assert_equivalent_runs` interruption.
+- `forget(actor)` stops invariants being checked against an actor the
+  scenario destroyed, and `rebind(actor, id)` moves one onto a new runtime ID.
 
 Core implements all of this against a real core: it claims, resolves and
 releases addresses, and implements `capture`, `reconstruct` and the image
@@ -224,7 +248,8 @@ readers, the residency protocol (`unload`, `load`, `remove_unloaded`), and the
 definition upgrade of a named actor (`prepare_replacement`,
 `activate_replacement`). `ruby/scenarios/named_actors.rb` drives all of it
 without an `expect_failure`. `ruby/runner_selftest.rb` runs the helpers against
-a fake host.
+a scripted fake host, which is faster than a real run and still checks every
+argument name against the real host's `rpc.discover` schemas.
 
 ### Instruments
 
@@ -250,6 +275,12 @@ allocator.budget(4096)                     # refuse what does not fit (ADR 0023)
 walk.arm_fault(after: 1, result: 'err_busy')
 io.entries('send')
 sink.logged                                # [[label, value], ...]
+
+router.mode(:direct)                       # change mode after installing it
+dir.put(family: 'light', name: 'l1', kind: :resident, actor: id)
+dir.directory_entries                      # what the directory holds
+any.journal(since: seq)                    # entries after one seq
+any.clear_faults                           # disarm what arm_fault armed
 ```
 
 ### Traces and equivalent runs
@@ -281,7 +312,10 @@ not count as differences, and `rebind(actor, new_id)` keeps an actor's label
 after a reload.
 
 `expect_failure` applies to the next scenario only, and it names the failure
-it expects: `rpc_error:` (optionally with `rpc_method:`) and/or `message:`.
+it expects: `rpc_error:` (optionally with `rpc_method:`) and/or `message:`. No
+scenario in `ruby/scenarios` uses it: core implements the whole bound API, so
+a scenario that fails there is a bug rather than a known gap. The imported
+SCXML IRP suite is where it earns its keep, against its recorded baseline.
 
 | Outcome | Meaning | Suite |
 |---|---|---|
@@ -311,7 +345,8 @@ Charts whose data model has no adapter in the host are skipped.
 
 `ruby/selftest.rb` verifies the DSL's outcome classification against the live
 host. `ruby/runner_selftest.rb` runs the steps against a scripted fake host
-whose answers stand in for core functions that are not implemented yet.
+that answers as a fully implemented core would, so the DSL's own bookkeeping
+is checked without paying for a real run.
 `ruby/instruments_selftest.rb` checks each instrument, the leak check, and
 `assert_equivalent_runs` against the live host, including that a leak and a
 divergent run are detected.
