@@ -45,8 +45,12 @@ static jv tat_handle_discover(tat_bind *bind, jv params, int *error_code) {
     result = jv_object_set(result, jv_string("protocol"),
                            jv_string("JSON-RPC 2.0 subset over NDJSON"));
     result = jv_object_set(result, jv_string("jq"), jv_string(JQ_VERSION));
-    result = jv_object_set(result, jv_string("datamodels"),
-                           jv_array_append(jv_array_append(jv_array(), jv_string("jq")), jv_string("ecmascript")));
+    /* Every data model src/adapters.c registers, in the order it lists them. */
+    jv datamodels = jv_array();
+    datamodels = jv_array_append(datamodels, jv_string("jq"));
+    datamodels = jv_array_append(datamodels, jv_string("ecmascript"));
+    datamodels = jv_array_append(datamodels, jv_string("null"));
+    result = jv_object_set(result, jv_string("datamodels"), datamodels);
     result = jv_object_set(result, jv_string("methods"), jv_keys(jv_copy(server->dispatch)));
     result = jv_object_set(result, jv_string("schemas"), jv_copy(server->schemas));
     result = jv_object_set(result, jv_string("unimplemented"), jv_keys(unimplemented));
