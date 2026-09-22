@@ -200,9 +200,12 @@ an allocation is still live, or when core freed memory it was not given.
   first use. `spawn(chart, binding: {...})` gives the actor a host
   data-model binding, as an invoked child's `<param>`s would.
 - A chart sends to a logical address with the target
-  `#_actor_<family>/<name>`, which core parses (ADR 0044);
-  `recording_router(directory: true)` resolves those destinations through
-  the directory, because the host owns location and residency.
+  `#_actor_<family>/<name>`, which core parses (ADR 0044). The default
+  `router.direct` resolves such a destination with `ta_actor_find()`, so the
+  directory a named spawn already installs is enough for one actor to address
+  another. `recording_router(directory: true)` resolves them through the
+  directory instrument instead, which journals the resolution and can fault
+  it; a host needs its own router when it owns location, not merely naming.
 - `capture(actor)` returns an image handle. `image_deadline(image)` gives
   the image's earliest deadline, and `destroy_image(image)` frees it.
 - `reconstruct(image, binding:)` rebuilds an anonymous session.
@@ -215,14 +218,13 @@ an allocation is still live, or when core freed memory it was not given.
   round trip with the actor's current data root as the binding. They are
   meant as `assert_equivalent_runs` interruptions.
 
-Core claims, resolves and releases addresses, and implements `capture`,
-`reconstruct` and the image readers, so `spawn name:`, `find`, `capture`,
-`reconstruct_in_place` and the deadline helpers work against a real core. It
-does not implement the residency protocol yet, so `unload`, `load`,
-`remove_unloaded` and the two replacement helpers still answer -32001: the
-residency half of `ruby/scenarios/named_actors.rb` is expected failures that
-name the unimplemented call. `ruby/runner_selftest.rb` runs the helpers
-against a fake host.
+Core implements all of this against a real core: it claims, resolves and
+releases addresses, and implements `capture`, `reconstruct` and the image
+readers, the residency protocol (`unload`, `load`, `remove_unloaded`), and the
+definition upgrade of a named actor (`prepare_replacement`,
+`activate_replacement`). `ruby/scenarios/named_actors.rb` drives all of it
+without an `expect_failure`. `ruby/runner_selftest.rb` runs the helpers against
+a fake host.
 
 ### Instruments
 
@@ -313,6 +315,28 @@ whose answers stand in for core functions that are not implemented yet.
 `ruby/instruments_selftest.rb` checks each instrument, the leak check, and
 `assert_equivalent_runs` against the live host, including that a leak and a
 divergent run are detected.
+
+## The interactive workbench
+
+`bin/workbench` is a live system you can watch and drive, whose charts are
+files on disk. Saving a chart upgrades the running actors to it in place: the
+host process, the system, the actor addresses, and the accumulated data-model
+state all survive, because every top-level actor is a named actor and the
+reload goes through `ta_actor_prepare_replacement` and
+`ta_actor_activate_replacement`.
+
+```text
+mise run build
+mise run workbench            # opens ./workbench in tmux
+```
+
+It drives a `TinyactorsTest::Context`, the same class the scenario suite uses,
+so it exercises the public C API through the generated bindings. A tmux window
+shows the resident actors, the focused actor's data model, and the log; a
+command pane delivers events and advances logical time.
+
+See `ruby/workbench/README.md` for the directory format, the reload semantics,
+and the commands. `ruby/workbench_selftest.rb` checks it against the live host.
 
 ## Vendored dependencies
 
