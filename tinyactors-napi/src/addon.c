@@ -11,6 +11,7 @@
 typedef struct tinyactors_napi_environment tinyactors_napi_environment;
 typedef struct tinyactors_napi_system tinyactors_napi_system;
 typedef struct tinyactors_napi_definition tinyactors_napi_definition;
+typedef struct tinyactors_napi_actor tinyactors_napi_actor;
 
 struct tinyactors_napi_definition {
     tinyactors_napi_system *system;
@@ -24,10 +25,23 @@ struct tinyactors_napi_definition {
     bool retired;
 };
 
+struct tinyactors_napi_actor {
+    tinyactors_napi_system *system;
+    tinyactors_napi_definition *definition;
+    napi_ref system_ref;
+    napi_ref definition_ref;
+    ta_actor_id id;
+    bool destroyed;
+};
+
 struct tinyactors_napi_system {
     tinyactors_napi_environment *environment;
     ta_system *core;
     bool closed;
+    ta_actor_id *runnable;
+    size_t runnable_count;
+    size_t runnable_head;
+    size_t runnable_capacity;
     tinyactors_napi_system *next;
 };
 
@@ -35,6 +49,7 @@ struct tinyactors_napi_environment {
     napi_env env;
     napi_ref system_constructor;
     napi_ref definition_constructor;
+    napi_ref actor_constructor;
     napi_ref error_constructor;
     tinyactors_napi_system *systems;
     bool cleaning;
@@ -108,6 +123,11 @@ static void tinyactors_napi_destroy_core(tinyactors_napi_system *system) {
     }
     if (system != NULL) {
         system->closed = true;
+        free(system->runnable);
+        system->runnable = NULL;
+        system->runnable_count = 0;
+        system->runnable_head = 0;
+        system->runnable_capacity = 0;
     }
 }
 
@@ -259,6 +279,76 @@ static napi_value tinyactors_napi_system_time(napi_env env, napi_callback_info i
         return NULL;
     }
     return result;
+}
+
+#define TINYACTORS_NAPI_RESUME_BUDGET 1024u
+
+static bool tinyactors_napi_runnable_enqueue(napi_env env, tinyactors_napi_system *system,
+                                             ta_actor_id id) {
+    if (system->runnable_head == system->runnable_count) {
+        system->runnable_head = 0;
+        system->runnable_count = 0;
+    } else if (system->runnable_head != 0 &&
+               system->runnable_count == system->runnable_capacity) {
+        size_t pending = system->runnable_count - system->runnable_head;
+        memmove(system->runnable, system->runnable + system->runnable_head,
+                pending * sizeof(*system->runnable));
+        system->runnable_count = pending;
+        system->runnable_head = 0;
+    }
+    if (system->runnable_count == system->runnable_capacity) {
+        size_t capacity = system->runnable_capacity == 0 ? 16u : system->runnable_capacity * 2u;
+        ta_actor_id *runnable = realloc(system->runnable, capacity * sizeof(*runnable));
+        if (runnable == NULL) {
+            (void)tinyactors_napi_throw_error(env, "out-of-memory",
+                                               "out of memory growing runnable queue");
+            return false;
+        }
+        system->runnable = runnable;
+        system->runnable_capacity = capacity;
+    }
+    system->runnable[system->runnable_count++] = id;
+    return true;
+}
+
+static void tinyactors_napi_runnable_remove(tinyactors_napi_system *system, ta_actor_id id) {
+    size_t write = system->runnable_head;
+    for (size_t read = system->runnable_head; read < system->runnable_count; read += 1u) {
+        if (system->runnable[read] != id) {
+            system->runnable[write++] = system->runnable[read];
+        }
+    }
+    system->runnable_count = write;
+    if (system->runnable_head == system->runnable_count) {
+        system->runnable_head = 0;
+        system->runnable_count = 0;
+    }
+}
+
+/* Run one finite turn. A paused actor is put back on the queue for a later turn. */
+static ta_result tinyactors_napi_pump_runnable(napi_env env, tinyactors_napi_system *system) {
+    size_t turn_count = system->runnable_count - system->runnable_head;
+    for (size_t turn = 0; turn < turn_count; turn += 1u) {
+        ta_actor_id id = system->runnable[system->runnable_head++];
+        ta_run_status status = TA_RUN_ERROR;
+        ta_result result = ta_actor_resume(system->core,
+            &(ta_actor_resume_params){.actor = id,
+                                      .budget = TINYACTORS_NAPI_RESUME_BUDGET,
+                                      .status = &status});
+        if (result != TA_OK) {
+            return result;
+        }
+        if (status == TA_RUN_PAUSED) {
+            if (!tinyactors_napi_runnable_enqueue(env, system, id)) {
+                return TA_ERR_NOMEM;
+            }
+        }
+    }
+    if (system->runnable_head == system->runnable_count) {
+        system->runnable_head = 0;
+        system->runnable_count = 0;
+    }
+    return TA_OK;
 }
 
 typedef struct {
@@ -928,6 +1018,406 @@ static napi_value tinyactors_napi_definition_retire(napi_env env, napi_callback_
     return NULL;
 }
 
+static void tinyactors_napi_actor_finalize(napi_env env, void *data, void *hint) {
+    (void)hint;
+    tinyactors_napi_actor *actor = data;
+    if (actor == NULL) {
+        return;
+    }
+    if (actor->system_ref != NULL) {
+        (void)napi_delete_reference(env, actor->system_ref);
+    }
+    if (actor->definition_ref != NULL) {
+        (void)napi_delete_reference(env, actor->definition_ref);
+    }
+    free(actor);
+}
+
+static tinyactors_napi_actor *tinyactors_napi_unwrap_actor(napi_env env,
+                                                            napi_value this_value) {
+    tinyactors_napi_actor *actor = NULL;
+    if (napi_unwrap(env, this_value, (void **)&actor) != napi_ok || actor == NULL) {
+        (void)tinyactors_napi_throw_error(env, "invalid", "value is not a Tinyactors Actor");
+        return NULL;
+    }
+    return actor;
+}
+
+static bool tinyactors_napi_require_actor_open(napi_env env, tinyactors_napi_actor *actor,
+                                                const char *operation) {
+    return actor != NULL && tinyactors_napi_require_open(env, actor->system, operation);
+}
+
+static napi_value tinyactors_napi_actor_constructor(napi_env env, napi_callback_info info) {
+    napi_value this_value;
+    napi_value argv[3];
+    size_t argc = 3;
+    if (!tinyactors_napi_check(env,
+            napi_get_cb_info(env, info, &argc, argv, &this_value, NULL), "napi_get_cb_info")) {
+        return NULL;
+    }
+    if (argc != 3) {
+        (void)tinyactors_napi_throw_error(env, "invalid",
+                                           "Actor cannot be constructed directly");
+        return NULL;
+    }
+    tinyactors_napi_actor *actor = NULL;
+    tinyactors_napi_system *system = NULL;
+    tinyactors_napi_definition *definition = NULL;
+    if (napi_get_value_external(env, argv[0], (void **)&actor) != napi_ok || actor == NULL ||
+        napi_unwrap(env, argv[1], (void **)&system) != napi_ok || system == NULL ||
+        napi_unwrap(env, argv[2], (void **)&definition) != napi_ok || definition == NULL ||
+        actor->system != system || actor->definition != definition) {
+        (void)tinyactors_napi_throw_error(env, "invalid", "invalid native Actor handle");
+        return NULL;
+    }
+    if (!tinyactors_napi_check(env,
+            napi_create_reference(env, argv[1], 1, &actor->system_ref),
+            "napi_create_reference") ||
+        !tinyactors_napi_check(env,
+            napi_create_reference(env, argv[2], 1, &actor->definition_ref),
+            "napi_create_reference") ||
+        !tinyactors_napi_check(env,
+            napi_wrap(env, this_value, actor, tinyactors_napi_actor_finalize, NULL, NULL),
+            "napi_wrap")) {
+        if (actor->system_ref != NULL) {
+            (void)napi_delete_reference(env, actor->system_ref);
+            actor->system_ref = NULL;
+        }
+        if (actor->definition_ref != NULL) {
+            (void)napi_delete_reference(env, actor->definition_ref);
+            actor->definition_ref = NULL;
+        }
+        return NULL;
+    }
+    return this_value;
+}
+
+static napi_value tinyactors_napi_actor_system(napi_env env, napi_callback_info info) {
+    napi_value this_value;
+    if (!tinyactors_napi_check(env,
+            napi_get_cb_info(env, info, NULL, NULL, &this_value, NULL), "napi_get_cb_info")) {
+        return NULL;
+    }
+    tinyactors_napi_actor *actor = tinyactors_napi_unwrap_actor(env, this_value);
+    if (actor == NULL || actor->system_ref == NULL) {
+        return NULL;
+    }
+    napi_value result;
+    if (!tinyactors_napi_check(env,
+            napi_get_reference_value(env, actor->system_ref, &result),
+            "napi_get_reference_value")) {
+        return NULL;
+    }
+    return result;
+}
+
+static napi_value tinyactors_napi_actor_definition(napi_env env, napi_callback_info info) {
+    napi_value this_value;
+    if (!tinyactors_napi_check(env,
+            napi_get_cb_info(env, info, NULL, NULL, &this_value, NULL), "napi_get_cb_info")) {
+        return NULL;
+    }
+    tinyactors_napi_actor *actor = tinyactors_napi_unwrap_actor(env, this_value);
+    if (actor == NULL || actor->definition_ref == NULL) {
+        return NULL;
+    }
+    napi_value result;
+    if (!tinyactors_napi_check(env,
+            napi_get_reference_value(env, actor->definition_ref, &result),
+            "napi_get_reference_value")) {
+        return NULL;
+    }
+    return result;
+}
+
+static napi_value tinyactors_napi_actor_id(napi_env env, napi_callback_info info) {
+    napi_value this_value;
+    if (!tinyactors_napi_check(env,
+            napi_get_cb_info(env, info, NULL, NULL, &this_value, NULL), "napi_get_cb_info")) {
+        return NULL;
+    }
+    tinyactors_napi_actor *actor = tinyactors_napi_unwrap_actor(env, this_value);
+    napi_value result;
+    if (actor == NULL || !tinyactors_napi_create_uint64(env, actor->id, &result)) {
+        return NULL;
+    }
+    return result;
+}
+
+static napi_value tinyactors_napi_actor_destroyed(napi_env env, napi_callback_info info) {
+    napi_value this_value;
+    if (!tinyactors_napi_check(env,
+            napi_get_cb_info(env, info, NULL, NULL, &this_value, NULL), "napi_get_cb_info")) {
+        return NULL;
+    }
+    tinyactors_napi_actor *actor = tinyactors_napi_unwrap_actor(env, this_value);
+    napi_value result;
+    if (actor == NULL || !tinyactors_napi_check(env,
+            napi_get_boolean(env, actor->destroyed || actor->system->closed, &result),
+            "napi_get_boolean")) {
+        return NULL;
+    }
+    return result;
+}
+
+static napi_value tinyactors_napi_actor_destroy(napi_env env, napi_callback_info info) {
+    napi_value this_value;
+    if (!tinyactors_napi_check(env,
+            napi_get_cb_info(env, info, NULL, NULL, &this_value, NULL), "napi_get_cb_info")) {
+        return NULL;
+    }
+    tinyactors_napi_actor *actor = tinyactors_napi_unwrap_actor(env, this_value);
+    if (actor == NULL || !tinyactors_napi_require_actor_open(env, actor, "Actor.destroy")) {
+        return NULL;
+    }
+    if (actor->destroyed) {
+        return NULL;
+    }
+    tinyactors_napi_runnable_remove(actor->system, actor->id);
+    ta_result result = ta_actor_destroy(actor->system->core, actor->id);
+    if (result == TA_OK) {
+        actor->destroyed = true;
+        return NULL;
+    }
+    (void)tinyactors_napi_throw_result(env, result, "ta_actor_destroy");
+    return NULL;
+}
+
+static bool tinyactors_napi_set_bool(napi_env env, napi_value object, const char *name,
+                                     bool value) {
+    napi_value js_value;
+    return tinyactors_napi_check(env, napi_get_boolean(env, value, &js_value),
+                                 "napi_get_boolean") &&
+           tinyactors_napi_check(env, napi_set_named_property(env, object, name, js_value),
+                                 "napi_set_named_property");
+}
+
+static napi_value tinyactors_napi_actor_inspect(napi_env env, napi_callback_info info) {
+    napi_value this_value;
+    if (!tinyactors_napi_check(env,
+            napi_get_cb_info(env, info, NULL, NULL, &this_value, NULL), "napi_get_cb_info")) {
+        return NULL;
+    }
+    tinyactors_napi_actor *actor = tinyactors_napi_unwrap_actor(env, this_value);
+    if (actor == NULL || !tinyactors_napi_require_actor_open(env, actor, "Actor.inspect")) {
+        return NULL;
+    }
+    ta_actor_inspection facts;
+    if (!tinyactors_napi_throw_result(env,
+            ta_actor_inspect(actor->system->core, actor->id, &facts), "ta_actor_inspect")) {
+        return NULL;
+    }
+    uint32_t state_count = facts.active_state_count;
+    ta_result result = TA_OK;
+    ta_state_id *states = NULL;
+    if (state_count != 0) {
+        states = calloc(state_count, sizeof(*states));
+        if (states == NULL) {
+            (void)tinyactors_napi_throw_error(env, "out-of-memory", "out of memory inspecting Actor");
+            return NULL;
+        }
+        result = ta_actor_active_states(actor->system->core,
+            &(ta_actor_active_states_params){.actor = actor->id,
+                                              .states = states,
+                                              .capacity = state_count,
+                                              .count = &state_count});
+        if (!tinyactors_napi_throw_result(env, result, "ta_actor_active_states")) {
+            free(states);
+            return NULL;
+        }
+    }
+
+    napi_value inspection;
+    napi_value value;
+    if (!tinyactors_napi_check(env, napi_create_object(env, &inspection), "napi_create_object") ||
+        !tinyactors_napi_create_uint64(env, actor->id, &value) ||
+        !tinyactors_napi_check(env, napi_set_named_property(env, inspection, "actor", value),
+                               "napi_set_named_property")) {
+        free(states);
+        return NULL;
+    }
+    napi_value definition_value;
+    napi_value identity;
+    if (!tinyactors_napi_check(env,
+            napi_get_reference_value(env, actor->definition_ref, &definition_value),
+            "napi_get_reference_value") ||
+        !tinyactors_napi_check(env,
+            napi_get_named_property(env, definition_value, "identity", &identity),
+            "napi_get_named_property") ||
+        !tinyactors_napi_check(env,
+            napi_set_named_property(env, inspection, "definition", identity),
+            "napi_set_named_property")) {
+        free(states);
+        return NULL;
+    }
+
+    napi_value active_states;
+    if (!tinyactors_napi_check(env, napi_create_array_with_length(env, state_count, &active_states),
+                               "napi_create_array_with_length")) {
+        free(states);
+        return NULL;
+    }
+    for (uint32_t index = 0; index < state_count; index += 1u) {
+        ta_state_info state;
+        if (!tinyactors_napi_throw_result(env,
+                ta_definition_state(actor->system->core,
+                    &(ta_definition_state_params){.definition = facts.definition_id,
+                                                  .state = states[index], .out = &state}),
+                "ta_definition_state")) {
+            free(states);
+            return NULL;
+        }
+        napi_value name;
+        if (!tinyactors_napi_check(env,
+                napi_create_string_utf8(env, state.id.ptr, state.id.len, &name),
+                "napi_create_string_utf8") ||
+            !tinyactors_napi_check(env, napi_set_element(env, active_states, index, name),
+                                   "napi_set_element")) {
+            free(states);
+            return NULL;
+        }
+    }
+    free(states);
+    if (!tinyactors_napi_check(env,
+            napi_set_named_property(env, inspection, "activeStates", active_states),
+            "napi_set_named_property") ||
+        !tinyactors_napi_set_bool(env, inspection, "macrostepInProgress",
+                                  facts.macrostep_in_progress) ||
+        !tinyactors_napi_set_bool(env, inspection, "done", facts.has_completion) ||
+        !tinyactors_napi_set_bool(env, inspection, "published", facts.published)) {
+        return NULL;
+    }
+    const char *residency = "running";
+    if (facts.residency == TA_ACTOR_IDLE) {
+        residency = "resident";
+    } else if (facts.residency == TA_ACTOR_DONE) {
+        residency = "done";
+    } else if (facts.residency == TA_ACTOR_UNLOADED) {
+        residency = "unloaded";
+    }
+    if (!tinyactors_napi_check(env,
+            napi_create_string_utf8(env, residency, NAPI_AUTO_LENGTH, &value),
+            "napi_create_string_utf8") ||
+        !tinyactors_napi_check(env, napi_set_named_property(env, inspection, "residency", value),
+                               "napi_set_named_property") ||
+        !tinyactors_napi_check(env,
+            napi_create_uint32(env, facts.internal_count, &value), "napi_create_uint32") ||
+        !tinyactors_napi_check(env,
+            napi_set_named_property(env, inspection, "internalEventCount", value),
+            "napi_set_named_property") ||
+        !tinyactors_napi_check(env,
+            napi_create_double(env, (double)facts.allocated_bytes, &value),
+            "napi_create_double") ||
+        !tinyactors_napi_check(env,
+            napi_set_named_property(env, inspection, "allocatedBytes", value),
+            "napi_set_named_property")) {
+        return NULL;
+    }
+    if (facts.has_completion) {
+        if (!tinyactors_napi_check(env, napi_get_null(env, &value), "napi_get_null") ||
+            !tinyactors_napi_check(env,
+                napi_set_named_property(env, inspection, "completion", value),
+                "napi_set_named_property")) {
+            return NULL;
+        }
+    }
+    return inspection;
+}
+
+static void tinyactors_napi_actor_drop_after_spawn_failure(tinyactors_napi_actor *actor) {
+    if (actor == NULL) {
+        return;
+    }
+    (void)ta_actor_destroy(actor->system->core, actor->id);
+    actor->destroyed = true;
+}
+
+static napi_value tinyactors_napi_system_spawn(napi_env env, napi_callback_info info) {
+    napi_value this_value;
+    napi_value argv[2];
+    size_t argc = 2;
+    if (!tinyactors_napi_check(env,
+            napi_get_cb_info(env, info, &argc, argv, &this_value, NULL), "napi_get_cb_info")) {
+        return NULL;
+    }
+    tinyactors_napi_system *system = tinyactors_napi_unwrap_system(env, this_value);
+    if (system == NULL || !tinyactors_napi_require_open(env, system, "System.spawn")) {
+        return NULL;
+    }
+    if (argc < 1 || argc > 2) {
+        (void)tinyactors_napi_throw_error(env, "invalid", "System.spawn requires a Definition");
+        return NULL;
+    }
+    tinyactors_napi_definition *definition = tinyactors_napi_unwrap_definition(env, argv[0]);
+    if (definition == NULL || definition->system != system) {
+        (void)tinyactors_napi_throw_error(env, "invalid",
+                                           "Definition belongs to another System");
+        return NULL;
+    }
+    if (argc == 2) {
+        napi_valuetype type;
+        if (!tinyactors_napi_check(env, napi_typeof(env, argv[1], &type), "napi_typeof")) {
+            return NULL;
+        }
+        if (type != napi_undefined) {
+            (void)tinyactors_napi_throw_error(env, "unsupported",
+                                               "anonymous System.spawn does not accept options");
+            return NULL;
+        }
+    }
+
+    ta_actor_id id = 0;
+    if (!tinyactors_napi_throw_result(env,
+            ta_actor_spawn(system->core,
+                &(ta_actor_spawn_params){.definition = definition->id, .out = &id}),
+            "ta_actor_spawn")) {
+        return NULL;
+    }
+    tinyactors_napi_actor *actor = calloc(1, sizeof(*actor));
+    if (actor == NULL) {
+        (void)ta_actor_destroy(system->core, id);
+        (void)tinyactors_napi_throw_error(env, "out-of-memory", "out of memory creating Actor");
+        return NULL;
+    }
+    actor->system = system;
+    actor->definition = definition;
+    actor->id = id;
+
+    tinyactors_napi_environment *environment = NULL;
+    napi_value constructor;
+    napi_value external;
+    napi_value instance;
+    if (!tinyactors_napi_check(env,
+            napi_get_instance_data(env, (void **)&environment), "napi_get_instance_data") ||
+        environment == NULL || environment->actor_constructor == NULL ||
+        !tinyactors_napi_check(env,
+            napi_get_reference_value(env, environment->actor_constructor, &constructor),
+            "napi_get_reference_value") ||
+        !tinyactors_napi_check(env,
+            napi_create_external(env, actor, NULL, NULL, &external), "napi_create_external") ||
+        !tinyactors_napi_check(env,
+            napi_new_instance(env, constructor, 3,
+                              (napi_value[]){external, this_value, argv[0]}, &instance),
+            "napi_new_instance")) {
+        tinyactors_napi_actor_drop_after_spawn_failure(actor);
+        free(actor);
+        return NULL;
+    }
+    if (!tinyactors_napi_runnable_enqueue(env, system, id)) {
+        actor->destroyed = true;
+        (void)ta_actor_destroy(system->core, id);
+        return NULL;
+    }
+    ta_result pump_result = tinyactors_napi_pump_runnable(env, system);
+    if (!tinyactors_napi_throw_result(env, pump_result, "ta_actor_resume")) {
+        actor->destroyed = true;
+        (void)ta_actor_destroy(system->core, id);
+        return NULL;
+    }
+    return instance;
+}
+
 static napi_value tinyactors_napi_system_define(napi_env env, napi_callback_info info) {
     napi_value this_value;
     napi_value argv[1];
@@ -1266,8 +1756,37 @@ static napi_value tinyactors_napi_init(napi_env env, napi_value exports) {
         return NULL;
     }
 
+    napi_property_descriptor actor_properties[] = {
+        { .utf8name = "system", .getter = tinyactors_napi_actor_system,
+          .attributes = napi_enumerable },
+        { .utf8name = "id", .getter = tinyactors_napi_actor_id,
+          .attributes = napi_enumerable },
+        { .utf8name = "definition", .getter = tinyactors_napi_actor_definition,
+          .attributes = napi_enumerable },
+        { .utf8name = "destroyed", .getter = tinyactors_napi_actor_destroyed,
+          .attributes = napi_enumerable },
+        { .utf8name = "inspect", .method = tinyactors_napi_actor_inspect,
+          .attributes = napi_writable | napi_configurable },
+        { .utf8name = "destroy", .method = tinyactors_napi_actor_destroy,
+          .attributes = napi_writable | napi_configurable },
+    };
+    napi_value actor_constructor;
+    if (!tinyactors_napi_check(env,
+            napi_define_class(env, "Actor", NAPI_AUTO_LENGTH,
+                              tinyactors_napi_actor_constructor, NULL,
+                              sizeof(actor_properties) / sizeof(actor_properties[0]),
+                              actor_properties, &actor_constructor),
+            "napi_define_class") ||
+        !tinyactors_napi_check(env,
+            napi_create_reference(env, actor_constructor, 1, &environment->actor_constructor),
+            "napi_create_reference")) {
+        return NULL;
+    }
+
     napi_property_descriptor system_properties[] = {
         { .utf8name = "define", .method = tinyactors_napi_system_define,
+          .attributes = napi_writable | napi_configurable },
+        { .utf8name = "spawn", .method = tinyactors_napi_system_spawn,
           .attributes = napi_writable | napi_configurable },
         { .utf8name = "close", .method = tinyactors_napi_system_close,
           .attributes = napi_writable | napi_configurable },

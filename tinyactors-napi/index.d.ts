@@ -409,6 +409,8 @@ export interface ActorInspection<Data = unknown> {
   readonly macrostepInProgress: boolean;
   readonly currentEvent?: ActorEvent;
   readonly internalEventCount: number;
+  /** True once the actor has reached a top-level final state. */
+  readonly done: boolean;
   readonly invocations: readonly InvocationInspection[];
   readonly delayedSends: readonly DelayedSendInspection[];
   readonly completion?: Data;
