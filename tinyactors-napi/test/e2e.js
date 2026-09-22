@@ -39,7 +39,8 @@ try {
 
     for (const actor of actors) {
       const inspection = actor.inspect();
-      assert.equal(inspection.residency, 'done');
+      assert.deepEqual(inspection.activeStates, ['finished']);
+      assert.equal(inspection.residency, 'resident');
       assert.equal(Object.hasOwn(inspection, 'completion'), true);
       assert.equal(inspection.macrostepInProgress, false);
     }

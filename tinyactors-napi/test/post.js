@@ -27,7 +27,10 @@ assert.deepEqual(actors.map(actor => actor.inspect().activeStates), [
 (async () => {
   await system.flush();
   for (const actor of actors) {
-    assert.equal(actor.inspect().residency, 'done');
+    const inspection = actor.inspect();
+    assert.deepEqual(inspection.activeStates, ['finished']);
+    assert.equal(inspection.macrostepInProgress, false);
+    assert.equal(inspection.residency, 'resident');
   }
   system.close();
   assert.throws(

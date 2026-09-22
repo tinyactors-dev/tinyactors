@@ -397,7 +397,7 @@ export interface ReplacementOptions<Data extends object> {
   readonly binding?: Partial<Data> | Data;
 }
 
-export type ActorResidency = "resident" | "done" | "unloaded";
+export type ActorResidency = "resident" | "unloaded";
 
 export interface ActorInspection<Data = unknown> {
   readonly actor: ActorId;

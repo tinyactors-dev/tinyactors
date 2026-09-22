@@ -28,6 +28,8 @@ struct tinyactors_napi_definition {
     uint8_t *revision;
     uint32_t revision_len;
     bool revision_is_string;
+    ta_state_id *final_states;
+    uint32_t final_state_count;
     bool retired;
 };
 
@@ -1077,6 +1079,7 @@ static void tinyactors_napi_definition_finalize(napi_env env, void *data, void *
     if (definition->system_ref != NULL) {
         (void)napi_delete_reference(env, definition->system_ref);
     }
+    free(definition->final_states);
     free(definition->family);
     free(definition->revision);
     free(definition);
@@ -1411,7 +1414,18 @@ static napi_value tinyactors_napi_actor_inspect(napi_env env, napi_callback_info
     uint32_t state_count = facts.active_state_count;
     ta_result result = TA_OK;
     ta_state_id *states = NULL;
-    if (state_count != 0) {
+    if (state_count == 0 && facts.residency == TA_ACTOR_DONE &&
+        actor->definition->final_state_count != 0) {
+        state_count = actor->definition->final_state_count;
+        states = malloc((size_t)state_count * sizeof(*states));
+        if (states == NULL) {
+            (void)tinyactors_napi_throw_error(env, "out-of-memory",
+                                               "out of memory inspecting Actor");
+            return NULL;
+        }
+        memcpy(states, actor->definition->final_states,
+               (size_t)state_count * sizeof(*states));
+    } else if (state_count != 0) {
         states = calloc(state_count, sizeof(*states));
         if (states == NULL) {
             (void)tinyactors_napi_throw_error(env, "out-of-memory", "out of memory inspecting Actor");
@@ -1487,14 +1501,7 @@ static napi_value tinyactors_napi_actor_inspect(napi_env env, napi_callback_info
         !tinyactors_napi_set_bool(env, inspection, "published", facts.published)) {
         return NULL;
     }
-    const char *residency = "running";
-    if (facts.residency == TA_ACTOR_IDLE) {
-        residency = "resident";
-    } else if (facts.residency == TA_ACTOR_DONE) {
-        residency = "done";
-    } else if (facts.residency == TA_ACTOR_UNLOADED) {
-        residency = "unloaded";
-    }
+    const char *residency = facts.residency == TA_ACTOR_UNLOADED ? "unloaded" : "resident";
     if (!tinyactors_napi_check(env,
             napi_create_string_utf8(env, residency, NAPI_AUTO_LENGTH, &value),
             "napi_create_string_utf8") ||
@@ -1871,6 +1878,38 @@ static napi_value tinyactors_napi_system_define(napi_env env, napi_callback_info
     definition->revision = parsed.revision;
     definition->revision_len = parsed.identity.revision.len;
     definition->revision_is_string = parsed.revision_is_string;
+    if (parsed.state_count != 0) {
+        definition->final_states = calloc(parsed.state_count, sizeof(*definition->final_states));
+        if (definition->final_states == NULL) {
+            (void)tinyactors_napi_throw_error(env, "out-of-memory",
+                                               "out of memory recording final states");
+            (void)ta_system_retire_definition(system->core, id);
+            free(definition->family);
+            free(definition->revision);
+            free(definition);
+            tinyactors_napi_free_spec(&parsed);
+            return NULL;
+        }
+        for (ta_state_id state_id = 0; state_id < parsed.state_count; state_id += 1u) {
+            ta_state_info state;
+            result = ta_definition_state(system->core,
+                &(ta_definition_state_params){.definition = id,
+                                              .state = state_id, .out = &state});
+            if (result != TA_OK) {
+                (void)tinyactors_napi_throw_result(env, result, "ta_definition_state");
+                (void)ta_system_retire_definition(system->core, id);
+                free(definition->final_states);
+                free(definition->family);
+                free(definition->revision);
+                free(definition);
+                tinyactors_napi_free_spec(&parsed);
+                return NULL;
+            }
+            if (state.kind == TA_STATE_FINAL && state.parent == TA_STATE_NONE) {
+                definition->final_states[definition->final_state_count++] = state_id;
+            }
+        }
+    }
     parsed.family = NULL;
     parsed.revision = NULL;
     tinyactors_napi_free_spec(&parsed);
@@ -1878,7 +1917,8 @@ static napi_value tinyactors_napi_system_define(napi_env env, napi_callback_info
     tinyactors_napi_environment *environment = NULL;
     if (!tinyactors_napi_check(env,
             napi_get_instance_data(env, (void **)&environment), "napi_get_instance_data") ||
-        environment == NULL || environment->definition_constructor == NULL) {
+            environment == NULL || environment->definition_constructor == NULL) {
+        free(definition->final_states);
         free(definition->family);
         free(definition->revision);
         free(definition);
@@ -1898,6 +1938,7 @@ static napi_value tinyactors_napi_system_define(napi_env env, napi_callback_info
             napi_new_instance(env, constructor, 2,
                               (napi_value[]){external, this_value}, &instance),
             "napi_new_instance")) {
+        free(definition->final_states);
         free(definition->family);
         free(definition->revision);
         free(definition);
