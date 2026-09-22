@@ -1,0 +1,10 @@
+#!/usr/bin/env ruby
+#MISE description="Commit selected repository paths"
+
+abort "usage: mise run commit MESSAGE PATH..." if ARGV.length < 2
+
+message = ARGV.shift
+paths = ARGV
+
+system("git", "add", "--", *paths) or exit($?.exitstatus || 1)
+exec("git", "commit", "-m", message, "--", *paths)
