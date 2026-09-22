@@ -1484,7 +1484,6 @@ static napi_value tinyactors_napi_actor_inspect(napi_env env, napi_callback_info
             "napi_set_named_property") ||
         !tinyactors_napi_set_bool(env, inspection, "macrostepInProgress",
                                   facts.macrostep_in_progress) ||
-        !tinyactors_napi_set_bool(env, inspection, "done", facts.has_completion) ||
         !tinyactors_napi_set_bool(env, inspection, "published", facts.published)) {
         return NULL;
     }

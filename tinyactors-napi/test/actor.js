@@ -20,7 +20,6 @@ for (const actor of actors) {
   const inspection = actor.inspect();
   assert.deepEqual(inspection.activeStates, ['idle']);
   assert.equal(inspection.macrostepInProgress, false);
-  assert.equal(inspection.done, false);
 }
 
 actors[0].destroy();

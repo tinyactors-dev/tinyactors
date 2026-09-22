@@ -397,7 +397,7 @@ export interface ReplacementOptions<Data extends object> {
   readonly binding?: Partial<Data> | Data;
 }
 
-export type ActorResidency = "resident" | "unloaded";
+export type ActorResidency = "resident" | "done" | "unloaded";
 
 export interface ActorInspection<Data = unknown> {
   readonly actor: ActorId;
@@ -409,8 +409,6 @@ export interface ActorInspection<Data = unknown> {
   readonly macrostepInProgress: boolean;
   readonly currentEvent?: ActorEvent;
   readonly internalEventCount: number;
-  /** True once the actor has reached a top-level final state. */
-  readonly done: boolean;
   readonly invocations: readonly InvocationInspection[];
   readonly delayedSends: readonly DelayedSendInspection[];
   readonly completion?: Data;

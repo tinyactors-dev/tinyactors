@@ -20,11 +20,15 @@ const actors = Array.from({ length: 8 }, () => system.spawn(definition));
 
 for (const actor of actors) actor.post('work');
 system.post(actors[0].id, 'work');
-assert.deepEqual(actors.map(actor => actor.inspect().done), [false, false, false, false, false, false, false, false]);
+assert.deepEqual(actors.map(actor => actor.inspect().activeStates), [
+  ['idle'], ['idle'], ['idle'], ['idle'], ['idle'], ['idle'], ['idle'], ['idle'],
+]);
 
 (async () => {
   await system.flush();
-  for (const actor of actors) assert.equal(actor.inspect().done, true);
+  for (const actor of actors) {
+    assert.equal(actor.inspect().residency, 'done');
+  }
   system.close();
   assert.throws(
     () => actors[0].post('work'),
