@@ -55,5 +55,7 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0049](0049-interned-identities-are-readable-back.md) | [Identities core interns are readable back](0049-interned-identities-are-readable-back.md) |
 | [0050](0050-envelope-data-is-shared-by-retain-not-cloned.md) | [Envelope data is shared by retain, not cloned](0050-envelope-data-is-shared-by-retain-not-cloned.md) |
 | [0051](0051-the-only-public-restore-path-is-ta-actor-load.md) | [The only public restore path is `ta_actor_load`](0051-the-only-public-restore-path-is-ta-actor-load.md) |
+| [0052](0052-reconstruction-is-public-and-route-neutral.md) | [Reconstruction is public and route-neutral](0052-reconstruction-is-public-and-route-neutral.md) |
+| [0053](0053-a-chart-representation-is-a-codec-and-literal-content-is-bytes.md) | [A chart representation is a codec, and literal content reaches adapters as bytes](0053-a-chart-representation-is-a-codec-and-literal-content-is-bytes.md) |
 
 See [the API gaps](../internal/api-gaps.md) for places where the current header skeleton does not yet fully expose these decisions.
