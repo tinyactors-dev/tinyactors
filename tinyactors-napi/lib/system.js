@@ -249,6 +249,52 @@ class System {
     return generation === 0 ? null : new ActorId(this, slot, generation);
   }
 
+  /**
+   * The resident actors as pages of IDs (ADR 0003): each page is a
+   * Uint32Array of interleaved [slot, generation] pairs, with no object per
+   * actor. Pages come from core's walk in slot order and continue from its
+   * cursor, so a whole iteration is linear and holds one page at a time. A
+   * page is a snapshot: an actor resident for the whole iteration appears
+   * exactly once, one destroyed before the walk reaches it does not appear,
+   * and one spawned meanwhile appears when its slot is ahead of the cursor
+   * (core ADR 0062). Options: { pageSize } (default 1024, at most 65536).
+   */
+  *actorIds(options = {}) {
+    const pageSize = pageSizeOf(options, 'actorIds()');
+    let from = 0;
+    while (from !== null) {
+      const page = this.#native.idPage(from, pageSize);
+      if (page.ids.length > 0) {
+        yield page.ids;
+      }
+      from = page.next;
+    }
+  }
+
+  /**
+   * The resident actors' inspections, one page of IDs at a time (ADR 0003).
+   * Each actor is inspected when the iterator reaches it, with inspect(), so
+   * at most one page of IDs and one inspection are held at a time. An actor
+   * destroyed after its page was taken, and before it was reached, is
+   * skipped. Options: { pageSize } (default 1024, at most 65536).
+   */
+  *actors(options = {}) {
+    for (const ids of this.actorIds(options)) {
+      for (let at = 0; at < ids.length; at += 2) {
+        let inspection;
+        try {
+          inspection = this.inspect(new ActorId(this, ids[at], ids[at + 1]));
+        } catch (error) {
+          if (error instanceof TinyactorsError && error.code === 'not-found') {
+            continue;
+          }
+          throw error;
+        }
+        yield inspection;
+      }
+    }
+  }
+
   /** True when a resident actor has this ID. */
   exists(actor) {
     const { slot, generation } = actorOf(this, actor);
@@ -334,6 +380,21 @@ class System {
   [Symbol.dispose]() {
     this.close();
   }
+}
+
+const DEFAULT_PAGE_SIZE = 1024;
+const MAX_PAGE_SIZE = 65536;
+
+// The page size of actors() and actorIds().
+function pageSizeOf(options, method) {
+  if (options === null || typeof options !== 'object') {
+    throw new TinyactorsError(`${method}: options must be an object`, 'invalid');
+  }
+  const { pageSize = DEFAULT_PAGE_SIZE } = options;
+  if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > MAX_PAGE_SIZE) {
+    throw new TinyactorsError(`${method}: pageSize must be an integer from 1 to ${MAX_PAGE_SIZE}`, 'invalid');
+  }
+  return pageSize;
 }
 
 // The (slot, generation) of an ActorId of `system` (ADR 0002).

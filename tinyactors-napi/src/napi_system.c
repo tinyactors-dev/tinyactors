@@ -2,6 +2,7 @@
 
 #include <stdlib.h>
 
+#include "enumerate.h"
 #include "events.h"
 #include "pump.h"
 #include "router.h"
@@ -399,6 +400,69 @@ static bool tna_text_argument(napi_env env, tna_system *system, napi_value value
     return true;
 }
 
+/* Largest page idPage() accepts: 2^16 actors, 512 KiB of IDs. */
+#define TNA_MAX_PAGE_SIZE 65536u
+
+/*
+ * idPage(from, limit): one page of actor IDs from core's walk (ADR 0003,
+ * core ADR 0062). Returns { ids, next }: `ids` is a Uint32Array of
+ * interleaved [slot, generation] pairs, whose backing store core's visitor
+ * filled directly, and `next` is the position to pass for the next page, or
+ * null when the walk is over. `from` must be 0 or a `next` this method gave.
+ * The walk is a core call, so it is not allowed inside one.
+ */
+static napi_value tna_id_page_method(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2] = { NULL, NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    tna_system *system = wrapper->system;
+    uint32_t from = 0;
+    uint32_t limit = 0;
+    if (argc < 2 || napi_get_value_uint32(env, argv[0], &from) != napi_ok ||
+        napi_get_value_uint32(env, argv[1], &limit) != napi_ok || limit == 0 || limit > TNA_MAX_PAGE_SIZE) {
+        return tna_throw(env, "invalid", "idPage: expected (from, limit) with 1 <= limit <= 65536");
+    }
+    if (system->inside_core) {
+        return tna_throw(env, "reentrant", "actors cannot be enumerated from inside a core call (ADR 0013)");
+    }
+    void *data = NULL;
+    napi_value buffer = NULL;
+    if (napi_create_arraybuffer(env, (size_t)limit * 2u * sizeof(uint32_t), &data, &buffer) != napi_ok) {
+        return tna_throw(env, "out-of-memory", "idPage: cannot allocate the page");
+    }
+    tna_id_page page = { .from = from, .limit = limit, .pairs = data };
+    ta_result result = tna_enumerate_ids(system, &page);
+    if (result != TA_OK) {
+        return tna_throw(env, tna_result_code(result), "idPage: the walk failed");
+    }
+    napi_value ids = NULL;
+    napi_value next = NULL;
+    napi_value out = NULL;
+    napi_status status = napi_create_typedarray(env, napi_uint32_array, (size_t)page.count * 2u, buffer, 0, &ids);
+    if (status == napi_ok) {
+        status = page.next == TA_ACTOR_VISIT_END ? napi_get_null(env, &next) : napi_create_uint32(env, page.next, &next);
+    }
+    if (status == napi_ok) {
+        status = napi_create_object(env, &out);
+    }
+    if (status == napi_ok) {
+        status = napi_set_named_property(env, out, "ids", ids);
+    }
+    if (status == napi_ok) {
+        status = napi_set_named_property(env, out, "next", next);
+    }
+    if (status != napi_ok) {
+        return tna_throw(env, "out-of-memory", "idPage: cannot build the page");
+    }
+    return out;
+}
+
 /*
  * postNamed(family, name, event): queues an event without data for the actor
  * the directory has at that address (ADR 0006), or a dead letter when it has
@@ -571,6 +635,7 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "internEvent", NULL, tna_intern_event_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "post", NULL, tna_post_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "postNamed", NULL, tna_post_named_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "idPage", NULL, tna_id_page_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "closed", NULL, NULL, tna_closed_getter, NULL, NULL, napi_default_jsproperty, NULL },
     };
     napi_value constructor = NULL;
