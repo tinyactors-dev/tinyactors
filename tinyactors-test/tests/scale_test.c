@@ -81,7 +81,7 @@ static const uint32_t POPULATIONS[] = {50000u, 200000u, 1000000u, 4000000u};
 #define INSPECTION_SAMPLE 256u
 /* Pages of the actor walk (ADR 0062): their size, and how many are taken. */
 #define WALK_PAGE_SIZE 64u
-#define PAGES 3000u
+#define PAGES 10000u
 #define REPETITIONS 3u
 
 /*
@@ -90,6 +90,20 @@ static const uint32_t POPULATIONS[] = {50000u, 200000u, 1000000u, 4000000u};
  * about 4.
  */
 #define COST_RATIO_BOUND 2.0
+
+/*
+ * A page of the actor walk has a looser bound. Each visit reads a different
+ * actor's memory, so its cost follows the memory hierarchy: warm, the step
+ * from 1M to 4M actors (about 9.5 GB) measures 1.75-1.9 from TLB and cache
+ * misses alone, too close to 2 to be a stable test. The bug this check is
+ * for, a page that costs its population or its cursor position, measures
+ * the population step, 4 to 5 times, because the pages start spread over
+ * the whole table. Measured on an Apple M-series machine: 1.4-1.6,
+ * 2.25-2.57 and 1.56-1.72 for the three steps on correct code, and 3.7 to
+ * 7.6 with a planted O(position) walk. The middle step is closest: it is
+ * where the population outgrows the caches.
+ */
+#define WALK_COST_RATIO_BOUND 3.0
 
 /*
  * What one resident named actor of the null data model may cost, in bytes
@@ -634,22 +648,38 @@ static round_cost measure(size_t population) {
             "a re-armed actor holds exactly its one send");
 
     /*
-     * Pages of the actor walk (ADR 0062): each starts where the last one
-     * ended, wrapping at the end, so a page costs its own size whatever
-     * the population, and the walk never skips ahead by re-walking.
+     * Pages of the actor walk (ADR 0062): a page costs its own size wherever
+     * it starts and whatever the population. The pages start evenly spread
+     * over the whole table, page i at i x population / PAGES, so the average
+     * start is half the population at every size: a walk whose page cost
+     * grows with its start position (one that re-walks from slot 0, say)
+     * grows with each population step, 4 to 5 times per step, and fails.
+     * Walked from slot 0 instead, the positions stop growing once the pass
+     * is shorter than the population, and such a bug hid at 1M and 4M.
+     *
+     * The same pages are walked twice and only the second walk is timed.
+     * The first touch of a large population's memory can page-fault, or
+     * decompress pages the OS compressed, and clock() counts that as CPU
+     * time. Measured cold, the step from 1M to 4M actors reached ratios of
+     * 2.0-2.4 from that alone.
      */
     size_t visited = 0;
-    uint32_t cursor = 0;
-    for (unsigned page = 0; page < PAGES; page += 1u) {
-        uint32_t next = 0;
-        require(ta_system_visit_actors(system, &(ta_actor_visit_params){
-                                                   .inspector = {.self = &visited, .visit = count_visit},
-                                                   .from = cursor,
-                                                   .limit = WALK_PAGE_SIZE,
-                                                   .next = &next,
-                                               }) == TA_OK,
-                "a page of the actor walk");
-        cursor = next == TA_ACTOR_VISIT_END ? 0u : next;
+    double warm_started = 0.0;
+    for (unsigned pass = 0; pass < 2u; pass += 1u) {
+        visited = 0;
+        warm_started = cpu_seconds();
+        for (unsigned page = 0; page < PAGES; page += 1u) {
+            uint32_t from = (uint32_t)(((uint64_t)page * population) / PAGES);
+            uint32_t next = 0;
+            require(ta_system_visit_actors(system, &(ta_actor_visit_params){
+                                                       .inspector = {.self = &visited, .visit = count_visit},
+                                                       .from = from,
+                                                       .limit = WALK_PAGE_SIZE,
+                                                       .next = &next,
+                                                   }) == TA_OK,
+                    "a page of the actor walk");
+            require(next == TA_ACTOR_VISIT_END || next > from, "a page moves the cursor forward");
+        }
     }
     double paged = cpu_seconds();
     require(visited >= (size_t)PAGES * WALK_PAGE_SIZE / 2u, "the pages visited actors");
@@ -691,7 +721,7 @@ static round_cost measure(size_t population) {
         .inspect_us = per_actor_us(inspected - inspect_started, INSPECTIONS),
         .timer_us = per_actor_us(timers_churned - inspected, CHURN_ACTORS),
         .cancel_us = per_actor_us(rearmed - timers_churned, CHURN_ACTORS),
-        .page_us = per_actor_us(paged - rearmed, visited),
+        .page_us = per_actor_us(paged - warm_started, visited),
         .median_spawn_us = median_spawn_us,
         .longest_spawn_us = longest_spawn_us,
         .largest_spawn_block = largest_spawn_block,
@@ -761,16 +791,20 @@ static uint32_t small_population = 0;
 static uint32_t large_population = 0;
 
 /* Names the two costs whose ratio failed, so the report says which walk. */
-static void require_flat(const char *what, double small, double large) {
+static void require_flat_within(const char *what, double small, double large, double bound) {
     double ratio = small > 0.0 ? large / small : 0.0;
-    if (ratio <= COST_RATIO_BOUND) {
+    if (ratio <= bound) {
         return;
     }
     fprintf(stderr,
             "scale test failed: %s measures %.2f against %u residents and %.2f against %u, a ratio of "
             "%.2f against a bound of %.2f: the cost of one actor grows with the population (invariant 17)\n",
-            what, small, small_population, large, large_population, ratio, COST_RATIO_BOUND);
+            what, small, small_population, large, large_population, ratio, bound);
     exit(1);
+}
+
+static void require_flat(const char *what, double small, double large) {
+    require_flat_within(what, small, large, COST_RATIO_BOUND);
 }
 
 /* Every cost, and per-actor memory, flat from one population to the next. */
@@ -784,7 +818,7 @@ static void require_flat_pair(uint32_t small_count, const round_cost *small, uin
     require_flat("inspecting a timed actor", small->inspect_us, large->inspect_us);
     require_flat("a timed ephemeral actor", small->timer_us, large->timer_us);
     require_flat("cancelling and re-arming a delayed send", small->cancel_us, large->cancel_us);
-    require_flat("a page of the actor walk", small->page_us, large->page_us);
+    require_flat_within("a page of the actor walk", small->page_us, large->page_us, WALK_COST_RATIO_BOUND);
 /*
  * No spawn may need a block that grows with the population (ADR 0063): a
  * table that doubles allocates four times as much for four times the
