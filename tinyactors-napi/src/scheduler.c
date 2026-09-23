@@ -58,6 +58,7 @@ static uint32_t tna_envelope_take(tna_sched *sched) {
 /* Releases the envelope's references and returns it to the free list. */
 static void tna_envelope_give(tna_sched *sched, uint32_t index) {
     tna_envelope *envelope = tna_sched_envelope(sched, index);
+    sched->retained -= envelope->bytes;
     ta_event_release(&envelope->event);
     ta_address_release(envelope->address);
     *envelope = (tna_envelope){ .next = sched->envelopes.free_head };
@@ -92,6 +93,10 @@ void tna_sched_init(tna_sched *sched, ta_allocator allocator, ta_allocator envel
     tna_ring_init(&sched->runnable, allocator, shape);
     tna_ring_init(&sched->ready, allocator, shape);
     tna_envelopes_init(&sched->envelopes, envelopes);
+    tna_vec_init(&sched->waiters, envelopes, TNA_LAYOUT(tna_waiter));
+    tna_map_init(&sched->inflight, allocator);
+    tna_ring_init(&sched->settled, allocator,
+                  (tna_ring_shape){ .layout = TNA_LAYOUT(tna_settlement), .chunk_capacity = 256u });
 }
 
 void tna_sched_discard_mail(tna_sched *sched) {
@@ -122,6 +127,12 @@ void tna_sched_destroy(tna_sched *sched) {
     tna_ring_destroy(&sched->runnable);
     tna_ring_destroy(&sched->ready);
     tna_envelopes_destroy(&sched->envelopes);
+    tna_vec_destroy(&sched->waiters);
+    tna_map_destroy(&sched->inflight);
+    tna_ring_destroy(&sched->settled);
+    sched->waiter_free = 0;
+    sched->waiters_live = 0;
+    sched->retained = 0;
     sched->known = 0;
     sched->queued = 0;
     sched->dead_first = 0;
@@ -201,6 +212,131 @@ static void tna_sched_bury(tna_sched *sched, tna_sched_entry *entry, tna_dead_re
     entry->last = 0;
 }
 
+/* ------------------------------------------------------------------------
+ * send() waiters
+ */
+
+tna_waiter *tna_sched_waiter(const tna_sched *sched, uint32_t index) {
+    if (index == 0 || index >= sched->waiters.count) {
+        return NULL;
+    }
+    return tna_vec_at(&sched->waiters, index);
+}
+
+uint32_t tna_sched_waiter_take(tna_sched *sched) {
+    if (sched->waiters.count == 0) {
+        tna_waiter none = { .generation = 1u };
+        if (tna_vec_push(&sched->waiters, &none) != TA_OK) { /* index 0 is never issued */
+            return 0;
+        }
+    }
+    uint32_t index = sched->waiter_free;
+    if (index != 0) {
+        sched->waiter_free = tna_sched_waiter(sched, index)->next_free;
+    } else {
+        tna_waiter fresh = { .generation = 1u };
+        if (tna_vec_push(&sched->waiters, &fresh) != TA_OK) {
+            return 0;
+        }
+        index = sched->waiters.count - 1u;
+    }
+    tna_waiter *waiter = tna_sched_waiter(sched, index);
+    waiter->state = TNA_WAITER_SETTLING; /* the caller's until a post takes it */
+    waiter->envelope = 0;
+    waiter->actor = 0;
+    waiter->next_free = 0;
+    waiter->host = NULL;
+    sched->waiters_live += 1u;
+    return index;
+}
+
+void tna_sched_waiter_give(tna_sched *sched, uint32_t index) {
+    tna_waiter *waiter = tna_sched_waiter(sched, index);
+    if (waiter == NULL || waiter->state == TNA_WAITER_FREE) {
+        return;
+    }
+    waiter->generation = waiter->generation == UINT32_MAX ? 1u : waiter->generation + 1u;
+    waiter->state = TNA_WAITER_FREE;
+    waiter->host = NULL;
+    waiter->next_free = sched->waiter_free;
+    sched->waiter_free = index;
+    sched->waiters_live -= 1u;
+}
+
+bool tna_sched_settlement_pop(tna_sched *sched, tna_settlement *out) {
+    return tna_ring_pop(&sched->settled, out);
+}
+
+/* Queues a settlement for a waiter and marks it SETTLING. */
+static void tna_sched_settle_waiter(tna_sched *sched, uint32_t index, tna_settlement settlement) {
+    tna_waiter *waiter = tna_sched_waiter(sched, index);
+    if (waiter == NULL) {
+        return;
+    }
+    waiter->state = TNA_WAITER_SETTLING;
+    settlement.waiter = index;
+    /* The ring keeps a spare chunk, so this allocates only as it grows. If
+     * it cannot, the promise is not settled until close() rejects it. */
+    (void)tna_ring_push(&sched->settled, &settlement);
+}
+
+/* The macrostep `actor` ran for a send() ended: settle its waiter. */
+static void tna_sched_complete(tna_sched *sched, ta_actor_id actor, tna_settlement settlement) {
+    uint64_t index = 0;
+    if (tna_map_count(&sched->inflight) == 0 || !tna_map_get(&sched->inflight, actor, &index)) {
+        return;
+    }
+    tna_map_remove(&sched->inflight, actor);
+    settlement.actor = actor;
+    tna_sched_settle_waiter(sched, (uint32_t)index, settlement);
+}
+
+/* Unlinks `index` from the entry's mailbox; false when it is not there. */
+static bool tna_sched_unlink(tna_sched *sched, tna_sched_entry *entry, uint32_t index) {
+    uint32_t previous = 0;
+    for (uint32_t at = entry->first; at != 0; at = tna_sched_envelope(sched, at)->next) {
+        if (at == index) {
+            uint32_t next = tna_sched_envelope(sched, at)->next;
+            if (previous == 0) {
+                entry->first = next;
+            } else {
+                tna_sched_envelope(sched, previous)->next = next;
+            }
+            if (entry->last == index) {
+                entry->last = previous;
+            }
+            return true;
+        }
+        previous = at;
+    }
+    return false;
+}
+
+bool tna_sched_cancel(tna_sched *sched, uint32_t index) {
+    tna_waiter *waiter = tna_sched_waiter(sched, index);
+    if (waiter == NULL) {
+        return false;
+    }
+    if (waiter->state == TNA_WAITER_QUEUED) {
+        tna_envelope *envelope = tna_sched_envelope(sched, waiter->envelope);
+        tna_sched_entry *entry = tna_sched_lookup(sched, waiter->actor);
+        if (envelope != NULL && entry != NULL && tna_sched_unlink(sched, entry, waiter->envelope)) {
+            /* A ready actor whose mailbox is now empty becomes idle when popped. */
+            tna_envelope_give(sched, waiter->envelope);
+        } else if (envelope != NULL) {
+            envelope->waiter = 0; /* on the dead list: still reported, without the waiter */
+        }
+        waiter->state = TNA_WAITER_SETTLING;
+        return true;
+    }
+    if (waiter->state == TNA_WAITER_INFLIGHT) {
+        tna_map_remove(&sched->inflight, waiter->actor);
+        waiter->state = TNA_WAITER_SETTLING;
+        return true;
+    }
+    return false;
+}
+
 ta_result tna_sched_add(tna_sched *sched, ta_actor_id actor) {
     tna_sched_entry *entry = tna_sched_entry_make(sched, ta_actor_id_slot(actor));
     if (entry == NULL) {
@@ -214,6 +350,8 @@ ta_result tna_sched_add(tna_sched *sched, ta_actor_id actor) {
     } else {
         /* A previous actor of this slot the addon never saw go: its mail is dead. */
         tna_sched_bury(sched, entry, TNA_DEAD_NOT_FOUND);
+        tna_sched_complete(sched, ta_actor_id_make(ta_actor_id_slot(actor), entry->generation),
+                           (tna_settlement){ .kind = TNA_SETTLE_DEAD, .reason = TNA_DEAD_NOT_FOUND });
     }
     *entry = (tna_sched_entry){ .generation = ta_actor_id_generation(actor), .state = TNA_SCHED_RUNNABLE };
     return TA_OK;
@@ -225,6 +363,7 @@ void tna_sched_remove(tna_sched *sched, ta_actor_id actor, tna_dead_reason reaso
         return;
     }
     tna_sched_bury(sched, entry, reason);
+    tna_sched_complete(sched, actor, (tna_settlement){ .kind = TNA_SETTLE_DEAD, .reason = (uint8_t)reason });
     *entry = (tna_sched_entry){0};
     sched->known -= 1u;
 }
@@ -246,7 +385,8 @@ ta_result tna_sched_release(tna_sched *sched, ta_actor_id actor) {
 }
 
 bool tna_sched_quiet(const tna_sched *sched) {
-    return tna_ring_count(&sched->runnable) == 0 && tna_ring_count(&sched->ready) == 0 && sched->dead_count == 0;
+    return tna_ring_count(&sched->runnable) == 0 && tna_ring_count(&sched->ready) == 0 && sched->dead_count == 0 &&
+           tna_ring_count(&sched->settled) == 0;
 }
 
 uint32_t tna_sched_mailbox_count(const tna_sched *sched, ta_actor_id actor) {
@@ -263,8 +403,32 @@ uint32_t tna_sched_mailbox_count(const tna_sched *sched, ta_actor_id actor) {
  * Posting
  */
 
-ta_result tna_sched_post(tna_sched *sched, ta_actor_id target, const ta_event *event) {
-    if (sched->max_queued != 0 && sched->queued >= sched->max_queued) {
+/* The limits a message must fit before it is accepted (ADR 0005 point 9). */
+static bool tna_sched_full(const tna_sched *sched, uint32_t bytes) {
+    return (sched->max_queued != 0 && sched->queued >= sched->max_queued) ||
+           (sched->max_retained != 0 && sched->retained + bytes > sched->max_retained);
+}
+
+/* Fills a taken envelope from the message and attaches its waiter. */
+static void tna_sched_fill(tna_sched *sched, uint32_t index, const tna_message *message) {
+    tna_envelope *envelope = tna_sched_envelope(sched, index);
+    envelope->event = *message->event;
+    envelope->target = message->target;
+    envelope->bytes = message->bytes;
+    envelope->waiter = message->waiter;
+    sched->queued += 1u;
+    sched->retained += message->bytes;
+    tna_waiter *waiter = tna_sched_waiter(sched, message->waiter);
+    if (waiter != NULL) {
+        waiter->state = TNA_WAITER_QUEUED;
+        waiter->envelope = index;
+        waiter->actor = message->target;
+    }
+}
+
+ta_result tna_sched_post(tna_sched *sched, const tna_message *message) {
+    ta_actor_id target = message->target;
+    if (tna_sched_full(sched, message->bytes)) {
         return TA_ERR_BUSY;
     }
     tna_sched_entry *entry = tna_sched_lookup(sched, target);
@@ -278,10 +442,7 @@ ta_result tna_sched_post(tna_sched *sched, ta_actor_id target, const ta_event *e
         /* A ready-queue entry pushed above names an idle actor; delivery skips it. */
         return TA_ERR_NOMEM;
     }
-    sched->queued += 1u;
-    tna_envelope *envelope = tna_sched_envelope(sched, index);
-    envelope->event = *event;
-    envelope->target = target;
+    tna_sched_fill(sched, index, message);
     if (dead) {
         tna_sched_dead_append(sched, index, entry == NULL ? TNA_DEAD_NOT_FOUND : TNA_DEAD_DONE);
         return TA_OK;
@@ -299,16 +460,16 @@ ta_result tna_sched_post(tna_sched *sched, ta_actor_id target, const ta_event *e
 }
 
 ta_result tna_sched_post_dead(tna_sched *sched, const tna_dead_post *post) {
-    if (sched->max_queued != 0 && sched->queued >= sched->max_queued) {
+    if (tna_sched_full(sched, post->message->bytes)) {
         return TA_ERR_BUSY;
     }
     uint32_t index = tna_envelope_take(sched);
     if (index == 0) {
         return TA_ERR_NOMEM;
     }
-    sched->queued += 1u;
+    tna_sched_fill(sched, index, post->message);
     tna_envelope *envelope = tna_sched_envelope(sched, index);
-    envelope->event = *post->event;
+    envelope->target = 0;
     envelope->address = post->address;
     tna_sched_dead_append(sched, index, post->reason);
     return TA_OK;
@@ -393,6 +554,7 @@ static void tna_sched_resume_one(tna_sched *sched, const tna_turn_params *params
         return;
     }
     if (result != TA_OK) {
+        tna_sched_complete(sched, actor, (tna_settlement){ .kind = TNA_SETTLE_FAULT, .code = result });
         tna_sched_fault(sched, params, (tna_turn_record){ .actor = actor, .operation = "resume", .code = result });
         return;
     }
@@ -401,6 +563,7 @@ static void tna_sched_resume_one(tna_sched *sched, const tna_turn_params *params
         tna_sched_requeue(sched, params, &sched->runnable, actor);
         return;
     case TA_RUN_DONE:
+        tna_sched_complete(sched, actor, (tna_settlement){ .kind = TNA_SETTLE_DONE });
         entry->state = TNA_SCHED_IDLE;
         tna_sched_bury(sched, entry, TNA_DEAD_DONE);
         if ((entry->flags & TNA_SCHED_FINISHED) == 0) {
@@ -410,6 +573,7 @@ static void tna_sched_resume_one(tna_sched *sched, const tna_turn_params *params
         return;
     case TA_RUN_STABLE:
     default:
+        tna_sched_complete(sched, actor, (tna_settlement){ .kind = TNA_SETTLE_STABLE });
         tna_sched_settle(sched, params, entry, actor);
         return;
     }
@@ -441,6 +605,18 @@ static void tna_sched_deliver_one(tna_sched *sched, const tna_turn_params *param
         entry->first = envelope->next;
         if (entry->first == 0) {
             entry->last = 0;
+        }
+        if (envelope->waiter != 0) {
+            /* The send() follows the macrostep this message starts. */
+            tna_waiter *waiter = tna_sched_waiter(sched, envelope->waiter);
+            if (tna_map_put(&sched->inflight, actor, envelope->waiter) == TA_OK) {
+                waiter->state = TNA_WAITER_INFLIGHT;
+                waiter->actor = actor;
+                waiter->envelope = 0;
+            } else {
+                tna_sched_settle_waiter(sched, envelope->waiter,
+                                        (tna_settlement){ .kind = TNA_SETTLE_FAULT, .code = TA_ERR_NOMEM, .actor = actor });
+            }
         }
         tna_envelope_give(sched, head);
         sched->delivered += 1u;
@@ -519,6 +695,10 @@ static void tna_sched_report_dead(tna_sched *sched, const tna_turn_params *param
             record.has_address = tna_copy_address(params->arena, envelope->address, &record.address);
         }
         tna_sched_record(sched, params, record);
+        if (envelope->waiter != 0) {
+            tna_sched_settle_waiter(sched, envelope->waiter,
+                                    (tna_settlement){ .kind = TNA_SETTLE_DEAD, .reason = envelope->reason, .actor = envelope->target });
+        }
         tna_envelope_give(sched, index);
     }
 }

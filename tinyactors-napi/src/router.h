@@ -21,6 +21,7 @@
  * copied. RETRY is only for resource limits: the queue is at
  * maxQueuedMessages, or an envelope cannot be allocated (ADR 0006 point 3).
  */
+#include "scheduler.h"
 #include "tinyactors.h"
 
 typedef struct tna_system tna_system;
@@ -28,9 +29,10 @@ typedef struct tna_system tna_system;
 ta_external_event_router tna_router_adapter(tna_system *system);
 
 /*
- * Accepts `event` for a named destination, as submit() does: the resident
- * actor's mailbox, or a dead letter when the name has none. On TA_OK the
- * system owns `event`'s references; `address` stays the caller's.
- * TA_ERR_BUSY: the queue is full; TA_ERR_NOMEM: nothing accepted.
+ * Accepts a message for a named destination, as submit() does: the resident
+ * actor's mailbox, or a dead letter when the name has none. `message->target`
+ * is ignored. On TA_OK the system owns the event's references and the waiter;
+ * `address` stays the caller's. TA_ERR_BUSY: the queue is full;
+ * TA_ERR_NOMEM: nothing accepted.
  */
-ta_result tna_router_post_named(tna_system *system, ta_address *address, const ta_event *event);
+ta_result tna_router_post_named(tna_system *system, ta_address *address, const tna_message *message);

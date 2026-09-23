@@ -31,6 +31,16 @@
  * only waits. A queue entry whose actor was destroyed or replaced in the
  * meantime is skipped when it is popped.
  *
+ * send() waiters (ADR 0005 point 11): a message may carry a waiter, the
+ * native half of a send() promise. While the message is queued the waiter
+ * names its envelope; when core accepts the message the waiter moves to the
+ * `inflight` map, keyed by the actor that runs the macrostep; when that
+ * macrostep ends (stable, done, a fault, or the actor is gone) or the message
+ * becomes a dead letter, the scheduler queues a settlement. The Node-API layer
+ * pops settlements after the turn and settles the promises. Waiters are
+ * reused through a free list, so a send makes no allocator call after
+ * warm-up.
+ *
  * One turn resumes up to `resumes` runnable actors, each with a microstep
  * budget and an action budget (core ADR 0061). What the turn learns that
  * JavaScript must hear about (an actor finished, an actor faulted) becomes a
@@ -86,10 +96,51 @@ typedef struct {
     ta_event event;
     ta_actor_id target;
     ta_address *address;
-    uint32_t next;  /* the next envelope in its list, 0 when last */
-    uint8_t reason; /* tna_dead_reason, while on the dead list */
-    uint8_t live;   /* taken from the store */
+    uint32_t next;   /* the next envelope in its list, 0 when last */
+    uint32_t waiter; /* the send() waiting for this message, or 0 */
+    uint32_t bytes;  /* counted against max_retained (ADR 0005 point 9) */
+    uint8_t reason;  /* tna_dead_reason, while on the dead list */
+    uint8_t live;    /* taken from the store */
 } tna_envelope;
+
+/* A message to accept: the target, the event, and what it carries along. */
+typedef struct {
+    ta_actor_id target;     /* unused for a named post */
+    const ta_event *event;
+    uint32_t bytes;         /* retained-bytes estimate of its data, 0 for none */
+    uint32_t waiter;        /* a send() waiting for it, or 0 */
+} tna_message;
+
+typedef enum {
+    TNA_WAITER_FREE = 0,
+    TNA_WAITER_QUEUED,   /* its message waits in a mailbox or on the dead list */
+    TNA_WAITER_INFLIGHT, /* core accepted the message; its macrostep runs */
+    TNA_WAITER_SETTLING  /* settled or cancelled; the Node-API layer gives it back */
+} tna_waiter_state;
+
+typedef struct {
+    uint32_t generation; /* part of the token JavaScript holds; never 0 */
+    uint32_t envelope;   /* QUEUED: the message's envelope */
+    ta_actor_id actor;   /* QUEUED: the target; INFLIGHT: the actor running it */
+    uint32_t next_free;
+    uint8_t state;       /* tna_waiter_state */
+    void *host;          /* the Node-API layer's promise (a napi_deferred) */
+} tna_waiter;
+
+typedef enum {
+    TNA_SETTLE_STABLE, /* the message's macrostep ended with the actor stable */
+    TNA_SETTLE_DONE,   /* ... with the actor finished */
+    TNA_SETTLE_DEAD,   /* the message became a dead letter, or its actor went away */
+    TNA_SETTLE_FAULT   /* the macrostep failed and the actor is quarantined */
+} tna_settle_kind;
+
+typedef struct {
+    uint32_t waiter;
+    uint8_t kind;    /* tna_settle_kind */
+    uint8_t reason;  /* DEAD: tna_dead_reason */
+    ta_result code;  /* FAULT: core's result */
+    ta_actor_id actor;
+} tna_settlement;
 
 #define TNA_ENVELOPE_PAGE_BITS 10u
 #define TNA_ENVELOPE_PAGE_ENTRIES (1u << TNA_ENVELOPE_PAGE_BITS) /* 1,024 envelopes */
@@ -132,6 +183,16 @@ typedef struct {
     /* Accepted messages not yet delivered or reported: mailboxes plus the dead list. */
     uint32_t queued;
     uint32_t max_queued;    /* 0: no limit (ADR 0005 point 9) */
+    /* Retained-bytes estimates of queued messages, and their limit (0: none). */
+    uint64_t retained;
+    uint64_t max_retained;
+    /* send() waiters: records by index (0 is never issued), a free list,
+     * the actors whose macrostep a waiter follows, and settlements. */
+    tna_vec waiters;        /* tna_waiter */
+    uint32_t waiter_free;
+    uint32_t waiters_live;
+    tna_map inflight;       /* ta_actor_id -> waiter index */
+    tna_ring settled;       /* tna_settlement */
     /* Dead letters waiting to be reported, threaded through `next`. */
     uint32_t dead_first;
     uint32_t dead_last;
@@ -183,14 +244,16 @@ ta_result tna_sched_add(tna_sched *sched, ta_actor_id actor);
 void tna_sched_remove(tna_sched *sched, ta_actor_id actor, tna_dead_reason reason);
 
 /*
- * Accepts a message for `target` (ADR 0005 point 3). On TA_OK the envelope
- * owns `event`'s references; otherwise the caller keeps them.
+ * Accepts a message for `message->target` (ADR 0005 point 3). On TA_OK the
+ * envelope owns the event's references and the waiter follows the message;
+ * otherwise the caller keeps both.
  * - A target the table does not know (stale or unknown ID) or one that has
  *   finished: accepted as a dead letter at once.
- * - TA_ERR_BUSY: the queue is at max_queued; nothing was accepted.
+ * - TA_ERR_BUSY: the queue is at max_queued, or the message's bytes would
+ *   pass max_retained; nothing was accepted.
  * - TA_ERR_NOMEM: nothing was accepted.
  */
-ta_result tna_sched_post(tna_sched *sched, ta_actor_id target, const ta_event *event);
+ta_result tna_sched_post(tna_sched *sched, const tna_message *message);
 /*
  * Accepts a message that is a dead letter already: its target is a name the
  * directory has no resident actor for (ADR 0006 point 4). On TA_OK the
@@ -199,7 +262,7 @@ ta_result tna_sched_post(tna_sched *sched, ta_actor_id target, const ta_event *e
  */
 typedef struct {
     ta_address *address;
-    const ta_event *event;
+    const tna_message *message;
     tna_dead_reason reason;
 } tna_dead_post;
 ta_result tna_sched_post_dead(tna_sched *sched, const tna_dead_post *post);
@@ -209,6 +272,24 @@ tna_envelope *tna_sched_envelope(const tna_sched *sched, uint32_t index);
 uint32_t tna_sched_mailbox_count(const tna_sched *sched, ta_actor_id actor);
 /* Puts a quarantined actor back on the runnable queue (ADR 0008). */
 ta_result tna_sched_release(tna_sched *sched, ta_actor_id actor);
+
+/*
+ * send() waiters. tna_sched_waiter_take() returns a free waiter's index, or
+ * 0 when there is no memory; give it to exactly one tna_sched_post() (or
+ * back with tna_sched_waiter_give()). A settlement names the waiter it
+ * settles, which is then SETTLING until the Node-API layer gives it back.
+ */
+uint32_t tna_sched_waiter_take(tna_sched *sched);
+tna_waiter *tna_sched_waiter(const tna_sched *sched, uint32_t index);
+void tna_sched_waiter_give(tna_sched *sched, uint32_t index);
+bool tna_sched_settlement_pop(tna_sched *sched, tna_settlement *out);
+/*
+ * Cancels a pending waiter (abort or timeout). A message still in a mailbox
+ * is withdrawn, so it is never delivered; one already on the dead list is
+ * still reported, without its waiter; one already delivered is not undone.
+ * Returns true when the waiter was pending; it is then SETTLING.
+ */
+bool tna_sched_cancel(tna_sched *sched, uint32_t index);
 
 /* True when a turn has nothing to do. */
 bool tna_sched_quiet(const tna_sched *sched);

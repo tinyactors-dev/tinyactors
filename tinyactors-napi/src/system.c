@@ -245,11 +245,11 @@ void tna_system_end_turn(tna_system *system) {
     tna_system_arm(system);
 }
 
-ta_result tna_system_post(tna_system *system, ta_actor_id target, const ta_event *event) {
+ta_result tna_system_post(tna_system *system, const tna_message *message) {
     if (system == NULL || system->closed) {
         return TA_ERR_INVALID;
     }
-    ta_result result = tna_sched_post(&system->sched, target, event);
+    ta_result result = tna_sched_post(&system->sched, message);
     if (result == TA_OK) {
         tna_system_want_turn(system);
     }

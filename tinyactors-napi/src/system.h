@@ -119,11 +119,11 @@ size_t tna_system_leaked_bytes(const tna_system *system);
 void tna_system_free(tna_system *system);
 
 /*
- * Accepts a message for `target` and asks for a turn (ADR 0005). On TA_OK the
- * system owns `event`'s references. TA_ERR_BUSY: the queue is full
- * (max_queued); TA_ERR_NOMEM: nothing accepted.
+ * Accepts a message and asks for a turn (ADR 0005). On TA_OK the system owns
+ * the event's references and the message's waiter. TA_ERR_BUSY: the queue is
+ * full (max_queued or max_retained); TA_ERR_NOMEM: nothing accepted.
  */
-ta_result tna_system_post(tna_system *system, ta_actor_id target, const ta_event *event);
+ta_result tna_system_post(tna_system *system, const tna_message *message);
 
 /* Asks for a turn unless one is pending or the system is quiet or closed. */
 void tna_system_want_turn(tna_system *system);

@@ -50,6 +50,26 @@ static bool tna_count_option(napi_env env, napi_value object, const char *name, 
     return true;
 }
 
+/* scheduling.maxRetainedBytes (ADR 0005 point 9): 0 or absent means no limit. */
+static bool tna_bytes_option(napi_env env, napi_value object, const char *name, uint64_t *out) {
+    napi_value value = NULL;
+    if (!tna_option(env, object, name, &value)) {
+        return false;
+    }
+    if (value == NULL) {
+        return true;
+    }
+    double number = 0;
+    if (napi_get_value_double(env, value, &number) != napi_ok || !(number >= 0) || number > 9007199254740991.0) {
+        char message[128];
+        snprintf(message, sizeof message, "createSystem: scheduling.%s must be a non-negative number", name);
+        tna_throw(env, "invalid", message);
+        return false;
+    }
+    *out = (uint64_t)number;
+    return true;
+}
+
 static bool tna_hook_option(napi_env env, napi_value object, const char *name, napi_ref *out) {
     napi_value value = NULL;
     if (!tna_option(env, object, name, &value)) {
@@ -251,6 +271,7 @@ bool tna_pump_init(napi_env env, tna_napi_system *wrapper, napi_value facade, na
         !tna_count_option(env, scheduling, "resumesPerTurn", &budgets->resumes) ||
         !tna_count_option(env, scheduling, "messageBudget", &budgets->messages) ||
         !tna_count_option(env, scheduling, "maxQueuedMessages", &wrapper->system->sched.max_queued) ||
+        !tna_bytes_option(env, scheduling, "maxRetainedBytes", &wrapper->system->sched.max_retained) ||
         !tna_count_option(env, scheduling, "dueBudget", &wrapper->system->due_budget) ||
         !tna_clock_option(env, options, &clock) || !tna_option(env, options, "initialTime", &initial_value) ||
         (initial_value != NULL && !tna_time_value(env, initial_value, "createSystem: initialTime", &initial)) ||
@@ -489,6 +510,90 @@ static void tna_dead_letter_record(napi_env env, tna_napi_system *wrapper, const
 }
 
 /* ------------------------------------------------------------------------
+ * send() promises (ADR 0005 point 11)
+ */
+
+/* The error code a dead letter's reason gives a send() (ADR 0008). */
+static const char *const tna_dead_codes[] = {
+    [TNA_DEAD_NOT_FOUND] = "not-found",
+    [TNA_DEAD_DONE] = "done",
+    [TNA_DEAD_DESTROYED] = "not-found",
+    [TNA_DEAD_REFUSED] = "invalid",
+    [TNA_DEAD_UNLOADED] = "unloaded",
+};
+
+static napi_value tna_settlement_error(napi_env env, const tna_settlement *settlement) {
+    char message[160];
+    napi_value error = NULL;
+    if (settlement->kind == TNA_SETTLE_DEAD) {
+        snprintf(message, sizeof message, "send: the message became a dead letter (%s)", tna_dead_reasons[settlement->reason]);
+        error = tna_error(env, tna_dead_codes[settlement->reason], message);
+        napi_value detail = NULL;
+        napi_value reason = NULL;
+        if (error != NULL && napi_create_object(env, &detail) == napi_ok &&
+            napi_create_string_utf8(env, tna_dead_reasons[settlement->reason], NAPI_AUTO_LENGTH, &reason) == napi_ok &&
+            tna_set(env, detail, "reason", reason) == napi_ok) {
+            napi_set_named_property(env, error, "detail", detail);
+        }
+        return error;
+    }
+    const char *code = tna_result_code(settlement->code);
+    snprintf(message, sizeof message, "send: the message's macrostep failed (%s); the actor is quarantined", code);
+    return tna_error(env, code, message);
+}
+
+/* { actor, status, completion }: the macrostep ended with the actor stable or done. */
+static napi_value tna_settlement_result(napi_env env, tna_napi_system *wrapper, const tna_settlement *settlement) {
+    napi_value result = NULL;
+    napi_value status = NULL;
+    bool done = settlement->kind == TNA_SETTLE_DONE;
+    if (napi_create_object(env, &result) != napi_ok ||
+        napi_create_string_utf8(env, done ? "done" : "stable", NAPI_AUTO_LENGTH, &status) != napi_ok ||
+        tna_set(env, result, "actor", tna_actor_view(env, wrapper, settlement->actor)) != napi_ok ||
+        tna_set(env, result, "status", status) != napi_ok) {
+        return NULL;
+    }
+    if (done) {
+        tna_set(env, result, "completion", tna_completion_data(env, wrapper->system, settlement->actor));
+    }
+    return result;
+}
+
+/*
+ * Settles the send() promises whose messages settled (ADR 0007: after the
+ * last core call of the turn). Runs before the hooks, so a finished actor's
+ * completion is still readable before finished: "destroy" removes it, and
+ * again after them, for settlements the hooks caused.
+ */
+static void tna_settle_sends(napi_env env, tna_napi_system *wrapper) {
+    tna_sched *sched = &wrapper->system->sched;
+    tna_settlement settlement;
+    while (tna_sched_settlement_pop(sched, &settlement)) {
+        tna_waiter *waiter = tna_sched_waiter(sched, settlement.waiter);
+        if (waiter == NULL || waiter->host == NULL) {
+            continue;
+        }
+        napi_deferred deferred = waiter->host;
+        tna_sched_waiter_give(sched, settlement.waiter);
+        napi_handle_scope scope = NULL;
+        napi_open_handle_scope(env, &scope);
+        if (settlement.kind == TNA_SETTLE_STABLE || settlement.kind == TNA_SETTLE_DONE) {
+            napi_value result = tna_settlement_result(env, wrapper, &settlement);
+            if (result != NULL) {
+                napi_resolve_deferred(env, deferred, result);
+            } else {
+                napi_reject_deferred(env, deferred, tna_error(env, "out-of-memory", "send: cannot build the result"));
+            }
+        } else {
+            napi_reject_deferred(env, deferred, tna_settlement_error(env, &settlement));
+        }
+        if (scope != NULL) {
+            napi_close_handle_scope(env, scope);
+        }
+    }
+}
+
+/* ------------------------------------------------------------------------
  * Flush waiters
  */
 
@@ -554,6 +659,7 @@ static napi_value tna_turn_callback(napi_env env, napi_callback_info info) {
     napi_value first_error = NULL;
     if (!tna_system_closed(system)) {
         tna_system_turn(system);
+        tna_settle_sends(env, wrapper);
         for (const tna_turn_record *record = system->sched.records; record != NULL; record = record->next) {
             if (tna_system_closed(system)) {
                 break; /* a hook closed the system */
@@ -565,6 +671,9 @@ static napi_value tna_turn_callback(napi_env env, napi_callback_info info) {
             } else {
                 tna_dead_letter_record(env, wrapper, record, &first_error);
             }
+        }
+        if (!tna_system_closed(system)) {
+            tna_settle_sends(env, wrapper);
         }
         tna_system_end_turn(system);
         if (tna_settled(system)) {
@@ -653,6 +762,18 @@ void tna_pump_close(tna_napi_system *wrapper, bool env_usable) {
         napi_value error = tna_error(env, "closed", "the system was closed");
         for (uint32_t index = 0; index < wrapper->waiter_count; index += 1) {
             napi_reject_deferred(env, wrapper->waiters[index], error);
+        }
+    }
+    /* send() promises still pending reject with "closed" (ADR 0012). */
+    tna_sched *sched = &wrapper->system->sched;
+    napi_value closed = env_usable && sched->waiters_live > 0 ? tna_error(env, "closed", "the system was closed") : NULL;
+    for (uint32_t index = 1; index < sched->waiters.count; index += 1) {
+        tna_waiter *waiter = tna_sched_waiter(sched, index);
+        if (waiter->state != TNA_WAITER_FREE) {
+            if (closed != NULL && waiter->host != NULL) {
+                napi_reject_deferred(env, waiter->host, closed);
+            }
+            tna_sched_waiter_give(sched, index);
         }
     }
     /* Waiters that cannot be settled (finalizer, teardown) are abandoned. */

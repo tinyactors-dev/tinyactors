@@ -412,17 +412,85 @@ static bool tna_post_event(napi_env env, tna_napi_system *wrapper, uint32_t name
     return true;
 }
 
+/* The retained-bytes estimate argument (ADR 0005 point 9): 0 when absent. */
+static bool tna_bytes_argument(napi_env env, napi_value value, uint32_t *out) {
+    napi_valuetype type = napi_undefined;
+    *out = 0;
+    if (value == NULL || napi_typeof(env, value, &type) != napi_ok || type == napi_undefined) {
+        return true;
+    }
+    double bytes = 0;
+    if (type != napi_number || napi_get_value_double(env, value, &bytes) != napi_ok || !(bytes >= 0)) {
+        return false;
+    }
+    *out = bytes > (double)UINT32_MAX ? UINT32_MAX : (uint32_t)bytes;
+    return true;
+}
+
 /*
- * post(slot, generation, name, data?): queues an event for an actor (ADR
- * 0005). `name` is a ta_event_name_id from internEvent(); `data` is any
- * JavaScript value, shared, not copied (ADR 0011). Mail for a stale ID is
- * accepted as a dead letter. Throws "queue-full" at maxQueuedMessages. It
- * never calls core, so it is allowed inside a core call (a data-model
- * callback may post; ADR 0013).
+ * A send() in flight: its waiter and promise. A post has none. `failed`
+ * settles a refused message: a post throws, a send rejects (ADR 0008 point
+ * 3: a full queue is not misuse, so a send reports it through its promise).
  */
-static napi_value tna_post_method(napi_env env, napi_callback_info info) {
-    size_t argc = 4;
-    napi_value argv[4] = { NULL, NULL, NULL, NULL };
+typedef struct {
+    bool send;
+    uint32_t waiter;
+    napi_deferred deferred;
+    napi_value promise;
+} tna_accepting;
+
+static bool tna_accept_begin(napi_env env, tna_napi_system *wrapper, tna_accepting *accepting) {
+    if (!accepting->send) {
+        return true;
+    }
+    if (napi_create_promise(env, &accepting->deferred, &accepting->promise) != napi_ok) {
+        tna_throw(env, "out-of-memory", "send: cannot create a promise");
+        return false;
+    }
+    accepting->waiter = tna_sched_waiter_take(&wrapper->system->sched);
+    if (accepting->waiter != 0) {
+        tna_sched_waiter(&wrapper->system->sched, accepting->waiter)->host = accepting->deferred;
+    }
+    return true;
+}
+
+static napi_value tna_accept_failed(napi_env env, tna_napi_system *wrapper, tna_accepting *accepting, ta_result result) {
+    const char *code = result == TA_ERR_BUSY ? "queue-full" : tna_result_code(result);
+    const char *message = result == TA_ERR_BUSY
+                              ? "the system holds maxQueuedMessages messages or maxRetainedBytes of data"
+                              : "the message was not accepted";
+    if (!accepting->send) {
+        return tna_throw(env, code, message);
+    }
+    tna_sched_waiter_give(&wrapper->system->sched, accepting->waiter);
+    napi_reject_deferred(env, accepting->deferred, tna_error(env, code, message));
+    return accepting->promise;
+}
+
+static napi_value tna_accept_done(napi_env env, tna_napi_system *wrapper, tna_accepting *accepting) {
+    if (!accepting->send) {
+        napi_value undefined = NULL;
+        napi_get_undefined(env, &undefined);
+        return undefined;
+    }
+    const tna_waiter *waiter = tna_sched_waiter(&wrapper->system->sched, accepting->waiter);
+    wrapper->last_send_token = (double)waiter->generation * 4294967296.0 + (double)accepting->waiter;
+    return accepting->promise;
+}
+
+/*
+ * post(slot, generation, name, data?, bytes?) and send(...): queue an event
+ * for an actor (ADR 0005). `name` is a ta_event_name_id from internEvent();
+ * `data` is any JavaScript value, shared, not copied (ADR 0011); `bytes` is
+ * its retained-bytes estimate. Mail for a stale ID is accepted as a dead
+ * letter. post() throws "queue-full" when a limit is reached; send() returns
+ * a promise that settles when the message's macrostep ends (ADR 0005 point
+ * 11) and rejects with "queue-full" instead. Neither calls core, so both are
+ * allowed inside a core call (a data-model callback may post; ADR 0013).
+ */
+static napi_value tna_post_common(napi_env env, napi_callback_info info, bool send) {
+    size_t argc = 5;
+    napi_value argv[5] = { NULL, NULL, NULL, NULL, NULL };
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
         return NULL;
     }
@@ -430,31 +498,99 @@ static napi_value tna_post_method(napi_env env, napi_callback_info info) {
     uint32_t slot = 0;
     uint32_t generation = 0;
     uint32_t name = 0;
+    uint32_t bytes = 0;
     if (wrapper == NULL) {
         return NULL;
     }
     if (argc < 3 || napi_get_value_uint32(env, argv[0], &slot) != napi_ok ||
         napi_get_value_uint32(env, argv[1], &generation) != napi_ok ||
-        napi_get_value_uint32(env, argv[2], &name) != napi_ok) {
-        return tna_throw(env, "invalid", "post: expected (slot, generation, name)");
+        napi_get_value_uint32(env, argv[2], &name) != napi_ok || !tna_bytes_argument(env, argv[4], &bytes)) {
+        return tna_throw(env, "invalid", "post: expected (slot, generation, name, data, bytes)");
     }
     ta_event event;
     if (!tna_post_event(env, wrapper, name, argv[3], &event)) {
         return NULL;
     }
-    ta_result result = tna_system_post(wrapper->system, ta_actor_id_make(slot, generation), &event);
+    tna_accepting accepting = { .send = send };
+    if (!tna_accept_begin(env, wrapper, &accepting)) {
+        ta_value_release(&event.data);
+        return NULL;
+    }
+    ta_result result = send && accepting.waiter == 0
+                           ? TA_ERR_NOMEM
+                           : tna_system_post(wrapper->system, &(tna_message){
+                                                                  .target = ta_actor_id_make(slot, generation),
+                                                                  .event = &event,
+                                                                  .bytes = bytes,
+                                                                  .waiter = accepting.waiter,
+                                                              });
     if (result != TA_OK) {
         ta_value_release(&event.data);
+        return tna_accept_failed(env, wrapper, &accepting, result);
     }
-    if (result == TA_ERR_BUSY) {
-        return tna_throw(env, "queue-full", "post: the system holds maxQueuedMessages messages");
+    return tna_accept_done(env, wrapper, &accepting);
+}
+
+static napi_value tna_post_method(napi_env env, napi_callback_info info) {
+    return tna_post_common(env, info, false);
+}
+
+static napi_value tna_send_method(napi_env env, napi_callback_info info) {
+    return tna_post_common(env, info, true);
+}
+
+/*
+ * cancelSend(token, code): a send()'s signal was aborted or its timeout
+ * passed (code "aborted" or "timeout"). A message still waiting in a mailbox
+ * is withdrawn and never delivered; one core already accepted is not undone.
+ * The promise rejects with `code`. Returns false when the send had settled.
+ */
+static napi_value tna_cancel_send_method(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2] = { NULL, NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
     }
-    if (result != TA_OK) {
-        return tna_throw(env, tna_result_code(result), "post: the message was not accepted");
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
     }
-    napi_value undefined = NULL;
-    napi_get_undefined(env, &undefined);
-    return undefined;
+    double token = 0;
+    char code[16] = { 0 };
+    size_t length = 0;
+    if (argc < 2 || napi_get_value_double(env, argv[0], &token) != napi_ok ||
+        napi_get_value_string_utf8(env, argv[1], code, sizeof code, &length) != napi_ok) {
+        return tna_throw(env, "invalid", "cancelSend: expected (token, code)");
+    }
+    tna_sched *sched = &wrapper->system->sched;
+    uint32_t index = (uint32_t)(token - (double)(uint32_t)(token / 4294967296.0) * 4294967296.0);
+    uint32_t generation = (uint32_t)(token / 4294967296.0);
+    tna_waiter *waiter = tna_sched_waiter(sched, index);
+    bool cancelled = false;
+    if (waiter != NULL && waiter->generation == generation && waiter->host != NULL) {
+        napi_deferred deferred = waiter->host;
+        cancelled = tna_sched_cancel(sched, index);
+        if (cancelled) {
+            const char *message = strcmp(code, "timeout") == 0 ? "send: the timeout passed before the message completed"
+                                                                : "send: the signal was aborted";
+            napi_reject_deferred(env, deferred, tna_error(env, code, message));
+            tna_sched_waiter_give(sched, index);
+        }
+    }
+    napi_value out = NULL;
+    napi_get_boolean(env, cancelled, &out);
+    return out;
+}
+
+/* The token of the last send() this system accepted (see cancelSend). */
+static napi_value tna_last_send_token_getter(napi_env env, napi_callback_info info) {
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    napi_value out = NULL;
+    napi_create_double(env, wrapper->last_send_token, &out);
+    return out;
 }
 
 /* A string argument read into the call arena; false when it is not a string. */
@@ -538,14 +674,14 @@ static napi_value tna_id_page_method(napi_env env, napi_callback_info info) {
 }
 
 /*
- * postNamed(family, name, event, data?): queues an event for the actor the
- * directory has at that address (ADR 0006), or a dead letter when it has
- * none. Interning the address is a core call, so this one is not allowed
- * inside a core call.
+ * postNamed(family, name, event, data?, bytes?) and sendNamed(...): as post
+ * and send, for the actor the directory has at that address (ADR 0006), or a
+ * dead letter when it has none. Interning the address is a core call, so
+ * these are not allowed inside a core call.
  */
-static napi_value tna_post_named_method(napi_env env, napi_callback_info info) {
-    size_t argc = 4;
-    napi_value argv[4] = { NULL, NULL, NULL, NULL };
+static napi_value tna_post_named_common(napi_env env, napi_callback_info info, bool send) {
+    size_t argc = 5;
+    napi_value argv[5] = { NULL, NULL, NULL, NULL, NULL };
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
         return NULL;
     }
@@ -559,9 +695,10 @@ static napi_value tna_post_named_method(napi_env env, napi_callback_info info) {
     }
     ta_actor_address text = {0};
     uint32_t name = 0;
+    uint32_t bytes = 0;
     bool ok = argc >= 3 && tna_text_argument(env, system, argv[0], &text.family.name) &&
               tna_text_argument(env, system, argv[1], &text.name) &&
-              napi_get_value_uint32(env, argv[2], &name) == napi_ok;
+              napi_get_value_uint32(env, argv[2], &name) == napi_ok && tna_bytes_argument(env, argv[4], &bytes);
     ta_address *address = NULL;
     ta_result result = ok ? ta_address_intern(system->core, &text, &address) : TA_ERR_INVALID;
     tna_scratch_reset_call(&system->scratch);
@@ -576,21 +713,31 @@ static napi_value tna_post_named_method(napi_env env, napi_callback_info info) {
         ta_address_release(address);
         return NULL;
     }
-    result = tna_router_post_named(system, address, &event);
+    tna_accepting accepting = { .send = send };
+    if (!tna_accept_begin(env, wrapper, &accepting)) {
+        ta_address_release(address);
+        ta_value_release(&event.data);
+        return NULL;
+    }
+    result = send && accepting.waiter == 0
+                 ? TA_ERR_NOMEM
+                 : tna_router_post_named(system, address,
+                                         &(tna_message){ .event = &event, .bytes = bytes, .waiter = accepting.waiter });
     ta_address_release(address);
     if (result != TA_OK) {
         ta_value_release(&event.data);
-    }
-    if (result == TA_ERR_BUSY) {
-        return tna_throw(env, "queue-full", "post: the system holds maxQueuedMessages messages");
-    }
-    if (result != TA_OK) {
-        return tna_throw(env, tna_result_code(result), "post: the message was not accepted");
+        return tna_accept_failed(env, wrapper, &accepting, result);
     }
     tna_system_want_turn(system);
-    napi_value undefined = NULL;
-    napi_get_undefined(env, &undefined);
-    return undefined;
+    return tna_accept_done(env, wrapper, &accepting);
+}
+
+static napi_value tna_post_named_method(napi_env env, napi_callback_info info) {
+    return tna_post_named_common(env, info, false);
+}
+
+static napi_value tna_send_named_method(napi_env env, napi_callback_info info) {
+    return tna_post_named_common(env, info, true);
 }
 
 /*
@@ -724,6 +871,10 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "internEvent", NULL, tna_intern_event_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "post", NULL, tna_post_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "postNamed", NULL, tna_post_named_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "send", NULL, tna_send_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "sendNamed", NULL, tna_send_named_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "cancelSend", NULL, tna_cancel_send_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "lastSendToken", NULL, NULL, tna_last_send_token_getter, NULL, NULL, napi_default_jsproperty, NULL },
         { "idPage", NULL, tna_id_page_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "closed", NULL, NULL, tna_closed_getter, NULL, NULL, napi_default_jsproperty, NULL },
     };

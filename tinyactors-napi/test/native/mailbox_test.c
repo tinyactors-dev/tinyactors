@@ -85,7 +85,7 @@ static ta_event_name_id name(tna_system *system, const char *text) {
 
 static ta_result post(tna_system *system, ta_actor_id target, ta_event_name_id event) {
     ta_event message = { .name = event, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    return tna_system_post(system, target, &message);
+    return tna_system_post(system, &(tna_message){ .target = target, .event = &message });
 }
 
 /* One turn; returns the number of records of `kind` it produced. */

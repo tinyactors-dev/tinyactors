@@ -192,7 +192,7 @@ static void post(tna_system *system, ta_actor_id actor, const char *name) {
     ta_event_name_id id = 0;
     CHECK(tna_event_name_intern(system->core, (ta_str){ .ptr = name, .len = (uint32_t)strlen(name) }, &id) == TA_OK);
     ta_event event = { .name = id, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(tna_system_post(system, actor, &event) == TA_OK);
+    CHECK(tna_system_post(system, &(tna_message){ .target = actor, .event = &event }) == TA_OK);
 }
 
 /* Manual clock: nothing fires before its deadline, and deadlines fire in order. */

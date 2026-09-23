@@ -46,6 +46,7 @@ struct tna_napi_system {
     bool destroy_finished;        /* finished: "destroy" (the default) */
     tna_values values;            /* value boxes (ADR 0011) */
     tna_js_datamodel dm;          /* the JavaScript data model (ADR 0011) */
+    double last_send_token;       /* the token of the last send(), for cancelSend() */
     napi_deferred *waiters;       /* flush() promises */
     uint32_t waiter_count;
     uint32_t waiter_capacity;
