@@ -43,7 +43,6 @@
 #include <time.h>
 
 #include "allocator.h"
-#include "null_datamodel.h"
 
 #define STR(text) {.ptr = (text), .len = (uint32_t)(sizeof(text) - 1u)}
 
@@ -316,7 +315,7 @@ static ta_definition_id register_revision(ta_system *system, ta_allocator alloca
         system,
         &(ta_definition_compile_params){
             .spec = &(ta_scxml_spec){.datamodel = STR("null"), .identity = &identity, .states = states},
-            .datamodel = tat_null_datamodel(),
+            .datamodel = ta_null_datamodel(),
             .allocator = allocator,
             .out = &definition,
         });

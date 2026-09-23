@@ -66,7 +66,7 @@ handles, and adapters.
 The host includes three data models, chosen per chart by its `datamodel`:
 `datamodel.jq` (below), `datamodel.ecmascript`, backed by quickjs-ng (see
 `docs/ecmascript-datamodel.md`), and `datamodel.null`, the minimum SCXML B.1
-profile (`src/null_datamodel.c`): conditions are the `In(state)` predicate
+profile, which core ships as `ta_null_datamodel()` (ADR 0057): conditions are the `In(state)` predicate
 and nothing else, there are no data bindings, values or scripts, and an
 actor of such a chart carries no data-model instance. The three are fully
 separate; values cross between them, and over the protocol, only as JSON

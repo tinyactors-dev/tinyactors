@@ -5,7 +5,6 @@
 #include "binding.h"
 #include "instruments.h"
 #include "json_datamodel.h"
-#include "null_datamodel.h"
 #include "ta_scxml.h"
 #include "ta_rpc.h"
 #include "value_codec.h"
@@ -40,12 +39,12 @@ static bool tat_make_jq_datamodel(tat_bind *bind, jv config, void *out) {
 }
 
 /* datamodel.ecmascript: SCXML B.2 on quickjs-ng; one runtime per host process. */
-/* datamodel.null: SCXML B.1, the minimum profile (src/null_datamodel.c). */
+/* datamodel.null: SCXML B.1, the minimum profile, which core ships (ADR 0057). */
 static bool tat_make_null_datamodel(tat_bind *bind, jv config, void *out) {
     if (!tat_no_config(bind, config)) {
         return false;
     }
-    *(ta_datamodel *)out = tat_null_datamodel();
+    *(ta_datamodel *)out = ta_null_datamodel();
     return true;
 }
 
