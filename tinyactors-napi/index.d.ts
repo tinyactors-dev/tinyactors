@@ -422,13 +422,18 @@ export interface InvocationInspection {
   readonly autoforward: boolean;
 }
 
+/** One pending delayed send; `delayedSends` is ordered by due time, then send order. */
 export interface DelayedSendInspection {
   readonly id: SendId;
   readonly due: number;
   readonly event: EventName;
   readonly ioType: string;
+  /** The resolved receiver for the built-in SCXML processor; absent for custom processors, which use `target`. */
+  readonly destination?: ActorId | ActorAddress;
   readonly target: unknown;
   readonly data: unknown;
+  /** The router refused this send once; it is waiting to be offered again. */
+  readonly submitted: boolean;
 }
 
 /* --------------------------------------------------------------------------
