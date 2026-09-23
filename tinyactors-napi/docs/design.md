@@ -1,5 +1,8 @@
 # Tinyactors Node-API binding design
 
+> Superseded where they differ by the ADRs in [`adr/`](adr/README.md), which
+> record the design of the from-scratch rewrite.
+
 ## Status and scope
 
 This document records the design for the Node-API binding. The current module
