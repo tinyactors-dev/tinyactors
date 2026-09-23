@@ -10,15 +10,16 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test415 do
-  initial :final
-  data :_irp_outcome
-  final :final do
-    on_entry do
-      raise_event 'event1'
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test415, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="final" version="1.0" datamodel="jq" name="irp_test415"><datamodel><data id="_irp_outcome"/></datamodel>
+  <final id="final">
+    <onentry>
+      <raise event="event1"></raise>
+      </onentry>
+   </final>
+
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test415')

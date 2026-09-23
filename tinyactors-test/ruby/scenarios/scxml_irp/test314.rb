@@ -12,40 +12,41 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test314 do
-  initial :s0
-  data :_irp_outcome
-  data Var1: { expr: '1' }
-  state :s0, initial: :s01 do
-    transition on: 'error.execution', target: :fail
-    state :s01 do
-      transition target: :s02
-    end
-    state :s02 do
-      transition target: :s03
-    end
-    state :s03 do
-      on_entry do
-        assign '.Var1', 'error("conf:illegalExpr")'
-        raise_event 'foo'
-      end
-      transition on: 'error.execution', target: :pass
-      transition on: '.*', target: :fail
-    end
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test314, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="jq" initial="s0" name="irp_test314">
+<datamodel><data id="_irp_outcome"/>
+  <data id="Var1" expr="1"></data>
+ </datamodel>
+
+
+<state id="s0" initial="s01">
+  <transition event="error.execution" target="fail"></transition>
+  
+   <state id="s01">
+      <transition target="s02"></transition>
+    </state>
+
+   <state id="s02">
+     <transition target="s03"></transition>
+   </state>
+
+  <state id="s03">
+    <onentry>
+     <assign location=".Var1" expr="error(&quot;conf:illegalExpr&quot;)"></assign>
+      <raise event="foo"></raise>
+   </onentry>
+     <transition event="error.execution" target="pass"></transition> 
+     <transition event=".*" target="fail"></transition>
+  </state>
+   
+</state>
+    
+<final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+<final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+
+   
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test314')

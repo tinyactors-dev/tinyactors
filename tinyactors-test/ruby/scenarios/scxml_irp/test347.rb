@@ -10,50 +10,47 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test347_child1, document_name: 'machineName' do
-  initial :sub0
-  state :sub0 do
-    on_entry do
-      send_event 'childToParent', to: '#_parent', type: 'http://www.w3.org/TR/scxml/#SCXMLEventProcessor'
-    end
-    transition on: 'parentToChild', target: :subFinal
-  end
-  final :subFinal
-end
+TinyactorsTest.scxml_chart :irp_test347, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="s0" datamodel="jq" version="1.0" name="irp_test347"><datamodel><data id="_irp_outcome"/></datamodel>
 
-TinyactorsTest.chart :irp_test347 do
-  initial :s0
-  data :_irp_outcome
-  state :s0, initial: :s01 do
-    invoke type: 'scxml', id: 'child', chart: :irp_test347_child1
-    on_entry do
-      send_event 'timeout', delay: 20000
-    end
-    transition on: 'timeout', target: :fail
-    state :s01 do
-      transition on: 'childToParent', target: :s02
-    end
-    state :s02 do
-      on_entry do
-        send_event 'parentToChild', to: '#_child', type: 'http://www.w3.org/TR/scxml/#SCXMLEventProcessor'
-      end
-      transition on: 'done.invoke', target: :pass
-      transition on: 'error', target: :fail
-    end
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+  
+<state id="s0" initial="s01">
+     <invoke id="child" type="scxml">
+      <content>
+      <scxml xmlns="http://www.w3.org/2005/07/scxml" initial="sub0" version="1.0" datamodel="jq" name="machineName">  
+         <state id="sub0">
+           <onentry>
+             <send type="http://www.w3.org/TR/scxml/#SCXMLEventProcessor" target="#_parent" event="childToParent"></send>
+         </onentry>
+      <transition event="parentToChild" target="subFinal"></transition>
+     </state>
+     <final id="subFinal"></final>
+       </scxml>
+     </content>
+        </invoke>
+   <onentry>
+     <send delay="20s" event="timeout"></send>
+     </onentry>
+  <transition event="timeout" target="fail"></transition>
+        
+  <state id="s01">
+      <transition event="childToParent" target="s02"></transition>
+      </state>
+    
+   <state id="s02">
+     <onentry>
+       <send type="http://www.w3.org/TR/scxml/#SCXMLEventProcessor" target="#_child" event="parentToChild"></send>
+       </onentry>
+   <transition event="done.invoke" target="pass"></transition>
+   <transition event="error" target="fail"></transition>
+   </state>
+</state>
+  
+   <final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+   <final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test347')

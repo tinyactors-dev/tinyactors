@@ -13,35 +13,34 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test280, binding: :late do
-  initial :s0
-  data :_irp_outcome
-  data :Var1
-  state :s0 do
-    transition target: :s1, cond: '.Var2 == null'
-    transition target: :fail
-  end
-  state :s1 do
-    data Var2: { expr: '1' }
-    on_entry do
-      assign '.Var1', '.Var2'
-    end
-    transition target: :pass, cond: '.Var1 == .Var2'
-    transition target: :fail
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test280, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="s0" version="1.0" datamodel="jq" binding="late" name="irp_test280">
+ 
+ <datamodel><data id="_irp_outcome"/>
+   <data id="Var1"></data>
+   </datamodel>  
+     
+ <state id="s0">
+   <transition cond=".Var2 == null" target="s1"></transition>
+  <transition target="fail"></transition>
+   </state>
+   
+<state id="s1">
+  <datamodel>
+    <data id="Var2" expr="1"></data>
+    </datamodel>
+    <onentry>
+    <assign location=".Var1" expr=".Var2"></assign>
+    </onentry>
+    <transition cond=".Var1 == .Var2" target="pass"></transition>
+    <transition target="fail"></transition>
+  </state>
+   
+   <final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+   <final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+     
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test280')

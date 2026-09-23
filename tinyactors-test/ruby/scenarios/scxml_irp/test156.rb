@@ -11,35 +11,35 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test156 do
-  initial :s0
-  data :_irp_outcome
-  data Var1: { expr: '0' }
-  data :Var2
-  data Var3: { content: "\n  [1,2,3]\n  " }
-  state :s0 do
-    on_entry do
-      foreach '.Var3', item: 'Var2' do
-        assign '.Var1', '.Var1 + 1'
-        assign '.Var5', 'error("conf:illegalExpr")'
-      end
-    end
-    transition target: :pass, cond: '.Var1 == 1'
-    transition target: :fail
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test156, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="s0" version="1.0" datamodel="jq" name="irp_test156">
+
+<datamodel><data id="_irp_outcome"/>
+  <data id="Var1" expr="0"></data>
+  <data id="Var2"></data>
+  <data id="Var3">
+  [1,2,3]
+  </data>
+  </datamodel>
+  
+   <state id="s0">
+      <onentry>
+        <foreach item="Var2" array=".Var3">
+          <assign location=".Var1" expr=".Var1 + 1"/>
+          
+          <assign location=".Var5" expr="error(&quot;conf:illegalExpr&quot;)"></assign>
+          </foreach>
+        </onentry>
+
+  <transition cond=".Var1 == 1" target="pass"></transition>
+  <transition target="fail"></transition>
+  </state> 
+   
+   <final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+   <final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+   
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test156')

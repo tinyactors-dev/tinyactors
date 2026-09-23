@@ -12,91 +12,103 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test387 do
-  initial :s3
-  data :_irp_outcome
-  state :s0, initial: :s01 do
-    transition on: 'enteringS011', target: :s4
-    transition on: '*', target: :fail
-    history :s0HistShallow, type: :shallow, default: :s01
-    history :s0HistDeep, type: :deep, default: :s022
-    state :s01, initial: :s011 do
-      state :s011 do
-        on_entry do
-          raise_event 'enteringS011'
-        end
-      end
-      state :s012 do
-        on_entry do
-          raise_event 'enteringS012'
-        end
-      end
-    end
-    state :s02, initial: :s021 do
-      state :s021 do
-        on_entry do
-          raise_event 'enteringS021'
-        end
-      end
-      state :s022 do
-        on_entry do
-          raise_event 'enteringS022'
-        end
-      end
-    end
-  end
-  state :s1, initial: :s11 do
-    transition on: 'enteringS122', target: :pass
-    transition on: '*', target: :fail
-    history :s1HistShallow, type: :shallow, default: :s11
-    history :s1HistDeep, type: :deep, default: :s122
-    state :s11, initial: :s111 do
-      state :s111 do
-        on_entry do
-          raise_event 'enteringS111'
-        end
-      end
-      state :s112 do
-        on_entry do
-          raise_event 'enteringS112'
-        end
-      end
-    end
-    state :s12, initial: :s121 do
-      state :s121 do
-        on_entry do
-          raise_event 'enteringS121'
-        end
-      end
-      state :s122 do
-        on_entry do
-          raise_event 'enteringS122'
-        end
-      end
-    end
-  end
-  state :s3 do
-    on_entry do
-      send_event 'timeout', delay: 1000
-    end
-    transition target: :s0HistShallow
-  end
-  state :s4 do
-    transition target: :s1HistDeep
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test387, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="s3" version="1.0" datamodel="jq" name="irp_test387"><datamodel><data id="_irp_outcome"/></datamodel>
+
+       
+<state id="s0" initial="s01">
+
+  <transition event="enteringS011" target="s4"></transition>
+  <transition event="*" target="fail"></transition>
+  
+  <history type="shallow" id="s0HistShallow">
+    <transition target="s01"></transition>
+    </history>
+  <history type="deep" id="s0HistDeep">
+    <transition target="s022"></transition>
+    </history>
+  <state id="s01" initial="s011">
+    <state id="s011">
+       <onentry>
+         <raise event="enteringS011"></raise>
+         </onentry>
+    </state>
+    <state id="s012">
+      <onentry>
+       <raise event="enteringS012"></raise>
+        </onentry>
+    </state>
+  </state>
+ <state id="s02" initial="s021">
+     <state id="s021">
+       <onentry>
+         <raise event="enteringS021"></raise>
+         </onentry>
+    </state>
+    <state id="s022">
+      <onentry>
+       <raise event="enteringS022"></raise>
+        </onentry>
+    </state>
+  </state>
+ 
+</state>
+
+<state id="s1" initial="s11">
+ 
+  <transition event="enteringS122" target="pass"></transition>
+  <transition event="*" target="fail"></transition>
+  
+  <history type="shallow" id="s1HistShallow">
+    <transition target="s11"></transition>
+    </history>
+  <history type="deep" id="s1HistDeep">
+    <transition target="s122"></transition>
+    </history>
+  <state id="s11" initial="s111">
+    <state id="s111">
+       <onentry>
+         <raise event="enteringS111"></raise>
+         </onentry>
+    </state>
+    <state id="s112">
+      <onentry>
+       <raise event="enteringS112"></raise>
+        </onentry>
+    </state>
+  </state>
+ <state id="s12" initial="s121">
+     <state id="s121">
+       <onentry>
+         <raise event="enteringS121"></raise>
+         </onentry>
+    </state>
+    <state id="s122">
+      <onentry>
+       <raise event="enteringS122"></raise>
+        </onentry>
+    </state>
+  </state>
+ 
+</state>
+
+
+<state id="s3">
+  <onentry>
+    <send event="timeout" delay="1s"></send>
+   </onentry>
+  <transition target="s0HistShallow"></transition>
+</state>
+
+<state id="s4">
+  <transition target="s1HistDeep"></transition>
+</state>
+ 
+<final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+<final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test387')

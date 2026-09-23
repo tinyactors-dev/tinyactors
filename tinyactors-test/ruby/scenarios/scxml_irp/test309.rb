@@ -11,26 +11,20 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test309 do
-  initial :s0
-  data :_irp_outcome
-  state :s0 do
-    transition target: :fail, cond: 'error("conf:nonBoolean")'
-    transition target: :pass
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test309, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="jq" initial="s0" name="irp_test309"><datamodel><data id="_irp_outcome"/></datamodel>
+
+<state id="s0"> 
+  <transition cond="error(&quot;conf:nonBoolean&quot;)" target="fail"></transition>
+  <transition target="pass"></transition>
+  </state>
+    
+<final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+<final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+
+   
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test309')

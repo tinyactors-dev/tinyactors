@@ -9,30 +9,27 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test401 do
-  initial :s0
-  data :_irp_outcome
-  state :s0 do
-    on_entry do
-      send_event 'foo'
-      assign 'error("conf:invalidLocation")', '2'
-    end
-    transition on: 'foo', target: :fail
-    transition on: 'error', target: :pass
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test401, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="s0" version="1.0" datamodel="jq" name="irp_test401"><datamodel><data id="_irp_outcome"/></datamodel>
+
+       
+<state id="s0">
+  <onentry>
+     <send event="foo"></send>
+     
+    <assign location="error(&quot;conf:invalidLocation&quot;)" expr="2"></assign>
+    </onentry>
+
+    
+  <transition event="foo" target="fail"></transition>
+  <transition event="error" target="pass"></transition>
+
+</state>
+ 
+<final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+<final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test401')

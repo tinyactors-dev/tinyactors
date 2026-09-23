@@ -12,43 +12,41 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test417 do
-  initial :s1
-  data :_irp_outcome
-  state :s1, initial: :s1p1 do
-    on_entry do
-      send_event 'timeout', delay: 1000
-    end
-    transition on: 'timeout', target: :fail
-    parallel :s1p1 do
-      transition on: 'done.state.s1p1', target: :pass
-      state :s1p11, initial: :s1p111 do
-        state :s1p111 do
-          transition target: :s1p11final
-        end
-        final :s1p11final
-      end
-      state :s1p12, initial: :s1p121 do
-        state :s1p121 do
-          transition target: :s1p12final
-        end
-        final :s1p12final
-      end
-    end
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test417, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="s1" datamodel="jq" name="irp_test417"><datamodel><data id="_irp_outcome"/></datamodel>
+
+ <state id="s1" initial="s1p1">
+   <onentry>
+     <send event="timeout" delay="1s"></send>
+     </onentry>
+   <transition event="timeout" target="fail"></transition>
+
+  <parallel id="s1p1">
+     <transition event="done.state.s1p1" target="pass"></transition>
+     
+     <state id="s1p11" initial="s1p111">
+        <state id="s1p111">
+         <transition target="s1p11final"></transition>
+        </state>
+        <final id="s1p11final"></final>
+     </state>
+     
+     <state id="s1p12" initial="s1p121">
+       <state id="s1p121">
+         <transition target="s1p12final"></transition>
+       </state>
+       <final id="s1p12final"></final>
+     </state>
+     
+  </parallel>
+</state> 
+
+ 
+<final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+<final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test417')

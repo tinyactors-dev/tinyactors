@@ -13,38 +13,35 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test421 do
-  initial :s1
-  data :_irp_outcome
-  state :s1, initial: :s11 do
-    on_entry do
-      send_event 'externalEvent'
-      raise_event 'internalEvent1'
-      raise_event 'internalEvent2'
-      raise_event 'internalEvent3'
-      raise_event 'internalEvent4'
-    end
-    transition on: 'externalEvent', target: :fail
-    state :s11 do
-      transition on: 'internalEvent3', target: :s12
-    end
-    state :s12 do
-      transition on: 'internalEvent4', target: :pass
-    end
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test421, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="s1" datamodel="jq" name="irp_test421"><datamodel><data id="_irp_outcome"/></datamodel>
+
+ <state id="s1" initial="s11">
+   <onentry>
+      <send event="externalEvent"></send>
+     <raise event="internalEvent1"></raise>
+     <raise event="internalEvent2"></raise>
+     <raise event="internalEvent3"></raise>
+     <raise event="internalEvent4"></raise>
+     </onentry>
+    
+   <transition event="externalEvent" target="fail"></transition>
+   
+   <state id="s11">
+     <transition event="internalEvent3" target="s12"></transition>
+     </state>
+     
+   <state id="s12">
+     <transition event="internalEvent4" target="pass"></transition>
+    </state>
+
+</state> 
+
+ 
+<final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+<final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test421')

@@ -11,35 +11,31 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test554_child1 do
-  initial :subFinal
-  final :subFinal
-end
+TinyactorsTest.scxml_chart :irp_test554, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="s0" version="1.0" datamodel="jq" name="irp_test554"><datamodel><data id="_irp_outcome"/></datamodel>
 
-TinyactorsTest.chart :irp_test554 do
-  initial :s0
-  data :_irp_outcome
-  state :s0 do
-    on_entry do
-      send_event 'timer', delay: 1000
-    end
-    invoke type: 'http://www.w3.org/TR/scxml/', chart: :irp_test554_child1, params: { "\"foo" => { location: 'error("conf:invalidNamelist")' } }
-    transition on: 'timer', target: :pass
-    transition on: 'done.invoke', target: :fail
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+     
+<state id="s0">
+  <onentry>
+    <send event="timer" delay="1s"></send>
+    </onentry>
+    
+  
+   <invoke type="http://www.w3.org/TR/scxml/"><param name="&quot;foo" location="error(&quot;conf:invalidNamelist&quot;)"/>
+      <content>
+       <scxml xmlns="http://www.w3.org/2005/07/scxml" initial="subFinal" version="1.0" datamodel="jq" name="irp_test554_child1">
+             <final id="subFinal"></final>
+            </scxml>
+            </content>
+            </invoke>
+     <transition event="timer" target="pass"></transition>
+     <transition event="done.invoke" target="fail"></transition>
+   </state>   
+     
+<final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+<final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test554')

@@ -11,36 +11,39 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test528 do
-  initial :s0
-  data :_irp_outcome
-  state :s0, initial: :s01 do
-    transition on: 'error.execution', target: :s1
-    transition on: 'done.state.s0', target: :fail
-    state :s01 do
-      transition target: :s02
-    end
-    final :s02 do
-      done_data expr: 'error("conf:illegalExpr")'
-    end
-  end
-  state :s1 do
-    transition on: 'done.state.s0', target: :pass, cond: '$_event.data == null'
-    transition on: '*', target: :fail
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test528, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="jq" initial="s0" name="irp_test528"><datamodel><data id="_irp_outcome"/></datamodel>
+
+     
+ <state id="s0" initial="s01">
+   
+   <transition event="error.execution" target="s1"></transition>
+   <transition event="done.state.s0" target="fail"></transition>     
+
+
+   <state id="s01">
+   <transition target="s02"></transition>
+   </state>
+   <final id="s02">
+     <donedata>
+      <content expr="error(&quot;conf:illegalExpr&quot;)"></content>
+      </donedata>
+     </final>
+  </state>
+
+ 
+ 
+ 
+ <state id="s1">
+   <transition event="done.state.s0" cond="$_event.data == null" target="pass"></transition>
+   <transition event="*" target="fail"></transition>
+   </state>
+
+<final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+<final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test528')

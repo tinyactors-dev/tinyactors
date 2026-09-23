@@ -4,8 +4,10 @@
 `vendor/scxml-irp` into scenario files for the scenario runner. Tests written
 in datamodel-neutral `conf:` markup use the jq data model; tests that require
 `datamodel="ecmascript"` use the ECMAScript data model. Each test becomes one file, `ruby/scenarios/scxml_irp/testNNN.rb`.
-The file defines every machine the test needs (the test document, its inline
-child machines, and its sub-documents) followed by the test's scenarios.
+The file holds every document the test needs (its sub-documents and the test
+document) as SCXML, followed by the test's scenarios. The host imports each
+document with `ta_definition_import` through the SCXML codec that ships
+(`tinyactors-scxml`, core ADR 0053): no Ruby code reads SCXML.
 
 ```text
 mise run import-scxml-irp     # regenerate ruby/scenarios/scxml_irp
@@ -16,15 +18,15 @@ mise run scenarios -n 'scxml-irp: test144' # run one
 
 The generated files are committed. `ruby/scxml_irp_check.rb` (part of
 `mise run test`) fails when they are stale. It also loads every generated
-file, which runs the DSL's chart checks, and decodes every chart spec in the
-host.
+file and imports every document in the host through the codec.
 
 ## Files
 
 | File | Role |
 |---|---|
 | `importer.rb` | Reads `manifest.xml`, decides what to skip, and writes the scenario files and `INDEX.md` |
-| `document.rb` | Converts one `.txml` document to chart DSL source |
+| `conf_transform.rb` | Rewrites one `.txml` document as SCXML for its data model (what `confEcma.xsl` does for ECMAScript) |
+| `emitter.rb` | Writes the generated Ruby around the documents |
 | `jq_expressions.rb` | Maps `conf:` markup and small ECMAScript expressions to jq |
 | `ecma_expressions.rb` | Maps `conf:` markup to ECMAScript, for `datamodel="ecmascript"` tests |
 | `expectations.rb` | Applies `baseline.json` to the generated scenarios |
@@ -71,28 +73,27 @@ machine without a `datamodel` attribute uses its parent's data model. The
 adapter has no XML DOM, so tests that call DOM methods such as
 `getElementsByTagName` on XML data are skipped.
 
-**Strict conversion.** Every element and attribute must be understood. Any
-other construct makes the test skipped, and its reason is recorded in
-`INDEX.md`. Nothing is dropped silently.
+**Strict conversion.** The rewrite refuses every `conf:` construct and
+expression it cannot express, and the codec refuses every SCXML element and
+attribute it does not understand. A refused test is skipped with its reason
+in `INDEX.md`. Nothing is dropped silently.
 
 **Invoked child machines.** An inline machine (`<invoke><content><scxml>`)
-becomes a chart of its own, named `irp_testNNN_childN`. The invoke refers to
-it with `chart:`, which embeds that chart's spec as JSON in the invoke's
-`<content>`. A file-based machine (`src="file:testNNNsub1.scxml"`) keeps its
-`src` unchanged, and its `.txml` dependency is converted to the chart
-`irp_testNNNsub1`. An invoker in the test host maps `file:NAME.scxml` to the
-chart `irp_NAME`.
+stays inline, rewritten in the parent's dialect. The codec serializes it with
+its namespace (SCXML G.6) as content of type `application/scxml+xml`, core
+hands the bytes to the invoker, and the host's SCXML invoker imports them
+through the same codec. A file-based machine (`src="file:testNNNsub1.scxml"`)
+keeps its `src`, and its `.txml` dependency becomes the document
+`irp_testNNNsub1`, which the invoker finds by that name.
 
 **Inline `<scxml>` as a value.** An `<scxml>` document can also be the
-content of `<assign>`, `<data>`, or a `<send>`/`<donedata>` `<content>`
-(test530 assigns one and invokes it with `<content expr>`). The host has no
-XML parser (ADR 0025), so the importer converts the document to a child
-chart in the same way and emits `chart:` (`assign '.Var1', chart:
-:irp_test530_child1`). The value is that chart's spec, which the SCXML
-invoker runs.
+content of `<assign>` or `<data>` (test530 assigns one and invokes it with
+`<content expr>`). It stays inline too: the data model imports the markup as
+a string, and the SCXML invoker reads a string value as SCXML text.
 
-**`<data src>`.** The importer reads the file (the core performs no I/O) and
-passes it as inline content.
+**`<data src>`.** The attribute is kept. The scenario file hands the file's
+text to the host (`files:`), and the codec fetches it through the host's
+`ta_chart_src_resolver` (the core performs no I/O).
 
 ## Outcome
 

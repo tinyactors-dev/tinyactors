@@ -11,75 +11,83 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test504 do
-  initial :s1
-  data :_irp_outcome
-  data Var1: { expr: '0' }
-  data Var2: { expr: '0' }
-  data Var3: { expr: '0' }
-  data Var4: { expr: '0' }
-  data Var5: { expr: '0' }
-  state :s1 do
-    on_entry do
-      raise_event 'foo'
-      raise_event 'bar'
-    end
-    transition target: :p
-  end
-  state :s2 do
-    on_exit do
-      assign '.Var5', '.Var5 + 1'
-    end
-    parallel :p do
-      on_exit do
-        assign '.Var1', '.Var1 + 1'
-      end
-      transition on: 'foo', target: :ps1 do
-        assign '.Var4', '.Var4 + 1'
-      end
-      transition on: 'bar', target: :s3, cond: '.Var4 == 1'
-      transition on: 'bar', target: :fail
-      state :ps1 do
-        on_exit do
-          assign '.Var2', '.Var2 + 1'
-        end
-      end
-      state :ps2 do
-        on_exit do
-          assign '.Var3', '.Var3 + 1'
-        end
-      end
-    end
-  end
-  state :s3 do
-    transition target: :s4, cond: '.Var1 == 2'
-    transition target: :fail
-  end
-  state :s4 do
-    transition target: :s5, cond: '.Var2 == 2'
-    transition target: :fail
-  end
-  state :s5 do
-    transition target: :s6, cond: '.Var3 == 2'
-    transition target: :fail
-  end
-  state :s6 do
-    transition target: :pass, cond: '.Var5 == 1'
-    transition target: :fail
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test504, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="s1" version="1.0" datamodel="jq" name="irp_test504">
+<datamodel><data id="_irp_outcome"/>
+  <data id="Var1" expr="0"></data>  
+  <data id="Var2" expr="0"></data>  
+  <data id="Var3" expr="0"></data>  
+  <data id="Var4" expr="0"></data>  
+  <data id="Var5" expr="0"></data>  
+  </datamodel>
+    
+ <state id="s1">
+   <onentry>
+    <raise event="foo"></raise>
+    <raise event="bar"></raise>
+    </onentry>
+   <transition target="p"></transition>
+   </state>
+   
+<state id="s2">
+	 <onexit>
+	 	<assign location=".Var5" expr=".Var5 + 1"/>
+	 	</onexit>
+
+<parallel id="p">
+  <onexit>
+    <assign location=".Var1" expr=".Var1 + 1"/>
+    </onexit>
+  <transition event="foo" target="ps1">
+     <assign location=".Var4" expr=".Var4 + 1"/>
+     </transition>
+     
+    
+  <transition event="bar" cond=".Var4 == 1" target="s3"></transition>
+  <transition event="bar" target="fail"></transition>
+  
+ <state id="ps1">
+   <onexit>
+   <assign location=".Var2" expr=".Var2 + 1"/>
+   </onexit>
+  </state>
+  <state id="ps2">
+   <onexit>
+   <assign location=".Var3" expr=".Var3 + 1"/>
+   </onexit>
+  </state>
+</parallel>
+</state>
+  
+<state id="s3">
+  
+    <transition cond=".Var1 == 2" target="s4"></transition>
+    <transition target="fail"></transition>
+ </state> 
+ 
+<state id="s4">
+  
+    <transition cond=".Var2 == 2" target="s5"></transition>
+    <transition target="fail"></transition>
+ </state> 
+  
+<state id="s5">
+  
+    <transition cond=".Var3 == 2" target="s6"></transition>
+    <transition target="fail"></transition>
+ </state>
+ 
+<state id="s6">
+	
+	<transition cond=".Var5 == 1" target="pass"></transition>
+	<transition target="fail"></transition>
+	</state>
+  
+<final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+<final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+     
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test504')

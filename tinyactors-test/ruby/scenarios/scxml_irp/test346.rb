@@ -10,57 +10,58 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test346, document_name: 'machineName' do
-  initial :s0
-  data :_irp_outcome
-  state :s0 do
-    on_entry do
-      assign '$_sessionid', '"otherName"'
-      raise_event 'event1'
-    end
-    transition on: 'error.execution', target: :s1
-    transition on: '*', target: :fail
-  end
-  state :s1 do
-    on_entry do
-      assign '$_event', '"otherName"'
-      raise_event 'event2'
-    end
-    transition on: 'event1'
-    transition on: 'error.execution', target: :s2
-    transition on: '*', target: :fail
-  end
-  state :s2 do
-    on_entry do
-      assign '$_ioprocessors', '"otherName"'
-      raise_event 'event3'
-    end
-    transition on: 'event2'
-    transition on: 'error.execution', target: :s3
-    transition on: '*', target: :fail
-  end
-  state :s3 do
-    on_entry do
-      assign '$_name', '"otherName"'
-      raise_event 'event4'
-    end
-    transition on: 'event3'
-    transition on: 'error.execution', target: :pass
-    transition on: '*', target: :fail
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test346, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="s0" version="1.0" datamodel="jq" name="machineName"><datamodel><data id="_irp_outcome"/></datamodel>
+
+   
+ <state id="s0">
+   <onentry>
+    <assign location="$_sessionid" expr="&quot;otherName&quot;"></assign>
+    <raise event="event1"></raise>
+    </onentry>
+ 
+   <transition event="error.execution" target="s1"></transition>
+   <transition event="*" target="fail"></transition>
+   </state>
+   
+ <state id="s1">
+     <onentry>
+    <assign location="$_event" expr="&quot;otherName&quot;"></assign>
+    <raise event="event2"></raise>
+    </onentry>
+    
+   <transition event="event1"></transition>
+   <transition event="error.execution" target="s2"></transition>
+   
+   <transition event="*" target="fail"></transition>
+   </state>  
+   
+<state id="s2">
+     <onentry>
+    <assign location="$_ioprocessors" expr="&quot;otherName&quot;"></assign>
+    <raise event="event3"></raise>
+    </onentry>
+   <transition event="event2"></transition>
+   <transition event="error.execution" target="s3"></transition>
+   <transition event="*" target="fail"></transition>
+   </state>  
+   
+<state id="s3">
+     <onentry>
+    <assign location="$_name" expr="&quot;otherName&quot;"></assign>
+    <raise event="event4"></raise>
+    </onentry>
+   <transition event="event3"></transition>
+   <transition event="error.execution" target="pass"></transition>
+   <transition event="*" target="fail"></transition>
+   </state>  
+   
+   
+   <final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+   <final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+     
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test346')

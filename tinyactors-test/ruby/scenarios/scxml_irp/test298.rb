@@ -11,36 +11,35 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test298 do
-  initial :s0
-  data :_irp_outcome
-  data Var1: { expr: '0' }
-  state :s0, initial: :s01 do
-    on_entry do
-      send_event 'timeout', delay: 1000
-    end
-    transition on: 'error.execution', target: :pass
-    transition on: '*', target: :fail
-    state :s01 do
-      transition target: :s02
-    end
-    final :s02 do
-      done_data params: { Var3: { location: 'error("conf:invalidLocation")' } }
-    end
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test298, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="jq" initial="s0" name="irp_test298">
+ <datamodel><data id="_irp_outcome"/>
+       <data id="Var1" expr="0"></data>
+    </datamodel>   
+     
+ <state id="s0" initial="s01">
+ 	<onentry>
+ 		<send event="timeout" delay="1s"></send>
+ 		</onentry>
+ 		
+    <transition event="error.execution" target="pass"></transition>
+       <transition event="*" target="fail"></transition>
+
+   <state id="s01">
+   <transition target="s02"></transition>
+   </state>
+   <final id="s02">
+     <donedata>
+      <param name="Var3" location="error(&quot;conf:invalidLocation&quot;)"></param>
+      </donedata>
+     </final>
+ </state>
+
+<final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+<final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+     
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test298')

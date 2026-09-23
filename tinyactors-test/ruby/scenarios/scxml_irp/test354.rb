@@ -15,52 +15,59 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test354 do
-  initial :s0
-  data :_irp_outcome
-  data Var1: { expr: '1' }
-  data :Var2
-  data :Var3
-  state :s0 do
-    on_entry do
-      send_event 'timeout', delay: 5000
-      send_event 'event1', type: 'http://www.w3.org/TR/scxml/#SCXMLEventProcessor', params: { Var1: { location: '.Var1' }, param1: '2' }
-    end
-    transition on: 'event1', target: :s1 do
-      assign '.Var2', '$_event.data.Var1'
-      assign '.Var3', '$_event.data.param1'
-    end
-    transition on: '*', target: :fail
-  end
-  state :s1 do
-    transition target: :s2, cond: '.Var2 == 1'
-    transition target: :fail
-  end
-  state :s2 do
-    transition target: :s3, cond: '.Var3 == 2'
-    transition target: :fail
-  end
-  state :s3 do
-    on_entry do
-      send_event 'timeout', delay: 5000
-      send_event 'event2', content: '123'
-    end
-    transition on: 'event2', target: :pass, cond: '$_event.data == 123'
-    transition on: '*', target: :fail
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test354, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="s0" version="1.0" datamodel="jq" name="irp_test354">
+<datamodel><data id="_irp_outcome"/>
+  <data id="Var1" expr="1"></data>
+  <data id="Var2"></data>
+  <data id="Var3"></data>
+  </datamodel>
+  
+<state id="s0">
+   <onentry>
+     <send delay="5s" event="timeout"></send>
+    <send event="event1" type="http://www.w3.org/TR/scxml/#SCXMLEventProcessor"><param name="Var1" location=".Var1"/> 
+      <param name="param1" expr="2"></param>
+      </send> 
+     </onentry>
+  <transition event="event1" target="s1">
+    <assign location=".Var2" expr="$_event.data.Var1"></assign>
+    <assign location=".Var3" expr="$_event.data.param1"></assign>
+    </transition>
+  <transition event="*" target="fail">
+    </transition>
+
+</state>
+
+<state id="s1">
+  
+  <transition cond=".Var2 == 1" target="s2"></transition>
+  <transition target="fail"></transition>
+  </state>
+
+<state id="s2">
+    <transition cond=".Var3 == 2" target="s3"></transition>
+  <transition target="fail"></transition>
+  </state>
+
+<state id="s3">
+   <onentry>
+     <send delay="5s" event="timeout"></send>
+    <send event="event2"> 
+      <content>123</content>
+      </send>
+     </onentry>
+  <transition event="event2" cond="$_event.data == 123" target="pass"></transition>
+  <transition event="*" target="fail"></transition>
+
+</state>
+
+
+   <final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+   <final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test354')

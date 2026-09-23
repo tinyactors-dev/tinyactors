@@ -11,41 +11,48 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test250_child1 do
-  initial :sub0
-  state :sub0, initial: :sub01 do
-    on_entry do
-      send_event 'timeout', delay: 2000
-    end
-    transition on: 'timeout', target: :subFinal
-    on_exit do
-      log expr: '"Exiting sub0"'
-    end
-    state :sub01 do
-      on_exit do
-        log expr: '"Exiting sub01"'
-      end
-    end
-  end
-  final :subFinal do
-    on_entry do
-      log expr: '"entering final state, invocation was not cancelled"'
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test250, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="s0" version="1.0" datamodel="jq" name="irp_test250"><datamodel><data id="_irp_outcome"/></datamodel>
 
-TinyactorsTest.chart :irp_test250 do
-  initial :s0
-  data :_irp_outcome
-  state :s0 do
-    on_entry do
-      send_event 'foo'
-    end
-    invoke type: 'http://www.w3.org/TR/scxml/', chart: :irp_test250_child1
-    transition on: 'foo', target: :final
-  end
-  final :final
-end
+     
+<state id="s0">
+  <onentry>
+    <send event="foo"></send>
+    </onentry>
+   
+     <invoke type="http://www.w3.org/TR/scxml/">
+         <content>
+           <scxml xmlns="http://www.w3.org/2005/07/scxml" initial="sub0" version="1.0" datamodel="jq" name="irp_test250_child1">
+             <state id="sub0" initial="sub01">
+               <onentry>
+                <send event="timeout" delay="2s"></send>
+                  </onentry>
+                 <transition event="timeout" target="subFinal"></transition>
+              <onexit>
+                 <log expr="&quot;Exiting sub0&quot;"></log>
+                </onexit> 
+             <state id="sub01">
+             <onexit>
+             <log expr="&quot;Exiting sub01&quot;"></log>
+           </onexit>
+        </state>
+      </state>     
+        <final id="subFinal">
+          <onentry>
+           <log expr="&quot;entering final state, invocation was not cancelled&quot;"></log>
+          </onentry>
+         </final> 
+      </scxml>
+      </content>
+      </invoke>
+      
+     
+     <transition event="foo" target="final"></transition>
+   </state>
+ 
+<final id="final"></final>
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test250')

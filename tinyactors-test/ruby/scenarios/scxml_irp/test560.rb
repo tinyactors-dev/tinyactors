@@ -13,29 +13,26 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test560, datamodel: 'ecmascript' do
-  initial :s0
-  data :_irp_outcome
-  state :s0 do
-    on_entry do
-      send_event 'foo', params: { aParam: '1' }
-    end
-    transition on: 'foo', target: :pass, cond: '_event.data.aParam == 1'
-    transition on: '*', target: :fail
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: "'pass'"
-      assign '_irp_outcome', "'pass'"
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: "'fail'"
-      assign '_irp_outcome', "'fail'"
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test560, <<'SCXML', datamodel: 'ecmascript'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="s0" version="1.0" datamodel="ecmascript" name="irp_test560"><datamodel><data id="_irp_outcome"/></datamodel>
+
+  
+<state id="s0">
+   <onentry>
+    <send event="foo">
+    <param name="aParam" expr="1"></param>
+    </send>
+  </onentry>
+  <transition event="foo" cond="_event.data.aParam == 1" target="pass"></transition>
+  <transition event="*" target="fail"></transition>
+  </state>
+  
+    
+<final id="pass"><onentry><log label="Outcome" expr="'pass'"/><assign location="_irp_outcome" expr="'pass'"/></onentry></final>
+<final id="fail"><onentry><log label="Outcome" expr="'fail'"/><assign location="_irp_outcome" expr="'fail'"/></onentry></final>  
+
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test560')

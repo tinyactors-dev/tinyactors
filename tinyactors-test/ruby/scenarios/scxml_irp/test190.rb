@@ -12,38 +12,40 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test190 do
-  initial :s0
-  data :_irp_outcome
-  data Var1: { expr: '"#_scxml_"' }
-  data Var2: { expr: '$_sessionid' }
-  state :s0 do
-    on_entry do
-      assign '.Var1', '.Var1 + .Var2'
-      send_event 'event2', to_expr: '.Var1'
-      raise_event 'event1'
-      send_event 'timeout'
-    end
-    transition on: 'event1', target: :s1
-    transition on: '*', target: :fail
-  end
-  state :s1 do
-    transition on: 'event2', target: :pass
-    transition on: '*', target: :fail
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test190, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="s0" version="1.0" datamodel="jq" name="irp_test190">
+<datamodel><data id="_irp_outcome"/>
+ <data id="Var1" expr="&quot;#_scxml_&quot;"></data>
+ <data id="Var2" expr="$_sessionid"></data>
+ </datamodel>
+  
+<state id="s0">
+  <onentry>
+  <assign location=".Var1" expr=".Var1 + .Var2"/>
+   
+   <send event="event2" targetexpr=".Var1"></send>
+   
+   <raise event="event1"></raise>
+   
+   <send event="timeout"></send>
+    </onentry>
+ 
+    
+  <transition event="event1" target="s1"></transition>
+  <transition event="*" target="fail"></transition>
+ </state>
+ 
+
+<state id="s1">
+  <transition event="event2" target="pass"></transition>
+  <transition event="*" target="fail"></transition>
+  </state>
+
+   <final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+   <final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test190')

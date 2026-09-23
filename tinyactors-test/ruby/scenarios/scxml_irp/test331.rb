@@ -12,62 +12,68 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test331, document_name: 'machineName' do
-  initial :s0
-  data :_irp_outcome
-  data :Var1
-  state :s0 do
-    on_entry do
-      raise_event 'foo'
-    end
-    transition on: 'foo', target: :s1 do
-      assign '.Var1', '$_event.type'
-    end
-    transition on: '*', target: :fail
-  end
-  state :s1 do
-    transition target: :s2, cond: '.Var1 == "internal"'
-    transition target: :fail
-  end
-  state :s2 do
-    on_entry do
-      assign 'error("conf:invalidLocation")', '1'
-    end
-    transition on: 'error', target: :s3 do
-      assign '.Var1', '$_event.type'
-    end
-    transition on: '*', target: :fail
-  end
-  state :s3 do
-    transition target: :s4, cond: '.Var1 == "platform"'
-    transition target: :fail
-  end
-  state :s4 do
-    on_entry do
-      send_event 'foo'
-    end
-    transition on: 'foo', target: :s5 do
-      assign '.Var1', '$_event.type'
-    end
-    transition on: '*', target: :fail
-  end
-  state :s5 do
-    transition target: :pass, cond: '.Var1 == "external"'
-    transition target: :fail
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test331, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="jq" initial="s0" name="machineName">
+
+
+<datamodel><data id="_irp_outcome"/>
+ <data id="Var1"></data>
+ </datamodel>
+     
+ <state id="s0">
+   <onentry>
+   
+     <raise event="foo"></raise>
+   </onentry>
+   <transition event="foo" target="s1"> 
+     <assign location=".Var1" expr="$_event.type"></assign>
+     </transition>
+      <transition event="*" target="fail"></transition> 
+   </state>
+
+<state id="s1">
+  <transition cond=".Var1 == &quot;internal&quot;" target="s2"></transition>
+  <transition target="fail"></transition>
+  </state>
+   
+<state id="s2">
+   <onentry>
+   
+     <assign location="error(&quot;conf:invalidLocation&quot;)" expr="1"></assign>
+   </onentry>
+   <transition event="error" target="s3">
+     <assign location=".Var1" expr="$_event.type"></assign>
+     </transition> 
+      <transition event="*" target="fail"></transition>
+   </state>
+   
+<state id="s3">
+  <transition cond=".Var1 == &quot;platform&quot;" target="s4"></transition>
+  <transition target="fail"></transition>
+  </state>
+   
+ <state id="s4">
+   <onentry>
+   
+     <send event="foo"></send>
+   </onentry>
+   <transition event="foo" target="s5">
+   <assign location=".Var1" expr="$_event.type"></assign>
+     </transition>   
+      <transition event="*" target="fail"></transition>
+   </state>
+   
+<state id="s5">
+  <transition cond=".Var1 == &quot;external&quot;" target="pass"></transition>
+  <transition target="fail"></transition>
+  </state>
+   
+    
+  <final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+  <final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+     
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test331')

@@ -11,60 +11,66 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test230_child1 do
-  initial :sub0
-  state :sub0 do
-    on_entry do
-      send_event 'childToParent', to: '#_parent'
-      send_event 'timeout', delay: 2000
-    end
-    transition on: 'childToParent', target: :subFinal do
-      log 'name is ', expr: '$_event.name'
-      log 'type is ', expr: '$_event.type'
-      log 'sendid is ', expr: '$_event.sendid'
-      log 'origin is ', expr: '$_event.origin'
-      log 'origintype is ', expr: '$_event.origintype'
-      log 'invokeid is ', expr: '$_event.invokeid'
-      log 'data is ', expr: '$_event.data'
-    end
-    transition on: '*', target: :subFinal
-  end
-  final :subFinal
-end
+TinyactorsTest.scxml_chart :irp_test230, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="s0" version="1.0" datamodel="jq" name="irp_test230"><datamodel><data id="_irp_outcome"/></datamodel>
 
-TinyactorsTest.chart :irp_test230 do
-  initial :s0
-  data :_irp_outcome
-  state :s0, initial: :s01 do
-    on_entry do
-      send_event 'timeout', delay: 3000
-    end
-    invoke type: 'http://www.w3.org/TR/scxml/', autoforward: true, chart: :irp_test230_child1
-    transition on: 'timeout', target: :final
-    state :s01 do
-      transition on: 'childToParent', target: :s02 do
-        log 'name is ', expr: '$_event.name'
-        log 'type is ', expr: '$_event.type'
-        log 'sendid is ', expr: '$_event.sendid'
-        log 'origin is ', expr: '$_event.origin'
-        log 'origintype is ', expr: '$_event.origintype'
-        log 'invokeid is ', expr: '$_event.invokeid'
-        log 'data is ', expr: '$_event.data'
-      end
-      transition on: '*', target: :fail
-    end
-    state :s02 do
-      transition on: 'done.invoke', target: :final
-    end
-  end
-  final :final
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+     
+<state id="s0" initial="s01">
+  <onentry>
+    <send event="timeout" delay="3s"></send>
+    </onentry>
+  <invoke type="http://www.w3.org/TR/scxml/" autoforward="true">
+    <content>
+    
+        <scxml xmlns="http://www.w3.org/2005/07/scxml" initial="sub0" version="1.0" datamodel="jq" name="irp_test230_child1">
+           <state id="sub0">
+            <onentry>
+              <send target="#_parent" event="childToParent"></send> 
+              <send event="timeout" delay="2s"></send>
+             </onentry> 
+           <transition event="childToParent" target="subFinal">
+                  <log label="name is " expr="$_event.name"></log>
+                  <log label="type is " expr="$_event.type"></log>
+                  <log label="sendid is " expr="$_event.sendid"></log>
+                 <log label="origin is " expr="$_event.origin"></log>
+                 <log label="origintype is " expr="$_event.origintype"></log>
+                 <log label="invokeid is " expr="$_event.invokeid"></log>
+                 <log label="data is " expr="$_event.data"></log>
+              </transition>
+          <transition event="*" target="subFinal"></transition>  
+          </state>
+        <final id="subFinal"></final>
+       </scxml>
+       </content>
+       </invoke>
+  <transition event="timeout" target="final"></transition>
+   
+ 
+  <state id="s01">
+  <transition event="childToParent" target="s02">
+    <log label="name is " expr="$_event.name"></log>
+    <log label="type is " expr="$_event.type"></log>
+    <log label="sendid is " expr="$_event.sendid"></log>
+    <log label="origin is " expr="$_event.origin"></log>
+    <log label="origintype is " expr="$_event.origintype"></log>
+    <log label="invokeid is " expr="$_event.invokeid"></log>
+    <log label="data is " expr="$_event.data"></log>
+    </transition>
+  <transition event="*" target="fail"></transition>
+ </state>
+ 
+ <state id="s02">
+  
+   <transition event="done.invoke" target="final"></transition>
+   </state>
+
+</state>
+
+<final id="final"></final>
+<final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test230')

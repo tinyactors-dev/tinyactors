@@ -11,36 +11,32 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test530_child1, datamodel: nil do
-  final :irp_anonymous_1
-end
-
-TinyactorsTest.chart :irp_test530 do
-  initial :s0
-  data :_irp_outcome
-  data Var1: { expr: '1' }
-  state :s0 do
-    on_entry do
-      assign '.Var1', chart: :irp_test530_child1
-      send_event 'timeout', delay: 2000
-    end
-    invoke type: 'http://www.w3.org/TR/scxml/', content_expr: '.Var1'
-    transition on: 'done.invoke', target: :pass
-    transition on: '*', target: :fail
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test530, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="s0" version="1.0" datamodel="jq" name="irp_test530">
+  <datamodel><data id="_irp_outcome"/>
+    <data id="Var1" expr="1"></data>
+    </datamodel>
+    
+    <state id="s0">
+      <onentry>
+        <assign location=".Var1">
+           <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="irp_test530_child1"><final></final></scxml>
+           </assign>
+        <send event="timeout" delay="2s"></send>
+        </onentry>
+        
+      <invoke type="http://www.w3.org/TR/scxml/">
+        <content expr=".Var1"></content>
+        </invoke>
+        
+        <transition event="done.invoke" target="pass"></transition>
+        <transition event="*" target="fail"></transition>
+    </state>
+    
+    <final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+    <final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+  </scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test530')

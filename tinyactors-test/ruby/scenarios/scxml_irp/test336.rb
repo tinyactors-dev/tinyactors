@@ -11,38 +11,32 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test336, document_name: 'machineName' do
-  initial :s0
-  data :_irp_outcome
-  state :s0 do
-    on_entry do
-      send_event 'foo'
-    end
-    transition on: 'foo', target: :s1 do
-      send_event 'bar', to_expr: '$_event.origin', type_expr: '$_event.origintype'
-    end
-    transition on: '*', target: :fail
-  end
-  state :s1 do
-    on_entry do
-      send_event 'baz'
-    end
-    transition on: 'bar', target: :pass
-    transition on: '*', target: :fail
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test336, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="s0" datamodel="jq" version="1.0" name="machineName"><datamodel><data id="_irp_outcome"/></datamodel>  
+   
+ <state id="s0">
+   <onentry>
+     <send event="foo"></send>
+   </onentry>
+   <transition event="foo" target="s1">
+     <send event="bar" targetexpr="$_event.origin" typeexpr="$_event.origintype"/>
+      </transition>
+      <transition event="*" target="fail"></transition> 
+   </state>
+   
+<state id="s1">
+  <onentry>
+    <send event="baz"></send>
+    </onentry>
+  <transition event="bar" target="pass"></transition>
+  <transition event="*" target="fail"></transition>
+  </state>
+      
+   <final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+   <final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+     
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test336')

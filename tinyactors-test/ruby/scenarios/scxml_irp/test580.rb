@@ -10,47 +10,56 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test580 do
-  initial :p1
-  data :_irp_outcome
-  data Var1: { expr: '0' }
-  parallel :p1 do
-    on_entry do
-      send_event 'timeout', delay: 2000
-    end
-    state :s0 do
-      transition target: :fail, cond: 'In("sh1")'
-      transition on: 'timeout', target: :fail
-    end
-    state :s1 do
-      initial :sh1
-      history :sh1, type: :shallow, default: :s11
-      state :s11 do
-        transition target: :fail, cond: 'In("sh1")'
-        transition target: :s12
-      end
-      state :s12
-      transition target: :fail, cond: 'In("sh1")'
-      transition target: :sh1, cond: '.Var1 == 0'
-      transition target: :pass, cond: '.Var1 == 1'
-      on_exit do
-        assign '.Var1', '.Var1 + 1'
-      end
-    end
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test580, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="p1" datamodel="jq" name="irp_test580">
+	<datamodel><data id="_irp_outcome"/>
+		  <data id="Var1" expr="0"></data>
+		</datamodel>
+	
+<parallel id="p1">
+  <onentry>
+  	<send delay="2s" event="timeout"></send>
+    </onentry>
+   
+   
+  <state id="s0">
+ <transition cond="In(&quot;sh1&quot;)" target="fail"></transition>
+ <transition event="timeout" target="fail"></transition>
+  	</state>
+ 
+           
+<state id="s1">
+	<initial>
+		 <transition target="sh1"></transition>
+		 	</initial>
+
+
+ <history id="sh1">
+ 	  <transition target="s11"></transition>
+   	</history>
+  	
+  	<state id="s11">
+  		<transition cond="In(&quot;sh1&quot;)" target="fail"></transition>
+  		<transition target="s12"></transition>
+  		</state>
+  		
+  	<state id="s12"></state>
+  <transition cond="In(&quot;sh1&quot;)" target="fail"></transition>
+ <transition cond=".Var1 == 0" target="sh1"></transition>
+ <transition cond=".Var1 == 1" target="pass"></transition>
+   <onexit>
+  	<assign location=".Var1" expr=".Var1 + 1"/>
+  	</onexit>
+ </state>
+ 
+
+ </parallel>
+ 
+<final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+<final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test580')

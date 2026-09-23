@@ -10,32 +10,31 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test452, datamodel: 'ecmascript' do
-  data :_irp_outcome
-  data foo: { expr: '0' }
-  script "\n    function testobject() {\n    this.bar = 0;}\n   "
-  state :s0 do
-    on_entry do
-      assign 'foo', 'new testobject();'
-      assign 'foo.bar', '1'
-      raise_event 'event1'
-    end
-    transition on: 'event1', target: :pass, cond: 'foo.bar == 1'
-    transition on: '*', target: :fail
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: "'pass'"
-      assign '_irp_outcome', "'pass'"
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: "'fail'"
-      assign '_irp_outcome', "'fail'"
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test452, <<'SCXML', datamodel: 'ecmascript'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" datamodel="ecmascript" version="1.0" name="irp_test452">
+ <datamodel><data id="_irp_outcome"/>
+   <data id="foo" expr="0"></data>
+   </datamodel>
+    <script>
+    function testobject() {
+    this.bar = 0;}
+   </script>    
+<state id="s0">
+ <onentry>
+   <assign location="foo" expr="new testobject();"></assign>
+
+   <assign location="foo.bar" expr="1"></assign>
+   <raise event="event1"></raise>
+   </onentry>
+  
+   <transition event="event1" cond="foo.bar == 1" target="pass"></transition>
+   <transition event="*" target="fail"></transition>
+    </state>
+
+<final id="pass"><onentry><log label="Outcome" expr="'pass'"/><assign location="_irp_outcome" expr="'pass'"/></onentry></final>
+<final id="fail"><onentry><log label="Outcome" expr="'fail'"/><assign location="_irp_outcome" expr="'fail'"/></onentry></final>
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test452')

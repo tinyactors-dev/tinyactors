@@ -12,68 +12,80 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test388 do
-  initial :s012
-  data :_irp_outcome
-  data Var1: { expr: '0' }
-  state :s0, initial: :s01 do
-    on_entry do
-      assign '.Var1', '.Var1 + 1'
-    end
-    transition on: 'entering.s012', target: :s1, cond: '.Var1 == 1' do
-      send_event 'timeout', delay: 2000
-    end
-    transition on: 'entering.s012', target: :s2, cond: '.Var1 == 2'
-    transition on: 'entering', target: :fail, cond: '.Var1 == 2'
-    transition on: 'entering.s011', target: :pass, cond: '.Var1 == 3'
-    transition on: 'entering', target: :fail, cond: '.Var1 == 3'
-    transition on: 'timeout', target: :fail
-    history :s0HistShallow, type: :shallow, default: :s02
-    history :s0HistDeep, type: :deep, default: :s022
-    state :s01, initial: :s011 do
-      state :s011 do
-        on_entry do
-          raise_event 'entering.s011'
-        end
-      end
-      state :s012 do
-        on_entry do
-          raise_event 'entering.s012'
-        end
-      end
-    end
-    state :s02, initial: :s021 do
-      state :s021 do
-        on_entry do
-          raise_event 'entering.s021'
-        end
-      end
-      state :s022 do
-        on_entry do
-          raise_event 'entering.s022'
-        end
-      end
-    end
-  end
-  state :s1 do
-    transition target: :s0HistDeep
-  end
-  state :s2 do
-    transition target: :s0HistShallow
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test388, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="s012" datamodel="jq" name="irp_test388">
+<datamodel><data id="_irp_outcome"/>
+  <data id="Var1" expr="0"></data>
+  </datamodel>
+       
+<state id="s0" initial="s01">
+  <onentry>
+    <assign location=".Var1" expr=".Var1 + 1"/>
+    </onentry>
+    
+  
+  <transition event="entering.s012" cond=".Var1 == 1" target="s1">
+     <send event="timeout" delay="2s"></send>
+     </transition>
+  
+  
+  <transition event="entering.s012" cond=".Var1 == 2" target="s2"></transition>
+    <transition event="entering" cond=".Var1 == 2" target="fail"></transition>
+    
+  
+  <transition event="entering.s011" cond=".Var1 == 3" target="pass"></transition>
+  <transition event="entering" cond=".Var1 == 3" target="fail"></transition>
+ 
+ 
+ <transition event="timeout" target="fail"></transition>
+  
+  <history type="shallow" id="s0HistShallow">
+    <transition target="s02"></transition>
+    </history>
+  <history type="deep" id="s0HistDeep">
+    <transition target="s022"></transition>
+    </history>
+  <state id="s01" initial="s011">
+    <state id="s011">
+       <onentry>
+         <raise event="entering.s011"></raise>
+         </onentry>
+    </state>
+    <state id="s012">
+      <onentry>
+       <raise event="entering.s012"></raise>
+        </onentry>
+    </state>
+  </state>
+ <state id="s02" initial="s021">
+     <state id="s021">
+       <onentry>
+         <raise event="entering.s021"></raise>
+         </onentry>
+    </state>
+    <state id="s022">
+      <onentry>
+       <raise event="entering.s022"></raise>
+        </onentry>
+    </state>
+  </state>
+ 
+</state>
+
+
+<state id="s1">
+  <transition target="s0HistDeep"></transition>
+</state>
+
+<state id="s2">
+  <transition target="s0HistShallow"></transition>
+</state>
+ 
+<final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+<final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test388')

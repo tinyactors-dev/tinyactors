@@ -13,44 +13,41 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test245_child1 do
-  initial :sub0
-  state :sub0 do
-    transition target: :subFinal, cond: '.Var2' do
-      send_event 'failure', to: '#_parent'
-    end
-    transition target: :subFinal do
-      send_event 'success', to: '#_parent'
-    end
-  end
-  final :subFinal
-end
-
-TinyactorsTest.chart :irp_test245 do
-  initial :s0
-  data :_irp_outcome
-  data Var2: { expr: '3' }
-  state :s0 do
-    on_entry do
-      send_event 'timeout', delay: 2000
-    end
-    invoke type: 'http://www.w3.org/TR/scxml/', chart: :irp_test245_child1, params: { Var2: { location: '.Var2' } }
-    transition on: 'success', target: :pass
-    transition on: '*', target: :fail
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test245, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="s0" version="1.0" datamodel="jq" name="irp_test245">
+<datamodel><data id="_irp_outcome"/>
+  <data id="Var2" expr="3"></data>
+  </datamodel>
+     
+<state id="s0">
+  <onentry>
+    <send event="timeout" delay="2s"></send>
+    </onentry>
+   
+     <invoke type="http://www.w3.org/TR/scxml/"><param name="Var2" location=".Var2"/>
+       <content>
+          <scxml xmlns="http://www.w3.org/2005/07/scxml" initial="sub0" version="1.0" datamodel="jq" name="irp_test245_child1">
+               <state id="sub0">
+               <transition cond=".Var2" target="subFinal">
+                <send target="#_parent" event="failure"></send>
+            </transition>
+            <transition target="subFinal">
+              <send target="#_parent" event="success"></send>
+              </transition>
+          </state>    
+           <final id="subFinal"></final>
+           </scxml>
+           </content>
+          </invoke>
+          
+     <transition event="success" target="pass"></transition>
+     <transition event="*" target="fail"></transition>
+   </state>
+ 
+<final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+<final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test245')

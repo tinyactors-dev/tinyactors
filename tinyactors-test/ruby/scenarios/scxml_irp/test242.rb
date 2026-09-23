@@ -11,62 +11,68 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test242sub1 do
-  initial :final
-  final :final
-end
+TinyactorsTest.scxml_chart :irp_test242sub1, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="final" version="1.0" datamodel="jq" name="irp_test242sub1">
 
-TinyactorsTest.chart :irp_test242_child1 do
-  initial :subFinal1
-  final :subFinal1
-end
+ <final id="final"></final>
+ 
+</scxml>
+SCXML
 
-TinyactorsTest.chart :irp_test242_child2 do
-  initial :subFinal2
-  final :subFinal2
-end
+TinyactorsTest.scxml_chart :irp_test242, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="s0" version="1.0" datamodel="jq" name="irp_test242"><datamodel><data id="_irp_outcome"/></datamodel>
 
-TinyactorsTest.chart :irp_test242 do
-  initial :s0
-  data :_irp_outcome
-  state :s0 do
-    on_entry do
-      send_event 'timeout1', delay: 1000
-    end
-    transition on: 'timeout', target: :fail
-    invoke type: 'http://www.w3.org/TR/scxml/', src: 'file:test242sub1.scxml'
-    transition on: 'done.invoke', target: :s02
-    transition on: 'timeout1', target: :s03
-  end
-  state :s02 do
-    on_entry do
-      send_event 'timeout2', delay: 1000
-    end
-    invoke type: 'http://www.w3.org/TR/scxml/', chart: :irp_test242_child1
-    transition on: 'done.invoke', target: :pass
-    transition on: 'timeout2', target: :fail
-  end
-  state :s03 do
-    on_entry do
-      send_event 'timeout3', delay: 1000
-    end
-    invoke type: 'http://www.w3.org/TR/scxml/', chart: :irp_test242_child2
-    transition on: 'timeout3', target: :pass
-    transition on: 'done.invoke', target: :fail
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+     
+<state id="s0">
+  <onentry>
+    <send event="timeout1" delay="1s"></send>
+    </onentry>
+    <transition event="timeout" target="fail"></transition>
+
+     <invoke type="http://www.w3.org/TR/scxml/" src="file:test242sub1.scxml"></invoke>
+     <transition event="done.invoke" target="s02"></transition>
+     <transition event="timeout1" target="s03"></transition>
+   </state>
+
+<state id="s02">
+    <onentry>
+    <send event="timeout2" delay="1s"></send>
+    </onentry>
+      <invoke type="http://www.w3.org/TR/scxml/">
+        
+          <content>
+            <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="subFinal1" datamodel="jq" name="irp_test242_child1">
+             <final id="subFinal1"></final>
+              </scxml>
+            </content>
+        </invoke>
+ 
+  <transition event="done.invoke" target="pass"></transition>
+  <transition event="timeout2" target="fail"></transition>
+ </state>
+ 
+<state id="s03">
+    <onentry>
+    <send event="timeout3" delay="1s"></send>
+    </onentry>
+      <invoke type="http://www.w3.org/TR/scxml/">
+        
+          <content>
+            <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="subFinal2" datamodel="jq" name="irp_test242_child2">
+             <final id="subFinal2"></final>
+              </scxml>
+            </content>
+        </invoke>
+ 
+  <transition event="timeout3" target="pass"></transition>
+  <transition event="done.invoke" target="fail"></transition>
+ </state>
+  
+
+<final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+<final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test242')

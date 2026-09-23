@@ -12,62 +12,66 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test457, datamodel: 'ecmascript' do
-  initial :s0
-  data :_irp_outcome
-  data Var1: { expr: '0' }
-  data :Var2
-  data :Var3
-  data Var4: { expr: '7' }
-  data Var5: { expr: '[1,2,3]' }
-  data :Var6
-  state :s0 do
-    on_entry do
-      foreach 'Var4', item: 'Var2', index: 'Var3' do
-        assign 'Var1', 'Var1 + 1'
-      end
-      raise_event 'foo'
-    end
-    transition on: 'error.execution', target: :s1
-    transition on: '*', target: :fail
-  end
-  state :s1 do
-    on_entry do
-      foreach 'Var5', item: "'continue'", index: 'Var3' do
-        assign 'Var1', 'Var1 + 1'
-      end
-      raise_event 'bar'
-    end
-    transition on: 'error.execution', target: :s2
-    transition on: 'bar', target: :fail
-  end
-  state :s2 do
-    transition target: :s3, cond: 'Var1==0'
-    transition target: :fail
-  end
-  state :s3 do
-    on_entry do
-      assign 'Var6', '0'
-      foreach 'Var5', item: 'Var2' do
-        assign 'Var6', 'Var6 + Var2'
-      end
-    end
-    transition target: :pass, cond: 'Var6==6'
-    transition target: :fail
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: "'pass'"
-      assign '_irp_outcome', "'pass'"
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: "'fail'"
-      assign '_irp_outcome', "'fail'"
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test457, <<'SCXML', datamodel: 'ecmascript'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="s0" datamodel="ecmascript" version="1.0" name="irp_test457">
+<datamodel><data id="_irp_outcome"/>
+  <data id="Var1" expr="0"></data>
+  <data id="Var2"></data>
+  <data id="Var3"></data>
+  <data id="Var4" expr="7"></data>
+  <data id="Var5" expr="[1,2,3]"></data>
+  <data id="Var6"></data>
+  </datamodel>
+  
+   <state id="s0">
+      <onentry>
+
+        <foreach item="Var2" index="Var3" array="Var4">
+          <assign location="Var1" expr="Var1 + 1"></assign>
+          </foreach>
+        <raise event="foo"></raise>
+        </onentry>
+   <transition event="error.execution" target="s1"></transition>
+   <transition event="*" target="fail"></transition> 
+   </state>
+   
+   <state id="s1">
+      <onentry>
+
+        <foreach item="'continue'" index="Var3" array="Var5">
+          <assign location="Var1" expr="Var1 + 1"></assign>
+          </foreach>
+        <raise event="bar"></raise>
+        </onentry>
+   <transition event="error.execution" target="s2"></transition>
+   <transition event="bar" target="fail"></transition> 
+   </state>
+
+<state id="s2">
+  
+  <transition cond="Var1==0" target="s3"></transition>
+  <transition target="fail"></transition>
+  </state> 
+
+
+
+<state id="s3">
+	<onentry>
+		<assign location="Var6" expr="0"></assign>
+    <foreach item="Var2" array="Var5">
+	  <assign location="Var6" expr="Var6 + Var2"></assign>
+	</foreach>
+	</onentry>
+	  <transition cond="Var6==6" target="pass"></transition>
+	  <transition target="fail"></transition>
+ </state>   
+   <final id="pass"><onentry><log label="Outcome" expr="'pass'"></log><log label="Outcome" expr="'pass'"/><assign location="_irp_outcome" expr="'pass'"/></onentry></final>
+   <final id="fail"><onentry><log label="Outcome" expr="'fail'"></log><log label="Outcome" expr="'fail'"/><assign location="_irp_outcome" expr="'fail'"/></onentry></final>
+   
+
+
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test457')

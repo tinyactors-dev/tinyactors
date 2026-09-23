@@ -10,59 +10,61 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test329, document_name: 'machineName' do
-  initial :s0
-  data :_irp_outcome
-  data :Var1
-  data :Var2
-  data :Var3
-  data :Var4
-  state :s0 do
-    on_entry do
-      raise_event 'foo'
-      assign '.Var1', '$_sessionid'
-      assign '$_sessionid', '27'
-    end
-    transition on: 'foo', target: :s1, cond: '.Var1 == $_sessionid'
-    transition on: '*', target: :fail
-  end
-  state :s1 do
-    on_entry do
-      assign '.Var2', '$_event'
-      assign '$_event', '27'
-    end
-    transition target: :s2, cond: '.Var2 == $_event'
-    transition target: :fail
-  end
-  state :s2 do
-    on_entry do
-      assign '.Var3', '$_name'
-      assign '$_name', '27'
-    end
-    transition target: :s3, cond: '.Var3 == $_name'
-    transition target: :fail
-  end
-  state :s3 do
-    on_entry do
-      assign '.Var4', '$_ioprocessors'
-      assign '$_ioprocessors', '27'
-    end
-    transition target: :pass, cond: '.Var4 == $_ioprocessors'
-    transition target: :fail
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test329, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="s0" version="1.0" datamodel="jq" name="machineName">
+   <datamodel><data id="_irp_outcome"/>
+     <data id="Var1"></data>
+     <data id="Var2"></data>
+     <data id="Var3"></data>
+     <data id="Var4"></data>
+     </datamodel>
+        
+ <state id="s0">
+   <onentry>
+     
+     <raise event="foo"></raise>
+     <assign location=".Var1" expr="$_sessionid"></assign>
+     <assign location="$_sessionid" expr="27"></assign>
+   </onentry>
+
+   <transition event="foo" cond=".Var1 == $_sessionid" target="s1"></transition>
+   <transition event="*" target="fail"></transition>
+   </state>
+   
+ <state id="s1">
+  <onentry>
+     <assign location=".Var2" expr="$_event"></assign>
+     <assign location="$_event" expr="27"></assign>
+    </onentry>
+   <transition cond=".Var2 == $_event" target="s2"></transition>
+   <transition target="fail"></transition>
+   </state>  
+   
+<state id="s2">
+  <onentry>
+     <assign location=".Var3" expr="$_name"></assign>
+     <assign location="$_name" expr="27"></assign>
+    </onentry>
+   <transition cond=".Var3 == $_name" target="s3"></transition>
+   <transition target="fail"></transition>
+   </state> 
+
+   
+<state id="s3">
+  <onentry>
+     <assign location=".Var4" expr="$_ioprocessors"></assign>
+     <assign location="$_ioprocessors" expr="27"></assign>
+    </onentry>
+   <transition cond=".Var4 == $_ioprocessors" target="pass"></transition>
+   <transition target="fail"></transition>
+   </state>  
+   
+   
+   <final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+   <final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+     
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test329')

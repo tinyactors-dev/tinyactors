@@ -13,32 +13,28 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test446, datamodel: 'ecmascript' do
-  initial :s0
-  data :_irp_outcome
-  data var1: { content: '[1, 2, 3]' }
-  data var2: { content: '[1,2,3]' }
-  state :s0 do
-    transition target: :s1, cond: 'var1 instanceof Array'
-    transition target: :fail
-  end
-  state :s1 do
-    transition target: :pass, cond: 'var2 instanceof Array'
-    transition target: :fail
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: "'pass'"
-      assign '_irp_outcome', "'pass'"
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: "'fail'"
-      assign '_irp_outcome', "'fail'"
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test446, <<'SCXML', datamodel: 'ecmascript', files: { 'file:test446.txt' => '[1,2,3]' }
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="s0" version="1.0" datamodel="ecmascript" name="irp_test446">
+ <datamodel><data id="_irp_outcome"/>
+   <data id="var1">[1, 2, 3]</data>
+ <data id="var2" src="file:test446.txt"></data> 
+  </datamodel>
+  
+<state id="s0">
+   <transition cond="var1 instanceof Array" target="s1"></transition>
+   <transition target="fail"></transition>
+  </state>
+  
+<state id="s1">
+   <transition cond="var2 instanceof Array" target="pass"></transition>
+   <transition target="fail"></transition>
+   </state>
+    
+<final id="pass"><onentry><log label="Outcome" expr="'pass'"/><assign location="_irp_outcome" expr="'pass'"/></onentry></final>
+<final id="fail"><onentry><log label="Outcome" expr="'fail'"/><assign location="_irp_outcome" expr="'fail'"/></onentry></final>  
+
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test446')

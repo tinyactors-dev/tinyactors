@@ -11,66 +11,71 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test234_child1 do
-  initial :subFinal1
-  final :subFinal1 do
-    on_entry do
-      send_event 'childToParent', to: '#_parent', params: { aParam: '2' }
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test234, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="p0" version="1.0" datamodel="jq" name="irp_test234">
+<datamodel><data id="_irp_outcome"/>
+  <data id="Var1" expr="1"></data>
+  <data id="Var2" expr="1"></data>
+  </datamodel>
+<parallel id="p0">
+    <onentry>
+    <send event="timeout" delay="3s"></send>
+    </onentry>   
+    <transition event="timeout" target="fail"></transition>  
+    
+   <state id="p01">
+    <invoke type="http://www.w3.org/TR/scxml/">
+       <content>
+       <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="subFinal1" datamodel="jq" name="irp_test234_child1">
+          <final id="subFinal1">
+           <onentry>
+            <send target="#_parent" event="childToParent">
+            <param name="aParam" expr="2"></param>
+          </send> 
+         </onentry> 
+          </final>
+            </scxml>
+         </content>
+      <finalize>
+        <assign location=".Var1" expr="$_event.data.aParam"></assign>
+        </finalize>
+        </invoke>
+      
+      <transition event="childToParent" cond=".Var1 == 2" target="s1"></transition>
+       <transition event="childToParent" target="fail"></transition>
+    </state> 
 
-TinyactorsTest.chart :irp_test234_child2 do
-  initial :sub0
-  state :sub0 do
-    on_entry do
-      send_event 'timeout', delay: 2000
-    end
-    transition on: 'timeout', target: :subFinal2
-  end
-  final :subFinal2
-end
+   <state id="p02">
+     <invoke type="http://www.w3.org/TR/scxml/">
+       <content>
+       <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" initial="sub0" datamodel="jq" name="irp_test234_child2">
+         <state id="sub0">
+           <onentry>
+              <send event="timeout" delay="2s"></send>
+            </onentry>
+             <transition event="timeout" target="subFinal2"></transition>
+             </state>
+              <final id="subFinal2"></final>
+              </scxml>
+        </content>
+      <finalize>
+        <assign location=".Var2" expr="$_event.data.aParam"></assign>
+         </finalize>
+      </invoke>
+  </state>
 
-TinyactorsTest.chart :irp_test234 do
-  initial :p0
-  data :_irp_outcome
-  data Var1: { expr: '1' }
-  data Var2: { expr: '1' }
-  parallel :p0 do
-    on_entry do
-      send_event 'timeout', delay: 3000
-    end
-    transition on: 'timeout', target: :fail
-    state :p01 do
-      invoke type: 'http://www.w3.org/TR/scxml/', chart: :irp_test234_child1 do
-        assign '.Var1', '$_event.data.aParam'
-      end
-      transition on: 'childToParent', target: :s1, cond: '.Var1 == 2'
-      transition on: 'childToParent', target: :fail
-    end
-    state :p02 do
-      invoke type: 'http://www.w3.org/TR/scxml/', chart: :irp_test234_child2 do
-        assign '.Var2', '$_event.data.aParam'
-      end
-    end
-  end
-  state :s1 do
-    transition target: :pass, cond: '.Var2 == 1'
-    transition target: :fail
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+</parallel>    
+
+  
+<state id="s1">
+  <transition cond=".Var2 == 1" target="pass"></transition>
+  <transition target="fail"></transition>
+  </state>
+  
+<final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+<final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test234')

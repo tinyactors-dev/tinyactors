@@ -11,43 +11,40 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test459, datamodel: 'ecmascript' do
-  initial :s0
-  data :_irp_outcome
-  data Var1: { expr: '0' }
-  data :Var2
-  data :Var3
-  data Var4: { expr: '[1,2,3]' }
-  data Var5: { expr: '1' }
-  state :s0 do
-    on_entry do
-      foreach 'Var4', item: 'Var2', index: 'Var3' do
-        conditional do
-          branch 'Var1<Var2' do
-            assign 'Var1', 'Var2'
-          end
-          otherwise do
-            assign 'Var5', '0'
-          end
-        end
-      end
-    end
-    transition target: :fail, cond: 'Var4==0 | Var3 != 2'
-    transition target: :pass
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: "'pass'"
-      assign '_irp_outcome', "'pass'"
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: "'fail'"
-      assign '_irp_outcome', "'fail'"
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test459, <<'SCXML', datamodel: 'ecmascript'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="s0" version="1.0" datamodel="ecmascript" name="irp_test459">
+<datamodel><data id="_irp_outcome"/>
+  <data id="Var1" expr="0"></data> 
+  <data id="Var2"></data> 
+  <data id="Var3"></data>  
+  <data id="Var4" expr="[1,2,3]"></data>
+  <data id="Var5" expr="1"></data> 
+  </datamodel>
+  
+   <state id="s0">
+      <onentry>
+        <foreach item="Var2" array="Var4" index="Var3">
+         <if cond="Var1&lt;Var2">
+         <assign location="Var1" expr="Var2"></assign>
+         <else></else>
+         
+         <assign location="Var5" expr="0"></assign>
+         </if>
+          </foreach>
+        </onentry>
+
+  
+  <transition cond="Var4==0 | Var3 != 2" target="fail"></transition>
+  <transition target="pass"></transition>
+  </state> 
+   
+   <final id="pass"><onentry><log label="Outcome" expr="'pass'"></log><log label="Outcome" expr="'pass'"/><assign location="_irp_outcome" expr="'pass'"/></onentry></final>
+   <final id="fail"><onentry><log label="Outcome" expr="'fail'"></log><log label="Outcome" expr="'fail'"/><assign location="_irp_outcome" expr="'fail'"/></onentry></final>
+   
+
+
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test459')

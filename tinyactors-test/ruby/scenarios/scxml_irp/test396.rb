@@ -10,28 +10,24 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test396 do
-  data :_irp_outcome
-  state :s0 do
-    on_entry do
-      raise_event 'foo'
-    end
-    transition on: 'foo', target: :pass, cond: '$_event.name == "foo"'
-    transition on: 'foo', target: :fail
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test396, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" datamodel="jq" version="1.0" name="irp_test396"><datamodel><data id="_irp_outcome"/></datamodel>
+       
+<state id="s0">
+  <onentry>
+    <raise event="foo"></raise>
+    </onentry>
+
+    
+  <transition event="foo" cond="$_event.name == &quot;foo&quot;" target="pass"></transition>
+  <transition event="foo" target="fail"></transition>
+
+</state>
+ 
+<final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+<final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test396')

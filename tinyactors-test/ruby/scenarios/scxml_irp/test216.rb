@@ -12,37 +12,36 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test216sub1 do
-  initial :final
-  final :final
-end
+TinyactorsTest.scxml_chart :irp_test216sub1, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="final" version="1.0" datamodel="jq" name="irp_test216sub1">
 
-TinyactorsTest.chart :irp_test216 do
-  initial :s0
-  data :_irp_outcome
-  data Var1: { expr: '"foo"' }
-  state :s0 do
-    on_entry do
-      send_event 'timeout', delay: 5000
-      assign '.Var1', '"file:test216sub1.scxml"'
-    end
-    invoke type: 'http://www.w3.org/TR/scxml', src_expr: '.Var1'
-    transition on: 'done.invoke', target: :pass
-    transition on: '*', target: :fail
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+<final id="final"></final>
+
+</scxml>
+SCXML
+
+TinyactorsTest.scxml_chart :irp_test216, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" initial="s0" version="1.0" datamodel="jq" name="irp_test216">
+
+<datamodel><data id="_irp_outcome"/>
+  <data id="Var1" expr="&quot;foo&quot;"></data>
+   </datamodel> 
+   
+<state id="s0">
+  <onentry>
+    <send event="timeout" delay="5s"></send>
+   <assign location=".Var1" expr="&quot;file:test216sub1.scxml&quot;"></assign>
+    </onentry>
+  <invoke srcexpr=".Var1" type="http://www.w3.org/TR/scxml"></invoke>
+  <transition event="done.invoke" target="pass"></transition>
+  <transition event="*" target="fail"></transition> 
+</state>
+
+<final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+<final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test216')

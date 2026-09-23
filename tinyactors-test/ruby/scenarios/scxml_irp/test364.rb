@@ -15,83 +15,79 @@
 
 require_relative '../../scxml_irp/expectations'
 
-TinyactorsTest.chart :irp_test364 do
-  initial :s1
-  data :_irp_outcome
-  state :s1, initial: [:s11p112, :s11p122] do
-    on_entry do
-      send_event 'timeout', delay: 1000
-    end
-    transition on: 'timeout', target: :fail
-    state :s11, initial: :s111 do
-      state :s111
-      parallel :s11p1 do
-        state :s11p11, initial: :s11p111 do
-          state :s11p111
-          state :s11p112 do
-            on_entry do
-              raise_event 'In-s11p112'
-            end
-          end
-        end
-        state :s11p12, initial: :s11p121 do
-          state :s11p121
-          state :s11p122 do
-            transition on: 'In-s11p112', target: :s2
-          end
-        end
-      end
-    end
-  end
-  state :s2 do
-    initial :s21p112, :s21p122
-    transition on: 'timeout', target: :fail
-    state :s21, initial: :s211 do
-      state :s211
-      parallel :s21p1 do
-        state :s21p11, initial: :s21p111 do
-          state :s21p111
-          state :s21p112 do
-            on_entry do
-              raise_event 'In-s21p112'
-            end
-          end
-        end
-        state :s21p12, initial: :s21p121 do
-          state :s21p121
-          state :s21p122 do
-            transition on: 'In-s21p112', target: :s3
-          end
-        end
-      end
-    end
-  end
-  state :s3 do
-    transition target: :fail
-    state :s31 do
-      state :s311 do
-        state :s3111 do
-          transition target: :pass
-        end
-        state :s3112
-        state :s312
-        state :s32
-      end
-    end
-  end
-  final :pass do
-    on_entry do
-      log 'Outcome', expr: '"pass"'
-      assign '._irp_outcome', '"pass"'
-    end
-  end
-  final :fail do
-    on_entry do
-      log 'Outcome', expr: '"fail"'
-      assign '._irp_outcome', '"fail"'
-    end
-  end
-end
+TinyactorsTest.scxml_chart :irp_test364, <<'SCXML', datamodel: 'jq'
+<scxml xmlns="http://www.w3.org/2005/07/scxml" datamodel="jq" initial="s1" version="1.0" name="irp_test364"><datamodel><data id="_irp_outcome"/></datamodel>
+
+<state id="s1" initial="s11p112 s11p122">
+  <onentry>
+    <send event="timeout" delay="1s"></send>
+    </onentry>
+  <transition event="timeout" target="fail"></transition>
+  <state id="s11" initial="s111">
+    <state id="s111"></state>
+    <parallel id="s11p1">
+       <state id="s11p11" initial="s11p111">
+         <state id="s11p111"></state>
+         <state id="s11p112">
+           <onentry>
+             <raise event="In-s11p112"></raise>
+             </onentry>
+         </state>
+       </state>
+       <state id="s11p12" initial="s11p121">
+        <state id="s11p121"></state>
+        <state id="s11p122">
+          <transition event="In-s11p112" target="s2"></transition>
+          </state>
+       </state>
+      </parallel>
+  </state>
+</state>
+
+<state id="s2">
+	 <initial>
+	 	<transition target="s21p112 s21p122"></transition>
+	 	</initial>
+  <transition event="timeout" target="fail"></transition>
+  <state id="s21" initial="s211">
+    <state id="s211"></state>
+    <parallel id="s21p1">
+       <state id="s21p11" initial="s21p111">
+         <state id="s21p111"></state>
+         <state id="s21p112">
+           <onentry>
+             <raise event="In-s21p112"></raise>
+             </onentry>
+         </state>
+       </state>
+       <state id="s21p12" initial="s21p121">
+        <state id="s21p121"></state>
+        <state id="s21p122">
+          <transition event="In-s21p112" target="s3"></transition>
+          </state>
+       </state>
+      </parallel>
+  </state>
+</state>
+      
+<state id="s3">
+ <transition target="fail"></transition>
+  <state id="s31">
+    <state id="s311">
+       <state id="s3111">
+           <transition target="pass"></transition>
+       </state>
+       <state id="s3112"></state>
+    <state id="s312"></state>
+  <state id="s32"></state>
+</state>
+</state>
+</state>
+ 
+<final id="pass"><onentry><log label="Outcome" expr="&quot;pass&quot;"/><assign location="._irp_outcome" expr="&quot;pass&quot;"/></onentry></final>
+<final id="fail"><onentry><log label="Outcome" expr="&quot;fail&quot;"/><assign location="._irp_outcome" expr="&quot;fail&quot;"/></onentry></final>
+</scxml>
+SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
   ScxmlIrp.expect_failure(self, 'test364')
