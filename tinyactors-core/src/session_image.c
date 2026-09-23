@@ -58,6 +58,8 @@ struct ta_session_image {
     ta_actor_parent parent;
     bool completion_pending;
     ta_actor_completion completion;
+    /* A microstep paused inside executable content (ADR 0061), or null. */
+    ta_continuation *paused;
 };
 
 /* ------------------------------------------------------------------------
@@ -118,6 +120,9 @@ static size_t ta_image_measure(const ta_actor *actor) {
         total += (size_t)sparse->pending_invokes.count * sizeof(ta_state_id);
     }
     total += (size_t)ta_timer_copy_unsubmitted(ta_actor_timers(actor), NULL) * sizeof(ta_delayed_send);
+    if (sparse != NULL && sparse->paused != NULL) {
+        total += sparse->paused->bytes + TA_CONTINUATION_ALIGN;
+    }
     return total;
 }
 
@@ -181,6 +186,14 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
         image->pending_invoke_count = count;
     }
 
+    if (sparse != NULL && sparse->paused != NULL) {
+        image->paused = ta_arena_alloc(arena, sparse->paused->bytes, TA_CONTINUATION_ALIGN);
+        if (image->paused == NULL) {
+            return TA_ERR_NOMEM;
+        }
+        ta_mem_copy(image->paused, sparse->paused, sparse->paused->bytes);
+    }
+
     uint32_t sends = ta_timer_copy_unsubmitted(ta_actor_timers(actor), NULL);
     if (sends != 0) {
         image->delayed_sends = ta_arena_alloc(arena, (size_t)sends * sizeof(ta_delayed_send),
@@ -216,6 +229,9 @@ static void ta_image_retain(ta_session_image *image) {
     for (uint32_t index = 0; index < image->delayed_send_count; index += 1) {
         ta_value_retain(&image->delayed_sends[index].target);
         ta_value_retain(&image->delayed_sends[index].data);
+    }
+    if (image->paused != NULL) {
+        ta_continuation_retain(image->paused);
     }
 }
 
@@ -316,6 +332,9 @@ void ta_session_image_destroy(ta_session_image *image) {
         ta_value_release(&image->delayed_sends[index].target);
         ta_value_release(&image->delayed_sends[index].data);
     }
+    if (image->paused != NULL) {
+        ta_continuation_release(image->paused);
+    }
     ta_allocator allocator = image->allocator;
     ta_arena_destroy(&image->arena);
     ta_mem_free(allocator, image,
@@ -411,6 +430,26 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
     return TA_OK;
 }
 
+/*
+ * Gives the actor its own copy of a microstep the image captured paused
+ * inside executable content (ADR 0061 section 4); its snapshots are
+ * retained again, so the image keeps its own.
+ */
+static ta_result ta_image_restore_pause(const ta_session_image *image, ta_actor *actor, ta_system *system) {
+    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
+    if (sparse == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    ta_continuation *copy = ta_mem_alloc(system->allocator, image->paused->bytes, TA_CONTINUATION_ALIGN);
+    if (copy == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    ta_mem_copy(copy, image->paused, image->paused->bytes);
+    ta_continuation_retain(copy);
+    sparse->paused = copy;
+    return TA_OK;
+}
+
 ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_params *params) {
     if (system == NULL || params == NULL || params->image == NULL || params->out == NULL) {
         return TA_ERR_INVALID;
@@ -464,6 +503,9 @@ ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_par
     }
     /* A named actor answers to its address, so it owns that text itself. */
     result = ta_address_copy(&actor->record.self, system->allocator);
+    if (result == TA_OK && image->paused != NULL) {
+        result = ta_image_restore_pause(image, actor, system);
+    }
 
     if (result == TA_OK && (image->has_parent || image->completion.has_data || image->internal_count != 0 ||
                             image->invoke_count != 0 || image->pending_invoke_count != 0)) {

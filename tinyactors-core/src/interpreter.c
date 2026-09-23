@@ -10,6 +10,9 @@
 /* Executable content failed; error.execution is queued and the block stops (SCXML 4.9). */
 #define TA_EXEC_FAILED 1
 
+/* A block stopped at a pause point with its frames left open (ADR 0061). */
+#define TA_EXEC_PAUSED 2
+
 /* The root initial transition taken at bootstrap. */
 #define TA_TRANSITION_BOOTSTRAP (UINT32_MAX - 1u)
 
@@ -1119,10 +1122,29 @@ static ta_result ta_exec_block(ta_interpreter *it, ta_span32 block) {
  * scratch, so nothing here allocates them. An error anywhere stops the whole
  * block, as SCXML 4.9 requires, and every snapshot still held is released.
  */
+/*
+ * Whether the executor stops before its next unit (ADR 0061): only in a
+ * microstep's own block, never in <finalize> or at termination, and only
+ * once this call has run its action budget.
+ */
+static bool ta_exec_should_pause(const ta_interpreter *it, uint32_t floor) {
+    return it->pausable && it->in_microstep && floor == 0 && it->action_budget != 0 &&
+           it->actions >= it->action_budget;
+}
+
 static ta_result ta_run_block(ta_interpreter *it, ta_span32 block) {
     const ta_definition *definition = it->definition;
     uint32_t floor = it->exec_count;
-    ta_result result = ta_exec_block(it, block);
+    ta_result result = TA_OK;
+    if (it->at.block_open) {
+        /* Resuming: the frames the pause left, from the bottom, are this
+         * block's, which a pause only ever leaves at the microstep's level. */
+        floor = 0;
+        it->at.block_open = false;
+    } else {
+        it->at.block_open = false;
+        result = ta_exec_block(it, block);
+    }
     while (result == TA_OK && it->exec_count > floor) {
         ta_exec_frame *frame = &it->exec_frames[it->exec_count - 1u];
         if (frame->kind == TA_EXEC_FRAME_FOREACH) {
@@ -1131,6 +1153,11 @@ static ta_result ta_run_block(ta_interpreter *it, ta_span32 block) {
                 it->exec_count -= 1u;
                 continue;
             }
+            if (ta_exec_should_pause(it, floor)) {
+                it->at.block_open = true;
+                return TA_EXEC_PAUSED;
+            }
+            it->actions += 1u;
             result = ta_foreach_bind(it, frame);
             if (result == TA_OK) {
                 result = ta_exec_block(it, frame->actions);
@@ -1141,6 +1168,11 @@ static ta_result ta_run_block(ta_interpreter *it, ta_span32 block) {
             it->exec_count -= 1u;
             continue;
         }
+        if (ta_exec_should_pause(it, floor)) {
+            it->at.block_open = true;
+            return TA_EXEC_PAUSED;
+        }
+        it->actions += 1u;
         uint32_t index = frame->actions.offset + frame->cursor;
         frame->cursor += 1u;
         const ta_action_def *action = &definition->action_defs[index];
@@ -1186,12 +1218,17 @@ static ta_result ta_run_block_isolated(ta_interpreter *it, ta_span32 block) {
  * its own handler only.
  */
 static ta_result ta_run_handlers(ta_interpreter *it, ta_span32 handlers) {
-    for (uint32_t index = 0; index < handlers.length; index += 1) {
-        ta_result result = ta_run_block_isolated(it, it->definition->handlers[handlers.offset + index]);
+    /* `at.handler` is where a paused microstep resumes; it is 0 otherwise. */
+    for (; it->at.handler < handlers.length; it->at.handler += 1u) {
+        ta_result result = ta_run_block_isolated(it, it->definition->handlers[handlers.offset + it->at.handler]);
         if (result != TA_OK) {
+            if (result != TA_EXEC_PAUSED) {
+                it->at.handler = 0;
+            }
             return result;
         }
     }
+    it->at.handler = 0;
     return TA_OK;
 }
 
@@ -1753,7 +1790,8 @@ static ta_result ta_store_completion(ta_interpreter *it, ta_value *data) {
     return TA_OK;
 }
 
-static ta_result ta_exit_states(ta_interpreter *it) {
+/* Computes the exit set and records history, once, as a microstep begins. */
+static void ta_exit_begin(ta_interpreter *it) {
     const ta_definition *definition = it->definition;
     ta_bits_clear(it, it->to_exit);
     for (uint32_t index = 0; index < it->enabled_count; index += 1) {
@@ -1779,24 +1817,39 @@ static ta_result ta_exit_states(ta_interpreter *it) {
             }
         }
     }
-    for (ta_state_id index = definition->state_count; index > 0; index -= 1u) {
-        ta_state_id state = index - 1u;
+    it->at.state = definition->state_count;
+    it->at.stage = TA_EXIT_HANDLERS;
+}
+
+/* Exits the exit set, highest first, from where `at` stands. */
+static ta_result ta_exit_states(ta_interpreter *it) {
+    while (it->at.state > 0) {
+        ta_state_id state = it->at.state - 1u;
         if (!ta_bits_get(it->to_exit, state)) {
+            it->at.state -= 1u;
             continue;
         }
-        ta_result result = ta_run_handlers(it, ta_state(it, state)->onexit_handlers);
-        if (result == TA_OK) {
-            result = ta_invoke_state_exited(it, state); /* Invoke: cancel this state's invocations. */
+        ta_result result = TA_OK;
+        if (it->at.stage == TA_EXIT_HANDLERS) {
+            result = ta_run_handlers(it, ta_state(it, state)->onexit_handlers);
+            if (result != TA_OK) {
+                return result;
+            }
+            it->at.stage = TA_EXIT_HANDLERS_DONE;
         }
+        result = ta_invoke_state_exited(it, state); /* Invoke: cancel this state's invocations. */
         if (result != TA_OK) {
             return result;
         }
         ta_bits_put(it->active, state, false);
+        it->at.state -= 1u;
+        it->at.stage = TA_EXIT_HANDLERS;
     }
     return TA_OK;
 }
 
-static ta_result ta_enter_states(ta_interpreter *it) {
+/* Computes the entry set, once, after the transitions' content has run. */
+static void ta_enter_begin(ta_interpreter *it) {
     const ta_definition *definition = it->definition;
     ta_bits_clear(it, it->to_enter);
     ta_bits_clear(it, it->default_entry);
@@ -1821,56 +1874,93 @@ static ta_result ta_enter_states(ta_interpreter *it) {
             }
         }
     }
-    for (ta_state_id state = 0; state < definition->state_count; state += 1) {
+    it->at.state = 0;
+    it->at.stage = TA_ENTER_ACTIVATE;
+}
+
+/* Done data and done.state events for a final state just entered. */
+static ta_result ta_enter_final(ta_interpreter *it, ta_state_id state) {
+    const ta_state_def *def = ta_state(it, state);
+    ta_value data = {0};
+    ta_result result = ta_done_data_value(it, def->done_data, &data);
+    if (result != TA_OK) {
+        return result;
+    }
+    if (def->parent == TA_STATE_NONE) {
+        it->actor->finished = true;
+        return ta_store_completion(it, &data);
+    }
+    result = ta_raise_done(it, def->parent, &data);
+    ta_state_id grandparent = ta_state(it, def->parent)->parent;
+    if (result == TA_OK && grandparent != TA_STATE_NONE &&
+        ta_state(it, grandparent)->kind == TA_STATE_PARALLEL && ta_in_final_state(it, grandparent)) {
+        ta_value none = {0};
+        result = ta_raise_done(it, grandparent, &none);
+    }
+    return result;
+}
+
+/*
+ * Enters the entry set, lowest first, from where `at` stands. Each stage
+ * of a state happens once; `at.stage` records the ones done, so a paused
+ * microstep never activates a state or starts its data twice (ADR 0061).
+ */
+static ta_result ta_enter_states(ta_interpreter *it) {
+    const ta_definition *definition = it->definition;
+    while (it->at.state < definition->state_count) {
+        ta_state_id state = it->at.state;
         if (!ta_bits_get(it->to_enter, state)) {
+            it->at.state += 1u;
             continue;
         }
         const ta_state_def *def = ta_state(it, state);
-        ta_bits_put(it->active, state, true);
-        ta_result result = ta_invoke_state_entered(it, state); /* Invoke: start after the macrostep. */
-        if (definition->binding_mode == TA_BINDING_LATE && !ta_bits_get(it->actor->late_initialized, state)) {
-            ta_bits_put(it->actor->late_initialized, state, true);
-            result = ta_initialize_data(it, state);
-        }
-        if (result == TA_OK) {
-            result = ta_run_handlers(it, def->onentry_handlers);
-        }
-        if (result == TA_OK && ta_bits_get(it->default_entry, state)) {
-            result = ta_run_block_isolated(it, definition->initial_transitions[def->initial].actions);
-        }
-        if (result == TA_OK && it->default_history[state] != TA_STATE_NONE) {
-            const ta_state_def *history = ta_state(it, it->default_history[state]);
-            result = ta_run_block_isolated(it, definition->transitions[history->transitions.offset].actions);
-        }
-        if (result != TA_OK) {
-            return result;
-        }
-        if (def->kind != TA_STATE_FINAL) {
-            continue;
-        }
-        ta_value data = {0};
-        result = ta_done_data_value(it, def->done_data, &data);
-        if (result != TA_OK) {
-            return result;
-        }
-        if (def->parent == TA_STATE_NONE) {
-            it->actor->finished = true;
-            result = ta_store_completion(it, &data);
+        ta_result result = TA_OK;
+        if (it->at.stage == TA_ENTER_ACTIVATE) {
+            ta_bits_put(it->active, state, true);
+            result = ta_invoke_state_entered(it, state); /* Invoke: start after the macrostep. */
+            if (definition->binding_mode == TA_BINDING_LATE && !ta_bits_get(it->actor->late_initialized, state)) {
+                ta_bits_put(it->actor->late_initialized, state, true);
+                result = ta_initialize_data(it, state);
+            }
             if (result != TA_OK) {
                 return result;
             }
-            continue;
+            it->at.stage = TA_ENTER_HANDLERS;
         }
-        result = ta_raise_done(it, def->parent, &data);
-        ta_state_id grandparent = ta_state(it, def->parent)->parent;
-        if (result == TA_OK && grandparent != TA_STATE_NONE &&
-            ta_state(it, grandparent)->kind == TA_STATE_PARALLEL && ta_in_final_state(it, grandparent)) {
-            ta_value none = {0};
-            result = ta_raise_done(it, grandparent, &none);
+        if (it->at.stage == TA_ENTER_HANDLERS) {
+            result = ta_run_handlers(it, def->onentry_handlers);
+            if (result != TA_OK) {
+                return result;
+            }
+            it->at.stage = TA_ENTER_INITIAL;
         }
-        if (result != TA_OK) {
-            return result;
+        if (it->at.stage == TA_ENTER_INITIAL) {
+            if (ta_bits_get(it->default_entry, state)) {
+                result = ta_run_block_isolated(it, definition->initial_transitions[def->initial].actions);
+                if (result != TA_OK) {
+                    return result;
+                }
+            }
+            it->at.stage = TA_ENTER_HISTORY;
         }
+        if (it->at.stage == TA_ENTER_HISTORY) {
+            if (it->default_history[state] != TA_STATE_NONE) {
+                const ta_state_def *history = ta_state(it, it->default_history[state]);
+                result = ta_run_block_isolated(it, definition->transitions[history->transitions.offset].actions);
+                if (result != TA_OK) {
+                    return result;
+                }
+            }
+            it->at.stage = TA_ENTER_DONE;
+        }
+        if (def->kind == TA_STATE_FINAL) {
+            result = ta_enter_final(it, state);
+            if (result != TA_OK) {
+                return result;
+            }
+        }
+        it->at.state += 1u;
+        it->at.stage = TA_ENTER_ACTIVATE;
     }
     return TA_OK;
 }
@@ -1924,7 +2014,7 @@ static ta_result ta_prepare_microstep_queue(ta_interpreter *it) {
 
 static void ta_compact_sparse(ta_interpreter *it) {
     ta_actor_sparse_state *sparse = it->actor->sparse;
-    if (sparse == NULL || sparse->internal_events.count != 0 || sparse->invoke_count != 0 ||
+    if (sparse == NULL || sparse->paused != NULL || sparse->internal_events.count != 0 || sparse->invoke_count != 0 ||
         sparse->pending_invokes.count != 0 || sparse->activation_effects != NULL || sparse->has_parent ||
         sparse->completion_pending || sparse->completion.has_data) {
         return;
@@ -1944,27 +2034,139 @@ static void ta_compact_sparse(ta_interpreter *it) {
     it->actor->sparse = NULL;
 }
 
+/*
+ * Runs a microstep, or continues the one `at` describes. TA_EXEC_PAUSED
+ * leaves it open: the position, the sets and the frames stay in the
+ * interpreter for ta_pause_save (ADR 0061), and the actor's configuration
+ * is still the one before the microstep.
+ */
 static ta_result ta_microstep(ta_interpreter *it) {
-    /* A microstep changes the configuration, history, or the queue: an image
-     * taken before it no longer describes this actor. */
     ta_result result = TA_OK;
-    if (it->actor->bootstrapped) {
-        result = ta_prepare_microstep_queue(it);
+    if (it->at.phase == TA_MICRO_NONE) {
+        /* A microstep changes the configuration, history, or the queue: an
+         * image taken before it no longer describes this actor. */
+        if (it->actor->bootstrapped) {
+            result = ta_prepare_microstep_queue(it);
+        }
+        if (result != TA_OK) {
+            return result;
+        }
+        ta_actor_touch(it->actor);
+        ta_exit_begin(it);
+        it->at.phase = TA_MICRO_EXIT;
     }
-    if (result != TA_OK) {
-        return result;
+    it->in_microstep = true;
+    if (it->at.phase == TA_MICRO_EXIT) {
+        result = ta_exit_states(it);
+        if (result == TA_OK) {
+            it->at.phase = TA_MICRO_TRANSITIONS;
+            it->at.state = 0;
+        }
     }
-    ta_actor_touch(it->actor);
-    result = ta_exit_states(it);
-    for (uint32_t index = 0; result == TA_OK && index < it->enabled_count; index += 1) {
-        result = ta_run_block_isolated(it, ta_view(it, it->enabled[index]).actions);
+    if (result == TA_OK && it->at.phase == TA_MICRO_TRANSITIONS) {
+        for (; result == TA_OK && it->at.state < it->enabled_count; it->at.state += 1u) {
+            result = ta_run_block_isolated(it, ta_view(it, it->enabled[it->at.state]).actions);
+            if (result != TA_OK) {
+                break;
+            }
+        }
+        if (result == TA_OK) {
+            ta_enter_begin(it);
+            it->at.phase = TA_MICRO_ENTER;
+        }
     }
-    if (result == TA_OK) {
+    if (result == TA_OK && it->at.phase == TA_MICRO_ENTER) {
         result = ta_enter_states(it);
     }
+    it->in_microstep = false;
+    if (result == TA_EXEC_PAUSED) {
+        return result;
+    }
+    it->at = (ta_micro_position){0};
     ta_store_active(it);
     it->steps += 1u;
     return result;
+}
+
+/*
+ * Moves a paused microstep out of scratch into the actor (ADR 0061
+ * section 3). The frames' snapshots move with them. Fails without
+ * changing anything when there is no memory.
+ */
+static ta_result ta_pause_save(ta_interpreter *it) {
+    ta_actor_sparse_state *sparse = ta_sparse(it->system, it->actor);
+    if (sparse == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    ta_continuation shape = { .at = it->at, .words = it->words, .state_count = it->definition->state_count,
+                              .enabled_count = it->enabled_count, .frame_count = it->exec_count };
+    shape.bytes = ta_continuation_bytes(&shape);
+    ta_continuation *saved = ta_mem_alloc(it->system->allocator, shape.bytes, TA_CONTINUATION_ALIGN);
+    if (saved == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    *saved = shape;
+    uint64_t *sets = ta_continuation_sets(saved);
+    const uint64_t *from[] = { it->active, it->to_exit, it->to_enter, it->default_entry };
+    for (uint32_t index = 0; index < TA_ARRAY_COUNT(from); index += 1u) {
+        ta_mem_copy(sets + (size_t)index * it->words, from[index], (size_t)it->words * sizeof(uint64_t));
+    }
+    ta_mem_copy(ta_continuation_history(saved), it->default_history,
+                (size_t)shape.state_count * sizeof(ta_state_id));
+    ta_mem_copy(ta_continuation_enabled(saved), it->enabled, (size_t)shape.enabled_count * sizeof(ta_transition_id));
+    ta_mem_copy(ta_continuation_frames(saved), it->exec_frames, (size_t)shape.frame_count * sizeof(ta_exec_frame));
+    sparse->paused = saved;
+    it->exec_count = 0;
+    it->at = (ta_micro_position){0};
+    return TA_OK;
+}
+
+/* Moves a paused microstep back into scratch; the actor no longer holds it. */
+static void ta_pause_restore(ta_interpreter *it) {
+    ta_continuation *saved = it->actor->sparse->paused;
+    const uint64_t *sets = ta_continuation_sets(saved);
+    uint64_t *to[] = { it->active, it->to_exit, it->to_enter, it->default_entry };
+    for (uint32_t index = 0; index < TA_ARRAY_COUNT(to); index += 1u) {
+        ta_mem_copy(to[index], sets + (size_t)index * it->words, (size_t)it->words * sizeof(uint64_t));
+    }
+    ta_mem_copy(it->default_history, ta_continuation_history(saved), (size_t)saved->state_count * sizeof(ta_state_id));
+    ta_mem_copy(it->enabled, ta_continuation_enabled(saved), (size_t)saved->enabled_count * sizeof(ta_transition_id));
+    ta_mem_copy(it->exec_frames, ta_continuation_frames(saved), (size_t)saved->frame_count * sizeof(ta_exec_frame));
+    it->enabled_count = saved->enabled_count;
+    it->exec_count = saved->frame_count;
+    it->at = saved->at;
+    it->actor->sparse->paused = NULL;
+    ta_mem_free(it->system->allocator, saved,
+                &(ta_allocator_free_params){ .size = saved->bytes, .alignment = TA_CONTINUATION_ALIGN });
+}
+
+/* Drops a restored pause without finishing it: its snapshots are released. */
+static void ta_pause_drop(ta_interpreter *it) {
+    while (it->exec_count > 0) {
+        ta_exec_frame *frame = &it->exec_frames[--it->exec_count];
+        if (frame->kind == TA_EXEC_FRAME_FOREACH) {
+            ta_value_release(&frame->iteration_snapshot);
+        }
+    }
+    it->at = (ta_micro_position){0};
+}
+
+/*
+ * Runs or continues a microstep. A pause that cannot be saved does not
+ * pause: the microstep runs one more unit and tries again (ADR 0061
+ * section 3), so the budget never turns into an error.
+ */
+static ta_result ta_run_microstep(ta_interpreter *it) {
+    for (;;) {
+        ta_result result = ta_microstep(it);
+        if (result != TA_EXEC_PAUSED) {
+            return result;
+        }
+        if (ta_pause_save(it) == TA_OK) {
+            return TA_EXEC_PAUSED;
+        }
+        it->action_budget = it->actions + 1u;
+    }
 }
 
 /* Exits every active state in exit order when a top-level final state is reached. */
@@ -2070,6 +2272,9 @@ static ta_result ta_interpreter_init(ta_interpreter *it, ta_system *system, ta_a
     }
     ta_bits_clear(it, it->history_busy);
     ta_load_active(it);
+    if (actor->sparse != NULL && actor->sparse->paused != NULL) {
+        ta_pause_restore(it); /* the live set, too, is the paused microstep's */
+    }
     actor->live_active = it->active;
     return TA_OK;
 }
@@ -2086,6 +2291,23 @@ static ta_result ta_interpreter_run(ta_system *system, ta_actor *actor, const ta
     if (result == TA_OK && !actor->bootstrapped) {
         result = ta_bootstrap(it);
     }
+    it->pausable = true;
+    it->action_budget = params->action_budget;
+    if (result == TA_OK && it->at.phase != TA_MICRO_NONE) {
+        /* Continue the microstep a pause inside executable content left. The
+         * actor changes again, so an image taken while paused is stale. */
+        ta_actor_touch(actor);
+        bool restore_internal = it->at.restore_internal;
+        bool restore_external = it->at.restore_external;
+        result = ta_run_microstep(it);
+        if (result == TA_EXEC_PAUSED) {
+            *status = TA_RUN_PAUSED;
+            return TA_OK;
+        }
+        if (result == TA_ERR_NOMEM && (restore_internal || restore_external)) {
+            ta_restore_current_event(actor, restore_external);
+        }
+    }
     while (result == TA_OK && !actor->finished) {
         if (it->steps >= params->budget) {
             *status = TA_RUN_PAUSED;
@@ -2096,7 +2318,11 @@ static ta_result ta_interpreter_run(ta_system *system, ta_actor *actor, const ta
             break;
         }
         if (it->enabled_count != 0) {
-            result = ta_microstep(it);
+            result = ta_run_microstep(it);
+            if (result == TA_EXEC_PAUSED) {
+                *status = TA_RUN_PAUSED;
+                return TA_OK;
+            }
             continue;
         }
         ta_event event;
@@ -2131,7 +2357,13 @@ static ta_result ta_interpreter_run(ta_system *system, ta_actor *actor, const ta
         }
         result = ta_select_transitions(it, &actor->current_event);
         if (result == TA_OK && it->enabled_count != 0) {
-            result = ta_microstep(it);
+            it->at.restore_internal = restore_internal;
+            it->at.restore_external = restore_external;
+            result = ta_run_microstep(it);
+            if (result == TA_EXEC_PAUSED) {
+                *status = TA_RUN_PAUSED;
+                return TA_OK;
+            }
             if (result == TA_ERR_NOMEM && (restore_internal || restore_external)) {
                 ta_restore_current_event(actor, restore_external);
             }
@@ -2190,6 +2422,9 @@ static void ta_exit_open(ta_system *system, ta_vec *frames, ta_actor_id id) {
     ta_arena previous = system->scratch;
     system->scratch = frame.arena;
     ta_result result = ta_interpreter_init(&frame.it, system, actor);
+    /* A session paused inside a microstep exits its live set; the rest of
+     * the pause is dropped (ADR 0061 section 6). */
+    ta_pause_drop(&frame.it);
     frame.arena = system->scratch;
     frame.next = actor->definition->state_count;
     if (result == TA_OK) {
@@ -2313,6 +2548,7 @@ void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor) {
         return;
     }
     ta_invoke_release(system, actor); /* Invoke: cancel services, free bookkeeping. */
+    ta_continuation_free(system->allocator, &actor->sparse->paused);
     ta_event event;
     while (ta_dequeue_internal(actor, &event)) {
         ta_event_release(&event);

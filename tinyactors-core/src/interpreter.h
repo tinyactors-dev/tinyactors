@@ -4,9 +4,10 @@
 #include "datamodel.h"
 
 /*
- * Per-call interpreter scratch. The actor holds all state between microsteps,
- * so a budget pauses only at microstep boundaries, which the actor fully
- * describes: configuration, history, internal queue, and pending event.
+ * Per-call interpreter scratch. Between microsteps the actor holds all
+ * state: configuration, history, internal queue, and pending event. A pause
+ * inside a microstep (ADR 0061) moves the rest, the position, the sets and
+ * the executor's frames, into the actor's continuation.
  */
 typedef struct {
     ta_system *system;
@@ -47,6 +48,16 @@ typedef struct {
     ta_exec_frame *exec_frames;
     uint32_t exec_count;
     uint32_t exec_capacity;
+    /*
+     * Pausing inside a microstep (ADR 0061): where the microstep stands, the
+     * units of executable content this call may run and has run, and
+     * whether the block running now is one a pause may stop.
+     */
+    ta_micro_position at;
+    uint32_t action_budget;
+    uint32_t actions;
+    bool pausable;
+    bool in_microstep;
     /* Bootstrap only: data declarations the instance's binding already supplies. */
     uint64_t *bound_decls;
 } ta_interpreter;

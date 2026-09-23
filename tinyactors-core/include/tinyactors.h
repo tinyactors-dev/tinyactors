@@ -1799,7 +1799,21 @@ typedef struct {
     TA_OUT ta_actor_id *out;
 } ta_actor_spawn_params;
 typedef struct { TA_IN const ta_actor_address *address; TA_OUT ta_actor_id *out; } ta_actor_find_params;
-typedef struct { ta_actor_id actor; uint32_t budget; TA_OUT ta_run_status *status; } ta_actor_resume_params;
+/*
+ * `budget` is the number of microsteps this call may run (ADR 0009).
+ * `action_budget`, when not zero, is the number of units of executable
+ * content it may run before it pauses inside a microstep (ADR 0061): each
+ * action of a block, an <if> and a <foreach> included, and each <foreach>
+ * iteration. Either one reached answers TA_RUN_PAUSED, and the next call
+ * continues where this one stopped. Zero leaves pausing to `budget` alone.
+ * A pause that cannot save its position keeps running to the next unit.
+ */
+typedef struct {
+    ta_actor_id actor;
+    uint32_t budget;
+    TA_OUT ta_run_status *status;
+    uint32_t action_budget;
+} ta_actor_resume_params;
 typedef struct {
     ta_actor_id actor;
     const ta_session_image *image;
@@ -1914,6 +1928,10 @@ typedef struct {
     uint32_t active_state_count;
     /* True while a macrostep is paused mid-way (ta_actor_resume() continues it). */
     bool macrostep_in_progress;
+    /* True while it is paused inside a microstep, in executable content
+     * (ADR 0061). The active states are then those after the last completed
+     * microstep. */
+    bool microstep_in_progress;
     /* The external event of the paused macrostep, or null. */
     TA_IN TA_OPTIONAL const ta_event *current_event;
     TA_COUNTED_BY(internal_count) TA_OPTIONAL const ta_queued_event *internal_events;

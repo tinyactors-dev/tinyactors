@@ -1188,6 +1188,13 @@
           "doc": "True while a macrostep is paused mid-way (ta_actor_resume() continues it)."
         },
         {
+          "name": "microstep_in_progress",
+          "type": {
+            "builtin": "bool"
+          },
+          "doc": "True while it is paused inside a microstep, in executable content (ADR 0061). The active states are then those after the last completed microstep."
+        },
+        {
           "name": "current_event",
           "type": {
             "pointer": {
@@ -1300,6 +1307,7 @@
             "published": 92,
             "active_state_count": 96,
             "macrostep_in_progress": 100,
+            "microstep_in_progress": 101,
             "current_event": 104,
             "internal_events": 112,
             "internal_count": 120,
@@ -1324,6 +1332,7 @@
             "published": 60,
             "active_state_count": 64,
             "macrostep_in_progress": 68,
+            "microstep_in_progress": 69,
             "current_event": 72,
             "internal_events": 76,
             "internal_count": 80,
@@ -1804,6 +1813,7 @@
     },
     "ta_actor_resume_params": {
       "kind": "struct",
+      "doc": "`budget` is the number of microsteps this call may run (ADR 0009). `action_budget`, when not zero, is the number of units of executable content it may run before it pauses inside a microstep (ADR 0061): each action of a block, an <if > and a <foreach > included, and each <foreach > iteration. Either one reached answers TA_RUN_PAUSED, and the next call continues where this one stopped. Zero leaves pausing to `budget` alone. A pause that cannot save its position keeps running to the next unit.",
       "fields": [
         {
           "name": "actor",
@@ -1827,25 +1837,33 @@
           "shape": "single",
           "direction": "out",
           "valid_on": "success"
+        },
+        {
+          "name": "action_budget",
+          "type": {
+            "builtin": "uint32_t"
+          }
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "actor": 0,
+            "budget": 8,
+            "status": 16,
+            "action_budget": 24
+          }
+        },
+        "wasm32-unknown-unknown": {
           "size": 24,
           "align": 8,
           "offsets": {
             "actor": 0,
             "budget": 8,
-            "status": 16
-          }
-        },
-        "wasm32-unknown-unknown": {
-          "size": 16,
-          "align": 8,
-          "offsets": {
-            "actor": 0,
-            "budget": 8,
-            "status": 12
+            "status": 12,
+            "action_budget": 16
           }
         }
       }

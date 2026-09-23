@@ -51,6 +51,8 @@ typedef struct {
     ta_timer_list timers;
     bool has_parent;
     bool completion_pending;
+    /* A microstep paused inside executable content (ADR 0061), or null. */
+    ta_continuation *paused;
 } ta_actor_sparse_state;
 
 struct ta_actor {

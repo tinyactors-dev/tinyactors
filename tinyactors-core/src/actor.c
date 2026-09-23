@@ -689,6 +689,9 @@ static size_t ta_actor_allocated_bytes(const ta_actor *actor) {
             total += ta_vec_bytes(&sparse->activation_effects->entries);
         }
         total += ta_timer_list_bytes(&sparse->timers);
+        if (sparse->paused != NULL) {
+            total += sparse->paused->bytes;
+        }
     }
     return total;
 }
@@ -715,6 +718,7 @@ ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_inspectio
         .published = actor->published,
         .active_state_count = active,
         .macrostep_in_progress = actor->macrostep,
+        .microstep_in_progress = actor->sparse != NULL && actor->sparse->paused != NULL,
         .current_event = ta_actor_paused_event(actor),
         .allocated_bytes = ta_actor_allocated_bytes(actor),
     };

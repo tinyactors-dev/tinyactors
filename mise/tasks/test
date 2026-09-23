@@ -15,7 +15,7 @@ pid = Process.spawn('mise', 'run', 'check-recursion', chdir: root.join('tinyacto
 _pid, status = Process.wait2(pid)
 exit(status.exitstatus || 1) unless status.success?
 
-%w[deep_test delayed_send_test inspection_test export_test codec_test compile_error_test event_pattern_test retirement_test scxml_uri_test send_id_test tree_test].each do |test|
+%w[deep_test delayed_send_test pause_test inspection_test export_test codec_test compile_error_test event_pattern_test retirement_test scxml_uri_test send_id_test tree_test].each do |test|
   pid = Process.spawn("tinyactors-core/build/#{test}", chdir: root.to_s)
   _pid, status = Process.wait2(pid)
   exit(status.exitstatus || 1) unless status.success?
