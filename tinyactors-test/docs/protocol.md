@@ -64,7 +64,9 @@ IDs of every resident actor, including children that invokers spawned. With
 built on core's own enumeration, `ta_system_visit_actors`; that function is
 also bound directly (`ta.system.visit_actors`), and the callback it takes is
 an `inspector.recording` instrument, so a scenario can assert on the walk
-itself.
+itself. The paged walk, `ta_system_visit_actors_from` (ADR 0062), is bound
+as `ta.system.visit_actors_from` with `from` and `limit`; `next` comes back
+in `out` whatever the result.
 
 `instrument.list`, `instrument.journal`, and `instrument.control` read and
 steer the instrumented adapters (see [Instruments](#instruments)):

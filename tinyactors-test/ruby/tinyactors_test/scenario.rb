@@ -787,6 +787,39 @@ module TinyactorsTest
       ta.system.visit_actors(system: system_handle, inspector: inspector.adapter)[:result]
     end
 
+    # One page of the walk, ta_system_visit_actors_from (ADR 0062):
+    # [result, next]. `next` is ACTOR_VISIT_END when nothing is left.
+    ACTOR_VISIT_END = 0xFFFF_FFFF
+
+    def visit_actors_page(from:, limit:, inspector: recording_inspector)
+      response = ta.system.visit_actors_from(system: system_handle, inspector: inspector.adapter,
+                                             from: from, limit: limit)
+      [response[:result], response.dig(:out, :next)]
+    end
+
+    # Walks the whole population in pages of `limit`: [the actors visited in
+    # order, the `next` of every page].
+    def walk_in_pages(limit, inspector: recording_inspector)
+      # An empty page hands core the instrument, so its journal can be read.
+      visit_actors_page(from: ACTOR_VISIT_END, limit: 1, inspector: inspector)
+      seen = inspector.visits.size
+      cursor = 0
+      cursors = []
+      until cursor == ACTOR_VISIT_END
+        result, cursor = visit_actors_page(from: cursor, limit: limit, inspector: inspector)
+        assert_equal 'ok', result
+        cursors << cursor
+        assert cursors.size <= 1000, 'the walk ends'
+      end
+      [inspector.visits.drop(seen).map { |entry| entry[:actor] }, cursors]
+    end
+
+    # ACTOR_VISIT_END, for scenario blocks, which do not see this module's constants.
+    def actor_visit_end = ACTOR_VISIT_END
+
+    # An actor's position in the walk: its slot, the low 32 bits of its ID.
+    def actor_position(id) = id & 0xFFFF_FFFF
+
     # ----------------------------------------------------------------------
     # The SCXML target URI grammar (ADR 0044)
 

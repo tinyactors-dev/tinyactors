@@ -57,6 +57,9 @@
 #define CHURN_ACTORS 20000u
 #define INSPECTIONS 200000u
 #define INSPECTION_SAMPLE 256u
+/* Pages of the actor walk (ADR 0062): their size, and how many are taken. */
+#define PAGE_SIZE 64u
+#define PAGES 3000u
 #define REPETITIONS 3u
 
 /*
@@ -335,6 +338,7 @@ typedef struct {
     double churn_us;   /* per actor: spawn, bootstrap and destroy an ephemeral */
     double inspect_us; /* per inspection of one timed actor, its sends listed */
     double timer_us;   /* per actor: spawn a timed ephemeral (arms a send), destroy it (cancels it) */
+    double page_us;    /* per actor visited: one page of the actor walk, from where the last one ended */
     double actor_bytes;
     uint64_t peak_bytes;
 } round_cost;
@@ -350,6 +354,13 @@ static double cpu_seconds(void) {
 
 static double per_actor_us(double seconds, size_t actors) {
     return seconds * 1e6 / (double)actors;
+}
+
+/* Counts the actors a page visits. */
+static ta_result count_visit(void *self, const ta_actor_inspection *inspection) {
+    (void)inspection;
+    *(size_t *)self += 1u;
+    return TA_OK;
 }
 
 static round_cost measure(size_t population) {
@@ -497,6 +508,27 @@ static round_cost measure(size_t population) {
         require(ta_actor_destroy(system, ephemeral) == TA_OK, "destroying a timed ephemeral actor");
     }
     double timers_churned = cpu_seconds();
+
+    /*
+     * Pages of the actor walk (ADR 0062): each starts where the last one
+     * ended, wrapping at the end, so a page costs its own size whatever
+     * the population, and the walk never skips ahead by re-walking.
+     */
+    size_t visited = 0;
+    uint32_t cursor = 0;
+    for (unsigned page = 0; page < PAGES; page += 1u) {
+        uint32_t next = 0;
+        require(ta_system_visit_actors_from(system, &(ta_actor_visit_params){
+                                                        .inspector = {.self = &visited, .visit = count_visit},
+                                                        .from = cursor,
+                                                        .limit = PAGE_SIZE,
+                                                        .next = &next,
+                                                    }) == TA_OK,
+                "a page of the actor walk");
+        cursor = next == TA_ACTOR_VISIT_END ? 0u : next;
+    }
+    double paged = cpu_seconds();
+    require(visited >= (size_t)PAGES * PAGE_SIZE / 2u, "the pages visited actors");
     free(timed_actors);
 
     /*
@@ -533,6 +565,7 @@ static round_cost measure(size_t population) {
         .churn_us = per_actor_us(churned - upgraded, CHURN_ACTORS),
         .inspect_us = per_actor_us(inspected - inspect_started, INSPECTIONS),
         .timer_us = per_actor_us(timers_churned - inspected, CHURN_ACTORS),
+        .page_us = per_actor_us(paged - timers_churned, visited),
         .actor_bytes = actor_bytes,
         .peak_bytes = peak_bytes,
     };
@@ -558,22 +591,25 @@ static round_cost measure_best(size_t population, unsigned repetitions) {
         if (next.timer_us < best.timer_us) {
             best.timer_us = next.timer_us;
         }
+        if (next.page_us < best.page_us) {
+            best.page_us = next.page_us;
+        }
     }
     return best;
 }
 
 static void report(const char *label, size_t population, round_cost cost) {
-    printf("%-10s %9zu   %8.2f %8.2f %8.2f %8.3f %8.2f   %7.1f %10.1f\n", label, population, cost.spawn_us,
-           cost.upgrade_us, cost.churn_us, cost.inspect_us, cost.timer_us, cost.actor_bytes,
+    printf("%-10s %9zu   %8.2f %8.2f %8.2f %8.3f %8.2f %8.3f   %7.1f %10.1f\n", label, population, cost.spawn_us,
+           cost.upgrade_us, cost.churn_us, cost.inspect_us, cost.timer_us, cost.page_us, cost.actor_bytes,
            (double)cost.peak_bytes / (1024.0 * 1024.0));
     /* A failure below writes to stderr; keep the table ahead of it. */
     fflush(stdout);
 }
 
 static void report_header(void) {
-    printf("%-10s %9s   %8s %8s %8s %8s %8s   %7s %10s\n", "", "actors", "spawn", "upgrade", "churn", "inspect",
-           "timer", "bytes", "peak MB");
-    printf("%-10s %9s   %8s %8s %8s %8s %8s   %7s %10s\n", "", "", "us", "us", "us", "us", "us", "/actor", "");
+    printf("%-10s %9s   %8s %8s %8s %8s %8s %8s   %7s %10s\n", "", "actors", "spawn", "upgrade", "churn", "inspect",
+           "timer", "page", "bytes", "peak MB");
+    printf("%-10s %9s   %8s %8s %8s %8s %8s %8s   %7s %10s\n", "", "", "us", "us", "us", "us", "us", "us", "/actor", "");
 }
 
 /* Names the two costs whose ratio failed, so the report says which walk. */
@@ -613,6 +649,7 @@ int main(int argc, char **argv) {
     require_flat("an ephemeral actor", small.churn_us, large.churn_us);
     require_flat("inspecting a timed actor", small.inspect_us, large.inspect_us);
     require_flat("arming and cancelling a delayed send", small.timer_us, large.timer_us);
+    require_flat("a page of the actor walk", small.page_us, large.page_us);
 
     /*
      * Per-actor memory is a population claim too: it may not grow with the
