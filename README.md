@@ -42,6 +42,8 @@ Under active development - breaking changes are made frequently to land on a goo
 - `tinyactors-napi/` contains the Node-API binding for Node.js 22 and Bun.
 - `tinyactors-test/` contains the instrumentable JSON-RPC test host and its
   Ruby driver.
+- `docs/proposals/` holds outlines of possible future work, such as new
+  hosts. They are not plans or decisions; see its README.
 
 Run `mise run build` to build both projects and `mise run test` to exercise the
 test-host protocol.

@@ -36,3 +36,10 @@ so no outside code depends on an API or ABI staying the same.
   session is working in at the same time, such as `tinyactors-napi` during
   its rewrite. Change the call sites there too, keep the edit to those
   lines, and say in your report which of its files you touched.
+
+## Proposals are not instructions
+
+`docs/proposals/` holds outlines of possible future work. They are not
+instructions: do not implement anything from a proposal unless asked to.
+Where a proposal disagrees with an ADR or a roadmap, the ADR or roadmap wins.
+See `docs/proposals/README.md` for what each status means.
