@@ -32,3 +32,8 @@ are in [`docs/proposals/`](docs/proposals/README.md).
   host kernel, with a JavaScript surface shared with napi. Core already
   compiles for `wasm32-freestanding`, but no build task or test covers
   it yet.
+- [ ] **Package and release.** One command (`npm install tinyactors`,
+  `bun add tinyactors`) installs a prebuilt addon in a Node or Bun
+  project; releases are built with one command on a Mac or a Linux VM and
+  published to npm and GitHub Releases:
+  [Packaging and releases](docs/proposals/packaging.md).
