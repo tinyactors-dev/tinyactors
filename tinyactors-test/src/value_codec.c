@@ -151,8 +151,24 @@ void tat_value_codec_select(tat_bind *bind, const char *method, jv params) {
         /* A bad handle is the handler's error to report, not ours. */
         jv_free(bind->error);
         bind->error = jv_invalid();
+        if (!resolved) {
+            return;
+        }
         uint64_t id = 0;
-        if (!resolved || !tat_member_id(params, receiver->member, &id)) {
+        if (receiver->model == TAT_VALUE_MODEL_SESSION_IMAGE) {
+            /* An image is a handle, not an ID; its data model is its definition's. */
+            jv image_handle = jv_object_get(jv_copy(params), jv_string(receiver->member));
+            void *image = NULL;
+            bool found = jv_is_valid(image_handle) && tat_handle_resolve(bind, image_handle, "session_image", &image);
+            jv_free(image_handle);
+            jv_free(bind->error);
+            bind->error = jv_invalid();
+            ta_definition_id definition_id = 0;
+            if (!found || ta_session_image_definition(system, image, &definition_id) != TA_OK) {
+                return;
+            }
+            id = definition_id;
+        } else if (!tat_member_id(params, receiver->member, &id)) {
             return;
         }
         ta_datamodel model = {0};

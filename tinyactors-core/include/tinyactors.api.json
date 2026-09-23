@@ -14346,6 +14346,54 @@
       ]
     },
     {
+      "name": "ta_session_image_definition",
+      "doc": "The registered definition an image must be restored against: the exact revision it was captured under. TA_ERR_DEFINITION_MISMATCH when only another revision of its family is registered, TA_ERR_NOT_FOUND when none is. A host uses it to build the data-model binding with that definition's data model before ta_actor_load() or ta_actor_reconstruct().",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "image",
+          "type": {
+            "pointer": {
+              "type": "ta_session_image",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_definition_id"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success"
+        }
+      ]
+    },
+    {
       "name": "ta_session_image_destroy",
       "public": true,
       "static_inline": false,

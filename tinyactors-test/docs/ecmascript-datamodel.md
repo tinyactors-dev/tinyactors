@@ -256,8 +256,9 @@ order does not matter:
 | `ta.actor.deliver` | `actor` | `event.data` |
 | `ta.actor.report_invoke` | `actor` (the invoking parent) | event, done, and fault data |
 | `ta.actor.spawn` | `definition` | `datamodel_binding` |
-| `ta.actor.prepare_replacement` | `definition` | `datamodel_binding` (not yet implemented in core) |
-| everything else, including `ta.actor.load`/`reconstruct` (not implemented in core) and `codec.roundtrip.*` | none | jq |
+| `ta.actor.prepare_replacement` | `definition` | `datamodel_binding` |
+| `ta.actor.load`, `ta.actor.reconstruct` | `image`, through its definition (`ta_session_image_definition`) | `datamodel_binding` |
+| everything else, including `codec.roundtrip.*` | none | jq |
 
 If the system handle, id, or lookup is bad, the jq default is kept. Any
 decode error is cleared, so the generated handler reports the bad handle

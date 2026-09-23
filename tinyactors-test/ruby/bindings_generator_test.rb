@@ -38,7 +38,8 @@ end
 output = Rpc.generate(DESCRIPTION, TinyactorsBindings)
 check(output.source.include?('TAT_VALUE_RECEIVERS[]'), 'value receivers are generated from the value models')
 check(output.source.include?('{"ta.actor.spawn", "definition", TAT_VALUE_MODEL_DEFINITION}'), 'spawn values follow the definition')
-check(output.coverage['value_models'].key?('ta_actor_load'), 'the session-image fallback is reported')
+check(output.source.include?('{"ta.actor.load", "image", TAT_VALUE_MODEL_SESSION_IMAGE}'),
+      'load values follow the definition of the image')
 
 skips = TinyactorsBindings::SKIP_FUNCTIONS
 refuses('a stale skip entry', 'SKIP_FUNCTIONS ta_nothing_*', SKIP_FUNCTIONS: skips.merge('ta_nothing_*' => 'gone'))
@@ -52,8 +53,6 @@ refuses('an in-place pointer parameter', 'ta_arena_reset(arena): inout pointers 
         SKIP_FUNCTIONS: skips.reject { |pattern, _| pattern == 'ta_arena_*' })
 refuses('a returned pointer', 'ta_dm_host_event: returned pointers cannot cross the protocol',
         SKIP_FUNCTIONS: skips.reject { |pattern, _| pattern == 'ta_dm_host_*' })
-refuses('an unresolvable value model', 'ta_actor_load: the host cannot find the data model of a session_image',
-        VALUE_MODEL_FALLBACKS: {})
 refuses('an unbound vtable', 'ta_io_vtable: adapter operations cannot cross the protocol',
         SKIP_TYPES: TinyactorsBindings::SKIP_TYPES.reject { |pattern, _| pattern == '*_vtable' })
 
@@ -61,6 +60,13 @@ Dir.mktmpdir do |directory|
   old = File.join(directory, 'old.json')
   File.write(old, JSON.generate(JSON.parse(File.read(DESCRIPTION)).merge('format' => 'tinyactors-api/1')))
   refuses('an older description format', 'this generator reads tinyactors-api/2', description: old)
+
+  unknown = File.join(directory, 'unknown.json')
+  api = JSON.parse(File.read(DESCRIPTION))
+  api['functions'].find { |function| function['name'] == 'ta_actor_load' }['value_model']['kind'] = 'ghost'
+  File.write(unknown, JSON.generate(api))
+  refuses('an unresolvable value model', 'ta_actor_load: the host cannot find the data model of a ghost',
+          description: unknown)
 end
 
 puts 'tinyactors-test bindings generator test passed'

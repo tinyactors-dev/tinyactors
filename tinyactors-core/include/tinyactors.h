@@ -2248,6 +2248,16 @@ TA_API ta_result ta_actor_capture(ta_system *system,
 /* Returns TA_ERR_NOT_FOUND when the captured actor owns no delayed send. */
 TA_API ta_result ta_session_image_next_deadline(const ta_session_image *image,
                                                 TA_OUT ta_time *out);
+/*
+ * The registered definition an image must be restored against: the exact
+ * revision it was captured under. TA_ERR_DEFINITION_MISMATCH when only another
+ * revision of its family is registered, TA_ERR_NOT_FOUND when none is. A host
+ * uses it to build the data-model binding with that definition's data model
+ * before ta_actor_load() or ta_actor_reconstruct().
+ */
+TA_API ta_result ta_session_image_definition(const ta_system *system,
+                                             const ta_session_image *image,
+                                             TA_OUT ta_definition_id *out);
 TA_API void ta_session_image_destroy(TA_DESTROYS ta_session_image *image);
 
 

@@ -148,7 +148,10 @@ non-resident deadline entry.
 
 `ta_session_image_next_deadline` exposes the earliest actor-owned delayed-send
 deadline so a durability layer can index unloaded actors without depending on
-the image's private layout.
+the image's private layout. `ta_session_image_definition` names the registered
+definition an image must be restored against (the exact revision; otherwise
+`TA_ERR_DEFINITION_MISMATCH` or `TA_ERR_NOT_FOUND`), so a host can build the
+data-model binding with that definition's data model before loading.
 
 `ta_actor_destroy` terminates/removes the actor and its actor-owned semantic resources.
 

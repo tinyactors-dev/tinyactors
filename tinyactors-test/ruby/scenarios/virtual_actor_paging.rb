@@ -32,8 +32,9 @@ module VirtualActorPagingScenarios
   class Host
     attr_reader :page_ins, :page_outs, :spawns
 
-    def initialize(context, limit:, random:, prefix:, keep_binding: true)
+    def initialize(context, limit:, random:, prefix:, chart: :pager, keep_binding: true)
       @context = context
+      @chart = chart
       @limit = limit
       @random = random
       @prefix = prefix
@@ -71,7 +72,7 @@ module VirtualActorPagingScenarios
 
       evict_one while @resident.size >= @limit
       if actor.nil?
-        actor = @context.spawn(:pager, name: name)
+        actor = @context.spawn(@chart, name: name)
         @actors[name] = actor
         @spawns += 1
       else
@@ -131,12 +132,12 @@ module VirtualActorPagingScenarios
     end
   end
 
-  def self.run(context, population:, limit:, messages:, keep_binding: true)
+  def self.run(context, population:, limit:, messages:, chart: :pager, keep_binding: true)
     seed = self.seed
     stream = Random.new(seed)
     order = Array.new(messages) { [stream.rand(population), stream.rand(1_000)] }
 
-    paged = Host.new(context, limit: limit, random: Random.new(seed + 1), prefix: 'paged',
+    paged = Host.new(context, limit: limit, random: Random.new(seed + 1), prefix: 'paged', chart: chart,
                               keep_binding: keep_binding)
     counter = ResidentCounter.new(context)
     order.each_with_index do |(index, payload), at|
@@ -151,7 +152,7 @@ module VirtualActorPagingScenarios
     paged.release_parked
 
     # The reference: the same stream to a fresh set of actors, all resident.
-    reference = Host.new(context, limit: population * 2, random: Random.new(0), prefix: 'all')
+    reference = Host.new(context, limit: population * 2, random: Random.new(0), prefix: 'all', chart: chart)
     order.each { |index, payload| reference.deliver(index, payload) }
     want = reference.final_states.transform_keys { |name| name.delete_prefix('all') }
     context.assert_equal 0, reference.page_outs, 'the reference run never evicts'
@@ -205,5 +206,33 @@ TinyactorsTest.scenarios 'virtual actor paging', chart: :pager do
                                                      keep_binding: false)
       assert counts[:unbound].positive?, "some actor was loaded without its binding: #{counts}"
     end
+  end
+end
+
+# The same paging on the ECMAScript data model (SCXML B.2). A binding is a
+# value of the data model the image's definition uses, so the test host
+# decodes it with that model (ta_session_image_definition), not with jq.
+TinyactorsTest.chart :pager_js, datamodel: 'ecmascript' do
+  data v: 0
+  data n: 0
+
+  state :listening do
+    transition on: 'msg', type: :internal do
+      assign 'v', "(v * 31 + _event.data.m) % #{VirtualActorPagingScenarios::MODULUS}"
+      assign 'n', 'n + 1'
+    end
+  end
+end
+
+TinyactorsTest.scenarios 'virtual actor paging, ECMAScript', chart: :pager_js do
+  scenario '100 actors, at most 3 resident, 1000 random messages' do
+    counts = VirtualActorPagingScenarios.run(self, population: 100, limit: 3, messages: 1000, chart: :pager_js)
+    assert counts[:page_ins] >= 100, "every actor pages in again: #{counts}"
+  end
+
+  scenario '10 actors, at most 3 resident, 200 messages, loaded without their binding' do
+    counts = VirtualActorPagingScenarios.run(self, population: 10, limit: 3, messages: 200, chart: :pager_js,
+                                                   keep_binding: false)
+    assert counts[:unbound].positive?, "some actor was loaded without its binding: #{counts}"
   end
 end

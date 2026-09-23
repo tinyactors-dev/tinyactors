@@ -25,7 +25,10 @@ with `TA_ERR_STALE` if the source actor has changed since capture.
 `ta_session_image_next_deadline()` returns the earliest captured delayed-send
 deadline, or `TA_ERR_NOT_FOUND`. This is sufficient for a host durability layer
 to maintain a wake-up index for an unloaded actor without exposing the image's
-private structure.
+private structure. `ta_session_image_definition()` names the definition the
+image must be restored against, the same exact-revision lookup load and
+reconstruct use, so a host can build a binding with that definition's data
+model before loading it.
 
 Active invocation records are captured logically, but opaque invoker service
 handles are runtime-only and are not retained by the image.

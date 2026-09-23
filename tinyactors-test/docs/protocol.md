@@ -158,10 +158,10 @@ JSON-RPC errors are reserved for the protocol itself:
 - `ta_value` is any JSON value. It decodes into a value of the data model of
   the receiving actor, as the function's `value_model` in the API description
   names it: the `actor` of `ta.actor.deliver` and `ta.actor.report_invoke`, or
-  the `definition` of `ta.actor.spawn` and `ta.actor.prepare_replacement`.
-  Every other method decodes into jq values, including `ta.actor.load` and
-  `ta.actor.reconstruct`, whose session images the host cannot map to a data
-  model (`VALUE_MODEL_FALLBACKS` in `bindings.rb`).
+  the `definition` of `ta.actor.spawn` and `ta.actor.prepare_replacement`,
+  or the definition of the `image` of `ta.actor.load` and
+  `ta.actor.reconstruct` (`ta_session_image_definition`). Every other method
+  decodes into jq values.
   The wire carries no model tag. On output each value is encoded by its own
   data model. An ECMAScript value that JSON cannot represent encodes as
   `{"$value": "undefined" | "function" | "symbol" | "unserializable"}` at the

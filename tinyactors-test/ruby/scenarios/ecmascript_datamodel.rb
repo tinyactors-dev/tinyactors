@@ -107,3 +107,48 @@ TinyactorsTest.scenarios 'ecmascript data model' do
     assert_equal 3, actor.data('.total')
   end
 end
+
+# An image's binding is a value of the data model its definition uses. The
+# test host decoded the binding of ta.actor.load and ta.actor.reconstruct with
+# jq, so an ECMAScript actor refused its binding (err_unsupported) and could
+# never be paged back in. It now asks core which definition the image needs
+# (ta_session_image_definition) and decodes with that definition's model.
+TinyactorsTest.chart :ecma_counter, datamodel: 'ecmascript' do
+  data v: 0
+
+  state :counting do
+    transition on: 'add', type: :internal do
+      assign 'v', 'v + _event.data.m'
+    end
+  end
+end
+
+TinyactorsTest.scenarios 'ecmascript data model: residency' do
+  scenario 'an ECMAScript actor loads with its binding and continues from it' do
+    actor = spawn :ecma_counter, name: 'counter'
+    actor.deliver 'add', data: { m: 5 }
+    image = capture(actor)
+    binding = actor.data
+    assert_equal({ v: 5 }, binding)
+    assert_equal 'ok', unload(actor, image)
+    assert_equal 'ok', load(actor, image, binding: binding)
+    assert_equal({ v: 5 }, actor.data, 'the binding restores the data')
+    actor.deliver 'add', data: { m: 2 }
+    assert_equal({ v: 7 }, actor.data, 'the restored actor continues from it')
+    destroy_image(image)
+  end
+
+  scenario 'an ECMAScript actor reconstructs with its binding' do
+    actor = spawn :ecma_counter
+    actor.deliver 'add', data: { m: 4 }
+    image = capture(actor)
+    binding = actor.data
+    copy = core('ta_actor_reconstruct',
+                ta.actor.reconstruct(system: system_handle, image: image, datamodel_binding: binding)).fetch(:out)
+    root = ta.actor.datamodel_root(system: system_handle, actor: copy)
+    assert_equal 'ok', root[:result]
+    assert_equal({ v: 4 }, root.dig(:out, :out), 'the reconstructed session has the binding')
+    core('ta_actor_destroy', ta.actor.destroy(system: system_handle, actor: copy))
+    destroy_image(image)
+  end
+end

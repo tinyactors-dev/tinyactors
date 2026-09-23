@@ -151,10 +151,12 @@ void tat_handle_retire(tat_bind *bind, const void *ptr);
 jv tat_handle_fixture(tat_bind *bind, const char *type);
 jv tat_borrowed_encode(const char *type, const void *ptr);
 
-/* Methods whose ta_value inputs belong to the data model of the actor or
- * definition named by `member` (the API description's value models). The
+/* Methods whose ta_value inputs belong to the data model of the actor,
+ * definition or session image named by `member` (the API description's value
+ * models). An image's data model is its definition's, found with
+ * ta_session_image_definition(). The
  * generated bindings define the table; value_codec.c consults it. */
-typedef enum { TAT_VALUE_MODEL_ACTOR, TAT_VALUE_MODEL_DEFINITION } tat_value_model;
+typedef enum { TAT_VALUE_MODEL_ACTOR, TAT_VALUE_MODEL_DEFINITION, TAT_VALUE_MODEL_SESSION_IMAGE } tat_value_model;
 
 typedef struct {
     const char *method;

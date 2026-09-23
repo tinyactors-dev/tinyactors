@@ -16,13 +16,12 @@ module Rpc
     def skip_type(name) = lookup(:SKIP_TYPES, name)
     def override_type(name) = lookup(:OVERRIDE_TYPES, name)
     def flatten_member?(struct, member) = !lookup(:FLATTEN_UNION_MEMBERS, "#{struct}.#{member}").nil?
-    def value_model_fallback(kind) = lookup(:VALUE_MODEL_FALLBACKS, kind)
     def flatten_parameter = @mod::FLATTEN_PARAMETER
     def max_buffer_elements = @mod::MAX_BUFFER_ELEMENTS
 
     # Raises when an entry matched nothing during planning.
     def check_used!
-      stale = %i[SKIP_FUNCTIONS OVERRIDE_FUNCTIONS SKIP_TYPES OVERRIDE_TYPES FLATTEN_UNION_MEMBERS VALUE_MODEL_FALLBACKS]
+      stale = %i[SKIP_FUNCTIONS OVERRIDE_FUNCTIONS SKIP_TYPES OVERRIDE_TYPES FLATTEN_UNION_MEMBERS]
               .flat_map do |table|
         @mod.const_get(table).keys.reject { |pattern| @used[table][pattern] }.map { |pattern| "#{table} #{pattern}" }
       end

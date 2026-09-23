@@ -389,7 +389,10 @@ void ta_session_image_destroy(ta_session_image *image) {
  * it is a mismatch rather than a near miss; no definition of the family at
  * all is simply not found.
  */
-static ta_result ta_image_definition(ta_system *system, const ta_session_image *image, ta_definition_id *out) {
+ta_result ta_session_image_definition(const ta_system *system, const ta_session_image *image, ta_definition_id *out) {
+    if (system == NULL || image == NULL || out == NULL) {
+        return TA_ERR_INVALID;
+    }
     ta_result result = ta_system_find_definition(system, &image->definition, out);
     if (result != TA_ERR_NOT_FOUND) {
         return result;
@@ -507,7 +510,7 @@ ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_par
     }
     ta_session_image *image = (ta_session_image *)params->image;
     ta_definition_id definition_id = 0;
-    ta_result result = ta_image_definition(system, image, &definition_id);
+    ta_result result = ta_session_image_definition(system, image, &definition_id);
     if (result != TA_OK) {
         return result;
     }

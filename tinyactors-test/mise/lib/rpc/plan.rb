@@ -15,7 +15,11 @@ module Rpc
                    'uint64_t' => 'u64', 'size_t' => 'size', 'bool' => 'bool' }.freeze
     PRIMITIVE_TYPES = { 'u8' => 'uint8_t', 'u16' => 'uint16_t', 'u32' => 'uint32_t', 'i32' => 'int32_t', 'u64' => 'uint64_t',
                         'size' => 'size_t', 'bool' => 'bool' }.freeze
-    VALUE_MODELS = { 'actor' => 'TAT_VALUE_MODEL_ACTOR', 'definition' => 'TAT_VALUE_MODEL_DEFINITION' }.freeze
+    VALUE_MODELS = {
+      'actor' => 'TAT_VALUE_MODEL_ACTOR',
+      'definition' => 'TAT_VALUE_MODEL_DEFINITION',
+      'session_image' => 'TAT_VALUE_MODEL_SESSION_IMAGE'
+    }.freeze
 
     # How a value is converted: kind is :primitive, :enum, :struct, :runtime,
     # or :adapter; name is the codec name; ctype the C type it converts.
@@ -543,11 +547,9 @@ module Rpc
       kind = model['kind']
       return @report[:value_models] << [function['name'], 'any: decoded as jq'] if kind == 'any'
 
-      unless (constant = VALUE_MODELS[kind])
-        reason = @policy.value_model_fallback(kind) or
-          return error(function['name'], "the host cannot find the data model of a #{kind}; add a VALUE_MODEL_FALLBACKS entry")
-        return @report[:value_models] << [function['name'], "#{kind}: #{reason}"]
-      end
+      constant = VALUE_MODELS[kind] or
+        return error(function['name'], "the host cannot find the data model of a #{kind}; " \
+                                       'resolve it in VALUE_MODELS and value_codec.c')
       path = model['path']
       path = path.drop(1) if flattened && path.first == flattened.first
       return error(function['name'], "value model path #{model['path'].join('.')} is not a top-level member") unless path.size == 1
