@@ -1,6 +1,12 @@
+/* clock_gettime and CLOCK_MONOTONIC under -std=c11. */
+#if !defined(_POSIX_C_SOURCE) && !defined(__APPLE__)
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "system.h"
 
 #include <stdlib.h>
+#include <time.h>
 
 #include "router.h"
 
@@ -20,7 +26,10 @@ ta_result tna_system_create(tna_system **out) {
             .microsteps = TNA_DEFAULT_RESUME_BUDGET,
             .actions = TNA_DEFAULT_ACTION_BUDGET,
         },
+        .due_budget = TNA_DEFAULT_DUE_BUDGET,
+        .clock = { .kind = TNA_CLOCK_REALTIME, .now = tna_monotonic_ns },
     };
+    system->clock.origin = system->clock.now(system->clock.now_context);
     tna_allocator_init(&system->allocator);
     tna_sched_init(&system->sched, tna_allocator_for(&system->allocator, TNA_MEMORY_SCHEDULING),
                    tna_allocator_for(&system->allocator, TNA_MEMORY_ENVELOPES));
@@ -84,8 +93,100 @@ void tna_system_free(tna_system *system) {
     free(system);
 }
 
+/* Something is due at core's current time. */
+static bool tna_system_due_now(const tna_system *system) {
+    ta_time deadline = 0;
+    return system->core != NULL && ta_system_next_deadline(system->core, &deadline) == TA_OK &&
+           deadline <= ta_system_time(system->core);
+}
+
 bool tna_system_quiet(const tna_system *system) {
-    return tna_sched_quiet(&system->sched);
+    return tna_sched_quiet(&system->sched) && !tna_system_due_now(system);
+}
+
+uint64_t tna_monotonic_ns(void *context) {
+    (void)context;
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+        return 0;
+    }
+    return (uint64_t)now.tv_sec * 1000000000u + (uint64_t)now.tv_nsec;
+}
+
+ta_result tna_system_set_clock(tna_system *system, tna_clock_kind kind, ta_time initial) {
+    if (system == NULL || system->closed || ta_system_time(system->core) != 0) {
+        return TA_ERR_INVALID;
+    }
+    ta_result result = ta_system_set_time(system->core, initial);
+    if (result != TA_OK) {
+        return result;
+    }
+    system->clock.kind = kind;
+    system->clock.initial = initial;
+    system->clock.origin = system->clock.now(system->clock.now_context);
+    return TA_OK;
+}
+
+void tna_system_sync_time(tna_system *system) {
+    if (system == NULL || system->closed || system->clock.kind != TNA_CLOCK_REALTIME || system->inside_core) {
+        return;
+    }
+    uint64_t now = system->clock.now(system->clock.now_context);
+    uint64_t elapsed = now > system->clock.origin ? (now - system->clock.origin) / 1000000u : 0;
+    ta_time time = system->clock.initial + (ta_time)elapsed;
+    if (time > ta_system_time(system->core)) {
+        (void)ta_system_set_time(system->core, time);
+    }
+}
+
+ta_result tna_system_advance_to(tna_system *system, ta_time time) {
+    if (system == NULL || system->closed || system->clock.kind != TNA_CLOCK_MANUAL) {
+        return TA_ERR_INVALID;
+    }
+    if (system->inside_core) {
+        return TA_ERR_BUSY;
+    }
+    ta_result result = ta_system_set_time(system->core, time);
+    if (result == TA_OK) {
+        tna_system_want_turn(system);
+    }
+    return result;
+}
+
+/*
+ * Realtime: arms the host timer for the next deadline, when there is one in
+ * the future that is earlier than the armed one (ADR 0007 point 3). A
+ * deadline that is due already needs a turn, not a timer.
+ */
+static void tna_system_arm(tna_system *system) {
+    tna_clock *clock = &system->clock;
+    ta_time deadline = 0;
+    if (system->closed || clock->kind != TNA_CLOCK_REALTIME || clock->arm == NULL ||
+        ta_system_next_deadline(system->core, &deadline) != TA_OK) {
+        return;
+    }
+    tna_system_sync_time(system);
+    ta_time now = ta_system_time(system->core);
+    if (deadline <= now) {
+        tna_system_want_turn(system);
+        return;
+    }
+    if (clock->armed && clock->armed_deadline <= deadline) {
+        return;
+    }
+    clock->armed = true;
+    clock->armed_deadline = deadline;
+    clock->arm(system, deadline - now, system->wake_context);
+}
+
+void tna_system_timer_fired(tna_system *system) {
+    if (system == NULL || system->closed) {
+        return;
+    }
+    system->clock.armed = false;
+    tna_system_sync_time(system);
+    tna_system_want_turn(system);
+    tna_system_arm(system);
 }
 
 void tna_system_want_turn(tna_system *system) {
@@ -103,12 +204,30 @@ void tna_system_turn(tna_system *system) {
     if (system->closed) {
         return;
     }
+    tna_system_sync_time(system);
     tna_sched_turn(&system->sched, &(tna_turn_params){
                                        .core = system->core,
                                        .arena = &system->scratch.turn,
                                        .inside_core = &system->inside_core,
                                        .budgets = system->budgets,
                                    });
+    if (tna_system_due_now(system)) {
+        /*
+         * Due sends go through the router into mailboxes (ADR 0006), so what
+         * they deliver runs in a later turn. A refusal (a full queue) or
+         * TA_ERR_NOMEM leaves the rest due, so the system is not quiet and
+         * the next turn tries again.
+         */
+        uint32_t dispatched = 0;
+        bool more_due = false;
+        system->inside_core = true;
+        (void)ta_system_dispatch_due(system->core, &(ta_due_dispatch_params){
+                                                       .budget = system->due_budget,
+                                                       .dispatched = &dispatched,
+                                                       .more_due = &more_due,
+                                                   });
+        system->inside_core = false;
+    }
 }
 
 void tna_system_end_turn(tna_system *system) {
@@ -120,6 +239,7 @@ void tna_system_end_turn(tna_system *system) {
     system->sched.record_count = 0;
     tna_scratch_reset_turn(&system->scratch);
     tna_system_want_turn(system);
+    tna_system_arm(system);
 }
 
 ta_result tna_system_post(tna_system *system, ta_actor_id target, const ta_event *event) {
