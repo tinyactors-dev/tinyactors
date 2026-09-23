@@ -1,57 +1,113 @@
-# ADR 0054: Per-actor queries do not scale with the population
+# ADR 0054: Delayed sends live with their owner; the global index orders owners
 
-**Status:** Proposed; applies ADR 0018 and ADR 0026
+**Status:** Proposed; refines ADR 0026, applies ADR 0018
 **Date:** 2026-09-23
 
 ## Context
 
 ADR 0018 sets the design target at about four million actors in one
-process. ADR 0026 keeps delayed sends in one global heap, indexed by due
-time, not by owner.
+process. ADR 0026 says a delayed send belongs to its actor but "may be
+indexed globally" so that due work is found without scanning actors. Core
+does this by storing the send records *in* the global heap
+(`ta_timer_heap.items`) and nowhere else.
 
-`ta_actor_inspect()` fills `delayed_send_count` with
-`ta_timer_count_owner()` (`src/timer.c:191`). That function scans the whole
-global heap. So the cost of inspecting one actor grows with the number of
-delayed sends in the whole system, not with the size of that actor.
+Because of that, every question about one actor's sends is a scan of every
+send in the system:
 
-Hosts call `ta_actor_inspect()` often. The Node-API binding calls it twice
-for each posted event: once to validate the target, and once to check
-readiness before `ta_actor_deliver()`. Suppose each of four million actors
-holds a single timeout. Then every message costs four million heap reads,
-and a pump that delivers N messages costs N × 4M. The heap is "physically
-globally indexed", which is correct for dispatch, but it was never meant to
-make a per-actor question global.
+- `ta_actor_inspect()` fills `delayed_send_count` with
+  `ta_timer_count_owner()`, a full heap scan (`src/timer.c:191`).
+- `ta_actor_delayed_sends()` repeats a selection pass over the whole heap
+  once per returned send (`src/actor.c:835`). That is O(k × S) for k sends
+  of the actor and S sends in the system.
+- Cancel, withdraw, termination, destroy and capture also scan by owner.
+
+The count is also the wrong thing to show. "3 delayed sends" does not tell an
+operator what an actor is waiting for. Inspection already returns the
+internal event queue and the active invocations as borrowed arrays. Delayed
+sends should appear the same way: the whole list, as a borrowed array,
+available in O(1).
 
 ## Decision
 
-1. **A query about one actor costs O(size of that actor), not O(size of the
-   system).** "Size of that actor" means its definition-sized session
-   storage, its sparse state, and its own lists. This rule covers
-   `ta_actor_inspect()` and every other function that takes one
-   `ta_actor_id` and reads state.
-2. **The per-owner delayed-send count is kept, not computed.** The actor's
-   sparse state (ADR 0018) holds a counter. `ta_timer_schedule()` increments
-   it. Every path that removes a send owned by a resident actor decrements
-   it: pop on dispatch, cancel, withdraw, and termination. Actors that never
-   schedule a delayed send do not pay for it, because the counter lives in
-   the sparse allocation that such an actor does not have.
-3. **Submitted sends that outlive their session (ADR 0026) are not counted.**
-   Once the owner is destroyed, no actor is left to report the count.
-4. **`ta_actor_delayed_sends()` may still scan.** That function copies a
-   list and the host calls it deliberately. It is not on a delivery path.
-   Its count parameter is sized from the kept counter.
-5. A test inspects one actor while the system holds a large number of delayed
-   sends from other actors, and asserts that the work done does not depend
-   on that number (for example, by counting heap reads).
+1. **A delayed send is stored with its owner.** The actor's sparse state
+   (ADR 0018) holds its pending sends in one array sorted by
+   `(due, timer id)`. The array element is the public
+   `ta_delayed_send_info`. Private fields (the timer ID, the resolved
+   destination for retry, and the envelope of a submitted send) go in a
+   parallel array. This is the same arrangement as `invokes` and
+   `invoke_meta`. Actors with no delayed sends pay nothing.
+2. **The global index orders owners, not sends.** The system heap holds one
+   entry per actor that has at least one pending send. The entry's key is
+   the `(due, id)` of that actor's first send, and it records the actor's
+   position. The sparse state stores the entry's heap position.
+   - The global minimum is the front send of the owner at the top of the
+     heap. Dispatch order, `ta_system_next_deadline()` and
+     `ta_system_dispatch_due()` behave exactly as before.
+   - *Schedule:* binary search plus insertion into the owner's array. If the
+     send is the owner's new front, fix up the owner's heap entry.
+   - *Dispatch:* take the owner's front send, then re-key or remove the
+     owner's heap entry.
+   - *Cancel or withdraw:* remove from the owner's array. If the removed send
+     was the front, re-key the heap entry.
+   - *Termination, destroy, unload and capture:* work on the owner's array
+     only.
+
+   Each operation costs O(k + log A), where k is the owner's sends and A is
+   the number of actors with sends. Nothing scans the system. The heap
+   holds A entries instead of S, so it also shrinks.
+3. **Submitted sends that outlive their session (ADR 0026) move to a
+   system-owned list.** Destroying an actor already discards unsubmitted
+   sends and keeps submitted ones queued for their receivers. Core moves
+   those sends into one system-owned sorted list, which takes part in the
+   heap like an owner. They are no longer any actor's state, so they are
+   not reported by actor inspection.
+4. **Inspection returns the list.** `ta_actor_inspection` replaces
+   `uint32_t delayed_send_count` with a borrowed array:
+
+   ```c
+   TA_COUNTED_BY(delayed_send_count) TA_OPTIONAL
+   const ta_delayed_send_info *delayed_sends;
+   uint32_t delayed_send_count;
+   ```
+
+   Its order is by due time, then send order. It follows the same borrowing
+   rule as `internal_events` and `invokes`: valid only while the actor is
+   externally synchronized against mutation.
+5. **`ta_delayed_send_info` carries what an operator needs.** It already has
+   `send_id`, `due`, `event`, `io_type`, `target` and `data`. It gains:
+   - `bool submitted`: the router refused the send once and it is waiting to
+     be offered again (ADR 0026, ADR 0040);
+   - `ta_actor_ref destination`: the resolved target for the built-in SCXML
+     processor, or none for custom processors, which use `target`.
+6. **`ta_actor_delayed_sends()` is removed.** Inspection is now the one read
+   path, as it already is for internal events. A host that needs the list
+   beyond the synchronization window copies it and retains `target` and
+   `data`.
+7. **Rule:** a function that takes one `ta_actor_id` and reads state costs
+   O(size of that actor) — its definition-sized session storage, its sparse
+   state and its own lists — never O(size of the system). A test inspects
+   one actor while the system holds many sends from other actors, and
+   asserts that the work does not depend on that number.
 
 ## Consequences
 
-- Hosts can inspect an actor on a hot path without a hidden quadratic cost.
-  Bindings still should not inspect before each delivery; ADR 0055 makes
-  `ta_actor_deliver()` the admission test.
-- The timer module needs a way to find the owner's sparse state when a send
-  leaves the heap. `ta_actor_lookup()` is O(1) (a slot and a generation), so
-  this adds no scan.
-- An actor that schedules its first delayed send allocates sparse state if
-  it did not already have it. Under ADR 0047 that allocation is already on
-  a retryable path.
+- An operator sees exactly what each actor is waiting for, including sends
+  held back by the router, with no extra call and no scan.
+- Hosts can inspect on hot paths. They still should not inspect before each
+  delivery: ADR 0055 makes `ta_actor_deliver()` the admission test.
+- The timer module stops being a flat heap of records. It becomes
+  per-owner sorted arrays plus an owner heap. `ta_timer_*` functions take
+  the owner's sparse state instead of scanning by owner ID. Session capture
+  (`ta_timer_copy_unsubmitted`) becomes a copy of the owner's array.
+- Scheduling an actor's first delayed send may allocate sparse state and
+  grow its array. Under ADR 0047 both happen on the existing retryable path,
+  as `ta_timer_reserve()` does today.
+- An actor with a very large number of pending sends pays O(k) per insert or
+  cancel for array moves. This is bounded by that actor's own state, which
+  is the stated rule.
+- The public ABI changes: an inspection field changes type, two fields are
+  added to `ta_delayed_send_info`, and `ta_actor_delayed_sends()` and its
+  params type are removed.
+- Callers to update: the JSON-RPC test host and its Ruby scenario, trace and
+  workbench code, which call `ta_actor_delayed_sends` through the generated
+  bindings, and `tinyactors-napi/index.d.ts`, which declares the count.
