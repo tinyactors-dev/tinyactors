@@ -417,6 +417,16 @@ Exit criterion:
   idle period fires no earlier than its delay;
 - an idle realtime system does not keep the process alive.
 
+Built as:
+- `system.{c,h}` owns the clock, Node-API-free. `clock_test.c` drives it
+  with a fake monotonic clock.
+- `pump.c` arms the timer.
+- `test/time.js` checks the criteria on both runtimes. The idle-process
+  check runs `test/fixtures/time_idle_child.js` in a child process.
+
+`delayedSends[].id` is the send ID text, or null. `destination` is null for a
+custom processor; checking that waits for registered processors (step 13).
+
 ### 9. Enumerate
 
 Needs core ADR 0062.

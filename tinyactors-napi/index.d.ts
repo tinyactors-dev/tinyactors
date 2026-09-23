@@ -3,8 +3,9 @@
  * so far createSystem(), System.close(), System.closed, System.stats(),
  * System.define(), System.findDefinition(), Definition, statechart(),
  * literal(), TinyactorsError, spawn(), inspect(), destroy(), flush(),
- * post() without data, and the `done`, `fault` and `deadLetter` hooks are
- * implemented. Until the JavaScript data
+ * post() without data, the `done`, `fault` and `deadLetter` hooks, the
+ * realtime and manual clocks (time, advanceTo(), advanceBy()) and delayed
+ * sends are implemented. Until the JavaScript data
  * model lands (step 11), charts compile against core's null data model.
  */
 export const version: string;
@@ -14,8 +15,14 @@ export const version: string;
  * -------------------------------------------------------------------------- */
 
 export interface SystemOptions {
-  /** Realtime uses performance.now(); manual time advances only when requested. */
+  /**
+   * "realtime" (the default) follows a monotonic clock read natively; one
+   * unreferenced timer fires due sends, so an idle system does not keep the
+   * process alive. "manual" time moves only with advanceTo()/advanceBy()
+   * (ADR 0007 point 3).
+   */
   clock?: "realtime" | "manual";
+  /** Core's logical time at creation, in milliseconds; default 0. */
   initialTime?: number;
   scheduling?: SchedulingOptions;
   /**
@@ -78,7 +85,7 @@ export interface SchedulingOptions {
   actionBudget?: number;
   /** Runnable actors resumed in one pump turn; default 1024. */
   resumesPerTurn?: number;
-  /** Maximum due sends dispatched during one pump turn. */
+  /** Maximum due sends dispatched during one pump turn; at least 1, default 1024. */
   dueBudget?: number;
   /**
    * Deliveries started during one pump turn, and dead letters reported in
@@ -170,7 +177,11 @@ export interface System {
   /** Resolve after all currently reachable work is quiescent. */
   flush(): Promise<void>;
 
-  /** Available only with a manual clock. Time must not move backwards. */
+  /**
+   * Available only with a manual clock; throws `invalid` otherwise, or when
+   * time would move backwards. Resolves once everything due has been
+   * dispatched and the system is quiet.
+   */
   advanceTo(time: number): Promise<void>;
   advanceBy(milliseconds: number): Promise<void>;
 
@@ -566,6 +577,8 @@ export interface ActorInspection<Data = unknown> {
   readonly macrostepInProgress: boolean;
   readonly internalEventCount: number;
   readonly delayedSendCount: number;
+  /** Pending delayed sends, by due time then send order (core ADR 0054). */
+  readonly delayedSends: readonly DelayedSendInspection[];
   /** The addon's scheduling state (ADR 0005). */
   readonly scheduling: "none" | "idle" | "ready" | "runnable" | "quarantined";
   /** The top-level final state it reached, or null (core ADR 0056). */
@@ -584,12 +597,13 @@ export interface InvocationInspection {
 
 /** One pending delayed send; `delayedSends` is ordered by due time, then send order. */
 export interface DelayedSendInspection {
-  readonly id: SendId;
+  /** The send ID as the chart names it (core ADR 0048), or null when it has none. */
+  readonly id: string | null;
   readonly due: number;
   readonly event: EventName;
   readonly ioType: string;
-  /** The resolved receiver for the built-in SCXML processor; absent for custom processors, which use `target`. */
-  readonly destination?: ActorId | ActorAddress;
+  /** The resolved receiver for the built-in SCXML processor; null for custom processors, which use `target`. */
+  readonly destination: ActorId | ActorAddress | null;
   readonly target: unknown;
   readonly data: unknown;
   /** The router refused this send once; it is waiting to be offered again. */

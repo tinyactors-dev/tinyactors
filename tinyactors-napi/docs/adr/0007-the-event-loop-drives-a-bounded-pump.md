@@ -77,6 +77,13 @@ unless someone called `flush()`, and delayed sends never fired.
    - With `clock: "manual"`, there is no timer. `advanceTo()` and
      `advanceBy()` set the time and return a promise that settles once
      everything due has been dispatched and the system is quiet.
+   - `clock: "realtime"` is the default. A pending timer holds the native
+     System, like a pending turn. When `close()` runs in a finalizer, where
+     no JavaScript can run, the timer is left pending and its callback
+     drops the hold.
+   - Due sends are dispatched at the end of the turn, at most `dueBudget`
+     of them (default 1024). They go through the router into mailboxes, so
+     the events they carry are delivered in a later turn.
 4. **`flush()` resolves when the system is quiet**: no runnable actors, no
    ready actors, and nothing due at the current time. It spans as many
    turns as needed and yields to the event loop between them. Several
@@ -93,6 +100,10 @@ unless someone called `flush()`, and delayed sends never fired.
    any other.
 
 ## Consequences
+
+- A delayed send due later does not hold `flush()`, and its timer does not
+  hold the process. A script that must see a delayed send fire keeps the
+  process alive itself (a server does anyway), or uses the manual clock.
 
 - Any single turn is bounded by the budgets, and other JavaScript runs
   between turns.
