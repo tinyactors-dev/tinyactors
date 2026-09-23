@@ -41,8 +41,6 @@ tinyactors-napi/
 │   ├── definition.js            Definition facade; identity read from core
 │   ├── statechart.js            fluent builder; emits the generated spec shape (ADR 0013)
 │   ├── events.js                event-name cache: text <-> ta_event_name_id (ADR 0004)
-│   ├── pump.js                  MessageChannel wake-up, deadline timer, flush/advance waiters (ADR 0007)
-│   ├── hooks.js                 fault, deadLetter and done hook dispatch (ADRs 0008, 0012)
 │   └── errors.js                TinyactorsError; codes from the generated result table (ADR 0008)
 ├── src/
 │   ├── gen/
@@ -54,8 +52,10 @@ tinyactors-napi/
 │   ├── system.{c,h}             native System: owns ta_system and all plumbing, close, stats (ADR 0012)
 │   ├── containers.{c,h}         vec, ring, map, slice (ADR 0009)
 │   ├── allocator.{c,h}          per-system counting allocator, shared with core (ADR 0009)
-│   ├── scheduler.{c,h}          mailboxes, ready queue, runnable queue, deliver/resume, one pump turn,
-│   │                            per-actor faults and dead letters (ADRs 0005, 0007, 0008)
+│   ├── scheduler.{c,h}          mailboxes, ready queue, runnable queue, deliver/resume, one bounded turn,
+│   │                            per-actor faults and dead letters (ADRs 0005, 0008)
+│   ├── pump.{c,h}               threadsafe-function wake-up, deadline timer via global setTimeout,
+│   │                            monotonic clock, flush/advance promises, hook calls (ADR 0007)
 │   ├── hooks.{c,h}              post-call hooks for spawn/load/reconstruct/prepare/destroy/unload (ADR 0013)
 │   ├── router.{c,h}             external-event router into mailboxes (ADR 0006)
 │   ├── directory.{c,h}          in-memory actor directory (ADR 0006)
@@ -183,9 +183,9 @@ Needs core ADR 0056.
 - `lib/actor.js`: the `ActorId` view.
 - Spawn, run and destroy:
   - the spawn hook puts the actor on the runnable queue;
-  - `scheduler.{c,h}` runs the runnable part of one pump turn;
-  - `lib/pump.js` drives turns with a coalesced `MessageChannel` token and
-    implements `flush()`;
+  - `scheduler.{c,h}` runs the runnable part of one turn;
+  - `pump.{c,h}` schedules turns through a coalesced threadsafe function and
+    implements `flush()` with native promises;
   - the destroy hook.
 - `inspect()` goes through the generated `ta_actor_inspect`, including
   `finalState` for finished actors.
@@ -194,7 +194,8 @@ Needs core ADR 0056.
 
 Exit criterion:
 - spawned actors reach their initial state after `await flush()`, and
-  nothing runs synchronously inside `spawn()`;
+  nothing runs synchronously inside `spawn()` (checked on both runtimes;
+  ADR 0007);
 - a chart with two top-level finals reports the one that was actually
   reached;
 - with `finished: "destroy"`, finished actors are gone after `done`.
@@ -230,9 +231,10 @@ the directory.
 ### 8. Time
 
 - Manual clock: `advanceTo()` and `advanceBy()`.
-- Realtime clock: one JavaScript timer armed from
-  `ta_system_next_deadline`, unreferenced so it does not keep the process
-  alive.
+- Realtime clock in `pump.{c,h}`: one timer armed from native code with
+  the global `setTimeout`, based on `ta_system_next_deadline`, and
+  unreferenced so it does not keep the process alive. Time comes from a
+  native monotonic clock.
 - Due sends are dispatched in the pump turn.
 - Inspection shows `delayedSends` with `submitted` and `destination`.
 

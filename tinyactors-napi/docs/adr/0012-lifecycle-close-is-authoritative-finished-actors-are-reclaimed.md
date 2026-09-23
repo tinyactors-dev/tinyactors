@@ -29,7 +29,7 @@ Two lifecycle problems in the first addon grow with scale:
      for tests and debugging.
 3. **`System.close()` is explicit, idempotent and authoritative.** In
    order, it:
-   - stops the pump and closes its channel and timer;
+   - stops the pump: releases its threadsafe function and clears its timer;
    - rejects all pending promises;
    - discards mailboxes;
    - destroys the `ta_system`;
