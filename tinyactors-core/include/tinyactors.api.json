@@ -1287,6 +1287,13 @@
           "optional": true
         },
         {
+          "name": "final_state",
+          "type": {
+            "type": "ta_state_id"
+          },
+          "doc": "The top-level <final > whose entry ended the session, when `residency` is TA_ACTOR_DONE; TA_STATE_NONE otherwise, including an invoked child that was cancelled and an actor paused inside a microstep (ADR 0056). The active configuration stays empty after finishing: this names the outcome, it does not make the state active. Resolve it with ta_definition_state()."
+        },
+        {
           "name": "allocated_bytes",
           "type": {
             "builtin": "size_t"
@@ -1296,7 +1303,7 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 176,
+          "size": 184,
           "align": 8,
           "offsets": {
             "actor": 0,
@@ -1317,11 +1324,12 @@
             "delayed_send_count": 152,
             "has_completion": 156,
             "completion": 160,
-            "allocated_bytes": 168
+            "final_state": 168,
+            "allocated_bytes": 176
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 112,
+          "size": 120,
           "align": 8,
           "offsets": {
             "actor": 0,
@@ -1342,7 +1350,8 @@
             "delayed_send_count": 96,
             "has_completion": 100,
             "completion": 104,
-            "allocated_bytes": 108
+            "final_state": 108,
+            "allocated_bytes": 112
           }
         }
       }

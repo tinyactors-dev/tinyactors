@@ -58,6 +58,8 @@ struct ta_session_image {
     ta_actor_parent parent;
     bool completion_pending;
     ta_actor_completion completion;
+    /* The final state that ended the session, with `finished` (ADR 0056). */
+    ta_state_id final_state;
     /* A microstep paused inside executable content (ADR 0061), or null. */
     ta_continuation *paused;
 };
@@ -277,6 +279,7 @@ ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_params *par
         .parent = sparse != NULL ? sparse->parent : (ta_actor_parent){0},
         .completion_pending = sparse != NULL && sparse->completion_pending,
         .completion = sparse != NULL ? sparse->completion : (ta_actor_completion){0},
+        .final_state = sparse != NULL && actor->finished ? sparse->final_state : TA_STATE_NONE,
     };
     ta_result result = ta_arena_init(&image->arena, system->allocator, ta_image_measure(actor));
     if (result == TA_OK) {
@@ -507,8 +510,9 @@ ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_par
         result = ta_image_restore_pause(image, actor, system);
     }
 
-    if (result == TA_OK && (image->has_parent || image->completion.has_data || image->internal_count != 0 ||
-                            image->invoke_count != 0 || image->pending_invoke_count != 0)) {
+    if (result == TA_OK && (image->finished || image->has_parent || image->completion.has_data ||
+                            image->internal_count != 0 || image->invoke_count != 0 ||
+                            image->pending_invoke_count != 0)) {
         ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
         if (sparse == NULL) {
             result = TA_ERR_NOMEM;
@@ -518,6 +522,7 @@ ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_par
             sparse->completion_pending = image->completion_pending;
             sparse->completion = image->completion;
             ta_value_retain(&sparse->completion.data);
+            sparse->final_state = image->final_state;
             if (image->pending_invoke_count != 0 && sparse->pending_invokes.element_size == 0) {
                 ta_vec_init(&sparse->pending_invokes, system->allocator, TA_VEC_LAYOUT(ta_state_id));
             }

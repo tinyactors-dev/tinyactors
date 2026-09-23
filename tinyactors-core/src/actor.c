@@ -722,6 +722,7 @@ ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_inspectio
         .microstep_in_progress = actor->sparse != NULL && actor->sparse->paused != NULL,
         .current_event = ta_actor_paused_event(actor),
         .allocated_bytes = ta_actor_allocated_bytes(actor),
+        .final_state = TA_STATE_NONE,
     };
     if (actor->sparse != NULL) {
         out->internal_events = actor->sparse->internal_events.items;
@@ -732,6 +733,7 @@ ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_inspectio
         out->delayed_send_count = actor->sparse->timers.count;
         out->has_completion = actor->finished;
         out->completion = actor->finished ? &actor->sparse->completion : NULL;
+        out->final_state = actor->finished ? actor->sparse->final_state : TA_STATE_NONE;
     }
     return TA_OK;
 }

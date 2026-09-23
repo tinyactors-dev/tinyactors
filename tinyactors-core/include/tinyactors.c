@@ -1129,6 +1129,9 @@ typedef struct {
     ta_activation_effects *activation_effects;
     ta_actor_parent parent;
     ta_actor_completion completion;
+    /* The top-level <final> whose entry ended the session (ADR 0056); set
+     * with `completion`, and meaningful only while the actor is finished. */
+    ta_state_id final_state;
     /* This actor's pending delayed sends, indexed by the system's owner heap. */
     ta_timer_list timers;
     bool has_parent;
@@ -8798,6 +8801,7 @@ TA_API ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_in
         .microstep_in_progress = actor->sparse != NULL && actor->sparse->paused != NULL,
         .current_event = ta_actor_paused_event(actor),
         .allocated_bytes = ta_actor_allocated_bytes(actor),
+        .final_state = TA_STATE_NONE,
     };
     if (actor->sparse != NULL) {
         out->internal_events = actor->sparse->internal_events.items;
@@ -8808,6 +8812,7 @@ TA_API ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_in
         out->delayed_send_count = actor->sparse->timers.count;
         out->has_completion = actor->finished;
         out->completion = actor->finished ? &actor->sparse->completion : NULL;
+        out->final_state = actor->finished ? actor->sparse->final_state : TA_STATE_NONE;
     }
     return TA_OK;
 }
@@ -8995,6 +9000,8 @@ struct ta_session_image {
     ta_actor_parent parent;
     bool completion_pending;
     ta_actor_completion completion;
+    /* The final state that ended the session, with `finished` (ADR 0056). */
+    ta_state_id final_state;
     /* A microstep paused inside executable content (ADR 0061), or null. */
     ta_continuation *paused;
 };
@@ -9214,6 +9221,7 @@ TA_API ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_para
         .parent = sparse != NULL ? sparse->parent : (ta_actor_parent){0},
         .completion_pending = sparse != NULL && sparse->completion_pending,
         .completion = sparse != NULL ? sparse->completion : (ta_actor_completion){0},
+        .final_state = sparse != NULL && actor->finished ? sparse->final_state : TA_STATE_NONE,
     };
     ta_result result = ta_arena_init(&image->arena, system->allocator, ta_image_measure(actor));
     if (result == TA_OK) {
@@ -9444,8 +9452,9 @@ TA_API ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstr
         result = ta_image_restore_pause(image, actor, system);
     }
 
-    if (result == TA_OK && (image->has_parent || image->completion.has_data || image->internal_count != 0 ||
-                            image->invoke_count != 0 || image->pending_invoke_count != 0)) {
+    if (result == TA_OK && (image->finished || image->has_parent || image->completion.has_data ||
+                            image->internal_count != 0 || image->invoke_count != 0 ||
+                            image->pending_invoke_count != 0)) {
         ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
         if (sparse == NULL) {
             result = TA_ERR_NOMEM;
@@ -9455,6 +9464,7 @@ TA_API ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstr
             sparse->completion_pending = image->completion_pending;
             sparse->completion = image->completion;
             ta_value_retain(&sparse->completion.data);
+            sparse->final_state = image->final_state;
             if (image->pending_invoke_count != 0 && sparse->pending_invokes.element_size == 0) {
                 ta_vec_init(&sparse->pending_invokes, system->allocator, TA_VEC_LAYOUT(ta_state_id));
             }
@@ -10104,7 +10114,7 @@ static ta_actor_sparse_state *ta_sparse(ta_system *system, ta_actor *actor) {
         if (actor->sparse == NULL) {
             return NULL;
         }
-        *actor->sparse = (ta_actor_sparse_state){0};
+        *actor->sparse = (ta_actor_sparse_state){ .final_state = TA_STATE_NONE };
         ta_vec_init(&actor->sparse->internal_events, system->allocator, TA_VEC_LAYOUT(ta_queued_event));
     }
     return actor->sparse;
@@ -11904,7 +11914,11 @@ static ta_result ta_enter_final(ta_interpreter *it, ta_state_id state) {
     }
     if (def->parent == TA_STATE_NONE) {
         it->actor->finished = true;
-        return ta_store_completion(it, &data);
+        result = ta_store_completion(it, &data);
+        if (result == TA_OK) {
+            it->actor->sparse->final_state = state; /* ADR 0056 */
+        }
+        return result;
     }
     result = ta_raise_done(it, def->parent, &data);
     ta_state_id grandparent = ta_state(it, def->parent)->parent;

@@ -88,7 +88,7 @@ static ta_actor_sparse_state *ta_sparse(ta_system *system, ta_actor *actor) {
         if (actor->sparse == NULL) {
             return NULL;
         }
-        *actor->sparse = (ta_actor_sparse_state){0};
+        *actor->sparse = (ta_actor_sparse_state){ .final_state = TA_STATE_NONE };
         ta_vec_init(&actor->sparse->internal_events, system->allocator, TA_VEC_LAYOUT(ta_queued_event));
     }
     return actor->sparse;
@@ -1888,7 +1888,11 @@ static ta_result ta_enter_final(ta_interpreter *it, ta_state_id state) {
     }
     if (def->parent == TA_STATE_NONE) {
         it->actor->finished = true;
-        return ta_store_completion(it, &data);
+        result = ta_store_completion(it, &data);
+        if (result == TA_OK) {
+            it->actor->sparse->final_state = state; /* ADR 0056 */
+        }
+        return result;
     }
     result = ta_raise_done(it, def->parent, &data);
     ta_state_id grandparent = ta_state(it, def->parent)->parent;

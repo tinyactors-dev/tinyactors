@@ -1975,6 +1975,15 @@ typedef struct {
     bool has_completion;
     TA_IN TA_OPTIONAL const ta_actor_completion *completion;
     /*
+     * The top-level <final> whose entry ended the session, when `residency`
+     * is TA_ACTOR_DONE; TA_STATE_NONE otherwise, including an invoked child
+     * that was cancelled and an actor paused inside a microstep (ADR 0056).
+     * The active configuration stays empty after finishing: this names the
+     * outcome, it does not make the state active. Resolve it with
+     * ta_definition_state().
+     */
+    ta_state_id final_state;
+    /*
      * Bytes the core currently allocates for this actor: the actor record,
      * session storage (configuration and history), the data-model instance,
      * sparse state, and queue capacities. Excludes memory the data-model

@@ -47,6 +47,9 @@ typedef struct {
     ta_activation_effects *activation_effects;
     ta_actor_parent parent;
     ta_actor_completion completion;
+    /* The top-level <final> whose entry ended the session (ADR 0056); set
+     * with `completion`, and meaningful only while the actor is finished. */
+    ta_state_id final_state;
     /* This actor's pending delayed sends, indexed by the system's owner heap. */
     ta_timer_list timers;
     bool has_parent;
