@@ -2,6 +2,7 @@
 
 #include <stdlib.h>
 
+#include "events.h"
 #include "pump.h"
 
 static void tna_unlist(tna_napi_system *wrapper) {
@@ -300,6 +301,55 @@ static napi_value tna_scheduling_method(napi_env env, napi_callback_info info) {
     return state;
 }
 
+/*
+ * internEvent(text): the ta_event_name_id of a dotted event name (ADR 0004).
+ * lib/events.js calls it once per distinct name and caches the answer.
+ */
+static napi_value tna_intern_event_method(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value argv[1] = { NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    tna_system *system = wrapper->system;
+    if (system->inside_core) {
+        return tna_throw(env, "reentrant", "an event name cannot be interned from inside a core call (ADR 0013)");
+    }
+    napi_valuetype type = napi_undefined;
+    size_t length = 0;
+    if (argc < 1 || napi_typeof(env, argv[0], &type) != napi_ok || type != napi_string ||
+        napi_get_value_string_utf8(env, argv[0], NULL, 0, &length) != napi_ok) {
+        return tna_throw(env, "invalid", "an event name must be a string");
+    }
+    char stack[256];
+    char *text = stack;
+    if (length + 1u > sizeof stack) {
+        text = ta_arena_alloc(&system->scratch.call, length + 1u, 1);
+        if (text == NULL) {
+            return tna_throw(env, "out-of-memory", "cannot read the event name");
+        }
+    }
+    napi_get_value_string_utf8(env, argv[0], text, length + 1u, &length);
+    ta_event_name_id id = 0;
+    system->inside_core = true;
+    ta_result result = tna_event_name_intern(system->core, (ta_str){ .ptr = text, .len = (uint32_t)length }, &id);
+    system->inside_core = false;
+    tna_scratch_reset_call(&system->scratch);
+    if (result != TA_OK) {
+        return tna_throw(env, tna_result_code(result),
+                         result == TA_ERR_INVALID
+                             ? "invalid event name: it must be non-empty dotted text with no empty segment and at most 64 segments"
+                             : "cannot intern the event name");
+    }
+    napi_value out = NULL;
+    napi_create_uint32(env, id, &out);
+    return out;
+}
+
 static napi_status tna_set_number(napi_env env, napi_value object, const char *name, double value) {
     napi_value number = NULL;
     napi_status status = napi_create_double(env, value, &number);
@@ -358,6 +408,7 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "flush", NULL, tna_flush_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "release", NULL, tna_release_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "scheduling", NULL, tna_scheduling_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "internEvent", NULL, tna_intern_event_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "closed", NULL, NULL, tna_closed_getter, NULL, NULL, napi_default_jsproperty, NULL },
     };
     napi_value constructor = NULL;
