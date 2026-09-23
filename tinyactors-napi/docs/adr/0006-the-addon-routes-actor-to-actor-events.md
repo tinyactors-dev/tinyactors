@@ -50,7 +50,8 @@ message in the system had to come from JavaScript.
      letter at once (ADR 0005). A named one keeps a reference to its
      address, and the `deadLetter` record names it as `{ family, name }`;
    - a named address whose entry is unloaded is a dead letter with reason
-     `unloaded` until ROADMAP step 14 loads actors on demand;
+     `unloaded`. `load()` brings the actor back; mail is not held for it,
+     and nothing loads it on demand (an open follow-up in ROADMAP.md);
    - a finished target is found when its mailbox is delivered.
 
    This keeps routing O(1) and gives messages the same order whether their

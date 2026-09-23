@@ -8,6 +8,10 @@ step at a time on the new foundation.
 Where this roadmap and an ADR disagree, the ADR wins, and this file should be
 corrected.
 
+**Status (2026-09-23): steps 1–14 are done.** Every exit criterion below
+passes on Node and Bun. What is still open is listed under "Open
+follow-ups" at the end.
+
 ## Shape of the result
 
 - **Core interprets, the addon hosts, and JavaScript scripts** (ADR 0001).
@@ -667,15 +671,62 @@ Exit criterion:
 - a delayed send to `#_scxml_<sessionid>` armed before an unload reaches
   the actor after it is loaded again.
 
-### Later
+What was built (`lib/image.js`, `test/persist.js`):
+- **Images:** `capture()` returns a `SessionImage` over core's handle. Its
+  finalizer, `destroy()` and `close()` release it, so it never outlives its
+  system (ADR 0012). Core's image does not hold the data-model root, so the
+  `SessionImage` keeps the root the actor had at capture, and `load()` and
+  `reconstruct()` bind it unless given another `binding`. It is the same
+  object: reconstructing an image of an actor that still runs shares its
+  data unless a binding is passed.
+- **Unload:** throws `busy` while the actor has mail waiting, is inside a
+  macrostep or is quarantined, so it never drops accepted mail. Mail to an
+  unloaded address is a dead letter with reason `unloaded`; mail is not held
+  for it, and nothing loads it on demand.
+- **Load:** the same session ID, a new runtime ID, the address resident
+  again. Delayed sends travel in the image, including ones that fell due
+  while the actor was out. An invocation active at capture does not come
+  back: the actor gets `error.communication.invoke.<id>.unavailable` (core
+  ADR 0038). After `removeUnloaded()`, `load()` of its image fails with
+  `stale`.
+- **Replacement:** `prepareReplacement()` binds the incumbent's live root by
+  default. `activate()` throws `busy` while the incumbent is inside a
+  macrostep. Otherwise it publishes the replacement, whose hook moves the
+  incumbent's waiting mail and `send()`s, in order, to the front of the
+  replacement's mailbox (ADR 0005 point 12), and then destroys the
+  incumbent.
 
-- Port the tinyactors-test scenario suite to run against the addon.
-- Consider publishing a filtered raw core module (it would need an ADR, see
-  ADR 0013).
-- A browser build over core compiled to WebAssembly (tinyactors-browser).
-  When it starts, extract the host-neutral part of `lib/` (the statechart
-  builder, the event-name cache, `ActorId`, errors, the `System` facade)
-  into a layer that both builds share.
-- Size-class pools behind the allocator, if the steady-state measurement
-  asks for them (ADR 0014).
-- Add bulk mutation only when a measurement justifies it (ADR 0003).
+## Open follow-ups
+
+**Core findings** (measured in `scale.js`, recorded in `docs/scale.md`; each
+needs a core change):
+- every executed `<send>` makes one allocation and one free in core
+  (step 7);
+- a chart with a top-level `<final>` makes core allocate and free once per
+  delivered message (step 10);
+- the delayed-send owner heap grows by doubling, so with one timeout per
+  actor one spawn copies up to 32 MiB at 4M actors (step 13).
+
+**Open decisions:**
+- importing XML charts whose expressions are ECMAScript source text
+  (`ta_definition_import` stays skipped);
+- the public spec shape uses core's C field names (`onentry`,
+  `history_shallow`, `{ kind, … }`), per ADR 0013 point 6; a camelCase
+  surface would need a mapping in `lib/` and an ADR change;
+- loading unloaded actors on demand when mail arrives for their address
+  (a loader hook the router calls), instead of dead-lettering it;
+- network handoff of actors, modeled explicitly with I/O processors rather
+  than by serializing session images;
+- a host-neutral `lib/` shared with a WebAssembly browser build;
+- size-class pools behind the allocator, if the steady-state measurement
+  asks for them (ADR 0014);
+- a limit on turns per macrostep that quarantines runaway actors (ADR 0008);
+- holding and releasing an actor's mailbox for flow control;
+- a helper for naming effects that expands to `send(...).via(...)`;
+- an xstate baseline next to the plain-object one in `scale.js`.
+
+**Later:**
+- port the tinyactors-test scenario suite to run against the addon;
+- consider publishing a filtered raw core module (it would need an ADR,
+  see ADR 0013);
+- add bulk mutation only when a measurement justifies it (ADR 0003).

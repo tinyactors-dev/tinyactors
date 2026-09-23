@@ -48,6 +48,11 @@ class ActorId {
     return !this.system.exists(this);
   }
 
+  /** The actor's live data-model root, shared, not copied; undefined under the null data model. */
+  data() {
+    return this.system.inspect(this).data;
+  }
+
   /** Capture this actor in memory (System.capture). */
   capture() {
     return this.system.capture(this);

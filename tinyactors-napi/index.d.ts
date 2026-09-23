@@ -5,8 +5,9 @@
  * literal(), TinyactorsError, spawn(), inspect(), destroy(), flush(),
  * post() with data, the `done`, `fault` and `deadLetter` hooks, the
  * realtime and manual clocks (time, advanceTo(), advanceBy()), delayed
- * sends, paged enumeration, the JavaScript data model, send(), and services
- * (I/O processors, invokers, the log sink) are implemented.
+ * sends, paged enumeration, the JavaScript data model, send(), services
+ * (I/O processors, invokers, the log sink), and capture, unload, load,
+ * reconstruct and replacement are implemented: ROADMAP steps 1-14.
  */
 export const version: string;
 
@@ -71,7 +72,10 @@ export interface FaultRecord {
 export interface DeadLetterRecord {
   readonly target: ActorId | ActorAddress;
   readonly event: EventName;
-  /** `unloaded`: a name whose actor is unloaded; loading it is ROADMAP step 14. */
+  /**
+   * `unloaded`: a name whose actor is unloaded (load() brings it back; mail is
+   * not held for it), or mail left for an actor unloaded through the raw layer.
+   */
   readonly reason: "not-found" | "done" | "destroyed" | "refused" | "unloaded";
 }
 
@@ -144,18 +148,53 @@ export interface System {
   /** Put an actor that faulted back into scheduling (ADR 0008). */
   release(actor: ActorId): void;
 
+  /**
+   * Capture `actor` in memory (core ADR 0013), with the data-model root it
+   * has now. `busy` for an unpublished (prepared) actor.
+   */
+  capture<Data extends object>(actor: ActorId): SessionImage<Data>;
+
+  /**
+   * Evict a named actor with a capture taken since its last change (`stale`
+   * otherwise). Throws `busy` while it has mail waiting, is inside a
+   * macrostep, or is quarantined. Mail to its address is then a dead letter
+   * with reason `unloaded` until load(); its ActorId is stale.
+   */
+  unload(actor: ActorId, image: SessionImage): void;
+
+  /**
+   * Bring an unloaded named actor back: the same session ID, a new runtime
+   * ID (core ADR 0066). `binding` defaults to the root the image kept. An
+   * invocation active at capture is reported to the actor as
+   * `error.communication.invoke.<id>.unavailable` (core ADR 0038).
+   */
   load<Data extends object>(
     image: SessionImage<Data>,
     options?: { readonly binding?: Partial<Data> | Data },
   ): Actor<Data>;
 
+  /**
+   * Restore an image under a fresh runtime ID without touching the directory
+   * (core ADR 0052). `binding` defaults to the root the image kept, which is
+   * shared with the captured actor if it still runs.
+   */
   reconstruct<Data extends object>(
     image: SessionImage<Data>,
     options?: { readonly binding?: Partial<Data> | Data },
   ): Actor<Data>;
 
-  /** Release the address and durable claim of an actor that remains unloaded. */
+  /** Release the address of an actor that stays unloaded; load() of its image then fails with `stale`. */
   removeUnloaded(address: ActorAddress): void;
+
+  /** Create an unpublished replacement for the named actor `incumbent` (Actor.prepareReplacement). */
+  prepareReplacement<Data extends object>(
+    incumbent: ActorId,
+    definition: Definition<Data>,
+    options?: ReplacementOptions<Data>,
+  ): PreparedActor<Data>;
+
+  /** Publish a prepared actor and destroy its incumbent (PreparedActor.activate). */
+  activate<Data extends object>(prepared: PreparedActor<Data>): Actor<Data>;
 
   registerIo(type: string, processor: IoProcessor): void;
   registerInvoker(type: string, invoker: Invoker): void;
@@ -564,9 +603,7 @@ export interface SpawnOptions<Data extends object> {
 
 /**
  * The view spawn() returns (ADR 0002): an ActorId with methods that ask the
- * system. It holds no native resource. So far equals(), inspect(), post()
- * (without data), destroyed, destroy() and dispose are implemented; the other
- * methods arrive with later ROADMAP steps.
+ * system. It holds no native resource and no finalizer.
  */
 export interface Actor<Data extends object = Record<string, unknown>> extends ActorId {
   readonly destroyed: boolean;
@@ -579,13 +616,18 @@ export interface Actor<Data extends object = Record<string, unknown>> extends Ac
   /** A retained reference to the actor's live data-model root. */
   data(): Data;
 
-  /** Capture Tinyactors-owned state and retained host references in memory. */
+  /** Capture Tinyactors-owned state and the data-model root in memory (System.capture). */
   capture(): SessionImage<Data>;
 
-  /** Evict this named actor using an immediately preceding capture. */
+  /** Evict this named actor using a capture taken since its last change (System.unload). */
   unload(image: SessionImage<Data>): void;
 
-  /** Prepare a fresh unpublished actor under another definition revision. */
+  /**
+   * Prepare a fresh unpublished actor of `definition` to replace this named
+   * actor in place. It bootstraps like a spawned actor, and core holds its
+   * visible bootstrap effects until activation. `binding` defaults to this
+   * actor's live data root when `definition` uses the JavaScript data model.
+   */
   prepareReplacement(
     definition: Definition<Data>,
     options?: ReplacementOptions<Data>,
@@ -597,9 +639,19 @@ export interface Actor<Data extends object = Record<string, unknown>> extends Ac
 }
 
 export interface PreparedActor<Data extends object> extends Actor<Data> {
-  readonly published: false;
+  /** False until activate() publishes it. */
+  readonly published: boolean;
+  readonly incumbent: ActorId;
 
-  /** Atomically publish this actor at the incumbent's named address. */
+  /**
+   * Publish this actor at the incumbent's address, then destroy the
+   * incumbent. Mail still waiting for the incumbent, and the send()s it
+   * carries, move in order to the front of this actor's mailbox, so nothing
+   * accepted for the address is lost; the incumbent's delayed sends are
+   * discarded. Throws `busy` while the incumbent is inside a macrostep. If
+   * activation fails, the incumbent keeps the address and this actor is left
+   * for the caller to destroy.
+   */
   activate(): Actor<Data>;
 }
 
@@ -613,8 +665,7 @@ export type ActorResidency = "idle" | "running" | "done" | "unloaded";
 
 /**
  * A snapshot of core's view of one actor (ADR 0054: O(size of the actor)).
- * Invocations, delayed sends, the current event and completion data are
- * added by later ROADMAP steps.
+ * Invocations and the current event are not reported yet.
  */
 export interface ActorInspection<Data = unknown> {
   readonly actor: Actor;
@@ -666,12 +717,25 @@ export interface DelayedSendInspection {
  * In-memory capture, unload, and reconstruction
  * -------------------------------------------------------------------------- */
 
+/**
+ * A capture held in memory (ROADMAP step 14). Its handle is destroyed by
+ * destroy(), by its finalizer, or by close() of its system, whichever comes
+ * first; it never outlives its system (ADR 0012). Serializing it across
+ * processes is not supported: model network handoff with I/O processors.
+ */
 export interface SessionImage<Data extends object = Record<string, unknown>> {
   readonly origin: System;
+  /** The actor at capture; its ID is stale once the actor is unloaded. */
   readonly actor: ActorId;
+  /** Stable across unload and load (core ADR 0066). */
+  readonly sessionId: bigint;
   readonly definition: DefinitionIdentity;
   readonly address?: ActorAddress;
+  /** The data-model root at capture (shared, not copied), or undefined under the null data model. */
+  readonly data?: Data;
+  /** The earliest pending delayed send's due time, or undefined. */
   readonly nextDeadline?: number;
+  /** True after destroy() or close() of its system. */
   readonly destroyed: boolean;
 
   destroy(): void;

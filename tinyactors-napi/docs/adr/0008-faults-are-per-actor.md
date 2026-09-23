@@ -33,9 +33,11 @@ rest.
      sent to a name with no resident actor (ADR 0006). `reason` is
      `not-found` (an unknown or stale ID, or a name with no entry), `done`
      (the target reached a top-level final state), `destroyed` (the target
-     was destroyed or unloaded with mail waiting), `refused` (core refused
-     that message, which also faults the target, ADR 0005) or `unloaded` (a
-     name whose actor is unloaded, until ROADMAP step 14). Dead letters are
+     was destroyed with mail waiting), `refused` (core refused that
+     message, which also faults the target, ADR 0005) or `unloaded` (a name
+     whose actor is unloaded, or mail left for an actor unloaded through the
+     raw generated layer; `unload()` itself refuses an actor with mail
+     waiting). Dead letters are
      counted in `stats().messages.deadLetters` with or without a hook.
 2. **The pump never throws.** Failures inside a turn reach JavaScript only
    through hooks and, for `send()`, through that message's promise.

@@ -31,6 +31,9 @@ Two lifecycle problems in the first addon grow with scale:
    order, it:
    - stops the pump: clears its pending immediate and its timer;
    - rejects all pending promises;
+   - destroys every session image still alive (ROADMAP step 14), which
+     releases the values it holds; a `SessionImage` then reads as
+     destroyed;
    - discards mailboxes;
    - destroys the `ta_system`;
    - releases every definition callback and every live value box

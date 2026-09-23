@@ -129,6 +129,17 @@ That design has several faults:
       macrostep runs, and only the promise rejects.
     - `until: "accepted"` needs no waiter: the promise resolves as soon as
       the message is queued, with `status: "accepted"`.
+12. **Replacement moves waiting mail** (ROADMAP step 14). Mail posted to a
+    named address is resolved to the resident actor when it is accepted
+    (ADR 0006), so mail accepted before a replacement is activated waits in
+    the incumbent's mailbox. Activation's hook moves that mail, in order and
+    with its `send()` waiters, to the front of the replacement's mailbox:
+    it was accepted for the address the replacement now holds, and it is
+    older than anything queued for the replacement directly. The incumbent
+    is then destroyed with an empty mailbox, so nothing accepted for the
+    address is lost. `activate()` refuses (`busy`) while the incumbent is
+    inside a macrostep, and `unload()` refuses while the actor has mail
+    waiting, so neither drops accepted mail.
 
 ## Consequences
 

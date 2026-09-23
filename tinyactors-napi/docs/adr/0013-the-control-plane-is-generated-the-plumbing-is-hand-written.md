@@ -64,7 +64,12 @@ description, not a generator.
      - `ta_actor_spawn`, `ta_actor_load`, `ta_actor_reconstruct` and
        `ta_actor_prepare_replacement` put the new actor on the runnable
        queue for bootstrap;
-     - `ta_actor_destroy` and `ta_actor_unload` drop the actor's mailbox;
+     - `ta_actor_destroy` drops the actor's mailbox as dead letters, and
+       `ta_actor_unload` does the same with reason `unloaded`;
+     - `ta_actor_activate_replacement` moves the incumbent's waiting mail
+       to the front of the replacement's mailbox (ADR 0005 point 12). Its
+       hook takes the whole params struct (`actor: 'params'` in
+       `bindings.rb`);
    - **plumbing-owned**: not callable from JavaScript, because calling it
      would bypass or break the scheduler. Each entry gives a reason. The
      initial list is:
