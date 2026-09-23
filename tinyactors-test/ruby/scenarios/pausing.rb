@@ -67,6 +67,35 @@ TinyactorsTest.chart :nested_content do
   end
 end
 
+# An invoked child whose `work` microstep is long enough to pause inside,
+# and a parent that cancels it by leaving the invoking state (ADR 0061
+# section 6).
+TinyactorsTest.chart :slow_child do
+  state :idle do
+    on_exit { log 'idle exit' }
+    transition on: 'work', target: :busy
+  end
+  state :busy, initial: :inner do
+    on_exit { log 'busy exit' }
+    state :inner do
+      on_entry do
+        foreach '[1, 2, 3]', item: 'i' do
+          log 'step'
+        end
+      end
+      on_exit { log 'inner exit' }
+    end
+  end
+end
+
+TinyactorsTest.chart :child_canceller do
+  state :running do
+    invoke chart: :slow_child, id: :worker
+    transition on: 'stop', target: :stopped
+  end
+  state :stopped
+end
+
 TinyactorsTest.scenarios 'pausing', chart: :relay do
   invariant('the log only grows by known entries') do |actor|
     actor.chart != :relay || (actor.data('.log') - ['go', 'n=5', 'counted', 'ping', 'extra']).empty?
@@ -211,5 +240,25 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
     assert_equal %i[p c], nested.active
     assert_equal ['x1', 'x2 1', 'one', 'x2 2', 'two', 'x3', 't 1', 't 1.1', 't 1.2', 't 2', 't 2.1', 't 2.2',
                   't 3', 't 3.1', 't 3.2', 'p 1', 'p 2', 'b1', 'b2 1', 'b2 2', 'tc', 'c1'], nested.data('.log')
+  end
+  # Catches: a cancelled child paused inside a microstep that exits the
+  # configuration from before that microstep (running `idle exit` a second
+  # time and never exiting the states it had entered), or that leaks its
+  # paused frames.
+  scenario 'cancelling a child paused inside a microstep exits its live states' do
+    recording_log
+    parent = spawn :child_canceller
+    child = invoked_actors.fetch(0)
+    assert_equal 'ok', child.post('work')
+    assert_equal 'paused', child.resume(budget: 1000, action_budget: 2)
+    assert child.inspect_actor[:microstep_in_progress], 'the child paused inside its entry handler'
+    assert_logs ['idle exit', nil]
+
+    assert_equal 'ok', parent.post('stop')
+    assert_equal 'stable', parent.resume(budget: 1000)
+    assert_logs ['idle exit', nil], ['inner exit', nil], ['busy exit', nil]
+    assert_equal %i[stopped], parent.active
+    run_system('reclaim the cancelled child')
+    assert_equal [], invoked_actors
   end
 end
