@@ -19,7 +19,11 @@ module NapiCompile
   # object and binary directories so the two modes never evict each other.
   SANITIZE = ENV['TNA_SANITIZE'] == '1'
   SANITIZE_FLAGS = %w[-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all -g].freeze
-  OBJECTS = BUILD.join(SANITIZE ? 'obj-asan' : 'obj')
+  # TNA_VALUES_MODEL=table builds value boxes as a handle table (ADR 0011
+  # model B) instead of one napi_ref each, for the A/B measurement, into its
+  # own object directory. The addon it links replaces the default one.
+  VALUES_TABLE = ENV['TNA_VALUES_MODEL'] == 'table'
+  OBJECTS = BUILD.join(SANITIZE ? 'obj-asan' : (VALUES_TABLE ? 'obj-table' : 'obj'))
   NATIVE = BUILD.join(SANITIZE ? 'native-asan' : 'native')
   CORE_DIR = ROOT.join('../tinyactors-core/include').expand_path
   CORE_SOURCE = CORE_DIR.join('tinyactors.c')
@@ -50,6 +54,7 @@ module NapiCompile
       *compiler,
       *Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic -O2')),
       *(SANITIZE ? SANITIZE_FLAGS : []),
+      *(VALUES_TABLE ? ['-DTNA_VALUES_TABLE'] : []),
       '-fPIC',
       '-DNAPI_VERSION=10',
       "-DTINYACTORS_NAPI_VERSION=\"#{version}\"",

@@ -5,16 +5,88 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* One box: a strong reference and a native count (ADR 0011, model A). */
+/*
+ * One box: a strong reference (model A) or a handle-table index (model B),
+ * and a native count (ADR 0011).
+ */
 typedef struct tna_box {
     tna_values *values;
+#ifdef TNA_VALUES_TABLE
+    uint32_t index;
+#else
     napi_ref ref;
+#endif
     uint32_t references;
     uint32_t text_length;
     char *text; /* value_text cache, from the values lane, or NULL */
 } tna_box;
 
 _Static_assert(sizeof(void *) >= sizeof(double), "inline numbers need 64-bit pointers");
+
+/* ------------------------------------------------------------------------
+ * Holding the JavaScript value: model A or model B.
+ */
+
+#ifdef TNA_VALUES_TABLE
+
+static bool tna_hold(tna_values *values, napi_value value, tna_box *box) {
+    napi_value table = NULL;
+    uint32_t index = values->table_length;
+    if (values->free_indices.count > 0) {
+        index = *(uint32_t *)tna_vec_at(&values->free_indices, values->free_indices.count - 1u);
+    }
+    if (napi_get_reference_value(values->env, values->table, &table) != napi_ok ||
+        napi_set_element(values->env, table, index, value) != napi_ok) {
+        return false;
+    }
+    if (index == values->table_length) {
+        values->table_length += 1u;
+    } else {
+        values->free_indices.count -= 1u;
+    }
+    box->index = index;
+    return true;
+}
+
+static bool tna_held(const tna_box *box, napi_value *out) {
+    napi_value table = NULL;
+    napi_env env = box->values->env;
+    return napi_get_reference_value(env, box->values->table, &table) == napi_ok &&
+           napi_get_element(env, table, box->index, out) == napi_ok;
+}
+
+static void tna_unhold(tna_box *box) {
+    tna_values *values = box->values;
+    if (*values->torn_down) {
+        return;
+    }
+    napi_value table = NULL;
+    napi_value undefined = NULL;
+    if (napi_get_reference_value(values->env, values->table, &table) == napi_ok && table != NULL &&
+        napi_get_undefined(values->env, &undefined) == napi_ok) {
+        napi_set_element(values->env, table, box->index, undefined);
+    }
+    (void)tna_vec_push(&values->free_indices, &box->index);
+}
+
+#else
+
+static bool tna_hold(tna_values *values, napi_value value, tna_box *box) {
+    return napi_create_reference(values->env, value, 1, &box->ref) == napi_ok;
+}
+
+static bool tna_held(const tna_box *box, napi_value *out) {
+    return box->ref != NULL && napi_get_reference_value(box->values->env, box->ref, out) == napi_ok && *out != NULL;
+}
+
+static void tna_unhold(tna_box *box) {
+    if (box->ref != NULL && !*box->values->torn_down) {
+        napi_delete_reference(box->values->env, box->ref);
+    }
+    box->ref = NULL;
+}
+
+#endif
 
 static void tna_box_retain(void *self) {
     ((tna_box *)self)->references += 1u;
@@ -26,14 +98,11 @@ static void tna_box_release(void *self) {
         return;
     }
     tna_values *values = box->values;
-    if (box->ref != NULL && !*values->torn_down) {
-        napi_delete_reference(values->env, box->ref);
-    }
+    tna_unhold(box);
     if (box->text != NULL) {
         tna_free(values->allocator, &(ta_allocator_free_params){
                                         .ptr = box->text, .size = (size_t)box->text_length + 1u, .alignment = 1 });
     }
-    box->ref = NULL;
     box->text = NULL;
     values->live -= 1u;
     *values->env_live -= 1u;
@@ -49,13 +118,27 @@ static const ta_value_vtable tna_true_vtable = { NULL, NULL };
 static const ta_value_vtable tna_false_vtable = { NULL, NULL };
 static const ta_value_vtable tna_number_vtable = { NULL, NULL };
 
-void tna_values_init(tna_values *values, napi_env env, tna_allocator *allocator) {
+bool tna_values_init(tna_values *values, napi_env env, tna_allocator *allocator) {
     *values = (tna_values){ .env = env, .allocator = tna_allocator_for(allocator, TNA_MEMORY_VALUES) };
     tna_free_list_init(&values->boxes, values->allocator, TNA_LAYOUT(tna_box));
+#ifdef TNA_VALUES_TABLE
+    tna_vec_init(&values->free_indices, values->allocator, TNA_LAYOUT(uint32_t));
+    napi_value table = NULL;
+    return napi_create_array(env, &table) == napi_ok && napi_create_reference(env, table, 1, &values->table) == napi_ok;
+#else
+    return true;
+#endif
 }
 
 void tna_values_close(tna_values *values) {
     tna_free_list_destroy(&values->boxes);
+#ifdef TNA_VALUES_TABLE
+    tna_vec_destroy(&values->free_indices);
+    if (values->table != NULL && !*values->torn_down) {
+        napi_delete_reference(values->env, values->table);
+    }
+    values->table = NULL;
+#endif
 }
 
 bool tna_value_ours(const ta_value *value) {
@@ -102,7 +185,7 @@ bool tna_value_make(tna_values *values, napi_value value, ta_value *out) {
         return false;
     }
     *box = (tna_box){ .values = values, .references = 1u };
-    if (napi_create_reference(values->env, value, 1, &box->ref) != napi_ok) {
+    if (!tna_hold(values, value, box)) {
         tna_free_list_give(&values->boxes, box);
         return false;
     }
@@ -119,8 +202,8 @@ bool tna_value_get(napi_env env, const ta_value *value, napi_value *out) {
         return napi_get_undefined(env, out) == napi_ok;
     }
     if (v == &tna_box_vtable) {
-        const tna_box *box = value->self;
-        return box->ref != NULL && napi_get_reference_value(env, box->ref, out) == napi_ok && *out != NULL;
+        (void)env;
+        return tna_held(value->self, out);
     }
     if (v == &tna_null_vtable) {
         return napi_get_null(env, out) == napi_ok;
@@ -195,8 +278,7 @@ bool tna_value_text(tna_values *values, const ta_value *value, ta_str *out) {
         napi_value object = NULL;
         napi_value text = NULL;
         size_t length = 0;
-        if (napi_get_reference_value(env, box->ref, &object) != napi_ok ||
-            napi_coerce_to_string(env, object, &text) != napi_ok ||
+        if (!tna_held(box, &object) || napi_coerce_to_string(env, object, &text) != napi_ok ||
             napi_get_value_string_utf8(env, text, NULL, 0, &length) != napi_ok || length > UINT32_MAX - 1u) {
             bool pending = false;
             napi_value ignored = NULL;

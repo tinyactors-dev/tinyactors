@@ -55,6 +55,9 @@ let nativeOf;
 class System {
   #native;
   #events;
+  // Definition ID -> true when it runs the JavaScript data model; read from
+  // core once per definition.
+  #javascript = new Map();
 
   static {
     nativeOf = (system) => system.#native;
@@ -215,7 +218,7 @@ class System {
       finalState: view.final_state === NO_STATE ? null : stateName(view.final_state),
       allocatedBytes: view.allocated_bytes,
       // The live data object (JavaScript data model), shared, not copied.
-      data: this.#dataRoot(slot, generation),
+      data: this.#dataRoot(view.definition_id, slot, generation),
       // A finished actor's completion data (<donedata>).
       completion: view.has_completion && view.completion?.has_data ? view.completion.data : undefined,
     };
@@ -223,15 +226,13 @@ class System {
   }
 
   // The actor's data root, or undefined under the null data model.
-  #dataRoot(slot, generation) {
-    try {
-      return core.actor_datamodel_root(this.#native, slot, generation);
-    } catch (error) {
-      if (error instanceof TinyactorsError && error.code === 'unsupported') {
-        return undefined;
-      }
-      throw error;
+  #dataRoot(definitionId, slot, generation) {
+    let javascript = this.#javascript.get(definitionId);
+    if (javascript === undefined) {
+      javascript = core.definition_inspect(this.#native, definitionId).datamodel === 'javascript';
+      this.#javascript.set(definitionId, javascript);
     }
+    return javascript ? core.actor_datamodel_root(this.#native, slot, generation) : undefined;
   }
 
   // One pending delayed send, from core's ta_delayed_send_info (core ADR 0054).

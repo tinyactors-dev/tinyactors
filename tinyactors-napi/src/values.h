@@ -19,6 +19,10 @@
  *
  * Every access goes through make, get and the vtable's retain and release,
  * so a handle table (model B) can replace boxes without changing a caller.
+ * Building with TNA_VALUES_TABLE defined (TNA_VALUES_MODEL=table in the
+ * build's environment) selects model B, for the measurement ADR 0011 asks
+ * for: a box is then an index into one JavaScript array per system, held by
+ * one napi_ref, and freed indices are reused.
  *
  * All boxes die before their system (ADR 0011 point 7): close() releases
  * every value core or a mailbox still holds, then frees the free list. A box
@@ -41,13 +45,19 @@ typedef struct tna_values {
     uint64_t *env_live;      /* boxes live in the whole environment */
     uint64_t live;           /* boxes live in this system */
     uint64_t made;           /* boxes made, for tests */
+#ifdef TNA_VALUES_TABLE
+    napi_ref table;          /* model B: the handle table, a JavaScript array */
+    tna_vec free_indices;    /* model B: indices to reuse */
+    uint32_t table_length;
+#endif
     uint32_t number_next;    /* the next number-text buffer */
     char number_texts[16][32];
 } tna_values;
 
 #define TNA_NUMBER_TEXTS 16u
 
-void tna_values_init(tna_values *values, napi_env env, tna_allocator *allocator);
+/* False when model B cannot make its table. */
+bool tna_values_init(tna_values *values, napi_env env, tna_allocator *allocator);
 /* Frees the free list. Boxes still live are leaks, and stay counted. */
 void tna_values_close(tna_values *values);
 

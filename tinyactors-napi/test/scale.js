@@ -29,6 +29,12 @@
 // test prints the longest spawn, the longest pump turn, RSS, V8 heap
 // and native bytes per actor, and total GC pause time, next to a plain
 // JavaScript baseline (one object per actor with a switch-based handler).
+//
+// Two charts run (SCALE_VARIANTS=plain,data by default):
+//   - plain: no data, compiled against core's null data model (step 10);
+//   - data: the JavaScript data model (step 11), the load of one actor per
+//     websocket connection. Every actor has a data object; every `ping`
+//     carries a new object as event data, and a function assigns from it.
 
 const assert = require('node:assert/strict');
 const os = require('node:os');
@@ -141,13 +147,34 @@ function shouldRun(population, previous, peakRss) {
 }
 
 // `idle` takes `ping` and stays; `work` ends the actor.
-const chart = () =>
-  statechart({ family: 'scale', revision: 'v1' })
-    .state('idle', (s) => {
-      s.on('ping', (t) => t.target('idle'));
-      s.on('work', (t) => t.target('done'));
-    })
-    .final('done');
+const VARIANTS = {
+  plain: {
+    chart: () =>
+      statechart({ family: 'scale', revision: 'v1' })
+        .state('idle', (s) => {
+          s.on('ping', (t) => t.target('idle'));
+          s.on('work', (t) => t.target('done'));
+        })
+        .final('done'),
+    payload: () => undefined,
+  },
+  data: {
+    chart: () =>
+      statechart({ family: 'scale-data', revision: 'v1' })
+        .data('count', 0)
+        .data('last', null)
+        .state('idle', (s) => {
+          s.on('ping', (t) =>
+            t.target('idle')
+              .assign('count', function () { return this.count + 1; })
+              .assign('last', ({ event }) => event.data),
+          );
+          s.on('work', (t) => t.target('done'));
+        })
+        .final('done'),
+    payload: (sequence) => ({ sequence, text: 'hello' }),
+  },
+};
 
 // Total GC pause while `run` is measured (Node only).
 function gcObserver() {
@@ -181,9 +208,10 @@ function loopDelayMonitor() {
   }
 }
 
-async function measure(population) {
+async function measure(population, variant) {
   const gc = gcObserver();
   const jsBefore = jsRetained();
+  const { chart, payload } = VARIANTS[variant];
 
   let done = 0;
   const system = createSystem({ done: () => { done += 1; } });
@@ -216,10 +244,11 @@ async function measure(population) {
   const rssAfter = process.memoryUsage().rss;
 
   // Post plus delivery: rounds of REPEAT pings to every sampled actor.
+  let sequence = 0;
   const round = async () => {
     for (let repeat = 0; repeat < REPEAT; repeat += 1) {
       for (const actor of sample) {
-        actor.post('ping');
+        actor.post('ping', payload(sequence += 1));
       }
     }
     await system.flush();
@@ -295,6 +324,7 @@ async function measure(population) {
   system.close();
 
   return {
+    variant,
     population,
     spawn: (spawned - spawnStarted) / population,
     bootstrap: (bootstrapped - spawned) / population,
@@ -365,7 +395,7 @@ function requireFlat(what, small, large, bound) {
 function report(result) {
   const f = (value, digits = 3) => (value === null || value === undefined ? 'n/a' : value.toFixed(digits));
   console.log(
-    `scale.js ${IS_BUN ? 'bun' : 'node'} ${result.population}: ` +
+    `scale.js ${IS_BUN ? 'bun' : 'node'} ${result.variant} ${result.population}: ` +
       `spawn ${f(result.spawn)} us + bootstrap ${f(result.bootstrap)} us/actor, ` +
       `longest spawn ${f(result.longestSpawnUs, 1)} us, largest block ${result.largestBlock} B, ` +
       `post+delivery ${f(result.post)} us/msg, inspect ${f(result.inspect)} us, ` +
@@ -383,40 +413,45 @@ function report(result) {
     process.exit(1);
   }, Number(process.env.SCALE_TIMEOUT_MS ?? 30 * 60_000));
 
-  const results = [];
-  for (const population of POPULATIONS) {
-    const previous = results.at(-1);
-    if (previous && !shouldRun(population, previous.population, previous.peakRss)) {
-      break;
+  const variants = (process.env.SCALE_VARIANTS ?? 'plain,data').split(',');
+  let largest;
+  for (const variant of variants) {
+    const results = [];
+    for (const population of POPULATIONS) {
+      const previous = results.at(-1);
+      if (previous && !shouldRun(population, previous.population, previous.peakRss)) {
+        break;
+      }
+      current = `${variant} with ${population} actors`;
+      const result = await measure(population, variant);
+      report(result);
+      assert.equal(result.steady.addon, 0, `after warm-up the addon made ${result.steady.addon} allocator calls`);
+      results.push(result);
     }
-    current = `${population} actors`;
-    const result = await measure(population);
-    report(result);
-    assert.equal(result.steady.addon, 0, `after warm-up the addon made ${result.steady.addon} allocator calls`);
-    results.push(result);
+
+    for (let at = 1; at < results.length; at += 1) {
+      const small = results[at - 1];
+      const large = results[at];
+      const pair = (key) => [
+        { population: small.population, value: small[key] },
+        { population: large.population, value: large[key] },
+      ];
+      const what = (text) => `${variant}: ${text}`;
+      requireFlat(what('spawn plus bootstrap (us per actor)'), ...pair('spawnAndBootstrap'), COST_RATIO_BOUND);
+      requireFlat(what('post plus delivery (us per message)'), ...pair('post'), COST_RATIO_BOUND);
+      requireFlat(what('inspect (us per call)'), ...pair('inspect'), COST_RATIO_BOUND);
+      requireFlat(what(`a page of ${PAGE_SIZE} actor IDs (us)`), ...pair('page'), PAGE_RATIO_BOUND);
+      requireFlat(what('end to end (us per actor)'), ...pair('e2e'), COST_RATIO_BOUND);
+      requireFlat(what('native bytes per actor'), ...pair('nativePerActor'), BYTES_RATIO_BOUND);
+      assert.ok(
+        large.largestBlock <= small.largestBlock,
+        `${variant}: the largest block grew from ${small.largestBlock} B at ${small.population} actors ` +
+          `to ${large.largestBlock} B at ${large.population}`,
+      );
+    }
+    largest = results.at(-1);
   }
 
-  for (let at = 1; at < results.length; at += 1) {
-    const small = results[at - 1];
-    const large = results[at];
-    const pair = (key) => [
-      { population: small.population, value: small[key] },
-      { population: large.population, value: large[key] },
-    ];
-    requireFlat('spawn plus bootstrap (us per actor)', ...pair('spawnAndBootstrap'), COST_RATIO_BOUND);
-    requireFlat('post plus delivery (us per message)', ...pair('post'), COST_RATIO_BOUND);
-    requireFlat('inspect (us per call)', ...pair('inspect'), COST_RATIO_BOUND);
-    requireFlat(`a page of ${PAGE_SIZE} actor IDs (us)`, ...pair('page'), PAGE_RATIO_BOUND);
-    requireFlat('end to end (us per actor)', ...pair('e2e'), COST_RATIO_BOUND);
-    requireFlat('native bytes per actor', ...pair('nativePerActor'), BYTES_RATIO_BOUND);
-    assert.ok(
-      large.largestBlock <= small.largestBlock,
-      `the largest block grew from ${small.largestBlock} B at ${small.population} actors ` +
-        `to ${large.largestBlock} B at ${large.population}`,
-    );
-  }
-
-  const largest = results.at(-1);
   const baseline = plainBaseline(largest.population);
   console.log(
     `scale.js ${IS_BUN ? 'bun' : 'node'} plain-object baseline at ${largest.population}: ` +

@@ -212,12 +212,12 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
         return tna_throw(env, tna_result_code(result), "cannot create a system");
     }
     wrapper->env_data = data;
-    tna_values_init(&wrapper->values, env, &wrapper->system->allocator);
+    bool values_made = tna_values_init(&wrapper->values, env, &wrapper->system->allocator);
     wrapper->values.torn_down = &data->torn_down;
     wrapper->values.env_live = &data->values_live;
     wrapper->system->after_core = tna_after_core;
     wrapper->system->after_core_context = wrapper;
-    if (!tna_js_datamodel_init(&wrapper->dm, wrapper, env)) {
+    if (!values_made || !tna_js_datamodel_init(&wrapper->dm, wrapper, env)) {
         tna_js_datamodel_close(&wrapper->dm, true);
         tna_system_free(wrapper->system);
         free(wrapper);
