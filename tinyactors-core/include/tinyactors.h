@@ -105,6 +105,15 @@ typedef uint32_t ta_content_id;
 typedef uint32_t ta_param_id;
 typedef uint32_t ta_done_data_id;
 typedef uint32_t ta_invoke_decl_id;
+/*
+ * A resident actor: its table slot in the low 32 bits and the slot's
+ * generation in the high 32 bits (ADR 0059). Zero is never a valid ID, and
+ * no slot is ever issued generation 0, so a host may use generation 0 for
+ * "no actor". When an actor goes away its slot's generation moves on, so its
+ * ID goes stale (TA_ERR_NOT_FOUND) and never names the slot's next occupant.
+ * Split and join IDs with ta_actor_id_slot(), ta_actor_id_generation() and
+ * ta_actor_id_make() rather than with bit arithmetic.
+ */
 typedef uint64_t ta_actor_id;
 /*
  * A registered definition: its table slot in the low 32 bits and the slot's
@@ -1999,6 +2008,15 @@ typedef struct { void *self; ta_actor_inspection_visitor visit; } ta_actor_inspe
 TA_API ta_result ta_actor_inspect(ta_system *system,
                                   ta_actor_id actor,
                                   TA_OUT TA_LIFETIME(system) ta_actor_inspection *out);
+/*
+ * The two halves of an actor ID, and an ID from its halves (ADR 0059). Pure:
+ * no system, no failure. A made ID is checked where it is used, like any
+ * other: a slot that holds no actor, or a generation that is not the slot's
+ * current one, is TA_ERR_NOT_FOUND there.
+ */
+TA_API uint32_t ta_actor_id_slot(ta_actor_id id);
+TA_API uint32_t ta_actor_id_generation(ta_actor_id id);
+TA_API ta_actor_id ta_actor_id_make(uint32_t slot, uint32_t generation);
 /* The position of a finished walk: nothing is left to visit. */
 #define TA_ACTOR_VISIT_END ((uint32_t)UINT32_MAX)
 
@@ -2006,9 +2024,10 @@ TA_API ta_result ta_actor_inspect(ta_system *system,
  * Walks the resident actors (ADR 0062), invoked children included, handing
  * `inspector` the same view ta_actor_inspect() gives for each. Actors are
  * visited in increasing position order, starting at `from`. A position is
- * opaque: pass 0 to start, and then the previous call's `next`. Today it is
- * the actor's slot, the low 32 bits of its ID. A walk of everything is
- * `from` 0 and `limit` 0, and may leave `next` null.
+ * an actor's slot, ta_actor_id_slot() of its ID: pass 0 to start, then the
+ * previous call's `next`, or the slot of an actor to resume at. No slot is
+ * TA_ACTOR_VISIT_END. A walk of everything is `from` 0 and `limit` 0, and
+ * may leave `next` null.
  *
  * - The walk reached the end: TA_OK, and `next` is TA_ACTOR_VISIT_END.
  * - `limit` visits answered TA_OK (0 means no limit): TA_OK, and `next` is

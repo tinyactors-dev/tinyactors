@@ -1126,6 +1126,7 @@
     },
     "ta_actor_id": {
       "kind": "alias",
+      "doc": "A resident actor: its table slot in the low 32 bits and the slot's generation in the high 32 bits (ADR 0059). Zero is never a valid ID, and no slot is ever issued generation 0, so a host may use generation 0 for \"no actor\". When an actor goes away its slot's generation moves on, so its ID goes stale (TA_ERR_NOT_FOUND) and never names the slot's next occupant. Split and join IDs with ta_actor_id_slot(), ta_actor_id_generation() and ta_actor_id_make() rather than with bit arithmetic.",
       "type": {
         "builtin": "uint64_t"
       },
@@ -2008,7 +2009,7 @@
     },
     "ta_actor_visit_params": {
       "kind": "struct",
-      "doc": "Walks the resident actors (ADR 0062), invoked children included, handing `inspector` the same view ta_actor_inspect() gives for each. Actors are visited in increasing position order, starting at `from`. A position is opaque: pass 0 to start, and then the previous call's `next`. Today it is the actor's slot, the low 32 bits of its ID. A walk of everything is `from` 0 and `limit` 0, and may leave `next` null.\n\n- The walk reached the end: TA_OK, and `next` is TA_ACTOR_VISIT_END. - `limit` visits answered TA_OK (0 means no limit): TA_OK, and `next` is the position after the last actor visited. - A visit answered anything else: the walk stops with that result, and `next` is that actor's position, so calling again offers it again. An inspector ends a walk early this way. - A null `params` is TA_ERR_INVALID; so is a null `visit`, with `next` set to `from`.\n\nBetween calls, and from inside a visit, the system may change. An actor resident for the whole iteration is visited exactly once; an actor destroyed before the walk reaches it is not visited; one spawned is visited only if its position is at or after the cursor. No position is visited twice in one iteration. A call costs O(actors visited + empty slots passed).",
+      "doc": "Walks the resident actors (ADR 0062), invoked children included, handing `inspector` the same view ta_actor_inspect() gives for each. Actors are visited in increasing position order, starting at `from`. A position is an actor's slot, ta_actor_id_slot() of its ID: pass 0 to start, then the previous call's `next`, or the slot of an actor to resume at. No slot is TA_ACTOR_VISIT_END. A walk of everything is `from` 0 and `limit` 0, and may leave `next` null.\n\n- The walk reached the end: TA_OK, and `next` is TA_ACTOR_VISIT_END. - `limit` visits answered TA_OK (0 means no limit): TA_OK, and `next` is the position after the last actor visited. - A visit answered anything else: the walk stops with that result, and `next` is that actor's position, so calling again offers it again. An inspector ends a walk early this way. - A null `params` is TA_ERR_INVALID; so is a null `visit`, with `next` set to `from`.\n\nBetween calls, and from inside a visit, the system may change. An actor resident for the whole iteration is visited exactly once; an actor destroyed before the walk reaches it is not visited; one spawned is visited only if its position is at or after the cursor. No position is visited twice in one iteration. A call costs O(actors visited + empty slots passed).",
       "fields": [
         {
           "name": "inspector",
@@ -13867,6 +13868,70 @@
           "direction": "out",
           "valid_on": "success",
           "lifetime": "system"
+        }
+      ]
+    },
+    {
+      "name": "ta_actor_id_slot",
+      "doc": "The two halves of an actor ID, and an ID from its halves (ADR 0059). Pure: no system, no failure. A made ID is checked where it is used, like any other: a slot that holds no actor, or a generation that is not the slot's current one, is TA_ERR_NOT_FOUND there.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "uint32_t"
+        }
+      },
+      "params": [
+        {
+          "name": "id",
+          "type": {
+            "type": "ta_actor_id"
+          }
+        }
+      ]
+    },
+    {
+      "name": "ta_actor_id_generation",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "uint32_t"
+        }
+      },
+      "params": [
+        {
+          "name": "id",
+          "type": {
+            "type": "ta_actor_id"
+          }
+        }
+      ]
+    },
+    {
+      "name": "ta_actor_id_make",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_actor_id"
+        }
+      },
+      "params": [
+        {
+          "name": "slot",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "generation",
+          "type": {
+            "builtin": "uint32_t"
+          }
         }
       ]
     },

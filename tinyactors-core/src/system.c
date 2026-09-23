@@ -68,7 +68,7 @@ void ta_system_destroy(ta_system *system) {
     for (uint32_t slot = 0; slot < system->actors.count; slot += 1) {
         ta_actor_slot *entry = ta_vec_at(&system->actors, slot);
         if (entry->actor != NULL) {
-            (void)ta_actor_destroy(system, ((ta_actor_id)entry->generation << 32) | slot);
+            (void)ta_actor_destroy(system, ta_actor_id_make(slot, entry->generation));
         }
     }
     while (system->unregistered_definitions != NULL) {

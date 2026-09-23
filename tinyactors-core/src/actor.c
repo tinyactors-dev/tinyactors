@@ -5,13 +5,25 @@ ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id) {
     if (system == NULL) {
         return NULL;
     }
-    uint32_t slot = (uint32_t)(id & 0xffffffffu);
-    uint32_t generation = (uint32_t)(id >> 32);
+    uint32_t slot = ta_actor_id_slot(id);
+    uint32_t generation = ta_actor_id_generation(id);
     if (slot >= system->actors.count) {
         return NULL;
     }
     const ta_actor_slot *entry = ta_vec_at(&system->actors, slot);
     return entry->generation == generation ? entry->actor : NULL;
+}
+
+uint32_t ta_actor_id_slot(ta_actor_id id) {
+    return (uint32_t)(id & 0xffffffffu);
+}
+
+uint32_t ta_actor_id_generation(ta_actor_id id) {
+    return (uint32_t)(id >> 32);
+}
+
+ta_actor_id ta_actor_id_make(uint32_t slot, uint32_t generation) {
+    return ((ta_actor_id)generation << 32) | slot;
 }
 
 ta_timer_list *ta_actor_timers(const ta_actor *actor) {
@@ -166,7 +178,7 @@ static ta_result ta_actor_claim_slot(ta_system *system, ta_actor *actor, ta_acto
     ta_actor_slot *entry = ta_vec_at(&system->actors, slot);
     entry->actor = actor;
     entry->next_free = UINT32_MAX;
-    *out = ((ta_actor_id)entry->generation << 32) | slot;
+    *out = ta_actor_id_make(slot, entry->generation);
     return TA_OK;
 }
 
@@ -238,13 +250,16 @@ static ta_result ta_actor_claim_address(ta_system *system,
     return TA_OK;
 }
 
-/* Frees the slot an actor was given, so a failed spawn reuses it. */
-/* The slot's next occupant gets a new generation, so this ID goes stale. */
+/*
+ * Frees the slot an actor was given, so a failed spawn reuses it. The slot's
+ * next occupant gets a new generation, so this ID goes stale. Generation 0
+ * is never issued (ADR 0059): a wrap from UINT32_MAX goes to 1.
+ */
 void ta_actor_release_slot(ta_system *system, ta_actor_id id) {
-    uint32_t slot = (uint32_t)(id & 0xffffffffu);
+    uint32_t slot = ta_actor_id_slot(id);
     ta_actor_slot *entry = ta_vec_at(&system->actors, slot);
     entry->actor = NULL;
-    entry->generation += 1u;
+    entry->generation = entry->generation == UINT32_MAX ? 1u : entry->generation + 1u;
     entry->next_free = system->free_actor_slot;
     system->free_actor_slot = slot;
 }
