@@ -226,9 +226,16 @@ depth before compiling.
   default transition targets itself, or a cycle of such defaults, used to
   recurse until the stack overflowed. The entry set now skips a history
   state it is already expanding, and effective targets expand each history
-  state once per query. Such a chart no longer crashes, but the
-  configuration it enters is not meaningful. Rejecting it at compile time is
-  left open.
+  state once per query. Such a chart no longer crashes. It is also no
+  longer accepted: SCXML 3.11 requires a target to become a legal
+  configuration, and a loop of history defaults never reaches an atomic
+  state (it entered an empty configuration). After every state is
+  compiled, the compiler walks the edges "this history's default targets
+  that history state" depth-first, with an explicit stack, and reports a
+  loop as `TA_COMPILE_ERROR_BAD_HISTORY_DEFAULT` at the target that closes
+  it, with the history it returns to as `related`. A chain that ends in
+  real states (`hp` to `hq` to `x`, or two histories sharing `hq`) stays
+  legal. The run-time guard stays as defence in depth.
 - **Export needs no stack.** States are numbered in pre-order, so one pass
   in ID order fills each state's slot and hands its children theirs. Nested
   action blocks are queued by the action that owns them, with at most one

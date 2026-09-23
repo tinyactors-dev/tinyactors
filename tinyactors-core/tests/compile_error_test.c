@@ -893,6 +893,129 @@ static void test_long_message_is_bounded(void) {
     free(long_message);
 }
 
+/* ------------------------------------------------------------------------
+ * History defaults that loop back to a history state never reach a state
+ * (SCXML 3.11), so they are BAD_HISTORY_DEFAULT. Chains that end in real
+ * states stay legal.
+ */
+
+static void test_history_default_loops(void) {
+    /* h targets itself. */
+    {
+        static const ta_str self[] = { S("h"), END };
+        ta_scxml_transition_spec fallback[] = { { .kind = TA_SCXML_TRANSITION_EXTERNAL, .targets = self }, END };
+        ta_scxml_state_spec inner[] = {
+            { .kind = TA_SCXML_STATE_HISTORY_SHALLOW, .id = S("h"), .transitions = fallback },
+            { .kind = TA_SCXML_STATE_ATOMIC, .id = S("a") },
+            END,
+        };
+        ta_scxml_state_spec states[] = { { .kind = TA_SCXML_STATE_ATOMIC, .id = S("start") },
+                                         { .kind = TA_SCXML_STATE_COMPOUND, .id = S("p"), .states = inner }, END };
+        ta_scxml_spec spec = { .name = S("c"), .states = states };
+        outcome o;
+        compile(&spec, &o);
+        CHECK(o.result == TA_ERR_INVALID);
+        CHECK(o.error.code == TA_COMPILE_ERROR_BAD_HISTORY_DEFAULT);
+        CHECK(strcmp(path_text(&o.error), "states[1].states[0].transitions[0].targets[0]") == 0);
+        CHECK(o.error.subject.ptr == self[0].ptr);
+        CHECK(o.error.related.ptr == inner[0].id.ptr);
+        release(&o);
+    }
+    /* h1 and h2 target each other: reported where the loop closes. */
+    {
+        static const ta_str to_h1[] = { S("h1"), END };
+        static const ta_str to_h2[] = { S("h2"), END };
+        ta_scxml_transition_spec first[] = { { .kind = TA_SCXML_TRANSITION_EXTERNAL, .targets = to_h2 }, END };
+        ta_scxml_transition_spec second[] = { { .kind = TA_SCXML_TRANSITION_EXTERNAL, .targets = to_h1 }, END };
+        ta_scxml_state_spec inner[] = {
+            { .kind = TA_SCXML_STATE_HISTORY_SHALLOW, .id = S("h1"), .transitions = first },
+            { .kind = TA_SCXML_STATE_HISTORY_DEEP, .id = S("h2"), .transitions = second },
+            { .kind = TA_SCXML_STATE_ATOMIC, .id = S("a") },
+            END,
+        };
+        ta_scxml_state_spec states[] = { { .kind = TA_SCXML_STATE_COMPOUND, .id = S("p"), .states = inner }, END };
+        ta_scxml_spec spec = { .name = S("c"), .states = states };
+        outcome o;
+        compile(&spec, &o);
+        CHECK(o.error.code == TA_COMPILE_ERROR_BAD_HISTORY_DEFAULT);
+        CHECK(strcmp(path_text(&o.error), "states[0].states[1].transitions[0].targets[0]") == 0);
+        CHECK(o.error.subject.ptr == to_h1[0].ptr);
+        CHECK(o.error.related.ptr == inner[0].id.ptr);
+        ta_str line = format_line(&spec, &o);
+        CHECK(ends_with(line, "history defaults loop and never reach a state \"h1\"; see also \"h1\""));
+        release(&o);
+    }
+}
+
+/* hp -> hq -> x, and two histories sharing hq: no loop. The chart compiles,
+ * and entering hp for the first time enters x. */
+static void test_history_default_chains(void) {
+    static const ta_str to_hq[] = { S("hq"), END };
+    static const ta_str to_x[] = { S("x"), END };
+    static const ta_str to_hp[] = { S("hp"), END };
+    ta_scxml_transition_spec hp_default[] = { { .kind = TA_SCXML_TRANSITION_EXTERNAL, .targets = to_hq }, END };
+    ta_scxml_transition_spec hr_default[] = { { .kind = TA_SCXML_TRANSITION_EXTERNAL, .targets = to_hq }, END };
+    ta_scxml_transition_spec hq_default[] = { { .kind = TA_SCXML_TRANSITION_EXTERNAL, .targets = to_x }, END };
+    ta_scxml_transition_spec go[] = { { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = S("go"), .targets = to_hp }, END };
+    ta_scxml_state_spec q_children[] = {
+        { .kind = TA_SCXML_STATE_HISTORY_SHALLOW, .id = S("hq"), .transitions = hq_default },
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = S("w") },
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = S("x") },
+        END,
+    };
+    ta_scxml_state_spec p_children[] = {
+        { .kind = TA_SCXML_STATE_HISTORY_DEEP, .id = S("hp"), .transitions = hp_default },
+        { .kind = TA_SCXML_STATE_HISTORY_DEEP, .id = S("hr"), .transitions = hr_default },
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = S("v") },
+        { .kind = TA_SCXML_STATE_COMPOUND, .id = S("q"), .states = q_children },
+        END,
+    };
+    ta_scxml_state_spec states[] = {
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = S("start"), .transitions = go },
+        { .kind = TA_SCXML_STATE_COMPOUND, .id = S("p"), .states = p_children },
+        END,
+    };
+    ta_scxml_spec spec = { .name = S("chains"), .states = states };
+    ta_definition *definition = NULL;
+    ta_compile_error error = {0};
+    CHECK(ta_definition_compile_spec(system_under_test,
+                                     &(ta_definition_compile_params){ .spec = &spec,
+                                                                      .datamodel = { .v = &model_vtable },
+                                                                      .allocator = test_allocator,
+                                                                      .out = &definition,
+                                                                      .error = &error }) == TA_OK);
+    CHECK(error.code == TA_COMPILE_ERROR_NONE);
+    ta_definition_id id = 0;
+    CHECK(definition != NULL && ta_system_register_definition(system_under_test, definition, &id) == TA_OK);
+    ta_actor_id actor = 0;
+    CHECK(ta_actor_spawn(system_under_test, &(ta_actor_spawn_params){ .definition = id, .out = &actor }) == TA_OK);
+    ta_run_status status = TA_RUN_ERROR;
+    CHECK(ta_actor_resume(system_under_test, &(ta_actor_resume_params){ .actor = actor, .budget = 100,
+                                                                        .status = &status }) == TA_OK);
+    ta_atom go_atom = 0;
+    CHECK(ta_system_intern_atom(system_under_test, S("go"), &go_atom) == TA_OK);
+    ta_event_name_id go_name = 0;
+    CHECK(ta_event_name_intern(system_under_test, &(ta_atom_list){ .atoms = &go_atom, .count = 1 }, &go_name) == TA_OK);
+    ta_event event = { .name = go_name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+    CHECK(ta_actor_deliver(system_under_test, actor, &event) == TA_OK);
+    CHECK(ta_actor_resume(system_under_test, &(ta_actor_resume_params){ .actor = actor, .budget = 100,
+                                                                        .status = &status }) == TA_OK);
+    CHECK(status == TA_RUN_STABLE);
+    ta_state_id x = 0;
+    CHECK(ta_definition_find_state(system_under_test, &(ta_definition_find_state_params){ .definition = id,
+                                                                                         .id = S("x"),
+                                                                                         .out = &x }) == TA_OK);
+    ta_state_id active[8];
+    uint32_t count = 0;
+    CHECK(ta_actor_active_states(system_under_test, &(ta_actor_active_states_params){ .actor = actor,
+                                                                                     .states = active,
+                                                                                     .capacity = 8,
+                                                                                     .count = &count }) == TA_OK);
+    CHECK(count == 3 && active[count - 1u] == x); /* p, q, x */
+    CHECK(ta_actor_destroy(system_under_test, actor) == TA_OK);
+    CHECK(ta_system_retire_definition(system_under_test, id) == TA_OK);
+}
+
 int main(void) {
     if (ta_system_create(&(ta_system_config){ .allocator = test_allocator }, &system_under_test) != TA_OK) {
         fprintf(stderr, "cannot create a system\n");
@@ -912,6 +1035,8 @@ int main(void) {
     test_deep_typo_is_bounded();
     test_long_subjects_are_bounded();
     test_long_message_is_bounded();
+    test_history_default_loops();
+    test_history_default_chains();
     ta_system_destroy(system_under_test);
     if (failures != 0) {
         fprintf(stderr, "compile error test: %d check(s) failed\n", failures);

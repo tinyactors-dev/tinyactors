@@ -165,7 +165,9 @@ and documented: the chart's `datamodel` requirement; every state in
 document order to check its kind and collect its ID; the root's `<data>`;
 for each state in document order, its structural checks, transitions, the
 history default (for a history state), `<initial>`, `<onentry>`,
-`<onexit>`, `<data>`, `<donedata>` and `<invoke>`; the root `<initial>`;
+`<onexit>`, `<data>`, `<donedata>` and `<invoke>`; loops among history
+defaults (ADR 0060), whose check needs every state compiled; the root
+`<initial>`;
 the root `<script>`; the configuration limit and the family; then the data
 model. The same chart therefore always reports the same error.
 

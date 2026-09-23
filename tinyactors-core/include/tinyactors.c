@@ -6071,6 +6071,96 @@ static ta_result ta_compiler_finish(ta_compiler *compiler) {
  * each state in document order; the root <initial>; the root <script>; the
  * configuration limit and the family; then the data model's preparation.
  */
+/* One history state on the walk below, and the next default target to follow. */
+typedef struct {
+    ta_state_id state;
+    uint32_t next;
+} ta_history_walk;
+
+/* The default targets of a compiled history state. */
+static ta_span32 ta_compiler_history_targets(ta_compiler *compiler, ta_state_id history) {
+    const ta_state_def *state = ta_compiler_state(compiler, history);
+    const ta_transition_def *fallback = ta_vec_at(&compiler->transitions, state->transitions.offset);
+    return fallback->targets;
+}
+
+/*
+ * A history state's default may target another history state, which is
+ * then entered through its own default. That chain must end in real
+ * states: SCXML 3.11 requires a target to become a legal configuration
+ * once ancestors and defaults are added, and a loop never reaches an
+ * atomic state. So a loop, `h` targeting `h` or `h1` and `h2` targeting
+ * each other, is BAD_HISTORY_DEFAULT.
+ *
+ * A depth-first walk over the edges "this history's default targets that
+ * history state", with an explicit stack (ADR 0060). Walks start from the
+ * history states in document order and each state is finished once, so
+ * the loop reported is the same every time. The error is at the target
+ * that closes the loop, with the history it returns to as `related`.
+ */
+static ta_result ta_compiler_history_loops(ta_compiler *compiler) {
+    uint32_t count = compiler->states.count;
+    uint32_t histories = 0;
+    for (ta_state_id state = 0; state < count; state += 1u) {
+        histories += ta_state_kind_is_history(ta_compiler_state(compiler, state)->kind) ? 1u : 0u;
+    }
+    if (histories < 1u) {
+        return TA_OK;
+    }
+    enum { UNSEEN = 0, ON_WALK = 1, FINISHED = 2 };
+    ta_vec marks;
+    ta_vec walk;
+    ta_vec_init(&marks, compiler->allocator, TA_VEC_LAYOUT(uint8_t));
+    ta_vec_init(&walk, compiler->allocator, TA_VEC_LAYOUT(ta_history_walk));
+    uint32_t base = 0;
+    ta_result result = ta_vec_extend(&marks, count, &base);
+    for (ta_state_id start = 0; result == TA_OK && start < count; start += 1u) {
+        uint8_t *mark = marks.items;
+        if (!ta_state_kind_is_history(ta_compiler_state(compiler, start)->kind) || mark[start] != UNSEEN) {
+            continue;
+        }
+        mark[start] = ON_WALK;
+        result = ta_vec_push(&walk, &(ta_history_walk){ .state = start });
+        while (result == TA_OK && walk.count != 0) {
+            ta_history_walk *top = ta_vec_at(&walk, walk.count - 1u);
+            ta_span32 targets = ta_compiler_history_targets(compiler, top->state);
+            if (top->next == targets.length) {
+                ((uint8_t *)marks.items)[top->state] = FINISHED;
+                walk.count -= 1u;
+                continue;
+            }
+            uint32_t index = top->next;
+            top->next += 1u;
+            ta_state_id history = top->state;
+            ta_state_id target = *(ta_state_id *)ta_vec_at(&compiler->targets, targets.offset + index);
+            if (!ta_state_kind_is_history(ta_compiler_state(compiler, target)->kind)) {
+                continue;
+            }
+            uint8_t seen = ((uint8_t *)marks.items)[target];
+            if (seen == ON_WALK) {
+                ta_compiler_at(compiler, history);
+                result = ta_compiler_enter(compiler, TA_SPEC_MEMBER_TRANSITIONS, 0);
+                if (result == TA_OK) {
+                    result = ta_compiler_fail_at(compiler, TA_SPEC_MEMBER_TARGETS, index,
+                                                 &(ta_compiler_fault){
+                                                     .code = TA_COMPILE_ERROR_BAD_HISTORY_DEFAULT,
+                                                     .subject = ta_compiler_state_spec(compiler, history)
+                                                                    ->transitions[0].targets[index],
+                                                     .related = ta_compiler_state_spec(compiler, target)->id,
+                                                     .message = TA_PHRASE("history defaults loop and never reach a state"),
+                                                 });
+                }
+            } else if (seen == UNSEEN) {
+                ((uint8_t *)marks.items)[target] = ON_WALK;
+                result = ta_vec_push(&walk, &(ta_history_walk){ .state = target });
+            }
+        }
+    }
+    ta_vec_destroy(&walk);
+    ta_vec_destroy(&marks);
+    return result;
+}
+
 static ta_result ta_compiler_run(ta_compiler *compiler, ta_datamodel datamodel) {
     const ta_scxml_spec *spec = compiler->spec;
     ta_definition *definition = compiler->definition;
@@ -6096,6 +6186,9 @@ static ta_result ta_compiler_run(ta_compiler *compiler, ta_datamodel datamodel) 
     }
     for (ta_state_id state = 0; result == TA_OK && state < compiler->states.count; state += 1) {
         result = ta_compiler_compile_state(compiler, state);
+    }
+    if (result == TA_OK) {
+        result = ta_compiler_history_loops(compiler);
     }
     if (result == TA_OK) {
         ta_compiler_at(compiler, TA_STATE_NONE);
