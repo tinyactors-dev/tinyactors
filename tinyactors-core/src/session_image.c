@@ -116,8 +116,10 @@ static size_t ta_image_measure(const ta_actor *actor) {
         total += (size_t)actor->record.self.as.named.family.name.len + 1u;
         total += (size_t)actor->record.self.as.named.name.len + 1u;
     }
+    if (actor->internal_queue != NULL) {
+        total += (size_t)actor->internal_queue->count * sizeof(ta_queued_event);
+    }
     if (sparse != NULL) {
-        total += (size_t)sparse->internal_events.count * sizeof(ta_queued_event);
         total += (size_t)sparse->invoke_count * sizeof(ta_active_invoke);
         total += (size_t)sparse->pending_invokes.count * sizeof(ta_state_id);
     }
@@ -148,15 +150,15 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
         return result;
     }
 
-    if (sparse != NULL && sparse->internal_events.count != 0) {
-        uint32_t count = sparse->internal_events.count;
+    if (actor->internal_queue != NULL && actor->internal_queue->count != 0) {
+        uint32_t count = actor->internal_queue->count;
         image->internal_events = ta_arena_alloc(arena, (size_t)count * sizeof(ta_queued_event),
                                                 _Alignof(ta_queued_event));
         if (image->internal_events == NULL) {
             return TA_ERR_NOMEM;
         }
         for (uint32_t index = 0; index < count; index += 1) {
-            image->internal_events[index] = *(const ta_queued_event *)ta_vec_at(&sparse->internal_events, index);
+            image->internal_events[index] = actor->internal_queue->events[index];
         }
         image->internal_count = count;
     }
@@ -426,7 +428,7 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
      * Reporting the lost invocations put work in the queue of an actor the
      * image recorded as idle, so it has a macrostep to run again.
      */
-    if (!actor->macrostep && actor->sparse != NULL && actor->sparse->internal_events.count != 0) {
+    if (!actor->macrostep && ta_interpreter_internal_pending(actor)) {
         actor->macrostep = true;
         actor->record.residency = TA_ACTOR_RUNNING;
     }

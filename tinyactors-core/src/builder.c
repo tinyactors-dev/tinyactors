@@ -1836,6 +1836,14 @@ static ta_result ta_compiler_finish(ta_compiler *compiler) {
         return result;
     }
     definition->max_action_depth = compiler->action_depth;
+    definition->microstep_needs_sparse = definition->invoke_decl_count != 0;
+    for (uint32_t action = 0; action < definition->action_count && !definition->microstep_needs_sparse; action += 1u) {
+        definition->microstep_needs_sparse = definition->action_defs[action].kind == TA_ACTION_SEND;
+    }
+    for (ta_state_id state = 0; state < definition->state_count && !definition->microstep_needs_sparse; state += 1u) {
+        definition->microstep_needs_sparse = definition->states[state].parent == TA_STATE_NONE &&
+                                             definition->states[state].kind == TA_STATE_FINAL;
+    }
     if (definition->global_script_actions.length != 0 && definition->max_action_depth == 0) {
         definition->max_action_depth = 1;
     }

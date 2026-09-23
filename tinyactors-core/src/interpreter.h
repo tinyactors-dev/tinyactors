@@ -81,6 +81,10 @@ ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *syste
 void ta_interpreter_literal_content(const ta_definition *definition, ta_content_id content, ta_str *media_type,
                                     ta_bytes *bytes);
 void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor);
+/* Frees the system's cached internal queues (ADR 0064), at teardown. */
+void ta_interpreter_queue_cache_destroy(ta_system *system);
+/* The bytes an internal queue of this capacity takes. */
+size_t ta_internal_queue_bytes(uint32_t capacity);
 
 /* Send IDs as text: literal IDs are their author's text; generated ones round-trip. */
 void ta_send_id_write(const ta_system *system, ta_send_id id, ta_text_writer *writer);

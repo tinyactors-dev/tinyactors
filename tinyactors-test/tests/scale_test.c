@@ -119,11 +119,15 @@ typedef struct {
     int64_t live_blocks;
     /* The largest single block asked for since it was last reset. */
     uint64_t largest_block;
+    /* Allocator calls since they were last reset (ADR 0064). */
+    uint64_t alloc_calls;
+    uint64_t free_calls;
 } counting_allocator;
 
 static void *counting_alloc(void *self, size_t size, size_t alignment) {
     counting_allocator *counts = self;
     void *block = counts->backing.v->alloc(counts->backing.self, size, alignment);
+    counts->alloc_calls += 1u;
     if (block != NULL) {
         if (size > counts->largest_block) {
             counts->largest_block = size;
@@ -142,6 +146,7 @@ static void counting_free(void *self, const ta_allocator_free_params *params) {
     if (params->ptr == NULL) {
         return;
     }
+    counts->free_calls += 1u;
     counts->live_bytes -= params->size;
     counts->live_blocks -= 1;
     counts->backing.v->free(counts->backing.self, params);
@@ -883,6 +888,87 @@ static bool should_run(size_t index) {
 }
 
 
+/* ------------------------------------------------------------------------
+ * Allocator calls per event (ADR 0064). An actor's internal queue is lent
+ * to it while it runs, so once the system is warm an event that moves a
+ * simple actor and brings it back to stable makes no allocator call. Nor
+ * does one on an actor that keeps its sparse state for a pending delayed
+ * send. Before ADR 0064 every such event allocated and freed a queue, and a
+ * simple actor its sparse state too. This depends on no population.
+ */
+
+#define EVENT_ROUNDS 1000u
+
+static ta_event_name_id intern_event(ta_system *system, ta_str text) {
+    ta_atom atom = 0;
+    ta_event_name_id name = 0;
+    require(ta_system_intern_atom(system, text, &atom) == TA_OK &&
+                ta_event_name_intern(system, &(ta_atom_list){.atoms = &atom, .count = 1}, &name) == TA_OK,
+            "interning an event name");
+    return name;
+}
+
+static void run_to_stable(ta_system *system, ta_actor_id actor) {
+    ta_run_status status = TA_RUN_ERROR;
+    require(ta_actor_resume(system, &(ta_actor_resume_params){.actor = actor, .budget = 100, .status = &status}) ==
+                    TA_OK &&
+                status == TA_RUN_STABLE,
+            "running an actor to stable");
+}
+
+static void run_event(ta_system *system, ta_actor_id actor, ta_event_name_id name) {
+    ta_event event = {.name = name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE};
+    require(ta_actor_deliver(system, actor, &event) == TA_OK, "delivering an event");
+    run_to_stable(system, actor);
+}
+
+static void check_event_allocations(void) {
+    counting_allocator counts = {.backing = tat_libc_allocator()};
+    ta_allocator allocator = {.self = &counts, .v = &COUNTING_VTABLE};
+    ta_system *system = NULL;
+    require(ta_system_create(&(ta_system_config){.allocator = allocator}, &system) == TA_OK, "system creation");
+    ta_definition_id simple = register_revision(system, allocator, &(revision_spec){"events", "v2", STATES_V2});
+    ta_definition_id timed = register_revision(system, allocator, &(revision_spec){"timed", "v1", STATES_TIMED});
+    ta_actor_id simple_actor = 0;
+    ta_actor_id timed_actor = 0;
+    require(ta_actor_spawn(system, &(ta_actor_spawn_params){.definition = simple, .out = &simple_actor}) == TA_OK &&
+                ta_actor_spawn(system, &(ta_actor_spawn_params){.definition = timed, .out = &timed_actor}) == TA_OK,
+            "spawning the event actors");
+    run_to_stable(system, simple_actor);
+    run_to_stable(system, timed_actor);
+    ta_event_name_id go = intern_event(system, (ta_str)STR("go"));
+    ta_event_name_id done = intern_event(system, (ta_str)STR("done"));
+    ta_event_name_id rearm = intern_event(system, (ta_str)STR("rearm"));
+    /* Warm-up: the first run may fill the system's cache of queues. */
+    run_event(system, simple_actor, go);
+    run_event(system, simple_actor, done);
+    run_event(system, timed_actor, rearm);
+
+    counts.alloc_calls = 0;
+    counts.free_calls = 0;
+    for (unsigned round = 0; round < EVENT_ROUNDS; round += 1u) {
+        run_event(system, simple_actor, go);
+        run_event(system, simple_actor, done);
+    }
+    double simple_allocs = (double)counts.alloc_calls / (2.0 * EVENT_ROUNDS);
+    double simple_frees = (double)counts.free_calls / (2.0 * EVENT_ROUNDS);
+    counts.alloc_calls = 0;
+    counts.free_calls = 0;
+    for (unsigned round = 0; round < EVENT_ROUNDS; round += 1u) {
+        run_event(system, timed_actor, rearm);
+    }
+    double timed_allocs = (double)counts.alloc_calls / EVENT_ROUNDS;
+    double timed_frees = (double)counts.free_calls / EVENT_ROUNDS;
+    printf("allocator calls per event after warm-up: %.2f allocations and %.2f frees for a simple actor, "
+           "%.2f and %.2f for an actor with a pending delayed send\n",
+           simple_allocs, simple_frees, timed_allocs, timed_frees);
+    ta_system_destroy(system);
+    require(counts.live_bytes == 0, "the event system returned every byte it was given");
+    require(simple_allocs == 0.0 && simple_frees == 0.0, "an event to a simple actor calls the allocator (ADR 0064)");
+    require(timed_allocs == 0.0 && timed_frees == 0.0,
+            "an event to an actor with a pending delayed send calls the allocator (ADR 0064)");
+}
+
 int main(int argc, char **argv) {
     if (argc == 3 && strcmp(argv[1], "--report") == 0) {
         size_t population = (size_t)strtoull(argv[2], NULL, 10);
@@ -909,6 +995,7 @@ int main(int argc, char **argv) {
     for (size_t index = 1; index < count; index += 1) {
         require_flat_pair(POPULATIONS[index - 1], &costs[index - 1], POPULATIONS[index], &costs[index]);
     }
+    check_event_allocations();
     /* And every population stays inside the budget the target implies. */
     for (size_t index = 0; index < count; index += 1) {
         require(costs[index].actor_bytes <= (double)ACTOR_BYTE_BUDGET, "a resident actor costs more than its byte budget");

@@ -486,7 +486,6 @@ ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params)
             return TA_ERR_NOMEM;
         }
         *actor->sparse = (ta_actor_sparse_state){ .parent = *params->parent, .has_parent = true };
-        ta_vec_init(&actor->sparse->internal_events, system->allocator, TA_VEC_LAYOUT(ta_queued_event));
     }
 
     result = definition->datamodel.v->init_instance(
@@ -738,10 +737,12 @@ static size_t ta_vec_bytes(const ta_vec *vec) {
 /* Everything the core allocates for the actor now; see ta_actor_inspection. */
 static size_t ta_actor_allocated_bytes(const ta_actor *actor) {
     size_t total = actor->definition->actor_block_bytes;
+    if (actor->internal_queue != NULL) {
+        total += ta_internal_queue_bytes(actor->internal_queue->capacity);
+    }
     const ta_actor_sparse_state *sparse = actor->sparse;
     if (sparse != NULL) {
         total += sizeof(ta_actor_sparse_state);
-        total += ta_vec_bytes(&sparse->internal_events);
         total += ta_vec_bytes(&sparse->pending_invokes);
         total += (size_t)sparse->invoke_capacity * (sizeof(ta_active_invoke) + sizeof(ta_invoke_meta));
         if (sparse->activation_effects != NULL) {
@@ -783,9 +784,11 @@ ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_inspectio
         .allocated_bytes = ta_actor_allocated_bytes(actor),
         .final_state = TA_STATE_NONE,
     };
+    if (actor->internal_queue != NULL && actor->internal_queue->count != 0) {
+        out->internal_events = actor->internal_queue->events;
+        out->internal_count = actor->internal_queue->count;
+    }
     if (actor->sparse != NULL) {
-        out->internal_events = actor->sparse->internal_events.items;
-        out->internal_count = actor->sparse->internal_events.count;
         out->invokes = actor->sparse->invokes;
         out->invoke_count = actor->sparse->invoke_count;
         out->delayed_sends = actor->sparse->timers.count == 0 ? NULL : actor->sparse->timers.sends;

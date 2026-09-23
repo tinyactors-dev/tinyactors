@@ -88,6 +88,7 @@ void ta_system_destroy(ta_system *system) {
     ta_vec_destroy(&system->io_processors);
     ta_vec_destroy(&system->invokers);
     ta_arena_destroy(&system->scratch);
+    ta_interpreter_queue_cache_destroy(system);
     ta_event_name_table_destroy(&system->event_names);
     ta_atom_table_destroy(&system->atoms);
     ta_allocator allocator = system->allocator;

@@ -10,6 +10,10 @@
 #include "routing.h"
 #include "timer.h"
 
+/* How many empty internal queues a system keeps for reuse (ADR 0064): one
+ * per interpreter that can run at once, nested exits included (ADR 0060). */
+#define TA_INTERNAL_QUEUE_CACHE 4u
+
 typedef struct {
     ta_definition *definition;
     uint32_t generation;
@@ -58,6 +62,9 @@ struct ta_system {
     ta_atom scxml_invoke_type;
     uint64_t next_invoke_serial;
     ta_arena scratch;
+    /* Empty internal queues, lent to the next run that needs one (ADR 0064). */
+    ta_internal_queue *queue_cache[TA_INTERNAL_QUEUE_CACHE];
+    uint32_t queue_cache_count;
 };
 
 /*

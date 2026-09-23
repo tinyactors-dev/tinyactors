@@ -89,33 +89,122 @@ static ta_actor_sparse_state *ta_sparse(ta_system *system, ta_actor *actor) {
             return NULL;
         }
         *actor->sparse = (ta_actor_sparse_state){ .final_state = TA_STATE_NONE };
-        ta_vec_init(&actor->sparse->internal_events, system->allocator, TA_VEC_LAYOUT(ta_queued_event));
     }
     return actor->sparse;
 }
 
+/* ------------------------------------------------------------------------
+ * Internal queues (ADR 0064)
+ */
+
+/* A queue's first capacity, and the largest one the system caches. */
+#define TA_INTERNAL_QUEUE_INITIAL 8u
+#define TA_INTERNAL_QUEUE_CACHED_MAX 64u
+
+size_t ta_internal_queue_bytes(uint32_t capacity) {
+    return offsetof(ta_internal_queue, events) + (size_t)capacity * sizeof(ta_queued_event);
+}
+
+static void ta_queue_free(ta_system *system, ta_internal_queue *queue) {
+    ta_mem_free(system->allocator, queue,
+                &(ta_allocator_free_params){ .size = ta_internal_queue_bytes(queue->capacity),
+                                             .alignment = _Alignof(ta_internal_queue) });
+}
+
+/*
+ * Makes sure the actor holds a queue with room for one more event: its own,
+ * else one from the system's cache, else a new one; a full queue doubles.
+ * TA_ERR_NOMEM leaves the actor as it was, apart from a queue taken from
+ * the cache, which it may keep.
+ */
+static ta_result ta_queue_room(ta_system *system, ta_actor *actor) {
+    ta_internal_queue *queue = actor->internal_queue;
+    if (queue == NULL) {
+        if (system->queue_cache_count != 0) {
+            system->queue_cache_count -= 1u;
+            queue = system->queue_cache[system->queue_cache_count];
+        } else {
+            queue = ta_mem_alloc(system->allocator, ta_internal_queue_bytes(TA_INTERNAL_QUEUE_INITIAL),
+                                 _Alignof(ta_internal_queue));
+            if (queue == NULL) {
+                return TA_ERR_NOMEM;
+            }
+            queue->capacity = TA_INTERNAL_QUEUE_INITIAL;
+        }
+        queue->count = 0;
+        actor->internal_queue = queue;
+    }
+    if (queue->count < queue->capacity) {
+        return TA_OK;
+    }
+    if (queue->capacity > UINT32_MAX / 2u) {
+        return TA_ERR_NOMEM;
+    }
+    uint32_t capacity = queue->capacity * 2u;
+    ta_internal_queue *grown = ta_mem_alloc(system->allocator, ta_internal_queue_bytes(capacity),
+                                            _Alignof(ta_internal_queue));
+    if (grown == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    grown->count = queue->count;
+    grown->capacity = capacity;
+    ta_mem_copy(grown->events, queue->events, (size_t)queue->count * sizeof(ta_queued_event));
+    ta_queue_free(system, queue);
+    actor->internal_queue = grown;
+    return TA_OK;
+}
+
+/*
+ * Gives an actor's queue back when the actor no longer needs it: it is
+ * empty and no microstep is paused. It goes to the system's cache, or is
+ * freed when the cache is full or the queue grew large. Cannot fail.
+ */
+static void ta_queue_settle(ta_system *system, ta_actor *actor) {
+    ta_internal_queue *queue = actor->internal_queue;
+    if (queue == NULL || queue->count != 0 || (actor->sparse != NULL && actor->sparse->paused != NULL)) {
+        return;
+    }
+    actor->internal_queue = NULL;
+    if (system->queue_cache_count < TA_INTERNAL_QUEUE_CACHE && queue->capacity <= TA_INTERNAL_QUEUE_CACHED_MAX) {
+        system->queue_cache[system->queue_cache_count] = queue;
+        system->queue_cache_count += 1u;
+        return;
+    }
+    ta_queue_free(system, queue);
+}
+
+void ta_interpreter_queue_cache_destroy(ta_system *system) {
+    while (system->queue_cache_count != 0) {
+        system->queue_cache_count -= 1u;
+        ta_queue_free(system, system->queue_cache[system->queue_cache_count]);
+    }
+}
+
 ta_result ta_interpreter_enqueue_internal(ta_system *system, ta_actor *actor, ta_event *event) {
     ta_actor_touch(actor);
-    ta_actor_sparse_state *sparse = ta_sparse(system, actor);
-    ta_queued_event queued = {
+    ta_result result = ta_queue_room(system, actor);
+    if (result != TA_OK) {
+        ta_queue_settle(system, actor);
+        ta_event_release(event);
+        return result;
+    }
+    ta_internal_queue *queue = actor->internal_queue;
+    queue->events[queue->count] = (ta_queued_event){
         .event = *event,
         .flags = TA_EVENT_FLAG_OWNS_DATA | (event->type == TA_EVENT_PLATFORM ? TA_EVENT_FLAG_GENERATED : 0u),
     };
-    ta_result result = sparse == NULL ? TA_ERR_NOMEM : ta_vec_push(&sparse->internal_events, &queued);
-    if (result != TA_OK) {
-        ta_event_release(event);
-    }
-    return result;
+    queue->count += 1u;
+    return TA_OK;
 }
 
 static bool ta_dequeue_internal(ta_actor *actor, ta_event *out) {
-    if (actor->sparse == NULL || actor->sparse->internal_events.count == 0) {
+    ta_internal_queue *queue = actor->internal_queue;
+    if (queue == NULL || queue->count == 0) {
         return false;
     }
-    ta_vec *queue = &actor->sparse->internal_events;
-    *out = ((ta_queued_event *)queue->items)[0].event;
+    *out = queue->events[0].event;
     for (uint32_t index = 1; index < queue->count; index += 1) {
-        ((ta_queued_event *)queue->items)[index - 1u] = ((ta_queued_event *)queue->items)[index];
+        queue->events[index - 1u] = queue->events[index];
     }
     queue->count -= 1u;
     return true;
@@ -127,8 +216,9 @@ static void ta_restore_current_event(ta_actor *actor, bool external) {
         /* ta_set_current_event moved the retained external_event into current_event. */
         actor->has_external_event = true;
     } else {
-        ta_vec *queue = &actor->sparse->internal_events;
-        ta_queued_event *events = queue->items;
+        /* The event came out of this queue, so it has room for it again. */
+        ta_internal_queue *queue = actor->internal_queue;
+        ta_queued_event *events = queue->events;
         for (uint32_t index = queue->count; index > 0; index -= 1u) {
             events[index] = events[index - 1u];
         }
@@ -1999,45 +2089,36 @@ static void ta_store_active(ta_interpreter *it) {
 }
 
 /*
- * Internal events are the only persistent interpreter storage that an
- * ordinary transition commonly has to grow.  Reserve its first slot before
- * exit/actions/entry make the microstep visible, so a full allocator pauses
- * at the boundary and retry can start the same microstep again.
+ * Before exit, actions and entry make the microstep visible, make sure the
+ * actor holds an internal queue with room for one event (lent, ADR 0064) and,
+ * when the microstep may need it, its sparse state. So a full allocator
+ * pauses at the boundary, and a retry starts the same microstep again
+ * (ADR 0047).
  */
 static ta_result ta_prepare_microstep_queue(ta_interpreter *it) {
-    ta_actor *actor = it->actor;
-    bool created = actor->sparse == NULL;
-    ta_actor_sparse_state *sparse = ta_sparse(it->system, actor);
-    if (sparse == NULL) {
-        return TA_ERR_NOMEM;
-    }
-    ta_result result = ta_vec_reserve(&sparse->internal_events, sparse->internal_events.count + 1u);
-    if (result != TA_OK && created) {
-        ta_vec_destroy(&sparse->internal_events);
-        ta_mem_free(it->system->allocator, sparse,
-                    &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),
-                                                 .alignment = _Alignof(ta_actor_sparse_state) });
-        actor->sparse = NULL;
+    ta_result result = ta_queue_room(it->system, it->actor);
+    /* A microstep that may keep a send, a completion, an invocation or a
+     * held effect gets its sparse state now, while nothing is visible. */
+    if (result == TA_OK && (it->definition->microstep_needs_sparse || !it->actor->published) &&
+        ta_sparse(it->system, it->actor) == NULL) {
+        result = TA_ERR_NOMEM;
     }
     return result;
 }
 
 static void ta_compact_sparse(ta_interpreter *it) {
     ta_actor_sparse_state *sparse = it->actor->sparse;
-    if (sparse == NULL || sparse->paused != NULL || sparse->internal_events.count != 0 || sparse->invoke_count != 0 ||
+    if (sparse == NULL || sparse->paused != NULL || sparse->invoke_count != 0 ||
         sparse->pending_invokes.count != 0 || sparse->activation_effects != NULL || sparse->has_parent ||
         sparse->completion_pending || sparse->completion.has_data) {
         return;
     }
     ta_invoke_release(it->system, it->actor);
     if (sparse->timers.count != 0) {
-        /* Pending delayed sends keep the sparse state (ADR 0054); nothing else
-         * it holds may grow with what the actor has done. */
-        ta_vec_destroy(&sparse->internal_events);
+        /* Pending delayed sends keep the sparse state (ADR 0054). */
         return;
     }
     ta_timer_list_destroy(&it->system->timers, &sparse->timers);
-    ta_vec_destroy(&sparse->internal_events);
     ta_mem_free(it->system->allocator, sparse,
                 &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),
                                              .alignment = _Alignof(ta_actor_sparse_state) });
@@ -2196,9 +2277,8 @@ static ta_result ta_finish(ta_interpreter *it) {
     ta_store_active(it);
     /* Sends the router already refused once stay queued: they were sent before termination. */
     ta_timer_cancel_unsubmitted(&it->system->timers, ta_actor_timers(it->actor));
-    ta_actor_sparse_state *sparse = it->actor->sparse;
     ta_event event;
-    while (sparse != NULL && ta_dequeue_internal(it->actor, &event)) {
+    while (ta_dequeue_internal(it->actor, &event)) {
         ta_event_release(&event);
     }
     if (it->actor->has_macrostep_event) {
@@ -2394,6 +2474,8 @@ ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_act
     ta_result result = ta_interpreter_run(system, actor, params);
     /* The live set lives in scratch memory; between calls In() derives from the configuration. */
     actor->live_active = NULL;
+    /* An empty queue goes back; queued events or a paused microstep keep it. */
+    ta_queue_settle(system, actor);
     return result;
 }
 
@@ -2538,7 +2620,7 @@ ta_result ta_interpreter_run_actions(ta_interpreter *it, ta_span32 block) {
 }
 
 bool ta_interpreter_internal_pending(const ta_actor *actor) {
-    return actor->sparse != NULL && actor->sparse->internal_events.count != 0;
+    return actor->internal_queue != NULL && actor->internal_queue->count != 0;
 }
 
 void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor) {
@@ -2554,16 +2636,17 @@ void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor) {
         ta_event_release(&actor->current_event);
         actor->has_current_event = false;
     }
-    if (actor->sparse == NULL) {
-        return;
-    }
-    ta_invoke_release(system, actor); /* Invoke: cancel services, free bookkeeping. */
-    ta_continuation_free(system->allocator, &actor->sparse->paused);
     ta_event event;
     while (ta_dequeue_internal(actor, &event)) {
         ta_event_release(&event);
     }
-    ta_vec_destroy(&actor->sparse->internal_events);
+    if (actor->sparse == NULL) {
+        ta_queue_settle(system, actor);
+        return;
+    }
+    ta_invoke_release(system, actor); /* Invoke: cancel services, free bookkeeping. */
+    ta_continuation_free(system->allocator, &actor->sparse->paused);
+    ta_queue_settle(system, actor); /* empty, and no longer paused */
     /* The owner heap must not keep pointing into the freed sparse state. */
     ta_timer_list_destroy(&system->timers, &actor->sparse->timers);
     ta_value_release(&actor->sparse->completion.data);

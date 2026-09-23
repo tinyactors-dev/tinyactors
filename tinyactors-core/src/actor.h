@@ -34,9 +34,19 @@ typedef struct ta_activation_effects {
     ta_vec entries; /* ta_activation_effect, in authored order */
 } ta_activation_effects;
 
+/*
+ * An actor's internal event queue (ADR 0064): its events, oldest first, and
+ * its capacity, in one allocation. It is lent to an actor while it runs, and
+ * the actor keeps it only while events are queued or a microstep is paused.
+ */
+typedef struct ta_internal_queue {
+    uint32_t count;
+    uint32_t capacity;
+    ta_queued_event events[];
+} ta_internal_queue;
+
 /* Allocated only for actors that use one of these uncommon facilities. */
 typedef struct {
-    ta_vec internal_events; /* ta_queued_event, FIFO */
     ta_active_invoke *invokes;
     uint32_t invoke_count;
     uint32_t invoke_capacity;
@@ -71,6 +81,8 @@ struct ta_actor {
     void *datamodel_instance;
     bool datamodel_initialized;
     ta_actor_sparse_state *sparse;
+    /* Its internal event queue (ADR 0064), or null. */
+    ta_internal_queue *internal_queue;
     ta_actor_id replacement_of;
     uint64_t session_epoch;
     bool published;

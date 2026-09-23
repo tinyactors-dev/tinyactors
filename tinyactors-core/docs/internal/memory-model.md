@@ -26,10 +26,20 @@ Actors with no active invocation should ideally pay no invocation-vector allocat
 The resident representation enforces that boundary: an actor is one
 definition-sized allocation, laid out when the definition is compiled: the
 actor record, then the session storage (configuration, late-binding bits and
-history), then the data-model instance (ADR 0063). Internal queues, invocations, invoked-
-child completion state, and replacement activation effects occupy an optional
-`ta_actor_sparse_state`. An actor that does not use those features has no
-vectors for them.
+history), then the data-model instance (ADR 0063). Invocations, invoked-child
+completion state, replacement activation effects, pending delayed sends and a
+paused continuation occupy an optional `ta_actor_sparse_state`. An actor that
+does not use those features has no vectors for them.
+
+The internal event queue is not per actor (ADR 0064). A run is lent one: the
+actor's own if it kept one, else one from the system's cache of four empty
+queues, else a new allocation, always before its first microstep is visible.
+When the run ends with the queue empty and no microstep paused, the queue
+goes back to the cache, or is freed when the cache is full or the queue grew
+past 64 events. An actor keeps a queue only while events are queued in it or
+a microstep is paused. So once a system is warm, an event that moves an
+actor and returns it to stable makes no allocator call, and an actor that
+has never run costs one null pointer for its queue.
 
 ## Per-actor operations cost the same at every population
 
