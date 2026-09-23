@@ -69,6 +69,40 @@ static bool tna_hook_option(napi_env env, napi_value object, const char *name, n
     return napi_create_reference(env, value, 1, out) == napi_ok;
 }
 
+/* clock: "realtime" (the default) or "manual". */
+static bool tna_clock_option(napi_env env, napi_value object, tna_clock_kind *kind) {
+    napi_value value = NULL;
+    if (!tna_option(env, object, "clock", &value)) {
+        return false;
+    }
+    if (value == NULL) {
+        return true;
+    }
+    char text[16] = { 0 };
+    size_t length = 0;
+    if (napi_get_value_string_utf8(env, value, text, sizeof text, &length) != napi_ok ||
+        (strcmp(text, "realtime") != 0 && strcmp(text, "manual") != 0)) {
+        tna_throw(env, "invalid", "createSystem: clock must be \"realtime\" or \"manual\"");
+        return false;
+    }
+    *kind = strcmp(text, "manual") == 0 ? TNA_CLOCK_MANUAL : TNA_CLOCK_REALTIME;
+    return true;
+}
+
+/* A time in logical milliseconds: a non-negative safe integer. */
+static bool tna_time_value(napi_env env, napi_value value, const char *what, ta_time *out) {
+    double number = -1;
+    if (napi_get_value_double(env, value, &number) != napi_ok || !(number >= 0) || number > 9007199254740991.0 ||
+        number != (double)(ta_time)number) {
+        char message[128];
+        snprintf(message, sizeof message, "%s must be a non-negative integer number of milliseconds", what);
+        tna_throw(env, "invalid", message);
+        return false;
+    }
+    *out = (ta_time)number;
+    return true;
+}
+
 static bool tna_finished_option(napi_env env, napi_value object, bool *destroy) {
     napi_value value = NULL;
     if (!tna_option(env, object, "finished", &value)) {
@@ -93,6 +127,7 @@ static bool tna_finished_option(napi_env env, napi_value object, bool *destroy) 
  */
 
 static napi_value tna_turn_callback(napi_env env, napi_callback_info info);
+static napi_value tna_timer_callback(napi_env env, napi_callback_info info);
 
 /* Releases the hold a pending turn has on the wrapper. */
 static void tna_pump_unhold(tna_napi_system *wrapper) {
@@ -127,6 +162,71 @@ static void tna_pump_wake(tna_system *system, void *context) {
     }
 }
 
+/* Calls global[name](arguments...) and stores the result in `out` (may be NULL). */
+static bool tna_call_global(napi_env env, const char *name, size_t argc, const napi_value *argv, napi_value *out) {
+    napi_value global = NULL;
+    napi_value function = NULL;
+    napi_value ignored = NULL;
+    return napi_get_global(env, &global) == napi_ok && napi_get_named_property(env, global, name, &function) == napi_ok &&
+           napi_call_function(env, global, function, argc, argv, out != NULL ? out : &ignored) == napi_ok;
+}
+
+/* Clears the armed timer, if any, and drops its hold. JavaScript must be callable. */
+static void tna_pump_clear_timer(napi_env env, tna_napi_system *wrapper) {
+    if (wrapper->timeout != NULL) {
+        napi_value timeout = NULL;
+        if (napi_get_reference_value(env, wrapper->timeout, &timeout) == napi_ok && timeout != NULL) {
+            (void)tna_call_global(env, "clearTimeout", 1, &timeout, NULL);
+        }
+        napi_delete_reference(env, wrapper->timeout);
+        wrapper->timeout = NULL;
+    }
+    if (wrapper->timer_held) {
+        wrapper->timer_held = false;
+        tna_napi_system_unhold(wrapper);
+    }
+}
+
+/* The arm callback (system.h): setTimeout(timer, delay).unref(). */
+static void tna_pump_arm(tna_system *system, ta_time delay, void *context) {
+    tna_napi_system *wrapper = context;
+    napi_env env = wrapper->env;
+    napi_handle_scope scope = NULL;
+    if (napi_open_handle_scope(env, &scope) != napi_ok) {
+        system->clock.armed = false;
+        return;
+    }
+    tna_pump_clear_timer(env, wrapper);
+    napi_value argv[2] = { NULL, NULL };
+    napi_value timeout = NULL;
+    bool ok = napi_get_reference_value(env, wrapper->timer_function, &argv[0]) == napi_ok && argv[0] != NULL &&
+              napi_create_double(env, (double)delay, &argv[1]) == napi_ok &&
+              tna_call_global(env, "setTimeout", 2, argv, &timeout);
+    if (ok) {
+        wrapper->holders += 1u; /* the pending timer holds the wrapper */
+        wrapper->timer_held = true;
+        napi_valuetype type = napi_undefined;
+        napi_value unref = NULL;
+        napi_value ignored = NULL;
+        if (napi_typeof(env, timeout, &type) == napi_ok && (type == napi_object || type == napi_function) &&
+            napi_get_named_property(env, timeout, "unref", &unref) == napi_ok &&
+            napi_typeof(env, unref, &type) == napi_ok && type == napi_function) {
+            (void)napi_call_function(env, timeout, unref, 0, NULL, &ignored);
+        }
+        ok = napi_create_reference(env, timeout, 1, &wrapper->timeout) == napi_ok;
+    }
+    if (!ok) {
+        /* No timer: a later turn tries again. Clear a pending exception. */
+        bool pending = false;
+        napi_value error = NULL;
+        if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
+            napi_get_and_clear_last_exception(env, &error);
+        }
+        system->clock.armed = false;
+    }
+    napi_close_handle_scope(env, scope);
+}
+
 bool tna_pump_init(napi_env env, tna_napi_system *wrapper, napi_value facade, napi_value options) {
     wrapper->env = env;
     wrapper->destroy_finished = true;
@@ -141,6 +241,9 @@ bool tna_pump_init(napi_env env, tna_napi_system *wrapper, napi_value facade, na
         }
     }
     napi_value scheduling = NULL;
+    napi_value initial_value = NULL;
+    tna_clock_kind clock = TNA_CLOCK_REALTIME;
+    ta_time initial = 0;
     tna_turn_budgets *budgets = &wrapper->system->budgets;
     if (!tna_option(env, options, "scheduling", &scheduling) ||
         !tna_count_option(env, scheduling, "resumeBudget", &budgets->microsteps) ||
@@ -148,26 +251,37 @@ bool tna_pump_init(napi_env env, tna_napi_system *wrapper, napi_value facade, na
         !tna_count_option(env, scheduling, "resumesPerTurn", &budgets->resumes) ||
         !tna_count_option(env, scheduling, "messageBudget", &budgets->messages) ||
         !tna_count_option(env, scheduling, "maxQueuedMessages", &wrapper->system->sched.max_queued) ||
+        !tna_count_option(env, scheduling, "dueBudget", &wrapper->system->due_budget) ||
+        !tna_clock_option(env, options, &clock) || !tna_option(env, options, "initialTime", &initial_value) ||
+        (initial_value != NULL && !tna_time_value(env, initial_value, "createSystem: initialTime", &initial)) ||
         !tna_finished_option(env, options, &wrapper->destroy_finished) ||
         !tna_hook_option(env, options, "done", &wrapper->done_hook) ||
         !tna_hook_option(env, options, "fault", &wrapper->fault_hook) ||
         !tna_hook_option(env, options, "deadLetter", &wrapper->dead_letter_hook)) {
         return false;
     }
-    if (budgets->microsteps == 0 || budgets->resumes == 0 || budgets->messages == 0) {
+    if (budgets->microsteps == 0 || budgets->resumes == 0 || budgets->messages == 0 || wrapper->system->due_budget == 0) {
         tna_throw(env, "invalid",
-                  "createSystem: scheduling.resumeBudget, resumesPerTurn and messageBudget must be at least 1");
+                  "createSystem: scheduling.resumeBudget, resumesPerTurn, messageBudget and dueBudget must be at least 1");
+        return false;
+    }
+    if (tna_system_set_clock(wrapper->system, clock, initial) != TA_OK) {
+        tna_throw(env, "invalid", "createSystem: cannot set the clock");
         return false;
     }
     napi_value turn = NULL;
+    napi_value timer = NULL;
     if (napi_create_function(env, "tinyactorsTurn", NAPI_AUTO_LENGTH, tna_turn_callback, wrapper, &turn) != napi_ok ||
         napi_create_reference(env, turn, 1, &wrapper->turn_function) != napi_ok ||
+        napi_create_function(env, "tinyactorsTimer", NAPI_AUTO_LENGTH, tna_timer_callback, wrapper, &timer) != napi_ok ||
+        napi_create_reference(env, timer, 1, &wrapper->timer_function) != napi_ok ||
         (facade != NULL && napi_create_reference(env, facade, 0, &wrapper->facade) != napi_ok)) {
         tna_throw(env, "out-of-memory", "cannot set up the pump");
         return false;
     }
     wrapper->system->wake = tna_pump_wake;
     wrapper->system->wake_context = wrapper;
+    wrapper->system->clock.arm = tna_pump_arm;
     return true;
 }
 
@@ -449,6 +563,47 @@ static napi_value tna_turn_callback(napi_env env, napi_callback_info info) {
     return NULL;
 }
 
+/* The host timer fired (ADR 0007 point 3): move time, and turn if something is due. */
+static napi_value tna_timer_callback(napi_env env, napi_callback_info info) {
+    void *data = NULL;
+    if (napi_get_cb_info(env, info, NULL, NULL, NULL, &data) != napi_ok || data == NULL) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = data;
+    if (wrapper->timeout != NULL && !wrapper->env_data->torn_down) {
+        napi_delete_reference(env, wrapper->timeout);
+    }
+    wrapper->timeout = NULL;
+    bool held = wrapper->timer_held;
+    wrapper->timer_held = false;
+    if (!tna_system_closed(wrapper->system)) {
+        tna_system_timer_fired(wrapper->system);
+    }
+    if (held) {
+        tna_napi_system_unhold(wrapper); /* may free a finalized wrapper */
+    }
+    return NULL;
+}
+
+napi_value tna_pump_advance_to(napi_env env, tna_napi_system *wrapper, napi_value time_value) {
+    tna_system *system = wrapper->system;
+    if (system->clock.kind != TNA_CLOCK_MANUAL) {
+        return tna_throw(env, "invalid", "advanceTo() needs a system with clock: \"manual\"");
+    }
+    ta_time time = 0;
+    if (!tna_time_value(env, time_value, "advanceTo(): time", &time)) {
+        return NULL;
+    }
+    ta_result result = tna_system_advance_to(system, time);
+    if (result == TA_ERR_BUSY) {
+        return tna_throw(env, "reentrant", "advanceTo() cannot run inside a core call");
+    }
+    if (result != TA_OK) {
+        return tna_throw(env, "invalid", "advanceTo(): time must not move backwards");
+    }
+    return tna_pump_flush(env, wrapper);
+}
+
 /* ------------------------------------------------------------------------
  * Close
  */
@@ -466,6 +621,19 @@ void tna_pump_close(tna_napi_system *wrapper, bool env_usable) {
         return;
     }
     wrapper->system->wake = NULL;
+    wrapper->system->clock.arm = NULL;
+    wrapper->system->clock.armed = false;
+    if (env_usable) {
+        tna_pump_clear_timer(env, wrapper);
+    } else if (wrapper->timeout != NULL && !wrapper->env_data->torn_down) {
+        /*
+         * No JavaScript can run here (finalizer), so the timer stays pending
+         * and keeps its hold; its callback finds the system closed and drops
+         * the hold. It is unreferenced, so it keeps nothing alive.
+         */
+        napi_delete_reference(env, wrapper->timeout);
+        wrapper->timeout = NULL;
+    }
     if (env_usable && wrapper->waiter_count > 0) {
         napi_value error = tna_error(env, "closed", "the system was closed");
         for (uint32_t index = 0; index < wrapper->waiter_count; index += 1) {
@@ -479,6 +647,7 @@ void tna_pump_close(tna_napi_system *wrapper, bool env_usable) {
     wrapper->waiter_capacity = 0;
     bool refs_usable = !wrapper->env_data->torn_down;
     tna_delete(env, &wrapper->turn_function, refs_usable);
+    tna_delete(env, &wrapper->timer_function, refs_usable);
     tna_delete(env, &wrapper->facade, refs_usable);
     tna_delete(env, &wrapper->done_hook, refs_usable);
     tna_delete(env, &wrapper->fault_hook, refs_usable);

@@ -9,10 +9,12 @@
 // the application uses, not with traffic.
 
 const { TinyactorsError } = require('./errors');
+const { core } = require('./native');
 
 class EventNames {
   #native;
   #ids = new Map();
+  #names = new Map();
 
   constructor(native) {
     this.#native = native;
@@ -29,6 +31,20 @@ class EventNames {
       this.#ids.set(name, id);
     }
     return id;
+  }
+
+  /**
+   * The dotted text of a name core reports (inspections, events), formatted
+   * once per ID and cached (ADR 0004 point 3).
+   */
+  name(id) {
+    let text = this.#names.get(id);
+    if (text === undefined) {
+      text = core.event_name_format(this.#native, id);
+      this.#names.set(id, text);
+      this.#ids.set(text, id);
+    }
+    return text;
   }
 
   /** Distinct names interned through this cache. */

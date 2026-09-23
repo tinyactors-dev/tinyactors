@@ -84,6 +84,36 @@ class System {
     return this.#native.closed;
   }
 
+  /** "realtime" (the default) or "manual" (ADR 0007 point 3). */
+  get clock() {
+    return this.#native.clock;
+  }
+
+  /**
+   * Core's logical time in milliseconds. With the realtime clock it follows
+   * a monotonic clock read natively, relative to system creation plus
+   * `initialTime`.
+   */
+  get time() {
+    return this.#native.time;
+  }
+
+  /**
+   * Manual clock only: move time to `time` (never backwards) and resolve once
+   * everything due has been dispatched and the system is quiet.
+   */
+  advanceTo(time) {
+    return this.#native.advanceTo(time);
+  }
+
+  /** Manual clock only: advanceTo(time + milliseconds). */
+  advanceBy(milliseconds) {
+    if (typeof milliseconds !== 'number' || !(milliseconds >= 0)) {
+      throw new TinyactorsError('advanceBy(): expected a non-negative number of milliseconds', 'invalid');
+    }
+    return this.#native.advanceTo(this.#native.time + milliseconds);
+  }
+
   /**
    * Compile and register a chart: a statechart() builder, or a spec in the
    * generated shape (the shape core's definition export returns). Until the
@@ -175,12 +205,48 @@ class System {
       macrostepInProgress: view.macrostep_in_progress,
       internalEventCount: view.internal_events.length,
       delayedSendCount: view.delayed_sends.length,
+      delayedSends: view.delayed_sends.map((send) => this.#delayedSend(send)),
       scheduling: this.#native.scheduling(slot, generation),
       // The top-level final it reached, or null (core ADR 0056).
       finalState: view.final_state === NO_STATE ? null : stateName(view.final_state),
       allocatedBytes: view.allocated_bytes,
     };
     return inspection;
+  }
+
+  // One pending delayed send, from core's ta_delayed_send_info (core ADR 0054).
+  #delayedSend(send) {
+    let id = null;
+    try {
+      id = core.send_id_format(this.#native, send.send_id);
+    } catch (error) {
+      if (!(error instanceof TinyactorsError && error.code === 'not-found')) {
+        throw error;
+      }
+    }
+    return {
+      id,
+      due: send.due,
+      event: this.#events.name(send.event),
+      ioType: core.system_atom_text(this.#native, send.io_type),
+      destination: this.#destination(send.destination),
+      target: send.target,
+      data: send.data,
+      submitted: send.submitted,
+    };
+  }
+
+  // A resolved destination: an ActorId, an address, or null for a custom
+  // I/O processor, whose destination core leaves as runtime ID 0.
+  #destination(ref) {
+    if (ref === undefined || ref === null) {
+      return null;
+    }
+    if (ref.kind === 'named') {
+      return ref.named === undefined ? null : { family: ref.named.family.name, name: ref.named.name };
+    }
+    const { slot, generation } = ref.runtime;
+    return generation === 0 ? null : new ActorId(this, slot, generation);
   }
 
   /** True when a resident actor has this ID. */
@@ -240,8 +306,10 @@ class System {
 
   /**
    * Resolves once the system is quiet: nothing runnable, nothing ready, no
-   * dead letters to report (later: nothing due). It spans as many pump turns as needed and yields to
-   * the event loop between them. close() rejects it with `closed`.
+   * dead letters to report, and nothing due at the current time (ADR 0007
+   * point 4). A delayed send due later does not hold it. It spans as many
+   * pump turns as needed and yields to the event loop between them. close()
+   * rejects it with `closed`.
    */
   flush() {
     return this.#native.flush();

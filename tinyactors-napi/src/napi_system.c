@@ -250,6 +250,48 @@ static napi_value tna_flush_method(napi_env env, napi_callback_info info) {
     return wrapper == NULL ? NULL : tna_pump_flush(env, wrapper);
 }
 
+/* advanceTo(time): manual clock only (ADR 0007 point 3). */
+static napi_value tna_advance_to_method(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value argv[1] = { NULL };
+    napi_value self = NULL;
+    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    if (argc < 1) {
+        return tna_throw(env, "invalid", "advanceTo(): expected a time");
+    }
+    return tna_pump_advance_to(env, wrapper, argv[0]);
+}
+
+/* clock: "realtime" or "manual". */
+static napi_value tna_clock_getter(napi_env env, napi_callback_info info) {
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    napi_value clock = NULL;
+    const char *text = wrapper->system->clock.kind == TNA_CLOCK_MANUAL ? "manual" : "realtime";
+    napi_create_string_utf8(env, text, NAPI_AUTO_LENGTH, &clock);
+    return clock;
+}
+
+/* time: core's logical milliseconds; the realtime clock is read first. */
+static napi_value tna_time_getter(napi_env env, napi_callback_info info) {
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    tna_system_sync_time(wrapper->system);
+    napi_value time = NULL;
+    napi_create_double(env, (double)ta_system_time(wrapper->system->core), &time);
+    return time;
+}
+
 /* release(slot, generation): puts a quarantined actor back into scheduling (ADR 0008). */
 static napi_value tna_release_method(napi_env env, napi_callback_info info) {
     size_t argc = 2;
@@ -521,6 +563,9 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "close", NULL, tna_close_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "stats", NULL, tna_stats_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "flush", NULL, tna_flush_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "advanceTo", NULL, tna_advance_to_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "clock", NULL, NULL, tna_clock_getter, NULL, NULL, napi_default_jsproperty, NULL },
+        { "time", NULL, NULL, tna_time_getter, NULL, NULL, napi_default_jsproperty, NULL },
         { "release", NULL, tna_release_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "scheduling", NULL, tna_scheduling_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "internEvent", NULL, tna_intern_event_method, NULL, NULL, NULL, napi_default_method, NULL },

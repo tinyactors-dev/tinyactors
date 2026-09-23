@@ -21,6 +21,12 @@
  *   so it surfaces as an uncaught exception from the setImmediate callback.
  * - flush() returns a native promise that settles at the end of the turn
  *   that leaves the system quiet. close() rejects the waiting ones.
+ * - Time (ADR 0007 point 3): the system's arm callback (system.h) calls the
+ *   global setTimeout from native code, clearing the timer it armed before,
+ *   and unrefs the Timeout through its `unref` method, so an idle system
+ *   does not keep the process alive. A pending timer holds the wrapper like
+ *   a pending turn. The manual clock arms no timer; advanceTo() moves time
+ *   and waits like flush().
  *
  * Handle scopes: the scheduler has no Node-API in it, so it opens no scope
  * around a resume. No JavaScript runs inside a resume until the JavaScript
@@ -41,3 +47,5 @@ bool tna_pump_init(napi_env env, tna_napi_system *wrapper, napi_value facade, na
 void tna_pump_close(tna_napi_system *wrapper, bool env_usable);
 /* flush(): a promise that settles when the system is quiet. */
 napi_value tna_pump_flush(napi_env env, tna_napi_system *wrapper);
+/* advanceTo(time): manual clock only; moves time, then waits like flush(). */
+napi_value tna_pump_advance_to(napi_env env, tna_napi_system *wrapper, napi_value time);
