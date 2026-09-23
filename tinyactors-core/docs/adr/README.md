@@ -63,5 +63,6 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0057](0057-core-ships-the-null-data-model.md) | [Core ships the null data model](0057-core-ships-the-null-data-model.md) |
 | [0058](0058-compile-errors-say-what-and-where.md) | [A compile error says what is wrong and where in the chart](0058-compile-errors-say-what-and-where.md) |
 | [0059](0059-an-actor-id-is-a-public-slot-and-generation.md) | [An actor ID is a public slot and generation](0059-an-actor-id-is-a-public-slot-and-generation.md) (proposed) |
+| [0060](0060-no-recursion-in-core.md) | [No recursion in core](0060-no-recursion-in-core.md) |
 
 See [the API gaps](../internal/api-gaps.md) for places where the current header skeleton does not yet fully expose these decisions.
