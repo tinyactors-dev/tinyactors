@@ -124,6 +124,13 @@
       "value": 4294967295
     },
     {
+      "name": "TA_EXPR_ID_NONE",
+      "type": {
+        "type": "ta_expr_id"
+      },
+      "value": 4294967295
+    },
+    {
       "name": "TA_INITIALIZER_NONE",
       "type": {
         "type": "ta_initializer_id"
@@ -143,6 +150,13 @@
         "type": "ta_invoke_id"
       },
       "value": 18446744073709551615
+    },
+    {
+      "name": "TA_SPEC_INDEX_NONE",
+      "type": {
+        "builtin": "uint32_t"
+      },
+      "value": 4294967295
     },
     {
       "name": "TA_STATE_NONE",
@@ -3296,21 +3310,90 @@
           "type": {
             "type": "ta_compile_error_code"
           }
+        },
+        {
+          "name": "path",
+          "type": {
+            "pointer": {
+              "type": "ta_spec_step",
+              "const": true
+            }
+          },
+          "count": "path_length",
+          "shape": "counted",
+          "direction": "in",
+          "optional": true,
+          "doc": "From the spec's root to the element at fault, in the error arena. Empty when no arena was given or the error is about the whole chart."
+        },
+        {
+          "name": "path_length",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "count_of": "path"
+        },
+        {
+          "name": "subject",
+          "type": {
+            "type": "ta_str"
+          },
+          "doc": "The authored text at fault, borrowed from the spec exactly as given: the unknown target, the duplicate ID, the bad duration, the refused expression's source. Empty when the error is not about text."
+        },
+        {
+          "name": "subject_offset",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "Within `subject`, the bytes at fault when narrower than all of it: an event descriptor's empty segment, or the range a data model reported. Both zero when all of `subject` is meant."
+        },
+        {
+          "name": "subject_length",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "related",
+          "type": {
+            "type": "ta_str"
+          },
+          "doc": "A second place the error involves, borrowed from the spec: the first state with a duplicate ID, the state a target must lie within, or the existing state ID nearest to an unknown target. Empty when none."
+        },
+        {
+          "name": "message",
+          "type": {
+            "type": "ta_str"
+          },
+          "doc": "Why, in words: core's fixed phrase, or the data model's message copied into the error arena (empty without one)."
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 4,
-          "align": 4,
+          "size": 80,
+          "align": 8,
           "offsets": {
-            "code": 0
+            "code": 0,
+            "path": 8,
+            "path_length": 16,
+            "subject": 24,
+            "subject_offset": 40,
+            "subject_length": 44,
+            "related": 48,
+            "message": 64
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 4,
+          "size": 44,
           "align": 4,
           "offsets": {
-            "code": 0
+            "code": 0,
+            "path": 4,
+            "path_length": 8,
+            "subject": 12,
+            "subject_offset": 20,
+            "subject_length": 24,
+            "related": 28,
+            "message": 36
           }
         }
       }
@@ -3322,9 +3405,103 @@
           "name": "TA_COMPILE_ERROR_NONE",
           "value": 0,
           "symbol": "none"
+        },
+        {
+          "name": "TA_COMPILE_ERROR_MALFORMED_SPEC",
+          "value": 1,
+          "symbol": "malformed_spec",
+          "doc": "a tag out of range; a required pointer absent"
+        },
+        {
+          "name": "TA_COMPILE_ERROR_MISSING_VALUE",
+          "value": 2,
+          "symbol": "missing_value",
+          "doc": "required text or expression absent or empty"
+        },
+        {
+          "name": "TA_COMPILE_ERROR_EXCLUSIVE_MEMBERS",
+          "value": 3,
+          "symbol": "exclusive_members",
+          "doc": "params with content; src with content"
+        },
+        {
+          "name": "TA_COMPILE_ERROR_DUPLICATE_STATE",
+          "value": 4,
+          "symbol": "duplicate_state"
+        },
+        {
+          "name": "TA_COMPILE_ERROR_UNKNOWN_STATE",
+          "value": 5,
+          "symbol": "unknown_state",
+          "doc": "a target or initial names no state"
+        },
+        {
+          "name": "TA_COMPILE_ERROR_TARGET_OUTSIDE",
+          "value": 6,
+          "symbol": "target_outside",
+          "doc": "an initial or history target outside its owner"
+        },
+        {
+          "name": "TA_COMPILE_ERROR_BAD_EVENT_DESCRIPTOR",
+          "value": 7,
+          "symbol": "bad_event_descriptor"
+        },
+        {
+          "name": "TA_COMPILE_ERROR_BAD_DURATION",
+          "value": 8,
+          "symbol": "bad_duration"
+        },
+        {
+          "name": "TA_COMPILE_ERROR_BAD_STRUCTURE",
+          "value": 9,
+          "symbol": "bad_structure",
+          "doc": "children, <initial > or <donedata > where the kind forbids"
+        },
+        {
+          "name": "TA_COMPILE_ERROR_BAD_HISTORY_DEFAULT",
+          "value": 10,
+          "symbol": "bad_history_default"
+        },
+        {
+          "name": "TA_COMPILE_ERROR_NO_STATES",
+          "value": 11,
+          "symbol": "no_states"
+        },
+        {
+          "name": "TA_COMPILE_ERROR_NO_FAMILY",
+          "value": 12,
+          "symbol": "no_family"
+        },
+        {
+          "name": "TA_COMPILE_ERROR_DATAMODEL_MISMATCH",
+          "value": 13,
+          "symbol": "datamodel_mismatch"
+        },
+        {
+          "name": "TA_COMPILE_ERROR_UNSUPPORTED_CONSTRUCT",
+          "value": 14,
+          "symbol": "unsupported_construct",
+          "doc": "TA_SCXML_ACTION_INVOKE"
+        },
+        {
+          "name": "TA_COMPILE_ERROR_LIMIT",
+          "value": 15,
+          "symbol": "limit",
+          "doc": "a bound core enforces was reached"
+        },
+        {
+          "name": "TA_COMPILE_ERROR_HOST_EXPRESSION",
+          "value": 16,
+          "symbol": "host_expression",
+          "doc": "a host expression's retain() failed"
+        },
+        {
+          "name": "TA_COMPILE_ERROR_EXPRESSION_REJECTED",
+          "value": 17,
+          "symbol": "expression_rejected",
+          "doc": "the data model refused an expression"
         }
       ],
-      "doc": "Why ta_definition_compile_spec() refused a spec. PENDING ADR 0058: this is the placeholder ta_import_error needs, and carries no detail yet. ADR 0058 adds the codes, the path through the spec and the text at fault.",
       "layout": {
         "x86_64-unknown-linux-gnu": {
           "size": 4,
@@ -3333,6 +3510,79 @@
         "wasm32-unknown-unknown": {
           "size": 4,
           "align": 4
+        }
+      }
+    },
+    "ta_compile_error_format_params": {
+      "kind": "struct",
+      "doc": "Writes a compile error as one line of text, for people; it has no stable grammar, and tools read the struct. A state step shows its ID: states[2](idle).transitions[0].targets[0]: unknown state \"idel\"; nearest is \"idle\" `spec` is the spec the error came from; it may be null, and then no IDs are shown.",
+      "fields": [
+        {
+          "name": "spec",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_spec",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in",
+          "optional": true
+        },
+        {
+          "name": "error",
+          "type": {
+            "pointer": {
+              "type": "ta_compile_error",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        },
+        {
+          "name": "arena",
+          "type": {
+            "pointer": {
+              "type": "ta_arena"
+            }
+          },
+          "shape": "arena",
+          "direction": "inout"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_str"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "arena"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "spec": 0,
+            "error": 8,
+            "arena": 16,
+            "out": 24
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "spec": 0,
+            "error": 4,
+            "arena": 8,
+            "out": 12
+          }
         }
       }
     },
@@ -4414,7 +4664,6 @@
     },
     "ta_datamodel_prepare_definition_params": {
       "kind": "struct",
-      "doc": "Prepares one compiled definition for a data model. `expressions` is the definition's expression table, indexed by ta_expr_id. It is borrowed and remains valid until destroy_definition() for the same `shared` state, so the adapter may keep the pointer instead of copying. The adapter never sees the compiled definition itself.",
       "fields": [
         {
           "name": "expressions",
@@ -4455,27 +4704,43 @@
           "shape": "raw",
           "direction": "out",
           "valid_on": "success"
+        },
+        {
+          "name": "rejected",
+          "type": {
+            "pointer": {
+              "type": "ta_expression_rejection"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success",
+          "lifetime": "call",
+          "doc": "Set by an adapter that returns TA_ERR_INVALID or TA_ERR_UNSUPPORTED because of one expression; `expression` stays TA_EXPR_ID_NONE otherwise. Null when the caller wants no detail."
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 40,
+          "size": 48,
           "align": 8,
           "offsets": {
             "expressions": 0,
             "expression_count": 8,
             "allocator": 16,
-            "shared": 32
+            "shared": 32,
+            "rejected": 40
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 20,
+          "size": 24,
           "align": 4,
           "offsets": {
             "expressions": 0,
             "expression_count": 4,
             "allocator": 8,
-            "shared": 16
+            "shared": 16,
+            "rejected": 20
           }
         }
       }
@@ -5762,7 +6027,6 @@
     },
     "ta_definition_compile_params": {
       "kind": "struct",
-      "doc": "Compile a sentinel-terminated SCXML specification into an immutable definition.\n\nThe compiler resolves state IDs and event descriptors, interns named send events, I/O processor and invoker types, and literal send and invoke IDs, validates the complete tree, and copies all data it retains. Thus the specification may be a nested compound literal with automatic storage. Every optional field is absent when zero-initialized; no field takes a runtime identifier such as `ta_expr_id`, `ta_send_id`, or `ta_atom`.",
       "fields": [
         {
           "name": "spec",
@@ -5799,27 +6063,57 @@
           "shape": "handle_out",
           "direction": "out",
           "valid_on": "success"
+        },
+        {
+          "name": "error",
+          "type": {
+            "pointer": {
+              "type": "ta_compile_error"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success",
+          "lifetime": "input",
+          "doc": "Filled when the result is TA_ERR_INVALID or TA_ERR_UNSUPPORTED because of the spec: the first fault in compile order (ADR 0058 section 2). Argument errors and TA_ERR_NOMEM leave `code` TA_COMPILE_ERROR_NONE. Borrows from `spec` and `error_arena`."
+        },
+        {
+          "name": "error_arena",
+          "type": {
+            "pointer": {
+              "type": "ta_arena"
+            }
+          },
+          "shape": "arena",
+          "direction": "inout",
+          "optional": true,
+          "doc": "Receives the error's path and any copied message; untouched on success. Without one, `error` has no path and no data-model message."
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 48,
+          "size": 64,
           "align": 8,
           "offsets": {
             "spec": 0,
             "datamodel": 8,
             "allocator": 24,
-            "out": 40
+            "out": 40,
+            "error": 48,
+            "error_arena": 56
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 24,
+          "size": 32,
           "align": 4,
           "offsets": {
             "spec": 0,
             "datamodel": 4,
             "allocator": 12,
-            "out": 20
+            "out": 20,
+            "error": 24,
+            "error_arena": 28
           }
         }
       }
@@ -7173,6 +7467,58 @@
         }
       }
     },
+    "ta_expression_rejection": {
+      "kind": "struct",
+      "doc": "Prepares one compiled definition for a data model. `expressions` is the definition's expression table, indexed by ta_expr_id. It is borrowed and remains valid until destroy_definition() for the same `shared` state, so the adapter may keep the pointer instead of copying. The adapter never sees the compiled definition itself.\n\nWhich expression a data model refused at prepare_definition(), and where in its source (ADR 0058). `offset` and `length` are bytes within that expression's source text; both zero when the whole expression is meant. `message` need only live for the call: core copies it.",
+      "fields": [
+        {
+          "name": "expression",
+          "type": {
+            "type": "ta_expr_id"
+          }
+        },
+        {
+          "name": "offset",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "length",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "message",
+          "type": {
+            "type": "ta_str"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "expression": 0,
+            "offset": 4,
+            "length": 8,
+            "message": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 20,
+          "align": 4,
+          "offsets": {
+            "expression": 0,
+            "offset": 4,
+            "length": 8,
+            "message": 12
+          }
+        }
+      }
+    },
     "ta_external_delivery": {
       "kind": "struct",
       "doc": "A fully normalized event destined for another SCXML external event queue.",
@@ -7490,7 +7836,7 @@
           "type": {
             "builtin": "bool"
           },
-          "doc": "Whether `at` says where in `input` the error is. A decode error always has a position. A compile error has none until ADR 0058 lands."
+          "doc": "Whether `at` says where in `input` the error is. A decode error always has a position. A compile error has one when its subject, or the nearest element above it with text, lies within `input` (ADR 0058)."
         },
         {
           "name": "at",
@@ -7511,15 +7857,15 @@
       },
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 104,
+          "size": 112,
           "align": 8,
           "offsets": {
             "stage": 0,
             "as": 8,
             "as.decode": 8,
             "as.compile": 8,
-            "located": 80,
-            "at": 88
+            "located": 88,
+            "at": 96
           }
         },
         "wasm32-unknown-unknown": {
@@ -10839,6 +11185,254 @@
         }
       ]
     },
+    "ta_spec_member": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_SPEC_MEMBER_NONE",
+          "value": 0,
+          "symbol": "none"
+        },
+        {
+          "name": "TA_SPEC_MEMBER_STATES",
+          "value": 1,
+          "symbol": "states",
+          "doc": "Lists."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_TRANSITIONS",
+          "value": 2,
+          "symbol": "transitions",
+          "doc": "Lists."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_TARGETS",
+          "value": 3,
+          "symbol": "targets",
+          "doc": "Lists."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_ONENTRY",
+          "value": 4,
+          "symbol": "onentry",
+          "doc": "Lists."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_ONEXIT",
+          "value": 5,
+          "symbol": "onexit",
+          "doc": "Lists."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_ACTIONS",
+          "value": 6,
+          "symbol": "actions",
+          "doc": "Lists."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_THEN",
+          "value": 7,
+          "symbol": "then",
+          "doc": "Lists."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_ELSE",
+          "value": 8,
+          "symbol": "else",
+          "doc": "Lists."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_BODY",
+          "value": 9,
+          "symbol": "body",
+          "doc": "Lists."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_FINALIZE",
+          "value": 10,
+          "symbol": "finalize",
+          "doc": "Lists."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_INVOKES",
+          "value": 11,
+          "symbol": "invokes",
+          "doc": "Lists."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_DATA",
+          "value": 12,
+          "symbol": "data",
+          "doc": "Lists."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_PARAMS",
+          "value": 13,
+          "symbol": "params",
+          "doc": "Lists."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_INITIAL",
+          "value": 14,
+          "symbol": "initial",
+          "doc": "Single members."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_DONE_DATA",
+          "value": 15,
+          "symbol": "done_data",
+          "doc": "Single members."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_SCRIPT",
+          "value": 16,
+          "symbol": "script",
+          "doc": "Single members."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_ID",
+          "value": 17,
+          "symbol": "id",
+          "doc": "Single members."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_NAME",
+          "value": 18,
+          "symbol": "name",
+          "doc": "Single members."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_EVENT",
+          "value": 19,
+          "symbol": "event",
+          "doc": "Single members."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_CONDITION",
+          "value": 20,
+          "symbol": "condition",
+          "doc": "Single members."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_TYPE",
+          "value": 21,
+          "symbol": "type",
+          "doc": "Single members."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_SRC",
+          "value": 22,
+          "symbol": "src",
+          "doc": "Single members."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_TARGET",
+          "value": 23,
+          "symbol": "target",
+          "doc": "Single members."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_DELAY",
+          "value": 24,
+          "symbol": "delay",
+          "doc": "Single members."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_DATA_VALUE",
+          "value": 25,
+          "symbol": "data_value",
+          "doc": "Single members."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_LOCATION",
+          "value": 26,
+          "symbol": "location",
+          "doc": "Single members."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_EXPR",
+          "value": 27,
+          "symbol": "expr",
+          "doc": "Single members."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_ITEM",
+          "value": 28,
+          "symbol": "item",
+          "doc": "Single members."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_INDEX",
+          "value": 29,
+          "symbol": "index",
+          "doc": "Single members."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_SENDID",
+          "value": 30,
+          "symbol": "sendid",
+          "doc": "Single members."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_DATAMODEL",
+          "value": 31,
+          "symbol": "datamodel",
+          "doc": "Single members."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_IDENTITY",
+          "value": 32,
+          "symbol": "identity",
+          "doc": "Single members."
+        }
+      ],
+      "doc": "Compile a sentinel-terminated SCXML specification into an immutable definition.\n\nThe compiler resolves state IDs and event descriptors, interns named send events, I/O processor and invoker types, and literal send and invoke IDs, validates the complete tree, and copies all data it retains. Thus the specification may be a nested compound literal with automatic storage. Every optional field is absent when zero-initialized; no field takes a runtime identifier such as `ta_expr_id`, `ta_send_id`, or `ta_atom`.\n\nCompile errors (ADR 0058)\n\nA refused spec is described by what is wrong (the code and message), where in the spec (a path of steps from the root), and which authored text is at fault (`subject`, the spec's own pointer, never a copy). When the spec came from a codec that keeps text as slices of its input, `subject` points into that input, which is how ta_definition_import() turns it into a line and column.\n\nOne step from a spec's root toward the element an error is about: a member of the element reached so far and, for a list member, the index in it.",
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
+    "ta_spec_step": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "member",
+          "type": {
+            "type": "ta_spec_member"
+          }
+        },
+        {
+          "name": "index",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "member": 0,
+            "index": 4
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "member": 0,
+            "index": 4
+          }
+        }
+      }
+    },
     "ta_state_id": {
       "kind": "alias",
       "type": {
@@ -12476,6 +13070,31 @@
           "shape": "handle",
           "direction": "in",
           "destroys": true
+        }
+      ]
+    },
+    {
+      "name": "ta_compile_error_format",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_compile_error_format_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
         }
       ]
     },

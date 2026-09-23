@@ -123,6 +123,8 @@ typedef uint64_t ta_time;
 #define TA_INITIALIZER_NONE ((ta_initializer_id)UINT32_MAX)
 #define TA_DONE_DATA_NONE ((ta_done_data_id)UINT32_MAX)
 #define TA_INVOKE_ID_NONE ((ta_invoke_id)UINT64_MAX)
+/* Not an expression: a rejection that is about no single expression. */
+#define TA_EXPR_ID_NONE ((ta_expr_id)UINT32_MAX)
 
 enum TA_CONSTANTS_OF(ta_result, "TA_") {
     TA_OK TA_SUCCESS = 0,
@@ -360,11 +362,30 @@ typedef struct {
  * adapter may keep the pointer instead of copying. The adapter never sees the
  * compiled definition itself.
  */
+/*
+ * Which expression a data model refused at prepare_definition(), and where in
+ * its source (ADR 0058). `offset` and `length` are bytes within that
+ * expression's source text; both zero when the whole expression is meant.
+ * `message` need only live for the call: core copies it.
+ */
+typedef struct {
+    ta_expr_id expression;
+    uint32_t offset;
+    uint32_t length;
+    ta_str message;
+} ta_expression_rejection;
+
 typedef struct {
     TA_COUNTED_BY(expression_count) TA_OPTIONAL TA_LIFETIME(definition) const ta_expression *expressions;
     uint32_t expression_count;
     ta_allocator allocator;
     void **shared;
+    /*
+     * Set by an adapter that returns TA_ERR_INVALID or TA_ERR_UNSUPPORTED
+     * because of one expression; `expression` stays TA_EXPR_ID_NONE
+     * otherwise. Null when the caller wants no detail.
+     */
+    TA_OUT TA_OPTIONAL TA_LIFETIME(call) ta_expression_rejection *rejected;
 } ta_datamodel_prepare_definition_params;
 typedef struct { void *shared; void *instance; TA_IN TA_OPTIONAL const ta_value *binding; const ta_dm_host *host; } ta_datamodel_init_instance_params;
 /*
@@ -1286,16 +1307,145 @@ typedef struct {
  *     });
  * @endcode
  */
+/*
+ * Compile errors (ADR 0058)
+ *
+ * A refused spec is described by what is wrong (the code and message), where
+ * in the spec (a path of steps from the root), and which authored text is at
+ * fault (`subject`, the spec's own pointer, never a copy). When the spec came
+ * from a codec that keeps text as slices of its input, `subject` points into
+ * that input, which is how ta_definition_import() turns it into a line and
+ * column.
+ *
+ * One step from a spec's root toward the element an error is about: a member
+ * of the element reached so far and, for a list member, the index in it.
+ */
+typedef enum {
+    TA_SPEC_MEMBER_NONE = 0,
+    /* Lists. */
+    TA_SPEC_MEMBER_STATES,
+    TA_SPEC_MEMBER_TRANSITIONS,
+    TA_SPEC_MEMBER_TARGETS,
+    TA_SPEC_MEMBER_ONENTRY,
+    TA_SPEC_MEMBER_ONEXIT,
+    TA_SPEC_MEMBER_ACTIONS,
+    TA_SPEC_MEMBER_THEN,
+    TA_SPEC_MEMBER_ELSE,
+    TA_SPEC_MEMBER_BODY,
+    TA_SPEC_MEMBER_FINALIZE,
+    TA_SPEC_MEMBER_INVOKES,
+    TA_SPEC_MEMBER_DATA,
+    TA_SPEC_MEMBER_PARAMS,
+    /* Single members. */
+    TA_SPEC_MEMBER_INITIAL,
+    TA_SPEC_MEMBER_DONE_DATA,
+    TA_SPEC_MEMBER_SCRIPT,
+    TA_SPEC_MEMBER_ID,
+    TA_SPEC_MEMBER_NAME,
+    TA_SPEC_MEMBER_EVENT,
+    TA_SPEC_MEMBER_CONDITION,
+    TA_SPEC_MEMBER_TYPE,
+    TA_SPEC_MEMBER_SRC,
+    TA_SPEC_MEMBER_TARGET,
+    TA_SPEC_MEMBER_DELAY,
+    TA_SPEC_MEMBER_DATA_VALUE,
+    TA_SPEC_MEMBER_LOCATION,
+    TA_SPEC_MEMBER_EXPR,
+    TA_SPEC_MEMBER_ITEM,
+    TA_SPEC_MEMBER_INDEX,
+    TA_SPEC_MEMBER_SENDID,
+    TA_SPEC_MEMBER_DATAMODEL,
+    TA_SPEC_MEMBER_IDENTITY
+} ta_spec_member TA_SYMBOLS("TA_SPEC_MEMBER_");
+
+/* The index of a step into a single member. */
+#define TA_SPEC_INDEX_NONE ((uint32_t)UINT32_MAX)
+
+typedef struct {
+    ta_spec_member member;
+    uint32_t index;
+} ta_spec_step;
+
+typedef enum {
+    TA_COMPILE_ERROR_NONE = 0,
+    TA_COMPILE_ERROR_MALFORMED_SPEC,        /* a tag out of range; a required pointer absent */
+    TA_COMPILE_ERROR_MISSING_VALUE,         /* required text or expression absent or empty */
+    TA_COMPILE_ERROR_EXCLUSIVE_MEMBERS,     /* params with content; src with content */
+    TA_COMPILE_ERROR_DUPLICATE_STATE,
+    TA_COMPILE_ERROR_UNKNOWN_STATE,         /* a target or initial names no state */
+    TA_COMPILE_ERROR_TARGET_OUTSIDE,        /* an initial or history target outside its owner */
+    TA_COMPILE_ERROR_BAD_EVENT_DESCRIPTOR,
+    TA_COMPILE_ERROR_BAD_DURATION,
+    TA_COMPILE_ERROR_BAD_STRUCTURE,         /* children, <initial> or <donedata> where the kind forbids */
+    TA_COMPILE_ERROR_BAD_HISTORY_DEFAULT,
+    TA_COMPILE_ERROR_NO_STATES,
+    TA_COMPILE_ERROR_NO_FAMILY,
+    TA_COMPILE_ERROR_DATAMODEL_MISMATCH,
+    TA_COMPILE_ERROR_UNSUPPORTED_CONSTRUCT, /* TA_SCXML_ACTION_INVOKE */
+    TA_COMPILE_ERROR_LIMIT,                 /* a bound core enforces was reached */
+    TA_COMPILE_ERROR_HOST_EXPRESSION,       /* a host expression's retain() failed */
+    TA_COMPILE_ERROR_EXPRESSION_REJECTED    /* the data model refused an expression */
+} ta_compile_error_code TA_SYMBOLS("TA_COMPILE_ERROR_");
+
+typedef struct {
+    ta_compile_error_code code;
+    /* From the spec's root to the element at fault, in the error arena.
+     * Empty when no arena was given or the error is about the whole chart. */
+    TA_COUNTED_BY(path_length) TA_OPTIONAL const ta_spec_step *path;
+    uint32_t path_length;
+    /* The authored text at fault, borrowed from the spec exactly as given:
+     * the unknown target, the duplicate ID, the bad duration, the refused
+     * expression's source. Empty when the error is not about text. */
+    ta_str subject;
+    /* Within `subject`, the bytes at fault when narrower than all of it: an
+     * event descriptor's empty segment, or the range a data model reported.
+     * Both zero when all of `subject` is meant. */
+    uint32_t subject_offset;
+    uint32_t subject_length;
+    /* A second place the error involves, borrowed from the spec: the first
+     * state with a duplicate ID, the state a target must lie within, or the
+     * existing state ID nearest to an unknown target. Empty when none. */
+    ta_str related;
+    /* Why, in words: core's fixed phrase, or the data model's message copied
+     * into the error arena (empty without one). */
+    ta_str message;
+} ta_compile_error;
+
 typedef struct {
     TA_IN const ta_scxml_spec *spec;
     ta_datamodel datamodel;
     ta_allocator allocator;
     ta_definition **out;
+    /*
+     * Filled when the result is TA_ERR_INVALID or TA_ERR_UNSUPPORTED because
+     * of the spec: the first fault in compile order (ADR 0058 section 2).
+     * Argument errors and TA_ERR_NOMEM leave `code` TA_COMPILE_ERROR_NONE.
+     * Borrows from `spec` and `error_arena`.
+     */
+    TA_OUT TA_OPTIONAL TA_LIFETIME(input) ta_compile_error *error;
+    /* Receives the error's path and any copied message; untouched on
+     * success. Without one, `error` has no path and no data-model message. */
+    TA_OPTIONAL TA_ARENA ta_arena *error_arena;
 } ta_definition_compile_params;
 
 TA_API ta_result ta_definition_compile_spec(ta_system *system,
                                             TA_IN const ta_definition_compile_params *params);
 TA_API void ta_definition_destroy(TA_DESTROYS ta_definition *definition);
+
+/*
+ * Writes a compile error as one line of text, for people; it has no stable
+ * grammar, and tools read the struct. A state step shows its ID:
+ *   states[2](idle).transitions[0].targets[0]: unknown state "idel"; nearest is "idle"
+ * `spec` is the spec the error came from; it may be null, and then no IDs
+ * are shown.
+ */
+typedef struct {
+    TA_IN TA_OPTIONAL const ta_scxml_spec *spec;
+    TA_IN const ta_compile_error *error;
+    TA_ARENA ta_arena *arena;
+    TA_OUT TA_LIFETIME(arena) ta_str *out;
+} ta_compile_error_format_params;
+TA_API ta_result ta_compile_error_format(TA_IN const ta_compile_error_format_params *params);
 
 /*
  * Rebuilds the author-level spec of a registered definition (ADR 0042).
@@ -1489,19 +1639,6 @@ typedef struct ta_chart_codec_vtable {
 
 typedef struct { void *self; const ta_chart_codec_vtable *v; } ta_chart_codec TA_ADAPTER;
 
-/*
- * Why ta_definition_compile_spec() refused a spec. PENDING ADR 0058: this is
- * the placeholder ta_import_error needs, and carries no detail yet. ADR 0058
- * adds the codes, the path through the spec and the text at fault.
- */
-typedef enum {
-    TA_COMPILE_ERROR_NONE = 0
-} ta_compile_error_code TA_SYMBOLS("TA_COMPILE_ERROR_");
-
-typedef struct {
-    ta_compile_error_code code;
-} ta_compile_error;
-
 /* Which stage of ta_definition_import() failed. */
 typedef enum {
     TA_IMPORT_STAGE_NONE = 0,
@@ -1516,7 +1653,8 @@ typedef struct {
         TA_WHEN(TA_IMPORT_STAGE_COMPILE) ta_compile_error compile; /* ADR 0058 */
     } as;
     /* Whether `at` says where in `input` the error is. A decode error always
-     * has a position. A compile error has none until ADR 0058 lands. */
+     * has a position. A compile error has one when its subject, or the
+     * nearest element above it with text, lies within `input` (ADR 0058). */
     bool located;
     ta_chart_position at;
 } ta_import_error TA_TAGGED(stage, as);

@@ -4104,6 +4104,13 @@ TA_API ta_result ta_definition_inspect(const ta_system *system,
  * compiles transitions, initial transitions, executable content, and data.
  * Every table is built in a growable vector and finally copied into the
  * definition's arena, which owns all compiled storage.
+ *
+ * Errors (ADR 0058). The compiler keeps the path to the element it is working
+ * on: the state it is in (`path_state`, whose own path from the root follows
+ * from the state table) and a stack of steps below it. Descending pushes a
+ * step and returning pops it; nothing else happens on success. The first
+ * fault stops the compile and is recorded once, with the path copied into the
+ * caller's error arena.
  */
 typedef struct {
     ta_system *system;
@@ -4129,6 +4136,13 @@ typedef struct {
     ta_vec done_data;    /* ta_done_data_def */
     ta_vec invokes;      /* ta_invoke_decl */
     ta_vec texts;        /* ta_str: authored text kept for export */
+    ta_vec path;         /* ta_spec_step: the steps below path_state */
+    ta_state_id path_state;
+    ta_compile_error *error;
+    ta_arena *error_arena;
+    /* Replay (ADR 0058 section 3): stop at this expression ID. */
+    uint32_t locate;
+    bool failed;
     uint64_t hash;
 } ta_compiler;
 
@@ -4137,6 +4151,193 @@ typedef struct {
     void **out;
     uint32_t *count;
 } ta_compiler_seal_params;
+
+#define TA_PHRASE(text) ((ta_str){ .ptr = (text), .len = (uint32_t)(sizeof(text) - 1u) })
+
+/* ------------------------------------------------------------------------
+ * Faults and the path
+ */
+
+typedef struct {
+    ta_compile_error_code code;
+    ta_str subject;
+    uint32_t subject_offset;
+    uint32_t subject_length;
+    ta_str related;
+    ta_str message;
+    /* The result to return; zero picks the code's usual one. */
+    ta_result result;
+} ta_compiler_fault;
+
+static ta_state_def *ta_compiler_state(ta_compiler *compiler, ta_state_id state) {
+    return ta_vec_at(&compiler->states, state);
+}
+
+static const ta_scxml_state_spec *ta_compiler_state_spec(ta_compiler *compiler, ta_state_id state) {
+    return *(const ta_scxml_state_spec **)ta_vec_at(&compiler->state_specs, state);
+}
+
+/* The state's index in its parent's `states` list: specs are arrays. */
+static uint32_t ta_compiler_state_index(ta_compiler *compiler, ta_state_id state) {
+    ta_state_id parent = ta_compiler_state(compiler, state)->parent;
+    const ta_scxml_state_spec *list =
+        parent == TA_STATE_NONE ? compiler->spec->states : ta_compiler_state_spec(compiler, parent)->states;
+    return (uint32_t)(ta_compiler_state_spec(compiler, state) - list);
+}
+
+static void ta_compiler_copy_path(ta_compiler *compiler) {
+    uint32_t depth = 0;
+    for (ta_state_id at = compiler->path_state; at != TA_STATE_NONE; at = ta_compiler_state(compiler, at)->parent) {
+        depth += 1u;
+    }
+    uint32_t length = depth + compiler->path.count;
+    if (length == 0) {
+        return;
+    }
+    ta_spec_step *steps = ta_arena_alloc(compiler->error_arena, (size_t)length * sizeof(ta_spec_step),
+                                         _Alignof(ta_spec_step));
+    if (steps == NULL) {
+        return; /* the error keeps its code and subject without a path */
+    }
+    uint32_t index = depth;
+    for (ta_state_id at = compiler->path_state; at != TA_STATE_NONE; at = ta_compiler_state(compiler, at)->parent) {
+        index -= 1u;
+        steps[index] = (ta_spec_step){ .member = TA_SPEC_MEMBER_STATES,
+                                       .index = ta_compiler_state_index(compiler, at) };
+    }
+    for (uint32_t step = 0; step < compiler->path.count; step += 1u) {
+        steps[depth + step] = *(const ta_spec_step *)ta_vec_at(&compiler->path, step);
+    }
+    compiler->error->path = steps;
+    compiler->error->path_length = length;
+}
+
+static ta_result ta_compiler_record(ta_compiler *compiler, const ta_compiler_fault *fault) {
+    ta_result result = fault->result;
+    if (result == TA_OK) {
+        switch (fault->code) {
+            case TA_COMPILE_ERROR_DATAMODEL_MISMATCH:
+            case TA_COMPILE_ERROR_UNSUPPORTED_CONSTRUCT:
+            case TA_COMPILE_ERROR_LIMIT:
+                result = TA_ERR_UNSUPPORTED;
+                break;
+            default:
+                result = TA_ERR_INVALID;
+                break;
+        }
+    }
+    if (compiler->failed) {
+        return result;
+    }
+    compiler->failed = true;
+    if (compiler->error == NULL) {
+        return result;
+    }
+    *compiler->error = (ta_compile_error){
+        .code = fault->code,
+        .subject = fault->subject,
+        .subject_offset = fault->subject_offset,
+        .subject_length = fault->subject_length,
+        .related = fault->related,
+        .message = fault->message,
+    };
+    if (compiler->error_arena != NULL) {
+        ta_compiler_copy_path(compiler);
+    }
+    return result;
+}
+
+static ta_result ta_compiler_fail(ta_compiler *compiler, ta_compile_error_code code, ta_str subject,
+                                  ta_str message) {
+    return ta_compiler_record(compiler, &(ta_compiler_fault){ .code = code, .subject = subject, .message = message });
+}
+
+static ta_result ta_compiler_enter(ta_compiler *compiler, ta_spec_member member, uint32_t index) {
+    ta_spec_step step = { .member = member, .index = index };
+    return ta_vec_push(&compiler->path, &step);
+}
+
+/* Steps are popped only on success: a fault ends the compile. */
+static void ta_compiler_leave(ta_compiler *compiler) {
+    compiler->path.count -= 1u;
+}
+
+/* Starts the path over at `state` (TA_STATE_NONE: the root). */
+static void ta_compiler_at(ta_compiler *compiler, ta_state_id state) {
+    compiler->path_state = state;
+    compiler->path.count = 0;
+}
+
+static ta_result ta_compiler_fail_at(ta_compiler *compiler, ta_spec_member member, uint32_t index,
+                                     const ta_compiler_fault *fault) {
+    ta_result entered = ta_compiler_enter(compiler, member, index);
+    return entered != TA_OK ? entered : ta_compiler_record(compiler, fault);
+}
+
+/*
+ * Optimal string alignment distance, a transposition counting one edit, so
+ * "idel" is one edit from "idle". Error path only. UINT32_MAX when the rows
+ * cannot be allocated.
+ */
+static uint32_t ta_compiler_distance(ta_allocator allocator, ta_str left, ta_str right) {
+    uint32_t width = right.len + 1u;
+    size_t size = (size_t)width * 3u * sizeof(uint32_t);
+    uint32_t *rows = ta_mem_alloc(allocator, size, _Alignof(uint32_t));
+    if (rows == NULL) {
+        return UINT32_MAX;
+    }
+    uint32_t *before = rows;
+    uint32_t *previous = rows + width;
+    uint32_t *current = rows + 2u * width;
+    for (uint32_t column = 0; column < width; column += 1u) {
+        previous[column] = column;
+    }
+    for (uint32_t row = 1; row <= left.len; row += 1u) {
+        current[0] = row;
+        for (uint32_t column = 1; column < width; column += 1u) {
+            uint32_t cost = left.ptr[row - 1u] == right.ptr[column - 1u] ? 0u : 1u;
+            uint32_t best = previous[column] + 1u;
+            if (current[column - 1u] + 1u < best) {
+                best = current[column - 1u] + 1u;
+            }
+            if (previous[column - 1u] + cost < best) {
+                best = previous[column - 1u] + cost;
+            }
+            if (row > 1u && column > 1u && left.ptr[row - 1u] == right.ptr[column - 2u] &&
+                left.ptr[row - 2u] == right.ptr[column - 1u] && before[column - 2u] + 1u < best) {
+                best = before[column - 2u] + 1u;
+            }
+            current[column] = best;
+        }
+        uint32_t *spare = before;
+        before = previous;
+        previous = current;
+        current = spare;
+    }
+    uint32_t distance = previous[right.len];
+    ta_mem_free(allocator, rows, &(ta_allocator_free_params){ .size = size, .alignment = _Alignof(uint32_t) });
+    return distance;
+}
+
+/* The state ID nearest to `id`, within a third of its length; the first
+ * such in document order on a tie. Empty when none is that near. */
+static ta_str ta_compiler_nearest(ta_compiler *compiler, ta_str id) {
+    ta_str nearest = {0};
+    uint32_t best = UINT32_MAX;
+    for (ta_state_id state = 0; state < compiler->states.count; state += 1u) {
+        ta_str candidate = ta_compiler_state_spec(compiler, state)->id;
+        uint32_t distance = ta_compiler_distance(compiler->allocator, id, candidate);
+        if (distance != 0 && distance < best && 3u * (uint64_t)distance <= id.len) {
+            best = distance;
+            nearest = candidate;
+        }
+    }
+    return nearest;
+}
+
+/* ------------------------------------------------------------------------
+ * Leaves
+ */
 
 static void ta_compiler_hash(ta_compiler *compiler, const void *bytes, size_t size) {
     const unsigned char *in = bytes;
@@ -4163,10 +4364,21 @@ static ta_atom_table *ta_compiler_atoms(ta_compiler *compiler) {
 
 static ta_result ta_compiler_atom(ta_compiler *compiler, ta_str text, ta_atom *out) {
     if (text.ptr == NULL || text.len == 0) {
-        return TA_ERR_INVALID;
+        return ta_compiler_fail(compiler, TA_COMPILE_ERROR_MISSING_VALUE, text, TA_PHRASE("required text is empty"));
     }
     ta_compiler_hash_str(compiler, text);
     return ta_atom_intern(ta_compiler_atoms(compiler), text, out);
+}
+
+static ta_result ta_compiler_atom_at(ta_compiler *compiler, ta_spec_member member, ta_str text, ta_atom *out) {
+    ta_result result = ta_compiler_enter(compiler, member, TA_SPEC_INDEX_NONE);
+    if (result == TA_OK) {
+        result = ta_compiler_atom(compiler, text, out);
+    }
+    if (result == TA_OK) {
+        ta_compiler_leave(compiler);
+    }
+    return result;
 }
 
 TA_PRIVATE ta_result ta_duration_parse(ta_str text, ta_time *out) {
@@ -4224,27 +4436,47 @@ TA_PRIVATE ta_result ta_duration_parse(ta_str text, ta_time *out) {
 
 static ta_result ta_compiler_expression(ta_compiler *compiler, const ta_expression *expression,
                                         ta_expr_id *out) {
+    if (compiler->locate == compiler->expressions.count &&
+        (expression->kind == TA_EXPRESSION_SOURCE || expression->kind == TA_EXPRESSION_HOST)) {
+        /* Replay: this is the expression the data model refused. */
+        return ta_compiler_fail(compiler, TA_COMPILE_ERROR_EXPRESSION_REJECTED,
+                                expression->kind == TA_EXPRESSION_SOURCE ? expression->as.source : (ta_str){0},
+                                TA_PHRASE("the data model refused this expression"));
+    }
     ta_expression copy = { .kind = expression->kind };
     ta_result result = TA_OK;
     switch (expression->kind) {
         case TA_EXPRESSION_SOURCE:
             ta_compiler_hash_str(compiler, expression->as.source);
             if (expression->as.source.ptr == NULL) {
-                return TA_ERR_INVALID;
+                return ta_compiler_fail(compiler, TA_COMPILE_ERROR_MISSING_VALUE, (ta_str){0},
+                                        TA_PHRASE("an expression has no source text"));
             }
             result = ta_arena_copy_str(&compiler->definition->arena, expression->as.source,
                                        &copy.as.source);
             break;
         case TA_EXPRESSION_HOST:
             if (expression->as.host.v == NULL || expression->as.host.v->retain == NULL) {
-                return TA_ERR_INVALID;
+                return ta_compiler_fail(compiler, TA_COMPILE_ERROR_MALFORMED_SPEC, (ta_str){0},
+                                        TA_PHRASE("a host expression has no retain operation"));
             }
             copy.as.host = expression->as.host;
             result = expression->as.host.v->retain(expression->as.host.self, expression->as.host.value,
                                                    compiler->allocator, &copy.as.host.value);
+            if (result != TA_OK && result != TA_ERR_NOMEM) {
+                return ta_compiler_record(compiler, &(ta_compiler_fault){
+                                                        .code = TA_COMPILE_ERROR_HOST_EXPRESSION,
+                                                        .message = TA_PHRASE("a host expression could not be retained"),
+                                                        .result = result,
+                                                    });
+            }
             break;
+        case TA_EXPRESSION_NONE:
+            return ta_compiler_fail(compiler, TA_COMPILE_ERROR_MISSING_VALUE, (ta_str){0},
+                                    TA_PHRASE("an expression is required"));
         default:
-            return TA_ERR_INVALID;
+            return ta_compiler_fail(compiler, TA_COMPILE_ERROR_MALFORMED_SPEC, (ta_str){0},
+                                    TA_PHRASE("unknown expression kind"));
     }
     if (result != TA_OK) {
         return result;
@@ -4253,6 +4485,38 @@ static ta_result ta_compiler_expression(ta_compiler *compiler, const ta_expressi
     result = ta_vec_push(&compiler->expressions, &copy);
     if (result != TA_OK && copy.kind == TA_EXPRESSION_HOST && copy.as.host.v->release != NULL) {
         copy.as.host.v->release(copy.as.host.self, copy.as.host.value, compiler->allocator);
+    }
+    return result;
+}
+
+static ta_result ta_compiler_expression_at(ta_compiler *compiler, ta_spec_member member,
+                                           const ta_expression *expression, ta_expr_id *out) {
+    ta_result result = ta_compiler_enter(compiler, member, TA_SPEC_INDEX_NONE);
+    if (result == TA_OK) {
+        result = ta_compiler_expression(compiler, expression, out);
+    }
+    if (result == TA_OK) {
+        ta_compiler_leave(compiler);
+    }
+    return result;
+}
+
+/* A dotted event name, as <raise event> and <send event> write one. */
+static ta_result ta_compiler_event_name(ta_compiler *compiler, ta_str text, ta_event_name_id *out) {
+    ta_result result = ta_compiler_enter(compiler, TA_SPEC_MEMBER_EVENT, TA_SPEC_INDEX_NONE);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_compiler_hash_str(compiler, text);
+    result = ta_event_name_intern_dotted(&compiler->system->event_names, text, out);
+    if (result == TA_ERR_INVALID) {
+        return text.len == 0
+                   ? ta_compiler_fail(compiler, TA_COMPILE_ERROR_MISSING_VALUE, text, TA_PHRASE("an event name is required"))
+                   : ta_compiler_fail(compiler, TA_COMPILE_ERROR_BAD_EVENT_DESCRIPTOR, text,
+                                      TA_PHRASE("an event name has an empty segment"));
+    }
+    if (result == TA_OK) {
+        ta_compiler_leave(compiler);
     }
     return result;
 }
@@ -4317,8 +4581,21 @@ static ta_result ta_compiler_value(ta_compiler *compiler, const ta_scxml_value_s
             return ta_compiler_content(compiler, spec->as.content.media_type, spec->as.content.bytes,
                                        &out->as.content);
         default:
-            return TA_ERR_INVALID;
+            return ta_compiler_fail(compiler, TA_COMPILE_ERROR_MALFORMED_SPEC, (ta_str){0},
+                                    TA_PHRASE("unknown value kind"));
     }
+}
+
+static ta_result ta_compiler_value_at(ta_compiler *compiler, ta_spec_member member,
+                                      const ta_scxml_value_spec *spec, ta_value_source *out) {
+    ta_result result = ta_compiler_enter(compiler, member, TA_SPEC_INDEX_NONE);
+    if (result == TA_OK) {
+        result = ta_compiler_value(compiler, spec, out);
+    }
+    if (result == TA_OK) {
+        ta_compiler_leave(compiler);
+    }
+    return result;
 }
 
 static ta_result ta_compiler_params(ta_compiler *compiler, const ta_scxml_param_spec *specs,
@@ -4331,11 +4608,15 @@ static ta_result ta_compiler_params(ta_compiler *compiler, const ta_scxml_param_
     ta_result result = ta_vec_extend(&compiler->params, count, &base);
     for (uint32_t index = 0; result == TA_OK && index < count; index += 1) {
         ta_param_def param = {0};
-        result = ta_compiler_atom(compiler, specs[index].name, &param.name);
+        result = ta_compiler_enter(compiler, TA_SPEC_MEMBER_PARAMS, index);
         if (result == TA_OK) {
-            result = ta_compiler_value(compiler, &specs[index].value, &param.value);
+            result = ta_compiler_atom_at(compiler, TA_SPEC_MEMBER_NAME, specs[index].name, &param.name);
         }
         if (result == TA_OK) {
+            result = ta_compiler_value_at(compiler, TA_SPEC_MEMBER_DATA_VALUE, &specs[index].value, &param.value);
+        }
+        if (result == TA_OK) {
+            ta_compiler_leave(compiler);
             *(ta_param_def *)ta_vec_at(&compiler->params, base + index) = param;
         }
     }
@@ -4343,8 +4624,14 @@ static ta_result ta_compiler_params(ta_compiler *compiler, const ta_scxml_param_
     return result;
 }
 
-static ta_result ta_compiler_block(ta_compiler *compiler, const ta_scxml_action_spec *specs,
-                                   ta_span32 *out);
+static ta_result ta_compiler_block(ta_compiler *compiler, ta_spec_member member,
+                                   const ta_scxml_action_spec *specs, ta_span32 *out);
+
+static ta_result ta_compiler_malformed(ta_compiler *compiler, ta_spec_member member) {
+    return ta_compiler_fail_at(compiler, member, TA_SPEC_INDEX_NONE,
+                               &(ta_compiler_fault){ .code = TA_COMPILE_ERROR_MALFORMED_SPEC,
+                                                     .message = TA_PHRASE("unknown kind") });
+}
 
 static ta_result ta_compiler_send(ta_compiler *compiler, const ta_scxml_send_spec *spec,
                                   ta_send_action *out) {
@@ -4355,14 +4642,15 @@ static ta_result ta_compiler_send(ta_compiler *compiler, const ta_scxml_send_spe
             break;
         case TA_SCXML_ID_LITERAL:
             out->id.kind = TA_ID_SOURCE_LITERAL;
-            result = ta_compiler_atom(compiler, spec->id.as.literal, &out->id.as.literal);
+            result = ta_compiler_atom_at(compiler, TA_SPEC_MEMBER_ID, spec->id.as.literal, &out->id.as.literal);
             break;
         case TA_SCXML_ID_LOCATION:
             out->id.kind = TA_ID_SOURCE_LOCATION;
-            result = ta_compiler_expression(compiler, &spec->id.as.location, &out->id.as.location);
+            result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_ID, &spec->id.as.location,
+                                               &out->id.as.location);
             break;
         default:
-            return TA_ERR_INVALID;
+            return ta_compiler_malformed(compiler, TA_SPEC_MEMBER_ID);
     }
     if (result != TA_OK) {
         return result;
@@ -4373,14 +4661,15 @@ static ta_result ta_compiler_send(ta_compiler *compiler, const ta_scxml_send_spe
             break;
         case TA_SCXML_STRING_LITERAL:
             out->type.kind = TA_TEXT_SOURCE_ATOM;
-            result = ta_compiler_atom(compiler, spec->type.as.literal, &out->type.as.atom);
+            result = ta_compiler_atom_at(compiler, TA_SPEC_MEMBER_TYPE, spec->type.as.literal, &out->type.as.atom);
             break;
         case TA_SCXML_STRING_EXPR:
             out->type.kind = TA_TEXT_SOURCE_EXPR;
-            result = ta_compiler_expression(compiler, &spec->type.as.expr, &out->type.as.expr);
+            result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_TYPE, &spec->type.as.expr,
+                                               &out->type.as.expr);
             break;
         default:
-            return TA_ERR_INVALID;
+            return ta_compiler_malformed(compiler, TA_SPEC_MEMBER_TYPE);
     }
     if (result != TA_OK) {
         return result;
@@ -4389,14 +4678,17 @@ static ta_result ta_compiler_send(ta_compiler *compiler, const ta_scxml_send_spe
     ta_compiler_hash_u32(compiler, spec->event.kind);
     if (spec->event.kind == TA_SCXML_EVENT_EXPR) {
         out->event.kind = TA_EVENT_SOURCE_EXPR;
-        result = ta_compiler_expression(compiler, &spec->event.as.expr, &out->event.as.expr);
+        result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_EVENT, &spec->event.as.expr,
+                                           &out->event.as.expr);
     } else if (spec->event.kind == TA_SCXML_EVENT_NAME) {
         out->event.kind = TA_EVENT_SOURCE_NAME;
-        ta_compiler_hash_str(compiler, spec->event.as.name);
-        result = ta_event_name_intern_dotted(&compiler->system->event_names, spec->event.as.name,
-                                             &out->event.as.name);
+        result = ta_compiler_event_name(compiler, spec->event.as.name, &out->event.as.name);
+    } else if (spec->event.kind == TA_SCXML_EVENT_NONE) {
+        return ta_compiler_fail_at(compiler, TA_SPEC_MEMBER_EVENT, TA_SPEC_INDEX_NONE,
+                                   &(ta_compiler_fault){ .code = TA_COMPILE_ERROR_MISSING_VALUE,
+                                                         .message = TA_PHRASE("a send needs an event") });
     } else {
-        return TA_ERR_INVALID;
+        return ta_compiler_malformed(compiler, TA_SPEC_MEMBER_EVENT);
     }
     if (result != TA_OK) {
         return result;
@@ -4414,10 +4706,11 @@ static ta_result ta_compiler_send(ta_compiler *compiler, const ta_scxml_send_spe
             break;
         case TA_SCXML_STRING_EXPR:
             out->target.kind = TA_VALUE_SOURCE_EXPR;
-            result = ta_compiler_expression(compiler, &spec->target.as.expr, &out->target.as.expr);
+            result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_TARGET, &spec->target.as.expr,
+                                               &out->target.as.expr);
             break;
         default:
-            return TA_ERR_INVALID;
+            return ta_compiler_malformed(compiler, TA_SPEC_MEMBER_TARGET);
     }
     if (result != TA_OK) {
         return result;
@@ -4430,25 +4723,35 @@ static ta_result ta_compiler_send(ta_compiler *compiler, const ta_scxml_send_spe
             out->delay.kind = TA_DELAY_SOURCE_LITERAL;
             ta_compiler_hash_str(compiler, spec->delay.as.literal);
             result = ta_duration_parse(spec->delay.as.literal, &out->delay.as.literal);
+            if (result == TA_ERR_INVALID) {
+                return ta_compiler_fail_at(compiler, TA_SPEC_MEMBER_DELAY, TA_SPEC_INDEX_NONE,
+                                           &(ta_compiler_fault){
+                                               .code = TA_COMPILE_ERROR_BAD_DURATION,
+                                               .subject = spec->delay.as.literal,
+                                               .message = TA_PHRASE("not an SCXML duration such as \"500ms\" or \"2.5s\""),
+                                           });
+            }
             if (result == TA_OK) {
                 result = ta_compiler_keep_text(compiler, spec->delay.as.literal, &out->delay.text);
             }
             break;
         case TA_SCXML_STRING_EXPR:
             out->delay.kind = TA_DELAY_SOURCE_EXPR;
-            result = ta_compiler_expression(compiler, &spec->delay.as.expr, &out->delay.as.expr);
+            result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_DELAY, &spec->delay.as.expr,
+                                               &out->delay.as.expr);
             break;
         default:
-            return TA_ERR_INVALID;
+            return ta_compiler_malformed(compiler, TA_SPEC_MEMBER_DELAY);
     }
     if (result == TA_OK) {
-        result = ta_compiler_value(compiler, &spec->data, &out->data);
+        result = ta_compiler_value_at(compiler, TA_SPEC_MEMBER_DATA_VALUE, &spec->data, &out->data);
     }
     if (result == TA_OK) {
         result = ta_compiler_params(compiler, spec->params, &out->params);
     }
     if (result == TA_OK && out->params.length != 0 && out->data.kind != TA_VALUE_SOURCE_NONE) {
-        result = TA_ERR_INVALID;
+        result = ta_compiler_fail(compiler, TA_COMPILE_ERROR_EXCLUSIVE_MEMBERS, (ta_str){0},
+                                  TA_PHRASE("a send has both params and content"));
     }
     return result;
 }
@@ -4459,19 +4762,16 @@ static ta_result ta_compiler_send(ta_compiler *compiler, const ta_scxml_send_spe
  */
 static ta_result ta_compiler_foreach(ta_compiler *compiler, const ta_scxml_action_spec *spec,
                                      ta_foreach_action *out) {
-    if (spec->as.foreach.array.kind == TA_EXPRESSION_NONE) {
-        return TA_ERR_INVALID;
-    }
-    ta_result result = ta_compiler_expression(compiler, &spec->as.foreach.array, &out->array);
+    ta_result result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_EXPR, &spec->as.foreach.array, &out->array);
     if (result == TA_OK) {
-        result = ta_compiler_atom(compiler, spec->as.foreach.item, &out->item);
+        result = ta_compiler_atom_at(compiler, TA_SPEC_MEMBER_ITEM, spec->as.foreach.item, &out->item);
     }
     if (result == TA_OK && spec->as.foreach.index.ptr != NULL) {
         out->has_index = true;
-        result = ta_compiler_atom(compiler, spec->as.foreach.index, &out->index);
+        result = ta_compiler_atom_at(compiler, TA_SPEC_MEMBER_INDEX, spec->as.foreach.index, &out->index);
     }
     if (result == TA_OK) {
-        result = ta_compiler_block(compiler, spec->as.foreach.body, &out->body_actions);
+        result = ta_compiler_block(compiler, TA_SPEC_MEMBER_BODY, spec->as.foreach.body, &out->body_actions);
     }
     return result;
 }
@@ -4483,11 +4783,10 @@ static ta_result ta_compiler_action(ta_compiler *compiler, const ta_scxml_action
     switch (spec->kind) {
         case TA_SCXML_ACTION_RAISE:
             out->kind = TA_ACTION_RAISE;
-            ta_compiler_hash_str(compiler, spec->as.raise.event);
-            result = ta_event_name_intern_dotted(&compiler->system->event_names, spec->as.raise.event,
-                                                 &out->as.raise.event);
+            result = ta_compiler_event_name(compiler, spec->as.raise.event, &out->as.raise.event);
             if (result == TA_OK) {
-                result = ta_compiler_value(compiler, &spec->as.raise.data, &out->as.raise.data);
+                result = ta_compiler_value_at(compiler, TA_SPEC_MEMBER_DATA_VALUE, &spec->as.raise.data,
+                                              &out->as.raise.data);
             }
             return result;
         case TA_SCXML_ACTION_SEND:
@@ -4497,28 +4796,37 @@ static ta_result ta_compiler_action(ta_compiler *compiler, const ta_scxml_action
             out->kind = TA_ACTION_CANCEL;
             if (spec->as.cancel.sendid.kind == TA_SCXML_STRING_EXPR) {
                 out->as.cancel.sendid.kind = TA_TEXT_SOURCE_EXPR;
-                return ta_compiler_expression(compiler, &spec->as.cancel.sendid.as.expr,
-                                              &out->as.cancel.sendid.as.expr);
+                return ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_SENDID, &spec->as.cancel.sendid.as.expr,
+                                                 &out->as.cancel.sendid.as.expr);
+            }
+            if (spec->as.cancel.sendid.kind == TA_SCXML_STRING_NONE) {
+                return ta_compiler_fail_at(compiler, TA_SPEC_MEMBER_SENDID, TA_SPEC_INDEX_NONE,
+                                           &(ta_compiler_fault){ .code = TA_COMPILE_ERROR_MISSING_VALUE,
+                                                                 .message = TA_PHRASE("a cancel needs a sendid") });
             }
             if (spec->as.cancel.sendid.kind != TA_SCXML_STRING_LITERAL) {
-                return TA_ERR_INVALID;
+                return ta_compiler_malformed(compiler, TA_SPEC_MEMBER_SENDID);
             }
             out->as.cancel.sendid.kind = TA_TEXT_SOURCE_ATOM;
-            return ta_compiler_atom(compiler, spec->as.cancel.sendid.as.literal,
-                                    &out->as.cancel.sendid.as.atom);
+            return ta_compiler_atom_at(compiler, TA_SPEC_MEMBER_SENDID, spec->as.cancel.sendid.as.literal,
+                                       &out->as.cancel.sendid.as.atom);
         case TA_SCXML_ACTION_ASSIGN:
             out->kind = TA_ACTION_ASSIGN;
             if (spec->as.assign.value.kind == TA_SCXML_VALUE_NONE) {
-                return TA_ERR_INVALID;
+                return ta_compiler_fail_at(compiler, TA_SPEC_MEMBER_DATA_VALUE, TA_SPEC_INDEX_NONE,
+                                           &(ta_compiler_fault){ .code = TA_COMPILE_ERROR_MISSING_VALUE,
+                                                                 .message = TA_PHRASE("an assign needs a value") });
             }
-            result = ta_compiler_expression(compiler, &spec->as.assign.location, &out->as.assign.location);
+            result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_LOCATION, &spec->as.assign.location,
+                                               &out->as.assign.location);
             if (result == TA_OK) {
-                result = ta_compiler_value(compiler, &spec->as.assign.value, &out->as.assign.value);
+                result = ta_compiler_value_at(compiler, TA_SPEC_MEMBER_DATA_VALUE, &spec->as.assign.value,
+                                              &out->as.assign.value);
             }
             return result;
         case TA_SCXML_ACTION_SCRIPT:
             out->kind = TA_ACTION_SCRIPT;
-            return ta_compiler_expression(compiler, &spec->as.script.script, &out->as.script);
+            return ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_EXPR, &spec->as.script.script, &out->as.script);
         case TA_SCXML_ACTION_LOG:
             out->kind = TA_ACTION_LOG;
             if (spec->as.log.label.ptr != NULL) {
@@ -4527,19 +4835,20 @@ static ta_result ta_compiler_action(ta_compiler *compiler, const ta_scxml_action
             }
             if (result == TA_OK && spec->as.log.expr.kind != TA_EXPRESSION_NONE) {
                 out->as.log.has_expr = true;
-                result = ta_compiler_expression(compiler, &spec->as.log.expr, &out->as.log.expr);
+                result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_EXPR, &spec->as.log.expr,
+                                                   &out->as.log.expr);
             }
             return result;
         case TA_SCXML_ACTION_IF:
             out->kind = TA_ACTION_IF;
-            result = ta_compiler_expression(compiler, &spec->as.conditional.condition,
-                                            &out->as.conditional.condition);
+            result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_CONDITION, &spec->as.conditional.condition,
+                                               &out->as.conditional.condition);
             if (result == TA_OK) {
-                result = ta_compiler_block(compiler, spec->as.conditional.then_actions,
+                result = ta_compiler_block(compiler, TA_SPEC_MEMBER_THEN, spec->as.conditional.then_actions,
                                            &out->as.conditional.then_actions);
             }
             if (result == TA_OK) {
-                result = ta_compiler_block(compiler, spec->as.conditional.else_actions,
+                result = ta_compiler_block(compiler, TA_SPEC_MEMBER_ELSE, spec->as.conditional.else_actions,
                                            &out->as.conditional.else_actions);
             }
             return result;
@@ -4547,14 +4856,16 @@ static ta_result ta_compiler_action(ta_compiler *compiler, const ta_scxml_action
             out->kind = TA_ACTION_FOREACH;
             return ta_compiler_foreach(compiler, spec, &out->as.foreach);
         case TA_SCXML_ACTION_INVOKE:
-            return TA_ERR_UNSUPPORTED;
+            return ta_compiler_fail(compiler, TA_COMPILE_ERROR_UNSUPPORTED_CONSTRUCT, (ta_str){0},
+                                    TA_PHRASE("<invoke> is not executable content"));
         default:
-            return TA_ERR_INVALID;
+            return ta_compiler_fail(compiler, TA_COMPILE_ERROR_MALFORMED_SPEC, (ta_str){0},
+                                    TA_PHRASE("unknown action kind"));
     }
 }
 
-static ta_result ta_compiler_block(ta_compiler *compiler, const ta_scxml_action_spec *specs,
-                                   ta_span32 *out) {
+static ta_result ta_compiler_block(ta_compiler *compiler, ta_spec_member member,
+                                   const ta_scxml_action_spec *specs, ta_span32 *out) {
     uint32_t count = 0;
     while (specs != NULL && specs[count].kind != TA_SCXML_ACTION_NONE) {
         count += 1;
@@ -4564,8 +4875,12 @@ static ta_result ta_compiler_block(ta_compiler *compiler, const ta_scxml_action_
     for (uint32_t index = 0; result == TA_OK && index < count; index += 1) {
         /* Nested blocks append behind this block, so write by index. */
         ta_action_def action = {0};
-        result = ta_compiler_action(compiler, &specs[index], &action);
+        result = ta_compiler_enter(compiler, member, index);
         if (result == TA_OK) {
+            result = ta_compiler_action(compiler, &specs[index], &action);
+        }
+        if (result == TA_OK) {
+            ta_compiler_leave(compiler);
             *(ta_action_def *)ta_vec_at(&compiler->actions, base + index) = action;
         }
     }
@@ -4577,8 +4892,8 @@ static ta_result ta_compiler_block(ta_compiler *compiler, const ta_scxml_action_
  * Compiles a list of <onentry> or <onexit> handlers. Each handler keeps its
  * own action block, so an error in one handler does not skip the next.
  */
-static ta_result ta_compiler_handlers(ta_compiler *compiler, const ta_scxml_handler_spec *specs,
-                                      ta_span32 *out) {
+static ta_result ta_compiler_handlers(ta_compiler *compiler, ta_spec_member member,
+                                      const ta_scxml_handler_spec *specs, ta_span32 *out) {
     uint32_t count = 0;
     while (specs != NULL && specs[count].actions != NULL) {
         count += 1;
@@ -4588,8 +4903,12 @@ static ta_result ta_compiler_handlers(ta_compiler *compiler, const ta_scxml_hand
     ta_result result = ta_vec_extend(&compiler->handlers, count, &base);
     for (uint32_t index = 0; result == TA_OK && index < count; index += 1) {
         ta_span32 block = {0};
-        result = ta_compiler_block(compiler, specs[index].actions, &block);
+        result = ta_compiler_enter(compiler, member, index);
         if (result == TA_OK) {
+            result = ta_compiler_block(compiler, TA_SPEC_MEMBER_ACTIONS, specs[index].actions, &block);
+        }
+        if (result == TA_OK) {
+            ta_compiler_leave(compiler);
             ta_compiler_hash_u32(compiler, block.length);
             *(ta_span32 *)ta_vec_at(&compiler->handlers, base + index) = block;
         }
@@ -4598,11 +4917,7 @@ static ta_result ta_compiler_handlers(ta_compiler *compiler, const ta_scxml_hand
     return result;
 }
 
-static ta_state_def *ta_compiler_state(ta_compiler *compiler, ta_state_id state) {
-    return ta_vec_at(&compiler->states, state);
-}
-
-static ta_result ta_compiler_kind(ta_scxml_state_kind kind, ta_state_kind *out) {
+static ta_result ta_compiler_kind(ta_compiler *compiler, ta_scxml_state_kind kind, ta_state_kind *out) {
     switch (kind) {
         case TA_SCXML_STATE_ATOMIC: *out = TA_STATE_ATOMIC; return TA_OK;
         case TA_SCXML_STATE_COMPOUND: *out = TA_STATE_COMPOUND; return TA_OK;
@@ -4610,7 +4925,9 @@ static ta_result ta_compiler_kind(ta_scxml_state_kind kind, ta_state_kind *out) 
         case TA_SCXML_STATE_FINAL: *out = TA_STATE_FINAL; return TA_OK;
         case TA_SCXML_STATE_HISTORY_SHALLOW: *out = TA_STATE_HISTORY_SHALLOW; return TA_OK;
         case TA_SCXML_STATE_HISTORY_DEEP: *out = TA_STATE_HISTORY_DEEP; return TA_OK;
-        default: return TA_ERR_INVALID;
+        default:
+            return ta_compiler_fail(compiler, TA_COMPILE_ERROR_MALFORMED_SPEC, (ta_str){0},
+                                    TA_PHRASE("unknown state kind"));
     }
 }
 
@@ -4635,14 +4952,24 @@ static ta_result ta_compiler_collect(ta_compiler *compiler, const ta_scxml_state
             .done_data = TA_DONE_DATA_NONE,
             .history_slot = UINT32_MAX,
         };
-        ta_compiler_hash_u32(compiler, spec->kind);
-        result = ta_compiler_kind(spec->kind, &state.kind);
+        ta_compiler_at(compiler, parent);
+        result = ta_compiler_enter(compiler, TA_SPEC_MEMBER_STATES, index);
         if (result == TA_OK) {
-            result = ta_compiler_atom(compiler, spec->id, &state.name);
+            ta_compiler_hash_u32(compiler, spec->kind);
+            result = ta_compiler_kind(compiler, spec->kind, &state.kind);
+        }
+        if (result == TA_OK) {
+            result = ta_compiler_atom_at(compiler, TA_SPEC_MEMBER_ID, spec->id, &state.name);
         }
         for (uint32_t other = 0; result == TA_OK && other < compiler->states.count; other += 1) {
             if (ta_compiler_state(compiler, other)->name == state.name) {
-                result = TA_ERR_INVALID;
+                result = ta_compiler_fail_at(compiler, TA_SPEC_MEMBER_ID, TA_SPEC_INDEX_NONE,
+                                             &(ta_compiler_fault){
+                                                 .code = TA_COMPILE_ERROR_DUPLICATE_STATE,
+                                                 .subject = spec->id,
+                                                 .related = ta_compiler_state_spec(compiler, other)->id,
+                                                 .message = TA_PHRASE("duplicate state ID"),
+                                             });
             }
         }
         if (result != TA_OK) {
@@ -4678,7 +5005,12 @@ static ta_result ta_compiler_resolve(ta_compiler *compiler, ta_str id, ta_state_
             return TA_OK;
         }
     }
-    return TA_ERR_INVALID;
+    return ta_compiler_record(compiler, &(ta_compiler_fault){
+                                            .code = TA_COMPILE_ERROR_UNKNOWN_STATE,
+                                            .subject = id,
+                                            .related = ta_compiler_nearest(compiler, id),
+                                            .message = TA_PHRASE("unknown state"),
+                                        });
 }
 
 static bool ta_compiler_descends(ta_compiler *compiler, ta_state_id state, ta_state_id ancestor) {
@@ -4710,11 +5042,20 @@ static ta_result ta_compiler_targets(ta_compiler *compiler, const ta_compiler_ta
     ta_result result = ta_vec_extend(&compiler->targets, count, &base);
     for (uint32_t index = 0; result == TA_OK && index < count; index += 1) {
         ta_state_id target = TA_STATE_NONE;
-        result = ta_compiler_resolve(compiler, params->ids[index], &target);
+        result = ta_compiler_enter(compiler, TA_SPEC_MEMBER_TARGETS, index);
+        if (result == TA_OK) {
+            result = ta_compiler_resolve(compiler, params->ids[index], &target);
+        }
         if (result == TA_OK && !ta_compiler_descends(compiler, target, params->within)) {
-            result = TA_ERR_INVALID;
+            result = ta_compiler_record(compiler, &(ta_compiler_fault){
+                                                      .code = TA_COMPILE_ERROR_TARGET_OUTSIDE,
+                                                      .subject = params->ids[index],
+                                                      .related = ta_compiler_state_spec(compiler, params->within)->id,
+                                                      .message = TA_PHRASE("target is not inside its state"),
+                                                  });
         }
         if (result == TA_OK) {
+            ta_compiler_leave(compiler);
             *(ta_state_id *)ta_vec_at(&compiler->targets, base + index) = target;
         }
     }
@@ -4752,7 +5093,13 @@ static ta_result ta_compiler_descriptors(ta_compiler *compiler, ta_str text, ta_
             }
             ta_str segment = { .ptr = text.ptr + segment_start, .len = at - segment_start };
             if (segment.len == 0) {
-                return TA_ERR_INVALID;
+                return ta_compiler_record(compiler, &(ta_compiler_fault){
+                                                        .code = TA_COMPILE_ERROR_BAD_EVENT_DESCRIPTOR,
+                                                        .subject = text,
+                                                        .subject_offset = start,
+                                                        .subject_length = index - start,
+                                                        .message = TA_PHRASE("an event descriptor has an empty segment"),
+                                                    });
             }
             ta_event_pattern_segment compiled = {0};
             ta_result result = TA_OK;
@@ -4797,14 +5144,22 @@ static ta_result ta_compiler_transition(ta_compiler *compiler, ta_state_id sourc
     } else if (spec->kind == TA_SCXML_TRANSITION_INTERNAL) {
         transition.type = TA_TRANSITION_INTERNAL;
     } else {
-        return TA_ERR_INVALID;
+        return ta_compiler_fail(compiler, TA_COMPILE_ERROR_MALFORMED_SPEC, (ta_str){0},
+                                TA_PHRASE("unknown transition kind"));
     }
-    ta_result result = ta_compiler_descriptors(compiler, spec->event, &transition.event_patterns);
+    ta_result result = ta_compiler_enter(compiler, TA_SPEC_MEMBER_EVENT, TA_SPEC_INDEX_NONE);
+    if (result == TA_OK) {
+        result = ta_compiler_descriptors(compiler, spec->event, &transition.event_patterns);
+    }
     if (result == TA_OK && spec->event.ptr != NULL) {
         result = ta_compiler_keep_text(compiler, spec->event, &transition.event_text);
     }
+    if (result == TA_OK) {
+        ta_compiler_leave(compiler);
+    }
     if (result == TA_OK && spec->condition.kind != TA_EXPRESSION_NONE) {
-        result = ta_compiler_expression(compiler, &spec->condition, &transition.condition);
+        result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_CONDITION, &spec->condition,
+                                           &transition.condition);
     }
     if (result == TA_OK) {
         result = ta_compiler_targets(compiler, &(ta_compiler_targets_params){
@@ -4814,7 +5169,7 @@ static ta_result ta_compiler_transition(ta_compiler *compiler, ta_state_id sourc
                                                });
     }
     if (result == TA_OK) {
-        result = ta_compiler_block(compiler, spec->actions, &transition.actions);
+        result = ta_compiler_block(compiler, TA_SPEC_MEMBER_ACTIONS, spec->actions, &transition.actions);
     }
     if (result == TA_OK) {
         result = ta_vec_push(&compiler->transitions, &transition);
@@ -4832,6 +5187,12 @@ typedef struct {
 static ta_result ta_compiler_initial(ta_compiler *compiler, const ta_compiler_initial_params *params) {
     ta_initial_transition_def initial = { .owner = params->owner };
     ta_result result = TA_OK;
+    if (params->spec != NULL) {
+        result = ta_compiler_enter(compiler, TA_SPEC_MEMBER_INITIAL, TA_SPEC_INDEX_NONE);
+        if (result != TA_OK) {
+            return result;
+        }
+    }
     if (params->spec != NULL && params->spec->targets != NULL && params->spec->targets[0].ptr != NULL) {
         initial.authored_targets = true;
         result = ta_compiler_targets(compiler, &(ta_compiler_targets_params){
@@ -4849,16 +5210,20 @@ static ta_result ta_compiler_initial(ta_compiler *compiler, const ta_compiler_in
             }
         }
         if (first == TA_STATE_NONE) {
-            return TA_ERR_INVALID;
+            return ta_compiler_fail(compiler, TA_COMPILE_ERROR_BAD_STRUCTURE, (ta_str){0},
+                                    TA_PHRASE("no child state to enter"));
         }
         initial.targets.offset = compiler->targets.count;
         initial.targets.length = 1;
         result = ta_vec_push(&compiler->targets, &first);
     }
     if (result == TA_OK && params->spec != NULL) {
-        result = ta_compiler_block(compiler, params->spec->actions, &initial.actions);
+        result = ta_compiler_block(compiler, TA_SPEC_MEMBER_ACTIONS, params->spec->actions, &initial.actions);
     }
     if (result == TA_OK) {
+        if (params->spec != NULL) {
+            ta_compiler_leave(compiler);
+        }
         *params->out = compiler->initials.count;
         result = ta_vec_push(&compiler->initials, &initial);
     }
@@ -4868,16 +5233,21 @@ static ta_result ta_compiler_initial(ta_compiler *compiler, const ta_compiler_in
 static ta_result ta_compiler_data(ta_compiler *compiler, const ta_scxml_data_spec *specs, ta_state_id owner) {
     for (uint32_t index = 0; specs != NULL && specs[index].name.ptr != NULL; index += 1) {
         ta_data_decl decl = { .owner_state = owner, .initializer = TA_INITIALIZER_NONE };
-        ta_result result = ta_compiler_atom(compiler, specs[index].name, &decl.name);
+        ta_result result = ta_compiler_enter(compiler, TA_SPEC_MEMBER_DATA, index);
+        if (result == TA_OK) {
+            result = ta_compiler_atom_at(compiler, TA_SPEC_MEMBER_NAME, specs[index].name, &decl.name);
+        }
         if (result == TA_OK && specs[index].initializer.kind != TA_SCXML_VALUE_NONE) {
             ta_initializer_def initializer = {0};
-            result = ta_compiler_value(compiler, &specs[index].initializer, &initializer.value);
+            result = ta_compiler_value_at(compiler, TA_SPEC_MEMBER_DATA_VALUE, &specs[index].initializer,
+                                          &initializer.value);
             if (result == TA_OK) {
                 decl.initializer = compiler->initializers.count;
                 result = ta_vec_push(&compiler->initializers, &initializer);
             }
         }
         if (result == TA_OK) {
+            ta_compiler_leave(compiler);
             result = ta_vec_push(&compiler->data_decls, &decl);
         }
         if (result != TA_OK) {
@@ -4891,14 +5261,19 @@ static ta_result ta_compiler_data(ta_compiler *compiler, const ta_scxml_data_spe
 static ta_result ta_compiler_done_data(ta_compiler *compiler, const ta_scxml_done_data_spec *spec,
                                        ta_done_data_id *out) {
     ta_done_data_def done = {0};
-    ta_result result = ta_compiler_value(compiler, &spec->content, &done.content);
+    ta_result result = ta_compiler_enter(compiler, TA_SPEC_MEMBER_DONE_DATA, TA_SPEC_INDEX_NONE);
+    if (result == TA_OK) {
+        result = ta_compiler_value_at(compiler, TA_SPEC_MEMBER_DATA_VALUE, &spec->content, &done.content);
+    }
     if (result == TA_OK) {
         result = ta_compiler_params(compiler, spec->params, &done.params);
     }
     if (result == TA_OK && done.params.length != 0 && done.content.kind != TA_VALUE_SOURCE_NONE) {
-        result = TA_ERR_INVALID;
+        result = ta_compiler_fail(compiler, TA_COMPILE_ERROR_EXCLUSIVE_MEMBERS, (ta_str){0},
+                                  TA_PHRASE("a donedata has both params and content"));
     }
     if (result == TA_OK) {
+        ta_compiler_leave(compiler);
         *out = compiler->done_data.count;
         result = ta_vec_push(&compiler->done_data, &done);
     }
@@ -4926,7 +5301,8 @@ static ta_result ta_compiler_invoke_text(ta_compiler *compiler, const ta_scxml_s
             out->kind = TA_VALUE_SOURCE_EXPR;
             return ta_compiler_expression(compiler, &spec->as.expr, &out->as.expr);
         default:
-            return TA_ERR_INVALID;
+            return ta_compiler_fail(compiler, TA_COMPILE_ERROR_MALFORMED_SPEC, (ta_str){0},
+                                    TA_PHRASE("unknown kind"));
     }
 }
 
@@ -4939,14 +5315,15 @@ static ta_result ta_compiler_invoke(ta_compiler *compiler, const ta_scxml_invoke
             break;
         case TA_SCXML_ID_LITERAL:
             out->id.kind = TA_ID_SOURCE_LITERAL;
-            result = ta_compiler_atom(compiler, spec->id.as.literal, &out->id.as.literal);
+            result = ta_compiler_atom_at(compiler, TA_SPEC_MEMBER_ID, spec->id.as.literal, &out->id.as.literal);
             break;
         case TA_SCXML_ID_LOCATION:
             out->id.kind = TA_ID_SOURCE_LOCATION;
-            result = ta_compiler_expression(compiler, &spec->id.as.location, &out->id.as.location);
+            result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_ID, &spec->id.as.location,
+                                               &out->id.as.location);
             break;
         default:
-            return TA_ERR_INVALID;
+            return ta_compiler_malformed(compiler, TA_SPEC_MEMBER_ID);
     }
     if (result != TA_OK) {
         return result;
@@ -4957,32 +5334,40 @@ static ta_result ta_compiler_invoke(ta_compiler *compiler, const ta_scxml_invoke
             break;
         case TA_SCXML_STRING_LITERAL:
             out->type.kind = TA_TEXT_SOURCE_ATOM;
-            result = ta_compiler_atom(compiler, spec->type.as.literal, &out->type.as.atom);
+            result = ta_compiler_atom_at(compiler, TA_SPEC_MEMBER_TYPE, spec->type.as.literal, &out->type.as.atom);
             break;
         case TA_SCXML_STRING_EXPR:
             out->type.kind = TA_TEXT_SOURCE_EXPR;
-            result = ta_compiler_expression(compiler, &spec->type.as.expr, &out->type.as.expr);
+            result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_TYPE, &spec->type.as.expr,
+                                               &out->type.as.expr);
             break;
         default:
-            return TA_ERR_INVALID;
+            return ta_compiler_malformed(compiler, TA_SPEC_MEMBER_TYPE);
     }
     if (result == TA_OK) {
-        result = ta_compiler_invoke_text(compiler, &spec->src, &out->src);
+        result = ta_compiler_enter(compiler, TA_SPEC_MEMBER_SRC, TA_SPEC_INDEX_NONE);
+        if (result == TA_OK) {
+            result = ta_compiler_invoke_text(compiler, &spec->src, &out->src);
+        }
+        if (result == TA_OK) {
+            ta_compiler_leave(compiler);
+        }
     }
     if (result == TA_OK) {
-        result = ta_compiler_value(compiler, &spec->data, &out->data);
+        result = ta_compiler_value_at(compiler, TA_SPEC_MEMBER_DATA_VALUE, &spec->data, &out->data);
     }
     if (result == TA_OK) {
         result = ta_compiler_params(compiler, spec->params, &out->params);
     }
     if (result == TA_OK) {
-        result = ta_compiler_block(compiler, spec->finalize, &out->finalize_actions);
+        result = ta_compiler_block(compiler, TA_SPEC_MEMBER_FINALIZE, spec->finalize, &out->finalize_actions);
     }
     out->autoforward = spec->autoforward;
     ta_compiler_hash_u32(compiler, spec->autoforward ? 1u : 0u);
     /* SCXML: src and inline content are exclusive. */
     if (result == TA_OK && out->src.kind != TA_VALUE_SOURCE_NONE && out->data.kind != TA_VALUE_SOURCE_NONE) {
-        result = TA_ERR_INVALID;
+        result = ta_compiler_fail(compiler, TA_COMPILE_ERROR_EXCLUSIVE_MEMBERS, (ta_str){0},
+                                  TA_PHRASE("an invoke has both src and content"));
     }
     return result;
 }
@@ -4990,8 +5375,12 @@ static ta_result ta_compiler_invoke(ta_compiler *compiler, const ta_scxml_invoke
 static ta_result ta_compiler_invokes(ta_compiler *compiler, const ta_scxml_invoke_spec *specs, ta_state_id owner) {
     for (uint32_t index = 0; specs[index].kind != TA_SCXML_INVOKE_NONE; index += 1) {
         ta_invoke_decl decl = { .owner = owner };
-        ta_result result = ta_compiler_invoke(compiler, &specs[index], &decl);
+        ta_result result = ta_compiler_enter(compiler, TA_SPEC_MEMBER_INVOKES, index);
         if (result == TA_OK) {
+            result = ta_compiler_invoke(compiler, &specs[index], &decl);
+        }
+        if (result == TA_OK) {
+            ta_compiler_leave(compiler);
             result = ta_vec_push(&compiler->invokes, &decl);
         }
         if (result != TA_OK) {
@@ -5001,14 +5390,22 @@ static ta_result ta_compiler_invokes(ta_compiler *compiler, const ta_scxml_invok
     return TA_OK;
 }
 
+static ta_result ta_compiler_structure(ta_compiler *compiler, ta_spec_member member, uint32_t index,
+                                       ta_str message) {
+    ta_compiler_fault fault = { .code = TA_COMPILE_ERROR_BAD_STRUCTURE, .message = message };
+    return member == TA_SPEC_MEMBER_NONE ? ta_compiler_record(compiler, &fault)
+                                         : ta_compiler_fail_at(compiler, member, index, &fault);
+}
+
 /* Pass two for one state. */
 static ta_result ta_compiler_compile_state(ta_compiler *compiler, ta_state_id id) {
-    const ta_scxml_state_spec *spec = *(const ta_scxml_state_spec **)ta_vec_at(&compiler->state_specs, id);
+    const ta_scxml_state_spec *spec = ta_compiler_state_spec(compiler, id);
     ta_state_def state = *ta_compiler_state(compiler, id);
     ta_state_def parent = {0};
     if (state.parent != TA_STATE_NONE) {
         parent = *ta_compiler_state(compiler, state.parent);
     }
+    ta_compiler_at(compiler, id);
     uint32_t real_children = 0;
     for (uint32_t index = 0; index < state.children.length; index += 1) {
         ta_state_id child = *(ta_state_id *)ta_vec_at(&compiler->children, state.children.offset + index);
@@ -5016,25 +5413,41 @@ static ta_result ta_compiler_compile_state(ta_compiler *compiler, ta_state_id id
     }
     bool history = ta_state_kind_is_history(state.kind);
     if (spec->done_data != NULL && state.kind != TA_STATE_FINAL) {
-        return TA_ERR_INVALID;
+        return ta_compiler_structure(compiler, TA_SPEC_MEMBER_DONE_DATA, TA_SPEC_INDEX_NONE,
+                                     TA_PHRASE("only a final state has <donedata>"));
     }
     switch (state.kind) {
         case TA_STATE_ATOMIC:
         case TA_STATE_FINAL:
-            if (state.children.length != 0 || spec->initial != NULL) {
-                return TA_ERR_INVALID;
+            if (state.children.length != 0) {
+                return ta_compiler_structure(compiler, TA_SPEC_MEMBER_STATES, 0,
+                                             TA_PHRASE("an atomic or final state has no child states"));
+            }
+            if (spec->initial != NULL) {
+                return ta_compiler_structure(compiler, TA_SPEC_MEMBER_INITIAL, TA_SPEC_INDEX_NONE,
+                                             TA_PHRASE("an atomic or final state has no <initial>"));
             }
             break;
         case TA_STATE_COMPOUND:
         case TA_STATE_PARALLEL:
-            if (real_children == 0 || (state.kind == TA_STATE_PARALLEL && spec->initial != NULL)) {
-                return TA_ERR_INVALID;
+            if (real_children == 0) {
+                return ta_compiler_structure(compiler, TA_SPEC_MEMBER_NONE, 0,
+                                             TA_PHRASE("a compound or parallel state needs a child state"));
+            }
+            if (state.kind == TA_STATE_PARALLEL && spec->initial != NULL) {
+                return ta_compiler_structure(compiler, TA_SPEC_MEMBER_INITIAL, TA_SPEC_INDEX_NONE,
+                                             TA_PHRASE("a parallel state has no <initial>"));
             }
             break;
         default:
-            if (state.parent == TA_STATE_NONE || state.children.length != 0 ||
+            if (state.children.length != 0) {
+                return ta_compiler_structure(compiler, TA_SPEC_MEMBER_STATES, 0,
+                                             TA_PHRASE("a history state has no child states"));
+            }
+            if (state.parent == TA_STATE_NONE ||
                 (parent.kind != TA_STATE_COMPOUND && parent.kind != TA_STATE_PARALLEL)) {
-                return TA_ERR_INVALID;
+                return ta_compiler_structure(compiler, TA_SPEC_MEMBER_NONE, 0,
+                                             TA_PHRASE("a history state must be inside a compound or parallel state"));
             }
             break;
     }
@@ -5044,7 +5457,13 @@ static ta_result ta_compiler_compile_state(ta_compiler *compiler, ta_state_id id
     for (uint32_t index = 0; result == TA_OK && spec->transitions != NULL &&
                              spec->transitions[index].kind != TA_SCXML_TRANSITION_NONE;
          index += 1) {
-        result = ta_compiler_transition(compiler, id, &spec->transitions[index]);
+        result = ta_compiler_enter(compiler, TA_SPEC_MEMBER_TRANSITIONS, index);
+        if (result == TA_OK) {
+            result = ta_compiler_transition(compiler, id, &spec->transitions[index]);
+        }
+        if (result == TA_OK) {
+            ta_compiler_leave(compiler);
+        }
     }
     state.transitions.length = compiler->transitions.count - state.transitions.offset;
     if (result != TA_OK) {
@@ -5052,18 +5471,33 @@ static ta_result ta_compiler_compile_state(ta_compiler *compiler, ta_state_id id
     }
     if (history) {
         /* A history state has exactly one targetless-event default transition into its parent. */
+        ta_compiler_fault fault = { .code = TA_COMPILE_ERROR_BAD_HISTORY_DEFAULT,
+                                    .message = TA_PHRASE("a history state needs exactly one default transition") };
         if (state.transitions.length != 1) {
-            return TA_ERR_INVALID;
+            return state.transitions.length == 0
+                       ? ta_compiler_record(compiler, &fault)
+                       : ta_compiler_fail_at(compiler, TA_SPEC_MEMBER_TRANSITIONS, 1, &fault);
         }
         const ta_transition_def *fallback = ta_vec_at(&compiler->transitions, state.transitions.offset);
         if (fallback->event_patterns.length != 0 || fallback->condition != UINT32_MAX ||
             fallback->targets.length == 0) {
-            return TA_ERR_INVALID;
+            fault.message = TA_PHRASE("a history default transition has targets and no event or condition");
+            return ta_compiler_fail_at(compiler, TA_SPEC_MEMBER_TRANSITIONS, 0, &fault);
         }
         for (uint32_t index = 0; index < fallback->targets.length; index += 1) {
             ta_state_id target = *(ta_state_id *)ta_vec_at(&compiler->targets, fallback->targets.offset + index);
             if (!ta_compiler_descends(compiler, target, state.parent)) {
-                return TA_ERR_INVALID;
+                result = ta_compiler_enter(compiler, TA_SPEC_MEMBER_TRANSITIONS, 0);
+                if (result == TA_OK) {
+                    result = ta_compiler_fail_at(compiler, TA_SPEC_MEMBER_TARGETS, index,
+                                                 &(ta_compiler_fault){
+                                                     .code = TA_COMPILE_ERROR_TARGET_OUTSIDE,
+                                                     .subject = spec->transitions[0].targets[index],
+                                                     .related = ta_compiler_state_spec(compiler, state.parent)->id,
+                                                     .message = TA_PHRASE("target is not inside its state"),
+                                                 });
+                }
+                return result;
             }
         }
         state.history_slot = compiler->history.count;
@@ -5079,10 +5513,10 @@ static ta_result ta_compiler_compile_state(ta_compiler *compiler, ta_state_id id
                                                });
     }
     if (result == TA_OK) {
-        result = ta_compiler_handlers(compiler, spec->onentry, &state.onentry_handlers);
+        result = ta_compiler_handlers(compiler, TA_SPEC_MEMBER_ONENTRY, spec->onentry, &state.onentry_handlers);
     }
     if (result == TA_OK) {
-        result = ta_compiler_handlers(compiler, spec->onexit, &state.onexit_handlers);
+        result = ta_compiler_handlers(compiler, TA_SPEC_MEMBER_ONEXIT, spec->onexit, &state.onexit_handlers);
     }
     if (result == TA_OK) {
         result = ta_compiler_data(compiler, spec->data, id);
@@ -5092,7 +5526,9 @@ static ta_result ta_compiler_compile_state(ta_compiler *compiler, ta_state_id id
     }
     /* Invoke: compile this state's <invoke> children. */
     if (result == TA_OK && spec->invokes != NULL && spec->invokes[0].kind != TA_SCXML_INVOKE_NONE) {
-        result = history ? TA_ERR_INVALID : ta_compiler_invokes(compiler, spec->invokes, id);
+        result = history ? ta_compiler_structure(compiler, TA_SPEC_MEMBER_INVOKES, 0,
+                                                 TA_PHRASE("a history state has no <invoke>"))
+                         : ta_compiler_invokes(compiler, spec->invokes, id);
     }
     if (result == TA_OK) {
         ta_atom segment = state.name;
@@ -5129,7 +5565,7 @@ static void ta_compiler_destroy(ta_compiler *compiler) {
         &compiler->initials, &compiler->targets, &compiler->actions, &compiler->handlers, &compiler->params,
         &compiler->data_decls, &compiler->initializers, &compiler->contents, &compiler->patterns,
         &compiler->segments, &compiler->expressions, &compiler->history, &compiler->done_data,
-        &compiler->invokes, &compiler->texts,
+        &compiler->invokes, &compiler->texts, &compiler->path,
     };
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(vecs); index += 1) {
         ta_vec_destroy(vecs[index]);
@@ -5154,7 +5590,10 @@ static ta_result ta_compiler_identity(ta_compiler *compiler) {
         revision = (ta_bytes){ .ptr = (const uint8_t *)fingerprint, .len = 16 };
     }
     if (family.ptr == NULL || family.len == 0) {
-        return TA_ERR_INVALID;
+        return ta_compiler_fail_at(compiler, spec->identity != NULL ? TA_SPEC_MEMBER_IDENTITY : TA_SPEC_MEMBER_NAME,
+                                   TA_SPEC_INDEX_NONE,
+                                   &(ta_compiler_fault){ .code = TA_COMPILE_ERROR_NO_FAMILY,
+                                                         .message = TA_PHRASE("the chart has no name and no identity family") });
     }
     ta_result result = ta_arena_copy_str(&definition->arena, family, &definition->identity.family.name);
     ta_str revision_copy = {0};
@@ -5209,7 +5648,8 @@ static ta_result ta_compiler_finish(ta_compiler *compiler) {
     }
     uint32_t words = ta_bits_words(definition->state_count);
     if (words * 8u > UINT16_MAX) {
-        return TA_ERR_UNSUPPORTED;
+        return ta_compiler_fail(compiler, TA_COMPILE_ERROR_LIMIT, (ta_str){0},
+                                TA_PHRASE("the chart has more states than a configuration can hold"));
     }
     definition->configuration = (ta_configuration_layout){
         .kind = TA_CONFIG_WORDS,
@@ -5225,15 +5665,30 @@ static ta_result ta_compiler_finish(ta_compiler *compiler) {
     return ta_compiler_identity(compiler);
 }
 
-static ta_result ta_compiler_run(ta_compiler *compiler) {
+/*
+ * The compile order, which decides which fault a chart with several reports
+ * (ADR 0058 section 2): the data-model requirement; pass one over every state
+ * in document order (kind, ID, duplicates); the root's <data>; pass two for
+ * each state in document order; the root <initial>; the root <script>; the
+ * configuration limit and the family; then the data model's preparation.
+ */
+static ta_result ta_compiler_run(ta_compiler *compiler, ta_datamodel datamodel) {
     const ta_scxml_spec *spec = compiler->spec;
     ta_definition *definition = compiler->definition;
+    if (spec->datamodel.ptr != NULL && spec->datamodel.len != 0 && !ta_str_equal(spec->datamodel, datamodel.v->name)) {
+        return ta_compiler_fail_at(compiler, TA_SPEC_MEMBER_DATAMODEL, TA_SPEC_INDEX_NONE,
+                                   &(ta_compiler_fault){ .code = TA_COMPILE_ERROR_DATAMODEL_MISMATCH,
+                                                         .subject = spec->datamodel,
+                                                         .message = TA_PHRASE("the chart requires another data model") });
+    }
     ta_compiler_hash_str(compiler, spec->name);
     ta_compiler_hash_u32(compiler, spec->binding);
     ta_span32 roots = {0};
     ta_result result = ta_compiler_collect(compiler, spec->states, TA_STATE_NONE, &roots);
+    ta_compiler_at(compiler, TA_STATE_NONE);
     if (result == TA_OK && compiler->states.count == 0) {
-        result = TA_ERR_INVALID;
+        result = ta_compiler_fail(compiler, TA_COMPILE_ERROR_NO_STATES, (ta_str){0},
+                                  TA_PHRASE("the chart has no states"));
     }
     /* Data declarations are listed root first, then by state in document order. */
     if (result == TA_OK) {
@@ -5243,6 +5698,7 @@ static ta_result ta_compiler_run(ta_compiler *compiler) {
         result = ta_compiler_compile_state(compiler, state);
     }
     if (result == TA_OK) {
+        ta_compiler_at(compiler, TA_STATE_NONE);
         result = ta_compiler_initial(compiler, &(ta_compiler_initial_params){
                                                    .owner = TA_STATE_NONE,
                                                    .spec = spec->initial,
@@ -5253,7 +5709,7 @@ static ta_result ta_compiler_run(ta_compiler *compiler) {
     if (result == TA_OK && spec->script.kind != TA_EXPRESSION_NONE) {
         uint32_t base = 0;
         ta_action_def script = { .kind = TA_ACTION_SCRIPT };
-        result = ta_compiler_expression(compiler, &spec->script, &script.as.script);
+        result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_SCRIPT, &spec->script, &script.as.script);
         if (result == TA_OK) {
             result = ta_vec_extend(&compiler->actions, 1, &base);
         }
@@ -5263,6 +5719,7 @@ static ta_result ta_compiler_run(ta_compiler *compiler) {
         }
     }
     if (result == TA_OK) {
+        ta_compiler_at(compiler, TA_STATE_NONE);
         result = ta_compiler_finish(compiler);
     }
     return result;
@@ -5275,16 +5732,19 @@ static bool ta_datamodel_complete(const ta_datamodel *datamodel) {
            v->destroy_instance != NULL;
 }
 
-TA_API ta_result ta_definition_compile_spec(ta_system *system, const ta_definition_compile_params *params) {
-    if (system == NULL || params == NULL || params->spec == NULL || params->out == NULL ||
-        params->allocator.v == NULL || !ta_datamodel_complete(&params->datamodel)) {
-        return TA_ERR_INVALID;
-    }
+typedef struct {
+    ta_compile_error *error;
+    ta_arena *error_arena;
+    /* UINT32_MAX for a compile; otherwise a replay that stops at this
+     * expression ID and never prepares or keeps a definition. */
+    uint32_t locate;
+    ta_expression_rejection *rejected;
+    ta_definition **out;
+} ta_compile_run_params;
+
+static ta_result ta_compile(ta_system *system, const ta_definition_compile_params *params,
+                            const ta_compile_run_params *run) {
     const ta_scxml_spec *spec = params->spec;
-    if (spec->datamodel.ptr != NULL && spec->datamodel.len != 0 &&
-        !ta_str_equal(spec->datamodel, params->datamodel.v->name)) {
-        return TA_ERR_UNSUPPORTED;
-    }
     ta_definition *definition = ta_mem_alloc(params->allocator, sizeof(ta_definition),
                                              _Alignof(ta_definition));
     if (definition == NULL) {
@@ -5310,6 +5770,10 @@ TA_API ta_result ta_definition_compile_spec(ta_system *system, const ta_definiti
         .allocator = params->allocator,
         .spec = spec,
         .definition = definition,
+        .path_state = TA_STATE_NONE,
+        .error = run->error,
+        .error_arena = run->error_arena,
+        .locate = run->locate,
         .hash = 14695981039346656037ull,
     };
     const struct { ta_vec *vec; const ta_tree_list_layout *layout; } vecs[] = {
@@ -5332,12 +5796,19 @@ TA_API ta_result ta_definition_compile_spec(ta_system *system, const ta_definiti
         { &compiler.done_data, TA_VEC_LAYOUT(ta_done_data_def) },
         { &compiler.invokes, TA_VEC_LAYOUT(ta_invoke_decl) },
         { &compiler.texts, TA_VEC_LAYOUT(ta_str) },
+        { &compiler.path, TA_VEC_LAYOUT(ta_spec_step) },
     };
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(vecs); index += 1) {
         ta_vec_init(vecs[index].vec, params->allocator, vecs[index].layout);
     }
 
-    result = ta_compiler_run(&compiler);
+    result = ta_compiler_run(&compiler, params->datamodel);
+    if ((result == TA_ERR_INVALID || result == TA_ERR_UNSUPPORTED) && !compiler.failed) {
+        /* A refusal from below the compiler's own checks. */
+        ta_compiler_at(&compiler, TA_STATE_NONE);
+        (void)ta_compiler_fail(&compiler, TA_COMPILE_ERROR_MALFORMED_SPEC, (ta_str){0},
+                               TA_PHRASE("the spec was refused"));
+    }
     /* The expression table moves to the definition even on failure, so it is released once. */
     ta_result sealed = ta_compiler_seal(&compiler, &(ta_compiler_seal_params){
                                                        .vec = &compiler.expressions,
@@ -5358,6 +5829,10 @@ TA_API ta_result ta_definition_compile_spec(ta_system *system, const ta_definiti
     }
     ta_compiler_destroy(&compiler);
 
+    if (run->locate != UINT32_MAX) {
+        ta_definition_destroy(definition);
+        return result;
+    }
     if (result == TA_OK) {
         result = params->datamodel.v->prepare_definition(
             params->datamodel.self,
@@ -5366,6 +5841,7 @@ TA_API ta_result ta_definition_compile_spec(ta_system *system, const ta_definiti
                 .expression_count = definition->expression_count,
                 .allocator = params->allocator,
                 .shared = &definition->datamodel_shared,
+                .rejected = run->rejected,
             });
         definition->datamodel_prepared = result == TA_OK;
     }
@@ -5387,7 +5863,215 @@ TA_API ta_result ta_definition_compile_spec(ta_system *system, const ta_definiti
         definition->unregistered_next->unregistered_previous = definition;
     }
     system->unregistered_definitions = definition;
-    *params->out = definition;
+    *run->out = definition;
+    return TA_OK;
+}
+
+/*
+ * The data model refused the prepared expression table. Name the expression
+ * it pointed at by replaying the walk to it: expression IDs are assigned in
+ * walk order, so nothing is stored per expression on the success path.
+ */
+static void ta_compile_rejected(ta_system *system, const ta_definition_compile_params *params,
+                                const ta_expression_rejection *rejection) {
+    ta_compile_error *error = params->error;
+    if (rejection->expression != TA_EXPR_ID_NONE) {
+        ta_result replayed = ta_compile(system, params, &(ta_compile_run_params){
+                                                            .error = error,
+                                                            .error_arena = params->error_arena,
+                                                            .locate = rejection->expression,
+                                                        });
+        if (replayed == TA_OK) {
+            *error = (ta_compile_error){0}; /* no such expression: about none */
+        }
+    }
+    error->code = TA_COMPILE_ERROR_EXPRESSION_REJECTED;
+    if (rejection->expression != TA_EXPR_ID_NONE && rejection->offset <= error->subject.len &&
+        rejection->length <= error->subject.len - rejection->offset) {
+        error->subject_offset = rejection->offset;
+        error->subject_length = rejection->length;
+    }
+    error->message = TA_PHRASE("the data model refused this expression");
+    if (params->error_arena != NULL && rejection->message.ptr != NULL && rejection->message.len != 0) {
+        ta_str copy = {0};
+        if (ta_arena_copy_str(params->error_arena, rejection->message, &copy) == TA_OK) {
+            error->message = copy;
+        }
+    }
+}
+
+TA_API ta_result ta_definition_compile_spec(ta_system *system, const ta_definition_compile_params *params) {
+    if (params != NULL && params->error != NULL) {
+        *params->error = (ta_compile_error){0};
+    }
+    if (system == NULL || params == NULL || params->spec == NULL || params->out == NULL ||
+        params->allocator.v == NULL || !ta_datamodel_complete(&params->datamodel)) {
+        return TA_ERR_INVALID;
+    }
+    ta_expression_rejection rejection = { .expression = TA_EXPR_ID_NONE };
+    ta_compile_error error = {0};
+    ta_result result = ta_compile(system, params, &(ta_compile_run_params){
+                                                      .error = params->error != NULL ? &error : NULL,
+                                                      .error_arena = params->error_arena,
+                                                      .locate = UINT32_MAX,
+                                                      .rejected = &rejection,
+                                                      .out = params->out,
+                                                  });
+    if (params->error == NULL || (result != TA_ERR_INVALID && result != TA_ERR_UNSUPPORTED)) {
+        return result;
+    }
+    if (error.code == TA_COMPILE_ERROR_NONE) {
+        /* The compiler passed the spec and the data model refused it. */
+        *params->error = (ta_compile_error){0};
+        ta_compile_rejected(system, params, &rejection);
+        return result;
+    }
+    *params->error = error;
+    return result;
+}
+
+/* ------------------------------------------------------------------------
+ * Formatting
+ */
+
+typedef struct {
+    ta_arena *arena;
+    char *bytes;
+    uint32_t length;
+    uint32_t capacity;
+    bool failed;
+} ta_text_builder;
+
+static void ta_text_append(ta_text_builder *text, ta_str piece) {
+    if (text->failed || piece.len == 0) {
+        return;
+    }
+    if (text->length + piece.len > text->capacity) {
+        uint32_t capacity = text->capacity == 0 ? 128u : text->capacity;
+        while (capacity < text->length + piece.len) {
+            capacity *= 2u;
+        }
+        char *bytes = ta_arena_alloc(text->arena, capacity, 1);
+        if (bytes == NULL) {
+            text->failed = true;
+            return;
+        }
+        if (text->length != 0) {
+            ta_mem_copy(bytes, text->bytes, text->length);
+        }
+        text->bytes = bytes;
+        text->capacity = capacity;
+    }
+    ta_mem_copy(text->bytes + text->length, piece.ptr, piece.len);
+    text->length += piece.len;
+}
+
+static void ta_text_append_u32(ta_text_builder *text, uint32_t value) {
+    char digits[10];
+    uint32_t count = 0;
+    do {
+        digits[sizeof(digits) - 1u - count] = (char)('0' + value % 10u);
+        value /= 10u;
+        count += 1u;
+    } while (value != 0);
+    ta_text_append(text, (ta_str){ .ptr = digits + sizeof(digits) - count, .len = count });
+}
+
+static ta_str ta_spec_member_name(ta_spec_member member) {
+    switch (member) {
+        case TA_SPEC_MEMBER_STATES: return TA_PHRASE("states");
+        case TA_SPEC_MEMBER_TRANSITIONS: return TA_PHRASE("transitions");
+        case TA_SPEC_MEMBER_TARGETS: return TA_PHRASE("targets");
+        case TA_SPEC_MEMBER_ONENTRY: return TA_PHRASE("onentry");
+        case TA_SPEC_MEMBER_ONEXIT: return TA_PHRASE("onexit");
+        case TA_SPEC_MEMBER_ACTIONS: return TA_PHRASE("actions");
+        case TA_SPEC_MEMBER_THEN: return TA_PHRASE("then");
+        case TA_SPEC_MEMBER_ELSE: return TA_PHRASE("else");
+        case TA_SPEC_MEMBER_BODY: return TA_PHRASE("body");
+        case TA_SPEC_MEMBER_FINALIZE: return TA_PHRASE("finalize");
+        case TA_SPEC_MEMBER_INVOKES: return TA_PHRASE("invokes");
+        case TA_SPEC_MEMBER_DATA: return TA_PHRASE("data");
+        case TA_SPEC_MEMBER_PARAMS: return TA_PHRASE("params");
+        case TA_SPEC_MEMBER_INITIAL: return TA_PHRASE("initial");
+        case TA_SPEC_MEMBER_DONE_DATA: return TA_PHRASE("done_data");
+        case TA_SPEC_MEMBER_SCRIPT: return TA_PHRASE("script");
+        case TA_SPEC_MEMBER_ID: return TA_PHRASE("id");
+        case TA_SPEC_MEMBER_NAME: return TA_PHRASE("name");
+        case TA_SPEC_MEMBER_EVENT: return TA_PHRASE("event");
+        case TA_SPEC_MEMBER_CONDITION: return TA_PHRASE("condition");
+        case TA_SPEC_MEMBER_TYPE: return TA_PHRASE("type");
+        case TA_SPEC_MEMBER_SRC: return TA_PHRASE("src");
+        case TA_SPEC_MEMBER_TARGET: return TA_PHRASE("target");
+        case TA_SPEC_MEMBER_DELAY: return TA_PHRASE("delay");
+        case TA_SPEC_MEMBER_DATA_VALUE: return TA_PHRASE("value");
+        case TA_SPEC_MEMBER_LOCATION: return TA_PHRASE("location");
+        case TA_SPEC_MEMBER_EXPR: return TA_PHRASE("expr");
+        case TA_SPEC_MEMBER_ITEM: return TA_PHRASE("item");
+        case TA_SPEC_MEMBER_INDEX: return TA_PHRASE("index");
+        case TA_SPEC_MEMBER_SENDID: return TA_PHRASE("sendid");
+        case TA_SPEC_MEMBER_DATAMODEL: return TA_PHRASE("datamodel");
+        case TA_SPEC_MEMBER_IDENTITY: return TA_PHRASE("identity");
+        default: return TA_PHRASE("?");
+    }
+}
+
+TA_API ta_result ta_compile_error_format(const ta_compile_error_format_params *params) {
+    if (params == NULL || params->error == NULL || params->arena == NULL || params->out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_compile_error *error = params->error;
+    ta_text_builder text = { .arena = params->arena };
+    /* States are resolved while the path goes through states only. */
+    const ta_scxml_state_spec *list = params->spec != NULL ? params->spec->states : NULL;
+    for (uint32_t index = 0; index < error->path_length; index += 1u) {
+        ta_spec_step step = error->path[index];
+        if (index != 0) {
+            ta_text_append(&text, TA_PHRASE("."));
+        }
+        ta_text_append(&text, ta_spec_member_name(step.member));
+        if (step.index != TA_SPEC_INDEX_NONE) {
+            ta_text_append(&text, TA_PHRASE("["));
+            ta_text_append_u32(&text, step.index);
+            ta_text_append(&text, TA_PHRASE("]"));
+        }
+        if (step.member == TA_SPEC_MEMBER_STATES && list != NULL) {
+            const ta_scxml_state_spec *state = &list[step.index];
+            ta_text_append(&text, TA_PHRASE("("));
+            ta_text_append(&text, state->id);
+            ta_text_append(&text, TA_PHRASE(")"));
+            list = state->states;
+        } else {
+            list = NULL;
+        }
+    }
+    if (error->path_length != 0) {
+        ta_text_append(&text, TA_PHRASE(": "));
+    }
+    ta_text_append(&text, error->message.len != 0 ? error->message : TA_PHRASE("the spec was refused"));
+    if (error->subject.len != 0) {
+        ta_text_append(&text, TA_PHRASE(" \""));
+        ta_text_append(&text, error->subject);
+        ta_text_append(&text, TA_PHRASE("\""));
+    }
+    if (error->related.len != 0) {
+        switch (error->code) {
+            case TA_COMPILE_ERROR_UNKNOWN_STATE:
+                ta_text_append(&text, TA_PHRASE("; nearest is \""));
+                break;
+            case TA_COMPILE_ERROR_TARGET_OUTSIDE:
+                ta_text_append(&text, TA_PHRASE("; it must be inside \""));
+                break;
+            default:
+                ta_text_append(&text, TA_PHRASE("; see also \""));
+                break;
+        }
+        ta_text_append(&text, error->related);
+        ta_text_append(&text, TA_PHRASE("\""));
+    }
+    if (text.failed) {
+        return TA_ERR_NOMEM;
+    }
+    *params->out = (ta_str){ .ptr = text.bytes, .len = text.length };
     return TA_OK;
 }
 
@@ -5880,6 +6564,320 @@ static void ta_import_fail(const ta_definition_import_params *params, const ta_i
     }
 }
 
+/* ------------------------------------------------------------------------
+ * Locating a compile error in the input (ADR 0058 section 5)
+ */
+
+static bool ta_import_within(ta_bytes input, const char *ptr, uint32_t len) {
+    const char *begin = (const char *)input.ptr;
+    return ptr != NULL && input.ptr != NULL && ptr >= begin && (size_t)(ptr - begin) <= input.len &&
+           len <= input.len - (size_t)(ptr - begin);
+}
+
+/* Lines and columns count from 1; a column counts bytes, as txml's do. */
+static ta_chart_position ta_import_position(ta_bytes input, uint64_t offset) {
+    ta_chart_position at = { .offset = offset, .line = 1, .column = 1 };
+    for (uint64_t index = 0; index < offset && index < input.len; index += 1u) {
+        if (input.ptr[index] == '\n') {
+            at.line += 1u;
+            at.column = 1;
+        } else {
+            at.column += 1u;
+        }
+    }
+    return at;
+}
+
+typedef enum {
+    TA_NODE_NONE = 0,
+    TA_NODE_SPEC,
+    TA_NODE_STATE,
+    TA_NODE_TRANSITION,
+    TA_NODE_HANDLER,
+    TA_NODE_INITIAL,
+    TA_NODE_ACTION,
+    TA_NODE_DATA,
+    TA_NODE_PARAM,
+    TA_NODE_INVOKE,
+    TA_NODE_DONE_DATA,
+    TA_NODE_TEXT
+} ta_node_kind;
+
+/* One element of a spec reached by a path; TA_NODE_TEXT is a text member. */
+typedef struct {
+    ta_node_kind kind;
+    const void *ptr;
+    ta_str text;
+} ta_node;
+
+static ta_str ta_expression_text(const ta_expression *expression) {
+    return expression->kind == TA_EXPRESSION_SOURCE ? expression->as.source : (ta_str){0};
+}
+
+static ta_str ta_value_text(const ta_scxml_value_spec *value) {
+    switch (value->kind) {
+        case TA_SCXML_VALUE_EXPR: return ta_expression_text(&value->as.expr);
+        case TA_SCXML_VALUE_LOCATION: return ta_expression_text(&value->as.location);
+        case TA_SCXML_VALUE_CONTENT:
+            return (ta_str){ .ptr = (const char *)value->as.content.bytes.ptr, .len = value->as.content.bytes.len };
+        default: return (ta_str){0};
+    }
+}
+
+static ta_str ta_string_text(const ta_scxml_string_spec *string) {
+    switch (string->kind) {
+        case TA_SCXML_STRING_LITERAL: return string->as.literal;
+        case TA_SCXML_STRING_EXPR: return ta_expression_text(&string->as.expr);
+        default: return (ta_str){0};
+    }
+}
+
+static ta_str ta_id_text(const ta_scxml_id_spec *id) {
+    switch (id->kind) {
+        case TA_SCXML_ID_LITERAL: return id->as.literal;
+        case TA_SCXML_ID_LOCATION: return ta_expression_text(&id->as.location);
+        default: return (ta_str){0};
+    }
+}
+
+static ta_node ta_text_node(ta_str text) {
+    return (ta_node){ .kind = TA_NODE_TEXT, .text = text };
+}
+
+static ta_node ta_list_node(ta_node_kind kind, const void *element) {
+    return (ta_node){ .kind = kind, .ptr = element };
+}
+
+static ta_node ta_action_step(const ta_scxml_action_spec *action, ta_spec_step step) {
+    uint32_t i = step.index;
+    switch (action->kind) {
+        case TA_SCXML_ACTION_RAISE:
+            if (step.member == TA_SPEC_MEMBER_EVENT) return ta_text_node(action->as.raise.event);
+            if (step.member == TA_SPEC_MEMBER_DATA_VALUE) return ta_text_node(ta_value_text(&action->as.raise.data));
+            return (ta_node){0};
+        case TA_SCXML_ACTION_SEND: {
+            const ta_scxml_send_spec *send = &action->as.send;
+            switch (step.member) {
+                case TA_SPEC_MEMBER_PARAMS: return ta_list_node(TA_NODE_PARAM, &send->params[i]);
+                case TA_SPEC_MEMBER_ID: return ta_text_node(ta_id_text(&send->id));
+                case TA_SPEC_MEMBER_TYPE: return ta_text_node(ta_string_text(&send->type));
+                case TA_SPEC_MEMBER_EVENT:
+                    if (send->event.kind == TA_SCXML_EVENT_NAME) return ta_text_node(send->event.as.name);
+                    if (send->event.kind == TA_SCXML_EVENT_EXPR) return ta_text_node(ta_expression_text(&send->event.as.expr));
+                    return (ta_node){0};
+                case TA_SPEC_MEMBER_TARGET: return ta_text_node(ta_string_text(&send->target));
+                case TA_SPEC_MEMBER_DELAY: return ta_text_node(ta_string_text(&send->delay));
+                case TA_SPEC_MEMBER_DATA_VALUE: return ta_text_node(ta_value_text(&send->data));
+                default: return (ta_node){0};
+            }
+        }
+        case TA_SCXML_ACTION_CANCEL:
+            if (step.member == TA_SPEC_MEMBER_SENDID) return ta_text_node(ta_string_text(&action->as.cancel.sendid));
+            return (ta_node){0};
+        case TA_SCXML_ACTION_ASSIGN:
+            if (step.member == TA_SPEC_MEMBER_LOCATION) return ta_text_node(ta_expression_text(&action->as.assign.location));
+            if (step.member == TA_SPEC_MEMBER_DATA_VALUE) return ta_text_node(ta_value_text(&action->as.assign.value));
+            return (ta_node){0};
+        case TA_SCXML_ACTION_SCRIPT:
+            if (step.member == TA_SPEC_MEMBER_EXPR) return ta_text_node(ta_expression_text(&action->as.script.script));
+            return (ta_node){0};
+        case TA_SCXML_ACTION_LOG:
+            if (step.member == TA_SPEC_MEMBER_EXPR) return ta_text_node(ta_expression_text(&action->as.log.expr));
+            return (ta_node){0};
+        case TA_SCXML_ACTION_IF:
+            switch (step.member) {
+                case TA_SPEC_MEMBER_CONDITION: return ta_text_node(ta_expression_text(&action->as.conditional.condition));
+                case TA_SPEC_MEMBER_THEN: return ta_list_node(TA_NODE_ACTION, &action->as.conditional.then_actions[i]);
+                case TA_SPEC_MEMBER_ELSE: return ta_list_node(TA_NODE_ACTION, &action->as.conditional.else_actions[i]);
+                default: return (ta_node){0};
+            }
+        case TA_SCXML_ACTION_FOREACH:
+            switch (step.member) {
+                case TA_SPEC_MEMBER_EXPR: return ta_text_node(ta_expression_text(&action->as.foreach.array));
+                case TA_SPEC_MEMBER_ITEM: return ta_text_node(action->as.foreach.item);
+                case TA_SPEC_MEMBER_INDEX: return ta_text_node(action->as.foreach.index);
+                case TA_SPEC_MEMBER_BODY: return ta_list_node(TA_NODE_ACTION, &action->as.foreach.body[i]);
+                default: return (ta_node){0};
+            }
+        default:
+            return (ta_node){0};
+    }
+}
+
+/* Follows one step of a compile error's path. */
+static ta_node ta_node_step(ta_node node, ta_spec_step step) {
+    uint32_t i = step.index;
+    switch (node.kind) {
+        case TA_NODE_SPEC: {
+            const ta_scxml_spec *spec = node.ptr;
+            switch (step.member) {
+                case TA_SPEC_MEMBER_STATES: return ta_list_node(TA_NODE_STATE, &spec->states[i]);
+                case TA_SPEC_MEMBER_DATA: return ta_list_node(TA_NODE_DATA, &spec->data[i]);
+                case TA_SPEC_MEMBER_INITIAL: return ta_list_node(TA_NODE_INITIAL, spec->initial);
+                case TA_SPEC_MEMBER_SCRIPT: return ta_text_node(ta_expression_text(&spec->script));
+                case TA_SPEC_MEMBER_NAME: return ta_text_node(spec->name);
+                case TA_SPEC_MEMBER_DATAMODEL: return ta_text_node(spec->datamodel);
+                default: return (ta_node){0};
+            }
+        }
+        case TA_NODE_STATE: {
+            const ta_scxml_state_spec *state = node.ptr;
+            switch (step.member) {
+                case TA_SPEC_MEMBER_STATES: return ta_list_node(TA_NODE_STATE, &state->states[i]);
+                case TA_SPEC_MEMBER_TRANSITIONS: return ta_list_node(TA_NODE_TRANSITION, &state->transitions[i]);
+                case TA_SPEC_MEMBER_ONENTRY: return ta_list_node(TA_NODE_HANDLER, &state->onentry[i]);
+                case TA_SPEC_MEMBER_ONEXIT: return ta_list_node(TA_NODE_HANDLER, &state->onexit[i]);
+                case TA_SPEC_MEMBER_DATA: return ta_list_node(TA_NODE_DATA, &state->data[i]);
+                case TA_SPEC_MEMBER_INVOKES: return ta_list_node(TA_NODE_INVOKE, &state->invokes[i]);
+                case TA_SPEC_MEMBER_INITIAL: return ta_list_node(TA_NODE_INITIAL, state->initial);
+                case TA_SPEC_MEMBER_DONE_DATA: return ta_list_node(TA_NODE_DONE_DATA, state->done_data);
+                case TA_SPEC_MEMBER_ID: return ta_text_node(state->id);
+                default: return (ta_node){0};
+            }
+        }
+        case TA_NODE_TRANSITION: {
+            const ta_scxml_transition_spec *transition = node.ptr;
+            switch (step.member) {
+                case TA_SPEC_MEMBER_TARGETS: return ta_text_node(transition->targets[i]);
+                case TA_SPEC_MEMBER_ACTIONS: return ta_list_node(TA_NODE_ACTION, &transition->actions[i]);
+                case TA_SPEC_MEMBER_EVENT: return ta_text_node(transition->event);
+                case TA_SPEC_MEMBER_CONDITION: return ta_text_node(ta_expression_text(&transition->condition));
+                default: return (ta_node){0};
+            }
+        }
+        case TA_NODE_HANDLER: {
+            const ta_scxml_handler_spec *handler = node.ptr;
+            if (step.member == TA_SPEC_MEMBER_ACTIONS) return ta_list_node(TA_NODE_ACTION, &handler->actions[i]);
+            return (ta_node){0};
+        }
+        case TA_NODE_INITIAL: {
+            const ta_scxml_initial_spec *initial = node.ptr;
+            if (step.member == TA_SPEC_MEMBER_TARGETS) return ta_text_node(initial->targets[i]);
+            if (step.member == TA_SPEC_MEMBER_ACTIONS) return ta_list_node(TA_NODE_ACTION, &initial->actions[i]);
+            return (ta_node){0};
+        }
+        case TA_NODE_DATA: {
+            const ta_scxml_data_spec *data = node.ptr;
+            if (step.member == TA_SPEC_MEMBER_NAME) return ta_text_node(data->name);
+            if (step.member == TA_SPEC_MEMBER_DATA_VALUE) return ta_text_node(ta_value_text(&data->initializer));
+            return (ta_node){0};
+        }
+        case TA_NODE_PARAM: {
+            const ta_scxml_param_spec *param = node.ptr;
+            if (step.member == TA_SPEC_MEMBER_NAME) return ta_text_node(param->name);
+            if (step.member == TA_SPEC_MEMBER_DATA_VALUE) return ta_text_node(ta_value_text(&param->value));
+            return (ta_node){0};
+        }
+        case TA_NODE_DONE_DATA: {
+            const ta_scxml_done_data_spec *done = node.ptr;
+            if (step.member == TA_SPEC_MEMBER_PARAMS) return ta_list_node(TA_NODE_PARAM, &done->params[i]);
+            if (step.member == TA_SPEC_MEMBER_DATA_VALUE) return ta_text_node(ta_value_text(&done->content));
+            return (ta_node){0};
+        }
+        case TA_NODE_INVOKE: {
+            const ta_scxml_invoke_spec *invoke = node.ptr;
+            switch (step.member) {
+                case TA_SPEC_MEMBER_PARAMS: return ta_list_node(TA_NODE_PARAM, &invoke->params[i]);
+                case TA_SPEC_MEMBER_FINALIZE: return ta_list_node(TA_NODE_ACTION, &invoke->finalize[i]);
+                case TA_SPEC_MEMBER_ID: return ta_text_node(ta_id_text(&invoke->id));
+                case TA_SPEC_MEMBER_TYPE: return ta_text_node(ta_string_text(&invoke->type));
+                case TA_SPEC_MEMBER_SRC: return ta_text_node(ta_string_text(&invoke->src));
+                case TA_SPEC_MEMBER_DATA_VALUE: return ta_text_node(ta_value_text(&invoke->data));
+                default: return (ta_node){0};
+            }
+        }
+        case TA_NODE_ACTION:
+            return ta_action_step(node.ptr, step);
+        default:
+            return (ta_node){0};
+    }
+}
+
+/* The text that stands for a node, if any of it lies within `input`. */
+static ta_str ta_node_anchor(ta_node node, ta_bytes input) {
+    ta_str candidates[3] = { {0}, {0}, {0} };
+    switch (node.kind) {
+        case TA_NODE_TEXT: candidates[0] = node.text; break;
+        case TA_NODE_SPEC: candidates[0] = ((const ta_scxml_spec *)node.ptr)->name; break;
+        case TA_NODE_STATE: candidates[0] = ((const ta_scxml_state_spec *)node.ptr)->id; break;
+        case TA_NODE_TRANSITION: {
+            const ta_scxml_transition_spec *transition = node.ptr;
+            candidates[0] = transition->event;
+            candidates[1] = ta_expression_text(&transition->condition);
+            candidates[2] = transition->targets != NULL ? transition->targets[0] : (ta_str){0};
+            break;
+        }
+        case TA_NODE_INITIAL: {
+            const ta_scxml_initial_spec *initial = node.ptr;
+            candidates[0] = initial->targets != NULL ? initial->targets[0] : (ta_str){0};
+            break;
+        }
+        case TA_NODE_DATA: candidates[0] = ((const ta_scxml_data_spec *)node.ptr)->name; break;
+        case TA_NODE_PARAM: candidates[0] = ((const ta_scxml_param_spec *)node.ptr)->name; break;
+        case TA_NODE_INVOKE: {
+            const ta_scxml_invoke_spec *invoke = node.ptr;
+            candidates[0] = ta_id_text(&invoke->id);
+            candidates[1] = ta_string_text(&invoke->type);
+            candidates[2] = ta_string_text(&invoke->src);
+            break;
+        }
+        case TA_NODE_ACTION: {
+            /* The first text member the action has. */
+            static const ta_spec_member members[] = {
+                TA_SPEC_MEMBER_EVENT, TA_SPEC_MEMBER_LOCATION, TA_SPEC_MEMBER_EXPR, TA_SPEC_MEMBER_CONDITION,
+                TA_SPEC_MEMBER_SENDID, TA_SPEC_MEMBER_TARGET, TA_SPEC_MEMBER_TYPE, TA_SPEC_MEMBER_ID,
+            };
+            for (uint32_t index = 0; index < sizeof(members) / sizeof(members[0]); index += 1u) {
+                ta_node text = ta_action_step(node.ptr, (ta_spec_step){ .member = members[index],
+                                                                        .index = TA_SPEC_INDEX_NONE });
+                if (text.kind == TA_NODE_TEXT && ta_import_within(input, text.text.ptr, text.text.len)) {
+                    return text.text;
+                }
+            }
+            break;
+        }
+        default: break;
+    }
+    for (uint32_t index = 0; index < 3u; index += 1u) {
+        if (ta_import_within(input, candidates[index].ptr, candidates[index].len)) {
+            return candidates[index];
+        }
+    }
+    return (ta_str){0};
+}
+
+/*
+ * Where in `input` a compile error is: its subject, if the subject is a
+ * slice of the input; otherwise the deepest element on its path whose text
+ * is. False when neither. Error path only.
+ */
+static bool ta_import_locate(const ta_scxml_spec *spec, const ta_compile_error *error, ta_bytes input,
+                             uint64_t *offset) {
+    const char *begin = (const char *)input.ptr;
+    if (error->subject.len != 0 && ta_import_within(input, error->subject.ptr, error->subject.len)) {
+        *offset = (uint64_t)(error->subject.ptr - begin) + error->subject_offset;
+        return true;
+    }
+    for (uint32_t depth = error->path_length + 1u; depth > 0; depth -= 1u) {
+        ta_node node = { .kind = TA_NODE_SPEC, .ptr = spec };
+        for (uint32_t step = 0; step + 1u < depth && node.kind != TA_NODE_NONE; step += 1u) {
+            node = ta_node_step(node, error->path[step]);
+            if (node.kind != TA_NODE_TEXT && node.ptr == NULL) {
+                node.kind = TA_NODE_NONE;
+            }
+        }
+        if (node.kind == TA_NODE_NONE) {
+            continue;
+        }
+        ta_str anchor = ta_node_anchor(node, input);
+        if (anchor.ptr != NULL) {
+            *offset = (uint64_t)(anchor.ptr - begin);
+            return true;
+        }
+    }
+    return false;
+}
+
 TA_API ta_result ta_definition_import(ta_system *system, const ta_definition_import_params *params) {
     if (system == NULL || params == NULL || params->codec.v == NULL || params->arena == NULL ||
         params->out == NULL || (params->input.ptr == NULL && params->input.len != 0)) {
@@ -5928,16 +6926,26 @@ TA_API ta_result ta_definition_import(ta_system *system, const ta_definition_imp
     spec->identity = params->identity;
 
     ta_definition *definition = NULL;
+    ta_compile_error compile_error = {0};
     result = ta_definition_compile_spec(system, &(ta_definition_compile_params){
                                                     .spec = spec,
                                                     .datamodel = params->datamodel,
                                                     .allocator = params->allocator,
                                                     .out = &definition,
+                                                    .error = params->error != NULL ? &compile_error : NULL,
+                                                    .error_arena = params->arena,
                                                 });
+    if ((result == TA_ERR_INVALID || result == TA_ERR_UNSUPPORTED) && params->error != NULL) {
+        ta_import_error error = { .stage = TA_IMPORT_STAGE_COMPILE, .as.compile = compile_error };
+        uint64_t offset = 0;
+        if (ta_import_locate(spec, &compile_error, params->input, &offset)) {
+            error.located = true;
+            error.at = ta_import_position(params->input, offset);
+        }
+        ta_import_fail(params, &error);
+        return result;
+    }
     if (result == TA_ERR_INVALID || result == TA_ERR_UNSUPPORTED) {
-        /* Located once ADR 0058 reports where in the spec the fault is. */
-        ta_import_fail(params, &(ta_import_error){ .stage = TA_IMPORT_STAGE_COMPILE,
-                                                   .as.compile = { .code = TA_COMPILE_ERROR_NONE } });
         return result;
     }
     if (result != TA_OK) {

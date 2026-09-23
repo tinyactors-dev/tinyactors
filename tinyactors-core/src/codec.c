@@ -13,6 +13,320 @@ static void ta_import_fail(const ta_definition_import_params *params, const ta_i
     }
 }
 
+/* ------------------------------------------------------------------------
+ * Locating a compile error in the input (ADR 0058 section 5)
+ */
+
+static bool ta_import_within(ta_bytes input, const char *ptr, uint32_t len) {
+    const char *begin = (const char *)input.ptr;
+    return ptr != NULL && input.ptr != NULL && ptr >= begin && (size_t)(ptr - begin) <= input.len &&
+           len <= input.len - (size_t)(ptr - begin);
+}
+
+/* Lines and columns count from 1; a column counts bytes, as txml's do. */
+static ta_chart_position ta_import_position(ta_bytes input, uint64_t offset) {
+    ta_chart_position at = { .offset = offset, .line = 1, .column = 1 };
+    for (uint64_t index = 0; index < offset && index < input.len; index += 1u) {
+        if (input.ptr[index] == '\n') {
+            at.line += 1u;
+            at.column = 1;
+        } else {
+            at.column += 1u;
+        }
+    }
+    return at;
+}
+
+typedef enum {
+    TA_NODE_NONE = 0,
+    TA_NODE_SPEC,
+    TA_NODE_STATE,
+    TA_NODE_TRANSITION,
+    TA_NODE_HANDLER,
+    TA_NODE_INITIAL,
+    TA_NODE_ACTION,
+    TA_NODE_DATA,
+    TA_NODE_PARAM,
+    TA_NODE_INVOKE,
+    TA_NODE_DONE_DATA,
+    TA_NODE_TEXT
+} ta_node_kind;
+
+/* One element of a spec reached by a path; TA_NODE_TEXT is a text member. */
+typedef struct {
+    ta_node_kind kind;
+    const void *ptr;
+    ta_str text;
+} ta_node;
+
+static ta_str ta_expression_text(const ta_expression *expression) {
+    return expression->kind == TA_EXPRESSION_SOURCE ? expression->as.source : (ta_str){0};
+}
+
+static ta_str ta_value_text(const ta_scxml_value_spec *value) {
+    switch (value->kind) {
+        case TA_SCXML_VALUE_EXPR: return ta_expression_text(&value->as.expr);
+        case TA_SCXML_VALUE_LOCATION: return ta_expression_text(&value->as.location);
+        case TA_SCXML_VALUE_CONTENT:
+            return (ta_str){ .ptr = (const char *)value->as.content.bytes.ptr, .len = value->as.content.bytes.len };
+        default: return (ta_str){0};
+    }
+}
+
+static ta_str ta_string_text(const ta_scxml_string_spec *string) {
+    switch (string->kind) {
+        case TA_SCXML_STRING_LITERAL: return string->as.literal;
+        case TA_SCXML_STRING_EXPR: return ta_expression_text(&string->as.expr);
+        default: return (ta_str){0};
+    }
+}
+
+static ta_str ta_id_text(const ta_scxml_id_spec *id) {
+    switch (id->kind) {
+        case TA_SCXML_ID_LITERAL: return id->as.literal;
+        case TA_SCXML_ID_LOCATION: return ta_expression_text(&id->as.location);
+        default: return (ta_str){0};
+    }
+}
+
+static ta_node ta_text_node(ta_str text) {
+    return (ta_node){ .kind = TA_NODE_TEXT, .text = text };
+}
+
+static ta_node ta_list_node(ta_node_kind kind, const void *element) {
+    return (ta_node){ .kind = kind, .ptr = element };
+}
+
+static ta_node ta_action_step(const ta_scxml_action_spec *action, ta_spec_step step) {
+    uint32_t i = step.index;
+    switch (action->kind) {
+        case TA_SCXML_ACTION_RAISE:
+            if (step.member == TA_SPEC_MEMBER_EVENT) return ta_text_node(action->as.raise.event);
+            if (step.member == TA_SPEC_MEMBER_DATA_VALUE) return ta_text_node(ta_value_text(&action->as.raise.data));
+            return (ta_node){0};
+        case TA_SCXML_ACTION_SEND: {
+            const ta_scxml_send_spec *send = &action->as.send;
+            switch (step.member) {
+                case TA_SPEC_MEMBER_PARAMS: return ta_list_node(TA_NODE_PARAM, &send->params[i]);
+                case TA_SPEC_MEMBER_ID: return ta_text_node(ta_id_text(&send->id));
+                case TA_SPEC_MEMBER_TYPE: return ta_text_node(ta_string_text(&send->type));
+                case TA_SPEC_MEMBER_EVENT:
+                    if (send->event.kind == TA_SCXML_EVENT_NAME) return ta_text_node(send->event.as.name);
+                    if (send->event.kind == TA_SCXML_EVENT_EXPR) return ta_text_node(ta_expression_text(&send->event.as.expr));
+                    return (ta_node){0};
+                case TA_SPEC_MEMBER_TARGET: return ta_text_node(ta_string_text(&send->target));
+                case TA_SPEC_MEMBER_DELAY: return ta_text_node(ta_string_text(&send->delay));
+                case TA_SPEC_MEMBER_DATA_VALUE: return ta_text_node(ta_value_text(&send->data));
+                default: return (ta_node){0};
+            }
+        }
+        case TA_SCXML_ACTION_CANCEL:
+            if (step.member == TA_SPEC_MEMBER_SENDID) return ta_text_node(ta_string_text(&action->as.cancel.sendid));
+            return (ta_node){0};
+        case TA_SCXML_ACTION_ASSIGN:
+            if (step.member == TA_SPEC_MEMBER_LOCATION) return ta_text_node(ta_expression_text(&action->as.assign.location));
+            if (step.member == TA_SPEC_MEMBER_DATA_VALUE) return ta_text_node(ta_value_text(&action->as.assign.value));
+            return (ta_node){0};
+        case TA_SCXML_ACTION_SCRIPT:
+            if (step.member == TA_SPEC_MEMBER_EXPR) return ta_text_node(ta_expression_text(&action->as.script.script));
+            return (ta_node){0};
+        case TA_SCXML_ACTION_LOG:
+            if (step.member == TA_SPEC_MEMBER_EXPR) return ta_text_node(ta_expression_text(&action->as.log.expr));
+            return (ta_node){0};
+        case TA_SCXML_ACTION_IF:
+            switch (step.member) {
+                case TA_SPEC_MEMBER_CONDITION: return ta_text_node(ta_expression_text(&action->as.conditional.condition));
+                case TA_SPEC_MEMBER_THEN: return ta_list_node(TA_NODE_ACTION, &action->as.conditional.then_actions[i]);
+                case TA_SPEC_MEMBER_ELSE: return ta_list_node(TA_NODE_ACTION, &action->as.conditional.else_actions[i]);
+                default: return (ta_node){0};
+            }
+        case TA_SCXML_ACTION_FOREACH:
+            switch (step.member) {
+                case TA_SPEC_MEMBER_EXPR: return ta_text_node(ta_expression_text(&action->as.foreach.array));
+                case TA_SPEC_MEMBER_ITEM: return ta_text_node(action->as.foreach.item);
+                case TA_SPEC_MEMBER_INDEX: return ta_text_node(action->as.foreach.index);
+                case TA_SPEC_MEMBER_BODY: return ta_list_node(TA_NODE_ACTION, &action->as.foreach.body[i]);
+                default: return (ta_node){0};
+            }
+        default:
+            return (ta_node){0};
+    }
+}
+
+/* Follows one step of a compile error's path. */
+static ta_node ta_node_step(ta_node node, ta_spec_step step) {
+    uint32_t i = step.index;
+    switch (node.kind) {
+        case TA_NODE_SPEC: {
+            const ta_scxml_spec *spec = node.ptr;
+            switch (step.member) {
+                case TA_SPEC_MEMBER_STATES: return ta_list_node(TA_NODE_STATE, &spec->states[i]);
+                case TA_SPEC_MEMBER_DATA: return ta_list_node(TA_NODE_DATA, &spec->data[i]);
+                case TA_SPEC_MEMBER_INITIAL: return ta_list_node(TA_NODE_INITIAL, spec->initial);
+                case TA_SPEC_MEMBER_SCRIPT: return ta_text_node(ta_expression_text(&spec->script));
+                case TA_SPEC_MEMBER_NAME: return ta_text_node(spec->name);
+                case TA_SPEC_MEMBER_DATAMODEL: return ta_text_node(spec->datamodel);
+                default: return (ta_node){0};
+            }
+        }
+        case TA_NODE_STATE: {
+            const ta_scxml_state_spec *state = node.ptr;
+            switch (step.member) {
+                case TA_SPEC_MEMBER_STATES: return ta_list_node(TA_NODE_STATE, &state->states[i]);
+                case TA_SPEC_MEMBER_TRANSITIONS: return ta_list_node(TA_NODE_TRANSITION, &state->transitions[i]);
+                case TA_SPEC_MEMBER_ONENTRY: return ta_list_node(TA_NODE_HANDLER, &state->onentry[i]);
+                case TA_SPEC_MEMBER_ONEXIT: return ta_list_node(TA_NODE_HANDLER, &state->onexit[i]);
+                case TA_SPEC_MEMBER_DATA: return ta_list_node(TA_NODE_DATA, &state->data[i]);
+                case TA_SPEC_MEMBER_INVOKES: return ta_list_node(TA_NODE_INVOKE, &state->invokes[i]);
+                case TA_SPEC_MEMBER_INITIAL: return ta_list_node(TA_NODE_INITIAL, state->initial);
+                case TA_SPEC_MEMBER_DONE_DATA: return ta_list_node(TA_NODE_DONE_DATA, state->done_data);
+                case TA_SPEC_MEMBER_ID: return ta_text_node(state->id);
+                default: return (ta_node){0};
+            }
+        }
+        case TA_NODE_TRANSITION: {
+            const ta_scxml_transition_spec *transition = node.ptr;
+            switch (step.member) {
+                case TA_SPEC_MEMBER_TARGETS: return ta_text_node(transition->targets[i]);
+                case TA_SPEC_MEMBER_ACTIONS: return ta_list_node(TA_NODE_ACTION, &transition->actions[i]);
+                case TA_SPEC_MEMBER_EVENT: return ta_text_node(transition->event);
+                case TA_SPEC_MEMBER_CONDITION: return ta_text_node(ta_expression_text(&transition->condition));
+                default: return (ta_node){0};
+            }
+        }
+        case TA_NODE_HANDLER: {
+            const ta_scxml_handler_spec *handler = node.ptr;
+            if (step.member == TA_SPEC_MEMBER_ACTIONS) return ta_list_node(TA_NODE_ACTION, &handler->actions[i]);
+            return (ta_node){0};
+        }
+        case TA_NODE_INITIAL: {
+            const ta_scxml_initial_spec *initial = node.ptr;
+            if (step.member == TA_SPEC_MEMBER_TARGETS) return ta_text_node(initial->targets[i]);
+            if (step.member == TA_SPEC_MEMBER_ACTIONS) return ta_list_node(TA_NODE_ACTION, &initial->actions[i]);
+            return (ta_node){0};
+        }
+        case TA_NODE_DATA: {
+            const ta_scxml_data_spec *data = node.ptr;
+            if (step.member == TA_SPEC_MEMBER_NAME) return ta_text_node(data->name);
+            if (step.member == TA_SPEC_MEMBER_DATA_VALUE) return ta_text_node(ta_value_text(&data->initializer));
+            return (ta_node){0};
+        }
+        case TA_NODE_PARAM: {
+            const ta_scxml_param_spec *param = node.ptr;
+            if (step.member == TA_SPEC_MEMBER_NAME) return ta_text_node(param->name);
+            if (step.member == TA_SPEC_MEMBER_DATA_VALUE) return ta_text_node(ta_value_text(&param->value));
+            return (ta_node){0};
+        }
+        case TA_NODE_DONE_DATA: {
+            const ta_scxml_done_data_spec *done = node.ptr;
+            if (step.member == TA_SPEC_MEMBER_PARAMS) return ta_list_node(TA_NODE_PARAM, &done->params[i]);
+            if (step.member == TA_SPEC_MEMBER_DATA_VALUE) return ta_text_node(ta_value_text(&done->content));
+            return (ta_node){0};
+        }
+        case TA_NODE_INVOKE: {
+            const ta_scxml_invoke_spec *invoke = node.ptr;
+            switch (step.member) {
+                case TA_SPEC_MEMBER_PARAMS: return ta_list_node(TA_NODE_PARAM, &invoke->params[i]);
+                case TA_SPEC_MEMBER_FINALIZE: return ta_list_node(TA_NODE_ACTION, &invoke->finalize[i]);
+                case TA_SPEC_MEMBER_ID: return ta_text_node(ta_id_text(&invoke->id));
+                case TA_SPEC_MEMBER_TYPE: return ta_text_node(ta_string_text(&invoke->type));
+                case TA_SPEC_MEMBER_SRC: return ta_text_node(ta_string_text(&invoke->src));
+                case TA_SPEC_MEMBER_DATA_VALUE: return ta_text_node(ta_value_text(&invoke->data));
+                default: return (ta_node){0};
+            }
+        }
+        case TA_NODE_ACTION:
+            return ta_action_step(node.ptr, step);
+        default:
+            return (ta_node){0};
+    }
+}
+
+/* The text that stands for a node, if any of it lies within `input`. */
+static ta_str ta_node_anchor(ta_node node, ta_bytes input) {
+    ta_str candidates[3] = { {0}, {0}, {0} };
+    switch (node.kind) {
+        case TA_NODE_TEXT: candidates[0] = node.text; break;
+        case TA_NODE_SPEC: candidates[0] = ((const ta_scxml_spec *)node.ptr)->name; break;
+        case TA_NODE_STATE: candidates[0] = ((const ta_scxml_state_spec *)node.ptr)->id; break;
+        case TA_NODE_TRANSITION: {
+            const ta_scxml_transition_spec *transition = node.ptr;
+            candidates[0] = transition->event;
+            candidates[1] = ta_expression_text(&transition->condition);
+            candidates[2] = transition->targets != NULL ? transition->targets[0] : (ta_str){0};
+            break;
+        }
+        case TA_NODE_INITIAL: {
+            const ta_scxml_initial_spec *initial = node.ptr;
+            candidates[0] = initial->targets != NULL ? initial->targets[0] : (ta_str){0};
+            break;
+        }
+        case TA_NODE_DATA: candidates[0] = ((const ta_scxml_data_spec *)node.ptr)->name; break;
+        case TA_NODE_PARAM: candidates[0] = ((const ta_scxml_param_spec *)node.ptr)->name; break;
+        case TA_NODE_INVOKE: {
+            const ta_scxml_invoke_spec *invoke = node.ptr;
+            candidates[0] = ta_id_text(&invoke->id);
+            candidates[1] = ta_string_text(&invoke->type);
+            candidates[2] = ta_string_text(&invoke->src);
+            break;
+        }
+        case TA_NODE_ACTION: {
+            /* The first text member the action has. */
+            static const ta_spec_member members[] = {
+                TA_SPEC_MEMBER_EVENT, TA_SPEC_MEMBER_LOCATION, TA_SPEC_MEMBER_EXPR, TA_SPEC_MEMBER_CONDITION,
+                TA_SPEC_MEMBER_SENDID, TA_SPEC_MEMBER_TARGET, TA_SPEC_MEMBER_TYPE, TA_SPEC_MEMBER_ID,
+            };
+            for (uint32_t index = 0; index < sizeof(members) / sizeof(members[0]); index += 1u) {
+                ta_node text = ta_action_step(node.ptr, (ta_spec_step){ .member = members[index],
+                                                                        .index = TA_SPEC_INDEX_NONE });
+                if (text.kind == TA_NODE_TEXT && ta_import_within(input, text.text.ptr, text.text.len)) {
+                    return text.text;
+                }
+            }
+            break;
+        }
+        default: break;
+    }
+    for (uint32_t index = 0; index < 3u; index += 1u) {
+        if (ta_import_within(input, candidates[index].ptr, candidates[index].len)) {
+            return candidates[index];
+        }
+    }
+    return (ta_str){0};
+}
+
+/*
+ * Where in `input` a compile error is: its subject, if the subject is a
+ * slice of the input; otherwise the deepest element on its path whose text
+ * is. False when neither. Error path only.
+ */
+static bool ta_import_locate(const ta_scxml_spec *spec, const ta_compile_error *error, ta_bytes input,
+                             uint64_t *offset) {
+    const char *begin = (const char *)input.ptr;
+    if (error->subject.len != 0 && ta_import_within(input, error->subject.ptr, error->subject.len)) {
+        *offset = (uint64_t)(error->subject.ptr - begin) + error->subject_offset;
+        return true;
+    }
+    for (uint32_t depth = error->path_length + 1u; depth > 0; depth -= 1u) {
+        ta_node node = { .kind = TA_NODE_SPEC, .ptr = spec };
+        for (uint32_t step = 0; step + 1u < depth && node.kind != TA_NODE_NONE; step += 1u) {
+            node = ta_node_step(node, error->path[step]);
+            if (node.kind != TA_NODE_TEXT && node.ptr == NULL) {
+                node.kind = TA_NODE_NONE;
+            }
+        }
+        if (node.kind == TA_NODE_NONE) {
+            continue;
+        }
+        ta_str anchor = ta_node_anchor(node, input);
+        if (anchor.ptr != NULL) {
+            *offset = (uint64_t)(anchor.ptr - begin);
+            return true;
+        }
+    }
+    return false;
+}
+
 ta_result ta_definition_import(ta_system *system, const ta_definition_import_params *params) {
     if (system == NULL || params == NULL || params->codec.v == NULL || params->arena == NULL ||
         params->out == NULL || (params->input.ptr == NULL && params->input.len != 0)) {
@@ -61,16 +375,26 @@ ta_result ta_definition_import(ta_system *system, const ta_definition_import_par
     spec->identity = params->identity;
 
     ta_definition *definition = NULL;
+    ta_compile_error compile_error = {0};
     result = ta_definition_compile_spec(system, &(ta_definition_compile_params){
                                                     .spec = spec,
                                                     .datamodel = params->datamodel,
                                                     .allocator = params->allocator,
                                                     .out = &definition,
+                                                    .error = params->error != NULL ? &compile_error : NULL,
+                                                    .error_arena = params->arena,
                                                 });
+    if ((result == TA_ERR_INVALID || result == TA_ERR_UNSUPPORTED) && params->error != NULL) {
+        ta_import_error error = { .stage = TA_IMPORT_STAGE_COMPILE, .as.compile = compile_error };
+        uint64_t offset = 0;
+        if (ta_import_locate(spec, &compile_error, params->input, &offset)) {
+            error.located = true;
+            error.at = ta_import_position(params->input, offset);
+        }
+        ta_import_fail(params, &error);
+        return result;
+    }
     if (result == TA_ERR_INVALID || result == TA_ERR_UNSUPPORTED) {
-        /* Located once ADR 0058 reports where in the spec the fault is. */
-        ta_import_fail(params, &(ta_import_error){ .stage = TA_IMPORT_STAGE_COMPILE,
-                                                   .as.compile = { .code = TA_COMPILE_ERROR_NONE } });
         return result;
     }
     if (result != TA_OK) {
