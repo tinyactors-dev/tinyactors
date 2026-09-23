@@ -5,6 +5,7 @@
 
 #include "enumerate.h"
 #include "events.h"
+#include "napi_services.h"
 #include "pump.h"
 #include "router.h"
 
@@ -175,7 +176,7 @@ static tna_napi_system *tna_this(napi_env env, napi_callback_info info) {
 }
 
 /* Like tna_this, but also throws "closed" for a closed system. */
-static tna_napi_system *tna_open_this(napi_env env, napi_callback_info info) {
+tna_napi_system *tna_open_this(napi_env env, napi_callback_info info) {
     tna_napi_system *wrapper = tna_this(env, info);
     if (wrapper != NULL && tna_system_closed(wrapper->system)) {
         tna_throw(env, "closed", "the system is closed");
@@ -230,6 +231,7 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
         free(wrapper);
         return NULL;
     }
+    tna_services_init(wrapper);
     if (napi_wrap(env, self, wrapper, tna_finalize, NULL, NULL) != napi_ok) {
         tna_pump_close(wrapper, true);
         tna_system_free(wrapper->system);
@@ -876,6 +878,10 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "cancelSend", NULL, tna_cancel_send_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "lastSendToken", NULL, NULL, tna_last_send_token_getter, NULL, NULL, napi_default_jsproperty, NULL },
         { "idPage", NULL, tna_id_page_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "registerIo", NULL, tna_register_io_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "registerInvoker", NULL, tna_register_invoker_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "setLogSink", NULL, tna_set_log_sink_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "reportInvoke", NULL, tna_report_invoke_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "closed", NULL, NULL, tna_closed_getter, NULL, NULL, napi_default_jsproperty, NULL },
     };
     napi_value constructor = NULL;

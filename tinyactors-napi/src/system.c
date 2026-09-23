@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <time.h>
 
+#include "adapters/invoker.h"
 #include "router.h"
 
 ta_result tna_system_create(tna_system **out) {
@@ -39,6 +40,7 @@ ta_result tna_system_create(tna_system **out) {
         free(system);
         return result;
     }
+    tna_effects_init(&system->effects, &system->scratch.turn);
     ta_system_config config = {
         .allocator = tna_allocator_for(&system->allocator, TNA_MEMORY_CORE),
         .initial_time = 0,
@@ -51,6 +53,13 @@ ta_result tna_system_create(tna_system **out) {
     }
     (void)ta_system_set_actor_directory(system->core, tna_directory_adapter(&system->directory));
     (void)ta_system_set_external_event_router(system->core, tna_router_adapter(system));
+    result = tna_scxml_invoker_register(system);
+    if (result != TA_OK) {
+        ta_system_destroy(system->core);
+        tna_scratch_destroy(&system->scratch);
+        free(system);
+        return result;
+    }
     *out = system;
     return TA_OK;
 }
@@ -70,6 +79,9 @@ void tna_system_close(tna_system *system) {
     (void)ta_system_set_actor_directory(system->core, (ta_actor_directory){0});
     tna_sched_discard_mail(&system->sched);
     tna_directory_clear(&system->directory);
+    /* Waiting effects hold values and addresses; what core's teardown asks
+     * of a service from here on is dropped (the adapters in adapters/). */
+    tna_effects_close(&system->effects);
     ta_system_destroy(system->core);
     system->core = NULL;
     tna_sched_destroy(&system->sched);
@@ -104,7 +116,15 @@ static bool tna_system_due_now(const tna_system *system) {
 }
 
 bool tna_system_quiet(const tna_system *system) {
-    return tna_sched_quiet(&system->sched) && !tna_system_due_now(system);
+    return tna_sched_quiet(&system->sched) && system->effects.count == 0 && !tna_system_due_now(system);
+}
+
+bool tna_system_effect(tna_system *system, const tna_effect *effect) {
+    bool queued = tna_effects_push(&system->effects, effect);
+    if (queued) {
+        tna_system_want_turn(system);
+    }
+    return queued;
 }
 
 uint64_t tna_monotonic_ns(void *context) {

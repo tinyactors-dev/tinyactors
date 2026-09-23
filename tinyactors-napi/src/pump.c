@@ -1,5 +1,7 @@
 #include "pump.h"
 
+#include "napi_services.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -311,7 +313,7 @@ bool tna_pump_init(napi_env env, tna_napi_system *wrapper, napi_value facade, na
  */
 
 /* The ActorId view of `actor` (ADR 0002), or NULL without a class or facade. */
-static napi_value tna_actor_view(napi_env env, tna_napi_system *wrapper, ta_actor_id actor) {
+napi_value tna_actor_view(napi_env env, tna_napi_system *wrapper, ta_actor_id actor) {
     tna_env *data = wrapper->env_data;
     napi_value actor_class = NULL;
     napi_value argv[3] = { NULL, NULL, NULL };
@@ -355,7 +357,7 @@ static napi_status tna_set(napi_env env, napi_value object, const char *name, na
  * Calls `hook` with `argument`. An exception is kept as the turn's first
  * one, if it is the first, and cleared, so the turn goes on.
  */
-static void tna_call_hook(napi_env env, napi_ref hook, napi_value argument, napi_value *first_error) {
+void tna_call_hook(napi_env env, napi_ref hook, napi_value argument, napi_value *first_error) {
     napi_value function = NULL;
     napi_value global = NULL;
     napi_value ignored = NULL;
@@ -450,7 +452,7 @@ static const char *const tna_dead_reasons[] = {
 };
 
 /* { family, name }: a named target that had no resident actor (ADR 0006). */
-static napi_value tna_address_object(napi_env env, const ta_actor_address *address) {
+napi_value tna_address_object(napi_env env, const ta_actor_address *address) {
     napi_value object = NULL;
     napi_value family = NULL;
     napi_value name = NULL;
@@ -464,7 +466,7 @@ static napi_value tna_address_object(napi_env env, const ta_actor_address *addre
 }
 
 /* The dotted text of an event name, formatted by core (ADR 0004), or NULL. */
-static napi_value tna_event_text(napi_env env, tna_system *system, ta_event_name_id name) {
+napi_value tna_event_text(napi_env env, tna_system *system, ta_event_name_id name) {
     char stack[256];
     uint32_t needed = 0;
     ta_event_name_format_params params = { .name = name, .buffer = stack, .capacity = sizeof stack, .needed = &needed };
@@ -672,6 +674,8 @@ static napi_value tna_turn_callback(napi_env env, napi_callback_info info) {
                 tna_dead_letter_record(env, wrapper, record, &first_error);
             }
         }
+        /* Services run after the hooks, in the order core called them (step 13). */
+        tna_services_dispatch(env, wrapper, &first_error);
         if (!tna_system_closed(system)) {
             tna_settle_sends(env, wrapper);
         }

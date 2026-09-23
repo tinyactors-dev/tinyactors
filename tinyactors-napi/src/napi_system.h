@@ -58,6 +58,8 @@ extern const char tna_napi_system_tag;
 napi_status tna_napi_system_define(napi_env env, napi_value exports);
 /* Closes every system still open in the environment (the cleanup hook). */
 void tna_napi_system_close_open(tna_env *data);
+/* The native System that `this` is; throws "invalid" or "closed" and returns NULL otherwise. */
+tna_napi_system *tna_open_this(napi_env env, napi_callback_info info);
 /* The native System of a JavaScript System object, or NULL. */
 tna_napi_system *tna_napi_system_unwrap(napi_env env, napi_value value);
 

@@ -11,6 +11,9 @@
  * - setupLiteral(brand): registers the symbol that marks literal() objects,
  *   so the JavaScript data model can tell a constant from an expression
  *   (ADR 0011); lib/statechart.js calls it;
+ * - setupEffects(handler): registers the function the pump calls with each
+ *   service effect, handler(system, kind, payload) (napi_services.h);
+ *   lib/system.js calls it;
  * - System: the native system class (ADR 0012), used by lib/system.js;
  * - environmentStats(): counters for tests (systems created and closed,
  *   bytes leaked at close);
@@ -79,6 +82,33 @@ static napi_value tna_setup_actor(napi_env env, napi_callback_info info) {
     return undefined;
 }
 
+/* setupEffects(handler): the function that runs service effects (lib/system.js). */
+static napi_value tna_setup_effects(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value argv[1] = { NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    napi_valuetype type = napi_undefined;
+    if (argc < 1 || napi_typeof(env, argv[0], &type) != napi_ok || type != napi_function) {
+        return tna_throw(env, "invalid", "setupEffects expects a function");
+    }
+    tna_env *data = tna_env_get(env);
+    if (data == NULL) {
+        return tna_throw(env, "invalid", "the addon is not initialized");
+    }
+    if (data->effects_handler != NULL) {
+        napi_delete_reference(env, data->effects_handler);
+        data->effects_handler = NULL;
+    }
+    if (napi_create_reference(env, argv[0], 1, &data->effects_handler) != napi_ok) {
+        return tna_throw(env, "out-of-memory", "cannot keep the effects handler");
+    }
+    napi_value undefined = NULL;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+}
+
 /* setupLiteral(brand): the symbol that marks literal() objects (lib/statechart.js). */
 static napi_value tna_setup_literal(napi_env env, napi_callback_info info) {
     size_t argc = 1;
@@ -140,6 +170,7 @@ static napi_value tna_init(napi_env env, napi_value exports) {
         tna_export_function(env, exports, "setup", tna_setup) != napi_ok ||
         tna_export_function(env, exports, "setupActor", tna_setup_actor) != napi_ok ||
         tna_export_function(env, exports, "setupLiteral", tna_setup_literal) != napi_ok ||
+        tna_export_function(env, exports, "setupEffects", tna_setup_effects) != napi_ok ||
         tna_export_function(env, exports, "environmentStats", tna_environment_stats) != napi_ok ||
         tna_napi_system_define(env, exports) != napi_ok ||
         tna_gen_define(env, exports) != napi_ok) {

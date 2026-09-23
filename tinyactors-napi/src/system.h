@@ -37,6 +37,14 @@
  * armed timer fire early and arm again. Due sends are dispatched at the end
  * of a turn, at most `due` of them.
  *
+ * Services (ROADMAP step 13, ADR 0001 rule 3): the log sink, the I/O
+ * processors and the invokers core calls are adapters (the adapters in adapters/) that
+ * queue effects (effects.h) instead of running JavaScript inside core. The
+ * queue counts as work, so a system with effects waiting is not quiet, and
+ * close releases what they hold while core is still alive. The in-system
+ * SCXML invoker is registered at creation; it spawns its child in the same
+ * system and tells the scheduler about it.
+ *
  * Later steps add more plumbing (values); each one is released by
  * tna_system_close() in the order ADR 0012 gives.
  */
@@ -45,6 +53,7 @@
 
 #include "allocator.h"
 #include "directory.h"
+#include "effects.h"
 #include "scheduler.h"
 #include "tinyactors.h"
 
@@ -109,6 +118,17 @@ struct tna_system {
      */
     void (*after_core)(void *context);
     void *after_core_context;
+    /* Effects waiting for JavaScript (effects.h), in the turn arena. */
+    tna_effects effects;
+    /* The last service handle a JavaScript invoker's start was given. */
+    uint64_t next_service;
+    /*
+     * The in-system SCXML invoker (adapters/invoker.c) asks the Node-API
+     * layer which registered definition an invoke's content or src names.
+     * TA_ERR_NOT_FOUND when the value names none.
+     */
+    ta_result (*resolve_child)(void *context, const ta_value *value, ta_definition_id *out);
+    void *resolve_context;
 };
 
 /* TA_ERR_NOMEM when the record or core cannot be allocated. */
@@ -125,6 +145,12 @@ void tna_system_free(tna_system *system);
  */
 ta_result tna_system_post(tna_system *system, const tna_message *message);
 
+/*
+ * Queues an effect (effects.h), which hands over its references, and asks
+ * for a turn. False when it was dropped (closing, or no memory).
+ */
+bool tna_system_effect(tna_system *system, const tna_effect *effect);
+
 /* Asks for a turn unless one is pending or the system is quiet or closed. */
 void tna_system_want_turn(tna_system *system);
 /*
@@ -135,8 +161,8 @@ void tna_system_want_turn(tna_system *system);
 void tna_system_turn(tna_system *system);
 void tna_system_end_turn(tna_system *system);
 /*
- * No runnable or ready actors, no dead letters to report, and nothing due at
- * core's current time (ADR 0007 point 4).
+ * No runnable or ready actors, no dead letters to report, no effects waiting
+ * for JavaScript, and nothing due at core's current time (ADR 0007 point 4).
  */
 bool tna_system_quiet(const tna_system *system);
 

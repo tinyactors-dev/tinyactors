@@ -49,3 +49,13 @@ void tna_pump_close(tna_napi_system *wrapper, bool env_usable);
 napi_value tna_pump_flush(napi_env env, tna_napi_system *wrapper);
 /* advanceTo(time): manual clock only; moves time, then waits like flush(). */
 napi_value tna_pump_advance_to(napi_env env, tna_napi_system *wrapper, napi_value time);
+
+/* Helpers the pump and the services layer (napi_services.h) share. */
+/* The ActorId view of `actor` (ADR 0002), or NULL without a class or facade. */
+napi_value tna_actor_view(napi_env env, tna_napi_system *wrapper, ta_actor_id actor);
+/* { family, name } for an address. */
+napi_value tna_address_object(napi_env env, const ta_actor_address *address);
+/* The dotted text of an event name, formatted by core (ADR 0004), or NULL. */
+napi_value tna_event_text(napi_env env, tna_system *system, ta_event_name_id name);
+/* Calls `hook` with `argument`; the turn's first exception is kept, not thrown. */
+void tna_call_hook(napi_env env, napi_ref hook, napi_value argument, napi_value *first_error);

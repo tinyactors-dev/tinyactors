@@ -270,6 +270,13 @@ ta_result tna_sched_post_dead(tna_sched *sched, const tna_dead_post *post);
 tna_envelope *tna_sched_envelope(const tna_sched *sched, uint32_t index);
 /* Messages waiting in `actor`'s mailbox. */
 uint32_t tna_sched_mailbox_count(const tna_sched *sched, ta_actor_id actor);
+/*
+ * Core gave `actor` a macrostep to run outside a delivery (for example an
+ * invocation reported unavailable, which queues an internal event): an idle
+ * or ready actor becomes runnable. A runnable or quarantined actor is left
+ * as it is. TA_ERR_NOT_FOUND for an actor the table does not know.
+ */
+ta_result tna_sched_wake(tna_sched *sched, ta_actor_id actor);
 /* Puts a quarantined actor back on the runnable queue (ADR 0008). */
 ta_result tna_sched_release(tna_sched *sched, ta_actor_id actor);
 

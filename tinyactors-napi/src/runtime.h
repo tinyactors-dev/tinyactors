@@ -39,6 +39,7 @@ typedef struct tna_env {
     napi_ref error_class; /* TinyactorsError, or NULL before setup */
     napi_ref actor_class; /* ActorId (lib/actor.js), for views made natively */
     napi_ref literal_brand; /* the literal() brand symbol (lib/statechart.js) */
+    napi_ref effects_handler; /* (system, kind, payload) => void (lib/system.js), step 13 */
     tna_napi_system *open_systems; /* intrusive list through tna_napi_system */
     uint32_t references;           /* live native Systems */
     bool torn_down;                /* the cleanup hook has run */

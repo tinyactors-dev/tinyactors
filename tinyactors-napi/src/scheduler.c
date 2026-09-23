@@ -370,6 +370,22 @@ void tna_sched_remove(tna_sched *sched, ta_actor_id actor, tna_dead_reason reaso
     sched->known -= 1u;
 }
 
+ta_result tna_sched_wake(tna_sched *sched, ta_actor_id actor) {
+    tna_sched_entry *entry = tna_sched_lookup(sched, actor);
+    if (entry == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    if (entry->state != TNA_SCHED_IDLE && entry->state != TNA_SCHED_READY) {
+        return TA_OK;
+    }
+    /* A ready actor's entry in the ready queue is skipped once it is runnable. */
+    if (tna_ring_push(&sched->runnable, &actor) != TA_OK) {
+        return TA_ERR_NOMEM;
+    }
+    entry->state = TNA_SCHED_RUNNABLE;
+    return TA_OK;
+}
+
 ta_result tna_sched_release(tna_sched *sched, ta_actor_id actor) {
     tna_sched_entry *entry = tna_sched_lookup(sched, actor);
     if (entry == NULL) {
