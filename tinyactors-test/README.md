@@ -110,9 +110,12 @@ upgrading one to a new revision of its chart (`prepare_replacement`, run,
 whole spawn/bootstrap/destroy life.
 
 `mise run test` runs it as a test of invariant 17: it takes each measurement
-at two populations a factor of four apart and fails when the cost of one
-actor grows with the population, which is what an actor-table walk inside a
-spawn looks like. It asserts no absolute time — that would only measure the
+at 50,000, 200,000, 1,000,000 and 4,000,000 actors, and fails when the cost
+of one actor grows from one population to the next, which is what an
+actor-table walk inside a spawn looks like. Measuring up to the target takes
+about 30 seconds and a peak of about 9.5 GB. On a machine without that much
+memory to spare, `TAT_SCALE_MAX_POPULATION=200000` limits it to the first
+two populations, which takes about a second. It asserts no absolute time — that would only measure the
 machine — and it measures CPU time, so a loaded machine slows it down
 without changing the verdict. Per-actor memory is held to a budget in the
 same way.

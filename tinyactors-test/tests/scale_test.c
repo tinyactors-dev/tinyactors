@@ -7,8 +7,9 @@
  * benchmark behind the four-million-actor target of that page.
  *
  * The claim is about a population, so a fixed-size test cannot state it: it
- * is measured at two populations that differ by a factor of four, and the
- * per-actor cost must stay flat between them. A table walk inside a spawn
+ * is measured at a series of populations, each about four times the last,
+ * up to the four-million-actor target, and the per-actor cost must stay flat
+ * from each one to the next. A table walk inside a spawn
  * costs one factor of four per factor of four in population, so a bug shows
  * up as a ratio near four against a bound of two, and machine noise cannot
  * cross that gap. Each population is measured three times and the cheapest
@@ -47,13 +48,17 @@
 #define STR(text) {.ptr = (text), .len = (uint32_t)(sizeof(text) - 1u)}
 
 /*
- * The populations the ratio is taken over. Four million actors is the
- * target, not the test: SMALL and LARGE are the smallest pair that keeps
- * each measurement well clear of the clock's resolution while the whole
- * test stays under a second of a passing run.
+ * The populations measured, smallest first. Each neighbouring pair is a
+ * ratio check, so each step grows the population by roughly four and a
+ * table walk shows up as a ratio near the step against a bound of two.
+ * Four million actors is the target of docs/internal/memory-model.md, and
+ * it is measured by default: about 40 seconds and a peak of about 9.5 GB
+ * for the whole test. On a machine without that much memory to spare, set
+ * TAT_SCALE_MAX_POPULATION to leave out every population above it, for
+ * example 200000 for the quick pair. At least two populations always run.
  */
-#define SMALL_POPULATION 50000u
-#define LARGE_POPULATION 200000u
+static const uint32_t POPULATIONS[] = {50000u, 200000u, 1000000u, 4000000u};
+#define POPULATION_COUNT (sizeof(POPULATIONS) / sizeof(POPULATIONS[0]))
 #define CHURN_ACTORS 20000u
 #define INSPECTIONS 200000u
 #define INSPECTION_SAMPLE 256u
@@ -669,6 +674,10 @@ static void report_header(void) {
            "");
 }
 
+/* The pair of populations a ratio is taken over, for the failure message. */
+static uint32_t small_population = 0;
+static uint32_t large_population = 0;
+
 /* Names the two costs whose ratio failed, so the report says which walk. */
 static void require_flat(const char *what, double small, double large) {
     double ratio = small > 0.0 ? large / small : 0.0;
@@ -678,8 +687,38 @@ static void require_flat(const char *what, double small, double large) {
     fprintf(stderr,
             "scale test failed: %s costs %.2f us per actor against %u residents and %.2f us against %u, a ratio of "
             "%.2f against a bound of %.2f: the cost of one actor grows with the population (invariant 17)\n",
-            what, small, SMALL_POPULATION, large, LARGE_POPULATION, ratio, COST_RATIO_BOUND);
+            what, small, small_population, large, large_population, ratio, COST_RATIO_BOUND);
     exit(1);
+}
+
+/* Every cost, and per-actor memory, flat from one population to the next. */
+static void require_flat_pair(uint32_t small_count, const round_cost *small, uint32_t large_count,
+                              const round_cost *large) {
+    small_population = small_count;
+    large_population = large_count;
+    require_flat("spawning an actor", small->spawn_us, large->spawn_us);
+    require_flat("upgrading an actor", small->upgrade_us, large->upgrade_us);
+    require_flat("an ephemeral actor", small->churn_us, large->churn_us);
+    require_flat("inspecting a timed actor", small->inspect_us, large->inspect_us);
+    require_flat("a timed ephemeral actor", small->timer_us, large->timer_us);
+    require_flat("cancelling and re-arming a delayed send", small->cancel_us, large->cancel_us);
+    require_flat("a page of the actor walk", small->page_us, large->page_us);
+    /* Per-actor memory is a population claim too: it may not grow. */
+    require(large->actor_bytes <= small->actor_bytes + 1.0, "per-actor memory grows with the population");
+}
+
+/* How many of POPULATIONS to run: all, or those up to the cap, at least two. */
+static size_t population_count(void) {
+    const char *cap_text = getenv("TAT_SCALE_MAX_POPULATION");
+    if (cap_text == NULL || cap_text[0] == 0) {
+        return POPULATION_COUNT;
+    }
+    unsigned long long cap = strtoull(cap_text, NULL, 10);
+    size_t count = 0;
+    while (count < POPULATION_COUNT && POPULATIONS[count] <= cap) {
+        count += 1;
+    }
+    return count < 2 ? 2 : count;
 }
 
 int main(int argc, char **argv) {
@@ -695,28 +734,24 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    round_cost small = measure_best(SMALL_POPULATION, REPETITIONS);
-    round_cost large = measure_best(LARGE_POPULATION, REPETITIONS);
+    size_t count = population_count();
+    round_cost costs[POPULATION_COUNT];
+    for (size_t index = 0; index < count; index += 1) {
+        costs[index] = measure_best(POPULATIONS[index], REPETITIONS);
+    }
     report_header();
-    report("small", SMALL_POPULATION, small);
-    report("large", LARGE_POPULATION, large);
+    for (size_t index = 0; index < count; index += 1) {
+        report("measured", POPULATIONS[index], costs[index]);
+    }
+    for (size_t index = 1; index < count; index += 1) {
+        require_flat_pair(POPULATIONS[index - 1], &costs[index - 1], POPULATIONS[index], &costs[index]);
+    }
+    /* And every population stays inside the budget the target implies. */
+    for (size_t index = 0; index < count; index += 1) {
+        require(costs[index].actor_bytes <= (double)ACTOR_BYTE_BUDGET, "a resident actor costs more than its byte budget");
+    }
 
-    require_flat("spawning an actor", small.spawn_us, large.spawn_us);
-    require_flat("upgrading an actor", small.upgrade_us, large.upgrade_us);
-    require_flat("an ephemeral actor", small.churn_us, large.churn_us);
-    require_flat("inspecting a timed actor", small.inspect_us, large.inspect_us);
-    require_flat("a timed ephemeral actor", small.timer_us, large.timer_us);
-    require_flat("cancelling and re-arming a delayed send", small.cancel_us, large.cancel_us);
-    require_flat("a page of the actor walk", small.page_us, large.page_us);
-
-    /*
-     * Per-actor memory is a population claim too: it may not grow with the
-     * population, and it must stay inside the budget the target implies.
-     */
-    require(large.actor_bytes <= small.actor_bytes + 1.0, "per-actor memory grows with the population");
-    require(large.actor_bytes <= (double)ACTOR_BYTE_BUDGET, "a resident actor costs more than its byte budget");
-
-    printf("scale test passed: per-actor cost is flat from %u to %u actors, %.0f bytes each\n", SMALL_POPULATION,
-           LARGE_POPULATION, large.actor_bytes);
+    printf("scale test passed: per-actor cost is flat from %u to %u actors, %.0f bytes each\n", POPULATIONS[0],
+           POPULATIONS[count - 1], costs[count - 1].actor_bytes);
     return 0;
 }
