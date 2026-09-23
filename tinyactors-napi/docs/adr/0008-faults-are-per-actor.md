@@ -29,11 +29,14 @@ rest.
      there. Destroying it discards the mailbox.
    - Messages dropped because their target is gone go to a `deadLetter`
      hook with `{ target, event, reason }`, at most `messageBudget` per
-     turn. `reason` is `not-found` (an unknown or stale ID), `done` (the
-     target reached a top-level final state), `destroyed` (the target was
-     destroyed or unloaded with mail waiting) or `refused` (core refused
-     that message, which also faults the target, ADR 0005). Dead letters
-     are counted in `stats().messages.deadLetters` with or without a hook.
+     turn. `target` is an `ActorId`, or `{ family, name }` for a message
+     sent to a name with no resident actor (ADR 0006). `reason` is
+     `not-found` (an unknown or stale ID, or a name with no entry), `done`
+     (the target reached a top-level final state), `destroyed` (the target
+     was destroyed or unloaded with mail waiting), `refused` (core refused
+     that message, which also faults the target, ADR 0005) or `unloaded` (a
+     name whose actor is unloaded, until ROADMAP step 14). Dead letters are
+     counted in `stats().messages.deadLetters` with or without a hook.
 2. **The pump never throws.** Failures inside a turn reach JavaScript only
    through hooks and, for `send()`, through that message's promise.
 3. **API calls throw only for misuse**, such as wrong argument types, a

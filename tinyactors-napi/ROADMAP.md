@@ -135,8 +135,8 @@ needs, and a step waits for its prerequisites instead of working around them
 
 All of them are implemented. Two notes on what they mean for the addon:
 - **Core ADR 0065** fixed a use-after-free the addon would have hit: a named
-  origin kept after its sender was destroyed. The router keeps deliveries
-  with `ta_external_delivery_retain()`, and the directory receives
+  origin kept after its sender was destroyed. The router keeps an event's
+  references with `ta_event_retain()`, and the directory receives
   `ta_address` handles.
 - **Core ADR 0066:** a session keeps its ID across unload and load, but its
   runtime ID changes. An `ActorId` (slot and generation, ADR 0002) is a
@@ -356,14 +356,18 @@ Exit criterion:
 
 ### 7. Route actor-to-actor events
 
-Named routing needs core ADR 0065. Runtime-ID routing does not, and can
-land first.
+Needs core ADR 0065 (implemented).
 
 - `router.{c,h}` and `directory.{c,h}`, installed at system creation
   (ADR 0006):
-  - the router keeps a delivery with `ta_external_delivery_retain()`, and
-    the envelope releases it after delivery;
-  - the directory is a map keyed by the `ta_address` handle's pointer.
+  - the router keeps the event with `ta_event_retain()`; the destination is
+    resolved at once, so only the event goes into the envelope, which
+    releases it after delivery;
+  - the directory is a map keyed by the `ta_address` handle's pointer;
+  - a name with no resident actor is a dead letter whose record keeps the
+    name (`target: { family, name }`, reason `not-found`, or `unloaded`
+    until step 14).
+- `System.post()` to an address, resolved the same way.
 - Named spawn and `findActor()`.
 - Literal `<send>` between actors.
 - The router's `submit` only enqueues. It never destroys or unloads an
@@ -377,12 +381,18 @@ Exit criterion:
 - sends to a named address follow the directory;
 - an external send to self is delivered in a later macrostep, with no
   `TA_ERR_BUSY`;
-- after warm-up, a named ping-pong pair makes no allocator call and copies
-  no address;
+- after warm-up, a named ping-pong pair makes no allocator call in the
+  addon and copies no address (a named target costs core exactly what a
+  session target costs);
 - a named sender finishes and is destroyed while its message waits in a
   mailbox. The envelope's origin stays valid: a native test reads it with
   `ta_address_view()` under AddressSanitizer, and step 11 checks
   `_event.origin` in JavaScript.
+
+Measured while building this step: core makes one allocation and one free
+for every `<send>` it executes, for a named and a session target alike. It
+is core's own send path, not an address copy. Core's scale test is the place
+to chase it.
 
 ### 8. Time
 

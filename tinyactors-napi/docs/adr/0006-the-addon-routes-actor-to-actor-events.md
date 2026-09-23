@@ -22,10 +22,11 @@ message in the system had to come from JavaScript.
    `TA_EXTERNAL_EVENT_ACCEPTED`. Data is shared by retain, not cloned
    (tinyactors-core ADR 0050).
    - Named addresses are core's reference-counted `ta_address` handles
-     (tinyactors-core ADR 0065). The router keeps a delivery with
-     `ta_external_delivery_retain()`, which retains the destination, the
-     origin and the data. It copies no strings and never allocates. The
-     envelope holds those references and releases them after delivery.
+     (tinyactors-core ADR 0065). The router resolves the destination at
+     once and keeps only the event, with `ta_event_retain()`, which
+     retains the origin and the data. It copies no strings and never
+     allocates. The envelope holds those references and releases them
+     after delivery.
    - This also keeps a named origin valid after its sender is destroyed.
      Today's `ta_external_delivery_clone()` copies only the destination, so
      an envelope that waits while its sender is destroyed would hold
@@ -46,7 +47,10 @@ message in the system had to come from JavaScript.
    delivery is accepted, and it becomes a dead letter:
    - a named address with no directory entry, or a runtime ID whose
      generation does not match the scheduling table, is recorded as a dead
-     letter at once (ADR 0005);
+     letter at once (ADR 0005). A named one keeps a reference to its
+     address, and the `deadLetter` record names it as `{ family, name }`;
+   - a named address whose entry is unloaded is a dead letter with reason
+     `unloaded` until ROADMAP step 14 loads actors on demand;
    - a finished target is found when its mailbox is delivered.
 
    This keeps routing O(1) and gives messages the same order whether their
@@ -68,5 +72,10 @@ message in the system had to come from JavaScript.
 - Actor-to-actor traffic between named actors copies no strings. Core's
   address table grows with the number of distinct live addresses, and an
   address is freed when its last reference is released.
-- Named routing waits for tinyactors-core ADR 0065. Until it is
-  implemented, the addon does not keep named origins in envelopes.
+- Close uninstalls the router and the directory, and gives back every
+  address reference the addon holds (envelopes, directory entries), before
+  `ta_system_destroy()`, because core frees its address records at the end
+  of that call.
+- `System.post()` to an address interns it, which is a core call, so it is
+  refused (`reentrant`) from inside a core call. Posting to an `ActorId`
+  stays allowed there.
