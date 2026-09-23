@@ -1,0 +1,52 @@
+#!/usr/bin/env ruby
+#MISE description="Build core's tests with AddressSanitizer and UndefinedBehaviorSanitizer and run them"
+# vim:ft=ruby
+
+# Reading freed memory is not a failed check but undefined behaviour, which
+# an ordinary run may survive. ADR 0065's origin tests (tests/address_test.c)
+# read an address after its sender is gone; only a sanitized build turns a
+# regression there into a failure. The core tests about lifetimes run this
+# way.
+#
+# deep_test is left out: it proves ten thousand levels run on a 64 KiB
+# stack, and the sanitizer's own frames do not fit in that stack.
+#
+#   mise run asan   exit 1 when a test fails or a sanitizer reports
+
+require 'fileutils'
+require 'pathname'
+
+root = Pathname.new(__dir__).join('../..').expand_path
+build = root.join('build/asan')
+FileUtils.mkdir_p(build)
+
+cc = ENV.fetch('CC', 'cc')
+flags = %W[-I#{root.join("include")} -std=c11 -Wall -Wextra -Werror -pedantic -g -O1 -fno-omit-frame-pointer
+           -fsanitize=address,undefined -fno-sanitize-recover=all]
+
+# Tests that link the amalgamation, and tests that include it themselves.
+WITH_RUNTIME = %w[address_test delayed_send_test null_datamodel_test pause_test inspection_test
+                  retirement_test scxml_uri_test send_id_test tree_test].freeze
+# Of the tests that include the amalgamation themselves, and so compile it
+# again, only the one about actor lifetimes runs: codec, export, compile
+# error and event pattern tests exercise pure functions.
+STANDALONE = %w[actor_id_test].freeze
+
+# The amalgamation is compiled once and linked into every test that needs it.
+runtime = build.join('tinyactors.o')
+unless system(cc, *flags, '-c', root.join('include/tinyactors.c').to_s, '-o', runtime.to_s, chdir: root.to_s)
+  abort 'asan: the amalgamation does not compile'
+end
+failed = []
+(WITH_RUNTIME + STANDALONE).each do |test|
+  sources = [root.join("tests/#{test}.c").to_s]
+  sources << runtime.to_s if WITH_RUNTIME.include?(test)
+  binary = build.join(test)
+  unless system(cc, *flags, *sources, '-o', binary.to_s, chdir: root.to_s)
+    failed << "#{test} (build)"
+    next
+  end
+  failed << test unless system(binary.to_s, chdir: root.to_s, out: File::NULL)
+end
+abort "asan: failed: #{failed.join(', ')}" unless failed.empty?
+puts "asan: #{WITH_RUNTIME.size + STANDALONE.size} core tests pass under AddressSanitizer and UBSan"

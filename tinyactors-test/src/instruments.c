@@ -593,7 +593,7 @@ static ta_result tat_router_deliver(tat_instrument *instrument, const ta_externa
         }
         ta_actor_directory_entry resolved = {.kind = TA_ACTOR_DIRECTORY_NONE};
         ta_result result = tat_directory_resolve(
-            directory, &(ta_actor_directory_resolve_params){.address = &delivery->destination.as.named,
+            directory, &(ta_actor_directory_resolve_params){.address = delivery->destination.as.named,
                                                             .out = &resolved});
         if (entry != NULL) {
             *entry = jv_object_set(*entry, jv_string("resolved"), tat_entry_record(resolved));
@@ -644,10 +644,8 @@ static ta_external_event_submit_status tat_recording_submit(void *self, const ta
             state->held_capacity = capacity;
         }
         tat_held_delivery *held = &state->held[state->held_count];
-        if (ta_external_delivery_clone(delivery, tat_libc_allocator(), &held->delivery) != TA_OK) {
-            tat_journal(instrument, "submit", jv_object_set(entry, jv_string("status"), jv_string("retry")));
-            return TA_EXTERNAL_EVENT_RETRY;
-        }
+        /* Retaining cannot fail and copies nothing (ADR 0065). */
+        ta_external_delivery_retain(delivery, &held->delivery);
         held->id = ++state->next_held;
         state->held_count += 1;
         entry = jv_object_set(entry, jv_string("status"), jv_string("accepted"));
@@ -733,7 +731,7 @@ static tat_held_delivery *tat_held_find(tat_router_state *state, uint64_t id, si
 }
 
 static void tat_held_remove(tat_router_state *state, size_t index) {
-    ta_external_delivery_release(&state->held[index].delivery, tat_libc_allocator());
+    ta_external_delivery_release(&state->held[index].delivery);
     memmove(&state->held[index], &state->held[index + 1], (state->held_count - index - 1) * sizeof(*state->held));
     state->held_count -= 1;
 }
@@ -819,25 +817,27 @@ static bool tat_directory_fault(tat_instrument *instrument, const char *op, jv *
 }
 
 static ta_result tat_directory_claim(void *self, const ta_actor_directory_claim_params *params) {
+    ta_actor_address address_view = ta_address_view(params->address);
     tat_instrument *instrument = self;
-    jv entry = jv_object_set(tat_directory_entry(params->address), jv_string("entry"), tat_entry_record(params->entry));
+    jv entry = jv_object_set(tat_directory_entry(&address_view), jv_string("entry"), tat_entry_record(params->entry));
     ta_result result = TA_OK;
     if (!tat_directory_fault(instrument, "claim", &entry, &result)) {
-        if (tat_directory_current(instrument, params->address).kind != TA_ACTOR_DIRECTORY_NONE) {
+        if (tat_directory_current(instrument, &address_view).kind != TA_ACTOR_DIRECTORY_NONE) {
             result = TA_ERR_STALE;
         } else {
-            tat_directory_store(instrument, params->address, params->entry);
+            tat_directory_store(instrument, &address_view, params->entry);
         }
     }
     return tat_directory_finish(instrument, "claim", entry, result);
 }
 
 static ta_result tat_directory_resolve(void *self, const ta_actor_directory_resolve_params *params) {
+    ta_actor_address address_view = ta_address_view(params->address);
     tat_instrument *instrument = self;
-    jv entry = tat_directory_entry(params->address);
+    jv entry = tat_directory_entry(&address_view);
     ta_result result = TA_OK;
     if (!tat_directory_fault(instrument, "resolve", &entry, &result)) {
-        *params->out = tat_directory_current(instrument, params->address);
+        *params->out = tat_directory_current(instrument, &address_view);
         result = params->out->kind == TA_ACTOR_DIRECTORY_NONE ? TA_ERR_NOT_FOUND : TA_OK;
         entry = jv_object_set(entry, jv_string("out"), tat_entry_record(*params->out));
     }
@@ -845,30 +845,32 @@ static ta_result tat_directory_resolve(void *self, const ta_actor_directory_reso
 }
 
 static ta_result tat_directory_replace(void *self, const ta_actor_directory_replace_params *params) {
+    ta_actor_address address_view = ta_address_view(params->address);
     tat_instrument *instrument = self;
-    jv entry = tat_directory_entry(params->address);
+    jv entry = tat_directory_entry(&address_view);
     entry = jv_object_set(entry, jv_string("expected"), tat_entry_record(params->expected));
     entry = jv_object_set(entry, jv_string("replacement"), tat_entry_record(params->replacement));
     ta_result result = TA_OK;
     if (!tat_directory_fault(instrument, "replace", &entry, &result)) {
-        if (!tat_entries_equal(tat_directory_current(instrument, params->address), params->expected)) {
+        if (!tat_entries_equal(tat_directory_current(instrument, &address_view), params->expected)) {
             result = TA_ERR_STALE;
         } else {
-            tat_directory_store(instrument, params->address, params->replacement);
+            tat_directory_store(instrument, &address_view, params->replacement);
         }
     }
     return tat_directory_finish(instrument, "replace", entry, result);
 }
 
 static ta_result tat_directory_remove(void *self, const ta_actor_directory_remove_params *params) {
+    ta_actor_address address_view = ta_address_view(params->address);
     tat_instrument *instrument = self;
-    jv entry = jv_object_set(tat_directory_entry(params->address), jv_string("expected"), tat_entry_record(params->expected));
+    jv entry = jv_object_set(tat_directory_entry(&address_view), jv_string("expected"), tat_entry_record(params->expected));
     ta_result result = TA_OK;
     if (!tat_directory_fault(instrument, "remove", &entry, &result)) {
-        if (!tat_entries_equal(tat_directory_current(instrument, params->address), params->expected)) {
+        if (!tat_entries_equal(tat_directory_current(instrument, &address_view), params->expected)) {
             result = TA_ERR_STALE;
         } else {
-            tat_directory_store(instrument, params->address, (ta_actor_directory_entry){.kind = TA_ACTOR_DIRECTORY_NONE});
+            tat_directory_store(instrument, &address_view, (ta_actor_directory_entry){.kind = TA_ACTOR_DIRECTORY_NONE});
         }
     }
     return tat_directory_finish(instrument, "remove", entry, result);

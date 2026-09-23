@@ -28,6 +28,7 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
     system->free_definition_slot = UINT32_MAX;
     ta_vec_init(&system->io_processors, config->allocator, TA_VEC_LAYOUT(ta_io_registration));
     ta_vec_init(&system->invokers, config->allocator, TA_VEC_LAYOUT(ta_invoker_registration));
+    ta_address_table_init(&system->addresses, config->allocator);
     ta_result result = ta_atom_table_init(&system->atoms, config->allocator);
     if (result != TA_OK) {
         ta_mem_free(config->allocator, system,
@@ -89,6 +90,8 @@ void ta_system_destroy(ta_system *system) {
     ta_vec_destroy(&system->invokers);
     ta_arena_destroy(&system->scratch);
     ta_interpreter_queue_cache_destroy(system);
+    /* Last: everything above gave its addresses back. */
+    ta_address_table_destroy(&system->addresses);
     ta_event_name_table_destroy(&system->event_names);
     ta_atom_table_destroy(&system->atoms);
     ta_allocator allocator = system->allocator;

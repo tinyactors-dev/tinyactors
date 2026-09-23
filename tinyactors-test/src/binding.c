@@ -38,12 +38,21 @@ ta_result tat_bind_init(tat_bind *bind, ta_allocator allocator, void *host) {
         return result;
     }
     bind->decode_model = tat_json_datamodel(&bind->json);
+    result = ta_system_create(&(ta_system_config){.allocator = allocator}, &bind->codec_system);
+    if (result != TA_OK) {
+        tat_js_datamodel_context_destroy(&bind->js);
+        tat_json_datamodel_context_destroy(&bind->json);
+        ta_arena_destroy(&bind->arena);
+        return result;
+    }
     return TA_OK;
 }
 
 void tat_bind_destroy(tat_bind *bind) {
     tat_bind_end(bind);
     free(bind->values);
+    free(bind->addresses);
+    ta_system_destroy(bind->codec_system);
     free(bind->handles);
     tat_js_datamodel_context_destroy(&bind->js);
     tat_json_datamodel_context_destroy(&bind->json);
@@ -53,6 +62,7 @@ void tat_bind_destroy(tat_bind *bind) {
 
 void tat_bind_begin(tat_bind *bind) {
     ta_arena_reset(&bind->arena);
+    bind->request_system = NULL;
     bind->decode_model = tat_json_datamodel(&bind->json);
     jv_free(bind->error);
     bind->error = jv_invalid();
@@ -63,6 +73,11 @@ void tat_bind_end(tat_bind *bind) {
         ta_value_release(&bind->values[index]);
     }
     bind->value_count = 0;
+    for (size_t index = 0; index < bind->address_count; index += 1) {
+        ta_address_release(bind->addresses[index]);
+    }
+    bind->address_count = 0;
+    bind->request_system = NULL;
     jv_free(bind->error);
     bind->error = jv_invalid();
     if (bind->request_bytes > TAT_BIND_ARENA_KEEP) {
@@ -421,6 +436,73 @@ jv tat_encode_ta_expression(tat_bind *bind, const ta_expression *value) {
     }
 }
 
+/* Generated codecs (build/gen/ta_rpc.c) the actor ref codec builds on. */
+bool tat_decode_ta_actor_ref_kind(tat_bind *b, jv in, ta_actor_ref_kind *out);
+jv tat_encode_ta_actor_ref_kind(tat_bind *b, const ta_actor_ref_kind *in);
+bool tat_fields_ta_actor_address(tat_bind *b, jv in, ta_actor_address *out);
+void tat_put_fields_ta_actor_address(tat_bind *b, const ta_actor_address *in, jv *o);
+
+/*
+ * A named actor ref crosses as {"kind": "named", "family": {...}, "name": ...}
+ * (the address's fields beside the kind) and is an interned handle inside
+ * (ADR 0065). Decoding interns the address into the request's system, or the
+ * binding's own, and releases it when the request ends.
+ */
+bool tat_decode_ta_actor_ref(tat_bind *bind, jv value, ta_actor_ref *out) {
+    memset(out, 0, sizeof(*out));
+    if (jv_get_kind(value) != JV_KIND_OBJECT) {
+        return tat_fail(bind, "expected an actor reference object");
+    }
+    jv kind = jv_object_get(jv_copy(value), jv_string("kind"));
+    bool ok = tat_decode_ta_actor_ref_kind(bind, kind, &out->kind);
+    jv_free(kind);
+    if (!ok) {
+        return false;
+    }
+    if (out->kind == TA_ACTOR_REF_RUNTIME) {
+        jv runtime = jv_object_get(jv_copy(value), jv_string("runtime"));
+        ok = jv_get_kind(runtime) == JV_KIND_NULL || jv_get_kind(runtime) == JV_KIND_INVALID
+                 ? true
+                 : tat_decode_u64(bind, runtime, (uint64_t *)&out->as.runtime);
+        jv_free(runtime);
+        return ok;
+    }
+    ta_actor_address address;
+    memset(&address, 0, sizeof(address));
+    if (!tat_fields_ta_actor_address(bind, value, &address)) {
+        return false;
+    }
+    if (address.name.ptr == NULL || address.family.name.ptr == NULL) {
+        return tat_fail(bind, "a named actor reference needs a family and a name");
+    }
+    if (bind->address_count == bind->address_capacity) {
+        size_t capacity = bind->address_capacity == 0 ? 8 : bind->address_capacity * 2;
+        ta_address **grown = realloc(bind->addresses, capacity * sizeof(ta_address *));
+        if (grown == NULL) {
+            return tat_fail(bind, "out of memory");
+        }
+        bind->addresses = grown;
+        bind->address_capacity = capacity;
+    }
+    ta_system *system = bind->request_system != NULL ? bind->request_system : bind->codec_system;
+    if (ta_address_intern(system, &address, &out->as.named) != TA_OK) {
+        return tat_fail(bind, "could not intern the address");
+    }
+    bind->addresses[bind->address_count] = out->as.named;
+    bind->address_count += 1;
+    return true;
+}
+
+jv tat_encode_ta_actor_ref(tat_bind *bind, const ta_actor_ref *value) {
+    jv out = jv_object_set(jv_object(), jv_string("kind"), tat_encode_ta_actor_ref_kind(bind, &value->kind));
+    if (value->kind == TA_ACTOR_REF_NAMED) {
+        ta_actor_address view = ta_address_view(value->as.named);
+        tat_put_fields_ta_actor_address(bind, &view, &out);
+        return out;
+    }
+    return jv_object_set(out, jv_string("runtime"), tat_encode_u64(bind, (const uint64_t *)&value->as.runtime));
+}
+
 static const char *tat_handle_text(jv value) {
     if (jv_get_kind(value) != JV_KIND_OBJECT) {
         return NULL;
@@ -463,6 +545,10 @@ bool tat_handle_resolve(tat_bind *bind, jv value, const char *type, void **out) 
         return tat_fail(bind, "fixture handle \"%s\" cannot reach native code", text);
     }
     *out = handle->ptr;
+    if (strcmp(type, "system") == 0) {
+        /* Named refs later in this request intern into this system. */
+        bind->request_system = handle->ptr;
+    }
     return true;
 }
 

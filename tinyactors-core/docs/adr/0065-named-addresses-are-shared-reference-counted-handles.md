@@ -1,6 +1,6 @@
 # ADR 0065: Named addresses are shared, reference-counted handles
 
-**Status:** Proposed; refines ADR 0022, ADR 0040 and ADR 0050
+**Status:** Accepted and implemented; refines ADR 0022, ADR 0040 and ADR 0050. See the implementation notes for where the code differs from the text.
 **Date:** 2026-09-23
 
 ## Context
@@ -119,3 +119,65 @@ table (napi ADR 0006), which duplicates what core could provide once.
   the delivery helpers. Every caller is in this repository (root
   `AGENTS.md`): core, the test host, its Ruby bindings and the napi addon
   move with it.
+
+## Implementation notes
+
+- **The use-after-free was real.** `tests/address_test.c` was written first,
+  against the old API, and built with AddressSanitizer. Both cases failed
+  with a heap-use-after-free: a router that kept a delivery (with
+  `ta_external_delivery_clone`) read its origin's name after the sender was
+  destroyed, and so did a router offered a submitted send after its sender
+  was destroyed. In both, `ta_actor_destroy` had freed the name through
+  `ta_actor_free`. The test now also covers an origin a host interned,
+  delivered and released at once. It runs under `mise run asan`, which
+  `mise run test` runs: ten core lifetime tests under AddressSanitizer and
+  UBSan.
+- **Handles are `ta_address *`, not `const ta_address *`.** The API
+  extractor pairs a handle's output (`ta_address **out`) with a release
+  marked `TA_DESTROYS`, and takes no `TA_IN` on handles. So the handle is
+  non-const everywhere except `ta_address_view`, and releasing a reference
+  is the handle's "destroy". `ta_address_release` accepts null.
+- **The table (decision 6) is a linear hash table** (Litwin). It starts at
+  16 buckets and splits one bucket per insert while it holds more than one
+  record per bucket, so no operation rehashes the table. Buckets live in
+  fixed pages of 1,024, found through a page directory, as the actor
+  table's slots do (ADR 0063), so growing never copies them. A failed page
+  allocation only postpones a split, so the only allocation that can fail
+  an intern is the record itself, which stores both strings inline.
+- **`ta_external_delivery_release` lost its allocator parameter.** Nothing
+  is freed through it any more except by a last release.
+- **Parsing a target interns.** `ta_scxml_target_parse` returns a target
+  that holds a reference, and `ta_scxml_target_release` is added to give it
+  back.
+- **Images carry detached addresses.** A session image stores each address
+  as a copy in its own arena, whose record has no table: retaining or
+  releasing it does nothing. So an image does not depend on the system
+  that captured it (ADR 0028). Reconstruct and load intern every address
+  the image carries: the actor's self, the held and queued events' origins,
+  and the delayed sends' destinations and origins. Capture used to copy
+  only the self and the delayed sends' addresses; the held events' origins
+  were borrowed from their senders, the same fault as above.
+- **Where interning can happen during a run.** Only a `<send>` target is
+  interned mid-microstep, when a literal or evaluated target is parsed.
+  When the address is already held, which it is for every resident or
+  directory-held actor and every address sent to before, this is a lookup
+  and allocates nothing. Only an address nobody holds allocates, and a
+  failure there returns `TA_ERR_NOMEM` from the send. That is the same
+  class as the existing timer reservation in `ta_actor_schedule_send`
+  during a send, and this change does not close it. Interning literal
+  targets when the definition is compiled would remove the case for
+  literal targets.
+- **The directory contract.** The handle a callback receives is borrowed;
+  a directory that keeps it retains it. `ta_system_destroy` frees every
+  record still held, so every reference must be released before it.
+- **Callers.** The test host's `ta_actor_ref` codec is hand-written: a
+  named ref crosses as `{kind, family, name}` as before. It is interned
+  into the request's system, or into the binding's own system for codec
+  round trips, and released when the request ends. No scenario changed.
+  The scale test's directory keys by the handle pointer, and a new check
+  shows that a router keeping and releasing a delivery makes no allocator
+  call after warm-up. Before, keeping one copied its destination's
+  strings: two allocations.
+- **Memory.** A named actor's address is one record where it was two
+  string copies, so the scale test measures about 507 bytes per actor,
+  down from about 563.

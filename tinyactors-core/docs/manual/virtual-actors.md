@@ -31,7 +31,7 @@ and committed version. It does not copy the transcript.
 A typical LLM host registers these boundaries:
 
 - **External-event router** — accepts normalized SCXML-session events from
-  core's built-in SCXML Event I/O Processor. It copies the deliveries it keeps (`ta_external_delivery_clone()`),
+  core's built-in SCXML Event I/O Processor. It retains the deliveries it keeps (`ta_external_delivery_retain()`),
   resolves resident or unloaded destinations, and eventually calls
   `ta_actor_deliver()`. Its queue, fencing, and backpressure policy are
   host-owned; it is not registered as an I/O processor.
@@ -91,6 +91,14 @@ ta_system_register_definition(system, conversation_definition,
 The directory callbacks must implement atomic comparisons. For example,
 `replace(address, expected, replacement)` changes the record only if its current
 entry equals `expected`; otherwise it returns `TA_ERR_STALE`.
+
+The address a callback receives is an interned handle (ADR 0065): equal
+addresses are the same pointer, so a directory can key its map by the pointer
+and never hash text. The handle is borrowed for the call. A directory that
+keeps an entry retains the address (`ta_address_retain`) and releases it when
+the entry goes, and releases every address it still holds before the system is
+destroyed. `ta_address_view` gives the strings, for a directory that stores
+them.
 
 ## Creating and running a conversation
 

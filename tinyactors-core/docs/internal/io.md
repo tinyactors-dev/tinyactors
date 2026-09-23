@@ -24,9 +24,10 @@ one, so the URI a chart reads from `$_event.origin` parses back to its sender.
 A literal target is the definition's text; an evaluated target stays a host
 `ta_value`, and core asks the data model for its text with `value_text()` and
 parses that. An omitted target is external self and needs no text. A named
-address borrows its family and name from that text, which stays valid while the
-value is retained, and the send record retains it; a router that keeps a
-delivery past the call deep-copies it with `ta_external_delivery_clone()`.
+address is interned (ADR 0065): the send record holds a reference to the
+system's handle for it, not the text, and a router that keeps a delivery past
+the call retains it with `ta_external_delivery_retain()`, which copies no text
+and cannot fail.
 
 `#_internal` is appended directly to the sender's internal queue. Every external
 SCXML-session delivery becomes a normalized `ta_external_delivery` and is

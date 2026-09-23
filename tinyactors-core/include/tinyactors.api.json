@@ -582,11 +582,10 @@
           "name": "address",
           "type": {
             "pointer": {
-              "type": "ta_actor_address",
-              "const": true
+              "type": "ta_address"
             }
           },
-          "shape": "single",
+          "shape": "handle",
           "direction": "in"
         },
         {
@@ -688,11 +687,10 @@
           "name": "address",
           "type": {
             "pointer": {
-              "type": "ta_actor_address",
-              "const": true
+              "type": "ta_address"
             }
           },
-          "shape": "single",
+          "shape": "handle",
           "direction": "in"
         },
         {
@@ -728,11 +726,10 @@
           "name": "address",
           "type": {
             "pointer": {
-              "type": "ta_actor_address",
-              "const": true
+              "type": "ta_address"
             }
           },
-          "shape": "single",
+          "shape": "handle",
           "direction": "in"
         },
         {
@@ -776,11 +773,10 @@
           "name": "address",
           "type": {
             "pointer": {
-              "type": "ta_actor_address",
-              "const": true
+              "type": "ta_address"
             }
           },
-          "shape": "single",
+          "shape": "handle",
           "direction": "in"
         },
         {
@@ -817,6 +813,7 @@
     "ta_actor_directory_vtable": {
       "kind": "struct",
       "semantic": "vtable",
+      "doc": "The directory is keyed by address handle (ADR 0065): equal addresses are the same pointer, so a directory can key its map by the pointer. The handle is borrowed for the call; a directory that keeps an entry retains the address (ta_address_retain) and releases it when the entry goes.",
       "fields": [
         {
           "name": "claim",
@@ -1311,55 +1308,55 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 184,
+          "size": 160,
           "align": 8,
           "offsets": {
             "actor": 0,
             "self": 8,
-            "definition_id": 48,
-            "definition": 56,
-            "residency": 88,
-            "published": 92,
-            "active_state_count": 96,
-            "macrostep_in_progress": 100,
-            "microstep_in_progress": 101,
-            "current_event": 104,
-            "internal_events": 112,
-            "internal_count": 120,
-            "invokes": 128,
-            "invoke_count": 136,
-            "delayed_sends": 144,
-            "delayed_send_count": 152,
-            "has_completion": 156,
-            "completion": 160,
-            "final_state": 168,
-            "allocated_bytes": 176
+            "definition_id": 24,
+            "definition": 32,
+            "residency": 64,
+            "published": 68,
+            "active_state_count": 72,
+            "macrostep_in_progress": 76,
+            "microstep_in_progress": 77,
+            "current_event": 80,
+            "internal_events": 88,
+            "internal_count": 96,
+            "invokes": 104,
+            "invoke_count": 112,
+            "delayed_sends": 120,
+            "delayed_send_count": 128,
+            "has_completion": 132,
+            "completion": 136,
+            "final_state": 144,
+            "allocated_bytes": 152
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 120,
+          "size": 112,
           "align": 8,
           "offsets": {
             "actor": 0,
             "self": 8,
-            "definition_id": 32,
-            "definition": 40,
-            "residency": 56,
-            "published": 60,
-            "active_state_count": 64,
-            "macrostep_in_progress": 68,
-            "microstep_in_progress": 69,
-            "current_event": 72,
-            "internal_events": 76,
-            "internal_count": 80,
-            "invokes": 84,
-            "invoke_count": 88,
-            "delayed_sends": 92,
-            "delayed_send_count": 96,
-            "has_completion": 100,
-            "completion": 104,
-            "final_state": 108,
-            "allocated_bytes": 112
+            "definition_id": 24,
+            "definition": 32,
+            "residency": 48,
+            "published": 52,
+            "active_state_count": 56,
+            "macrostep_in_progress": 60,
+            "microstep_in_progress": 61,
+            "current_event": 64,
+            "internal_events": 68,
+            "internal_count": 72,
+            "invokes": 76,
+            "invoke_count": 80,
+            "delayed_sends": 84,
+            "delayed_send_count": 88,
+            "has_completion": 92,
+            "completion": 96,
+            "final_state": 100,
+            "allocated_bytes": 104
           }
         }
       }
@@ -1694,9 +1691,13 @@
                 {
                   "name": "named",
                   "type": {
-                    "type": "ta_actor_address"
+                    "pointer": {
+                      "type": "ta_address"
+                    }
                   },
-                  "when": "TA_ACTOR_REF_NAMED"
+                  "when": "TA_ACTOR_REF_NAMED",
+                  "shape": "handle",
+                  "direction": "in"
                 }
               ]
             }
@@ -1714,7 +1715,7 @@
       },
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 40,
+          "size": 16,
           "align": 8,
           "offsets": {
             "kind": 0,
@@ -1724,7 +1725,7 @@
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 24,
+          "size": 16,
           "align": 8,
           "offsets": {
             "kind": 0,
@@ -2064,6 +2065,27 @@
           }
         }
       }
+    },
+    "ta_address": {
+      "kind": "handle",
+      "handle": "address",
+      "doc": "A named address that core holds (ADR 0065): one record per distinct (family, name) pair in a system, reference-counted. Two equal addresses in one system are the same handle, so pointer equality is address equality. Core interns a ta_actor_address a host supplies (spawn, find, unload, load); every named reference core stores or hands out is a handle. A handle core hands out is borrowed for the call; a host that keeps one retains it. Release every reference before destroying the system.",
+      "created_by": [
+        {
+          "function": "ta_address_intern",
+          "path": [
+            "out"
+          ]
+        }
+      ],
+      "destroyed_by": [
+        {
+          "function": "ta_address_release",
+          "path": [
+            "address"
+          ]
+        }
+      ]
     },
     "ta_allocator": {
       "kind": "struct",
@@ -6851,7 +6873,7 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 104,
+          "size": 80,
           "align": 8,
           "offsets": {
             "send_id": 0,
@@ -6859,13 +6881,13 @@
             "event": 16,
             "io_type": 20,
             "destination": 24,
-            "target": 64,
-            "data": 80,
-            "submitted": 96
+            "target": 40,
+            "data": 56,
+            "submitted": 72
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 72,
+          "size": 64,
           "align": 8,
           "offsets": {
             "send_id": 0,
@@ -6873,9 +6895,9 @@
             "event": 16,
             "io_type": 20,
             "destination": 24,
-            "target": 48,
-            "data": 56,
-            "submitted": 64
+            "target": 40,
+            "data": 48,
+            "submitted": 56
           }
         }
       }
@@ -7138,18 +7160,6 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 88,
-          "align": 8,
-          "offsets": {
-            "name": 0,
-            "type": 4,
-            "send_id": 8,
-            "origin": 16,
-            "invoke_id": 64,
-            "data": 72
-          }
-        },
-        "wasm32-unknown-unknown": {
           "size": 64,
           "align": 8,
           "offsets": {
@@ -7157,8 +7167,20 @@
             "type": 4,
             "send_id": 8,
             "origin": 16,
-            "invoke_id": 48,
-            "data": 56
+            "invoke_id": 40,
+            "data": 48
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "type": 4,
+            "send_id": 8,
+            "origin": 16,
+            "invoke_id": 40,
+            "data": 48
           }
         }
       }
@@ -7645,19 +7667,19 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 128,
+          "size": 80,
           "align": 8,
           "offsets": {
             "destination": 0,
-            "event": 40
+            "event": 16
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 88,
+          "size": 72,
           "align": 8,
           "offsets": {
             "destination": 0,
-            "event": 24
+            "event": 16
           }
         }
       }
@@ -8794,23 +8816,23 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 80,
+          "size": 56,
           "align": 8,
           "offsets": {
             "source": 0,
-            "label": 40,
-            "has_value": 56,
-            "value": 64
+            "label": 16,
+            "has_value": 32,
+            "value": 40
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 48,
+          "size": 40,
           "align": 8,
           "offsets": {
             "source": 0,
-            "label": 24,
-            "has_value": 32,
-            "value": 36
+            "label": 16,
+            "has_value": 24,
+            "value": 28
           }
         }
       }
@@ -9040,7 +9062,7 @@
       },
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 48,
+          "size": 24,
           "align": 8,
           "offsets": {
             "kind": 0,
@@ -9051,7 +9073,7 @@
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 32,
+          "size": 24,
           "align": 8,
           "offsets": {
             "kind": 0,
@@ -9133,19 +9155,19 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 96,
-          "align": 8,
-          "offsets": {
-            "event": 0,
-            "flags": 88
-          }
-        },
-        "wasm32-unknown-unknown": {
           "size": 72,
           "align": 8,
           "offsets": {
             "event": 0,
             "flags": 64
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "event": 0,
+            "flags": 56
           }
         }
       }
@@ -10740,7 +10762,7 @@
       },
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 48,
+          "size": 24,
           "align": 8,
           "offsets": {
             "kind": 0,
@@ -10750,7 +10772,7 @@
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 32,
+          "size": 24,
           "align": 8,
           "offsets": {
             "kind": 0,
@@ -10806,23 +10828,23 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 72,
-          "align": 8,
-          "offsets": {
-            "target": 0,
-            "buffer": 48,
-            "capacity": 56,
-            "needed": 64
-          }
-        },
-        "wasm32-unknown-unknown": {
           "size": 48,
           "align": 8,
           "offsets": {
             "target": 0,
-            "buffer": 32,
-            "capacity": 36,
+            "buffer": 24,
+            "capacity": 32,
             "needed": 40
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "target": 0,
+            "buffer": 24,
+            "capacity": 28,
+            "needed": 32
           }
         }
       }
@@ -11165,31 +11187,31 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 120,
+          "size": 96,
           "align": 8,
           "offsets": {
             "source": 0,
-            "send_id": 40,
-            "event": 48,
-            "io_type": 52,
-            "target": 56,
-            "data": 72,
-            "content_type": 88,
-            "content": 104
+            "send_id": 16,
+            "event": 24,
+            "io_type": 28,
+            "target": 32,
+            "data": 48,
+            "content_type": 64,
+            "content": 80
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 72,
+          "size": 64,
           "align": 8,
           "offsets": {
             "source": 0,
-            "send_id": 24,
-            "event": 32,
-            "io_type": 36,
-            "target": 40,
-            "data": 48,
-            "content_type": 56,
-            "content": 64
+            "send_id": 16,
+            "event": 24,
+            "io_type": 28,
+            "target": 32,
+            "data": 40,
+            "content_type": 48,
+            "content": 56
           }
         }
       }
@@ -12063,6 +12085,129 @@
   },
   "functions": [
     {
+      "name": "ta_address_intern",
+      "doc": "Finds or adds the address; *out holds a new reference. Allocates only the first time a pair is seen, so only then can it fail with TA_ERR_NOMEM.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "address",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_address",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "pointer": {
+                "type": "ta_address"
+              }
+            }
+          },
+          "shape": "handle_out",
+          "direction": "out",
+          "valid_on": "success"
+        }
+      ]
+    },
+    {
+      "name": "ta_address_retain",
+      "doc": "Retain and release cannot fail. Release accepts null. The record is freed with its last reference.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "void"
+        }
+      },
+      "params": [
+        {
+          "name": "address",
+          "type": {
+            "pointer": {
+              "type": "ta_address"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_address_release",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "void"
+        }
+      },
+      "params": [
+        {
+          "name": "address",
+          "type": {
+            "pointer": {
+              "type": "ta_address"
+            }
+          },
+          "shape": "handle",
+          "direction": "in",
+          "optional": true,
+          "destroys": true
+        }
+      ]
+    },
+    {
+      "name": "ta_address_view",
+      "doc": "The strings, valid while the caller holds a reference.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_actor_address"
+        }
+      },
+      "params": [
+        {
+          "name": "address",
+          "type": {
+            "pointer": {
+              "type": "ta_address",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        }
+      ]
+    },
+    {
       "name": "ta_arena_init",
       "public": true,
       "static_inline": false,
@@ -12263,6 +12408,46 @@
       }
     },
     {
+      "name": "ta_event_retain",
+      "doc": "An event owns its data and, when its origin is a named actor, a reference to that address (ADR 0065). Retaining copies the envelope and retains both; it cannot fail. Releasing gives both back.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "void"
+        }
+      },
+      "params": [
+        {
+          "name": "event",
+          "type": {
+            "pointer": {
+              "type": "ta_event",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_event"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "always",
+          "release": "ta_event_release"
+        }
+      ],
+      "value_model": {
+        "kind": "any"
+      }
+    },
+    {
       "name": "ta_event_release",
       "public": true,
       "static_inline": false,
@@ -12289,16 +12474,15 @@
       }
     },
     {
-      "name": "ta_external_delivery_clone",
-      "doc": "Deep-copies a named destination and retains the event's data (ADR 0050).",
+      "name": "ta_external_delivery_retain",
+      "doc": "Keeps a delivery past the submit call: retains its destination, its origin and its data (ADR 0050, ADR 0065). It never allocates and cannot fail. Release gives all three back.",
       "public": true,
       "static_inline": false,
       "implemented": true,
       "returns": {
         "type": {
-          "type": "ta_result"
-        },
-        "success": "TA_OK"
+          "builtin": "void"
+        }
       },
       "params": [
         {
@@ -12313,12 +12497,6 @@
           "direction": "in"
         },
         {
-          "name": "allocator",
-          "type": {
-            "type": "ta_allocator"
-          }
-        },
-        {
           "name": "out",
           "type": {
             "pointer": {
@@ -12327,7 +12505,7 @@
           },
           "shape": "single",
           "direction": "out",
-          "valid_on": "success",
+          "valid_on": "always",
           "release": "ta_external_delivery_release"
         }
       ],
@@ -12355,12 +12533,6 @@
           },
           "shape": "single",
           "direction": "inout"
-        },
-        {
-          "name": "allocator",
-          "type": {
-            "type": "ta_allocator"
-          }
         }
       ],
       "value_model": {
@@ -12369,7 +12541,7 @@
     },
     {
       "name": "ta_scxml_target_parse",
-      "doc": "The SCXML Event I/O Processor target URIs (ADR 0044). Core owns the grammar, so a literal `target`, an evaluated `targetexpr`, and the text core writes for `$_event.origin` agree by construction:\n\n#_internal                 the sender's own internal queue #_parent                   the invoking parent session #_scxml_ <session >          a session by its runtime ID #_actor_ <family >/ <name >    a named actor by its logical address #_ <invokeid >               an invocation of the sending session\n\nA session URI whose text is not a session ID names no session: it parses as runtime actor 0, which never exists, so a send to it is inaccessible (SCXML C.1) rather than invalid. TA_ERR_INVALID means an invalid target, which a send reports as error.execution.\n\nA named address borrows its family and name from `text`, which must stay valid for as long as the target is used.",
+      "doc": "The SCXML Event I/O Processor target URIs (ADR 0044). Core owns the grammar, so a literal `target`, an evaluated `targetexpr`, and the text core writes for `$_event.origin` agree by construction:\n\n#_internal                 the sender's own internal queue #_parent                   the invoking parent session #_scxml_ <session >          a session by its runtime ID #_actor_ <family >/ <name >    a named actor by its logical address #_ <invokeid >               an invocation of the sending session\n\nA session URI whose text is not a session ID names no session: it parses as runtime actor 0, which never exists, so a send to it is inaccessible (SCXML C.1) rather than invalid. TA_ERR_INVALID means an invalid target, which a send reports as error.execution.\n\nA named actor target holds a reference to its interned address (ADR 0065); release the target with ta_scxml_target_release(). Interning a new address can fail with TA_ERR_NOMEM.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -12406,7 +12578,31 @@
           "shape": "single",
           "direction": "out",
           "valid_on": "success",
-          "lifetime": "input"
+          "release": "ta_scxml_target_release"
+        }
+      ]
+    },
+    {
+      "name": "ta_scxml_target_release",
+      "doc": "Releases a parsed target's address reference; accepts any target.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "void"
+        }
+      },
+      "params": [
+        {
+          "name": "target",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_target"
+            }
+          },
+          "shape": "single",
+          "direction": "inout"
         }
       ]
     },

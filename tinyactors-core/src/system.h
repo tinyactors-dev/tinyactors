@@ -1,6 +1,7 @@
 #pragma once
 
 #include "actor.h"
+#include "address.h"
 #include "arena.h"
 #include "atom.h"
 #include "builder.h"
@@ -25,6 +26,8 @@ struct ta_system {
     ta_allocator allocator;
     ta_clock clock;
     ta_atom_table atoms;
+    /* Interned named addresses (ADR 0065). */
+    ta_address_table addresses;
     ta_event_name_table event_names;
 
     /*

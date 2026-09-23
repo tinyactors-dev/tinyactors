@@ -184,6 +184,63 @@ TA_PRIVATE uint32_t ta_hash_bytes(uint32_t seed, const void *bytes, size_t size)
 
 
 
+/*
+ * Interned named addresses (ADR 0065). A system keeps one record per
+ * distinct (family, name) pair that anyone holds; a record is freed with its
+ * last reference.
+ *
+ * The table is a linear hash table (Litwin): it grows one bucket at a time,
+ * each insert splitting at most one bucket, so no single operation's cost
+ * grows with the number of addresses. Buckets live in fixed pages found
+ * through a small page directory, as the actor table's slots do (ADR 0063),
+ * so growing never copies the buckets. A failed page allocation only skips
+ * a split; the only allocation that can fail an intern is the record's own.
+ */
+
+#define TA_ADDRESS_PAGE_BUCKETS 1024u
+#define TA_ADDRESS_INITIAL_BUCKETS 16u
+
+typedef struct ta_address_table ta_address_table;
+
+struct ta_address {
+    /* Null for a detached record: a session image's own copy (see below). */
+    ta_address_table *table;
+    struct ta_address *next;
+    uint32_t references;
+    uint32_t hash;
+    uint32_t family_len;
+    uint32_t name_len;
+    /* The family, a NUL, the name, a NUL. */
+    char text[];
+};
+
+struct ta_address_table {
+    ta_allocator allocator;
+    ta_vec pages; /* ta_address ** pages of TA_ADDRESS_PAGE_BUCKETS buckets */
+    /* Linear hashing: `base` buckets hashed with base - 1, and the first
+     * `split` of them already split with 2 * base - 1. */
+    uint32_t base;
+    uint32_t split;
+    uint32_t count;
+};
+
+TA_PRIVATE void ta_address_table_init(ta_address_table *table, ta_allocator allocator);
+/* Frees every record, held or not; references held past this are dangling. */
+TA_PRIVATE void ta_address_table_destroy(ta_address_table *table);
+TA_PRIVATE ta_result ta_address_table_intern(ta_address_table *table, const ta_actor_address *address,
+                                  ta_address **out);
+
+/*
+ * A detached copy in `arena`: the same strings, no table, no counting.
+ * Retain and release do nothing on it. Session images carry their addresses
+ * this way, so an image does not depend on the system that captured it
+ * (ADR 0028); loading interns them again.
+ */
+TA_PRIVATE ta_result ta_address_detach(ta_arena *arena, const ta_address *address, ta_address **out);
+TA_PRIVATE bool ta_address_in(const ta_address *address, const ta_address_table *table);
+
+
+
 typedef struct {
     ta_event_name_id parent;
     ta_atom segment;
@@ -240,12 +297,7 @@ TA_PRIVATE uint32_t ta_event_name_segments(const ta_event_name_table *table,
 
 /* Events, faults, and queued events are fully public. */
 
-/*
- * Core's own co-ownership of an event's data (ADR 0050): the envelope is
- * copied and its host value retained, so the copy outlives the caller's.
- * It cannot fail, because ta_value_retain() cannot.
- */
-TA_PRIVATE void ta_event_retain(const ta_event *event, ta_event *out);
+/* ta_event_retain() and ta_event_release() are public (ADR 0050, ADR 0065). */
 
 
 
@@ -298,13 +350,22 @@ TA_PRIVATE bool ta_scxml_uri_write(const ta_system *system, ta_text_writer *writ
 /* External delivery and the router boundary are fully public. */
 
 /*
- * A named ta_actor_ref borrows its family and name text from whoever built
- * it. An owner that outlives that text — a delivery the router retains, a
- * named actor's own self reference — copies it with ta_address_copy() and
- * gives it back with ta_address_release(). Both ignore a runtime ref.
+ * A named ta_actor_ref is a reference to an interned address (ADR 0065).
+ * An owner retains it and releases it; both ignore a runtime ref.
  */
-TA_PRIVATE ta_result ta_address_copy(ta_actor_ref *ref, ta_allocator allocator);
-TA_PRIVATE void ta_address_release(ta_actor_ref *ref, ta_allocator allocator);
+TA_PRIVATE void ta_actor_ref_retain(const ta_actor_ref *ref);
+TA_PRIVATE void ta_actor_ref_release(ta_actor_ref *ref);
+
+/*
+ * Makes a named ref one of this system's handles: a detached address (from a
+ * session image) is interned and the ref then holds a new reference. A ref
+ * that is already this system's, or a runtime ref, is left alone.
+ */
+TA_PRIVATE ta_result ta_actor_ref_localize(ta_system *system, ta_actor_ref *ref);
+/* Detaches a named ref into `arena`, for an image; a runtime ref is left alone. */
+TA_PRIVATE ta_result ta_actor_ref_detach(ta_arena *arena, ta_actor_ref *ref);
+/* The origin of an event, when it is an actor. */
+TA_PRIVATE ta_actor_ref *ta_event_origin_ref(ta_event *event);
 
 
 
@@ -1300,6 +1361,8 @@ struct ta_system {
     ta_allocator allocator;
     ta_clock clock;
     ta_atom_table atoms;
+    /* Interned named addresses (ADR 0065). */
+    ta_address_table addresses;
     ta_event_name_table event_names;
 
     /*
@@ -2096,6 +2159,238 @@ TA_PRIVATE ta_result ta_atom_find(const ta_atom_table *table, ta_str text, ta_at
 }
 
 
+static uint32_t ta_address_hash(const ta_actor_address *address) {
+    uint32_t hash = ta_hash_bytes(0, address->family.name.ptr, address->family.name.len);
+    const char separator = 0;
+    hash = ta_hash_bytes(hash, &separator, 1);
+    return ta_hash_bytes(hash, address->name.ptr, address->name.len);
+}
+
+static uint32_t ta_address_bucket_count(const ta_address_table *table) {
+    return table->base + table->split;
+}
+
+static ta_address **ta_address_bucket(const ta_address_table *table, uint32_t index) {
+    ta_address **page = *(ta_address ***)ta_vec_at(&table->pages, index / TA_ADDRESS_PAGE_BUCKETS);
+    return &page[index % TA_ADDRESS_PAGE_BUCKETS];
+}
+
+static uint32_t ta_address_index(const ta_address_table *table, uint32_t hash) {
+    uint32_t index = hash & (table->base - 1u);
+    return index < table->split ? hash & (2u * table->base - 1u) : index;
+}
+
+static size_t ta_address_bytes(uint32_t family_len, uint32_t name_len) {
+    return sizeof(ta_address) + (size_t)family_len + (size_t)name_len + 2u;
+}
+
+/* Makes sure the page holding bucket `index` exists; false when it cannot. */
+static bool ta_address_page_for(ta_address_table *table, uint32_t index) {
+    uint32_t page_index = index / TA_ADDRESS_PAGE_BUCKETS;
+    if (page_index < table->pages.count) {
+        return true;
+    }
+    ta_address **page = ta_mem_alloc(table->allocator, TA_ADDRESS_PAGE_BUCKETS * sizeof(ta_address *),
+                                     _Alignof(ta_address *));
+    if (page == NULL) {
+        return false;
+    }
+    for (uint32_t bucket = 0; bucket < TA_ADDRESS_PAGE_BUCKETS; bucket += 1u) {
+        page[bucket] = NULL;
+    }
+    if (ta_vec_push(&table->pages, &page) != TA_OK) {
+        ta_mem_free(table->allocator, page,
+                    &(ta_allocator_free_params){ .size = TA_ADDRESS_PAGE_BUCKETS * sizeof(ta_address *),
+                                                 .alignment = _Alignof(ta_address *) });
+        return false;
+    }
+    return true;
+}
+
+/* Splits one bucket when the table is fuller than one record per bucket. */
+static void ta_address_grow(ta_address_table *table) {
+    uint32_t added = ta_address_bucket_count(table);
+    if (table->count <= added || added == UINT32_MAX || !ta_address_page_for(table, added)) {
+        return; /* a failed page only postpones the split */
+    }
+    uint32_t wide = 2u * table->base - 1u;
+    ta_address **from = ta_address_bucket(table, table->split);
+    ta_address **to = ta_address_bucket(table, added);
+    ta_address *chain = *from;
+    *from = NULL;
+    while (chain != NULL) {
+        ta_address *next = chain->next;
+        ta_address **home = (chain->hash & wide) == table->split ? from : to;
+        chain->next = *home;
+        *home = chain;
+        chain = next;
+    }
+    table->split += 1u;
+    if (table->split == table->base) {
+        table->base *= 2u;
+        table->split = 0;
+    }
+}
+
+TA_PRIVATE void ta_address_table_init(ta_address_table *table, ta_allocator allocator) {
+    *table = (ta_address_table){ .allocator = allocator, .base = TA_ADDRESS_INITIAL_BUCKETS };
+    ta_vec_init(&table->pages, allocator, TA_VEC_LAYOUT(ta_address **));
+}
+
+static void ta_address_free(ta_address_table *table, ta_address *address) {
+    ta_mem_free(table->allocator, address,
+                &(ta_allocator_free_params){ .size = ta_address_bytes(address->family_len, address->name_len),
+                                             .alignment = _Alignof(ta_address) });
+}
+
+TA_PRIVATE void ta_address_table_destroy(ta_address_table *table) {
+    uint32_t buckets = table->pages.count == 0 ? 0u : ta_address_bucket_count(table);
+    for (uint32_t index = 0; index < buckets; index += 1u) {
+        ta_address *chain = *ta_address_bucket(table, index);
+        while (chain != NULL) {
+            ta_address *next = chain->next;
+            ta_address_free(table, chain);
+            chain = next;
+        }
+    }
+    for (uint32_t page = 0; page < table->pages.count; page += 1u) {
+        ta_mem_free(table->allocator, *(ta_address ***)ta_vec_at(&table->pages, page),
+                    &(ta_allocator_free_params){ .size = TA_ADDRESS_PAGE_BUCKETS * sizeof(ta_address *),
+                                                 .alignment = _Alignof(ta_address *) });
+    }
+    ta_vec_destroy(&table->pages);
+    *table = (ta_address_table){0};
+}
+
+static bool ta_address_matches(const ta_address *record, const ta_actor_address *address, uint32_t hash) {
+    ta_str family = { .ptr = record->text, .len = record->family_len };
+    ta_str name = { .ptr = record->text + record->family_len + 1u, .len = record->name_len };
+    return record->hash == hash && ta_str_equal(family, address->family.name) && ta_str_equal(name, address->name);
+}
+
+static ta_address *ta_address_record(ta_allocator allocator, const ta_actor_address *address, uint32_t hash) {
+    uint32_t family_len = address->family.name.len;
+    uint32_t name_len = address->name.len;
+    ta_address *record = ta_mem_alloc(allocator, ta_address_bytes(family_len, name_len), _Alignof(ta_address));
+    if (record == NULL) {
+        return NULL;
+    }
+    record->table = NULL;
+    record->next = NULL;
+    record->references = 0;
+    record->hash = hash;
+    record->family_len = family_len;
+    record->name_len = name_len;
+    if (family_len != 0) {
+        ta_mem_copy(record->text, address->family.name.ptr, family_len);
+    }
+    record->text[family_len] = 0;
+    if (name_len != 0) {
+        ta_mem_copy(record->text + family_len + 1u, address->name.ptr, name_len);
+    }
+    record->text[family_len + 1u + name_len] = 0;
+    return record;
+}
+
+TA_PRIVATE ta_result ta_address_table_intern(ta_address_table *table, const ta_actor_address *address,
+                                  ta_address **out) {
+    uint32_t hash = ta_address_hash(address);
+    if (table->pages.count != 0) {
+        for (ta_address *record = *ta_address_bucket(table, ta_address_index(table, hash)); record != NULL;
+             record = record->next) {
+            if (ta_address_matches(record, address, hash)) {
+                record->references += 1u;
+                *out = record;
+                return TA_OK;
+            }
+        }
+    } else if (!ta_address_page_for(table, 0)) {
+        return TA_ERR_NOMEM;
+    }
+    ta_address *record = ta_address_record(table->allocator, address, hash);
+    if (record == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    record->table = table;
+    record->references = 1;
+    ta_address **bucket = ta_address_bucket(table, ta_address_index(table, hash));
+    record->next = *bucket;
+    *bucket = record;
+    table->count += 1u;
+    ta_address_grow(table);
+    *out = record;
+    return TA_OK;
+}
+
+TA_PRIVATE ta_result ta_address_detach(ta_arena *arena, const ta_address *address, ta_address **out) {
+    size_t bytes = ta_address_bytes(address->family_len, address->name_len);
+    ta_address *copy = ta_arena_alloc(arena, bytes, _Alignof(ta_address));
+    if (copy == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    ta_mem_copy(copy, address, bytes);
+    copy->table = NULL;
+    copy->next = NULL;
+    copy->references = 0;
+    *out = copy;
+    return TA_OK;
+}
+
+TA_PRIVATE bool ta_address_in(const ta_address *address, const ta_address_table *table) {
+    return address != NULL && address->table == table;
+}
+
+/* ------------------------------------------------------------------------
+ * Public
+ */
+
+TA_API ta_result ta_address_intern(ta_system *system, const ta_actor_address *address, ta_address **out) {
+    if (system == NULL || address == NULL || out == NULL ||
+        (address->family.name.ptr == NULL && address->family.name.len != 0) ||
+        (address->name.ptr == NULL && address->name.len != 0)) {
+        return TA_ERR_INVALID;
+    }
+    return ta_address_table_intern(&system->addresses, address, out);
+}
+
+TA_API void ta_address_retain(ta_address *address) {
+    if (address != NULL && address->table != NULL) {
+        address->references += 1u;
+    }
+}
+
+TA_API void ta_address_release(ta_address *address) {
+    if (address == NULL || address->table == NULL) {
+        return;
+    }
+    ta_address *record = address;
+    record->references -= 1u;
+    if (record->references != 0) {
+        return;
+    }
+    ta_address_table *table = record->table;
+    for (ta_address **link = ta_address_bucket(table, ta_address_index(table, record->hash)); *link != NULL;
+         link = &(*link)->next) {
+        if (*link == record) {
+            *link = record->next;
+            break;
+        }
+    }
+    table->count -= 1u;
+    ta_address_free(table, record);
+}
+
+TA_API ta_actor_address ta_address_view(const ta_address *address) {
+    if (address == NULL) {
+        return (ta_actor_address){0};
+    }
+    return (ta_actor_address){
+        .family = { .name = { .ptr = address->text, .len = address->family_len } },
+        .name = { .ptr = address->text + address->family_len + 1u, .len = address->name_len },
+    };
+}
+
+
 static const ta_event_name_node *ta_event_name_node_at(const ta_event_name_table *table,
                                                        ta_event_name_id name) {
     return ta_vec_at(&table->nodes, name);
@@ -2300,9 +2595,12 @@ TA_PRIVATE uint32_t ta_event_name_segments(const ta_event_name_table *table,
 }
 
 
-TA_PRIVATE void ta_event_retain(const ta_event *event, ta_event *out) {
+TA_API void ta_event_retain(const ta_event *event, ta_event *out) {
     *out = *event;
     ta_value_retain(&out->data);
+    if (out->origin.kind == TA_ORIGIN_ACTOR) {
+        ta_actor_ref_retain(&out->origin.as.actor);
+    }
 }
 
 TA_API void ta_event_release(ta_event *event) {
@@ -2311,6 +2609,9 @@ TA_API void ta_event_release(ta_event *event) {
     }
     ta_value_release(&event->data);
     event->data = (ta_value){0};
+    if (event->origin.kind == TA_ORIGIN_ACTOR) {
+        ta_actor_ref_release(&event->origin.as.actor);
+    }
 }
 
 
@@ -2412,8 +2713,14 @@ TA_API ta_result ta_scxml_target_parse(ta_system *system, ta_str text, ta_scxml_
         if (!ta_uri_address(rest, &address)) {
             return TA_ERR_INVALID;
         }
+        /* The target holds a reference to the interned address (ADR 0065). */
+        ta_address *named = NULL;
+        ta_result result = ta_address_intern(system, &address, &named);
+        if (result != TA_OK) {
+            return result;
+        }
         *out = (ta_scxml_target){ .kind = TA_SCXML_TARGET_ACTOR,
-                                  .as.actor = { .kind = TA_ACTOR_REF_NAMED, .as.named = address } };
+                                  .as.actor = { .kind = TA_ACTOR_REF_NAMED, .as.named = named } };
         return TA_OK;
     }
     rest = text;
@@ -2435,6 +2742,12 @@ TA_API ta_result ta_scxml_target_parse(ta_system *system, ta_str text, ta_scxml_
     return TA_ERR_INVALID;
 }
 
+TA_API void ta_scxml_target_release(ta_scxml_target *target) {
+    if (target != NULL && target->kind == TA_SCXML_TARGET_ACTOR) {
+        ta_actor_ref_release(&target->as.actor);
+    }
+}
+
 TA_PRIVATE bool ta_scxml_uri_write(const ta_system *system, ta_text_writer *writer, const ta_scxml_target *target) {
     switch (target->kind) {
         case TA_SCXML_TARGET_INTERNAL:
@@ -2449,10 +2762,11 @@ TA_PRIVATE bool ta_scxml_uri_write(const ta_system *system, ta_text_writer *writ
             return true;
         case TA_SCXML_TARGET_ACTOR:
             if (target->as.actor.kind == TA_ACTOR_REF_NAMED) {
+                ta_actor_address view = ta_address_view(target->as.actor.as.named);
                 ta_text_put(writer, ta_str_from_cstr(TA_URI_ADDRESS));
-                ta_text_put(writer, target->as.actor.as.named.family.name);
+                ta_text_put(writer, view.family.name);
                 ta_text_put(writer, (ta_str){ .ptr = "/", .len = 1 });
-                ta_text_put(writer, target->as.actor.as.named.name);
+                ta_text_put(writer, view.name);
                 return true;
             }
             ta_text_put(writer, ta_str_from_cstr(TA_URI_SESSION));
@@ -2477,76 +2791,53 @@ TA_API ta_result ta_scxml_target_format(const ta_system *system, const ta_scxml_
 }
 
 
-TA_PRIVATE void ta_address_release(ta_actor_ref *ref, ta_allocator allocator) {
-    if (ref->kind != TA_ACTOR_REF_NAMED) {
+TA_PRIVATE void ta_actor_ref_retain(const ta_actor_ref *ref) {
+    if (ref->kind == TA_ACTOR_REF_NAMED) {
+        ta_address_retain(ref->as.named);
+    }
+}
+
+TA_PRIVATE void ta_actor_ref_release(ta_actor_ref *ref) {
+    if (ref->kind == TA_ACTOR_REF_NAMED) {
+        ta_address_release(ref->as.named);
+        ref->as.named = NULL;
+    }
+}
+
+TA_PRIVATE ta_result ta_actor_ref_localize(ta_system *system, ta_actor_ref *ref) {
+    if (ref->kind != TA_ACTOR_REF_NAMED || ref->as.named == NULL || ta_address_in(ref->as.named, &system->addresses)) {
+        return TA_OK;
+    }
+    ta_actor_address view = ta_address_view(ref->as.named);
+    return ta_address_table_intern(&system->addresses, &view, &ref->as.named);
+}
+
+TA_PRIVATE ta_result ta_actor_ref_detach(ta_arena *arena, ta_actor_ref *ref) {
+    if (ref->kind != TA_ACTOR_REF_NAMED || ref->as.named == NULL) {
+        return TA_OK;
+    }
+    return ta_address_detach(arena, ref->as.named, &ref->as.named);
+}
+
+TA_PRIVATE ta_actor_ref *ta_event_origin_ref(ta_event *event) {
+    return event->origin.kind == TA_ORIGIN_ACTOR ? &event->origin.as.actor : NULL;
+}
+
+TA_API void ta_external_delivery_retain(const ta_external_delivery *delivery, ta_external_delivery *out) {
+    if (delivery == NULL || out == NULL) {
         return;
     }
-    ta_str *texts[2] = { &ref->as.named.family.name, &ref->as.named.name };
-    for (uint32_t index = 0; index < 2; index += 1) {
-        if (texts[index]->ptr != NULL) {
-            ta_mem_free(allocator, (void *)texts[index]->ptr,
-                        &(ta_allocator_free_params){ .size = (size_t)texts[index]->len + 1u,
-                                                     .alignment = 1 });
-        }
-        *texts[index] = (ta_str){0};
-    }
-}
-
-static ta_result ta_address_copy_text(ta_str *text, ta_allocator allocator) {
-    if (text->ptr == NULL) {
-        return TA_OK;
-    }
-    char *copy = ta_mem_alloc(allocator, (size_t)text->len + 1u, 1);
-    if (copy == NULL) {
-        *text = (ta_str){0};
-        return TA_ERR_NOMEM;
-    }
-    ta_mem_copy(copy, text->ptr, text->len);
-    copy[text->len] = '\0';
-    text->ptr = copy;
-    return TA_OK;
-}
-
-TA_PRIVATE ta_result ta_address_copy(ta_actor_ref *ref, ta_allocator allocator) {
-    if (ref->kind != TA_ACTOR_REF_NAMED) {
-        return TA_OK;
-    }
-    ta_result result = ta_address_copy_text(&ref->as.named.family.name, allocator);
-    if (result != TA_OK) {
-        /* The family copy left its own text null; the name is still borrowed. */
-        ref->as.named.name = (ta_str){0};
-        return result;
-    }
-    result = ta_address_copy_text(&ref->as.named.name, allocator);
-    if (result != TA_OK) {
-        ta_address_release(ref, allocator);
-    }
-    return result;
-}
-
-TA_API ta_result ta_external_delivery_clone(const ta_external_delivery *delivery,
-                                     ta_allocator allocator,
-                                     ta_external_delivery *out) {
-    if (delivery == NULL || out == NULL) {
-        return TA_ERR_INVALID;
-    }
     ta_external_delivery copy = *delivery;
-    /* Only the address can refuse memory; retaining the event cannot. */
-    ta_result result = ta_address_copy(&copy.destination, allocator);
-    if (result != TA_OK) {
-        ta_address_release(&copy.destination, allocator);
-        return result;
-    }
+    ta_actor_ref_retain(&copy.destination);
     ta_event_retain(&delivery->event, &copy.event);
     *out = copy;
-    return TA_OK;
 }
 
-TA_API void ta_external_delivery_release(ta_external_delivery *delivery, ta_allocator allocator) {
+TA_API void ta_external_delivery_release(ta_external_delivery *delivery) {
     if (delivery == NULL) {
         return;
     }
-    ta_address_release(&delivery->destination, allocator);
+    ta_actor_ref_release(&delivery->destination);
     ta_event_release(&delivery->event);
 }
 
@@ -2925,6 +3216,9 @@ static bool ta_timer_remove_selected(ta_timer_heap *heap, ta_timer_list *list, c
         if (ta_timer_selected(&list->sends[index], selection)) {
             ta_value_release(&list->sends[index].target);
             ta_value_release(&list->sends[index].data);
+            /* A stored send owns its destination and origin references (ADR 0065). */
+            ta_actor_ref_release(&list->sends[index].destination);
+            ta_actor_ref_release(&list->meta[index].origin);
             continue;
         }
         list->sends[kept] = list->sends[index];
@@ -4141,9 +4435,14 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
     };
     record.data = delivery->event.data;
     ta_value_retain(&record.data);
+    /* The stored send owns its destination and origin references (ADR 0065). */
+    ta_actor_ref_retain(&record.destination);
+    ta_actor_ref_retain(&record.origin);
     ta_result result = ta_actor_schedule_send(system, delivery->sender, &record);
     if (result != TA_OK) {
         ta_value_release(&record.data);
+        ta_actor_ref_release(&record.destination);
+        ta_actor_ref_release(&record.origin);
     }
     return result;
 }
@@ -8223,6 +8522,8 @@ static void ta_activation_effect_release(ta_activation_effect *effect) {
     if (effect->kind == TA_ACTIVATION_SEND) {
         ta_value_release(&effect->as.send.send.target);
         ta_value_release(&effect->as.send.send.data);
+        ta_actor_ref_release(&effect->as.send.send.destination);
+        ta_actor_ref_release(&effect->as.send.send.origin);
     } else if (effect->kind == TA_ACTIVATION_LOG) {
         ta_value_release(&effect->as.log.value);
     }
@@ -8357,8 +8658,8 @@ TA_PRIVATE void ta_actor_free(ta_system *system, ta_actor *actor) {
         definition->datamodel.v->destroy_instance(definition->datamodel.self, definition->datamodel_shared,
                                                   actor->datamodel_instance);
     }
-    /* A named actor owns the text of its address; a runtime ref owns nothing. */
-    ta_address_release(&actor->record.self, system->allocator);
+    /* A named actor holds a reference to its address; a runtime ref holds nothing. */
+    ta_actor_ref_release(&actor->record.self);
     ta_interpreter_release_actor_state(system, actor);
     /* The record, the session storage and the instance are one block (ADR 0063). */
     ta_mem_free(system->allocator, actor,
@@ -8388,19 +8689,19 @@ static ta_result ta_actor_claim_address(ta_system *system,
         address->name.ptr == NULL || address->name.len == 0) {
         return TA_ERR_INVALID;
     }
-    ta_actor_ref self = { .kind = TA_ACTOR_REF_NAMED, .as.named = *address };
-    ta_result result = ta_address_copy(&self, system->allocator);
+    ta_actor_ref self = { .kind = TA_ACTOR_REF_NAMED };
+    ta_result result = ta_address_intern(system, address, &self.as.named);
     if (result != TA_OK) {
         return result;
     }
     result = system->directory.v->claim(
         system->directory.self,
         &(ta_actor_directory_claim_params){
-            .address = &self.as.named,
+            .address = self.as.named,
             .entry = { .kind = TA_ACTOR_DIRECTORY_RESIDENT, .actor = actor->record.id },
         });
     if (result != TA_OK) {
-        ta_address_release(&self, system->allocator);
+        ta_actor_ref_release(&self);
         return result;
     }
     /* From here the actor answers to its address: every origin core writes
@@ -8440,7 +8741,7 @@ static void ta_actor_release_address(ta_system *system, const ta_actor *actor) {
         ta_actor_directory_entry current = {0};
         ta_result result = system->directory.v->resolve(
             system->directory.self,
-            &(ta_actor_directory_resolve_params){ .address = &actor->record.self.as.named, .out = &current });
+            &(ta_actor_directory_resolve_params){ .address = actor->record.self.as.named, .out = &current });
         if (result == TA_OK &&
             (current.kind != TA_ACTOR_DIRECTORY_RESIDENT || current.actor != actor->record.id)) {
             return;
@@ -8449,7 +8750,7 @@ static void ta_actor_release_address(ta_system *system, const ta_actor *actor) {
     (void)system->directory.v->remove(
         system->directory.self,
         &(ta_actor_directory_remove_params){
-            .address = &actor->record.self.as.named,
+            .address = actor->record.self.as.named,
             .expected = { .kind = TA_ACTOR_DIRECTORY_RESIDENT, .actor = actor->record.id },
         });
 }
@@ -8486,12 +8787,19 @@ TA_API ta_result ta_actor_remove_unloaded(ta_system *system, const ta_actor_remo
     if (system == NULL || params == NULL || params->address == NULL) {
         return TA_ERR_INVALID;
     }
-    return ta_actor_directory_drop(
+    ta_address *address = NULL;
+    ta_result result = ta_address_intern(system, params->address, &address);
+    if (result != TA_OK) {
+        return result;
+    }
+    result = ta_actor_directory_drop(
         system,
         &(ta_actor_directory_remove_params){
-            .address = params->address,
+            .address = address,
             .expected = { .kind = TA_ACTOR_DIRECTORY_UNLOADED },
         });
+    ta_address_release(address);
+    return result;
 }
 
 /*
@@ -8506,10 +8814,16 @@ TA_API ta_result ta_actor_find(ta_system *system, const ta_actor_find_params *pa
     if (system->directory.v == NULL || system->directory.v->resolve == NULL) {
         return TA_ERR_UNSUPPORTED;
     }
+    ta_address *address = NULL;
+    ta_result result = ta_address_intern(system, params->address, &address);
+    if (result != TA_OK) {
+        return result;
+    }
     ta_actor_directory_entry entry = { .kind = TA_ACTOR_DIRECTORY_NONE };
-    ta_result result = system->directory.v->resolve(
+    result = system->directory.v->resolve(
         system->directory.self,
-        &(ta_actor_directory_resolve_params){ .address = params->address, .out = &entry });
+        &(ta_actor_directory_resolve_params){ .address = address, .out = &entry });
+    ta_address_release(address);
     if (result != TA_OK) {
         return result;
     }
@@ -8636,7 +8950,8 @@ TA_API ta_result ta_actor_prepare_replacement(ta_system *system, const ta_actor_
         return TA_ERR_NOT_FOUND;
     }
     if (!incumbent->published || incumbent->record.self.kind != TA_ACTOR_REF_NAMED ||
-        !ta_str_equal(incumbent->record.self.as.named.family.name, definition->identity.family.name)) {
+        !ta_str_equal(ta_address_view(incumbent->record.self.as.named).family.name,
+                      definition->identity.family.name)) {
         return TA_ERR_INVALID;
     }
     ta_actor *actor = NULL;
@@ -8648,7 +8963,7 @@ TA_API ta_result ta_actor_prepare_replacement(ta_system *system, const ta_actor_
     actor->published = false;
     actor->replacement_of = incumbent->record.id;
     actor->record.self = incumbent->record.self;
-    result = ta_address_copy(&actor->record.self, system->allocator);
+    ta_actor_ref_retain(&actor->record.self);
     if (result == TA_OK) {
         result = definition->datamodel.v->init_instance(
             definition->datamodel.self,
@@ -8704,9 +9019,7 @@ static void ta_actor_release_activation_effects(ta_system *system, ta_actor *act
             if (status != TA_EXTERNAL_EVENT_RETRY) {
                 continue;
             }
-            send->submitted = true;
-            send->origin = actor->record.self;
-            send->invoke_id = ta_invoke_parent_id(actor, &send->destination);
+            /* Dispatch marked it submitted and took its origin and invoke ID. */
         }
         /* Reserved by ta_actor_activate_replacement(), so this cannot fail. */
         (void)ta_timer_schedule(&system->timers, &sparse->timers, send);
@@ -8743,7 +9056,7 @@ TA_API ta_result ta_actor_activate_replacement(ta_system *system, const ta_actor
     result = ta_actor_directory_swap(
         system,
         &(ta_actor_directory_replace_params){
-            .address = &replacement->record.self.as.named,
+            .address = replacement->record.self.as.named,
             .expected = { .kind = TA_ACTOR_DIRECTORY_RESIDENT, .actor = incumbent->record.id },
             .replacement = { .kind = TA_ACTOR_DIRECTORY_RESIDENT, .actor = replacement->record.id },
         });
@@ -9129,13 +9442,24 @@ static ta_result ta_image_copy_str(ta_arena *arena, ta_str *text) {
     return TA_OK;
 }
 
-/* Moves a named ref's text into the arena; a runtime ref owns nothing. */
+/*
+ * An image carries its addresses as detached copies in its own arena (ADR
+ * 0065): the strings, not the capturing system's handles, so the image does
+ * not depend on that system (ADR 0028). A runtime ref owns nothing.
+ */
 static ta_result ta_image_copy_address(ta_arena *arena, ta_actor_ref *ref) {
-    if (ref->kind != TA_ACTOR_REF_NAMED) {
-        return TA_OK;
-    }
-    ta_result result = ta_image_copy_str(arena, &ref->as.named.family.name);
-    return result == TA_OK ? ta_image_copy_str(arena, &ref->as.named.name) : result;
+    return ta_actor_ref_detach(arena, ref);
+}
+
+static ta_result ta_image_copy_origin(ta_arena *arena, ta_event *event) {
+    ta_actor_ref *origin = ta_event_origin_ref(event);
+    return origin == NULL ? TA_OK : ta_actor_ref_detach(arena, origin);
+}
+
+/* Makes an event restored from an image hold this system's origin handle. */
+static ta_result ta_image_localize_origin(ta_system *system, ta_event *event) {
+    ta_actor_ref *origin = ta_event_origin_ref(event);
+    return origin == NULL ? TA_OK : ta_actor_ref_localize(system, origin);
 }
 
 static ta_result ta_image_copy_identity(ta_arena *arena, ta_definition_identity *identity) {
@@ -9160,8 +9484,8 @@ static size_t ta_image_measure(const ta_actor *actor) {
     total += (size_t)actor->definition->identity.family.name.len + 1u;
     total += (size_t)actor->definition->identity.revision.len + 1u;
     if (actor->record.self.kind == TA_ACTOR_REF_NAMED) {
-        total += (size_t)actor->record.self.as.named.family.name.len + 1u;
-        total += (size_t)actor->record.self.as.named.name.len + 1u;
+        ta_actor_address view = ta_address_view(actor->record.self.as.named);
+        total += sizeof(ta_address) + (size_t)view.family.name.len + (size_t)view.name.len + 2u;
     }
     if (actor->internal_queue != NULL) {
         total += (size_t)actor->internal_queue->count * sizeof(ta_queued_event);
@@ -9193,6 +9517,15 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
     if (result == TA_OK) {
         result = ta_image_copy_address(arena, &image->self);
     }
+    if (result == TA_OK) {
+        result = ta_image_copy_origin(arena, &image->external_event);
+    }
+    if (result == TA_OK) {
+        result = ta_image_copy_origin(arena, &image->macrostep_event);
+    }
+    if (result == TA_OK) {
+        result = ta_image_copy_origin(arena, &image->current_event);
+    }
     if (result != TA_OK) {
         return result;
     }
@@ -9206,6 +9539,10 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
         }
         for (uint32_t index = 0; index < count; index += 1) {
             image->internal_events[index] = actor->internal_queue->events[index];
+            result = ta_image_copy_origin(arena, &image->internal_events[index].event);
+            if (result != TA_OK) {
+                return result;
+            }
         }
         image->internal_count = count;
     }
@@ -9436,7 +9773,12 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
     for (uint32_t index = 0; index < image->internal_count; index += 1) {
         ta_event event;
         ta_event_retain(&image->internal_events[index].event, &event);
-        ta_result result = ta_interpreter_enqueue_internal(system, actor, &event);
+        ta_result result = ta_image_localize_origin(system, &event);
+        if (result != TA_OK) {
+            ta_event_release(&event);
+            return result;
+        }
+        result = ta_interpreter_enqueue_internal(system, actor, &event);
         if (result != TA_OK) {
             return result;
         }
@@ -9464,10 +9806,19 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
         ta_image_rebind_self(&send.origin, image->source_actor, actor->record.id);
         ta_value_retain(&send.target);
         ta_value_retain(&send.data);
-        ta_result result = ta_actor_schedule_send(system, actor, &send);
+        /* The image's detached addresses become this system's handles. */
+        ta_result result = ta_actor_ref_localize(system, &send.destination);
+        if (result == TA_OK) {
+            result = ta_actor_ref_localize(system, &send.origin);
+        }
+        if (result == TA_OK) {
+            result = ta_actor_schedule_send(system, actor, &send);
+        }
         if (result != TA_OK) {
             ta_value_release(&send.target);
             ta_value_release(&send.data);
+            ta_actor_ref_release(&send.destination);
+            ta_actor_ref_release(&send.origin);
             return result;
         }
     }
@@ -9553,8 +9904,21 @@ TA_API ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstr
         ta_event_retain(&image->current_event, &actor->current_event);
         actor->has_current_event = true;
     }
-    /* A named actor answers to its address, so it owns that text itself. */
-    result = ta_address_copy(&actor->record.self, system->allocator);
+    /*
+     * The image carries detached addresses; the actor holds this system's
+     * handles (ADR 0065). A failure leaves a detached one behind, which
+     * releasing ignores.
+     */
+    result = ta_actor_ref_localize(system, &actor->record.self);
+    if (result == TA_OK && actor->has_external_event) {
+        result = ta_image_localize_origin(system, &actor->external_event);
+    }
+    if (result == TA_OK && actor->has_macrostep_event) {
+        result = ta_image_localize_origin(system, &actor->macrostep_event);
+    }
+    if (result == TA_OK && actor->has_current_event) {
+        result = ta_image_localize_origin(system, &actor->current_event);
+    }
     if (result == TA_OK && image->paused != NULL) {
         result = ta_image_restore_pause(image, actor, system);
     }
@@ -9654,7 +10018,7 @@ TA_API ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params
     result = ta_actor_directory_swap(
         system,
         &(ta_actor_directory_replace_params){
-            .address = &actor->record.self.as.named,
+            .address = actor->record.self.as.named,
             .expected = { .kind = TA_ACTOR_DIRECTORY_RESIDENT, .actor = actor->record.id },
             .replacement = { .kind = TA_ACTOR_DIRECTORY_UNLOADED },
         });
@@ -9704,7 +10068,7 @@ TA_API ta_result ta_actor_load(ta_system *system, const ta_actor_load_params *pa
     result = ta_actor_directory_swap(
         system,
         &(ta_actor_directory_replace_params){
-            .address = &image->self.as.named,
+            .address = ta_actor_lookup(system, id)->record.self.as.named,
             .expected = { .kind = TA_ACTOR_DIRECTORY_UNLOADED },
             .replacement = { .kind = TA_ACTOR_DIRECTORY_RESIDENT, .actor = id },
         });
@@ -9752,6 +10116,7 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
     system->free_definition_slot = UINT32_MAX;
     ta_vec_init(&system->io_processors, config->allocator, TA_VEC_LAYOUT(ta_io_registration));
     ta_vec_init(&system->invokers, config->allocator, TA_VEC_LAYOUT(ta_invoker_registration));
+    ta_address_table_init(&system->addresses, config->allocator);
     ta_result result = ta_atom_table_init(&system->atoms, config->allocator);
     if (result != TA_OK) {
         ta_mem_free(config->allocator, system,
@@ -9813,6 +10178,8 @@ TA_API void ta_system_destroy(ta_system *system) {
     ta_vec_destroy(&system->invokers);
     ta_arena_destroy(&system->scratch);
     ta_interpreter_queue_cache_destroy(system);
+    /* Last: everything above gave its addresses back. */
+    ta_address_table_destroy(&system->addresses);
     ta_event_name_table_destroy(&system->event_names);
     ta_atom_table_destroy(&system->atoms);
     ta_allocator allocator = system->allocator;
@@ -10770,9 +11137,14 @@ TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_sy
          * <cancel> no longer reaches it, and it outlives its sender
          * (ADR 0054 D3, D5). The caller keeps it in the deadline index.
          */
-        send->submitted = true;
-        send->origin = origin;
-        send->invoke_id = invoke_id;
+        if (!send->submitted) {
+            /* The stored send now owns its envelope's origin (ADR 0065). */
+            ta_actor_ref_retain(&origin);
+            ta_actor_ref_release(&send->origin);
+            send->origin = origin;
+            send->submitted = true;
+            send->invoke_id = invoke_id;
+        }
         ta_value_release(&fault.data);
         return status;
     }
@@ -10783,6 +11155,8 @@ TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_sy
     ta_value_release(&fault.data);
     ta_value_release(&send->target);
     ta_value_release(&send->data);
+    ta_actor_ref_release(&send->destination);
+    ta_actor_ref_release(&send->origin);
     return status;
 }
 
@@ -11100,6 +11474,7 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
     if (status != TA_OP_OK) {
         ta_value_release(&state.data);
         ta_value_release(&state.target);
+        ta_scxml_target_release(&state.scxml);
         return ta_send_execution_error(it, state.send_id, &fault);
     }
 
@@ -11113,6 +11488,8 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
             .invoke_id = TA_INVOKE_ID_NONE,
             .data = state.data,
         };
+        /* The queued event owns its origin reference (ADR 0065). */
+        ta_actor_ref_retain(&event.origin.as.actor);
         return ta_interpreter_enqueue_internal(system, actor, &event);
     }
 
@@ -11127,9 +11504,11 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
         .has_content = state.has_content,
         .content = state.content,
     };
+    /* A named target's reference passes to the send record (ADR 0065). */
     if (state.scxml_io && !ta_send_destination(it, &state.scxml, &record.destination)) {
         ta_value_release(&state.data);
         ta_value_release(&state.target);
+        ta_scxml_target_release(&state.scxml);
         return ta_communication_error(system, actor, &(ta_error_params){ .send_id = state.send_id });
     }
     if (!actor->published) {
@@ -11138,6 +11517,7 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
         if (result != TA_OK) {
             ta_value_release(&state.data);
             ta_value_release(&state.target);
+            ta_actor_ref_release(&record.destination);
         }
         return result;
     }
@@ -11156,6 +11536,8 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
     if (result != TA_OK) {
         ta_value_release(&state.data);
         ta_value_release(&state.target);
+        ta_actor_ref_release(&record.destination);
+        ta_actor_ref_release(&record.origin);
     }
     return result;
 }

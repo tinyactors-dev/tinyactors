@@ -82,13 +82,24 @@ static ta_result ta_image_copy_str(ta_arena *arena, ta_str *text) {
     return TA_OK;
 }
 
-/* Moves a named ref's text into the arena; a runtime ref owns nothing. */
+/*
+ * An image carries its addresses as detached copies in its own arena (ADR
+ * 0065): the strings, not the capturing system's handles, so the image does
+ * not depend on that system (ADR 0028). A runtime ref owns nothing.
+ */
 static ta_result ta_image_copy_address(ta_arena *arena, ta_actor_ref *ref) {
-    if (ref->kind != TA_ACTOR_REF_NAMED) {
-        return TA_OK;
-    }
-    ta_result result = ta_image_copy_str(arena, &ref->as.named.family.name);
-    return result == TA_OK ? ta_image_copy_str(arena, &ref->as.named.name) : result;
+    return ta_actor_ref_detach(arena, ref);
+}
+
+static ta_result ta_image_copy_origin(ta_arena *arena, ta_event *event) {
+    ta_actor_ref *origin = ta_event_origin_ref(event);
+    return origin == NULL ? TA_OK : ta_actor_ref_detach(arena, origin);
+}
+
+/* Makes an event restored from an image hold this system's origin handle. */
+static ta_result ta_image_localize_origin(ta_system *system, ta_event *event) {
+    ta_actor_ref *origin = ta_event_origin_ref(event);
+    return origin == NULL ? TA_OK : ta_actor_ref_localize(system, origin);
 }
 
 static ta_result ta_image_copy_identity(ta_arena *arena, ta_definition_identity *identity) {
@@ -113,8 +124,8 @@ static size_t ta_image_measure(const ta_actor *actor) {
     total += (size_t)actor->definition->identity.family.name.len + 1u;
     total += (size_t)actor->definition->identity.revision.len + 1u;
     if (actor->record.self.kind == TA_ACTOR_REF_NAMED) {
-        total += (size_t)actor->record.self.as.named.family.name.len + 1u;
-        total += (size_t)actor->record.self.as.named.name.len + 1u;
+        ta_actor_address view = ta_address_view(actor->record.self.as.named);
+        total += sizeof(ta_address) + (size_t)view.family.name.len + (size_t)view.name.len + 2u;
     }
     if (actor->internal_queue != NULL) {
         total += (size_t)actor->internal_queue->count * sizeof(ta_queued_event);
@@ -146,6 +157,15 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
     if (result == TA_OK) {
         result = ta_image_copy_address(arena, &image->self);
     }
+    if (result == TA_OK) {
+        result = ta_image_copy_origin(arena, &image->external_event);
+    }
+    if (result == TA_OK) {
+        result = ta_image_copy_origin(arena, &image->macrostep_event);
+    }
+    if (result == TA_OK) {
+        result = ta_image_copy_origin(arena, &image->current_event);
+    }
     if (result != TA_OK) {
         return result;
     }
@@ -159,6 +179,10 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
         }
         for (uint32_t index = 0; index < count; index += 1) {
             image->internal_events[index] = actor->internal_queue->events[index];
+            result = ta_image_copy_origin(arena, &image->internal_events[index].event);
+            if (result != TA_OK) {
+                return result;
+            }
         }
         image->internal_count = count;
     }
@@ -389,7 +413,12 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
     for (uint32_t index = 0; index < image->internal_count; index += 1) {
         ta_event event;
         ta_event_retain(&image->internal_events[index].event, &event);
-        ta_result result = ta_interpreter_enqueue_internal(system, actor, &event);
+        ta_result result = ta_image_localize_origin(system, &event);
+        if (result != TA_OK) {
+            ta_event_release(&event);
+            return result;
+        }
+        result = ta_interpreter_enqueue_internal(system, actor, &event);
         if (result != TA_OK) {
             return result;
         }
@@ -417,10 +446,19 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
         ta_image_rebind_self(&send.origin, image->source_actor, actor->record.id);
         ta_value_retain(&send.target);
         ta_value_retain(&send.data);
-        ta_result result = ta_actor_schedule_send(system, actor, &send);
+        /* The image's detached addresses become this system's handles. */
+        ta_result result = ta_actor_ref_localize(system, &send.destination);
+        if (result == TA_OK) {
+            result = ta_actor_ref_localize(system, &send.origin);
+        }
+        if (result == TA_OK) {
+            result = ta_actor_schedule_send(system, actor, &send);
+        }
         if (result != TA_OK) {
             ta_value_release(&send.target);
             ta_value_release(&send.data);
+            ta_actor_ref_release(&send.destination);
+            ta_actor_ref_release(&send.origin);
             return result;
         }
     }
@@ -506,8 +544,21 @@ ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_par
         ta_event_retain(&image->current_event, &actor->current_event);
         actor->has_current_event = true;
     }
-    /* A named actor answers to its address, so it owns that text itself. */
-    result = ta_address_copy(&actor->record.self, system->allocator);
+    /*
+     * The image carries detached addresses; the actor holds this system's
+     * handles (ADR 0065). A failure leaves a detached one behind, which
+     * releasing ignores.
+     */
+    result = ta_actor_ref_localize(system, &actor->record.self);
+    if (result == TA_OK && actor->has_external_event) {
+        result = ta_image_localize_origin(system, &actor->external_event);
+    }
+    if (result == TA_OK && actor->has_macrostep_event) {
+        result = ta_image_localize_origin(system, &actor->macrostep_event);
+    }
+    if (result == TA_OK && actor->has_current_event) {
+        result = ta_image_localize_origin(system, &actor->current_event);
+    }
     if (result == TA_OK && image->paused != NULL) {
         result = ta_image_restore_pause(image, actor, system);
     }
@@ -607,7 +658,7 @@ ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params *param
     result = ta_actor_directory_swap(
         system,
         &(ta_actor_directory_replace_params){
-            .address = &actor->record.self.as.named,
+            .address = actor->record.self.as.named,
             .expected = { .kind = TA_ACTOR_DIRECTORY_RESIDENT, .actor = actor->record.id },
             .replacement = { .kind = TA_ACTOR_DIRECTORY_UNLOADED },
         });
@@ -657,7 +708,7 @@ ta_result ta_actor_load(ta_system *system, const ta_actor_load_params *params) {
     result = ta_actor_directory_swap(
         system,
         &(ta_actor_directory_replace_params){
-            .address = &image->self.as.named,
+            .address = ta_actor_lookup(system, id)->record.self.as.named,
             .expected = { .kind = TA_ACTOR_DIRECTORY_UNLOADED },
             .replacement = { .kind = TA_ACTOR_DIRECTORY_RESIDENT, .actor = id },
         });

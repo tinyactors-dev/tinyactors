@@ -176,11 +176,16 @@ JSON-RPC errors are reserved for the protocol itself:
   `"paused"`, and `ta_result` constants are `"ok"`, `"err_busy"`, and so on.
 - A tagged union (`TA_TAGGED`) is one object with `"kind"`. A struct member of
   the union is flattened into that object when `FLATTEN_UNION_MEMBERS` in
-  `bindings.rb` lists it: `ta_actor_ref`'s `named`, and every action of
-  `ta_scxml_action_spec` except `invoke`, whose own `kind` would collide. Other
-  members are keyed by the member name. When `kind` is omitted and exactly one
+  `bindings.rb` lists it: every action of `ta_scxml_action_spec` except
+  `invoke`, whose own `kind` would collide. Other members are keyed by the
+  member name. When `kind` is omitted and exactly one
   keyed member is present, that member selects the kind: `{"expr": ".x"}` is
   `{"kind": "expr", "expr": ".x"}`.
+- A named `ta_actor_ref` is an interned address handle in C (ADR 0065) and
+  `{"kind": "named", "family": {"name": ...}, "name": ...}` on the wire, through
+  a hand-written codec. Decoding interns the address into the request's
+  system (the one its `system` handle names) or, for the codec round trips,
+  into the binding's own, and releases it when the request ends.
 - The `ta_scxml_*` specification structs omit absent (zero) members when
   encoded. Their child pointers are arrays that the decoder terminates with a
   zero element; an element that would itself terminate the list is an error.

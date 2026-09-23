@@ -15,7 +15,10 @@ module TinyactorsBindings
     'ta_value_retain' => 'static inline lifetime helper; the value table owns references',
     'ta_value_release' => 'static inline lifetime helper; the value table owns references',
     'ta_event_release' => 'C memory helper for native event ownership',
-    'ta_external_delivery_clone' => 'used inside asynchronous router adapters, not by hosts',
+    'ta_event_retain' => 'C memory helper for native event ownership',
+    'ta_external_delivery_retain' => 'used inside asynchronous router adapters, not by hosts',
+    'ta_address_*' => 'named addresses cross the protocol as {family, name}; the ta_actor_ref codec interns them',
+    'ta_scxml_target_release' => 'the ta_actor_ref codec releases what a request interned or received',
     'ta_external_delivery_release' => 'used inside asynchronous router adapters, not by hosts',
     'ta_dm_host_*' => 'callable only from inside data-model callbacks'
   }.freeze
@@ -27,7 +30,8 @@ module TinyactorsBindings
   # src/binding.c. (String, bytes, and host value types have runtime codecs
   # by their semantic in the API description.)
   OVERRIDE_TYPES = {
-    'ta_expression' => 'source text only; host expressions cannot cross the protocol'
+    'ta_expression' => 'source text only; host expressions cannot cross the protocol',
+    'ta_actor_ref' => 'a named ref is an interned address handle (ADR 0065); it crosses as {kind, family, name}'
   }.freeze
 
   SKIP_TYPES = {
@@ -50,7 +54,6 @@ module TinyactorsBindings
   #
   # ta_scxml_action_spec.invoke stays keyed: its own `kind` would collide.
   FLATTEN_UNION_MEMBERS = {
-    'ta_actor_ref.named' => 'an address reads as the actor reference itself',
     'ta_scxml_action_spec.{raise,send,cancel,assign,script,log,conditional,foreach}' =>
       'an action is one object, as in SCXML markup',
     'ta_scxml_value_spec.content' =>

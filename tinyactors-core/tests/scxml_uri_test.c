@@ -75,12 +75,19 @@ int main(void) {
               target.kind == TA_SCXML_TARGET_INVOKE,
           "#_<invokeid>");
 
-    /* A named actor's logical address; family and name borrow from the text. */
+    /* A named actor's logical address, interned (ADR 0065): the target holds
+     * a reference to the same handle as every other use of that address. */
     check(ta_scxml_target_parse(system, str("#_actor_door/front"), &target) == TA_OK &&
               target.kind == TA_SCXML_TARGET_ACTOR && target.as.actor.kind == TA_ACTOR_REF_NAMED &&
-              str_is(target.as.actor.as.named.family.name, "door") &&
-              str_is(target.as.actor.as.named.name, "front"),
+              str_is(ta_address_view(target.as.actor.as.named).family.name, "door") &&
+              str_is(ta_address_view(target.as.actor.as.named).name, "front"),
           "#_actor_door/front");
+    ta_scxml_target again = {0};
+    check(ta_scxml_target_parse(system, str("#_actor_door/front"), &again) == TA_OK &&
+              again.as.actor.as.named == target.as.actor.as.named,
+          "an address parsed twice is the same handle");
+    ta_scxml_target_release(&again);
+    ta_scxml_target_release(&target);
 
     /*
      * A session URI whose text is not a session ID names no session (SCXML
@@ -112,6 +119,7 @@ int main(void) {
               round_trip[index]);
         check(strcmp(format(system, target, buffer, sizeof(buffer)), round_trip[index]) == 0,
               round_trip[index]);
+        ta_scxml_target_release(&target);
     }
 
     /* The absent target has no URI of its own. */

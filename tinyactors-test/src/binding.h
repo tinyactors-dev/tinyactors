@@ -63,6 +63,17 @@ struct tat_bind {
     size_t value_capacity;
     jv error;
     void *host;
+    /*
+     * Named actor refs are interned address handles (ADR 0065). A request
+     * that names a system interns into it; one that does not (the codec
+     * round trips) interns into the binding's own system. Every reference a
+     * request takes is released when it ends.
+     */
+    ta_system *request_system;
+    ta_system *codec_system;
+    ta_address **addresses;
+    size_t address_count;
+    size_t address_capacity;
 };
 
 typedef jv (*tat_method_fn)(tat_bind *bind, jv params, int *error_code);
@@ -128,6 +139,8 @@ bool tat_decode_ta_value(tat_bind *bind, jv value, ta_value *out);
 jv tat_encode_ta_value(tat_bind *bind, const ta_value *value);
 bool tat_decode_ta_expression(tat_bind *bind, jv value, ta_expression *out);
 jv tat_encode_ta_expression(tat_bind *bind, const ta_expression *value);
+bool tat_decode_ta_actor_ref(tat_bind *bind, jv value, ta_actor_ref *out);
+jv tat_encode_ta_actor_ref(tat_bind *bind, const ta_actor_ref *value);
 
 /* Protocol handles: {"$handle": "<type>:<id>"}. IDs are never reused, so a
  * retired handle stays invalid. */

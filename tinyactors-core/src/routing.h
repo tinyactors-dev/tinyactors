@@ -1,15 +1,25 @@
 #pragma once
 
+#include "address.h"
 #include "event.h"
 #include "fault.h"
 
 /* External delivery and the router boundary are fully public. */
 
 /*
- * A named ta_actor_ref borrows its family and name text from whoever built
- * it. An owner that outlives that text — a delivery the router retains, a
- * named actor's own self reference — copies it with ta_address_copy() and
- * gives it back with ta_address_release(). Both ignore a runtime ref.
+ * A named ta_actor_ref is a reference to an interned address (ADR 0065).
+ * An owner retains it and releases it; both ignore a runtime ref.
  */
-ta_result ta_address_copy(ta_actor_ref *ref, ta_allocator allocator);
-void ta_address_release(ta_actor_ref *ref, ta_allocator allocator);
+void ta_actor_ref_retain(const ta_actor_ref *ref);
+void ta_actor_ref_release(ta_actor_ref *ref);
+
+/*
+ * Makes a named ref one of this system's handles: a detached address (from a
+ * session image) is interned and the ref then holds a new reference. A ref
+ * that is already this system's, or a runtime ref, is left alone.
+ */
+ta_result ta_actor_ref_localize(ta_system *system, ta_actor_ref *ref);
+/* Detaches a named ref into `arena`, for an image; a runtime ref is left alone. */
+ta_result ta_actor_ref_detach(ta_arena *arena, ta_actor_ref *ref);
+/* The origin of an event, when it is an actor. */
+ta_actor_ref *ta_event_origin_ref(ta_event *event);

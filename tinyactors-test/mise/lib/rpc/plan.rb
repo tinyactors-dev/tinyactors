@@ -10,7 +10,7 @@ module Rpc
   class Plan
     # The runtime (src/binding.c) has codecs for these types.
     RUNTIME_TYPES = { 'string' => %w[ta_str], 'bytes' => %w[ta_bytes], 'host_value' => %w[ta_value] }.freeze
-    RUNTIME_OVERRIDES = %w[ta_expression].freeze
+    RUNTIME_OVERRIDES = %w[ta_expression ta_actor_ref].freeze
     PRIMITIVES = { 'uint8_t' => 'u8', 'uint16_t' => 'u16', 'uint32_t' => 'u32', 'int32_t' => 'i32', 'int' => 'i32',
                    'uint64_t' => 'u64', 'size_t' => 'size', 'bool' => 'bool' }.freeze
     PRIMITIVE_TYPES = { 'u8' => 'uint8_t', 'u16' => 'uint16_t', 'u32' => 'uint32_t', 'i32' => 'int32_t', 'u64' => 'uint64_t',

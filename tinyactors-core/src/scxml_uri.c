@@ -1,3 +1,4 @@
+#include "routing.h"
 #include "scxml_uri.h"
 
 #include "interpreter.h"
@@ -99,8 +100,14 @@ ta_result ta_scxml_target_parse(ta_system *system, ta_str text, ta_scxml_target 
         if (!ta_uri_address(rest, &address)) {
             return TA_ERR_INVALID;
         }
+        /* The target holds a reference to the interned address (ADR 0065). */
+        ta_address *named = NULL;
+        ta_result result = ta_address_intern(system, &address, &named);
+        if (result != TA_OK) {
+            return result;
+        }
         *out = (ta_scxml_target){ .kind = TA_SCXML_TARGET_ACTOR,
-                                  .as.actor = { .kind = TA_ACTOR_REF_NAMED, .as.named = address } };
+                                  .as.actor = { .kind = TA_ACTOR_REF_NAMED, .as.named = named } };
         return TA_OK;
     }
     rest = text;
@@ -122,6 +129,12 @@ ta_result ta_scxml_target_parse(ta_system *system, ta_str text, ta_scxml_target 
     return TA_ERR_INVALID;
 }
 
+void ta_scxml_target_release(ta_scxml_target *target) {
+    if (target != NULL && target->kind == TA_SCXML_TARGET_ACTOR) {
+        ta_actor_ref_release(&target->as.actor);
+    }
+}
+
 bool ta_scxml_uri_write(const ta_system *system, ta_text_writer *writer, const ta_scxml_target *target) {
     switch (target->kind) {
         case TA_SCXML_TARGET_INTERNAL:
@@ -136,10 +149,11 @@ bool ta_scxml_uri_write(const ta_system *system, ta_text_writer *writer, const t
             return true;
         case TA_SCXML_TARGET_ACTOR:
             if (target->as.actor.kind == TA_ACTOR_REF_NAMED) {
+                ta_actor_address view = ta_address_view(target->as.actor.as.named);
                 ta_text_put(writer, ta_str_from_cstr(TA_URI_ADDRESS));
-                ta_text_put(writer, target->as.actor.as.named.family.name);
+                ta_text_put(writer, view.family.name);
                 ta_text_put(writer, (ta_str){ .ptr = "/", .len = 1 });
-                ta_text_put(writer, target->as.actor.as.named.name);
+                ta_text_put(writer, view.name);
                 return true;
             }
             ta_text_put(writer, ta_str_from_cstr(TA_URI_SESSION));

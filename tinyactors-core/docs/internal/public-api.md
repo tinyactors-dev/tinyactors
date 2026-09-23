@@ -9,7 +9,8 @@
 - `ta_definition_id` — runtime definition handle: slot in the low 32 bits, the slot's generation in the high 32 bits (ADR 0043). A freed definition's ID goes stale and never names another definition; zero is never valid.
 - `ta_definition_identity` — logical definition family plus exact opaque revision fingerprint.
 - `ta_actor_id` — runtime actor handle: slot in the low 32 bits, the slot's generation in the high 32 bits (ADR 0059), split and joined with `ta_actor_id_slot`, `ta_actor_id_generation` and `ta_actor_id_make`. Zero is never valid and no slot is issued generation 0. A destroyed actor's ID goes stale; the slot's next occupant has a newer generation.
-- `ta_actor_address` — logical named actor address scoped by definition family.
+- `ta_actor_address` — logical named actor address scoped by definition family, as a host supplies it: two borrowed strings.
+- `ta_address` — the handle core holds for a named address (ADR 0065): one reference-counted record per distinct address in a system, so equal addresses are one pointer. `ta_address_intern`, `ta_address_retain`, `ta_address_release` and `ta_address_view`. A named `ta_actor_ref` holds one; directory callbacks receive one.
 - `ta_invoke_id`, `ta_send_id`, `ta_timer_id` — identities scoped by their semantic subsystem.
 - `ta_time` — caller-supplied monotonic logical time, in milliseconds.
 
@@ -35,8 +36,8 @@ changes the actor.
 `ta_scxml_target_parse` and `ta_scxml_target_format` are the SCXML target URI
 grammar (ADR 0044). Core parses both spellings of a `<send>` target with the
 first and writes every URI it gives a chart, such as `$_event.origin`, with the
-second, so the two are inverses. A named address borrows its text from the
-input and stays valid while that input does.
+second, so the two are inverses. A parsed named address is an interned handle
+that the target holds a reference to; `ta_scxml_target_release` gives it back.
 
 `ta_send_id_parse` and `ta_send_id_format` are the send ID text, for the same
 reason (ADR 0048). A chart sees a send ID as text — `idlocation` stores it,

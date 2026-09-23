@@ -155,12 +155,22 @@ typedef struct { TA_COUNTED_BY(count) const ta_atom *atoms; uint32_t count; } ta
 typedef struct { const uint8_t *ptr; uint32_t len; } ta_bytes TA_BYTES;
 typedef struct { ta_str name; } ta_definition_family;
 typedef struct { ta_definition_family family; ta_str name; } ta_actor_address;
+/*
+ * A named address that core holds (ADR 0065): one record per distinct
+ * (family, name) pair in a system, reference-counted. Two equal addresses in
+ * one system are the same handle, so pointer equality is address equality.
+ * Core interns a ta_actor_address a host supplies (spawn, find, unload,
+ * load); every named reference core stores or hands out is a handle. A
+ * handle core hands out is borrowed for the call; a host that keeps one
+ * retains it. Release every reference before destroying the system.
+ */
+typedef struct ta_address ta_address TA_HANDLE;
 typedef enum { TA_ACTOR_REF_RUNTIME = 0, TA_ACTOR_REF_NAMED = 1 } ta_actor_ref_kind TA_SYMBOLS("TA_ACTOR_REF_");
 typedef struct {
     ta_actor_ref_kind kind;
     union {
         TA_WHEN(TA_ACTOR_REF_RUNTIME) ta_actor_id runtime;
-        TA_WHEN(TA_ACTOR_REF_NAMED) ta_actor_address named;
+        TA_WHEN(TA_ACTOR_REF_NAMED) ta_address *named;
     } as;
 } ta_actor_ref TA_TAGGED(kind, as);
 
@@ -169,6 +179,18 @@ typedef struct ta_definition ta_definition TA_HANDLE;
 typedef struct ta_dm_host ta_dm_host TA_VIEW;
 typedef struct ta_value ta_value TA_HOST_VALUE;
 typedef struct ta_session_image ta_session_image TA_HANDLE;
+
+/* Finds or adds the address; *out holds a new reference. Allocates only the
+ * first time a pair is seen, so only then can it fail with TA_ERR_NOMEM. */
+TA_API ta_result ta_address_intern(ta_system *system,
+                                   TA_IN const ta_actor_address *address,
+                                   ta_address **out);
+/* Retain and release cannot fail. Release accepts null. The record is freed
+ * with its last reference. */
+TA_API void ta_address_retain(ta_address *address);
+TA_API void ta_address_release(TA_DESTROYS TA_OPTIONAL ta_address *address);
+/* The strings, valid while the caller holds a reference. */
+TA_API ta_actor_address ta_address_view(const ta_address *address);
 
 
 
@@ -260,6 +282,13 @@ enum TA_FLAG_SET(ta_event_flags, "TA_EVENT_FLAG_") {
     TA_EVENT_FLAG_GENERATED = 1u << 1
 };
 
+/*
+ * An event owns its data and, when its origin is a named actor, a reference
+ * to that address (ADR 0065). Retaining copies the envelope and retains
+ * both; it cannot fail. Releasing gives both back.
+ */
+TA_API void ta_event_retain(TA_IN const ta_event *event, TA_OUT TA_RELEASE(ta_event_release) ta_event *out)
+    TA_ANY_VALUE_MODEL;
 TA_API void ta_event_release(TA_INOUT ta_event *event) TA_ANY_VALUE_MODEL;
 /* ========================================================================
  * External SCXML event routing
@@ -272,14 +301,15 @@ typedef struct {
     ta_event event;
 } ta_external_delivery;
 
-/* Deep-copies a named destination and retains the event's data (ADR 0050). */
-TA_API ta_result ta_external_delivery_clone(TA_IN const ta_external_delivery *delivery,
-                                            ta_allocator allocator,
-                                            TA_OUT TA_RELEASE(ta_external_delivery_release)
-                                                ta_external_delivery *out)
+/*
+ * Keeps a delivery past the submit call: retains its destination, its
+ * origin and its data (ADR 0050, ADR 0065). It never allocates and cannot
+ * fail. Release gives all three back.
+ */
+TA_API void ta_external_delivery_retain(TA_IN const ta_external_delivery *delivery,
+                                        TA_OUT TA_RELEASE(ta_external_delivery_release) ta_external_delivery *out)
     TA_ANY_VALUE_MODEL;
-TA_API void ta_external_delivery_release(TA_INOUT ta_external_delivery *delivery,
-                                         ta_allocator allocator) TA_ANY_VALUE_MODEL;
+TA_API void ta_external_delivery_release(TA_INOUT ta_external_delivery *delivery) TA_ANY_VALUE_MODEL;
 
 typedef struct {
     TA_IN const ta_external_delivery *delivery;
@@ -446,12 +476,15 @@ typedef struct {
  * (SCXML C.1) rather than invalid. TA_ERR_INVALID means an invalid target,
  * which a send reports as error.execution.
  *
- * A named address borrows its family and name from `text`, which must stay
- * valid for as long as the target is used.
+ * A named actor target holds a reference to its interned address (ADR
+ * 0065); release the target with ta_scxml_target_release(). Interning a new
+ * address can fail with TA_ERR_NOMEM.
  */
 TA_API ta_result ta_scxml_target_parse(ta_system *system,
                                        ta_str text,
-                                       TA_OUT TA_LIFETIME(input) ta_scxml_target *out);
+                                       TA_OUT TA_RELEASE(ta_scxml_target_release) ta_scxml_target *out);
+/* Releases a parsed target's address reference; accepts any target. */
+TA_API void ta_scxml_target_release(TA_INOUT ta_scxml_target *target);
 
 typedef struct {
     ta_scxml_target target;
@@ -1779,17 +1812,23 @@ typedef struct {
     /* Meaningful only for TA_ACTOR_DIRECTORY_RESIDENT. */
     ta_actor_id actor;
 } ta_actor_directory_entry;
-typedef struct { TA_IN const ta_actor_address *address; ta_actor_directory_entry entry; } ta_actor_directory_claim_params;
-typedef struct { TA_IN const ta_actor_address *address; TA_OUT ta_actor_directory_entry *out; } ta_actor_directory_resolve_params;
+typedef struct { ta_address *address; ta_actor_directory_entry entry; } ta_actor_directory_claim_params;
+typedef struct { ta_address *address; TA_OUT ta_actor_directory_entry *out; } ta_actor_directory_resolve_params;
 typedef struct {
-    TA_IN const ta_actor_address *address;
+    ta_address *address;
     ta_actor_directory_entry expected;
     ta_actor_directory_entry replacement;
 } ta_actor_directory_replace_params;
 typedef struct {
-    TA_IN const ta_actor_address *address;
+    ta_address *address;
     ta_actor_directory_entry expected;
 } ta_actor_directory_remove_params;
+/*
+ * The directory is keyed by address handle (ADR 0065): equal addresses are
+ * the same pointer, so a directory can key its map by the pointer. The
+ * handle is borrowed for the call; a directory that keeps an entry retains
+ * the address (ta_address_retain) and releases it when the entry goes.
+ */
 typedef struct ta_actor_directory_vtable {
     /* claim succeeds only when the address has no entry. */
     ta_result (*claim)(void *self, TA_IN const ta_actor_directory_claim_params *params);

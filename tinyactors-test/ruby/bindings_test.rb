@@ -61,11 +61,13 @@ begin
   # Tagged unions: kind may be inferred from the single member key.
   check(host.codec.roundtrip.ta_scxml_value_spec(value: { expr: '.x' }) == { kind: 'expr', expr: '.x' },
         'tagged union round-trip infers kind')
-  ref = host.codec.roundtrip.ta_actor_ref(value: { kind: 'named', family: { name: 'door' }, name: 'd1' })
-  check(ref == { kind: 'named', family: { name: 'door' }, name: 'd1' }, "flattened struct member: #{ref}")
+  # A named actor ref is an interned address handle inside (ADR 0065) and
+  # {kind, family, name} on the wire, through the hand-written codec.
+  named = { kind: 'actor', actor: { kind: 'named', family: { name: 'door' }, name: 'd1' } }
+  check(host.codec.roundtrip.ta_origin(value: named) == named, "named actor ref: #{named}")
   origin = { kind: 'actor', actor: { kind: 'runtime', runtime: 7 } }
   check(host.codec.roundtrip.ta_origin(value: origin) == origin, 'colliding member stays nested')
-  rpc_error(-32_602) { host.codec.roundtrip.ta_actor_ref(value: { name: 'd1' }) }
+  rpc_error(-32_602) { host.codec.roundtrip.ta_origin(value: { kind: 'actor', actor: { kind: 'named', name: 'd1' } }) }
 
   # 64-bit IDs: numbers up to 2^53-1, decimal strings above.
   parent = host.codec.roundtrip.ta_actor_parent(value: { actor: '18446744073709551615', invoke_id: 9_007_199_254_740_991 })

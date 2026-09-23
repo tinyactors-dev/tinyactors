@@ -117,6 +117,8 @@ static void ta_activation_effect_release(ta_activation_effect *effect) {
     if (effect->kind == TA_ACTIVATION_SEND) {
         ta_value_release(&effect->as.send.send.target);
         ta_value_release(&effect->as.send.send.data);
+        ta_actor_ref_release(&effect->as.send.send.destination);
+        ta_actor_ref_release(&effect->as.send.send.origin);
     } else if (effect->kind == TA_ACTIVATION_LOG) {
         ta_value_release(&effect->as.log.value);
     }
@@ -251,8 +253,8 @@ void ta_actor_free(ta_system *system, ta_actor *actor) {
         definition->datamodel.v->destroy_instance(definition->datamodel.self, definition->datamodel_shared,
                                                   actor->datamodel_instance);
     }
-    /* A named actor owns the text of its address; a runtime ref owns nothing. */
-    ta_address_release(&actor->record.self, system->allocator);
+    /* A named actor holds a reference to its address; a runtime ref holds nothing. */
+    ta_actor_ref_release(&actor->record.self);
     ta_interpreter_release_actor_state(system, actor);
     /* The record, the session storage and the instance are one block (ADR 0063). */
     ta_mem_free(system->allocator, actor,
@@ -282,19 +284,19 @@ static ta_result ta_actor_claim_address(ta_system *system,
         address->name.ptr == NULL || address->name.len == 0) {
         return TA_ERR_INVALID;
     }
-    ta_actor_ref self = { .kind = TA_ACTOR_REF_NAMED, .as.named = *address };
-    ta_result result = ta_address_copy(&self, system->allocator);
+    ta_actor_ref self = { .kind = TA_ACTOR_REF_NAMED };
+    ta_result result = ta_address_intern(system, address, &self.as.named);
     if (result != TA_OK) {
         return result;
     }
     result = system->directory.v->claim(
         system->directory.self,
         &(ta_actor_directory_claim_params){
-            .address = &self.as.named,
+            .address = self.as.named,
             .entry = { .kind = TA_ACTOR_DIRECTORY_RESIDENT, .actor = actor->record.id },
         });
     if (result != TA_OK) {
-        ta_address_release(&self, system->allocator);
+        ta_actor_ref_release(&self);
         return result;
     }
     /* From here the actor answers to its address: every origin core writes
@@ -334,7 +336,7 @@ static void ta_actor_release_address(ta_system *system, const ta_actor *actor) {
         ta_actor_directory_entry current = {0};
         ta_result result = system->directory.v->resolve(
             system->directory.self,
-            &(ta_actor_directory_resolve_params){ .address = &actor->record.self.as.named, .out = &current });
+            &(ta_actor_directory_resolve_params){ .address = actor->record.self.as.named, .out = &current });
         if (result == TA_OK &&
             (current.kind != TA_ACTOR_DIRECTORY_RESIDENT || current.actor != actor->record.id)) {
             return;
@@ -343,7 +345,7 @@ static void ta_actor_release_address(ta_system *system, const ta_actor *actor) {
     (void)system->directory.v->remove(
         system->directory.self,
         &(ta_actor_directory_remove_params){
-            .address = &actor->record.self.as.named,
+            .address = actor->record.self.as.named,
             .expected = { .kind = TA_ACTOR_DIRECTORY_RESIDENT, .actor = actor->record.id },
         });
 }
@@ -380,12 +382,19 @@ ta_result ta_actor_remove_unloaded(ta_system *system, const ta_actor_remove_unlo
     if (system == NULL || params == NULL || params->address == NULL) {
         return TA_ERR_INVALID;
     }
-    return ta_actor_directory_drop(
+    ta_address *address = NULL;
+    ta_result result = ta_address_intern(system, params->address, &address);
+    if (result != TA_OK) {
+        return result;
+    }
+    result = ta_actor_directory_drop(
         system,
         &(ta_actor_directory_remove_params){
-            .address = params->address,
+            .address = address,
             .expected = { .kind = TA_ACTOR_DIRECTORY_UNLOADED },
         });
+    ta_address_release(address);
+    return result;
 }
 
 /*
@@ -400,10 +409,16 @@ ta_result ta_actor_find(ta_system *system, const ta_actor_find_params *params) {
     if (system->directory.v == NULL || system->directory.v->resolve == NULL) {
         return TA_ERR_UNSUPPORTED;
     }
+    ta_address *address = NULL;
+    ta_result result = ta_address_intern(system, params->address, &address);
+    if (result != TA_OK) {
+        return result;
+    }
     ta_actor_directory_entry entry = { .kind = TA_ACTOR_DIRECTORY_NONE };
-    ta_result result = system->directory.v->resolve(
+    result = system->directory.v->resolve(
         system->directory.self,
-        &(ta_actor_directory_resolve_params){ .address = params->address, .out = &entry });
+        &(ta_actor_directory_resolve_params){ .address = address, .out = &entry });
+    ta_address_release(address);
     if (result != TA_OK) {
         return result;
     }
@@ -530,7 +545,8 @@ ta_result ta_actor_prepare_replacement(ta_system *system, const ta_actor_prepare
         return TA_ERR_NOT_FOUND;
     }
     if (!incumbent->published || incumbent->record.self.kind != TA_ACTOR_REF_NAMED ||
-        !ta_str_equal(incumbent->record.self.as.named.family.name, definition->identity.family.name)) {
+        !ta_str_equal(ta_address_view(incumbent->record.self.as.named).family.name,
+                      definition->identity.family.name)) {
         return TA_ERR_INVALID;
     }
     ta_actor *actor = NULL;
@@ -542,7 +558,7 @@ ta_result ta_actor_prepare_replacement(ta_system *system, const ta_actor_prepare
     actor->published = false;
     actor->replacement_of = incumbent->record.id;
     actor->record.self = incumbent->record.self;
-    result = ta_address_copy(&actor->record.self, system->allocator);
+    ta_actor_ref_retain(&actor->record.self);
     if (result == TA_OK) {
         result = definition->datamodel.v->init_instance(
             definition->datamodel.self,
@@ -598,9 +614,7 @@ static void ta_actor_release_activation_effects(ta_system *system, ta_actor *act
             if (status != TA_EXTERNAL_EVENT_RETRY) {
                 continue;
             }
-            send->submitted = true;
-            send->origin = actor->record.self;
-            send->invoke_id = ta_invoke_parent_id(actor, &send->destination);
+            /* Dispatch marked it submitted and took its origin and invoke ID. */
         }
         /* Reserved by ta_actor_activate_replacement(), so this cannot fail. */
         (void)ta_timer_schedule(&system->timers, &sparse->timers, send);
@@ -637,7 +651,7 @@ ta_result ta_actor_activate_replacement(ta_system *system, const ta_actor_activa
     result = ta_actor_directory_swap(
         system,
         &(ta_actor_directory_replace_params){
-            .address = &replacement->record.self.as.named,
+            .address = replacement->record.self.as.named,
             .expected = { .kind = TA_ACTOR_DIRECTORY_RESIDENT, .actor = incumbent->record.id },
             .replacement = { .kind = TA_ACTOR_DIRECTORY_RESIDENT, .actor = replacement->record.id },
         });

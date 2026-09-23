@@ -636,9 +636,14 @@ ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *syste
          * <cancel> no longer reaches it, and it outlives its sender
          * (ADR 0054 D3, D5). The caller keeps it in the deadline index.
          */
-        send->submitted = true;
-        send->origin = origin;
-        send->invoke_id = invoke_id;
+        if (!send->submitted) {
+            /* The stored send now owns its envelope's origin (ADR 0065). */
+            ta_actor_ref_retain(&origin);
+            ta_actor_ref_release(&send->origin);
+            send->origin = origin;
+            send->submitted = true;
+            send->invoke_id = invoke_id;
+        }
         ta_value_release(&fault.data);
         return status;
     }
@@ -649,6 +654,8 @@ ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *syste
     ta_value_release(&fault.data);
     ta_value_release(&send->target);
     ta_value_release(&send->data);
+    ta_actor_ref_release(&send->destination);
+    ta_actor_ref_release(&send->origin);
     return status;
 }
 
@@ -966,6 +973,7 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
     if (status != TA_OP_OK) {
         ta_value_release(&state.data);
         ta_value_release(&state.target);
+        ta_scxml_target_release(&state.scxml);
         return ta_send_execution_error(it, state.send_id, &fault);
     }
 
@@ -979,6 +987,8 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
             .invoke_id = TA_INVOKE_ID_NONE,
             .data = state.data,
         };
+        /* The queued event owns its origin reference (ADR 0065). */
+        ta_actor_ref_retain(&event.origin.as.actor);
         return ta_interpreter_enqueue_internal(system, actor, &event);
     }
 
@@ -993,9 +1003,11 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
         .has_content = state.has_content,
         .content = state.content,
     };
+    /* A named target's reference passes to the send record (ADR 0065). */
     if (state.scxml_io && !ta_send_destination(it, &state.scxml, &record.destination)) {
         ta_value_release(&state.data);
         ta_value_release(&state.target);
+        ta_scxml_target_release(&state.scxml);
         return ta_communication_error(system, actor, &(ta_error_params){ .send_id = state.send_id });
     }
     if (!actor->published) {
@@ -1004,6 +1016,7 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
         if (result != TA_OK) {
             ta_value_release(&state.data);
             ta_value_release(&state.target);
+            ta_actor_ref_release(&record.destination);
         }
         return result;
     }
@@ -1022,6 +1035,8 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
     if (result != TA_OK) {
         ta_value_release(&state.data);
         ta_value_release(&state.target);
+        ta_actor_ref_release(&record.destination);
+        ta_actor_ref_release(&record.origin);
     }
     return result;
 }

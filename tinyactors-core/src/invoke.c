@@ -599,9 +599,14 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
     };
     record.data = delivery->event.data;
     ta_value_retain(&record.data);
+    /* The stored send owns its destination and origin references (ADR 0065). */
+    ta_actor_ref_retain(&record.destination);
+    ta_actor_ref_retain(&record.origin);
     ta_result result = ta_actor_schedule_send(system, delivery->sender, &record);
     if (result != TA_OK) {
         ta_value_release(&record.data);
+        ta_actor_ref_release(&record.destination);
+        ta_actor_ref_release(&record.origin);
     }
     return result;
 }

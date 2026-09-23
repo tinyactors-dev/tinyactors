@@ -1,4 +1,5 @@
 #include "timer.h"
+#include "routing.h"
 
 /* ------------------------------------------------------------------------
  * Keys and the owner heap
@@ -277,6 +278,9 @@ static bool ta_timer_remove_selected(ta_timer_heap *heap, ta_timer_list *list, c
         if (ta_timer_selected(&list->sends[index], selection)) {
             ta_value_release(&list->sends[index].target);
             ta_value_release(&list->sends[index].data);
+            /* A stored send owns its destination and origin references (ADR 0065). */
+            ta_actor_ref_release(&list->sends[index].destination);
+            ta_actor_ref_release(&list->meta[index].origin);
             continue;
         }
         list->sends[kept] = list->sends[index];

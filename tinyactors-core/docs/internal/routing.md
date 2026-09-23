@@ -11,10 +11,12 @@ name, type, origin, send ID, invocation metadata, and retained data.
 
 The callback may deliver synchronously when reentrancy and actor-busy rules
 permit, but most hosts enqueue or marshal the delivery. Callback arguments are
-borrowed for the call. A router retaining work must copy the actor reference and
-retain the event before returning `TA_EXTERNAL_EVENT_ACCEPTED`.
-`ta_external_delivery_clone()` and `ta_external_delivery_release()` implement
-that ownership operation, including deep-copying a named logical address.
+borrowed for the call. A router retaining work must retain the delivery before
+returning `TA_EXTERNAL_EVENT_ACCEPTED`. `ta_external_delivery_retain()` and
+`ta_external_delivery_release()` implement that ownership: a named destination
+and a named origin are interned address handles (ADR 0065), so retaining
+increments their reference counts and the data's, allocates nothing and cannot
+fail.
 
 Typical implementations are:
 

@@ -78,8 +78,8 @@ static ta_external_event_submit_status tat_direct_submit(void *self,
     if (delivery->destination.kind == TA_ACTOR_REF_RUNTIME) {
         id = delivery->destination.as.runtime;
     } else {
-        ta_result found =
-            ta_actor_find(self, &(ta_actor_find_params){.address = &delivery->destination.as.named, .out = &id});
+        ta_actor_address view = ta_address_view(delivery->destination.as.named);
+        ta_result found = ta_actor_find(self, &(ta_actor_find_params){.address = &view, .out = &id});
         if (found != TA_OK) {
             *params->fault =
                 (ta_fault){.code = found, .message = {.ptr = unresolved, .len = sizeof(unresolved) - 1}};

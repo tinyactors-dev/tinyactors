@@ -157,14 +157,16 @@ static const ta_allocator_vtable COUNTING_VTABLE = {.alloc = counting_alloc, .fr
 /* ------------------------------------------------------------------------
  * A directory, which named actors need and the host owns (ADR 0037).
  *
- * Open addressing over the name text, sized so it never rehashes during a
- * run: this is the population's index, and a host cost the measurements
- * must not mistake for core's.
+ * Open addressing over the address handle (ADR 0065): equal addresses are
+ * one pointer, so the directory hashes the pointer and never the text. It is
+ * sized so it never rehashes during a run: this is the population's index,
+ * and a host cost the measurements must not mistake for core's. A kept entry
+ * retains its address; a removed one gives it back and leaves a tombstone,
+ * so probing does not break.
  */
 
 typedef struct {
-    char *name;
-    uint32_t length;
+    ta_address *address;
     ta_actor_directory_entry entry;
     bool used;
 } directory_slot;
@@ -184,24 +186,27 @@ static void directory_init(directory *dir, size_t population) {
     dir->mask = capacity - 1u;
 }
 
-static void directory_destroy(directory *dir) {
+/* Gives back every address the directory holds; before the system goes. */
+static void directory_release(directory *dir) {
     for (size_t index = 0; index <= dir->mask; index += 1) {
-        free(dir->slots[index].name);
+        ta_address_release(dir->slots[index].address);
+        dir->slots[index].address = NULL;
     }
+}
+
+static void directory_destroy(directory *dir) {
     free(dir->slots);
     dir->slots = NULL;
 }
 
-static directory_slot *directory_find(directory *dir, const ta_actor_address *address) {
-    size_t hash = 1469598103934665603u;
-    for (uint32_t index = 0; index < address->name.len; index += 1) {
-        hash ^= (unsigned char)address->name.ptr[index];
-        hash *= 1099511628211u;
-    }
-    for (size_t at = hash & dir->mask;; at = (at + 1u) & dir->mask) {
+static directory_slot *directory_find(directory *dir, const ta_address *address) {
+    uint64_t bits = (uint64_t)(uintptr_t)address;
+    bits ^= bits >> 33;
+    bits *= 0xff51afd7ed558ccdULL;
+    bits ^= bits >> 33;
+    for (size_t at = (size_t)bits & dir->mask;; at = (at + 1u) & dir->mask) {
         directory_slot *slot = &dir->slots[at];
-        if (!slot->used || (slot->length == address->name.len &&
-                            memcmp(slot->name, address->name.ptr, slot->length) == 0)) {
+        if (!slot->used || slot->address == address) {
             return slot;
         }
     }
@@ -212,10 +217,8 @@ static ta_result directory_claim(void *self, const ta_actor_directory_claim_para
     if (slot->used) {
         return TA_ERR_STALE;
     }
-    slot->name = malloc(params->address->name.len);
-    require(slot->name != NULL, "directory name allocation");
-    memcpy(slot->name, params->address->name.ptr, params->address->name.len);
-    slot->length = params->address->name.len;
+    ta_address_retain(params->address);
+    slot->address = params->address;
     slot->entry = params->entry;
     slot->used = true;
     return TA_OK;
@@ -251,7 +254,9 @@ static ta_result directory_remove(void *self, const ta_actor_directory_remove_pa
     if (slot->entry.kind != params->expected.kind || slot->entry.actor != params->expected.actor) {
         return TA_ERR_STALE;
     }
-    /* The name stays claimed: probing must not break, and no name is reused. */
+    /* A tombstone: the slot stays used so probing does not break. */
+    ta_address_release(slot->address);
+    slot->address = NULL;
     slot->entry = (ta_actor_directory_entry){.kind = TA_ACTOR_DIRECTORY_NONE};
     return TA_OK;
 }
@@ -672,6 +677,7 @@ static round_cost measure(size_t population) {
             "the old revision is freed with its last incumbent");
 
     uint64_t peak_bytes = counts.peak_bytes;
+    directory_release(&dir);
     ta_system_destroy(system);
     directory_destroy(&dir);
     free(actors);
@@ -969,6 +975,121 @@ static void check_event_allocations(void) {
             "an event to an actor with a pending delayed send calls the allocator (ADR 0064)");
 }
 
+/* ------------------------------------------------------------------------
+ * A router that keeps a delivery and releases it later (ADR 0065). The
+ * delivery's named destination and origin are shared handles, so keeping
+ * it retains three references and releasing it gives them back: once the
+ * system is warm, neither calls the allocator. Before ADR 0065 keeping a
+ * delivery copied its destination's strings, two allocations, and releasing
+ * it freed them. The sender keeps a far delayed send, so its sparse state
+ * stays (ADR 0064) and only the router's own work is counted.
+ */
+
+static const ta_scxml_state_spec STATES_PINGER[] = {
+    {
+        .kind = TA_SCXML_STATE_ATOMIC,
+        .id = STR("waiting"),
+        .onentry =
+            (const ta_scxml_handler_spec[]){
+                {.actions =
+                     (const ta_scxml_action_spec[]){
+                         {.kind = TA_SCXML_ACTION_SEND,
+                          .as.send = {.id = {.kind = TA_SCXML_ID_LITERAL, .as.literal = STR("timeout")},
+                                      .event = {.kind = TA_SCXML_EVENT_NAME, .as.name = STR("timeout")},
+                                      .delay = {.kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("60s")}}},
+                         {0},
+                     }},
+                {0},
+            },
+        .transitions =
+            (const ta_scxml_transition_spec[]){
+                {.kind = TA_SCXML_TRANSITION_INTERNAL,
+                 .event = STR("ping"),
+                 .actions =
+                     (const ta_scxml_action_spec[]){
+                         {.kind = TA_SCXML_ACTION_SEND,
+                          .as.send = {.event = {.kind = TA_SCXML_EVENT_NAME, .as.name = STR("pong")},
+                                      .target = {.kind = TA_SCXML_STRING_LITERAL,
+                                                 .as.literal = STR("#_actor_peer/b")}}},
+                         {0},
+                     }},
+                {0},
+            },
+    },
+    {0},
+};
+
+typedef struct {
+    ta_external_delivery kept;
+    bool holding;
+    unsigned accepted;
+} keeping_router;
+
+static ta_external_event_submit_status keep_delivery(void *self, const ta_external_event_submit_params *params) {
+    keeping_router *router = self;
+    require(!router->holding, "the router holds one delivery at a time");
+    ta_external_delivery_retain(params->delivery, &router->kept);
+    router->holding = true;
+    router->accepted += 1u;
+    return TA_EXTERNAL_EVENT_ACCEPTED;
+}
+
+static const ta_external_event_router_vtable KEEPING_ROUTER = {.submit = keep_delivery};
+
+static void check_kept_delivery_allocations(void) {
+    counting_allocator counts = {.backing = tat_libc_allocator()};
+    ta_allocator allocator = {.self = &counts, .v = &COUNTING_VTABLE};
+    ta_system *system = NULL;
+    require(ta_system_create(&(ta_system_config){.allocator = allocator}, &system) == TA_OK, "system creation");
+    directory dir;
+    directory_init(&dir, 16);
+    keeping_router router = {0};
+    require(ta_system_set_actor_directory(system, (ta_actor_directory){.self = &dir, .v = &DIRECTORY_VTABLE}) ==
+                    TA_OK &&
+                ta_system_set_external_event_router(
+                    system, (ta_external_event_router){.self = &router, .v = &KEEPING_ROUTER}) == TA_OK,
+            "installing the directory and the router");
+    ta_definition_id pinger = register_revision(system, allocator, &(revision_spec){"pinger", "v1", STATES_PINGER});
+    ta_definition_id peer = register_revision(system, allocator, &(revision_spec){"peer", "v1", STATES_V2});
+    ta_actor_id sender = 0;
+    ta_actor_id receiver = 0;
+    require(ta_actor_spawn(system, &(ta_actor_spawn_params){
+                                       .definition = pinger,
+                                       .address = &(ta_actor_address){.family = {STR("pinger")}, .name = STR("a")},
+                                       .out = &sender}) == TA_OK &&
+                ta_actor_spawn(system, &(ta_actor_spawn_params){
+                                           .definition = peer,
+                                           .address = &(ta_actor_address){.family = {STR("peer")}, .name = STR("b")},
+                                           .out = &receiver}) == TA_OK,
+            "spawning the named sender and receiver");
+    run_to_stable(system, sender);
+    run_to_stable(system, receiver);
+    ta_event_name_id ping = intern_event(system, (ta_str)STR("ping"));
+    /* Warm-up. */
+    run_event(system, sender, ping);
+    require(router.holding, "the router kept the delivery");
+    ta_external_delivery_release(&router.kept);
+    router.holding = false;
+
+    counts.alloc_calls = 0;
+    counts.free_calls = 0;
+    for (unsigned round = 0; round < EVENT_ROUNDS; round += 1u) {
+        run_event(system, sender, ping);
+        ta_external_delivery_release(&router.kept);
+        router.holding = false;
+    }
+    double allocs = (double)counts.alloc_calls / EVENT_ROUNDS;
+    double frees = (double)counts.free_calls / EVENT_ROUNDS;
+    printf("allocator calls per kept-then-released delivery after warm-up: %.2f allocations and %.2f frees\n",
+           allocs, frees);
+    require(router.accepted == EVENT_ROUNDS + 1u, "every ping reached the router");
+    directory_release(&dir);
+    ta_system_destroy(system);
+    directory_destroy(&dir);
+    require(counts.live_bytes == 0, "the router system returned every byte it was given");
+    require(allocs == 0.0 && frees == 0.0, "keeping and releasing a delivery calls the allocator (ADR 0065)");
+}
+
 int main(int argc, char **argv) {
     if (argc == 3 && strcmp(argv[1], "--report") == 0) {
         size_t population = (size_t)strtoull(argv[2], NULL, 10);
@@ -996,6 +1117,7 @@ int main(int argc, char **argv) {
         require_flat_pair(POPULATIONS[index - 1], &costs[index - 1], POPULATIONS[index], &costs[index]);
     }
     check_event_allocations();
+    check_kept_delivery_allocations();
     /* And every population stays inside the budget the target implies. */
     for (size_t index = 0; index < count; index += 1) {
         require(costs[index].actor_bytes <= (double)ACTOR_BYTE_BUDGET, "a resident actor costs more than its byte budget");
