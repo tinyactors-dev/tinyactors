@@ -109,15 +109,15 @@ function builder() {
   const again = system.define({ ...exported, identity: { family: { name: 'player' }, revision: 'player/v1b' } });
   assert.equal(again.inspect().stateCount, definition.inspect().stateCount);
 
-  // What needs JavaScript values or functions waits for the data model.
-  const fresh = () => statechart({ family: 'later', revision: 'v1' });
-  assertCode(() => fresh().data('count', 0), 'unsupported', /step 11/);
-  assertCode(() => fresh().state('a', (s) => s.on('e', (t) => t.when(() => true))), 'unsupported', /step 11/);
-  assertCode(() => fresh().state('a', (s) => s.entry((a) => a.assign('x', 1))), 'unsupported', /step 11/);
-  assertCode(() => fresh().state('a', (s) => s.entry((a) => a.script(() => {}))), 'unsupported', /step 11/);
-  assertCode(() => fresh().state('a', (s) => s.entry((a) => a.raise('e', { some: 'data' }))), 'unsupported', /step 11/);
-  assertCode(() => fresh().state('a', (s) => s.entry((a) => a.send('e', (b) => b.data({})))), 'unsupported', /step 11/);
-  assertCode(() => fresh().state('a', (s) => s.doneData(() => {})), 'unsupported', /step 11/);
+  // Charts with data or JavaScript compile against the JavaScript data model
+  // (step 11); the rest against the null data model.
+  const fresh = (revision) => statechart({ family: 'later', revision });
+  assert.equal(definition.inspect().datamodel, 'null');
+  assert.equal(system.define(fresh('v1').data('count', 0).state('a')).inspect().datamodel, 'javascript');
+  assert.equal(system.define(fresh('v2').state('a', (s) => s.on('e', (t) => t.when(() => true)))).inspect().datamodel,
+    'javascript');
+  assertCode(() => fresh('v3').state('a', (s) => s.entry((a) => a.assignAt({}, 1))), 'invalid', /get and set/);
+  assertCode(() => fresh('v4').state('a', (s) => s.entry((a) => a.script('text'))), 'invalid');
   system.close();
 }
 

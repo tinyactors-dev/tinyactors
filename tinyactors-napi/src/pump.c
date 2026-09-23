@@ -361,13 +361,28 @@ static void tna_destroy_finished(tna_system *system, ta_actor_id actor) {
     }
 }
 
+/* The actor's completion data (<donedata>), or undefined (ADR 0012, ADR 0011). */
+static napi_value tna_completion_data(napi_env env, tna_system *system, ta_actor_id actor) {
+    napi_value data = NULL;
+    ta_actor_completion completion = { 0 };
+    system->inside_core = true;
+    ta_result result = ta_actor_get_completion(system->core, actor, &completion);
+    system->inside_core = false;
+    if (result != TA_OK || !completion.has_data || !tna_value_get(env, &completion.data, &data)) {
+        napi_get_undefined(env, &data);
+    }
+    if (result == TA_OK && completion.has_data) {
+        ta_value_release(&completion.data);
+    }
+    return data;
+}
+
 static void tna_done_record(napi_env env, tna_napi_system *wrapper, const tna_turn_record *record, napi_value *first_error) {
     tna_system *system = wrapper->system;
     if (wrapper->done_hook != NULL && tna_sched_lookup(&system->sched, record->actor) != NULL) {
         napi_value view = tna_actor_view(env, wrapper, record->actor);
         napi_value argument = NULL;
-        napi_value data = NULL;
-        napi_get_undefined(env, &data); /* completion data: step 11 */
+        napi_value data = tna_completion_data(env, system, record->actor);
         if (view != NULL && napi_create_object(env, &argument) == napi_ok &&
             tna_set(env, argument, "actor", view) == napi_ok &&
             tna_set(env, argument, "finalState", tna_final_state(env, system, record->actor)) == napi_ok &&

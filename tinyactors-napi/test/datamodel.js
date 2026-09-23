@@ -1,0 +1,289 @@
+'use strict';
+
+// Step 11: the JavaScript data model (ROADMAP step 11; ADR 0011). Runs on
+// Node and Bun.
+
+const assert = require('node:assert/strict');
+const native = require('../lib/native');
+const { nativeOf } = require('../lib/system');
+const { createSystem, statechart, literal, TinyactorsError } = require('..');
+
+const { core } = native;
+const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+function assertCode(fn, code, pattern) {
+  assert.throws(fn, (error) => {
+    assert.ok(error instanceof TinyactorsError, `expected TinyactorsError, got ${error}`);
+    assert.equal(error.code, code, error.message);
+    if (pattern) {
+      assert.match(error.message, pattern);
+    }
+    return true;
+  });
+}
+
+// Data, assignments, conditions and event data.
+async function counter() {
+  const system = createSystem();
+  const definition = system.define(
+    statechart({ family: 'counter', revision: 'v1' })
+      .data('count', 0)
+      .data('step', literal(() => 'a function kept as data'))
+      .state('idle', (s) => {
+        s.on('inc', (t) => t.assign('count', function (context) { return this.count + (context.event.data ?? 1); }));
+        s.on('check', (t) => t.when(({ data }) => data.count > 5).target('big'));
+      })
+      .state('big'),
+  );
+  assert.equal(definition.inspect().datamodel, 'javascript');
+  const actor = system.spawn(definition);
+  await system.flush();
+  assert.equal(actor.inspect().data.count, 0);
+  assert.equal(typeof actor.inspect().data.step, 'function', 'literal() keeps a function as data');
+  actor.post('inc');
+  actor.post('check');
+  await system.flush();
+  assert.deepEqual(actor.inspect().activeStates, ['idle'], 'the condition was false');
+  actor.post('inc', 10);
+  actor.post('check');
+  await system.flush();
+  assert.equal(actor.inspect().data.count, 11);
+  assert.deepEqual(actor.inspect().activeStates, ['big']);
+  system.close();
+}
+
+// A spawn binding is the actor's data; a bound name skips its initializer.
+async function binding() {
+  const system = createSystem();
+  const definition = system.define(
+    statechart({ family: 'bound', revision: 'v1' }).data('name', 'nobody').data('seen', 0).state('idle'),
+  );
+  const root = { name: 'ada' };
+  const actor = system.spawn(definition, { binding: root });
+  await system.flush();
+  assert.equal(actor.inspect().data, root, 'the data object is shared, not copied');
+  assert.deepEqual(root, { name: 'ada', seen: 0 });
+  system.close();
+}
+
+// The evaluation context: `this`, event fields, system variables, In().
+async function context() {
+  let kept;
+  const seen = {};
+  const system = createSystem();
+  const definition = system.define(
+    statechart({ family: 'context', revision: 'v1', name: 'ctx' })
+      .data('mark', 'x')
+      .state('idle', (s) => {
+        s.on('look', (t) =>
+          t.script(function (context) {
+            kept = context;
+            seen.self = this === context.data;
+            seen.event = { name: context.event.name, type: context.event.type, data: context.event.data };
+            seen.inIdle = context.inState('idle');
+            seen.inMissing = context.inState('missing');
+            seen.sessionId = context.sessionId;
+            seen.name = context.name;
+            seen.processors = Object.keys(context.ioProcessors);
+          }),
+        );
+        s.on('source', (t) => t.when("In('idle')").target('named'));
+      })
+      .state('named', (s) => s.on('name', (t) => t.when('mark').target('done')))
+      .state('done'),
+  );
+  const actor = system.spawn(definition);
+  await system.flush();
+  actor.post('look', { payload: 1 });
+  await system.flush();
+  assert.equal(seen.self, true, 'this is the data');
+  assert.deepEqual(seen.event, { name: 'look', type: 'external', data: { payload: 1 } });
+  assert.equal(seen.inIdle, true);
+  assert.equal(seen.inMissing, false, 'In() of a state the chart does not have is false');
+  assert.equal(seen.sessionId, String(actor.inspect().sessionId));
+  assert.equal(seen.name, 'ctx');
+  assert.ok(seen.processors.includes('scxml'));
+  assertCode(() => kept.data, 'invalid', /only while its expression runs/);
+  // Source text: In(state) and data names.
+  actor.post('source');
+  actor.post('name');
+  await system.flush();
+  assert.deepEqual(actor.inspect().activeStates, ['done']);
+  // Other source text is refused when the chart is defined.
+  assertCode(
+    () => system.define(statechart({ family: 'src', revision: 'v1' }).data('x', 1).state('a', (s) => s.on('e', (t) => t.when('x > 1')))),
+    'invalid',
+    /condition: the JavaScript data model takes functions/,
+  );
+  system.close();
+}
+
+// Exceptions become error.execution with the thrown value as data; an
+// undeclared name cannot be assigned; JavaScript inside a callback cannot
+// call core, but can post.
+async function errors() {
+  const system = createSystem();
+  const probe = system.define(statechart({ family: 'probe', revision: 'v1' }).state('idle', (s) => s.on('hi', (t) => t.target('greeted'))).state('greeted'));
+  const target = system.spawn(probe);
+  const definition = system.define(
+    statechart({ family: 'errors', revision: 'v1' })
+      .data('message', null)
+      .data('code', null)
+      .state('idle', (s) => {
+        s.on('throw', (t) => t.when(() => { throw new Error('boom'); }).target('never'));
+        s.on('undeclared', (t) => t.assign('nope', 1));
+        s.on('reenter', (t) =>
+          t.script(function () {
+            try {
+              core.system_time(nativeOf(system));
+            } catch (error) {
+              this.code = error.code;
+            }
+            target.post('hi');
+          }),
+        );
+        s.on('error.execution', (t) => t.assign('message', ({ event }) => event.data?.message ?? event.name));
+      })
+      .state('never'),
+  );
+  const actor = system.spawn(definition);
+  await system.flush();
+  actor.post('throw');
+  await system.flush();
+  assert.equal(actor.inspect().data.message, 'boom', 'the thrown value is the error event data');
+  assert.deepEqual(actor.inspect().activeStates, ['idle']);
+  actor.post('undeclared');
+  await system.flush();
+  assert.match(actor.inspect().data.message, /error\.execution/);
+  assert.equal(actor.inspect().data.nope, undefined);
+  // Interning a new event name is a core call, so the name is interned
+  // before the callback posts it (a dead letter, here).
+  system.post({ family: 'nobody', name: 'here' }, 'hi');
+  actor.post('reenter');
+  await system.flush();
+  assert.equal(actor.inspect().data.code, 'reentrant');
+  assert.deepEqual(target.inspect().activeStates, ['greeted'], 'posting from a callback is allowed');
+  system.close();
+}
+
+// <foreach>, <donedata> and completion data in the done hook.
+async function foreachAndDoneData() {
+  const done = [];
+  const system = createSystem({ done: (record) => done.push(record) });
+  const definition = system.define(
+    statechart({ family: 'sum', revision: 'v1' })
+      .data('sum', 0)
+      .state('run', (s) =>
+        s.on('go', (t) =>
+          t.forEach(({ event }) => event.data, 'item', (b) => b.assign('sum', function () { return this.sum + this.item * this.i; }), 'i')
+            .target('end'),
+        ),
+      )
+      .final('end', (f) => f.doneData((d) => d.param('total', function () { return this.sum; }))),
+  );
+  const actor = system.spawn(definition);
+  await system.flush();
+  actor.post('go', [1, 2, 3, 4]);
+  await system.flush();
+  assert.equal(done.length, 1);
+  assert.equal(done[0].finalState, 'end');
+  assert.deepEqual(done[0].data, { total: 0 * 1 + 1 * 2 + 2 * 3 + 3 * 4 });
+  assert.equal(system.exists(actor), false, 'finished: "destroy"');
+  system.close();
+}
+
+// A small actionBudget splits a <foreach> over a large array across turns,
+// and other actors run between them (core ADR 0061; left by step 5).
+async function foreachAcrossTurns() {
+  const system = createSystem({ scheduling: { actionBudget: 50 } });
+  const busy = system.spawn(
+    system.define(
+      statechart({ family: 'busy', revision: 'v1' })
+        .data('items', literal(Array.from({ length: 1000 }, (_, index) => index)))
+        .data('count', 0)
+        .state('start', (s) => s.always((t) => t.target('busy')))
+        .state('busy', (s) => s.entry((a) => a.forEach('items', 'item', (b) => b.assign('count', function () { return this.count + 1; })))),
+    ),
+  );
+  const other = system.spawn(system.define(statechart({ family: 'other', revision: 'v1' }).state('idle')));
+  await tick();
+  await tick();
+  assert.equal(busy.inspect().macrostepInProgress, true, 'paused inside the foreach');
+  assert.deepEqual(other.inspect().activeStates, ['idle'], 'another actor ran meanwhile');
+  let turns = 2;
+  while (busy.inspect().scheduling === 'runnable') {
+    await tick();
+    turns += 1;
+    assert.ok(turns < 1000);
+  }
+  assert.equal(busy.inspect().data.count, 1000);
+  assert.ok(turns >= 20, `1000 iterations at 50 actions per resume took ${turns} turns`);
+  system.close();
+}
+
+// Each callback opens its own handle scope, so garbage an expression makes
+// can be collected before the turn ends (ADR 0007).
+async function handleScopes() {
+  const gc = globalThis.gc ?? (typeof Bun === 'undefined'
+    ? (require('node:v8').setFlagsFromString('--expose-gc'), require('node:vm').runInNewContext('gc'))
+    : () => Bun.gc(true));
+  const heap = [];
+  const system = createSystem({ scheduling: { actionBudget: 0 } });
+  const definition = system.define(
+    statechart({ family: 'garbage', revision: 'v1' })
+      .data('items', literal(Array.from({ length: 20000 }, (_, index) => index)))
+      .data('last', null)
+      .state('start', (s) => s.always((t) => t.target('run')))
+      .state('run', (s) =>
+        s.entry((a) =>
+          a.forEach('items', 'item', (b) =>
+            b.assign('last', function () {
+              if (this.item % 5000 === 0) {
+                gc();
+                heap.push(process.memoryUsage().heapUsed);
+              }
+              return 'x'.repeat(1000) + this.item; // about 1 KB of garbage per call
+            }),
+          ),
+        ),
+      ),
+  );
+  system.spawn(definition);
+  await system.flush();
+  assert.equal(heap.length, 4);
+  const growth = heap[3] - heap[0];
+  assert.ok(growth < 8 * 1024 * 1024, `heap grew ${growth} bytes over 15,000 expressions in one turn`);
+  system.close();
+}
+
+// Values return to zero after close (ADR 0011 point 7).
+async function valuesAfterClose() {
+  const live = () => native.environmentStats().valuesLive;
+  const start = live();
+  const system = createSystem();
+  const definition = system.define(statechart({ family: 'held', revision: 'v1' }).data('list', []).state('idle'));
+  const actors = Array.from({ length: 10 }, () => system.spawn(definition));
+  await system.flush();
+  for (const actor of actors) {
+    actor.post('ignored', { payload: true });
+  }
+  assert.ok(live() > start);
+  system.close();
+  assert.equal(live(), start, 'close releases every value');
+  assert.equal(native.environmentStats().leakedBytes, 0);
+}
+
+(async () => {
+  await counter();
+  await binding();
+  await context();
+  await errors();
+  await foreachAndDoneData();
+  await foreachAcrossTurns();
+  await handleScopes();
+  await valuesAfterClose();
+  console.log('datamodel.js passed');
+})().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

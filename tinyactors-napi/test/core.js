@@ -136,7 +136,9 @@ function errors() {
     return true;
   });
 
-  // JavaScript values and function expressions wait for the data model (step 11).
+  // The generated layer compiles against the null data model, which takes
+  // no binding and no function expressions (System.define() selects the
+  // JavaScript data model, ADR 0011).
   const id = core.system_register_definition(system, core.definition_compile_spec(system, chart('v3')).out);
   assertCode(() => core.actor_spawn(system, id, undefined, { some: 'data' }), 'unsupported');
   assertCode(() => core.definition_compile_spec(system, chart('v4', { script: () => 1 })), 'unsupported');

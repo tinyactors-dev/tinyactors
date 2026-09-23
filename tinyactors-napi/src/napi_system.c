@@ -1,6 +1,7 @@
 #include "napi_system.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 #include "enumerate.h"
 #include "events.h"
@@ -120,7 +121,10 @@ static void tna_close(tna_napi_system *wrapper, bool env_usable) {
     }
     tna_pump_close(wrapper, env_usable);
     tna_close_handles(wrapper);
+    /* Closing from a finalizer: exit handlers core runs cannot call JavaScript. */
+    wrapper->dm.js_usable = env_usable;
     tna_system_close(wrapper->system);
+    tna_js_datamodel_close(&wrapper->dm, !wrapper->env_data->torn_down);
     tna_unlist(wrapper);
     wrapper->env_data->systems_closed += 1u;
     wrapper->env_data->leaked_bytes += tna_system_leaked_bytes(wrapper->system);
@@ -213,15 +217,23 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
     wrapper->values.env_live = &data->values_live;
     wrapper->system->after_core = tna_after_core;
     wrapper->system->after_core_context = wrapper;
+    if (!tna_js_datamodel_init(&wrapper->dm, wrapper, env)) {
+        tna_js_datamodel_close(&wrapper->dm, true);
+        tna_system_free(wrapper->system);
+        free(wrapper);
+        return tna_throw(env, "out-of-memory", "cannot create the data model");
+    }
     if (!tna_pump_init(env, wrapper, facade, argv[1])) {
         tna_pump_close(wrapper, true);
         tna_system_free(wrapper->system);
+        tna_js_datamodel_close(&wrapper->dm, true);
         free(wrapper);
         return NULL;
     }
     if (napi_wrap(env, self, wrapper, tna_finalize, NULL, NULL) != napi_ok) {
         tna_pump_close(wrapper, true);
         tna_system_free(wrapper->system);
+        tna_js_datamodel_close(&wrapper->dm, true);
         free(wrapper);
         return tna_throw(env, "invalid", "cannot wrap a system");
     }
@@ -327,6 +339,33 @@ static napi_value tna_release_method(napi_env env, napi_callback_info info) {
         return tna_throw(env, tna_result_code(result), "release: the actor is not known");
     }
     tna_system_want_turn(wrapper->system);
+    napi_value undefined = NULL;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+}
+
+/*
+ * selectDatamodel(name): the data model the next compile uses, "null" (core's
+ * null data model, the default) or "javascript". System.define() calls it
+ * just before compiling; the compile resets it to the default.
+ */
+static napi_value tna_select_datamodel_method(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value argv[1] = { NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    char name[16];
+    size_t length = 0;
+    if (argc < 1 || napi_get_value_string_utf8(env, argv[0], name, sizeof name, &length) != napi_ok ||
+        (strcmp(name, "javascript") != 0 && strcmp(name, "null") != 0)) {
+        return tna_throw(env, "invalid", "selectDatamodel: expected \"javascript\" or \"null\"");
+    }
+    wrapper->dm.select_javascript = strcmp(name, "javascript") == 0;
     napi_value undefined = NULL;
     napi_get_undefined(env, &undefined);
     return undefined;
@@ -675,6 +714,7 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "time", NULL, NULL, tna_time_getter, NULL, NULL, napi_default_jsproperty, NULL },
         { "release", NULL, tna_release_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "scheduling", NULL, tna_scheduling_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "selectDatamodel", NULL, tna_select_datamodel_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "internEvent", NULL, tna_intern_event_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "post", NULL, tna_post_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "postNamed", NULL, tna_post_named_method, NULL, NULL, NULL, napi_default_method, NULL },

@@ -5,26 +5,32 @@
 // `System.define()` accepts as a plain object and core's definition export
 // returns. There is no separate normalization step.
 //
-// Until the JavaScript data model lands (ROADMAP step 11), charts compile
-// against core's null data model. Expressions are data-model source text,
-// and the null data model accepts only `In(state)` conditions. Anything that
-// needs JavaScript values or functions throws `unsupported` and names the
-// step that adds it.
+// Expressions are JavaScript (ADR 0011): a function is an expression (a
+// condition, a value or a script) called with `this` bound to the actor's
+// data and one argument, the evaluation context. A value that is not a
+// function is data, and literal() makes a function data too. A location is
+// a declared data name, or an object with `get` and `set`. Source text is
+// accepted only as `In(state)` conditions and data names, so charts without
+// data keep compiling against core's null data model.
 
+const native = require('./native');
 const { TinyactorsError } = require('./errors');
 
 const literalBrand = Symbol('tinyactors.literal');
+native.setupLiteral(literalBrand);
 
 /** Force a callable JavaScript value to be data rather than an expression. */
 function literal(value) {
   return Object.freeze({ [literalBrand]: true, value });
 }
 
-function needsDataModel(what) {
-  return new TinyactorsError(
-    `${what} needs the JavaScript data model, which is not implemented yet (ROADMAP step 11)`,
-    'unsupported',
-  );
+function isLiteral(value) {
+  return value !== null && typeof value === 'object' && value[literalBrand] === true;
+}
+
+function isLocation(value) {
+  return value !== null && typeof value === 'object' && !isLiteral(value) &&
+    typeof value.get === 'function' && typeof value.set === 'function';
 }
 
 function invalid(message) {
@@ -38,13 +44,29 @@ function text(value, what) {
   return value;
 }
 
-// An expression is data-model source text. JavaScript functions are the
-// JavaScript data model's form (step 11).
+// An expression: a function, a literal(), or source text (In(state) or a
+// data name).
 function expression(value, what) {
-  if (typeof value === 'function') {
-    throw needsDataModel(`${what} as a JavaScript function`);
+  if (typeof value === 'function' || isLiteral(value)) {
+    return value;
   }
   return text(value, what);
+}
+
+// A location: a data name, or an object with get and set.
+function location(value, what) {
+  if (isLocation(value)) {
+    return value;
+  }
+  return text(value, what);
+}
+
+// A value source: a function is evaluated, anything else is data.
+function valueSpec(value) {
+  if (typeof value === 'function' || isLiteral(value)) {
+    return { kind: 'expr', expr: value };
+  }
+  return { kind: 'expr', expr: literal(value) };
 }
 
 function targets(value, what) {
@@ -58,9 +80,15 @@ function targets(value, what) {
 // A literal/expression attribute pair (`x` / `xexpr`).
 function stringSpec(value, what) {
   if (typeof value === 'function') {
-    throw needsDataModel(`${what} as a JavaScript function`);
+    return { kind: 'expr', expr: value };
   }
   return { kind: 'literal', literal: text(value, what) };
+}
+
+// A number of milliseconds becomes an SCXML duration, for literals and for
+// what a delay function returns.
+function duration(value) {
+  return typeof value === 'number' ? `${value}ms` : value;
 }
 
 function delaySpec(value, what) {
@@ -70,13 +98,21 @@ function delaySpec(value, what) {
     }
     return { kind: 'literal', literal: `${value}ms` };
   }
+  if (typeof value === 'function') {
+    const delay = value;
+    return {
+      kind: 'expr',
+      expr: function delayInMilliseconds(context) {
+        return duration(delay.call(this, context));
+      },
+    };
+  }
   return stringSpec(value, what);
 }
 
-function noValue(value, what) {
-  if (value !== undefined) {
-    throw needsDataModel(what);
-  }
+// An `id` / `idlocation` pair.
+function idLocation(value, what) {
+  return { kind: 'location', location: location(value, what) };
 }
 
 // One builder tree shares one root: once build() or System.define() has
@@ -119,16 +155,18 @@ class ActionSequenceBuilder {
   }
 
   raise(event, data) {
-    noValue(data, 'raise() with data');
-    return this.#push({ kind: 'raise', raise: { event: text(event, 'raise event') } });
+    const raise = { event: text(event, 'raise event') };
+    if (data !== undefined) {
+      raise.data = valueSpec(data);
+    }
+    return this.#push({ kind: 'raise', raise });
   }
 
   send(event, build) {
     this.#root.check();
-    if (typeof event === 'function') {
-      throw needsDataModel('a send event as a JavaScript function');
-    }
-    const send = { event: { kind: 'name', name: text(event, 'send event') } };
+    const send = {
+      event: typeof event === 'function' ? { kind: 'expr', expr: event } : { kind: 'name', name: text(event, 'send event') },
+    };
     if (build !== undefined) {
       if (typeof build !== 'function') {
         throw invalid('send(): expected a function that receives the send builder');
@@ -165,20 +203,42 @@ class ActionSequenceBuilder {
     return this.#push({ kind: 'if', conditional });
   }
 
-  assign() {
-    throw needsDataModel('assign()');
+  /** Assign a declared top-level data property. */
+  assign(name, value) {
+    return this.#push({ kind: 'assign', assign: { location: text(name, 'assign() location'), value: valueSpec(value) } });
   }
 
-  assignAt() {
-    throw needsDataModel('assignAt()');
+  /** Assign through an explicit { get, set } location. */
+  assignAt(at, value) {
+    if (!isLocation(at)) {
+      throw invalid('assignAt(): expected a location with get and set functions');
+    }
+    return this.#push({ kind: 'assign', assign: { location: at, value: valueSpec(value) } });
   }
 
-  script() {
-    throw needsDataModel('script()');
+  /** Run a synchronous function with `this` bound to the actor's data. */
+  script(run) {
+    if (typeof run !== 'function') {
+      throw invalid('script(): expected a function');
+    }
+    return this.#push({ kind: 'script', script: { script: run } });
   }
 
-  forEach() {
-    throw needsDataModel('forEach()');
+  /**
+   * Run `build`'s actions once per element of a snapshot of `array`, with
+   * data property `item` bound to the element and `index` to its index.
+   */
+  forEach(array, item, build, index) {
+    this.#root.check();
+    const foreach = {
+      array: expression(array, 'forEach() array'),
+      item: text(item, 'forEach() item'),
+      body: block(this.#root, build, 'forEach() body'),
+    };
+    if (index !== undefined) {
+      foreach.index = text(index, 'forEach() index');
+    }
+    return this.#push({ kind: 'foreach', foreach });
   }
 }
 
@@ -215,16 +275,18 @@ class SendBuilder {
     return this.#set('id', { kind: 'literal', literal: text(id, 'send ID') });
   }
 
-  idLocation() {
-    throw needsDataModel('send idLocation()');
+  idLocation(at) {
+    return this.#set('id', idLocation(at, 'send idLocation'));
   }
 
-  data() {
-    throw needsDataModel('send data()');
+  data(value) {
+    return this.#set('data', valueSpec(value));
   }
 
-  param() {
-    throw needsDataModel('send param()');
+  param(name, value) {
+    this.#root.check();
+    (this.#send.params ??= []).push({ name: text(name, 'send param name'), value: valueSpec(value) });
+    return this;
   }
 }
 
@@ -281,8 +343,8 @@ class InvokeBuilder {
     return this.#set('id', { kind: 'literal', literal: text(id, 'invoke ID') });
   }
 
-  idLocation() {
-    throw needsDataModel('invoke idLocation()');
+  idLocation(at) {
+    return this.#set('id', idLocation(at, 'invoke idLocation'));
   }
 
   type(type) {
@@ -293,12 +355,14 @@ class InvokeBuilder {
     return this.#set('src', stringSpec(source, 'invoke source'));
   }
 
-  content() {
-    throw needsDataModel('invoke content()');
+  content(value) {
+    return this.#set('data', valueSpec(value));
   }
 
-  param() {
-    throw needsDataModel('invoke param()');
+  param(name, value) {
+    this.#root.check();
+    (this.#invoke.params ??= []).push({ name: text(name, 'invoke param name'), value: valueSpec(value) });
+    return this;
   }
 
   autoforward(enabled = true) {
@@ -310,6 +374,48 @@ class InvokeBuilder {
 
   finalize(build) {
     return this.#set('finalize', block(this.#root, build, 'invoke finalize()'));
+  }
+}
+
+// data(name, value): the value is data even when it is a function.
+function literalOf(value) {
+  return isLiteral(value) ? value : literal(value);
+}
+
+function functionSpec(value, what) {
+  if (typeof value !== 'function') {
+    throw invalid(`${what}: expected a function`);
+  }
+  return { kind: 'expr', expr: value };
+}
+
+function dataSpec(name, initializer) {
+  const data = { name: text(name, 'data name') };
+  if (initializer !== undefined) {
+    data.initializer = initializer;
+  }
+  return data;
+}
+
+class DoneDataBuilder {
+  #root;
+  #done;
+
+  constructor(root, done) {
+    this.#root = root;
+    this.#done = done;
+  }
+
+  content(value) {
+    this.#root.check();
+    this.#done.content = valueSpec(value);
+    return this;
+  }
+
+  param(name, value) {
+    this.#root.check();
+    (this.#done.params ??= []).push({ name: text(name, 'doneData param name'), value: valueSpec(value) });
+    return this;
   }
 }
 
@@ -399,12 +505,14 @@ class StateBuilder extends StateContainerBuilder {
     return this;
   }
 
-  data() {
-    throw needsDataModel('data()');
+  /** Declare data property `name` with `initial` as data (a function too: use dataExpression). */
+  data(name, initial) {
+    return this.#list('data', dataSpec(name, initial === undefined ? undefined : valueSpec(literalOf(initial))));
   }
 
-  dataExpression() {
-    throw needsDataModel('dataExpression()');
+  /** Declare data property `name`, initialized by calling `initial`. */
+  dataExpression(name, initial) {
+    return this.#list('data', dataSpec(name, functionSpec(initial, 'dataExpression()')));
   }
 
   entry(build) {
@@ -451,8 +559,16 @@ class StateBuilder extends StateContainerBuilder {
     return this.#list('invokes', invoke);
   }
 
-  doneData() {
-    throw needsDataModel('doneData()');
+  /** The data a final state reports on completion: content(), or param()s. */
+  doneData(build) {
+    this.#root.check();
+    if (typeof build !== 'function') {
+      throw invalid('doneData(): expected a function that receives the done-data builder');
+    }
+    const done = {};
+    build(new DoneDataBuilder(this.#root, done));
+    this.#spec.done_data = done;
+    return this;
   }
 
   // The finished spec. An unspecified kind is compound with children, and
@@ -494,12 +610,28 @@ class DefinitionBuilder extends StateContainerBuilder {
     }
   }
 
-  data() {
-    throw needsDataModel('data()');
+  /** Declare top-level data property `name` with `initial` as data. */
+  data(name, initial) {
+    this.#root.check();
+    (this.#spec.data ??= []).push(dataSpec(name, initial === undefined ? undefined : valueSpec(literalOf(initial))));
+    return this;
   }
 
-  dataExpression() {
-    throw needsDataModel('dataExpression()');
+  /** Declare top-level data property `name`, initialized by calling `initial`. */
+  dataExpression(name, initial) {
+    this.#root.check();
+    (this.#spec.data ??= []).push(dataSpec(name, functionSpec(initial, 'dataExpression()')));
+    return this;
+  }
+
+  /** A script run once at initialization, after early-bound data (SCXML 3.2.2). */
+  script(run) {
+    this.#root.check();
+    if (typeof run !== 'function') {
+      throw invalid('script(): expected a function');
+    }
+    this.#spec.script = run;
+    return this;
   }
 
   initial(target, actions) {
@@ -524,4 +656,31 @@ function statechart(options) {
   return new DefinitionBuilder(options);
 }
 
-module.exports = { statechart, literal, DefinitionBuilder, literalBrand };
+/**
+ * True when a spec needs the JavaScript data model: it declares data, has a
+ * top-level script, or holds a function, a literal() or a location object
+ * anywhere. System.define() compiles other specs against core's null data
+ * model.
+ */
+function needsJavaScript(spec) {
+  const seen = new Set();
+  const visit = (value) => {
+    if (typeof value === 'function' || isLiteral(value) || isLocation(value)) {
+      return true;
+    }
+    if (value === null || typeof value !== 'object' || ArrayBuffer.isView(value) || seen.has(value)) {
+      return false;
+    }
+    seen.add(value);
+    if (Array.isArray(value)) {
+      return value.some(visit);
+    }
+    if ((Array.isArray(value.data) && value.data.length > 0 && 'name' in value.data[0]) || value.script !== undefined) {
+      return true;
+    }
+    return Object.values(value).some(visit);
+  };
+  return visit(spec);
+}
+
+module.exports = { statechart, literal, isLiteral, needsJavaScript, DefinitionBuilder, literalBrand };

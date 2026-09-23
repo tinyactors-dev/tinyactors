@@ -38,6 +38,7 @@ typedef struct tna_napi_system tna_napi_system;
 typedef struct tna_env {
     napi_ref error_class; /* TinyactorsError, or NULL before setup */
     napi_ref actor_class; /* ActorId (lib/actor.js), for views made natively */
+    napi_ref literal_brand; /* the literal() brand symbol (lib/statechart.js) */
     tna_napi_system *open_systems; /* intrusive list through tna_napi_system */
     uint32_t references;           /* live native Systems */
     bool torn_down;                /* the cleanup hook has run */
@@ -134,6 +135,8 @@ napi_value tna_call_fail(tna_call *call, ta_result result, napi_value detail);
 bool tna_call_keep_address(tna_call *call, ta_address *address);
 /* Releases `value` when the call ends; releases it now on failure. */
 bool tna_call_keep_value(tna_call *call, ta_value value);
+/* Releases a host expression when the call ends; releases it now on failure. */
+bool tna_call_keep_expression(tna_call *call, ta_expression expression);
 /* The call arena: the system's, or a temporary one for a call with no system. */
 ta_arena *tna_call_arena(tna_call *call);
 /* Zeroed memory from the call arena; throws and returns NULL on failure. */

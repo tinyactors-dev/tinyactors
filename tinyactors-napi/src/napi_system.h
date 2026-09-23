@@ -12,6 +12,7 @@
 #include <node_api.h>
 
 #include "runtime.h"
+#include "napi_datamodel.h"
 #include "system.h"
 #include "values.h"
 
@@ -44,6 +45,7 @@ struct tna_napi_system {
     napi_ref dead_letter_hook;    /* ADR 0008 */
     bool destroy_finished;        /* finished: "destroy" (the default) */
     tna_values values;            /* value boxes (ADR 0011) */
+    tna_js_datamodel dm;          /* the JavaScript data model (ADR 0011) */
     napi_deferred *waiters;       /* flush() promises */
     uint32_t waiter_count;
     uint32_t waiter_capacity;

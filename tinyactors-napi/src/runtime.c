@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "napi_datamodel.h"
 #include "napi_system.h"
 #include "system.h"
 
@@ -29,6 +30,7 @@ static void tna_env_cleanup(void *arg) {
     /* The environment is being destroyed; its references go with it. */
     data->error_class = NULL;
     data->actor_class = NULL;
+    data->literal_brand = NULL;
     tna_env_free_if_unused(data);
 }
 
@@ -121,6 +123,7 @@ napi_value tna_throw(napi_env env, const char *code, const char *message) {
 struct tna_cleanup {
     ta_address *address; /* or NULL */
     ta_value value;      /* or absent */
+    ta_expression expression; /* or TA_EXPRESSION_NONE */
     tna_cleanup *next;
 };
 
@@ -147,6 +150,7 @@ napi_value tna_call_end(tna_call *call, napi_value value) {
     for (tna_cleanup *cleanup = call->cleanups; cleanup != NULL; cleanup = cleanup->next) {
         ta_address_release(cleanup->address);
         ta_value_release(&cleanup->value);
+        tna_expression_release(&cleanup->expression);
     }
     call->cleanups = NULL;
     if (call->temporary_used) {
@@ -488,6 +492,17 @@ bool tna_call_keep_address(tna_call *call, ta_address *address) {
         return false;
     }
     *cleanup = (tna_cleanup){ .address = address, .next = call->cleanups };
+    call->cleanups = cleanup;
+    return true;
+}
+
+bool tna_call_keep_expression(tna_call *call, ta_expression expression) {
+    tna_cleanup *cleanup = tna_call_alloc(call, sizeof *cleanup, _Alignof(tna_cleanup));
+    if (cleanup == NULL) {
+        tna_expression_release(&expression);
+        return false;
+    }
+    *cleanup = (tna_cleanup){ .expression = expression, .next = call->cleanups };
     call->cleanups = cleanup;
     return true;
 }

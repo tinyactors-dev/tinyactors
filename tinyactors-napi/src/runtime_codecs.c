@@ -225,8 +225,24 @@ napi_value tna_enc_ta_value(tna_call *call, const ta_value *in) {
 }
 
 /* ------------------------------------------------------------------------
- * Expressions: source text now, JavaScript functions in step 11.
+ * Expressions (ADR 0011): source text is a string; a function, a literal()
+ * object and a { get, set } location object are host expressions of the
+ * JavaScript data model, held by the call until core retains them.
  */
+
+/* An object whose `get` and `set` are functions. */
+static bool tna_location_object(tna_call *call, napi_value value) {
+    napi_value get = NULL;
+    napi_value set = NULL;
+    napi_valuetype type = napi_undefined;
+    if (napi_get_named_property(call->env, value, "get", &get) != napi_ok ||
+        napi_typeof(call->env, get, &type) != napi_ok || type != napi_function ||
+        napi_get_named_property(call->env, value, "set", &set) != napi_ok ||
+        napi_typeof(call->env, set, &type) != napi_ok) {
+        return false;
+    }
+    return type == napi_function;
+}
 
 bool tna_dec_ta_expression(tna_call *call, napi_value value, ta_expression *out) {
     napi_valuetype type = napi_undefined;
@@ -234,12 +250,38 @@ bool tna_dec_ta_expression(tna_call *call, napi_value value, ta_expression *out)
         *out = (ta_expression){ .kind = TA_EXPRESSION_NONE };
         return true;
     }
-    if (napi_typeof(call->env, value, &type) == napi_ok && type == napi_function) {
-        tna_throw(call->env, "unsupported", "expressions as JavaScript functions arrive with the data model (ADR 0011)");
+    if (napi_typeof(call->env, value, &type) != napi_ok) {
+        return tna_invalid(call, "an expression");
+    }
+    if (type == napi_string) {
+        *out = (ta_expression){ .kind = TA_EXPRESSION_SOURCE };
+        return tna_dec_ta_str(call, value, &out->as.source);
+    }
+    tna_expr_kind kind = TNA_EXPR_FUNCTION;
+    if (type == napi_function) {
+        kind = TNA_EXPR_FUNCTION;
+    } else if (type == napi_object && tna_expression_is_literal(call->env, value)) {
+        kind = TNA_EXPR_LITERAL;
+    } else if (type == napi_object && tna_location_object(call, value)) {
+        kind = TNA_EXPR_LOCATION;
+    } else {
+        return tna_invalid(call, "source text, a function, a literal() value or a { get, set } location");
+    }
+    if (call->owner == NULL) {
+        /*
+         * A call with no system (compile_error_format) only reads the spec;
+         * a JavaScript expression stands there as text naming its kind.
+         */
+        static const char *const names[] = { "[JavaScript function]", "[literal]", "[location]" };
+        *out = (ta_expression){ .kind = TA_EXPRESSION_SOURCE,
+                                .as.source = { names[kind], (uint32_t)strlen(names[kind]) } };
+        return true;
+    }
+    if (!tna_expression_make(&call->owner->dm, value, kind, out)) {
+        tna_throw(call->env, "out-of-memory", "cannot keep a JavaScript expression");
         return false;
     }
-    *out = (ta_expression){ .kind = TA_EXPRESSION_SOURCE };
-    return tna_dec_ta_str(call, value, &out->as.source);
+    return tna_call_keep_expression(call, *out);
 }
 
 napi_value tna_enc_ta_expression(tna_call *call, const ta_expression *in) {
@@ -248,9 +290,13 @@ napi_value tna_enc_ta_expression(tna_call *call, const ta_expression *in) {
         return tna_undefined(call);
     case TA_EXPRESSION_SOURCE:
         return tna_enc_ta_str(call, &in->as.source);
-    default:
-        tna_throw(call->env, "unsupported", "host expressions arrive with the data model (ADR 0011)");
-        return NULL;
+    default: {
+        napi_value value = tna_expression_value(call->env, in);
+        if (value == NULL) {
+            tna_throw(call->env, "unsupported", "a host expression this binding did not make");
+        }
+        return value;
+    }
     }
 }
 
@@ -419,10 +465,17 @@ bool tna_inject_ta_allocator(tna_call *call, ta_allocator *out) {
     return true;
 }
 
+/*
+ * Core's null data model, or the JavaScript data model (ADR 0011) when
+ * System.define() selected it for this compile (selectDatamodel).
+ */
 bool tna_inject_ta_datamodel(tna_call *call, ta_datamodel *out) {
-    (void)call;
-    /* The JavaScript data model replaces this in step 11 (ADR 0011). */
-    *out = ta_null_datamodel();
+    if (call->owner == NULL) {
+        return tna_invalid(call, "a call that runs against a system");
+    }
+    tna_js_datamodel *dm = &call->owner->dm;
+    *out = dm->select_javascript ? tna_js_datamodel_adapter(dm) : ta_null_datamodel();
+    dm->select_javascript = false;
     return true;
 }
 

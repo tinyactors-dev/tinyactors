@@ -8,6 +8,9 @@
  *   code throws (ADR 0008); lib/errors.js calls it once per environment;
  * - setupActor(ActorId): registers the ActorId view class (ADR 0002) that the
  *   pump uses for the actors it passes to hooks; lib/actor.js calls it;
+ * - setupLiteral(brand): registers the symbol that marks literal() objects,
+ *   so the JavaScript data model can tell a constant from an expression
+ *   (ADR 0011); lib/statechart.js calls it;
  * - System: the native system class (ADR 0012), used by lib/system.js;
  * - environmentStats(): counters for tests (systems created and closed,
  *   bytes leaked at close);
@@ -76,6 +79,33 @@ static napi_value tna_setup_actor(napi_env env, napi_callback_info info) {
     return undefined;
 }
 
+/* setupLiteral(brand): the symbol that marks literal() objects (lib/statechart.js). */
+static napi_value tna_setup_literal(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value argv[1] = { NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    napi_valuetype type = napi_undefined;
+    if (argc < 1 || napi_typeof(env, argv[0], &type) != napi_ok || type != napi_symbol) {
+        return tna_throw(env, "invalid", "setupLiteral expects the literal brand symbol");
+    }
+    tna_env *data = tna_env_get(env);
+    if (data == NULL) {
+        return tna_throw(env, "invalid", "the addon is not initialized");
+    }
+    if (data->literal_brand != NULL) {
+        napi_delete_reference(env, data->literal_brand);
+        data->literal_brand = NULL;
+    }
+    if (napi_create_reference(env, argv[0], 1, &data->literal_brand) != napi_ok) {
+        return tna_throw(env, "out-of-memory", "cannot keep the literal brand");
+    }
+    napi_value undefined = NULL;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+}
+
 static napi_value tna_environment_stats(napi_env env, napi_callback_info info) {
     (void)info;
     tna_env *data = tna_env_get(env);
@@ -109,6 +139,7 @@ static napi_value tna_init(napi_env env, napi_value exports) {
         napi_set_named_property(env, exports, "version", version) != napi_ok ||
         tna_export_function(env, exports, "setup", tna_setup) != napi_ok ||
         tna_export_function(env, exports, "setupActor", tna_setup_actor) != napi_ok ||
+        tna_export_function(env, exports, "setupLiteral", tna_setup_literal) != napi_ok ||
         tna_export_function(env, exports, "environmentStats", tna_environment_stats) != napi_ok ||
         tna_napi_system_define(env, exports) != napi_ok ||
         tna_gen_define(env, exports) != napi_ok) {

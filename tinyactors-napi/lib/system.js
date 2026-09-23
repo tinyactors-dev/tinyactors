@@ -7,7 +7,7 @@
 const native = require('./native');
 const { TinyactorsError } = require('./errors');
 const { Definition, identityOf } = require('./definition');
-const { DefinitionBuilder } = require('./statechart');
+const { DefinitionBuilder, needsJavaScript } = require('./statechart');
 const { ActorId } = require('./actor');
 const { EventNames } = require('./events');
 
@@ -116,9 +116,11 @@ class System {
 
   /**
    * Compile and register a chart: a statechart() builder, or a spec in the
-   * generated shape (the shape core's definition export returns). Until the
-   * JavaScript data model lands (ROADMAP step 11), charts compile against
-   * core's null data model.
+   * generated shape (the shape core's definition export returns). A chart
+   * with data, a script, or a JavaScript function, literal() or location
+   * anywhere compiles against the JavaScript data model ("javascript", ADR
+   * 0011); any other chart against core's null data model ("null"), which
+   * costs nothing per actor. A spec's `datamodel` chooses explicitly.
    */
   define(source) {
     let spec = source;
@@ -127,6 +129,8 @@ class System {
     } else if (source === null || typeof source !== 'object') {
       throw new TinyactorsError('define(): expected a statechart() builder or a spec object', 'invalid');
     }
+    const datamodel = spec.datamodel ?? (needsJavaScript(spec) ? 'javascript' : 'null');
+    this.#native.selectDatamodel(datamodel === 'null' ? 'null' : 'javascript');
     const compiled = compile(this.#native, spec);
     const id = core.system_register_definition(this.#native, compiled.out);
     return new Definition(this, this.#native, id);
@@ -210,8 +214,24 @@ class System {
       // The top-level final it reached, or null (core ADR 0056).
       finalState: view.final_state === NO_STATE ? null : stateName(view.final_state),
       allocatedBytes: view.allocated_bytes,
+      // The live data object (JavaScript data model), shared, not copied.
+      data: this.#dataRoot(slot, generation),
+      // A finished actor's completion data (<donedata>).
+      completion: view.has_completion && view.completion?.has_data ? view.completion.data : undefined,
     };
     return inspection;
+  }
+
+  // The actor's data root, or undefined under the null data model.
+  #dataRoot(slot, generation) {
+    try {
+      return core.actor_datamodel_root(this.#native, slot, generation);
+    } catch (error) {
+      if (error instanceof TinyactorsError && error.code === 'unsupported') {
+        return undefined;
+      }
+      throw error;
+    }
   }
 
   // One pending delayed send, from core's ta_delayed_send_info (core ADR 0054).
