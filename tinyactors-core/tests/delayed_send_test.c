@@ -59,6 +59,8 @@ typedef struct {
     int accepted;
     ta_event_name_id last_event;
     ta_actor_ref last_origin;
+    ta_actor_ref last_destination;
+    ta_actor_address last_destination_address;
 } router_state;
 
 static ta_external_event_submit_status route(void *self, const ta_external_event_submit_params *params) {
@@ -67,6 +69,10 @@ static ta_external_event_submit_status route(void *self, const ta_external_event
         router->accepted += 1;
         router->last_event = params->delivery->event.name;
         router->last_origin = params->delivery->event.origin.as.actor;
+        router->last_destination = params->delivery->destination;
+        if (params->delivery->destination.kind == TA_ACTOR_REF_NAMED) {
+            router->last_destination_address = ta_address_view(params->delivery->destination.as.named);
+        }
     }
     return router->answer;
 }
@@ -396,12 +402,55 @@ static void test_capture_and_load_keep_the_sends(void) {
     ta_system_destroy(system);
 }
 
+/*
+ * A send to self that the router refused is already sent (ADR 0054). When
+ * its owner unloads, it moves to the system's own list, not into the image,
+ * so loading cannot rebind it to the new session. It names its owner by
+ * address instead, and the retry reaches whichever session holds it next.
+ */
+static bool same_text(ta_str left, ta_str right) {
+    return left.len == right.len && (left.len == 0 || memcmp(left.ptr, right.ptr, left.len) == 0);
+}
+
+static void test_refused_self_send_follows_its_owner_across_unload(void) {
+    router_state router = { .answer = TA_EXTERNAL_EVENT_RETRY };
+    ta_system *system = create_system(&router);
+    one_directory dir = {0};
+    CHECK(ta_system_set_actor_directory(system, (ta_actor_directory){ .self = &dir, .v = &dir_vtable }) == TA_OK);
+    ta_definition_id definition = define(system, "immediate", immediate);
+    ta_actor_address address = { .family = { STR("immediate") }, .name = STR("self") };
+    ta_actor_id actor = spawn(system, definition, &address);
+
+    ta_session_image *image = NULL;
+    CHECK(ta_actor_capture(system, &(ta_actor_capture_params){ .actor = actor, .out = &image }) == TA_OK);
+    CHECK(ta_actor_unload(system, &(ta_actor_unload_params){ .actor = actor, .image = image }) == TA_OK);
+    ta_actor_id loaded = 0;
+    CHECK(ta_actor_load(system, &(ta_actor_load_params){ .image = image, .out = &loaded }) == TA_OK);
+    CHECK(loaded != actor);
+    ta_session_image_destroy(image);
+
+    router.answer = TA_EXTERNAL_EVENT_ACCEPTED;
+    uint32_t dispatched = 0;
+    bool more = true;
+    CHECK(ta_system_dispatch_due(system, &(ta_due_dispatch_params){ .budget = 10, .dispatched = &dispatched,
+                                                                    .more_due = &more }) == TA_OK);
+    CHECK(dispatched == 1 && router.accepted == 1);
+    CHECK(router.last_event == event_name(system, "ping"));
+    /* Not the runtime ID of the session that unloaded: the owner's address. */
+    CHECK(router.last_destination.kind == TA_ACTOR_REF_NAMED);
+    CHECK(same_text(router.last_destination_address.name, address.name) &&
+          same_text(router.last_destination_address.family.name, address.family.name));
+    CHECK(router.last_origin.kind == TA_ACTOR_REF_NAMED);
+    ta_system_destroy(system);
+}
+
 int main(void) {
     test_inspection_lists_only_the_actors_sends();
     test_cancelling_the_front_send();
     test_submitted_send_outlives_its_sender();
     test_teardown_releases_orphans();
     test_capture_and_load_keep_the_sends();
+    test_refused_self_send_follows_its_owner_across_unload();
     CHECK(live_blocks == 0);
     if (failures != 0) {
         fprintf(stderr, "delayed_send_test: %d check(s) failed\n", failures);

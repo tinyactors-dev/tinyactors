@@ -374,6 +374,26 @@ ta_result ta_timer_reserve_orphans(ta_timer_heap *heap, const ta_timer_list *lis
     return ta_timer_reserve(heap, &heap->orphans, ta_timer_submitted_count(list));
 }
 
+static void ta_timer_name_self(ta_actor_ref *ref, ta_actor_id self, const ta_actor_ref *named) {
+    if (ref->kind == TA_ACTOR_REF_RUNTIME && ref->as.runtime == self) {
+        ta_actor_ref_retain(named);
+        *ref = *named;
+    }
+}
+
+void ta_timer_readdress_self(ta_timer_list *list, ta_actor_id self, const ta_actor_ref *named) {
+    if (list == NULL || named->kind != TA_ACTOR_REF_NAMED) {
+        return;
+    }
+    for (uint32_t index = 0; index < list->count; index += 1u) {
+        if (!list->sends[index].submitted) {
+            continue;
+        }
+        ta_timer_name_self(&list->sends[index].destination, self, named);
+        ta_timer_name_self(&list->meta[index].origin, self, named);
+    }
+}
+
 void ta_timer_orphan(ta_timer_heap *heap, ta_timer_list *list) {
     if (list == NULL) {
         return;

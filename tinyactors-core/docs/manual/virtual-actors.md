@@ -180,6 +180,11 @@ encoder has finished with all retained values.
 
 Unloading cancels runtime invocation handles and removes the actor's delayed
 sends from the resident timer heap. Their logical records remain in the image.
+A send the router already refused is different: it counts as sent, so it
+stays queued in the system, not in the image (ADR 0054). If it was a send to
+the actor itself, unloading re-addresses it to the actor's name, and its retry
+reaches whichever session holds that name next, like any send to a
+paged-out actor.
 For the normal between-turn case there should be no active inference invocation;
 if there is one, loading later produces the specified
 `error.communication.invoke.<id>.unavailable` event.

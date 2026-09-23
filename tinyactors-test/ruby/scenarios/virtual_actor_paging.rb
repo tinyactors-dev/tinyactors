@@ -259,7 +259,8 @@ end
 # Sends between actors go to named addresses (#_actor_<family>/<name>),
 # which stay valid across a reload; a runtime ID does not. A send to self
 # (no target, or #_scxml_<_sessionid>) names the sender's runtime ID, and
-# an image rebinds it to the reloaded session (ta_image_rebind_self).
+# an image rebinds it to the reloaded session (ta_image_rebind_self); one
+# the router refused names its owner's address once the owner unloads.
 module VirtualActorPagingScenarios
   # A Host that also indexes the deadlines of the images it holds.
   class TimedHost < Host
@@ -385,9 +386,10 @@ module VirtualActorPagingScenarios
   # the order that is specified: one owner to one target by one route.
   #
   # With `self_sends:` the schedule also arms sends to self: with no target,
-  # or to #_scxml_<_sessionid>. It then refuses no submissions: a refused send
-  # to self is lost when its owner pages out before the retry (see
-  # 'a refused send to self survives its owner paging out' below).
+  # or to #_scxml_<_sessionid>. Refused submissions are mixed in as for the
+  # other sends: a refused send to self whose owner pages out before the
+  # retry names its owner's address from then on (ADR 0054), so the retry
+  # pages the owner in like any send to a paged-out actor.
   def self.run_timed(context, population:, limit:, steps:, chart:, self_sends: false)
     seed = self.seed
     stream = Random.new(seed)
@@ -397,7 +399,7 @@ module VirtualActorPagingScenarios
         when 0..2 then [:msg, stream.rand(population), stream.rand(1_000)]
         when 3..4 then [:arm, stream.rand(population), stream.rand(population), 100 * (1 + stream.rand(40))]
         when 5..6 then [:self, stream.rand(population), stream.rand(2), 100 * (1 + stream.rand(40))]
-        else [:advance, 100 * (1 + stream.rand(20)), false]
+        else [:advance, 100 * (1 + stream.rand(20)), stream.rand(4).zero?]
         end
       else
         case stream.rand(10)
@@ -776,12 +778,9 @@ TinyactorsTest.scenarios 'virtual actor paging, sends to self', chart: :self_pag
 
   # A send to self that the router refuses is submitted: it stays with its
   # owner, not in the owner's image (ADR 0054). When the owner pages out
-  # before the retry, the send moves to the system's list with the old
-  # runtime ID, is never rebound, and the retry goes stale: lost, with no
-  # error to the reloaded actor. Recorded here until core decides how an
-  # in-flight send to self follows its owner across a reload.
-  expect_failure 'a refused send to self is lost when its owner pages out before the retry',
-                 message: /the reloaded owner receives its refused send to self/
+  # before the retry, the send moves to the system's list and names its
+  # owner's address instead of the runtime ID that goes stale, so the retry
+  # reaches the reloaded owner through the directory.
   scenario 'a refused send to self survives its owner paging out' do
     router = recording_router(mode: :hold, directory: true)
     owner = spawn :self_pager, name: 'a'

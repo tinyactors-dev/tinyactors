@@ -683,8 +683,11 @@ ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params *param
      * live in the image now and must not also sit in the resident heap,
      * where they would fire for an actor that is not there; a send already
      * handed to the router is an envelope of its own and stays, exactly as
-     * it does when a session ends.
+     * it does when a session ends. One sent to this session itself names it
+     * by address from here on, so its retry finds the session that holds
+     * the address next rather than this runtime ID, which goes stale.
      */
+    ta_timer_readdress_self(ta_actor_timers(actor), actor->record.id, &actor->record.self);
     ta_timer_orphan(&system->timers, ta_actor_timers(actor));
     ta_actor_release_slot(system, actor->record.id);
     ta_actor_free(system, actor);

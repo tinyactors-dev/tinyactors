@@ -175,3 +175,20 @@ the text above, as of the follow-up commits `809b64a`, `a14d8be` and
 - **Destroy and unload fail with `TA_ERR_NOMEM` only for an actor that holds a
   submitted send.** Unsubmitted sends are discarded and need no room, so
   that is the only case the scenarios can and do drive.
+- **A submitted send to self names its owner by address after an unload**
+  (2026-09-23). A send the router refused is already sent, so an unloaded
+  owner's submitted sends move to the orphan list, not into the image, and
+  loading never rebinds them. A send to self (no target, or
+  `#_scxml_<sessionid>`) held the owner's runtime ID, which went stale: its
+  retry was released with `TA_ERR_NOT_FOUND` and lost. `ta_actor_unload()`
+  now calls `ta_timer_readdress_self()` before orphaning: every submitted
+  send whose destination or origin is the unloading runtime ID holds a
+  retained reference to the owner's address instead (ADR 0065), which cannot
+  fail. The retry then resolves through the directory to whichever session
+  holds the address next. Unsubmitted sends still travel in the image and
+  are rebound on load (`ta_image_rebind_self`), and destroy is unchanged: a
+  destroyed actor's submitted sends to self keep its runtime ID and fail
+  with `TA_ERR_NOT_FOUND` at retry, since nothing holds that session any
+  more. Tested by `delayed_send_test.c`
+  (`test_refused_self_send_follows_its_owner_across_unload`) and the paging
+  scenario "a refused send to self survives its owner paging out".

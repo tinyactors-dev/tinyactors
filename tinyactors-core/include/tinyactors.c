@@ -641,6 +641,14 @@ TA_PRIVATE ta_result ta_timer_reserve_orphans(ta_timer_heap *heap, const ta_time
  * first. Leaves the list empty and unindexed; its storage stays allocated.
  */
 TA_PRIVATE void ta_timer_orphan(ta_timer_heap *heap, ta_timer_list *list);
+/*
+ * Before an unloaded owner's submitted sends become orphans: every send
+ * whose destination or origin is the owner's runtime ID `self` names the
+ * owner by its address instead, retaining `named`, so a retry resolves
+ * through the directory to whichever session holds that address next
+ * (ADR 0054). Cannot fail.
+ */
+TA_PRIVATE void ta_timer_readdress_self(ta_timer_list *list, ta_actor_id self, const ta_actor_ref *named);
 /* Releases every send in list, unindexes it, and frees its storage. */
 TA_PRIVATE void ta_timer_list_destroy(ta_timer_heap *heap, ta_timer_list *list);
 /* Bytes the list's storage occupies. */
@@ -3310,6 +3318,26 @@ TA_PRIVATE ta_result ta_timer_reserve_orphans(ta_timer_heap *heap, const ta_time
         return TA_OK;
     }
     return ta_timer_reserve(heap, &heap->orphans, ta_timer_submitted_count(list));
+}
+
+static void ta_timer_name_self(ta_actor_ref *ref, ta_actor_id self, const ta_actor_ref *named) {
+    if (ref->kind == TA_ACTOR_REF_RUNTIME && ref->as.runtime == self) {
+        ta_actor_ref_retain(named);
+        *ref = *named;
+    }
+}
+
+TA_PRIVATE void ta_timer_readdress_self(ta_timer_list *list, ta_actor_id self, const ta_actor_ref *named) {
+    if (list == NULL || named->kind != TA_ACTOR_REF_NAMED) {
+        return;
+    }
+    for (uint32_t index = 0; index < list->count; index += 1u) {
+        if (!list->sends[index].submitted) {
+            continue;
+        }
+        ta_timer_name_self(&list->sends[index].destination, self, named);
+        ta_timer_name_self(&list->meta[index].origin, self, named);
+    }
 }
 
 TA_PRIVATE void ta_timer_orphan(ta_timer_heap *heap, ta_timer_list *list) {
@@ -10043,8 +10071,11 @@ TA_API ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params
      * live in the image now and must not also sit in the resident heap,
      * where they would fire for an actor that is not there; a send already
      * handed to the router is an envelope of its own and stays, exactly as
-     * it does when a session ends.
+     * it does when a session ends. One sent to this session itself names it
+     * by address from here on, so its retry finds the session that holds
+     * the address next rather than this runtime ID, which goes stale.
      */
+    ta_timer_readdress_self(ta_actor_timers(actor), actor->record.id, &actor->record.self);
     ta_timer_orphan(&system->timers, ta_actor_timers(actor));
     ta_actor_release_slot(system, actor->record.id);
     ta_actor_free(system, actor);
