@@ -109,7 +109,7 @@ ta_result ta_dm_host_text(const ta_dm_host *host, const ta_dm_text_params *param
     bool present = true;
     switch (params->kind) {
         case TA_DM_TEXT_SESSION_ID:
-            ta_text_put_u64(&writer, actor->record.id);
+            ta_text_put_u64(&writer, actor->session_id);
             break;
         case TA_DM_TEXT_SESSION_NAME:
             present = actor->definition->document_name != TA_ATOM_NONE;

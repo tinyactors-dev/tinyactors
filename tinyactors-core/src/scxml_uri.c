@@ -11,7 +11,7 @@
  *
  *   #_internal                 the sender's own internal queue
  *   #_parent                   the invoking parent session
- *   #_scxml_<session>          a session by its runtime ID
+ *   #_scxml_<session>          a session by its session ID (ADR 0066)
  *   #_actor_<family>/<name>    a named actor by its logical address
  *   #_<invokeid>               an invocation of the sending session
  *
@@ -156,8 +156,9 @@ bool ta_scxml_uri_write(const ta_system *system, ta_text_writer *writer, const t
                 ta_text_put(writer, view.name);
                 return true;
             }
+            /* A resident actor is written as its session (ADR 0066). */
             ta_text_put(writer, ta_str_from_cstr(TA_URI_SESSION));
-            ta_text_put_u64(writer, target->as.actor.as.runtime);
+            ta_text_put_u64(writer, ta_session_id_of(system, target->as.actor.as.runtime));
             return true;
         default:
             /* SELF is the absent target, which has no URI of its own. */

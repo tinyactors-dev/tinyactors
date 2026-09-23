@@ -535,8 +535,11 @@ static ta_external_event_submit_status ta_submit_external(ta_system *system, con
     if (system->external_events.v == NULL) {
         return TA_EXTERNAL_EVENT_ERROR;
     }
+    /* A session ID that is not a resident runtime ID resolves here (ADR 0066). */
+    ta_actor_ref destination;
+    bool routed_by_name = ta_session_route(system, &params->destination, &destination);
     ta_external_delivery delivery = {
-        .destination = params->destination,
+        .destination = destination,
         .event = {
             .name = params->event,
             .type = TA_EVENT_EXTERNAL,
@@ -546,11 +549,16 @@ static ta_external_event_submit_status ta_submit_external(ta_system *system, con
             .data = *params->data,
         },
     };
-    return system->external_events.v->submit(system->external_events.self,
-                                             &(ta_external_event_submit_params){
-                                                 .delivery = &delivery,
-                                                 .fault = params->fault,
-                                             });
+    ta_external_event_submit_status status =
+        system->external_events.v->submit(system->external_events.self,
+                                          &(ta_external_event_submit_params){
+                                              .delivery = &delivery,
+                                              .fault = params->fault,
+                                          });
+    if (routed_by_name) {
+        ta_actor_ref_release(&destination);
+    }
+    return status;
 }
 
 static ta_result ta_communication_error(ta_system *system, ta_actor *actor, const ta_error_params *params) {
@@ -777,13 +785,14 @@ static bool ta_send_destination(ta_interpreter *it, const ta_scxml_target *targe
     switch (target->kind) {
         case TA_SCXML_TARGET_SELF:
             /*
-             * A send to self is a delivery to *this* session, so it names the
-             * runtime ID and needs no directory to resolve — a named actor's
-             * own timers must not depend on one. Reconstruction rebinds such
-             * a send to the new session (ta_image_rebind_self); what a
-             * receiver replies to is the origin, which is the address.
+             * A send to self names *this* session by its session ID (ADR
+             * 0066), which a reload does not change. While the session is
+             * resident and never reloaded it is also the runtime ID, so it
+             * needs no directory; otherwise submission resolves it through
+             * the session table (ta_session_route). What a receiver replies
+             * to is the origin, which for a named actor is the address.
              */
-            *out = (ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = it->actor->record.id };
+            *out = (ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = it->actor->session_id };
             return true;
         case TA_SCXML_TARGET_PARENT:
             if (it->actor->sparse == NULL || !it->actor->sparse->has_parent) {

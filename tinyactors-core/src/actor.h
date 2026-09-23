@@ -4,6 +4,7 @@
 #include "definition.h"
 #include "invoke.h"
 #include "timer.h"
+#include "session.h"
 
 typedef struct {
     ta_actor_id id;
@@ -84,6 +85,10 @@ struct ta_actor {
     /* Its internal event queue (ADR 0064), or null. */
     ta_internal_queue *internal_queue;
     ta_actor_id replacement_of;
+    /* The session this actor holds (ADR 0066), and its entry in the session
+     * table when that ID is not this actor's runtime ID. */
+    uint64_t session_id;
+    ta_session_node *session_node;
     uint64_t session_epoch;
     bool published;
     ta_dm_host_impl host_impl;

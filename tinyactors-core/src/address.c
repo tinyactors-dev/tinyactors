@@ -119,6 +119,7 @@ static ta_address *ta_address_record(ta_allocator allocator, const ta_actor_addr
     }
     record->table = NULL;
     record->next = NULL;
+    record->unloaded = NULL;
     record->references = 0;
     record->hash = hash;
     record->family_len = family_len;
@@ -173,6 +174,7 @@ ta_result ta_address_detach(ta_arena *arena, const ta_address *address, ta_addre
     ta_mem_copy(copy, address, bytes);
     copy->table = NULL;
     copy->next = NULL;
+    copy->unloaded = NULL;
     copy->references = 0;
     *out = copy;
     return TA_OK;

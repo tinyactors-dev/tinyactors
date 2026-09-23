@@ -18,6 +18,12 @@ default external self-send, `#_internal`, `#_parent`, `#_<invokeid>`, and
 `#_scxml_<sessionid>` semantics. Inaccessible targets produce
 `error.communication` in the sender.
 
+A session ID is the runtime ID the session was spawned with, kept across
+unload and load (ADR 0066). When a send is submitted, a runtime destination
+that is not a resident actor's runtime ID is looked up as a session ID: a
+reloaded session gives its current runtime ID, an unloaded named session its
+address. A send with no target names the sending session the same way.
+
 Core owns the target URI grammar in both directions (ADR 0044):
 `ta_scxml_target_parse()` reads a target and `ta_scxml_target_format()` writes
 one, so the URI a chart reads from `$_event.origin` parses back to its sender.

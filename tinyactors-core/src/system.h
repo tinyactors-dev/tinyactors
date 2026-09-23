@@ -2,6 +2,7 @@
 
 #include "actor.h"
 #include "address.h"
+#include "session.h"
 #include "arena.h"
 #include "atom.h"
 #include "builder.h"
@@ -28,6 +29,8 @@ struct ta_system {
     ta_atom_table atoms;
     /* Interned named addresses (ADR 0065). */
     ta_address_table addresses;
+    /* Reloaded and unloaded sessions, by session ID (ADR 0066). */
+    ta_session_table sessions;
     ta_event_name_table event_names;
 
     /*

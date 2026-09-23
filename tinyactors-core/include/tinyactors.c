@@ -206,6 +206,8 @@ struct ta_address {
     /* Null for a detached record: a session image's own copy (see below). */
     ta_address_table *table;
     struct ta_address *next;
+    /* The unloaded session at this address (ADR 0066), or null. */
+    struct ta_session_node *unloaded;
     uint32_t references;
     uint32_t hash;
     uint32_t family_len;
@@ -238,6 +240,66 @@ TA_PRIVATE ta_result ta_address_table_intern(ta_address_table *table, const ta_a
  */
 TA_PRIVATE ta_result ta_address_detach(ta_arena *arena, const ta_address *address, ta_address **out);
 TA_PRIVATE bool ta_address_in(const ta_address *address, const ta_address_table *table);
+
+
+
+/*
+ * Sessions whose ID is not a resident actor's runtime ID (ADR 0066). A
+ * session's ID is the runtime ID it was spawned with, so a never-paged
+ * session is found through the actor table and has no entry here. An entry
+ * is either a reloaded resident session (`actor` set) or an unloaded named
+ * one (`actor` null, `address` held). Lookups prefer a resident entry.
+ *
+ * The table is a linear hash table over fixed pages, like the address table
+ * (ADR 0065): each insert splits at most one bucket, growing never copies
+ * the table, and a failed page allocation only postpones a split. Its first
+ * page is allocated at init, so inserting never fails.
+ */
+
+#define TA_SESSION_PAGE_BUCKETS 1024u
+#define TA_SESSION_INITIAL_BUCKETS 16u
+
+typedef struct ta_session_node {
+    uint64_t id;
+    struct ta_session_node *next;
+    /* The resident actor holding the session, or null when it is unloaded. */
+    struct ta_actor *actor;
+    /* An unloaded session's address, one reference held; null otherwise. */
+    ta_address *address;
+} ta_session_node;
+
+typedef struct {
+    ta_allocator allocator;
+    ta_vec pages; /* ta_session_node ** pages of TA_SESSION_PAGE_BUCKETS buckets */
+    uint32_t base;
+    uint32_t split;
+    uint32_t count;
+} ta_session_table;
+
+TA_PRIVATE ta_result ta_session_table_init(ta_session_table *table, ta_allocator allocator);
+/* Frees every entry left, releasing the addresses unloaded entries hold. */
+TA_PRIVATE void ta_session_table_destroy(ta_session_table *table);
+
+TA_PRIVATE ta_result ta_session_node_new(ta_session_table *table, ta_session_node **out);
+/* Frees an entry that is not in the table, releasing its address. */
+TA_PRIVATE void ta_session_node_free(ta_session_table *table, ta_session_node *node);
+TA_PRIVATE void ta_session_insert(ta_session_table *table, ta_session_node *node);
+TA_PRIVATE void ta_session_remove(ta_session_table *table, ta_session_node *node);
+/* The entry for `id`: a resident one if there is one, else an unloaded one. */
+TA_PRIVATE const ta_session_node *ta_session_find(const ta_session_table *table, uint64_t id);
+
+/* Whether a resident session holds `id`: a never-paged actor or a reloaded one. */
+TA_PRIVATE bool ta_session_resident(const ta_system *system, uint64_t id);
+/* The session ID of the resident actor `runtime`, or `runtime` itself. */
+TA_PRIVATE uint64_t ta_session_id_of(const ta_system *system, ta_actor_id runtime);
+/*
+ * Where an SCXML send to `ref` goes (ADR 0066 section 3): a runtime ID that
+ * is not a resident actor's is looked up as a session ID. A reloaded session
+ * gives its current runtime ID; an unloaded one gives its address, retained,
+ * in which case this returns true and the caller releases *out. Otherwise
+ * *out is `ref` and this returns false.
+ */
+TA_PRIVATE bool ta_session_route(const ta_system *system, const ta_actor_ref *ref, ta_actor_ref *out);
 
 
 
@@ -641,14 +703,6 @@ TA_PRIVATE ta_result ta_timer_reserve_orphans(ta_timer_heap *heap, const ta_time
  * first. Leaves the list empty and unindexed; its storage stays allocated.
  */
 TA_PRIVATE void ta_timer_orphan(ta_timer_heap *heap, ta_timer_list *list);
-/*
- * Before an unloaded owner's submitted sends become orphans: every send
- * whose destination or origin is the owner's runtime ID `self` names the
- * owner by its address instead, retaining `named`, so a retry resolves
- * through the directory to whichever session holds that address next
- * (ADR 0054). Cannot fail.
- */
-TA_PRIVATE void ta_timer_readdress_self(ta_timer_list *list, ta_actor_id self, const ta_actor_ref *named);
 /* Releases every send in list, unindexes it, and frees its storage. */
 TA_PRIVATE void ta_timer_list_destroy(ta_timer_heap *heap, ta_timer_list *list);
 /* Bytes the list's storage occupies. */
@@ -1245,6 +1299,10 @@ struct ta_actor {
     /* Its internal event queue (ADR 0064), or null. */
     ta_internal_queue *internal_queue;
     ta_actor_id replacement_of;
+    /* The session this actor holds (ADR 0066), and its entry in the session
+     * table when that ID is not this actor's runtime ID. */
+    uint64_t session_id;
+    ta_session_node *session_node;
     uint64_t session_epoch;
     bool published;
     ta_dm_host_impl host_impl;
@@ -1371,6 +1429,8 @@ struct ta_system {
     ta_atom_table atoms;
     /* Interned named addresses (ADR 0065). */
     ta_address_table addresses;
+    /* Reloaded and unloaded sessions, by session ID (ADR 0066). */
+    ta_session_table sessions;
     ta_event_name_table event_names;
 
     /*
@@ -2285,6 +2345,7 @@ static ta_address *ta_address_record(ta_allocator allocator, const ta_actor_addr
     }
     record->table = NULL;
     record->next = NULL;
+    record->unloaded = NULL;
     record->references = 0;
     record->hash = hash;
     record->family_len = family_len;
@@ -2339,6 +2400,7 @@ TA_PRIVATE ta_result ta_address_detach(ta_arena *arena, const ta_address *addres
     ta_mem_copy(copy, address, bytes);
     copy->table = NULL;
     copy->next = NULL;
+    copy->unloaded = NULL;
     copy->references = 0;
     *out = copy;
     return TA_OK;
@@ -2396,6 +2458,199 @@ TA_API ta_actor_address ta_address_view(const ta_address *address) {
         .family = { .name = { .ptr = address->text, .len = address->family_len } },
         .name = { .ptr = address->text + address->family_len + 1u, .len = address->name_len },
     };
+}
+
+
+static uint32_t ta_session_hash(uint64_t id) {
+    /* A 64-bit finalizer: runtime IDs differ mostly in their low slot bits. */
+    id ^= id >> 33;
+    id *= 0xff51afd7ed558ccdull;
+    id ^= id >> 33;
+    id *= 0xc4ceb9fe1a85ec53ull;
+    id ^= id >> 33;
+    return (uint32_t)id;
+}
+
+static uint32_t ta_session_bucket_count(const ta_session_table *table) {
+    return table->base + table->split;
+}
+
+static ta_session_node **ta_session_bucket(const ta_session_table *table, uint32_t index) {
+    ta_session_node **page = *(ta_session_node ***)ta_vec_at(&table->pages, index / TA_SESSION_PAGE_BUCKETS);
+    return &page[index % TA_SESSION_PAGE_BUCKETS];
+}
+
+static uint32_t ta_session_index(const ta_session_table *table, uint32_t hash) {
+    uint32_t index = hash & (table->base - 1u);
+    return index < table->split ? hash & (2u * table->base - 1u) : index;
+}
+
+static void ta_session_page_free(ta_allocator allocator, ta_session_node **page) {
+    ta_mem_free(allocator, page,
+                &(ta_allocator_free_params){ .size = TA_SESSION_PAGE_BUCKETS * sizeof(ta_session_node *),
+                                             .alignment = _Alignof(ta_session_node *) });
+}
+
+/* Makes sure the page holding bucket `index` exists; false when it cannot. */
+static bool ta_session_page_for(ta_session_table *table, uint32_t index) {
+    if (index / TA_SESSION_PAGE_BUCKETS < table->pages.count) {
+        return true;
+    }
+    ta_session_node **page = ta_mem_alloc(table->allocator, TA_SESSION_PAGE_BUCKETS * sizeof(ta_session_node *),
+                                          _Alignof(ta_session_node *));
+    if (page == NULL) {
+        return false;
+    }
+    for (uint32_t bucket = 0; bucket < TA_SESSION_PAGE_BUCKETS; bucket += 1u) {
+        page[bucket] = NULL;
+    }
+    if (ta_vec_push(&table->pages, &page) != TA_OK) {
+        ta_session_page_free(table->allocator, page);
+        return false;
+    }
+    return true;
+}
+
+/* Splits one bucket when the table holds more than one entry per bucket. */
+static void ta_session_grow(ta_session_table *table) {
+    uint32_t added = ta_session_bucket_count(table);
+    if (table->count <= added || added == UINT32_MAX || !ta_session_page_for(table, added)) {
+        return; /* a failed page only postpones the split */
+    }
+    uint32_t wide = 2u * table->base - 1u;
+    ta_session_node **from = ta_session_bucket(table, table->split);
+    ta_session_node **to = ta_session_bucket(table, added);
+    ta_session_node *chain = *from;
+    *from = NULL;
+    while (chain != NULL) {
+        ta_session_node *next = chain->next;
+        ta_session_node **home = (ta_session_hash(chain->id) & wide) == table->split ? from : to;
+        chain->next = *home;
+        *home = chain;
+        chain = next;
+    }
+    table->split += 1u;
+    if (table->split == table->base) {
+        table->base *= 2u;
+        table->split = 0;
+    }
+}
+
+TA_PRIVATE ta_result ta_session_table_init(ta_session_table *table, ta_allocator allocator) {
+    *table = (ta_session_table){ .allocator = allocator, .base = TA_SESSION_INITIAL_BUCKETS };
+    ta_vec_init(&table->pages, allocator, TA_VEC_LAYOUT(ta_session_node **));
+    return ta_session_page_for(table, 0) ? TA_OK : TA_ERR_NOMEM;
+}
+
+TA_PRIVATE void ta_session_table_destroy(ta_session_table *table) {
+    uint32_t buckets = table->pages.count == 0 ? 0u : ta_session_bucket_count(table);
+    for (uint32_t index = 0; index < buckets; index += 1u) {
+        ta_session_node *chain = *ta_session_bucket(table, index);
+        while (chain != NULL) {
+            ta_session_node *next = chain->next;
+            ta_session_node_free(table, chain);
+            chain = next;
+        }
+    }
+    for (uint32_t page = 0; page < table->pages.count; page += 1u) {
+        ta_session_page_free(table->allocator, *(ta_session_node ***)ta_vec_at(&table->pages, page));
+    }
+    ta_vec_destroy(&table->pages);
+    *table = (ta_session_table){0};
+}
+
+TA_PRIVATE ta_result ta_session_node_new(ta_session_table *table, ta_session_node **out) {
+    ta_session_node *node = ta_mem_alloc(table->allocator, sizeof(ta_session_node), _Alignof(ta_session_node));
+    if (node == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    *node = (ta_session_node){0};
+    *out = node;
+    return TA_OK;
+}
+
+TA_PRIVATE void ta_session_node_free(ta_session_table *table, ta_session_node *node) {
+    if (node == NULL) {
+        return;
+    }
+    if (node->address != NULL) {
+        if (node->address->unloaded == node) {
+            node->address->unloaded = NULL;
+        }
+        ta_address_release(node->address);
+    }
+    ta_mem_free(table->allocator, node,
+                &(ta_allocator_free_params){ .size = sizeof(ta_session_node), .alignment = _Alignof(ta_session_node) });
+}
+
+TA_PRIVATE void ta_session_insert(ta_session_table *table, ta_session_node *node) {
+    ta_session_node **bucket = ta_session_bucket(table, ta_session_index(table, ta_session_hash(node->id)));
+    node->next = *bucket;
+    *bucket = node;
+    table->count += 1u;
+    ta_session_grow(table);
+}
+
+TA_PRIVATE void ta_session_remove(ta_session_table *table, ta_session_node *node) {
+    for (ta_session_node **link = ta_session_bucket(table, ta_session_index(table, ta_session_hash(node->id)));
+         *link != NULL; link = &(*link)->next) {
+        if (*link == node) {
+            *link = node->next;
+            node->next = NULL;
+            table->count -= 1u;
+            return;
+        }
+    }
+}
+
+TA_PRIVATE const ta_session_node *ta_session_find(const ta_session_table *table, uint64_t id) {
+    if (table->pages.count == 0) {
+        return NULL;
+    }
+    const ta_session_node *unloaded = NULL;
+    for (const ta_session_node *node = *ta_session_bucket(table, ta_session_index(table, ta_session_hash(id)));
+         node != NULL; node = node->next) {
+        if (node->id != id) {
+            continue;
+        }
+        if (node->actor != NULL) {
+            return node;
+        }
+        unloaded = node;
+    }
+    return unloaded;
+}
+
+TA_PRIVATE bool ta_session_resident(const ta_system *system, uint64_t id) {
+    const ta_actor *actor = ta_actor_lookup(system, id);
+    if (actor != NULL && actor->session_id == id) {
+        return true;
+    }
+    const ta_session_node *node = ta_session_find(&system->sessions, id);
+    return node != NULL && node->actor != NULL;
+}
+
+TA_PRIVATE uint64_t ta_session_id_of(const ta_system *system, ta_actor_id runtime) {
+    const ta_actor *actor = ta_actor_lookup(system, runtime);
+    return actor != NULL ? actor->session_id : runtime;
+}
+
+TA_PRIVATE bool ta_session_route(const ta_system *system, const ta_actor_ref *ref, ta_actor_ref *out) {
+    *out = *ref;
+    if (ref->kind != TA_ACTOR_REF_RUNTIME || ta_actor_lookup(system, ref->as.runtime) != NULL) {
+        return false;
+    }
+    const ta_session_node *node = ta_session_find(&system->sessions, ref->as.runtime);
+    if (node == NULL) {
+        return false;
+    }
+    if (node->actor != NULL) {
+        *out = (ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = node->actor->record.id };
+        return false;
+    }
+    ta_address_retain(node->address);
+    *out = (ta_actor_ref){ .kind = TA_ACTOR_REF_NAMED, .as.named = node->address };
+    return true;
 }
 
 
@@ -2632,7 +2887,7 @@ TA_API void ta_event_release(ta_event *event) {
  *
  *   #_internal                 the sender's own internal queue
  *   #_parent                   the invoking parent session
- *   #_scxml_<session>          a session by its runtime ID
+ *   #_scxml_<session>          a session by its session ID (ADR 0066)
  *   #_actor_<family>/<name>    a named actor by its logical address
  *   #_<invokeid>               an invocation of the sending session
  *
@@ -2777,8 +3032,9 @@ TA_PRIVATE bool ta_scxml_uri_write(const ta_system *system, ta_text_writer *writ
                 ta_text_put(writer, view.name);
                 return true;
             }
+            /* A resident actor is written as its session (ADR 0066). */
             ta_text_put(writer, ta_str_from_cstr(TA_URI_SESSION));
-            ta_text_put_u64(writer, target->as.actor.as.runtime);
+            ta_text_put_u64(writer, ta_session_id_of(system, target->as.actor.as.runtime));
             return true;
         default:
             /* SELF is the absent target, which has no URI of its own. */
@@ -3320,26 +3576,6 @@ TA_PRIVATE ta_result ta_timer_reserve_orphans(ta_timer_heap *heap, const ta_time
     return ta_timer_reserve(heap, &heap->orphans, ta_timer_submitted_count(list));
 }
 
-static void ta_timer_name_self(ta_actor_ref *ref, ta_actor_id self, const ta_actor_ref *named) {
-    if (ref->kind == TA_ACTOR_REF_RUNTIME && ref->as.runtime == self) {
-        ta_actor_ref_retain(named);
-        *ref = *named;
-    }
-}
-
-TA_PRIVATE void ta_timer_readdress_self(ta_timer_list *list, ta_actor_id self, const ta_actor_ref *named) {
-    if (list == NULL || named->kind != TA_ACTOR_REF_NAMED) {
-        return;
-    }
-    for (uint32_t index = 0; index < list->count; index += 1u) {
-        if (!list->sends[index].submitted) {
-            continue;
-        }
-        ta_timer_name_self(&list->sends[index].destination, self, named);
-        ta_timer_name_self(&list->meta[index].origin, self, named);
-    }
-}
-
 TA_PRIVATE void ta_timer_orphan(ta_timer_heap *heap, ta_timer_list *list) {
     if (list == NULL) {
         return;
@@ -3535,7 +3771,7 @@ TA_API ta_result ta_dm_host_text(const ta_dm_host *host, const ta_dm_text_params
     bool present = true;
     switch (params->kind) {
         case TA_DM_TEXT_SESSION_ID:
-            ta_text_put_u64(&writer, actor->record.id);
+            ta_text_put_u64(&writer, actor->session_id);
             break;
         case TA_DM_TEXT_SESSION_NAME:
             present = actor->definition->document_name != TA_ATOM_NONE;
@@ -8689,6 +8925,10 @@ TA_PRIVATE void ta_actor_free(ta_system *system, ta_actor *actor) {
     /* A named actor holds a reference to its address; a runtime ref holds nothing. */
     ta_actor_ref_release(&actor->record.self);
     ta_interpreter_release_actor_state(system, actor);
+    if (actor->session_node != NULL) {
+        ta_session_remove(&system->sessions, actor->session_node);
+        ta_session_node_free(&system->sessions, actor->session_node);
+    }
     /* The record, the session storage and the instance are one block (ADR 0063). */
     ta_mem_free(system->allocator, actor,
                 &(ta_allocator_free_params){ .size = definition->actor_block_bytes,
@@ -8826,6 +9066,12 @@ TA_API ta_result ta_actor_remove_unloaded(ta_system *system, const ta_actor_remo
             .address = address,
             .expected = { .kind = TA_ACTOR_DIRECTORY_UNLOADED },
         });
+    /* The unloaded session ends with its name (ADR 0066). */
+    if (result == TA_OK && address->unloaded != NULL) {
+        ta_session_node *parked = address->unloaded;
+        ta_session_remove(&system->sessions, parked);
+        ta_session_node_free(&system->sessions, parked);
+    }
     ta_address_release(address);
     return result;
 }
@@ -8906,6 +9152,8 @@ TA_PRIVATE ta_result ta_actor_new(ta_system *system, ta_definition *definition, 
         .self = { .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = id },
         .residency = TA_ACTOR_RUNNING,
     };
+    /* A new session is named by the runtime ID it starts with (ADR 0066). */
+    actor->session_id = id;
     *out = actor;
     return TA_OK;
 }
@@ -9219,6 +9467,7 @@ TA_API ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_in
     }
     *out = (ta_actor_inspection){
         .actor = id,
+        .session_id = actor->session_id,
         .self = actor->record.self,
         .definition_id = definition->id,
         .definition = definition->identity,
@@ -9410,6 +9659,8 @@ struct ta_session_image {
 
     /* Local freshness: which actor this came from, and at which epoch. */
     ta_actor_id source_actor;
+    /* The session this image continues (ADR 0066). */
+    uint64_t session_id;
     uint64_t source_epoch;
 
     ta_actor_ref self;
@@ -9674,6 +9925,7 @@ TA_API ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_para
     *image = (ta_session_image){
         .allocator = system->allocator,
         .source_actor = actor->record.id,
+        .session_id = actor->session_id,
         .source_epoch = actor->session_epoch,
         .self = actor->record.self,
         .definition = actor->definition->identity,
@@ -9841,7 +10093,8 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
         /* A fresh timer ID; the SCXML send ID that <cancel> names is kept. */
         send.id = 0;
         send.owner = actor->record.id;
-        ta_image_rebind_self(&send.destination, image->source_actor, actor->record.id);
+        /* A destination naming this session is its session ID and survives a
+         * reload as it is; only an unnamed actor's runtime origin moves. */
         ta_image_rebind_self(&send.origin, image->source_actor, actor->record.id);
         ta_value_retain(&send.target);
         ta_value_retain(&send.data);
@@ -9909,6 +10162,25 @@ TA_API ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstr
         return result;
     }
     ta_actor_id id = actor->record.id;
+    /*
+     * The image's session continues here unless a resident session holds
+     * its ID (ADR 0066): two live sessions never share one. Its ID is not
+     * this actor's runtime ID, so the session table finds it.
+     */
+    if (image->session_id != 0 && !ta_session_resident(system, image->session_id)) {
+        ta_session_node *node = NULL;
+        result = ta_session_node_new(&system->sessions, &node);
+        if (result != TA_OK) {
+            ta_actor_release_slot(system, id);
+            ta_actor_free(system, actor);
+            return result;
+        }
+        node->id = image->session_id;
+        node->actor = actor;
+        ta_session_insert(&system->sessions, node);
+        actor->session_id = image->session_id;
+        actor->session_node = node;
+    }
 
     /* The interpreter state the image describes, restored before anything
      * fallible runs against it. */
@@ -10053,6 +10325,12 @@ TA_API ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params
     if (result != TA_OK) {
         return result;
     }
+    /* And the entry that keeps the session findable while it is out (ADR 0066). */
+    ta_session_node *parked = NULL;
+    result = ta_session_node_new(&system->sessions, &parked);
+    if (result != TA_OK) {
+        return result;
+    }
 
     result = ta_actor_directory_swap(
         system,
@@ -10063,6 +10341,7 @@ TA_API ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params
         });
     if (result != TA_OK) {
         /* Still resident, still routable, and the same image will do. */
+        ta_session_node_free(&system->sessions, parked);
         return result;
     }
 
@@ -10071,14 +10350,23 @@ TA_API ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params
      * live in the image now and must not also sit in the resident heap,
      * where they would fire for an actor that is not there; a send already
      * handed to the router is an envelope of its own and stays, exactly as
-     * it does when a session ends. One sent to this session itself names it
-     * by address from here on, so its retry finds the session that holds
-     * the address next rather than this runtime ID, which goes stale.
+     * it does when a session ends. One sent to this session names it by
+     * session ID, and the parked entry routes its retry by address to
+     * whatever session loads here next (ADR 0066).
      */
-    ta_timer_readdress_self(ta_actor_timers(actor), actor->record.id, &actor->record.self);
+    ta_address *address = actor->record.self.as.named;
+    parked->id = actor->session_id;
+    parked->address = address;
+    ta_address_retain(address);
     ta_timer_orphan(&system->timers, ta_actor_timers(actor));
     ta_actor_release_slot(system, actor->record.id);
     ta_actor_free(system, actor);
+    if (address->unloaded != NULL) {
+        ta_session_remove(&system->sessions, address->unloaded);
+        ta_session_node_free(&system->sessions, address->unloaded);
+    }
+    address->unloaded = parked;
+    ta_session_insert(&system->sessions, parked);
     return TA_OK;
 }
 
@@ -10125,6 +10413,13 @@ TA_API ta_result ta_actor_load(ta_system *system, const ta_actor_load_params *pa
         ta_actor_free(system, actor); /* frees its delayed sends too */
         return result;
     }
+    /* The session is resident again: its parked entry goes (ADR 0066). */
+    ta_address *address = ta_actor_lookup(system, id)->record.self.as.named;
+    if (address->unloaded != NULL) {
+        ta_session_node *parked = address->unloaded;
+        ta_session_remove(&system->sessions, parked);
+        ta_session_node_free(&system->sessions, parked);
+    }
     *params->out = id;
     return TA_OK;
 }
@@ -10159,8 +10454,12 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
     ta_vec_init(&system->io_processors, config->allocator, TA_VEC_LAYOUT(ta_io_registration));
     ta_vec_init(&system->invokers, config->allocator, TA_VEC_LAYOUT(ta_invoker_registration));
     ta_address_table_init(&system->addresses, config->allocator);
-    ta_result result = ta_atom_table_init(&system->atoms, config->allocator);
+    ta_result result = ta_session_table_init(&system->sessions, config->allocator);
+    if (result == TA_OK) {
+        result = ta_atom_table_init(&system->atoms, config->allocator);
+    }
     if (result != TA_OK) {
+        ta_session_table_destroy(&system->sessions);
         ta_mem_free(config->allocator, system,
                     &(ta_allocator_free_params){ .size = sizeof(ta_system), .alignment = _Alignof(ta_system) });
         return result;
@@ -10220,6 +10519,8 @@ TA_API void ta_system_destroy(ta_system *system) {
     ta_vec_destroy(&system->invokers);
     ta_arena_destroy(&system->scratch);
     ta_interpreter_queue_cache_destroy(system);
+    /* Unloaded sessions hold addresses; give them back before the table goes. */
+    ta_session_table_destroy(&system->sessions);
     /* Last: everything above gave its addresses back. */
     ta_address_table_destroy(&system->addresses);
     ta_event_name_table_destroy(&system->event_names);
@@ -11078,8 +11379,11 @@ static ta_external_event_submit_status ta_submit_external(ta_system *system, con
     if (system->external_events.v == NULL) {
         return TA_EXTERNAL_EVENT_ERROR;
     }
+    /* A session ID that is not a resident runtime ID resolves here (ADR 0066). */
+    ta_actor_ref destination;
+    bool routed_by_name = ta_session_route(system, &params->destination, &destination);
     ta_external_delivery delivery = {
-        .destination = params->destination,
+        .destination = destination,
         .event = {
             .name = params->event,
             .type = TA_EVENT_EXTERNAL,
@@ -11089,11 +11393,16 @@ static ta_external_event_submit_status ta_submit_external(ta_system *system, con
             .data = *params->data,
         },
     };
-    return system->external_events.v->submit(system->external_events.self,
-                                             &(ta_external_event_submit_params){
-                                                 .delivery = &delivery,
-                                                 .fault = params->fault,
-                                             });
+    ta_external_event_submit_status status =
+        system->external_events.v->submit(system->external_events.self,
+                                          &(ta_external_event_submit_params){
+                                              .delivery = &delivery,
+                                              .fault = params->fault,
+                                          });
+    if (routed_by_name) {
+        ta_actor_ref_release(&destination);
+    }
+    return status;
 }
 
 static ta_result ta_communication_error(ta_system *system, ta_actor *actor, const ta_error_params *params) {
@@ -11320,13 +11629,14 @@ static bool ta_send_destination(ta_interpreter *it, const ta_scxml_target *targe
     switch (target->kind) {
         case TA_SCXML_TARGET_SELF:
             /*
-             * A send to self is a delivery to *this* session, so it names the
-             * runtime ID and needs no directory to resolve — a named actor's
-             * own timers must not depend on one. Reconstruction rebinds such
-             * a send to the new session (ta_image_rebind_self); what a
-             * receiver replies to is the origin, which is the address.
+             * A send to self names *this* session by its session ID (ADR
+             * 0066), which a reload does not change. While the session is
+             * resident and never reloaded it is also the runtime ID, so it
+             * needs no directory; otherwise submission resolves it through
+             * the session table (ta_session_route). What a receiver replies
+             * to is the origin, which for a named actor is the address.
              */
-            *out = (ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = it->actor->record.id };
+            *out = (ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = it->actor->session_id };
             return true;
         case TA_SCXML_TARGET_PARENT:
             if (it->actor->sparse == NULL || !it->actor->sparse->has_parent) {

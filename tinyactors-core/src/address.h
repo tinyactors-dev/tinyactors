@@ -25,6 +25,8 @@ struct ta_address {
     /* Null for a detached record: a session image's own copy (see below). */
     ta_address_table *table;
     struct ta_address *next;
+    /* The unloaded session at this address (ADR 0066), or null. */
+    struct ta_session_node *unloaded;
     uint32_t references;
     uint32_t hash;
     uint32_t family_len;

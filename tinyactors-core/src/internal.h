@@ -5,6 +5,7 @@
 #include "tree.h"
 #include "atom.h"
 #include "address.h"
+#include "session.h"
 #include "event_name.h"
 #include "event.h"
 #include "fault.h"

@@ -1149,6 +1149,13 @@
           }
         },
         {
+          "name": "session_id",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "The SCXML session this actor holds, as _sessionid reads it (ADR 0066): the runtime ID the session was spawned with, kept across unload and load. It equals `actor` until the session has been reloaded."
+        },
+        {
           "name": "self",
           "type": {
             "type": "ta_actor_ref"
@@ -1308,55 +1315,57 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 160,
+          "size": 168,
           "align": 8,
           "offsets": {
             "actor": 0,
-            "self": 8,
-            "definition_id": 24,
-            "definition": 32,
-            "residency": 64,
-            "published": 68,
-            "active_state_count": 72,
-            "macrostep_in_progress": 76,
-            "microstep_in_progress": 77,
-            "current_event": 80,
-            "internal_events": 88,
-            "internal_count": 96,
-            "invokes": 104,
-            "invoke_count": 112,
-            "delayed_sends": 120,
-            "delayed_send_count": 128,
-            "has_completion": 132,
-            "completion": 136,
-            "final_state": 144,
-            "allocated_bytes": 152
+            "session_id": 8,
+            "self": 16,
+            "definition_id": 32,
+            "definition": 40,
+            "residency": 72,
+            "published": 76,
+            "active_state_count": 80,
+            "macrostep_in_progress": 84,
+            "microstep_in_progress": 85,
+            "current_event": 88,
+            "internal_events": 96,
+            "internal_count": 104,
+            "invokes": 112,
+            "invoke_count": 120,
+            "delayed_sends": 128,
+            "delayed_send_count": 136,
+            "has_completion": 140,
+            "completion": 144,
+            "final_state": 152,
+            "allocated_bytes": 160
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 112,
+          "size": 120,
           "align": 8,
           "offsets": {
             "actor": 0,
-            "self": 8,
-            "definition_id": 24,
-            "definition": 32,
-            "residency": 48,
-            "published": 52,
-            "active_state_count": 56,
-            "macrostep_in_progress": 60,
-            "microstep_in_progress": 61,
-            "current_event": 64,
-            "internal_events": 68,
-            "internal_count": 72,
-            "invokes": 76,
-            "invoke_count": 80,
-            "delayed_sends": 84,
-            "delayed_send_count": 88,
-            "has_completion": 92,
-            "completion": 96,
-            "final_state": 100,
-            "allocated_bytes": 104
+            "session_id": 8,
+            "self": 16,
+            "definition_id": 32,
+            "definition": 40,
+            "residency": 56,
+            "published": 60,
+            "active_state_count": 64,
+            "macrostep_in_progress": 68,
+            "microstep_in_progress": 69,
+            "current_event": 72,
+            "internal_events": 76,
+            "internal_count": 80,
+            "invokes": 84,
+            "invoke_count": 88,
+            "delayed_sends": 92,
+            "delayed_send_count": 96,
+            "has_completion": 100,
+            "completion": 104,
+            "final_state": 108,
+            "allocated_bytes": 112
           }
         }
       }
@@ -12541,7 +12550,7 @@
     },
     {
       "name": "ta_scxml_target_parse",
-      "doc": "The SCXML Event I/O Processor target URIs (ADR 0044). Core owns the grammar, so a literal `target`, an evaluated `targetexpr`, and the text core writes for `$_event.origin` agree by construction:\n\n#_internal                 the sender's own internal queue #_parent                   the invoking parent session #_scxml_ <session >          a session by its runtime ID #_actor_ <family >/ <name >    a named actor by its logical address #_ <invokeid >               an invocation of the sending session\n\nA session URI whose text is not a session ID names no session: it parses as runtime actor 0, which never exists, so a send to it is inaccessible (SCXML C.1) rather than invalid. TA_ERR_INVALID means an invalid target, which a send reports as error.execution.\n\nA named actor target holds a reference to its interned address (ADR 0065); release the target with ta_scxml_target_release(). Interning a new address can fail with TA_ERR_NOMEM.",
+      "doc": "The SCXML Event I/O Processor target URIs (ADR 0044). Core owns the grammar, so a literal `target`, an evaluated `targetexpr`, and the text core writes for `$_event.origin` agree by construction:\n\n#_internal                 the sender's own internal queue #_parent                   the invoking parent session #_scxml_ <session >          a session by its session ID (ADR 0066) #_actor_ <family >/ <name >    a named actor by its logical address #_ <invokeid >               an invocation of the sending session\n\nA session URI whose text is not a session ID names no session: it parses as runtime actor 0, which never exists, so a send to it is inaccessible (SCXML C.1) rather than invalid. TA_ERR_INVALID means an invalid target, which a send reports as error.execution.\n\nA named actor target holds a reference to its interned address (ADR 0065); release the target with ta_scxml_target_release(). Interning a new address can fail with TA_ERR_NOMEM.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -13723,7 +13732,7 @@
     },
     {
       "name": "ta_actor_reconstruct",
-      "doc": "Reconstructs an image under a fresh runtime ID without reading or changing the actor directory. For a named image, the logical self-address is kept; sends to that address follow the directory's current route.",
+      "doc": "Reconstructs an image under a fresh runtime ID without reading or changing the actor directory. For a named image, the logical self-address is kept; sends to that address follow the directory's current route. The image's session continues, keeping its session ID, unless a resident session holds that ID; then this is a new session (ADR 0066). ta_actor_load() always continues the session.",
       "public": true,
       "static_inline": false,
       "implemented": true,

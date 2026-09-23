@@ -615,20 +615,15 @@ TinyactorsTest.scenarios 'virtual actor paging, delayed sends', chart: :timed_pa
   end
 end
 
-# Delayed sends to self across paging, one case at a time. A send to self has
-# no target, or targets #_scxml_<_sessionid>; both resolve, when the send
-# executes, to the sender's runtime ID (src/interpreter.c,
-# ta_send_destination; src/scxml_uri.c). Unloading moves the send into the
-# image, and loading rebinds a reference to the captured runtime ID to the
-# new session (ta_image_rebind_self), so the send reaches the reloaded actor,
-# which has a new runtime ID. Nothing else is rebound: a send to another
-# actor by its runtime ID stays stale once that actor reloads (ADR 0052,
-# "References to the captured runtime ID remain stale").
-#
-# _sessionid is the runtime ID (src/datamodel.c, TA_DM_TEXT_SESSION_ID), so
-# it changes across a reload, and #_scxml_<_sessionid> always names the
-# current session. docs/manual/virtual-actors.md says "_sessionid ... come[s]
-# from the image", which the code does not do; ADR 0052 agrees with the code.
+# Delayed sends to a session across paging, one case at a time (ADR 0066).
+# A session's ID is the runtime ID it was spawned with, and it outlives
+# residency: loading keeps it, so _sessionid is constant for the life of the
+# session. A send to self (no target) and a send to #_scxml_<_sessionid>
+# both name the session by that ID, which no reload changes. When the send
+# is submitted, core resolves a session ID that is not a resident runtime
+# ID through its session table: to the reloaded session's runtime ID, or,
+# while the session is unloaded, to its address, so the host pages it in.
+# A session that no longer exists stays unreachable: error.communication.
 TinyactorsTest.chart :self_pager do
   data t: 0
   data k: []
@@ -706,11 +701,14 @@ TinyactorsTest.scenarios 'virtual actor paging, sends to self', chart: :self_pag
       owner.deliver 'self_arm', data: { delay: '1000ms', k: 1 }
       owner.deliver 'session_arm', data: { delay: '1000ms', k: 2 }
       ids = [owner.handle]
+      session = owner.inspect_actor[:session_id]
+      assert_equal owner.handle, session, 'a fresh session is named by its runtime ID'
       3.times do
         cycle_residency(owner)
         ids << owner.handle
-        assert_equal [owner.handle] * 2, VirtualActorPagingScenarios.send_destinations(owner),
-                     'both sends to self go to the reloaded runtime ID'
+        assert_equal session, owner.inspect_actor[:session_id], 'a reload keeps the session ID'
+        assert_equal [session] * 2, VirtualActorPagingScenarios.send_destinations(owner),
+                     'both sends to self name the session, which a reload does not change'
       end
       assert_equal ids.uniq, ids, "every reload gives a new runtime ID: #{ids}"
       advance_time(1000)
@@ -722,17 +720,35 @@ TinyactorsTest.scenarios 'virtual actor paging, sends to self', chart: :self_pag
     end
   end
 
-  scenario '_sessionid is the current runtime ID, before and after a reload' do
+  %i[self_pager self_pager_js].each do |chart|
+    scenario "#{chart}: _sessionid is constant across reloads" do
+      recording_router(mode: :direct, directory: true)
+      actor = spawn chart, name: 'a'
+      first = actor.handle
+      session = actor.inspect_actor[:session_id]
+      assert_equal first, session, 'a fresh session is named by its runtime ID'
+      2.times do
+        cycle_residency(actor)
+        assert first != actor.handle, 'a reload gives a new runtime ID'
+        assert_equal session, actor.inspect_actor[:session_id], 'but keeps the session ID'
+      end
+      actor.deliver 'session_arm', data: { delay: '10ms', k: 3 }
+      assert_equal [session], VirtualActorPagingScenarios.send_destinations(actor),
+                   '#_scxml_<_sessionid> names the first runtime ID: the session'
+      advance_time(10)
+      assert_equal [3], actor.data('.k'), '#_scxml_<_sessionid> reaches the reloaded session'
+    end
+  end
+
+  scenario '_sessionid reads the same text before and after a reload' do
     recording_router(mode: :direct, directory: true)
     actor = spawn :self_pager, name: 'a'
     actor.deliver 'remember'
-    assert_equal actor.handle.to_s, actor.data('.sid').to_s
+    before = actor.data('.sid').to_s
+    assert_equal actor.handle.to_s, before
     cycle_residency(actor)
     actor.deliver 'remember'
-    assert_equal actor.handle.to_s, actor.data('.sid').to_s, 'after a reload _sessionid names the new session'
-    actor.deliver 'session_arm', data: { delay: '10ms', k: 3 }
-    advance_time(10)
-    assert_equal [3], actor.data('.k'), '#_scxml_<_sessionid> reaches the reloaded session'
+    assert_equal before, actor.data('.sid').to_s, 'after a reload _sessionid is unchanged'
   end
 
   scenario 'a delayed send to #_internal is error.execution and schedules nothing' do
@@ -744,19 +760,55 @@ TinyactorsTest.scenarios 'virtual actor paging, sends to self', chart: :self_pag
     assert_equal 0, actor.data('.t')
   end
 
-  scenario 'a send to another actor by runtime ID is not rebound, and goes stale' do
+  scenario 'a send to another session reaches it after it reloads' do
     router = recording_router(mode: :direct, directory: true)
     sender = spawn :self_pager, name: 'sender'
     target = spawn :self_pager, name: 'target'
-    old_target = target.handle
-    sender.deliver 'to_arm', data: { to: "#_scxml_#{old_target}", delay: '100ms', k: 4 }
+    session = target.inspect_actor[:session_id]
+    sender.deliver 'to_arm', data: { to: "#_scxml_#{session}", delay: '100ms', k: 4 }
     cycle_residency(target)
     cycle_residency(sender)
-    assert_equal [old_target], VirtualActorPagingScenarios.send_destinations(sender),
-                 'only references to the sender itself are rebound'
+    assert_equal [session], VirtualActorPagingScenarios.send_destinations(sender),
+                 'the send names the target session, which its reload did not change'
     advance_time(100)
-    assert_equal 0, target.data('.t'), 'the reloaded target does not receive a send to its old runtime ID'
-    assert_equal ['error.communication'], sender.data('.errs'), 'the sender learns the target is gone'
+    assert_equal 1, target.data('.t'), 'the reloaded target session receives the send once'
+    assert_equal [], sender.data('.errs')
+    submits = router.journal.select { |entry| entry[:op] == 'submit' }
+    assert_equal [{ kind: 'runtime', runtime: target.handle }], submits.map { |entry| entry[:destination] },
+                 'core resolved the session to its current runtime ID'
+  end
+
+  scenario 'a send to an unloaded session goes by its address, so the host pages it in' do
+    router = recording_router(mode: :hold, directory: true)
+    sender = spawn :self_pager, name: 'sender'
+    target = spawn :self_pager, name: 'target'
+    session = target.inspect_actor[:session_id]
+    sender.deliver 'to_arm', data: { to: "#_scxml_#{session}", delay: '100ms', k: 6 }
+    image = capture(target)
+    binding = target.data
+    core('ta_actor_unload', { result: unload(target, image) })
+    set_time(now + 100)
+    core('ta_system_dispatch_due', ta.system.dispatch_due(system: system_handle, budget: 1))
+    submit = router.journal.find { |entry| entry[:op] == 'submit' }
+    assert_equal 'named', submit.dig(:destination, :kind), 'the unloaded session is addressed by name'
+    assert_equal 'target', submit.dig(:destination, :name)
+    core('ta_actor_load', { result: load(target, image, binding: binding) })
+    destroy_image(image)
+    assert_equal session, target.inspect_actor[:session_id], 'the paged-in actor continues the session'
+    router.held.each { |delivery| router.release(delivery.fetch(:id)) }
+    run_system('after paging the target in')
+    assert_equal [6], target.data('.k'), 'the paged-in session receives the send once'
+  end
+
+  scenario 'a send to a session that ended is error.communication' do
+    router = recording_router(mode: :direct, directory: true)
+    sender = spawn :self_pager, name: 'sender'
+    target = spawn :self_pager, name: 'target'
+    session = target.inspect_actor[:session_id]
+    sender.deliver 'to_arm', data: { to: "#_scxml_#{session}", delay: '100ms', k: 4 }
+    target.destroy
+    advance_time(100)
+    assert_equal ['error.communication'], sender.data('.errs'), 'the sender learns the session is gone'
     assert_equal %w[err_not_found], router.journal.select { |entry| entry[:op] == 'submit' }.map { |entry| entry[:result] }
   end
 
@@ -769,7 +821,7 @@ TinyactorsTest.scenarios 'virtual actor paging, sends to self', chart: :self_pag
     old = actor.handle
     cycle_residency(actor)
     assert old != actor.handle, 'a reload gives a new runtime ID'
-    assert_equal [actor.handle], VirtualActorPagingScenarios.send_destinations(actor)
+    assert_equal [old], VirtualActorPagingScenarios.send_destinations(actor), 'the send to self names the session'
     nil while actor.resume(budget: 1000, action_budget: 1) == 'paused'
     assert_equal 1, actor.data('.after'), 'the rest of the microstep ran once'
     advance_time(100)
@@ -778,9 +830,9 @@ TinyactorsTest.scenarios 'virtual actor paging, sends to self', chart: :self_pag
 
   # A send to self that the router refuses is submitted: it stays with its
   # owner, not in the owner's image (ADR 0054). When the owner pages out
-  # before the retry, the send moves to the system's list and names its
-  # owner's address instead of the runtime ID that goes stale, so the retry
-  # reaches the reloaded owner through the directory.
+  # before the retry, the send moves to the system's list. It names the
+  # session by its session ID, so its retry reaches the reloaded owner
+  # (ADR 0066).
   scenario 'a refused send to self survives its owner paging out' do
     router = recording_router(mode: :hold, directory: true)
     owner = spawn :self_pager, name: 'a'

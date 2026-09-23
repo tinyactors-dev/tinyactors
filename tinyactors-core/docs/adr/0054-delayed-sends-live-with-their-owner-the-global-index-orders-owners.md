@@ -192,3 +192,9 @@ the text above, as of the follow-up commits `809b64a`, `a14d8be` and
   more. Tested by `delayed_send_test.c`
   (`test_refused_self_send_follows_its_owner_across_unload`) and the paging
   scenario "a refused send to self survives its owner paging out".
+
+  **Superseded by ADR 0066** (2026-09-23): a send to self now names its
+  session by session ID, which no reload changes, and submission resolves
+  the ID through the session table, by address while the owner is unloaded
+  and by runtime ID once it is loaded again. `ta_timer_readdress_self()` is
+  removed, and `ta_image_rebind_self()` no longer touches destinations.

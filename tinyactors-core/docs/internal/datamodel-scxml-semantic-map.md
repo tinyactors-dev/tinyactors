@@ -28,7 +28,7 @@ This file records how SCXML 1.0 data semantics map to the `ta` runtime without r
 | inline `<content>` | `import_literal` |
 | `<donedata>` | normal content/parameter materialization attached to done event |
 | `_event` | protected system-variable view of core current event |
-| `_sessionid` | actor/session identity exposed by host view |
+| `_sessionid` | the session ID: the runtime ID the session was spawned with, kept across reloads (ADR 0066) |
 | `_name` | definition/machine name exposed by host view |
 | `_ioprocessors` | host-view metadata materialized by plugin |
 | `_x` | host platform values materialized by plugin |

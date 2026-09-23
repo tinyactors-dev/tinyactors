@@ -1,0 +1,323 @@
+/*
+ * ADR 0066: a session ID outlives residency. A session is named by the
+ * runtime ID it was spawned with; load keeps it; reconstruct keeps it unless
+ * a resident session holds it; and an SCXML send to it resolves through the
+ * session table: to the reloaded session's runtime ID, or to the address of
+ * an unloaded one.
+ *
+ * Includes the amalgamation, so it can look at the session table itself.
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "../include/tinyactors.c"
+
+static int failures;
+
+#define CHECK(condition)                                                        \
+    do {                                                                        \
+        if (!(condition)) {                                                     \
+            fprintf(stderr, "%s:%d: check failed: %s\n", __FILE__, __LINE__, #condition); \
+            failures += 1;                                                      \
+        }                                                                       \
+    } while (0)
+
+#define STR(text) { .ptr = text, .len = sizeof(text) - 1u }
+
+static long live_blocks;
+static size_t largest_block;
+
+static void *count_alloc(void *self, size_t size, size_t alignment) {
+    (void)self;
+    (void)alignment;
+    void *block = calloc(1, size);
+    largest_block = size > largest_block ? size : largest_block;
+    live_blocks += block != NULL ? 1 : 0;
+    return block;
+}
+
+static void count_free(void *self, const ta_allocator_free_params *params) {
+    (void)self;
+    if (params->ptr != NULL) {
+        live_blocks -= 1;
+        free(params->ptr);
+    }
+}
+
+static const ta_allocator_vtable count_vtable = { .alloc = count_alloc, .free = count_free };
+static const ta_allocator test_allocator = { .self = NULL, .v = &count_vtable };
+
+/* A one-address directory, enough for one named actor to unload and load. */
+typedef struct {
+    bool used;
+    ta_actor_directory_entry entry;
+} one_directory;
+
+static ta_result dir_claim(void *self, const ta_actor_directory_claim_params *params) {
+    one_directory *dir = self;
+    if (dir->used) {
+        return TA_ERR_STALE;
+    }
+    dir->used = true;
+    dir->entry = params->entry;
+    return TA_OK;
+}
+
+static ta_result dir_resolve(void *self, const ta_actor_directory_resolve_params *params) {
+    one_directory *dir = self;
+    *params->out = dir->used ? dir->entry : (ta_actor_directory_entry){ .kind = TA_ACTOR_DIRECTORY_NONE };
+    return TA_OK;
+}
+
+static bool same_entry(ta_actor_directory_entry left, ta_actor_directory_entry right) {
+    return left.kind == right.kind && (left.kind != TA_ACTOR_DIRECTORY_RESIDENT || left.actor == right.actor);
+}
+
+static ta_result dir_replace(void *self, const ta_actor_directory_replace_params *params) {
+    one_directory *dir = self;
+    if (!dir->used || !same_entry(dir->entry, params->expected)) {
+        return TA_ERR_STALE;
+    }
+    dir->entry = params->replacement;
+    return TA_OK;
+}
+
+static ta_result dir_remove(void *self, const ta_actor_directory_remove_params *params) {
+    one_directory *dir = self;
+    if (!dir->used || !same_entry(dir->entry, params->expected)) {
+        return TA_ERR_STALE;
+    }
+    dir->used = false;
+    return TA_OK;
+}
+
+static const ta_actor_directory_vtable dir_vtable = {
+    .claim = dir_claim, .resolve = dir_resolve, .replace = dir_replace, .remove = dir_remove,
+};
+
+static const ta_scxml_state_spec idle_chart[] = {
+    { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("idle") },
+    {0},
+};
+
+typedef struct {
+    ta_system *system;
+    ta_definition_id definition;
+    one_directory dir;
+} fixture;
+
+static void start(fixture *f) {
+    *f = (fixture){0};
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = test_allocator }, &f->system) == TA_OK);
+    CHECK(ta_system_set_actor_directory(f->system, (ta_actor_directory){ .self = &f->dir, .v = &dir_vtable }) ==
+          TA_OK);
+    ta_definition_identity identity = {
+        .family = { STR("idle") },
+        .revision = { .ptr = (const uint8_t *)"v1", .len = 2 },
+    };
+    ta_definition *definition = NULL;
+    CHECK(ta_definition_compile_spec(
+              f->system, &(ta_definition_compile_params){
+                             .spec = &(ta_scxml_spec){ .datamodel = STR("null"), .identity = &identity,
+                                                       .states = idle_chart },
+                             .datamodel = ta_null_datamodel(),
+                             .allocator = test_allocator,
+                             .out = &definition,
+                         }) == TA_OK);
+    CHECK(ta_system_register_definition(f->system, definition, &f->definition) == TA_OK);
+}
+
+static const ta_actor_address the_address = { .family = { STR("idle") }, .name = STR("one") };
+
+static ta_actor_id spawn(fixture *f, const ta_actor_address *address) {
+    ta_actor_id id = 0;
+    CHECK(ta_actor_spawn(f->system, &(ta_actor_spawn_params){ .definition = f->definition, .address = address,
+                                                            .out = &id }) == TA_OK);
+    return id;
+}
+
+static uint64_t session_of(fixture *f, ta_actor_id actor) {
+    ta_actor_inspection view;
+    CHECK(ta_actor_inspect(f->system, actor, &view) == TA_OK);
+    return view.session_id;
+}
+
+static ta_session_image *unload(fixture *f, ta_actor_id actor) {
+    ta_session_image *image = NULL;
+    CHECK(ta_actor_capture(f->system, &(ta_actor_capture_params){ .actor = actor, .out = &image }) == TA_OK);
+    CHECK(ta_actor_unload(f->system, &(ta_actor_unload_params){ .actor = actor, .image = image }) == TA_OK);
+    return image;
+}
+
+static ta_actor_id load(fixture *f, ta_session_image *image) {
+    ta_actor_id id = 0;
+    CHECK(ta_actor_load(f->system, &(ta_actor_load_params){ .image = image, .out = &id }) == TA_OK);
+    ta_session_image_destroy(image);
+    return id;
+}
+
+/* Where core would submit an SCXML send to session `id` right now. */
+static ta_actor_ref route(fixture *f, uint64_t id, bool *named) {
+    ta_actor_ref out;
+    *named = ta_session_route(f->system, &(ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = id }, &out);
+    return out;
+}
+
+static void finish(fixture *f) {
+    ta_system_destroy(f->system);
+    CHECK(live_blocks == 0);
+}
+
+/* The session ID is the first runtime ID, across any number of reloads. */
+static void test_load_keeps_the_session(void) {
+    fixture f;
+    start(&f);
+    ta_actor_id first = spawn(&f, &the_address);
+    CHECK(session_of(&f, first) == first);
+    ta_actor_id current = first;
+    for (int round = 0; round < 3; round += 1) {
+        ta_session_image *image = unload(&f, current);
+        bool named = false;
+        ta_actor_ref out = route(&f, first, &named);
+        CHECK(named && out.kind == TA_ACTOR_REF_NAMED); /* unloaded: by address */
+        CHECK(ta_str_equal(ta_address_view(out.as.named).name, the_address.name));
+        ta_actor_ref_release(&out);
+        ta_actor_id loaded = load(&f, image);
+        CHECK(loaded != current && loaded != first);
+        CHECK(session_of(&f, loaded) == first);
+        out = route(&f, first, &named);
+        CHECK(!named && out.kind == TA_ACTOR_REF_RUNTIME && out.as.runtime == loaded); /* reloaded */
+        current = loaded;
+    }
+    /* One entry: the resident reloaded session; the parked entries are gone. */
+    CHECK(f.system->sessions.count == 1);
+    finish(&f);
+}
+
+/* A runtime ID is never issued twice, so no new session takes an old ID. */
+static void test_session_ids_are_unique(void) {
+    fixture f;
+    start(&f);
+    ta_actor_id named = spawn(&f, &the_address);
+    uint64_t kept = session_of(&f, named);
+    ta_actor_id loaded = load(&f, unload(&f, named)); /* frees the first slot */
+    for (int round = 0; round < 50; round += 1) {
+        ta_actor_id fresh = spawn(&f, NULL);
+        CHECK(session_of(&f, fresh) == fresh);
+        CHECK(session_of(&f, fresh) != kept);
+        CHECK(ta_actor_destroy(f.system, fresh) == TA_OK);
+    }
+    CHECK(session_of(&f, loaded) == kept);
+    finish(&f);
+}
+
+/* Reconstruct keeps the image's session unless a resident session holds it. */
+static void test_reconstruct_keeps_a_free_session(void) {
+    fixture f;
+    start(&f);
+    ta_actor_id original = spawn(&f, NULL);
+    ta_session_image *image = NULL;
+    CHECK(ta_actor_capture(f.system, &(ta_actor_capture_params){ .actor = original, .out = &image }) == TA_OK);
+
+    ta_actor_id copy = 0;
+    CHECK(ta_actor_reconstruct(f.system, &(ta_actor_reconstruct_params){ .image = image, .out = &copy }) == TA_OK);
+    CHECK(session_of(&f, copy) == copy); /* the original holds its session: a new one */
+    CHECK(ta_actor_destroy(f.system, copy) == TA_OK);
+
+    CHECK(ta_actor_destroy(f.system, original) == TA_OK);
+    CHECK(ta_actor_reconstruct(f.system, &(ta_actor_reconstruct_params){ .image = image, .out = &copy }) == TA_OK);
+    CHECK(session_of(&f, copy) == original); /* the session is free: it continues */
+    bool named = false;
+    ta_actor_ref out = route(&f, original, &named);
+    CHECK(!named && out.as.runtime == copy);
+    ta_session_image_destroy(image);
+    finish(&f);
+}
+
+/* Removing an unloaded actor ends its session. */
+static void test_remove_unloaded_ends_the_session(void) {
+    fixture f;
+    start(&f);
+    ta_actor_id actor = spawn(&f, &the_address);
+    ta_session_image *image = unload(&f, actor);
+    CHECK(f.system->sessions.count == 1);
+    CHECK(ta_actor_remove_unloaded(f.system, &(ta_actor_remove_unloaded_params){ .address = &the_address }) ==
+          TA_OK);
+    CHECK(f.system->sessions.count == 0);
+    bool named = false;
+    ta_actor_ref out = route(&f, actor, &named);
+    CHECK(!named && out.kind == TA_ACTOR_REF_RUNTIME && out.as.runtime == actor); /* stale, as before */
+    ta_session_image_destroy(image);
+    finish(&f);
+}
+
+/* A system destroyed with an unloaded session frees its entry. */
+static void test_destroy_frees_a_parked_session(void) {
+    fixture f;
+    start(&f);
+    ta_session_image *image = unload(&f, spawn(&f, &the_address));
+    ta_session_image_destroy(image);
+    finish(&f);
+}
+
+/*
+ * The table at scale: 200,000 sessions. Growth never copies it (no block
+ * larger than one page of buckets), every entry is found, a resident entry
+ * shadows an unloaded one with the same ID, and removal empties it.
+ */
+static void test_the_table_grows_without_copying(void) {
+    enum { COUNT = 200000 };
+    ta_session_table table;
+    CHECK(ta_session_table_init(&table, test_allocator) == TA_OK);
+    ta_session_node **nodes = calloc(COUNT, sizeof(*nodes));
+    ta_actor stand_in;
+    largest_block = 0;
+    for (uint32_t index = 0; index < COUNT; index += 1u) {
+        CHECK(ta_session_node_new(&table, &nodes[index]) == TA_OK);
+        nodes[index]->id = ta_actor_id_make(index, 1u + index % 7u);
+        nodes[index]->actor = index % 2u == 0 ? &stand_in : NULL;
+        ta_session_insert(&table, nodes[index]);
+    }
+    CHECK(largest_block <= TA_SESSION_PAGE_BUCKETS * sizeof(ta_session_node *));
+    CHECK(table.count == COUNT);
+    uint32_t found = 0;
+    for (uint32_t index = 0; index < COUNT; index += 1u) {
+        found += ta_session_find(&table, nodes[index]->id) == nodes[index] ? 1u : 0u;
+    }
+    CHECK(found == COUNT);
+    CHECK(ta_session_find(&table, ta_actor_id_make(COUNT + 1u, 1u)) == NULL);
+    /* A resident entry wins over an unloaded one with the same ID. */
+    ta_session_node *resident = NULL;
+    CHECK(ta_session_node_new(&table, &resident) == TA_OK);
+    resident->id = nodes[1]->id; /* nodes[1] is unloaded */
+    resident->actor = &stand_in;
+    ta_session_insert(&table, resident);
+    CHECK(ta_session_find(&table, resident->id) == resident);
+    ta_session_remove(&table, resident);
+    ta_session_node_free(&table, resident);
+    CHECK(ta_session_find(&table, nodes[1]->id) == nodes[1]);
+    for (uint32_t index = 0; index < COUNT; index += 1u) {
+        ta_session_remove(&table, nodes[index]);
+        ta_session_node_free(&table, nodes[index]);
+    }
+    CHECK(table.count == 0);
+    ta_session_table_destroy(&table);
+    free(nodes);
+    CHECK(live_blocks == 0);
+}
+
+int main(void) {
+    test_load_keeps_the_session();
+    test_session_ids_are_unique();
+    test_reconstruct_keeps_a_free_session();
+    test_remove_unloaded_ends_the_session();
+    test_destroy_frees_a_parked_session();
+    test_the_table_grows_without_copying();
+    if (failures != 0) {
+        fprintf(stderr, "session id test: %d check(s) failed\n", failures);
+        return 1;
+    }
+    puts("tinyactors-core session id test passed");
+    return 0;
+}

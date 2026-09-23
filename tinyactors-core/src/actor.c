@@ -256,6 +256,10 @@ void ta_actor_free(ta_system *system, ta_actor *actor) {
     /* A named actor holds a reference to its address; a runtime ref holds nothing. */
     ta_actor_ref_release(&actor->record.self);
     ta_interpreter_release_actor_state(system, actor);
+    if (actor->session_node != NULL) {
+        ta_session_remove(&system->sessions, actor->session_node);
+        ta_session_node_free(&system->sessions, actor->session_node);
+    }
     /* The record, the session storage and the instance are one block (ADR 0063). */
     ta_mem_free(system->allocator, actor,
                 &(ta_allocator_free_params){ .size = definition->actor_block_bytes,
@@ -393,6 +397,12 @@ ta_result ta_actor_remove_unloaded(ta_system *system, const ta_actor_remove_unlo
             .address = address,
             .expected = { .kind = TA_ACTOR_DIRECTORY_UNLOADED },
         });
+    /* The unloaded session ends with its name (ADR 0066). */
+    if (result == TA_OK && address->unloaded != NULL) {
+        ta_session_node *parked = address->unloaded;
+        ta_session_remove(&system->sessions, parked);
+        ta_session_node_free(&system->sessions, parked);
+    }
     ta_address_release(address);
     return result;
 }
@@ -473,6 +483,8 @@ ta_result ta_actor_new(ta_system *system, ta_definition *definition, ta_actor **
         .self = { .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = id },
         .residency = TA_ACTOR_RUNNING,
     };
+    /* A new session is named by the runtime ID it starts with (ADR 0066). */
+    actor->session_id = id;
     *out = actor;
     return TA_OK;
 }
@@ -786,6 +798,7 @@ ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_inspectio
     }
     *out = (ta_actor_inspection){
         .actor = id,
+        .session_id = actor->session_id,
         .self = actor->record.self,
         .definition_id = definition->id,
         .definition = definition->identity,

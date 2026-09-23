@@ -22,6 +22,8 @@ struct ta_session_image {
 
     /* Local freshness: which actor this came from, and at which epoch. */
     ta_actor_id source_actor;
+    /* The session this image continues (ADR 0066). */
+    uint64_t session_id;
     uint64_t source_epoch;
 
     ta_actor_ref self;
@@ -286,6 +288,7 @@ ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_params *par
     *image = (ta_session_image){
         .allocator = system->allocator,
         .source_actor = actor->record.id,
+        .session_id = actor->session_id,
         .source_epoch = actor->session_epoch,
         .self = actor->record.self,
         .definition = actor->definition->identity,
@@ -453,7 +456,8 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
         /* A fresh timer ID; the SCXML send ID that <cancel> names is kept. */
         send.id = 0;
         send.owner = actor->record.id;
-        ta_image_rebind_self(&send.destination, image->source_actor, actor->record.id);
+        /* A destination naming this session is its session ID and survives a
+         * reload as it is; only an unnamed actor's runtime origin moves. */
         ta_image_rebind_self(&send.origin, image->source_actor, actor->record.id);
         ta_value_retain(&send.target);
         ta_value_retain(&send.data);
@@ -521,6 +525,25 @@ ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_par
         return result;
     }
     ta_actor_id id = actor->record.id;
+    /*
+     * The image's session continues here unless a resident session holds
+     * its ID (ADR 0066): two live sessions never share one. Its ID is not
+     * this actor's runtime ID, so the session table finds it.
+     */
+    if (image->session_id != 0 && !ta_session_resident(system, image->session_id)) {
+        ta_session_node *node = NULL;
+        result = ta_session_node_new(&system->sessions, &node);
+        if (result != TA_OK) {
+            ta_actor_release_slot(system, id);
+            ta_actor_free(system, actor);
+            return result;
+        }
+        node->id = image->session_id;
+        node->actor = actor;
+        ta_session_insert(&system->sessions, node);
+        actor->session_id = image->session_id;
+        actor->session_node = node;
+    }
 
     /* The interpreter state the image describes, restored before anything
      * fallible runs against it. */
@@ -665,6 +688,12 @@ ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params *param
     if (result != TA_OK) {
         return result;
     }
+    /* And the entry that keeps the session findable while it is out (ADR 0066). */
+    ta_session_node *parked = NULL;
+    result = ta_session_node_new(&system->sessions, &parked);
+    if (result != TA_OK) {
+        return result;
+    }
 
     result = ta_actor_directory_swap(
         system,
@@ -675,6 +704,7 @@ ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params *param
         });
     if (result != TA_OK) {
         /* Still resident, still routable, and the same image will do. */
+        ta_session_node_free(&system->sessions, parked);
         return result;
     }
 
@@ -683,14 +713,23 @@ ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params *param
      * live in the image now and must not also sit in the resident heap,
      * where they would fire for an actor that is not there; a send already
      * handed to the router is an envelope of its own and stays, exactly as
-     * it does when a session ends. One sent to this session itself names it
-     * by address from here on, so its retry finds the session that holds
-     * the address next rather than this runtime ID, which goes stale.
+     * it does when a session ends. One sent to this session names it by
+     * session ID, and the parked entry routes its retry by address to
+     * whatever session loads here next (ADR 0066).
      */
-    ta_timer_readdress_self(ta_actor_timers(actor), actor->record.id, &actor->record.self);
+    ta_address *address = actor->record.self.as.named;
+    parked->id = actor->session_id;
+    parked->address = address;
+    ta_address_retain(address);
     ta_timer_orphan(&system->timers, ta_actor_timers(actor));
     ta_actor_release_slot(system, actor->record.id);
     ta_actor_free(system, actor);
+    if (address->unloaded != NULL) {
+        ta_session_remove(&system->sessions, address->unloaded);
+        ta_session_node_free(&system->sessions, address->unloaded);
+    }
+    address->unloaded = parked;
+    ta_session_insert(&system->sessions, parked);
     return TA_OK;
 }
 
@@ -736,6 +775,13 @@ ta_result ta_actor_load(ta_system *system, const ta_actor_load_params *params) {
         ta_actor_release_slot(system, id);
         ta_actor_free(system, actor); /* frees its delayed sends too */
         return result;
+    }
+    /* The session is resident again: its parked entry goes (ADR 0066). */
+    ta_address *address = ta_actor_lookup(system, id)->record.self.as.named;
+    if (address->unloaded != NULL) {
+        ta_session_node *parked = address->unloaded;
+        ta_session_remove(&system->sessions, parked);
+        ta_session_node_free(&system->sessions, parked);
     }
     *params->out = id;
     return TA_OK;

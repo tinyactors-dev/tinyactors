@@ -111,14 +111,6 @@ ta_result ta_timer_reserve_orphans(ta_timer_heap *heap, const ta_timer_list *lis
  * first. Leaves the list empty and unindexed; its storage stays allocated.
  */
 void ta_timer_orphan(ta_timer_heap *heap, ta_timer_list *list);
-/*
- * Before an unloaded owner's submitted sends become orphans: every send
- * whose destination or origin is the owner's runtime ID `self` names the
- * owner by its address instead, retaining `named`, so a retry resolves
- * through the directory to whichever session holds that address next
- * (ADR 0054). Cannot fail.
- */
-void ta_timer_readdress_self(ta_timer_list *list, ta_actor_id self, const ta_actor_ref *named);
 /* Releases every send in list, unindexes it, and frees its storage. */
 void ta_timer_list_destroy(ta_timer_heap *heap, ta_timer_list *list);
 /* Bytes the list's storage occupies. */

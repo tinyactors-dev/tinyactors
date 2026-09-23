@@ -1,6 +1,6 @@
 # ADR 0066: A session ID outlives residency
 
-**Status:** Accepted; refines ADR 0038, ADR 0044 and ADR 0052
+**Status:** Accepted and implemented; refines ADR 0038, ADR 0044 and ADR 0052. See the implementation notes.
 **Date:** 2026-09-23
 
 ## Context
@@ -131,3 +131,47 @@ text core writes for it is its session ID.
 - Per-actor memory grows by 16 bytes: the session ID and the entry pointer.
 - `docs/manual/virtual-actors.md` is now correct: `_sessionid` does come
   from the image.
+
+## Implementation notes
+
+- **Where it lives.** `src/session.{h,c}` holds the table
+  (`ta_session_table`, `ta_session_node`), `ta_session_resident()`,
+  `ta_session_id_of()` and `ta_session_route()`. An actor has
+  `session_id` and `session_node`. An address record points at its unloaded
+  session (`ta_address.unloaded`), so `ta_actor_remove_unloaded()` and a
+  committing load find the parked entry without a search.
+- **Resolution happens at submission**, in `ta_submit_external()`, for every
+  SCXML send, including retries of submitted sends. `#_scxml_<n>` still
+  parses to a runtime reference to `n`, so `ta_scxml_target_parse()` and
+  `ta_scxml_target_format()` are unchanged, except that formatting a
+  resident actor's runtime reference writes its session ID.
+- **A resident runtime ID still wins.** A runtime ID that names a resident
+  actor is delivered to that actor as before, even when it is not the
+  actor's session ID (a reloaded actor's current runtime ID). Runtime IDs
+  are never reissued, so a value can't be both one actor's current runtime
+  ID and another session's ID.
+- **Load removes the parked entry only once the directory swap commits.**
+  If the swap fails, the reconstructed actor is freed with its resident
+  entry, and the parked entry still routes sends by address.
+- **`ta_timer_readdress_self()` is removed**, as section 4 says, and
+  `ta_image_rebind_self()` now rewrites origins only.
+- **Changed tests.**
+  - `delayed_send_test.c`: a refused send to self retried after its owner
+    reloaded goes to the loaded actor's runtime ID, and one retried while
+    the owner is unloaded goes by address (new test).
+  - The paging scenarios: "sends to self" now assert the ADR 0066 contract.
+    `_sessionid` is constant across reloads, on jq and ECMAScript. Pending
+    sends to self name the session. A send to another session by
+    `#_scxml_` reaches it after it reloads. A send to an unloaded session
+    is submitted by address and reaches it after the host pages it in. A
+    send to a session that ended is `error.communication`. The case "a send
+    to another actor by runtime ID goes stale", from b85b7b2, is replaced:
+    that target was a session URI, which now reaches the reloaded session.
+- **Scale.** Per-actor memory went from about 508 to about 532 bytes: the
+  session ID and the entry pointer, plus padding. Resolution flatness is
+  tested structurally, not by timing, in `session_id_test.c`: 200,000 entries
+  are inserted, found and removed, and no allocation is larger than one page
+  of buckets, so the table never copies itself. A timing check in
+  `scale_test.c` would need a population-sized number of unloaded or
+  reloaded sessions at each size, which means capturing and unloading
+  hundreds of thousands of actors. It is left for later.

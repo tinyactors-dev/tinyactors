@@ -467,7 +467,7 @@ typedef struct {
  *
  *   #_internal                 the sender's own internal queue
  *   #_parent                   the invoking parent session
- *   #_scxml_<session>          a session by its runtime ID
+ *   #_scxml_<session>          a session by its session ID (ADR 0066)
  *   #_actor_<family>/<name>    a named actor by its logical address
  *   #_<invokeid>               an invocation of the sending session
  *
@@ -1935,7 +1935,10 @@ TA_API ta_result ta_actor_load(ta_system *system, TA_IN const ta_actor_load_para
 /*
  * Reconstructs an image under a fresh runtime ID without reading or changing
  * the actor directory. For a named image, the logical self-address is kept;
- * sends to that address follow the directory's current route.
+ * sends to that address follow the directory's current route. The image's
+ * session continues, keeping its session ID, unless a resident session holds
+ * that ID; then this is a new session (ADR 0066). ta_actor_load() always
+ * continues the session.
  */
 TA_API ta_result ta_actor_reconstruct(ta_system *system,
                                       TA_IN const ta_actor_reconstruct_params *params)
@@ -1991,6 +1994,12 @@ typedef struct {
  */
 typedef struct {
     ta_actor_id actor;
+    /*
+     * The SCXML session this actor holds, as _sessionid reads it (ADR 0066):
+     * the runtime ID the session was spawned with, kept across unload and
+     * load. It equals `actor` until the session has been reloaded.
+     */
+    uint64_t session_id;
     ta_actor_ref self;
     ta_definition_id definition_id;
     ta_definition_identity definition;

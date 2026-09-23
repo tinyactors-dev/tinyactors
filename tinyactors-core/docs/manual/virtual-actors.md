@@ -182,9 +182,9 @@ Unloading cancels runtime invocation handles and removes the actor's delayed
 sends from the resident timer heap. Their logical records remain in the image.
 A send the router already refused is different: it counts as sent, so it
 stays queued in the system, not in the image (ADR 0054). If it was a send to
-the actor itself, unloading re-addresses it to the actor's name, and its retry
-reaches whichever session holds that name next, like any send to a
-paged-out actor.
+the actor itself, it names the actor's session (ADR 0066), so its retry goes
+by the actor's name while the actor is unloaded, like any send to a paged-out
+actor, and to the actor itself once it is loaded again.
 For the normal between-turn case there should be no active inference invocation;
 if there is one, loading later produces the specified
 `error.communication.invoke.<id>.unavailable` event.
@@ -241,6 +241,14 @@ host_unlock_actor(conversation_address);
 The host then resumes the actor with the normal bounded loop. Load returns a new
 runtime actor ID, while `_sessionid`, logical self-address, configuration,
 history, queued internal events, and delayed-send semantics come from the image.
+
+The session ID behind `_sessionid` is the runtime ID the session was spawned
+with, and every load keeps it (ADR 0066), so it stays constant for the life of
+the conversation, as SCXML requires. A `#_scxml_<sessionid>` send reaches the
+session wherever it is: core resolves it to the reloaded actor's runtime ID, or,
+while the actor is unloaded, to its address, so the router pages it in like any
+send to `#_actor_<family>/<name>`. Host calls such as `ta_actor_deliver()`
+still take the current runtime ID: an old one stays stale.
 
 If the durable deadline index fires first, the host follows the same load path,
 advances logical time, and calls `ta_system_dispatch_due()` instead of initially
