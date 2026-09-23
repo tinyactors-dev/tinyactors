@@ -15,10 +15,14 @@ once.
 
 1. **Every operation that is applied per actor has a bulk form that takes or
    returns typed arrays:**
-   - `spawnMany(definition, count)` returns a `BigUint64Array` of IDs;
-   - `postMany(targets: BigUint64Array, event, data?)` posts one event to
-     each target;
-   - `destroyMany(targets: BigUint64Array)`.
+   - `spawnMany(definition, count)` returns an `ActorIdArray`;
+   - `postMany(targets: ActorIdArray, event, data?)` posts one event to each
+     target;
+   - `destroyMany(targets: ActorIdArray)`.
+
+   An `ActorIdArray` wraps one `Uint32Array` of interleaved
+   `[slot, generation]` pairs (ADR 0002): 8 bytes per actor, and no
+   allocation per element. `at(i)` makes an `ActorId` view on request.
 
    The singular forms are thin JavaScript calls into the same native paths.
 2. **A bulk call is all-or-nothing when it is checked, and per-item when it
@@ -31,8 +35,8 @@ once.
 3. **Iterating the population is paged.** `system.actors()` returns an
    iterator that fetches inspections from core in fixed-size pages
    (`ta_system_visit_actors` into a native buffer). It never materializes
-   the whole population. A compact form returns only IDs as a
-   `BigUint64Array` page.
+   the whole population. A compact form returns only IDs as an
+   `ActorIdArray` page.
 4. **Native code keeps shared building blocks.** Growable vectors, rings,
    hash maps and scratch arenas are written once in the addon (ADR 0009) and
    used by every queue and batch path. No hand-written head/count/capacity
@@ -42,7 +46,7 @@ once.
 
 - The cost of a population-wide operation is O(n) native work plus O(1)
   boundary crossings.
-- Typed arrays of `bigint` are the bulk ID format. Callers that hold IDs in
-  regular arrays pay for the conversion themselves.
+- `ActorIdArray` is the bulk ID format. Reading an element as two numbers
+  allocates nothing.
 - `ActorInspection` objects still exist for single actors and for pages. The
   fields are as in `index.d.ts`.
