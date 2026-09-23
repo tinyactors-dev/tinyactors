@@ -153,6 +153,20 @@
     }
   ],
   "flag_sets": {
+    "ta_chart_codec_flags": {
+      "constants": [
+        {
+          "name": "TA_CHART_CODEC_DECODES",
+          "value": 1,
+          "symbol": "decodes"
+        },
+        {
+          "name": "TA_CHART_CODEC_ENCODES",
+          "value": 2,
+          "symbol": "encodes"
+        }
+      ]
+    },
     "ta_event_flags": {
       "constants": [
         {
@@ -2272,6 +2286,1004 @@
           "offsets": {
             "ptr": 0,
             "len": 4
+          }
+        }
+      }
+    },
+    "ta_chart_codec": {
+      "kind": "struct",
+      "semantic": "adapter",
+      "fields": [
+        {
+          "name": "self",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            }
+          },
+          "shape": "raw",
+          "direction": "in"
+        },
+        {
+          "name": "v",
+          "type": {
+            "pointer": {
+              "type": "ta_chart_codec_vtable",
+              "const": true
+            }
+          },
+          "shape": "vtable",
+          "direction": "in"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "self": 0,
+            "v": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "self": 0,
+            "v": 4
+          }
+        }
+      }
+    },
+    "ta_chart_codec_info": {
+      "kind": "struct",
+      "doc": "What a codec is, for a host choosing one and a tool reporting what it did. Every field is fixed for the codec's lifetime.",
+      "fields": [
+        {
+          "name": "name",
+          "type": {
+            "type": "ta_str"
+          },
+          "doc": "The representation this codec reads and writes: the registered media type where one exists (\"application/scxml+xml\"), otherwise a stable identifier of the implementer's choosing. It is also what a decode writes into a literal content's media_type."
+        },
+        {
+          "name": "extensions",
+          "type": {
+            "pointer": {
+              "type": "ta_str",
+              "const": true
+            }
+          },
+          "terminator": "ptr",
+          "shape": "terminated",
+          "direction": "in",
+          "optional": true,
+          "doc": "Conventional file extensions without the dot, terminated by an empty one; absent when the representation has none."
+        },
+        {
+          "name": "description",
+          "type": {
+            "type": "ta_str"
+          },
+          "doc": "One line, for a tool's --help."
+        },
+        {
+          "name": "flags",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "flags": "ta_chart_codec_flags"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "name": 0,
+            "extensions": 16,
+            "description": 24,
+            "flags": 40
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 24,
+          "align": 4,
+          "offsets": {
+            "name": 0,
+            "extensions": 8,
+            "description": 12,
+            "flags": 20
+          }
+        }
+      }
+    },
+    "ta_chart_codec_vtable": {
+      "kind": "struct",
+      "semantic": "vtable",
+      "fields": [
+        {
+          "name": "info",
+          "type": {
+            "type": "ta_chart_codec_info"
+          }
+        },
+        {
+          "name": "decode",
+          "type": {
+            "pointer": {
+              "function": {
+                "returns": {
+                  "type": {
+                    "type": "ta_result"
+                  },
+                  "success": "TA_OK"
+                },
+                "params": [
+                  {
+                    "name": "self",
+                    "type": {
+                      "pointer": {
+                        "builtin": "void"
+                      }
+                    },
+                    "shape": "raw",
+                    "direction": "in"
+                  },
+                  {
+                    "name": "params",
+                    "type": {
+                      "pointer": {
+                        "type": "ta_chart_decode_params",
+                        "const": true
+                      }
+                    },
+                    "shape": "single",
+                    "direction": "in"
+                  }
+                ]
+              }
+            }
+          },
+          "shape": "callback",
+          "direction": "in",
+          "optional": true,
+          "doc": "Decode `input` into a spec.\n\n**The spec may point into `input`.** A codec is not required to copy, because a codec over a syntax tree keeps expression text as exact slices of the source, which is what lets an embedder map a compiled expression back to the construct it came from and run static checks on it before compiling. So `input` must stay valid as long as the spec does — until ta_definition_compile_spec() has copied it. Callers keep the buffer; codecs that do copy make that harmless.\n\nA codec bounds its own input: nesting depth, document size, expansion. Reaching one of its bounds is TA_CHART_ERROR_LIMIT. The interface sets no bound of its own, so two codecs need not accept the same documents.\n\nA literal <content > is decoded to bytes plus this codec's `info.name` as their media type. What those bytes are is the codec's rule: an XML codec serializes the content subtree with namespaces resolved as SCXML G.6 requires, rather than slicing the source, because what a recipient must see is a re-serialization and not the author's bytes.\n\nTA_OK, TA_ERR_INVALID with `error` saying why, or TA_ERR_NOMEM. Null when this codec only writes."
+        },
+        {
+          "name": "encode",
+          "type": {
+            "pointer": {
+              "function": {
+                "returns": {
+                  "type": {
+                    "type": "ta_result"
+                  },
+                  "success": "TA_OK"
+                },
+                "params": [
+                  {
+                    "name": "self",
+                    "type": {
+                      "pointer": {
+                        "builtin": "void"
+                      }
+                    },
+                    "shape": "raw",
+                    "direction": "in"
+                  },
+                  {
+                    "name": "params",
+                    "type": {
+                      "pointer": {
+                        "type": "ta_chart_encode_params",
+                        "const": true
+                      }
+                    },
+                    "shape": "single",
+                    "direction": "in"
+                  }
+                ]
+              }
+            }
+          },
+          "shape": "callback",
+          "direction": "in",
+          "optional": true,
+          "doc": "Write `spec` in this codec's syntax. `spec->identity` is not written: identity has no chart syntax, so a round trip that must preserve an explicit one carries it beside the document and feeds it back through ta_chart_decode_params. A literal content whose media type is not this codec's own is TA_CHART_ERROR_UNREPRESENTABLE unless the codec can carry it verbatim. Null when this codec only reads."
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "info": 0,
+            "decode": 48,
+            "encode": 56
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 32,
+          "align": 4,
+          "offsets": {
+            "info": 0,
+            "decode": 24,
+            "encode": 28
+          }
+        }
+      }
+    },
+    "ta_chart_decode_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "input",
+          "type": {
+            "type": "ta_bytes"
+          }
+        },
+        {
+          "name": "arena",
+          "type": {
+            "pointer": {
+              "type": "ta_arena"
+            }
+          },
+          "shape": "arena",
+          "direction": "inout",
+          "doc": "The operation's arena. Everything the decode allocates lives here — the codec's own parse, the spec, and the transients in between — and nothing outlives it. Reset or destroy it once the spec is compiled."
+        },
+        {
+          "name": "resolver",
+          "type": {
+            "type": "ta_chart_src_resolver"
+          }
+        },
+        {
+          "name": "lowering",
+          "type": {
+            "type": "ta_chart_lowering"
+          }
+        },
+        {
+          "name": "identity",
+          "type": {
+            "pointer": {
+              "type": "ta_definition_identity",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in",
+          "optional": true,
+          "doc": "No chart syntax has a form for a definition's identity, so it is supplied here or not at all; absent means the compiler fingerprints."
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "pointer": {
+                "type": "ta_scxml_spec",
+                "const": true
+              }
+            }
+          },
+          "shape": "view_out",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "arena"
+        },
+        {
+          "name": "error",
+          "type": {
+            "pointer": {
+              "type": "ta_chart_error"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "TA_ERR_INVALID",
+          "lifetime": "arena"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "input": 0,
+            "arena": 16,
+            "resolver": 24,
+            "lowering": 40,
+            "identity": 56,
+            "out": 64,
+            "error": 72
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 40,
+          "align": 4,
+          "offsets": {
+            "input": 0,
+            "arena": 8,
+            "resolver": 12,
+            "lowering": 20,
+            "identity": 28,
+            "out": 32,
+            "error": 36
+          }
+        }
+      }
+    },
+    "ta_chart_encode_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "spec",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_spec",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        },
+        {
+          "name": "arena",
+          "type": {
+            "pointer": {
+              "type": "ta_arena"
+            }
+          },
+          "shape": "arena",
+          "direction": "inout",
+          "doc": "The operation's arena: the output bytes and everything the encode needed to produce them."
+        },
+        {
+          "name": "expressions",
+          "type": {
+            "type": "ta_chart_expression_printer"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_bytes"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "arena"
+        },
+        {
+          "name": "error",
+          "type": {
+            "pointer": {
+              "type": "ta_chart_error"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "TA_ERR_INVALID",
+          "lifetime": "arena"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "spec": 0,
+            "arena": 8,
+            "expressions": 16,
+            "out": 32,
+            "error": 40
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 24,
+          "align": 4,
+          "offsets": {
+            "spec": 0,
+            "arena": 4,
+            "expressions": 8,
+            "out": 16,
+            "error": 20
+          }
+        }
+      }
+    },
+    "ta_chart_error": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "code",
+          "type": {
+            "type": "ta_chart_error_code"
+          }
+        },
+        {
+          "name": "at",
+          "type": {
+            "type": "ta_chart_position"
+          }
+        },
+        {
+          "name": "construct",
+          "type": {
+            "type": "ta_str"
+          },
+          "doc": "the element or production the error is about"
+        },
+        {
+          "name": "attribute",
+          "type": {
+            "type": "ta_str"
+          },
+          "doc": "empty when it is not about one"
+        },
+        {
+          "name": "message",
+          "type": {
+            "type": "ta_str"
+          },
+          "doc": "a fixed phrase owned by the codec"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 72,
+          "align": 8,
+          "offsets": {
+            "code": 0,
+            "at": 8,
+            "construct": 24,
+            "attribute": 40,
+            "message": 56
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "code": 0,
+            "at": 8,
+            "construct": 24,
+            "attribute": 32,
+            "message": 40
+          }
+        }
+      }
+    },
+    "ta_chart_error_code": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_CHART_ERROR_NONE",
+          "value": 0,
+          "symbol": "none"
+        },
+        {
+          "name": "TA_CHART_ERROR_SYNTAX",
+          "value": 1,
+          "symbol": "syntax",
+          "doc": "not well-formed in this codec's syntax"
+        },
+        {
+          "name": "TA_CHART_ERROR_NOT_CHART",
+          "value": 2,
+          "symbol": "not_chart",
+          "doc": "well-formed, but not a chart"
+        },
+        {
+          "name": "TA_CHART_ERROR_UNKNOWN_CONSTRUCT",
+          "value": 3,
+          "symbol": "unknown_construct"
+        },
+        {
+          "name": "TA_CHART_ERROR_MISPLACED_CONSTRUCT",
+          "value": 4,
+          "symbol": "misplaced_construct",
+          "doc": "<else > before an <elseif >; <param > with <content >"
+        },
+        {
+          "name": "TA_CHART_ERROR_UNKNOWN_ATTRIBUTE",
+          "value": 5,
+          "symbol": "unknown_attribute"
+        },
+        {
+          "name": "TA_CHART_ERROR_MISSING_ATTRIBUTE",
+          "value": 6,
+          "symbol": "missing_attribute"
+        },
+        {
+          "name": "TA_CHART_ERROR_CONFLICTING_ATTRIBUTE",
+          "value": 7,
+          "symbol": "conflicting_attribute",
+          "doc": "both `event` and `eventexpr`"
+        },
+        {
+          "name": "TA_CHART_ERROR_BAD_VALUE",
+          "value": 8,
+          "symbol": "bad_value",
+          "doc": "a duration, a boolean, an ID list"
+        },
+        {
+          "name": "TA_CHART_ERROR_FOREIGN_CONTENT",
+          "value": 9,
+          "symbol": "foreign_content",
+          "doc": "SCXML 4.10 content, no lowering (ADR 0046)"
+        },
+        {
+          "name": "TA_CHART_ERROR_SRC_UNRESOLVED",
+          "value": 10,
+          "symbol": "src_unresolved",
+          "doc": "a src= and no resolver"
+        },
+        {
+          "name": "TA_CHART_ERROR_LIMIT",
+          "value": 11,
+          "symbol": "limit",
+          "doc": "a bound this codec enforces was reached"
+        },
+        {
+          "name": "TA_CHART_ERROR_UNREPRESENTABLE",
+          "value": 12,
+          "symbol": "unrepresentable",
+          "doc": "encode: the spec has no form in this syntax"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
+    "ta_chart_expression_printer": {
+      "kind": "struct",
+      "semantic": "adapter",
+      "fields": [
+        {
+          "name": "self",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            }
+          },
+          "shape": "raw",
+          "direction": "in"
+        },
+        {
+          "name": "v",
+          "type": {
+            "pointer": {
+              "type": "ta_chart_expression_printer_vtable",
+              "const": true
+            }
+          },
+          "shape": "vtable",
+          "direction": "in",
+          "optional": true
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "self": 0,
+            "v": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "self": 0,
+            "v": 4
+          }
+        }
+      }
+    },
+    "ta_chart_expression_printer_vtable": {
+      "kind": "struct",
+      "semantic": "vtable",
+      "doc": "Renders TA_EXPRESSION_HOST back to source during an encode. A spec decoded from a document carries only TA_EXPRESSION_SOURCE and needs none; a spec built from host handles is TA_CHART_ERROR_UNREPRESENTABLE without it.",
+      "fields": [
+        {
+          "name": "print",
+          "type": {
+            "pointer": {
+              "function": {
+                "returns": {
+                  "type": {
+                    "type": "ta_result"
+                  },
+                  "success": "TA_OK"
+                },
+                "params": [
+                  {
+                    "name": "self",
+                    "type": {
+                      "pointer": {
+                        "builtin": "void"
+                      }
+                    },
+                    "shape": "raw",
+                    "direction": "in"
+                  },
+                  {
+                    "name": "host",
+                    "type": {
+                      "pointer": {
+                        "type": "ta_expression_host",
+                        "const": true
+                      }
+                    },
+                    "shape": "single",
+                    "direction": "in"
+                  },
+                  {
+                    "name": "arena",
+                    "type": {
+                      "pointer": {
+                        "type": "ta_arena"
+                      }
+                    },
+                    "shape": "arena",
+                    "direction": "inout"
+                  },
+                  {
+                    "name": "out",
+                    "type": {
+                      "pointer": {
+                        "type": "ta_str"
+                      }
+                    },
+                    "shape": "single",
+                    "direction": "out",
+                    "valid_on": "success",
+                    "lifetime": "arena"
+                  }
+                ]
+              }
+            }
+          },
+          "shape": "callback",
+          "direction": "in"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 8,
+          "align": 8,
+          "offsets": {
+            "print": 0
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4,
+          "offsets": {
+            "print": 0
+          }
+        }
+      }
+    },
+    "ta_chart_lowering": {
+      "kind": "struct",
+      "semantic": "adapter",
+      "fields": [
+        {
+          "name": "self",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            }
+          },
+          "shape": "raw",
+          "direction": "in"
+        },
+        {
+          "name": "v",
+          "type": {
+            "pointer": {
+              "type": "ta_chart_lowering_vtable",
+              "const": true
+            }
+          },
+          "shape": "vtable",
+          "direction": "in",
+          "optional": true
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "self": 0,
+            "v": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "self": 0,
+            "v": 4
+          }
+        }
+      }
+    },
+    "ta_chart_lowering_vtable": {
+      "kind": "struct",
+      "semantic": "vtable",
+      "doc": "Lowers SCXML 4.10 platform-specific executable content to a <send > to a registered I/O processor, the only form core has for it (ADR 0046). `element` is the element as written. Returning TA_ERR_NOT_FOUND refuses the document, which SCXML A.2 permits. An absent adapter refuses every such element: skipping one would silently drop behaviour the author wrote.",
+      "fields": [
+        {
+          "name": "lower",
+          "type": {
+            "pointer": {
+              "function": {
+                "returns": {
+                  "type": {
+                    "type": "ta_result"
+                  },
+                  "success": "TA_OK"
+                },
+                "params": [
+                  {
+                    "name": "self",
+                    "type": {
+                      "pointer": {
+                        "builtin": "void"
+                      }
+                    },
+                    "shape": "raw",
+                    "direction": "in"
+                  },
+                  {
+                    "name": "at",
+                    "type": {
+                      "pointer": {
+                        "type": "ta_chart_position",
+                        "const": true
+                      }
+                    },
+                    "shape": "single",
+                    "direction": "in"
+                  },
+                  {
+                    "name": "element",
+                    "type": {
+                      "type": "ta_bytes"
+                    }
+                  },
+                  {
+                    "name": "arena",
+                    "type": {
+                      "pointer": {
+                        "type": "ta_arena"
+                      }
+                    },
+                    "shape": "arena",
+                    "direction": "inout"
+                  },
+                  {
+                    "name": "out",
+                    "type": {
+                      "pointer": {
+                        "type": "ta_scxml_send_spec"
+                      }
+                    },
+                    "shape": "single",
+                    "direction": "out",
+                    "valid_on": "success",
+                    "lifetime": "arena"
+                  }
+                ]
+              }
+            }
+          },
+          "shape": "callback",
+          "direction": "in"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 8,
+          "align": 8,
+          "offsets": {
+            "lower": 0
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4,
+          "offsets": {
+            "lower": 0
+          }
+        }
+      }
+    },
+    "ta_chart_position": {
+      "kind": "struct",
+      "doc": "======================================================================== Chart codecs (ADR 0053)\n\nA codec turns bytes into a ta_scxml_spec and back. Core defines the adapter and the in-memory form and links no parser: SCXML XML, a JSON encoding and a tree-sitter grammar are all codecs, and none is in core.\n\nCore calls a codec only from ta_definition_import() and ta_definition_encode(). An embedder may also decode and then compile with ta_definition_compile_spec() itself.",
+      "fields": [
+        {
+          "name": "offset",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "line",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "column",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "offset": 0,
+            "line": 8,
+            "column": 12
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "offset": 0,
+            "line": 8,
+            "column": 12
+          }
+        }
+      }
+    },
+    "ta_chart_src_resolver": {
+      "kind": "struct",
+      "semantic": "adapter",
+      "fields": [
+        {
+          "name": "self",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            }
+          },
+          "shape": "raw",
+          "direction": "in"
+        },
+        {
+          "name": "v",
+          "type": {
+            "pointer": {
+              "type": "ta_chart_src_resolver_vtable",
+              "const": true
+            }
+          },
+          "shape": "vtable",
+          "direction": "in",
+          "optional": true
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "self": 0,
+            "v": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "self": 0,
+            "v": 4
+          }
+        }
+      }
+    },
+    "ta_chart_src_resolver_vtable": {
+      "kind": "struct",
+      "semantic": "vtable",
+      "doc": "Resolves <data src>, <script src> and <invoke src> during a decode: the one route to the outside world, and the embedder's, never core's and never the codec's. For <script > the bytes are source text. TA_ERR_NOT_FOUND when `src` names nothing the resolver knows.",
+      "fields": [
+        {
+          "name": "fetch",
+          "type": {
+            "pointer": {
+              "function": {
+                "returns": {
+                  "type": {
+                    "type": "ta_result"
+                  },
+                  "success": "TA_OK"
+                },
+                "params": [
+                  {
+                    "name": "self",
+                    "type": {
+                      "pointer": {
+                        "builtin": "void"
+                      }
+                    },
+                    "shape": "raw",
+                    "direction": "in"
+                  },
+                  {
+                    "name": "src",
+                    "type": {
+                      "type": "ta_str"
+                    }
+                  },
+                  {
+                    "name": "arena",
+                    "type": {
+                      "pointer": {
+                        "type": "ta_arena"
+                      }
+                    },
+                    "shape": "arena",
+                    "direction": "inout"
+                  },
+                  {
+                    "name": "out",
+                    "type": {
+                      "pointer": {
+                        "type": "ta_bytes"
+                      }
+                    },
+                    "shape": "single",
+                    "direction": "out",
+                    "valid_on": "success",
+                    "lifetime": "arena"
+                  }
+                ]
+              }
+            }
+          },
+          "shape": "callback",
+          "direction": "in"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 8,
+          "align": 8,
+          "offsets": {
+            "fetch": 0
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4,
+          "offsets": {
+            "fetch": 0
           }
         }
       }
@@ -10062,6 +11074,30 @@
           "type": {
             "builtin": "size_t"
           }
+        }
+      ]
+    },
+    {
+      "name": "ta_arena_allocator",
+      "doc": "An allocator that draws from `arena` and whose free() does nothing, so an arena can back anything that wants a ta_allocator (ADR 0053). What it allocates lives until the arena is reset or destroyed.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_allocator"
+        }
+      },
+      "params": [
+        {
+          "name": "arena",
+          "type": {
+            "pointer": {
+              "type": "ta_arena"
+            }
+          },
+          "shape": "single",
+          "direction": "inout"
         }
       ]
     },

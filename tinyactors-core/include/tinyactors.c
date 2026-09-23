@@ -1573,6 +1573,24 @@ TA_PRIVATE ta_result ta_arena_copy_str(ta_arena *arena, ta_str text, ta_str *out
     return TA_OK;
 }
 
+static void *ta_arena_allocator_alloc(void *self, size_t size, size_t alignment) {
+    return ta_arena_alloc(self, size, alignment);
+}
+
+static void ta_arena_allocator_free(void *self, const ta_allocator_free_params *params) {
+    (void)self;
+    (void)params;
+}
+
+static const ta_allocator_vtable ta_arena_allocator_vtable = {
+    .alloc = ta_arena_allocator_alloc,
+    .free = ta_arena_allocator_free,
+};
+
+TA_API ta_allocator ta_arena_allocator(ta_arena *arena) {
+    return (ta_allocator){ .self = arena, .v = &ta_arena_allocator_vtable };
+}
+
 
 /* The arena block every tree starts from, as elsewhere in core. */
 #define TA_TREE_BLOCK_SIZE 4096u

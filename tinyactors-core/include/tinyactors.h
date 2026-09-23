@@ -189,6 +189,12 @@ TA_API ta_result ta_arena_init(TA_OUT TA_RELEASE(ta_arena_destroy) ta_arena *are
 TA_API void ta_arena_reset(TA_INOUT ta_arena *arena);
 TA_API void ta_arena_destroy(TA_INOUT ta_arena *arena);
 TA_API void *ta_arena_alloc(TA_INOUT ta_arena *arena, size_t size, size_t alignment);
+/*
+ * An allocator that draws from `arena` and whose free() does nothing, so an
+ * arena can back anything that wants a ta_allocator (ADR 0053). What it
+ * allocates lives until the arena is reset or destroyed.
+ */
+TA_API ta_allocator ta_arena_allocator(TA_INOUT ta_arena *arena);
 /* ========================================================================
  * Host values
  */
@@ -1290,6 +1296,173 @@ typedef struct {
 } ta_definition_export_params;
 TA_API ta_result ta_definition_export(const ta_system *system,
                                       TA_IN const ta_definition_export_params *params);
+
+/* ========================================================================
+ * Chart codecs (ADR 0053)
+ *
+ * A codec turns bytes into a ta_scxml_spec and back. Core defines the
+ * adapter and the in-memory form and links no parser: SCXML XML, a JSON
+ * encoding and a tree-sitter grammar are all codecs, and none is in core.
+ *
+ * Core calls a codec only from ta_definition_import() and
+ * ta_definition_encode(). An embedder may also decode and then compile with
+ * ta_definition_compile_spec() itself.
+ */
+
+typedef struct { uint64_t offset; uint32_t line; uint32_t column; } ta_chart_position;
+
+typedef enum {
+    TA_CHART_ERROR_NONE = 0,
+    TA_CHART_ERROR_SYNTAX,                /* not well-formed in this codec's syntax */
+    TA_CHART_ERROR_NOT_CHART,             /* well-formed, but not a chart */
+    TA_CHART_ERROR_UNKNOWN_CONSTRUCT,
+    TA_CHART_ERROR_MISPLACED_CONSTRUCT,   /* <else> before an <elseif>; <param> with <content> */
+    TA_CHART_ERROR_UNKNOWN_ATTRIBUTE,
+    TA_CHART_ERROR_MISSING_ATTRIBUTE,
+    TA_CHART_ERROR_CONFLICTING_ATTRIBUTE, /* both `event` and `eventexpr` */
+    TA_CHART_ERROR_BAD_VALUE,             /* a duration, a boolean, an ID list */
+    TA_CHART_ERROR_FOREIGN_CONTENT,       /* SCXML 4.10 content, no lowering (ADR 0046) */
+    TA_CHART_ERROR_SRC_UNRESOLVED,        /* a src= and no resolver */
+    TA_CHART_ERROR_LIMIT,                 /* a bound this codec enforces was reached */
+    TA_CHART_ERROR_UNREPRESENTABLE        /* encode: the spec has no form in this syntax */
+} ta_chart_error_code TA_SYMBOLS("TA_CHART_ERROR_");
+
+typedef struct {
+    ta_chart_error_code code;
+    ta_chart_position at;
+    ta_str construct;  /* the element or production the error is about */
+    ta_str attribute;  /* empty when it is not about one */
+    ta_str message;    /* a fixed phrase owned by the codec */
+} ta_chart_error;
+
+enum TA_FLAG_SET(ta_chart_codec_flags, "TA_CHART_CODEC_") {
+    TA_CHART_CODEC_DECODES = 1u << 0,
+    TA_CHART_CODEC_ENCODES = 1u << 1
+};
+
+/*
+ * What a codec is, for a host choosing one and a tool reporting what it did.
+ * Every field is fixed for the codec's lifetime.
+ */
+typedef struct {
+    /* The representation this codec reads and writes: the registered media
+     * type where one exists ("application/scxml+xml"), otherwise a stable
+     * identifier of the implementer's choosing. It is also what a decode
+     * writes into a literal content's media_type. */
+    ta_str name;
+    /* Conventional file extensions without the dot, terminated by an empty
+     * one; absent when the representation has none. */
+    TA_TERMINATED_BY(ptr) TA_OPTIONAL const ta_str *extensions;
+    /* One line, for a tool's --help. */
+    ta_str description;
+    uint32_t flags TA_FLAGS(ta_chart_codec_flags);
+} ta_chart_codec_info;
+
+/*
+ * Resolves <data src>, <script src> and <invoke src> during a decode: the one
+ * route to the outside world, and the embedder's, never core's and never the
+ * codec's. For <script> the bytes are source text. TA_ERR_NOT_FOUND when
+ * `src` names nothing the resolver knows.
+ */
+typedef struct ta_chart_src_resolver_vtable {
+    ta_result (*fetch)(void *self, ta_str src, TA_ARENA ta_arena *arena,
+                       TA_OUT TA_LIFETIME(arena) ta_bytes *out);
+} ta_chart_src_resolver_vtable TA_VTABLE;
+typedef struct { void *self; TA_OPTIONAL const ta_chart_src_resolver_vtable *v; } ta_chart_src_resolver TA_ADAPTER;
+
+/*
+ * Lowers SCXML 4.10 platform-specific executable content to a <send> to a
+ * registered I/O processor, the only form core has for it (ADR 0046).
+ * `element` is the element as written. Returning TA_ERR_NOT_FOUND refuses
+ * the document, which SCXML A.2 permits. An absent adapter refuses every
+ * such element: skipping one would silently drop behaviour the author wrote.
+ */
+typedef struct ta_chart_lowering_vtable {
+    ta_result (*lower)(void *self,
+                       TA_IN const ta_chart_position *at,
+                       ta_bytes element,
+                       TA_ARENA ta_arena *arena,
+                       TA_OUT TA_LIFETIME(arena) ta_scxml_send_spec *out);
+} ta_chart_lowering_vtable TA_VTABLE;
+typedef struct { void *self; TA_OPTIONAL const ta_chart_lowering_vtable *v; } ta_chart_lowering TA_ADAPTER;
+
+/*
+ * Renders TA_EXPRESSION_HOST back to source during an encode. A spec decoded
+ * from a document carries only TA_EXPRESSION_SOURCE and needs none; a spec
+ * built from host handles is TA_CHART_ERROR_UNREPRESENTABLE without it.
+ */
+typedef struct ta_chart_expression_printer_vtable {
+    ta_result (*print)(void *self, TA_IN const ta_expression_host *host,
+                       TA_ARENA ta_arena *arena, TA_OUT TA_LIFETIME(arena) ta_str *out);
+} ta_chart_expression_printer_vtable TA_VTABLE;
+typedef struct { void *self; TA_OPTIONAL const ta_chart_expression_printer_vtable *v; } ta_chart_expression_printer TA_ADAPTER;
+
+typedef struct {
+    ta_bytes input;
+    /*
+     * The operation's arena. Everything the decode allocates lives here — the
+     * codec's own parse, the spec, and the transients in between — and
+     * nothing outlives it. Reset or destroy it once the spec is compiled.
+     */
+    TA_ARENA ta_arena *arena;
+    ta_chart_src_resolver resolver;
+    ta_chart_lowering lowering;
+    /* No chart syntax has a form for a definition's identity, so it is
+     * supplied here or not at all; absent means the compiler fingerprints. */
+    TA_IN TA_OPTIONAL const ta_definition_identity *identity;
+    TA_VIEW_OUT TA_LIFETIME(arena) const ta_scxml_spec **out;
+    TA_OUT TA_OPTIONAL TA_VALID_ON(TA_ERR_INVALID) TA_LIFETIME(arena) ta_chart_error *error;
+} ta_chart_decode_params;
+
+typedef struct {
+    TA_IN const ta_scxml_spec *spec;
+    /* The operation's arena: the output bytes and everything the encode
+     * needed to produce them. */
+    TA_ARENA ta_arena *arena;
+    ta_chart_expression_printer expressions;
+    TA_OUT TA_LIFETIME(arena) ta_bytes *out;
+    TA_OUT TA_OPTIONAL TA_VALID_ON(TA_ERR_INVALID) TA_LIFETIME(arena) ta_chart_error *error;
+} ta_chart_encode_params;
+
+typedef struct ta_chart_codec_vtable {
+    ta_chart_codec_info info;
+    /*
+     * Decode `input` into a spec.
+     *
+     * **The spec may point into `input`.** A codec is not required to copy,
+     * because a codec over a syntax tree keeps expression text as exact
+     * slices of the source, which is what lets an embedder map a compiled
+     * expression back to the construct it came from and run static checks on
+     * it before compiling. So `input` must stay valid as long as the spec
+     * does — until ta_definition_compile_spec() has copied it. Callers keep
+     * the buffer; codecs that do copy make that harmless.
+     *
+     * A codec bounds its own input: nesting depth, document size, expansion.
+     * Reaching one of its bounds is TA_CHART_ERROR_LIMIT. The interface sets
+     * no bound of its own, so two codecs need not accept the same documents.
+     *
+     * A literal <content> is decoded to bytes plus this codec's `info.name`
+     * as their media type. What those bytes are is the codec's rule: an XML
+     * codec serializes the content subtree with namespaces resolved as SCXML
+     * G.6 requires, rather than slicing the source, because what a recipient
+     * must see is a re-serialization and not the author's bytes.
+     *
+     * TA_OK, TA_ERR_INVALID with `error` saying why, or TA_ERR_NOMEM. Null
+     * when this codec only writes.
+     */
+    TA_OPTIONAL ta_result (*decode)(void *self, TA_IN const ta_chart_decode_params *params);
+    /*
+     * Write `spec` in this codec's syntax. `spec->identity` is not written:
+     * identity has no chart syntax, so a round trip that must preserve an
+     * explicit one carries it beside the document and feeds it back through
+     * ta_chart_decode_params. A literal content whose media type is not this
+     * codec's own is TA_CHART_ERROR_UNREPRESENTABLE unless the codec can
+     * carry it verbatim. Null when this codec only reads.
+     */
+    TA_OPTIONAL ta_result (*encode)(void *self, TA_IN const ta_chart_encode_params *params);
+} ta_chart_codec_vtable TA_VTABLE;
+
+typedef struct { void *self; const ta_chart_codec_vtable *v; } ta_chart_codec TA_ADAPTER;
 
 
 /* ========================================================================
