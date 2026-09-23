@@ -57,6 +57,14 @@ bool ta_definition_is_descendant(const ta_definition *definition, ta_state_id st
     return false;
 }
 
+/*
+ * Matches an event against one descriptor (ADR 0060 section 5). A `*`
+ * segment matches zero or more event segments, anywhere in the descriptor;
+ * a descriptor used up before the event is a prefix match. Two pointers,
+ * no recursion: on a mismatch the last `*` passed takes one more event
+ * segment and matching resumes after it. O(event x descriptor) time, O(1)
+ * space.
+ */
 typedef struct {
     const ta_atom *event;
     uint32_t event_count;
@@ -64,22 +72,31 @@ typedef struct {
     uint32_t pattern_count;
 } ta_pattern_match;
 
-/* A wildcard matches zero or more segments; trailing event segments are a prefix match. */
-static bool ta_pattern_match_from(const ta_pattern_match *match, uint32_t event_index, uint32_t pattern_index) {
-    if (pattern_index == match->pattern_count) {
-        return true;
-    }
-    const ta_event_pattern_segment *segment = &match->pattern[pattern_index];
-    if (segment->flags & TA_EVENT_PATTERN_SEGMENT_WILDCARD) {
-        for (uint32_t skip = event_index; skip <= match->event_count; skip += 1) {
-            if (ta_pattern_match_from(match, skip, pattern_index + 1u)) {
-                return true;
-            }
+static bool ta_pattern_match_run(const ta_pattern_match *match) {
+    uint32_t event = 0;
+    uint32_t pattern = 0;
+    bool starred = false;
+    uint32_t star_pattern = 0;
+    uint32_t star_event = 0;
+    while (pattern < match->pattern_count) {
+        const ta_event_pattern_segment *segment = &match->pattern[pattern];
+        if (segment->flags & TA_EVENT_PATTERN_SEGMENT_WILDCARD) {
+            starred = true;
+            star_pattern = pattern;
+            star_event = event;
+            pattern += 1u;
+        } else if (event < match->event_count && match->event[event] == segment->atom) {
+            event += 1u;
+            pattern += 1u;
+        } else if (starred && star_event < match->event_count) {
+            star_event += 1u;
+            event = star_event;
+            pattern = star_pattern + 1u;
+        } else {
+            return false;
         }
-        return false;
     }
-    return event_index < match->event_count && match->event[event_index] == segment->atom &&
-           ta_pattern_match_from(match, event_index + 1u, pattern_index + 1u);
+    return true;
 }
 
 bool ta_event_pattern_matches(const ta_definition *definition,
@@ -96,7 +113,7 @@ bool ta_event_pattern_matches(const ta_definition *definition,
         .pattern = definition->event_pattern_segments + pattern->segments.offset,
         .pattern_count = pattern->segments.length,
     };
-    return ta_pattern_match_from(&match, 0, 0);
+    return ta_pattern_match_run(&match);
 }
 
 ta_result ta_definition_state(const ta_system *system, const ta_definition_state_params *params) {
