@@ -178,10 +178,12 @@ module TinyactorsTest
       offer(event, data: data)[:result]
     end
 
-    # One ta_actor_resume call with `budget` microsteps; returns the status:
-    # "paused", "stable", or "done".
-    def resume(budget:)
-      response = @context.ta.actor.resume(system: @context.system_handle, actor: handle, budget: budget)
+    # One ta_actor_resume call with `budget` microsteps and, when not zero,
+    # `action_budget` units of executable content (ADR 0061); returns the
+    # status: "paused", "stable", or "done".
+    def resume(budget:, action_budget: 0)
+      response = @context.ta.actor.resume(system: @context.system_handle, actor: handle, budget: budget,
+                                          action_budget: action_budget)
       @context.core('ta_actor_resume', response).fetch(:status)
     end
 
@@ -267,17 +269,19 @@ module TinyactorsTest
     # `run` names this run; instrument names are prefixed with it, so
     # several runs can share one host process. `trace: true` records a Trace
     # after every step. `resume_budget` and `dispatch_budget` are passed to
-    # ta_actor_resume and ta_system_dispatch_due. `after_step` is called as
+    # ta_actor_resume and ta_system_dispatch_due; `resume_action_budget` is
+    # ta_actor_resume's action budget (ADR 0061), zero for none. `after_step` is called as
     # after_step.call(context, step_index) once a step is quiescent, before
     # it is traced and its invariants are checked; the system is run to
     # quiescence again after it, without further hooks or trace steps.
     def initialize(driver, group, charts, run: 'main', trace: false, resume_budget: RESUME_BUDGET,
-                   dispatch_budget: DISPATCH_BUDGET, after_step: nil)
+                   dispatch_budget: DISPATCH_BUDGET, resume_action_budget: 0, after_step: nil)
       @driver = driver
       @group = group
       @charts = charts
       @run = run
       @resume_budget = resume_budget
+      @resume_action_budget = resume_action_budget
       @dispatch_budget = dispatch_budget
       @after_step = after_step
       @definitions = {}
@@ -1026,7 +1030,8 @@ module TinyactorsTest
     # be destroyed while others run, when its parent cancels the invocation.
     def settle(id)
       MAX_ROUNDS.times do
-        response = ta.actor.resume(system: system_handle, actor: id, budget: @resume_budget)
+        response = ta.actor.resume(system: system_handle, actor: id, budget: @resume_budget,
+                                   action_budget: @resume_action_budget)
         return if response[:result] == 'err_not_found'
 
         status = core('ta_actor_resume', response).fetch(:status)

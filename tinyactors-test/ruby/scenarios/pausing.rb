@@ -5,7 +5,68 @@
 # ta_actor_resume. A paused actor is still busy with its event (invariant 2),
 # and internal events finish before the next external event (invariant 6).
 # Pausing must be invisible: a run that pauses after every microstep is
-# observably identical to one that never pauses.
+# observably identical to one that never pauses. With an action budget
+# (ADR 0061) the same holds for pauses inside executable content.
+
+# Nested <if> and <foreach> in exit handlers, transition content and entry
+# handlers, outside the bootstrap, where an action budget can stop them
+# (ADR 0061).
+TinyactorsTest.chart :nested_content do
+  data log: { expr: '[]' }
+
+  state :a do
+    on_exit do
+      assign '.log', '.log + ["x1"]'
+      conditional do
+        branch('1 == 1') do
+          foreach '[1, 2]', item: 'i' do
+            assign '.log', '.log + ["x2 \(.i)"]'
+            conditional do
+              branch('.i == 2') { assign '.log', '.log + ["two"]' }
+              otherwise { assign '.log', '.log + ["one"]' }
+            end
+          end
+        end
+      end
+    end
+    on_exit { assign '.log', '.log + ["x3"]' }
+    transition on: 'go', target: :p do
+      foreach '[1, 2, 3]', item: 'j' do
+        assign '.log', '.log + ["t \(.j)"]'
+        foreach '[1, 2]', item: 'k' do
+          assign '.log', '.log + ["t \(.j).\(.k)"]'
+        end
+      end
+      raise_event 'inner'
+    end
+  end
+
+  state :p, initial: :b do
+    on_entry do
+      foreach '[1, 2]', item: 'm' do
+        assign '.log', '.log + ["p \(.m)"]'
+      end
+    end
+    state :b do
+      on_entry { assign '.log', '.log + ["b1"]' }
+      on_entry do
+        foreach '[1, 2]', item: 'n' do
+          assign '.log', '.log + ["b2 \(.n)"]'
+        end
+      end
+      transition on: 'inner', target: :c do
+        assign '.log', '.log + ["tc"]'
+      end
+    end
+    state :c do
+      on_entry { assign '.log', '.log + ["c1"]' }
+      transition on: 'back', target: :a do
+        assign '.log', '.log + ["back"]'
+      end
+    end
+  end
+end
+
 TinyactorsTest.scenarios 'pausing', chart: :relay do
   invariant('the log only grows by known entries') do |actor|
     actor.chart != :relay || (actor.data('.log') - ['go', 'n=5', 'counted', 'ping', 'extra']).empty?
@@ -101,5 +162,54 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
       caller.deliver 'finish'
       assert_equal ['progress 21', 'done 42'], caller.data('.log')
     end
+  end
+
+  # Catches: a pause inside executable content that repeats or skips an
+  # action, a <foreach> iteration, a handler, a state's activation or a
+  # raised event, or that loses a snapshot across resumes (ADR 0061).
+  scenario 'pausing inside executable content is invisible' do
+    variants = (1..6).to_h { |budget| ["action budget #{budget}", { resume_action_budget: budget }] }
+    variants['action budget 1, resume budget 1'] = { resume_action_budget: 1, resume_budget: 1 }
+    assert_equivalent_runs(variants: variants) do
+      nested = spawn :nested_content
+      nested.deliver 'go'
+      nested.deliver 'back'
+      nested.deliver 'go'
+      relay = spawn
+      relay.deliver 'go'
+      light = spawn :traffic_light
+      advance_time 30_000
+      light.deliver 'fault'
+      light.deliver 'repair'
+      caller = spawn :caller
+      caller.deliver 'finish'
+      assert_equal ['progress 21', 'done 42'], caller.data('.log')
+    end
+  end
+
+  # Catches: an actor paused inside a microstep that reports a half-changed
+  # configuration instead of the one after its last completed microstep,
+  # accepts an event, or does not say it is inside a microstep.
+  scenario 'an actor paused inside a microstep is busy and reports its last configuration' do
+    nested = spawn :nested_content
+    assert_equal [:a], nested.active
+    assert_equal 'ok', nested.post('go')
+    inside = 0
+    seen = []
+    while nested.resume(budget: 1000, action_budget: 1) == 'paused'
+      inspection = nested.inspect_actor
+      assert inspection[:macrostep_in_progress], 'a paused actor is in a macrostep'
+      next unless inspection[:microstep_in_progress]
+
+      inside += 1
+      seen << nested.active
+      assert_equal 'err_busy', nested.post('back')
+    end
+    assert inside > 20, "only #{inside} pauses were inside a microstep"
+    # Only whole configurations: after the go microstep, and after the inner one.
+    assert_equal [[:a], %i[p b]], seen.uniq
+    assert_equal %i[p c], nested.active
+    assert_equal ['x1', 'x2 1', 'one', 'x2 2', 'two', 'x3', 't 1', 't 1.1', 't 1.2', 't 2', 't 2.1', 't 2.2',
+                  't 3', 't 3.1', 't 3.2', 'p 1', 'p 2', 'b1', 'b2 1', 'b2 2', 'tc', 'c1'], nested.data('.log')
   end
 end
