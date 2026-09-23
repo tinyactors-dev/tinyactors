@@ -33,8 +33,8 @@ Two lifecycle problems in the first addon grow with scale:
    - rejects all pending promises;
    - discards mailboxes;
    - destroys the `ta_system`;
-   - releases every definition callback, and the handle table of
-     ADR 0011 through its one reference;
+   - releases every definition callback and every live value box
+     (ADR 0011);
    - frees the free lists, the scheduling table and the arenas (ADR 0014).
      The allocator's bytes in use are then zero.
 

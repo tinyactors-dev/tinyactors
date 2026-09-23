@@ -20,7 +20,7 @@ corrected.
   - the router and the actor directory (ADR 0006);
   - the clock;
   - adapters for core's callback interfaces;
-  - the JavaScript data model, the handle table and value boxes (ADR 0011).
+  - the JavaScript data model and value boxes (ADR 0011).
 - **Actors cross the boundary as `(slot, generation)` pairs of small
   integers** (ADR 0002), passed to native code as two positional numbers.
   Nothing is allocated per actor on the JavaScript side.
@@ -68,7 +68,7 @@ tinyactors-napi/
 │   ├── router.{c,h}             external-event router into mailboxes (ADR 0006)
 │   ├── directory.{c,h}          in-memory actor directory keyed by core's ta_address handles (ADR 0006)
 │   ├── events.{c,h}             dotted event-name interning and formatting (ADR 0004)
-│   ├── values.{c,h}             handle table and reference-counted value boxes (ADR 0011)
+│   ├── values.{c,h}             reference-counted value boxes, one napi_ref each (ADR 0011)
 │   ├── napi_datamodel.{c,h}     the JavaScript data model (ADR 0011)
 │   ├── enumerate.{c,h}          cursor-paged actor enumeration (ADR 0003)
 │   └── adapters/
@@ -433,8 +433,9 @@ target-population numbers are recorded for comparison, not asserted.
 
 ### 11. The JavaScript data model
 
-- `values.{c,h}` (the handle table and value boxes from a free list) and
-  `napi_datamodel.{c,h}`:
+- `values.{c,h}`: value boxes with one `napi_ref` each (ADR 0011, model
+  A), records from a free list, behind a make/retain/release/get
+  interface. Also `napi_datamodel.{c,h}`:
   - data declarations;
   - conditions, values, locations, assignments and scripts as
     JavaScript functions;
@@ -445,14 +446,15 @@ target-population numbers are recorded for comparison, not asserted.
 Exit criterion:
 - the ping-pong player chart in `docs/design.md` runs;
 - the number of value boxes returns to zero after `close()`;
-- a system holds one `napi_ref` for values, whatever the number of live
-  values;
+- model A is measured against a handle table (model B) at 1M and 4M
+  actors with data (bytes per value, make and release cost, full and minor
+  GC time, allocator calls per message). The result is recorded in
+  ADR 0011, and B replaces A only if it is clearly better;
 - a receiver reads `_event.origin` of a message whose named sender was
   destroyed before delivery, and replies to it (core ADR 0065);
 - `test/scale.js` runs again with a chart that has data: its ratios stay
   within their bounds, steady state with data makes no allocator call in
-  the addon, and the
-  target-population numbers are recorded.
+  the addon, and the target-population numbers are recorded.
 
 ### 12. `send()` and backpressure
 
