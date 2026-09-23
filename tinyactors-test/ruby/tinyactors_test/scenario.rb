@@ -335,6 +335,18 @@ module TinyactorsTest
       run_system("advance_time #{milliseconds} (t=#{@now}ms)")
     end
 
+    # Sets logical time to `now` without running the system, so a scenario
+    # can dispatch due sends itself (ta_system_dispatch_due) and look at
+    # what is left in between. Time never goes back.
+    def set_time(now)
+      unless now.is_a?(Integer) && now >= @now
+        raise ScenarioError, "set_time needs an Integer of milliseconds at or after t=#{@now}ms"
+      end
+
+      @now = now
+      core('ta_system_set_time', ta.system.set_time(system: system_handle, now: @now))
+    end
+
     # Advances logical time from one delayed-send deadline to the next until
     # `actor` is done. Fails when no delayed send is pending while the actor
     # still runs, or when the next deadline lies beyond `limit` milliseconds
