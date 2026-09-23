@@ -1,6 +1,7 @@
 # ADR 0002: Actors are IDs; handles are plain JavaScript
 
-**Status:** Accepted; ID representation depends on tinyactors-core ADR 0059
+**Status:** Accepted; ID representation depends on tinyactors-core ADR 0059;
+per-slot scheduling entry added with ADR 0005
 **Date:** 2026-09-23
 
 ## Context
@@ -31,9 +32,18 @@ IDs. Both are 32-bit values, and tinyactors-core ADR 0059 makes them public.
    billion times. So on V8, both are small integers that are not allocated,
    and on JSC every int32 and double is stored inline. Nothing is
    allocated per ID, and the check for stale IDs is at full strength.
-3. **The addon keeps no per-actor native record and no per-actor Node-API
-   reference.** Whether an actor exists, is done, or is destroyed is asked of
-   core each time.
+   - Native entry points take an actor as two positional number
+     arguments, `slot` and `generation`. They never read properties of a
+     view object. The JavaScript layer unpacks the view before the call.
+   - A native call that returns a new actor (spawn, find, load) creates
+     one small view object for it. That object is young and short-lived
+     unless the application keeps it.
+3. **The addon keeps no per-actor Node-API reference and no copy of a core
+   fact.** Whether an actor exists, is done, or is destroyed is asked of
+   core each time. The one per-actor native record is the host's own
+   scheduling entry: 16 bytes per slot for the actor's scheduling state and
+   mailbox (ADR 0005). Core has no such state, because the host owns
+   external queueing (tinyactors-core ADR 0029).
 4. **`ActorId` is a plain JavaScript class**, defined in `index.js`, with
    three fields: `system`, `slot` and `generation`. Its methods call system
    methods. It holds no native resource and needs no finalizer.

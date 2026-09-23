@@ -16,13 +16,17 @@ rest.
 
 1. **A failure is attributed to an actor and handled there.**
    - `TA_ERR_NOMEM` from a resume or deliver: the macrostep is retryable
-     (tinyactors-core ADR 0047). The actor goes back on its queue and
-     backs off for a turn. The pump goes on with other actors.
-   - Any other failure: the actor is **quarantined**. It is taken out of the
-     scheduling queues, and its mailbox is kept but not delivered. A
-     `fault` hook receives `{ actor, operation, code, message }`.
-     `system.release(id)` puts the actor back into scheduling, and
-     destroying it discards the mailbox.
+     (tinyactors-core ADR 0047). The actor goes back on its queue with
+     the back-off flag of its scheduling entry set, and it is skipped for
+     one turn. The pump goes on with other actors.
+   - Any other failure: the actor is **quarantined**. Its scheduling state
+     becomes `quarantined` (ADR 0005), so it leaves the scheduling queues and
+     stays out of them even while its mailbox is empty. Mail for it is kept
+     but not delivered. A `fault` hook receives
+     `{ actor, operation, code, message }`. `system.release(id)` puts the
+     actor on the runnable queue, where the next resume continues a paused
+     macrostep or reports the actor stable, and ADR 0005's rules apply from
+     there. Destroying it discards the mailbox.
    - Messages dropped because their target is done or unknown go to a
      `deadLetter` hook with `{ target, event, reason }`. If no hook is set,
      they are counted in system statistics and dropped.
