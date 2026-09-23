@@ -88,23 +88,7 @@ end
 
 cycles = components.select { |component| component.length > 1 || calls[component.first].include?(component.first) }
 
-# Known cycles that ADR 0060's refactoring has not removed yet. Each entry is
-# the sorted list of functions in one cycle. The list shrinks with each step
-# and is deleted with the last one.
-ALLOWED = [
-  %w[ta_exec_action ta_exec_foreach ta_run_block],
-  %w[ta_actor_exit_invoked ta_interpreter_cancel ta_invoke_cancel_at ta_invoke_state_exited],
-].map(&:sort).freeze
+cycles.each { |cycle| puts "check-recursion: CYCLE: #{cycle.join(' -> ')}" }
+abort "check-recursion: #{cycles.size} cycle(s) in core's call graph (ADR 0060)" unless cycles.empty?
 
-unexpected = cycles.reject { |cycle| ALLOWED.include?(cycle) }
-stale = ALLOWED.reject { |cycle| cycles.include?(cycle) }
-cycles.each do |cycle|
-  mark = ALLOWED.include?(cycle) ? 'allowed' : 'CYCLE'
-  puts "check-recursion: #{mark}: #{cycle.join(' -> ')}"
-end
-stale.each { |cycle| puts "check-recursion: allowlist entry no longer a cycle, remove it: #{cycle.join(', ')}" }
-if unexpected.empty? && stale.empty?
-  puts "check-recursion: #{defined.size} functions, no recursion#{ALLOWED.empty? ? '' : " outside #{ALLOWED.size} allowed cycle(s)"}"
-else
-  exit 1
-end
+puts "check-recursion: #{defined.size} functions, no recursion"

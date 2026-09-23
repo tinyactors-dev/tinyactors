@@ -129,20 +129,28 @@ static void ta_invoke_remove_at(ta_actor_sparse_state *sparse, uint32_t index) {
     sparse->invoke_count -= 1u;
 }
 
-/* Cancels the service and forgets the invocation. */
-static void ta_invoke_cancel_at(ta_system *system, ta_actor_sparse_state *sparse, uint32_t index) {
-    ta_active_invoke active = sparse->invokes[index];
-    ta_invoke_meta meta = sparse->invoke_meta[index];
+static ta_invoke_taken ta_invoke_take_index(ta_actor_sparse_state *sparse, uint32_t index) {
+    ta_invoke_taken taken = { .active = sparse->invokes[index], .meta = sparse->invoke_meta[index] };
     /* Remove first: the service may destroy a child that reports back reentrantly. */
     ta_invoke_remove_at(sparse, index);
-    if (meta.has_child) {
-        ta_actor_exit_invoked(system, meta.child);
-    }
-    if (meta.invoker.v != NULL && meta.invoker.v->cancel != NULL) {
+    return taken;
+}
+
+void ta_invoke_cancel_service(const ta_invoke_taken *taken) {
+    if (taken->meta.invoker.v != NULL && taken->meta.invoker.v->cancel != NULL) {
         ta_fault fault = {0};
-        (void)meta.invoker.v->cancel(meta.invoker.self, active.service_handle, &fault);
+        (void)taken->meta.invoker.v->cancel(taken->meta.invoker.self, taken->active.service_handle, &fault);
         ta_value_release(&fault.data);
     }
+}
+
+/* Cancels the service and forgets the invocation. */
+static void ta_invoke_cancel_at(ta_system *system, ta_actor_sparse_state *sparse, uint32_t index) {
+    ta_invoke_taken taken = ta_invoke_take_index(sparse, index);
+    if (taken.meta.has_child) {
+        ta_actor_exit_invoked(system, taken.meta.child);
+    }
+    ta_invoke_cancel_service(&taken);
 }
 
 static ta_vec *ta_invoke_pending(ta_system *system, ta_actor_sparse_state *sparse) {
@@ -203,10 +211,10 @@ ta_result ta_invoke_state_entered(ta_interpreter *it, ta_state_id state) {
     return ta_vec_push(pending, &state);
 }
 
-ta_result ta_invoke_state_exited(ta_interpreter *it, ta_state_id state) {
-    ta_actor_sparse_state *sparse = it->actor->sparse;
+void ta_invoke_forget_pending(ta_actor *actor, ta_state_id state) {
+    ta_actor_sparse_state *sparse = actor->sparse;
     if (sparse == NULL) {
-        return TA_OK;
+        return;
     }
     ta_vec *pending = &sparse->pending_invokes;
     for (uint32_t index = 0; index < pending->count; index += 1) {
@@ -216,6 +224,31 @@ ta_result ta_invoke_state_exited(ta_interpreter *it, ta_state_id state) {
             break;
         }
     }
+}
+
+bool ta_invoke_take(ta_actor *actor, ta_state_id state, uint32_t *cursor, ta_invoke_taken *out) {
+    ta_actor_sparse_state *sparse = actor->sparse;
+    uint32_t index = sparse == NULL ? 0 : *cursor;
+    if (sparse != NULL && index > sparse->invoke_count) {
+        index = sparse->invoke_count;
+    }
+    for (; index > 0; index -= 1u) {
+        if (sparse->invoke_meta[index - 1u].state == state) {
+            *out = ta_invoke_take_index(sparse, index - 1u);
+            *cursor = index - 1u;
+            return true;
+        }
+    }
+    *cursor = 0;
+    return false;
+}
+
+ta_result ta_invoke_state_exited(ta_interpreter *it, ta_state_id state) {
+    ta_actor_sparse_state *sparse = it->actor->sparse;
+    if (sparse == NULL) {
+        return TA_OK;
+    }
+    ta_invoke_forget_pending(it->actor, state);
     for (uint32_t index = sparse->invoke_count; index > 0; index -= 1u) {
         if (sparse->invoke_meta[index - 1u].state == state) {
             ta_invoke_cancel_at(it->system, sparse, index - 1u);

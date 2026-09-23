@@ -38,13 +38,26 @@ typedef struct {
     uint64_t *history_seen;
     uint64_t *history_busy;
     uint64_t *final_states;
+    /*
+     * The executor's frames (ADR 0060 section 2): one per open block and one
+     * per running <foreach>, sized from the definition's deepest nesting of
+     * blocks when the interpreter starts, so running actions never allocates
+     * frames.
+     */
+    ta_exec_frame *exec_frames;
+    uint32_t exec_count;
+    uint32_t exec_capacity;
     /* Bootstrap only: data declarations the instance's binding already supplies. */
     uint64_t *bound_decls;
 } ta_interpreter;
 
 ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_actor_resume_params *params);
-/* Runs SCXML exitInterpreter for a cancelled invoked session, without done.invoke. */
-ta_result ta_interpreter_cancel(ta_system *system, ta_actor *actor);
+/*
+ * Runs SCXML exitInterpreter for a cancelled invoked session, without
+ * done.invoke, and for every session it invoked in turn, without recursion
+ * (ADR 0060). A session that is gone or finished is skipped.
+ */
+void ta_interpreter_exit_invoked(ta_system *system, ta_actor_id id);
 /* Takes ownership of the event's data. */
 ta_result ta_interpreter_enqueue_internal(ta_system *system, ta_actor *actor, ta_event *event);
 /* Dispatches a due delayed send; RETRY leaves the send owned by the caller. */
@@ -89,6 +102,18 @@ ta_result ta_invoke_id_from_text(ta_system *system, ta_str text, ta_invoke_id *o
 ta_str ta_invoke_id_text(const ta_system *system, ta_invoke_id invoke);
 ta_result ta_invoke_state_entered(ta_interpreter *it, ta_state_id state);
 ta_result ta_invoke_state_exited(ta_interpreter *it, ta_state_id state);
+/* An invocation taken out of an actor's table, to be cancelled. */
+typedef struct {
+    ta_active_invoke active;
+    ta_invoke_meta meta;
+} ta_invoke_taken;
+/* Forgets the not-yet-started invocations of `state`. */
+void ta_invoke_forget_pending(ta_actor *actor, ta_state_id state);
+/* Takes the last invocation of `state` below index `*cursor` out of the
+ * actor's table; false when there is none. */
+bool ta_invoke_take(ta_actor *actor, ta_state_id state, uint32_t *cursor, ta_invoke_taken *out);
+/* Tells the invoker to cancel the service of a taken invocation. */
+void ta_invoke_cancel_service(const ta_invoke_taken *taken);
 /* Starts the invokes of states entered during the finished macrostep. */
 ta_result ta_invoke_start_pending(ta_interpreter *it);
 /* Applies <finalize> and autoforwarding to the actor's current (external) event. */

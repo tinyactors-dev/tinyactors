@@ -141,22 +141,7 @@ bool ta_actor_state_active(const ta_actor *actor, ta_state_id state) {
 }
 
 void ta_actor_exit_invoked(ta_system *system, ta_actor_id id) {
-    ta_actor *actor = ta_actor_lookup(system, id);
-    if (actor == NULL || actor->finished) {
-        return;
-    }
-    /* Invocation cancellation is reentrant from the parent's interpreter.
-     * Preserve its scratch arena while the child runs exitInterpreter. */
-    ta_arena outer = system->scratch;
-    ta_arena nested = {0};
-    if (ta_arena_init(&nested, system->allocator, outer.block_size) != TA_OK) {
-        return;
-    }
-    system->scratch = nested;
-    (void)ta_interpreter_cancel(system, actor);
-    nested = system->scratch;
-    system->scratch = outer;
-    ta_arena_destroy(&nested);
+    ta_interpreter_exit_invoked(system, id);
 }
 
 /*

@@ -931,53 +931,55 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
  * Executable content
  */
 
-static ta_result ta_run_block(ta_interpreter *it, ta_span32 block);
-
 /*
  * <foreach> iterates a shallow copy made by the data model. A failed
  * snapshot or binding, or an error in the body, stops the foreach and the
- * enclosing block (SCXML 4.6).
+ * enclosing block (SCXML 4.6). The loop is a frame of the executor (see
+ * ta_run_block): `actions` is the body, `cursor` the <foreach> action
+ * itself, and the snapshot and position are the frame's.
  */
-static ta_result ta_exec_foreach(ta_interpreter *it, const ta_foreach_action *foreach) {
+static ta_result ta_foreach_begin(ta_interpreter *it, ta_exec_frame *loop) {
     const ta_definition *definition = it->definition;
     const ta_datamodel_vtable *v = definition->datamodel.v;
     if (v->foreach_snapshot == NULL || v->foreach_bind == NULL) {
         return ta_execution_error(it, NULL);
     }
     ta_fault fault = {0};
-    ta_value snapshot = {0};
-    uint32_t count = 0;
     if (v->foreach_snapshot(definition->datamodel.self,
                             &(ta_datamodel_foreach_snapshot_params){
                                 .shared = definition->datamodel_shared,
                                 .instance = it->actor->datamodel_instance,
-                                .array = foreach->array,
+                                .array = definition->action_defs[loop->cursor].as.foreach.array,
                                 .host = &it->actor->host,
-                                .out = &snapshot,
-                                .count = &count,
+                                .out = &loop->iteration_snapshot,
+                                .count = &loop->iteration_count,
                                 .fault = &fault,
                             }) != TA_OP_OK) {
         return ta_execution_error(it, &fault);
     }
+    return TA_OK;
+}
+
+/* Binds the item and index for the loop's next position. */
+static ta_result ta_foreach_bind(ta_interpreter *it, ta_exec_frame *loop) {
+    const ta_definition *definition = it->definition;
+    const ta_foreach_action *foreach = &definition->action_defs[loop->cursor].as.foreach;
     ta_str item = ta_atom_text(&it->system->atoms, foreach->item);
     ta_str index = foreach->has_index ? ta_atom_text(&it->system->atoms, foreach->index) : (ta_str){0};
-    ta_result result = TA_OK;
-    for (uint32_t position = 0; position < count && result == TA_OK; position += 1) {
-        ta_op_status bound = v->foreach_bind(definition->datamodel.self,
-                                             &(ta_datamodel_foreach_bind_params){
-                                                 .shared = definition->datamodel_shared,
-                                                 .instance = it->actor->datamodel_instance,
-                                                 .snapshot = &snapshot,
-                                                 .index = position,
-                                                 .item = item,
-                                                 .index_name = index,
-                                                 .host = &it->actor->host,
-                                                 .fault = &fault,
-                                             });
-        result = bound == TA_OP_OK ? ta_run_block(it, foreach->body_actions) : ta_execution_error(it, &fault);
-    }
-    ta_value_release(&snapshot);
-    return result;
+    ta_fault fault = {0};
+    ta_op_status bound = definition->datamodel.v->foreach_bind(definition->datamodel.self,
+                                                               &(ta_datamodel_foreach_bind_params){
+                                                                   .shared = definition->datamodel_shared,
+                                                                   .instance = it->actor->datamodel_instance,
+                                                                   .snapshot = &loop->iteration_snapshot,
+                                                                   .index = loop->iteration,
+                                                                   .item = item,
+                                                                   .index_name = index,
+                                                                   .host = &it->actor->host,
+                                                                   .fault = &fault,
+                                                               });
+    loop->iteration += 1u;
+    return bound == TA_OP_OK ? TA_OK : ta_execution_error(it, &fault);
 }
 
 static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action) {
@@ -1089,17 +1091,7 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
             ta_value_release(&record.value);
             break;
         }
-        case TA_ACTION_FOREACH:
-            return ta_exec_foreach(it, &action->as.foreach);
-        case TA_ACTION_IF: {
-            bool condition = false;
-            status = ta_eval_condition(it, action->as.conditional.condition, &condition, &fault);
-            if (status == TA_OP_OK) {
-                return ta_run_block(it, condition ? action->as.conditional.then_actions
-                                                  : action->as.conditional.else_actions);
-            }
-            break;
-        }
+        /* <if> and <foreach> open blocks, which ta_run_block runs. */
         default:
             status = TA_OP_ERROR;
             break;
@@ -1107,14 +1099,79 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
     return status == TA_OP_OK ? TA_OK : ta_execution_error(it, &fault);
 }
 
+static ta_result ta_exec_push(ta_interpreter *it, ta_exec_frame frame) {
+    if (it->exec_count == it->exec_capacity) {
+        return TA_ERR_INVALID; /* unreachable: the definition's depth sizes the frames */
+    }
+    it->exec_frames[it->exec_count++] = frame;
+    return TA_OK;
+}
+
+static ta_result ta_exec_block(ta_interpreter *it, ta_span32 block) {
+    return ta_exec_push(it, (ta_exec_frame){ .kind = TA_EXEC_FRAME_ACTIONS, .actions = block });
+}
+
+/*
+ * Runs a block of executable content and every block nested in it, without
+ * recursion (ADR 0060). Each open block is an ACTIONS frame; an <if> opens
+ * the block its condition picks, and a <foreach> is a FOREACH frame that
+ * opens its body once per position. The frames come from the interpreter's
+ * scratch, so nothing here allocates them. An error anywhere stops the whole
+ * block, as SCXML 4.9 requires, and every snapshot still held is released.
+ */
 static ta_result ta_run_block(ta_interpreter *it, ta_span32 block) {
-    for (uint32_t index = 0; index < block.length; index += 1) {
-        ta_result result = ta_exec_action(it, &it->definition->action_defs[block.offset + index]);
-        if (result != TA_OK) {
-            return result;
+    const ta_definition *definition = it->definition;
+    uint32_t floor = it->exec_count;
+    ta_result result = ta_exec_block(it, block);
+    while (result == TA_OK && it->exec_count > floor) {
+        ta_exec_frame *frame = &it->exec_frames[it->exec_count - 1u];
+        if (frame->kind == TA_EXEC_FRAME_FOREACH) {
+            if (frame->iteration == frame->iteration_count) {
+                ta_value_release(&frame->iteration_snapshot);
+                it->exec_count -= 1u;
+                continue;
+            }
+            result = ta_foreach_bind(it, frame);
+            if (result == TA_OK) {
+                result = ta_exec_block(it, frame->actions);
+            }
+            continue;
+        }
+        if (frame->cursor == frame->actions.length) {
+            it->exec_count -= 1u;
+            continue;
+        }
+        uint32_t index = frame->actions.offset + frame->cursor;
+        frame->cursor += 1u;
+        const ta_action_def *action = &definition->action_defs[index];
+        if (action->kind == TA_ACTION_IF) {
+            bool condition = false;
+            ta_fault fault = {0};
+            ta_op_status status = ta_eval_condition(it, action->as.conditional.condition, &condition, &fault);
+            result = status != TA_OP_OK ? ta_execution_error(it, &fault)
+                                        : ta_exec_block(it, condition ? action->as.conditional.then_actions
+                                                                      : action->as.conditional.else_actions);
+        } else if (action->kind == TA_ACTION_FOREACH) {
+            ta_exec_frame loop = { .kind = TA_EXEC_FRAME_FOREACH, .actions = action->as.foreach.body_actions,
+                                   .cursor = index };
+            result = ta_foreach_begin(it, &loop);
+            if (result == TA_OK) {
+                result = ta_exec_push(it, loop);
+                if (result != TA_OK) {
+                    ta_value_release(&loop.iteration_snapshot);
+                }
+            }
+        } else {
+            result = ta_exec_action(it, action);
         }
     }
-    return TA_OK;
+    while (it->exec_count > floor) {
+        ta_exec_frame *frame = &it->exec_frames[--it->exec_count];
+        if (frame->kind == TA_EXEC_FRAME_FOREACH) {
+            ta_value_release(&frame->iteration_snapshot);
+        }
+    }
+    return result;
 }
 
 /* A failed block has already queued its error; execution continues with the next block. */
@@ -2005,7 +2062,10 @@ static ta_result ta_interpreter_init(ta_interpreter *it, ta_system *system, ta_a
     /* Each history state is expanded at most once. */
     it->history_stack = ta_arena_alloc(&system->scratch, (definition->history.slot_count + 1u) * sizeof(ta_state_id),
                                        _Alignof(ta_state_id));
-    if (it->entry_frames == NULL || it->history_stack == NULL) {
+    /* An open block per level, and a <foreach> frame under each body. */
+    it->exec_capacity = 2u * definition->max_action_depth + 1u;
+    it->exec_frames = ta_arena_alloc(&system->scratch, it->exec_capacity * sizeof(ta_exec_frame), _Alignof(ta_exec_frame));
+    if (it->entry_frames == NULL || it->history_stack == NULL || it->exec_frames == NULL) {
         return TA_ERR_NOMEM;
     }
     ta_bits_clear(it, it->history_busy);
@@ -2095,32 +2155,119 @@ ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_act
     return result;
 }
 
-ta_result ta_interpreter_cancel(ta_system *system, ta_actor *actor) {
-    ta_interpreter interpreter;
-    ta_interpreter *it = &interpreter;
-    ta_result result = ta_interpreter_init(it, system, actor);
+/*
+ * One session being exited by ta_interpreter_exit_invoked: its interpreter,
+ * the scratch arena that interpreter lives in, the states it still has to
+ * exit, and, while a child it invoked is being exited above it, the
+ * invocation to cancel once that child is done.
+ */
+typedef struct {
+    ta_actor *actor;
+    ta_interpreter it;
+    ta_arena arena;
+    ta_state_id next;     /* states left to exit: those below `next`, highest first */
+    ta_state_id exiting;  /* the state whose invocations are being cancelled */
+    uint32_t cursor;      /* its invocations left: those below `cursor` */
+    bool waiting;         /* `taken`'s child is being exited above this frame */
+    ta_invoke_taken taken;
+} ta_exit_frame;
+
+/*
+ * Starts exiting a session: a scratch arena of its own, so the interpreter
+ * that cancelled it keeps its scratch, and an interpreter over it. Nothing
+ * happens when the session is gone or finished, or when there is no memory
+ * to exit it with.
+ */
+static void ta_exit_open(ta_system *system, ta_vec *frames, ta_actor_id id) {
+    ta_actor *actor = ta_actor_lookup(system, id);
+    if (actor == NULL || actor->finished) {
+        return;
+    }
+    ta_exit_frame frame = { .actor = actor, .exiting = TA_STATE_NONE };
+    if (ta_arena_init(&frame.arena, system->allocator, system->scratch.block_size) != TA_OK) {
+        return;
+    }
+    ta_arena previous = system->scratch;
+    system->scratch = frame.arena;
+    ta_result result = ta_interpreter_init(&frame.it, system, actor);
+    frame.arena = system->scratch;
+    frame.next = actor->definition->state_count;
+    if (result == TA_OK) {
+        result = ta_vec_push(frames, &frame);
+    }
     if (result != TA_OK) {
         actor->live_active = NULL;
-        return result;
+        ta_arena_destroy(&frame.arena);
+        system->scratch = previous;
     }
-    const ta_definition *definition = it->definition;
-    for (ta_state_id index = definition->state_count; index > 0; index -= 1u) {
-        ta_state_id state = index - 1u;
-        if (!ta_bits_get(it->active, state)) {
-            continue;
+}
+
+/*
+ * One step of the session on top: exit its next state, cancel that state's
+ * next invocation, or finish. `system->scratch` is the session's arena while
+ * it runs; a step that keeps the session saves the arena back to its frame.
+ */
+static void ta_exit_step(ta_system *system, ta_vec *frames) {
+    ta_exit_frame *frame = ta_vec_at(frames, frames->count - 1u);
+    ta_interpreter *it = &frame->it;
+    if (frame->waiting) {
+        frame->waiting = false;
+        ta_invoke_cancel_service(&frame->taken);
+        frame->arena = system->scratch;
+        return;
+    }
+    if (frame->exiting != TA_STATE_NONE) {
+        if (!ta_invoke_take(frame->actor, frame->exiting, &frame->cursor, &frame->taken)) {
+            ta_bits_put(it->active, frame->exiting, false);
+            frame->exiting = TA_STATE_NONE;
+        } else if (frame->taken.meta.has_child) {
+            frame->waiting = true;
+            frame->arena = system->scratch;
+            ta_exit_open(system, frames, frame->taken.meta.child); /* may move `frame` */
+            return;
+        } else {
+            ta_invoke_cancel_service(&frame->taken);
         }
-        result = ta_run_handlers(it, ta_state(it, state)->onexit_handlers);
-        if (result == TA_OK) {
-            result = ta_invoke_state_exited(it, state);
-        }
+        frame->arena = system->scratch;
+        return;
+    }
+    while (frame->next > 0 && !ta_bits_get(it->active, frame->next - 1u)) {
+        frame->next -= 1u;
+    }
+    if (frame->next == 0) {
+        ta_store_active(it);
+        frame->actor->live_active = NULL;
+        ta_arena_destroy(&system->scratch);
+        frames->count -= 1u;
+        return;
+    }
+    ta_state_id state = --frame->next;
+    ta_result result = ta_run_handlers(it, ta_state(it, state)->onexit_handlers);
+    frame->arena = system->scratch;
+    if (result != TA_OK) {
         ta_bits_put(it->active, state, false);
-        if (result != TA_OK) {
-            break;
-        }
+        frame->next = 0; /* exitInterpreter stops at a failure, as it did */
+        return;
     }
-    ta_store_active(it);
-    actor->live_active = NULL;
-    return result;
+    ta_invoke_forget_pending(frame->actor, state);
+    frame->exiting = state;
+    frame->cursor = UINT32_MAX;
+}
+
+void ta_interpreter_exit_invoked(ta_system *system, ta_actor_id id) {
+    /* Cancelling an invocation happens inside the parent's interpreter:
+     * every exited session gets its own scratch, and the parent's comes back. */
+    ta_arena outer = system->scratch;
+    ta_vec frames;
+    ta_vec_init(&frames, system->allocator, TA_VEC_LAYOUT(ta_exit_frame));
+    ta_exit_open(system, &frames, id);
+    while (frames.count != 0) {
+        ta_exit_frame *frame = ta_vec_at(&frames, frames.count - 1u);
+        system->scratch = frame->arena;
+        ta_exit_step(system, &frames);
+    }
+    ta_vec_destroy(&frames);
+    system->scratch = outer;
 }
 
 /* ------------------------------------------------------------------------
