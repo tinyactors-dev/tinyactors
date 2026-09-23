@@ -1999,32 +1999,25 @@ typedef struct { void *self; ta_actor_inspection_visitor visit; } ta_actor_inspe
 TA_API ta_result ta_actor_inspect(ta_system *system,
                                   ta_actor_id actor,
                                   TA_OUT TA_LIFETIME(system) ta_actor_inspection *out);
-/*
- * Visits every resident actor once, invoked children included, with the
- * same view ta_actor_inspect() gives for it. The walk stops at the first
- * visit that answers anything but TA_OK and returns that result, so an
- * inspector can end it early; a null `visit` is TA_ERR_INVALID. Actors are
- * visited in increasing position order, as ta_system_visit_actors_from()
- * defines it; this is that walk from position 0 with no limit.
- */
-TA_API ta_result ta_system_visit_actors(ta_system *system, ta_actor_inspector inspector);
-
 /* The position of a finished walk: nothing is left to visit. */
 #define TA_ACTOR_VISIT_END ((uint32_t)UINT32_MAX)
 
 /*
- * One page of the actor walk (ADR 0062). Resident actors are visited in
- * increasing position order, starting at `from`, invoked children included
- * at their own positions. A position is opaque: pass 0 to start and then the
- * previous call's `next`. Today it is the actor's slot, the low 32 bits of
- * its ID.
+ * Walks the resident actors (ADR 0062), invoked children included, handing
+ * `inspector` the same view ta_actor_inspect() gives for each. Actors are
+ * visited in increasing position order, starting at `from`. A position is
+ * opaque: pass 0 to start, and then the previous call's `next`. Today it is
+ * the actor's slot, the low 32 bits of its ID. A walk of everything is
+ * `from` 0 and `limit` 0, and may leave `next` null.
  *
- * - The walk reached the end: TA_OK, `next` is TA_ACTOR_VISIT_END.
+ * - The walk reached the end: TA_OK, and `next` is TA_ACTOR_VISIT_END.
  * - `limit` visits answered TA_OK (0 means no limit): TA_OK, and `next` is
  *   the position after the last actor visited.
- * - A visit answered anything else: that result, and `next` is that actor's
- *   position, so calling again offers it again.
- * - A null `params`, `next` or `visit` is TA_ERR_INVALID.
+ * - A visit answered anything else: the walk stops with that result, and
+ *   `next` is that actor's position, so calling again offers it again. An
+ *   inspector ends a walk early this way.
+ * - A null `params` is TA_ERR_INVALID; so is a null `visit`, with `next`
+ *   set to `from`.
  *
  * Between calls, and from inside a visit, the system may change. An actor
  * resident for the whole iteration is visited exactly once; an actor
@@ -2037,10 +2030,9 @@ typedef struct {
     ta_actor_inspector inspector;
     uint32_t from;
     uint32_t limit;
-    TA_OUT TA_ALWAYS uint32_t *next;
+    TA_OUT TA_OPTIONAL TA_ALWAYS uint32_t *next;
 } ta_actor_visit_params;
-TA_API ta_result ta_system_visit_actors_from(ta_system *system,
-                                             TA_IN const ta_actor_visit_params *params);
+TA_API ta_result ta_system_visit_actors(ta_system *system, TA_IN const ta_actor_visit_params *params);
 /*
  * The data model's inspection root (its `inspect` operation). Release it
  * with ta_value_release(). TA_ERR_UNSUPPORTED when the adapter has none.

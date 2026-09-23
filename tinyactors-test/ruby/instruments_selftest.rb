@@ -144,7 +144,7 @@ inspector_group = TinyactorsTest.scenarios 'inspector' do
     first = spawn :harness_ping
     second = spawn :harness_ping
 
-    assert_equal 'ok', visit_actors
+    assert_equal 'ok', visit_actors.first
     assert_equal [first.handle, second.handle].sort, inspector.visits.map { |entry| entry[:actor] }.sort
     assert_equal 2, inspector.control('stats')[:visits]
     view = inspector.visits.first.fetch(:view)
@@ -154,7 +154,7 @@ inspector_group = TinyactorsTest.scenarios 'inspector' do
     # Armed before the walk it did not take part in yet: the instrument is
     # created by the control call itself.
     inspector.arm_fault(after: 0, result: 'err_not_found')
-    assert_equal 'err_not_found', visit_actors
+    assert_equal 'err_not_found', visit_actors.first
     assert_equal 3, inspector.visits.size, 'the failing visit stopped the walk'
   end
 end

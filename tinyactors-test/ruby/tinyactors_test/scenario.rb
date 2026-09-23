@@ -782,18 +782,15 @@ module TinyactorsTest
       @instruments['inspector'] ||= instrument('inspector', 'inspector.recording')
     end
 
-    # ta_system_visit_actors with that inspector; returns the result.
-    def visit_actors(inspector = recording_inspector)
-      ta.system.visit_actors(system: system_handle, inspector: inspector.adapter)[:result]
-    end
-
-    # One page of the walk, ta_system_visit_actors_from (ADR 0062):
-    # [result, next]. `next` is ACTOR_VISIT_END when nothing is left.
+    # ta_system_visit_actors with that inspector (ADR 0062): [result, next].
+    # The defaults walk everything; `from` and `limit` walk one page, and
+    # `next` says where the next page starts, ACTOR_VISIT_END when nothing is
+    # left.
     ACTOR_VISIT_END = 0xFFFF_FFFF
 
-    def visit_actors_page(from:, limit:, inspector: recording_inspector)
-      response = ta.system.visit_actors_from(system: system_handle, inspector: inspector.adapter,
-                                             from: from, limit: limit)
+    def visit_actors(inspector = recording_inspector, from: 0, limit: 0)
+      response = ta.system.visit_actors(system: system_handle, inspector: inspector.adapter,
+                                        from: from, limit: limit)
       [response[:result], response.dig(:out, :next)]
     end
 
@@ -801,12 +798,12 @@ module TinyactorsTest
     # order, the `next` of every page].
     def walk_in_pages(limit, inspector: recording_inspector)
       # An empty page hands core the instrument, so its journal can be read.
-      visit_actors_page(from: ACTOR_VISIT_END, limit: 1, inspector: inspector)
+      visit_actors(inspector, from: ACTOR_VISIT_END, limit: 1)
       seen = inspector.visits.size
       cursor = 0
       cursors = []
       until cursor == ACTOR_VISIT_END
-        result, cursor = visit_actors_page(from: cursor, limit: limit, inspector: inspector)
+        result, cursor = visit_actors(inspector, from: cursor, limit: limit)
         assert_equal 'ok', result
         cursors << cursor
         assert cursors.size <= 1000, 'the walk ends'

@@ -31,7 +31,7 @@ implemented.
 
 ## Decision
 
-### 1. A new paged call; the old one stays
+### 1. One walk, taking a params struct
 
 ```c
 /* The position of a finished walk: nothing is left to visit. */
@@ -43,19 +43,21 @@ typedef struct {
     uint32_t from;
     /* Visits after which the call returns TA_OK; 0 means no limit. */
     uint32_t limit;
-    /* Where the next call starts, or TA_ACTOR_VISIT_END. Always written. */
-    TA_OUT uint32_t *next;
+    /* Where the next call starts, or TA_ACTOR_VISIT_END. Written whatever
+     * the result; may be null for a walk of everything. */
+    TA_OUT TA_OPTIONAL TA_ALWAYS uint32_t *next;
 } ta_actor_visit_params;
 
-TA_API ta_result ta_system_visit_actors_from(ta_system *system,
-                                             TA_IN const ta_actor_visit_params *params);
+TA_API ta_result ta_system_visit_actors(ta_system *system,
+                                        TA_IN const ta_actor_visit_params *params);
 ```
 
-`ta_system_visit_actors` keeps its signature and meaning. It is the walk
-from position 0 with no limit. No existing caller changes. Core's rule of
-at most three parameters means a resumable walk needs a params struct either
-way; adding one beside the old call is cheaper than migrating every caller,
-and the old call remains the natural one for a walk that is never resumed.
+`ta_system_visit_actors` takes the params struct, and there is one walk. A
+walk of everything is `from` 0 and `limit` 0, and may leave `next` null; a
+page passes a start, a limit and `next`. Core's rule of at most three
+parameters means a resumable walk needs a params struct, and the library is
+private (root `AGENTS.md`), so the function changed in place and its
+callers moved with it.
 
 A page limit is part of the call, not left to the inspector. A page that is
 full is not an error, so an inspector should not have to return a made-up
@@ -85,8 +87,8 @@ from a real failure.
   result, and `next` is the position of that actor. A visit that fails did
   not take the actor. Calling again from `next` offers the same actor
   again, so an inspector that failed for want of memory can retry the page.
-- **Bad arguments** (null `params`, `next` or `visit`): `TA_ERR_INVALID`,
-  and `next` is written as `from` when `next` is not null.
+- **Bad arguments** (null `params` or `visit`): `TA_ERR_INVALID`, and
+  `next` is written as `from` when there is one.
 
 So `next` is always the first position not yet taken by a visit that
 answered `TA_OK`.
@@ -129,16 +131,15 @@ a full iteration is O(table size). This is accepted. A caller that needs a
 hard bound per call can be given a scan limit later, if a measurement shows
 it matters.
 
-### 7. `ta_system_visit_actors`
+### 7. The order is part of the contract
 
-Its documentation now promises the same order: increasing position. Its
-behaviour does not change, since the implementation already walked slots in
-order.
+The walk has always gone through slots in order. It is now promised:
+increasing position, for a walk of everything as for a page.
 
 ## Consequences
 
 - The napi addon can build a page in O(page size + empty slots) by calling
-  `ta_system_visit_actors_from` with its page size as `limit` and keeping
+  `ta_system_visit_actors` with its page size as `limit` and keeping
   `next`. It no longer needs to skip pages or return a fake error.
 - A walk can cross a process boundary: the test host's RPC binds the paged
   call directly, and a scenario can walk page by page.
@@ -161,8 +162,8 @@ order.
   which a page must not do.
 - **Bad arguments:** `next` is written as `from` before the system and
   `visit` are checked, so it is set whenever it is not null.
-- **Tests** are in `tinyactors-test`: `ruby/scenarios/actor_pages.rb`
-  covers pages of 1, 7 and more than the population, changes between
+- **Tests** are in `tinyactors-test`: `ruby/scenarios/actor_walk.rb`
+  covers the walk of everything and pages of 1, 7 and more than the population, changes between
   pages with slot reuse on both sides of the cursor, a failed visit, an
   invoked child placed before its parent, and an empty system. The scale
   test measures one page of 64 per actor visited, 3,000 pages from where
@@ -170,6 +171,18 @@ order.
 - **ADR 0059** is still Proposed and unimplemented. The position is the
   slot, taken from the low 32 bits of the actor ID internally; nothing
   public promises that yet.
+
+- **2026-09-23: one function.** As first implemented, this ADR added
+  `ta_system_visit_actors_from` beside an unchanged
+  `ta_system_visit_actors(ta_system *, ta_actor_inspector)`, so that no
+  caller would change. Under the rule that the libraries here are private
+  and their APIs change in place (root `AGENTS.md`), the second function
+  was removed the same day: `ta_system_visit_actors` now takes
+  `ta_actor_visit_params`, `next` became optional for a walk of everything,
+  and every caller (core's `inspection_test.c`, the test host's `server.c`
+  and `scale_test.c`, and its Ruby `visit_actors`, now one entry point with
+  paging as optional arguments) moved with it. The two scenario files
+  became one.
 
 ## Sources
 

@@ -179,8 +179,8 @@ static ta_result tat_collect_actor(void *self, const ta_actor_inspection *inspec
  * Lists the IDs of every resident actor, including children that invokers
  * spawned, so a scenario can run all of them to quiescence. With
  * "runnable": true, only actors with a macrostep in progress are listed.
- * Core's only enumeration is the ta_system_visit_actors callback, which
- * cannot cross RPC.
+ * It walks with core's ta_system_visit_actors in one call, from position 0
+ * with no limit; its callback cannot cross RPC, so the list is built here.
  */
 static jv tat_handle_system_actors(tat_bind *bind, jv params, int *error_code) {
     jv system = jv_object_get(jv_copy(params), jv_string("system"));
@@ -194,7 +194,8 @@ static jv tat_handle_system_actors(tat_bind *bind, jv params, int *error_code) {
         jv_free(list.ids);
         return tat_bind_take_error(bind, error_code);
     }
-    ta_result result = ta_system_visit_actors(handle, (ta_actor_inspector){.self = &list, .visit = tat_collect_actor});
+    ta_result result = ta_system_visit_actors(
+        handle, &(ta_actor_visit_params){.inspector = {.self = &list, .visit = tat_collect_actor}});
     jv ids = list.ids;
     if (result != TA_OK) {
         jv_free(ids);

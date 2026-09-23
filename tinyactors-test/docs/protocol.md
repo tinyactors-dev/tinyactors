@@ -61,12 +61,12 @@ that create real handles.
 `system.actors` takes `{"system": <handle>, "runnable": bool}` and returns the
 IDs of every resident actor, including children that invokers spawned. With
 `"runnable": true` it lists only actors whose macrostep is in progress. It is
-built on core's own enumeration, `ta_system_visit_actors`; that function is
-also bound directly (`ta.system.visit_actors`), and the callback it takes is
-an `inspector.recording` instrument, so a scenario can assert on the walk
-itself. The paged walk, `ta_system_visit_actors_from` (ADR 0062), is bound
-as `ta.system.visit_actors_from` with `from` and `limit`; `next` comes back
-in `out` whatever the result.
+built on core's own enumeration, `ta_system_visit_actors`, walking
+everything in one call. That function is also bound directly
+(`ta.system.visit_actors`), with `from` and `limit` for one page
+(ADR 0062); `next` comes back in `out` whatever the result. The callback it
+takes is an `inspector.recording` instrument, so a scenario can assert on
+the walk itself.
 
 `instrument.list`, `instrument.journal`, and `instrument.control` read and
 steer the instrumented adapters (see [Instruments](#instruments)):

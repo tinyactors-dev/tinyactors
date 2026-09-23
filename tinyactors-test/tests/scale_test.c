@@ -570,12 +570,12 @@ static round_cost measure(size_t population) {
     uint32_t cursor = 0;
     for (unsigned page = 0; page < PAGES; page += 1u) {
         uint32_t next = 0;
-        require(ta_system_visit_actors_from(system, &(ta_actor_visit_params){
-                                                        .inspector = {.self = &visited, .visit = count_visit},
-                                                        .from = cursor,
-                                                        .limit = PAGE_SIZE,
-                                                        .next = &next,
-                                                    }) == TA_OK,
+        require(ta_system_visit_actors(system, &(ta_actor_visit_params){
+                                                   .inspector = {.self = &visited, .visit = count_visit},
+                                                   .from = cursor,
+                                                   .limit = PAGE_SIZE,
+                                                   .next = &next,
+                                               }) == TA_OK,
                 "a page of the actor walk");
         cursor = next == TA_ACTOR_VISIT_END ? 0u : next;
     }

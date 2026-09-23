@@ -315,7 +315,8 @@ static void test_actor_inspection(ta_system *system, counting_model *model) {
     CHECK(model->inspects == inspects);
 
     visit_log log = {0};
-    CHECK(ta_system_visit_actors(system, (ta_actor_inspector){ .self = &log, .visit = record_visit }) == TA_OK);
+    CHECK(ta_system_visit_actors(system, &(ta_actor_visit_params){
+                                             .inspector = { .self = &log, .visit = record_visit } }) == TA_OK);
     CHECK(log.visited == 1);
     CHECK(log.allocated_bytes == view.allocated_bytes);
     CHECK(model->inspects == inspects);

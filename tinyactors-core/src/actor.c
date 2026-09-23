@@ -765,11 +765,14 @@ ta_result ta_actor_datamodel_root(ta_system *system, ta_actor_id id, ta_value *o
     return result;
 }
 
-ta_result ta_system_visit_actors_from(ta_system *system, const ta_actor_visit_params *params) {
-    if (params == NULL || params->next == NULL) {
+ta_result ta_system_visit_actors(ta_system *system, const ta_actor_visit_params *params) {
+    if (params == NULL) {
         return TA_ERR_INVALID;
     }
-    *params->next = params->from;
+    /* A walk of everything may leave `next` null. */
+    uint32_t unused = 0;
+    uint32_t *next = params->next != NULL ? params->next : &unused;
+    *next = params->from;
     if (system == NULL || params->inspector.visit == NULL) {
         return TA_ERR_INVALID;
     }
@@ -790,18 +793,13 @@ ta_result ta_system_visit_actors_from(ta_system *system, const ta_actor_visit_pa
             result = params->inspector.visit(params->inspector.self, &inspection);
         }
         if (result != TA_OK) {
-            *params->next = slot; /* not taken: the next call offers it again */
+            *next = slot; /* not taken: the next call offers it again */
             return result;
         }
         visited += 1u;
     }
-    *params->next = slot >= system->actors.count ? TA_ACTOR_VISIT_END : slot;
+    *next = slot >= system->actors.count ? TA_ACTOR_VISIT_END : slot;
     return TA_OK;
-}
-
-ta_result ta_system_visit_actors(ta_system *system, ta_actor_inspector inspector) {
-    uint32_t next = 0;
-    return ta_system_visit_actors_from(system, &(ta_actor_visit_params){ .inspector = inspector, .next = &next });
 }
 
 ta_result ta_actor_active_states(ta_system *system, const ta_actor_active_states_params *params) {

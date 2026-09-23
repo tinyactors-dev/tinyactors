@@ -209,8 +209,10 @@ Further observations:
   `[{label:, value:, actor:}]`. `assert_logs(['phase', 'start'], ...)` states
   the records in order, `assert_logged(label, value, actor:, times:)` one of
   them.
-- `visit_actors` walks the resident actors with `recording_inspector`, whose
-  `visits` are the views core handed the callback (`ta_system_visit_actors`).
+- `visit_actors(inspector, from:, limit:)` walks the resident actors with
+  `recording_inspector` and answers `[result, next]`: everything by default,
+  or one page from `from`. The inspector's `visits` are the views core
+  handed the callback (`ta_system_visit_actors`, ADR 0062).
 - `parse_target(text)` and `format_target(target, capacity:)` are core's
   SCXML target URI grammar (ADR 0044), the parser and the writer that a
   `<send>` target and `$_event.origin` both go through.
