@@ -6212,9 +6212,9 @@
           "shape": "single",
           "direction": "out",
           "optional": true,
-          "valid_on": "success",
+          "valid_on": "always",
           "lifetime": "input",
-          "doc": "Filled when the result is TA_ERR_INVALID or TA_ERR_UNSUPPORTED because of the spec: the first fault in compile order (ADR 0058 section 2). Argument errors and TA_ERR_NOMEM leave `code` TA_COMPILE_ERROR_NONE. Borrows from `spec` and `error_arena`."
+          "doc": "Written after every result. When the result is TA_ERR_INVALID or TA_ERR_UNSUPPORTED because of the spec, it holds the first fault in compile order (ADR 0058 section 2). Success, argument errors and TA_ERR_NOMEM leave `code` TA_COMPILE_ERROR_NONE. Borrows from `spec` and `error_arena`."
         },
         {
           "name": "error_arena",

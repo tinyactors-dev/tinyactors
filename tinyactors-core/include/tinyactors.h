@@ -1468,12 +1468,13 @@ typedef struct {
     ta_allocator allocator;
     ta_definition **out;
     /*
-     * Filled when the result is TA_ERR_INVALID or TA_ERR_UNSUPPORTED because
-     * of the spec: the first fault in compile order (ADR 0058 section 2).
-     * Argument errors and TA_ERR_NOMEM leave `code` TA_COMPILE_ERROR_NONE.
+     * Written after every result. When the result is TA_ERR_INVALID or
+     * TA_ERR_UNSUPPORTED because of the spec, it holds the first fault in
+     * compile order (ADR 0058 section 2). Success, argument errors and
+     * TA_ERR_NOMEM leave `code` TA_COMPILE_ERROR_NONE.
      * Borrows from `spec` and `error_arena`.
      */
-    TA_OUT TA_OPTIONAL TA_LIFETIME(input) ta_compile_error *error;
+    TA_OUT TA_OPTIONAL TA_ALWAYS TA_LIFETIME(input) ta_compile_error *error;
     /* Receives the error's path and any copied message; untouched on
      * success. Without one, `error` has no path and no data-model message. */
     TA_OPTIONAL TA_ARENA ta_arena *error_arena;

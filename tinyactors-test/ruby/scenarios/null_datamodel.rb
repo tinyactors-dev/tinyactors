@@ -123,6 +123,8 @@ TinyactorsTest.scenarios 'null data model', chart: :null_parallel do
                                             datamodel: { '$adapter' => 'datamodel.null' },
                                             allocator: allocator.adapter)
       assert_equal 'err_invalid', response[:result], "#{operation} compiled under the null data model"
+      assert_equal 'expression_rejected', response.dig(:out, :error, :code),
+                   "#{operation}: compile_spec reports why the chart was refused"
     end
   end
   

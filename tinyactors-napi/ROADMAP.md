@@ -138,8 +138,6 @@ addon needs a core change, core's API changes in place and every caller
 moves with it, the addon included. There are no second functions and no
 compatibility shims.
 
-One small core change is still needed before step 4: see step 4.
-
 ## Steps
 
 Each step leaves `main` building and passing `mise run test`, and is
@@ -222,15 +220,11 @@ Needs core ADR 0057; core ADR 0058 improves error messages.
   `ta_compile_error` (core ADR 0058): its code, path, subject and message.
   The call arena is passed as `error_arena`, and the error is copied into
   JavaScript before the arena is reset.
-  - The `error` member of `ta_definition_compile_params` is written after
-    every result: `ta_definition_compile_spec()` zeroes it on entry, so its
-    code is `TA_COMPILE_ERROR_NONE` unless the spec was refused. But it has
-    no validity annotation, so generated bindings treat it as valid only on
-    success and drop it when compiling fails. The test host has the same
-    gap (core ADR 0057, implementation notes). Before this step, annotate it
-    `TA_ALWAYS` in core, regenerate `tinyactors.api.json`, and move the test
-    host's refusal scenario from SCXML import to `compile_spec`. This needs
-    no ADR. Do not override the binding in the addon.
+  - The `error` member of `ta_definition_compile_params` is annotated
+    `TA_ALWAYS`: it is written after every result, with code
+    `TA_COMPILE_ERROR_NONE` unless the spec was refused (core ADR 0057,
+    implementation notes). The generated binding returns it on a refusal,
+    so the addon needs no override.
 - `lib/definition.js` reads `identity`, `inspect()` and `retired` through
   generated calls. `retire()` is bound.
 

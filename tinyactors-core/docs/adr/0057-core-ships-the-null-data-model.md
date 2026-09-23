@@ -91,9 +91,12 @@ Recorded when this ADR was implemented (2026-09-23).
   `delayed_send_test`, `event_pattern_test`) use `ta_null_datamodel()`.
   Stubs that count calls or refuse things on purpose (`deep_test`,
   `compile_error_test`, `export_test`) stay.
-- **The RPC does not return `compile_spec`'s error.** The `error` member of
-  `ta_definition_compile_params` has no `TA_VALID_ON` annotation, so the
-  generated binding encodes it as null on a refusal. The scenario that
-  checks the refusal's detail therefore imports an SCXML document, whose
-  `ta_import_error` is annotated. This is an ADR 0058 annotation gap, not
-  part of this ADR.
+- **The RPC did not return `compile_spec`'s error (fixed 2026-09-23).** The
+  `error` member of `ta_definition_compile_params` had no validity
+  annotation, so generated bindings treated it as valid only on success and
+  encoded it as null on a refusal. `ta_definition_compile_spec()` already
+  zeroes it on entry, so it is written after every result; it is now
+  annotated `TA_ALWAYS`. The scenario that compiles each refused chart
+  through `compile_spec` now also checks the `expression_rejected` code.
+  The scenario that checks the refusal's place in the document still
+  imports SCXML, because only the codec knows line and column.
