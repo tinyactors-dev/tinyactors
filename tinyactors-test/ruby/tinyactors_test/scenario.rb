@@ -313,7 +313,7 @@ module TinyactorsTest
       params[:datamodel_binding] = binding unless binding.nil?
       if name
         memory_directory
-        params[:address] = address(chart_name, name)
+        params[:address] = { family: { name: definition_family(definition) }, name: name.to_s }
       end
       id = core('ta_actor_spawn', ta.actor.spawn(**params)).fetch(:out)
       actor = Actor.new(self, id, chart_name, definition, address: params[:address])
@@ -850,7 +850,12 @@ module TinyactorsTest
 
     # The definition family of a chart (its <scxml name>, by default the chart name).
     def family(chart_name)
-      facts = core('ta_definition_inspect', ta.definition.inspect(system: system_handle, definition: definition(chart_name)))
+      definition_family(definition(chart_name))
+    end
+
+    # The family of a registered definition, for a chart the registry does not know.
+    def definition_family(definition)
+      facts = core('ta_definition_inspect', ta.definition.inspect(system: system_handle, definition: definition))
       facts.fetch(:out).dig(:identity, :family, :name)
     end
 
