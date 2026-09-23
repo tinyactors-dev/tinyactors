@@ -32,8 +32,11 @@ Two lifecycle problems in the first addon grow with scale:
    - stops the pump: releases its threadsafe function and clears its timer;
    - rejects all pending promises;
    - discards mailboxes;
-   - destroys the `ta_system`;
-   - releases every value box and definition callback.
+   - destroys the `ta_system`, whose frees go back to the pools;
+   - releases every definition callback, and the handle table of
+     ADR 0011 through its one reference;
+   - returns every pool chunk and arena block to the operating system
+     (ADR 0014).
 
    After close, every method throws `closed`.
 4. **Finalizers are safety nets.** The environment cleanup hook closes any

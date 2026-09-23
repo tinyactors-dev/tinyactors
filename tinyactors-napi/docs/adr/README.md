@@ -22,3 +22,4 @@ particular on core ADRs 0011, 0029, 0040, 0047, 0050 and 0053–0057 and 0059.
 | [0011](0011-javascript-values-cross-as-reference-counted-boxes.md) | [JavaScript values cross as reference-counted boxes](0011-javascript-values-cross-as-reference-counted-boxes.md) |
 | [0012](0012-lifecycle-close-is-authoritative-finished-actors-are-reclaimed.md) | [Lifecycle: close is authoritative, finished actors are reclaimed](0012-lifecycle-close-is-authoritative-finished-actors-are-reclaimed.md) |
 | [0013](0013-the-control-plane-is-generated-the-plumbing-is-hand-written.md) | [The control plane is generated; the plumbing is hand-written](0013-the-control-plane-is-generated-the-plumbing-is-hand-written.md) |
+| [0014](0014-memory-is-pooled-by-lifetime.md) | [Memory is pooled by lifetime](0014-memory-is-pooled-by-lifetime.md) |

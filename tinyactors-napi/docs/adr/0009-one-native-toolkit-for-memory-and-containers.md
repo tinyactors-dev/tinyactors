@@ -1,6 +1,6 @@
 # ADR 0009: One native toolkit for memory and containers
 
-**Status:** Accepted
+**Status:** Accepted; memory strategy refined by ADR 0014
 **Date:** 2026-09-23
 
 ## Context
@@ -17,20 +17,25 @@ much memory the addon itself used.
 1. **One small container module** (`src/containers.{c,h}`) provides:
    - `vec`: a growable array;
    - `ring`: a FIFO made of fixed-size chunks, so growing it never copies
-     the whole queue;
-   - `map`: an open-addressing hash map keyed by `uint64_t`, used for
-     mailboxes and the directory;
+     the whole queue. Chunks come from the system's pools (ADR 0014) and
+     return to them when they are empty;
+   - `map`: an open-addressing hash map keyed by `uint64_t`, used for the
+     directory and for interned addresses. Mailboxes do not use it, because
+     the scheduling table indexes them by slot (ADR 0005);
    - `slice`: a view of a pointer and a length, used in every interface
      that passes a sequence.
 
    Queues, enumeration pages and tables use these types and nothing else.
 2. **Temporary allocations use a scratch arena**, such as decoding a spec or
    building an inspection page. It is reset after each call, so error
-   paths free nothing by hand.
-3. **All allocations go through one counting allocator per system.** That
-   allocator is also handed to core. `system.stats()` reports the addon's
-   bytes by category (mailboxes, envelopes, value boxes, scratch high-water
-   mark), next to what core reports for each actor.
+   paths free nothing by hand. It is core's `ta_arena`, backed by the
+   system's chunk source (ADR 0014).
+3. **All allocations go through one counting pool allocator per system**
+   (ADR 0014). That allocator is also handed to core. `system.stats()`
+   reports the addon's bytes by category (envelopes, scheduling table, value
+   boxes, interned addresses, scratch high-water mark), the bytes held and
+   free in each size class, and the number of chunk requests, next to what
+   core reports for each actor.
 4. **The addon follows core's C rules where they make sense**: functions
    take at most three parameters, and helpers get their own module instead
    of living in `addon.c`.
