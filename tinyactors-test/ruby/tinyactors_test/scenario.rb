@@ -95,10 +95,10 @@ module TinyactorsTest
   class CoreResultError < StandardError
     attr_reader :function, :result
 
-    def initialize(function, result)
+    def initialize(function, result, detail = nil)
       @function = function
       @result = result
-      super("#{function} returned #{result}")
+      super(detail.nil? ? "#{function} returned #{result}" : "#{function} returned #{result}: #{detail}")
     end
   end
 
@@ -1051,12 +1051,18 @@ module TinyactorsTest
     end
 
     # ta_definition_import through the SCXML codec: decode, compile, register.
+    # A refusal says where in the document and why (ADR 0058).
     def import_scxml(chart)
-      core('ta_definition_import',
-           ta.definition.import(system: system_handle, codec: { '$adapter' => 'codec.scxml' },
-                                input: chart.source,
-                                resolver: { '$adapter' => 'resolver.map', 'config' => { 'files' => chart.files } },
-                                datamodel: datamodel_adapter(chart), allocator: allocator.adapter)).fetch(:out)
+      response = ta.definition.import(system: system_handle, codec: { '$adapter' => 'codec.scxml' },
+                                      input: chart.source,
+                                      resolver: { '$adapter' => 'resolver.map', 'config' => { 'files' => chart.files } },
+                                      datamodel: datamodel_adapter(chart), allocator: allocator.adapter)
+      unless response[:result] == 'ok'
+        detail = "#{chart.name}: #{TinyactorsTest.describe_import_error(ta, response.dig(:out, :error))}"
+        raise CoreResultError.new('ta_definition_import', response[:result], detail)
+      end
+
+      response.fetch(:out, {}).fetch(:out)
     end
 
     def compile_and_register(chart)

@@ -98,7 +98,9 @@ class Check
     response = @ta.definition.import(system: @system, codec: CODEC, input: source,
                                      resolver: { '$adapter' => 'resolver.map', 'config' => { 'files' => files } },
                                      datamodel: datamodel, allocator: ALLOCATOR)
-    return [nil, "#{response[:result]} #{response.dig(:out, :error).inspect}"] unless response[:result] == 'ok'
+    unless response[:result] == 'ok'
+      return [nil, "#{response[:result]} #{TinyactorsTest.describe_import_error(@ta, response.dig(:out, :error))}"]
+    end
 
     [response.dig(:out, :out), 'ok']
   end

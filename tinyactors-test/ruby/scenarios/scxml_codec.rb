@@ -99,6 +99,23 @@ TinyactorsTest.scenarios 'scxml codec' do
                   error.dig(:as, :decode, :attribute) || error.dig(:decode, :attribute)]
   end
 
+  # Catches: a semantic error in a document that says neither where nor what
+  # (ADR 0058) — the compile error is located in the document and formatted.
+  scenario 'a document with an unknown target is refused with its line, column and nearest state' do
+    source = "<scxml #{ScxmlCodecCharts::NS} name=\"c\">\n  <state id=\"idle\">\n" \
+             "    <transition event=\"go\" target=\"idel\"/>\n  </state>\n</scxml>"
+    response = ta.definition.import(system: system_handle, codec: { '$adapter' => 'codec.scxml' }, input: source,
+                                    datamodel: { '$adapter' => 'datamodel.jq' },
+                                    allocator: { '$adapter' => 'allocator.libc' })
+    assert_equal 'err_invalid', response[:result]
+    error = response.dig(:out, :error)
+    compile = error.dig(:as, :compile) || error[:compile]
+    assert_equal ['compile', true, 3, 36], [error[:stage], error[:located], error.dig(:at, :line), error.dig(:at, :column)]
+    assert_equal %w[unknown_state idel idle], [compile[:code], compile[:subject], compile[:related]]
+    assert_equal '3:36: states[0].transitions[0].targets[0]: unknown state "idel"; nearest is "idle"',
+                 TinyactorsTest.describe_import_error(ta, error)
+  end
+
   # Catches: codec limits that do not reach the embedder, or a limit error
   # that does not say which bound.
   scenario 'a codec configured with limits refuses what exceeds them' do

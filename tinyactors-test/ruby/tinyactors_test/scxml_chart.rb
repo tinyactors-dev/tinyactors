@@ -27,4 +27,28 @@ module TinyactorsTest
 
     def to_s = "#{name} (SCXML)"
   end
+
+  # One line saying why ta_definition_import refused a document: where in
+  # it, when the error is located, and what. A compile error is written by
+  # core's ta_compile_error_format (ADR 0058), so a broken chart reads
+  #   3:36: states[0].transitions[0].targets[0]: unknown state "idel"; nearest is "idle"
+  # `ta` is the driver's proxy; `error` is the response's out.error.
+  def self.describe_import_error(ta, error)
+    return 'no error detail' unless error.is_a?(Hash)
+
+    where = error[:located] ? "#{error.dig(:at, :line)}:#{error.dig(:at, :column)}: " : ''
+    case error[:stage]
+    when 'decode'
+      decode = error[:decode] || {}
+      construct = decode[:construct].to_s.empty? ? '' : " <#{decode[:construct]}>"
+      attribute = decode[:attribute].to_s.empty? ? '' : " #{decode[:attribute]}="
+      "#{where}#{decode[:code]}#{construct}#{attribute}: #{decode[:message]}"
+    when 'compile'
+      formatted = ta.compile.error_format(error: error[:compile])
+      text = formatted[:result] == 'ok' ? formatted.dig(:out, :out) : error[:compile].inspect
+      "#{where}#{text}"
+    else
+      error.inspect
+    end
+  end
 end

@@ -45,7 +45,10 @@ begin
     response = driver.ta.definition.import(system: system, codec: { '$adapter' => 'codec.scxml' }, input: chart.source,
                                            resolver: { '$adapter' => 'resolver.map', 'config' => { 'files' => chart.files } },
                                            datamodel: datamodel, allocator: allocator)
-    failures << "#{name}: #{response[:result]} #{response.dig(:out, :error).inspect}" unless response[:result] == 'ok'
+    next if response[:result] == 'ok'
+
+    failures << "#{name}: #{response[:result]} " \
+                "#{TinyactorsTest.describe_import_error(driver.ta, response.dig(:out, :error))}"
   rescue TinyactorsTest::RpcError => e
     failures << "#{name}: #{e.message} #{e.data.inspect}"
   end
