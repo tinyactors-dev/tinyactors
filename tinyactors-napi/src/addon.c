@@ -8,10 +8,13 @@
  *   code throws (ADR 0008); lib/errors.js calls it once per environment;
  * - System: the native system class (ADR 0012), used by lib/system.js;
  * - environmentStats(): counters for tests (systems created and closed,
- *   bytes leaked at close).
+ *   bytes leaked at close);
+ * - core: the generated control plane (ADR 0013), one function per bound
+ *   core function. It is internal: index.js does not re-export it.
  */
 #include <node_api.h>
 
+#include "gen/ta_napi.h"
 #include "napi_system.h"
 #include "runtime.h"
 
@@ -76,7 +79,8 @@ static napi_value tna_init(napi_env env, napi_value exports) {
         napi_set_named_property(env, exports, "version", version) != napi_ok ||
         tna_export_function(env, exports, "setup", tna_setup) != napi_ok ||
         tna_export_function(env, exports, "environmentStats", tna_environment_stats) != napi_ok ||
-        tna_napi_system_define(env, exports) != napi_ok) {
+        tna_napi_system_define(env, exports) != napi_ok ||
+        tna_gen_define(env, exports) != napi_ok) {
         napi_throw_error(env, NULL, "tinyactors-napi: module initialization failed");
         return NULL;
     }

@@ -15,15 +15,35 @@
 #include "system.h"
 
 struct tna_napi_system {
+    const void *tag; /* &tna_napi_system_tag: unwrapped objects are checked */
     tna_system *system;
     tna_env *env_data;
     /* The environment's list of open systems. */
     tna_napi_system *previous;
     tna_napi_system *next;
     bool listed;
+    /*
+     * Handle objects made from this system (ADR 0013 point 5). Each one holds
+     * the wrapper, so the wrapper and its system outlive the JavaScript System
+     * until the last handle object is finalized.
+     */
+    tna_napi_handle *handles;
+    uint32_t holders;
+    bool finalized; /* the JavaScript System is gone */
 };
+
+extern const char tna_napi_system_tag;
 
 /* Defines the System class on `exports`. */
 napi_status tna_napi_system_define(napi_env env, napi_value exports);
 /* Closes every system still open in the environment (the cleanup hook). */
 void tna_napi_system_close_open(tna_env *data);
+/* The native System of a JavaScript System object, or NULL. */
+tna_napi_system *tna_napi_system_unwrap(napi_env env, napi_value value);
+
+/* Adds a handle to the system's list; the handle holds the system. */
+void tna_napi_system_adopt(tna_napi_system *wrapper, tna_napi_handle *handle);
+/* Removes a handle from its system's list and frees it. */
+void tna_napi_system_drop(tna_napi_handle *handle);
+/* Releases the handles whose objects were finalized while core ran. */
+void tna_napi_system_flush(tna_napi_system *wrapper);

@@ -30,6 +30,12 @@ typedef struct tna_system {
     tna_scratch scratch;
     ta_system *core;
     bool closed;
+    /*
+     * Set around every core call (ADR 0013 point 4). A generated entry point
+     * that finds it set throws "reentrant": data-model, I/O and invoker
+     * callbacks may run JavaScript, but that JavaScript cannot call core.
+     */
+    bool inside_core;
     /* Bytes still in use when close finished; nonzero means a leak. */
     size_t leaked_bytes;
 } tna_system;

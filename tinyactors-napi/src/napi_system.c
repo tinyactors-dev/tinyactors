@@ -20,11 +20,93 @@ static void tna_unlist(tna_napi_system *wrapper) {
     wrapper->listed = false;
 }
 
+const char tna_napi_system_tag = 0;
+
+static void tna_free_wrapper(tna_napi_system *wrapper) {
+    tna_system_free(wrapper->system);
+    tna_env *data = wrapper->env_data;
+    free(wrapper);
+    tna_env_release(data);
+}
+
+static void tna_unlink_handle(tna_napi_handle *handle) {
+    tna_napi_system *owner = handle->owner;
+    if (handle->previous != NULL) {
+        handle->previous->next = handle->next;
+    } else {
+        owner->handles = handle->next;
+    }
+    if (handle->next != NULL) {
+        handle->next->previous = handle->previous;
+    }
+    handle->previous = NULL;
+    handle->next = NULL;
+}
+
+void tna_napi_system_adopt(tna_napi_system *wrapper, tna_napi_handle *handle) {
+    handle->owner = wrapper;
+    handle->previous = NULL;
+    handle->next = wrapper->handles;
+    if (wrapper->handles != NULL) {
+        wrapper->handles->previous = handle;
+    }
+    wrapper->handles = handle;
+    wrapper->holders += 1u;
+}
+
+void tna_napi_system_drop(tna_napi_handle *handle) {
+    tna_napi_system *owner = handle->owner;
+    tna_unlink_handle(handle);
+    free(handle);
+    owner->holders -= 1u;
+    if (owner->finalized && owner->holders == 0) {
+        tna_free_wrapper(owner);
+    }
+}
+
+void tna_napi_system_flush(tna_napi_system *wrapper) {
+    if (wrapper->system->inside_core) {
+        return;
+    }
+    tna_napi_handle *handle = wrapper->handles;
+    while (handle != NULL) {
+        tna_napi_handle *next = handle->next;
+        if (handle->finalized) {
+            if (handle->pointer != NULL && !tna_system_closed(wrapper->system)) {
+                handle->kind->release(handle->pointer);
+            }
+            tna_napi_system_drop(handle);
+        }
+        handle = next;
+    }
+}
+
+/*
+ * Close releases every handle core does not reclaim itself, before core goes
+ * away (ADR 0012). Handle objects that are still reachable keep working as
+ * "closed" objects; those already finalized are freed.
+ */
+static void tna_close_handles(tna_napi_system *wrapper) {
+    tna_napi_handle *handle = wrapper->handles;
+    while (handle != NULL) {
+        tna_napi_handle *next = handle->next;
+        if (handle->pointer != NULL && !handle->kind->reclaimed_by_core) {
+            handle->kind->release(handle->pointer);
+        }
+        handle->pointer = NULL;
+        if (handle->finalized) {
+            tna_napi_system_drop(handle);
+        }
+        handle = next;
+    }
+}
+
 /* Closes the native system once and records what it leaked. */
 static void tna_close(tna_napi_system *wrapper) {
     if (tna_system_closed(wrapper->system)) {
         return;
     }
+    tna_close_handles(wrapper);
     tna_system_close(wrapper->system);
     tna_unlist(wrapper);
     wrapper->env_data->systems_closed += 1u;
@@ -42,18 +124,27 @@ static void tna_finalize(napi_env env, void *finalize_data, void *hint) {
     (void)hint;
     tna_napi_system *wrapper = finalize_data;
     tna_close(wrapper);
-    tna_system_free(wrapper->system);
-    tna_env *data = wrapper->env_data;
-    free(wrapper);
-    tna_env_release(data);
+    wrapper->finalized = true;
+    if (wrapper->holders == 0) {
+        tna_free_wrapper(wrapper);
+    }
+}
+
+tna_napi_system *tna_napi_system_unwrap(napi_env env, napi_value value) {
+    void *wrapped = NULL;
+    if (napi_unwrap(env, value, &wrapped) != napi_ok || wrapped == NULL ||
+        *(const void *const *)wrapped != &tna_napi_system_tag) {
+        return NULL;
+    }
+    return wrapped;
 }
 
 /* Unwraps `this`; throws and returns NULL when it is not a System. */
 static tna_napi_system *tna_this(napi_env env, napi_callback_info info) {
     napi_value self = NULL;
-    void *wrapped = NULL;
+    tna_napi_system *wrapped = NULL;
     if (napi_get_cb_info(env, info, NULL, NULL, &self, NULL) != napi_ok ||
-        napi_unwrap(env, self, &wrapped) != napi_ok || wrapped == NULL) {
+        (wrapped = tna_napi_system_unwrap(env, self)) == NULL) {
         tna_throw(env, "invalid", "not a System");
         return NULL;
     }
@@ -83,6 +174,7 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
     if (wrapper == NULL) {
         return tna_throw(env, "out-of-memory", "cannot allocate a system");
     }
+    wrapper->tag = &tna_napi_system_tag;
     ta_result result = tna_system_create(&wrapper->system);
     if (result != TA_OK) {
         free(wrapper);
