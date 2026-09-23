@@ -242,8 +242,18 @@ normalizes `scxml` to it). Each invocation runs as a child actor spawned with
 invoke's literal `<content>`, or, for `src="file:NAME.scxml"`, the chart
 `irp_NAME` from `charts`. Core hands literal content to the invoker as bytes
 with their media type (ADR 0053), and the invoker reads the media types it
-has a reader for: `application/vnd.tinyactors.scxml-spec+json`, a chart spec
-as JSON (the DSL's `chart:`). Content of any other media type is refused.
+has a reader for: `application/scxml+xml`, an SCXML document it imports with
+the SCXML codec (`../tinyactors-scxml`), and
+`application/vnd.tinyactors.scxml-spec+json`, a chart spec as JSON (the DSL's
+`chart:`). Content of any other media type is refused. A `<content expr>`
+value that is a string is SCXML text, and a `charts` entry may be a spec or
+SCXML text. The config's `files` serve `<data src>` in imported documents.
+
+`codec.scxml` is the SCXML codec as a `ta_chart_codec`, for
+`ta.definition.import` and `ta.definition.encode`. Its config is null for the
+default limits, or an object with any field of `ta_scxml_codec_params`
+(`{"max_depth": 32}`). `resolver.map` is a `ta_chart_src_resolver` over
+`{"files": {src: text}}`; an unknown `src` is not found.
 `<param>`s whose names match the child's top-level `<data>` become its
 data-model binding. Core routes `#_parent`, `#_<invokeid>`, autoforwarding,
 and `done.invoke`; cancelling an invocation destroys the child. The child

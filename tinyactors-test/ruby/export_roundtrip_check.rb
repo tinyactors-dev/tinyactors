@@ -16,6 +16,12 @@
 # 4. the exported JSON is the chart's own spec, up to the chart DSL's
 #    shorthand (empty lists, absent members, inferable union kinds).
 #
+# A chart given as an SCXML document (TinyactorsTest.scxml_chart) is imported
+# through the SCXML codec instead of compiled from a spec, and has no spec of
+# its own to compare with (4). It is also encoded back to SCXML with
+# ta_definition_encode, and that document must import to the same revision:
+# the codec's round trip (ADR 0053).
+#
 # Charts whose data model has no adapter in the host yet (ecmascript) cannot
 # be compiled; they are counted as skipped while their compile fails.
 
@@ -86,9 +92,29 @@ class Check
     ok('ta_definition_inspect', @ta.definition.inspect(system: @system, definition: definition)).fetch(:identity)
   end
 
+  CODEC = { '$adapter' => 'codec.scxml' }.freeze
+
+  def import(source, datamodel, files)
+    response = @ta.definition.import(system: @system, codec: CODEC, input: source,
+                                     resolver: { '$adapter' => 'resolver.map', 'config' => { 'files' => files } },
+                                     datamodel: datamodel, allocator: ALLOCATOR)
+    return [nil, "#{response[:result]} #{response.dig(:out, :error).inspect}"] unless response[:result] == 'ok'
+
+    [response.dig(:out, :out), 'ok']
+  end
+
+  def encode(definition)
+    response = @ta.definition.encode(system: @system, definition: definition, codec: CODEC)
+    raise "ta_definition_encode: #{response[:result]} #{response.dig(:out, :error).inspect}" unless response[:result] == 'ok'
+
+    response.dig(:out, :out)
+  end
+
   # Returns :skipped, or a list of failures.
   def run(chart)
     datamodel = Context::DATAMODELS.fetch(chart.datamodel || Context::DEFAULT_DATAMODEL)
+    return run_scxml(chart, datamodel) if chart.is_a?(TinyactorsTest::ScxmlChart)
+
     spec = json(chart.to_spec)
     original, result = compile(spec, datamodel)
     return :skipped if original.nil? && chart.datamodel == 'ecmascript'
@@ -106,6 +132,31 @@ class Check
     failures << 'exporting the recompiled definition differs' unless json(export(again)) == exported
     failures << "the export differs from the chart spec:\n#{diff(canonical(spec), canonical(exported))}" \
       unless canonical(spec) == canonical(exported)
+    failures
+  end
+
+  # An SCXML chart: import, export and recompile (1-3), then encode and
+  # import the encoding.
+  def run_scxml(chart, datamodel)
+    original, result = import(chart.source, datamodel, chart.files)
+    return ["ta_definition_import: #{result}"] if original.nil?
+
+    exported = json(export(original))
+    failures = []
+    failures << "the export names an identity: #{exported['identity'].inspect}" if exported.key?('identity')
+    again, result = compile(exported, datamodel)
+    return failures + ["compile_spec of the export: #{result}"] if again.nil?
+
+    before = identity(original)
+    failures << "identity #{before} became #{identity(again)} through export" unless before == identity(again)
+    failures << 'exporting the recompiled definition differs' unless json(export(again)) == exported
+
+    encoded = encode(original)
+    reimported, result = import(encoded, datamodel, chart.files)
+    return failures + ["import of the encoding: #{result}\n#{encoded}"] if reimported.nil?
+
+    failures << "identity #{before} became #{identity(reimported)} through encode" unless before == identity(reimported)
+    failures << 'encoding the reimported definition differs' unless encode(reimported) == encoded
     failures
   end
 

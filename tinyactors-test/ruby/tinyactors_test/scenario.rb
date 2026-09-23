@@ -303,7 +303,7 @@ module TinyactorsTest
     def spawn(chart = @group.chart, name: nil, binding: nil)
       raise ScenarioError, "#{@group.name}: spawn needs a chart" if chart.nil?
 
-      chart_name = chart.is_a?(Chart) ? chart.name.to_sym : chart.to_sym
+      chart_name = chart.is_a?(Chart) || chart.is_a?(ScxmlChart) ? chart.name.to_sym : chart.to_sym
       definition = definition_id(chart)
       params = { system: system_handle, definition: definition }
       params[:datamodel_binding] = binding unless binding.nil?
@@ -961,8 +961,9 @@ module TinyactorsTest
 
     def register_scxml_invoker(system)
       type = core('ta_system_intern_atom', ta.system.intern_atom(system: system, text: SCXML_INVOKER_TYPE)).fetch(:out)
-      charts = @charts.to_h { |name, chart| [name.to_s, chart.to_spec] }
-      invoker = { '$adapter' => 'invoker.scxml', 'config' => { 'system' => system, 'charts' => charts } }
+      charts = @charts.to_h { |name, chart| [name.to_s, chart.is_a?(ScxmlChart) ? chart.invoker_entry : chart.to_spec] }
+      files = @charts.values.grep(ScxmlChart).map(&:files).reduce({}, :merge)
+      invoker = { '$adapter' => 'invoker.scxml', 'config' => { 'system' => system, 'charts' => charts, 'files' => files } }
       core('ta_system_register_invoker', ta.system.register_invoker(system: system, type: type, invoker: invoker))
     end
 
@@ -1038,18 +1039,33 @@ module TinyactorsTest
     # Compiles and registers a chart once per scenario; the system then owns
     # it. Takes a registry name or a Chart the scenario built itself.
     def definition_id(chart)
-      unless chart.is_a?(Chart)
+      unless chart.is_a?(Chart) || chart.is_a?(ScxmlChart)
         name = chart.to_sym
         chart = @charts.fetch(name) { raise ScenarioError, "unknown chart #{name}" }
       end
-      @definitions[chart] ||= begin
-        compiled = core('ta_definition_compile_spec',
-                        ta.definition.compile_spec(system: system_handle, spec: chart.to_spec,
-                                                   datamodel: datamodel_adapter(chart), allocator: allocator.adapter))
-        core('ta_system_register_definition',
-             ta.system.register_definition(system: system_handle, definition: compiled.fetch(:out)))
-          .fetch(:out)
-      end
+      @definitions[chart] ||= if chart.is_a?(ScxmlChart)
+                                import_scxml(chart)
+                              else
+                                compile_and_register(chart)
+                              end
+    end
+
+    # ta_definition_import through the SCXML codec: decode, compile, register.
+    def import_scxml(chart)
+      core('ta_definition_import',
+           ta.definition.import(system: system_handle, codec: { '$adapter' => 'codec.scxml' },
+                                input: chart.source,
+                                resolver: { '$adapter' => 'resolver.map', 'config' => { 'files' => chart.files } },
+                                datamodel: datamodel_adapter(chart), allocator: allocator.adapter)).fetch(:out)
+    end
+
+    def compile_and_register(chart)
+      compiled = core('ta_definition_compile_spec',
+                      ta.definition.compile_spec(system: system_handle, spec: chart.to_spec,
+                                                 datamodel: datamodel_adapter(chart), allocator: allocator.adapter))
+      core('ta_system_register_definition',
+           ta.system.register_definition(system: system_handle, definition: compiled.fetch(:out)))
+        .fetch(:out)
     end
 
     # The data-model adapter config the chart's datamodel names.

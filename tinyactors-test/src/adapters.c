@@ -6,6 +6,7 @@
 #include "instruments.h"
 #include "json_datamodel.h"
 #include "null_datamodel.h"
+#include "ta_scxml.h"
 #include "ta_rpc.h"
 #include "value_codec.h"
 
@@ -115,32 +116,154 @@ static bool tat_make_direct_router(tat_bind *bind, jv config, void *out) {
 }
 
 /*
+ * codec.scxml: the SCXML XML codec (tinyactors-scxml, ADR 0053) as a
+ * ta_chart_codec. Config: null for the default limits, or an object with any
+ * of the fields of ta_scxml_codec_params ("max_depth": 32, ...). One codec
+ * per factory call, living as long as the host process.
+ */
+static bool tat_config_u64(jv config, const char *name, uint64_t *out) {
+    jv value = jv_object_get(jv_copy(config), jv_string(name));
+    bool ok = true;
+    if (jv_get_kind(value) == JV_KIND_NUMBER) {
+        double number = jv_number_value(value);
+        ok = number >= 0 && number <= 18446744073709551615.0;
+        *out = (uint64_t)number;
+    } else {
+        ok = jv_get_kind(value) == JV_KIND_INVALID || jv_get_kind(value) == JV_KIND_NULL;
+    }
+    jv_free(value);
+    return ok;
+}
+
+static bool tat_make_scxml_codec(tat_bind *bind, jv config, void *out) {
+    ta_scxml_codec_params params = {0};
+    if (jv_is_valid(config) && jv_get_kind(config) == JV_KIND_OBJECT) {
+        uint64_t depth = 0, attributes = 0, text = 0, names = 0, name_length = 0;
+        bool ok = tat_config_u64(config, "max_document_bytes", &params.max_document_bytes) &&
+                  tat_config_u64(config, "max_parse_bytes", &params.max_parse_bytes) &&
+                  tat_config_u64(config, "max_depth", &depth) &&
+                  tat_config_u64(config, "max_attributes", &attributes) &&
+                  tat_config_u64(config, "max_text_bytes", &text) &&
+                  tat_config_u64(config, "max_entity_expansion", &params.max_entity_expansion) &&
+                  tat_config_u64(config, "max_name_length", &name_length) &&
+                  tat_config_u64(config, "max_names", &names);
+        if (!ok || depth > UINT32_MAX || attributes > UINT32_MAX || text > UINT32_MAX || names > UINT32_MAX ||
+            name_length > UINT32_MAX) {
+            return tat_fail(bind, "codec.scxml: limits are non-negative integers");
+        }
+        params.max_depth = (uint32_t)depth;
+        params.max_attributes = (uint32_t)attributes;
+        params.max_text_bytes = (uint32_t)text;
+        params.max_names = (uint32_t)names;
+        params.max_name_length = (uint32_t)name_length;
+    } else if (!tat_no_config(bind, config)) {
+        return false;
+    }
+    ta_scxml_codec *codec = malloc(sizeof(*codec));
+    if (codec == NULL) {
+        return tat_fail(bind, "out of memory");
+    }
+    if (ta_scxml_codec_init(codec, &params) != TA_OK) {
+        free(codec);
+        return tat_fail(bind, "codec.scxml: a limit is beyond what txml can represent");
+    }
+    *(ta_chart_codec *)out = ta_scxml_codec_adapter(codec);
+    return true;
+}
+
+/*
+ * resolver.map: a ta_chart_src_resolver over fixed resources, the way a host
+ * would serve <data src> and <script src> from its own store. Config:
+ * {"files": {src: text}}. An unknown src is TA_ERR_NOT_FOUND.
+ */
+static ta_result tat_map_fetch(void *self, ta_str src, ta_arena *arena, ta_bytes *out) {
+    jv *files = self;
+    jv text = jv_object_get(jv_copy(*files), jv_string_sized(src.ptr, (int)src.len));
+    if (jv_get_kind(text) != JV_KIND_STRING) {
+        jv_free(text);
+        return TA_ERR_NOT_FOUND;
+    }
+    int length = jv_string_length_bytes(jv_copy(text));
+    uint8_t *copy = ta_arena_alloc(arena, length == 0 ? 1 : (size_t)length, 1);
+    if (copy == NULL) {
+        jv_free(text);
+        return TA_ERR_NOMEM;
+    }
+    memcpy(copy, jv_string_value(text), (size_t)length);
+    jv_free(text);
+    *out = (ta_bytes){.ptr = copy, .len = (uint32_t)length};
+    return TA_OK;
+}
+
+static const ta_chart_src_resolver_vtable TAT_MAP_RESOLVER = {.fetch = tat_map_fetch};
+
+/* Lives as long as the host process, like the codec. */
+static jv *tat_files_config(jv config) {
+    jv files = jv_object();
+    if (jv_is_valid(config) && jv_get_kind(config) == JV_KIND_OBJECT) {
+        jv given = jv_object_get(jv_copy(config), jv_string("files"));
+        if (jv_get_kind(given) == JV_KIND_OBJECT) {
+            jv_free(files);
+            files = given;
+        } else {
+            jv_free(given);
+        }
+    }
+    jv *stored = malloc(sizeof(*stored));
+    if (stored == NULL) {
+        jv_free(files);
+        return NULL;
+    }
+    *stored = files;
+    return stored;
+}
+
+static bool tat_make_map_resolver(tat_bind *bind, jv config, void *out) {
+    jv *files = tat_files_config(config);
+    if (files == NULL) {
+        return tat_fail(bind, "out of memory");
+    }
+    *(ta_chart_src_resolver *)out = (ta_chart_src_resolver){.self = files, .v = &TAT_MAP_RESOLVER};
+    return true;
+}
+
+/*
  * invoker.scxml: the SCXML invoker type. It runs each invoked machine as a
  * child actor of the invoking session. The machine is the invoke's inline
  * <content>, the value of its <content expr>, or, for src="file:NAME.scxml",
  * the chart "irp_NAME" from config.charts. <param>s become the child's
  * data-model binding. Core routes events between parent and child and
  * reports done.invoke itself. Config: {"system": <handle>, "charts": {name:
- * spec}}.
+ * spec or SCXML text}, "files": {src: text}}.
  *
  * Literal <content> arrives as bytes with the media type its front end gave
- * it (ADR 0053); core does not import it. The invoker runs what it can read:
- * a chart spec as JSON (TAT_SPEC_MEDIA_TYPE, the Ruby DSL's `chart:`). Any
- * other media type is refused, which the core reports to the parent as
- * error.execution.
+ * it (ADR 0053); core does not import it. The invoker runs what it has a
+ * reader for:
+ *
+ *   application/scxml+xml                       an SCXML document, decoded by
+ *                                               codec.scxml
+ *   application/vnd.tinyactors.scxml-spec+json  a chart spec as JSON (the
+ *                                               Ruby DSL's `chart:`)
+ *
+ * Any other media type is refused, which the core reports to the parent as
+ * error.execution. A <content expr> value that is a string is SCXML text; one
+ * that is an object is a spec.
  *
  * Values cross into the child only through the RPC codec: src, content, and
  * params are encoded with the parent's data model and the binding is decoded
- * with the child's. The child's data model is the one its spec's `datamodel`
- * names ("jq" or "ecmascript"), or the parent's when absent; a child whose
- * data model differs from the parent's is refused, which the core reports to
- * the parent as error.execution.
+ * with the child's. A spec's child uses the data model its `datamodel`
+ * names ("jq" or "ecmascript"), or the parent's when absent; an SCXML
+ * document is compiled with the parent's, which its `datamodel` attribute
+ * must then match. A child whose data model differs from the parent's is
+ * refused.
  */
 typedef struct {
     tat_bind *bind;
     ta_system *system;
     jv charts;
-    /* Canonical spec JSON text -> registered ta_definition_id as decimal text. */
+    jv *files;
+    ta_scxml_codec codec;
+    /* Canonical source -> registered ta_definition_id as decimal text. */
     jv definitions;
 } tat_scxml_invoker;
 
@@ -155,58 +278,62 @@ static bool tat_str_is(ta_str text, const char *literal) {
     return text.len == length && (length == 0 || memcmp(text.ptr, literal, length) == 0);
 }
 
-/* The child machine's spec: inline content, or the chart a file: src names. */
-static bool tat_invoker_spec(tat_scxml_invoker *invoker, const ta_invoke_request *request, jv *out) {
+/* What the invoke names as its child: a spec (JSON object) or SCXML text. */
+typedef enum { TAT_CHILD_NONE, TAT_CHILD_SPEC, TAT_CHILD_SCXML, TAT_CHILD_UNREADABLE } tat_child_kind;
+
+static tat_child_kind tat_invoker_child(tat_scxml_invoker *invoker, const ta_invoke_request *request, jv *out) {
     jv value;
     if (request->content.ptr != NULL) {
+        if (tat_str_is(request->content_type, TA_SCXML_MEDIA_TYPE)) {
+            *out = jv_string_sized((const char *)request->content.ptr, (int)request->content.len);
+            return TAT_CHILD_SCXML;
+        }
         if (!tat_str_is(request->content_type, TAT_SPEC_MEDIA_TYPE)) {
-            return false;
+            return TAT_CHILD_UNREADABLE;
         }
         value = jv_parse_sized((const char *)request->content.ptr, (int)request->content.len);
         if (jv_get_kind(value) == JV_KIND_OBJECT) {
             *out = value;
-            return true;
+            return TAT_CHILD_SPEC;
         }
         jv_free(value);
-        return false;
+        return TAT_CHILD_NONE;
     }
     if (request->data.v != NULL) {
         if (tat_value_codec_for_value(&request->data) == NULL) {
-            return false;
+            return TAT_CHILD_NONE;
         }
         value = tat_value_encode(&request->data);
-        if (jv_get_kind(value) == JV_KIND_OBJECT) {
-            *out = value;
-            return true;
+    } else {
+        if (request->src.v == NULL || tat_value_codec_for_value(&request->src) == NULL) {
+            return TAT_CHILD_NONE;
         }
-        jv_free(value);
-        return false;
-    }
-    if (request->src.v == NULL || tat_value_codec_for_value(&request->src) == NULL) {
-        return false;
-    }
-    value = tat_value_encode(&request->src);
-    if (jv_get_kind(value) != JV_KIND_STRING) {
-        jv_free(value);
-        return false;
-    }
-    const char *src = jv_string_value(value);
-    size_t length = strlen(src);
-    static const char prefix[] = "file:";
-    static const char suffix[] = ".scxml";
-    bool ok = length > sizeof(prefix) - 1 + sizeof(suffix) - 1 && strncmp(src, prefix, sizeof(prefix) - 1) == 0 &&
-              strcmp(src + length - (sizeof(suffix) - 1), suffix) == 0;
-    if (ok) {
-        jv name = jv_string_fmt("irp_%.*s", (int)(length - (sizeof(prefix) - 1) - (sizeof(suffix) - 1)),
-                                src + sizeof(prefix) - 1);
-        *out = jv_object_get(jv_copy(invoker->charts), name);
-        ok = jv_get_kind(*out) == JV_KIND_OBJECT;
-        if (!ok) {
-            jv_free(*out);
+        jv src = tat_value_encode(&request->src);
+        value = jv_invalid();
+        if (jv_get_kind(src) == JV_KIND_STRING) {
+            const char *text = jv_string_value(src);
+            size_t length = strlen(text);
+            static const char prefix[] = "file:";
+            static const char suffix[] = ".scxml";
+            if (length > sizeof(prefix) - 1 + sizeof(suffix) - 1 && strncmp(text, prefix, sizeof(prefix) - 1) == 0 &&
+                strcmp(text + length - (sizeof(suffix) - 1), suffix) == 0) {
+                jv name = jv_string_fmt("irp_%.*s", (int)(length - (sizeof(prefix) - 1) - (sizeof(suffix) - 1)),
+                                        text + sizeof(prefix) - 1);
+                value = jv_object_get(jv_copy(invoker->charts), name);
+            }
         }
+        jv_free(src);
+    }
+    if (jv_get_kind(value) == JV_KIND_OBJECT) {
+        *out = value;
+        return TAT_CHILD_SPEC;
+    }
+    if (jv_get_kind(value) == JV_KIND_STRING) {
+        *out = value;
+        return TAT_CHILD_SCXML;
     }
     jv_free(value);
-    return ok;
+    return TAT_CHILD_NONE;
 }
 
 /* The child's data model: the one its spec names, or the parent's when it names none. */
@@ -226,22 +353,33 @@ static bool tat_invoker_child_model(tat_scxml_invoker *invoker, jv spec, ta_data
     return ok;
 }
 
-static bool tat_invoker_definition(tat_scxml_invoker *invoker, jv spec, ta_datamodel model, ta_definition_id *out) {
-    /* A spec without `datamodel` compiles once per data model that invokes it. */
-    jv key = jv_string_fmt("%.*s:", (int)model.v->name.len, model.v->name.ptr);
-    key = jv_string_concat(key, jv_dump_string(jv_copy(spec), JV_PRINT_SORTED));
+/* A definition compiled earlier from the same source and data model, unless
+ * it has been retired and freed since (its ID is then stale, ADR 0043). */
+static bool tat_invoker_cached(tat_scxml_invoker *invoker, jv key, ta_definition_id *out) {
     jv cached = jv_object_get(jv_copy(invoker->definitions), jv_copy(key));
+    bool found = false;
     if (jv_get_kind(cached) == JV_KIND_STRING) {
-        /* A retired and freed definition's ID is stale (ADR 0043): recompile. */
         *out = (ta_definition_id)strtoull(jv_string_value(cached), NULL, 10);
         ta_definition_inspection facts;
-        if (ta_definition_inspect(invoker->system, *out, &facts) == TA_OK && !facts.retired) {
-            jv_free(cached);
-            jv_free(key);
-            return true;
-        }
+        found = ta_definition_inspect(invoker->system, *out, &facts) == TA_OK && !facts.retired;
     }
     jv_free(cached);
+    return found;
+}
+
+static void tat_invoker_remember(tat_scxml_invoker *invoker, jv key, ta_definition_id id) {
+    invoker->definitions = jv_object_set(invoker->definitions, key, jv_string_fmt("%llu", (unsigned long long)id));
+}
+
+static bool tat_invoker_spec_definition(tat_scxml_invoker *invoker, jv spec, ta_datamodel model,
+                                        ta_definition_id *out) {
+    /* A spec without `datamodel` compiles once per data model that invokes it. */
+    jv key = jv_string_fmt("spec:%.*s:", (int)model.v->name.len, model.v->name.ptr);
+    key = jv_string_concat(key, jv_dump_string(jv_copy(spec), JV_PRINT_SORTED));
+    if (tat_invoker_cached(invoker, key, out)) {
+        jv_free(key);
+        return true;
+    }
     tat_bind *bind = invoker->bind;
     ta_scxml_spec decoded;
     bool ok = tat_decode_ta_scxml_spec(bind, spec, &decoded);
@@ -261,18 +399,54 @@ static bool tat_invoker_definition(tat_scxml_invoker *invoker, jv spec, ta_datam
         ok = false;
     }
     if (ok) {
-        invoker->definitions = jv_object_set(invoker->definitions, jv_copy(key), jv_string_fmt("%llu", (unsigned long long)*out));
+        tat_invoker_remember(invoker, key, *out);
+    } else {
+        jv_free(key);
     }
-    jv_free(key);
     return ok;
+}
+
+/* An SCXML document, imported through the codec with the parent's data
+ * model. TA_ERR_UNSUPPORTED when the document requires another one. */
+static ta_result tat_invoker_scxml_definition(tat_scxml_invoker *invoker, jv text, ta_datamodel model,
+                                              ta_definition_id *out) {
+    jv key = jv_string_fmt("scxml:%.*s:", (int)model.v->name.len, model.v->name.ptr);
+    key = jv_string_concat(key, jv_copy(text));
+    if (tat_invoker_cached(invoker, key, out)) {
+        jv_free(key);
+        return TA_OK;
+    }
+    ta_arena arena;
+    ta_result result = ta_arena_init(&arena, tat_libc_allocator(), 16384);
+    if (result == TA_OK) {
+        result = ta_definition_import(
+            invoker->system,
+            &(ta_definition_import_params){
+                .codec = ta_scxml_codec_adapter(&invoker->codec),
+                .input = {.ptr = (const uint8_t *)jv_string_value(text), .len = (uint32_t)jv_string_length_bytes(jv_copy(text))},
+                .arena = &arena,
+                .resolver = {.self = invoker->files, .v = &TAT_MAP_RESOLVER},
+                .datamodel = model,
+                .allocator = tat_libc_allocator(),
+                .out = out,
+            });
+        ta_arena_destroy(&arena);
+    }
+    if (result == TA_OK) {
+        tat_invoker_remember(invoker, key, *out);
+    } else {
+        jv_free(key);
+    }
+    return result;
 }
 
 /*
  * <param>s arrive as the parent data model's {name: value} object, encoded
  * as wire JSON. Only names that match one of the child's top-level <data>
- * IDs enter its binding (SCXML 6.4).
+ * IDs enter its binding (SCXML 6.4); the definition's export says which.
  */
-static bool tat_invoker_binding(const ta_invoke_request *request, jv spec, jv *out) {
+static bool tat_invoker_binding(tat_scxml_invoker *invoker, const ta_invoke_request *request,
+                                ta_definition_id definition, jv *out) {
     *out = jv_object();
     if (request->params.v == NULL) {
         return true;
@@ -285,20 +459,21 @@ static bool tat_invoker_binding(const ta_invoke_request *request, jv spec, jv *o
         jv_free(params);
         return false;
     }
-    jv data = jv_object_get(jv_copy(spec), jv_string("data"));
-    if (jv_get_kind(data) == JV_KIND_ARRAY) {
-        jv_array_foreach(data, index, declaration) {
-            jv name = jv_object_get(declaration, jv_string("name"));
-            if (jv_get_kind(name) == JV_KIND_STRING && jv_object_has(jv_copy(params), jv_copy(name))) {
-                *out = jv_object_set(*out, jv_copy(name), jv_object_get(jv_copy(params), jv_copy(name)));
-            }
-            jv_free(name);
-            (void)index;
+    ta_arena arena;
+    const ta_scxml_spec *spec = NULL;
+    bool ok = ta_arena_init(&arena, tat_libc_allocator(), 4096) == TA_OK;
+    ok = ok && ta_definition_export(invoker->system, &(ta_definition_export_params){
+                                                         .definition = definition, .arena = &arena, .out = &spec}) == TA_OK;
+    for (uint32_t index = 0; ok && spec->data != NULL && spec->data[index].name.ptr != NULL; index += 1u) {
+        jv name = jv_string_sized(spec->data[index].name.ptr, (int)spec->data[index].name.len);
+        if (jv_object_has(jv_copy(params), jv_copy(name))) {
+            *out = jv_object_set(*out, jv_copy(name), jv_object_get(jv_copy(params), jv_copy(name)));
         }
+        jv_free(name);
     }
-    jv_free(data);
+    ta_arena_destroy(&arena);
     jv_free(params);
-    return true;
+    return ok;
 }
 
 static ta_op_status tat_invoker_start(void *self, const ta_invoker_start_params *params) {
@@ -310,31 +485,47 @@ static ta_op_status tat_invoker_start(void *self, const ta_invoker_start_params 
         tat_invoker_fault(params->fault, "invoker.scxml: the parent's data model is unknown");
         return TA_OP_ERROR;
     }
-    jv spec;
-    if (!tat_invoker_spec(invoker, request, &spec)) {
+    jv child;
+    tat_child_kind kind = tat_invoker_child(invoker, request, &child);
+    if (kind == TAT_CHILD_UNREADABLE) {
+        tat_invoker_fault(params->fault, "invoker.scxml: no reader for the content's media type");
+        return TA_OP_ERROR;
+    }
+    if (kind == TAT_CHILD_NONE) {
         tat_invoker_fault(params->fault, "invoker.scxml: no chart in the invoke's content or src");
         return TA_OP_ERROR;
     }
-    ta_datamodel model = {0};
-    if (!tat_invoker_child_model(invoker, spec, parent, &model)) {
-        jv_free(spec);
-        tat_invoker_fault(params->fault, "invoker.scxml: the child names an unknown data model");
-        return TA_OP_ERROR;
-    }
-    if (model.v != parent.v || model.self != parent.self) {
-        jv_free(spec);
-        tat_invoker_fault(params->fault, "invoker.scxml: the child's data model differs from the parent's");
-        return TA_OP_ERROR;
-    }
+    ta_datamodel model = parent;
     ta_definition_id definition = 0;
-    if (!tat_invoker_definition(invoker, spec, model, &definition)) {
-        jv_free(spec);
-        tat_invoker_fault(params->fault, "invoker.scxml: the child chart did not compile");
-        return TA_OP_ERROR;
+    if (kind == TAT_CHILD_SPEC) {
+        if (!tat_invoker_child_model(invoker, child, parent, &model)) {
+            jv_free(child);
+            tat_invoker_fault(params->fault, "invoker.scxml: the child names an unknown data model");
+            return TA_OP_ERROR;
+        }
+        if (model.v != parent.v || model.self != parent.self) {
+            jv_free(child);
+            tat_invoker_fault(params->fault, "invoker.scxml: the child's data model differs from the parent's");
+            return TA_OP_ERROR;
+        }
+        bool compiled = tat_invoker_spec_definition(invoker, child, model, &definition);
+        jv_free(child);
+        if (!compiled) {
+            tat_invoker_fault(params->fault, "invoker.scxml: the child chart did not compile");
+            return TA_OP_ERROR;
+        }
+    } else {
+        ta_result imported = tat_invoker_scxml_definition(invoker, child, model, &definition);
+        jv_free(child);
+        if (imported != TA_OK) {
+            tat_invoker_fault(params->fault, imported == TA_ERR_UNSUPPORTED
+                                                 ? "invoker.scxml: the child's data model differs from the parent's"
+                                                 : "invoker.scxml: the child document did not import");
+            return TA_OP_ERROR;
+        }
     }
     jv binding;
-    bool ok = tat_invoker_binding(request, spec, &binding);
-    jv_free(spec);
+    bool ok = tat_invoker_binding(invoker, request, definition, &binding);
     if (!ok) {
         jv_free(binding);
         tat_invoker_fault(params->fault, "invoker.scxml: invalid invoke params");
@@ -347,21 +538,21 @@ static ta_op_status tat_invoker_start(void *self, const ta_invoker_start_params 
         tat_invoker_fault(params->fault, "invoker.scxml: could not make the child binding");
         return TA_OP_ERROR;
     }
-    ta_actor_id child = 0;
+    ta_actor_id spawned = 0;
     ta_result result = ta_actor_spawn(invoker->system,
                                       &(ta_actor_spawn_params){
                                           .definition = definition,
                                           .datamodel_binding = &value,
                                           .parent = &(ta_actor_parent){.actor = request->parent,
                                                                        .invoke_id = request->invoke_id},
-                                          .out = &child,
+                                          .out = &spawned,
                                       });
     ta_value_release(&value);
     if (result != TA_OK) {
         tat_invoker_fault(params->fault, "invoker.scxml: could not spawn the child");
         return TA_OP_ERROR;
     }
-    *params->service_handle = child;
+    *params->service_handle = spawned;
     return TA_OP_OK;
 }
 
@@ -409,11 +600,16 @@ static bool tat_make_scxml_invoker(tat_bind *bind, jv config, void *out) {
     }
     /* Lives as long as the host process; a scenario creates one system and one invoker. */
     tat_scxml_invoker *invoker = malloc(sizeof(*invoker));
-    if (invoker == NULL) {
+    jv *files = tat_files_config(config);
+    if (invoker == NULL || files == NULL) {
+        free(invoker);
+        free(files);
         jv_free(charts);
         return tat_fail(bind, "out of memory");
     }
-    *invoker = (tat_scxml_invoker){.bind = bind, .system = handle, .charts = charts, .definitions = jv_object()};
+    *invoker = (tat_scxml_invoker){
+        .bind = bind, .system = handle, .charts = charts, .files = files, .definitions = jv_object()};
+    (void)ta_scxml_codec_init(&invoker->codec, NULL);
     *(ta_invoker *)out = (ta_invoker){.self = invoker, .v = &TAT_SCXML_INVOKER};
     return true;
 }
@@ -426,6 +622,8 @@ const tat_adapter TAT_ADAPTERS[] = {
     {"router.direct", "ta_external_event_router", sizeof(ta_external_event_router),
      tat_make_direct_router},
     {"invoker.scxml", "ta_invoker", sizeof(ta_invoker), tat_make_scxml_invoker},
+    {"codec.scxml", "ta_chart_codec", sizeof(ta_chart_codec), tat_make_scxml_codec},
+    {"resolver.map", "ta_chart_src_resolver", sizeof(ta_chart_src_resolver), tat_make_map_resolver},
     /* Instrumented adapters: src/instruments.c. */
     {"allocator.counting", "ta_allocator", sizeof(ta_allocator), tat_make_counting_allocator},
     {"router.recording", "ta_external_event_router", sizeof(ta_external_event_router), tat_make_recording_router},

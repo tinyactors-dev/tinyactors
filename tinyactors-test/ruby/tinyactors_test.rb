@@ -2,6 +2,7 @@
 
 require_relative 'driver'
 require_relative 'tinyactors_test/chart'
+require_relative 'tinyactors_test/scxml_chart'
 require_relative 'tinyactors_test/instruments'
 require_relative 'tinyactors_test/trace'
 require_relative 'tinyactors_test/scenario'
@@ -21,6 +22,15 @@ module TinyactorsTest
       raise ChartError, "chart #{name} is defined twice" if @charts.key?(name)
 
       @charts[name] = Chart.define(name, **options, &block)
+    end
+
+    # A chart written as an SCXML document, which the host imports through
+    # the SCXML codec (ADR 0053). See ScxmlChart.
+    def scxml_chart(name, source, **options)
+      name = name.to_sym
+      raise ChartError, "chart #{name} is defined twice" if @charts.key?(name)
+
+      @charts[name] = ScxmlChart.new(name, source, **options)
     end
 
     def scenarios(name, chart: nil, &block)

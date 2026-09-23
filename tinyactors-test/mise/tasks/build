@@ -39,6 +39,12 @@ CORE_DIST_HEADER = CORE_DIST_INCLUDE.join('tinyactors.h')
 # profile (-O2), which is also what a plain `mise run dist` in core publishes
 # by default.
 CORE_DIST_LIBRARY = CORE.join('dist/lib/release/libtinyactors.a')
+# The SCXML codec (ADR 0053) is compiled from its sources into the host, and
+# links txml's published archive. See ../tinyactors-scxml/README.md.
+SCXML = WORKSPACE.join('tinyactors-scxml')
+XML = WORKSPACE.join('tinyxml')
+XML_DIST_INCLUDE = XML.join('dist/include')
+XML_DIST_LIBRARY = XML.join('dist/lib/release/libtxml.a')
 JQ_SOURCE = ROOT.join('vendor/jq')
 QUICKJS_SOURCE = ROOT.join('vendor/quickjs-ng')
 BUILD = ROOT.join('build')
@@ -112,6 +118,7 @@ end
 # really changed; it is what keeps CORE_DIST_HEADER/CORE_DIST_LIBRARY current
 # before anything below compiles or links against them.
 run('mise', 'run', 'dist', chdir: CORE)
+run('mise', 'run', 'dist', chdir: XML)
 
 # The generated bindings are cached by mise's own stamp, which survives
 # `rm -rf build`; force the task when what it generates is gone. `bindings`
@@ -169,6 +176,7 @@ host_sources = [
   ROOT.join('src/binding.c'),
   ROOT.join('src/adapters.c'),
   ROOT.join('src/instruments.c'),
+  SCXML.join('src/ta_scxml.c'),
   BUILD.join('gen/ta_rpc.c')
 ]
 host_binary = BUILD.join('tinyactors-test')
@@ -180,8 +188,11 @@ host_command = [
   "-I#{PREFIX.join('include')}",
   "-I#{JQ_BUILD.join('src')}",
   "-I#{CORE_DIST_INCLUDE}",
+  "-I#{SCXML.join('include')}",
+  "-I#{XML_DIST_INCLUDE}",
   *host_sources.map(&:to_s),
   CORE_DIST_LIBRARY.to_s,
+  XML_DIST_LIBRARY.to_s,
   libjq.to_s,
   libonig.to_s,
   libqjs.to_s,
@@ -191,7 +202,8 @@ host_command = [
   host_binary.to_s
 ]
 link('tinyactors-test', host_binary, host_command,
-     [*host_sources, CORE_DIST_HEADER, CORE_DIST_LIBRARY, libjq, libonig, libqjs], compiler_id)
+     [*host_sources, CORE_DIST_HEADER, CORE_DIST_LIBRARY, SCXML.join('include/ta_scxml.h'),
+      XML_DIST_INCLUDE.join('txml.h'), XML_DIST_LIBRARY, libjq, libonig, libqjs], compiler_id)
 
 json_binary = BUILD.join('json_datamodel_test')
 json_sources = [
