@@ -30,11 +30,17 @@
 // and native bytes per actor, and total GC pause time, next to a plain
 // JavaScript baseline (one object per actor with a switch-based handler).
 //
-// Two charts run (SCALE_VARIANTS=plain,data by default):
+// Three charts run (SCALE_VARIANTS=plain,data,ws by default):
 //   - plain: no data, compiled against core's null data model (step 10);
-//   - data: the JavaScript data model (step 11), the load of one actor per
-//     websocket connection. Every actor has a data object; every `ping`
-//     carries a new object as event data, and a function assigns from it.
+//   - data: the JavaScript data model (step 11). Every actor has a data
+//     object; every `ping` carries a new object as event data, and a
+//     function assigns from it;
+//   - ws: the websocket-shaped load (step 13). One actor per simulated
+//     connection, with data; every inbound `ping` also sends the payload out
+//     through a registered I/O processor (`ws.write` via "ws") and re-arms a
+//     30-second idle timeout (a delayed send that exiting the state cancels
+//     and entering it arms again), so every actor always holds one delayed
+//     send.
 
 const assert = require('node:assert/strict');
 const os = require('node:os');
@@ -174,6 +180,36 @@ const VARIANTS = {
         .final('done'),
     payload: (sequence) => ({ sequence, text: 'hello' }),
   },
+  ws: {
+    chart: () =>
+      statechart({ family: 'scale-ws', revision: 'v1' })
+        .data('count', 0)
+        .data('last', null)
+        .state('idle', (s) => {
+          s.entry((a) => a.send('timeout', (send) => send.id('idle').after(30_000)));
+          s.exit((a) => a.cancel('idle'));
+          s.on('ping', (t) =>
+            t.target('idle')
+              .assign('count', function () { return this.count + 1; })
+              .assign('last', ({ event }) => event.data)
+              .send('ws.write', (send) => send.via('ws').data(({ event }) => event.data)),
+          );
+          s.on('timeout', (t) => t.target('done'));
+          s.on('work', (t) => t.target('done'));
+        })
+        .final('done'),
+    payload: (sequence) => ({ sequence, text: 'hello' }),
+    // The outbound socket: counts the writes it is handed.
+    options: (counters) => ({ io: { ws: { send() { counters.outbound += 1; } } } }),
+    // A core finding, reported rather than hidden: core keeps one heap entry
+    // per actor with a pending delayed send (core ADR 0054), in one array
+    // that grows by doubling and copying (ta_timer_reserve_heap in
+    // tinyactors-core/src/timer.c). Every ws actor holds its idle timeout,
+    // so core's largest block grows with the population, as the actor table
+    // did before core ADR 0063. The addon's own largest block must still
+    // stay flat.
+    coreGrowth: 'the delayed-send owner heap (tinyactors-core src/timer.c) grows by doubling',
+  },
 };
 
 // GC pause while a population is measured (Node only): the total, and the
@@ -220,10 +256,11 @@ function loopDelayMonitor() {
 async function measure(population, variant) {
   const gc = gcObserver();
   const jsBefore = jsRetained();
-  const { chart, payload } = VARIANTS[variant];
+  const { chart, payload, options } = VARIANTS[variant];
 
   let done = 0;
-  const system = createSystem({ done: () => { done += 1; } });
+  const counters = { outbound: 0 };
+  const system = createSystem({ ...options?.(counters), done: () => { done += 1; } });
   const definition = system.define(chart());
   const largestBefore = system.stats().memory.total.largestBlock;
 
@@ -247,6 +284,11 @@ async function measure(population, variant) {
   await system.flush();
   const bootstrapped = cpuMicros();
   const largestBlock = system.stats().memory.total.largestBlock;
+  const largestAddonBlock = Math.max(
+    ...Object.entries(system.stats().memory)
+      .filter(([name]) => name !== 'total' && name !== 'core')
+      .map(([, counters]) => counters.largestBlock),
+  );
 
   const nativeBytes = system.stats().memory.total.bytesInUse;
   const jsAfter = jsRetained();
@@ -326,6 +368,9 @@ async function measure(population, variant) {
   const loopDelayP50Ms = loop.p50Ms();
   loop.stop();
   assert.equal(done, population, 'every actor finished');
+  if (options !== undefined) {
+    assert.equal(counters.outbound, sequence, 'every inbound message sent one outbound write');
+  }
   assert.equal([...system.actorIds()].length, 0, 'finished actors were destroyed');
 
   const gcPauseMs = gc.total();
@@ -342,6 +387,7 @@ async function measure(population, variant) {
     spawnAndBootstrap: (bootstrapped - spawnStarted) / population,
     longestSpawnUs: Number(longestSpawn) / 1e3,
     largestBlock,
+    largestAddonBlock,
     largestBefore,
     post: median(postCosts),
     inspect: median(inspectCosts),
@@ -427,7 +473,7 @@ function report(result) {
     process.exit(1);
   }, Number(process.env.SCALE_TIMEOUT_MS ?? 30 * 60_000));
 
-  const variants = (process.env.SCALE_VARIANTS ?? 'plain,data').split(',');
+  const variants = (process.env.SCALE_VARIANTS ?? 'plain,data,ws').split(',');
   let largest;
   for (const variant of variants) {
     const results = [];
@@ -457,11 +503,23 @@ function report(result) {
       requireFlat(what(`a page of ${PAGE_SIZE} actor IDs (us)`), ...pair('page'), PAGE_RATIO_BOUND);
       requireFlat(what('end to end (us per actor)'), ...pair('e2e'), COST_RATIO_BOUND);
       requireFlat(what('native bytes per actor'), ...pair('nativePerActor'), BYTES_RATIO_BOUND);
-      assert.ok(
-        large.largestBlock <= small.largestBlock,
-        `${variant}: the largest block grew from ${small.largestBlock} B at ${small.population} actors ` +
-          `to ${large.largestBlock} B at ${large.population}`,
-      );
+      const coreGrowth = VARIANTS[variant].coreGrowth;
+      if (coreGrowth !== undefined && large.largestBlock > small.largestBlock) {
+        assert.ok(
+          large.largestAddonBlock <= small.largestAddonBlock,
+          `${variant}: the addon's largest block grew from ${small.largestAddonBlock} B to ${large.largestAddonBlock} B`,
+        );
+        console.log(
+          `scale.js: known core finding (${variant}): core's largest block grew from ${small.largestBlock} B at ` +
+            `${small.population} actors to ${large.largestBlock} B at ${large.population}: ${coreGrowth}`,
+        );
+      } else {
+        assert.ok(
+          large.largestBlock <= small.largestBlock,
+          `${variant}: the largest block grew from ${small.largestBlock} B at ${small.population} actors ` +
+            `to ${large.largestBlock} B at ${large.population}`,
+        );
+      }
     }
     largest = results.at(-1);
   }
