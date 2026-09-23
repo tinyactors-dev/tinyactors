@@ -23,8 +23,10 @@ A sequential definition can store one active leaf. A small parallel definition c
 
 Actors with no active invocation should ideally pay no invocation-vector allocation. Idle actors do not need external mailboxes. Timers live in a shared deadline index. Large paused continuations may be side-allocated if the common continuation is small.
 
-The resident representation enforces that boundary: one definition-sized slab
-backs configuration and history, while internal queues, invocations, invoked-
+The resident representation enforces that boundary: an actor is one
+definition-sized allocation, laid out when the definition is compiled: the
+actor record, then the session storage (configuration, late-binding bits and
+history), then the data-model instance (ADR 0063). Internal queues, invocations, invoked-
 child completion state, and replacement activation effects occupy an optional
 `ta_actor_sparse_state`. An actor that does not use those features has no
 vectors for them.
@@ -37,8 +39,16 @@ scanning for a hole: a scan is invisible in a unit test and fatal in
 production, where short-lived actors are spawned and destroyed against a large
 resident population and would each pay for all of it.
 
+The table itself is paged (ADR 0063): slots live in fixed pages of 4,096,
+found through a small directory of page pointers. A page is allocated only when
+the last one is full and never moves, so no spawn copies the table. The largest
+block a spawn allocates is one 64 KiB page at any population; before paging,
+the spawn that crossed 2,097,152 actors copied a 32 MB table.
+
 `tinyactors-test/tests/scale_test.c` measures spawn, upgrade, and ephemeral
-churn at two populations and fails when per-actor cost grows between them. It
+churn at populations up to four million, sized to the memory available, and
+fails when per-actor cost, or the largest block a spawn allocates, grows from
+one population to the next. It
 also reports the target itself: four million resident named actors of a null
 data-model chart cost 558 bytes each, 2.1 GB in all, and a rolling upgrade of
 all of them takes 1.6 s of CPU time.

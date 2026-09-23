@@ -61,6 +61,11 @@ TA_PRIVATE ta_result ta_vec_extend(ta_vec *vec, uint32_t count, uint32_t *out);
 TA_PRIVATE ta_result ta_vec_push(ta_vec *vec, const void *element);
 TA_PRIVATE void *ta_vec_at(const ta_vec *vec, uint32_t index);
 
+/* `value` rounded up to a multiple of `alignment`, which is never zero. */
+TA_PRIVATE inline size_t ta_align_up(size_t value, size_t alignment) {
+    return (value + alignment - 1u) / alignment * alignment;
+}
+
 /* Bitsets of 64-bit words, used for state sets. */
 TA_PRIVATE inline uint32_t ta_bits_words(uint32_t bits) { return (bits + 63u) / 64u; }
 TA_PRIVATE inline bool ta_bits_get(const uint64_t *words, uint32_t bit) {
@@ -1032,6 +1037,11 @@ struct ta_definition {
     bool datamodel_prepared;
     uint32_t datamodel_instance_size;
     uint32_t datamodel_instance_alignment;
+    /* One actor of this definition is one block (ADR 0063; ta_actor_layout()). */
+    size_t actor_block_bytes;
+    size_t actor_block_alignment;
+    size_t actor_session_offset;
+    size_t actor_instance_offset;
     /* Resident actors whose `definition` points here; see ta_actor_free(). */
     uint32_t actor_count;
     /*
@@ -1047,8 +1057,6 @@ struct ta_definition {
 TA_PRIVATE const ta_definition *ta_definition_lookup(const ta_system *system, ta_definition_id id);
 /* Bytes of one actor's session storage: two configurations and history. */
 TA_PRIVATE size_t ta_definition_session_bytes(const ta_definition *definition);
-/* Bytes allocated for one actor's data-model instance (never zero). */
-TA_PRIVATE size_t ta_definition_instance_bytes(const ta_definition *definition);
 TA_PRIVATE bool ta_definition_is_atomic(const ta_definition *definition, ta_state_id state);
 TA_PRIVATE bool ta_definition_is_descendant(const ta_definition *definition, ta_state_id state, ta_state_id ancestor);
 TA_PRIVATE bool ta_event_pattern_matches(const ta_definition *definition,
@@ -1179,6 +1187,29 @@ typedef struct {
     uint32_t next_free;
 } ta_actor_slot;
 
+/*
+ * The actor table (ADR 0063): slots live in fixed pages of
+ * TA_ACTOR_PAGE_SLOTS, found through a page directory. Slot `s` is in page
+ * `s / TA_ACTOR_PAGE_SLOTS`. A page is allocated only when the last one is
+ * full, and pages never move, so no spawn copies the table; only the
+ * directory of page pointers doubles. Pages live as long as the system.
+ */
+#define TA_ACTOR_PAGE_SLOTS 4096u
+typedef struct {
+    ta_vec pages;   /* ta_actor_slot *, one per page */
+    uint32_t count; /* slots issued so far */
+} ta_actor_table;
+
+/* The entry for `slot`, or NULL when that slot was never issued. */
+TA_PRIVATE ta_actor_slot *ta_actor_slot_at(const ta_system *system, uint32_t slot);
+TA_PRIVATE void ta_actor_table_destroy(ta_actor_table *table, ta_allocator allocator);
+/*
+ * Lays out one actor of `definition` as a single allocation (ADR 0063): the
+ * ta_actor record, then the session storage, then the data-model instance,
+ * each at its alignment. Called once, when the definition is compiled.
+ */
+TA_PRIVATE void ta_actor_layout(ta_definition *definition);
+
 TA_PRIVATE ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id);
 TA_PRIVATE bool ta_actor_state_active(const ta_actor *actor, ta_state_id state);
 /* Runs an invoked child's exitInterpreter path with isolated scratch storage. */
@@ -1264,7 +1295,7 @@ struct ta_system {
      * head instead of scanning the table, so it costs the same against four
      * million actors as against four (invariant 17).
      */
-    ta_vec actors;
+    ta_actor_table actors;
     uint32_t free_actor_slot;
 
     ta_timer_heap timers;
@@ -2524,10 +2555,6 @@ typedef struct {
     size_t frames;
     size_t end;
 } ta_continuation_layout;
-
-static size_t ta_align_up(size_t offset, size_t alignment) {
-    return (offset + alignment - 1u) / alignment * alignment;
-}
 
 static ta_continuation_layout ta_continuation_offsets(const ta_continuation *shape) {
     ta_continuation_layout layout;
@@ -4534,10 +4561,6 @@ TA_PRIVATE size_t ta_definition_session_bytes(const ta_definition *definition) {
     return definition->configuration.bytes * 2u + definition->history.storage_bytes;
 }
 
-TA_PRIVATE size_t ta_definition_instance_bytes(const ta_definition *definition) {
-    return definition->datamodel_instance_size == 0 ? 1u : definition->datamodel_instance_size;
-}
-
 TA_API ta_result ta_definition_inspect(const ta_system *system,
                                 ta_definition_id id,
                                 ta_definition_inspection *out) {
@@ -4561,8 +4584,7 @@ TA_API ta_result ta_definition_inspect(const ta_system *system,
         .state_count = definition->state_count,
         .retired = definition->retired,
         .actor_count = definition->actor_count,
-        .actor_fixed_bytes = sizeof(ta_actor) + ta_definition_session_bytes(definition) +
-                             ta_definition_instance_bytes(definition),
+        .actor_fixed_bytes = definition->actor_block_bytes,
         .definition_bytes = ta_arena_allocated_bytes(&definition->arena),
     };
     return TA_OK;
@@ -6728,6 +6750,7 @@ static ta_result ta_compile(ta_system *system, const ta_definition_compile_param
         if (definition->datamodel_instance_alignment == 0) {
             definition->datamodel_instance_alignment = 1;
         }
+        ta_actor_layout(definition);
     }
     if (result != TA_OK) {
         ta_definition_destroy(definition);
@@ -8051,11 +8074,72 @@ TA_PRIVATE ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id) {
     }
     uint32_t slot = ta_actor_id_slot(id);
     uint32_t generation = ta_actor_id_generation(id);
+    const ta_actor_slot *entry = ta_actor_slot_at(system, slot);
+    return entry != NULL && entry->generation == generation ? entry->actor : NULL;
+}
+
+TA_PRIVATE ta_actor_slot *ta_actor_slot_at(const ta_system *system, uint32_t slot) {
     if (slot >= system->actors.count) {
         return NULL;
     }
-    const ta_actor_slot *entry = ta_vec_at(&system->actors, slot);
-    return entry->generation == generation ? entry->actor : NULL;
+    ta_actor_slot *const *pages = system->actors.pages.items;
+    return &pages[slot / TA_ACTOR_PAGE_SLOTS][slot % TA_ACTOR_PAGE_SLOTS];
+}
+
+TA_PRIVATE void ta_actor_table_destroy(ta_actor_table *table, ta_allocator allocator) {
+    ta_actor_slot **pages = table->pages.items;
+    for (uint32_t page = 0; page < table->pages.count; page += 1u) {
+        ta_mem_free(allocator, pages[page],
+                    &(ta_allocator_free_params){ .size = TA_ACTOR_PAGE_SLOTS * sizeof(ta_actor_slot),
+                                                 .alignment = _Alignof(ta_actor_slot) });
+    }
+    ta_vec_destroy(&table->pages);
+    table->count = 0;
+}
+
+TA_PRIVATE void ta_actor_layout(ta_definition *definition) {
+    size_t instance_alignment = definition->datamodel_instance_alignment;
+    size_t alignment = _Alignof(ta_actor);
+    if (alignment < _Alignof(uint64_t)) {
+        alignment = _Alignof(uint64_t);
+    }
+    if (alignment < instance_alignment) {
+        alignment = instance_alignment;
+    }
+    definition->actor_session_offset = ta_align_up(sizeof(ta_actor), _Alignof(uint64_t));
+    definition->actor_instance_offset =
+        ta_align_up(definition->actor_session_offset + ta_definition_session_bytes(definition), instance_alignment);
+    definition->actor_block_bytes = definition->actor_instance_offset + definition->datamodel_instance_size;
+    definition->actor_block_alignment = alignment;
+}
+
+/*
+ * Issues the next slot, allocating a page when the last one is full. Pages
+ * never move, so this never copies the table (ADR 0063).
+ */
+static ta_result ta_actor_table_grow(ta_system *system, uint32_t *out) {
+    ta_actor_table *table = &system->actors;
+    if (table->count == UINT32_MAX) {
+        return TA_ERR_NOMEM; /* UINT32_MAX is no slot: it ends the free list and a walk */
+    }
+    if ((uint64_t)table->count == (uint64_t)table->pages.count * TA_ACTOR_PAGE_SLOTS) {
+        ta_actor_slot *page = ta_mem_alloc(system->allocator, TA_ACTOR_PAGE_SLOTS * sizeof(ta_actor_slot),
+                                           _Alignof(ta_actor_slot));
+        if (page == NULL) {
+            return TA_ERR_NOMEM;
+        }
+        ta_result result = ta_vec_push(&table->pages, &page);
+        if (result != TA_OK) {
+            ta_mem_free(system->allocator, page,
+                        &(ta_allocator_free_params){ .size = TA_ACTOR_PAGE_SLOTS * sizeof(ta_actor_slot),
+                                                     .alignment = _Alignof(ta_actor_slot) });
+            return result;
+        }
+    }
+    *out = table->count;
+    table->count += 1u;
+    *ta_actor_slot_at(system, *out) = (ta_actor_slot){ .generation = 1, .next_free = UINT32_MAX };
+    return TA_OK;
 }
 
 TA_API uint32_t ta_actor_id_slot(ta_actor_id id) {
@@ -8209,17 +8293,14 @@ TA_PRIVATE void ta_actor_exit_invoked(ta_system *system, ta_actor_id id) {
 static ta_result ta_actor_claim_slot(ta_system *system, ta_actor *actor, ta_actor_id *out) {
     uint32_t slot = system->free_actor_slot;
     if (slot == UINT32_MAX) {
-        ta_actor_slot fresh = { .generation = 1, .next_free = UINT32_MAX };
-        ta_result result = ta_vec_push(&system->actors, &fresh);
+        ta_result result = ta_actor_table_grow(system, &slot);
         if (result != TA_OK) {
             return result;
         }
-        slot = system->actors.count - 1u;
     } else {
-        const ta_actor_slot *head = ta_vec_at(&system->actors, slot);
-        system->free_actor_slot = head->next_free;
+        system->free_actor_slot = ta_actor_slot_at(system, slot)->next_free;
     }
-    ta_actor_slot *entry = ta_vec_at(&system->actors, slot);
+    ta_actor_slot *entry = ta_actor_slot_at(system, slot);
     entry->actor = actor;
     entry->next_free = UINT32_MAX;
     *out = ta_actor_id_make(slot, entry->generation);
@@ -8237,18 +8318,13 @@ TA_PRIVATE void ta_actor_free(ta_system *system, ta_actor *actor) {
         definition->datamodel.v->destroy_instance(definition->datamodel.self, definition->datamodel_shared,
                                                   actor->datamodel_instance);
     }
-    if (actor->datamodel_instance != NULL) {
-        ta_mem_free(system->allocator, actor->datamodel_instance,
-                    &(ta_allocator_free_params){ .size = ta_definition_instance_bytes(definition),
-                                                 .alignment = definition->datamodel_instance_alignment });
-    }
-    ta_mem_free(system->allocator, actor->session_storage,
-                &(ta_allocator_free_params){ .size = actor->session_bytes, .alignment = _Alignof(uint64_t) });
     /* A named actor owns the text of its address; a runtime ref owns nothing. */
     ta_address_release(&actor->record.self, system->allocator);
     ta_interpreter_release_actor_state(system, actor);
+    /* The record, the session storage and the instance are one block (ADR 0063). */
     ta_mem_free(system->allocator, actor,
-                &(ta_allocator_free_params){ .size = sizeof(ta_actor), .alignment = _Alignof(ta_actor) });
+                &(ta_allocator_free_params){ .size = definition->actor_block_bytes,
+                                             .alignment = definition->actor_block_alignment });
     ta_definition *owner = ta_system_definition(system, definition->id);
     owner->actor_count -= 1u;
     if (owner->retired && owner->actor_count == 0) {
@@ -8301,7 +8377,7 @@ static ta_result ta_actor_claim_address(ta_system *system,
  */
 TA_PRIVATE void ta_actor_release_slot(ta_system *system, ta_actor_id id) {
     uint32_t slot = ta_actor_id_slot(id);
-    ta_actor_slot *entry = ta_vec_at(&system->actors, slot);
+    ta_actor_slot *entry = ta_actor_slot_at(system, slot);
     entry->actor = NULL;
     entry->generation = entry->generation == UINT32_MAX ? 1u : entry->generation + 1u;
     entry->next_free = system->free_actor_slot;
@@ -8412,10 +8488,12 @@ TA_API ta_result ta_actor_find(ta_system *system, const ta_actor_find_params *pa
  * from an image instead, so both start here.
  */
 TA_PRIVATE ta_result ta_actor_new(ta_system *system, ta_definition *definition, ta_actor **out) {
-    ta_actor *actor = ta_mem_alloc(system->allocator, sizeof(ta_actor), _Alignof(ta_actor));
+    /* One allocation: the record, the session storage, the instance (ADR 0063). */
+    ta_actor *actor = ta_mem_alloc(system->allocator, definition->actor_block_bytes, definition->actor_block_alignment);
     if (actor == NULL) {
         return TA_ERR_NOMEM;
     }
+    unsigned char *block = (unsigned char *)actor;
     *actor = (ta_actor){ .definition = definition, .published = true, .macrostep = true };
     /* Counted from here so every ta_actor_free() path can uncount it. */
     definition->actor_count += 1u;
@@ -8424,23 +8502,15 @@ TA_PRIVATE ta_result ta_actor_new(ta_system *system, ta_definition *definition, 
 
     size_t config_bytes = definition->configuration.bytes;
     actor->session_bytes = ta_definition_session_bytes(definition);
-    actor->session_storage = ta_mem_alloc(system->allocator, actor->session_bytes, _Alignof(uint64_t));
-    if (actor->session_storage == NULL) {
-        ta_actor_free(system, actor);
-        return TA_ERR_NOMEM;
-    }
+    actor->session_storage = block + definition->actor_session_offset;
     ta_mem_zero(actor->session_storage, actor->session_bytes);
     unsigned char *storage = actor->session_storage;
     actor->configuration = (ta_configuration){ .storage = storage, .layout = &definition->configuration };
     actor->late_initialized = (uint64_t *)(storage + config_bytes);
     actor->history = (ta_history_state){ .storage = storage + config_bytes * 2u, .layout = &definition->history };
 
-    actor->datamodel_instance = ta_mem_alloc(system->allocator, ta_definition_instance_bytes(definition),
-                                             definition->datamodel_instance_alignment);
-    if (actor->datamodel_instance == NULL) {
-        ta_actor_free(system, actor);
-        return TA_ERR_NOMEM;
-    }
+    /* An instance of size 0 (the null data model) points at the block's end. */
+    actor->datamodel_instance = block + definition->actor_instance_offset;
     ta_mem_zero(actor->datamodel_instance, definition->datamodel_instance_size);
 
     ta_actor_id id = 0;
@@ -8734,10 +8804,7 @@ static size_t ta_vec_bytes(const ta_vec *vec) {
 
 /* Everything the core allocates for the actor now; see ta_actor_inspection. */
 static size_t ta_actor_allocated_bytes(const ta_actor *actor) {
-    size_t total = sizeof(ta_actor) + actor->session_bytes;
-    if (actor->datamodel_instance != NULL) {
-        total += ta_definition_instance_bytes(actor->definition);
-    }
+    size_t total = actor->definition->actor_block_bytes;
     const ta_actor_sparse_state *sparse = actor->sparse;
     if (sparse != NULL) {
         total += sizeof(ta_actor_sparse_state);
@@ -8842,7 +8909,7 @@ TA_API ta_result ta_system_visit_actors(ta_system *system, const ta_actor_visit_
             break;
         }
         /* Read the entry each time: a visit may spawn and grow the table. */
-        const ta_actor_slot *entry = ta_vec_at(&system->actors, slot);
+        const ta_actor_slot *entry = ta_actor_slot_at(system, slot);
         if (entry->actor == NULL) {
             continue;
         }
@@ -9635,7 +9702,7 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
     }
     *system = (ta_system){ .allocator = config->allocator };
     ta_clock_set(&system->clock, config->initial_time);
-    ta_vec_init(&system->actors, config->allocator, TA_VEC_LAYOUT(ta_actor_slot));
+    ta_vec_init(&system->actors.pages, config->allocator, TA_VEC_LAYOUT(ta_actor_slot *));
     system->free_actor_slot = UINT32_MAX;
     ta_vec_init(&system->definitions, config->allocator, TA_VEC_LAYOUT(ta_definition_slot));
     system->free_definition_slot = UINT32_MAX;
@@ -9679,7 +9746,7 @@ TA_API void ta_system_destroy(ta_system *system) {
     /* Teardown releases submitted sends instead of keeping them as orphans. */
     system->timers.closing = true;
     for (uint32_t slot = 0; slot < system->actors.count; slot += 1) {
-        ta_actor_slot *entry = ta_vec_at(&system->actors, slot);
+        ta_actor_slot *entry = ta_actor_slot_at(system, slot);
         if (entry->actor != NULL) {
             (void)ta_actor_destroy(system, ta_actor_id_make(slot, entry->generation));
         }
@@ -9697,7 +9764,7 @@ TA_API void ta_system_destroy(ta_system *system) {
     }
     ta_vec_destroy(&system->definitions);
     ta_timer_heap_destroy(&system->timers);
-    ta_vec_destroy(&system->actors);
+    ta_actor_table_destroy(&system->actors, system->allocator);
     ta_vec_destroy(&system->io_processors);
     ta_vec_destroy(&system->invokers);
     ta_arena_destroy(&system->scratch);

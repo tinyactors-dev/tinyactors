@@ -162,10 +162,6 @@ size_t ta_definition_session_bytes(const ta_definition *definition) {
     return definition->configuration.bytes * 2u + definition->history.storage_bytes;
 }
 
-size_t ta_definition_instance_bytes(const ta_definition *definition) {
-    return definition->datamodel_instance_size == 0 ? 1u : definition->datamodel_instance_size;
-}
-
 ta_result ta_definition_inspect(const ta_system *system,
                                 ta_definition_id id,
                                 ta_definition_inspection *out) {
@@ -189,8 +185,7 @@ ta_result ta_definition_inspect(const ta_system *system,
         .state_count = definition->state_count,
         .retired = definition->retired,
         .actor_count = definition->actor_count,
-        .actor_fixed_bytes = sizeof(ta_actor) + ta_definition_session_bytes(definition) +
-                             ta_definition_instance_bytes(definition),
+        .actor_fixed_bytes = definition->actor_block_bytes,
         .definition_bytes = ta_arena_allocated_bytes(&definition->arena),
     };
     return TA_OK;

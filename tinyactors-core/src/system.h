@@ -40,7 +40,7 @@ struct ta_system {
      * head instead of scanning the table, so it costs the same against four
      * million actors as against four (invariant 17).
      */
-    ta_vec actors;
+    ta_actor_table actors;
     uint32_t free_actor_slot;
 
     ta_timer_heap timers;

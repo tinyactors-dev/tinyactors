@@ -117,12 +117,17 @@ typedef struct {
     uint64_t live_bytes;
     uint64_t peak_bytes;
     int64_t live_blocks;
+    /* The largest single block asked for since it was last reset. */
+    uint64_t largest_block;
 } counting_allocator;
 
 static void *counting_alloc(void *self, size_t size, size_t alignment) {
     counting_allocator *counts = self;
     void *block = counts->backing.v->alloc(counts->backing.self, size, alignment);
     if (block != NULL) {
+        if (size > counts->largest_block) {
+            counts->largest_block = size;
+        }
         counts->live_bytes += size;
         counts->live_blocks += 1;
         if (counts->live_bytes > counts->peak_bytes) {
@@ -382,6 +387,9 @@ typedef struct {
     double timer_us;   /* per actor: spawn a timed ephemeral (arms a send), destroy it (discards it) */
     double cancel_us;  /* per event: <cancel> a resident actor's send and arm it again */
     double page_us;    /* per actor visited: one page of the actor walk, from where the last one ended */
+    double median_spawn_us;  /* the median single spawn-and-bootstrap, thread CPU time */
+    double longest_spawn_us; /* the longest single one, reported, not bounded: see below */
+    uint64_t largest_spawn_block; /* the largest block core allocated while spawning (ADR 0063) */
     double actor_bytes;
     uint64_t peak_bytes;
 } round_cost;
@@ -393,6 +401,25 @@ typedef struct {
  */
 static double cpu_seconds(void) {
     return (double)clock() / (double)CLOCKS_PER_SEC;
+}
+
+/*
+ * The calling thread's CPU time in nanoseconds, for timing one spawn: clock()
+ * ticks in microseconds, longer than a spawn, and a thread clock does not
+ * count the time the thread was preempted, which is most of the noise in a
+ * single short measurement. Reading it costs about 0.1 us, paid equally at
+ * every population.
+ */
+static uint64_t thread_ns(void) {
+    struct timespec now;
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now);
+    return (uint64_t)now.tv_sec * 1000000000u + (uint64_t)now.tv_nsec;
+}
+
+static int compare_u32(const void *left, const void *right) {
+    uint32_t a = *(const uint32_t *)left;
+    uint32_t b = *(const uint32_t *)right;
+    return (a > b) - (a < b);
 }
 
 static double per_actor_us(double seconds, size_t actors) {
@@ -430,7 +457,11 @@ static round_cost measure(size_t population) {
 
     /* Spawning a named actor, from an empty system to the full population. */
     uint64_t empty_bytes = counts.live_bytes;
+    uint32_t *spawn_ns = malloc(population * sizeof(uint32_t));
+    require(spawn_ns != NULL, "fixture allocation");
+    counts.largest_block = 0;
     double started = cpu_seconds();
+    uint64_t last_ns = thread_ns();
     for (size_t index = 0; index < population; index += 1) {
         const char *name = &names[index * 24];
         ta_actor_address address = {.family = {STR("scale")},
@@ -449,8 +480,17 @@ static round_cost measure(size_t population) {
                                         }) == TA_OK &&
                     status == TA_RUN_STABLE,
                 "bootstrapping a named actor");
+        uint64_t now_ns = thread_ns();
+        uint64_t spent = now_ns - last_ns;
+        spawn_ns[index] = spent > UINT32_MAX ? UINT32_MAX : (uint32_t)spent;
+        last_ns = now_ns;
     }
     double spawned = cpu_seconds();
+    uint64_t largest_spawn_block = counts.largest_block;
+    qsort(spawn_ns, population, sizeof(uint32_t), compare_u32);
+    double median_spawn_us = (double)spawn_ns[population / 2u] / 1000.0;
+    double longest_spawn_us = (double)spawn_ns[population - 1u] / 1000.0;
+    free(spawn_ns);
     double actor_bytes = (double)(counts.live_bytes - empty_bytes) / (double)population;
 
     /* Upgrading every one of them to v2 under its own address (ADR 0043). */
@@ -641,6 +681,9 @@ static round_cost measure(size_t population) {
         .timer_us = per_actor_us(timers_churned - inspected, CHURN_ACTORS),
         .cancel_us = per_actor_us(rearmed - timers_churned, CHURN_ACTORS),
         .page_us = per_actor_us(paged - rearmed, visited),
+        .median_spawn_us = median_spawn_us,
+        .longest_spawn_us = longest_spawn_us,
+        .largest_spawn_block = largest_spawn_block,
         .actor_bytes = actor_bytes,
         .peak_bytes = peak_bytes,
     };
@@ -672,23 +715,34 @@ static round_cost measure_best(size_t population, unsigned repetitions) {
         if (next.page_us < best.page_us) {
             best.page_us = next.page_us;
         }
+        /* The smallest longest spawn of the rounds: a spike every round has
+         * is structural; one that noise put in a single round is not. */
+        if (next.longest_spawn_us < best.longest_spawn_us) {
+            best.longest_spawn_us = next.longest_spawn_us;
+        }
+        if (next.median_spawn_us < best.median_spawn_us) {
+            best.median_spawn_us = next.median_spawn_us;
+        }
+        if (next.largest_spawn_block > best.largest_spawn_block) {
+            best.largest_spawn_block = next.largest_spawn_block;
+        }
     }
     return best;
 }
 
 static void report(const char *label, size_t population, round_cost cost) {
-    printf("%-10s %9zu   %8.2f %8.2f %8.2f %8.3f %8.2f %8.3f %8.3f   %7.1f %10.1f\n", label, population, cost.spawn_us,
-           cost.upgrade_us, cost.churn_us, cost.inspect_us, cost.timer_us, cost.cancel_us, cost.page_us, cost.actor_bytes,
-           (double)cost.peak_bytes / (1024.0 * 1024.0));
+    printf("%-10s %9zu   %8.2f %8.2f %8.2f %8.3f %8.2f %8.3f %8.3f   %8.2f %9.1f %8.1f   %7.1f %10.1f\n", label, population,
+           cost.spawn_us, cost.upgrade_us, cost.churn_us, cost.inspect_us, cost.timer_us, cost.cancel_us, cost.page_us,
+           cost.median_spawn_us, cost.longest_spawn_us, (double)cost.largest_spawn_block / 1024.0, cost.actor_bytes, (double)cost.peak_bytes / (1024.0 * 1024.0));
     /* A failure below writes to stderr; keep the table ahead of it. */
     fflush(stdout);
 }
 
 static void report_header(void) {
-    printf("%-10s %9s   %8s %8s %8s %8s %8s %8s %8s   %7s %10s\n", "", "actors", "spawn", "upgrade", "churn", "inspect",
-           "timer", "cancel", "page", "bytes", "peak MB");
-    printf("%-10s %9s   %8s %8s %8s %8s %8s %8s %8s   %7s %10s\n", "", "", "us", "us", "us", "us", "us", "us", "us", "/actor",
-           "");
+    printf("%-10s %9s   %8s %8s %8s %8s %8s %8s %8s   %8s %9s %8s   %7s %10s\n", "", "actors", "spawn", "upgrade", "churn",
+           "inspect", "timer", "cancel", "page", "median", "longest", "block", "bytes", "peak MB");
+    printf("%-10s %9s   %8s %8s %8s %8s %8s %8s %8s   %8s %9s %8s   %7s %10s\n", "", "", "us", "us", "us", "us", "us", "us", "us",
+           "us", "us", "KiB", "/actor", "");
 }
 
 /* The pair of populations a ratio is taken over, for the failure message. */
@@ -702,7 +756,7 @@ static void require_flat(const char *what, double small, double large) {
         return;
     }
     fprintf(stderr,
-            "scale test failed: %s costs %.2f us per actor against %u residents and %.2f us against %u, a ratio of "
+            "scale test failed: %s measures %.2f against %u residents and %.2f against %u, a ratio of "
             "%.2f against a bound of %.2f: the cost of one actor grows with the population (invariant 17)\n",
             what, small, small_population, large, large_population, ratio, COST_RATIO_BOUND);
     exit(1);
@@ -720,7 +774,17 @@ static void require_flat_pair(uint32_t small_count, const round_cost *small, uin
     require_flat("a timed ephemeral actor", small->timer_us, large->timer_us);
     require_flat("cancelling and re-arming a delayed send", small->cancel_us, large->cancel_us);
     require_flat("a page of the actor walk", small->page_us, large->page_us);
-    /* Per-actor memory is a population claim too: it may not grow. */
+/*
+ * No spawn may need a block that grows with the population (ADR 0063): a
+ * table that doubles allocates four times as much for four times the
+ * actors, and one spawn pays for copying it. The longest single spawn
+ * shows that too, but allocator and page-fault noise reaches 100 us or
+ * more at millions of actors, as large as the copy below four million, so
+ * a time bound would pass or fail by accident. The largest block is exact.
+ */
+require_flat("the largest block a spawn allocates", (double)small->largest_spawn_block,
+             (double)large->largest_spawn_block);
+/* Per-actor memory is a population claim too: it may not grow. */
     require(large->actor_bytes <= small->actor_bytes + 1.0, "per-actor memory grows with the population");
 }
 

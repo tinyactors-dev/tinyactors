@@ -9,10 +9,6 @@ typedef struct {
     size_t end;
 } ta_continuation_layout;
 
-static size_t ta_align_up(size_t offset, size_t alignment) {
-    return (offset + alignment - 1u) / alignment * alignment;
-}
-
 static ta_continuation_layout ta_continuation_offsets(const ta_continuation *shape) {
     ta_continuation_layout layout;
     layout.sets = ta_align_up(sizeof(ta_continuation), _Alignof(uint64_t));

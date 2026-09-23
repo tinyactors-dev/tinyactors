@@ -92,7 +92,7 @@ static void test_generation_skips_zero(void) {
 
     /* The slot's generation at its last value before the wrap. */
     CHECK(ta_actor_destroy(system, second) == TA_OK);
-    ta_actor_slot *entry = ta_vec_at(&system->actors, slot);
+    ta_actor_slot *entry = ta_actor_slot_at(system, slot);
     entry->generation = UINT32_MAX;
     ta_actor_id last = spawn(system, chart);
     CHECK(ta_actor_id_slot(last) == slot);
@@ -101,7 +101,7 @@ static void test_generation_skips_zero(void) {
 
     /* Released, it wraps to 1, not 0. */
     CHECK(ta_actor_destroy(system, last) == TA_OK);
-    CHECK(entry == ta_vec_at(&system->actors, slot) && entry->generation == 1u);
+    CHECK(entry == ta_actor_slot_at(system, slot) && entry->generation == 1u);
     ta_actor_id wrapped = spawn(system, chart);
     CHECK(ta_actor_id_slot(wrapped) == slot);
     CHECK(ta_actor_id_generation(wrapped) == 1u);

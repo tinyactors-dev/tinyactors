@@ -383,6 +383,11 @@ struct ta_definition {
     bool datamodel_prepared;
     uint32_t datamodel_instance_size;
     uint32_t datamodel_instance_alignment;
+    /* One actor of this definition is one block (ADR 0063; ta_actor_layout()). */
+    size_t actor_block_bytes;
+    size_t actor_block_alignment;
+    size_t actor_session_offset;
+    size_t actor_instance_offset;
     /* Resident actors whose `definition` points here; see ta_actor_free(). */
     uint32_t actor_count;
     /*
@@ -398,8 +403,6 @@ struct ta_definition {
 const ta_definition *ta_definition_lookup(const ta_system *system, ta_definition_id id);
 /* Bytes of one actor's session storage: two configurations and history. */
 size_t ta_definition_session_bytes(const ta_definition *definition);
-/* Bytes allocated for one actor's data-model instance (never zero). */
-size_t ta_definition_instance_bytes(const ta_definition *definition);
 bool ta_definition_is_atomic(const ta_definition *definition, ta_state_id state);
 bool ta_definition_is_descendant(const ta_definition *definition, ta_state_id state, ta_state_id ancestor);
 bool ta_event_pattern_matches(const ta_definition *definition,

@@ -103,6 +103,29 @@ typedef struct {
     uint32_t next_free;
 } ta_actor_slot;
 
+/*
+ * The actor table (ADR 0063): slots live in fixed pages of
+ * TA_ACTOR_PAGE_SLOTS, found through a page directory. Slot `s` is in page
+ * `s / TA_ACTOR_PAGE_SLOTS`. A page is allocated only when the last one is
+ * full, and pages never move, so no spawn copies the table; only the
+ * directory of page pointers doubles. Pages live as long as the system.
+ */
+#define TA_ACTOR_PAGE_SLOTS 4096u
+typedef struct {
+    ta_vec pages;   /* ta_actor_slot *, one per page */
+    uint32_t count; /* slots issued so far */
+} ta_actor_table;
+
+/* The entry for `slot`, or NULL when that slot was never issued. */
+ta_actor_slot *ta_actor_slot_at(const ta_system *system, uint32_t slot);
+void ta_actor_table_destroy(ta_actor_table *table, ta_allocator allocator);
+/*
+ * Lays out one actor of `definition` as a single allocation (ADR 0063): the
+ * ta_actor record, then the session storage, then the data-model instance,
+ * each at its alignment. Called once, when the definition is compiled.
+ */
+void ta_actor_layout(ta_definition *definition);
+
 ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id);
 bool ta_actor_state_active(const ta_actor *actor, ta_state_id state);
 /* Runs an invoked child's exitInterpreter path with isolated scratch storage. */
