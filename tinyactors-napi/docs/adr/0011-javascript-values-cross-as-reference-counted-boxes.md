@@ -19,7 +19,8 @@ global handle, so the per-value cost matters for the same reasons as in ADR
      (ADR 0014): an index into the table and a native reference count.
    - `retain` increments the count. `release` decrements it, and at zero it
      stores `undefined` at the index and puts the index on a native free
-     list. `clone` shares the box.
+     list. Core shares values only by retain; `ta_value_vtable` has no
+     `clone` (tinyactors-core ADR 0050).
    - Reading a value is one `napi_get_element`. Writing a new one takes an
      index from the free list, or appends, and is one `napi_set_element`.
    - Values are shared, not structured-cloned (as `docs/design.md`

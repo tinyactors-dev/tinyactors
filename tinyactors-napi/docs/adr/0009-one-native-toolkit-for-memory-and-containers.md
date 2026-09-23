@@ -20,8 +20,9 @@ much memory the addon itself used.
      the whole queue. Chunks come from the system's pools (ADR 0014) and
      return to them when they are empty;
    - `map`: an open-addressing hash map keyed by `uint64_t`, used for the
-     directory and for interned addresses. Mailboxes do not use it, because
-     the scheduling table indexes them by slot (ADR 0005);
+     directory, which it keys by `ta_address` pointer (ADR 0006). Mailboxes
+     do not use it, because the scheduling table indexes them by slot
+     (ADR 0005);
    - `slice`: a view of a pointer and a length, used in every interface
      that passes a sequence.
 
@@ -33,7 +34,7 @@ much memory the addon itself used.
 3. **All allocations go through one counting pool allocator per system**
    (ADR 0014). That allocator is also handed to core. `system.stats()`
    reports the addon's bytes by category (envelopes, scheduling table, value
-   boxes, interned addresses, scratch high-water mark), the bytes held and
+   boxes, directory, scratch high-water mark), the bytes held and
    free in each size class, and the number of chunk requests, next to what
    core reports for each actor.
 4. **The addon follows core's C rules where they make sense**: functions

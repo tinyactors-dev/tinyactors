@@ -17,7 +17,7 @@ corrected.
   - memory: a chunk source, size-class pools and arenas (ADR 0014);
   - scheduling: the slot-indexed scheduling table, pooled mailboxes, ready
     and runnable queues, and the pump (ADRs 0005, 0007);
-  - the router, the actor directory and the address table (ADR 0006);
+  - the router and the actor directory (ADR 0006);
   - the clock;
   - adapters for core's callback interfaces;
   - the JavaScript data model, the handle table and value boxes (ADR 0011).
@@ -65,7 +65,7 @@ tinyactors-napi/
 │   │                            clock read every turn, flush/advance promises, hook calls (ADR 0007)
 │   ├── hooks.{c,h}              post-call hooks for spawn/load/reconstruct/prepare/destroy/unload (ADR 0013)
 │   ├── router.{c,h}             external-event router into mailboxes (ADR 0006)
-│   ├── directory.{c,h}          in-memory actor directory and the interned address table (ADR 0006)
+│   ├── directory.{c,h}          in-memory actor directory keyed by core's ta_address handles (ADR 0006)
 │   ├── events.{c,h}             dotted event-name interning and formatting (ADR 0004)
 │   ├── values.{c,h}             handle table and reference-counted value boxes (ADR 0011)
 │   ├── napi_datamodel.{c,h}     the JavaScript data model (ADR 0011)
@@ -111,26 +111,33 @@ needs, and a step waits for its prerequisites instead of working around them
 | 0056: a finished actor reports its final state | step 5 | implemented |
 | 0057: core ships the null data model | step 4 | implemented |
 | 0058: compile errors say what and where | step 4 (error quality only) | implemented |
-| 0059: an actor ID is a public slot and generation | step 3 | **proposed, not implemented** |
+| 0059: an actor ID is a public slot and generation | step 3 | implemented |
 | 0061: a macrostep can pause inside executable content | step 5 | implemented |
 | 0062: the actor walk is paged by position | step 9 | implemented |
+| 0065: named addresses are shared, reference-counted handles | step 7 | proposed |
 
-Step 3 and everything after it wait for core ADR 0059:
-`ta_actor_id_slot()`, `ta_actor_id_generation()` and `ta_actor_id_make()`
-are not in `tinyactors.h` yet.
+Core ADR 0065 also fixes a lifetime bug that the addon would hit. A named
+sender's origin strings are borrowed from the sender. A delivery kept with
+`ta_external_delivery_clone()`, which copies only the destination, or a
+submitted delayed send that outlives its owner, points at freed memory once
+the sender is destroyed. The addon destroys finished actors by default
+(ADR 0012), so this is a common case. Named routing in step 7 waits for
+0065.
 
 The libraries in this repository are private (root `AGENTS.md`). When the
 addon needs a core change, core's API changes in place and every caller
 moves with it, the addon included. There are no second functions and no
 compatibility shims.
 
-Some core changes would help but are not prerequisites, because the pools
-of ADR 0014 make their cost small. Each needs its own core ADR:
-- grow the actor table in fixed pages instead of doubling it;
-- keep an actor's sparse state and internal-event array between
-  macrosteps;
-- an interface that lets the router keep named addresses without copying
-  them.
+Two proposed core ADRs help but are not prerequisites, because the pools
+of ADR 0014 make their cost small:
+- 0063: an actor is one allocation, in a table that grows in fixed pages,
+  so no spawn copies the table;
+- 0064: a running actor is lent an internal queue, so a trivial macrostep
+  allocates nothing.
+
+`scale.js` (step 10) records the longest spawn and the chunk requests
+before and after each of them lands.
 
 ## Steps
 
@@ -210,11 +217,15 @@ Needs core ADR 0057; core ADR 0058 improves error messages.
   `ta_compile_error` (core ADR 0058): its code, path, subject and message.
   The call arena is passed as `error_arena`, and the error is copied into
   JavaScript before the arena is reset.
-  - The `error` member of `ta_definition_compile_params` has no
-    `TA_VALID_ON` annotation, so a generated binding writes nothing for it
-    when the compile fails. The test host has the same gap (core ADR 0057,
-    implementation notes). Fix the annotation in core, in place, before
-    this step. Do not override the binding in the addon.
+  - The `error` member of `ta_definition_compile_params` is written after
+    every result: `ta_definition_compile_spec()` zeroes it on entry, so its
+    code is `TA_COMPILE_ERROR_NONE` unless the spec was refused. But it has
+    no validity annotation, so generated bindings treat it as valid only on
+    success and drop it when compiling fails. The test host has the same
+    gap (core ADR 0057, implementation notes). Before this step, annotate it
+    `TA_ALWAYS` in core, regenerate `tinyactors.api.json`, and move the test
+    host's refusal scenario from SCXML import to `compile_spec`. This needs
+    no ADR. Do not override the binding in the addon.
 - `lib/definition.js` reads `identity`, `inspect()` and `retired` through
   generated calls. `retire()` is bound.
 
@@ -305,8 +316,14 @@ Exit criterion:
 
 ### 7. Route actor-to-actor events
 
+Named routing needs core ADR 0065. Runtime-ID routing does not, and can
+land first.
+
 - `router.{c,h}` and `directory.{c,h}`, installed at system creation
-  (ADR 0006), with the interned address table.
+  (ADR 0006):
+  - the router keeps a delivery with `ta_external_delivery_retain()`, and
+    the envelope releases it after delivery;
+  - the directory is a map keyed by the `ta_address` handle's pointer.
 - Named spawn and `findActor()`.
 - Literal `<send>` between actors.
 - The router's `submit` only enqueues. It never destroys or unloads an
@@ -321,7 +338,11 @@ Exit criterion:
 - an external send to self is delivered in a later macrostep, with no
   `TA_ERR_BUSY`;
 - after warm-up, a named ping-pong pair requests no chunk and copies no
-  address.
+  address;
+- a named sender finishes and is destroyed while its message waits in a
+  mailbox. The envelope's origin stays valid: a native test reads it with
+  `ta_address_view()` under AddressSanitizer, and step 11 checks
+  `_event.origin` in JavaScript.
 
 ### 8. Time
 
@@ -417,6 +438,8 @@ Exit criterion:
 - the number of value boxes returns to zero after `close()`;
 - a system holds one `napi_ref` for values, whatever the number of live
   values;
+- a receiver reads `_event.origin` of a message whose named sender was
+  destroyed before delivery, and replies to it (core ADR 0065);
 - `test/scale.js` runs again with a chart that has data: its ratios stay
   within their bounds, steady state with data requests no chunk, and the
   target-population numbers are recorded.

@@ -84,7 +84,10 @@ description, not a generator.
        `TA_EXPRESSION_HOST`;
      - `ta_actor_id` is carried as `(slot, generation)` (ADR 0002);
      - `ta_value` is carried as value boxes (ADR 0011);
-   - **skipped**: C-only utilities (`ta_arena_*`, `ta_tree_*`, clone and
+     - `ta_address` (tinyactors-core ADR 0065) is carried as its text, a
+       family and a name. Inputs are interned for the call, and outputs are
+       read through `ta_address_view()`. JavaScript never holds a handle;
+   - **skipped**: C-only utilities (`ta_arena_*`, `ta_tree_*`, retain and
      release helpers) and functions that can only be called from inside a
      callback (`ta_dm_host_*`), each with a reason.
 

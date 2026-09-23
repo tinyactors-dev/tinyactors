@@ -73,8 +73,8 @@ That design has several faults:
 8. **Envelopes are small.** An envelope holds the target's generation, the
    event name ID, the send ID, the origin, the invoke ID, the index of the
    next envelope, and a value box only when data is present (ADR 0011). A
-   named origin is a reference to an interned address (ADR 0006), not a
-   copy. A post without data allocates nothing after warm-up (ADR 0014).
+   named origin is a retained `ta_address` handle (tinyactors-core ADR
+   0065, napi ADR 0006), not a copy. A post without data allocates nothing after warm-up (ADR 0014).
 9. **Backpressure.** Limits on the total number of queued envelopes and on
    retained data bytes are checked when a message is accepted: at
    `post`, and in the router (ADR 0006), which answers

@@ -42,7 +42,7 @@ blocks for the next use.
 
    | Lifetime | Examples | Strategy |
    |---|---|---|
-   | System | actors, session storage, sparse state, envelopes, value-box records, queue chunks, scheduling-table pages, interned addresses | size-class pools over large chunks |
+   | System | actors, session storage, sparse state, envelopes, value-box records, queue chunks, scheduling-table pages, directory entries | size-class pools over large chunks |
    | Definition | compiled layouts, spec trees | core's arenas (unchanged) |
    | Pump turn | `done`, `fault` and `deadLetter` records waiting for their hooks | a turn arena, reset at the end of each turn |
    | Call | spec decoding, an enumeration page, formatting buffers | a call arena, reset after the call |
@@ -79,21 +79,25 @@ blocks for the next use.
    - queues are made of chunks taken from the pools (ADR 0009);
    - value boxes are pool records that index one handle table per system
      (ADR 0011);
-   - named addresses are interned once and shared by reference (ADR 0006).
+   - named addresses are core's interned handles, shared by reference
+     (ADR 0006, tinyactors-core ADR 0065).
 
 6. **Accounting (ADR 0009).** For each lifetime and each size class,
    `stats()` reports the chunks held, the bytes in use and the bytes free.
    It also reports the number of chunk requests. That count is the test
    signal: after warm-up, a steady workload requests no new chunks.
 
-7. **Core changes that would help.** With pools in place none of them is a
-   prerequisite, and each would need its own core ADR:
-   - grow the actor table in fixed pages instead of doubling it;
-   - keep an actor's sparse state and internal-event array between
-     macrosteps, or share one internal queue per system that is copied into
-     the actor only when a macrostep pauses;
-   - copy a named address into the router's storage only once, for example
-     through an address interning interface.
+7. **Core changes that help.** Each is a proposed tinyactors-core ADR:
+   - ADR 0063: an actor is one allocation, in a table that grows in fixed
+     pages instead of doubling;
+   - ADR 0064: a running actor is lent an internal queue from a small
+     system cache, so a macrostep allocates nothing for it;
+   - ADR 0065: named addresses are reference-counted handles, so keeping a
+     delivery copies no strings.
+
+   With pools in place, 0063 and 0064 are optimizations, not
+   prerequisites. 0065 also fixes the lifetime of named origins, so named
+   routing waits for it (ADR 0006).
 
 8. **What stays outside this design.** V8 and Node-API allocate for
    promises, handle scopes and JavaScript objects. There, the aim is only
