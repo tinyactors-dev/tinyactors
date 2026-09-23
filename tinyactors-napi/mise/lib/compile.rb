@@ -1,0 +1,114 @@
+# frozen_string_literal: true
+
+require 'English'
+require 'fileutils'
+require 'json'
+require 'pathname'
+require 'rbconfig'
+require 'shellwords'
+require 'cache'
+
+# The one compile command for the addon's C sources, the core amalgamation and
+# the native tests. Every translation unit is compiled once to its own object
+# under build/obj (Cache.compile reuses it while its inputs are unchanged), so
+# `build` and `test-native` share objects instead of compiling core twice.
+module NapiCompile
+  ROOT = Cache::ROOT
+  BUILD = ROOT.join('build')
+  OBJECTS = BUILD.join('obj')
+  CORE_DIR = ROOT.join('../tinyactors-core/include').expand_path
+  CORE_SOURCE = CORE_DIR.join('tinyactors.c')
+
+  module_function
+
+  def capture(*command)
+    output = IO.popen(command, chdir: ROOT.to_s, err: %i[child out], &:read)
+    abort output unless $CHILD_STATUS.success?
+    output.strip
+  end
+
+  def node_include_dir
+    @node_include_dir ||= begin
+      node = Pathname.new(capture('mise', 'which', 'node'))
+      dir = node.dirname.parent.join('include/node')
+      abort "Node-API headers not found under #{dir}" unless dir.join('node_api.h').file?
+      dir
+    end
+  end
+
+  def version = JSON.parse(ROOT.join('package.json').read).fetch('version')
+
+  def compiler = Shellwords.split(ENV.fetch('CC', 'cc'))
+
+  def command
+    @command ||= [
+      *compiler,
+      *Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic -O2')),
+      '-fPIC',
+      '-DNAPI_VERSION=8',
+      "-DTINYACTORS_NAPI_VERSION=\"#{version}\"",
+      "-I#{node_include_dir}",
+      "-I#{CORE_DIR}",
+      "-I#{ROOT.join('src')}"
+    ]
+  end
+
+  # The addon's own sources, adapters included.
+  def sources = Cache.files('src/**/*.c')
+
+  def object_for(source)
+    source = Pathname.new(source)
+    return OBJECTS.join('core/tinyactors.o') if source == CORE_SOURCE
+
+    OBJECTS.join(source.relative_path_from(ROOT).sub_ext('.o'))
+  end
+
+  # Compiles each source (reusing cached objects) and returns the objects.
+  def objects(sources)
+    sources.map do |source|
+      object = object_for(source)
+      state, output = Cache.compile(command, source, object)
+      if state == :failed
+        warn output
+        abort "tinyactors-napi: compiling #{source.relative_path_from(ROOT)} failed"
+      end
+      puts "compiled #{source.relative_path_from(ROOT)}" if state == :compiled
+      object
+    end
+  end
+
+  def core_object = objects([CORE_SOURCE]).first
+
+  # Links `objects` into `output`, unless the same objects were linked the same
+  # way last time and the output is still there.
+  def link(objects, output, flags: [])
+    link_command = [*compiler, *flags, *objects.map(&:to_s), '-o', output.to_s]
+    name = "link-#{output.relative_path_from(BUILD).to_s.tr('/', '_')}"
+    key = Cache.digest(objects, link_command.join(' '), Cache.tool_id(compiler.first(1)))
+    return if output.file? && Cache.stamped?(name, key)
+
+    Cache.unstamp(name)
+    FileUtils.rm_f(output)
+    FileUtils.mkdir_p(output.dirname)
+    puts link_command.shelljoin
+    pid = Process.spawn(*link_command, chdir: ROOT.to_s)
+    _pid, status = Process.wait2(pid)
+    exit(status.exitstatus || 1) unless status.success?
+    Cache.stamp(name, key)
+  end
+
+  # Whether the object's translation unit included node_api.h, directly or
+  # through another header. Such an object cannot link outside a Node process.
+  def uses_node_api?(object)
+    dep = object.sub_ext('.d')
+    Cache.dependencies(dep).any? { |header| File.basename(header) == 'node_api.h' }
+  end
+
+  def addon_link_flags
+    case RbConfig::CONFIG.fetch('host_os')
+    when /darwin/ then %w[-bundle -undefined dynamic_lookup]
+    when /linux|bsd/ then %w[-shared]
+    else abort 'tinyactors-napi: the build supports macOS, Linux, and BSD'
+    end
+  end
+end

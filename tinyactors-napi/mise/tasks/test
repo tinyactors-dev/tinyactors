@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="Build and test the tinyactors Node-API addon with Node.js and Bun"
+#MISE description="Build and test the tinyactors Node-API addon: native unit tests, then the JS suites on Node.js and Bun"
 # vim:ft=ruby
 
 require 'pathname'
@@ -14,15 +14,10 @@ def run(*command)
 end
 
 run('mise', 'run', 'build')
-run('node', 'test/version.js')
-run('bun', 'test/version.js')
-run('node', 'test/system.js')
-run('bun', 'test/system.js')
-run('node', 'test/definition.js')
-run('bun', 'test/definition.js')
-run('node', 'test/actor.js')
-run('bun', 'test/actor.js')
-run('node', 'test/post.js')
-run('bun', 'test/post.js')
-run('node', 'test/e2e.js')
-run('bun', 'test/e2e.js')
+run('mise', 'run', 'test-native')
+
+Dir[ROOT.join('test/*.js').to_s].sort.each do |suite|
+  relative = Pathname.new(suite).relative_path_from(ROOT).to_s
+  run('node', relative)
+  run('bun', relative)
+end

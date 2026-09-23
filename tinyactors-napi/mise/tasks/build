@@ -3,78 +3,11 @@
 # vim:ft=ruby
 
 require 'fileutils'
-require 'English'
-require 'json'
-require 'pathname'
-require 'rbconfig'
-require 'shellwords'
-require 'cache'
+require_relative '../lib/compile'
 
-ROOT = Cache::ROOT
-BUILD = ROOT.join('build')
-SOURCE = ROOT.join('src/addon.c')
-NULL_SOURCE = ROOT.join('src/null_datamodel.c')
-CORE_SOURCE = ROOT.join('../tinyactors-core/include/tinyactors.c').expand_path
-CORE_HEADER = ROOT.join('../tinyactors-core/include/tinyactors.h').expand_path
-SUPPORT_SOURCE = ROOT.join('src/binding.h')
-OUTPUT = BUILD.join('tinyactors_napi.node')
-
-def capture(*command)
-  output = IO.popen(command, chdir: ROOT.to_s, err: %i[child out], &:read)
-  abort output unless $CHILD_STATUS.success?
-  output.strip
-end
-
-node = Pathname.new(capture('mise', 'which', 'node'))
-include_dir = node.dirname.parent.join('include/node')
-abort "Node-API headers not found under #{include_dir}" unless include_dir.join('node_api.h').file?
-
-version = JSON.parse(ROOT.join('package.json').read).fetch('version')
-compiler = Shellwords.split(ENV.fetch('CC', 'cc'))
-flags = Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic -O2'))
-link_flags = case RbConfig::CONFIG.fetch('host_os')
-             when /darwin/
-               %w[-bundle -undefined dynamic_lookup]
-             when /linux|bsd/
-               %w[-shared -fPIC]
-             else
-               abort 'tinyactors-napi: the bootstrap build supports macOS, Linux, and BSD'
-             end
-
-FileUtils.mkdir_p(BUILD)
-command = [
-  *compiler,
-  *flags,
-  *link_flags,
-  '-DNAPI_VERSION=6',
-  "-DTINYACTORS_NAPI_VERSION=\"#{version}\"",
-  "-I#{include_dir}",
-  "-I#{CORE_HEADER.dirname}",
-  SOURCE.to_s,
-  NULL_SOURCE.to_s,
-  CORE_SOURCE.to_s,
-  '-o',
-  OUTPUT.to_s
-]
-
-# The Node-API headers live outside this module, so include them explicitly in
-# the content key instead of relying on mise's mtime-based sources. The command
-# also captures the selected Node installation, flags, platform linker mode,
-# package version define, and compiler identity.
-headers = Dir[include_dir.join('**/*.h').to_s].sort.map { |path| Pathname.new(path) }
-normalized_command = command.map do |part|
-  part.start_with?(ROOT.to_s) ? part.delete_prefix("#{ROOT}/") : part
-end.join(' ')
-Cache.gate(
-  'build-addon',
-  inputs: [SOURCE, NULL_SOURCE, SUPPORT_SOURCE, CORE_SOURCE, CORE_HEADER,
-           ROOT.join('package.json'), *headers],
-  outputs: [OUTPUT],
-  extra: [normalized_command, Cache.tool_id(compiler.first(1))]
-)
-
-FileUtils.rm_f(OUTPUT)
-puts command.shelljoin
-pid = Process.spawn(*command, chdir: ROOT.to_s)
-_pid, status = Process.wait2(pid)
-exit(status.exitstatus || 1) unless status.success?
+# Every src/**/*.c, compiled together with the core amalgamation (ROADMAP
+# step 1). Objects are cached one by one; the link runs only when an object or
+# the link command changed.
+objects = NapiCompile.objects(NapiCompile.sources) + [NapiCompile.core_object]
+NapiCompile.link(objects, NapiCompile::BUILD.join('tinyactors_napi.node'),
+                 flags: NapiCompile.addon_link_flags)
