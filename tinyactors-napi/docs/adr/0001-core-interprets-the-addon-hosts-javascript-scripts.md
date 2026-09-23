@@ -42,7 +42,9 @@ Rules that follow:
      `TA_ERR_DONE`;
    - ADR 0056: a finished actor reports its final state;
    - ADR 0057: core ships the null data model;
-   - ADR 0059: an actor ID is a public slot and generation.
+   - ADR 0059: an actor ID is a public slot and generation;
+   - a core ADR not yet written: `ta_system_visit_actors` takes a cursor
+     (ADR 0003).
 3. **JavaScript runs only between core calls.** Core callbacks into the
    addon (router, I/O, invoker, log, data model) must not re-enter the
    interpreter. They enqueue work or buffer records. Data-model callbacks

@@ -5,7 +5,9 @@ rewritten from scratch against them. Where `../design.md` or
 `../../ROADMAP.md` disagree with an ADR, the ADR wins.
 
 Core decisions live in `tinyactors-core/docs/adr`. This addon depends in
-particular on core ADRs 0011, 0029, 0040, 0047, 0050 and 0053–0057 and 0059.
+particular on core ADRs 0011, 0029, 0040, 0047, 0050 and 0053–0057 and 0059,
+and on a core ADR not yet written that gives `ta_system_visit_actors` a
+cursor (ADR 0003).
 
 | ADR | Title |
 |---|---|
