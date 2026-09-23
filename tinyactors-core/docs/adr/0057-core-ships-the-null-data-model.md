@@ -1,6 +1,6 @@
 # ADR 0057: Core ships the null data model
 
-**Status:** Proposed; applies ADR 0005 and ADR 0023
+**Status:** Accepted and implemented; applies ADR 0005 and ADR 0023. See the implementation notes for where the code differs from the text.
 **Date:** 2026-09-23
 
 ## Context
@@ -55,3 +55,45 @@ answers anyway.
   host adapters.
 - The null profile's error messages become part of core's behaviour. Tests
   in hosts that match on the old texts must be updated.
+
+## Implementation notes
+
+Recorded when this ADR was implemented (2026-09-23).
+
+- **Where the two copies disagreed, the ADR won.** The test host accepted
+  every source expression when a chart was defined and faulted a
+  non-`In()` one only when it ran. napi refused every expression, `In()`
+  included. Core accepts `In()` and refuses everything else in
+  `prepare_definition`, as D2 says. The test host's scenarios that
+  expected run-time `error.execution` for assign, script, foreach, send
+  data, send params and a non-`In()` condition now expect the chart to be
+  refused when it is compiled.
+- **The refusal names the expression** through ADR 0058's
+  `ta_expression_rejection`. A source expression that is not `In(id)` is
+  `TA_ERR_INVALID` with `TA_COMPILE_ERROR_EXPRESSION_REJECTED`, its path,
+  its source as `subject`, and the message "the null data model has only
+  the In(state) predicate". A host-handle expression is
+  `TA_ERR_UNSUPPORTED`.
+- **What still fails at run time.** `prepare_definition` sees the
+  expression table, not where each expression is used, so it cannot refuse
+  `In()` used as a value (`<log expr="In('a')">`). That compiles and faults
+  as `error.execution` when it runs. Literal `<content>` and a `<data>`
+  without an initializer carry no expression, and also fault at run time.
+- **Per-definition state.** A chart with no expressions keeps nothing
+  (`shared` is null). A chart with expressions keeps one record: a pointer
+  to the expression table core already owns, and its length.
+- **Error messages** are the test host's texts, plus the new refusal
+  message above.
+- **D4 is done for `tinyactors-test` only.** Its copy is deleted, and its
+  `datamodel.null` adapter and scale test call `ta_null_datamodel()`.
+  `tinyactors-napi/src/null_datamodel.c` remains; napi is separate work.
+- **Core tests** that stubbed a model named "null" (`codec_test`,
+  `delayed_send_test`, `event_pattern_test`) use `ta_null_datamodel()`.
+  Stubs that count calls or refuse things on purpose (`deep_test`,
+  `compile_error_test`, `export_test`) stay.
+- **The RPC does not return `compile_spec`'s error.** The `error` member of
+  `ta_definition_compile_params` has no `TA_VALID_ON` annotation, so the
+  generated binding encodes it as null on a refusal. The scenario that
+  checks the refusal's detail therefore imports an SCXML document, whose
+  `ta_import_error` is annotated. This is an ADR 0058 annotation gap, not
+  part of this ADR.

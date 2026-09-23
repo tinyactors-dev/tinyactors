@@ -1,5 +1,8 @@
 # Null data-model profile
 
+Core ships this profile as `ta_null_datamodel()` (ADR 0057,
+`src/null_datamodel.c`). Hosts use it rather than writing their own.
+
 The Null data model is the minimum semantic profile and should remain exceptionally small.
 
 ## Supported
@@ -17,7 +20,11 @@ The Null data model is the minimum semantic profile and should remain exceptiona
 - content/data manipulation requiring a data model;
 - application access to system variables.
 
-The definition compiler/preparer rejects definitions that require unsupported data-model operations.
+`prepare_definition` refuses a chart with any expression other than
+`In(id)`, naming the expression (ADR 0058), so such a chart fails when it is
+defined. Operations that carry no expression but need data (literal
+`<content>`, a `<data>` without an initializer, `In()` used as a value)
+fault at run time as `error.execution`.
 
 The implementation can therefore have:
 
