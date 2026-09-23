@@ -37,9 +37,8 @@ model, and the null data model has no data at all.
    keeps SCXML semantics, so `In()` is false for everything after
    termination.
 4. **Session images carry the final state together with `finished`.** It is
-   captured and restored the same way (ADR 0038). An image of a finished
-   session without it is `TA_ERR_CORRUPT`. The image format version
-   increases.
+   captured and restored the same way (ADR 0038). No saved images exist
+   yet, so the image layout changes without a version bump or migration.
 5. An actor that ends in another way, such as cancellation of an invoked
    child (`ta_actor_exit_invoked`) or destruction, did not reach a final
    state. It reports `TA_STATE_NONE`.
