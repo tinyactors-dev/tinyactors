@@ -1,6 +1,6 @@
 # ADR 0054: Delayed sends live with their owner; the global index orders owners
 
-**Status:** Proposed; refines ADR 0026, applies ADR 0018
+**Status:** Accepted and implemented; refines ADR 0026, applies ADR 0018. See the implementation notes for where the code differs from the text.
 **Date:** 2026-09-23
 
 ## Context
@@ -122,5 +122,56 @@ available in O(1).
   params type are removed.
 - Callers updated with the change: the JSON-RPC test host (its bindings are
   generated from the header) and its Ruby scenario, trace and workbench
-  code. `tinyactors-napi/index.d.ts`, which declares the count, still needs
-  the same change.
+  code, and `tinyactors-napi/index.d.ts` (`0e4d4c4`).
+
+## Implementation notes
+
+Implemented in `1308a94`, with the docs in `d811c94` and napi's `index.d.ts`
+in `0e4d4c4`. The notes below record where the code or its tests differ from
+the text above, as of the follow-up commits `809b64a`, `a14d8be` and
+`8c7a1c2`.
+
+- **A due send the router refused was not marked submitted.** D3 and D5
+  say a send the router refuses is submitted: already sent, waiting to be
+  offered again. Only the path for a send refused during a macrostep did
+  that. `ta_system_dispatch_due` put a refused due send back into its
+  owner's list unsubmitted, so a `<cancel>` could still remove it, and
+  destroying or unloading the owner discarded it instead of moving it to
+  the system-owned list. `809b64a` records the submission and the envelope
+  in `ta_interpreter_dispatch_delayed`, which both paths share.
+- **Tests are in `tinyactors-test`.** `ruby/scenarios/delayed_sends.rb`
+  covers inspection with `destination` for the SCXML processor and a custom
+  one, dispatch order across owners with ties and a cancelled front send,
+  a refused send going back to its owner and outliving destroy and unload,
+  and destroy and unload that cannot reserve room (`TA_ERR_NOMEM`, nothing
+  changed, a retry succeeds). The core test `tests/delayed_send_test.c`
+  covers one actor's list against a large population.
+- **`destination` of a custom-processor send is a zeroed `ta_actor_ref`**
+  (runtime ID 0, which names no actor), not a separate "none" kind. D5's
+  "or none" means that.
+- **D7's scale measurement.** The scale test measured "arming then
+  cancelling one more send" as spawning a timed ephemeral actor and
+  destroying it, which discards an unsubmitted send rather than running
+  `<cancel>`. It now also measures a real `<cancel>`: the timed chart's
+  `rearm` transition cancels its send and arms it again on a resident actor,
+  against every other actor's send. Both are required to stay flat. At
+  50,000 and 200,000 residents a cancel-and-rearm costs 0.248 and 0.241 µs.
+- **A refused send can still be dropped, in one case that no router in this
+  repository reaches.** When the router refuses a due send,
+  `ta_system_dispatch_due` puts it back where it belongs: its owner's list,
+  or the orphans list if the owner is gone. If that fails for want of
+  memory, the send is released and `TA_ERR_NOMEM` returned
+  (`src/system.c`), so it is lost. The owner's list keeps its capacity when
+  its front send is taken, and the heap keeps its capacity, so putting the
+  send back into a live owner's list never allocates. It allocates only if
+  the router's submit callback itself destroys or unloads the sending
+  actor, or otherwise frees its list, and the orphans list must then grow.
+  No router in this repository does that: the test host's routers only
+  deliver, and napi installs none yet. Closing the case
+  fully means reserving room in the orphans list before every dispatch,
+  which costs an allocation on the first dispatch of every system and was
+  not judged worth it. If a router ever needs to destroy or unload a sender
+  during submit, this becomes a bug to fix.
+- **Destroy and unload fail with `TA_ERR_NOMEM` only for an actor that holds a
+  submitted send.** Unsubmitted sends are discarded and need no room, so
+  that is the only case the scenarios can and do drive.
