@@ -493,6 +493,113 @@ static void test_round_trip(ta_system *system) {
                      "<scxml " NS " xmlns:ex=\"urn:example\" name=\"l\"><state><onentry><ex:ping/></onentry></state></scxml>");
 }
 
+/* ------------------------------------------------------------------------
+ * Compile errors located in the document (ADR 0058): the codec keeps text as
+ * slices of the input, so a semantic error has a line and column too.
+ */
+
+typedef struct {
+    ta_result result;
+    ta_import_error error;
+    ta_str line; /* the formatted compile error */
+} located;
+
+static void import_for_error(ta_system *system, ta_arena *arena, const char *document, located *out) {
+    *out = (located){ 0 };
+    ta_definition_id id = 0;
+    out->result = import_bytes(system, arena, (ta_bytes){ .ptr = (const uint8_t *)document, .len = (uint32_t)strlen(document) },
+                               &id, &out->error);
+    if (out->error.stage == TA_IMPORT_STAGE_COMPILE) {
+        (void)ta_compile_error_format(&(ta_compile_error_format_params){ .error = &out->error.as.compile,
+                                                                         .arena = arena,
+                                                                         .out = &out->line });
+    }
+}
+
+/* The 1-based line and byte column of `needle`'s first occurrence after `after`. */
+static ta_chart_position position_of(const char *document, const char *after, const char *needle) {
+    const char *from = after != NULL ? strstr(document, after) : document;
+    const char *at = from != NULL ? strstr(from, needle) : NULL;
+    ta_chart_position position = { .offset = at != NULL ? (uint64_t)(at - document) : UINT64_MAX, .line = 1, .column = 1 };
+    for (const char *p = document; at != NULL && p < at; p += 1) {
+        if (*p == '\n') {
+            position.line += 1u;
+            position.column = 1;
+        } else {
+            position.column += 1u;
+        }
+    }
+    return position;
+}
+
+static bool at_position(const located *result, ta_chart_position expected) {
+    return result->error.located && result->error.at.offset == expected.offset &&
+           result->error.at.line == expected.line && result->error.at.column == expected.column;
+}
+
+static void test_compile_error_positions(ta_system *system) {
+    ta_arena arena;
+    CHECK(ta_arena_init(&arena, test_allocator, 4096) == TA_OK);
+    located result;
+
+    /* An unknown target: its own position, the word, and the nearest state. */
+    const char *unknown = "<scxml " NS " name=\"c\">\n"
+                          "  <state id=\"idle\">\n"
+                          "    <transition event=\"go\" target=\"idel\"/>\n"
+                          "  </state>\n"
+                          "</scxml>";
+    import_for_error(system, &arena, unknown, &result);
+    CHECK(result.result == TA_ERR_INVALID);
+    CHECK(result.error.stage == TA_IMPORT_STAGE_COMPILE);
+    CHECK(result.error.as.compile.code == TA_COMPILE_ERROR_UNKNOWN_STATE);
+    CHECK(str_is(result.error.as.compile.subject, "idel"));
+    CHECK(str_is(result.error.as.compile.related, "idle"));
+    ta_chart_position idel = position_of(unknown, "target=", "idel");
+    CHECK(idel.line == 3 && idel.column == 36);
+    CHECK(at_position(&result, idel));
+    CHECK(str_is(result.line, "states[0].transitions[0].targets[0]: unknown state \"idel\"; nearest is \"idle\""));
+
+    /* A duplicate ID: at the second, and related is the first, in the input. */
+    const char *duplicate = "<scxml " NS " name=\"c\">\n"
+                            "  <state id=\"a\"/>\n"
+                            "  <state id=\"a\"/>\n"
+                            "</scxml>";
+    import_for_error(system, &arena, duplicate, &result);
+    CHECK(result.error.as.compile.code == TA_COMPILE_ERROR_DUPLICATE_STATE);
+    ta_chart_position first = position_of(duplicate, "<state", "a\"");
+    ta_chart_position second = position_of(duplicate, "/>\n  <state id=", "a\"");
+    CHECK(second.line == 3);
+    CHECK(at_position(&result, second));
+    CHECK(result.error.as.compile.related.ptr == duplicate + first.offset);
+
+    /* A bad delay: the attribute value. */
+    const char *delay = "<scxml " NS " name=\"c\">\n"
+                        "  <state id=\"s\">\n"
+                        "    <onentry><send event=\"e\" delay=\"soon\"/></onentry>\n"
+                        "  </state>\n"
+                        "</scxml>";
+    import_for_error(system, &arena, delay, &result);
+    CHECK(result.error.as.compile.code == TA_COMPILE_ERROR_BAD_DURATION);
+    CHECK(str_is(result.error.as.compile.subject, "soon"));
+    CHECK(at_position(&result, position_of(delay, "delay=", "soon")));
+    CHECK(str_is(result.line, "states[0].onentry[0].actions[0].delay: not an SCXML duration such as \"500ms\" or "
+                              "\"2.5s\" \"soon\""));
+
+    /* A subject with a character reference is not a slice of the input: the
+     * error falls back to the nearest element whose text is, the transition. */
+    const char *entity = "<scxml " NS " name=\"c\">\n"
+                         "  <state id=\"idle\">\n"
+                         "    <transition event=\"go\" target=\"id&#101;l\"/>\n"
+                         "  </state>\n"
+                         "</scxml>";
+    import_for_error(system, &arena, entity, &result);
+    CHECK(result.error.as.compile.code == TA_COMPILE_ERROR_UNKNOWN_STATE);
+    CHECK(str_is(result.error.as.compile.subject, "idel"));
+    CHECK(at_position(&result, position_of(entity, "event=", "go")));
+
+    ta_arena_destroy(&arena);
+}
+
 /* A literal content in another media type has no form in this syntax. */
 static void test_unrepresentable(void) {
     ta_arena arena;
@@ -693,6 +800,7 @@ int main(void) {
     test_errors();
     test_lowering();
     test_round_trip(system);
+    test_compile_error_positions(system);
     test_unrepresentable();
     test_limits();
     test_default_limits();
