@@ -36,3 +36,4 @@ Every proposal starts with a status line:
 | [PostgreSQL host](postgres-host.md) | Sketch | tinyactors-core, a new tinyactors-postgres |
 | [Host kernel](host-kernel.md) | Sketch | tinyactors-napi, future language hosts |
 | [Replay-based persistence](replay-persistence.md) | Sketch | tinyactors-core, tinyactors-napi |
+| [An idle actor carries no event](lean-actor-events.md) | Proposed | tinyactors-core, tinyactors-napi |
