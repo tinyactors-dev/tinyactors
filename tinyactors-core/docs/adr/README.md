@@ -67,3 +67,4 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0061](0061-a-macrostep-can-pause-inside-executable-content.md) | [A macrostep can pause inside executable content](0061-a-macrostep-can-pause-inside-executable-content.md) |
 | [0062](0062-the-actor-walk-is-paged-by-position.md) | [The actor walk is paged by position](0062-the-actor-walk-is-paged-by-position.md) |
 | [0063](0063-an-actor-is-one-allocation-in-a-paged-table.md) | [An actor is one allocation in a paged table](0063-an-actor-is-one-allocation-in-a-paged-table.md) (Proposed) |
+| [0064](0064-an-internal-queue-is-lent-to-a-running-actor.md) | [An internal queue is lent to a running actor](0064-an-internal-queue-is-lent-to-a-running-actor.md) (Proposed) |
