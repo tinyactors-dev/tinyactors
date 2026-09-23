@@ -27,8 +27,8 @@ This rewrite starts from a clear split of responsibility.
 | Layer | Owns |
 |---|---|
 | **tinyactors-core** | Statechart semantics, the actor table, sessions, internal queues, delayed-send storage and the deadline index, interning, definition identity, completion and final state, inspection, session images. |
-| **Addon (C, Node-API)** | Host services core asks for: external queues and scheduling (ADR 0005), the external-event router (ADR 0006), the clock and pump (ADR 0007), I/O processors, invokers, log sink, the actor directory, the JavaScript data model and value boxes (ADR 0011). It also provides paged enumeration to JavaScript (ADR 0003). |
-| **JavaScript** | Scripting and policy: the fluent builder and spec normalization (ADR 0010), handle objects (ADR 0002), promise and `send()` bookkeeping, and choosing options. |
+| **Addon (C, Node-API)** | Host services core asks for: external queues and scheduling (ADR 0005), the external-event router (ADR 0006), the clock and pump (ADR 0007), I/O processors, invokers, log sink, the actor directory, the JavaScript data model and value boxes (ADR 0011). It also provides paged enumeration to JavaScript (ADR 0003), and the generated control-plane bindings (ADR 0013). |
+| **JavaScript** | Scripting and policy: the fluent builder, which emits the generated spec shape (ADR 0013), handle objects (ADR 0002), promise and `send()` bookkeeping, and choosing options. |
 
 Rules that follow:
 

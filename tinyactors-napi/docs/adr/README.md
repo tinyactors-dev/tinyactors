@@ -18,6 +18,7 @@ particular on core ADRs 0011, 0029, 0040, 0047, 0050 and 0053–0057 and 0059.
 | [0007](0007-the-event-loop-drives-a-bounded-pump.md) | [The event loop drives a bounded pump](0007-the-event-loop-drives-a-bounded-pump.md) |
 | [0008](0008-faults-are-per-actor.md) | [Faults are per actor](0008-faults-are-per-actor.md) |
 | [0009](0009-one-native-toolkit-for-memory-and-containers.md) | [One native toolkit for memory and containers](0009-one-native-toolkit-for-memory-and-containers.md) |
-| [0010](0010-definitions-are-normalized-in-javascript-and-built-in-one-arena.md) | [Definitions are normalized in JavaScript and built in one arena](0010-definitions-are-normalized-in-javascript-and-built-in-one-arena.md) |
+| [0010](0010-definitions-are-normalized-in-javascript-and-built-in-one-arena.md) | [Definitions are normalized in JavaScript and built in one arena](0010-definitions-are-normalized-in-javascript-and-built-in-one-arena.md) (superseded by 0013) |
 | [0011](0011-javascript-values-cross-as-reference-counted-boxes.md) | [JavaScript values cross as reference-counted boxes](0011-javascript-values-cross-as-reference-counted-boxes.md) |
 | [0012](0012-lifecycle-close-is-authoritative-finished-actors-are-reclaimed.md) | [Lifecycle: close is authoritative, finished actors are reclaimed](0012-lifecycle-close-is-authoritative-finished-actors-are-reclaimed.md) |
+| [0013](0013-the-control-plane-is-generated-the-plumbing-is-hand-written.md) | [The control plane is generated; the plumbing is hand-written](0013-the-control-plane-is-generated-the-plumbing-is-hand-written.md) |

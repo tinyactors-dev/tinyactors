@@ -1,6 +1,6 @@
 # ADR 0010: Definitions are normalized in JavaScript and built in one arena
 
-**Status:** Accepted
+**Status:** Superseded by ADR 0013
 **Date:** 2026-09-23
 
 ## Context
