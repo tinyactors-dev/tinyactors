@@ -1,6 +1,6 @@
 # ADR 0005: Per-target mailboxes and a ready queue
 
-**Status:** Accepted; scheduling table and envelope free list added with ADR 0014;
+**Status:** Accepted; scheduling table and envelope free list added with ADR 0014; `send()` waiters and retained bytes added in ROADMAP step 12;
 delivery results refined when step 6 was built
 **Date:** 2026-09-23
 
@@ -84,16 +84,51 @@ That design has several faults:
    next envelope, and a value box only when data is present (ADR 0011). A
    named origin is a retained `ta_address` handle (tinyactors-core ADR
    0065, napi ADR 0006), not a copy. A post without data allocates nothing after warm-up (ADR 0014).
-9. **Backpressure.** Limits on the total number of queued envelopes and on
-   retained data bytes are checked when a message is accepted: at
-   `post`, and in the router (ADR 0006), which answers
-   `TA_EXTERNAL_EVENT_RETRY` when full. A message that has been accepted is
-   never dropped because of a limit.
+9. **Backpressure.** Limits on the total number of queued envelopes
+   (`maxQueuedMessages`) and on retained data bytes (`maxRetainedBytes`)
+   are checked when a message is accepted: at `post` and `send`, and in the
+   router (ADR 0006), which answers `TA_EXTERNAL_EVENT_RETRY` when full. A
+   message that has been accepted is never dropped because of a limit.
+   - Retained bytes are an estimate made in JavaScript when the message is
+     accepted, in O(1): `options.bytes` when given; otherwise 0 for no data
+     and for numbers, booleans and `null` (they ride inline, ADR 0011), 2
+     bytes per UTF-16 code unit of a string, `byteLength` for an
+     `ArrayBuffer` or a view of one, and a flat 64 bytes for any other
+     object. Objects are not walked; pass `bytes` for large ones.
+   - Mail between actors carries no estimate: its data is a value made
+     inside a chart, and sizing it would mean calling JavaScript.
+   - A message whose estimate alone passes the limit never fits.
 10. **Dead letters are bounded per turn.** Dropping a mailbox moves its
     envelopes to a dead-letter list at once, which is O(1). The pump then
     reports at most `messageBudget` of them to the `deadLetter` hook in
     each turn, so one dead actor with a deep mailbox cannot make one turn
     long.
+11. **`send()` follows its message.** A message may carry a waiter, the
+    native half of a `send()` promise. Waiters are records reused through a
+    free list, so a send makes no allocator call after warm-up (ADR 0014).
+    - While the message is queued, the waiter names its envelope. When core
+      accepts the message, the waiter moves to a map from the actor to the
+      waiter; one actor runs at most one delivered message at a time.
+    - **Completion** is the end of the macrostep the message starts: the
+      actor is stable again (`status: "stable"`) or it finished
+      (`status: "done"`, with its done data). A macrostep paused by a budget
+      has not ended.
+    - The waiter also settles, as a rejection, when the message becomes a
+      dead letter (the reason's code: `not-found`, `done`, `unloaded`, or
+      `invalid` for a message core refused; `detail.reason` names the
+      reason), when the macrostep fails (the fault's code; the actor is
+      quarantined, ADR 0008), and when its actor goes away.
+    - Settlements queue in a ring that the pump drains after the turn's last
+      core call: before the hooks, so a finished actor's done data is still
+      readable before `finished: "destroy"` removes it, and again after
+      them.
+    - **Abort and timeout** (`options.signal`, `options.timeout`) cancel the
+      waiter. A message still in a mailbox is withdrawn and never
+      delivered. A message already on the dead list is still reported to the
+      `deadLetter` hook. A message the actor already took is not undone: its
+      macrostep runs, and only the promise rejects.
+    - `until: "accepted"` needs no waiter: the promise resolves as soon as
+      the message is queued, with `status: "accepted"`.
 
 ## Consequences
 

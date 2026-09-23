@@ -43,6 +43,12 @@ rest.
    closed system, or a definition from another system. They are thrown
    synchronously as `TinyactorsError` with a `code`. A call never both
    throws and rejects.
+   - A full queue is not misuse. `send()` reports `queue-full` through its
+     promise, as it does every other outcome of the message (ADR 0005 point
+     9). `post()` has no promise, so it throws `queue-full`: nothing was
+     accepted, and the caller must know.
+   - An already aborted `signal` rejects a `send()` and throws from a
+     `post()`, for the same reason.
 4. **Result names and codes are generated** from
    `tinyactors-core/include/tinyactors.api.json`, not written by hand, so
    new core results (such as `TA_ERR_DONE`) reach JavaScript without edits.

@@ -96,7 +96,13 @@ export interface SchedulingOptions {
    * `queue-full` beyond it. 0 or absent: no limit.
    */
   maxQueuedMessages?: number;
-  /** Optional best-effort limit for retained JavaScript data. */
+  /**
+   * Maximum retained-bytes estimate of the data of accepted messages not yet
+   * delivered or reported (ADR 0005 point 9); 0 or absent: no limit. The
+   * estimate: `options.bytes`, or 2 bytes per string code unit, byteLength
+   * for buffers, 64 for other objects, 0 for primitives. Mail between actors
+   * carries no estimate.
+   */
   maxRetainedBytes?: number;
 }
 
@@ -160,13 +166,22 @@ export interface System {
    * Mail for an actor that is gone is a dead letter, not an error. An
    * address is resolved through the directory when the post is accepted; a
    * name with no resident actor is a dead letter too (ADR 0006). Throws
-   * `queue-full` at maxQueuedMessages. `data` is any JavaScript value, shared
+   * `queue-full` at maxQueuedMessages or maxRetainedBytes. `data` is any JavaScript value, shared
    * with the receiver, not copied (ADR 0011); the receiver's expressions see
    * it as `context.event.data`.
    */
   post(target: ActorTarget, event: EventName, data?: unknown, options?: PostOptions): void;
 
-  /** Queue a message and resolve after its macrostep becomes stable or done. */
+  /**
+   * Queue a message and return a promise (ADR 0005 point 11). With
+   * `until: "completed"` (the default) it resolves once the macrostep the
+   * message starts has ended, with the actor stable or done; with
+   * `until: "accepted"` once the message is queued. It rejects when the
+   * message becomes a dead letter, when its macrostep faults, on `signal`
+   * (`aborted`), after `timeout` (`timeout`), when the queue is full
+   * (`queue-full`), and on close() (`closed`). Abort and timeout withdraw a
+   * message still queued; a delivered one is not undone. Only misuse throws.
+   */
   send(
     target: ActorTarget,
     event: EventName,
@@ -282,16 +297,22 @@ export type SendId = bigint & { readonly [sendIdBrand]: true };
 
 export interface PostOptions {
   signal?: AbortSignal;
+  /** The retained-bytes estimate of `data`, instead of the default (ADR 0005 point 9). */
+  bytes?: number;
 }
 
 export interface SendOptions extends PostOptions {
-  /** Reject if the message has not completed by this many milliseconds. */
+  /** "completed" (default): the message's macrostep ended; "accepted": it is queued. */
+  until?: "completed" | "accepted";
+  /** Reject with `timeout`, and withdraw the message if still queued, after this many milliseconds. */
   timeout?: number;
 }
 
 export interface SendResult {
-  readonly actor: Actor;
-  readonly status: "stable" | "done";
+  /** The actor that ran the macrostep; for "accepted", the target when it was an ActorId. */
+  readonly actor?: Actor;
+  readonly status: "accepted" | "stable" | "done";
+  /** "done": the actor's done data. */
   readonly completion?: unknown;
 }
 

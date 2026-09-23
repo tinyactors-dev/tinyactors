@@ -577,6 +577,21 @@ ADRs left open:
 Exit criterion: pending promises settle on completion, on abort, and on
 `close()`.
 
+Done (ADR 0005 points 9 and 11, ADR 0008 point 3):
+- `until: "completed"` (the default) resolves when the macrostep the message
+  starts ends, stable or done (with the done data). `until: "accepted"`
+  resolves when the message is queued.
+- Dead letters reject with the reason's code, and a failed macrostep with
+  the fault's. `signal` and `timeout` withdraw a message still queued; a
+  delivered one is not undone. `close()` rejects with `closed`.
+- A full queue rejects a `send()` with `queue-full`; `post()` throws it.
+- Retained bytes are an O(1) estimate made when a message is accepted:
+  `options.bytes`, 2 bytes per string code unit, `byteLength` for buffers,
+  64 for other objects, 0 for primitives. Mail between actors carries none.
+- Waiters come from a free list: after warm-up a `send()` makes no
+  allocator call in the addon. At 100k actors, a completed `send()` costs
+  about 0.6 µs on Node and 0.4 µs on Bun, against 0.2 µs for a `post()`.
+
 ### 13. Services
 
 - `adapters/io`, `adapters/invoker` (JavaScript invokers and the in-system
