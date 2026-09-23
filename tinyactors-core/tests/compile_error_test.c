@@ -54,6 +54,8 @@ typedef struct {
     uint32_t offset;
     uint32_t length;
     char message[32];
+    /* When set, the message instead of "unexpected token". */
+    ta_str long_message;
 } test_model;
 
 static ta_result model_prepare(void *self, const ta_datamodel_prepare_definition_params *params) {
@@ -68,7 +70,9 @@ static ta_result model_prepare(void *self, const ta_datamodel_prepare_definition
         *params->rejected = (ta_expression_rejection){ .expression = model->expression,
                                                        .offset = model->offset,
                                                        .length = model->length,
-                                                       .message = { .ptr = model->message, .len = 16 } };
+                                                       .message = model->long_message.len != 0
+                                                                      ? model->long_message
+                                                                      : (ta_str){ .ptr = model->message, .len = 16 } };
     }
     return TA_ERR_INVALID;
 }
@@ -732,6 +736,163 @@ static void test_format(void) {
     release(&o);
 }
 
+/* ------------------------------------------------------------------------
+ * The formatted line is bounded: a typo at the bottom of a very deep chart
+ * with very long IDs, very long and odd subjects, and a long message.
+ */
+
+static bool utf8_valid(ta_str text) {
+    for (uint32_t at = 0; at < text.len;) {
+        unsigned char lead = (unsigned char)text.ptr[at];
+        uint32_t length = lead < 0x80u ? 1u : lead < 0xC0u ? 0u : lead < 0xE0u ? 2u : lead < 0xF0u ? 3u : lead < 0xF8u ? 4u : 0u;
+        if (length == 0 || length > text.len - at) {
+            return false;
+        }
+        for (uint32_t index = 1; index < length; index += 1u) {
+            if (((unsigned char)text.ptr[at + index] & 0xC0u) != 0x80u) {
+                return false;
+            }
+        }
+        at += length;
+    }
+    return true;
+}
+
+static ta_str format_line(const ta_scxml_spec *spec, outcome *o) {
+    ta_str line = {0};
+    CHECK(ta_compile_error_format(&(ta_compile_error_format_params){ .spec = spec, .error = &o->error,
+                                                                     .arena = &o->arena, .out = &line }) == TA_OK);
+    CHECK(line.len <= TA_COMPILE_ERROR_TEXT_MAX);
+    CHECK(memchr(line.ptr, '\n', line.len) == NULL);
+    CHECK(utf8_valid(line));
+    return line;
+}
+
+static bool ends_with(ta_str text, const char *suffix) {
+    size_t length = strlen(suffix);
+    return text.len >= length && memcmp(text.ptr + text.len - length, suffix, length) == 0;
+}
+
+static bool contains(ta_str text, const char *needle) {
+    size_t length = strlen(needle);
+    for (uint32_t at = 0; length <= text.len && at <= text.len - length; at += 1u) {
+        if (memcmp(text.ptr + at, needle, length) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void test_deep_typo_is_bounded(void) {
+    enum { DEPTH = 500, ID_LENGTH = 20000 };
+    ta_scxml_state_spec (*levels)[3] = calloc(DEPTH, sizeof(*levels));
+    char *ids = malloc((size_t)DEPTH * ID_LENGTH);
+    CHECK(levels != NULL && ids != NULL);
+    if (levels == NULL || ids == NULL) {
+        free(levels);
+        free(ids);
+        return;
+    }
+    static const ta_str typo[] = { S("idel"), END };
+    static ta_scxml_transition_spec transitions[] = { { .kind = TA_SCXML_TRANSITION_EXTERNAL, .targets = typo }, END };
+    for (uint32_t depth = 0; depth < DEPTH; depth += 1u) {
+        char *id = ids + (size_t)depth * ID_LENGTH;
+        memset(id, 'x', ID_LENGTH);
+        int prefix = snprintf(id, ID_LENGTH, "level%u-", depth);
+        id[prefix] = 'x'; /* snprintf wrote a terminator there */
+        ta_str name = { .ptr = id, .len = ID_LENGTH };
+        if (depth + 1u < DEPTH) {
+            levels[depth][0] = (ta_scxml_state_spec){ .kind = TA_SCXML_STATE_COMPOUND, .id = name,
+                                                      .states = levels[depth + 1u] };
+        } else {
+            /* The deepest level: the typo, and the state it meant. */
+            levels[depth][0] = (ta_scxml_state_spec){ .kind = TA_SCXML_STATE_ATOMIC, .id = name,
+                                                      .transitions = transitions };
+            levels[depth][1] = (ta_scxml_state_spec){ .kind = TA_SCXML_STATE_ATOMIC, .id = S("idle") };
+        }
+    }
+    ta_scxml_spec spec = { .name = S("deep"), .states = levels[0] };
+    outcome o;
+    compile(&spec, &o);
+    CHECK(o.error.code == TA_COMPILE_ERROR_UNKNOWN_STATE);
+    CHECK(o.error.path_length == DEPTH + 2u); /* the struct keeps the whole path */
+    ta_str line = format_line(&spec, &o);
+    CHECK(strncmp(line.ptr, "states[0](level0-xxx", 20) == 0);
+    CHECK(contains(line, "...).states[0](level1-"));
+    CHECK(contains(line, ".[494 steps]."));
+    CHECK(ends_with(line, "...).transitions[0].targets[0]: unknown state \"idel\"; nearest is \"idle\""));
+    release(&o);
+    free(ids);
+    free(levels);
+}
+
+static void test_long_subjects_are_bounded(void) {
+    enum { LENGTH = 100000 };
+    char *long_text = malloc(LENGTH);
+    CHECK(long_text != NULL);
+    if (long_text == NULL) {
+        return;
+    }
+    /* A very long unknown target: cut, and no nearest-name search. */
+    memset(long_text, 'q', LENGTH);
+    const ta_str long_target[] = { { .ptr = long_text, .len = LENGTH }, END };
+    ta_scxml_transition_spec transitions[] = { { .kind = TA_SCXML_TRANSITION_EXTERNAL, .targets = long_target }, END };
+    ta_scxml_state_spec states[] = { { .kind = TA_SCXML_STATE_ATOMIC, .id = S("a"), .transitions = transitions }, END };
+    ta_scxml_spec spec = { .name = S("c"), .states = states };
+    outcome o;
+    compile(&spec, &o);
+    CHECK(o.error.code == TA_COMPILE_ERROR_UNKNOWN_STATE);
+    CHECK(o.error.subject.len == LENGTH && o.error.related.len == 0);
+    ta_str line = format_line(&spec, &o);
+    CHECK(ends_with(line, "qqq...\""));
+    release(&o);
+
+    /* Two-byte characters are cut between characters, never inside one. */
+    for (uint32_t at = 0; at + 1u < LENGTH; at += 2u) {
+        long_text[at] = (char)0xC3;
+        long_text[at + 1u] = (char)0xA9; /* é */
+    }
+    compile(&spec, &o);
+    line = format_line(&spec, &o);
+    CHECK(ends_with(line, "\xC3\xA9...\""));
+    release(&o);
+
+    /* Control characters, quotes and backslashes are escaped. */
+    const ta_str odd[] = { S("a\nb\"c\\d\x01"), END };
+    transitions[0].targets = odd;
+    compile(&spec, &o);
+    line = format_line(&spec, &o);
+    CHECK(contains(line, "unknown state \"a\\nb\\\"c\\\\d\\x01\""));
+    release(&o);
+    free(long_text);
+}
+
+static void test_long_message_is_bounded(void) {
+    enum { LENGTH = 50000 };
+    char *long_message = malloc(LENGTH);
+    CHECK(long_message != NULL);
+    if (long_message == NULL) {
+        return;
+    }
+    memset(long_message, 'm', LENGTH);
+    ta_scxml_transition_spec transitions[] = {
+        { .kind = TA_SCXML_TRANSITION_EXTERNAL, .condition = { .kind = TA_EXPRESSION_SOURCE, .as.source = S("x") } },
+        END,
+    };
+    ta_scxml_state_spec states[] = { { .kind = TA_SCXML_STATE_ATOMIC, .id = S("a"), .transitions = transitions }, END };
+    ta_scxml_spec spec = { .name = S("c"), .states = states };
+    test_model model = { .refuse = true, .expression = 0, .long_message = { .ptr = long_message, .len = LENGTH } };
+    outcome o;
+    compile_with(&spec, &model, true, &o);
+    CHECK(o.error.code == TA_COMPILE_ERROR_EXPRESSION_REJECTED);
+    CHECK(o.error.message.len == TA_COMPILE_ERROR_MESSAGE_MAX); /* the copy kept is bounded */
+    CHECK(o.error.message.ptr != long_message);
+    ta_str line = format_line(&spec, &o);
+    CHECK(contains(line, "mmm..."));
+    release(&o);
+    free(long_message);
+}
+
 int main(void) {
     if (ta_system_create(&(ta_system_config){ .allocator = test_allocator }, &system_under_test) != TA_OK) {
         fprintf(stderr, "cannot create a system\n");
@@ -748,6 +909,9 @@ int main(void) {
     test_success_costs_nothing();
     test_rejection();
     test_format();
+    test_deep_typo_is_bounded();
+    test_long_subjects_are_bounded();
+    test_long_message_is_bounded();
     ta_system_destroy(system_under_test);
     if (failures != 0) {
         fprintf(stderr, "compile error test: %d check(s) failed\n", failures);

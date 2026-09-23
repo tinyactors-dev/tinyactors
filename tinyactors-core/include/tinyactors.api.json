@@ -117,6 +117,20 @@
   },
   "constants": [
     {
+      "name": "TA_COMPILE_ERROR_MESSAGE_MAX",
+      "type": {
+        "builtin": "uint32_t"
+      },
+      "value": 256
+    },
+    {
+      "name": "TA_COMPILE_ERROR_TEXT_MAX",
+      "type": {
+        "builtin": "uint32_t"
+      },
+      "value": 1024
+    },
+    {
       "name": "TA_DONE_DATA_NONE",
       "type": {
         "type": "ta_done_data_id"
@@ -3515,7 +3529,7 @@
     },
     "ta_compile_error_format_params": {
       "kind": "struct",
-      "doc": "Writes a compile error as one line of text, for people; it has no stable grammar, and tools read the struct. A state step shows its ID: states[2](idle).transitions[0].targets[0]: unknown state \"idel\"; nearest is \"idle\" `spec` is the spec the error came from; it may be null, and then no IDs are shown.",
+      "doc": "Writes a compile error as one line of text, for people. The line has no stable grammar; tools read the struct. It is never longer than TA_COMPILE_ERROR_TEXT_MAX bytes, however deep the path or long the text: - a path of more than 8 steps shows its first 2 and last 6 steps, and says how many it left out; - each ID, subject, related text and message is cut at a UTF-8 boundary and ends in \"...\" when it is too long; - control characters are escaped everywhere, and quotes and backslashes are escaped inside the quoted subject and related text, so the line stays one line. A state step shows its ID: states[2](idle).transitions[0].targets[0]: unknown state \"idel\"; nearest is \"idle\" `spec` is the spec the error came from; it may be null, and then no IDs are shown.",
       "fields": [
         {
           "name": "spec",

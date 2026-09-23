@@ -388,6 +388,9 @@ typedef struct {
      */
     TA_OUT TA_OPTIONAL TA_LIFETIME(call) ta_expression_rejection *rejected;
 } ta_datamodel_prepare_definition_params;
+/* Core keeps at most this many bytes of a rejection's message, cut at a
+ * UTF-8 boundary. */
+#define TA_COMPILE_ERROR_MESSAGE_MAX ((uint32_t)256)
 typedef struct { void *shared; void *instance; TA_IN TA_OPTIONAL const ta_value *binding; const ta_dm_host *host; } ta_datamodel_init_instance_params;
 /*
  * Named top-level data bindings (SCXML <data>). `name` is the author's data ID,
@@ -1434,8 +1437,17 @@ TA_API ta_result ta_definition_compile_spec(ta_system *system,
 TA_API void ta_definition_destroy(TA_DESTROYS ta_definition *definition);
 
 /*
- * Writes a compile error as one line of text, for people; it has no stable
- * grammar, and tools read the struct. A state step shows its ID:
+ * Writes a compile error as one line of text, for people. The line has no
+ * stable grammar; tools read the struct. It is never longer than
+ * TA_COMPILE_ERROR_TEXT_MAX bytes, however deep the path or long the text:
+ * - a path of more than 8 steps shows its first 2 and last 6 steps, and says
+ *   how many it left out;
+ * - each ID, subject, related text and message is cut at a UTF-8 boundary
+ *   and ends in "..." when it is too long;
+ * - control characters are escaped everywhere, and quotes and backslashes
+ *   are escaped inside the quoted subject and related text, so the line
+ *   stays one line.
+ * A state step shows its ID:
  *   states[2](idle).transitions[0].targets[0]: unknown state "idel"; nearest is "idle"
  * `spec` is the spec the error came from; it may be null, and then no IDs
  * are shown.
@@ -1446,6 +1458,7 @@ typedef struct {
     TA_ARENA ta_arena *arena;
     TA_OUT TA_LIFETIME(arena) ta_str *out;
 } ta_compile_error_format_params;
+#define TA_COMPILE_ERROR_TEXT_MAX ((uint32_t)1024)
 TA_API ta_result ta_compile_error_format(TA_IN const ta_compile_error_format_params *params);
 
 /*

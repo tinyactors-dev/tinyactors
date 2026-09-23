@@ -4111,6 +4111,9 @@ typedef struct {
  */
 #define TA_COMPILER_LINEAR_NAMES 16u
 
+/* Longer unknown targets get no nearest-name suggestion. */
+#define TA_COMPILER_NEAREST_MAX 128u
+
 /*
  * Compiles a ta_scxml_spec in two passes. Pass one assigns state IDs in
  * document (pre-)order and records child ranges; pass two resolves targets and
@@ -4338,8 +4341,15 @@ static uint32_t ta_compiler_distance(ta_allocator allocator, ta_str left, ta_str
 static ta_str ta_compiler_nearest(ta_compiler *compiler, ta_str id) {
     ta_str nearest = {0};
     uint32_t best = UINT32_MAX;
+    if (id.len > TA_COMPILER_NEAREST_MAX) {
+        return nearest; /* nobody misspells a name this long by a few letters */
+    }
     for (ta_state_id state = 0; state < compiler->states.count; state += 1u) {
         ta_str candidate = ta_compiler_state_spec(compiler, state)->id;
+        uint32_t gap = candidate.len > id.len ? candidate.len - id.len : id.len - candidate.len;
+        if (3u * (uint64_t)gap > id.len) {
+            continue; /* the distance is at least the gap in length */
+        }
         uint32_t distance = ta_compiler_distance(compiler->allocator, id, candidate);
         if (distance != 0 && distance < best && 3u * (uint64_t)distance <= id.len) {
             best = distance;
@@ -6015,6 +6025,19 @@ static ta_result ta_compile(ta_system *system, const ta_definition_compile_param
  * it pointed at by replaying the walk to it: expression IDs are assigned in
  * walk order, so nothing is stored per expression on the success path.
  */
+/* The longest prefix of `text` of at most `limit` bytes that does not end
+ * inside a UTF-8 sequence. */
+static uint32_t ta_utf8_prefix(ta_str text, uint32_t limit) {
+    if (text.len <= limit) {
+        return text.len;
+    }
+    uint32_t end = limit;
+    while (end > 0 && ((unsigned char)text.ptr[end] & 0xC0u) == 0x80u) {
+        end -= 1u;
+    }
+    return end;
+}
+
 static void ta_compile_rejected(ta_system *system, const ta_definition_compile_params *params,
                                 const ta_expression_rejection *rejection) {
     ta_compile_error *error = params->error;
@@ -6022,7 +6045,9 @@ static void ta_compile_rejected(ta_system *system, const ta_definition_compile_p
     ta_str message = TA_PHRASE("the data model refused this expression");
     if (params->error_arena != NULL && rejection->message.ptr != NULL && rejection->message.len != 0) {
         ta_str copy = {0};
-        if (ta_arena_copy_str(params->error_arena, rejection->message, &copy) == TA_OK) {
+        ta_str kept = { .ptr = rejection->message.ptr,
+                        .len = ta_utf8_prefix(rejection->message, TA_COMPILE_ERROR_MESSAGE_MAX) };
+        if (ta_arena_copy_str(params->error_arena, kept, &copy) == TA_OK) {
             message = copy;
         }
     }
@@ -6079,36 +6104,23 @@ TA_API ta_result ta_definition_compile_spec(ta_system *system, const ta_definiti
  * Formatting
  */
 
+/*
+ * The formatter's output: one buffer of TA_COMPILE_ERROR_TEXT_MAX bytes,
+ * allocated once. Appending past the end is cut off, which the field limits
+ * below keep from happening; it is the backstop, not the rule.
+ */
 typedef struct {
-    ta_arena *arena;
     char *bytes;
     uint32_t length;
-    uint32_t capacity;
-    bool failed;
 } ta_text_builder;
 
 static void ta_text_append(ta_text_builder *text, ta_str piece) {
-    if (text->failed || piece.len == 0) {
-        return;
+    uint32_t room = TA_COMPILE_ERROR_TEXT_MAX - text->length;
+    uint32_t count = ta_utf8_prefix(piece, room);
+    if (count != 0) {
+        ta_mem_copy(text->bytes + text->length, piece.ptr, count);
+        text->length += count;
     }
-    if (text->length + piece.len > text->capacity) {
-        uint32_t capacity = text->capacity == 0 ? 128u : text->capacity;
-        while (capacity < text->length + piece.len) {
-            capacity *= 2u;
-        }
-        char *bytes = ta_arena_alloc(text->arena, capacity, 1);
-        if (bytes == NULL) {
-            text->failed = true;
-            return;
-        }
-        if (text->length != 0) {
-            ta_mem_copy(bytes, text->bytes, text->length);
-        }
-        text->bytes = bytes;
-        text->capacity = capacity;
-    }
-    ta_mem_copy(text->bytes + text->length, piece.ptr, piece.len);
-    text->length += piece.len;
 }
 
 static void ta_text_append_u32(ta_text_builder *text, uint32_t value) {
@@ -6120,6 +6132,88 @@ static void ta_text_append_u32(ta_text_builder *text, uint32_t value) {
         count += 1u;
     } while (value != 0);
     ta_text_append(text, (ta_str){ .ptr = digits + sizeof(digits) - count, .len = count });
+}
+
+/* Output limits for one field, and how much of a deep path is shown. */
+enum {
+    TA_FORMAT_ID_MAX = 64u,
+    TA_FORMAT_TEXT_MAX = 96u,
+    TA_FORMAT_HEAD_STEPS = 2u,
+    TA_FORMAT_TAIL_STEPS = 6u
+};
+
+/*
+ * The length in bytes of the unit of `text` starting at `at`: a well-formed
+ * UTF-8 sequence, or one byte that is not part of one.
+ */
+static uint32_t ta_utf8_unit(ta_str text, uint32_t at) {
+    unsigned char lead = (unsigned char)text.ptr[at];
+    uint32_t length = lead < 0xC0u ? 1u : lead < 0xE0u ? 2u : lead < 0xF0u ? 3u : lead < 0xF8u ? 4u : 1u;
+    if (length > text.len - at) {
+        return 1u;
+    }
+    for (uint32_t index = 1; index < length; index += 1u) {
+        if (((unsigned char)text.ptr[at + index] & 0xC0u) != 0x80u) {
+            return 1u;
+        }
+    }
+    return length;
+}
+
+/* How a unit is written: escaped when it would break the line, or, in a
+ * quoted field, the quotes. */
+static uint32_t ta_text_escape(ta_str text, uint32_t at, uint32_t unit, bool quoted, char out[4]) {
+    unsigned char byte = (unsigned char)text.ptr[at];
+    static const char hex[] = "0123456789abcdef";
+    if (unit == 1u && (byte < 0x20u || byte == 0x7Fu || byte >= 0x80u)) {
+        if (byte == '\n' || byte == '\t' || byte == '\r') {
+            out[0] = '\\';
+            out[1] = byte == '\n' ? 'n' : byte == '\t' ? 't' : 'r';
+            return 2u;
+        }
+        out[0] = '\\';
+        out[1] = 'x';
+        out[2] = hex[byte >> 4];
+        out[3] = hex[byte & 0xFu];
+        return 4u;
+    }
+    if (quoted && unit == 1u && (byte == '"' || byte == '\\')) {
+        out[0] = '\\';
+        out[1] = (char)byte;
+        return 2u;
+    }
+    ta_mem_copy(out, text.ptr + at, unit);
+    return unit;
+}
+
+/*
+ * Appends `value` escaped, in at most `limit` bytes of output. When it does
+ * not fit, it is cut at a unit boundary and ends in "...". A `quoted` field
+ * also escapes quotes and backslashes.
+ */
+static void ta_text_append_field(ta_text_builder *text, ta_str value, uint32_t limit, bool quoted) {
+    uint32_t total = 0;
+    char unit_text[4];
+    for (uint32_t at = 0; at < value.len && total <= limit;) {
+        uint32_t unit = ta_utf8_unit(value, at);
+        total += ta_text_escape(value, at, unit, quoted, unit_text);
+        at += unit;
+    }
+    uint32_t budget = total <= limit ? limit : limit - 3u;
+    uint32_t written = 0;
+    for (uint32_t at = 0; at < value.len;) {
+        uint32_t unit = ta_utf8_unit(value, at);
+        uint32_t size = ta_text_escape(value, at, unit, quoted, unit_text);
+        if (written + size > budget) {
+            break;
+        }
+        ta_text_append(text, (ta_str){ .ptr = unit_text, .len = size });
+        written += size;
+        at += unit;
+    }
+    if (total > limit) {
+        ta_text_append(text, TA_PHRASE("..."));
+    }
 }
 
 static ta_str ta_spec_member_name(ta_spec_member member) {
@@ -6165,11 +6259,36 @@ TA_API ta_result ta_compile_error_format(const ta_compile_error_format_params *p
         return TA_ERR_INVALID;
     }
     const ta_compile_error *error = params->error;
-    ta_text_builder text = { .arena = params->arena };
-    /* States are resolved while the path goes through states only. */
+    ta_text_builder text = { .bytes = ta_arena_alloc(params->arena, TA_COMPILE_ERROR_TEXT_MAX, 1) };
+    if (text.bytes == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    /*
+     * A deep path shows its first and last steps. States are resolved while
+     * the path goes through states only, so the walk follows every step,
+     * shown or not.
+     */
     const ta_scxml_state_spec *list = params->spec != NULL ? params->spec->states : NULL;
-    for (uint32_t index = 0; index < error->path_length; index += 1u) {
+    uint32_t length = error->path_length;
+    bool elide = length > TA_FORMAT_HEAD_STEPS + TA_FORMAT_TAIL_STEPS;
+    for (uint32_t index = 0; index < length; index += 1u) {
         ta_spec_step step = error->path[index];
+        const ta_scxml_state_spec *state = NULL;
+        if (step.member == TA_SPEC_MEMBER_STATES && list != NULL) {
+            state = &list[step.index];
+            list = state->states;
+        } else {
+            list = NULL;
+        }
+        bool shown = !elide || index < TA_FORMAT_HEAD_STEPS || index >= length - TA_FORMAT_TAIL_STEPS;
+        if (elide && index == TA_FORMAT_HEAD_STEPS) {
+            ta_text_append(&text, TA_PHRASE(".["));
+            ta_text_append_u32(&text, length - TA_FORMAT_HEAD_STEPS - TA_FORMAT_TAIL_STEPS);
+            ta_text_append(&text, TA_PHRASE(" steps]"));
+        }
+        if (!shown) {
+            continue;
+        }
         if (index != 0) {
             ta_text_append(&text, TA_PHRASE("."));
         }
@@ -6179,23 +6298,20 @@ TA_API ta_result ta_compile_error_format(const ta_compile_error_format_params *p
             ta_text_append_u32(&text, step.index);
             ta_text_append(&text, TA_PHRASE("]"));
         }
-        if (step.member == TA_SPEC_MEMBER_STATES && list != NULL) {
-            const ta_scxml_state_spec *state = &list[step.index];
+        if (state != NULL) {
             ta_text_append(&text, TA_PHRASE("("));
-            ta_text_append(&text, state->id);
+            ta_text_append_field(&text, state->id, TA_FORMAT_ID_MAX, false);
             ta_text_append(&text, TA_PHRASE(")"));
-            list = state->states;
-        } else {
-            list = NULL;
         }
     }
-    if (error->path_length != 0) {
+    if (length != 0) {
         ta_text_append(&text, TA_PHRASE(": "));
     }
-    ta_text_append(&text, error->message.len != 0 ? error->message : TA_PHRASE("the spec was refused"));
+    ta_text_append_field(&text, error->message.len != 0 ? error->message : TA_PHRASE("the spec was refused"),
+                         TA_FORMAT_TEXT_MAX, false);
     if (error->subject.len != 0) {
         ta_text_append(&text, TA_PHRASE(" \""));
-        ta_text_append(&text, error->subject);
+        ta_text_append_field(&text, error->subject, TA_FORMAT_ID_MAX, true);
         ta_text_append(&text, TA_PHRASE("\""));
     }
     if (error->related.len != 0) {
@@ -6210,11 +6326,8 @@ TA_API ta_result ta_compile_error_format(const ta_compile_error_format_params *p
                 ta_text_append(&text, TA_PHRASE("; see also \""));
                 break;
         }
-        ta_text_append(&text, error->related);
+        ta_text_append_field(&text, error->related, TA_FORMAT_ID_MAX, true);
         ta_text_append(&text, TA_PHRASE("\""));
-    }
-    if (text.failed) {
-        return TA_ERR_NOMEM;
     }
     *params->out = (ta_str){ .ptr = text.bytes, .len = text.length };
     return TA_OK;

@@ -244,6 +244,33 @@ TA_API ta_result ta_compile_error_format(TA_IN const ta_compile_error_format_par
 
 This format is for people and has no stable grammar. Tools use the struct.
 
+**The line has a fixed maximum length.** It is never longer than
+`TA_COMPILE_ERROR_TEXT_MAX` (1024) bytes, however deep the path or long the
+text. Neither the spec's depth nor the length of its text can make it grow:
+
+- A path of more than 8 steps shows its first 2 and last 6 steps, and says
+  how many steps it left out. The end of the path is kept because it
+  locates the fault.
+- Each state ID, subject and related text is cut to 64 bytes, and the
+  message to 96. A cut falls on a UTF-8 character boundary and ends in
+  `...`.
+- Control characters, quotes and backslashes are escaped, so the line stays
+  one line.
+
+A typo at depth 500, where every ID is 20,000 bytes, formats as a line of
+534 bytes:
+
+    states[0](level0-xxx…...).states[0](level1-xxx…...).[494 steps].states[0](level496-…...)…
+      .transitions[0].targets[0]: unknown state "idel"; nearest is "idle"
+
+The struct keeps the whole path, because tools may need every step. The
+path is linear in the depth of the spec the caller built. The data-model
+message is the one thing core copies, so it is also bounded: core keeps at
+most `TA_COMPILE_ERROR_MESSAGE_MAX` (256) bytes of it. The nearest-name
+search skips candidates whose difference in length already rules them out,
+and is not run for unknown names longer than 128 bytes. That bounds the
+error path's work too.
+
 ### 5. Through `ta_definition_import()`, a compile error gets a position
 
 ADR 0053 §4 defines `ta_definition_import()`. On a compile failure it fills
