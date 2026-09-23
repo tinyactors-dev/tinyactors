@@ -268,6 +268,9 @@ async function valuesAfterClose() {
     actor.post('ignored', { payload: true });
   }
   assert.ok(live() > start);
+  const { values } = system.stats();
+  assert.equal(values.live, live() - start, 'stats() counts the same boxes');
+  assert.ok(values.made >= values.live);
   system.close();
   assert.equal(live(), start, 'close releases every value');
   assert.equal(native.environmentStats().leakedBytes, 0);

@@ -531,6 +531,43 @@ Exit criterion:
   within their bounds, steady state with data makes no allocator call in
   the addon, and the target-population numbers are recorded.
 
+Done (2026-09-23). Every exit criterion passes on Node and Bun
+(`test/datamodel.js`, `test/scale.js`). What was built, and the choices the
+ADRs left open:
+- **The data model is named "javascript".** A function is an expression
+  (condition, value or script) with `this` bound to the actor's data object;
+  `literal()` is a constant; `{ get, set }` is a location. Source text is
+  accepted only as `In(state)` and a data name, and anything else is
+  refused at define time, naming the expression. Importing SCXML with
+  ECMAScript source text stays an open decision; `ta_definition_import`
+  stays skipped.
+- **The data model is chosen per chart.** `System.define()` uses the
+  JavaScript data model for a chart with data, a script, or any function,
+  `literal()` or location, and core's null data model otherwise, so charts
+  without data still cost nothing per actor. A spec's `datamodel` overrides
+  the choice. The generated layer alone compiles against the null data
+  model.
+- **An actor's data is one object:** the spawn binding (shared, not copied),
+  or a new object. A bound name skips its initializer, and assigning to a
+  name the object does not have is `error.execution`.
+- **The evaluation context is one frozen object per system.** Its getters
+  (`data`, `event`, `sessionId`, `name`, `ioProcessors`, `inState()`) read
+  the core call in progress and throw after it. `event.origin` is the URI a
+  reply can target.
+- **Expressions cannot call core** (the reentrancy guard), but can `post()`
+  names already interned. Interning a new name is a core call.
+- **Value boxes stay model A**, one `napi_ref` each. The A/B at 4M actors is
+  in ADR 0011 and `docs/scale.md`: the handle table halves major GC time but
+  makes every message 17–26% slower. The addon builds against Node-API 10,
+  which is needed for references to strings, bigints and symbols.
+- **With data, a message costs about 1 µs** (Node 1.27 µs, Bun 0.96 µs at
+  4M actors): two JavaScript calls and a boxed payload. That compares with
+  about 2.7 µs for xstate and 0.03 µs for a plain JavaScript object. An
+  actor with a data object costs 528 native bytes and about 56–64 bytes of
+  JS heap.
+- `inspect()` reports `data` and `completion`, the `done` hook receives
+  completion data, and `stats().values` counts live boxes.
+
 ### 12. `send()` and backpressure
 
 - `send()` promises with acceptance and completion modes, abort signals and

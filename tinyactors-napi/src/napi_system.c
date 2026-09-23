@@ -670,7 +670,8 @@ static const char *const tna_category_names[TNA_MEMORY_CATEGORY_COUNT] = {
 
 /*
  * stats(): { memory: { total, core, envelopes, ... }, allocatorCalls,
- * messages: { queued, delivered, deadLetters } } (ADRs 0008, 0009).
+ * messages: { queued, delivered, deadLetters }, values: { live, made } }
+ * (ADRs 0008, 0009, 0011).
  */
 static napi_value tna_stats_method(napi_env env, napi_callback_info info) {
     tna_napi_system *wrapper = tna_open_this(env, info);
@@ -698,6 +699,11 @@ static napi_value tna_stats_method(napi_env env, napi_callback_info info) {
     if (status == napi_ok) status = tna_set_number(env, messages, "delivered", (double)sched->delivered);
     if (status == napi_ok) status = tna_set_number(env, messages, "deadLetters", (double)sched->dead_letters);
     if (status == napi_ok) status = napi_set_named_property(env, stats, "messages", messages);
+    napi_value values = NULL;
+    if (status == napi_ok) status = napi_create_object(env, &values);
+    if (status == napi_ok) status = tna_set_number(env, values, "live", (double)wrapper->values.live);
+    if (status == napi_ok) status = tna_set_number(env, values, "made", (double)wrapper->values.made);
+    if (status == napi_ok) status = napi_set_named_property(env, stats, "values", values);
     if (status != napi_ok) {
         return tna_throw(env, "out-of-memory", "cannot build the stats object");
     }

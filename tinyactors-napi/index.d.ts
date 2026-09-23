@@ -3,10 +3,9 @@
  * so far createSystem(), System.close(), System.closed, System.stats(),
  * System.define(), System.findDefinition(), Definition, statechart(),
  * literal(), TinyactorsError, spawn(), inspect(), destroy(), flush(),
- * post() without data, the `done`, `fault` and `deadLetter` hooks, the
- * realtime and manual clocks (time, advanceTo(), advanceBy()) and delayed
- * sends are implemented. Until the JavaScript data
- * model lands (step 11), charts compile against core's null data model.
+ * post() with data, the `done`, `fault` and `deadLetter` hooks, the
+ * realtime and manual clocks (time, advanceTo(), advanceBy()), delayed
+ * sends, paged enumeration and the JavaScript data model are implemented.
  */
 export const version: string;
 
@@ -51,7 +50,7 @@ export interface DoneRecord<Data = unknown> {
   readonly actor: Actor;
   /** The top-level final state it reached (core ADR 0056). */
   readonly finalState: string;
-  /** Its completion data; undefined until the JavaScript data model (step 11). */
+  /** Its completion data (<donedata>), or undefined. */
   readonly data: Data | undefined;
 }
 
@@ -161,8 +160,9 @@ export interface System {
    * Mail for an actor that is gone is a dead letter, not an error. An
    * address is resolved through the directory when the post is accepted; a
    * name with no resident actor is a dead letter too (ADR 0006). Throws
-   * `queue-full` at maxQueuedMessages. Until ROADMAP step 11, `data` must be
-   * undefined.
+   * `queue-full` at maxQueuedMessages. `data` is any JavaScript value, shared
+   * with the receiver, not copied (ADR 0011); the receiver's expressions see
+   * it as `context.event.data`.
    */
   post(target: ActorTarget, event: EventName, data?: unknown, options?: PostOptions): void;
 
@@ -244,6 +244,13 @@ export interface SystemStats {
     readonly queued: number;
     readonly delivered: number;
     readonly deadLetters: number;
+  };
+  /** JavaScript values core and the mailboxes hold (ADR 0011). */
+  readonly values: {
+    /** Value boxes live now; numbers, booleans, null and undefined need none. */
+    readonly live: number;
+    /** Value boxes made since the system was created. */
+    readonly made: number;
   };
 }
 
@@ -388,6 +395,8 @@ export interface DefinitionBuilder<Data extends object>
     initial: Expression<Data, Data[Key]>,
   ): this;
   initial(target: Target, actions?: ActionBlock<Data>): this;
+  /** A script run once at initialization, after early-bound data (SCXML 3.2.2). */
+  script(run: Script<Data>): this;
   build(): DefinitionSpec;
 }
 
@@ -440,7 +449,7 @@ export type TransitionBlock<Data extends object> = (
 
 export interface TransitionBuilder<Data extends object>
   extends ActionSequenceBuilder<Data, TransitionBuilder<Data>> {
-  /** A JavaScript function needs the JavaScript data model (step 11); until then, data-model source such as "In('s')". */
+  /** A function, or source text: "In('s')" or a data name. */
   when(condition: Condition<Data> | string): this;
   target(target: Target): this;
   internal(): this;
@@ -477,7 +486,7 @@ export interface ActionSequenceBuilder<Data extends object, Self> {
   ): Self;
 
   forEach<Item>(
-    array: Expression<Data, readonly Item[]>,
+    array: Expression<Data, readonly Item[]> | (keyof Data & string) | LiteralValue<readonly Item[]>,
     item: keyof Data & string,
     build: ActionBlock<Data>,
     index?: keyof Data & string,
@@ -603,8 +612,10 @@ export interface ActorInspection<Data = unknown> {
   /** The top-level final state it reached, or null (core ADR 0056). */
   readonly finalState: string | null;
   readonly allocatedBytes: number;
-  /** @internal reserved for completion data (step 11). */
-  readonly completion?: Data;
+  /** The live data object (JavaScript data model), shared, not copied; undefined under the null data model. */
+  readonly data?: Data;
+  /** A finished actor's completion data (<donedata>), or undefined. */
+  readonly completion?: unknown;
 }
 
 export interface InvocationInspection {
@@ -689,11 +700,18 @@ export type DelaySpec<Data extends object> =
   | `${number}s`
   | Expression<Data, number | string>;
 
+/**
+ * The event an expression sees as `context.event` (SCXML _event). `origin`
+ * is a URI a send can target: `#_scxml_<sessionId>` or
+ * `#_actor_<family>/<name>` (core ADR 0044), so replying is
+ * `send("reply").to(({ event }) => event.origin)`.
+ */
 export interface ActorEvent<Data = unknown> {
   readonly name: EventName;
   readonly type: "external" | "internal" | "platform";
   readonly sendId?: string;
-  readonly origin?: EventOrigin;
+  readonly origin?: string;
+  readonly originType?: string;
   readonly invocationId?: string;
   readonly data: Data;
 }
@@ -708,10 +726,24 @@ export type EventOrigin =
  *
  * System.define() accepts this shape as a plain object; statechart() emits
  * it; core's definition export returns it. Member names follow core's C
- * spelling, and a tagged union is { kind, <member>: ... }. Expressions are
- * data-model source text; until step 11 that is the null data model, which
- * accepts only In(state).
+ * spelling, and a tagged union is { kind, <member>: ... }.
+ *
+ * An expression is a JavaScript function (a condition, value or script,
+ * called with `this` bound to the actor's data), a literal() value, or source
+ * text: `In(state)`, or a data name, which reads that property (ADR 0011). A
+ * location is a data name or a { get, set } object. A spec with data, a
+ * script, or any function, literal() or location compiles against the
+ * JavaScript data model ("javascript"); any other spec against core's null
+ * data model ("null"). `datamodel` chooses explicitly.
  * -------------------------------------------------------------------------- */
+
+/** A function, a literal(), or source text (In(state) or a data name). */
+export type ExpressionSpec =
+  | string
+  | ((this: any, context: EvaluationContext<any>) => unknown)
+  | LiteralValue<unknown>;
+/** A data name, or a { get, set } location. */
+export type LocationSpec = string | Location<any, unknown>;
 
 export type StateKind =
   | "atomic"
@@ -735,7 +767,7 @@ export interface DefinitionSpec {
   /** Document order is semantically significant. */
   readonly states?: readonly StateSpec[];
   readonly data?: readonly DataSpec[];
-  readonly script?: string;
+  readonly script?: ExpressionSpec;
 }
 
 export interface StateSpec {
@@ -761,7 +793,7 @@ export interface TransitionSpec {
   readonly kind: "external" | "internal";
   /** Omit for an eventless transition. Wildcard segments are supported. */
   readonly event?: string;
-  readonly condition?: string;
+  readonly condition?: ExpressionSpec;
   readonly targets?: readonly string[];
   readonly actions?: readonly ActionSpec[];
 }
@@ -776,26 +808,26 @@ export interface DataSpec {
 }
 
 export type ValueSourceSpec =
-  | { readonly kind: "expr"; readonly expr: string }
-  | { readonly kind: "location"; readonly location: string }
+  | { readonly kind: "expr"; readonly expr: ExpressionSpec }
+  | { readonly kind: "location"; readonly location: LocationSpec }
   | { readonly kind: "content"; readonly content: { readonly media_type?: string; readonly bytes: Uint8Array } };
 
 /** An `x` / `xexpr` attribute pair. */
 export type StringAttributeSpec =
   | { readonly kind: "literal"; readonly literal: string }
-  | { readonly kind: "expr"; readonly expr: string };
+  | { readonly kind: "expr"; readonly expr: ExpressionSpec };
 
 export type ActionSpec =
   | { readonly kind: "raise"; readonly raise: { readonly event: string; readonly data?: ValueSourceSpec } }
   | { readonly kind: "send"; readonly send: SendSpec }
   | { readonly kind: "cancel"; readonly cancel: { readonly sendid: StringAttributeSpec } }
-  | { readonly kind: "assign"; readonly assign: { readonly location: string; readonly value?: ValueSourceSpec } }
-  | { readonly kind: "script"; readonly script: { readonly script: string } }
-  | { readonly kind: "log"; readonly log: { readonly label?: string; readonly expr?: string } }
+  | { readonly kind: "assign"; readonly assign: { readonly location: LocationSpec; readonly value?: ValueSourceSpec } }
+  | { readonly kind: "script"; readonly script: { readonly script: ExpressionSpec } }
+  | { readonly kind: "log"; readonly log: { readonly label?: string; readonly expr?: ExpressionSpec } }
   | {
     readonly kind: "if";
     readonly conditional: {
-      readonly condition: string;
+      readonly condition: ExpressionSpec;
       readonly then_actions?: readonly ActionSpec[];
       readonly else_actions?: readonly ActionSpec[];
     };
@@ -803,7 +835,7 @@ export type ActionSpec =
   | {
     readonly kind: "foreach";
     readonly foreach: {
-      readonly array: string;
+      readonly array: ExpressionSpec;
       readonly item: string;
       readonly index?: string;
       readonly body?: readonly ActionSpec[];
@@ -811,9 +843,9 @@ export type ActionSpec =
   };
 
 export interface SendSpec {
-  readonly id?: { readonly kind: "literal"; readonly literal: string } | { readonly kind: "location"; readonly location: string };
+  readonly id?: { readonly kind: "literal"; readonly literal: string } | { readonly kind: "location"; readonly location: LocationSpec };
   readonly type?: StringAttributeSpec;
-  readonly event?: { readonly kind: "name"; readonly name: string } | { readonly kind: "expr"; readonly expr: string };
+  readonly event?: { readonly kind: "name"; readonly name: string } | { readonly kind: "expr"; readonly expr: ExpressionSpec };
   readonly target?: StringAttributeSpec;
   /** A literal delay is an SCXML duration such as "500ms" or "5s". */
   readonly delay?: StringAttributeSpec;
@@ -828,7 +860,7 @@ export interface ParamSpec {
 
 export interface InvokeSpec {
   readonly kind: "invoke";
-  readonly id?: { readonly kind: "literal"; readonly literal: string } | { readonly kind: "location"; readonly location: string };
+  readonly id?: { readonly kind: "literal"; readonly literal: string } | { readonly kind: "location"; readonly location: LocationSpec };
   readonly type?: StringAttributeSpec;
   readonly src?: StringAttributeSpec;
   readonly data?: ValueSourceSpec;

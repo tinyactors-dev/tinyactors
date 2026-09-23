@@ -69,15 +69,15 @@ module TinyactorsNapiBindings
   OVERRIDE_TYPES = {
     'ta_actor_id' => 'crosses as (slot, generation): two positional numbers at the top level, {slot, generation} inside objects (ADR 0002)',
     'ta_actor_ref' => 'a named ref is an interned ta_address handle; it crosses as family and name text (ADR 0006)',
-    'ta_value' => 'values cross as value boxes (ADR 0011, step 11); until then only an absent value crosses',
-    'ta_expression' => 'source text crosses as a string; JavaScript functions become host expressions in step 11'
+    'ta_value' => 'values cross as value boxes (ADR 0011); undefined is an absent value',
+    'ta_expression' => 'source text crosses as a string; a function, literal() or { get, set } is a host expression of the JavaScript data model (ADR 0011)'
   }.freeze
 
   # Adapter types the plumbing supplies. A field of such a type is not an
   # argument: the runtime fills it. In an output it crosses as described.
   INJECT_TYPES = {
     'ta_allocator' => 'the system allocator (ADR 0014)',
-    'ta_datamodel' => "the system's data model: the null data model until step 11; in an output, its SCXML name"
+    'ta_datamodel' => "core's null data model, or the JavaScript data model when System.define() selects it; in an output, its SCXML name"
   }.freeze
 
   SKIP_TYPES = {
