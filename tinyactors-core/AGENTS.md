@@ -34,7 +34,12 @@ What to do instead, by kind of walk:
     (`ta_interpreter_init`), sized from the definition's recorded maximum
     action nesting depth. Interpreters nest (cancelling an invocation exits
     the child inside the parent's interpreter), and each has its own
-    scratch, so there is no one system-wide stack. Actors carry no frames.
+    scratch, so there is no one system-wide stack. Actors carry no frames,
+    except while paused inside a microstep (ADR 0061): then the position,
+    the sets and the frames move into one `ta_continuation` the actor owns,
+    and back into scratch when it resumes. That move happens between
+    units of executable content, never while an action runs, and a move
+    that cannot allocate does not pause.
     **Never grow a frame stack while actions run.** A growth that fails after an
     `<assign>` has taken effect breaks ADR 0047, which requires that a
     failed allocation happens before any part of a microstep is visible.

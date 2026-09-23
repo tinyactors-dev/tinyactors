@@ -1,6 +1,6 @@
 # ADR 0033: Foreach iteration is stable and resumable
 
-- Status: Accepted; durability wording refined by ADR 0038
+- Status: Accepted; durability wording refined by ADR 0038; pausing inside a `<foreach>` implemented by ADR 0061
 - Date: 2026-09-15
 
 ## Context

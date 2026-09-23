@@ -1,6 +1,6 @@
 # ADR 0061: A macrostep can pause inside executable content
 
-**Status:** Accepted; completes ADR 0033, applies ADR 0009, ADR 0038, ADR 0047 and ADR 0060
+**Status:** Accepted and implemented; completes ADR 0033, applies ADR 0009, ADR 0038, ADR 0047 and ADR 0060
 **Date:** 2026-09-23
 
 ## Context
@@ -176,3 +176,39 @@ configuration after the last completed microstep.
   until it resumes, sized by its definition.
 - The bootstrap, `<finalize>`, and exits at termination or cancellation
   remain uninterruptible.
+
+## Implementation notes
+
+- **Where it lives.** `ta_micro_position` (`src/continuation.h`) is the
+  position while a microstep runs, held in the interpreter. `ta_microstep`
+  is resumable: it computes the exit set (recording history) and the entry
+  set once, as it reaches each phase, and continues from `at` otherwise.
+  `ta_run_block` stops only at the microstep's own level, never in a block
+  nested under another run of the executor, so a pause always leaves the
+  frames from the bottom of the stack up.
+- **The saved form holds no pointers.** `ta_continuation` is a header
+  followed by the four sets, the default-history map, the enabled
+  transitions and the frames, at offsets computed from the counts. So a
+  copy for a session image, or back into an actor, is a copy of `bytes`
+  plus a retain of each `<foreach>` snapshot.
+- **A failed save** raises the call's action budget by one unit and
+  continues the same microstep, so the next unit boundary tries again.
+- **Resuming a paused microstep touches the session epoch**, like
+  starting one: an image captured while paused is stale once the actor
+  continues.
+- **Activation stays one stage.** Setting the state active, noting its
+  invocations and late data initialization happen together in
+  `TA_ENTER_ACTIVATE`, before any content of the state can pause, as
+  before. The existing order, in which a late-initialization result
+  replaces the invocation hook's result, is unchanged.
+- **Tests.** `tests/pause_test.c` runs a chart with nested `<if>` and
+  `<foreach>` in exit handlers, transition content and entry handlers,
+  and gets a trace identical to an unpaused run for every action budget
+  from 1 to 80. It also captures an actor paused inside a nested
+  `<foreach>`, destroys it, reconstructs it from the image and finishes
+  identically; refuses every save and finishes in one call; and checks
+  that no allocation or snapshot leaks. `pausing.rb` runs the
+  equivalence workload with action budgets 1 to 6. It also checks that an
+  actor paused inside a microstep is busy and reports only whole
+  configurations, and that cancelling a child paused inside a microstep
+  exits its live states.

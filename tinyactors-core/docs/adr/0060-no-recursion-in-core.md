@@ -183,7 +183,7 @@ depth before compiling.
   microsteps, and this ADR does not change that. Pausing inside a block
   needs the frames in the session image (ADR 0038) and in inspection, and
   it needs its own decision. The frame layout chosen here is the one it
-  would use.
+  would use. ADR 0061 makes that decision.
 
 ## Implementation notes
 
