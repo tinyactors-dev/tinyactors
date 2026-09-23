@@ -593,7 +593,16 @@ TA_API ta_result ta_dm_host_state_name(const ta_dm_host *host,
  */
 
 
-typedef struct { ta_actor_ref source; ta_send_id send_id; ta_event_name_id event; ta_atom io_type; ta_value target; ta_value data; } ta_send;
+/*
+ * One send to a host I/O processor. `data` is the evaluated `<content expr>`,
+ * namelist or <param>s; `content` is a literal <content>, delivered as the
+ * bytes the chart holds and not imported into the data model (ADR 0053).
+ * `content_type` is the literal's media type, empty when nothing said. At
+ * most one of `data` and `content` is present. Everything is borrowed for
+ * the call.
+ */
+typedef struct { ta_actor_ref source; ta_send_id send_id; ta_event_name_id event; ta_atom io_type; ta_value target; ta_value data;
+                 ta_str content_type; ta_bytes content; } ta_send;
 typedef struct ta_io_vtable {
     ta_op_status (*send)(void *self,
                          TA_IN const ta_send *send,
@@ -647,13 +656,17 @@ typedef struct {
  * One invocation to start. `type` is the resolved invoker type; the SCXML
  * aliases "scxml" and "http://www.w3.org/TR/scxml" are normalized to
  * "http://www.w3.org/TR/scxml/". `src` is the evaluated src/srcexpr, `data`
- * the evaluated inline <content>, and `params` the data model's aggregate of
- * <param>/namelist values; each is empty (null vtable) when absent. Values are
- * borrowed for the call. A service for an SCXML session spawns its child with
+ * the evaluated `<content expr>`, and `params` the data model's aggregate of
+ * <param>/namelist values; each is empty (null vtable) when absent. A literal
+ * <content> is not imported: it arrives as `content`, the bytes the chart
+ * holds, with `content_type` its media type (empty when nothing said), and
+ * interpreting it is the invoker's business (ADR 0053, SCXML 6.4.2). Values
+ * and bytes are borrowed for the call. A service for an SCXML session spawns its child with
  * ta_actor_spawn() and a `parent` of {parent, invoke_id}; the core then routes
  * `#_<invokeid>` sends, autoforwarding, and done.invoke itself.
  */
-typedef struct { ta_system *system; ta_actor_id parent; ta_invoke_id invoke_id; ta_atom type; ta_value src; ta_value data; ta_value params; bool autoforward; } ta_invoke_request;
+typedef struct { ta_system *system; ta_actor_id parent; ta_invoke_id invoke_id; ta_atom type; ta_value src; ta_value data;
+                 ta_str content_type; ta_bytes content; ta_value params; bool autoforward; } ta_invoke_request;
 typedef struct { TA_IN const ta_invoke_request *request; TA_OUT uint64_t *service_handle; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_invoker_start_params;
 typedef struct { uint64_t service_handle; TA_IN const ta_event *event; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_invoker_forward_params;
 
@@ -791,7 +804,18 @@ typedef struct {
     union {
         TA_WHEN(TA_SCXML_VALUE_EXPR) ta_expression expr;
         TA_WHEN(TA_SCXML_VALUE_LOCATION) ta_expression location;
-        TA_WHEN(TA_SCXML_VALUE_CONTENT) ta_bytes content;
+        /*
+         * Literal <content> (ADR 0053). A data model imports it for <data>,
+         * <assign>, <raise>, <donedata> and a <send> to the SCXML Event I/O
+         * Processor; a host I/O processor and an invoker receive the bytes.
+         */
+        TA_WHEN(TA_SCXML_VALUE_CONTENT) struct {
+            /* What these bytes are, as the codec that produced them knows it;
+             * the decoding codec's info.name. Empty when nothing said. Opaque
+             * to core. */
+            ta_str media_type;
+            ta_bytes bytes;
+        } content;
     } as;
 } ta_scxml_value_spec TA_TAGGED(kind, as) TA_ZERO_IS_ABSENT;
 
@@ -1359,10 +1383,11 @@ typedef struct {
 } ta_chart_codec_info;
 
 /*
- * Resolves <data src>, <script src> and <invoke src> during a decode: the one
- * route to the outside world, and the embedder's, never core's and never the
- * codec's. For <script> the bytes are source text. TA_ERR_NOT_FOUND when
- * `src` names nothing the resolver knows.
+ * Resolves <data src> and <script src> during a decode: the one route to the
+ * outside world, and the embedder's, never core's and never the codec's. For
+ * <script> the bytes are source text. TA_ERR_NOT_FOUND when `src` names
+ * nothing the resolver knows. An <invoke src> is not fetched: it is a URI the
+ * invoker interprets at run time (SCXML 6.4), and stays in the spec.
  */
 typedef struct ta_chart_src_resolver_vtable {
     ta_result (*fetch)(void *self, ta_str src, TA_ARENA ta_arena *arena,

@@ -460,6 +460,14 @@ typedef struct {
     ta_value target;
     ta_value data;
     /*
+     * A send to a host I/O processor with literal <content>: the content's ID
+     * in the owner's definition, not its bytes, so a session image restores
+     * it against its exact revision (ADR 0053, ADR 0038). The processor gets
+     * the bytes when the send is dispatched.
+     */
+    bool has_content;
+    ta_content_id content;
+    /*
      * Already sent: the router accepted nothing and the send waits here to be
      * offered again. <cancel> and session termination leave it in place.
      */
@@ -475,6 +483,9 @@ typedef struct {
     ta_actor_id owner;
     ta_actor_ref origin;
     ta_invoke_id invoke_id;
+    /* See ta_delayed_send.content. */
+    bool has_content;
+    ta_content_id content;
 } ta_delayed_send_meta;
 
 /* One owner's pending sends, sorted by (due, id). Zero-initialized is empty. */
@@ -796,9 +807,17 @@ typedef struct {
     ta_span32 params;
 } ta_done_data_def;
 
+/*
+ * Literal content, and the text of a literal <send target> or <invoke src>.
+ * `media_type` is what the front end said the bytes are (ADR 0053); it is
+ * empty for literal text, and hashed into the revision either way.
+ */
 typedef struct {
+    ta_str media_type;
     ta_bytes bytes;
 } ta_content_def;
+
+#define TA_CONTENT_NONE ((ta_content_id)UINT32_MAX)
 
 /* A literal src is TA_VALUE_SOURCE_CONTENT. */
 typedef struct {
@@ -1246,6 +1265,13 @@ TA_PRIVATE ta_result ta_interpreter_cancel(ta_system *system, ta_actor *actor);
 TA_PRIVATE ta_result ta_interpreter_enqueue_internal(ta_system *system, ta_actor *actor, ta_event *event);
 /* Dispatches a due delayed send; RETRY leaves the send owned by the caller. */
 TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send);
+/*
+ * A literal content as a host adapter receives it (ADR 0053): its media type
+ * and its bytes. The bytes' pointer is non-null even for empty content, so an
+ * adapter can tell empty content from none.
+ */
+TA_PRIVATE void ta_interpreter_literal_content(const ta_definition *definition, ta_content_id content, ta_str *media_type,
+                                    ta_bytes *bytes);
 TA_PRIVATE void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor);
 
 /* Send IDs as text: literal IDs are their author's text; generated ones round-trip. */
@@ -2611,6 +2637,8 @@ static void ta_timer_split(const ta_delayed_send *send, ta_delayed_send_info *in
         .owner = send->owner,
         .origin = send->origin,
         .invoke_id = send->invoke_id,
+        .has_content = send->has_content,
+        .content = send->content,
     };
 }
 
@@ -2630,6 +2658,8 @@ static ta_delayed_send ta_timer_join(const ta_timer_list *list, uint32_t index) 
         .submitted = info->submitted,
         .origin = meta->origin,
         .invoke_id = meta->invoke_id,
+        .has_content = meta->has_content,
+        .content = meta->content,
     };
 }
 
@@ -3388,17 +3418,12 @@ static ta_op_status ta_invoke_resolve_values(ta_interpreter *it, const ta_invoke
                                              .source = decl->src, .out = &values->src, .fault = &values->fault });
     }
     if (status == TA_OP_OK && decl->data.kind == TA_VALUE_SOURCE_CONTENT) {
-        status = v->import_content == NULL
-                     ? TA_OP_ERROR
-                     : v->import_content(definition->datamodel.self,
-                                         &(ta_datamodel_import_content_params){
-                                             .shared = definition->datamodel_shared,
-                                             .instance = it->actor->datamodel_instance,
-                                             .content = definition->contents[decl->data.as.content].bytes,
-                                             .host = &it->actor->host,
-                                             .out = &values->data,
-                                             .fault = &values->fault,
-                                         });
+        /*
+         * Literal content is not imported: core owns no invoker, so it has no
+         * semantics to impose, and the invoker receives the bytes and their
+         * media type (ADR 0053, SCXML 6.4.2). ta_invoke_start reads them from
+         * the definition.
+         */
     } else if (status == TA_OP_OK) {
         status = ta_interpreter_eval(it, &(ta_interpreter_value_params){
                                              .source = decl->data, .out = &values->data, .fault = &values->fault });
@@ -3486,6 +3511,10 @@ static ta_result ta_invoke_start(ta_interpreter *it, ta_invoke_decl_id decl_id) 
         .params = values.params,
         .autoforward = decl->autoforward,
     };
+    if (decl->data.kind == TA_VALUE_SOURCE_CONTENT) {
+        ta_interpreter_literal_content(it->definition, decl->data.as.content, &request.content_type,
+                                       &request.content);
+    }
     uint64_t service = 0;
     status = invoker->v->start(invoker->self, &(ta_invoker_start_params){
                                                   .request = &request, .service_handle = &service,
@@ -4234,8 +4263,20 @@ static ta_result ta_compiler_keep_text(ta_compiler *compiler, ta_str text, ta_au
     return result;
 }
 
-static ta_result ta_compiler_content(ta_compiler *compiler, ta_bytes bytes, ta_content_id *out) {
+/* `media_type` is empty for literal text (a send target, an invoke src). */
+static ta_result ta_compiler_content(ta_compiler *compiler, ta_str media_type, ta_bytes bytes,
+                                     ta_content_id *out) {
     ta_content_def content = {0};
+    if (media_type.len != 0) {
+        ta_result copied = ta_arena_copy_str(&compiler->definition->arena, media_type, &content.media_type);
+        if (copied != TA_OK) {
+            return copied;
+        }
+    }
+    /* A media type is part of what the chart says, so it is part of its
+     * revision (ADR 0053): two charts differing only in one must not share a
+     * fingerprint. */
+    ta_compiler_hash_str(compiler, media_type);
     if (bytes.len != 0) {
         uint8_t *copy = ta_arena_alloc(&compiler->definition->arena, bytes.len, 1);
         if (copy == NULL) {
@@ -4264,7 +4305,8 @@ static ta_result ta_compiler_value(ta_compiler *compiler, const ta_scxml_value_s
             return ta_compiler_expression(compiler, &spec->as.location, &out->as.location);
         case TA_SCXML_VALUE_CONTENT:
             out->kind = TA_VALUE_SOURCE_CONTENT;
-            return ta_compiler_content(compiler, spec->as.content, &out->as.content);
+            return ta_compiler_content(compiler, spec->as.content.media_type, spec->as.content.bytes,
+                                       &out->as.content);
         default:
             return TA_ERR_INVALID;
     }
@@ -4356,7 +4398,7 @@ static ta_result ta_compiler_send(ta_compiler *compiler, const ta_scxml_send_spe
             break;
         case TA_SCXML_STRING_LITERAL:
             out->target.kind = TA_VALUE_SOURCE_CONTENT;
-            result = ta_compiler_content(compiler,
+            result = ta_compiler_content(compiler, (ta_str){0},
                                          (ta_bytes){ .ptr = (const uint8_t *)spec->target.as.literal.ptr,
                                                      .len = spec->target.as.literal.len },
                                          &out->target.as.content);
@@ -4867,7 +4909,7 @@ static ta_result ta_compiler_invoke_text(ta_compiler *compiler, const ta_scxml_s
             return TA_OK;
         case TA_SCXML_STRING_LITERAL:
             out->kind = TA_VALUE_SOURCE_CONTENT;
-            return ta_compiler_content(compiler,
+            return ta_compiler_content(compiler, (ta_str){0},
                                        (ta_bytes){ .ptr = (const uint8_t *)spec->as.literal.ptr,
                                                    .len = spec->as.literal.len },
                                        &out->as.content);
@@ -5447,7 +5489,10 @@ static ta_scxml_value_spec ta_export_value(const ta_exporter *exporter, const ta
             break;
         case TA_VALUE_SOURCE_CONTENT:
             out.kind = TA_SCXML_VALUE_CONTENT;
-            out.as.content = ta_export_content(exporter, source->as.content);
+            /* The media type round-trips, so a decoded chart recompiles to
+             * the same revision (ADR 0053). */
+            out.as.content.media_type = exporter->definition->contents[source->as.content].media_type;
+            out.as.content.bytes = ta_export_content(exporter, source->as.content);
             break;
         default:
             break;
@@ -8201,6 +8246,14 @@ static ta_result ta_communication_error(ta_system *system, ta_actor *actor, cons
     return result;
 }
 
+TA_PRIVATE void ta_interpreter_literal_content(const ta_definition *definition, ta_content_id content, ta_str *media_type,
+                                    ta_bytes *bytes) {
+    static const uint8_t empty[1] = { 0 };
+    const ta_content_def *def = &definition->contents[content];
+    *media_type = def->media_type;
+    *bytes = def->bytes.ptr != NULL ? def->bytes : (ta_bytes){ .ptr = empty, .len = 0 };
+}
+
 TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send) {
     ta_actor *sender = ta_actor_lookup(system, send->owner);
     ta_fault fault = {0};
@@ -8239,6 +8292,12 @@ TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_sy
             .target = send->target,
             .data = send->data,
         };
+        /* A send to a host processor is dispatched while its sender lives,
+         * so the content resolves against the sender's definition. */
+        if (send->has_content && sender != NULL) {
+            ta_interpreter_literal_content(sender->definition, send->content, &request.content_type,
+                                           &request.content);
+        }
         if (io != NULL && io->v->send(io->self, &request, &fault) == TA_OP_OK) {
             status = TA_EXTERNAL_EVENT_ACCEPTED;
         }
@@ -8264,10 +8323,23 @@ typedef struct {
     ta_atom io_type;
     ta_send_id send_id;
     bool scxml_io;
+    bool has_content;
+    ta_content_id content;
 } ta_send_state;
 
 static ta_op_status ta_send_payload(ta_interpreter *it, const ta_send_action *send, ta_send_state *state,
                                     ta_fault *fault) {
+    if (!state->scxml_io && send->data.kind == TA_VALUE_SOURCE_CONTENT) {
+        /*
+         * A host I/O processor receives literal content as bytes: its
+         * interpretation is platform-specific (SCXML 6.4.2), and only the
+         * built-in SCXML processor, whose receiver reads _event.data, imports
+         * it (ADR 0053).
+         */
+        state->has_content = true;
+        state->content = send->data.as.content;
+        return TA_OP_OK;
+    }
     if (send->params.length == 0) {
         return ta_eval_source(it, &(ta_value_params){ .source = send->data, .out = &state->data, .fault = fault });
     }
@@ -8582,6 +8654,8 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
         .io_type = state.io_type,
         .target = state.target,
         .data = state.data,
+        .has_content = state.has_content,
+        .content = state.content,
     };
     if (state.scxml_io && !ta_send_destination(it, &state.scxml, &record.destination)) {
         ta_value_release(&state.data);

@@ -480,6 +480,14 @@ static ta_result ta_communication_error(ta_system *system, ta_actor *actor, cons
     return result;
 }
 
+void ta_interpreter_literal_content(const ta_definition *definition, ta_content_id content, ta_str *media_type,
+                                    ta_bytes *bytes) {
+    static const uint8_t empty[1] = { 0 };
+    const ta_content_def *def = &definition->contents[content];
+    *media_type = def->media_type;
+    *bytes = def->bytes.ptr != NULL ? def->bytes : (ta_bytes){ .ptr = empty, .len = 0 };
+}
+
 ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send) {
     ta_actor *sender = ta_actor_lookup(system, send->owner);
     ta_fault fault = {0};
@@ -518,6 +526,12 @@ ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *syste
             .target = send->target,
             .data = send->data,
         };
+        /* A send to a host processor is dispatched while its sender lives,
+         * so the content resolves against the sender's definition. */
+        if (send->has_content && sender != NULL) {
+            ta_interpreter_literal_content(sender->definition, send->content, &request.content_type,
+                                           &request.content);
+        }
         if (io != NULL && io->v->send(io->self, &request, &fault) == TA_OP_OK) {
             status = TA_EXTERNAL_EVENT_ACCEPTED;
         }
@@ -543,10 +557,23 @@ typedef struct {
     ta_atom io_type;
     ta_send_id send_id;
     bool scxml_io;
+    bool has_content;
+    ta_content_id content;
 } ta_send_state;
 
 static ta_op_status ta_send_payload(ta_interpreter *it, const ta_send_action *send, ta_send_state *state,
                                     ta_fault *fault) {
+    if (!state->scxml_io && send->data.kind == TA_VALUE_SOURCE_CONTENT) {
+        /*
+         * A host I/O processor receives literal content as bytes: its
+         * interpretation is platform-specific (SCXML 6.4.2), and only the
+         * built-in SCXML processor, whose receiver reads _event.data, imports
+         * it (ADR 0053).
+         */
+        state->has_content = true;
+        state->content = send->data.as.content;
+        return TA_OP_OK;
+    }
     if (send->params.length == 0) {
         return ta_eval_source(it, &(ta_value_params){ .source = send->data, .out = &state->data, .fault = fault });
     }
@@ -861,6 +888,8 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
         .io_type = state.io_type,
         .target = state.target,
         .data = state.data,
+        .has_content = state.has_content,
+        .content = state.content,
     };
     if (state.scxml_io && !ta_send_destination(it, &state.scxml, &record.destination)) {
         ta_value_release(&state.data);

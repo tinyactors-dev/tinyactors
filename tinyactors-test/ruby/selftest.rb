@@ -157,11 +157,12 @@ valued = TinyactorsTest::Chart.define(:valued) do
     end
   end
 end.to_spec
-check(valued[:data] == [{ name: 'machine', initializer: { content: machine_json } }],
+machine_content = { kind: 'content', media_type: TinyactorsTest::Chart::SPEC_MEDIA_TYPE, bytes: machine_json }
+check(valued[:data] == [{ name: 'machine', initializer: machine_content }],
       "data chart: is the chart spec as content\n#{valued[:data]}")
 check(valued[:states][0][:onentry] == [{ actions: [
-  { kind: 'assign', location: '.copy', value: { content: machine_json } },
-  { kind: 'send', event: { name: 'e' }, data: { content: machine_json } }
+  { kind: 'assign', location: '.copy', value: machine_content },
+  { kind: 'send', event: { name: 'e' }, data: machine_content }
 ] }], "assign and send chart: are the chart spec as content\n#{valued[:states][0][:onentry]}")
 check(raises?(TinyactorsTest::ChartError, /assign \.x names chart missing, which is not defined yet/) do
   chart.call { state(:a) { on_entry { assign '.x', chart: :missing } } }
@@ -216,7 +217,7 @@ check(structured[:states][0][:onentry] == [{ actions: [
     else_actions: [{ kind: 'if', condition: '.x == 2', then_actions: [{ kind: 'raise', event: 'two' }],
                      else_actions: [{ kind: 'cancel', sendid: { literal: 'elsewhere' } }] }] },
   { kind: 'foreach', array: '.items', item: 'item', index: 'i',
-    body: [{ kind: 'send', event: { expr: '.name' }, data: { content: '[1,2]' } }] }
+    body: [{ kind: 'send', event: { expr: '.name' }, data: { kind: 'content', bytes: '[1,2]' } }] }
 ] }], "conditional and foreach specs\n#{structured[:states][0][:onentry]}")
 check(structured[:states][1][:done_data] == { params: [{ name: 'result', value: { expr: '.x' } }] },
       "done_data specs\n#{structured[:states][1][:done_data]}")

@@ -34,6 +34,14 @@ typedef struct {
     ta_value target;
     ta_value data;
     /*
+     * A send to a host I/O processor with literal <content>: the content's ID
+     * in the owner's definition, not its bytes, so a session image restores
+     * it against its exact revision (ADR 0053, ADR 0038). The processor gets
+     * the bytes when the send is dispatched.
+     */
+    bool has_content;
+    ta_content_id content;
+    /*
      * Already sent: the router accepted nothing and the send waits here to be
      * offered again. <cancel> and session termination leave it in place.
      */
@@ -49,6 +57,9 @@ typedef struct {
     ta_actor_id owner;
     ta_actor_ref origin;
     ta_invoke_id invoke_id;
+    /* See ta_delayed_send.content. */
+    bool has_content;
+    ta_content_id content;
 } ta_delayed_send_meta;
 
 /* One owner's pending sends, sorted by (due, id). Zero-initialized is empty. */

@@ -54,7 +54,9 @@ module TinyactorsBindings
   FLATTEN_UNION_MEMBERS = {
     'ta_actor_ref.named' => 'an address reads as the actor reference itself',
     'ta_scxml_action_spec.{raise,send,cancel,assign,script,log,conditional,foreach}' =>
-      'an action is one object, as in SCXML markup'
+      'an action is one object, as in SCXML markup',
+    'ta_scxml_value_spec.content' =>
+      'literal content is {"kind": "content", "media_type": ..., "bytes": ...}, one object like an action'
   }.freeze
 
   # A parameter with this name that points at a struct is flattened: its input

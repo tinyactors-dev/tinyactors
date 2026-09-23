@@ -117,10 +117,17 @@ static bool tat_make_direct_router(tat_bind *bind, jv config, void *out) {
 /*
  * invoker.scxml: the SCXML invoker type. It runs each invoked machine as a
  * child actor of the invoking session. The machine is the invoke's inline
- * <content> (a chart spec as JSON) or, for src="file:NAME.scxml", the chart
- * "irp_NAME" from config.charts. <param>s become the child's data-model
- * binding. Core routes events between parent and child and reports
- * done.invoke itself. Config: {"system": <handle>, "charts": {name: spec}}.
+ * <content>, the value of its <content expr>, or, for src="file:NAME.scxml",
+ * the chart "irp_NAME" from config.charts. <param>s become the child's
+ * data-model binding. Core routes events between parent and child and
+ * reports done.invoke itself. Config: {"system": <handle>, "charts": {name:
+ * spec}}.
+ *
+ * Literal <content> arrives as bytes with the media type its front end gave
+ * it (ADR 0053); core does not import it. The invoker runs what it can read:
+ * a chart spec as JSON (TAT_SPEC_MEDIA_TYPE, the Ruby DSL's `chart:`). Any
+ * other media type is refused, which the core reports to the parent as
+ * error.execution.
  *
  * Values cross into the child only through the RPC codec: src, content, and
  * params are encoded with the parent's data model and the binding is decoded
@@ -141,9 +148,28 @@ static void tat_invoker_fault(ta_fault *fault, const char *message) {
     *fault = (ta_fault){.code = TA_ERR_INVALID, .message = {.ptr = message, .len = (uint32_t)strlen(message)}};
 }
 
+#define TAT_SPEC_MEDIA_TYPE "application/vnd.tinyactors.scxml-spec+json"
+
+static bool tat_str_is(ta_str text, const char *literal) {
+    size_t length = strlen(literal);
+    return text.len == length && (length == 0 || memcmp(text.ptr, literal, length) == 0);
+}
+
 /* The child machine's spec: inline content, or the chart a file: src names. */
 static bool tat_invoker_spec(tat_scxml_invoker *invoker, const ta_invoke_request *request, jv *out) {
     jv value;
+    if (request->content.ptr != NULL) {
+        if (!tat_str_is(request->content_type, TAT_SPEC_MEDIA_TYPE)) {
+            return false;
+        }
+        value = jv_parse_sized((const char *)request->content.ptr, (int)request->content.len);
+        if (jv_get_kind(value) == JV_KIND_OBJECT) {
+            *out = value;
+            return true;
+        }
+        jv_free(value);
+        return false;
+    }
     if (request->data.v != NULL) {
         if (tat_value_codec_for_value(&request->data) == NULL) {
             return false;

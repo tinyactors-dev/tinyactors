@@ -3211,7 +3211,7 @@
     "ta_chart_src_resolver_vtable": {
       "kind": "struct",
       "semantic": "vtable",
-      "doc": "Resolves <data src>, <script src> and <invoke src> during a decode: the one route to the outside world, and the embedder's, never core's and never the codec's. For <script > the bytes are source text. TA_ERR_NOT_FOUND when `src` names nothing the resolver knows.",
+      "doc": "Resolves <data src> and <script src> during a decode: the one route to the outside world, and the embedder's, never core's and never the codec's. For <script > the bytes are source text. TA_ERR_NOT_FOUND when `src` names nothing the resolver knows. An <invoke src> is not fetched: it is a URI the invoker interprets at run time (SCXML 6.4), and stays in the spec.",
       "fields": [
         {
           "name": "fetch",
@@ -7382,7 +7382,7 @@
     },
     "ta_invoke_request": {
       "kind": "struct",
-      "doc": "One invocation to start. `type` is the resolved invoker type; the SCXML aliases \"scxml\" and \"http://www.w3.org/TR/scxml\" are normalized to \"http://www.w3.org/TR/scxml/\". `src` is the evaluated src/srcexpr, `data` the evaluated inline <content >, and `params` the data model's aggregate of <param >/namelist values; each is empty (null vtable) when absent. Values are borrowed for the call. A service for an SCXML session spawns its child with ta_actor_spawn() and a `parent` of {parent, invoke_id}; the core then routes `#_ <invokeid >` sends, autoforwarding, and done.invoke itself.",
+      "doc": "One invocation to start. `type` is the resolved invoker type; the SCXML aliases \"scxml\" and \"http://www.w3.org/TR/scxml\" are normalized to \"http://www.w3.org/TR/scxml/\". `src` is the evaluated src/srcexpr, `data` the evaluated ` <content expr>`, and `params` the data model's aggregate of <param >/namelist values; each is empty (null vtable) when absent. A literal <content > is not imported: it arrives as `content`, the bytes the chart holds, with `content_type` its media type (empty when nothing said), and interpreting it is the invoker's business (ADR 0053, SCXML 6.4.2). Values and bytes are borrowed for the call. A service for an SCXML session spawns its child with ta_actor_spawn() and a `parent` of {parent, invoke_id}; the core then routes `#_ <invokeid >` sends, autoforwarding, and done.invoke itself.",
       "fields": [
         {
           "name": "system",
@@ -7425,6 +7425,18 @@
           }
         },
         {
+          "name": "content_type",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "content",
+          "type": {
+            "type": "ta_bytes"
+          }
+        },
+        {
           "name": "params",
           "type": {
             "type": "ta_value"
@@ -7439,7 +7451,7 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 88,
+          "size": 120,
           "align": 8,
           "offsets": {
             "system": 0,
@@ -7448,12 +7460,14 @@
             "type": 24,
             "src": 32,
             "data": 48,
-            "params": 64,
-            "autoforward": 80
+            "content_type": 64,
+            "content": 80,
+            "params": 96,
+            "autoforward": 112
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 56,
+          "size": 72,
           "align": 8,
           "offsets": {
             "system": 0,
@@ -7462,8 +7476,10 @@
             "type": 24,
             "src": 28,
             "data": 36,
-            "params": 44,
-            "autoforward": 52
+            "content_type": 44,
+            "content": 52,
+            "params": 60,
+            "autoforward": 68
           }
         }
       }
@@ -10178,7 +10194,24 @@
                 {
                   "name": "content",
                   "type": {
-                    "type": "ta_bytes"
+                    "record": {
+                      "kind": "struct",
+                      "fields": [
+                        {
+                          "name": "media_type",
+                          "type": {
+                            "type": "ta_str"
+                          },
+                          "doc": "What these bytes are, as the codec that produced them knows it; the decoding codec's info.name. Empty when nothing said. Opaque to core."
+                        },
+                        {
+                          "name": "bytes",
+                          "type": {
+                            "type": "ta_bytes"
+                          }
+                        }
+                      ]
+                    }
                   },
                   "when": "TA_SCXML_VALUE_CONTENT"
                 }
@@ -10208,7 +10241,9 @@
             "as": 8,
             "as.expr": 8,
             "as.location": 8,
-            "as.content": 8
+            "as.content": 8,
+            "as.content.media_type": 8,
+            "as.content.bytes": 24
           }
         },
         "wasm32-unknown-unknown": {
@@ -10219,14 +10254,16 @@
             "as": 4,
             "as.expr": 4,
             "as.location": 4,
-            "as.content": 4
+            "as.content": 4,
+            "as.content.media_type": 4,
+            "as.content.bytes": 12
           }
         }
       }
     },
     "ta_send": {
       "kind": "struct",
-      "doc": "======================================================================== I/O processors",
+      "doc": "One send to a host I/O processor. `data` is the evaluated ` <content expr>`, namelist or <param >s; `content` is a literal <content >, delivered as the bytes the chart holds and not imported into the data model (ADR 0053). `content_type` is the literal's media type, empty when nothing said. At most one of `data` and `content` is present. Everything is borrowed for the call.",
       "fields": [
         {
           "name": "source",
@@ -10263,11 +10300,23 @@
           "type": {
             "type": "ta_value"
           }
+        },
+        {
+          "name": "content_type",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "content",
+          "type": {
+            "type": "ta_bytes"
+          }
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 88,
+          "size": 120,
           "align": 8,
           "offsets": {
             "source": 0,
@@ -10275,11 +10324,13 @@
             "event": 48,
             "io_type": 52,
             "target": 56,
-            "data": 72
+            "data": 72,
+            "content_type": 88,
+            "content": 104
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 56,
+          "size": 72,
           "align": 8,
           "offsets": {
             "source": 0,
@@ -10287,7 +10338,9 @@
             "event": 32,
             "io_type": 36,
             "target": 40,
-            "data": 48
+            "data": 48,
+            "content_type": 56,
+            "content": 64
           }
         }
       }

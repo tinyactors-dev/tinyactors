@@ -205,9 +205,17 @@ typedef struct {
     ta_span32 params;
 } ta_done_data_def;
 
+/*
+ * Literal content, and the text of a literal <send target> or <invoke src>.
+ * `media_type` is what the front end said the bytes are (ADR 0053); it is
+ * empty for literal text, and hashed into the revision either way.
+ */
 typedef struct {
+    ta_str media_type;
     ta_bytes bytes;
 } ta_content_def;
+
+#define TA_CONTENT_NONE ((ta_content_id)UINT32_MAX)
 
 /* A literal src is TA_VALUE_SOURCE_CONTENT. */
 typedef struct {

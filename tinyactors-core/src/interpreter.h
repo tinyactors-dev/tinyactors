@@ -39,6 +39,13 @@ ta_result ta_interpreter_cancel(ta_system *system, ta_actor *actor);
 ta_result ta_interpreter_enqueue_internal(ta_system *system, ta_actor *actor, ta_event *event);
 /* Dispatches a due delayed send; RETRY leaves the send owned by the caller. */
 ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send);
+/*
+ * A literal content as a host adapter receives it (ADR 0053): its media type
+ * and its bytes. The bytes' pointer is non-null even for empty content, so an
+ * adapter can tell empty content from none.
+ */
+void ta_interpreter_literal_content(const ta_definition *definition, ta_content_id content, ta_str *media_type,
+                                    ta_bytes *bytes);
 void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor);
 
 /* Send IDs as text: literal IDs are their author's text; generated ones round-trip. */

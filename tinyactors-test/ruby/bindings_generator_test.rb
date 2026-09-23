@@ -44,8 +44,8 @@ skips = TinyactorsBindings::SKIP_FUNCTIONS
 refuses('a stale skip entry', 'SKIP_FUNCTIONS ta_nothing_*', SKIP_FUNCTIONS: skips.merge('ta_nothing_*' => 'gone'))
 refuses('a flattened member that collides', 'ta_scxml_action_spec.as.invoke: members kind collide',
         FLATTEN_UNION_MEMBERS: TinyactorsBindings::FLATTEN_UNION_MEMBERS.merge('ta_scxml_action_spec.invoke' => 'no'))
-refuses('flattening a non-struct member', 'ta_scxml_value_spec.as.content: only plain struct members can be flattened',
-        FLATTEN_UNION_MEMBERS: TinyactorsBindings::FLATTEN_UNION_MEMBERS.merge('ta_scxml_value_spec.content' => 'no'))
+refuses('flattening a non-struct member', 'ta_actor_ref.as.runtime: only plain struct members can be flattened',
+        FLATTEN_UNION_MEMBERS: TinyactorsBindings::FLATTEN_UNION_MEMBERS.merge('ta_actor_ref.runtime' => 'no'))
 refuses('a skipped type a bound type needs', 'ta_actor_address is skipped in bindings.rb',
         SKIP_TYPES: TinyactorsBindings::SKIP_TYPES.merge('ta_actor_address' => 'test'))
 refuses('an in-place pointer parameter', 'ta_arena_reset(arena): inout pointers cannot cross the protocol',

@@ -107,7 +107,10 @@ static ta_scxml_value_spec ta_export_value(const ta_exporter *exporter, const ta
             break;
         case TA_VALUE_SOURCE_CONTENT:
             out.kind = TA_SCXML_VALUE_CONTENT;
-            out.as.content = ta_export_content(exporter, source->as.content);
+            /* The media type round-trips, so a decoded chart recompiles to
+             * the same revision (ADR 0053). */
+            out.as.content.media_type = exporter->definition->contents[source->as.content].media_type;
+            out.as.content.bytes = ta_export_content(exporter, source->as.content);
             break;
         default:
             break;

@@ -239,12 +239,15 @@ config and cannot call it.
 and implements the SCXML invoker type (`http://www.w3.org/TR/scxml/`; core
 normalizes `scxml` to it). Each invocation runs as a child actor spawned with
 `ta_actor_spawn()` and the invoking actor as its `parent`: the machine is the
-chart spec JSON in the invoke's `<content>`, or, for `src="file:NAME.scxml"`,
-the chart `irp_NAME` from `charts`. `<param>`s whose names match the child's
-top-level `<data>` become its data-model binding. Core routes `#_parent`,
-`#_<invokeid>`, autoforwarding, and `done.invoke`; cancelling an invocation
-destroys the child. Markup content, such as an SCXML document as XML text, is
-not supported. The child compiles with the data model its spec's `datamodel`
+invoke's literal `<content>`, or, for `src="file:NAME.scxml"`, the chart
+`irp_NAME` from `charts`. Core hands literal content to the invoker as bytes
+with their media type (ADR 0053), and the invoker reads the media types it
+has a reader for: `application/vnd.tinyactors.scxml-spec+json`, a chart spec
+as JSON (the DSL's `chart:`). Content of any other media type is refused.
+`<param>`s whose names match the child's top-level `<data>` become its
+data-model binding. Core routes `#_parent`, `#_<invokeid>`, autoforwarding,
+and `done.invoke`; cancelling an invocation destroys the child. The child
+compiles with the data model its spec's `datamodel`
 names (`jq` or `ecmascript`), or with the parent's when the spec names none.
 `src`, content, and params cross into the child as wire JSON: they are
 encoded with the parent's model and decoded with the child's. The invoker
@@ -318,13 +321,15 @@ them.
   directory yet.
 - **`invoker.scripted`** is a service that is not an actor. `start`
   journals the request (`parent`, `invoke_id`, `type`, `src`, `data`,
-  `params`, `autoforward`), with `type` as the invoker type's name (ADR
-  0049), and answers a new `service` handle. The test then
+  `params`, `autoforward`, and `content` and `content_type` when the invoke
+  has literal `<content>`, ADR 0053), with `type` as the invoker type's name
+  (ADR 0049), and answers a new `service` handle. The test then
   reports the service's events, completion, or loss with
   `ta.actor.report_invoke`. `cancel` and `forward` are journaled with
   `known`, which tells whether the service was still live.
 - **`io.recording`** is an Event I/O Processor that journals each send
-  (`source`, `send_id`, `event_text`, `io_type`, `target`, `data`) and
+  (`source`, `send_id`, `event_text`, `io_type`, `target`, `data`, and
+  `content` and `content_type` for literal `<content>`, ADR 0053) and
   delivers nothing. `io_type` is the type's name, read back from its atom
   with `ta_system_atom_text` (ADR 0049), not the handle.
 - **`log.recording`** is the system's `<log>` sink (ADR 0045). It journals
@@ -422,7 +427,9 @@ Charts compile from the JSON form of `ta_scxml_spec` (see
 - A param is `{"name", "value"}`, where `value` is a value spec. SCXML
   `namelist` entries are params with `location` values.
 - A transition is `{"kind": "external"|"internal", "event"?, "condition"?, "targets"?, "actions"?}`.
-- A value spec (`ta_scxml_value_spec`) is `{"expr": src}`, `{"location": src}`, or `{"content": text}`.
+- A value spec (`ta_scxml_value_spec`) is `{"expr": src}`, `{"location": src}`, or
+  `{"kind": "content", "bytes": text, "media_type": type}`, where `media_type`
+  is optional (ADR 0053).
 - A string spec (`ta_scxml_string_spec`, SCXML's `x` / `xexpr` pairs) is
   `{"literal": text}` or `{"expr": src}`.
 - An ID spec (`ta_scxml_id_spec`, SCXML's `id` / `idlocation`) is

@@ -174,8 +174,20 @@ static ta_result ta_compiler_keep_text(ta_compiler *compiler, ta_str text, ta_au
     return result;
 }
 
-static ta_result ta_compiler_content(ta_compiler *compiler, ta_bytes bytes, ta_content_id *out) {
+/* `media_type` is empty for literal text (a send target, an invoke src). */
+static ta_result ta_compiler_content(ta_compiler *compiler, ta_str media_type, ta_bytes bytes,
+                                     ta_content_id *out) {
     ta_content_def content = {0};
+    if (media_type.len != 0) {
+        ta_result copied = ta_arena_copy_str(&compiler->definition->arena, media_type, &content.media_type);
+        if (copied != TA_OK) {
+            return copied;
+        }
+    }
+    /* A media type is part of what the chart says, so it is part of its
+     * revision (ADR 0053): two charts differing only in one must not share a
+     * fingerprint. */
+    ta_compiler_hash_str(compiler, media_type);
     if (bytes.len != 0) {
         uint8_t *copy = ta_arena_alloc(&compiler->definition->arena, bytes.len, 1);
         if (copy == NULL) {
@@ -204,7 +216,8 @@ static ta_result ta_compiler_value(ta_compiler *compiler, const ta_scxml_value_s
             return ta_compiler_expression(compiler, &spec->as.location, &out->as.location);
         case TA_SCXML_VALUE_CONTENT:
             out->kind = TA_VALUE_SOURCE_CONTENT;
-            return ta_compiler_content(compiler, spec->as.content, &out->as.content);
+            return ta_compiler_content(compiler, spec->as.content.media_type, spec->as.content.bytes,
+                                       &out->as.content);
         default:
             return TA_ERR_INVALID;
     }
@@ -296,7 +309,7 @@ static ta_result ta_compiler_send(ta_compiler *compiler, const ta_scxml_send_spe
             break;
         case TA_SCXML_STRING_LITERAL:
             out->target.kind = TA_VALUE_SOURCE_CONTENT;
-            result = ta_compiler_content(compiler,
+            result = ta_compiler_content(compiler, (ta_str){0},
                                          (ta_bytes){ .ptr = (const uint8_t *)spec->target.as.literal.ptr,
                                                      .len = spec->target.as.literal.len },
                                          &out->target.as.content);
@@ -807,7 +820,7 @@ static ta_result ta_compiler_invoke_text(ta_compiler *compiler, const ta_scxml_s
             return TA_OK;
         case TA_SCXML_STRING_LITERAL:
             out->kind = TA_VALUE_SOURCE_CONTENT;
-            return ta_compiler_content(compiler,
+            return ta_compiler_content(compiler, (ta_str){0},
                                        (ta_bytes){ .ptr = (const uint8_t *)spec->as.literal.ptr,
                                                    .len = spec->as.literal.len },
                                        &out->as.content);

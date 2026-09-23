@@ -20,7 +20,8 @@
 #define VLOC(text) ((ta_scxml_value_spec){ .kind = TA_SCXML_VALUE_LOCATION, .as.location = E(text) })
 #define VCONTENT(text) \
     ((ta_scxml_value_spec){ .kind = TA_SCXML_VALUE_CONTENT, \
-                            .as.content = { .ptr = (const uint8_t *)(text), .len = (uint32_t)(sizeof(text) - 1u) } })
+                            .as.content.bytes = { .ptr = (const uint8_t *)(text), \
+                                                   .len = (uint32_t)(sizeof(text) - 1u) } })
 #define TARGETS(...) ((const ta_str[]){ __VA_ARGS__, {0} })
 #define ACTIONS(...) ((const ta_scxml_action_spec[]){ __VA_ARGS__, {0} })
 #define NO_ACTIONS ((const ta_scxml_action_spec[]){ {0} })
@@ -432,7 +433,8 @@ static void test_executable_content(roundtrip *trip) {
     CHECK(exported_sends[1].as.send.delay.kind == TA_SCXML_STRING_EXPR);
     CHECK(same_str(exported_sends[2].as.send.delay.as.literal, S("0500ms")));
     CHECK(exported_sends[2].as.send.data.kind == TA_SCXML_VALUE_CONTENT &&
-          exported_sends[2].as.send.data.as.content.ptr != NULL && exported_sends[2].as.send.data.as.content.len == 0);
+          exported_sends[2].as.send.data.as.content.bytes.ptr != NULL &&
+          exported_sends[2].as.send.data.as.content.bytes.len == 0);
     CHECK(exported_sends[2].as.send.id.kind == TA_SCXML_ID_NONE);
     const ta_scxml_action_spec *entry = running->onentry[0].actions;
     CHECK(entry[4].as.log.label.ptr != NULL && entry[5].as.log.label.ptr == NULL);

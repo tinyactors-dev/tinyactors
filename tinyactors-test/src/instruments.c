@@ -901,6 +901,21 @@ bool tat_make_memory_directory(tat_bind *bind, jv config, void *out) {
  * Config: {"name", "system"}.
  */
 
+/*
+ * Literal content a host adapter received (ADR 0053): "content" is the bytes
+ * as text and "content_type" their media type (null when none was given).
+ * Both are absent when the request carried none.
+ */
+static jv tat_put_content(jv entry, ta_str content_type, ta_bytes content) {
+    if (content.ptr == NULL) {
+        return entry;
+    }
+    entry = jv_object_set(entry, jv_string("content"),
+                          jv_string_sized((const char *)content.ptr, (int)content.len));
+    return jv_object_set(entry, jv_string("content_type"),
+                         content_type.len == 0 ? jv_null() : jv_string_sized(content_type.ptr, (int)content_type.len));
+}
+
 static jv tat_service_key(uint64_t service) {
     return jv_string_fmt("%llu", (unsigned long long)service);
 }
@@ -914,6 +929,7 @@ static ta_op_status tat_scripted_start(void *self, const ta_invoker_start_params
     entry = jv_object_set(entry, jv_string("type"), tat_atom_text(instrument->system, request->type));
     entry = jv_object_set(entry, jv_string("src"), tat_value_or_null(&request->src));
     entry = jv_object_set(entry, jv_string("data"), tat_value_or_null(&request->data));
+    entry = tat_put_content(entry, request->content_type, request->content);
     entry = jv_object_set(entry, jv_string("params"), tat_value_or_null(&request->params));
     entry = jv_object_set(entry, jv_string("autoforward"), jv_bool(request->autoforward));
     jv spec;
@@ -1016,6 +1032,7 @@ static ta_op_status tat_recording_send(void *self, const ta_send *send, ta_fault
     entry = jv_object_set(entry, jv_string("io_type"), tat_atom_text(instrument->system, send->io_type));
     entry = jv_object_set(entry, jv_string("target"), tat_value_or_null(&send->target));
     entry = jv_object_set(entry, jv_string("data"), tat_value_or_null(&send->data));
+    entry = tat_put_content(entry, send->content_type, send->content);
     jv spec;
     if (tat_take_fault(instrument, "send", &spec)) {
         tat_fault_fill(instrument, spec, TA_ERR_UNSUPPORTED, fault);

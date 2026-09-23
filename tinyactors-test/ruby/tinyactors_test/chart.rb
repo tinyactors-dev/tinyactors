@@ -15,6 +15,10 @@ module TinyactorsTest
   class Chart
     attr_reader :name, :datamodel, :binding, :document_name
 
+    # The media type of a chart spec written as JSON (the `chart:` shorthand):
+    # what the SCXML invoker is told it was handed (ADR 0053).
+    SPEC_MEDIA_TYPE = 'application/vnd.tinyactors.scxml-spec+json'
+
     BINDINGS = %i[early late].freeze
 
     # `document_name:` is the SCXML `<scxml name>` (the `_name` system
@@ -259,14 +263,25 @@ module TinyactorsTest
     # Builds a value spec from exactly one of `expr:`, `location:`,
     # `content:`, or `chart:`; nil when none is given. `chart:` names a
     # defined chart and gives its spec, as JSON, as inline content: the value
-    # of an inline <scxml> document, which the SCXML invoker can run.
-    def self.value_spec(chart, what, expr: nil, location: nil, content: nil, chart_name: nil)
+    # of an inline <scxml> document, which the SCXML invoker can run. Its
+    # media type is SPEC_MEDIA_TYPE, which is how the invoker knows what it
+    # was handed (ADR 0053). `media_type:` labels literal `content:`.
+    def self.value_spec(chart, what, expr: nil, location: nil, content: nil, chart_name: nil, media_type: nil)
       present = { expr: expr, location: location, content: content, chart: chart_name }.compact
       raise ChartError, "chart #{chart.name}: #{what} takes one of expr:, location:, content:, chart:" if present.size > 1
+      if media_type && content.nil?
+        raise ChartError, "chart #{chart.name}: #{what}: media_type: labels literal content:"
+      end
 
-      return { content: chart_content(chart, what, chart_name) } if chart_name
+      return content_spec(chart_content(chart, what, chart_name), SPEC_MEDIA_TYPE) if chart_name
+      return content_spec(content.to_s, media_type) unless content.nil?
 
       present.transform_values(&:to_s).first&.then { |kind, source| { kind => source } }
+    end
+
+    # Literal content: bytes, and what they are when that is known.
+    def self.content_spec(bytes, media_type)
+      { kind: 'content', media_type: media_type&.to_s, bytes: bytes }.compact
     end
 
     # The spec of the chart named `chart_name`, as JSON text.
@@ -402,25 +417,26 @@ module TinyactorsTest
       #   chart:                an inline child machine: the named chart's spec,
       #                         as JSON, becomes the invoke's <content>
       #   content:, content_expr: other inline <content>
+      #   media_type:           what literal `content:` is (ADR 0053)
       #   id:, id_location:     the invoke ID
       #   params:               { name => expr or value spec }; SCXML namelist
       #                         entries become `{ location: ... }` params
       #   autoforward:          forward external events to the child
       # A block gives the <finalize> executable content.
       def invoke(type: nil, type_expr: nil, src: nil, src_expr: nil, chart: nil, content: nil,
-                 content_expr: nil, id: nil, id_location: nil, params: nil, autoforward: false, &block)
+                 content_expr: nil, media_type: nil, id: nil, id_location: nil, params: nil, autoforward: false,
+                 &block)
         require_state!('invoke')
-        if chart
-          raise ChartError, "chart #{@chart.name}: invoke takes chart: or content:, not both" if content || content_expr
-
-          content = Chart.chart_content(@chart, 'invoke', chart)
+        if chart && (content || content_expr)
+          raise ChartError, "chart #{@chart.name}: invoke takes chart: or content:, not both"
         end
 
         invoke = { kind: 'invoke' }
         invoke[:id] = Chart.pair(@chart, 'id', { literal: id&.to_s }, { location: id_location })
         invoke[:type] = Chart.pair(@chart, 'type', { literal: type&.to_s }, { expr: type_expr })
         invoke[:src] = Chart.pair(@chart, 'src', { literal: src&.to_s }, { expr: src_expr })
-        invoke[:data] = Chart.value_spec(@chart, 'invoke content', expr: content_expr, content: content)
+        invoke[:data] = Chart.value_spec(@chart, chart ? 'invoke' : 'invoke content', expr: content_expr, content: content,
+                                                                    chart_name: chart, media_type: media_type)
         invoke[:autoforward] = true if autoforward
         invoke[:params] = Chart.param_specs(@chart, params) if params
         invoke[:finalize] = actions(&block) if block
@@ -501,18 +517,20 @@ module TinyactorsTest
       #   data:        an expression for the event data
       #   content:     inline <content> for the event data
       #   chart:       a chart whose spec is the event data (inline <scxml>)
+      #   media_type:  what literal `content:` is (ADR 0053)
       #   params:      { name => expr or value spec }; SCXML namelist entries
       #                become `{ location: ... }` params
       def send_event(event = nil, event_expr: nil, delay: nil, delay_expr: nil, id: nil, id_location: nil,
                      to: nil, to_expr: nil, type: nil, type_expr: nil, data: nil, content: nil, chart: nil,
-                     params: nil)
+                     media_type: nil, params: nil)
         action = { kind: 'send' }
         action[:event] = pair('event', { name: event&.to_s }, { expr: event_expr })
         action[:id] = pair('id', { literal: id&.to_s }, { location: id_location })
         action[:type] = pair('type', { literal: type&.to_s }, { expr: type_expr })
         action[:target] = pair('to', { literal: to&.to_s }, { expr: to_expr })
         action[:delay] = pair('delay', { literal: duration(delay) }, { expr: delay_expr })
-        action[:data] = Chart.value_spec(@chart, 'send data', expr: data, content: content, chart_name: chart)
+        action[:data] = Chart.value_spec(@chart, 'send data', expr: data, content: content, chart_name: chart,
+                                                              media_type: media_type)
         action[:params] = Chart.param_specs(@chart, params) if params
         @chart.declare_send_id(id.to_s) if id
         @actions << action.compact

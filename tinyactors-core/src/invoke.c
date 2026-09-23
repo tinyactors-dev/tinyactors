@@ -363,17 +363,12 @@ static ta_op_status ta_invoke_resolve_values(ta_interpreter *it, const ta_invoke
                                              .source = decl->src, .out = &values->src, .fault = &values->fault });
     }
     if (status == TA_OP_OK && decl->data.kind == TA_VALUE_SOURCE_CONTENT) {
-        status = v->import_content == NULL
-                     ? TA_OP_ERROR
-                     : v->import_content(definition->datamodel.self,
-                                         &(ta_datamodel_import_content_params){
-                                             .shared = definition->datamodel_shared,
-                                             .instance = it->actor->datamodel_instance,
-                                             .content = definition->contents[decl->data.as.content].bytes,
-                                             .host = &it->actor->host,
-                                             .out = &values->data,
-                                             .fault = &values->fault,
-                                         });
+        /*
+         * Literal content is not imported: core owns no invoker, so it has no
+         * semantics to impose, and the invoker receives the bytes and their
+         * media type (ADR 0053, SCXML 6.4.2). ta_invoke_start reads them from
+         * the definition.
+         */
     } else if (status == TA_OP_OK) {
         status = ta_interpreter_eval(it, &(ta_interpreter_value_params){
                                              .source = decl->data, .out = &values->data, .fault = &values->fault });
@@ -461,6 +456,10 @@ static ta_result ta_invoke_start(ta_interpreter *it, ta_invoke_decl_id decl_id) 
         .params = values.params,
         .autoforward = decl->autoforward,
     };
+    if (decl->data.kind == TA_VALUE_SOURCE_CONTENT) {
+        ta_interpreter_literal_content(it->definition, decl->data.as.content, &request.content_type,
+                                       &request.content);
+    }
     uint64_t service = 0;
     status = invoker->v->start(invoker->self, &(ta_invoker_start_params){
                                                   .request = &request, .service_handle = &service,
