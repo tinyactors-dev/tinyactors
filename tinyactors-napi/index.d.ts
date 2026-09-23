@@ -1,4 +1,8 @@
-/** The package version. This is the only API implemented by the current stub. */
+/**
+ * The package version. The addon is being rebuilt step by step (ROADMAP.md);
+ * so far createSystem(), System.close(), System.closed, System.stats() and
+ * TinyactorsError are implemented.
+ */
 export const version: string;
 
 /* --------------------------------------------------------------------------
@@ -86,12 +90,38 @@ export interface System {
   actors(): readonly ActorInspection[];
   definitions(): readonly DefinitionInspection[];
 
+  /** Memory by category and allocator calls (ADRs 0009, 0014). Throws `closed` after close(). */
+  stats(): SystemStats;
+
   /**
    * Stop scheduling, reject pending sends, destroy the native system, and
    * release every retained JavaScript value. Idempotent.
    */
   close(): void;
   [Symbol.dispose](): void;
+}
+
+export interface MemoryCounters {
+  readonly bytesInUse: number;
+  /** High-water mark of bytesInUse. */
+  readonly peakBytes: number;
+  readonly allocations: number;
+  readonly frees: number;
+}
+
+export interface SystemStats {
+  readonly memory: {
+    readonly total: MemoryCounters;
+    readonly core: MemoryCounters;
+    readonly envelopes: MemoryCounters;
+    readonly scheduling: MemoryCounters;
+    readonly values: MemoryCounters;
+    readonly directory: MemoryCounters;
+    readonly scratch: MemoryCounters;
+    readonly other: MemoryCounters;
+  };
+  /** Allocations plus frees: zero growth in steady state is the test signal. */
+  readonly allocatorCalls: number;
 }
 
 export type EventName = string;
@@ -710,6 +740,7 @@ export type LogSink = (record: LogRecord) => void;
  * -------------------------------------------------------------------------- */
 
 export type TinyactorsErrorCode =
+  | "done"
   | "invalid"
   | "out-of-memory"
   | "not-found"

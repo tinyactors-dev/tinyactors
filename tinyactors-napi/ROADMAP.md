@@ -47,15 +47,19 @@ tinyactors-napi/
 │   ├── definition.js            Definition facade; identity read from core
 │   ├── statechart.js            fluent builder; emits the generated spec shape (ADR 0013)
 │   ├── events.js                event-name cache: text <-> ta_event_name_id (ADR 0004)
-│   └── errors.js                TinyactorsError; codes from the generated result table (ADR 0008)
+│   ├── errors.js                TinyactorsError; codes from the generated result table (ADR 0008)
+│   └── native.js                loads the compiled addon once for every lib/ module
 ├── src/
 │   ├── gen/
 │   │   ├── ta_napi.c            GENERATED, checked in; never edited by hand
 │   │   └── ta_napi.h            GENERATED, checked in
 │   ├── addon.c                  module init: registers classes and the generated module; nothing else
-│   ├── runtime.{c,h}            support for generated code: primitive and (slot, generation) codecs,
+│   ├── runtime.{c,h}            the per-environment record (error class, open systems, cleanup hook);
+│   │                            support for generated code: primitive and (slot, generation) codecs,
 │   │                            result -> TinyactorsError, reentrancy guard, handle wrapping (ADR 0013)
-│   ├── system.{c,h}             native System: owns ta_system and all plumbing, close, stats (ADR 0012)
+│   ├── system.{c,h}             native system without Node-API: owns ta_system and all plumbing,
+│   │                            close, stats (ADR 0012); covered by native tests
+│   ├── napi_system.{c,h}        the JavaScript System class over system.{c,h}: wrap, finalizer, stats
 │   ├── containers.{c,h}         vec, ring, map, slice, free lists (ADR 0009)
 │   ├── allocator.{c,h}          counting allocator shared with core, turn and call arenas over
 │   │                            core's ta_arena (ADRs 0009, 0014)
@@ -80,10 +84,11 @@ tinyactors-napi/
 │   │   ├── bindings             regenerate src/gen/ from tinyactors.api.json and bindings.rb
 │   │   ├── build                compile core amalgamation + src/**/*.c into build/tinyactors_napi.node
 │   │   ├── test-native          build and run test/native/*_test.c against the plumbing objects
+│   │   ├── test-native-asan     the same native tests under AddressSanitizer and UBSan
 │   │   └── test                 staleness check, native unit tests, then the JS suites on Node and Bun
 │   └── lib/
 │       ├── compile.rb           the one compile command; cached objects under build/obj shared by
-│       │                        build and test-native
+│       │                        build and test-native (build/obj-asan with TNA_SANITIZE=1)
 │       └── napi/                the generator (owned by this package; not shared)
 │           ├── api.rb           read and validate the API description
 │           ├── plan.rb          Node-API binding decisions: positional args, codecs, outputs, handles
@@ -186,6 +191,13 @@ and container tests pass.
 
 Exit criterion: many systems can be created, closed and finalized in any
 order without leaks (the allocator's bytes in use return to zero).
+
+Done: `system.{c,h}` holds the native system with no Node-API in it, so
+native tests (also run under AddressSanitizer) cover create, close and free.
+`napi_system.{c,h}` wraps it as the JavaScript `System`, and `runtime.{c,h}`
+holds the per-environment record: the registered `TinyactorsError` class,
+the list of open systems that the environment cleanup hook closes, and the
+counters `environmentStats()` reports to tests.
 
 ### 3. Generate the control plane
 
