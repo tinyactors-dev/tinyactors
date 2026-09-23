@@ -1,6 +1,6 @@
 # ADR 0007: The event loop drives a bounded pump
 
-**Status:** Accepted
+**Status:** Accepted; turns yield to I/O and the clock is read every turn (amended)
 **Date:** 2026-09-23
 
 ## Context
@@ -14,35 +14,59 @@ unless someone called `flush()`, and delayed sends never fired.
 ## Decision
 
 1. **One pump turn does bounded work, in this order:**
-   1. resume runnable actors, up to `resumeBudget` in total;
-   2. deliver from the ready queue, up to `messageBudget`;
-   3. call `ta_system_dispatch_due()` with `dueBudget`.
-2. **The pump is native. Turns are scheduled by a threadsafe function.**
-   The system creates one `napi_threadsafe_function` and calls it only
-   from its own thread.
-   - Enqueueing work calls the function once if no turn is pending, and a
-     flag in the system coalesces further calls. Node and Bun both queue the
-     call on their event loop and run the turn from there.
-   - At the end of a turn, the function is called again if work remains.
-   - The function is referenced (`napi_ref_threadsafe_function`) only while
-     a turn is pending, and unreferenced (`napi_unref_threadsafe_function`)
-     when the system is quiet. Queued work, and a script ending in `await
-     system.flush()`, therefore run to completion, while an idle system does
-     not keep the process alive. The function is released with the system.
+   1. with `clock: "realtime"`, read the monotonic clock and call
+      `ta_system_set_time()`;
+   2. resume runnable actors, up to `resumeBudget` in total;
+   3. deliver from the ready queue, up to `messageBudget`;
+   4. call `ta_system_dispatch_due()` with `dueBudget`;
+   5. call the hooks for the turn's records (point 5), then reset the turn
+      arena (ADR 0014).
+
+   Each deliver and resume runs inside its own `napi_handle_scope`, so
+   handles made by data-model callbacks (ADR 0011) do not pile up until the
+   end of the turn.
+2. **The pump is native. Turns are scheduled with the global
+   `setImmediate`.** The system creates one native function for the turn,
+   and calls `setImmediate` with it from native code.
+   - Enqueueing work schedules a turn if none is pending. A flag in the
+     system coalesces further requests.
+   - At the end of a turn, the next turn is scheduled if work remains.
+   - `setImmediate` callbacks run after the event loop has polled for I/O.
+     So between two turns, socket reads, timers and other callbacks run, and
+     a busy system cannot starve websocket traffic. At most one turn runs
+     per event-loop iteration.
+   - A pending immediate keeps the process alive, and nothing else does.
+     Queued work, and a script ending in `await system.flush()`, therefore
+     run to completion, while an idle system does not keep the process
+     alive.
    - No JavaScript file takes part in scheduling, and actor data never goes
-     through the function.
+     through the scheduling call.
+   - An earlier version of this ADR used a `napi_threadsafe_function`. It
+     is not used now. Node's dispatch loop (`ThreadSafeFunction::Dispatch`
+     in `src/node_api.cc`) runs up to 1,000 calls in one wake-up, and it
+     also runs a call that was queued from inside the current one. A turn
+     that scheduled the next turn would therefore run up to 1,000 turns
+     with no I/O in between.
 3. **Time.** After each turn, the addon reads `ta_system_next_deadline()`
-   and keeps exactly one timer for it, re-armed only when the deadline
-   changes.
+   and keeps exactly one timer.
+   - The timer is re-armed only when the new deadline is earlier than the
+     armed one. A later deadline leaves the timer in place. It fires early,
+     finds nothing due, and is armed again for the deadline then current.
+     With millions of actors that re-arm idle timeouts, the earliest
+     deadline changes almost every turn, and this keeps timer calls rare.
    - The timer is created from native code with the global `setTimeout`
      and cancelled with `clearTimeout`. Both runtimes provide them. The
      handle is unreferenced by calling its `unref` method.
    - Node-API has no timer of its own, and `napi_get_uv_event_loop` would
      tie the addon to libuv.
-   - With `clock: "realtime"`, the timer callback sets
-     `ta_system_set_time()` from a monotonic clock read natively (for
-     example `clock_gettime(CLOCK_MONOTONIC)`), relative to system
-     creation, and then wakes the pump.
+   - With `clock: "realtime"`, time comes from a monotonic clock read
+     natively (for example `clock_gettime(CLOCK_MONOTONIC)`), relative to
+     system creation. It is set at the start of every turn (point 1) and
+     when the timer fires, which then wakes the pump.
+   - Setting the time only when the timer fires is wrong. Core computes a
+     delayed send's due time from the system time (`due = now + delay`).
+     After an idle period with no timer armed, that time is old, so a
+     30-second timeout armed by the first new message would already be due.
    - With `clock: "manual"`, there is no timer. `advanceTo()` and
      `advanceBy()` set the time and return a promise that settles once
      everything due has been dispatched and the system is quiet.
@@ -71,8 +95,9 @@ unless someone called `flush()`, and delayed sends never fired.
 - All scheduling state (queues, the pending-turn flag, the timer handle,
   waiters and hooks) lives in the native `System`. `close()` releases it in
   one place (ADR 0012).
-- Calling a threadsafe function from its own thread is allowed by Node-API,
-  but the function was designed for cross-thread use. The pump depends on
-  both runtimes queueing that call on the event loop rather than running it
-  inline. A test on each runtime checks that no turn runs inside the API
-  call that enqueued the work.
+- The pump depends on both runtimes running `setImmediate` callbacks
+  after I/O and never inline. Tests on each runtime check that no turn runs
+  inside the API call that enqueued the work, and that an I/O or timer
+  callback runs between two consecutive turns of a busy system.
+- Starting a turn costs one JavaScript call to `setImmediate`, and one
+  `Immediate` object, per turn, not per message.
