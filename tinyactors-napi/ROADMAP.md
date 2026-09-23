@@ -470,6 +470,11 @@ target-population numbers are recorded for comparison, not asserted.
 
 Exit criterion:
 - the ping-pong player chart in `docs/design.md` runs;
+- with a small `actionBudget`, a `<foreach>` over a large array in one
+  entry handler runs over several turns, with other actors running between
+  them (the variant step 5 left for the data model);
+- data-model callbacks open their own handle scope, so a turn that runs
+  many expressions does not keep their handles until it ends (ADR 0007);
 - the number of value boxes returns to zero after `close()`;
 - model A is measured against a handle table (model B) at 1M and 4M
   actors with data (bytes per value, make and release cost, full and minor
