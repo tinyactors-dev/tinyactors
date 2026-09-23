@@ -103,6 +103,7 @@ ta_result ta_duration_parse(ta_str text, ta_time *out) {
         if (!fraction_digits) {
             return TA_ERR_INVALID;
         }
+        digits = true; /* ".5s": SCXML durations are CSS2 times, whose whole part is optional */
     }
     if (!digits) {
         return TA_ERR_INVALID;

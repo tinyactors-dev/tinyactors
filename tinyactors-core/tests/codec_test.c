@@ -384,6 +384,23 @@ static void test_encode_round_trip(ta_system *system) {
     ta_arena_destroy(&arena);
 }
 
+/*
+ * SCXML durations are CSS2 time values, whose whole part is optional: a
+ * decoded document hands the compiler ".5s" as written, where the chart DSL
+ * used to hand it 500ms.
+ */
+static void test_durations(void) {
+    ta_time out = 0;
+    CHECK(ta_duration_parse(S(".5s"), &out) == TA_OK && out == 500);
+    CHECK(ta_duration_parse(S("0.25s"), &out) == TA_OK && out == 250);
+    CHECK(ta_duration_parse(S("2s"), &out) == TA_OK && out == 2000);
+    CHECK(ta_duration_parse(S("15ms"), &out) == TA_OK && out == 15);
+    CHECK(ta_duration_parse(S("."), &out) == TA_ERR_INVALID);
+    CHECK(ta_duration_parse(S(".s"), &out) == TA_ERR_INVALID);
+    CHECK(ta_duration_parse(S("5."), &out) == TA_ERR_INVALID);
+    CHECK(ta_duration_parse(S("s"), &out) == TA_ERR_INVALID);
+}
+
 /* ------------------------------------------------------------------------
  * ta_arena_allocator: an arena behind the ta_allocator interface.
  */
@@ -414,6 +431,7 @@ static void test_arena_allocator(void) {
 
 int main(void) {
     test_arena_allocator();
+    test_durations();
     ta_system *system = NULL;
     if (ta_system_create(&(ta_system_config){ .allocator = test_allocator }, &system) != TA_OK) {
         fprintf(stderr, "cannot create a system\n");
