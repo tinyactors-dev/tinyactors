@@ -1,6 +1,7 @@
 # ADR 0003: Singular calls are primary; enumeration is paged
 
-**Status:** Accepted; paging uses tinyactors-core ADR 0062
+**Status:** Accepted; paging uses tinyactors-core ADR 0062. Amended by
+ROADMAP step 9: `actors()` inspects each actor when it reaches it.
 **Date:** 2026-09-23
 
 ## Context
@@ -51,17 +52,26 @@ because "the visitor callback cannot cross RPC". Its scale checks
      that fails leaves `next` at that actor, so the page can be retried.
    - Each page costs O(page size + empty slots passed): the walk starts at
      `from` and stops at `limit`.
-   - `system.actors()` returns an iterator that fills a page in the call
-     arena (ADR 0014) and gives out inspections from that page. It never
-     builds the whole population. Inspection pointers are borrowed only for
-     the visit, so the page copies what it keeps: state lists, formatted
-     event names (ADR 0004), and value boxes for delayed-send targets and
-     data (ADR 0011).
-   - `system.actorIds()` returns the same pages as `Uint32Array`s of
+   - `system.actorIds()` returns the pages as `Uint32Array`s of
      interleaved `[slot, generation]` pairs (ADR 0002), with no objects per
-     element. It copies only the IDs.
-   - A page is a snapshot. Actors spawned or destroyed during iteration may
-     or may not appear.
+     element. Inspection pointers are borrowed only for the visit, so a
+     page copies what it keeps, and it keeps only the IDs: core's visitor
+     writes them straight into the page's `ArrayBuffer`, with no copy
+     through the call arena.
+   - `system.actors()` walks the same pages and inspects each actor with
+     `inspect()` when the iterator reaches it. It holds one page of IDs and
+     one inspection at a time, never the whole population, and it reuses
+     the one inspection mapping (state names, event names, delayed sends).
+     An actor destroyed after its page was taken, and before it was
+     reached, is skipped. Building inspections during the visit instead
+     would need the generated inspection encoder outside the generated
+     layer, and would save only one core lookup per actor, because naming
+     states and events takes calls of its own either way.
+   - Pages default to 1024 actors (`pageSize`, at most 65536).
+   - A page is a snapshot, with core ADR 0062's rules between pages: an
+     actor resident for the whole iteration appears exactly once, one
+     destroyed before the walk reaches it does not appear, and one spawned
+     meanwhile appears exactly when its slot is ahead of the cursor.
 3. **Bulk mutation is deferred until it is measured.** `spawnMany`,
    `postMany` and similar calls are added only when a benchmark of a
    JavaScript-driven fan-out shows that boundary crossings dominate. Such an

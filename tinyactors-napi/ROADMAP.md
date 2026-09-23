@@ -432,7 +432,9 @@ custom processor; checking that waits for registered processors (step 13).
 Needs core ADR 0062.
 
 - `enumerate.{c,h}`: `system.actors()` and `system.actorIds()` as pages
-  built in the call arena (ADR 0003). Each page is one call of
+  (ADR 0003). Core's visitor writes each page's IDs straight into the
+  page's `ArrayBuffer`, and `actors()` inspects each actor when it reaches
+  it. Each page is one call of
   `ta_system_visit_actors` with a `ta_actor_visit_params`:
   - `from` is the position the previous page returned in `next`, or 0 for
     the first page. `limit` is the page size;
@@ -452,6 +454,10 @@ Exit criterion:
 - the last page of a large population costs about the same as the first,
   so a whole iteration is linear;
 - an actor spawned or destroyed between pages follows core ADR 0062 §4.
+
+Done: `test/native/enumerate_test.c` and `test/enumerate.js`. Delayed-send
+targets and data in `actors()` inspections wait for value boxes (step 11),
+like every other inspection.
 
 ### 10. Prove the scale properties
 

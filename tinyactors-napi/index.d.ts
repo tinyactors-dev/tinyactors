@@ -185,7 +185,19 @@ export interface System {
   advanceTo(time: number): Promise<void>;
   advanceBy(milliseconds: number): Promise<void>;
 
-  actors(): readonly ActorInspection[];
+  /**
+   * Resident actors as pages of IDs: each page is a Uint32Array of
+   * interleaved [slot, generation] pairs (ADR 0003). Pages continue from
+   * core's cursor, in slot order; a page is a snapshot (core ADR 0062).
+   * Throws `reentrant` inside a core call.
+   */
+  actorIds(options?: PageOptions): IterableIterator<Uint32Array>;
+  /**
+   * Resident actors' inspections, taken when the iterator reaches each
+   * actor. Holds one page of IDs at a time; an actor destroyed after its
+   * page was taken is skipped.
+   */
+  actors(options?: PageOptions): IterableIterator<ActorInspection>;
   definitions(): readonly DefinitionInspection[];
 
   /** Memory by category and allocator calls (ADRs 0009, 0014). Throws `closed` after close(). */
@@ -205,6 +217,11 @@ export interface MemoryCounters {
   readonly peakBytes: number;
   readonly allocations: number;
   readonly frees: number;
+}
+
+export interface PageOptions {
+  /** Actors per page; default 1024, at most 65536. */
+  readonly pageSize?: number;
 }
 
 export interface SystemStats {
