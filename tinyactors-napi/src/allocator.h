@@ -36,6 +36,7 @@ typedef enum {
 typedef struct {
     size_t bytes_in_use;
     size_t peak_bytes;    /* the high-water mark of bytes_in_use */
+    size_t largest_block; /* the largest single allocation so far */
     uint64_t allocations; /* successful allocator calls */
     uint64_t frees;
 } tna_memory_counters;
@@ -57,7 +58,8 @@ void tna_allocator_init(tna_allocator *allocator);
 /* A ta_allocator whose allocations count against `category`. */
 ta_allocator tna_allocator_for(tna_allocator *allocator, tna_memory_category category);
 tna_memory_counters tna_allocator_counters(const tna_allocator *allocator, tna_memory_category category);
-/* The sum over every category; peak_bytes is the sum of the peaks. */
+/* The sum over every category; peak_bytes is the sum of the peaks, and
+ * largest_block the largest of any category. */
 tna_memory_counters tna_allocator_total(const tna_allocator *allocator);
 /* Allocations plus frees, over every category: the steady-state test signal. */
 uint64_t tna_allocator_calls(const tna_allocator *allocator);

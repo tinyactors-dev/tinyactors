@@ -24,6 +24,9 @@ static void counts_by_category(void) {
     tna_free(envelopes, &(ta_allocator_free_params){ .ptr = a, .size = 48, .alignment = 8 });
     CHECK(tna_allocator_counters(&allocator, TNA_MEMORY_ENVELOPES).bytes_in_use == 16);
     CHECK(tna_allocator_counters(&allocator, TNA_MEMORY_ENVELOPES).peak_bytes == 64);
+    CHECK(tna_allocator_counters(&allocator, TNA_MEMORY_ENVELOPES).largest_block == 48);
+    CHECK(tna_allocator_counters(&allocator, TNA_MEMORY_VALUES).largest_block == 32);
+    CHECK(tna_allocator_total(&allocator).largest_block == 48);
     tna_free(envelopes, &(ta_allocator_free_params){ .ptr = b, .size = 16, .alignment = 8 });
     tna_free(values, &(ta_allocator_free_params){ .ptr = c, .size = 32, .alignment = 16 });
 

@@ -41,7 +41,7 @@ function lifecycle() {
     .filter(([name]) => name !== 'total')
     .reduce((sum, [, counters]) => sum + counters.bytesInUse, 0));
   for (const name of ['core', 'envelopes', 'scheduling', 'values', 'directory', 'scratch', 'other']) {
-    assert.deepEqual(Object.keys(stats.memory[name]).sort(), ['allocations', 'bytesInUse', 'frees', 'peakBytes']);
+    assert.deepEqual(Object.keys(stats.memory[name]).sort(), ['allocations', 'bytesInUse', 'frees', 'largestBlock', 'peakBytes']);
   }
   assert.equal(stats.allocatorCalls, stats.memory.total.allocations + stats.memory.total.frees);
 

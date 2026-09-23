@@ -36,6 +36,9 @@ static void *tna_lane_alloc(void *self, size_t size, size_t alignment) {
     if (counters->bytes_in_use > counters->peak_bytes) {
         counters->peak_bytes = counters->bytes_in_use;
     }
+    if (size > counters->largest_block) {
+        counters->largest_block = size;
+    }
     return ptr;
 }
 
@@ -79,6 +82,9 @@ tna_memory_counters tna_allocator_total(const tna_allocator *allocator) {
         const tna_memory_counters *counters = &allocator->counters[category];
         total.bytes_in_use += counters->bytes_in_use;
         total.peak_bytes += counters->peak_bytes;
+        if (counters->largest_block > total.largest_block) {
+            total.largest_block = counters->largest_block;
+        }
         total.allocations += counters->allocations;
         total.frees += counters->frees;
     }

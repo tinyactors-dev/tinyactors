@@ -571,6 +571,7 @@ static napi_status tna_counters_object(napi_env env, tna_memory_counters counter
     napi_status status = napi_create_object(env, out);
     if (status == napi_ok) status = tna_set_number(env, *out, "bytesInUse", (double)counters.bytes_in_use);
     if (status == napi_ok) status = tna_set_number(env, *out, "peakBytes", (double)counters.peak_bytes);
+    if (status == napi_ok) status = tna_set_number(env, *out, "largestBlock", (double)counters.largest_block);
     if (status == napi_ok) status = tna_set_number(env, *out, "allocations", (double)counters.allocations);
     if (status == napi_ok) status = tna_set_number(env, *out, "frees", (double)counters.frees);
     return status;

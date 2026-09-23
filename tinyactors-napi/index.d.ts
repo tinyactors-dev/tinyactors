@@ -215,6 +215,8 @@ export interface MemoryCounters {
   readonly bytesInUse: number;
   /** High-water mark of bytesInUse. */
   readonly peakBytes: number;
+  /** The largest single allocation so far; in `total`, the largest of any category. */
+  readonly largestBlock: number;
   readonly allocations: number;
   readonly frees: number;
 }
