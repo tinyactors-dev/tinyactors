@@ -37,6 +37,7 @@ typedef struct tna_napi_system tna_napi_system;
 
 typedef struct tna_env {
     napi_ref error_class; /* TinyactorsError, or NULL before setup */
+    napi_ref actor_class; /* ActorId (lib/actor.js), for views made natively */
     tna_napi_system *open_systems; /* intrusive list through tna_napi_system */
     uint32_t references;           /* live native Systems */
     bool torn_down;                /* the cleanup hook has run */
@@ -58,6 +59,8 @@ void tna_env_release(tna_env *data);
  * Returns NULL so a callback can `return tna_throw(...)`.
  */
 napi_value tna_throw(napi_env env, const char *code, const char *message);
+/* A TinyactorsError value (not thrown), or an Error with `code` before setup. */
+napi_value tna_error(napi_env env, const char *code, const char *message);
 /* The TinyactorsErrorCode for a core result (generated in src/gen/ta_napi.c). */
 const char *tna_result_code(ta_result result);
 

@@ -28,6 +28,7 @@ static void tna_env_cleanup(void *arg) {
     data->torn_down = true;
     /* The environment is being destroyed; its references go with it. */
     data->error_class = NULL;
+    data->actor_class = NULL;
     tna_env_free_if_unused(data);
 }
 
@@ -78,6 +79,21 @@ static napi_value tna_error_object(napi_env env, const char *code, const char *m
     if (napi_create_string_utf8(env, message, NAPI_AUTO_LENGTH, &argv[0]) != napi_ok ||
         napi_create_string_utf8(env, code, NAPI_AUTO_LENGTH, &argv[1]) != napi_ok ||
         napi_new_instance(env, error_class, 2, argv, &error) != napi_ok) {
+        return NULL;
+    }
+    return error;
+}
+
+napi_value tna_error(napi_env env, const char *code, const char *message) {
+    napi_value error = tna_error_object(env, code, message);
+    if (error != NULL) {
+        return error;
+    }
+    napi_value code_value = NULL;
+    napi_value message_value = NULL;
+    if (napi_create_string_utf8(env, code, NAPI_AUTO_LENGTH, &code_value) != napi_ok ||
+        napi_create_string_utf8(env, message, NAPI_AUTO_LENGTH, &message_value) != napi_ok ||
+        napi_create_error(env, code_value, message_value, &error) != napi_ok) {
         return NULL;
     }
     return error;

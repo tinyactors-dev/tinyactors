@@ -28,8 +28,19 @@ struct tna_napi_system {
      * until the last handle object is finalized.
      */
     tna_napi_handle *handles;
-    uint32_t holders;
+    uint32_t holders; /* handle objects, and a pending pump turn */
     bool finalized; /* the JavaScript System is gone */
+
+    /* The pump (pump.h, ADR 0007). */
+    napi_env env;
+    napi_ref turn_function;       /* the native setImmediate callback */
+    napi_ref facade;              /* weak: the public System, for ActorId views */
+    napi_ref done_hook;           /* ADR 0012 */
+    napi_ref fault_hook;          /* ADR 0008 */
+    bool destroy_finished;        /* finished: "destroy" (the default) */
+    napi_deferred *waiters;       /* flush() promises */
+    uint32_t waiter_count;
+    uint32_t waiter_capacity;
 };
 
 extern const char tna_napi_system_tag;
@@ -45,5 +56,7 @@ tna_napi_system *tna_napi_system_unwrap(napi_env env, napi_value value);
 void tna_napi_system_adopt(tna_napi_system *wrapper, tna_napi_handle *handle);
 /* Removes a handle from its system's list and frees it. */
 void tna_napi_system_drop(tna_napi_handle *handle);
+/* Drops a hold (a handle or a pending turn); frees a finalized wrapper at zero. */
+void tna_napi_system_unhold(tna_napi_system *wrapper);
 /* Releases the handles whose objects were finalized while core ran. */
 void tna_napi_system_flush(tna_napi_system *wrapper);

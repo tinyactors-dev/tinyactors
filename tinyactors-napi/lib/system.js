@@ -1,12 +1,16 @@
 'use strict';
 
-// System facade over the native System (ADR 0012). Later steps add the
-// generated core module and the plumbing behind it.
+// System facade over the native System (ADR 0012) and the generated core
+// module (ADR 0013). Scheduling is native (ADR 0007): nothing here takes part
+// in it; spawn() and destroy() only reach core, whose hooks tell the pump.
 
 const native = require('./native');
 const { TinyactorsError } = require('./errors');
-const { Definition } = require('./definition');
+const { Definition, identityOf } = require('./definition');
 const { DefinitionBuilder } = require('./statechart');
+const { ActorId } = require('./actor');
+
+const NO_STATE = 4294967295;
 
 const { core } = native;
 
@@ -54,11 +58,18 @@ class System {
     nativeOf = (system) => system.#native;
   }
 
+  /**
+   * Options:
+   * - scheduling: { resumeBudget, actionBudget, resumesPerTurn } (ADR 0007);
+   * - finished: "destroy" (the default) or "retain" (ADR 0012);
+   * - done({ actor, finalState, data }) and fault({ actor, operation, code,
+   *   message }): hooks the pump calls at the end of a turn (ADRs 0008, 0012).
+   */
   constructor(options) {
     if (options !== undefined && (options === null || typeof options !== 'object')) {
       throw new TinyactorsError('createSystem options must be an object', 'invalid');
     }
-    this.#native = new native.System();
+    this.#native = new native.System(this, options);
   }
 
   /** True once close() has run. */
@@ -107,6 +118,83 @@ class System {
   }
 
   /**
+   * Create an actor of `definition`. It is bootstrapped by a later pump turn,
+   * never inside this call (ADR 0007); `await system.flush()` to see it in its
+   * initial state.
+   */
+  spawn(definition, options = {}) {
+    if (!(definition instanceof Definition) || definition.system !== this) {
+      throw new TinyactorsError('spawn(): expected a Definition of this system', 'invalid');
+    }
+    let address;
+    if (options.address !== undefined) {
+      address = { family: { name: options.address.family }, name: options.address.name };
+    } else if (options.name !== undefined) {
+      address = { family: { name: definition.identity.family }, name: options.name };
+    }
+    const id = core.actor_spawn(this.#native, definition.id, address, options.binding);
+    return new ActorId(this, id.slot, id.generation);
+  }
+
+  /** A snapshot of core's view of `actor` (ADR 0054: O(size of the actor)). */
+  inspect(actor) {
+    const { slot, generation } = actorOf(this, actor);
+    const view = core.actor_inspect(this.#native, slot, generation);
+    const stateName = (state) => core.definition_state(this.#native, view.definition_id, state).id;
+    const inspection = {
+      actor: new ActorId(this, view.actor.slot, view.actor.generation),
+      sessionId: view.session_id,
+      definition: identityOf(view.definition),
+      residency: view.residency,
+      published: view.published,
+      activeStates: core.actor_active_states(this.#native, slot, generation).map(stateName),
+      macrostepInProgress: view.macrostep_in_progress,
+      internalEventCount: view.internal_events.length,
+      delayedSendCount: view.delayed_sends.length,
+      scheduling: this.#native.scheduling(slot, generation),
+      // The top-level final it reached, or null (core ADR 0056).
+      finalState: view.final_state === NO_STATE ? null : stateName(view.final_state),
+      allocatedBytes: view.allocated_bytes,
+    };
+    return inspection;
+  }
+
+  /** True when a resident actor has this ID. */
+  exists(actor) {
+    const { slot, generation } = actorOf(this, actor);
+    try {
+      core.actor_inspect(this.#native, slot, generation);
+      return true;
+    } catch (error) {
+      if (error instanceof TinyactorsError && error.code === 'not-found') {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  /** Terminate `actor`. Throws `not-found` for an actor that is gone. */
+  destroy(actor) {
+    const { slot, generation } = actorOf(this, actor);
+    core.actor_destroy(this.#native, slot, generation);
+  }
+
+  /** Put an actor that faulted back into scheduling (ADR 0008). */
+  release(actor) {
+    const { slot, generation } = actorOf(this, actor);
+    this.#native.release(slot, generation);
+  }
+
+  /**
+   * Resolves once the system is quiet: nothing runnable (later: nothing
+   * ready, nothing due). It spans as many pump turns as needed and yields to
+   * the event loop between them. close() rejects it with `closed`.
+   */
+  flush() {
+    return this.#native.flush();
+  }
+
+  /**
    * Memory counters by category and the number of allocator calls
    * (ADRs 0009 and 0014). Throws `closed` after close().
    */
@@ -127,8 +215,16 @@ class System {
   }
 }
 
+// The (slot, generation) of an ActorId of `system` (ADR 0002).
+function actorOf(system, actor) {
+  if (!(actor instanceof ActorId) || actor.system !== system) {
+    throw new TinyactorsError('expected an actor of this system', 'invalid');
+  }
+  return actor;
+}
+
 function createSystem(options) {
   return new System(options);
 }
 
-module.exports = { System, createSystem, nativeOf };
+module.exports = { System, createSystem, nativeOf, ActorId };

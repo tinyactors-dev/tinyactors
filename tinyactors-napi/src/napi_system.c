@@ -2,6 +2,8 @@
 
 #include <stdlib.h>
 
+#include "pump.h"
+
 static void tna_unlist(tna_napi_system *wrapper) {
     if (!wrapper->listed) {
         return;
@@ -54,14 +56,18 @@ void tna_napi_system_adopt(tna_napi_system *wrapper, tna_napi_handle *handle) {
     wrapper->holders += 1u;
 }
 
+void tna_napi_system_unhold(tna_napi_system *wrapper) {
+    wrapper->holders -= 1u;
+    if (wrapper->finalized && wrapper->holders == 0) {
+        tna_free_wrapper(wrapper);
+    }
+}
+
 void tna_napi_system_drop(tna_napi_handle *handle) {
     tna_napi_system *owner = handle->owner;
     tna_unlink_handle(handle);
     free(handle);
-    owner->holders -= 1u;
-    if (owner->finalized && owner->holders == 0) {
-        tna_free_wrapper(owner);
-    }
+    tna_napi_system_unhold(owner);
 }
 
 void tna_napi_system_flush(tna_napi_system *wrapper) {
@@ -101,11 +107,15 @@ static void tna_close_handles(tna_napi_system *wrapper) {
     }
 }
 
-/* Closes the native system once and records what it leaked. */
-static void tna_close(tna_napi_system *wrapper) {
+/*
+ * Closes the native system once and records what it leaked. `env_usable` is
+ * false in the finalizer and the cleanup hook, where no JavaScript can run.
+ */
+static void tna_close(tna_napi_system *wrapper, bool env_usable) {
     if (tna_system_closed(wrapper->system)) {
         return;
     }
+    tna_pump_close(wrapper, env_usable);
     tna_close_handles(wrapper);
     tna_system_close(wrapper->system);
     tna_unlist(wrapper);
@@ -115,7 +125,7 @@ static void tna_close(tna_napi_system *wrapper) {
 
 void tna_napi_system_close_open(tna_env *data) {
     while (data->open_systems != NULL) {
-        tna_close(data->open_systems);
+        tna_close(data->open_systems, false);
     }
 }
 
@@ -123,7 +133,7 @@ static void tna_finalize(napi_env env, void *finalize_data, void *hint) {
     (void)env;
     (void)hint;
     tna_napi_system *wrapper = finalize_data;
-    tna_close(wrapper);
+    tna_close(wrapper, false);
     wrapper->finalized = true;
     if (wrapper->holders == 0) {
         tna_free_wrapper(wrapper);
@@ -161,11 +171,19 @@ static tna_napi_system *tna_open_this(napi_env env, napi_callback_info info) {
     return wrapper;
 }
 
+/* new System(facade?, options?): facade is the public System (lib/system.js). */
 static napi_value tna_construct(napi_env env, napi_callback_info info) {
     napi_value self = NULL;
-    if (napi_get_cb_info(env, info, NULL, NULL, &self, NULL) != napi_ok) {
+    size_t argc = 2;
+    napi_value argv[2] = { NULL, NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok) {
         return NULL;
     }
+    napi_valuetype facade_type = napi_undefined;
+    if (argv[0] != NULL) {
+        napi_typeof(env, argv[0], &facade_type);
+    }
+    napi_value facade = facade_type == napi_object ? argv[0] : NULL;
     tna_env *data = tna_env_get(env);
     if (data == NULL || data->torn_down) {
         return tna_throw(env, "closed", "the environment is shutting down");
@@ -180,12 +198,19 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
         free(wrapper);
         return tna_throw(env, tna_result_code(result), "cannot create a system");
     }
+    wrapper->env_data = data;
+    if (!tna_pump_init(env, wrapper, facade, argv[1])) {
+        tna_pump_close(wrapper, true);
+        tna_system_free(wrapper->system);
+        free(wrapper);
+        return NULL;
+    }
     if (napi_wrap(env, self, wrapper, tna_finalize, NULL, NULL) != napi_ok) {
+        tna_pump_close(wrapper, true);
         tna_system_free(wrapper->system);
         free(wrapper);
         return tna_throw(env, "invalid", "cannot wrap a system");
     }
-    wrapper->env_data = data;
     tna_env_retain(data);
     wrapper->next = data->open_systems;
     if (data->open_systems != NULL) {
@@ -202,7 +227,7 @@ static napi_value tna_close_method(napi_env env, napi_callback_info info) {
     if (wrapper == NULL) {
         return NULL;
     }
-    tna_close(wrapper);
+    tna_close(wrapper, true);
     napi_value undefined = NULL;
     napi_get_undefined(env, &undefined);
     return undefined;
@@ -216,6 +241,63 @@ static napi_value tna_closed_getter(napi_env env, napi_callback_info info) {
     napi_value closed = NULL;
     napi_get_boolean(env, tna_system_closed(wrapper->system), &closed);
     return closed;
+}
+
+static napi_value tna_flush_method(napi_env env, napi_callback_info info) {
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    return wrapper == NULL ? NULL : tna_pump_flush(env, wrapper);
+}
+
+/* release(slot, generation): puts a quarantined actor back into scheduling (ADR 0008). */
+static napi_value tna_release_method(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2] = { NULL, NULL };
+    napi_value self = NULL;
+    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    uint32_t slot = 0;
+    uint32_t generation = 0;
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    if (napi_get_value_uint32(env, argv[0], &slot) != napi_ok ||
+        napi_get_value_uint32(env, argv[1], &generation) != napi_ok) {
+        return tna_throw(env, "invalid", "release: expected (slot, generation)");
+    }
+    ta_result result = tna_sched_release(&wrapper->system->sched, ta_actor_id_make(slot, generation));
+    if (result != TA_OK) {
+        return tna_throw(env, tna_result_code(result), "release: the actor is not known");
+    }
+    tna_system_want_turn(wrapper->system);
+    napi_value undefined = NULL;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+}
+
+/* scheduling(slot, generation): the actor's scheduling state, for tests and inspection. */
+static napi_value tna_scheduling_method(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2] = { NULL, NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    uint32_t slot = 0;
+    uint32_t generation = 0;
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    if (napi_get_value_uint32(env, argv[0], &slot) != napi_ok ||
+        napi_get_value_uint32(env, argv[1], &generation) != napi_ok) {
+        return tna_throw(env, "invalid", "scheduling: expected (slot, generation)");
+    }
+    static const char *const names[] = { "none", "idle", "ready", "runnable", "quarantined" };
+    const tna_sched_entry *entry = tna_sched_lookup(&wrapper->system->sched, ta_actor_id_make(slot, generation));
+    napi_value state = NULL;
+    napi_create_string_utf8(env, entry == NULL ? "none" : names[entry->state], NAPI_AUTO_LENGTH, &state);
+    return state;
 }
 
 static napi_status tna_set_number(napi_env env, napi_value object, const char *name, double value) {
@@ -273,6 +355,9 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
     napi_property_descriptor properties[] = {
         { "close", NULL, tna_close_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "stats", NULL, tna_stats_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "flush", NULL, tna_flush_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "release", NULL, tna_release_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "scheduling", NULL, tna_scheduling_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "closed", NULL, NULL, tna_closed_getter, NULL, NULL, napi_default_jsproperty, NULL },
     };
     napi_value constructor = NULL;

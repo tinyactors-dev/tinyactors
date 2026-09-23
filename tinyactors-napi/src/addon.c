@@ -6,6 +6,8 @@
  * - version: the package version;
  * - setup(TinyactorsError): registers the JavaScript error class that native
  *   code throws (ADR 0008); lib/errors.js calls it once per environment;
+ * - setupActor(ActorId): registers the ActorId view class (ADR 0002) that the
+ *   pump uses for the actors it passes to hooks; lib/actor.js calls it;
  * - System: the native system class (ADR 0012), used by lib/system.js;
  * - environmentStats(): counters for tests (systems created and closed,
  *   bytes leaked at close);
@@ -48,6 +50,32 @@ static napi_value tna_setup(napi_env env, napi_callback_info info) {
     return undefined;
 }
 
+static napi_value tna_setup_actor(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value argv[1] = { NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    napi_valuetype type = napi_undefined;
+    if (argc < 1 || napi_typeof(env, argv[0], &type) != napi_ok || type != napi_function) {
+        return tna_throw(env, "invalid", "setupActor expects the ActorId class");
+    }
+    tna_env *data = tna_env_get(env);
+    if (data == NULL) {
+        return tna_throw(env, "invalid", "the addon is not initialized");
+    }
+    if (data->actor_class != NULL) {
+        napi_delete_reference(env, data->actor_class);
+        data->actor_class = NULL;
+    }
+    if (napi_create_reference(env, argv[0], 1, &data->actor_class) != napi_ok) {
+        return tna_throw(env, "out-of-memory", "cannot keep the ActorId class");
+    }
+    napi_value undefined = NULL;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+}
+
 static napi_value tna_environment_stats(napi_env env, napi_callback_info info) {
     (void)info;
     tna_env *data = tna_env_get(env);
@@ -78,6 +106,7 @@ static napi_value tna_init(napi_env env, napi_value exports) {
         napi_create_string_utf8(env, TINYACTORS_NAPI_VERSION, NAPI_AUTO_LENGTH, &version) != napi_ok ||
         napi_set_named_property(env, exports, "version", version) != napi_ok ||
         tna_export_function(env, exports, "setup", tna_setup) != napi_ok ||
+        tna_export_function(env, exports, "setupActor", tna_setup_actor) != napi_ok ||
         tna_export_function(env, exports, "environmentStats", tna_environment_stats) != napi_ok ||
         tna_napi_system_define(env, exports) != napi_ok ||
         tna_gen_define(env, exports) != napi_ok) {
