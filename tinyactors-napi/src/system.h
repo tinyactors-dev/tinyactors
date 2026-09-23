@@ -21,13 +21,20 @@
  * which the Node-API layer sets (pump.c) and native tests may set to anything;
  * a flag coalesces the requests until the turn runs.
  *
- * Later steps add more plumbing (router, directory, values); each one is
- * released by tna_system_close() in the order ADR 0012 gives.
+ * Routing (ADR 0006): the directory and the router are installed on core
+ * when the system is created. Close uninstalls both, gives back the
+ * directory's address references and the mailboxes' events, and only then
+ * destroys core, because core frees its address records at the end of
+ * ta_system_destroy().
+ *
+ * Later steps add more plumbing (values); each one is released by
+ * tna_system_close() in the order ADR 0012 gives.
  */
 #include <stdbool.h>
 #include <stddef.h>
 
 #include "allocator.h"
+#include "directory.h"
 #include "scheduler.h"
 #include "tinyactors.h"
 
@@ -47,6 +54,7 @@ struct tna_system {
     tna_scratch scratch;
     ta_system *core;
     tna_sched sched;
+    tna_directory directory; /* installed on core at creation (ADR 0006) */
     tna_turn_budgets budgets;
     tna_wake_fn wake;
     void *wake_context;

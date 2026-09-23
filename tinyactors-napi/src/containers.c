@@ -346,6 +346,19 @@ bool tna_map_remove(tna_map *map, uint64_t key) {
     return true;
 }
 
+bool tna_map_next(const tna_map *map, uint32_t *cursor, uint64_t *key, uint64_t *value) {
+    while (*cursor < map->capacity) {
+        uint32_t slot = *cursor;
+        *cursor += 1u;
+        if (map->states[slot] == TNA_MAP_FULL) {
+            *key = map->keys[slot];
+            *value = map->values[slot];
+            return true;
+        }
+    }
+    return false;
+}
+
 uint32_t tna_map_count(const tna_map *map) {
     return map->count;
 }

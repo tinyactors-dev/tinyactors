@@ -119,6 +119,15 @@ static void map_deletes_with_tombstones(void) {
     CHECK((uint64_t)(tna_map_count(&map) + tna_map_tombstones(&map)) * 4u <= (uint64_t)map.capacity * 3u);
     CHECK(tna_map_get(&map, 1000, &value) && value == 10000);
     CHECK(!tna_map_get(&map, 2001, &value));
+    /* Iteration visits every live entry once and skips tombstones. */
+    uint32_t cursor = 0;
+    uint32_t seen = 0;
+    uint64_t key = 0;
+    while (tna_map_next(&map, &cursor, &key, &value)) {
+        CHECK(tna_map_get(&map, key, NULL));
+        seen += 1u;
+    }
+    CHECK(seen == tna_map_count(&map));
     tna_map_destroy(&map);
     CHECK(tna_allocator_total(&allocator).bytes_in_use == 0);
 }

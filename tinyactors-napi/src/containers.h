@@ -96,6 +96,11 @@ void tna_map_init(tna_map *map, ta_allocator allocator);
 ta_result tna_map_put(tna_map *map, uint64_t key, uint64_t value);
 bool tna_map_get(const tna_map *map, uint64_t key, uint64_t *out);
 bool tna_map_remove(tna_map *map, uint64_t key);
+/*
+ * Iteration: start `*cursor` at 0; each true answer gives one live entry.
+ * The map must not change during the walk.
+ */
+bool tna_map_next(const tna_map *map, uint32_t *cursor, uint64_t *key, uint64_t *value);
 uint32_t tna_map_count(const tna_map *map);
 uint32_t tna_map_tombstones(const tna_map *map);
 void tna_map_destroy(tna_map *map);

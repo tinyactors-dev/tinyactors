@@ -22,6 +22,7 @@ ta_result tna_system_create(tna_system **out) {
     tna_allocator_init(&system->allocator);
     tna_sched_init(&system->sched, tna_allocator_for(&system->allocator, TNA_MEMORY_SCHEDULING),
                    tna_allocator_for(&system->allocator, TNA_MEMORY_ENVELOPES));
+    tna_directory_init(&system->directory, tna_allocator_for(&system->allocator, TNA_MEMORY_DIRECTORY));
     ta_result result = tna_scratch_init(&system->scratch, &system->allocator);
     if (result != TA_OK) {
         free(system);
@@ -37,6 +38,7 @@ ta_result tna_system_create(tna_system **out) {
         free(system);
         return result;
     }
+    (void)ta_system_set_actor_directory(system->core, tna_directory_adapter(&system->directory));
     *out = system;
     return TA_OK;
 }
@@ -47,8 +49,14 @@ void tna_system_close(tna_system *system) {
     }
     system->closed = true;
     system->turn_pending = false;
-    /* Mailboxes first: a queued event may hold core handles (ADR 0012). */
+    /*
+     * Nothing may reach the plumbing while core tears down, and every
+     * reference the addon holds to a core object (a named origin in an
+     * envelope, an address in the directory) goes back first (ADR 0012).
+     */
+    (void)ta_system_set_actor_directory(system->core, (ta_actor_directory){0});
     tna_sched_discard_mail(&system->sched);
+    tna_directory_clear(&system->directory);
     ta_system_destroy(system->core);
     system->core = NULL;
     tna_sched_destroy(&system->sched);
