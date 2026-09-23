@@ -12,7 +12,7 @@
  * own JSContext in it. See docs/ecmascript-datamodel.md.
  *
  * Threading: QuickJS is single-threaded. Every system that uses one context,
- * and every retain/release/clone of its values, must be externally
+ * and every retain/release of its values, must be externally
  * synchronized on one lock (or run on one thread).
  */
 

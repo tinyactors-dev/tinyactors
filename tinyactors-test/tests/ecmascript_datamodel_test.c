@@ -416,10 +416,7 @@ static void test_operations(tat_js_datamodel_context *context) {
     check(declare(&s, S("obj"), NULL) == TA_OP_OK && eval(&s, E_OBJECT, &object) == TA_OP_OK &&
               set_named(&s, S("obj"), &object) == TA_OP_OK,
           "obj in session A");
-    /* A value is a handle: retain is the whole contract, and clone is gone
-     * (ADR 0050), so asking for an independent copy is unsupported. */
-    ta_value copied;
-    check(ta_value_clone(&object, &copied) == TA_ERR_UNSUPPORTED, "this adapter offers no clone");
+    /* A value is a handle: retain is the whole contract (ADR 0050). */
     shared = object;
     ta_value_retain(&shared);
     check(shared.self == object.self, "retain shares the handle");

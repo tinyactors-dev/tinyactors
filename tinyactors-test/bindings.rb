@@ -14,8 +14,6 @@ module TinyactorsBindings
     'ta_tree_*' => 'C construction helper; JSON specifications decode straight into the spec tree',
     'ta_value_retain' => 'static inline lifetime helper; the value table owns references',
     'ta_value_release' => 'static inline lifetime helper; the value table owns references',
-    'ta_value_clone' => 'value lifetime is managed by the binding value table',
-    'ta_event_clone' => 'C memory helper for native event ownership',
     'ta_event_release' => 'C memory helper for native event ownership',
     'ta_external_delivery_clone' => 'used inside asynchronous router adapters, not by hosts',
     'ta_external_delivery_release' => 'used inside asynchronous router adapters, not by hosts',

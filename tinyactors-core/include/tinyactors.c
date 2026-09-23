@@ -233,18 +233,12 @@ TA_PRIVATE uint32_t ta_event_name_segments(const ta_event_name_table *table,
 
 
 
-/* ta_value is fully public; this module has no private declarations. */
-
-
-
 /* Events, faults, and queued events are fully public. */
 
 /*
  * Core's own co-ownership of an event's data (ADR 0050): the envelope is
  * copied and its host value retained, so the copy outlives the caller's.
- * It cannot fail, because ta_value_retain() cannot. The public
- * ta_event_clone() asks the host for an independent copy instead; core does
- * not use it.
+ * It cannot fail, because ta_value_retain() cannot.
  */
 TA_PRIVATE void ta_event_retain(const ta_event *event, ta_event *out);
 
@@ -2243,35 +2237,6 @@ TA_PRIVATE uint32_t ta_event_name_segments(const ta_event_name_table *table,
     return depth;
 }
 
-
-TA_API ta_result ta_value_clone(const ta_value *value, ta_value *out) {
-    if (value == NULL || out == NULL) {
-        return TA_ERR_INVALID;
-    }
-    if (value->v == NULL) {
-        *out = (ta_value){0};
-        return TA_OK;
-    }
-    if (value->v->clone == NULL) {
-        return TA_ERR_UNSUPPORTED;
-    }
-    return value->v->clone(value->self, out);
-}
-
-
-TA_API ta_result ta_event_clone(const ta_event *event, ta_event *out) {
-    if (event == NULL || out == NULL) {
-        return TA_ERR_INVALID;
-    }
-    ta_value data = {0};
-    ta_result result = ta_value_clone(&event->data, &data);
-    if (result != TA_OK) {
-        return result;
-    }
-    *out = *event;
-    out->data = data;
-    return TA_OK;
-}
 
 TA_PRIVATE void ta_event_retain(const ta_event *event, ta_event *out) {
     *out = *event;

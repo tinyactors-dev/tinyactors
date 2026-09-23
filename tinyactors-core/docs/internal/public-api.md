@@ -112,7 +112,7 @@ invocation IDs needed for later reports.
 `ta_actor_resume` advances the in-progress macrostep for a caller-supplied budget and reports stable/paused/done/error execution status.
 
 `TA_RUN_DONE` leaves the terminal actor resident. `ta_actor_get_completion`
-clones its optional final data. For an invoked child,
+retains its optional final data. For an invoked child,
 `ta_actor_publish_completion` retries a `done.invoke.<id>` delivery that could
 not be accepted while the parent was busy. Explicit destruction is not normal
 completion and never generates that event.

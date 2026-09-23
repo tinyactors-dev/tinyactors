@@ -7,12 +7,12 @@ URI, socket, or message-broker transport.
 Core submits `ta_external_delivery` values from the built-in SCXML Event I/O
 Processor and from other standard parent/child completion paths. The destination
 is already a runtime or named `ta_actor_ref`; the event already has its SCXML
-name, type, origin, send ID, invocation metadata, and cloned data semantics.
+name, type, origin, send ID, invocation metadata, and retained data.
 
 The callback may deliver synchronously when reentrancy and actor-busy rules
 permit, but most hosts enqueue or marshal the delivery. Callback arguments are
 borrowed for the call. A router retaining work must copy the actor reference and
-clone the event before returning `TA_EXTERNAL_EVENT_ACCEPTED`.
+retain the event before returning `TA_EXTERNAL_EVENT_ACCEPTED`.
 `ta_external_delivery_clone()` and `ta_external_delivery_release()` implement
 that ownership operation, including deep-copying a named logical address.
 

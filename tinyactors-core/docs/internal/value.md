@@ -1,11 +1,15 @@
-# `value.h`
+# Host values (`ta_value`)
 
-A `ta_value` is an opaque host value plus vtable.
+A `ta_value` is an opaque host value plus vtable, declared in
+`include/tinyactors.h`; core has no private value module.
 
 Required semantics:
 
-- `retain` / `release` keep host garbage collectors and reference counts correct;
-- `clone` creates an independently owned value suitable for event/timer/session-image retention.
+- `retain` / `release` keep host garbage collectors and reference counts correct.
+
+That is the whole contract. Core never copies a value: an event, a timer, a
+completion or a session image that outlives its source retains the same value
+(ADR 0050).
 
 Core deliberately has no universal `serialize` operation. A session image can retain a Python/Ruby/JavaScript/native host reference in-process without copying the referenced object. A portable durability module may provide a separate codec, stable object identity, or application-specific rebinding rule.
 

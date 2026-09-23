@@ -76,8 +76,8 @@ through each model's value codec. `rpc.discover` lists them under
 In the jq data model, source expressions and scripts
 are jq filters over the actor's JSON root. A condition uses jq truthiness, an
 assignment evaluates its expression as a jq location, and a script must produce
-exactly one replacement root. Values use Tinyactors' normal retain, release,
-and clone contract.
+exactly one replacement root. Values use Tinyactors' normal retain and release
+contract.
 
 Named SCXML parameters become a JSON object keyed by parameter name, so `<param
 name="x">` reads as `$_event.data.x`; a later duplicate name replaces an earlier one.

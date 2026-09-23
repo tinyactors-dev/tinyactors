@@ -51,7 +51,7 @@ module Api
     end
 
     # A declaration in source text, e.g. a callback field
-    # "ta_result (*clone)(void *self, TA_OUT ta_value *out)". `annotations`
+    # "ta_result (*fetch)(void *self, ta_str src, TA_OUT ta_bytes *out)". `annotations`
     # lists the macro names that may appear as annotations.
     def parse_declaration(text, known:, annotations:)
       parser = Parser.new(tokenize(text), known: known, annotations: annotations)

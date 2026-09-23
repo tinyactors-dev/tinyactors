@@ -5,7 +5,6 @@
 #include "tree.h"
 #include "atom.h"
 #include "event_name.h"
-#include "value.h"
 #include "event.h"
 #include "fault.h"
 #include "scxml_uri.h"

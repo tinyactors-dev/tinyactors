@@ -12039,66 +12039,23 @@
           },
           "shape": "callback",
           "direction": "in"
-        },
-        {
-          "name": "clone",
-          "type": {
-            "pointer": {
-              "function": {
-                "returns": {
-                  "type": {
-                    "type": "ta_result"
-                  },
-                  "success": "TA_OK"
-                },
-                "params": [
-                  {
-                    "name": "self",
-                    "type": {
-                      "pointer": {
-                        "builtin": "void"
-                      }
-                    },
-                    "shape": "raw",
-                    "direction": "in"
-                  },
-                  {
-                    "name": "out",
-                    "type": {
-                      "pointer": {
-                        "type": "ta_value"
-                      }
-                    },
-                    "shape": "single",
-                    "direction": "out",
-                    "valid_on": "success",
-                    "release": "ta_value_release"
-                  }
-                ]
-              }
-            }
-          },
-          "shape": "callback",
-          "direction": "in"
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 24,
+          "size": 16,
           "align": 8,
           "offsets": {
             "retain": 0,
-            "release": 8,
-            "clone": 16
+            "release": 8
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 12,
+          "size": 8,
           "align": 4,
           "offsets": {
             "retain": 0,
-            "release": 4,
-            "clone": 8
+            "release": 4
           }
         }
       }
@@ -12306,86 +12263,6 @@
       }
     },
     {
-      "name": "ta_value_clone",
-      "public": true,
-      "static_inline": false,
-      "implemented": true,
-      "returns": {
-        "type": {
-          "type": "ta_result"
-        },
-        "success": "TA_OK"
-      },
-      "params": [
-        {
-          "name": "value",
-          "type": {
-            "pointer": {
-              "type": "ta_value",
-              "const": true
-            }
-          },
-          "shape": "single",
-          "direction": "in"
-        },
-        {
-          "name": "out",
-          "type": {
-            "pointer": {
-              "type": "ta_value"
-            }
-          },
-          "shape": "single",
-          "direction": "out",
-          "valid_on": "success",
-          "release": "ta_value_release"
-        }
-      ],
-      "value_model": {
-        "kind": "any"
-      }
-    },
-    {
-      "name": "ta_event_clone",
-      "public": true,
-      "static_inline": false,
-      "implemented": true,
-      "returns": {
-        "type": {
-          "type": "ta_result"
-        },
-        "success": "TA_OK"
-      },
-      "params": [
-        {
-          "name": "event",
-          "type": {
-            "pointer": {
-              "type": "ta_event",
-              "const": true
-            }
-          },
-          "shape": "single",
-          "direction": "in"
-        },
-        {
-          "name": "out",
-          "type": {
-            "pointer": {
-              "type": "ta_event"
-            }
-          },
-          "shape": "single",
-          "direction": "out",
-          "valid_on": "success",
-          "release": "ta_event_release"
-        }
-      ],
-      "value_model": {
-        "kind": "any"
-      }
-    },
-    {
       "name": "ta_event_release",
       "public": true,
       "static_inline": false,
@@ -12413,7 +12290,7 @@
     },
     {
       "name": "ta_external_delivery_clone",
-      "doc": "Deep-copies a named destination and clones event data.",
+      "doc": "Deep-copies a named destination and retains the event's data (ADR 0050).",
       "public": true,
       "static_inline": false,
       "implemented": true,

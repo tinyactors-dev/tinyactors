@@ -33,7 +33,7 @@ succeeded. It must not call `ta_actor_report_invoke()` reentrantly. After
 IDs from `ta_invoke_request` and reports one of three outcomes through
 `ta_actor_report_invoke()`:
 
-- `TA_INVOKE_REPORT_EVENT` validates that the invocation is active, clones the
+- `TA_INVOKE_REPORT_EVENT` validates that the invocation is active, retains the
   supplied event, gives it external event type, marks it as originating from the
   invoked service, sets its envelope `invoke_id`, and submits it through the
   actor's external-event flow. The invocation remains active.

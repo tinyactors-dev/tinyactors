@@ -215,7 +215,6 @@ TA_API ta_allocator ta_arena_allocator(TA_INOUT ta_arena *arena);
 typedef struct ta_value_vtable {
     void (*retain)(void *self);
     void (*release)(void *self);
-    ta_result (*clone)(void *self, TA_OUT TA_RELEASE(ta_value_release) ta_value *out);
 } ta_value_vtable TA_VTABLE;
 struct ta_value { void *self; const ta_value_vtable *v; };
 
@@ -228,9 +227,6 @@ static inline void ta_value_release(TA_INOUT TA_OPTIONAL ta_value *value) TA_ANY
     if (value && value->v && value->v->release) value->v->release(value->self);
 }
 
-TA_API ta_result ta_value_clone(TA_IN const ta_value *value,
-                                TA_OUT TA_RELEASE(ta_value_release) ta_value *out)
-    TA_ANY_VALUE_MODEL;
 /* ========================================================================
  * Events and faults
  */
@@ -264,9 +260,6 @@ enum TA_FLAG_SET(ta_event_flags, "TA_EVENT_FLAG_") {
     TA_EVENT_FLAG_GENERATED = 1u << 1
 };
 
-TA_API ta_result ta_event_clone(TA_IN const ta_event *event,
-                                TA_OUT TA_RELEASE(ta_event_release) ta_event *out)
-    TA_ANY_VALUE_MODEL;
 TA_API void ta_event_release(TA_INOUT ta_event *event) TA_ANY_VALUE_MODEL;
 /* ========================================================================
  * External SCXML event routing
@@ -279,7 +272,7 @@ typedef struct {
     ta_event event;
 } ta_external_delivery;
 
-/* Deep-copies a named destination and clones event data. */
+/* Deep-copies a named destination and retains the event's data (ADR 0050). */
 TA_API ta_result ta_external_delivery_clone(TA_IN const ta_external_delivery *delivery,
                                             ta_allocator allocator,
                                             TA_OUT TA_RELEASE(ta_external_delivery_release)

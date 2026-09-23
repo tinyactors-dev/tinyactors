@@ -23,7 +23,7 @@ spawn -> initializing/running -> stable
 A top-level final state terminates statechart processing. It is not necessarily identical to immediate memory reclamation: the host may need final data, and a child actor must cause `done.invoke.<id>` to reach its parent on normal completion.
 
 The terminal actor remains resident with `TA_ACTOR_DONE` residency.
-`ta_actor_get_completion()` clones the optional `<donedata>` value for the host.
+`ta_actor_get_completion()` retains the optional `<donedata>` value for the host.
 An invoked child retains a pending completion while its parent is busy;
 `ta_actor_publish_completion()` retries publication, and destruction is busy
 while the parent invocation remains active. If that invocation was cancelled,

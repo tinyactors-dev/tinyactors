@@ -30,7 +30,7 @@ model gives the codec its own conversion to and from wire JSON.
 | Engine topology | One `JSRuntime` per ECMAScript adapter context (one per host process, in `tat_bind`). One `JSContext` per data-model instance (one per session). One private utility context, used for encoding. |
 | `ta_value` | A refcounted wrapper (`tat_js_value`) that holds one QuickJS reference. `retain` and `release` touch only the C count. The last release calls `JS_FreeValueRT`. |
 | Lifetime | A value is tied to the runtime, not to its session. It can outlive the context that created it. |
-| `clone` | Share: a new wrapper around the same `JSValue` (`JS_DupValue`). Values stay ECMAScript values. |
+| Sharing | Retain shares the wrapper; nothing is ever copied, and values stay ECMAScript values (ADR 0050). |
 | Wire values | Decoded ECMAScript values hold their JSON text. Each session that imports one parses it in its own realm. |
 | Serialization | A host-side codec registry: encode is selected by the value's vtable, and decode by the receiving actor's data model. There is no model tag on the wire. |
 | Definition → model | Core API: `ta_actor_inspect` gives an actor's `definition_id`, and `ta_definition_inspect` gives the definition's `ta_datamodel` (ADR 0042). The host keeps no map. |
@@ -69,9 +69,9 @@ typedef struct tat_js_value {
   3. unlinks the wrapper from the live list;
   4. returns the wrapper to the free list. Wrappers come from a `ta_arena`
      plus a free list, as in the jq adapter.
-- **`clone`**: a new wrapper with the same `kind` and
-  `JS_DupValue(value)`. No copy and no conversion happen. Every JS value,
-  including a WIRE JSON string, is safe to share within one runtime.
+- There is no `clone`: a value is a handle, and `retain`/`release` is the
+  whole contract (ADR 0050). Every JS value, including a WIRE JSON string,
+  is safe to share within one runtime.
 
 The wrapper has its own refcount. It does not dup the JSValue on every
 `ta_value_retain`. This keeps `retain` and `release` cheap and free of
@@ -127,7 +127,7 @@ the getters, holds `JS_DupContext(realm)`. The consequences are:
 
 ### 1.5 Known limitation: cross-realm sharing
 
-With clone = share, an object passed from one ECMAScript session to another
+Because values are shared, an object passed from one ECMAScript session to another
 keeps its creator's realm. This happens through `<send>` data to another
 session, `#_parent` data, or `done.invoke` data. The receiver sees the
 following:
@@ -148,9 +148,9 @@ invoker goes through the codec (6.1).
 
 | Case | What happens |
 |---|---|
-| Event data queued to another session | The value is shared (clone = dup) and is freed through the runtime. The sender's context can already be gone. |
-| Delayed send that outlives the sender (submitted record, or `sender == NULL` dispatch) | The record holds the wrapper. Delivery clones it. Only the runtime is needed. |
-| Completion data read after the child is destroyed | `ta_actor_get_completion` clones while the child is alive. The wrapper stays valid after the child is gone. RPC encoding (2.1) uses the utility context. |
+| Event data queued to another session | The value is shared (retained) and is freed through the runtime. The sender's context can already be gone. |
+| Delayed send that outlives the sender (submitted record, or `sender == NULL` dispatch) | The record holds the wrapper. Delivery retains it. Only the runtime is needed. |
+| Completion data read after the child is destroyed | `ta_actor_get_completion` retains while the child is alive. The wrapper stays valid after the child is gone. RPC encoding (2.1) uses the utility context. |
 | A function called after its session died | Its realm stays alive (1.4). `In()` throws. System variables read as `undefined`. |
 | A `ta_value` released after the adapter context is destroyed | Not supported, the same as for jq. See 5.4. |
 
@@ -159,7 +159,7 @@ invoker goes through the codec (6.1).
 QuickJS is single-threaded. The core requires external synchronisation (ADR
 0017), and the test host is single-threaded. Because the runtime is shared,
 all systems that use one ECMAScript adapter context must be driven from one
-thread or under one lock. That includes `ta_value` release and clone, which
+thread or under one lock. That includes `ta_value` retain and release, which
 call into QuickJS. The header documents this, and the adapter adds no locks.
 
 ---
@@ -579,7 +579,7 @@ that no bytes are outstanding after teardown. It covers:
 - `make_params`, `value_text`, and SCXML targets;
 - foreign values and a foreign binding;
 - `inspect`;
-- sharing: clone shares, and cross-realm arrays;
+- sharing: retain shares, and cross-realm arrays;
 - a value outliving its session;
 - a bound `declare`;
 - a real `ta_system` chart for `_event`, `_sessionid`, `_name`,
@@ -597,7 +597,7 @@ that no bytes are outstanding after teardown. It covers:
 
 ## 8. Decisions (formerly open questions)
 
-1. `clone` shares; the cross-realm limitation (1.5) is accepted.
+1. Values are shared, never copied; the cross-realm limitation (1.5) is accepted.
 2. `inspect` reports declared names only: `declare`, `set_named`, the
    binding, and `foreach_bind`.
 3. Markers `{"$value": ...}` at the top level; `null` when nested.

@@ -31,7 +31,7 @@ and committed version. It does not copy the transcript.
 A typical LLM host registers these boundaries:
 
 - **External-event router** — accepts normalized SCXML-session events from
-  core's built-in SCXML Event I/O Processor. It clones retained deliveries,
+  core's built-in SCXML Event I/O Processor. It copies the deliveries it keeps (`ta_external_delivery_clone()`),
   resolves resident or unloaded destinations, and eventually calls
   `ta_actor_deliver()`. Its queue, fencing, and backpressure policy are
   host-owned; it is not registered as an I/O processor.
