@@ -274,13 +274,15 @@ Needs core ADRs 0056 and 0061.
   - the scheduling table (ADR 0005), in fixed pages that are never copied;
   - the spawn hook fills the actor's entry and puts it on the runnable
     queue;
-  - `scheduler.{c,h}` runs the runnable part of one turn, with a handle
-    scope around each resume;
-  - each resume passes two budgets: `budget` counts microsteps, and
-    `action_budget` counts units of executable content (core ADR 0061). The
-    system options expose them as `resumeBudget` and `actionBudget`. The
-    action budget is what bounds one resume when a single microstep runs a
-    long script or a `<foreach>` over a large array;
+  - `scheduler.{c,h}` runs the runnable part of one turn. It has no
+    Node-API in it; data-model callbacks open their own handle scope
+    (step 11, ADR 0007);
+  - a turn resumes up to `resumesPerTurn` actors, and each resume passes two
+    budgets: `budget` counts microsteps, and `action_budget` counts units of
+    executable content (core ADR 0061). The system options expose them as
+    `resumeBudget` and `actionBudget`. The action budget is what bounds one
+    resume when a single microstep runs a long script or a `<foreach>` over
+    a large array;
   - an actor paused by either budget answers `TA_RUN_PAUSED` and stays
     `runnable` (ADR 0005);
   - `pump.{c,h}` schedules coalesced turns with `setImmediate` from native
@@ -306,8 +308,10 @@ Exit criterion:
   a timer callback run between two consecutive turns (on both runtimes);
 - a chart with two top-level finals reports the one that was actually
   reached;
-- with a small `actionBudget`, one entry handler with a long `<foreach>`
-  runs over several turns, and other actors run between them;
+- with a small `actionBudget`, one long entry handler runs over several
+  turns, and other actors run between them. Under the null data model the
+  handler is a run of `<log>` actions; the `<foreach>` variant needs the
+  data model and is checked in step 11;
 - with `finished: "destroy"`, finished actors are gone after `done`.
 
 ### 6. Post events through mailboxes

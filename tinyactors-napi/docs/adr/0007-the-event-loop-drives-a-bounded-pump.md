@@ -16,8 +16,9 @@ unless someone called `flush()`, and delayed sends never fired.
 1. **One pump turn does bounded work, in this order:**
    1. with `clock: "realtime"`, read the monotonic clock and call
       `ta_system_set_time()`;
-   2. resume runnable actors, up to `resumeBudget` in total. Each resume
-      also passes `actionBudget` as core's `action_budget`
+   2. resume up to `resumesPerTurn` runnable actors, among those queued
+      before the turn began. Each resume passes `resumeBudget` as core's
+      microstep `budget` and `actionBudget` as core's `action_budget`
       (tinyactors-core ADR 0061), so a microstep that runs a long script
       or `<foreach>` pauses inside its executable content instead of
       running to its end in one turn;
@@ -26,9 +27,11 @@ unless someone called `flush()`, and delayed sends never fired.
    5. call the hooks for the turn's records (point 5), then reset the turn
       arena (ADR 0014).
 
-   Each deliver and resume runs inside its own `napi_handle_scope`, so
-   handles made by data-model callbacks (ADR 0011) do not pile up until the
-   end of the turn.
+   Handles made by data-model callbacks (ADR 0011) must not pile up until
+   the end of the turn. The scheduler has no Node-API in it (so native tests
+   and sanitizers cover it), so it opens no scope around a resume; instead
+   each data-model callback opens its own `napi_handle_scope` (step 11).
+   No JavaScript runs inside a resume before then.
 2. **The pump is native. Turns are scheduled with the global
    `setImmediate`.** The system creates one native function for the turn,
    and calls `setImmediate` with it from native code.

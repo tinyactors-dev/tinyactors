@@ -2,7 +2,8 @@
  * The package version. The addon is being rebuilt step by step (ROADMAP.md);
  * so far createSystem(), System.close(), System.closed, System.stats(),
  * System.define(), System.findDefinition(), Definition, statechart(),
- * literal() and TinyactorsError are implemented. Until the JavaScript data
+ * literal(), TinyactorsError, spawn(), inspect(), destroy(), flush() and the
+ * `done` and `fault` hooks are implemented. Until the JavaScript data
  * model lands (step 11), charts compile against core's null data model.
  */
 export const version: string;
@@ -16,14 +17,48 @@ export interface SystemOptions {
   clock?: "realtime" | "manual";
   initialTime?: number;
   scheduling?: SchedulingOptions;
+  /**
+   * What happens to an actor that reaches a top-level final state (ADR 0012):
+   * "destroy" (the default) destroys it after the `done` hook returns;
+   * "retain" keeps it inspectable until it is destroyed.
+   */
+  finished?: "destroy" | "retain";
+  /** Called at the end of the pump turn in which an actor finished. */
+  done?: (record: DoneRecord) => void;
+  /** Called at the end of the pump turn in which an actor faulted (ADR 0008). */
+  fault?: (record: FaultRecord) => void;
   io?: Readonly<Record<string, IoProcessor>>;
   invokers?: Readonly<Record<string, Invoker>>;
   log?: LogSink;
 }
 
+/** An actor finished (ADR 0012). The actor is still resident while the hook runs. */
+export interface DoneRecord<Data = unknown> {
+  readonly actor: Actor;
+  /** The top-level final state it reached (core ADR 0056). */
+  readonly finalState: string;
+  /** Its completion data; undefined until the JavaScript data model (step 11). */
+  readonly data: Data | undefined;
+}
+
+/** A core call for an actor failed; the actor is quarantined (ADR 0008). */
+export interface FaultRecord {
+  readonly actor: Actor;
+  readonly operation: string;
+  readonly code: string;
+  readonly message: string;
+}
+
 export interface SchedulingOptions {
-  /** Maximum interpreter operations given to one actor before it yields. */
+  /** Microsteps one resume may run before the actor yields (core's `budget`); default 64. */
   resumeBudget?: number;
+  /**
+   * Units of executable content one resume may run before the actor pauses
+   * inside a microstep (core ADR 0061); 0 means no limit; default 1024.
+   */
+  actionBudget?: number;
+  /** Runnable actors resumed in one pump turn; default 1024. */
+  resumesPerTurn?: number;
   /** Maximum due sends dispatched during one pump turn. */
   dueBudget?: number;
   /** Maximum envelopes started during one pump turn. */
@@ -60,6 +95,15 @@ export interface System {
   ): Actor<Data>;
 
   findActor(address: ActorAddress): Actor | undefined;
+
+  /** A snapshot of core's view of `actor`. Throws `not-found` once it is gone. */
+  inspect<Data extends object>(actor: ActorId): ActorInspection<Data>;
+  /** True while a resident actor has this ID. */
+  exists(actor: ActorId): boolean;
+  /** Terminate `actor`. Throws `not-found` once it is gone. */
+  destroy(actor: ActorId): void;
+  /** Put an actor that faulted back into scheduling (ADR 0008). */
+  release(actor: ActorId): void;
 
   load<Data extends object>(
     image: SessionImage<Data>,
@@ -141,12 +185,20 @@ export interface ActorAddress {
   readonly name: string;
 }
 
-declare const actorIdBrand: unique symbol;
 declare const definitionIdBrand: unique symbol;
 declare const invocationIdBrand: unique symbol;
 declare const sendIdBrand: unique symbol;
 
-export type ActorId = bigint & { readonly [actorIdBrand]: true };
+/**
+ * An actor's ID: its slot and generation in the actor table, two small
+ * integers (ADR 0002). Equality is by value; among live actors the slot alone
+ * is unique.
+ */
+export interface ActorId {
+  readonly system: System;
+  readonly slot: number;
+  readonly generation: number;
+}
 export type DefinitionId = bigint & { readonly [definitionIdBrand]: true };
 export type InvocationId = bigint & { readonly [invocationIdBrand]: true };
 export type SendId = bigint & { readonly [sendIdBrand]: true };
@@ -409,12 +461,15 @@ export interface SpawnOptions<Data extends object> {
   readonly binding?: Partial<Data>;
 }
 
-export interface Actor<Data extends object = Record<string, unknown>> {
-  readonly system: System;
-  readonly id: ActorId;
-  readonly definition: Definition<Data>;
-  readonly address?: ActorAddress;
+/**
+ * The view spawn() returns (ADR 0002): an ActorId with methods that ask the
+ * system. It holds no native resource. So far equals(), inspect(),
+ * destroyed, destroy() and dispose are implemented; the other methods arrive
+ * with later ROADMAP steps.
+ */
+export interface Actor<Data extends object = Record<string, unknown>> extends ActorId {
   readonly destroyed: boolean;
+  equals(other: ActorId): boolean;
 
   post(event: EventName, data?: unknown, options?: PostOptions): void;
   send(event: EventName, data?: unknown, options?: SendOptions): Promise<SendResult>;
@@ -452,22 +507,32 @@ export interface ReplacementOptions<Data extends object> {
   readonly binding?: Partial<Data> | Data;
 }
 
-export type ActorResidency = "resident" | "unloaded";
+/** Core's residency: "idle" between macrosteps, "running" inside one, "done" once finished. */
+export type ActorResidency = "idle" | "running" | "done" | "unloaded";
 
+/**
+ * A snapshot of core's view of one actor (ADR 0054: O(size of the actor)).
+ * Invocations, delayed sends, the current event and completion data are
+ * added by later ROADMAP steps.
+ */
 export interface ActorInspection<Data = unknown> {
-  readonly actor: ActorId;
-  readonly address?: ActorAddress;
+  readonly actor: Actor;
+  /** Stable across unload and load; the runtime ID is not (core ADR 0066). */
+  readonly sessionId: bigint;
   readonly definition: DefinitionIdentity;
   readonly residency: ActorResidency;
   readonly published: boolean;
   readonly activeStates: readonly string[];
   readonly macrostepInProgress: boolean;
-  readonly currentEvent?: ActorEvent;
   readonly internalEventCount: number;
-  readonly invocations: readonly InvocationInspection[];
-  readonly delayedSends: readonly DelayedSendInspection[];
-  readonly completion?: Data;
+  readonly delayedSendCount: number;
+  /** The addon's scheduling state (ADR 0005). */
+  readonly scheduling: "none" | "idle" | "ready" | "runnable" | "quarantined";
+  /** The top-level final state it reached, or null (core ADR 0056). */
+  readonly finalState: string | null;
   readonly allocatedBytes: number;
+  /** @internal reserved for completion data (step 11). */
+  readonly completion?: Data;
 }
 
 export interface InvocationInspection {
