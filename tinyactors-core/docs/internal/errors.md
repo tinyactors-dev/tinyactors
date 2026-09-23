@@ -14,6 +14,12 @@ directory comparison or an unload image whose source session epoch no longer
 matches. Both are retry/control results for the host and do not generate SCXML
 events.
 
+`TA_ERR_DONE` reports that an actor has reached a top-level final state and
+accepts nothing more (ADR 0055). `ta_actor_deliver()` returns it instead of
+`TA_ERR_INVALID`, which from deliver means a caller error only. It is a
+control result for the host's scheduler, like `TA_ERR_BUSY`, and generates no
+SCXML event.
+
 ## SCXML `error.*`
 
 Used for statechart-visible runtime errors. These are ordinary internal platform events. The broad standard categories are:

@@ -44,6 +44,23 @@ Tinyactors does not serialize calls for you. Treat a `ta_system` as externally s
 
 An actor processes one external event at a time. If an actor is paused inside a macrostep, the host must not deliver another external event to it.
 
+## Delivering without inspecting
+
+`ta_actor_deliver()` is the admission test (ADR 0055). A host decides what to
+do with a queued message from its result alone, and does not need to call
+`ta_actor_inspect()` before delivering:
+
+| Result | Meaning | What the host does |
+|---|---|---|
+| `TA_OK` | The actor accepted the event | Resume the actor |
+| `TA_ERR_BUSY` | The actor is inside a macrostep, possibly paused, or already holds an event | Keep the message queued for this actor |
+| `TA_ERR_DONE` | The actor reached a top-level final state | Drop the message, or apply a dead-letter policy |
+| `TA_ERR_NOT_FOUND` | No resident actor has this ID | Drop the message, or load the actor and retry |
+| anything else | A host bug (`TA_ERR_INVALID`: a null or malformed event) or a resource failure | Report it |
+
+A finished actor answers `TA_ERR_DONE`, never `TA_ERR_BUSY`, so a host never
+keeps a message waiting for an actor that will not take it.
+
 ## Node, CPython, CRuby, WASM, ESP32
 
 The same synchronous C ABI works in all of these environments. Host callbacks may call directly into Node/Python/Ruby when execution is already on the host's permitted interpreter thread. If the embedder chooses native worker threads, reacquiring the host runtime's required thread/GIL/GVL/event-loop context is the embedder's responsibility.

@@ -125,7 +125,7 @@ TinyactorsTest.scenarios 'lifecycle', chart: :traffic_light do
     caller = spawn :caller
     caller.deliver 'finish'
     assert caller.done?, 'the caller reached its final state'
-    assert_equal 'err_invalid', caller.post('finish')
+    assert_equal 'err_done', caller.post('finish'), 'a finished actor answers done, not invalid (ADR 0055)'
     assert_equal ['progress 21', 'done 42'], caller.data('.log')
     caller.destroy
     assert_equal 'err_not_found', ta.actor.get_completion(system: system_handle, actor: caller.handle)[:result]

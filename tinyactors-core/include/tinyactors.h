@@ -137,7 +137,8 @@ enum TA_CONSTANTS_OF(ta_result, "TA_") {
     TA_ERR_CORRUPT = -7,
     TA_ERR_DEFINITION_MISMATCH = -8,
     TA_ERR_UNLOADED = -9,
-    TA_ERR_STALE = -10
+    TA_ERR_STALE = -10,
+    TA_ERR_DONE = -11
 };
 
 typedef struct { const char *ptr; uint32_t len; } ta_str TA_STRING;
@@ -1860,6 +1861,25 @@ TA_API ta_result ta_actor_prepare_replacement(ta_system *system,
 TA_API ta_result ta_actor_activate_replacement(ta_system *system,
                                                TA_IN const ta_actor_activate_replacement_params *params);
 TA_API ta_result ta_actor_find(ta_system *system, TA_IN const ta_actor_find_params *params);
+/*
+ * Offers an external event to a resident actor: the admission test
+ * (ADR 0055). The result alone tells a host what to do with the message,
+ * so it never needs to inspect the actor first:
+ * - TA_OK: accepted; the actor holds the event, so resume it.
+ * - TA_ERR_BUSY: the actor is inside a macrostep, including one paused by
+ *   ta_actor_resume()'s budgets (ADR 0061), or already holds an event.
+ *   Keep the message queued for this actor.
+ * - TA_ERR_DONE: the actor has reached a top-level final state. Drop the
+ *   message or route it to a dead-letter policy.
+ * - TA_ERR_NOT_FOUND: no resident actor has this ID (unknown, stale or
+ *   unloaded). The receiver is gone from here; drop or route the message.
+ * - TA_ERR_INVALID: a caller error only: a null event, an event name this
+ *   system never issued, or the root name.
+ * On any result but TA_OK nothing is retained and the event is untouched.
+ * A malformed event is TA_ERR_INVALID whatever the actor's state, and a
+ * finished actor is TA_ERR_DONE, never TA_ERR_BUSY: finishing is permanent,
+ * so a host that kept a message queued would wait forever.
+ */
 TA_API ta_result ta_actor_deliver(ta_system *system, ta_actor_id actor, TA_IN const ta_event *event)
     TA_VALUE_MODEL(actor, actor);
 TA_API ta_result ta_actor_resume(ta_system *system, TA_IN const ta_actor_resume_params *params);

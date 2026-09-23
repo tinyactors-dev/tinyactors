@@ -8681,8 +8681,9 @@ TA_API ta_result ta_actor_deliver(ta_system *system, ta_actor_id id, const ta_ev
     if (!ta_event_name_valid(&system->event_names, event->name) || event->name == TA_EVENT_NAME_ROOT) {
         return TA_ERR_INVALID;
     }
+    /* Before busy: a finished actor never becomes free again (ADR 0055). */
     if (actor->finished) {
-        return TA_ERR_INVALID;
+        return TA_ERR_DONE;
     }
     if (actor->macrostep || actor->has_external_event) {
         return TA_ERR_BUSY;
