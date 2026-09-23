@@ -129,6 +129,7 @@ class Check
     return failures + ["compile_spec of the export: #{result}"] if again.nil?
 
     before = identity(original)
+    @last_identity = before
     after = identity(again)
     failures << "identity #{before} became #{after}" unless before == after
     failures << 'exporting the recompiled definition differs' unless json(export(again)) == exported
@@ -150,6 +151,7 @@ class Check
     return failures + ["compile_spec of the export: #{result}"] if again.nil?
 
     before = identity(original)
+    @last_identity = before
     failures << "identity #{before} became #{identity(again)} through export" unless before == identity(again)
     failures << 'exporting the recompiled definition differs' unless json(export(again)) == exported
 
@@ -161,6 +163,9 @@ class Check
     failures << 'encoding the reimported definition differs' unless encode(reimported) == encoded
     failures
   end
+
+  # The identity of the chart run last, for TA_REVISION_DUMP.
+  attr_reader :last_identity
 
   private
 
@@ -191,10 +196,12 @@ charts = TinyactorsTest.charts
 driver = TinyactorsTest::Driver.new(host.to_s)
 failures = {}
 skipped = []
+revisions = {}
 begin
   check = Check.new(driver)
   charts.each do |name, chart|
     outcome = check.run(chart)
+    revisions[name] = check.last_identity unless outcome == :skipped
     if outcome == :skipped
       skipped << name
     elsif !outcome.empty?
@@ -205,6 +212,13 @@ begin
   end
 ensure
   driver.close
+end
+
+# TA_REVISION_DUMP=<file> writes every chart's identity, one per line, so a
+# change that must not move revisions (ADR 0060 section 6) can be compared
+# byte for byte against a dump taken before it.
+if (dump = ENV['TA_REVISION_DUMP'])
+  File.write(dump, revisions.sort.map { |name, identity| "#{name} #{JSON.generate(identity)}\n" }.join)
 end
 
 unless failures.empty?

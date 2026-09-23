@@ -1,0 +1,118 @@
+#!/usr/bin/env ruby
+#MISE description="Fail on any cycle in core's direct call graph (ADR 0060: no recursion in core)"
+# vim:ft=ruby
+
+# Compiles the amalgamation to LLVM IR at -O0, so nothing is inlined away,
+# and reads the direct calls of every defined function: `call` and `invoke`
+# instructions that name a function defined in the amalgamation. Calls
+# through function pointers (the vtables and adapters of the host) are not
+# edges: they leave core, and core cannot see where they go. A cycle is a
+# strongly connected component with more than one function, or one function
+# that calls itself.
+#
+#   mise run check-recursion   exit 1 and print each cycle when there is one
+
+require 'open3'
+require 'pathname'
+require 'set'
+
+root = Pathname.new(__dir__).join('../..').expand_path
+source = root.join('include/tinyactors.c')
+cc = ENV.fetch('CC', 'cc')
+ir, error, status = Open3.capture3(cc, '-std=c11', '-O0', '-S', '-emit-llvm', '-o', '-', source.to_s)
+unless status.success?
+  warn error
+  abort 'check-recursion: could not compile the amalgamation to LLVM IR'
+end
+
+calls = Hash.new { |hash, key| hash[key] = Set.new }
+current = nil
+ir.each_line do |line|
+  if (match = line.match(/\Adefine\b[^@]*@("?)([\w.$]+)\1\(/))
+    current = match[2]
+    calls[current]
+  elsif line.start_with?('}')
+    current = nil
+  elsif current && (match = line.match(/\b(?:call|invoke)\b[^@]*@("?)([\w.$]+)\1\(/))
+    calls[current] << match[2]
+  end
+end
+defined = calls.keys.to_set
+calls.each_value { |callees| callees.select! { |callee| defined.include?(callee) } }
+
+# Tarjan's strongly connected components, iterative.
+index = {}
+low = {}
+on_stack = Set.new
+stack = []
+components = []
+counter = 0
+calls.each_key do |start|
+  next if index.key?(start)
+
+  work = [[start, calls[start].to_a, 0]]
+  index[start] = low[start] = counter
+  counter += 1
+  stack << start
+  on_stack << start
+  until work.empty?
+    node, callees, position = work.last
+    if position < callees.length
+      work.last[2] += 1
+      callee = callees[position]
+      if !index.key?(callee)
+        index[callee] = low[callee] = counter
+        counter += 1
+        stack << callee
+        on_stack << callee
+        work << [callee, calls[callee].to_a, 0]
+      elsif on_stack.include?(callee)
+        low[node] = [low[node], index[callee]].min
+      end
+    else
+      work.pop
+      low[work.last[0]] = [low[work.last[0]], low[node]].min unless work.empty?
+      next unless low[node] == index[node]
+
+      component = []
+      loop do
+        member = stack.pop
+        on_stack.delete(member)
+        component << member
+        break if member == node
+      end
+      components << component.sort
+    end
+  end
+end
+
+cycles = components.select { |component| component.length > 1 || calls[component.first].include?(component.first) }
+
+# Known cycles that ADR 0060's refactoring has not removed yet. Each entry is
+# the sorted list of functions in one cycle. The list shrinks with each step
+# and is deleted with the last one.
+ALLOWED = [
+  %w[ta_compiler_collect],
+  %w[ta_compiler_action ta_compiler_block ta_compiler_foreach],
+  %w[ta_export_action ta_export_actions],
+  %w[ta_export_state ta_export_states],
+  %w[ta_exec_action ta_exec_foreach ta_run_block],
+  %w[ta_actor_exit_invoked ta_interpreter_cancel ta_invoke_cancel_at ta_invoke_state_exited],
+  %w[ta_effective_targets],
+  %w[ta_add_ancestors ta_add_descendants ta_add_targets ta_enter_parallel_regions],
+  %w[ta_in_final_state],
+  %w[ta_pattern_match_from],
+].map(&:sort).freeze
+
+unexpected = cycles.reject { |cycle| ALLOWED.include?(cycle) }
+stale = ALLOWED.reject { |cycle| cycles.include?(cycle) }
+cycles.each do |cycle|
+  mark = ALLOWED.include?(cycle) ? 'allowed' : 'CYCLE'
+  puts "check-recursion: #{mark}: #{cycle.join(' -> ')}"
+end
+stale.each { |cycle| puts "check-recursion: allowlist entry no longer a cycle, remove it: #{cycle.join(', ')}" }
+if unexpected.empty? && stale.empty?
+  puts "check-recursion: #{defined.size} functions, no recursion#{ALLOWED.empty? ? '' : " outside #{ALLOWED.size} allowed cycle(s)"}"
+else
+  exit 1
+end
