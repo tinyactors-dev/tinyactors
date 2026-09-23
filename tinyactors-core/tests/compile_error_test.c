@@ -182,6 +182,158 @@ static bool str_is(ta_str text, const char *expected) {
     } while (0)
 
 /* ------------------------------------------------------------------------
+ * The name index: sorted once after pass one, scanned at or below 16 states
+ * and binary-searched above.
+ */
+
+enum { MANY = 100 };
+static char many_names[MANY][8];
+
+static ta_str many_name(uint32_t index) {
+    return (ta_str){ .ptr = many_names[index], .len = (uint32_t)strlen(many_names[index]) };
+}
+
+/* Names interned in reverse, so atom order is the reverse of document order
+ * and the index really has to sort. */
+static void make_many_names(void) {
+    for (uint32_t index = 0; index < MANY; index += 1u) {
+        snprintf(many_names[index], sizeof(many_names[index]), "n%u", index);
+    }
+    for (uint32_t index = MANY; index > 0; index -= 1u) {
+        ta_atom atom = 0;
+        CHECK(ta_system_intern_atom(system_under_test, many_name(index - 1u), &atom) == TA_OK);
+    }
+}
+
+/* Every state targets another; export gives each target back by name, so a
+ * lookup that found the wrong state shows up as a different name. */
+static void test_many_states_resolve(void) {
+    static ta_str targets[MANY][2];
+    static ta_scxml_transition_spec transitions[MANY][2];
+    static ta_scxml_state_spec states[MANY + 1];
+    for (uint32_t index = 0; index < MANY; index += 1u) {
+        targets[index][0] = many_name((index * 37u + 11u) % MANY);
+        transitions[index][0] = (ta_scxml_transition_spec){ .kind = TA_SCXML_TRANSITION_EXTERNAL,
+                                                            .event = S("go"), .targets = targets[index] };
+        states[index] = (ta_scxml_state_spec){ .kind = TA_SCXML_STATE_ATOMIC, .id = many_name(index),
+                                               .transitions = transitions[index] };
+    }
+    ta_scxml_spec spec = { .name = S("many"), .states = states };
+    ta_definition *definition = NULL;
+    ta_compile_error error = {0};
+    CHECK(ta_definition_compile_spec(system_under_test,
+                                     &(ta_definition_compile_params){ .spec = &spec,
+                                                                      .datamodel = { .v = &model_vtable },
+                                                                      .allocator = test_allocator,
+                                                                      .out = &definition,
+                                                                      .error = &error }) == TA_OK);
+    ta_definition_id id = {0};
+    CHECK(definition != NULL && ta_system_register_definition(system_under_test, definition, &id) == TA_OK);
+    ta_arena arena;
+    CHECK(ta_arena_init(&arena, test_allocator, 4096) == TA_OK);
+    const ta_scxml_spec *exported = NULL;
+    CHECK(ta_definition_export(system_under_test, &(ta_definition_export_params){ .definition = id, .arena = &arena,
+                                                                                  .out = &exported }) == TA_OK);
+    for (uint32_t index = 0; exported != NULL && index < MANY; index += 1u) {
+        ta_str target = exported->states[index].transitions[0].targets[0];
+        CHECK(ta_str_equal(target, targets[index][0]));
+    }
+    ta_arena_destroy(&arena);
+    CHECK(ta_system_retire_definition(system_under_test, id) == TA_OK);
+
+    /* An unknown target is still unknown above the threshold. */
+    const ta_str unknown[] = { S("n1000"), END };
+    transitions[MANY / 2][0].targets = unknown;
+    outcome o;
+    compile(&spec, &o);
+    CHECK(o.error.code == TA_COMPILE_ERROR_UNKNOWN_STATE);
+    CHECK(strcmp(path_text(&o.error), "states[50].transitions[0].targets[0]") == 0);
+    CHECK(o.error.subject.ptr == unknown[0].ptr);
+    release(&o);
+}
+
+/* Several duplicates among many states: the one the walk meets first wins,
+ * and `related` is the first definition of that name. */
+static void test_many_states_duplicate(void) {
+    static ta_scxml_state_spec states[MANY + 1];
+    for (uint32_t index = 0; index < MANY; index += 1u) {
+        states[index] = (ta_scxml_state_spec){ .kind = TA_SCXML_STATE_ATOMIC, .id = many_name(index) };
+    }
+    states[70].id = many_name(10); /* 10 repeated at 70 */
+    states[50].id = many_name(20); /* 20 repeated at 50: met first */
+    states[60].id = many_name(5);  /* 5 repeated at 60 and 90 */
+    states[90].id = many_name(5);
+    ta_scxml_spec spec = { .name = S("many"), .states = states };
+    outcome o;
+    compile(&spec, &o);
+    CHECK(o.result == TA_ERR_INVALID);
+    CHECK(o.error.code == TA_COMPILE_ERROR_DUPLICATE_STATE);
+    CHECK(strcmp(path_text(&o.error), "states[50].id") == 0);
+    CHECK(o.error.subject.ptr == states[50].id.ptr);
+    CHECK(o.error.related.ptr == states[20].id.ptr);
+    release(&o);
+}
+
+/* A duplicate and another pass-one fault: whichever comes first in document
+ * order is reported, as when the check ran state by state. */
+static void test_duplicate_against_other_faults(void) {
+    {
+        ta_scxml_state_spec inner[] = { { .kind = TA_SCXML_STATE_ATOMIC, .id = S("a") }, END };
+        ta_scxml_state_spec states[] = {
+            { .kind = TA_SCXML_STATE_ATOMIC, .id = S("a") },
+            { .kind = TA_SCXML_STATE_COMPOUND, .id = S("b"), .states = inner },
+            { .kind = (ta_scxml_state_kind)99, .id = S("c") },
+            END,
+        };
+        ta_scxml_spec spec = { .name = S("c"), .states = states };
+        EXPECT(&spec, TA_ERR_INVALID, TA_COMPILE_ERROR_DUPLICATE_STATE, "states[1].states[0].id");
+    }
+    {
+        ta_scxml_state_spec states[] = {
+            { .kind = TA_SCXML_STATE_ATOMIC, .id = S("a") },
+            { .kind = (ta_scxml_state_kind)99, .id = S("c") },
+            { .kind = TA_SCXML_STATE_ATOMIC, .id = S("a") },
+            END,
+        };
+        ta_scxml_spec spec = { .name = S("c"), .states = states };
+        EXPECT(&spec, TA_ERR_INVALID, TA_COMPILE_ERROR_MALFORMED_SPEC, "states[1]");
+    }
+    {
+        /* The fault is inside a subtree whose root repeats an earlier ID. */
+        ta_scxml_state_spec inner[] = { { .kind = TA_SCXML_STATE_ATOMIC, .id = S("") }, END };
+        ta_scxml_state_spec states[] = {
+            { .kind = TA_SCXML_STATE_ATOMIC, .id = S("a") },
+            { .kind = TA_SCXML_STATE_COMPOUND, .id = S("a"), .states = inner },
+            END,
+        };
+        ta_scxml_spec spec = { .name = S("c"), .states = states };
+        EXPECT(&spec, TA_ERR_INVALID, TA_COMPILE_ERROR_DUPLICATE_STATE, "states[1].id");
+    }
+}
+
+/* LIMIT: one state more than a configuration's 8191 words can hold. */
+static void test_limit(void) {
+    enum { LIMIT_STATES = 8191u * 64u + 1u };
+    ta_scxml_state_spec *states = calloc(LIMIT_STATES + 1u, sizeof(*states));
+    char *names = calloc(LIMIT_STATES, 8);
+    CHECK(states != NULL && names != NULL);
+    if (states == NULL || names == NULL) {
+        free(states);
+        free(names);
+        return;
+    }
+    for (uint32_t index = 0; index < LIMIT_STATES; index += 1u) {
+        int length = snprintf(names + (size_t)index * 8u, 8, "L%x", index);
+        states[index] = (ta_scxml_state_spec){ .kind = TA_SCXML_STATE_ATOMIC,
+                                               .id = { .ptr = names + (size_t)index * 8u, .len = (uint32_t)length } };
+    }
+    ta_scxml_spec spec = { .name = S("huge"), .states = states };
+    EXPECT(&spec, TA_ERR_UNSUPPORTED, TA_COMPILE_ERROR_LIMIT, "");
+    free(names);
+    free(states);
+}
+
+/* ------------------------------------------------------------------------
  * Every code
  */
 
@@ -372,7 +524,6 @@ static void test_codes(void) {
         ta_scxml_spec spec = { .name = S("c"), .states = states };
         EXPECT(&spec, TA_ERR_INVALID, TA_COMPILE_ERROR_HOST_EXPRESSION, "states[0].transitions[0].condition");
     }
-    /* LIMIT needs more than 524224 states; see the ADR's implementation notes. */
     test_unknown_state();
     test_duplicate_state();
 }
@@ -586,7 +737,12 @@ int main(void) {
         fprintf(stderr, "cannot create a system\n");
         return 1;
     }
+    make_many_names();
     test_codes();
+    test_many_states_resolve();
+    test_many_states_duplicate();
+    test_duplicate_against_other_faults();
+    test_limit();
     test_every_list_member();
     test_order();
     test_success_costs_nothing();

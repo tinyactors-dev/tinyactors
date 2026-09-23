@@ -320,10 +320,19 @@ Recorded when this ADR was implemented (2026-09-23).
   location, expression, condition, sendid, target, type, id); an
   `<invoke>`'s `id`, `type` or `src`; a `<data>` or `<param>`'s name; an
   `<initial>`'s first target.
-- **`TA_COMPILE_ERROR_LIMIT` is not reached by a test.** It needs more
-  than 524,224 states, and pass one's duplicate-ID scan is quadratic, so
-  such a chart takes too long to compile in a test. Every other code is
-  reached from a chart in `tests/compile_error_test.c`.
+- **Duplicate IDs are found by sorting, not by comparing every pair.** After
+  pass one, the compiler builds one index of `(name, state)` keys and sorts
+  it in place: insertion sort up to 16 keys, heapsort above. It reports the
+  duplicate whose second occurrence comes first in document order, with the
+  first occurrence as `related`. If pass one stopped at another fault, any
+  duplicate among the states collected so far comes earlier in document
+  order, so it is reported instead. The first-error rule of §2 therefore
+  holds exactly as it did with a per-state check. Target resolution uses the
+  same index: a scan up to 16 states, a binary search above. Both pass one
+  and resolution were quadratic before.
+- **Every code is reached by a test, `TA_COMPILE_ERROR_LIMIT` included.** A
+  chart of 524,225 states, one more than 8191 configuration words can hold,
+  compiles to that error in under a second.
 - **The test host prints located errors.** The scenario runner, the IRP
   check and the export round-trip check write an import failure as
   `line:column: <formatted error>`, using this function over the RPC.

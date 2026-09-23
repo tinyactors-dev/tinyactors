@@ -1,6 +1,19 @@
 #include "builder.h"
 #include "system.h"
 
+/* A state by its interned name, for the name index built after pass one. */
+typedef struct {
+    ta_atom name;
+    ta_state_id state;
+} ta_state_key;
+
+/*
+ * At or below this many states the name index is scanned; above it, it is
+ * binary-searched. The index is sorted either way, so both give the same
+ * answer.
+ */
+#define TA_COMPILER_LINEAR_NAMES 16u
+
 /*
  * Compiles a ta_scxml_spec in two passes. Pass one assigns state IDs in
  * document (pre-)order and records child ranges; pass two resolves targets and
@@ -40,6 +53,7 @@ typedef struct {
     ta_vec invokes;      /* ta_invoke_decl */
     ta_vec texts;        /* ta_str: authored text kept for export */
     ta_vec path;         /* ta_spec_step: the steps below path_state */
+    ta_vec names;        /* ta_state_key: every state, sorted by (name, state) after pass one */
     ta_state_id path_state;
     ta_compile_error *error;
     ta_arena *error_arena;
@@ -838,6 +852,147 @@ static bool ta_state_kind_is_history(ta_state_kind kind) {
     return kind == TA_STATE_HISTORY_SHALLOW || kind == TA_STATE_HISTORY_DEEP;
 }
 
+static bool ta_state_key_before(ta_state_key left, ta_state_key right) {
+    return left.name < right.name || (left.name == right.name && left.state < right.state);
+}
+
+static void ta_state_keys_sift(ta_state_key *keys, uint32_t root, uint32_t count) {
+    for (;;) {
+        uint32_t largest = root;
+        uint32_t left = 2u * root + 1u;
+        uint32_t right = left + 1u;
+        if (left < count && ta_state_key_before(keys[largest], keys[left])) {
+            largest = left;
+        }
+        if (right < count && ta_state_key_before(keys[largest], keys[right])) {
+            largest = right;
+        }
+        if (largest == root) {
+            return;
+        }
+        ta_state_key swap = keys[root];
+        keys[root] = keys[largest];
+        keys[largest] = swap;
+        root = largest;
+    }
+}
+
+/*
+ * Sorts by (name, state): insertion sort for a few keys, heapsort otherwise,
+ * so the sort is O(n log n), in place, and allocates nothing. The order is
+ * total, so stability does not matter.
+ */
+static void ta_state_keys_sort(ta_state_key *keys, uint32_t count) {
+    if (count <= TA_COMPILER_LINEAR_NAMES) {
+        for (uint32_t index = 1; index < count; index += 1u) {
+            ta_state_key key = keys[index];
+            uint32_t at = index;
+            while (at > 0 && ta_state_key_before(key, keys[at - 1u])) {
+                keys[at] = keys[at - 1u];
+                at -= 1u;
+            }
+            keys[at] = key;
+        }
+        return;
+    }
+    for (uint32_t root = count / 2u; root > 0; root -= 1u) {
+        ta_state_keys_sift(keys, root - 1u, count);
+    }
+    for (uint32_t end = count - 1u; end > 0; end -= 1u) {
+        ta_state_key swap = keys[0];
+        keys[0] = keys[end];
+        keys[end] = swap;
+        ta_state_keys_sift(keys, 0, end);
+    }
+}
+
+/* The state named `name`. Pass two only: the index is complete and has no
+ * duplicates. */
+static bool ta_compiler_find(ta_compiler *compiler, ta_atom name, ta_state_id *out) {
+    const ta_state_key *keys = compiler->names.items;
+    uint32_t count = compiler->names.count;
+    if (count <= TA_COMPILER_LINEAR_NAMES) {
+        for (uint32_t index = 0; index < count; index += 1u) {
+            if (keys[index].name == name) {
+                *out = keys[index].state;
+                return true;
+            }
+        }
+        return false;
+    }
+    uint32_t low = 0;
+    uint32_t high = count;
+    while (low < high) {
+        uint32_t middle = low + (high - low) / 2u;
+        if (keys[middle].name < name) {
+            low = middle + 1u;
+        } else {
+            high = middle;
+        }
+    }
+    if (low < count && keys[low].name == name) {
+        *out = keys[low].state;
+        return true;
+    }
+    return false;
+}
+
+/*
+ * Builds the name index over the states pass one collected, and reports a
+ * duplicate ID. Sorted by (name, state), each run of equal names lists its
+ * states in document order. So the second key of a run is the duplicate the
+ * walk meets first, and the first key is the definition it repeats. Across
+ * runs the smallest such second state wins: that is the duplicate a
+ * per-state check during pass one would report.
+ *
+ * `collected` is the result of pass one. A pass-one fault stops collection
+ * at a state after every collected one, so a duplicate among the collected
+ * states comes earlier in document order and replaces that fault. That keeps
+ * the first error in compile order (ADR 0058 section 2).
+ */
+static ta_result ta_compiler_index_names(ta_compiler *compiler, ta_result collected) {
+    uint32_t count = compiler->states.count;
+    uint32_t base = 0;
+    ta_result result = ta_vec_extend(&compiler->names, count, &base);
+    if (result != TA_OK) {
+        return collected != TA_OK ? collected : result;
+    }
+    ta_state_key *keys = compiler->names.items;
+    for (ta_state_id state = 0; state < count; state += 1u) {
+        keys[state] = (ta_state_key){ .name = ta_compiler_state(compiler, state)->name, .state = state };
+    }
+    ta_state_keys_sort(keys, count);
+    ta_state_id duplicate = TA_STATE_NONE;
+    ta_state_id first = TA_STATE_NONE;
+    for (uint32_t index = 1, run = 0; index < count; index += 1u) {
+        if (keys[index].name != keys[index - 1u].name) {
+            run = index;
+        } else if (index == run + 1u && (duplicate == TA_STATE_NONE || keys[index].state < duplicate)) {
+            duplicate = keys[index].state;
+            first = keys[run].state;
+        }
+    }
+    if (duplicate == TA_STATE_NONE) {
+        return collected;
+    }
+    if (collected != TA_OK && !compiler->failed) {
+        return collected; /* an allocation failure, not a fault in the chart */
+    }
+    compiler->failed = false;
+    ta_compiler_at(compiler, ta_compiler_state(compiler, duplicate)->parent);
+    result = ta_compiler_enter(compiler, TA_SPEC_MEMBER_STATES, ta_compiler_state_index(compiler, duplicate));
+    if (result != TA_OK) {
+        return result;
+    }
+    return ta_compiler_fail_at(compiler, TA_SPEC_MEMBER_ID, TA_SPEC_INDEX_NONE,
+                               &(ta_compiler_fault){
+                                   .code = TA_COMPILE_ERROR_DUPLICATE_STATE,
+                                   .subject = ta_compiler_state_spec(compiler, duplicate)->id,
+                                   .related = ta_compiler_state_spec(compiler, first)->id,
+                                   .message = TA_PHRASE("duplicate state ID"),
+                               });
+}
+
 /* Pass one: assigns IDs in document order and records child ranges. */
 static ta_result ta_compiler_collect(ta_compiler *compiler, const ta_scxml_state_spec *specs,
                                      ta_state_id parent, ta_span32 *out) {
@@ -863,17 +1018,6 @@ static ta_result ta_compiler_collect(ta_compiler *compiler, const ta_scxml_state
         }
         if (result == TA_OK) {
             result = ta_compiler_atom_at(compiler, TA_SPEC_MEMBER_ID, spec->id, &state.name);
-        }
-        for (uint32_t other = 0; result == TA_OK && other < compiler->states.count; other += 1) {
-            if (ta_compiler_state(compiler, other)->name == state.name) {
-                result = ta_compiler_fail_at(compiler, TA_SPEC_MEMBER_ID, TA_SPEC_INDEX_NONE,
-                                             &(ta_compiler_fault){
-                                                 .code = TA_COMPILE_ERROR_DUPLICATE_STATE,
-                                                 .subject = spec->id,
-                                                 .related = ta_compiler_state_spec(compiler, other)->id,
-                                                 .message = TA_PHRASE("duplicate state ID"),
-                                             });
-            }
         }
         if (result != TA_OK) {
             return result;
@@ -902,11 +1046,8 @@ static ta_result ta_compiler_resolve(ta_compiler *compiler, ta_str id, ta_state_
     if (result != TA_OK) {
         return result;
     }
-    for (ta_state_id state = 0; state < compiler->states.count; state += 1) {
-        if (ta_compiler_state(compiler, state)->name == atom) {
-            *out = state;
-            return TA_OK;
-        }
+    if (ta_compiler_find(compiler, atom, out)) {
+        return TA_OK;
     }
     return ta_compiler_record(compiler, &(ta_compiler_fault){
                                             .code = TA_COMPILE_ERROR_UNKNOWN_STATE,
@@ -1468,7 +1609,7 @@ static void ta_compiler_destroy(ta_compiler *compiler) {
         &compiler->initials, &compiler->targets, &compiler->actions, &compiler->handlers, &compiler->params,
         &compiler->data_decls, &compiler->initializers, &compiler->contents, &compiler->patterns,
         &compiler->segments, &compiler->expressions, &compiler->history, &compiler->done_data,
-        &compiler->invokes, &compiler->texts, &compiler->path,
+        &compiler->invokes, &compiler->texts, &compiler->path, &compiler->names,
     };
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(vecs); index += 1) {
         ta_vec_destroy(vecs[index]);
@@ -1588,6 +1729,7 @@ static ta_result ta_compiler_run(ta_compiler *compiler, ta_datamodel datamodel) 
     ta_compiler_hash_u32(compiler, spec->binding);
     ta_span32 roots = {0};
     ta_result result = ta_compiler_collect(compiler, spec->states, TA_STATE_NONE, &roots);
+    result = ta_compiler_index_names(compiler, result);
     ta_compiler_at(compiler, TA_STATE_NONE);
     if (result == TA_OK && compiler->states.count == 0) {
         result = ta_compiler_fail(compiler, TA_COMPILE_ERROR_NO_STATES, (ta_str){0},
@@ -1700,6 +1842,7 @@ static ta_result ta_compile(ta_system *system, const ta_definition_compile_param
         { &compiler.invokes, TA_VEC_LAYOUT(ta_invoke_decl) },
         { &compiler.texts, TA_VEC_LAYOUT(ta_str) },
         { &compiler.path, TA_VEC_LAYOUT(ta_spec_step) },
+        { &compiler.names, TA_VEC_LAYOUT(ta_state_key) },
     };
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(vecs); index += 1) {
         ta_vec_init(vecs[index].vec, params->allocator, vecs[index].layout);

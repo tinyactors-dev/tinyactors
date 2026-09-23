@@ -227,3 +227,8 @@ streams, initial transitions, data initializers, content, parameters, and
 invokes. Compilation performs cross-tree validation including target
 resolution, state-kind rules, duplicate IDs, transition semantics, and data
 binding timing.
+
+State names are indexed once, after pass one. The `(name, state)` keys are
+sorted in place, and adjacent equal names are the duplicates. Every target
+is resolved against this index: by a scan up to 16 states, and by binary
+search above that. Checking and resolving names is O(n log n) in the number of states.
