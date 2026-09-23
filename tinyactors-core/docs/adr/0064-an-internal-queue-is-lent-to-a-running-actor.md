@@ -1,6 +1,6 @@
 # ADR 0064: An internal queue is lent to a running actor
 
-**Status:** Proposed; refines ADR 0018, applies ADR 0047 and ADR 0061
+**Status:** Accepted and implemented; refines ADR 0018, applies ADR 0047 and ADR 0061. See the implementation notes for where the code differs from the text.
 **Date:** 2026-09-23
 
 ## Context
@@ -94,3 +94,58 @@ with events still queued needs a queue of its own afterwards.
   happens before the microstep is visible, and a pause never allocates for
   the queue.
 - Hosts see no API change.
+
+## Implementation notes
+
+2026-09-23.
+
+- **The queue** is `ta_internal_queue` in `src/actor.h`: a count, a
+  capacity and the events as a flexible array, in one allocation. It
+  starts at 8 events and doubles when full. `ta_actor.internal_queue` is
+  the one pointer; inspection's `internal_events` points into it.
+- **Lending** happens in `ta_queue_room()` (`src/interpreter.c`), which the
+  pre-microstep reservation and every enqueue call. It takes the actor's
+  own queue, else the newest cached one, else a new one, and doubles a
+  full queue. The run takes its queue at its first microstep, not at the
+  top of `ta_actor_resume()`. That is the same point in ADR 0047's terms:
+  before anything in the run is visible.
+- **Returning** happens in `ta_queue_settle()`, called when
+  `ta_actor_resume()` returns, whatever the result, and when an actor is
+  freed. A queue that grew past 64 events is freed instead of cached, so
+  the cache never holds more than four small queues.
+- **Nested interpreters** (ADR 0060) need nothing special. Each actor
+  holds its own queue while it runs, and a cancelled child's queue goes
+  back to the cache when the child is freed. The four cached queues cover
+  that nesting without an allocation once warm.
+- **Deviation: sparse state before a microstep.** Decision 1 says an actor
+  no longer needs sparse state because it runs. That holds only for charts
+  whose microsteps never keep anything there. The old reservation created
+  the sparse state together with the queue, and that hid the other users,
+  which call `ta_sparse()` halfway through a microstep:
+  - a refused or delayed send (`ta_actor_schedule_send`);
+  - an invocation of an entered state;
+  - a top-level final state's completion;
+  - a replacement candidate's held effects.
+
+  The allocation-failure scenario caught this. With a warm queue cache,
+  the relay's refused self-send was the first allocation, and it failed
+  after exit and transition content had run, leaving the actor in no
+  state. The compiler now records `microstep_needs_sparse` (a `<send>`, an
+  `<invoke>`, or a top-level final state), and the reservation also
+  creates the sparse state for such a chart, and for an unpublished
+  replacement candidate, before the microstep is visible. A chart with
+  none of these, the common case of decision 8, still runs with no sparse
+  state and no allocator call. A chart with a `<send>` makes the same one
+  sparse allocation per macrostep as before, but no longer a queue
+  allocation.
+- **Measurement** (`tinyactors-test/tests/scale_test.c`,
+  `check_event_allocations`): after warm-up, 1,000 `go`/`done` round trips
+  on a simple actor and 1,000 `rearm` events on an actor holding a pending
+  delayed send. Built against the core before this change, the first
+  makes 2.00 allocations and 2.00 frees per event and the second 1.00 and
+  1.00. Now both make 0.00, and the test requires 0.
+- **Per-actor memory** grows by the pointer, from about 555 to 563 bytes.
+- **Scenario:** `pausing: queued internal events survive pauses and
+  residency changes` pauses a chart after every action. Whenever events
+  are queued it captures, unloads and loads the actor, and checks the log
+  and configuration against an uninterrupted run.
