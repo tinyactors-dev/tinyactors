@@ -1700,6 +1700,23 @@ static ta_result ta_compiler_finish(ta_compiler *compiler) {
     if (result != TA_OK) {
         return result;
     }
+/* Depths in one pass: every parent has a lower ID than its children. */
+if (definition->state_count != 0) {
+    size_t size = (size_t)definition->state_count * sizeof(uint32_t);
+    uint32_t *depths = ta_mem_alloc(compiler->allocator, size, _Alignof(uint32_t));
+    if (depths == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    for (ta_state_id state = 0; state < definition->state_count; state += 1u) {
+        ta_state_id parent = definition->states[state].parent;
+        depths[state] = parent == TA_STATE_NONE ? 1u : depths[parent] + 1u;
+        if (depths[state] > definition->max_state_depth) {
+            definition->max_state_depth = depths[state];
+        }
+    }
+    ta_mem_free(compiler->allocator, depths,
+                &(ta_allocator_free_params){ .size = size, .alignment = _Alignof(uint32_t) });
+}
     uint32_t words = ta_bits_words(definition->state_count);
     if (words * 8u > UINT16_MAX) {
         return ta_compiler_fail(compiler, TA_COMPILE_ERROR_LIMIT, (ta_str){0},

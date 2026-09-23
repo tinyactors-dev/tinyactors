@@ -1142,21 +1142,39 @@ static ta_result ta_run_handlers(ta_interpreter *it, ta_span32 handlers) {
  * Transition selection
  */
 
-static void ta_effective_targets(ta_interpreter *it, ta_span32 targets, uint64_t *out) {
+/*
+ * Adds a span of targets to `out`: a target itself, or for a history state
+ * its recorded configuration, or else the targets of its default
+ * transition, which may name history states again. Those are expanded from
+ * a worklist, each at most once, so a history default that leads back to
+ * itself ends instead of looping.
+ */
+static void ta_effective_span(ta_interpreter *it, ta_span32 targets, uint64_t *out, uint32_t *pending) {
     for (uint32_t index = 0; index < targets.length; index += 1) {
         ta_state_id target = ta_target_at(it, targets, index);
         if (!ta_is_history(it, target)) {
             ta_bits_put(out, target, true);
-            continue;
+        } else if (!ta_bits_get(it->history_seen, target)) {
+            ta_bits_put(it->history_seen, target, true);
+            it->history_stack[(*pending)++] = target;
         }
-        const uint64_t *recorded = ta_history_slot_words(&it->actor->history, ta_state(it, target)->history_slot);
+    }
+}
+
+static void ta_effective_targets(ta_interpreter *it, ta_span32 targets, uint64_t *out) {
+    ta_bits_clear(it, it->history_seen);
+    uint32_t pending = 0;
+    ta_effective_span(it, targets, out, &pending);
+    while (pending != 0) {
+        ta_state_id history = it->history_stack[--pending];
+        const uint64_t *recorded = ta_history_slot_words(&it->actor->history, ta_state(it, history)->history_slot);
         if (ta_bits_any(it, recorded)) {
             for (uint32_t word = 0; word < it->words; word += 1) {
                 out[word] |= recorded[word];
             }
         } else {
-            const ta_transition_def *fallback = &it->definition->transitions[ta_state(it, target)->transitions.offset];
-            ta_effective_targets(it, fallback->targets, out);
+            const ta_transition_def *fallback = &it->definition->transitions[ta_state(it, history)->transitions.offset];
+            ta_effective_span(it, fallback->targets, out, &pending);
         }
     }
 }
@@ -1322,8 +1340,6 @@ static ta_result ta_select_transitions(ta_interpreter *it, const ta_event *event
  * Microsteps
  */
 
-static void ta_add_descendants(ta_interpreter *it, ta_state_id state);
-
 static bool ta_entering_below(ta_interpreter *it, ta_state_id ancestor) {
     for (ta_state_id state = 0; state < it->definition->state_count; state += 1) {
         if (ta_bits_get(it->to_enter, state) && ta_descends(it, state, ancestor)) {
@@ -1333,85 +1349,237 @@ static bool ta_entering_below(ta_interpreter *it, ta_state_id ancestor) {
     return false;
 }
 
-static void ta_enter_parallel_regions(ta_interpreter *it, ta_state_id parallel) {
-    for (uint32_t index = 0; index < ta_state(it, parallel)->children.length; index += 1) {
-        ta_state_id child = ta_child_at(it, parallel, index);
-        if (!ta_is_history(it, child) && !ta_entering_below(it, child)) {
-            ta_add_descendants(it, child);
-        }
-    }
+/*
+ * The entry set (SCXML addDescendantStatesToEnter and
+ * addAncestorStatesToEnter), without recursion (ADR 0060). Each frame is one
+ * activation of the recursive algorithm, resumed where it left off, so the
+ * order of every step, which ta_entering_below and default_history depend
+ * on, is the recursion's:
+ *
+ *   DESCENDANTS  addDescendantStatesToEnter(state), not yet started
+ *   TARGETS      for each target: descendants; then for each: ancestors
+ *   RECORDED     the same over a history state's recorded configuration
+ *   ANCESTORS    addAncestorStatesToEnter, `state` the next ancestor
+ *   REGIONS      a parallel state's regions, `cursor` the next child
+ *
+ * A history frame marks its history state busy until it ends. A history
+ * default that leads back to a busy history state would recurse forever;
+ * it is skipped. Every other chain of descendant frames goes to strictly
+ * deeper states. So a chain holds at most one descendants frame per level
+ * of nesting and one per history state, and each of those has at most two
+ * frames above it (a loop, and an ancestors walk with its regions).
+ */
+typedef enum {
+    TA_ENTRY_DESCENDANTS = 0,
+    TA_ENTRY_TARGETS,
+    TA_ENTRY_RECORDED,
+    TA_ENTRY_ANCESTORS,
+    TA_ENTRY_REGIONS
+} ta_entry_kind;
+
+struct ta_entry_frame {
+    ta_entry_kind kind;
+    bool ancestors;         /* TARGETS, RECORDED: the second loop */
+    ta_state_id state;
+    ta_state_id ancestor;
+    ta_state_id history;    /* the history state that owns this frame, or TA_STATE_NONE */
+    ta_span32 targets;
+    uint32_t cursor;
+};
+
+/* The frame capacity ta_interpreter_init reserves: three per level of
+ * nesting and per history state, and room for the first frame. */
+static uint32_t ta_entry_capacity(const ta_definition *definition) {
+    return 3u * (definition->max_state_depth + definition->history.slot_count + 1u) + 1u;
 }
 
-static void ta_add_ancestors(ta_interpreter *it, ta_state_id state, ta_state_id ancestor) {
-    for (ta_state_id at = ta_state(it, state)->parent; at != ancestor && at != TA_STATE_NONE;
-         at = ta_state(it, at)->parent) {
-        ta_bits_put(it->to_enter, at, true);
-        if (ta_state(it, at)->kind == TA_STATE_PARALLEL) {
-            ta_enter_parallel_regions(it, at);
-        }
+static bool ta_entry_push(ta_interpreter *it, uint32_t *top, struct ta_entry_frame frame) {
+    if (*top == it->entry_capacity) {
+        return false; /* unreachable: the bound above holds */
     }
+    it->entry_frames[(*top)++] = frame;
+    return true;
 }
 
-static void ta_add_targets(ta_interpreter *it, ta_span32 targets, ta_state_id ancestor) {
-    for (uint32_t index = 0; index < targets.length; index += 1) {
-        ta_add_descendants(it, ta_target_at(it, targets, index));
-    }
-    for (uint32_t index = 0; index < targets.length; index += 1) {
-        ta_add_ancestors(it, ta_target_at(it, targets, index), ancestor);
-    }
+static struct ta_entry_frame ta_entry_descendants(ta_state_id state) {
+    return (struct ta_entry_frame){ .kind = TA_ENTRY_DESCENDANTS, .state = state, .history = TA_STATE_NONE };
 }
 
-static void ta_add_descendants(ta_interpreter *it, ta_state_id state) {
+static struct ta_entry_frame ta_entry_ancestors(ta_interpreter *it, ta_state_id state, ta_state_id ancestor) {
+    return (struct ta_entry_frame){ .kind = TA_ENTRY_ANCESTORS, .state = ta_state(it, state)->parent,
+                                    .ancestor = ancestor, .history = TA_STATE_NONE };
+}
+
+/* Starts addDescendantStatesToEnter(frame->state): rewrites the frame into
+ * the loop the recursion would run, or pops it. */
+static void ta_entry_start(ta_interpreter *it, uint32_t *top) {
+    struct ta_entry_frame *frame = &it->entry_frames[*top - 1u];
+    ta_state_id state = frame->state;
     const ta_state_def *def = ta_state(it, state);
     if (ta_is_history(it, state)) {
+        if (ta_bits_get(it->history_busy, state)) {
+            *top -= 1u;
+            return;
+        }
+        ta_bits_put(it->history_busy, state, true);
         const uint64_t *recorded = ta_history_slot_words(&it->actor->history, def->history_slot);
         if (ta_bits_any(it, recorded)) {
-            for (ta_state_id each = 0; each < it->definition->state_count; each += 1) {
-                if (ta_bits_get(recorded, each)) {
-                    ta_add_descendants(it, each);
-                }
-            }
-            for (ta_state_id each = 0; each < it->definition->state_count; each += 1) {
-                if (ta_bits_get(recorded, each)) {
-                    ta_add_ancestors(it, each, def->parent);
-                }
-            }
+            *frame = (struct ta_entry_frame){ .kind = TA_ENTRY_RECORDED, .state = state, .ancestor = def->parent,
+                                              .history = state };
         } else {
             it->default_history[def->parent] = state;
-            ta_add_targets(it, it->definition->transitions[def->transitions.offset].targets, def->parent);
+            *frame = (struct ta_entry_frame){ .kind = TA_ENTRY_TARGETS, .ancestor = def->parent, .history = state,
+                                              .targets = it->definition->transitions[def->transitions.offset].targets };
         }
         return;
     }
     ta_bits_put(it->to_enter, state, true);
     if (def->kind == TA_STATE_COMPOUND) {
         ta_bits_put(it->default_entry, state, true);
-        ta_add_targets(it, it->definition->initial_transitions[def->initial].targets, state);
+        *frame = (struct ta_entry_frame){ .kind = TA_ENTRY_TARGETS, .ancestor = state, .history = TA_STATE_NONE,
+                                          .targets = it->definition->initial_transitions[def->initial].targets };
     } else if (def->kind == TA_STATE_PARALLEL) {
-        ta_enter_parallel_regions(it, state);
+        *frame = (struct ta_entry_frame){ .kind = TA_ENTRY_REGIONS, .state = state, .history = TA_STATE_NONE };
+    } else {
+        *top -= 1u;
     }
 }
 
-static bool ta_in_final_state(ta_interpreter *it, ta_state_id state) {
-    const ta_state_def *def = ta_state(it, state);
-    if (def->kind == TA_STATE_COMPOUND) {
-        for (uint32_t index = 0; index < def->children.length; index += 1) {
-            ta_state_id child = ta_child_at(it, state, index);
-            if (ta_state(it, child)->kind == TA_STATE_FINAL && ta_bits_get(it->active, child)) {
+static void ta_entry_pop(ta_interpreter *it, uint32_t *top) {
+    ta_state_id history = it->entry_frames[*top - 1u].history;
+    if (history != TA_STATE_NONE) {
+        ta_bits_put(it->history_busy, history, false);
+    }
+    *top -= 1u;
+}
+
+/* The next recorded state at or after `from`, or state_count. */
+static ta_state_id ta_entry_next_recorded(ta_interpreter *it, const struct ta_entry_frame *frame, ta_state_id from) {
+    const uint64_t *recorded =
+        ta_history_slot_words(&it->actor->history, ta_state(it, frame->state)->history_slot);
+    while (from < it->definition->state_count && !ta_bits_get(recorded, from)) {
+        from += 1u;
+    }
+    return from;
+}
+
+/* One step of the frame on top of the stack. */
+static bool ta_entry_step(ta_interpreter *it, uint32_t *top) {
+    struct ta_entry_frame *frame = &it->entry_frames[*top - 1u];
+    switch (frame->kind) {
+        case TA_ENTRY_DESCENDANTS:
+            ta_entry_start(it, top);
+            return true;
+        case TA_ENTRY_TARGETS: {
+            if (frame->cursor == frame->targets.length) {
+                if (frame->ancestors) {
+                    ta_entry_pop(it, top);
+                    return true;
+                }
+                frame->ancestors = true;
+                frame->cursor = 0;
                 return true;
             }
+            ta_state_id target = ta_target_at(it, frame->targets, frame->cursor++);
+            return ta_entry_push(it, top, frame->ancestors ? ta_entry_ancestors(it, target, frame->ancestor)
+                                                           : ta_entry_descendants(target));
         }
-        return false;
-    }
-    if (def->kind == TA_STATE_PARALLEL) {
-        for (uint32_t index = 0; index < def->children.length; index += 1) {
-            ta_state_id child = ta_child_at(it, state, index);
-            if (!ta_is_history(it, child) && !ta_in_final_state(it, child)) {
-                return false;
+        case TA_ENTRY_RECORDED: {
+            ta_state_id next = ta_entry_next_recorded(it, frame, frame->cursor);
+            if (next == it->definition->state_count) {
+                if (frame->ancestors) {
+                    ta_entry_pop(it, top);
+                    return true;
+                }
+                frame->ancestors = true;
+                frame->cursor = 0;
+                return true;
             }
+            frame->cursor = next + 1u;
+            return ta_entry_push(it, top, frame->ancestors ? ta_entry_ancestors(it, next, frame->ancestor)
+                                                           : ta_entry_descendants(next));
         }
-        return true;
+        case TA_ENTRY_ANCESTORS: {
+            ta_state_id at = frame->state;
+            if (at == frame->ancestor || at == TA_STATE_NONE) {
+                ta_entry_pop(it, top);
+                return true;
+            }
+            ta_bits_put(it->to_enter, at, true);
+            frame->state = ta_state(it, at)->parent;
+            if (ta_state(it, at)->kind == TA_STATE_PARALLEL) {
+                return ta_entry_push(it, top, (struct ta_entry_frame){ .kind = TA_ENTRY_REGIONS, .state = at,
+                                                                       .history = TA_STATE_NONE });
+            }
+            return true;
+        }
+        case TA_ENTRY_REGIONS: {
+            ta_state_id parallel = frame->state;
+            while (frame->cursor < ta_state(it, parallel)->children.length) {
+                ta_state_id child = ta_child_at(it, parallel, frame->cursor++);
+                if (!ta_is_history(it, child) && !ta_entering_below(it, child)) {
+                    return ta_entry_push(it, top, ta_entry_descendants(child));
+                }
+            }
+            ta_entry_pop(it, top);
+            return true;
+        }
     }
     return false;
+}
+
+static void ta_entry_run(ta_interpreter *it, struct ta_entry_frame first) {
+    uint32_t top = 0;
+    if (!ta_entry_push(it, &top, first)) {
+        return;
+    }
+    while (top != 0 && ta_entry_step(it, &top)) {
+    }
+}
+
+static void ta_add_descendants(ta_interpreter *it, ta_state_id state) {
+    ta_entry_run(it, ta_entry_descendants(state));
+}
+
+static void ta_add_ancestors(ta_interpreter *it, ta_state_id state, ta_state_id ancestor) {
+    ta_entry_run(it, ta_entry_ancestors(it, state, ancestor));
+}
+
+/* The first state after `state`'s subtree: states are numbered in document
+ * pre-order, so a subtree is a contiguous range of IDs. */
+static ta_state_id ta_subtree_end(ta_interpreter *it, ta_state_id state) {
+    ta_state_id last = state;
+    while (ta_state(it, last)->children.length != 0) {
+        last = ta_child_at(it, last, ta_state(it, last)->children.length - 1u);
+    }
+    return last + 1u;
+}
+
+/*
+ * SCXML isInFinalState, bottom up in one pass (ADR 0060 section 4): every
+ * child has a higher ID than its parent, so visiting the subtree in reverse
+ * ID order answers each child before its parent.
+ */
+static bool ta_in_final_state(ta_interpreter *it, ta_state_id state) {
+    for (ta_state_id at = ta_subtree_end(it, state); at > state;) {
+        at -= 1u;
+        const ta_state_def *def = ta_state(it, at);
+        bool final = false;
+        if (def->kind == TA_STATE_COMPOUND) {
+            for (uint32_t index = 0; index < def->children.length && !final; index += 1) {
+                ta_state_id child = ta_child_at(it, at, index);
+                final = ta_state(it, child)->kind == TA_STATE_FINAL && ta_bits_get(it->active, child);
+            }
+        } else if (def->kind == TA_STATE_PARALLEL) {
+            final = true;
+            for (uint32_t index = 0; index < def->children.length && final; index += 1) {
+                ta_state_id child = ta_child_at(it, at, index);
+                final = ta_is_history(it, child) || ta_bits_get(it->final_states, child);
+            }
+        }
+        ta_bits_put(it->final_states, at, final);
+    }
+    return ta_bits_get(it->final_states, state);
 }
 
 /* Queues done.state.<state>; takes ownership of data, which may be empty. */
@@ -1814,6 +1982,7 @@ static ta_result ta_interpreter_init(ta_interpreter *it, ta_system *system, ta_a
     uint64_t **sets[] = {
         &it->active, &it->to_exit, &it->to_enter, &it->default_entry,
         &it->domain_targets, &it->entry_targets, &it->exit_left, &it->exit_right,
+        &it->history_seen, &it->history_busy, &it->final_states,
     };
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(sets); index += 1) {
         *sets[index] = ta_arena_alloc(&system->scratch, words * sizeof(uint64_t), _Alignof(uint64_t));
@@ -1830,6 +1999,16 @@ static ta_result ta_interpreter_init(ta_interpreter *it, ta_system *system, ta_a
     if (it->default_history == NULL || it->enabled == NULL || it->filtered == NULL || it->remove == NULL) {
         return TA_ERR_NOMEM;
     }
+    it->entry_capacity = ta_entry_capacity(definition);
+    it->entry_frames = ta_arena_alloc(&system->scratch, it->entry_capacity * sizeof(struct ta_entry_frame),
+                                      _Alignof(struct ta_entry_frame));
+    /* Each history state is expanded at most once. */
+    it->history_stack = ta_arena_alloc(&system->scratch, (definition->history.slot_count + 1u) * sizeof(ta_state_id),
+                                       _Alignof(ta_state_id));
+    if (it->entry_frames == NULL || it->history_stack == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    ta_bits_clear(it, it->history_busy);
     ta_load_active(it);
     actor->live_active = it->active;
     return TA_OK;

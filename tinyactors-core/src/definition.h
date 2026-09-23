@@ -314,6 +314,9 @@ struct ta_definition {
     ta_history_layout history;
     ta_state_def *states;
     uint32_t state_count;
+    /* The deepest nesting of states: 1 for a chart of root states only.
+     * Sizes the interpreter's entry-set frames (ADR 0060). */
+    uint32_t max_state_depth;
     ta_transition_def *transitions;
     uint32_t transition_count;
     ta_initial_transition_def *initial_transitions;

@@ -98,9 +98,6 @@ ALLOWED = [
   %w[ta_export_state ta_export_states],
   %w[ta_exec_action ta_exec_foreach ta_run_block],
   %w[ta_actor_exit_invoked ta_interpreter_cancel ta_invoke_cancel_at ta_invoke_state_exited],
-  %w[ta_effective_targets],
-  %w[ta_add_ancestors ta_add_descendants ta_add_targets ta_enter_parallel_regions],
-  %w[ta_in_final_state],
 ].map(&:sort).freeze
 
 unexpected = cycles.reject { |cycle| ALLOWED.include?(cycle) }
