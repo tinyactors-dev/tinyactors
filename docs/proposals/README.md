@@ -35,3 +35,4 @@ Every proposal starts with a status line:
 | [SQLite host](sqlite-host.md) | Sketch | tinyactors-core, a new tinyactors-sqlite |
 | [PostgreSQL host](postgres-host.md) | Sketch | tinyactors-core, a new tinyactors-postgres |
 | [Host kernel](host-kernel.md) | Sketch | tinyactors-napi, future language hosts |
+| [Replay-based persistence](replay-persistence.md) | Sketch | tinyactors-core, tinyactors-napi |
