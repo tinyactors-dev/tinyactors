@@ -1,6 +1,6 @@
 # ADR 0055: `ta_actor_deliver` is the admission test and reports finished actors
 
-**Status:** Proposed; refines ADR 0011, ADR 0014 and ADR 0029
+**Status:** Accepted and implemented; refines ADR 0011, ADR 0014 and ADR 0029. See the implementation notes for where the code differs from the text.
 **Date:** 2026-09-23
 
 ## Context
@@ -56,3 +56,42 @@ returns `TA_OK` with `TA_RUN_DONE`. Delivery should be just as clear.
   targets as errors until they handle the new code.
 - Tests that assert `TA_ERR_INVALID` for delivery to a finished actor change
   to `TA_ERR_DONE`.
+
+## Implementation notes
+
+Recorded when this ADR was implemented (2026-09-23).
+
+- **Only `ta_actor_deliver()` changed.** D1 says other functions that
+  reject a finished actor also return `TA_ERR_DONE`, but no other function
+  rejected one. `ta_actor_resume()` already answers `TA_OK` with
+  `TA_RUN_DONE`. `ta_actor_get_completion()` answers `TA_ERR_BUSY` for an
+  actor that has *not* finished, and `ta_actor_publish_completion()`
+  answers `TA_ERR_INVALID` for an actor that is not a finished invoked
+  child. Those are the opposite case, and they stay as they are.
+- **Precedence.** Deliver checks in this order:
+  1. a null event: `TA_ERR_INVALID`;
+  2. an ID with no resident actor: `TA_ERR_NOT_FOUND`;
+  3. a malformed event name: `TA_ERR_INVALID`;
+  4. a finished actor: `TA_ERR_DONE`;
+  5. an actor inside a macrostep, or holding an event: `TA_ERR_BUSY`.
+
+  A malformed event is a caller error whatever state the actor is in, as D2
+  says. Done comes before busy because finishing is permanent: a host told
+  busy would keep the message queued forever. A finished actor is never
+  inside a macrostep, so the two cannot collide today, but the order is the
+  rule. An actor paused by an action budget (ADR 0061) is inside its
+  macrostep, so it answers `TA_ERR_BUSY`.
+- **Bindings.** The test host's RPC names results after the enum
+  (`"err_done"`), so it needed no mapping of its own. D4's `"done"` for the
+  Node-API binding, and removing that binding's inspect-before-deliver
+  workaround (`tinyactors-napi/src/addon.c`, around line 480), are left to
+  the session that owns napi.
+- **Tests.** `tinyactors-test/ruby/scenarios/admission.rb` covers:
+  - done;
+  - busy while paused inside a microstep;
+  - invalid before busy and before done;
+  - not found after destroy.
+
+  The lifecycle scenario that expected `err_invalid` from a finished actor
+  now expects `err_done`. Core has no test of its own for this; the task
+  asked for the tests in tinyactors-test.
