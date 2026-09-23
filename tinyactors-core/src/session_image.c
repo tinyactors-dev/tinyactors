@@ -294,12 +294,20 @@ ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_params *par
         .bootstrapped = actor->bootstrapped,
         .macrostep = actor->macrostep,
         .finished = actor->finished,
+        /*
+         * An event is the actor's only while its flag is set. A cleared flag
+         * can leave stale bytes behind: taking the external event moves it
+         * into current_event and keeps the copy so a failed microstep can put
+         * it back, and releasing an event leaves its origin in place. The
+         * image takes, and later retains, detaches and releases, only what
+         * the flags say the actor holds.
+         */
         .has_external_event = actor->has_external_event,
-        .external_event = actor->external_event,
+        .external_event = actor->has_external_event ? actor->external_event : (ta_event){0},
         .has_macrostep_event = actor->has_macrostep_event,
-        .macrostep_event = actor->macrostep_event,
+        .macrostep_event = actor->has_macrostep_event ? actor->macrostep_event : (ta_event){0},
         .has_current_event = actor->has_current_event,
-        .current_event = actor->current_event,
+        .current_event = actor->has_current_event ? actor->current_event : (ta_event){0},
         .next_send_id = actor->next_send_id,
         .has_parent = sparse != NULL && sparse->has_parent,
         .parent = sparse != NULL ? sparse->parent : (ta_actor_parent){0},
