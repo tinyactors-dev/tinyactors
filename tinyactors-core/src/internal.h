@@ -21,6 +21,7 @@
 #include "definition.h"
 #include "builder.h"
 #include "export.h"
+#include "codec.h"
 #include "actor.h"
 #include "session_image.h"
 #include "store.h"

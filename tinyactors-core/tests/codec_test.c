@@ -1,7 +1,9 @@
 /*
- * Chart codecs (ADR 0053): the arena allocator a decode builds on, and the
- * media type of literal content, which is part of a chart's revision and
- * survives export.
+ * Chart codecs (ADR 0053): the arena allocator a decode builds on, the media
+ * type of literal content, which is part of a chart's revision and survives
+ * export, and ta_definition_import() / ta_definition_encode() over a stub
+ * codec. The round trip through a real codec is tested where one lives
+ * (tinyactors-scxml).
  *
  * The test includes the amalgamation, as export_test does, so it can look at
  * a compiled definition before registration; it uses the C library, the core
@@ -170,6 +172,219 @@ static void test_media_type(ta_system *system) {
 }
 
 /* ------------------------------------------------------------------------
+ * A stub codec. Its "syntax" is one state ID: decode reads the whole input as
+ * the ID of the chart's only state, pointing into the input as a codec over a
+ * syntax tree would; "!" is a syntax error, and "" decodes to a chart with no
+ * states, which the compiler refuses. Encode writes the only state's ID.
+ */
+
+typedef struct {
+    const ta_definition_identity *seen_identity;
+    uint32_t decodes;
+} stub_codec;
+
+static ta_result stub_decode(void *self, const ta_chart_decode_params *params) {
+    stub_codec *codec = self;
+    codec->decodes += 1u;
+    codec->seen_identity = params->identity;
+    if (params->input.len == 1 && params->input.ptr[0] == '!') {
+        if (params->error != NULL) {
+            *params->error = (ta_chart_error){ .code = TA_CHART_ERROR_SYNTAX,
+                                               .at = { .offset = 0, .line = 1, .column = 1 },
+                                               .message = S("a bang is not a state") };
+        }
+        return TA_ERR_INVALID;
+    }
+    ta_scxml_state_spec *states = ta_arena_alloc(params->arena, 2 * sizeof(ta_scxml_state_spec),
+                                                 _Alignof(ta_scxml_state_spec));
+    ta_scxml_spec *spec = ta_arena_alloc(params->arena, sizeof(ta_scxml_spec), _Alignof(ta_scxml_spec));
+    if (states == NULL || spec == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    states[0] = (ta_scxml_state_spec){ .kind = TA_SCXML_STATE_ATOMIC,
+                                       .id = { .ptr = (const char *)params->input.ptr, .len = params->input.len } };
+    states[1] = (ta_scxml_state_spec){0};
+    /* The stub leaves identity to the caller, which import must cope with. */
+    *spec = (ta_scxml_spec){ .name = S("stub"), .states = params->input.len == 0 ? NULL : states };
+    *params->out = spec;
+    return TA_OK;
+}
+
+static ta_result stub_encode(void *self, const ta_chart_encode_params *params) {
+    (void)self;
+    ta_str id = params->spec->states[0].id;
+    uint8_t *bytes = ta_arena_alloc(params->arena, id.len + 1u, 1);
+    if (bytes == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    memcpy(bytes, id.ptr, id.len);
+    *params->out = (ta_bytes){ .ptr = bytes, .len = id.len };
+    return TA_OK;
+}
+
+static const ta_chart_codec_vtable stub_codec_vtable = {
+    .info = { .name = S("application/x-stub"), .description = S("one state ID"),
+              .flags = TA_CHART_CODEC_DECODES | TA_CHART_CODEC_ENCODES },
+    .decode = stub_decode,
+    .encode = stub_encode,
+};
+static const ta_chart_codec_vtable stub_reader_vtable = {
+    .info = { .name = S("application/x-stub"), .flags = TA_CHART_CODEC_DECODES },
+    .decode = stub_decode,
+};
+static const ta_chart_codec_vtable stub_writer_vtable = {
+    .info = { .name = S("application/x-stub"), .flags = TA_CHART_CODEC_ENCODES },
+    .encode = stub_encode,
+};
+
+static ta_result import(ta_system *system, stub_codec *codec, ta_arena *arena, ta_bytes input,
+                        const ta_definition_identity *identity, ta_definition_id *out, ta_import_error *error) {
+    return ta_definition_import(system, &(ta_definition_import_params){
+                                            .codec = { .self = codec, .v = &stub_codec_vtable },
+                                            .input = input,
+                                            .arena = arena,
+                                            .identity = identity,
+                                            .datamodel = null_datamodel,
+                                            .allocator = test_allocator,
+                                            .out = out,
+                                            .error = error,
+                                        });
+}
+
+/*
+ * A successful import registers a definition that no longer depends on the
+ * input: the spec pointed into it, and the compile copied what it kept.
+ */
+static void test_import(ta_system *system) {
+    stub_codec codec = {0};
+    ta_arena arena;
+    CHECK(ta_arena_init(&arena, test_allocator, 128) == TA_OK);
+    char input[] = "running";
+    ta_definition_id id = 0;
+    ta_import_error error = { .stage = TA_IMPORT_STAGE_COMPILE };
+    CHECK(import(system, &codec, &arena, (ta_bytes){ .ptr = (const uint8_t *)input, .len = 7 }, NULL, &id,
+                 &error) == TA_OK);
+    CHECK(id != 0);
+    CHECK(error.stage == TA_IMPORT_STAGE_NONE);
+    memset(input, 'x', 7);
+    ta_arena_destroy(&arena);
+    ta_state_id state = TA_STATE_NONE;
+    CHECK(ta_definition_find_state(system, &(ta_definition_find_state_params){ .definition = id,
+                                                                               .id = S("running"),
+                                                                               .out = &state }) == TA_OK);
+    CHECK(state == 0);
+}
+
+/* A decode error names the decode stage and its position; a compile error
+ * names the compile stage and, until ADR 0058, no position. */
+static void test_import_errors(ta_system *system) {
+    stub_codec codec = {0};
+    ta_arena arena;
+    CHECK(ta_arena_init(&arena, test_allocator, 128) == TA_OK);
+    ta_definition_id id = 0;
+    ta_import_error error = {0};
+
+    CHECK(import(system, &codec, &arena, (ta_bytes){ .ptr = (const uint8_t *)"!", .len = 1 }, NULL, &id,
+                 &error) == TA_ERR_INVALID);
+    CHECK(error.stage == TA_IMPORT_STAGE_DECODE);
+    CHECK(error.as.decode.code == TA_CHART_ERROR_SYNTAX);
+    CHECK(error.located && error.at.line == 1 && error.at.column == 1);
+
+    error = (ta_import_error){0};
+    CHECK(import(system, &codec, &arena, (ta_bytes){ .ptr = (const uint8_t *)"", .len = 0 }, NULL, &id, &error) ==
+          TA_ERR_INVALID);
+    CHECK(error.stage == TA_IMPORT_STAGE_COMPILE);
+    CHECK(!error.located);
+
+    /* A codec that only writes cannot import. */
+    CHECK(ta_definition_import(system, &(ta_definition_import_params){
+                                           .codec = { .self = &codec, .v = &stub_writer_vtable },
+                                           .input = { .ptr = (const uint8_t *)"s", .len = 1 },
+                                           .arena = &arena,
+                                           .datamodel = null_datamodel,
+                                           .allocator = test_allocator,
+                                           .out = &id,
+                                       }) == TA_ERR_UNSUPPORTED);
+    /* Missing required arguments. */
+    CHECK(ta_definition_import(system, &(ta_definition_import_params){
+                                           .codec = { .self = &codec, .v = &stub_codec_vtable },
+                                           .arena = &arena,
+                                           .datamodel = null_datamodel,
+                                           .allocator = test_allocator,
+                                       }) == TA_ERR_INVALID);
+    ta_arena_destroy(&arena);
+}
+
+/*
+ * The identity no syntax carries goes in through import and comes back out
+ * of encode, and importing the encoding with it gives the same revision.
+ */
+static void test_encode_round_trip(ta_system *system) {
+    stub_codec codec = {0};
+    ta_arena arena;
+    CHECK(ta_arena_init(&arena, test_allocator, 128) == TA_OK);
+    const ta_definition_identity explicit_identity = {
+        .family = { .name = S("stub-family") },
+        .revision = { .ptr = (const uint8_t *)"r1", .len = 2 },
+    };
+    ta_definition_id first = 0;
+    CHECK(import(system, &codec, &arena, (ta_bytes){ .ptr = (const uint8_t *)"idle", .len = 4 }, &explicit_identity,
+                 &first, NULL) == TA_OK);
+    CHECK(codec.seen_identity == &explicit_identity);
+
+    ta_bytes encoded = {0};
+    const ta_definition_identity *identity = NULL;
+    CHECK(ta_definition_encode(system, &(ta_definition_encode_params){
+                                           .definition = first,
+                                           .codec = { .self = &codec, .v = &stub_codec_vtable },
+                                           .arena = &arena,
+                                           .out = &encoded,
+                                           .identity = &identity,
+                                       }) == TA_OK);
+    CHECK(same_bytes(encoded.ptr, encoded.len, "idle", 4));
+    CHECK(identity != NULL && same_bytes(identity->family.name.ptr, identity->family.name.len, "stub-family", 11));
+    CHECK(identity != NULL && same_bytes(identity->revision.ptr, identity->revision.len, "r1", 2));
+
+    /* A fingerprinted definition has no identity to carry. */
+    ta_definition_id fingerprinted = 0;
+    CHECK(import(system, &codec, &arena, (ta_bytes){ .ptr = (const uint8_t *)"busy", .len = 4 }, NULL,
+                 &fingerprinted, NULL) == TA_OK);
+    identity = &explicit_identity;
+    CHECK(ta_definition_encode(system, &(ta_definition_encode_params){
+                                           .definition = fingerprinted,
+                                           .codec = { .self = &codec, .v = &stub_codec_vtable },
+                                           .arena = &arena,
+                                           .out = &encoded,
+                                           .identity = &identity,
+                                       }) == TA_OK);
+    CHECK(identity == NULL);
+
+    /* The encoding, imported again, is the same revision. */
+    ta_definition_inspection before, after;
+    ta_definition_id again = 0;
+    CHECK(import(system, &codec, &arena, encoded, NULL, &again, NULL) == TA_OK);
+    CHECK(ta_definition_inspect(system, fingerprinted, &before) == TA_OK);
+    CHECK(ta_definition_inspect(system, again, &after) == TA_OK);
+    CHECK(same_bytes(before.identity.revision.ptr, before.identity.revision.len, after.identity.revision.ptr,
+                     after.identity.revision.len));
+
+    /* A codec that only reads cannot encode; an unknown ID is not found. */
+    CHECK(ta_definition_encode(system, &(ta_definition_encode_params){
+                                           .definition = first,
+                                           .codec = { .self = &codec, .v = &stub_reader_vtable },
+                                           .arena = &arena,
+                                           .out = &encoded,
+                                       }) == TA_ERR_UNSUPPORTED);
+    CHECK(ta_definition_encode(system, &(ta_definition_encode_params){
+                                           .definition = 0,
+                                           .codec = { .self = &codec, .v = &stub_codec_vtable },
+                                           .arena = &arena,
+                                           .out = &encoded,
+                                       }) == TA_ERR_NOT_FOUND);
+    ta_arena_destroy(&arena);
+}
+
+/* ------------------------------------------------------------------------
  * ta_arena_allocator: an arena behind the ta_allocator interface.
  */
 
@@ -205,6 +420,9 @@ int main(void) {
         return 1;
     }
     test_media_type(system);
+    test_import(system);
+    test_import_errors(system);
+    test_encode_round_trip(system);
     ta_system_destroy(system);
     if (failures != 0) {
         fprintf(stderr, "codec test: %d check(s) failed\n", failures);

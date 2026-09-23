@@ -3288,6 +3288,54 @@
         }
       }
     },
+    "ta_compile_error": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "code",
+          "type": {
+            "type": "ta_compile_error_code"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4,
+          "offsets": {
+            "code": 0
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4,
+          "offsets": {
+            "code": 0
+          }
+        }
+      }
+    },
+    "ta_compile_error_code": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_COMPILE_ERROR_NONE",
+          "value": 0,
+          "symbol": "none"
+        }
+      ],
+      "doc": "Why ta_definition_compile_spec() refused a spec. PENDING ADR 0058: this is the placeholder ta_import_error needs, and carries no detail yet. ADR 0058 adds the codes, the path through the spec and the text at fault.",
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
     "ta_content_id": {
       "kind": "alias",
       "type": {
@@ -5776,6 +5824,110 @@
         }
       }
     },
+    "ta_definition_encode_params": {
+      "kind": "struct",
+      "doc": "Writes a registered definition in `codec`'s syntax: ta_definition_export() followed by the codec's `encode` (ADR 0053 section 4). `identity`, when asked for, is the definition's explicit identity, which no chart syntax carries, or null when the definition was fingerprinted: feed it back as ta_definition_import()'s `identity` and the import has the same revision. A retired definition encodes until it is freed, as it exports.\n\nTA_ERR_UNSUPPORTED when the codec cannot encode (its `encode` is null). TA_ERR_NOT_FOUND when no definition has the ID. TA_ERR_INVALID with `error` from the codec, for example TA_CHART_ERROR_UNREPRESENTABLE.",
+      "fields": [
+        {
+          "name": "definition",
+          "type": {
+            "type": "ta_definition_id"
+          }
+        },
+        {
+          "name": "codec",
+          "type": {
+            "type": "ta_chart_codec"
+          }
+        },
+        {
+          "name": "arena",
+          "type": {
+            "pointer": {
+              "type": "ta_arena"
+            }
+          },
+          "shape": "arena",
+          "direction": "inout",
+          "doc": "Holds the exported spec, the output and the codec's transients."
+        },
+        {
+          "name": "expressions",
+          "type": {
+            "type": "ta_chart_expression_printer"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_bytes"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "arena"
+        },
+        {
+          "name": "identity",
+          "type": {
+            "pointer": {
+              "pointer": {
+                "type": "ta_definition_identity",
+                "const": true
+              }
+            }
+          },
+          "shape": "view_out",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success",
+          "lifetime": "definition"
+        },
+        {
+          "name": "error",
+          "type": {
+            "pointer": {
+              "type": "ta_chart_error"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "TA_ERR_INVALID",
+          "lifetime": "arena"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 72,
+          "align": 8,
+          "offsets": {
+            "definition": 0,
+            "codec": 8,
+            "arena": 24,
+            "expressions": 32,
+            "out": 48,
+            "identity": 56,
+            "error": 64
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "definition": 0,
+            "codec": 8,
+            "arena": 16,
+            "expressions": 20,
+            "out": 28,
+            "identity": 32,
+            "error": 36
+          }
+        }
+      }
+    },
     "ta_definition_export_params": {
       "kind": "struct",
       "doc": "Rebuilds the author-level spec of a registered definition (ADR 0042). Arrays and joined event names are allocated in `arena`; other text and expressions are borrowed from the definition and the system. Host expressions are the definition's retained handles, not retained again. The result stays valid until the arena is reset or the definition is freed, whichever comes first.\n\nExport is faithful: compiling the exported spec yields the same revision as the original. `identity` is null when the definition was fingerprinted and points to the definition's explicit identity otherwise. Empty lists are exported as null, except that a handler's `actions` is never null.\n\nTA_ERR_NOT_FOUND: no existing definition has this ID. A retired definition exports until it is freed.",
@@ -5958,6 +6110,129 @@
           "offsets": {
             "family": 0,
             "revision": 8
+          }
+        }
+      }
+    },
+    "ta_definition_import_params": {
+      "kind": "struct",
+      "doc": "Decodes `input` with `codec`, compiles the spec, and registers the definition (ADR 0053 section 4). `out` is the new definition's ID.\n\nThe spec may point into `input` only until it is compiled, which happens inside this call, so `input` need only outlive the call, and `error` when it is read. `identity` is given to the codec and set on the spec: no chart syntax carries one. If registration fails, the compiled definition is destroyed here; the caller never holds an unregistered one.\n\nTA_ERR_UNSUPPORTED when the codec cannot decode (its `decode` is null), or when the compiler refuses the spec's data model. TA_ERR_INVALID with `error` saying which stage refused the chart. TA_ERR_NOMEM.",
+      "fields": [
+        {
+          "name": "codec",
+          "type": {
+            "type": "ta_chart_codec"
+          }
+        },
+        {
+          "name": "input",
+          "type": {
+            "type": "ta_bytes"
+          }
+        },
+        {
+          "name": "arena",
+          "type": {
+            "pointer": {
+              "type": "ta_arena"
+            }
+          },
+          "shape": "arena",
+          "direction": "inout",
+          "doc": "The operation's arena: the decode, its transients, and anything `error` refers to. Core does not reset it. Reset it once the error has been read."
+        },
+        {
+          "name": "resolver",
+          "type": {
+            "type": "ta_chart_src_resolver"
+          }
+        },
+        {
+          "name": "lowering",
+          "type": {
+            "type": "ta_chart_lowering"
+          }
+        },
+        {
+          "name": "identity",
+          "type": {
+            "pointer": {
+              "type": "ta_definition_identity",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in",
+          "optional": true
+        },
+        {
+          "name": "datamodel",
+          "type": {
+            "type": "ta_datamodel"
+          }
+        },
+        {
+          "name": "allocator",
+          "type": {
+            "type": "ta_allocator"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_definition_id"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success"
+        },
+        {
+          "name": "error",
+          "type": {
+            "pointer": {
+              "type": "ta_import_error"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "TA_ERR_INVALID",
+          "lifetime": "arena"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 128,
+          "align": 8,
+          "offsets": {
+            "codec": 0,
+            "input": 16,
+            "arena": 32,
+            "resolver": 40,
+            "lowering": 56,
+            "identity": 72,
+            "datamodel": 80,
+            "allocator": 96,
+            "out": 112,
+            "error": 120
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 64,
+          "align": 4,
+          "offsets": {
+            "codec": 0,
+            "input": 8,
+            "arena": 16,
+            "resolver": 20,
+            "lowering": 28,
+            "identity": 36,
+            "datamodel": 40,
+            "allocator": 48,
+            "out": 56,
+            "error": 60
           }
         }
       }
@@ -7173,6 +7448,122 @@
             "message": 8,
             "data": 16
           }
+        }
+      }
+    },
+    "ta_import_error": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "stage",
+          "type": {
+            "type": "ta_import_stage"
+          }
+        },
+        {
+          "name": "as",
+          "type": {
+            "record": {
+              "kind": "union",
+              "fields": [
+                {
+                  "name": "decode",
+                  "type": {
+                    "type": "ta_chart_error"
+                  },
+                  "when": "TA_IMPORT_STAGE_DECODE"
+                },
+                {
+                  "name": "compile",
+                  "type": {
+                    "type": "ta_compile_error"
+                  },
+                  "when": "TA_IMPORT_STAGE_COMPILE",
+                  "doc": "ADR 0058"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "located",
+          "type": {
+            "builtin": "bool"
+          },
+          "doc": "Whether `at` says where in `input` the error is. A decode error always has a position. A compile error has none until ADR 0058 lands."
+        },
+        {
+          "name": "at",
+          "type": {
+            "type": "ta_chart_position"
+          }
+        }
+      ],
+      "tagged": {
+        "tag": "stage",
+        "union": "as",
+        "enum": "ta_import_stage",
+        "members": {
+          "TA_IMPORT_STAGE_NONE": null,
+          "TA_IMPORT_STAGE_DECODE": "decode",
+          "TA_IMPORT_STAGE_COMPILE": "compile"
+        }
+      },
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 104,
+          "align": 8,
+          "offsets": {
+            "stage": 0,
+            "as": 8,
+            "as.decode": 8,
+            "as.compile": 8,
+            "located": 80,
+            "at": 88
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "stage": 0,
+            "as": 8,
+            "as.decode": 8,
+            "as.compile": 8,
+            "located": 56,
+            "at": 64
+          }
+        }
+      }
+    },
+    "ta_import_stage": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_IMPORT_STAGE_NONE",
+          "value": 0,
+          "symbol": "none"
+        },
+        {
+          "name": "TA_IMPORT_STAGE_DECODE",
+          "value": 1,
+          "symbol": "decode"
+        },
+        {
+          "name": "TA_IMPORT_STAGE_COMPILE",
+          "value": 2,
+          "symbol": "compile"
+        }
+      ],
+      "doc": "Which stage of ta_definition_import() failed.",
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
         }
       }
     },
@@ -12116,6 +12507,77 @@
           "type": {
             "pointer": {
               "type": "ta_definition_export_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_definition_import",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_definition_import_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_definition_encode",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_definition_encode_params",
               "const": true
             }
           },

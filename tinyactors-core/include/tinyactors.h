@@ -1489,6 +1489,97 @@ typedef struct ta_chart_codec_vtable {
 
 typedef struct { void *self; const ta_chart_codec_vtable *v; } ta_chart_codec TA_ADAPTER;
 
+/*
+ * Why ta_definition_compile_spec() refused a spec. PENDING ADR 0058: this is
+ * the placeholder ta_import_error needs, and carries no detail yet. ADR 0058
+ * adds the codes, the path through the spec and the text at fault.
+ */
+typedef enum {
+    TA_COMPILE_ERROR_NONE = 0
+} ta_compile_error_code TA_SYMBOLS("TA_COMPILE_ERROR_");
+
+typedef struct {
+    ta_compile_error_code code;
+} ta_compile_error;
+
+/* Which stage of ta_definition_import() failed. */
+typedef enum {
+    TA_IMPORT_STAGE_NONE = 0,
+    TA_IMPORT_STAGE_DECODE,
+    TA_IMPORT_STAGE_COMPILE
+} ta_import_stage TA_SYMBOLS("TA_IMPORT_STAGE_");
+
+typedef struct {
+    ta_import_stage stage;
+    union {
+        TA_WHEN(TA_IMPORT_STAGE_DECODE) ta_chart_error decode;
+        TA_WHEN(TA_IMPORT_STAGE_COMPILE) ta_compile_error compile; /* ADR 0058 */
+    } as;
+    /* Whether `at` says where in `input` the error is. A decode error always
+     * has a position. A compile error has none until ADR 0058 lands. */
+    bool located;
+    ta_chart_position at;
+} ta_import_error TA_TAGGED(stage, as);
+
+/*
+ * Decodes `input` with `codec`, compiles the spec, and registers the
+ * definition (ADR 0053 section 4). `out` is the new definition's ID.
+ *
+ * The spec may point into `input` only until it is compiled, which happens
+ * inside this call, so `input` need only outlive the call, and `error` when
+ * it is read. `identity` is given to the codec and set on the spec: no chart
+ * syntax carries one. If registration fails, the compiled definition is
+ * destroyed here; the caller never holds an unregistered one.
+ *
+ * TA_ERR_UNSUPPORTED when the codec cannot decode (its `decode` is null), or
+ * when the compiler refuses the spec's data model. TA_ERR_INVALID with
+ * `error` saying which stage refused the chart. TA_ERR_NOMEM.
+ */
+typedef struct {
+    ta_chart_codec codec;
+    ta_bytes input;
+    /* The operation's arena: the decode, its transients, and anything
+     * `error` refers to. Core does not reset it. Reset it once the error has
+     * been read. */
+    TA_ARENA ta_arena *arena;
+    ta_chart_src_resolver resolver;
+    ta_chart_lowering lowering;
+    TA_IN TA_OPTIONAL const ta_definition_identity *identity;
+    ta_datamodel datamodel;
+    ta_allocator allocator;
+    TA_OUT ta_definition_id *out;
+    TA_OUT TA_OPTIONAL TA_VALID_ON(TA_ERR_INVALID) TA_LIFETIME(arena) ta_import_error *error;
+} ta_definition_import_params;
+
+TA_API ta_result ta_definition_import(ta_system *system,
+                                      TA_IN const ta_definition_import_params *params);
+
+/*
+ * Writes a registered definition in `codec`'s syntax: ta_definition_export()
+ * followed by the codec's `encode` (ADR 0053 section 4). `identity`, when
+ * asked for, is the definition's explicit identity, which no chart syntax
+ * carries, or null when the definition was fingerprinted: feed it back as
+ * ta_definition_import()'s `identity` and the import has the same revision.
+ * A retired definition encodes until it is freed, as it exports.
+ *
+ * TA_ERR_UNSUPPORTED when the codec cannot encode (its `encode` is null).
+ * TA_ERR_NOT_FOUND when no definition has the ID. TA_ERR_INVALID with
+ * `error` from the codec, for example TA_CHART_ERROR_UNREPRESENTABLE.
+ */
+typedef struct {
+    ta_definition_id definition;
+    ta_chart_codec codec;
+    /* Holds the exported spec, the output and the codec's transients. */
+    TA_ARENA ta_arena *arena;
+    ta_chart_expression_printer expressions;
+    TA_OUT TA_LIFETIME(arena) ta_bytes *out;
+    TA_VIEW_OUT TA_OPTIONAL TA_LIFETIME(definition) const ta_definition_identity **identity;
+    TA_OUT TA_OPTIONAL TA_VALID_ON(TA_ERR_INVALID) TA_LIFETIME(arena) ta_chart_error *error;
+} ta_definition_encode_params;
+
+TA_API ta_result ta_definition_encode(const ta_system *system,
+                                      TA_IN const ta_definition_encode_params *params);
+
 
 /* ========================================================================
  * Actors
