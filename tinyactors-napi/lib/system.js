@@ -143,6 +143,23 @@ class System {
     return new ActorId(this, id.slot, id.generation);
   }
 
+  /**
+   * The resident actor the directory has at `address` ({ family, name }), or
+   * undefined (ADR 0006).
+   */
+  findActor(address) {
+    const { family, name } = addressOf(address, 'findActor()');
+    try {
+      const id = core.actor_find(this.#native, { family: { name: family }, name });
+      return new ActorId(this, id.slot, id.generation);
+    } catch (error) {
+      if (error instanceof TinyactorsError && (error.code === 'not-found' || error.code === 'unloaded')) {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
   /** A snapshot of core's view of `actor` (ADR 0054: O(size of the actor)). */
   inspect(actor) {
     const { slot, generation } = actorOf(this, actor);
@@ -190,9 +207,11 @@ class System {
    * Queue `event` for `target` and return (ADR 0005). Nothing runs inside
    * this call: a later pump turn delivers it, in the order posts to that
    * target were accepted. Mail for an actor that is gone or finished is a
-   * dead letter (the `deadLetter` hook), not an error. Throws `queue-full`
-   * at scheduling.maxQueuedMessages. Event data needs the JavaScript data
-   * model (ROADMAP step 11); named targets need the directory (step 7).
+   * dead letter (the `deadLetter` hook), not an error. `target` is an
+   * ActorId or an address { family, name }, resolved through the directory
+   * when the post is accepted (ADR 0006); a name with no resident actor is a
+   * dead letter too. Throws `queue-full` at scheduling.maxQueuedMessages.
+   * Event data needs the JavaScript data model (ROADMAP step 11).
    */
   post(target, event, data, options) {
     if (data !== undefined) {
@@ -203,9 +222,11 @@ class System {
     }
     if (!(target instanceof ActorId)) {
       if (target !== null && typeof target === 'object' && 'name' in target) {
-        throw new TinyactorsError('post(): named targets need the actor directory (ROADMAP step 7)', 'unsupported');
+        const { family, name } = addressOf(target, 'post()');
+        this.#native.postNamed(family, name, this.#events.id(event));
+        return;
       }
-      throw new TinyactorsError('post(): expected an actor of this system', 'invalid');
+      throw new TinyactorsError('post(): expected an actor of this system or an address', 'invalid');
     }
     const { slot, generation } = actorOf(this, target);
     this.#native.post(slot, generation, this.#events.id(event));
@@ -253,6 +274,16 @@ function actorOf(system, actor) {
     throw new TinyactorsError('expected an actor of this system', 'invalid');
   }
   return actor;
+}
+
+// A named address { family, name } with non-empty text (ADR 0006).
+function addressOf(address, caller) {
+  if (address === null || typeof address !== 'object' ||
+      typeof address.family !== 'string' || address.family === '' ||
+      typeof address.name !== 'string' || address.name === '') {
+    throw new TinyactorsError(`${caller}: expected an address { family, name } of non-empty strings`, 'invalid');
+  }
+  return address;
 }
 
 function createSystem(options) {

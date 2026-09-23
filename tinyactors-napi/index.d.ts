@@ -56,11 +56,16 @@ export interface FaultRecord {
   readonly message: string;
 }
 
-/** A message that could not be delivered (ADR 0008). */
+/**
+ * A message that could not be delivered (ADR 0008). `target` is the actor it
+ * was for, or the address when it was sent to a name with no resident actor
+ * (ADR 0006).
+ */
 export interface DeadLetterRecord {
-  readonly target: ActorId;
+  readonly target: ActorId | ActorAddress;
   readonly event: EventName;
-  readonly reason: "not-found" | "done" | "destroyed" | "refused";
+  /** `unloaded`: a name whose actor is unloaded; loading it is ROADMAP step 14. */
+  readonly reason: "not-found" | "done" | "destroyed" | "refused" | "unloaded";
 }
 
 export interface SchedulingOptions {
@@ -114,6 +119,7 @@ export interface System {
     options?: SpawnOptions<Data>,
   ): Actor<Data>;
 
+  /** The resident actor the directory has at `address`, or undefined (ADR 0006). */
   findActor(address: ActorAddress): Actor | undefined;
 
   /** A snapshot of core's view of `actor`. Throws `not-found` once it is gone. */
@@ -145,9 +151,11 @@ export interface System {
   /**
    * Queue a message and return; a later pump turn delivers it (ADR 0005).
    * Messages to one target are delivered in the order they were accepted.
-   * Mail for an actor that is gone is a dead letter, not an error. Throws
+   * Mail for an actor that is gone is a dead letter, not an error. An
+   * address is resolved through the directory when the post is accepted; a
+   * name with no resident actor is a dead letter too (ADR 0006). Throws
    * `queue-full` at maxQueuedMessages. Until ROADMAP step 11, `data` must be
-   * undefined; until step 7, `target` must be an ActorId.
+   * undefined.
    */
   post(target: ActorTarget, event: EventName, data?: unknown, options?: PostOptions): void;
 

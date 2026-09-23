@@ -296,7 +296,22 @@ static const char *const tna_dead_reasons[] = {
     [TNA_DEAD_DONE] = "done",
     [TNA_DEAD_DESTROYED] = "destroyed",
     [TNA_DEAD_REFUSED] = "refused",
+    [TNA_DEAD_UNLOADED] = "unloaded",
 };
+
+/* { family, name }: a named target that had no resident actor (ADR 0006). */
+static napi_value tna_address_object(napi_env env, const ta_actor_address *address) {
+    napi_value object = NULL;
+    napi_value family = NULL;
+    napi_value name = NULL;
+    if (napi_create_object(env, &object) != napi_ok ||
+        napi_create_string_utf8(env, address->family.name.ptr, address->family.name.len, &family) != napi_ok ||
+        napi_create_string_utf8(env, address->name.ptr, address->name.len, &name) != napi_ok ||
+        tna_set(env, object, "family", family) != napi_ok || tna_set(env, object, "name", name) != napi_ok) {
+        return NULL;
+    }
+    return object;
+}
 
 /* The dotted text of an event name, formatted by core (ADR 0004), or NULL. */
 static napi_value tna_event_text(napi_env env, tna_system *system, ta_event_name_id name) {
@@ -321,7 +336,11 @@ static napi_value tna_event_text(napi_env env, tna_system *system, ta_event_name
     return out;
 }
 
-/* deadLetter({ target, event, reason }) (ADR 0008); counted in stats either way. */
+/*
+ * deadLetter({ target, event, reason }) (ADR 0008); counted in stats either
+ * way. `target` is an ActorId, or { family, name } for a named target that
+ * had no resident actor.
+ */
 static void tna_dead_letter_record(napi_env env, tna_napi_system *wrapper, const tna_turn_record *record,
                                    napi_value *first_error) {
     if (wrapper->dead_letter_hook == NULL) {
@@ -329,7 +348,8 @@ static void tna_dead_letter_record(napi_env env, tna_napi_system *wrapper, const
     }
     napi_value argument = NULL;
     napi_value reason = NULL;
-    napi_value view = tna_actor_view(env, wrapper, record->actor);
+    napi_value view = record->has_address ? tna_address_object(env, &record->address)
+                                          : tna_actor_view(env, wrapper, record->actor);
     napi_value event = tna_event_text(env, wrapper->system, record->event);
     if (view != NULL && napi_create_object(env, &argument) == napi_ok &&
         napi_create_string_utf8(env, tna_dead_reasons[record->reason], NAPI_AUTO_LENGTH, &reason) == napi_ok &&

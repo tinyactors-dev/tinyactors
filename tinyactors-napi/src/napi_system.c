@@ -4,6 +4,7 @@
 
 #include "events.h"
 #include "pump.h"
+#include "router.h"
 
 static void tna_unlist(tna_napi_system *wrapper) {
     if (!wrapper->listed) {
@@ -339,6 +340,72 @@ static napi_value tna_post_method(napi_env env, napi_callback_info info) {
     return undefined;
 }
 
+/* A string argument read into the call arena; false when it is not a string. */
+static bool tna_text_argument(napi_env env, tna_system *system, napi_value value, ta_str *out) {
+    napi_valuetype type = napi_undefined;
+    size_t length = 0;
+    if (napi_typeof(env, value, &type) != napi_ok || type != napi_string ||
+        napi_get_value_string_utf8(env, value, NULL, 0, &length) != napi_ok) {
+        return false;
+    }
+    char *text = ta_arena_alloc(&system->scratch.call, length + 1u, 1);
+    if (text == NULL) {
+        return false;
+    }
+    napi_get_value_string_utf8(env, value, text, length + 1u, &length);
+    *out = (ta_str){ .ptr = text, .len = (uint32_t)length };
+    return true;
+}
+
+/*
+ * postNamed(family, name, event): queues an event without data for the actor
+ * the directory has at that address (ADR 0006), or a dead letter when it has
+ * none. Interning the address is a core call, so this one is not allowed
+ * inside a core call.
+ */
+static napi_value tna_post_named_method(napi_env env, napi_callback_info info) {
+    size_t argc = 3;
+    napi_value argv[3] = { NULL, NULL, NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    tna_system *system = wrapper->system;
+    if (system->inside_core) {
+        return tna_throw(env, "reentrant", "post: a named target cannot be resolved from inside a core call (ADR 0013)");
+    }
+    ta_actor_address text = {0};
+    uint32_t name = 0;
+    bool ok = argc == 3 && tna_text_argument(env, system, argv[0], &text.family.name) &&
+              tna_text_argument(env, system, argv[1], &text.name) &&
+              napi_get_value_uint32(env, argv[2], &name) == napi_ok;
+    ta_address *address = NULL;
+    ta_result result = ok ? ta_address_intern(system->core, &text, &address) : TA_ERR_INVALID;
+    tna_scratch_reset_call(&system->scratch);
+    if (result == TA_ERR_INVALID) {
+        return tna_throw(env, "invalid", "post: expected (family, name, event) with non-empty text");
+    }
+    if (result != TA_OK) {
+        return tna_throw(env, tna_result_code(result), "post: cannot intern the address");
+    }
+    ta_event event = { .name = name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+    result = tna_router_post_named(system, address, &event);
+    ta_address_release(address);
+    if (result == TA_ERR_BUSY) {
+        return tna_throw(env, "queue-full", "post: the system holds maxQueuedMessages messages");
+    }
+    if (result != TA_OK) {
+        return tna_throw(env, tna_result_code(result), "post: the message was not accepted");
+    }
+    tna_system_want_turn(system);
+    napi_value undefined = NULL;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+}
+
 /*
  * internEvent(text): the ta_event_name_id of a dotted event name (ADR 0004).
  * lib/events.js calls it once per distinct name and caches the answer.
@@ -458,6 +525,7 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "scheduling", NULL, tna_scheduling_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "internEvent", NULL, tna_intern_event_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "post", NULL, tna_post_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "postNamed", NULL, tna_post_named_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "closed", NULL, NULL, tna_closed_getter, NULL, NULL, napi_default_jsproperty, NULL },
     };
     napi_value constructor = NULL;

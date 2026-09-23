@@ -235,12 +235,13 @@ async function steadyState() {
   system.close();
 }
 
-// What post() refuses before step 7 and step 11.
+// What post() refuses before step 11, and malformed targets.
 async function refusals() {
   const system = createSystem();
   const actor = system.spawn(system.define(steps()));
   assertCode(() => actor.post('x', { some: 'data' }), 'unsupported', /step 11/);
-  assertCode(() => system.post({ family: 'steps', name: 'n' }, 'x'), 'unsupported', /step 7/);
+  assertCode(() => system.post({ family: 'steps', name: '' }, 'x'), 'invalid');
+  assertCode(() => system.post({ family: 1, name: 'n' }, 'x'), 'invalid');
   assertCode(() => system.post({}, 'x'), 'invalid');
   const other = createSystem();
   assertCode(() => other.post(actor, 'x'), 'invalid');
