@@ -1,6 +1,6 @@
 # ADR 0053: A chart representation is a codec, and literal content reaches adapters as bytes
 
-**Status:** Accepted; amends ADR 0025, applies ADR 0040 and ADR 0046
+**Status:** Accepted; amends ADR 0025, applies ADR 0040 and ADR 0046; §4 amended 2026-09-23 (with ADR 0058)
 **Date:** 2026-09-22
 
 ## Context
@@ -79,15 +79,12 @@ defect requires and records why the rest is not needed.
 
 ### 1. A chart representation is a `ta_chart_codec`
 
-Core defines the adapter, the error vocabulary, and nothing else. It links no
-parser.
+Core defines the adapter and the error vocabulary, and links no parser.
 
-**Core does not call a codec.** Every other vtable in `tinyactors.h` exists
-because core calls out; this one exists so that codecs, tools and hosts share
-one shape, and so the functions in §4 have something to be expressed over. It
-lives in the public header rather than beside it because those functions are
-intended, and a type that core will call later belongs where core's types
-live.
+**Core calls a codec only from the two functions in §4.** Nothing else in
+core decodes or encodes, and nothing in core links a parser. The vtable is in
+the public header because those functions take it, and because codecs, tools
+and hosts should share one shape.
 
 ```c
 /* ========================================================================
@@ -97,9 +94,9 @@ live.
  * adapter and the in-memory form and links no parser: SCXML XML, a JSON
  * encoding and a tree-sitter grammar are all codecs, and none is in core.
  *
- * Core does not itself call a codec. An embedder decodes and then compiles
- * with ta_definition_compile_spec(). The vtable is here so codecs, tools and
- * hosts agree on one shape.
+ * Core calls a codec only from ta_definition_import() and
+ * ta_definition_encode(). An embedder may also decode and then compile with
+ * ta_definition_compile_spec() itself.
  */
 
 typedef struct { uint64_t offset; uint32_t line; uint32_t column; } ta_chart_position;
@@ -333,22 +330,141 @@ holds the literal — `definition.h:212` notes that a literal `src` is also
 consuming `type` atom. `docs/internal/datamodel-literals-and-content.md` is
 rewritten to record that, so the note and the code stop disagreeing.
 
-### 4. Functions over the codec come later
+### 4. Import and export over a codec
 
-Core will grow, in a later change, the two functions this interface exists to
-support — importing bytes into a registered definition, and exporting a
-registered definition to bytes, each through a supplied codec. They are named
-here so the shape above is understood as a foundation rather than an
-ornament, and deliberately not designed here: the interface should carry one
-real codec first.
+Core has two functions over a codec. Each one wraps a sequence that every
+embedder would otherwise write by hand, and gets a detail right that
+hand-written code tends to get wrong.
+
+#### `ta_definition_import`: bytes to a registered definition
+
+```c
+typedef enum {
+    TA_IMPORT_STAGE_NONE = 0,
+    TA_IMPORT_STAGE_DECODE,
+    TA_IMPORT_STAGE_COMPILE
+} ta_import_stage TA_SYMBOLS("TA_IMPORT_STAGE_");
+
+typedef struct {
+    ta_import_stage stage;
+    union {
+        TA_WHEN(TA_IMPORT_STAGE_DECODE) ta_chart_error decode;
+        TA_WHEN(TA_IMPORT_STAGE_COMPILE) ta_compile_error compile; /* ADR 0058 */
+    } as;
+    /* Where in `input` the error is. A decode error always has one. A compile
+     * error has one when its subject, or the nearest element above it, is
+     * text sliced from `input` (ADR 0058 §5). */
+    bool located;
+    ta_chart_position at;
+} ta_import_error TA_TAGGED(stage, as);
+
+typedef struct {
+    ta_chart_codec codec;
+    ta_bytes input;
+    /* The operation's arena: the decode, its transients, the compile error's
+     * path and message. Core does not reset it, because `error` borrows from
+     * it and from `input`. Reset it once the error has been read. */
+    TA_ARENA ta_arena *arena;
+    ta_chart_src_resolver resolver;
+    ta_chart_lowering lowering;
+    TA_IN TA_OPTIONAL const ta_definition_identity *identity;
+    ta_datamodel datamodel;
+    ta_allocator allocator;
+    TA_OUT ta_definition_id *out;
+    TA_OUT TA_OPTIONAL TA_VALID_ON(TA_ERR_INVALID) ta_import_error *error;
+} ta_definition_import_params;
+
+TA_API ta_result ta_definition_import(ta_system *system,
+                                      TA_IN const ta_definition_import_params *params);
+```
+
+It decodes, compiles and registers, and returns the new definition's ID. What
+it takes care of:
+
+- **The lifetime of `input`.** The spec may point into `input` until the
+  compile has copied it (§1). Since import runs decode and compile in one
+  call, that rule never reaches the caller. The caller only has to keep
+  `input` until it has read `error`.
+- **Ownership on failure.** `ta_system_register_definition()` takes the
+  definition only on `TA_OK`, so if registration fails, import destroys the
+  definition itself. The caller never holds an unregistered definition.
+- **Codecs that only write.** If `decode` is null, import returns
+  `TA_ERR_UNSUPPORTED` before touching `input`.
+- **One error, with a position.** A decode error comes from the codec. A
+  compile error comes from ADR 0058, and import gives it a position in
+  `input`. Import reports at most one error, as each stage does.
+
+An invoker for `http://www.w3.org/TR/scxml/` is the case §2 creates. It is
+handed `request->content` and `request->content_type`, picks the codec whose
+`info.name` equals that media type, and calls `ta_definition_import()`.
+Choosing the codec stays the host's job.
+
+The result is a registered ID, not a `ta_definition *`. A caller that needs
+the unregistered object, for example to register it under a lock of its own,
+calls the codec's `decode` and then `ta_definition_compile_spec()` itself.
+Those remain public.
+
+#### `ta_definition_encode`: a registered definition to bytes
+
+```c
+typedef struct {
+    ta_definition_id definition;
+    ta_chart_codec codec;
+    /* Holds the exported spec, the output and the codec's transients. */
+    TA_ARENA ta_arena *arena;
+    ta_chart_expression_printer expressions;
+    TA_OUT TA_LIFETIME(arena) ta_bytes *out;
+    /* The identity the document cannot carry, or null when the definition was
+     * fingerprinted. Feed it back as import's `identity` to round-trip. */
+    TA_OUT TA_OPTIONAL TA_VIEW_OUT const ta_definition_identity **identity;
+    TA_OUT TA_OPTIONAL TA_VALID_ON(TA_ERR_INVALID) ta_chart_error *error;
+} ta_definition_encode_params;
+
+TA_API ta_result ta_definition_encode(const ta_system *system,
+                                      TA_IN const ta_definition_encode_params *params);
+```
+
+This is `ta_definition_export()` followed by the codec's `encode`, with two
+additions. It returns `TA_ERR_UNSUPPORTED` when `encode` is null. And it hands
+over the identity that `encode` does not write, so a caller does not have to
+dig it out of the exported spec. It works on a retired definition until that
+definition is freed, as export does (ADR 0043). `TA_ERR_NOT_FOUND` when no
+definition has the ID.
+
+Import and export round-trip: import the output of `ta_definition_encode()`
+with the returned identity, and the result has the same revision. This follows
+from ADR 0042's faithful export and from a rule every codec that both reads
+and writes must follow: decoding what it encoded gives back an equal spec. A test asserts it for every codec in
+the tree.
+
+#### What core does not add
+
+- **A codec registry or lookup by name or extension.** A codec is a value.
+  `info.name` and `info.extensions` are enough for a host to build its own
+  table.
+- **Transcoding, bytes in one codec to bytes in another.** It is import
+  followed by encode. And a literal content that is not in the target codec's
+  own media type fails with `TA_CHART_ERROR_UNREPRESENTABLE`, so a core
+  function would promise a conversion that does not exist.
+- **A `ta_chart_decode()` wrapper.** It would only forward to `v->decode`.
+
+#### Sequencing
+
+Both functions land together with the first real codec and its tests, not
+before. That codec is the XML codec that replaces `document.rb`. The
+interface should be tested against one real codec before it gains callers.
 
 ## Consequences
 
 - No parser enters core, so ADR 0025's substance survives; what moves in is a
-  vtable and an error vocabulary.
+  vtable, an error vocabulary and the two functions over them in §4.
 - A codec is a value, not a registration. A host holding several passes the
-  one it wants; nothing in core resolves a codec by name yet. §4 is where that
-  question is answered, if it needs to be.
+  one it wants. Nothing in core resolves a codec by name, and §4 decides that
+  nothing will.
+- A file with a semantic error, such as an unknown target or a duplicate ID,
+  reports a line and column through `ta_definition_import()`, as a syntax
+  error does. This depends on ADR 0058 and on the codec slicing its input
+  instead of copying it.
 - `<invoke type="x-clock">` with a payload works, under every data model
   including the null profile, and an HTTP processor can set a `Content-Type`
   it was told rather than one it guessed.
