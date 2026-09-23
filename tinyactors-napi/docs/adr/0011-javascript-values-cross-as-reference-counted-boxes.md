@@ -1,7 +1,8 @@
 # ADR 0011: JavaScript values cross as reference-counted boxes
 
 **Status:** Accepted. Amended on 2026-09-23: build one `napi_ref` per box
-first, and measure it against a handle table before choosing.
+first, and measure it against a handle table before choosing. Measured the
+same day: one `napi_ref` per box (model A) stays; see the result below.
 **Date:** 2026-09-23
 
 ## Context
@@ -64,6 +65,33 @@ not a result.
 7. **All values die before their system.** `close()` releases every box that
    is still live (ADR 0012). No box outlives its system, so a box needs no
    finalizer and no weak reference.
+
+## Result of the measurement (2026-09-23, ROADMAP step 11)
+
+`test/scale.js` ran its `data` chart at 50k, 200k, 1M and 4M actors, with
+every actor holding a data object and every message carrying a new object,
+under both models (`docs/scale.md` has the table). At 4M actors on Node:
+
+| | Model A (`napi_ref`) | Model B (handle table) |
+|---|---|---|
+| post + delivery with data | 1.27 µs | 1.49 µs |
+| spawn + bootstrap | 1.31 µs | 1.43 µs |
+| RSS per actor | 788 B | 713 B |
+| GC pause, minor / major | 106 / 44 ms | 104 / 22 ms |
+| addon allocator calls in steady state | 0 | 0 |
+
+Model B halves major GC time and saves about 10% RSS, but every access costs
+two Node-API calls instead of one, so messages are 17% slower on Node (26%
+on Bun), and minor GC, which dominates, is the same. That is not clearly
+better, so **model A stays the default**. Model B remains buildable with
+`TNA_VALUES_MODEL=table` for a later measurement, for example if a workload
+with far more live values per actor shifts the balance.
+
+Also learned while building it:
+- A `napi_ref` to a string, bigint or symbol needs Node-API version 10, so the
+  addon builds against version 10. Both runtimes provide it.
+- Numbers, booleans, `null` and `undefined` ride inline (point 5), so
+  assigning a counter creates no box.
 
 ## Consequences
 

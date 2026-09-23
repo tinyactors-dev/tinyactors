@@ -176,20 +176,29 @@ const VARIANTS = {
   },
 };
 
-// Total GC pause while `run` is measured (Node only).
+// GC pause while a population is measured (Node only): the total, and the
+// part spent in minor (scavenge) and major (mark-compact) collections.
 function gcObserver() {
   if (IS_BUN) {
-    return { total: () => null, stop() {} };
+    return { total: () => null, minor: () => null, major: () => null, stop() {} };
   }
-  const { PerformanceObserver } = require('node:perf_hooks');
+  const { PerformanceObserver, constants } = require('node:perf_hooks');
   let total = 0;
+  let minor = 0;
+  let major = 0;
   const observer = new PerformanceObserver((list) => {
     for (const entry of list.getEntries()) {
       total += entry.duration;
+      const kind = entry.detail?.kind ?? entry.kind;
+      if (kind === constants.NODE_PERFORMANCE_GC_MINOR) {
+        minor += entry.duration;
+      } else if (kind === constants.NODE_PERFORMANCE_GC_MAJOR) {
+        major += entry.duration;
+      }
     }
   });
   observer.observe({ entryTypes: ['gc'] });
-  return { total: () => total, stop: () => observer.disconnect() };
+  return { total: () => total, minor: () => minor, major: () => major, stop: () => observer.disconnect() };
 }
 
 function loopDelayMonitor() {
@@ -320,6 +329,8 @@ async function measure(population, variant) {
   assert.equal([...system.actorIds()].length, 0, 'finished actors were destroyed');
 
   const gcPauseMs = gc.total();
+  const gcMinorMs = gc.minor();
+  const gcMajorMs = gc.major();
   gc.stop();
   system.close();
 
@@ -345,6 +356,8 @@ async function measure(population, variant) {
     loopDelayP99Ms,
     loopDelayP50Ms,
     gcPauseMs,
+    gcMinorMs,
+    gcMajorMs,
   };
 }
 
@@ -402,7 +415,8 @@ function report(result) {
       `page(${PAGE_SIZE}) ${f(result.page, 1)} us, end-to-end ${f(result.e2e)} us/actor, ` +
       `native ${f(result.nativePerActor, 1)} B/actor, js ${f(result.jsPerActor, 1)} B/actor, ` +
       `rss ${f(result.rssPerActor, 1)} B/actor, steady-state calls addon ${result.steady.addon} core ${result.steady.core}, ` +
-      `turns (event-loop delay during flush) p50 ${f(result.loopDelayP50Ms, 1)} p99 ${f(result.loopDelayP99Ms, 1)} max ${f(result.loopDelayMs, 1)} ms, gc pause ${f(result.gcPauseMs, 1)} ms`,
+      `turns (event-loop delay during flush) p50 ${f(result.loopDelayP50Ms, 1)} p99 ${f(result.loopDelayP99Ms, 1)} max ${f(result.loopDelayMs, 1)} ms, ` +
+      `gc pause ${f(result.gcPauseMs, 1)} ms (minor ${f(result.gcMinorMs, 1)}, major ${f(result.gcMajorMs, 1)})`,
   );
 }
 

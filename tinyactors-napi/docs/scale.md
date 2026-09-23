@@ -57,3 +57,40 @@ Every ratio stayed within its bound on both runtimes. Notes:
   instead: one 64 KiB page at every population.
 - **Inspect is the most expensive call per actor** (2–4 µs), because it
   builds a full JS inspection object. It is not a hot path.
+
+## 2026-09-23: with data, and value-box models A and B (step 11)
+
+Chart `data` (`scale.js`, `SCALE_VARIANTS=data`): the JavaScript data model.
+Every actor has a data object `{ count, last }`; every `ping` carries a new
+object `{ sequence, text }` as event data, and two functions assign from it
+(`count + 1`, and `last = event.data`). That is the load of one actor per
+websocket connection. Same machine and options as above.
+
+| | Node 4M, model A | Node 4M, model B | Bun 4M, model A | Bun 4M, model B |
+|---|---|---|---|---|
+| spawn (call), µs/actor | 0.58 | 0.61 | 0.59 | 0.49 |
+| bootstrap (data object, initializers), µs/actor | 0.73 | 0.82 | 0.76 | 0.61 |
+| post + delivery with data, µs/message | 1.27 | 1.49 | 0.96 | 1.21 |
+| inspect, µs | 4.06 | 4.13 | 2.18 | 2.17 |
+| end to end, µs/actor | 0.63 | 0.66 | 0.51 | 0.49 |
+| native bytes/actor (core + addon) | 528 | 528 | 528 | 528 |
+| JS heap bytes/actor | 56 | 65 | 64 | 74 |
+| RSS bytes/actor (from startup) | 788 | 713 | 932 | 752 |
+| GC pause over the population's life, ms (minor / major) | 154 (106 / 44) | 126 (104 / 22) | n/a | n/a |
+| pump turns during flush, p50 / p99 / max, ms | 1.1 / 1.3 / 32 | 1.2 / 1.3 / 27 | 0.2 / 1.2 / 23 | 0.2 / 0.3 / 24 |
+| addon allocator calls in steady state | 0 | 0 | 0 | 0 |
+
+- **Model A** is one `napi_ref` per value box (ADR 0011, the default).
+  **Model B** is a handle table: an index into one JavaScript array per
+  system (`TNA_VALUES_MODEL=table mise run build`).
+- **The cost per message with data is about 1 µs**, against about 0.25 µs
+  without data and xstate's ~2.7 µs (measured in the design discussion). It
+  is two JavaScript calls (the assign functions), one value box for the
+  payload, and the event object the context builds.
+- **Model B halves major GC time** (the global handles are gone from the
+  mark phase) and uses about 10% less RSS on Node, but posts are 17–26%
+  slower (two Node-API calls per access instead of one) and minor GC is
+  unchanged. Over the population's whole life the GC saving is 28 ms at 4M
+  actors. By ADR 0011 point 3, model A stays: B is not clearly better.
+- Every ratio from 50k to 4M stayed within its bound with data, on both
+  runtimes and both models.
