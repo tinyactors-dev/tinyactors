@@ -69,3 +69,4 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0063](0063-an-actor-is-one-allocation-in-a-paged-table.md) | [An actor is one allocation in a paged table](0063-an-actor-is-one-allocation-in-a-paged-table.md) |
 | [0064](0064-an-internal-queue-is-lent-to-a-running-actor.md) | [An internal queue is lent to a running actor](0064-an-internal-queue-is-lent-to-a-running-actor.md) |
 | [0065](0065-named-addresses-are-shared-reference-counted-handles.md) | [Named addresses are shared, reference-counted handles](0065-named-addresses-are-shared-reference-counted-handles.md) |
+| [0066](0066-a-session-id-outlives-residency.md) | [A session ID outlives residency](0066-a-session-id-outlives-residency.md) |
