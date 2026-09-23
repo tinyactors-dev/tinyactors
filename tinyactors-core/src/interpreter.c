@@ -540,6 +540,15 @@ ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *syste
         }
     }
     if (status == TA_EXTERNAL_EVENT_RETRY) {
+        /*
+         * The router accepted nothing (ADR 0040). The send is due, so it is
+         * sent: it waits to be offered again with the envelope it has now,
+         * <cancel> no longer reaches it, and it outlives its sender
+         * (ADR 0054 D3, D5). The caller keeps it in the deadline index.
+         */
+        send->submitted = true;
+        send->origin = origin;
+        send->invoke_id = invoke_id;
         ta_value_release(&fault.data);
         return status;
     }
@@ -915,12 +924,9 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
         }
         /*
          * The router accepted nothing, typically because the destination is
-         * this busy actor. The evaluated send waits in the deadline index,
-         * due now, and keeps its order among later sends.
+         * this busy actor. The send, now marked submitted, waits in the
+         * deadline index, due now, and keeps its order among later sends.
          */
-        record.submitted = true;
-        record.origin = actor->record.self;
-        record.invoke_id = ta_invoke_parent_id(actor, &record.destination);
     }
     ta_result result = ta_actor_schedule_send(system, actor, &record);
     if (result != TA_OK) {
