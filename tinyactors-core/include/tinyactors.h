@@ -2003,10 +2003,44 @@ TA_API ta_result ta_actor_inspect(ta_system *system,
  * Visits every resident actor once, invoked children included, with the
  * same view ta_actor_inspect() gives for it. The walk stops at the first
  * visit that answers anything but TA_OK and returns that result, so an
- * inspector can end it early; a null `visit` is TA_ERR_INVALID. The order
- * of the walk is not part of the contract.
+ * inspector can end it early; a null `visit` is TA_ERR_INVALID. Actors are
+ * visited in increasing position order, as ta_system_visit_actors_from()
+ * defines it; this is that walk from position 0 with no limit.
  */
 TA_API ta_result ta_system_visit_actors(ta_system *system, ta_actor_inspector inspector);
+
+/* The position of a finished walk: nothing is left to visit. */
+#define TA_ACTOR_VISIT_END ((uint32_t)UINT32_MAX)
+
+/*
+ * One page of the actor walk (ADR 0062). Resident actors are visited in
+ * increasing position order, starting at `from`, invoked children included
+ * at their own positions. A position is opaque: pass 0 to start and then the
+ * previous call's `next`. Today it is the actor's slot, the low 32 bits of
+ * its ID.
+ *
+ * - The walk reached the end: TA_OK, `next` is TA_ACTOR_VISIT_END.
+ * - `limit` visits answered TA_OK (0 means no limit): TA_OK, and `next` is
+ *   the position after the last actor visited.
+ * - A visit answered anything else: that result, and `next` is that actor's
+ *   position, so calling again offers it again.
+ * - A null `params`, `next` or `visit` is TA_ERR_INVALID.
+ *
+ * Between calls, and from inside a visit, the system may change. An actor
+ * resident for the whole iteration is visited exactly once; an actor
+ * destroyed before the walk reaches it is not visited; one spawned is
+ * visited only if its position is at or after the cursor. No position is
+ * visited twice in one iteration. A call costs O(actors visited + empty
+ * slots passed).
+ */
+typedef struct {
+    ta_actor_inspector inspector;
+    uint32_t from;
+    uint32_t limit;
+    TA_OUT TA_ALWAYS uint32_t *next;
+} ta_actor_visit_params;
+TA_API ta_result ta_system_visit_actors_from(ta_system *system,
+                                             TA_IN const ta_actor_visit_params *params);
 /*
  * The data model's inspection root (its `inspect` operation). Release it
  * with ta_value_release(). TA_ERR_UNSUPPORTED when the adapter has none.

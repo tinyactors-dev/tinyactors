@@ -117,6 +117,13 @@
   },
   "constants": [
     {
+      "name": "TA_ACTOR_VISIT_END",
+      "type": {
+        "builtin": "uint32_t"
+      },
+      "value": 4294967295
+    },
+    {
       "name": "TA_COMPILE_ERROR_MESSAGE_MAX",
       "type": {
         "builtin": "uint32_t"
@@ -1995,6 +2002,63 @@
           "offsets": {
             "actor": 0,
             "image": 8
+          }
+        }
+      }
+    },
+    "ta_actor_visit_params": {
+      "kind": "struct",
+      "doc": "One page of the actor walk (ADR 0062). Resident actors are visited in increasing position order, starting at `from`, invoked children included at their own positions. A position is opaque: pass 0 to start and then the previous call's `next`. Today it is the actor's slot, the low 32 bits of its ID.\n\n- The walk reached the end: TA_OK, `next` is TA_ACTOR_VISIT_END. - `limit` visits answered TA_OK (0 means no limit): TA_OK, and `next` is the position after the last actor visited. - A visit answered anything else: that result, and `next` is that actor's position, so calling again offers it again. - A null `params`, `next` or `visit` is TA_ERR_INVALID.\n\nBetween calls, and from inside a visit, the system may change. An actor resident for the whole iteration is visited exactly once; an actor destroyed before the walk reaches it is not visited; one spawned is visited only if its position is at or after the cursor. No position is visited twice in one iteration. A call costs O(actors visited + empty slots passed).",
+      "fields": [
+        {
+          "name": "inspector",
+          "type": {
+            "type": "ta_actor_inspector"
+          }
+        },
+        {
+          "name": "from",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "limit",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "next",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "always"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "inspector": 0,
+            "from": 16,
+            "limit": 20,
+            "next": 24
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 20,
+          "align": 4,
+          "offsets": {
+            "inspector": 0,
+            "from": 8,
+            "limit": 12,
+            "next": 16
           }
         }
       }
@@ -13807,7 +13871,7 @@
     },
     {
       "name": "ta_system_visit_actors",
-      "doc": "Visits every resident actor once, invoked children included, with the same view ta_actor_inspect() gives for it. The walk stops at the first visit that answers anything but TA_OK and returns that result, so an inspector can end it early; a null `visit` is TA_ERR_INVALID. The order of the walk is not part of the contract.",
+      "doc": "Visits every resident actor once, invoked children included, with the same view ta_actor_inspect() gives for it. The walk stops at the first visit that answers anything but TA_OK and returns that result, so an inspector can end it early; a null `visit` is TA_ERR_INVALID. Actors are visited in increasing position order, as ta_system_visit_actors_from() defines it; this is that walk from position 0 with no limit.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -13833,6 +13897,41 @@
           "type": {
             "type": "ta_actor_inspector"
           }
+        }
+      ]
+    },
+    {
+      "name": "ta_system_visit_actors_from",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_visit_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
         }
       ]
     },

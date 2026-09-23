@@ -765,11 +765,21 @@ ta_result ta_actor_datamodel_root(ta_system *system, ta_actor_id id, ta_value *o
     return result;
 }
 
-ta_result ta_system_visit_actors(ta_system *system, ta_actor_inspector inspector) {
-    if (system == NULL || inspector.visit == NULL) {
+ta_result ta_system_visit_actors_from(ta_system *system, const ta_actor_visit_params *params) {
+    if (params == NULL || params->next == NULL) {
         return TA_ERR_INVALID;
     }
-    for (uint32_t slot = 0; slot < system->actors.count; slot += 1) {
+    *params->next = params->from;
+    if (system == NULL || params->inspector.visit == NULL) {
+        return TA_ERR_INVALID;
+    }
+    uint32_t visited = 0;
+    uint32_t slot = params->from;
+    for (; slot < system->actors.count; slot += 1u) {
+        if (params->limit != 0 && visited == params->limit) {
+            break;
+        }
+        /* Read the entry each time: a visit may spawn and grow the table. */
         const ta_actor_slot *entry = ta_vec_at(&system->actors, slot);
         if (entry->actor == NULL) {
             continue;
@@ -777,13 +787,21 @@ ta_result ta_system_visit_actors(ta_system *system, ta_actor_inspector inspector
         ta_actor_inspection inspection;
         ta_result result = ta_actor_inspect(system, entry->actor->record.id, &inspection);
         if (result == TA_OK) {
-            result = inspector.visit(inspector.self, &inspection);
+            result = params->inspector.visit(params->inspector.self, &inspection);
         }
         if (result != TA_OK) {
+            *params->next = slot; /* not taken: the next call offers it again */
             return result;
         }
+        visited += 1u;
     }
+    *params->next = slot >= system->actors.count ? TA_ACTOR_VISIT_END : slot;
     return TA_OK;
+}
+
+ta_result ta_system_visit_actors(ta_system *system, ta_actor_inspector inspector) {
+    uint32_t next = 0;
+    return ta_system_visit_actors_from(system, &(ta_actor_visit_params){ .inspector = inspector, .next = &next });
 }
 
 ta_result ta_actor_active_states(ta_system *system, const ta_actor_active_states_params *params) {
