@@ -919,6 +919,10 @@ struct ta_definition {
     /* The deepest nesting of states: 1 for a chart of root states only.
      * Sizes the interpreter's entry-set frames (ADR 0060). */
     uint32_t max_state_depth;
+    /* The deepest nesting of blocks of executable content: 1 for blocks with
+     * no <if> or <foreach> in them, 0 for a chart with no blocks at all.
+     * Sizes the executor's frames (ADR 0060). */
+    uint32_t max_action_depth;
     ta_transition_def *transitions;
     uint32_t transition_count;
     ta_initial_transition_def *initial_transitions;
@@ -1265,16 +1269,16 @@ typedef struct {
     uint32_t enabled_count;
     ta_transition_id *filtered;
     bool *remove;
-/*
- * Scratch for the state-tree queries (ADR 0060 section 4), sized from
- * the definition when the interpreter starts, so no query allocates.
- */
-struct ta_entry_frame *entry_frames;
-uint32_t entry_capacity;
-ta_state_id *history_stack;
-uint64_t *history_seen;
-uint64_t *history_busy;
-uint64_t *final_states;
+    /*
+     * Scratch for the state-tree queries (ADR 0060 section 4), sized from
+     * the definition when the interpreter starts, so no query allocates.
+     */
+    struct ta_entry_frame *entry_frames;
+    uint32_t entry_capacity;
+    ta_state_id *history_stack;
+    uint64_t *history_seen;
+    uint64_t *history_busy;
+    uint64_t *final_states;
     /* Bootstrap only: data declarations the instance's binding already supplies. */
     uint64_t *bound_decls;
 } ta_interpreter;
@@ -4135,6 +4139,44 @@ typedef struct {
 } ta_state_key;
 
 /*
+ * The compiler's explicit stacks (ADR 0060: no recursion in core).
+ *
+ * A level of pass one: one list of sibling states, the parent they belong
+ * to, and the next one to collect. `current` is the state whose children
+ * the level above is collecting.
+ */
+typedef struct {
+    const ta_scxml_state_spec *specs;
+    ta_state_id parent;
+    ta_state_id current;
+    uint32_t count;
+    uint32_t base;
+    uint32_t index;
+} ta_collect_frame;
+
+/*
+ * A block of executable content being compiled. `action` is the action at
+ * `index` while its nested blocks are compiled; `stage` says which one:
+ * an <if>'s then block, then its else block, or a <foreach>'s body.
+ */
+typedef enum {
+    TA_BLOCK_NEXT = 0,
+    TA_BLOCK_THEN,
+    TA_BLOCK_ELSE,
+    TA_BLOCK_BODY
+} ta_block_stage;
+
+typedef struct {
+    const ta_scxml_action_spec *specs;
+    ta_spec_member member;
+    ta_block_stage stage;
+    uint32_t count;
+    uint32_t base;
+    uint32_t index;
+    ta_action_def action;
+} ta_block_frame;
+
+/*
  * At or below this many states the name index is scanned; above it, it is
  * binary-searched. The index is sorted either way, so both give the same
  * answer.
@@ -4184,6 +4226,9 @@ typedef struct {
     ta_vec texts;        /* ta_str: authored text kept for export */
     ta_vec path;         /* ta_spec_step: the steps below path_state */
     ta_vec names;        /* ta_state_key: every state, sorted by (name, state) after pass one */
+    ta_vec levels;       /* ta_collect_frame: pass one's stack */
+    ta_vec blocks;       /* ta_block_frame: the stack of nested blocks being compiled */
+    uint32_t action_depth; /* the deepest stack of blocks so far */
     ta_state_id path_state;
     ta_compile_error *error;
     ta_arena *error_arena;
@@ -4812,7 +4857,8 @@ static ta_result ta_compiler_send(ta_compiler *compiler, const ta_scxml_send_spe
 
 /*
  * <foreach>: the array is an expression; item and index are variable names
- * whose legality the data model judges when it binds them (SCXML 4.6).
+ * whose legality the data model judges when it binds them (SCXML 4.6). The
+ * body is compiled by ta_compiler_block after this.
  */
 static ta_result ta_compiler_foreach(ta_compiler *compiler, const ta_scxml_action_spec *spec,
                                      ta_foreach_action *out) {
@@ -4824,12 +4870,14 @@ static ta_result ta_compiler_foreach(ta_compiler *compiler, const ta_scxml_actio
         out->has_index = true;
         result = ta_compiler_atom_at(compiler, TA_SPEC_MEMBER_INDEX, spec->as.foreach.index, &out->index);
     }
-    if (result == TA_OK) {
-        result = ta_compiler_block(compiler, TA_SPEC_MEMBER_BODY, spec->as.foreach.body, &out->body_actions);
-    }
     return result;
 }
 
+/*
+ * One action, up to its nested blocks: everything an <if> or <foreach> has
+ * before them. ta_compiler_block compiles the nested blocks next, in the
+ * order the recursive compiler did.
+ */
 static ta_result ta_compiler_action(ta_compiler *compiler, const ta_scxml_action_spec *spec,
                                     ta_action_def *out) {
     ta_compiler_hash_u32(compiler, spec->kind);
@@ -4895,17 +4943,8 @@ static ta_result ta_compiler_action(ta_compiler *compiler, const ta_scxml_action
             return result;
         case TA_SCXML_ACTION_IF:
             out->kind = TA_ACTION_IF;
-            result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_CONDITION, &spec->as.conditional.condition,
-                                               &out->as.conditional.condition);
-            if (result == TA_OK) {
-                result = ta_compiler_block(compiler, TA_SPEC_MEMBER_THEN, spec->as.conditional.then_actions,
-                                           &out->as.conditional.then_actions);
-            }
-            if (result == TA_OK) {
-                result = ta_compiler_block(compiler, TA_SPEC_MEMBER_ELSE, spec->as.conditional.else_actions,
-                                           &out->as.conditional.else_actions);
-            }
-            return result;
+            return ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_CONDITION, &spec->as.conditional.condition,
+                                             &out->as.conditional.condition);
         case TA_SCXML_ACTION_FOREACH:
             out->kind = TA_ACTION_FOREACH;
             return ta_compiler_foreach(compiler, spec, &out->as.foreach);
@@ -4918,27 +4957,106 @@ static ta_result ta_compiler_action(ta_compiler *compiler, const ta_scxml_action
     }
 }
 
+/* Starts a block: reserves its actions, so nested blocks append behind it. */
+static ta_result ta_compiler_block_open(ta_compiler *compiler, ta_spec_member member,
+                                        const ta_scxml_action_spec *specs) {
+    ta_block_frame frame = { .specs = specs, .member = member };
+    while (specs != NULL && specs[frame.count].kind != TA_SCXML_ACTION_NONE) {
+        frame.count += 1;
+    }
+    ta_result result = ta_vec_extend(&compiler->actions, frame.count, &frame.base);
+    if (result == TA_OK) {
+        result = ta_vec_push(&compiler->blocks, &frame);
+    }
+    if (result == TA_OK && compiler->blocks.count > compiler->action_depth) {
+        compiler->action_depth = compiler->blocks.count;
+    }
+    return result;
+}
+
+static ta_block_frame *ta_compiler_block_top(ta_compiler *compiler) {
+    return ta_vec_at(&compiler->blocks, compiler->blocks.count - 1u);
+}
+
+/* Stores the finished action of the top block and moves to the next one. */
+static void ta_compiler_block_store(ta_compiler *compiler, ta_block_frame *frame) {
+    ta_compiler_leave(compiler);
+    *(ta_action_def *)ta_vec_at(&compiler->actions, frame->base + frame->index) = frame->action;
+    frame->index += 1u;
+    frame->stage = TA_BLOCK_NEXT;
+}
+
+/*
+ * Gives a finished nested block to the action that owns it, in the top
+ * frame, and opens the owner's next nested block if it has one.
+ */
+static ta_result ta_compiler_block_deliver(ta_compiler *compiler, ta_span32 span) {
+    ta_block_frame *frame = ta_compiler_block_top(compiler);
+    switch (frame->stage) {
+        case TA_BLOCK_THEN:
+            frame->action.as.conditional.then_actions = span;
+            frame->stage = TA_BLOCK_ELSE;
+            return ta_compiler_block_open(compiler, TA_SPEC_MEMBER_ELSE,
+                                          frame->specs[frame->index].as.conditional.else_actions);
+        case TA_BLOCK_ELSE:
+            frame->action.as.conditional.else_actions = span;
+            ta_compiler_block_store(compiler, frame);
+            return TA_OK;
+        case TA_BLOCK_BODY:
+            frame->action.as.foreach.body_actions = span;
+            ta_compiler_block_store(compiler, frame);
+            return TA_OK;
+        default:
+            return TA_ERR_INVALID; /* unreachable: only an owner waits for a block */
+    }
+}
+
+/*
+ * Compiles a block of executable content and every block nested in it,
+ * without recursion (ADR 0060). Each open block is a frame; an <if> or
+ * <foreach> in a block compiles up to its nested blocks, opens the first,
+ * and resumes when it is delivered. Actions, expressions, nested block
+ * reservations and path steps come in exactly the order the recursive
+ * compiler produced them, so revisions and numbering do not change.
+ */
 static ta_result ta_compiler_block(ta_compiler *compiler, ta_spec_member member,
                                    const ta_scxml_action_spec *specs, ta_span32 *out) {
-    uint32_t count = 0;
-    while (specs != NULL && specs[count].kind != TA_SCXML_ACTION_NONE) {
-        count += 1;
-    }
-    uint32_t base = 0;
-    ta_result result = ta_vec_extend(&compiler->actions, count, &base);
-    for (uint32_t index = 0; result == TA_OK && index < count; index += 1) {
-        /* Nested blocks append behind this block, so write by index. */
+    uint32_t floor = compiler->blocks.count;
+    ta_result result = ta_compiler_block_open(compiler, member, specs);
+    while (result == TA_OK) {
+        ta_block_frame *frame = ta_compiler_block_top(compiler);
+        if (frame->index == frame->count) {
+            ta_span32 span = { .offset = frame->base, .length = frame->count };
+            compiler->blocks.count -= 1u;
+            if (compiler->blocks.count == floor) {
+                *out = span;
+                return TA_OK;
+            }
+            result = ta_compiler_block_deliver(compiler, span);
+            continue;
+        }
+        const ta_scxml_action_spec *spec = &frame->specs[frame->index];
         ta_action_def action = {0};
-        result = ta_compiler_enter(compiler, member, index);
+        result = ta_compiler_enter(compiler, frame->member, frame->index);
         if (result == TA_OK) {
-            result = ta_compiler_action(compiler, &specs[index], &action);
+            result = ta_compiler_action(compiler, spec, &action);
         }
-        if (result == TA_OK) {
-            ta_compiler_leave(compiler);
-            *(ta_action_def *)ta_vec_at(&compiler->actions, base + index) = action;
+        if (result != TA_OK) {
+            break;
+        }
+        frame = ta_compiler_block_top(compiler);
+        frame->action = action;
+        if (action.kind == TA_ACTION_IF) {
+            frame->stage = TA_BLOCK_THEN;
+            result = ta_compiler_block_open(compiler, TA_SPEC_MEMBER_THEN, spec->as.conditional.then_actions);
+        } else if (action.kind == TA_ACTION_FOREACH) {
+            frame->stage = TA_BLOCK_BODY;
+            result = ta_compiler_block_open(compiler, TA_SPEC_MEMBER_BODY, spec->as.foreach.body);
+        } else {
+            ta_compiler_block_store(compiler, frame);
         }
     }
-    *out = (ta_span32){ .offset = base, .length = count };
+    compiler->blocks.count = floor;
     return result;
 }
 
@@ -5130,25 +5248,48 @@ static ta_result ta_compiler_index_names(ta_compiler *compiler, ta_result collec
                                });
 }
 
-/* Pass one: assigns IDs in document order and records child ranges. */
+/* Opens a level of pass one: reserves its slots in `children`. */
+static ta_result ta_compiler_level_open(ta_compiler *compiler, const ta_scxml_state_spec *specs, ta_state_id parent) {
+    ta_collect_frame frame = { .specs = specs, .parent = parent, .current = TA_STATE_NONE };
+    while (specs != NULL && specs[frame.count].kind != TA_SCXML_STATE_NONE) {
+        frame.count += 1;
+    }
+    ta_result result = ta_vec_extend(&compiler->children, frame.count, &frame.base);
+    return result == TA_OK ? ta_vec_push(&compiler->levels, &frame) : result;
+}
+
+/*
+ * Pass one: assigns IDs in document pre-order and records child ranges,
+ * without recursion (ADR 0060). A state's children are collected right after
+ * it, before its next sibling, as the recursive compiler did, so IDs, the
+ * layout of `children` and the hash do not change.
+ */
 static ta_result ta_compiler_collect(ta_compiler *compiler, const ta_scxml_state_spec *specs,
                                      ta_state_id parent, ta_span32 *out) {
-    uint32_t count = 0;
-    while (specs != NULL && specs[count].kind != TA_SCXML_STATE_NONE) {
-        count += 1;
-    }
-    uint32_t base = 0;
-    ta_result result = ta_vec_extend(&compiler->children, count, &base);
-    for (uint32_t index = 0; result == TA_OK && index < count; index += 1) {
-        const ta_scxml_state_spec *spec = &specs[index];
+    ta_result result = ta_compiler_level_open(compiler, specs, parent);
+    while (result == TA_OK) {
+        ta_collect_frame *frame = ta_vec_at(&compiler->levels, compiler->levels.count - 1u);
+        if (frame->index == frame->count) {
+            ta_span32 span = { .offset = frame->base, .length = frame->count };
+            compiler->levels.count -= 1u;
+            if (compiler->levels.count == 0) {
+                *out = span;
+                return TA_OK;
+            }
+            frame = ta_vec_at(&compiler->levels, compiler->levels.count - 1u);
+            ta_compiler_state(compiler, frame->current)->children = span;
+            frame->index += 1u;
+            continue;
+        }
+        const ta_scxml_state_spec *spec = &frame->specs[frame->index];
         ta_state_def state = {
-            .parent = parent,
+            .parent = frame->parent,
             .initial = TA_INITIAL_TRANSITION_NONE,
             .done_data = TA_DONE_DATA_NONE,
             .history_slot = UINT32_MAX,
         };
-        ta_compiler_at(compiler, parent);
-        result = ta_compiler_enter(compiler, TA_SPEC_MEMBER_STATES, index);
+        ta_compiler_at(compiler, frame->parent);
+        result = ta_compiler_enter(compiler, TA_SPEC_MEMBER_STATES, frame->index);
         if (result == TA_OK) {
             ta_compiler_hash_u32(compiler, spec->kind);
             result = ta_compiler_kind(compiler, spec->kind, &state.kind);
@@ -5157,23 +5298,20 @@ static ta_result ta_compiler_collect(ta_compiler *compiler, const ta_scxml_state
             result = ta_compiler_atom_at(compiler, TA_SPEC_MEMBER_ID, spec->id, &state.name);
         }
         if (result != TA_OK) {
-            return result;
+            break;
         }
         ta_state_id id = compiler->states.count;
-        *(ta_state_id *)ta_vec_at(&compiler->children, base + index) = id;
+        *(ta_state_id *)ta_vec_at(&compiler->children, frame->base + frame->index) = id;
+        frame->current = id;
         result = ta_vec_push(&compiler->states, &state);
         if (result == TA_OK) {
             result = ta_vec_push(&compiler->state_specs, &spec);
         }
-        ta_span32 children = {0};
         if (result == TA_OK) {
-            result = ta_compiler_collect(compiler, spec->states, id, &children);
-        }
-        if (result == TA_OK) {
-            ta_compiler_state(compiler, id)->children = children;
+            result = ta_compiler_level_open(compiler, spec->states, id);
         }
     }
-    *out = (ta_span32){ .offset = base, .length = count };
+    compiler->levels.count = 0;
     return result;
 }
 
@@ -5746,7 +5884,8 @@ static void ta_compiler_destroy(ta_compiler *compiler) {
         &compiler->initials, &compiler->targets, &compiler->actions, &compiler->handlers, &compiler->params,
         &compiler->data_decls, &compiler->initializers, &compiler->contents, &compiler->patterns,
         &compiler->segments, &compiler->expressions, &compiler->history, &compiler->done_data,
-        &compiler->invokes, &compiler->texts, &compiler->path, &compiler->names,
+        &compiler->invokes, &compiler->texts, &compiler->path, &compiler->names, &compiler->levels,
+        &compiler->blocks,
     };
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(vecs); index += 1) {
         ta_vec_destroy(vecs[index]);
@@ -5827,23 +5966,27 @@ static ta_result ta_compiler_finish(ta_compiler *compiler) {
     if (result != TA_OK) {
         return result;
     }
-/* Depths in one pass: every parent has a lower ID than its children. */
-if (definition->state_count != 0) {
-    size_t size = (size_t)definition->state_count * sizeof(uint32_t);
-    uint32_t *depths = ta_mem_alloc(compiler->allocator, size, _Alignof(uint32_t));
-    if (depths == NULL) {
-        return TA_ERR_NOMEM;
+    definition->max_action_depth = compiler->action_depth;
+    if (definition->global_script_actions.length != 0 && definition->max_action_depth == 0) {
+        definition->max_action_depth = 1;
     }
-    for (ta_state_id state = 0; state < definition->state_count; state += 1u) {
-        ta_state_id parent = definition->states[state].parent;
-        depths[state] = parent == TA_STATE_NONE ? 1u : depths[parent] + 1u;
-        if (depths[state] > definition->max_state_depth) {
-            definition->max_state_depth = depths[state];
+    /* Depths in one pass: every parent has a lower ID than its children. */
+    if (definition->state_count != 0) {
+        size_t size = (size_t)definition->state_count * sizeof(uint32_t);
+        uint32_t *depths = ta_mem_alloc(compiler->allocator, size, _Alignof(uint32_t));
+        if (depths == NULL) {
+            return TA_ERR_NOMEM;
         }
+        for (ta_state_id state = 0; state < definition->state_count; state += 1u) {
+            ta_state_id parent = definition->states[state].parent;
+            depths[state] = parent == TA_STATE_NONE ? 1u : depths[parent] + 1u;
+            if (depths[state] > definition->max_state_depth) {
+                definition->max_state_depth = depths[state];
+            }
+        }
+        ta_mem_free(compiler->allocator, depths,
+                    &(ta_allocator_free_params){ .size = size, .alignment = _Alignof(uint32_t) });
     }
-    ta_mem_free(compiler->allocator, depths,
-                &(ta_allocator_free_params){ .size = size, .alignment = _Alignof(uint32_t) });
-}
     uint32_t words = ta_bits_words(definition->state_count);
     if (words * 8u > UINT16_MAX) {
         return ta_compiler_fail(compiler, TA_COMPILE_ERROR_LIMIT, (ta_str){0},
@@ -5997,6 +6140,8 @@ static ta_result ta_compile(ta_system *system, const ta_definition_compile_param
         { &compiler.texts, TA_VEC_LAYOUT(ta_str) },
         { &compiler.path, TA_VEC_LAYOUT(ta_spec_step) },
         { &compiler.names, TA_VEC_LAYOUT(ta_state_key) },
+        { &compiler.levels, TA_VEC_LAYOUT(ta_collect_frame) },
+        { &compiler.blocks, TA_VEC_LAYOUT(ta_block_frame) },
     };
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(vecs); index += 1) {
         ta_vec_init(vecs[index].vec, params->allocator, vecs[index].layout);

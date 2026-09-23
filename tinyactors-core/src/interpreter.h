@@ -28,16 +28,16 @@ typedef struct {
     uint32_t enabled_count;
     ta_transition_id *filtered;
     bool *remove;
-/*
- * Scratch for the state-tree queries (ADR 0060 section 4), sized from
- * the definition when the interpreter starts, so no query allocates.
- */
-struct ta_entry_frame *entry_frames;
-uint32_t entry_capacity;
-ta_state_id *history_stack;
-uint64_t *history_seen;
-uint64_t *history_busy;
-uint64_t *final_states;
+    /*
+     * Scratch for the state-tree queries (ADR 0060 section 4), sized from
+     * the definition when the interpreter starts, so no query allocates.
+     */
+    struct ta_entry_frame *entry_frames;
+    uint32_t entry_capacity;
+    ta_state_id *history_stack;
+    uint64_t *history_seen;
+    uint64_t *history_busy;
+    uint64_t *final_states;
     /* Bootstrap only: data declarations the instance's binding already supplies. */
     uint64_t *bound_decls;
 } ta_interpreter;

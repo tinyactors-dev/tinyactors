@@ -317,6 +317,10 @@ struct ta_definition {
     /* The deepest nesting of states: 1 for a chart of root states only.
      * Sizes the interpreter's entry-set frames (ADR 0060). */
     uint32_t max_state_depth;
+    /* The deepest nesting of blocks of executable content: 1 for blocks with
+     * no <if> or <foreach> in them, 0 for a chart with no blocks at all.
+     * Sizes the executor's frames (ADR 0060). */
+    uint32_t max_action_depth;
     ta_transition_def *transitions;
     uint32_t transition_count;
     ta_initial_transition_def *initial_transitions;
