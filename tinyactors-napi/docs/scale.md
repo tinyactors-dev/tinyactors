@@ -142,3 +142,87 @@ every message cancels and arms one. Same machine and options as above.
 - **The longest pump turn grows at 4M** (56–66 ms, one outlier among
   thousands of turns; p99 stays about 2 ms). It is most likely a GC pause or
   the heap copy above, not a turn's own work.
+
+## 2026-09-23: tinyactors against xstate and plain objects
+
+`SCALE_BASELINES=xstate,object` runs the same three charts as xstate 5.33.2
+actors and as plain JavaScript objects. Each implementation and chart ran in
+a process of its own, at 50k, 200k and 1M actors, with
+`TAT_SCALE_MAX_POPULATION=1000000` and
+`NODE_OPTIONS=--max-old-space-size=14000`. The runtimes were Node 22 and
+Bun 1 on the same machine as above. The numbers below are at 1M actors, and
+the pattern at 50k and 200k is the same. Per message is CPU time, median of
+seven rounds over the same 1,024 actors spread over the population. GC is
+Node's total pause over the whole run, including the measurement's own
+forced collections. Bun doesn't report GC pauses.
+
+The charts:
+- `plain`: `ping` loops on `idle`, and `work` ends the actor.
+- `data`: adds two assignments from the event's data.
+- `ws`: adds an outbound write through a named effect and a 30-second idle
+  timeout re-armed on every message.
+
+How each implementation expresses them:
+- **xstate:** `reenter: true` self-transitions, `assign`, a
+  `setup({ actions })` action for the write, and `after` for the timeout.
+- **plain object:** a switch-based handler, and `setTimeout`/`clearTimeout`
+  for the timeout.
+
+Node, 1M actors:
+
+| chart | implementation | per message µs | spawn µs/actor | JS heap B/actor | native B/actor | RSS B/actor | GC total / longest ms | end-to-end blocks the loop |
+|---|---|---|---|---|---|---|---|---|
+| plain | tinyactors | 0.28 | 0.56 | 0 | 480 | 518 | 8 / 0.9 | no, turns of ≤ 4.6 ms |
+| plain | xstate | 1.2–7.1 ¹ | 4.67 | 3,641 | — | 3,963 | 1,700 / 348 | 1.9 s |
+| plain | object | 0.02 | 0.05 | 64 | — | 139 | 33 / 8 | 8 ms |
+| data | tinyactors | 1.26 | 1.36 | 56 | 528 | 849 | 41 / 9.9 | no, turns of ≤ 9 ms |
+| data | xstate | 2.02 | 5.49 | 3,641 | — | 3,904 | 1,898 / 400 | 1.9 s |
+| data | object | 0.04 | 0.05 | 64 | — | 139 | 32 / 8 | 10 ms |
+| ws | tinyactors | 2.51 | 1.46 | 56 | 1,225 | 1,565 | 42 / 9.9 | no, turns of ≤ 12.6 ms |
+| ws | xstate | 5.06 | 9.01 | 4,361 | — | 4,841 | 2,864 / 468 | 3.0 s |
+| ws | object | 0.20 | 0.30 | 280 | — | 340 | 62 / 24 | 32 ms |
+
+Bun, 1M actors:
+
+| chart | implementation | per message µs | spawn µs/actor | JS heap B/actor | RSS B/actor | end-to-end blocks the loop |
+|---|---|---|---|---|---|---|
+| plain | tinyactors | 0.25 | 0.48 | 0 | 548 | no, turns of ≤ 3.4 ms |
+| plain | xstate | 1.45 | 5.05 | 2,768 | 5,223 | 2.0 s |
+| plain | object | 0.01 | 0.04 | 72 | 104 | 9 ms |
+| data | tinyactors | 0.99 | 1.35 | 64 | 922 | no, turns of ≤ 5.7 ms |
+| data | xstate | 2.19 | 5.70 | 2,768 | 5,334 | 1.9 s |
+| data | object | 0.01 | 0.05 | 72 | 104 | 10 ms |
+| ws | tinyactors | 1.84 | 1.45 | 64 | 1,645 | no, turns of ≤ 12.7 ms |
+| ws | xstate | 3.50 | 6.98 | 3,244 | 5,931 | 2.9 s |
+| ws | object | 0.08 | 0.12 | 160 | 295 | 26 ms |
+
+¹ xstate `plain` on Node measured 1.18 µs at 200k and 7.10 µs at 1M. The
+1M figure most likely includes major GC pauses that fell inside the timed
+rounds: that run paused 1.7 s in total, with a longest pause of 348 ms. The
+`data` chart, which does strictly more work, measured 2.02 µs at 1M. Read
+`plain` at 1M as "about 1.2 µs plus GC".
+
+What the comparison is and isn't:
+- **Where the work is done differs.**
+  - xstate and the objects process a send synchronously inside the caller,
+    so their per-message time is all of the work.
+  - tinyactors queues the message and processes it in a later pump turn, and
+    its per-message time includes the flush. A websocket server would see
+    xstate's cost inside each socket callback, and tinyactors' cost spread
+    over turns.
+  - The "end-to-end blocks the loop" column shows the practical difference.
+    Sending `work` to every actor in one loop blocks xstate's event loop for
+    the whole loop, 2–3 s at 1M. tinyactors accepts the posts quickly and
+    runs them in bounded turns, the longest 4.6–12.7 ms.
+- **Timers differ.**
+  - xstate's `after` and the objects use one JavaScript timer per actor.
+  - tinyactors keeps delayed sends in core and arms one native timer per
+    system.
+  - The object `ws` row's 280 B per actor is mostly the `Timeout` object.
+- **GC pauses are counted over the whole run, not per message.** xstate's
+  run-long totals of 1.7–2.9 s at 1M, with single pauses up to 468 ms,
+  happen while the application runs. tinyactors' actor state is outside the
+  V8 heap, so its GC totals stay near those of the plain objects.
+- **The plain objects are a floor, not a competitor.** They have no
+  statechart semantics: no hierarchy, no run-to-completion, no event
+  queue, no delayed-send bookkeeping, no inspection.
