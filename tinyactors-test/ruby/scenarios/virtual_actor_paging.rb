@@ -32,7 +32,7 @@ module VirtualActorPagingScenarios
   class Host
     attr_reader :page_ins, :page_outs, :spawns
 
-    def initialize(context, limit:, random:, prefix:)
+    def initialize(context, limit:, random:, prefix:, keep_binding: true)
       @context = context
       @limit = limit
       @random = random
@@ -43,7 +43,11 @@ module VirtualActorPagingScenarios
       @page_ins = 0
       @page_outs = 0
       @spawns = 0
+      @keep_binding = keep_binding
+      @unbound = []       # names loaded without their data binding
     end
+
+    attr_reader :unbound
 
     def name(index) = "#{@prefix}#{index}"
 
@@ -72,7 +76,9 @@ module VirtualActorPagingScenarios
         @spawns += 1
       else
         image, binding = @parked.delete(name)
-        @context.core('ta_actor_load', { result: @context.load(actor, image, binding: binding) })
+        loaded = @keep_binding ? @context.load(actor, image, binding: binding) : @context.load(actor, image)
+        @context.core('ta_actor_load', { result: loaded })
+        @unbound << name unless @keep_binding
         @context.destroy_image(image)
         @page_ins += 1
       end
@@ -125,12 +131,13 @@ module VirtualActorPagingScenarios
     end
   end
 
-  def self.run(context, population:, limit:, messages:)
+  def self.run(context, population:, limit:, messages:, keep_binding: true)
     seed = self.seed
     stream = Random.new(seed)
     order = Array.new(messages) { [stream.rand(population), stream.rand(1_000)] }
 
-    paged = Host.new(context, limit: limit, random: Random.new(seed + 1), prefix: 'paged')
+    paged = Host.new(context, limit: limit, random: Random.new(seed + 1), prefix: 'paged',
+                              keep_binding: keep_binding)
     counter = ResidentCounter.new(context)
     order.each_with_index do |(index, payload), at|
       paged.deliver(index, payload)
@@ -139,6 +146,7 @@ module VirtualActorPagingScenarios
                      "seed #{seed}, message #{at} to #{paged.name(index)}: #{count} actors resident, " \
                      "limit #{limit} (replay with TAT_PAGING_SEED=#{seed})"
     end
+    unbound = paged.unbound.map { |name| name.delete_prefix('paged') }
     got = paged.final_states.transform_keys { |name| name.delete_prefix('paged') }
     paged.release_parked
 
@@ -149,12 +157,16 @@ module VirtualActorPagingScenarios
     context.assert_equal 0, reference.page_outs, 'the reference run never evicts'
 
     want.each do |name, state|
+      # Loaded without its binding, an actor's data is gone, and every later
+      # message fails its first <assign> (error.execution), which skips the
+      # rest of that block (SCXML 5.4): its root stays empty.
+      state = {} if unbound.include?(name)
       context.assert_equal state, got[name],
                            "seed #{seed}, actor #{name}: paged state differs from the all-resident run " \
                            "(replay with TAT_PAGING_SEED=#{seed})"
     end
     context.assert_equal want.keys, got.keys, "seed #{seed}: the same actors received messages"
-    { spawns: paged.spawns, page_ins: paged.page_ins, page_outs: paged.page_outs }
+    { spawns: paged.spawns, page_ins: paged.page_ins, page_outs: paged.page_outs, unbound: unbound.uniq.size }
   end
 end
 
@@ -179,6 +191,19 @@ TinyactorsTest.scenarios 'virtual actor paging', chart: :pager do
       else
         assert counts[:page_ins] >= population, "every actor pages in again: #{counts}"
       end
+    end
+  end
+
+  # Loading without the data binding is allowed (it is TA_OPTIONAL): the
+  # actor's data is lost, and it fails cleanly. This used to crash the host:
+  # capture retained the external event a raised error.execution had
+  # replaced and released, and the image released it again (a double free,
+  # tinyactors-core/tests/session_image_test.c).
+  [[3, 2, 100], [10, 3, 200]].each do |population, limit, messages|
+    scenario "#{population} actors, at most #{limit} resident, #{messages} messages, loaded without their binding" do
+      counts = VirtualActorPagingScenarios.run(self, population: population, limit: limit, messages: messages,
+                                                     keep_binding: false)
+      assert counts[:unbound].positive?, "some actor was loaded without its binding: #{counts}"
     end
   end
 end
