@@ -152,6 +152,12 @@ tna_napi_system *tna_napi_system_unwrap(napi_env env, napi_value value) {
     return wrapped;
 }
 
+/* Core is gone: every value it held has been released (ADR 0011 point 7). */
+static void tna_after_core(void *context) {
+    tna_napi_system *wrapper = context;
+    tna_values_close(&wrapper->values);
+}
+
 /* Unwraps `this`; throws and returns NULL when it is not a System. */
 static tna_napi_system *tna_this(napi_env env, napi_callback_info info) {
     napi_value self = NULL;
@@ -202,6 +208,11 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
         return tna_throw(env, tna_result_code(result), "cannot create a system");
     }
     wrapper->env_data = data;
+    tna_values_init(&wrapper->values, env, &wrapper->system->allocator);
+    wrapper->values.torn_down = &data->torn_down;
+    wrapper->values.env_live = &data->values_live;
+    wrapper->system->after_core = tna_after_core;
+    wrapper->system->after_core_context = wrapper;
     if (!tna_pump_init(env, wrapper, facade, argv[1])) {
         tna_pump_close(wrapper, true);
         tna_system_free(wrapper->system);
@@ -346,15 +357,33 @@ static napi_value tna_scheduling_method(napi_env env, napi_callback_info info) {
 }
 
 /*
- * post(slot, generation, name): queues an event without data for an actor
- * (ADR 0005). `name` is a ta_event_name_id from internEvent(). Mail for a
- * stale ID is accepted as a dead letter. Throws "queue-full" at
- * maxQueuedMessages. It never calls core, so it is allowed inside a core
- * call (a data-model callback may post; ADR 0013).
+ * The event a post queues: `name`, and `data` boxed when it is not
+ * undefined (ADR 0011). The caller owns the data's reference.
+ */
+static bool tna_post_event(napi_env env, tna_napi_system *wrapper, uint32_t name, napi_value data, ta_event *out) {
+    *out = (ta_event){ .name = name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+    napi_valuetype type = napi_undefined;
+    if (data == NULL || napi_typeof(env, data, &type) != napi_ok || type == napi_undefined) {
+        return true;
+    }
+    if (!tna_value_make(&wrapper->values, data, &out->data)) {
+        tna_throw(env, "out-of-memory", "post: cannot keep the event data");
+        return false;
+    }
+    return true;
+}
+
+/*
+ * post(slot, generation, name, data?): queues an event for an actor (ADR
+ * 0005). `name` is a ta_event_name_id from internEvent(); `data` is any
+ * JavaScript value, shared, not copied (ADR 0011). Mail for a stale ID is
+ * accepted as a dead letter. Throws "queue-full" at maxQueuedMessages. It
+ * never calls core, so it is allowed inside a core call (a data-model
+ * callback may post; ADR 0013).
  */
 static napi_value tna_post_method(napi_env env, napi_callback_info info) {
-    size_t argc = 3;
-    napi_value argv[3] = { NULL, NULL, NULL };
+    size_t argc = 4;
+    napi_value argv[4] = { NULL, NULL, NULL, NULL };
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
         return NULL;
     }
@@ -370,8 +399,14 @@ static napi_value tna_post_method(napi_env env, napi_callback_info info) {
         napi_get_value_uint32(env, argv[2], &name) != napi_ok) {
         return tna_throw(env, "invalid", "post: expected (slot, generation, name)");
     }
-    ta_event event = { .name = name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+    ta_event event;
+    if (!tna_post_event(env, wrapper, name, argv[3], &event)) {
+        return NULL;
+    }
     ta_result result = tna_system_post(wrapper->system, ta_actor_id_make(slot, generation), &event);
+    if (result != TA_OK) {
+        ta_value_release(&event.data);
+    }
     if (result == TA_ERR_BUSY) {
         return tna_throw(env, "queue-full", "post: the system holds maxQueuedMessages messages");
     }
@@ -464,14 +499,14 @@ static napi_value tna_id_page_method(napi_env env, napi_callback_info info) {
 }
 
 /*
- * postNamed(family, name, event): queues an event without data for the actor
- * the directory has at that address (ADR 0006), or a dead letter when it has
+ * postNamed(family, name, event, data?): queues an event for the actor the
+ * directory has at that address (ADR 0006), or a dead letter when it has
  * none. Interning the address is a core call, so this one is not allowed
  * inside a core call.
  */
 static napi_value tna_post_named_method(napi_env env, napi_callback_info info) {
-    size_t argc = 3;
-    napi_value argv[3] = { NULL, NULL, NULL };
+    size_t argc = 4;
+    napi_value argv[4] = { NULL, NULL, NULL, NULL };
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
         return NULL;
     }
@@ -485,7 +520,7 @@ static napi_value tna_post_named_method(napi_env env, napi_callback_info info) {
     }
     ta_actor_address text = {0};
     uint32_t name = 0;
-    bool ok = argc == 3 && tna_text_argument(env, system, argv[0], &text.family.name) &&
+    bool ok = argc >= 3 && tna_text_argument(env, system, argv[0], &text.family.name) &&
               tna_text_argument(env, system, argv[1], &text.name) &&
               napi_get_value_uint32(env, argv[2], &name) == napi_ok;
     ta_address *address = NULL;
@@ -497,9 +532,16 @@ static napi_value tna_post_named_method(napi_env env, napi_callback_info info) {
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result), "post: cannot intern the address");
     }
-    ta_event event = { .name = name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+    ta_event event;
+    if (!tna_post_event(env, wrapper, name, argv[3], &event)) {
+        ta_address_release(address);
+        return NULL;
+    }
     result = tna_router_post_named(system, address, &event);
     ta_address_release(address);
+    if (result != TA_OK) {
+        ta_value_release(&event.data);
+    }
     if (result == TA_ERR_BUSY) {
         return tna_throw(env, "queue-full", "post: the system holds maxQueuedMessages messages");
     }

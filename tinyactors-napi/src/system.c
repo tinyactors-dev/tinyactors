@@ -73,6 +73,9 @@ void tna_system_close(tna_system *system) {
     ta_system_destroy(system->core);
     system->core = NULL;
     tna_sched_destroy(&system->sched);
+    if (system->after_core != NULL) {
+        system->after_core(system->after_core_context);
+    }
     tna_scratch_destroy(&system->scratch);
     system->leaked_bytes = tna_allocator_total(&system->allocator).bytes_in_use;
 }

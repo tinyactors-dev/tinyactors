@@ -13,7 +13,9 @@
 
 #include "allocator.h"
 #include "runtime.h"
+#include "napi_system.h"
 #include "system.h"
+#include "values.h"
 
 #define TNA_MAX_SAFE_INTEGER 9007199254740991.0
 
@@ -194,8 +196,8 @@ napi_value tna_enc_ta_bytes(tna_call *call, const ta_bytes *in) {
 }
 
 /* ------------------------------------------------------------------------
- * Values: value boxes arrive in step 11 (ADR 0011). Until then only an
- * absent value crosses; anything else is refused, never dropped.
+ * Values (ADR 0011): undefined is absent; anything else becomes a value the
+ * call holds until it ends. Core retains what it keeps.
  */
 
 bool tna_dec_ta_value(tna_call *call, napi_value value, ta_value *out) {
@@ -203,16 +205,23 @@ bool tna_dec_ta_value(tna_call *call, napi_value value, ta_value *out) {
         *out = (ta_value){ NULL, NULL };
         return true;
     }
-    tna_throw(call->env, "unsupported", "JavaScript values cross core as value boxes, which arrive with the data model (ADR 0011)");
-    return false;
+    if (call->owner == NULL) {
+        return tna_invalid(call, "a call that runs against a system");
+    }
+    if (!tna_value_make(&call->owner->values, value, out)) {
+        tna_throw(call->env, "out-of-memory", "cannot keep a JavaScript value");
+        return false;
+    }
+    return tna_call_keep_value(call, *out);
 }
 
 napi_value tna_enc_ta_value(tna_call *call, const ta_value *in) {
-    if (in->self == NULL && in->v == NULL) {
-        return tna_undefined(call);
+    napi_value value = NULL;
+    if (!tna_value_get(call->env, in, &value)) {
+        tna_throw(call->env, "unsupported", "core holds a value this binding did not make");
+        return NULL;
     }
-    tna_throw(call->env, "unsupported", "core holds a value, but value boxes arrive with the data model (ADR 0011)");
-    return NULL;
+    return value;
 }
 
 /* ------------------------------------------------------------------------

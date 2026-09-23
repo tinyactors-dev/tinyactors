@@ -323,25 +323,24 @@ class System {
    * ActorId or an address { family, name }, resolved through the directory
    * when the post is accepted (ADR 0006); a name with no resident actor is a
    * dead letter too. Throws `queue-full` at scheduling.maxQueuedMessages.
-   * Event data needs the JavaScript data model (ROADMAP step 11).
+   * `data` is any JavaScript value, shared with the receiver, not copied
+   * (ADR 0011); it is `_event.data` (`context.event.data`) in the
+   * receiver's expressions.
    */
   post(target, event, data, options) {
-    if (data !== undefined) {
-      throw new TinyactorsError('post(): event data needs the JavaScript data model (ROADMAP step 11)', 'unsupported');
-    }
     if (options?.signal?.aborted) {
       throw new TinyactorsError('post(): the signal is already aborted', 'aborted');
     }
     if (!(target instanceof ActorId)) {
       if (target !== null && typeof target === 'object' && 'name' in target) {
         const { family, name } = addressOf(target, 'post()');
-        this.#native.postNamed(family, name, this.#events.id(event));
+        this.#native.postNamed(family, name, this.#events.id(event), data);
         return;
       }
       throw new TinyactorsError('post(): expected an actor of this system or an address', 'invalid');
     }
     const { slot, generation } = actorOf(this, target);
-    this.#native.post(slot, generation, this.#events.id(event));
+    this.#native.post(slot, generation, this.#events.id(event), data);
   }
 
   /** Put an actor that faulted back into scheduling (ADR 0008). */

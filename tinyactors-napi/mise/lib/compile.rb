@@ -51,7 +51,7 @@ module NapiCompile
       *Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic -O2')),
       *(SANITIZE ? SANITIZE_FLAGS : []),
       '-fPIC',
-      '-DNAPI_VERSION=8',
+      '-DNAPI_VERSION=10',
       "-DTINYACTORS_NAPI_VERSION=\"#{version}\"",
       "-I#{node_include_dir}",
       "-I#{CORE_DIR}",

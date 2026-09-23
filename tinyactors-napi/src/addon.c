@@ -90,6 +90,8 @@ static napi_value tna_environment_stats(napi_env env, napi_callback_info info) {
     napi_set_named_property(env, stats, "systemsClosed", value);
     napi_create_double(env, (double)data->leaked_bytes, &value);
     napi_set_named_property(env, stats, "leakedBytes", value);
+    napi_create_double(env, (double)data->values_live, &value);
+    napi_set_named_property(env, stats, "valuesLive", value);
     return stats;
 }
 

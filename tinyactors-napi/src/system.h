@@ -102,6 +102,13 @@ struct tna_system {
     bool inside_core;
     /* Bytes still in use when close finished; nonzero means a leak. */
     size_t leaked_bytes;
+    /*
+     * Called by close after core is destroyed and before the leak count:
+     * the Node-API layer frees what core released into it (the value-box
+     * free list, ADR 0011).
+     */
+    void (*after_core)(void *context);
+    void *after_core_context;
 };
 
 /* TA_ERR_NOMEM when the record or core cannot be allocated. */

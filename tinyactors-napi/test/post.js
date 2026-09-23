@@ -235,11 +235,36 @@ async function steadyState() {
   system.close();
 }
 
-// What post() refuses before step 11, and malformed targets.
+// Event data is a value box while it waits (ADR 0011): delivery, a dead
+// letter and close() each give it back.
+async function dataIsReleased() {
+  const live = () => native.environmentStats().valuesLive;
+  const start = live();
+  const system = createSystem();
+  const actor = system.spawn(system.define(steps('data')));
+  actor.post('x', { some: 'data' });
+  actor.post('y', 'text');
+  actor.post('z', 42);
+  assert.equal(live(), start + 2, 'an object and a string are boxed; a number rides inline');
+  await system.flush();
+  assert.equal(live(), start, 'delivered data is released');
+  const gone = system.spawn(system.define(steps('data-gone')));
+  gone.destroy();
+  gone.post('x', { lost: true });
+  system.post({ family: 'nobody', name: 'here' }, 'x', ['lost']);
+  await system.flush();
+  assert.equal(live(), start, 'dead letters release their data');
+  const waiting = system.spawn(system.define(steps('data-waiting')));
+  waiting.post('x', { waiting: true });
+  assert.equal(live(), start + 1);
+  system.close();
+  assert.equal(live(), start, 'close releases queued data');
+}
+
+// Malformed targets.
 async function refusals() {
   const system = createSystem();
   const actor = system.spawn(system.define(steps()));
-  assertCode(() => actor.post('x', { some: 'data' }), 'unsupported', /step 11/);
   assertCode(() => system.post({ family: 'steps', name: '' }, 'x'), 'invalid');
   assertCode(() => system.post({ family: 1, name: 'n' }, 'x'), 'invalid');
   assertCode(() => system.post({}, 'x'), 'invalid');
@@ -257,6 +282,7 @@ async function refusals() {
 (async () => {
   await fifoAcrossTheBudget();
   await mailBeforeBootstrap();
+  await dataIsReleased();
   await staleIds();
   await faultsQuarantineAndRelease();
   await finishedAndDestroyedTargets();

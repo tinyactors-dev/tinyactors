@@ -44,6 +44,7 @@ typedef struct tna_env {
     uint64_t systems_created;
     uint64_t systems_closed;
     uint64_t leaked_bytes;         /* summed over closed systems */
+    uint64_t values_live;          /* value boxes live in every system (ADR 0011) */
 } tna_env;
 
 /* Creates the record, stores it as instance data, and adds the cleanup hook. */
@@ -131,6 +132,8 @@ void tna_core_leave(tna_call *call);
 napi_value tna_call_fail(tna_call *call, ta_result result, napi_value detail);
 /* Releases `address` when the call ends; releases it now on failure. */
 bool tna_call_keep_address(tna_call *call, ta_address *address);
+/* Releases `value` when the call ends; releases it now on failure. */
+bool tna_call_keep_value(tna_call *call, ta_value value);
 /* The call arena: the system's, or a temporary one for a call with no system. */
 ta_arena *tna_call_arena(tna_call *call);
 /* Zeroed memory from the call arena; throws and returns NULL on failure. */

@@ -117,8 +117,10 @@ napi_value tna_throw(napi_env env, const char *code, const char *message) {
  * Calls
  */
 
+/* A reference a call took and gives back when it ends. */
 struct tna_cleanup {
-    ta_address *address;
+    ta_address *address; /* or NULL */
+    ta_value value;      /* or absent */
     tna_cleanup *next;
 };
 
@@ -144,6 +146,7 @@ void tna_call_begin(tna_call *call, napi_env env, const char *function) {
 napi_value tna_call_end(tna_call *call, napi_value value) {
     for (tna_cleanup *cleanup = call->cleanups; cleanup != NULL; cleanup = cleanup->next) {
         ta_address_release(cleanup->address);
+        ta_value_release(&cleanup->value);
     }
     call->cleanups = NULL;
     if (call->temporary_used) {
@@ -484,8 +487,18 @@ bool tna_call_keep_address(tna_call *call, ta_address *address) {
         ta_address_release(address);
         return false;
     }
-    cleanup->address = address;
-    cleanup->next = call->cleanups;
+    *cleanup = (tna_cleanup){ .address = address, .next = call->cleanups };
+    call->cleanups = cleanup;
+    return true;
+}
+
+bool tna_call_keep_value(tna_call *call, ta_value value) {
+    tna_cleanup *cleanup = tna_call_alloc(call, sizeof *cleanup, _Alignof(tna_cleanup));
+    if (cleanup == NULL) {
+        ta_value_release(&value);
+        return false;
+    }
+    *cleanup = (tna_cleanup){ .value = value, .next = call->cleanups };
     call->cleanups = cleanup;
     return true;
 }
