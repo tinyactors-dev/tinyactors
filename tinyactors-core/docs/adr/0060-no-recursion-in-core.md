@@ -1,6 +1,6 @@
 # ADR 0060: No recursion in core
 
-**Status:** Accepted; applies ADR 0023, ADR 0033 and ADR 0047
+**Status:** Accepted and implemented; applies ADR 0023, ADR 0033 and ADR 0047. See the implementation notes: the executor's frames are reserved when the interpreter starts, not at registration.
 **Date:** 2026-09-23
 
 ## Context
@@ -184,6 +184,70 @@ depth before compiling.
   needs the frames in the session image (ADR 0038) and in inspection, and
   it needs its own decision. The frame layout chosen here is the one it
   would use.
+
+## Implementation notes
+
+- **The executor's frames live in the interpreter's scratch, not in one
+  stack owned by the system, and are reserved when the interpreter starts,
+  not at registration.** Sections 2 and 3 assumed one interpreter runs at a
+  time. It does not: cancelling an invocation exits the child session from
+  inside the parent's interpreter, and each exited session already gets a
+  scratch arena of its own. A single system stack sized for the deepest
+  definition would not hold a parent's frames and a child's at once.
+  `ta_interpreter_init` takes `2 × max_action_depth + 1` frames from the
+  interpreter's scratch, next to the bitsets it already took there. That
+  happens before bootstrap or any microstep, so ADR 0047 holds as section 3
+  intended: a shortage is `TA_ERR_NOMEM` from `ta_actor_resume` before any
+  action runs, and a retry runs normally (`tests/deep_test.c`). Nothing
+  grows while actions run, and actors carry no frames: the scale test still
+  measures 560 bytes per actor. `ta_system_register_definition()` reserves
+  nothing.
+- **A cycle the table missed.** `mise run check-recursion` found every cycle
+  in the Context table, and one more: cancelling an invocation exits its
+  child session, which cancels the child's own invocations
+  (`ta_actor_exit_invoked` → `ta_interpreter_cancel` →
+  `ta_invoke_state_exited` → `ta_invoke_cancel_at`). Its depth is the length
+  of a chain of invoked sessions. `ta_interpreter_exit_invoked` now exits the
+  whole tree from a stack of frames, each with its own scratch arena as
+  before, in the same order: a state's `<onexit>` handlers, then its
+  invocations from the last, each child exited before its service is
+  cancelled.
+- **The entry set keeps the recursion's order.** `ta_entering_below` and
+  `default_history` depend on the order of every step, so the frames are
+  continuation frames, one per activation of the recursive algorithm
+  (descendants, a loop over targets or recorded states, an ancestors walk,
+  a parallel state's regions). A chain of them goes one state deeper per
+  descendants frame, except through history defaults, so the capacity is
+  `3 × (max_state_depth + history states + 1) + 1`. The compiler now
+  records `max_state_depth` in the definition for this. Sizing by the
+  number of states instead cost 100 bytes of scratch per state and grew the
+  scratch arena in the actor-memory scenario.
+- **History defaults that lead back to themselves.** A history state whose
+  default transition targets itself, or a cycle of such defaults, used to
+  recurse until the stack overflowed. The entry set now skips a history
+  state it is already expanding, and effective targets expand each history
+  state once per query. Such a chart no longer crashes, but the
+  configuration it enters is not meaningful. Rejecting it at compile time is
+  left open.
+- **Export needs no stack.** States are numbered in pre-order, so one pass
+  in ID order fills each state's slot and hands its children theirs. Nested
+  action blocks are queued by the action that owns them, with at most one
+  entry per block, so the queue's capacity is `2 × actions + 1`.
+- **The compiler keeps the ADR 0058 path stack.** Section 2 said the frames
+  would replace it. The path also holds steps outside blocks of executable
+  content (states, transitions, handlers, single members), so pass one's
+  levels and the block frames are separate stacks. They push and pop path
+  steps exactly as the recursion did. Visit order is unchanged: all 220
+  revisions in the suite are byte-identical to before the change, and so
+  are the scenario results.
+- **`ta_exec_frame` in a `<foreach>` frame.** `actions` is the body and
+  `cursor` is the index of the `<foreach>` action itself, which holds the
+  item and index names. `ta_continuation.frames` is still unused: pausing
+  inside a block stays out of scope, as decided.
+- **The check.** `mise run check-recursion` compiles the amalgamation to
+  LLVM IR at `-O0` and reads the direct `call` and `invoke` instructions.
+  Calls through function pointers (the host's vtables and adapters) are not
+  edges: they leave core.
 
 ## Sources
 

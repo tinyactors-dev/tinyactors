@@ -29,22 +29,24 @@ What to do instead, by kind of walk:
     It is also the ADR 0058 error path: every frame names its list and
     index, so the frames are the path.
   - export: the exporter's arena.
-  - running executable content: one stack owned by the system, using the
-    `ta_exec_frame` layout from `src/continuation.h`. A system runs one
-    macrostep at a time and an actor pauses only between microsteps, when
-    the stack is empty, so actors carry no frames. The compiler records
-    each definition's maximum action nesting depth, and
-    `ta_system_register_definition()` grows the stack to it. **Never grow a
-    frame stack while actions run.** A growth that fails after an
+  - running executable content: `ta_exec_frame` frames in the
+    interpreter's scratch, taken when the interpreter starts
+    (`ta_interpreter_init`), sized from the definition's recorded maximum
+    action nesting depth. Interpreters nest (cancelling an invocation exits
+    the child inside the parent's interpreter), and each has its own
+    scratch, so there is no one system-wide stack. Actors carry no frames.
+    **Never grow a frame stack while actions run.** A growth that fails after an
     `<assign>` has taken effect breaks ADR 0047, which requires that a
     failed allocation happens before any part of a microstep is visible.
-    Scratch space for state-tree queries is reserved the same way.
+    Scratch space for state-tree queries is reserved the same way, sized
+    from the definition's recorded maximum state depth.
 - **Queries over the state tree at run time**: use the compiled layout
   instead of a stack. States are numbered in document pre-order, so a
   state's subtree is a contiguous ID range, and every child has a higher ID
   than its parent. A bottom-up question (is this compound or parallel state
-  in a final state?) is one pass in reverse ID order. A top-down one (add
-  the descendants to enter) walks child spans with a worklist. History
+  in a final state?) is one pass in reverse ID order. The entry set is
+  order-sensitive, so it runs as continuation frames, one per activation of
+  the recursive SCXML algorithm, which keep its order exactly. History
   defaults are a worklist bounded by the number of history states.
 - **Matchers** (event descriptors against event names): iterative, with
   polynomial worst-case time. No backtracking recursion. A `*` segment may
