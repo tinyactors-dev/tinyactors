@@ -16,7 +16,11 @@ unless someone called `flush()`, and delayed sends never fired.
 1. **One pump turn does bounded work, in this order:**
    1. with `clock: "realtime"`, read the monotonic clock and call
       `ta_system_set_time()`;
-   2. resume runnable actors, up to `resumeBudget` in total;
+   2. resume runnable actors, up to `resumeBudget` in total. Each resume
+      also passes `actionBudget` as core's `action_budget`
+      (tinyactors-core ADR 0061), so a microstep that runs a long script
+      or `<foreach>` pauses inside its executable content instead of
+      running to its end in one turn;
    3. deliver from the ready queue, up to `messageBudget`;
    4. call `ta_system_dispatch_due()` with `dueBudget`;
    5. call the hooks for the turn's records (point 5), then reset the turn

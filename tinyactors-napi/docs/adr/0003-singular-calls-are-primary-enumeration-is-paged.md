@@ -1,6 +1,6 @@
 # ADR 0003: Singular calls are primary; enumeration is paged
 
-**Status:** Accepted; paging depends on a core ADR for a visit cursor (not yet written)
+**Status:** Accepted; paging uses tinyactors-core ADR 0062
 **Date:** 2026-09-23
 
 ## Context
@@ -25,12 +25,12 @@ the native router (ADR 0006) and never touch JavaScript. JavaScript supplies
 stimulus from outside, not the steady-state traffic.
 
 One case really does grow with the population: **enumeration**. Core offers
-`ta_system_visit_actors` only as a callback. The walk always starts at slot
-0 and its order is not part of the contract (`src/actor.c`), so it has no
-cursor. With the current signature, page *k* can be built only by walking
-again and skipping the first *k* pages, and every skipped actor costs a full
+`ta_system_visit_actors` only as a callback. Before tinyactors-core ADR
+0062, the walk always started at slot 0 and its order was not part of the
+contract, so it had no cursor. Page *k* could only be built by walking again
+and skipping the first *k* pages, and every skipped actor cost a full
 inspection. At four million actors and pages of 1,024, one full iteration
-makes about 8×10⁹ inspections. It also cannot be split across turns of the
+made about 8×10⁹ inspections, and it could not be split across turns of the
 event loop. Calling into JavaScript once per
 actor, or building one array of every actor, costs allocation and GC
 proportional to the population. tinyactors-test ran into the same limit: its
@@ -44,14 +44,13 @@ because "the visitor callback cannot cross RPC". Its scale checks
    `inspect` each operate on one actor. They allocate nothing per call
    beyond what the operation itself needs.
 2. **Iterating the population is paged, with a cursor.**
-   - Core's `ta_system_visit_actors` takes a cursor in its argument
-     struct: the slot to start at, and on return the slot to continue
-     from. The walk is in slot order. A walk that an inspector ends early
-     reports where the next page starts. This is a core change and needs
-     a core ADR. The addon waits for it (ADR 0001) and does not build pages
-     by skipping.
-   - Each page costs O(page size): the walk starts at the cursor and the
-     inspector ends it when the page is full.
+   - Core's `ta_system_visit_actors` takes a `ta_actor_visit_params`
+     (tinyactors-core ADR 0062): a start position `from`, a `limit`, and
+     `next`, where the following page starts. The walk is in increasing
+     position order, and the position is opaque to the addon. A visit
+     that fails leaves `next` at that actor, so the page can be retried.
+   - Each page costs O(page size + empty slots passed): the walk starts at
+     `from` and stops at `limit`.
    - `system.actors()` returns an iterator that fills a page in the call
      arena (ADR 0014) and gives out inspections from that page. It never
      builds the whole population. Inspection pointers are borrowed only for

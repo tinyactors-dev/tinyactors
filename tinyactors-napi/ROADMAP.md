@@ -107,12 +107,22 @@ needs, and a step waits for its prerequisites instead of working around them
 | Core ADR | Needed by | State |
 |---|---|---|
 | 0054: delayed sends live with their owner | step 8 | implemented |
-| 0055: deliver is the admission test (`TA_ERR_DONE`) | step 6 | in progress |
-| 0056: a finished actor reports its final state | step 5 | in progress |
-| 0057: core ships the null data model | step 4 | in progress |
-| 0058: compile errors say what and where | step 4 (error quality only) | in progress |
-| 0059: an actor ID is a public slot and generation | step 3 | in progress |
-| `ta_system_visit_actors` takes a cursor and walks in slot order (ADR 0003) | step 9 | not written |
+| 0055: deliver is the admission test (`TA_ERR_DONE`) | step 6 | implemented |
+| 0056: a finished actor reports its final state | step 5 | implemented |
+| 0057: core ships the null data model | step 4 | implemented |
+| 0058: compile errors say what and where | step 4 (error quality only) | implemented |
+| 0059: an actor ID is a public slot and generation | step 3 | **proposed, not implemented** |
+| 0061: a macrostep can pause inside executable content | step 5 | implemented |
+| 0062: the actor walk is paged by position | step 9 | implemented |
+
+Step 3 and everything after it wait for core ADR 0059:
+`ta_actor_id_slot()`, `ta_actor_id_generation()` and `ta_actor_id_make()`
+are not in `tinyactors.h` yet.
+
+The libraries in this repository are private (root `AGENTS.md`). When the
+addon needs a core change, core's API changes in place and every caller
+moves with it, the addon included. There are no second functions and no
+compatibility shims.
 
 Some core changes would help but are not prerequisites, because the pools
 of ADR 0014 make their cost small. Each needs its own core ADR:
@@ -196,17 +206,31 @@ Needs core ADR 0057; core ADR 0058 improves error messages.
 - `lib/statechart.js` emits the generated spec shape.
 - `System.define()` calls the generated `ta_definition_compile_spec` and
   `ta_system_register_definition` with `ta_null_datamodel()`.
+- A refused chart throws a `TinyactorsError` that carries core's
+  `ta_compile_error` (core ADR 0058): its code, path, subject and message.
+  The call arena is passed as `error_arena`, and the error is copied into
+  JavaScript before the arena is reset.
+  - The `error` member of `ta_definition_compile_params` has no
+    `TA_VALID_ON` annotation, so a generated binding writes nothing for it
+    when the compile fails. The test host has the same gap (core ADR 0057,
+    implementation notes). Fix the annotation in core, in place, before
+    this step. Do not override the binding in the addon.
 - `lib/definition.js` reads `identity`, `inspect()` and `retired` through
   generated calls. `retire()` is bound.
 
 Exit criterion:
 - the charts from the old `test/definition.js` compile;
 - malformed specs fail with the generated codec's error path;
+- under the null data model, a chart with any expression other than
+  `In(state)` is refused when it is defined, with
+  `TA_COMPILE_ERROR_EXPRESSION_REJECTED` and the expression's path;
+  `In()` used as a value compiles, and faults as `error.execution` when it
+  runs (core ADR 0057);
 - nothing about a definition is stored in the addon.
 
 ### 5. Spawn, run, inspect, destroy
 
-Needs core ADR 0056.
+Needs core ADRs 0056 and 0061.
 
 - `lib/actor.js`: the `ActorId` view.
 - Spawn, run and destroy:
@@ -215,12 +239,24 @@ Needs core ADR 0056.
     queue;
   - `scheduler.{c,h}` runs the runnable part of one turn, with a handle
     scope around each resume;
+  - each resume passes two budgets: `budget` counts microsteps, and
+    `action_budget` counts units of executable content (core ADR 0061). The
+    system options expose them as `resumeBudget` and `actionBudget`. The
+    action budget is what bounds one resume when a single microstep runs a
+    long script or a `<foreach>` over a large array;
+  - an actor paused by either budget answers `TA_RUN_PAUSED` and stays
+    `runnable` (ADR 0005);
   - `pump.{c,h}` schedules coalesced turns with `setImmediate` from native
     code, and implements `flush()` with native promises;
   - hook records go into the turn arena;
   - the destroy hook clears the actor's entry.
-- `inspect()` goes through the generated `ta_actor_inspect`, including
-  `finalState` for finished actors.
+- `inspect()` goes through the generated `ta_actor_inspect`. `finalState`
+  comes from the inspection's `final_state` (core ADR 0056), named through
+  `ta_definition_state()`. It is `null` while the actor runs, while it is
+  paused inside a microstep, and for a cancelled invoked child. The addon
+  keeps no copy of a chart's final states.
+- The `done` hook reads the final state and completion the same way,
+  before a `finished: "destroy"` actor is destroyed.
 - The `done` hook and the `finished: "destroy" | "retain"` option
   (ADR 0012).
 
@@ -232,6 +268,8 @@ Exit criterion:
   a timer callback run between two consecutive turns (on both runtimes);
 - a chart with two top-level finals reports the one that was actually
   reached;
+- with a small `actionBudget`, one entry handler with a long `<foreach>`
+  runs over several turns, and other actors run between them;
 - with `finished: "destroy"`, finished actors are gone after `done`.
 
 ### 6. Post events through mailboxes
@@ -241,7 +279,12 @@ Needs core ADR 0055.
 - `events.{c,h}` and `lib/events.js` (ADR 0004).
 - `post()`, mailboxes of pooled envelopes and the ready queue (ADR 0005):
   - mail for a stale generation is a dead letter at enqueue;
-  - delivery acts on `ta_actor_deliver`'s result alone;
+  - delivery acts on `ta_actor_deliver`'s result alone. Core checks in
+    this order: `TA_ERR_INVALID` for a malformed event, `TA_ERR_NOT_FOUND`,
+    `TA_ERR_DONE`, then `TA_ERR_BUSY` (core ADR 0055). An actor paused by
+    an action budget is inside its macrostep and answers `TA_ERR_BUSY`,
+    which the scheduling table already rules out because that actor is
+    `runnable`;
   - `TA_ERR_DONE` and `TA_ERR_NOT_FOUND` go to `deadLetter`, at most
     `messageBudget` records per turn;
   - other failures quarantine the actor in its entry and call `fault`
@@ -266,6 +309,10 @@ Exit criterion:
   (ADR 0006), with the interned address table.
 - Named spawn and `findActor()`.
 - Literal `<send>` between actors.
+- The router's `submit` only enqueues. It never destroys or unloads an
+  actor. Core relies on this: a due send that the router refuses goes back
+  to its owner's list without allocating only while the owner is still
+  there (core ADR 0054, implementation notes).
 
 Exit criterion:
 - a ping-pong pair exchanges N messages with no JavaScript involvement
@@ -287,7 +334,10 @@ Exit criterion:
     keep the process alive;
   - the timer is re-armed only for an earlier deadline.
 - Due sends are dispatched in the pump turn.
-- Inspection shows `delayedSends` with `submitted` and `destination`.
+- Inspection shows `delayedSends` with `submitted` and `destination`
+  (core ADR 0054). For a custom I/O processor, core leaves `destination`
+  as a zeroed runtime ref (ID 0). JavaScript sees `null` there, and the
+  send's `target`.
 
 Exit criterion:
 - delayed sends fire in deadline order under both clocks;
@@ -298,16 +348,29 @@ Exit criterion:
 
 ### 9. Enumerate
 
-Needs the core ADR for a `ta_system_visit_actors` cursor.
+Needs core ADR 0062.
 
 - `enumerate.{c,h}`: `system.actors()` and `system.actorIds()` as pages
-  that continue from a cursor, built in the call arena (ADR 0003).
+  built in the call arena (ADR 0003). Each page is one call of
+  `ta_system_visit_actors` with a `ta_actor_visit_params`:
+  - `from` is the position the previous page returned in `next`, or 0 for
+    the first page. `limit` is the page size;
+  - the iteration ends when `next` is `TA_ACTOR_VISIT_END`. A last page
+    that is exactly full takes one more call, which visits nothing;
+  - the iterator keeps the position as an opaque number and only passes
+    back a `next` that core gave it;
+  - if a visit fails (for example, the page cannot copy for want of
+    memory), `next` is the actor that failed, so the page can be retried
+    without skipping it.
+- Pages follow core ADR 0062's rules for changes between pages: an actor
+  resident for the whole iteration is visited exactly once.
 
 Exit criterion:
 - iterating over a large population keeps peak JavaScript heap bounded by
   the page size;
 - the last page of a large population costs about the same as the first,
-  so a whole iteration is linear.
+  so a whole iteration is linear;
+- an actor spawned or destroyed between pages follows core ADR 0062 §4.
 
 ### 10. Prove the scale properties
 
@@ -315,17 +378,19 @@ This step sets a baseline with charts that have no data. Steps 11 and 13
 run it again with data and I/O, which is the load of one actor per
 websocket connection.
 
-- `test/scale.js`: a population ratio benchmark in the style of
-  tinyactors-test's `scale_test.c`. It compares a small population with one
-  four times larger and checks that each of the following stays flat per
-  actor: spawn, post plus delivery, inspect, and heap bytes.
+- `test/scale.js`: a population benchmark in the style of tinyactors-test's
+  `scale_test.c`. That test now measures 50,000, 200,000, 1,000,000 and
+  4,000,000 actors, and core measures about 560 bytes per data-less actor.
+  `scale.js` uses the same populations and the same
+  `TAT_SCALE_MAX_POPULATION` limit for machines with less memory. It checks
+  that each of the following stays flat per actor from one population to
+  the next: spawn, post plus delivery, inspect, one enumeration page, and
+  heap bytes. It measures CPU time, not wall time.
 - A steady-state check: after warm-up, a round of posts and deliveries
   requests no chunk (ADR 0014).
 - The end-to-end many-actor test from the old roadmap (spawn N, post `work`
-  to all, flush once, all done), with N taken from an environment variable
-  for stress runs.
-- At the target population (N = 4,000,000 in stress runs), the test
-  reports:
+  to all, flush once, all done), with N from the same populations.
+- At the largest population measured, the test reports:
   - the longest pump turn and the largest event-loop delay;
   - RSS, V8 heap and native bytes per actor;
   - total GC pause time.
