@@ -198,6 +198,27 @@ literal, including arrays created with compound literals. For dynamically
 constructed specs, retain the `ta_tree` until compilation returns, then destroy
 it. The compiled definition retains no pointer into either authoring form.
 
+## Compile errors
+
+A refused spec is described by `ta_compile_error` when the caller passes one
+(ADR 0058): the first fault in compile order, with its code, a path of
+`ta_spec_step`s from the root, the authored text at fault (`subject`, the
+spec's own pointer), related text, and a message. The path and any
+data-model message go into `error_arena`; a successful compile never touches
+it. The error borrows from the spec, so read it before releasing the spec or
+the `ta_tree` it came from. `ta_compile_error_format()` writes one line for
+people:
+
+```text
+states[1](outer).states[0](idle).transitions[0].targets[0]: unknown state "idel"; nearest is "idle"
+```
+
+Inside the compiler, every check reports through `ta_compiler_record()`, and
+the path is the state being compiled (whose own path follows from the state
+table) plus a stack of steps below it. A data model's refusal names an
+expression ID; the compiler finds its path by replaying the walk up to that
+expression.
+
 ## Compiled IR
 
 The source tree is discarded after compilation. The compiler emits the compact

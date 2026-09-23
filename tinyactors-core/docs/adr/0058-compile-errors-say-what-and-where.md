@@ -1,6 +1,6 @@
 # ADR 0058: A compile error says what is wrong and where in the chart
 
-**Status:** Proposed; extends ADR 0042, completes ADR 0053 §4
+**Status:** Accepted; extends ADR 0042, completes ADR 0053 §4
 **Date:** 2026-09-23
 
 ## Context
@@ -8,25 +8,26 @@
 `ta_definition_compile_spec()` answers every problem in a chart with a bare
 `ta_result`. About forty distinct checks in `src/builder.c` all return
 `TA_ERR_INVALID` or `TA_ERR_UNSUPPORTED`, with nothing that says which check
-failed or which part of the spec it was about. Some of them:
+failed or which part of the spec it was about. Some of them, cited as of
+`main` at 1afb509, before this ADR:
 
 | Check | Where |
 |---|---|
-| A state ID, parameter name, data ID, `<foreach item>` or literal `sendid` is empty | `ta_compiler_atom`, `src/builder.c:67` |
-| Two states share an ID | `src/builder.c:532` |
-| A transition or initial target names no state | `ta_compiler_resolve`, `src/builder.c:570` |
-| An `<initial>` target is not a proper descendant of its owner | `src/builder.c:603` |
-| An event descriptor has an empty segment (`a..b`) | `src/builder.c:643` |
+| A state ID, parameter name, data ID, `<foreach item>` or literal `sendid` is empty | `ta_compiler_atom`, `src/builder.c:69` |
+| Two states share an ID | `src/builder.c:548` |
+| A transition or initial target names no state | `ta_compiler_resolve`, `src/builder.c:584` |
+| An `<initial>` target is not a proper descendant of its owner | `src/builder.c:618` |
+| An event descriptor has an empty segment (`a..b`) | `src/builder.c:658` |
 | A literal `delay` is not an SCXML duration | `ta_duration_parse`, `src/builder.c:75` |
-| `<send>`, `<donedata>` or `<invoke>` combine members SCXML makes exclusive | `src/builder.c:339`, `:787`, `:873` |
-| An atomic or final state has children or an `<initial>`; a compound or parallel state has none; a parallel state has an `<initial>` | `src/builder.c:911`–`:922` |
-| A history state is at the root, has children, or its parent is not compound or parallel | `src/builder.c:924` |
-| A history state's default transition is not exactly one targetless-event, conditionless transition into its parent | `src/builder.c:943`–`:957` |
-| `<donedata>` outside a final state; `<invoke>` inside a history state | `src/builder.c:907`, `:984` |
-| The chart has no states; neither `name` nor `identity` gives it a family | `src/builder.c:1124`, `:1045` |
-| The chart's `datamodel` is not the adapter's name | `src/builder.c:1173` |
-| The chart has more states than a configuration can hold | `src/builder.c:1100` |
-| The data model's `prepare_definition()` refuses the expression table | `src/builder.c:1251` |
+| `<send>`, `<donedata>` or `<invoke>` combine members SCXML makes exclusive | `src/builder.c:354`, `:802`, `:888` |
+| An atomic or final state has children or an `<initial>`; a compound or parallel state has none; a parallel state has an `<initial>` | `src/builder.c:928`, `:934` |
+| A history state is at the root, has children, or its parent is not compound or parallel | `src/builder.c:940` |
+| A history state's default transition is not exactly one targetless-event, conditionless transition into its parent | `src/builder.c:959`–`:969` |
+| `<donedata>` outside a final state; `<invoke>` inside a history state | `src/builder.c:922`, `:998` |
+| The chart has no states; neither `name` nor `identity` gives it a family | `src/builder.c:1139`, `:1060` |
+| The chart's `datamodel` is not the adapter's name | `src/builder.c:1189` |
+| The chart has more states than a configuration can hold | `src/builder.c:1115` |
+| The data model's `prepare_definition()` refuses the expression table | `src/builder.c:1265` |
 
 When a chart was written by hand as a C compound literal, the author can
 bisect it. When it came from a file, nobody can: the person who wrote
@@ -133,11 +134,11 @@ typedef struct {
     /* New. Filled when the result is TA_ERR_INVALID or TA_ERR_UNSUPPORTED
      * because of the spec. Argument errors and TA_ERR_NOMEM leave `code` at
      * TA_COMPILE_ERROR_NONE. */
-    TA_OUT TA_OPTIONAL ta_compile_error *error;
+    TA_OUT TA_OPTIONAL TA_LIFETIME(input) ta_compile_error *error;
     /* New. Holds the path and any copied message. Without it the error still
      * carries code, subject, related and core's own phrase, but no path and
      * no data-model message. */
-    TA_ARENA TA_OPTIONAL ta_arena *error_arena;
+    TA_OPTIONAL TA_ARENA ta_arena *error_arena;
 } ta_definition_compile_params;
 ```
 
@@ -152,19 +153,21 @@ byte offset of the fault. A copy would lose that.
 **`related` is the context a person needs next.** The duplicate ID shows
 where the first definition was. The descendant rule shows which state the
 target had to be within. For an unknown target, `related` is the existing
-state ID with the smallest edit distance, when that distance is at most a
-third of the subject's length. `target="idel"` then reports `idle` as the
+state ID with the smallest edit distance (a transposition counts as one
+edit), when that distance is at most a third of the subject's length. `target="idel"` then reports `idle` as the
 nearest. Finding it costs one pass over the state table, and only on the
 error path.
 
 ### 2. The first error in compile order, and nothing on the success path
 
 The compiler reports one error: the first it meets. The walk order is fixed
-and documented: the root's states in document order to collect IDs; the
-root's `<data>`; each state's own checks, transitions, `<initial>`,
-`<onentry>`, `<onexit>`, `<data>`, `<donedata>` and `<invoke>` in document
-order; the root `<initial>`; the root `<script>`; then the data model. The
-same chart therefore always reports the same error.
+and documented: the chart's `datamodel` requirement; every state in
+document order to check its kind and collect its ID; the root's `<data>`;
+for each state in document order, its structural checks, transitions, the
+history default (for a history state), `<initial>`, `<onentry>`,
+`<onexit>`, `<data>`, `<donedata>` and `<invoke>`; the root `<initial>`;
+the root `<script>`; the configuration limit and the family; then the data
+model. The same chart therefore always reports the same error.
 
 The compiler keeps the current path as a stack of `ta_spec_step`s. It pushes
 a step when it descends and pops one when it returns. The stack is a `ta_vec`
@@ -187,13 +190,13 @@ parses early could name the expression that fails to parse, but today it has
 no way to say which one.
 
 ```c
-#define TA_EXPR_ID_NONE UINT32_MAX  /* new */
+#define TA_EXPR_ID_NONE ((ta_expr_id)UINT32_MAX)  /* new */
 
 typedef struct {
     ta_expr_id expression;  /* TA_EXPR_ID_NONE when not about one */
     uint32_t offset;        /* within that expression's source */
     uint32_t length;
-    TA_LIFETIME(call) ta_str message;
+    ta_str message;         /* the adapter's until core next calls it */
 } ta_expression_rejection;
 
 typedef struct {
@@ -203,12 +206,12 @@ typedef struct {
     void **shared;
     /* New. Set by an adapter that returns TA_ERR_INVALID or TA_ERR_UNSUPPORTED
      * because of one expression. Absent when the caller wants no detail. */
-    TA_OUT TA_OPTIONAL ta_expression_rejection *rejected;
+    TA_OUT TA_OPTIONAL TA_LIFETIME(call) ta_expression_rejection *rejected;
 } ta_datamodel_prepare_definition_params;
 ```
 
-Core copies `message` into `error_arena` before returning, so an adapter may
-build a message on its stack. Core turns the rejection into
+Core copies `message` into `error_arena` before it calls the adapter again,
+so an adapter may point it at a buffer of its own that it reuses. Core turns the rejection into
 `TA_COMPILE_ERROR_EXPRESSION_REJECTED`, with the expression's source as
 `subject` and `offset`/`length` as the narrowed range.
 
@@ -227,11 +230,11 @@ say where the problem is.
 ```c
 /*
  * Writes `error` as one line into `arena`:
- *   states[2](id "idle").transitions[0].targets[0]: unknown state "idel"; nearest is "idle"
+ *   states[2](idle).transitions[0].targets[0]: unknown state "idel"; nearest is "idle"
  * A state step shows its ID so the line can be read without the spec.
  */
 typedef struct {
-    TA_IN const ta_scxml_spec *spec;
+    TA_IN TA_OPTIONAL const ta_scxml_spec *spec;  /* null: no state IDs shown */
     TA_IN const ta_compile_error *error;
     TA_ARENA ta_arena *arena;
     TA_OUT TA_LIFETIME(arena) ta_str *out;
@@ -284,9 +287,50 @@ message remain, which is what a C author gets today plus the path.
   changes which error a chart with several faults reports. That is allowed,
   but it is a visible change and needs its own note.
 
+## Implementation notes
+
+Recorded when this ADR was implemented (2026-09-23).
+
+- **Edit distance counts a transposition as one edit** (optimal string
+  alignment). Plain Levenshtein puts `idel` two edits from `idle`, over a
+  third of four, so the ADR's own example would not have suggested
+  anything.
+- **The compile order in §2 was corrected to the code.** The code checks
+  the data-model requirement first, a history state's default transition
+  right after that state's transitions, and the configuration limit and
+  family after the root `<script>`. The draft left these out. The code was
+  right; the text now says what it does.
+- **A rejection's message is the adapter's until core next calls it**, not
+  "for the call". Core can only read it after `prepare_definition()`
+  returns, so a buffer on the adapter's stack would already be gone. Core
+  copies it before the replay, and the replay does not call the adapter.
+- **Lifetime annotations.** The API vocabulary has no `spec` scope, so the
+  compile error is `TA_LIFETIME(input)`, meaning the spec. `rejected` is
+  `TA_LIFETIME(call)`; a `ta_str` member cannot carry one.
+- **The replay compiles again**, onto a scratch definition, until the
+  walk reaches the named expression. It interns nothing new (every atom
+  was interned by the first compile) and never prepares the scratch
+  definition. A rejection that names no expression, or one past the table,
+  has an empty path.
+- **A refusal from below the compiler's own checks** is reported as
+  `TA_COMPILE_ERROR_MALFORMED_SPEC` with an empty path, so a refused spec
+  never has `TA_COMPILE_ERROR_NONE`. None is known to happen today.
+- **Anchors for §5 step 2.** A state's `id`; a transition's `event`, then
+  its `cond`, then its first target; an action's first text member (event,
+  location, expression, condition, sendid, target, type, id); an
+  `<invoke>`'s `id`, `type` or `src`; a `<data>` or `<param>`'s name; an
+  `<initial>`'s first target.
+- **`TA_COMPILE_ERROR_LIMIT` is not reached by a test.** It needs more
+  than 524,224 states, and pass one's duplicate-ID scan is quadratic, so
+  such a chart takes too long to compile in a test. Every other code is
+  reached from a chart in `tests/compile_error_test.c`.
+- **The test host prints located errors.** The scenario runner, the IRP
+  check and the export round-trip check write an import failure as
+  `line:column: <formatted error>`, using this function over the RPC.
+
 ## Sources
 
-In-tree, cited above by file and line: `src/builder.c:67`, `:75`, `:339`,
-`:532`, `:570`, `:603`, `:643`, `:787`, `:873`, `:907`–`:957`, `:984`,
-`:1045`, `:1100`, `:1124`, `:1173`, `:1251`;
+In-tree, cited above by file and line as of 1afb509: `src/builder.c:69`,
+`:75`, `:354`, `:548`, `:584`, `:618`, `:658`, `:802`, `:888`,
+`:922`–`:969`, `:998`, `:1060`, `:1115`, `:1139`, `:1189`, `:1265`;
 `tinyactors-test/src/ecmascript_datamodel.c:820`.

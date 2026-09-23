@@ -521,9 +521,11 @@ showed the text above to be wrong or silent.
   reference, attribute-value normalization, a CRLF, or text split across
   nodes (the codec joins these). Only the join and `<content>` markup are
   copies the codec makes.
-- **The compile error is a placeholder.** `ta_compile_error` has only
-  `TA_COMPILE_ERROR_NONE`, and an import that fails in the compiler reports
-  `TA_IMPORT_STAGE_COMPILE` with `located = false`, pending ADR 0058.
+- **The compile error came in a second step.** `ta_compile_error` was first
+  a code-only placeholder, and an import that failed in the compiler had no
+  position. ADR 0058 replaced it: an import's compile error now has the code,
+  the path, the subject and a position in the input whenever the subject, or
+  an element above it, is text the codec sliced from the input.
 - **Durations.** `ta_duration_parse` accepted only a whole part, which the
   chart DSL never exposed because it wrote milliseconds. A document hands
   the compiler the author's text, and SCXML durations are CSS2 times: `.5s`
