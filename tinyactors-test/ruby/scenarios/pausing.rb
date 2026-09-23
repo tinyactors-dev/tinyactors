@@ -96,6 +96,41 @@ TinyactorsTest.chart :child_canceller do
   state :stopped
 end
 
+# Five internal events over two microsteps, so an actor paused after any
+# action usually has some queued (ADR 0064).
+TinyactorsTest.chart :raiser do
+  data log: { expr: '[]' }
+
+  state :idle do
+    transition on: 'go', target: :working do
+      assign '.log', '.log + ["go"]'
+      raise_event 'r1'
+      raise_event 'r2'
+      raise_event 'r3'
+    end
+  end
+  state :working do
+    transition on: 'r1' do
+      assign '.log', '.log + ["r1"]'
+      raise_event 'r4'
+      raise_event 'r5'
+    end
+    transition on: 'r2' do
+      assign '.log', '.log + ["r2"]'
+    end
+    transition on: 'r3' do
+      assign '.log', '.log + ["r3"]'
+    end
+    transition on: 'r4' do
+      assign '.log', '.log + ["r4"]'
+    end
+    transition on: 'r5', target: :finished do
+      assign '.log', '.log + ["r5"]'
+    end
+  end
+  state :finished
+end
+
 TinyactorsTest.scenarios 'pausing', chart: :relay do
   invariant('the log only grows by known entries') do |actor|
     actor.chart != :relay || (actor.data('.log') - ['go', 'n=5', 'counted', 'ping', 'extra']).empty?
@@ -260,5 +295,29 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
     assert_equal %i[stopped], parent.active
     run_system('reclaim the cancelled child')
     assert_equal [], invoked_actors
+  end
+
+  # Catches: an internal queue that a paused actor gives back while events
+  # are still in it, or that capture, unload and load lose or reorder
+  # (ADR 0064). The lent queue returns to the system only when it is empty.
+  scenario 'queued internal events survive pauses and residency changes' do
+    baseline = spawn :raiser, name: 'baseline'
+    baseline.deliver 'go'
+    expected = baseline.data('.log')
+    assert_equal %w[go r1 r2 r3 r4 r5], expected
+
+    raiser = spawn :raiser, name: 'cycled'
+    assert_equal 'ok', raiser.post('go')
+    cycled = 0
+    while raiser.resume(budget: 1000, action_budget: 1) == 'paused'
+      next if raiser.observe[:internal_events].to_a.empty?
+
+      cycle_residency(raiser)
+      cycled += 1
+    end
+    assert cycled >= 4, "only #{cycled} pauses had internal events queued"
+    assert_equal expected, raiser.data('.log')
+    assert_equal baseline.active, raiser.active
+    assert raiser.observe[:internal_events].to_a.empty?, 'the queue is empty once the macrostep ends'
   end
 end
