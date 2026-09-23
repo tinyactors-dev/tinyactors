@@ -2,6 +2,8 @@
 
 #include <stdlib.h>
 
+#include "router.h"
+
 ta_result tna_system_create(tna_system **out) {
     if (out == NULL) {
         return TA_ERR_INVALID;
@@ -39,6 +41,7 @@ ta_result tna_system_create(tna_system **out) {
         return result;
     }
     (void)ta_system_set_actor_directory(system->core, tna_directory_adapter(&system->directory));
+    (void)ta_system_set_external_event_router(system->core, tna_router_adapter(system));
     *out = system;
     return TA_OK;
 }
@@ -54,6 +57,7 @@ void tna_system_close(tna_system *system) {
      * reference the addon holds to a core object (a named origin in an
      * envelope, an address in the directory) goes back first (ADR 0012).
      */
+    (void)ta_system_set_external_event_router(system->core, (ta_external_event_router){0});
     (void)ta_system_set_actor_directory(system->core, (ta_actor_directory){0});
     tna_sched_discard_mail(&system->sched);
     tna_directory_clear(&system->directory);

@@ -59,6 +59,7 @@ static uint32_t tna_envelope_take(tna_sched *sched) {
 static void tna_envelope_give(tna_sched *sched, uint32_t index) {
     tna_envelope *envelope = tna_sched_envelope(sched, index);
     ta_event_release(&envelope->event);
+    ta_address_release(envelope->address);
     *envelope = (tna_envelope){ .next = sched->envelopes.free_head };
     sched->envelopes.free_head = index;
     sched->envelopes.live -= 1u;
@@ -100,6 +101,8 @@ void tna_sched_discard_mail(tna_sched *sched) {
         if (envelope->live) {
             ta_event_release(&envelope->event);
             envelope->event = (ta_event){0};
+            ta_address_release(envelope->address);
+            envelope->address = NULL;
         }
     }
 }
@@ -295,6 +298,22 @@ ta_result tna_sched_post(tna_sched *sched, ta_actor_id target, const ta_event *e
     return TA_OK;
 }
 
+ta_result tna_sched_post_dead(tna_sched *sched, const tna_dead_post *post) {
+    if (sched->max_queued != 0 && sched->queued >= sched->max_queued) {
+        return TA_ERR_BUSY;
+    }
+    uint32_t index = tna_envelope_take(sched);
+    if (index == 0) {
+        return TA_ERR_NOMEM;
+    }
+    sched->queued += 1u;
+    tna_envelope *envelope = tna_sched_envelope(sched, index);
+    envelope->event = *post->event;
+    envelope->address = post->address;
+    tna_sched_dead_append(sched, index, post->reason);
+    return TA_OK;
+}
+
 /* ------------------------------------------------------------------------
  * The turn
  */
@@ -461,6 +480,23 @@ static void tna_sched_deliver_one(tna_sched *sched, const tna_turn_params *param
     }
 }
 
+static bool tna_copy_text(ta_arena *arena, ta_str text, ta_str *out) {
+    char *copy = ta_arena_alloc(arena, (size_t)text.len + 1u, 1);
+    if (copy == NULL) {
+        return false;
+    }
+    memcpy(copy, text.ptr, text.len);
+    copy[text.len] = '\0';
+    *out = (ta_str){ .ptr = copy, .len = text.len };
+    return true;
+}
+
+/* Copies an address's text into the turn arena, so a record outlives the reference. */
+static bool tna_copy_address(ta_arena *arena, const ta_address *address, ta_actor_address *out) {
+    ta_actor_address view = ta_address_view(address);
+    return tna_copy_text(arena, view.family.name, &out->family.name) && tna_copy_text(arena, view.name, &out->name);
+}
+
 /* Reports up to `limit` dead letters as records and frees their envelopes. */
 static void tna_sched_report_dead(tna_sched *sched, const tna_turn_params *params, uint32_t limit) {
     for (uint32_t reported = 0; reported < limit && sched->dead_first != 0; reported += 1) {
@@ -472,12 +508,17 @@ static void tna_sched_report_dead(tna_sched *sched, const tna_turn_params *param
         }
         sched->dead_count -= 1u;
         sched->dead_letters += 1u;
-        tna_sched_record(sched, params, (tna_turn_record){
-                                            .kind = TNA_RECORD_DEAD_LETTER,
-                                            .actor = envelope->target,
-                                            .event = envelope->event.name,
-                                            .reason = (tna_dead_reason)envelope->reason,
-                                        });
+        tna_turn_record record = {
+            .kind = TNA_RECORD_DEAD_LETTER,
+            .actor = envelope->target,
+            .event = envelope->event.name,
+            .reason = (tna_dead_reason)envelope->reason,
+        };
+        if (envelope->address != NULL) {
+            /* The envelope's reference goes below; the record keeps the text. */
+            record.has_address = tna_copy_address(params->arena, envelope->address, &record.address);
+        }
+        tna_sched_record(sched, params, record);
         tna_envelope_give(sched, index);
     }
 }

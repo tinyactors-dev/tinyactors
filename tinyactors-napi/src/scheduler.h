@@ -73,13 +73,19 @@ typedef enum {
     TNA_DEAD_NOT_FOUND = 0, /* no resident actor has the target's ID */
     TNA_DEAD_DONE,          /* the target reached a top-level final state */
     TNA_DEAD_DESTROYED,     /* the target was destroyed or unloaded with mail waiting */
-    TNA_DEAD_REFUSED        /* core refused the message itself (for example a malformed event) */
+    TNA_DEAD_REFUSED,       /* core refused the message itself (for example a malformed event) */
+    TNA_DEAD_UNLOADED       /* a named target that is unloaded; loading it is ROADMAP step 14 */
 } tna_dead_reason;
 
-/* One queued message. `event` holds its own references (data, named origin). */
+/*
+ * One queued message. `event` holds its own references (data, named origin).
+ * `address` is set only for a dead letter to a named target that had no
+ * resident actor; it holds a reference too.
+ */
 typedef struct {
     ta_event event;
     ta_actor_id target;
+    ta_address *address;
     uint32_t next;  /* the next envelope in its list, 0 when last */
     uint8_t reason; /* tna_dead_reason, while on the dead list */
     uint8_t live;   /* taken from the store */
@@ -105,7 +111,10 @@ typedef enum {
 
 typedef struct tna_turn_record {
     tna_record_kind kind;
-    ta_actor_id actor;     /* DEAD_LETTER: the target */
+    ta_actor_id actor;     /* DEAD_LETTER: the target, or 0 when it was a name with no actor */
+    /* DEAD_LETTER to a named target with no actor: its text, copied into the turn arena. */
+    bool has_address;
+    ta_actor_address address;
     const char *operation; /* FAULT: "resume", "deliver" */
     ta_result code;        /* FAULT: core's result */
     ta_event_name_id event; /* DEAD_LETTER */
@@ -182,6 +191,18 @@ void tna_sched_remove(tna_sched *sched, ta_actor_id actor, tna_dead_reason reaso
  * - TA_ERR_NOMEM: nothing was accepted.
  */
 ta_result tna_sched_post(tna_sched *sched, ta_actor_id target, const ta_event *event);
+/*
+ * Accepts a message that is a dead letter already: its target is a name the
+ * directory has no resident actor for (ADR 0006 point 4). On TA_OK the
+ * envelope owns `event`'s references and the `address` reference.
+ * TA_ERR_BUSY and TA_ERR_NOMEM as for tna_sched_post().
+ */
+typedef struct {
+    ta_address *address;
+    const ta_event *event;
+    tna_dead_reason reason;
+} tna_dead_post;
+ta_result tna_sched_post_dead(tna_sched *sched, const tna_dead_post *post);
 /* The envelope at `index` (for tests and the router), or NULL. */
 tna_envelope *tna_sched_envelope(const tna_sched *sched, uint32_t index);
 /* Messages waiting in `actor`'s mailbox. */
