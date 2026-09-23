@@ -1,7 +1,9 @@
 /**
  * The package version. The addon is being rebuilt step by step (ROADMAP.md);
- * so far createSystem(), System.close(), System.closed, System.stats() and
- * TinyactorsError are implemented.
+ * so far createSystem(), System.close(), System.closed, System.stats(),
+ * System.define(), System.findDefinition(), Definition, statechart(),
+ * literal() and TinyactorsError are implemented. Until the JavaScript data
+ * model lands (step 11), charts compile against core's null data model.
  */
 export const version: string;
 
@@ -39,10 +41,17 @@ export interface System {
   readonly clock: "realtime" | "manual";
   readonly time: number;
 
+  /**
+   * Compile and register a chart: a statechart() builder, or a spec in the
+   * generated shape (the shape core's definition export returns). A refused
+   * chart throws `invalid` or `unsupported`, with core's compile error as
+   * `detail` (ChartRefusal).
+   */
   define<Data extends object = Record<string, unknown>>(
-    source: DefinitionSpec<Data> | DefinitionBuilder<Data>,
+    source: DefinitionSpec | DefinitionBuilder<Data>,
   ): Definition<Data>;
 
+  /** The newest registered, unretired definition with this identity. */
   findDefinition(identity: DefinitionIdentity): Definition | undefined;
 
   spawn<Data extends object>(
@@ -161,27 +170,42 @@ export interface SendResult {
  * Definitions
  * -------------------------------------------------------------------------- */
 
+/**
+ * A revision is stored as bytes. It reads back as a string when the bytes are
+ * valid UTF-8, and as a Uint8Array otherwise.
+ */
 export interface DefinitionIdentity {
   readonly family: string;
   readonly revision: string | Uint8Array;
 }
 
-export interface DefinitionSpec<Data extends object> extends DefinitionIdentity {
-  /** The statechart document name exposed through the data-model context. */
-  readonly name?: string;
-  readonly binding?: "early" | "late";
-  readonly initial?: InitialTransition<Data>;
-  readonly data?: readonly DataDeclaration<Data>[];
-  /** Document order is semantically significant. */
-  readonly states: readonly StateSpec<Data>[];
+/** Core's compile error, attached as `detail` when define() refuses a chart. */
+export interface ChartRefusal {
+  /** The compile error code, e.g. "expression_rejected" or "unknown_state". */
+  readonly code: string;
+  /** Where in the spec, e.g. "states[0].transitions[1].condition". */
+  readonly path: string;
+  /** Core's compile error as the generated layer returns it. */
+  readonly error: {
+    readonly code: string;
+    readonly path: readonly { readonly member: string; readonly index: number }[];
+    readonly subject?: string;
+    readonly related?: string;
+    readonly message: string;
+  };
 }
 
 export interface Definition<Data extends object = Record<string, unknown>> {
   readonly system: System;
   readonly id: DefinitionId;
   readonly identity: DefinitionIdentity;
+  /**
+   * True once retire() has run. Core frees a retired definition when no
+   * actor uses it; a freed definition still reads as retired.
+   */
   readonly retired: boolean;
 
+  /** Read from core. Throws `not-found` once a retired definition is freed. */
   inspect(): DefinitionInspection;
 
   /** Prevent new actors from using this definition. Existing actors continue. */
@@ -192,6 +216,8 @@ export interface DefinitionInspection {
   readonly id: DefinitionId;
   readonly identity: DefinitionIdentity;
   readonly name?: string;
+  /** The data model the chart was compiled against, e.g. "null". */
+  readonly datamodel: string;
   readonly binding: "early" | "late";
   readonly retired: boolean;
   readonly actorCount: number;
@@ -240,7 +266,7 @@ export interface DefinitionBuilder<Data extends object>
     initial: Expression<Data, Data[Key]>,
   ): this;
   initial(target: Target, actions?: ActionBlock<Data>): this;
-  build(): DefinitionSpec<Data>;
+  build(): DefinitionSpec;
 }
 
 export type ActionBlock<Data extends object> = (
@@ -292,7 +318,8 @@ export type TransitionBlock<Data extends object> = (
 
 export interface TransitionBuilder<Data extends object>
   extends ActionSequenceBuilder<Data, TransitionBuilder<Data>> {
-  when(condition: Condition<Data>): this;
+  /** A JavaScript function needs the JavaScript data model (step 11); until then, data-model source such as "In('s')". */
+  when(condition: Condition<Data> | string): this;
   target(target: Target): this;
   internal(): this;
   external(): this;
@@ -319,10 +346,10 @@ export interface ActionSequenceBuilder<Data extends object, Self> {
   ): Self;
 
   script(run: Script<Data>): Self;
-  log(label?: string, value?: Expression<Data>): Self;
+  log(label?: string, value?: Expression<Data> | string): Self;
 
   choose(
-    condition: Condition<Data>,
+    condition: Condition<Data> | string,
     then: ActionBlock<Data>,
     otherwise?: ActionBlock<Data>,
   ): Self;
@@ -333,8 +360,6 @@ export interface ActionSequenceBuilder<Data extends object, Self> {
     build: ActionBlock<Data>,
     index?: keyof Data & string,
   ): Self;
-
-  invoke(build: InvokeBlock<Data>): Self;
 }
 
 export type SendBlock<Data extends object> = (send: SendBuilder<Data>) => void;
@@ -541,7 +566,13 @@ export type EventOrigin =
   | { readonly kind: "io"; readonly value: bigint };
 
 /* --------------------------------------------------------------------------
- * Statechart authoring model
+ * Statechart specs: the generated shape (ADR 0013)
+ *
+ * System.define() accepts this shape as a plain object; statechart() emits
+ * it; core's definition export returns it. Member names follow core's C
+ * spelling, and a tagged union is { kind, <member>: ... }. Expressions are
+ * data-model source text; until step 11 that is the null data model, which
+ * accepts only In(state).
  * -------------------------------------------------------------------------- */
 
 export type StateKind =
@@ -549,132 +580,129 @@ export type StateKind =
   | "compound"
   | "parallel"
   | "final"
-  | "history-shallow"
-  | "history-deep";
+  | "history_shallow"
+  | "history_deep";
 
-export interface StateSpec<Data extends object> {
+export interface DefinitionSpec {
+  /** The statechart document name. */
+  readonly name?: string;
+  /** The data model the chart requires; absent means no requirement. */
+  readonly datamodel?: string;
+  readonly identity?: {
+    readonly family: { readonly name: string };
+    readonly revision: string | Uint8Array;
+  };
+  readonly binding?: "default" | "early" | "late";
+  readonly initial?: InitialSpec;
+  /** Document order is semantically significant. */
+  readonly states?: readonly StateSpec[];
+  readonly data?: readonly DataSpec[];
+  readonly script?: string;
+}
+
+export interface StateSpec {
+  readonly kind: StateKind;
   readonly id: string;
-  readonly kind?: StateKind;
-  readonly states?: readonly StateSpec<Data>[];
-  readonly initial?: InitialTransition<Data>;
-  readonly transitions?: readonly TransitionSpec<Data>[];
-  /** Each nested array is one separately-failing executable-content block. */
-  readonly onEntry?: readonly (readonly Action<Data>[])[];
-  readonly onExit?: readonly (readonly Action<Data>[])[];
-  readonly data?: readonly DataDeclaration<Data>[];
-  readonly invokes?: readonly InvokeSpec<Data>[];
-  readonly doneData?: DoneDataSpec<Data>;
+  readonly states?: readonly StateSpec[];
+  readonly initial?: InitialSpec;
+  readonly transitions?: readonly TransitionSpec[];
+  /** Each handler is one separately-failing executable-content block. */
+  readonly onentry?: readonly HandlerSpec[];
+  readonly onexit?: readonly HandlerSpec[];
+  readonly data?: readonly DataSpec[];
+  readonly invokes?: readonly InvokeSpec[];
+  readonly done_data?: DoneDataSpec;
 }
 
-export interface InitialTransition<Data extends object> {
-  readonly target: string | readonly string[];
-  readonly actions?: readonly Action<Data>[];
+export interface InitialSpec {
+  readonly targets: readonly string[];
+  readonly actions?: readonly ActionSpec[];
 }
 
-export interface TransitionSpec<Data extends object> {
+export interface TransitionSpec {
+  readonly kind: "external" | "internal";
   /** Omit for an eventless transition. Wildcard segments are supported. */
-  readonly event?: EventName;
-  readonly kind?: "external" | "internal";
-  readonly guard?: Condition<Data>;
-  readonly target?: string | readonly string[];
-  readonly actions?: readonly Action<Data>[];
+  readonly event?: string;
+  readonly condition?: string;
+  readonly targets?: readonly string[];
+  readonly actions?: readonly ActionSpec[];
 }
 
-export interface DataDeclaration<Data extends object> {
-  readonly name: keyof Data & string;
-  readonly initial?: ValueSpec<Data>;
+export interface HandlerSpec {
+  readonly actions: readonly ActionSpec[];
 }
 
-export type Action<Data extends object> =
-  | RaiseAction<Data>
-  | SendAction<Data>
-  | CancelAction<Data>
-  | AssignAction<Data>
-  | ScriptAction<Data>
-  | LogAction<Data>
-  | ChooseAction<Data>
-  | ForEachAction<Data>
-  | InvokeAction<Data>;
-
-export interface RaiseAction<Data extends object> {
-  readonly type: "raise";
-  readonly event: EventName;
-  readonly data?: ValueSpec<Data>;
-}
-
-export interface SendAction<Data extends object> {
-  readonly type: "send";
-  readonly event: StringSpec<Data>;
-  readonly target?: StringSpec<Data>;
-  readonly io?: StringSpec<Data>;
-  readonly delay?: DelaySpec<Data>;
-  readonly id?: string;
-  readonly idLocation?: Location<Data, string>;
-  readonly data?: ValueSpec<Data>;
-  readonly params?: readonly ParameterSpec<Data>[];
-}
-
-export interface CancelAction<Data extends object> {
-  readonly type: "cancel";
-  readonly sendId: StringSpec<Data>;
-}
-
-export interface AssignAction<Data extends object> {
-  readonly type: "assign";
-  readonly location: Location<Data>;
-  readonly value: ValueSpec<Data>;
-}
-
-export interface ScriptAction<Data extends object> {
-  readonly type: "script";
-  readonly run: Script<Data>;
-}
-
-export interface LogAction<Data extends object> {
-  readonly type: "log";
-  readonly label?: string;
-  readonly value?: Expression<Data>;
-}
-
-export interface ChooseAction<Data extends object> {
-  readonly type: "if";
-  readonly condition: Condition<Data>;
-  readonly then: readonly Action<Data>[];
-  readonly else?: readonly Action<Data>[];
-}
-
-export interface ForEachAction<Data extends object> {
-  readonly type: "foreach";
-  readonly array: Expression<Data, readonly unknown[]>;
-  readonly item: keyof Data & string;
-  readonly index?: keyof Data & string;
-  readonly actions: readonly Action<Data>[];
-}
-
-export interface InvokeAction<Data extends object> {
-  readonly type: "invoke";
-  readonly invoke: InvokeSpec<Data>;
-}
-
-export interface ParameterSpec<Data extends object> {
+export interface DataSpec {
   readonly name: string;
-  readonly value: ValueSpec<Data>;
+  readonly initializer?: ValueSourceSpec;
 }
 
-export interface InvokeSpec<Data extends object> {
-  readonly id?: string;
-  readonly idLocation?: Location<Data, string>;
-  readonly type?: StringSpec<Data>;
-  readonly source?: StringSpec<Data>;
-  readonly content?: ValueSpec<Data>;
-  readonly params?: readonly ParameterSpec<Data>[];
+export type ValueSourceSpec =
+  | { readonly kind: "expr"; readonly expr: string }
+  | { readonly kind: "location"; readonly location: string }
+  | { readonly kind: "content"; readonly content: { readonly media_type?: string; readonly bytes: Uint8Array } };
+
+/** An `x` / `xexpr` attribute pair. */
+export type StringAttributeSpec =
+  | { readonly kind: "literal"; readonly literal: string }
+  | { readonly kind: "expr"; readonly expr: string };
+
+export type ActionSpec =
+  | { readonly kind: "raise"; readonly raise: { readonly event: string; readonly data?: ValueSourceSpec } }
+  | { readonly kind: "send"; readonly send: SendSpec }
+  | { readonly kind: "cancel"; readonly cancel: { readonly sendid: StringAttributeSpec } }
+  | { readonly kind: "assign"; readonly assign: { readonly location: string; readonly value?: ValueSourceSpec } }
+  | { readonly kind: "script"; readonly script: { readonly script: string } }
+  | { readonly kind: "log"; readonly log: { readonly label?: string; readonly expr?: string } }
+  | {
+    readonly kind: "if";
+    readonly conditional: {
+      readonly condition: string;
+      readonly then_actions?: readonly ActionSpec[];
+      readonly else_actions?: readonly ActionSpec[];
+    };
+  }
+  | {
+    readonly kind: "foreach";
+    readonly foreach: {
+      readonly array: string;
+      readonly item: string;
+      readonly index?: string;
+      readonly body?: readonly ActionSpec[];
+    };
+  };
+
+export interface SendSpec {
+  readonly id?: { readonly kind: "literal"; readonly literal: string } | { readonly kind: "location"; readonly location: string };
+  readonly type?: StringAttributeSpec;
+  readonly event?: { readonly kind: "name"; readonly name: string } | { readonly kind: "expr"; readonly expr: string };
+  readonly target?: StringAttributeSpec;
+  /** A literal delay is an SCXML duration such as "500ms" or "5s". */
+  readonly delay?: StringAttributeSpec;
+  readonly data?: ValueSourceSpec;
+  readonly params?: readonly ParamSpec[];
+}
+
+export interface ParamSpec {
+  readonly name: string;
+  readonly value?: ValueSourceSpec;
+}
+
+export interface InvokeSpec {
+  readonly kind: "invoke";
+  readonly id?: { readonly kind: "literal"; readonly literal: string } | { readonly kind: "location"; readonly location: string };
+  readonly type?: StringAttributeSpec;
+  readonly src?: StringAttributeSpec;
+  readonly data?: ValueSourceSpec;
   readonly autoforward?: boolean;
-  readonly finalize?: readonly Action<Data>[];
+  readonly params?: readonly ParamSpec[];
+  readonly finalize?: readonly ActionSpec[];
 }
 
-export type DoneDataSpec<Data extends object> =
-  | { readonly content: ValueSpec<Data> }
-  | { readonly params: readonly ParameterSpec<Data>[] };
+export interface DoneDataSpec {
+  readonly content?: ValueSourceSpec;
+  readonly params?: readonly ParamSpec[];
+}
 
 /* --------------------------------------------------------------------------
  * Host extensions
