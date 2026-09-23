@@ -53,41 +53,6 @@ static void test_free(void *self, const ta_allocator_free_params *params) {
 static const ta_allocator_vtable test_allocator_vtable = { .alloc = test_alloc, .free = test_free };
 static const ta_allocator test_allocator = { .self = NULL, .v = &test_allocator_vtable };
 
-/* A data model that evaluates nothing: compiling needs one. */
-static ta_result null_prepare(void *self, const ta_datamodel_prepare_definition_params *params) {
-    (void)self;
-    *params->shared = NULL;
-    return TA_OK;
-}
-static void null_destroy_definition(void *self, void *shared, ta_allocator allocator) {
-    (void)self, (void)shared, (void)allocator;
-}
-static uint32_t null_instance_size(void *self, void *shared) {
-    (void)self, (void)shared;
-    return 1;
-}
-static uint32_t null_instance_alignment(void *self, void *shared) {
-    (void)self, (void)shared;
-    return 1;
-}
-static ta_result null_init_instance(void *self, const ta_datamodel_init_instance_params *params) {
-    (void)self, (void)params;
-    return TA_OK;
-}
-static void null_destroy_instance(void *self, void *shared, void *instance) {
-    (void)self, (void)shared, (void)instance;
-}
-
-static const ta_datamodel_vtable null_datamodel_vtable = {
-    .name = { .ptr = "null", .len = 4 },
-    .prepare_definition = null_prepare,
-    .destroy_definition = null_destroy_definition,
-    .instance_size = null_instance_size,
-    .instance_alignment = null_instance_alignment,
-    .init_instance = null_init_instance,
-    .destroy_instance = null_destroy_instance,
-};
-static const ta_datamodel null_datamodel = { .self = NULL, .v = &null_datamodel_vtable };
 
 #define S(text) ((ta_str){ .ptr = (text), .len = (uint32_t)(sizeof(text) - 1u) })
 
@@ -127,7 +92,7 @@ static ta_definition *compile(ta_system *system, const ta_scxml_spec *spec) {
     ta_definition *definition = NULL;
     ta_result result = ta_definition_compile_spec(system, &(ta_definition_compile_params){
                                                               .spec = spec,
-                                                              .datamodel = null_datamodel,
+                                                              .datamodel = ta_null_datamodel(),
                                                               .allocator = test_allocator,
                                                               .out = &definition,
                                                           });
@@ -244,7 +209,7 @@ static ta_result import(ta_system *system, stub_codec *codec, ta_arena *arena, t
                                             .input = input,
                                             .arena = arena,
                                             .identity = identity,
-                                            .datamodel = null_datamodel,
+                                            .datamodel = ta_null_datamodel(),
                                             .allocator = test_allocator,
                                             .out = out,
                                             .error = error,
@@ -303,7 +268,7 @@ static void test_import_errors(ta_system *system) {
                                            .codec = { .self = &codec, .v = &stub_writer_vtable },
                                            .input = { .ptr = (const uint8_t *)"s", .len = 1 },
                                            .arena = &arena,
-                                           .datamodel = null_datamodel,
+                                           .datamodel = ta_null_datamodel(),
                                            .allocator = test_allocator,
                                            .out = &id,
                                        }) == TA_ERR_UNSUPPORTED);
@@ -311,7 +276,7 @@ static void test_import_errors(ta_system *system) {
     CHECK(ta_definition_import(system, &(ta_definition_import_params){
                                            .codec = { .self = &codec, .v = &stub_codec_vtable },
                                            .arena = &arena,
-                                           .datamodel = null_datamodel,
+                                           .datamodel = ta_null_datamodel(),
                                            .allocator = test_allocator,
                                        }) == TA_ERR_INVALID);
     ta_arena_destroy(&arena);

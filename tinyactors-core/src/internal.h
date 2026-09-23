@@ -16,6 +16,7 @@
 #include "continuation.h"
 #include "timer.h"
 #include "datamodel.h"
+#include "null_datamodel.h"
 #include "io.h"
 #include "invoke.h"
 #include "definition.h"

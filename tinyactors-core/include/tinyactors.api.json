@@ -12699,6 +12699,19 @@
       ]
     },
     {
+      "name": "ta_null_datamodel",
+      "doc": "The SCXML Null data model (SCXML B.1, ADR 0057), named \"null\". Its only expression is the In(state) predicate in a condition, with the ID quoted in ' or \" or bare; In() of a state the chart does not have is false. A chart with any other expression fails to compile, and the error names the expression (ADR 0058). Every operation that needs data fails at run time as error.execution. It is stateless (`.self` is null) and allocates nothing per actor.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_datamodel"
+        }
+      },
+      "params": []
+    },
+    {
       "name": "ta_dm_host_text",
       "public": true,
       "static_inline": false,

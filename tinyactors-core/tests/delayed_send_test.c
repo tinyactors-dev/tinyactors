@@ -51,56 +51,6 @@ static const ta_allocator_vtable count_vtable = { .alloc = count_alloc, .free = 
 static const ta_allocator allocator = { .self = NULL, .v = &count_vtable };
 
 /* ------------------------------------------------------------------------
- * A data model with no data: these charts evaluate nothing.
- */
-
-static ta_result dm_prepare(void *self, const ta_datamodel_prepare_definition_params *params) {
-    (void)self;
-    *params->shared = NULL;
-    return TA_OK;
-}
-
-static void dm_destroy_definition(void *self, void *shared, ta_allocator unused) {
-    (void)self;
-    (void)shared;
-    (void)unused;
-}
-
-static uint32_t dm_instance_size(void *self, void *shared) {
-    (void)self;
-    (void)shared;
-    return 0;
-}
-
-static uint32_t dm_instance_alignment(void *self, void *shared) {
-    (void)self;
-    (void)shared;
-    return 1;
-}
-
-static ta_result dm_init_instance(void *self, const ta_datamodel_init_instance_params *params) {
-    (void)self;
-    (void)params;
-    return TA_OK;
-}
-
-static void dm_destroy_instance(void *self, void *shared, void *instance) {
-    (void)self;
-    (void)shared;
-    (void)instance;
-}
-
-static const ta_datamodel_vtable dm_vtable = {
-    .name = STR("null"),
-    .prepare_definition = dm_prepare,
-    .destroy_definition = dm_destroy_definition,
-    .instance_size = dm_instance_size,
-    .instance_alignment = dm_instance_alignment,
-    .init_instance = dm_init_instance,
-    .destroy_instance = dm_destroy_instance,
-};
-
-/* ------------------------------------------------------------------------
  * A router that accepts or refuses, and records what it accepted.
  */
 
@@ -242,7 +192,7 @@ static ta_definition_id define(ta_system *system, const char *family, const ta_s
     ta_result result = ta_definition_compile_spec(
         system, &(ta_definition_compile_params){
                     .spec = &(ta_scxml_spec){ .datamodel = STR("null"), .identity = &identity, .states = states },
-                    .datamodel = { .self = NULL, .v = &dm_vtable },
+                    .datamodel = ta_null_datamodel(),
                     .allocator = allocator,
                     .out = &definition,
                 });

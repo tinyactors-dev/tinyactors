@@ -573,6 +573,17 @@ TA_API const ta_event *ta_dm_host_event(const ta_dm_host *host) TA_OPTIONAL TA_L
 TA_API ta_actor_id ta_dm_host_actor(const ta_dm_host *host);
 
 /*
+ * The SCXML Null data model (SCXML B.1, ADR 0057), named "null". Its only
+ * expression is the In(state) predicate in a condition, with the ID quoted in
+ * ' or " or bare; In() of a state the chart does not have is false. A chart
+ * with any other expression fails to compile, and the error names the
+ * expression (ADR 0058). Every operation that needs data fails at run time
+ * as error.execution. It is stateless (`.self` is null) and allocates nothing
+ * per actor.
+ */
+TA_API ta_datamodel ta_null_datamodel(void);
+
+/*
  * Text of the SCXML system variables, for data models that expose them
  * (SCXML 5.10). Each field is formatted into the caller's buffer following
  * the list-output convention: `*needed` always receives the size including

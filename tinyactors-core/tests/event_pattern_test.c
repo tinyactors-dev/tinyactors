@@ -41,39 +41,6 @@ static void test_free(void *self, const ta_allocator_free_params *params) {
 static const ta_allocator_vtable test_allocator_vtable = { .alloc = test_alloc, .free = test_free };
 static const ta_allocator test_allocator = { .self = NULL, .v = &test_allocator_vtable };
 
-static ta_result model_prepare(void *self, const ta_datamodel_prepare_definition_params *params) {
-    (void)self;
-    *params->shared = NULL;
-    return TA_OK;
-}
-static void model_destroy_definition(void *self, void *shared, ta_allocator allocator) {
-    (void)self, (void)shared, (void)allocator;
-}
-static uint32_t model_instance_size(void *self, void *shared) {
-    (void)self, (void)shared;
-    return 1;
-}
-static uint32_t model_instance_alignment(void *self, void *shared) {
-    (void)self, (void)shared;
-    return 1;
-}
-static ta_result model_init_instance(void *self, const ta_datamodel_init_instance_params *params) {
-    (void)self, (void)params;
-    return TA_OK;
-}
-static void model_destroy_instance(void *self, void *shared, void *instance) {
-    (void)self, (void)shared, (void)instance;
-}
-static const ta_datamodel_vtable model_vtable = {
-    .name = { .ptr = "null", .len = 4 },
-    .prepare_definition = model_prepare,
-    .destroy_definition = model_destroy_definition,
-    .instance_size = model_instance_size,
-    .instance_alignment = model_instance_alignment,
-    .init_instance = model_init_instance,
-    .destroy_instance = model_destroy_instance,
-};
-
 static ta_system *system_under_test;
 
 static ta_str text(const char *value) {
@@ -94,7 +61,7 @@ static bool matches(const char *descriptor, const char *event) {
     ta_result compiled = ta_definition_compile_spec(system_under_test,
                                                     &(ta_definition_compile_params){
                                                         .spec = &spec,
-                                                        .datamodel = { .v = &model_vtable },
+                                                        .datamodel = ta_null_datamodel(),
                                                         .allocator = test_allocator,
                                                         .out = &definition,
                                                     });
