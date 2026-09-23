@@ -79,8 +79,11 @@ tinyactors-napi/
 │   ├── tasks/
 │   │   ├── bindings             regenerate src/gen/ from tinyactors.api.json and bindings.rb
 │   │   ├── build                compile core amalgamation + src/**/*.c into build/tinyactors_napi.node
+│   │   ├── test-native          build and run test/native/*_test.c against the plumbing objects
 │   │   └── test                 staleness check, native unit tests, then the JS suites on Node and Bun
 │   └── lib/
+│       ├── compile.rb           the one compile command; cached objects under build/obj shared by
+│       │                        build and test-native
 │       └── napi/                the generator (owned by this package; not shared)
 │           ├── api.rb           read and validate the API description
 │           ├── plan.rb          Node-API binding decisions: positional args, codecs, outputs, handles
