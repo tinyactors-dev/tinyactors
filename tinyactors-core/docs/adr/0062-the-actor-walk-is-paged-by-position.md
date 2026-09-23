@@ -1,6 +1,6 @@
 # ADR 0062: The actor walk is paged by position
 
-**Status:** Accepted and implemented; refines ADR 0018, prepares for ADR 0059. See the implementation notes.
+**Status:** Accepted and implemented; refines ADR 0018, applies ADR 0059. See the implementation notes.
 **Date:** 2026-09-23
 
 ## Context
@@ -26,8 +26,8 @@ consumers:
 Internally, actors live in a table of slots, and an actor's ID is
 `generation << 32 | slot` (`src/system.h`). Freed slots form a free list
 that spawn takes first, so the table only grows when every slot is in use.
-ADR 0059 (Proposed) would make the slot and generation public; it is not
-implemented.
+ADR 0059 makes the slot and generation public (`ta_actor_id_slot()`,
+`ta_actor_id_generation()`, `ta_actor_id_make()`).
 
 ## Decision
 
@@ -68,11 +68,12 @@ from a real failure.
 
 - A position is a `uint32_t`. The walk visits resident actors in increasing
   position order, starting at `from`.
-- Today a position is the actor's slot: the low 32 bits of its
-  `ta_actor_id`. Callers treat it as opaque and only pass back a `next`
-  core gave them, or 0. If ADR 0059 lands, the position is exactly the
-  public slot, and `[slot, generation]` pairs come from the IDs the walk
-  visits.
+- A position is an actor's slot, `ta_actor_id_slot()` of its ID (ADR
+  0059). It is not a separate opaque value: a host that holds an actor can
+  resume a walk at it with `from = ta_actor_id_slot(id)`, and the
+  `[slot, generation]` pairs a binding builds come from the same IDs the
+  walk visits. No slot is `TA_ACTOR_VISIT_END`: the free list already uses
+  `UINT32_MAX` as its end, and the table cannot reach that many slots.
 - `from == 0` starts a full iteration. `from` at or beyond the end of the
   table, `TA_ACTOR_VISIT_END` included, visits nothing and answers `TA_OK`
   with `next == TA_ACTOR_VISIT_END`.
@@ -144,9 +145,9 @@ increasing position, for a walk of everything as for a page.
 - A walk can cross a process boundary: the test host's RPC binds the paged
   call directly, and a scenario can walk page by page.
 - A failed visit can be retried without skipping the actor.
-- Position is tied to slots. If core ever stores actors differently, the
-  position must still be monotone and stable for a resident actor, or this
-  ADR changes.
+- Position is the slot. If core ever stores actors differently, the slot
+  and the position change together, in place, with every caller in this
+  repo (the private-library rule in the root `AGENTS.md`).
 
 ## Implementation notes
 
@@ -168,9 +169,9 @@ increasing position, for a walk of everything as for a page.
   invoked child placed before its parent, and an empty system. The scale
   test measures one page of 64 per actor visited, 3,000 pages from where
   the last ended: 0.015 us at 50,000 residents and 0.012 us at 200,000.
-- **ADR 0059** is still Proposed and unimplemented. The position is the
-  slot, taken from the low 32 bits of the actor ID internally; nothing
-  public promises that yet.
+- **ADR 0059** has since landed. The position is documented as the public
+  slot, `ta_actor_id_slot()`, in the header, the manual and this ADR; the
+  walk itself did not change.
 
 - **2026-09-23: one function.** As first implemented, this ADR added
   `ta_system_visit_actors_from` beside an unchanged

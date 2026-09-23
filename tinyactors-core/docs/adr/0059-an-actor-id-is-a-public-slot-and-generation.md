@@ -1,6 +1,6 @@
 # ADR 0059: An actor ID is a public slot and generation
 
-**Status:** Proposed; refines ADR 0028
+**Status:** Accepted and implemented; refines ADR 0028. See the implementation notes.
 **Date:** 2026-09-23
 
 ## Context
@@ -50,7 +50,35 @@ header (ADR 0043). The actor ID does not.
 
 - Bindings can represent an actor as two small integers, or as two
   `Uint32Array` lanes in bulk, without losing stale-ID detection.
-- The layout becomes part of the ABI. A change to the slot or generation
-  width is a breaking change and needs its own ADR.
+- The layout is a documented contract that every caller in this repo
+  relies on: bindings, the test host, and the paged walk's position
+  (ADR 0062). The libraries are private (root `AGENTS.md`), so a change to
+  the slot or generation width is made in place, with every caller
+  migrated in the same change, and recorded here.
 - Session images and other durable formats are unaffected. Runtime IDs are
   still process-local handles (ADR 0028).
+
+## Implementation notes
+
+- **The functions** are declared in `include/tinyactors.h` next to the
+  documented layout of `ta_actor_id`, and defined in `src/actor.c`. Core
+  uses them wherever it split or joined an actor ID by hand: the lookup,
+  claiming and releasing a slot (`src/actor.c`), and system teardown
+  (`src/system.c`). Definition IDs keep their own arithmetic (ADR 0043).
+- **Decision 3 was violated before this landed.** Releasing a slot did
+  `generation += 1`, which wraps from `UINT32_MAX` to 0. It now wraps to
+  1. `tests/actor_id_test.c` sets a free slot's generation to
+  `UINT32_MAX`, spawns into it, destroys that actor, and checks that the
+  next occupant gets generation 1, that the `UINT32_MAX` ID and a made
+  generation-0 ID are stale, and that the slot's very first ID names the
+  slot again: the aliasing decision 4 accepts after 2^32 − 1 reuses.
+- **Tests of the public behaviour** are scenarios in
+  `tinyactors-test/ruby/scenarios/actor_ids.rb`, over the generated RPC
+  (`ta.actor.id_slot`, `ta.actor.id_generation`, `ta.actor.id_make`):
+  split and join round-trip on real IDs, a wrong or zero generation is
+  not found, and a destroyed actor's ID stays stale while the slot's next
+  occupant has a newer generation.
+- **ADR 0062's position** is now documented as the public slot, not an
+  opaque value that happens to be the slot.
+- **napi** did not split or join actor IDs yet, so nothing there changed.
+  Its `actorIds()` pairs (napi ADR 0002) can rely on this layout.

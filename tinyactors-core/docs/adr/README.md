@@ -62,7 +62,7 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0056](0056-a-finished-actor-reports-the-final-state-it-reached.md) | [A finished actor reports the final state it reached](0056-a-finished-actor-reports-the-final-state-it-reached.md) |
 | [0057](0057-core-ships-the-null-data-model.md) | [Core ships the null data model](0057-core-ships-the-null-data-model.md) |
 | [0058](0058-compile-errors-say-what-and-where.md) | [A compile error says what is wrong and where in the chart](0058-compile-errors-say-what-and-where.md) |
-| [0059](0059-an-actor-id-is-a-public-slot-and-generation.md) | [An actor ID is a public slot and generation](0059-an-actor-id-is-a-public-slot-and-generation.md) (proposed) |
+| [0059](0059-an-actor-id-is-a-public-slot-and-generation.md) | [An actor ID is a public slot and generation](0059-an-actor-id-is-a-public-slot-and-generation.md) |
 | [0060](0060-no-recursion-in-core.md) | [No recursion in core](0060-no-recursion-in-core.md) |
 | [0061](0061-a-macrostep-can-pause-inside-executable-content.md) | [A macrostep can pause inside executable content](0061-a-macrostep-can-pause-inside-executable-content.md) |
 | [0062](0062-the-actor-walk-is-paged-by-position.md) | [The actor walk is paged by position](0062-the-actor-walk-is-paged-by-position.md) |

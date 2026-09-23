@@ -8,7 +8,7 @@
 - `ta_event_name_id` — structured event-name handle.
 - `ta_definition_id` — runtime definition handle: slot in the low 32 bits, the slot's generation in the high 32 bits (ADR 0043). A freed definition's ID goes stale and never names another definition; zero is never valid.
 - `ta_definition_identity` — logical definition family plus exact opaque revision fingerprint.
-- `ta_actor_id` — runtime-local actor identity; may internally encode slot + generation.
+- `ta_actor_id` — runtime actor handle: slot in the low 32 bits, the slot's generation in the high 32 bits (ADR 0059), split and joined with `ta_actor_id_slot`, `ta_actor_id_generation` and `ta_actor_id_make`. Zero is never valid and no slot is issued generation 0. A destroyed actor's ID goes stale; the slot's next occupant has a newer generation.
 - `ta_actor_address` — logical named actor address scoped by definition family.
 - `ta_invoke_id`, `ta_send_id`, `ta_timer_id` — identities scoped by their semantic subsystem.
 - `ta_time` — caller-supplied monotonic logical time, in milliseconds.
