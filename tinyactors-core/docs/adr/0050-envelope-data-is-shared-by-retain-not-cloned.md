@@ -1,6 +1,6 @@
 # ADR 0050: Envelope data is shared by retain, not cloned
 
-**Status:** Accepted; refines ADR 0006, applies ADR 0033
+**Status:** Accepted; refines ADR 0006, applies ADR 0033; the open question about `ta_value_clone` and `ta_event_clone` was settled on 2026-09-23 by removing them
 **Date:** 2026-09-20
 
 ## Context
@@ -82,8 +82,14 @@ somebody has to remember to write.
 
 `ta_value_clone` and `ta_event_clone` remain declared. Core no longer calls
 either, and no adapter in this repository implements `clone`, so both now
-answer `TA_ERR_UNSUPPORTED` against the shipped adapters. **Whether they stay
-in the public API is deliberately left open here.** Removing them is a
-breaking change; against it, a host that wants generic snapshot-on-take may
-still implement `clone` for its own callers, and re-adding an optional vtable
-member later is additive, because core would have to null-check it anyway.
+answer `TA_ERR_UNSUPPORTED` against the shipped adapters. Whether they stayed
+in the public API was left open here, because removing them was a breaking
+change.
+
+**Settled, 2026-09-23:** `ta_value_clone`, `ta_event_clone` and the `clone`
+member of `ta_value_vtable` were removed. Every caller of core is in this
+repository (the root `AGENTS.md`, "The libraries are private"), and nothing
+depended on them: core never called them, no adapter implemented `clone`, and
+the only uses were a test asserting `TA_ERR_UNSUPPORTED` and two binding
+exclusions. `retain` and `release` are now the whole value contract. A host
+that wants a copy makes one in its own code.

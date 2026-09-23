@@ -9,7 +9,7 @@ Event data, targets, data-model values, and errors may be native host objects. T
 
 ## Decision
 
-`ta_value` is a fat pointer whose vtable owns retain/release and clone behavior. A binding may wrap `PyObject *`, Ruby `VALUE`, N-API handles/references, native C objects, or immediate/arena-backed embedded values.
+`ta_value` is a fat pointer whose vtable owns retain/release and clone behavior. (ADR 0050 made retain the only way core shares a value, and the `clone` member has since been removed.) A binding may wrap `PyObject *`, Ruby `VALUE`, N-API handles/references, native C objects, or immediate/arena-backed embedded values.
 
 Tinyactors core does not require a universal serialization hook. Portable durability modules may define host-specific value codecs or stable-reference schemes outside the core ABI.
 
