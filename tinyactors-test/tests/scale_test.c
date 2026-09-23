@@ -279,7 +279,11 @@ static const ta_scxml_state_spec STATES_V2[] = {
     {0},
 };
 
-/* One delayed send far in the future, armed on entry: every timed actor holds one. */
+/*
+ * One delayed send far in the future, armed on entry: every timed actor holds
+ * one. `rearm` cancels it with <cancel> and arms it again, which is the
+ * cancel path ADR 0054 D7 measures on a resident actor.
+ */
 static const ta_scxml_state_spec STATES_TIMED[] = {
     {
         .kind = TA_SCXML_STATE_ATOMIC,
@@ -288,6 +292,22 @@ static const ta_scxml_state_spec STATES_TIMED[] = {
             (const ta_scxml_handler_spec[]){
                 {.actions =
                      (const ta_scxml_action_spec[]){
+                         {.kind = TA_SCXML_ACTION_SEND,
+                          .as.send = {.id = {.kind = TA_SCXML_ID_LITERAL, .as.literal = STR("timeout")},
+                                      .event = {.kind = TA_SCXML_EVENT_NAME, .as.name = STR("timeout")},
+                                      .delay = {.kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("60s")}}},
+                         {0},
+                     }},
+                {0},
+            },
+        .transitions =
+            (const ta_scxml_transition_spec[]){
+                {.kind = TA_SCXML_TRANSITION_INTERNAL,
+                 .event = STR("rearm"),
+                 .actions =
+                     (const ta_scxml_action_spec[]){
+                         {.kind = TA_SCXML_ACTION_CANCEL,
+                          .as.cancel = {.sendid = {.kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("timeout")}}},
                          {.kind = TA_SCXML_ACTION_SEND,
                           .as.send = {.id = {.kind = TA_SCXML_ID_LITERAL, .as.literal = STR("timeout")},
                                       .event = {.kind = TA_SCXML_EVENT_NAME, .as.name = STR("timeout")},
@@ -337,7 +357,8 @@ typedef struct {
     double upgrade_us; /* per actor: prepare, run, activate, destroy incumbent */
     double churn_us;   /* per actor: spawn, bootstrap and destroy an ephemeral */
     double inspect_us; /* per inspection of one timed actor, its sends listed */
-    double timer_us;   /* per actor: spawn a timed ephemeral (arms a send), destroy it (cancels it) */
+    double timer_us;   /* per actor: spawn a timed ephemeral (arms a send), destroy it (discards it) */
+    double cancel_us;  /* per event: <cancel> a resident actor's send and arm it again */
     double page_us;    /* per actor visited: one page of the actor walk, from where the last one ended */
     double actor_bytes;
     uint64_t peak_bytes;
@@ -510,6 +531,37 @@ static round_cost measure(size_t population) {
     double timers_churned = cpu_seconds();
 
     /*
+     * A real <cancel> on a resident actor (ADR 0054 D7): `rearm` cancels the
+     * actor's one send and arms it again, so the owner's list is emptied and
+     * refilled and its heap entry re-keyed, against the whole population's
+     * sends. The same round-robin sample as inspection keeps the ratio about
+     * work, not cache misses.
+     */
+    ta_atom rearm_atom = 0;
+    ta_event_name_id rearm_name = 0;
+    require(ta_system_intern_atom(system, (ta_str)STR("rearm"), &rearm_atom) == TA_OK &&
+                ta_event_name_intern(system, &(ta_atom_list){.atoms = &rearm_atom, .count = 1}, &rearm_name) == TA_OK,
+            "interning rearm");
+    for (size_t index = 0; index < CHURN_ACTORS; index += 1) {
+        ta_actor_id timed_actor = timed_actors[(index % INSPECTION_SAMPLE) * stride];
+        ta_event rearm = {.name = rearm_name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE};
+        require(ta_actor_deliver(system, timed_actor, &rearm) == TA_OK, "delivering rearm");
+        ta_run_status status = TA_RUN_ERROR;
+        require(ta_actor_resume(system, &(ta_actor_resume_params){
+                                            .actor = timed_actor,
+                                            .budget = 100,
+                                            .status = &status,
+                                        }) == TA_OK &&
+                    status == TA_RUN_STABLE,
+                "cancelling and re-arming a send");
+    }
+    double rearmed = cpu_seconds();
+    ta_actor_inspection rearmed_view;
+    require(ta_actor_inspect(system, timed_actors[0], &rearmed_view) == TA_OK &&
+                rearmed_view.delayed_send_count == 1 && rearmed_view.delayed_sends[0].due == 60000,
+            "a re-armed actor holds exactly its one send");
+
+    /*
      * Pages of the actor walk (ADR 0062): each starts where the last one
      * ended, wrapping at the end, so a page costs its own size whatever
      * the population, and the walk never skips ahead by re-walking.
@@ -565,7 +617,8 @@ static round_cost measure(size_t population) {
         .churn_us = per_actor_us(churned - upgraded, CHURN_ACTORS),
         .inspect_us = per_actor_us(inspected - inspect_started, INSPECTIONS),
         .timer_us = per_actor_us(timers_churned - inspected, CHURN_ACTORS),
-        .page_us = per_actor_us(paged - timers_churned, visited),
+        .cancel_us = per_actor_us(rearmed - timers_churned, CHURN_ACTORS),
+        .page_us = per_actor_us(paged - rearmed, visited),
         .actor_bytes = actor_bytes,
         .peak_bytes = peak_bytes,
     };
@@ -591,6 +644,9 @@ static round_cost measure_best(size_t population, unsigned repetitions) {
         if (next.timer_us < best.timer_us) {
             best.timer_us = next.timer_us;
         }
+        if (next.cancel_us < best.cancel_us) {
+            best.cancel_us = next.cancel_us;
+        }
         if (next.page_us < best.page_us) {
             best.page_us = next.page_us;
         }
@@ -599,17 +655,18 @@ static round_cost measure_best(size_t population, unsigned repetitions) {
 }
 
 static void report(const char *label, size_t population, round_cost cost) {
-    printf("%-10s %9zu   %8.2f %8.2f %8.2f %8.3f %8.2f %8.3f   %7.1f %10.1f\n", label, population, cost.spawn_us,
-           cost.upgrade_us, cost.churn_us, cost.inspect_us, cost.timer_us, cost.page_us, cost.actor_bytes,
+    printf("%-10s %9zu   %8.2f %8.2f %8.2f %8.3f %8.2f %8.3f %8.3f   %7.1f %10.1f\n", label, population, cost.spawn_us,
+           cost.upgrade_us, cost.churn_us, cost.inspect_us, cost.timer_us, cost.cancel_us, cost.page_us, cost.actor_bytes,
            (double)cost.peak_bytes / (1024.0 * 1024.0));
     /* A failure below writes to stderr; keep the table ahead of it. */
     fflush(stdout);
 }
 
 static void report_header(void) {
-    printf("%-10s %9s   %8s %8s %8s %8s %8s %8s   %7s %10s\n", "", "actors", "spawn", "upgrade", "churn", "inspect",
-           "timer", "page", "bytes", "peak MB");
-    printf("%-10s %9s   %8s %8s %8s %8s %8s %8s   %7s %10s\n", "", "", "us", "us", "us", "us", "us", "us", "/actor", "");
+    printf("%-10s %9s   %8s %8s %8s %8s %8s %8s %8s   %7s %10s\n", "", "actors", "spawn", "upgrade", "churn", "inspect",
+           "timer", "cancel", "page", "bytes", "peak MB");
+    printf("%-10s %9s   %8s %8s %8s %8s %8s %8s %8s   %7s %10s\n", "", "", "us", "us", "us", "us", "us", "us", "us", "/actor",
+           "");
 }
 
 /* Names the two costs whose ratio failed, so the report says which walk. */
@@ -648,7 +705,8 @@ int main(int argc, char **argv) {
     require_flat("upgrading an actor", small.upgrade_us, large.upgrade_us);
     require_flat("an ephemeral actor", small.churn_us, large.churn_us);
     require_flat("inspecting a timed actor", small.inspect_us, large.inspect_us);
-    require_flat("arming and cancelling a delayed send", small.timer_us, large.timer_us);
+    require_flat("a timed ephemeral actor", small.timer_us, large.timer_us);
+    require_flat("cancelling and re-arming a delayed send", small.cancel_us, large.cancel_us);
     require_flat("a page of the actor walk", small.page_us, large.page_us);
 
     /*
