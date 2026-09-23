@@ -753,6 +753,7 @@ export type TinyactorsErrorCode =
   | "stale"
   | "queue-full"
   | "closed"
+  | "reentrant"
   | "aborted"
   | "timeout";
 

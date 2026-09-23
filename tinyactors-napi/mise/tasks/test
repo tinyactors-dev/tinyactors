@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="Build and test the tinyactors Node-API addon: native unit tests, then the JS suites on Node.js and Bun"
+#MISE description="Build and test the tinyactors Node-API addon: binding staleness, native unit tests, then the JS suites on Node.js and Bun"
 # vim:ft=ruby
 
 require 'pathname'
@@ -13,6 +13,7 @@ def run(*command)
   exit(status.exitstatus || 1) unless status.success?
 end
 
+run('mise', 'run', 'bindings', '--check')
 run('mise', 'run', 'build')
 run('mise', 'run', 'test-native')
 run('mise', 'run', 'test-native-asan')

@@ -55,8 +55,12 @@ tinyactors-napi/
 │   │   └── ta_napi.h            GENERATED, checked in
 │   ├── addon.c                  module init: registers classes and the generated module; nothing else
 │   ├── runtime.{c,h}            the per-environment record (error class, open systems, cleanup hook);
-│   │                            support for generated code: primitive and (slot, generation) codecs,
-│   │                            result -> TinyactorsError, reentrancy guard, handle wrapping (ADR 0013)
+│   │                            support for generated code: the call context and arena, decode
+│   │                            paths, result -> TinyactorsError, reentrancy guard, handle objects
+│   │                            (ADR 0013)
+│   ├── runtime_codecs.c         hand-written codecs: primitives, ta_str, ta_bytes, the overridden
+│   │                            types (ta_actor_id, ta_actor_ref, ta_value, ta_expression) and the
+│   │                            injected adapters (ta_allocator, ta_datamodel)
 │   ├── system.{c,h}             native system without Node-API: owns ta_system and all plumbing,
 │   │                            close, stats (ADR 0012); covered by native tests
 │   ├── napi_system.{c,h}        the JavaScript System class over system.{c,h}: wrap, finalizer, stats
@@ -81,7 +85,8 @@ tinyactors-napi/
 │       └── log.{c,h}            buffered log sink
 ├── mise/
 │   ├── tasks/
-│   │   ├── bindings             regenerate src/gen/ from tinyactors.api.json and bindings.rb
+│   │   ├── bindings             regenerate src/gen/ from tinyactors.api.json and bindings.rb;
+│   │   │                        --check fails when src/gen is stale, --report lists every category
 │   │   ├── build                compile core amalgamation + src/**/*.c into build/tinyactors_napi.node
 │   │   ├── test-native          build and run test/native/*_test.c against the plumbing objects
 │   │   ├── test-native-asan     the same native tests under AddressSanitizer and UBSan
@@ -217,6 +222,13 @@ Needs core ADR 0059.
 - Commit the first `src/gen/ta_napi.{c,h}`.
 - `mise run test` regenerates into a temporary directory and fails on any
   difference.
+- The hooks are declared in `bindings.rb` and called by the generated code,
+  but `src/hooks.c` does nothing until step 5. An actor spawned through the
+  generated layer is created and not bootstrapped, because nothing
+  schedules it yet.
+- Until step 11, `ta_value` crosses only when absent, and `ta_expression`
+  only as source text. A JavaScript value or function throws
+  `unsupported`; nothing is dropped silently.
 
 Exit criterion:
 - a bound function (for example `ta_system_time`) is callable through the
