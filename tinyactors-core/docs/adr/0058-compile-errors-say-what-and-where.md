@@ -1,6 +1,6 @@
 # ADR 0058: A compile error says what is wrong and where in the chart
 
-**Status:** Accepted; extends ADR 0042, completes ADR 0053 §4
+**Status:** Accepted and implemented; extends ADR 0042, completes ADR 0053 §4. See the implementation notes for where the code differs from the text.
 **Date:** 2026-09-23
 
 ## Context
