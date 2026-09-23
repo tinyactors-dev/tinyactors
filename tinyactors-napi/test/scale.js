@@ -1,0 +1,416 @@
+'use strict';
+
+// Step 10: prove the scale properties (ROADMAP step 10; ADRs 0002, 0003,
+// 0005, 0007, 0014; core ADRs 0018, 0063, 0064). Runs on Node and Bun.
+//
+// A population benchmark in the style of tinyactors-test's scale_test.c. It
+// measures 50,000 and 200,000 actors by default. TAT_SCALE_MAX_POPULATION
+// raises the cap to 1,000,000 or 4,000,000; a population above 200,000 then
+// runs only when its predicted peak fits in three quarters of the memory
+// available at that moment.
+//
+// From one population to the next (a factor of four or five), each of these
+// must stay flat per actor, so a walk over the population shows up as a
+// ratio near the step against a bound of two:
+//   - spawn plus bootstrap, per actor (CPU time);
+//   - post plus delivery, per message (CPU time, a fixed sample of actors
+//     spread over the table, so the ratio measures work, not cache misses);
+//   - inspect, per call (CPU time, the same sample);
+//   - one page of actorIds(), per page (median wall time over a warm pass;
+//     bound three, as in scale_test.c);
+//   - the end-to-end run (post `work` to every actor, flush once), per actor;
+//   - native bytes per actor (bound 1.25), and the largest single block the
+//     system allocated, which must not grow at all (core ADR 0063 keeps the
+//     actor table in pages).
+// After warm-up a round of posts and deliveries makes no allocator call in
+// the addon; core's calls are reported beside it (ADR 0014 point 6).
+//
+// No absolute duration is asserted. At the largest population measured the
+// test prints the longest spawn, the largest event-loop delay, RSS, V8 heap
+// and native bytes per actor, and total GC pause time, next to a plain
+// JavaScript baseline (one object per actor with a switch-based handler).
+
+const assert = require('node:assert/strict');
+const os = require('node:os');
+const { execFileSync } = require('node:child_process');
+const { createSystem, statechart } = require('..');
+const { ActorId } = require('../lib/actor');
+
+const IS_BUN = typeof Bun !== 'undefined';
+const POPULATIONS = [50_000, 200_000, 1_000_000, 4_000_000];
+const DEFAULT_CAP = 200_000;
+const COST_RATIO_BOUND = 2.0;
+const PAGE_RATIO_BOUND = 3.0;
+const BYTES_RATIO_BOUND = 1.25;
+const SAMPLE = 1024;          // actors posted to and inspected, spread over the table
+const REPEAT = 8;             // messages per sampled actor per round
+const ROUNDS = 7;             // measured rounds; the median is kept
+const PAGE_SIZE = 1024;
+
+// A full garbage collection on either runtime.
+const collect = (() => {
+  if (IS_BUN) {
+    return () => Bun.gc(true);
+  }
+  require('node:v8').setFlagsFromString('--expose-gc');
+  return require('node:vm').runInNewContext('gc');
+})();
+
+function cpuMicros() {
+  const { user, system } = process.cpuUsage();
+  return user + system;
+}
+
+function median(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+// Bytes the JavaScript side holds after a full collection.
+function jsRetained() {
+  collect();
+  const { heapUsed, arrayBuffers = 0 } = process.memoryUsage();
+  return heapUsed + arrayBuffers;
+}
+
+// Allocator calls by the addon (every category but core's), and by core.
+function allocatorCalls(system) {
+  const memory = system.stats().memory;
+  let addon = 0;
+  for (const [name, counters] of Object.entries(memory)) {
+    if (name !== 'total' && name !== 'core') {
+      addon += counters.allocations + counters.frees;
+    }
+  }
+  return { addon, core: memory.core.allocations + memory.core.frees };
+}
+
+// Memory that is free or can be reclaimed without swapping, as scale_test.c
+// reads it; null when the platform does not say.
+function availableBytes() {
+  try {
+    if (process.platform === 'darwin') {
+      const text = execFileSync('vm_stat', { encoding: 'utf8' });
+      const pageSize = Number(/page size of (\d+) bytes/.exec(text)?.[1] ?? 4096);
+      let pages = 0;
+      for (const label of ['Pages free', 'Pages inactive', 'Pages speculative', 'Pages purgeable']) {
+        const match = new RegExp(`${label}:\\s+(\\d+)`).exec(text);
+        pages += match ? Number(match[1]) : 0;
+      }
+      return pages * pageSize;
+    }
+    if (process.platform === 'linux') {
+      const text = require('node:fs').readFileSync('/proc/meminfo', 'utf8');
+      const match = /MemAvailable:\s+(\d+) kB/.exec(text);
+      return match ? Number(match[1]) * 1024 : null;
+    }
+  } catch {
+    // fall through
+  }
+  return os.freemem?.() ?? null;
+}
+
+const gb = (bytes) => (bytes / 2 ** 30).toFixed(1);
+
+// Whether `population` runs: up to the cap, and above the default cap only
+// when the predicted peak fits in three quarters of what is available.
+function shouldRun(population, previous, peakRss) {
+  const cap = Number(process.env.TAT_SCALE_MAX_POPULATION ?? DEFAULT_CAP);
+  if (population > cap) {
+    return false;
+  }
+  if (population <= DEFAULT_CAP) {
+    return true;
+  }
+  const available = availableBytes();
+  if (available === null) {
+    console.log(`scale.js: stopping at ${previous}: this platform does not report available memory`);
+    return false;
+  }
+  const needed = (peakRss * population) / previous;
+  if (needed > available * 0.75) {
+    console.log(`scale.js: stopping at ${previous}: ${population} would need about ${gb(needed)} GB, ` +
+      `${gb(available)} GB is available (three quarters of it may be used)`);
+    return false;
+  }
+  console.log(`scale.js: measuring ${population}: needs about ${gb(needed)} GB, ${gb(available)} GB available`);
+  return true;
+}
+
+// `idle` takes `ping` and stays; `work` ends the actor.
+const chart = () =>
+  statechart({ family: 'scale', revision: 'v1' })
+    .state('idle', (s) => {
+      s.on('ping', (t) => t.target('idle'));
+      s.on('work', (t) => t.target('done'));
+    })
+    .final('done');
+
+// Total GC pause while `run` is measured (Node only).
+function gcObserver() {
+  if (IS_BUN) {
+    return { total: () => null, stop() {} };
+  }
+  const { PerformanceObserver } = require('node:perf_hooks');
+  let total = 0;
+  const observer = new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) {
+      total += entry.duration;
+    }
+  });
+  observer.observe({ entryTypes: ['gc'] });
+  return { total: () => total, stop: () => observer.disconnect() };
+}
+
+function loopDelayMonitor() {
+  try {
+    const { monitorEventLoopDelay } = require('node:perf_hooks');
+    const histogram = monitorEventLoopDelay({ resolution: 1 });
+    histogram.enable();
+    return { maxMs: () => histogram.max / 1e6, stop: () => histogram.disable() };
+  } catch {
+    return { maxMs: () => null, stop() {} };
+  }
+}
+
+async function measure(population) {
+  const gc = gcObserver();
+  const rssBefore = process.memoryUsage().rss;
+  const jsBefore = jsRetained();
+
+  let done = 0;
+  const system = createSystem({ done: () => { done += 1; } });
+  const definition = system.define(chart());
+  const largestBefore = system.stats().memory.total.largestBlock;
+
+  // Spawn, keeping only a sample of views spread over the table.
+  const stride = Math.floor(population / SAMPLE);
+  const sample = [];
+  let longestSpawn = 0n;
+  const spawnStarted = cpuMicros();
+  for (let at = 0; at < population; at += 1) {
+    const started = process.hrtime.bigint();
+    const actor = system.spawn(definition);
+    const took = process.hrtime.bigint() - started;
+    if (took > longestSpawn) {
+      longestSpawn = took;
+    }
+    if (at % stride === 0 && sample.length < SAMPLE) {
+      sample.push(actor);
+    }
+  }
+  const spawned = cpuMicros();
+  await system.flush();
+  const bootstrapped = cpuMicros();
+  const largestBlock = system.stats().memory.total.largestBlock;
+
+  const nativeBytes = system.stats().memory.total.bytesInUse;
+  const jsAfter = jsRetained();
+  const rssAfter = process.memoryUsage().rss;
+
+  // Post plus delivery: rounds of REPEAT pings to every sampled actor.
+  const round = async () => {
+    for (let repeat = 0; repeat < REPEAT; repeat += 1) {
+      for (const actor of sample) {
+        actor.post('ping');
+      }
+    }
+    await system.flush();
+  };
+  await round(); // warm-up
+  const postCosts = [];
+  for (let at = 0; at < ROUNDS; at += 1) {
+    const started = cpuMicros();
+    await round();
+    postCosts.push((cpuMicros() - started) / (sample.length * REPEAT));
+  }
+  const callsBefore = allocatorCalls(system);
+  await round();
+  const callsAfter = allocatorCalls(system);
+
+  // Inspect the same sample.
+  const inspectCosts = [];
+  for (let at = 0; at < ROUNDS; at += 1) {
+    const started = cpuMicros();
+    for (let repeat = 0; repeat < REPEAT; repeat += 1) {
+      for (const actor of sample) {
+        system.inspect(actor);
+      }
+    }
+    inspectCosts.push((cpuMicros() - started) / (sample.length * REPEAT));
+  }
+
+  // Pages of actorIds(): walk twice, time the second walk.
+  let pageCosts = [];
+  let visited = 0;
+  for (let pass = 0; pass < 2; pass += 1) {
+    pageCosts = [];
+    visited = 0;
+    const iterator = system.actorIds({ pageSize: PAGE_SIZE });
+    for (;;) {
+      const started = process.hrtime.bigint();
+      const step = iterator.next();
+      const took = Number(process.hrtime.bigint() - started) / 1e3;
+      if (step.done) {
+        break;
+      }
+      visited += step.value.length / 2;
+      if (step.value.length === PAGE_SIZE * 2) {
+        pageCosts.push(took);
+      }
+    }
+  }
+  assert.equal(visited, population, 'the walk visits every actor once');
+
+  // End to end: post `work` to every actor, flush once, all done.
+  const loop = loopDelayMonitor();
+  const e2eStarted = cpuMicros();
+  for (const page of system.actorIds({ pageSize: PAGE_SIZE })) {
+    for (let at = 0; at < page.length; at += 2) {
+      system.post(new ActorId(system, page[at], page[at + 1]), 'work');
+    }
+  }
+  await system.flush();
+  const e2eCost = (cpuMicros() - e2eStarted) / population;
+  const loopDelayMs = loop.maxMs();
+  loop.stop();
+  assert.equal(done, population, 'every actor finished');
+  assert.equal([...system.actorIds()].length, 0, 'finished actors were destroyed');
+
+  const gcPauseMs = gc.total();
+  gc.stop();
+  system.close();
+
+  return {
+    population,
+    spawn: (spawned - spawnStarted) / population,
+    bootstrap: (bootstrapped - spawned) / population,
+    spawnAndBootstrap: (bootstrapped - spawnStarted) / population,
+    longestSpawnUs: Number(longestSpawn) / 1e3,
+    largestBlock,
+    largestBefore,
+    post: median(postCosts),
+    inspect: median(inspectCosts),
+    page: median(pageCosts),
+    e2e: e2eCost,
+    nativePerActor: nativeBytes / population,
+    jsPerActor: (jsAfter - jsBefore) / population,
+    rssPerActor: (rssAfter - rssBefore) / population,
+    peakRss: process.memoryUsage().rss,
+    steady: { addon: callsAfter.addon - callsBefore.addon, core: callsAfter.core - callsBefore.core },
+    loopDelayMs,
+    gcPauseMs,
+  };
+}
+
+// The same load as plain JavaScript objects, printed for comparison only.
+function plainBaseline(population) {
+  class Conn {
+    constructor() {
+      this.state = 'idle';
+    }
+    on(event) {
+      switch (this.state) {
+        case 'idle':
+          if (event === 'work') this.state = 'done';
+          break;
+        default:
+          break;
+      }
+    }
+  }
+  const before = jsRetained();
+  const objects = new Array(population);
+  for (let at = 0; at < population; at += 1) {
+    objects[at] = new Conn();
+  }
+  const bytes = (jsRetained() - before) / population;
+  const stride = Math.floor(population / SAMPLE);
+  const started = cpuMicros();
+  for (let repeat = 0; repeat < REPEAT * ROUNDS; repeat += 1) {
+    for (let at = 0; at < SAMPLE; at += 1) {
+      objects[at * stride].on('ping');
+    }
+  }
+  const perEvent = (cpuMicros() - started) / (SAMPLE * REPEAT * ROUNDS);
+  assert.ok(objects.length === population);
+  return { bytes, perEvent };
+}
+
+function requireFlat(what, small, large, bound) {
+  const ratio = small.value > 0 ? large.value / small.value : 0;
+  assert.ok(
+    ratio <= bound,
+    `${what} measures ${small.value.toFixed(3)} at ${small.population} actors and ` +
+      `${large.value.toFixed(3)} at ${large.population}, a ratio of ${ratio.toFixed(2)} against a bound of ${bound}`,
+  );
+  return ratio;
+}
+
+function report(result) {
+  const f = (value, digits = 3) => (value === null || value === undefined ? 'n/a' : value.toFixed(digits));
+  console.log(
+    `scale.js ${IS_BUN ? 'bun' : 'node'} ${result.population}: ` +
+      `spawn ${f(result.spawn)} us + bootstrap ${f(result.bootstrap)} us/actor, ` +
+      `longest spawn ${f(result.longestSpawnUs, 1)} us, largest block ${result.largestBlock} B, ` +
+      `post+delivery ${f(result.post)} us/msg, inspect ${f(result.inspect)} us, ` +
+      `page(${PAGE_SIZE}) ${f(result.page, 1)} us, end-to-end ${f(result.e2e)} us/actor, ` +
+      `native ${f(result.nativePerActor, 1)} B/actor, js ${f(result.jsPerActor, 1)} B/actor, ` +
+      `rss ${f(result.rssPerActor, 1)} B/actor, steady-state calls addon ${result.steady.addon} core ${result.steady.core}, ` +
+      `event-loop delay max ${f(result.loopDelayMs, 1)} ms, gc pause ${f(result.gcPauseMs, 1)} ms`,
+  );
+}
+
+(async () => {
+  let current = 'start';
+  const watchdog = setTimeout(() => {
+    console.error(`scale.js: ${current} did not finish in time`);
+    process.exit(1);
+  }, Number(process.env.SCALE_TIMEOUT_MS ?? 30 * 60_000));
+
+  const results = [];
+  for (const population of POPULATIONS) {
+    const previous = results.at(-1);
+    if (previous && !shouldRun(population, previous.population, previous.peakRss)) {
+      break;
+    }
+    current = `${population} actors`;
+    const result = await measure(population);
+    report(result);
+    assert.equal(result.steady.addon, 0, `after warm-up the addon made ${result.steady.addon} allocator calls`);
+    results.push(result);
+  }
+
+  for (let at = 1; at < results.length; at += 1) {
+    const small = results[at - 1];
+    const large = results[at];
+    const pair = (key) => [
+      { population: small.population, value: small[key] },
+      { population: large.population, value: large[key] },
+    ];
+    requireFlat('spawn plus bootstrap (us per actor)', ...pair('spawnAndBootstrap'), COST_RATIO_BOUND);
+    requireFlat('post plus delivery (us per message)', ...pair('post'), COST_RATIO_BOUND);
+    requireFlat('inspect (us per call)', ...pair('inspect'), COST_RATIO_BOUND);
+    requireFlat(`a page of ${PAGE_SIZE} actor IDs (us)`, ...pair('page'), PAGE_RATIO_BOUND);
+    requireFlat('end to end (us per actor)', ...pair('e2e'), COST_RATIO_BOUND);
+    requireFlat('native bytes per actor', ...pair('nativePerActor'), BYTES_RATIO_BOUND);
+    assert.ok(
+      large.largestBlock <= small.largestBlock,
+      `the largest block grew from ${small.largestBlock} B at ${small.population} actors ` +
+        `to ${large.largestBlock} B at ${large.population}`,
+    );
+  }
+
+  const largest = results.at(-1);
+  const baseline = plainBaseline(largest.population);
+  console.log(
+    `scale.js ${IS_BUN ? 'bun' : 'node'} plain-object baseline at ${largest.population}: ` +
+      `${baseline.bytes.toFixed(1)} B/object (JS heap), ${baseline.perEvent.toFixed(3)} us/event (direct call)`,
+  );
+
+  clearTimeout(watchdog);
+  console.log('scale.js passed');
+})().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
