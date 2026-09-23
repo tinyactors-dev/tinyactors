@@ -1,6 +1,7 @@
 # ADR 0005: Per-target mailboxes and a ready queue
 
-**Status:** Accepted; scheduling table and envelope free list added with ADR 0014
+**Status:** Accepted; scheduling table and envelope free list added with ADR 0014;
+delivery results refined when step 6 was built
 **Date:** 2026-09-23
 
 ## Context
@@ -62,11 +63,19 @@ That design has several faults:
    addon does not inspect before delivering. It calls `ta_actor_deliver()`
    with the head envelope of a `ready` actor and acts on the result:
    - `TA_OK`: pop the envelope and make the actor `runnable`;
-   - `TA_ERR_DONE` or `TA_ERR_NOT_FOUND`: dead-letter the mailbox (ADR
-     0008) and clear the entry;
+   - `TA_ERR_NOMEM`: keep the envelope, and back off for one turn
+     (ADR 0008);
+   - `TA_ERR_DONE`: dead-letter the mailbox (ADR 0008) and mark the entry
+     finished. With `finished: "retain"` the actor stays resident, and
+     later mail for it is a dead letter with reason `done` at once;
+   - `TA_ERR_NOT_FOUND`: dead-letter the mailbox and clear the entry;
    - `TA_ERR_BUSY`: with the state above, this cannot happen. It is a host
-     bug. Debug builds assert, and release builds quarantine the actor;
-   - anything else: a fault (ADR 0008).
+     bug: the actor is quarantined and the envelope kept;
+   - anything else (for example `TA_ERR_INVALID` for a malformed event): a
+     fault (ADR 0008). The actor is quarantined and keeps its mailbox, but
+     the envelope core refused becomes a dead letter with reason
+     `refused`, because delivering it again after `release()` would only
+     fault again.
 7. **Order.** Messages to one target are delivered in the order they were
    accepted. Nothing is promised about the relative order of different
    targets beyond what the ready queue's FIFO order gives.

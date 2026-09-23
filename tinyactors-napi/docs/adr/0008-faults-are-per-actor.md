@@ -27,9 +27,13 @@ rest.
      actor on the runnable queue, where the next resume continues a paused
      macrostep or reports the actor stable, and ADR 0005's rules apply from
      there. Destroying it discards the mailbox.
-   - Messages dropped because their target is done or unknown go to a
-     `deadLetter` hook with `{ target, event, reason }`. If no hook is set,
-     they are counted in system statistics and dropped.
+   - Messages dropped because their target is gone go to a `deadLetter`
+     hook with `{ target, event, reason }`, at most `messageBudget` per
+     turn. `reason` is `not-found` (an unknown or stale ID), `done` (the
+     target reached a top-level final state), `destroyed` (the target was
+     destroyed or unloaded with mail waiting) or `refused` (core refused
+     that message, which also faults the target, ADR 0005). Dead letters
+     are counted in `stats().messages.deadLetters` with or without a hook.
 2. **The pump never throws.** Failures inside a turn reach JavaScript only
    through hooks and, for `send()`, through that message's promise.
 3. **API calls throw only for misuse**, such as wrong argument types, a

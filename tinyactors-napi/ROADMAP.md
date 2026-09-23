@@ -330,8 +330,17 @@ Needs core ADR 0055.
   - `TA_ERR_DONE` and `TA_ERR_NOT_FOUND` go to `deadLetter`, at most
     `messageBudget` records per turn;
   - other failures quarantine the actor in its entry and call `fault`
-    (ADR 0008).
+    (ADR 0008). The envelope core refused becomes a dead letter with reason
+    `refused`, so `release()` does not fault again on it.
 - `maxQueuedMessages` backpressure.
+- Posts carry no data until step 11 (value boxes), and targets are
+  `ActorId`s until step 7 (the directory).
+
+Built: the envelope store, mailboxes, the ready queue and dead letters are
+in `scheduler.{c,h}`, which has no Node-API and is covered by
+`test/native/mailbox_test.c` (also under ASan). A malformed event can only
+be posted through the native method, which `test/post.js` uses to provoke a
+delivery fault.
 
 Exit criterion:
 - per-target FIFO holds even when a turn stops at its message budget;

@@ -2,8 +2,9 @@
  * The package version. The addon is being rebuilt step by step (ROADMAP.md);
  * so far createSystem(), System.close(), System.closed, System.stats(),
  * System.define(), System.findDefinition(), Definition, statechart(),
- * literal(), TinyactorsError, spawn(), inspect(), destroy(), flush() and the
- * `done` and `fault` hooks are implemented. Until the JavaScript data
+ * literal(), TinyactorsError, spawn(), inspect(), destroy(), flush(),
+ * post() without data, and the `done`, `fault` and `deadLetter` hooks are
+ * implemented. Until the JavaScript data
  * model lands (step 11), charts compile against core's null data model.
  */
 export const version: string;
@@ -27,6 +28,12 @@ export interface SystemOptions {
   done?: (record: DoneRecord) => void;
   /** Called at the end of the pump turn in which an actor faulted (ADR 0008). */
   fault?: (record: FaultRecord) => void;
+  /**
+   * Called for a message whose target is gone, finished, or refused it, at
+   * most `messageBudget` times per pump turn (ADR 0008). Without a hook,
+   * dead letters are only counted in stats().
+   */
+  deadLetter?: (record: DeadLetterRecord) => void;
   io?: Readonly<Record<string, IoProcessor>>;
   invokers?: Readonly<Record<string, Invoker>>;
   log?: LogSink;
@@ -49,6 +56,13 @@ export interface FaultRecord {
   readonly message: string;
 }
 
+/** A message that could not be delivered (ADR 0008). */
+export interface DeadLetterRecord {
+  readonly target: ActorId;
+  readonly event: EventName;
+  readonly reason: "not-found" | "done" | "destroyed" | "refused";
+}
+
 export interface SchedulingOptions {
   /** Microsteps one resume may run before the actor yields (core's `budget`); default 64. */
   resumeBudget?: number;
@@ -61,9 +75,15 @@ export interface SchedulingOptions {
   resumesPerTurn?: number;
   /** Maximum due sends dispatched during one pump turn. */
   dueBudget?: number;
-  /** Maximum envelopes started during one pump turn. */
+  /**
+   * Deliveries started during one pump turn, and dead letters reported in
+   * one turn; at least 1, default 1024.
+   */
   messageBudget?: number;
-  /** Maximum queued external envelopes. New submissions fail when full. */
+  /**
+   * Maximum accepted messages not yet delivered or reported; post() throws
+   * `queue-full` beyond it. 0 or absent: no limit.
+   */
   maxQueuedMessages?: number;
   /** Optional best-effort limit for retained JavaScript data. */
   maxRetainedBytes?: number;
@@ -122,7 +142,13 @@ export interface System {
   registerInvoker(type: string, invoker: Invoker): void;
   setLogSink(sink?: LogSink): void;
 
-  /** Queue a message and return immediately after the binding owns its data. */
+  /**
+   * Queue a message and return; a later pump turn delivers it (ADR 0005).
+   * Messages to one target are delivered in the order they were accepted.
+   * Mail for an actor that is gone is a dead letter, not an error. Throws
+   * `queue-full` at maxQueuedMessages. Until ROADMAP step 11, `data` must be
+   * undefined; until step 7, `target` must be an ActorId.
+   */
   post(target: ActorTarget, event: EventName, data?: unknown, options?: PostOptions): void;
 
   /** Queue a message and resolve after its macrostep becomes stable or done. */
@@ -175,6 +201,12 @@ export interface SystemStats {
   };
   /** Allocations plus frees: zero growth in steady state is the test signal. */
   readonly allocatorCalls: number;
+  readonly messages: {
+    /** Accepted messages not yet delivered or reported as dead letters. */
+    readonly queued: number;
+    readonly delivered: number;
+    readonly deadLetters: number;
+  };
 }
 
 export type EventName = string;
@@ -463,9 +495,9 @@ export interface SpawnOptions<Data extends object> {
 
 /**
  * The view spawn() returns (ADR 0002): an ActorId with methods that ask the
- * system. It holds no native resource. So far equals(), inspect(),
- * destroyed, destroy() and dispose are implemented; the other methods arrive
- * with later ROADMAP steps.
+ * system. It holds no native resource. So far equals(), inspect(), post()
+ * (without data), destroyed, destroy() and dispose are implemented; the other
+ * methods arrive with later ROADMAP steps.
  */
 export interface Actor<Data extends object = Record<string, unknown>> extends ActorId {
   readonly destroyed: boolean;
