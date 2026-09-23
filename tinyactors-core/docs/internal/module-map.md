@@ -19,7 +19,7 @@ are private and hold layouts and internal functions.
 | `configuration.h` | active atomic-state set representation |
 | `history.h` | shallow/deep history storage layout |
 | `continuation.h` | paused macrostep interpreter state |
-| `timer.h` | delayed-send records and deadline index |
+| `timer.h` | per-owner delayed-send lists and the owner deadline index (ADR 0054) |
 | `datamodel.h` | host data-model adapter/binding/context and inspection root |
 | `io.h` | built-in SCXML and custom I/O processor dispatch |
 | `invoke.h` | invoked-service adapters and active records |

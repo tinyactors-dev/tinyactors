@@ -4,15 +4,16 @@ Inspection is a core operational capability, not a persistence feature.
 
 `ta_actor_inspect()` exposes a read-only view of one resident interpreter instance. `ta_system_visit_actors()` walks the resident actors so an embedder can build an admin endpoint, debugger, REPL, metrics collector, or process inspector without reverse-engineering private memory. It visits every resident actor once, invoked children included, with the same view `ta_actor_inspect()` gives for it, and stops at the first visit that answers anything but `TA_OK`, returning that result — so an inspector that has seen enough, or that cannot go on, ends the walk. The order is not part of the contract.
 
-The view reports the logical actor reference, definition ID and exact definition identity, residency, whether a macrostep is paused mid-way and the external event it is processing, the internal queue, invocations, completion, the number of active states and delayed sends, and `allocated_bytes`, the memory the core currently holds for the actor. Actor inspection never calls the data-model adapter, so it is cheap and has no adapter side effects. `ta_actor_datamodel_root()` asks the adapter's `inspect` operation for the data-model root; it returns `TA_ERR_UNSUPPORTED` when the adapter has none.
+The view reports the logical actor reference, definition ID and exact definition identity, residency, whether a macrostep is paused mid-way and the external event it is processing, the internal queue, invocations, pending delayed sends, completion, the number of active states, and `allocated_bytes`, the memory the core currently holds for the actor. Actor inspection never calls the data-model adapter, so it is cheap and has no adapter side effects. `ta_actor_datamodel_root()` asks the adapter's `inspect` operation for the data-model root; it returns `TA_ERR_UNSUPPORTED` when the adapter has none.
 
-Variable-length state has its own list functions, so the view never points into private layouts:
+The internal queue, the invocations, and the delayed sends are borrowed arrays in the view. Delayed sends are stored with their owner (ADR 0054), so `delayed_sends` lists them by due time, then send order, at no extra cost: send ID, due time, event, I/O type, resolved destination, target, data, and whether the router already refused the send once and it waits to be offered again (`submitted`). Inspecting one actor costs the size of that actor, never the size of the system.
+
+The active configuration and history are read with their own list functions, so the view never points into private layouts:
 
 | Function | Lists |
 |---|---|
 | `ta_actor_active_states()` | the active configuration, ancestors included, in document order |
 | `ta_actor_history()` | the states one history pseudo-state recorded (empty until recorded) |
-| `ta_actor_delayed_sends()` | pending delayed sends: send ID, due time, event, I/O type, target, and data |
 
 Each fills a caller-supplied array and always reports the total count. A too-small array returns `TA_ERR_NOMEM` without writing anything, so a zero capacity is a size query; the counts in the inspection view let a host size the array up front. `ta_definition_state()` resolves a state ID to the author's state ID, its parent, and its kind; `ta_definition_find_state()` goes the other way, from the author's ID to the state.
 
