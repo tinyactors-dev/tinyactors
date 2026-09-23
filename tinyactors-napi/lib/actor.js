@@ -48,6 +48,21 @@ class ActorId {
     return !this.system.exists(this);
   }
 
+  /** Capture this actor in memory (System.capture). */
+  capture() {
+    return this.system.capture(this);
+  }
+
+  /** Evict this named actor using a capture taken since its last change (System.unload). */
+  unload(image) {
+    this.system.unload(this, image);
+  }
+
+  /** Prepare a fresh unpublished actor of `definition` to replace this one (System.prepareReplacement). */
+  prepareReplacement(definition, options) {
+    return this.system.prepareReplacement(this, definition, options);
+  }
+
   /** Terminate this actor. Invoked children are not destroyed implicitly. */
   destroy() {
     this.system.destroy(this);

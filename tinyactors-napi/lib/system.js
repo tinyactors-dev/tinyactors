@@ -10,6 +10,7 @@ const { Definition, identityOf } = require('./definition');
 const { DefinitionBuilder, needsJavaScript } = require('./statechart');
 const { ActorId } = require('./actor');
 const { EventNames } = require('./events');
+const { SessionImage, handleOf } = require('./image');
 
 const NO_STATE = 4294967295;
 
@@ -463,12 +464,7 @@ class System {
 
   // The actor's data root, or undefined under the null data model.
   #dataRoot(definitionId, slot, generation) {
-    let javascript = this.#javascript.get(definitionId);
-    if (javascript === undefined) {
-      javascript = core.definition_inspect(this.#native, definitionId).datamodel === 'javascript';
-      this.#javascript.set(definitionId, javascript);
-    }
-    return javascript ? core.actor_datamodel_root(this.#native, slot, generation) : undefined;
+    return this.#usesJavaScript(definitionId) ? core.actor_datamodel_root(this.#native, slot, generation) : undefined;
   }
 
   // One pending delayed send, from core's ta_delayed_send_info (core ADR 0054).
@@ -687,6 +683,145 @@ class System {
       : this.#native.post(slot, generation, id, data, bytes);
   }
 
+  /*
+   * Persistence and replacement (ROADMAP step 14; core ADRs 0013, 0014,
+   * 0043, 0051, 0052, 0066).
+   */
+
+  /**
+   * Capture `actor` in memory: core's session image, plus the data-model
+   * root it has now (core's image does not hold it). A macrostep in
+   * progress is captured too; an unpublished (prepared) actor cannot be
+   * captured (`busy`).
+   */
+  capture(actor) {
+    const { slot, generation } = actorOf(this, actor);
+    const view = core.actor_inspect(this.#native, slot, generation);
+    const handle = core.actor_capture(this.#native, slot, generation);
+    const self = this.#destination(view.self);
+    return new SessionImage(this, handle, {
+      actor: new ActorId(this, slot, generation),
+      sessionId: view.session_id,
+      definition: identityOf(view.definition),
+      address: self instanceof ActorId || self === null ? undefined : self,
+      data: this.#dataRoot(view.definition_id, slot, generation),
+    });
+  }
+
+  /**
+   * Evict a named actor (core ADR 0014): `image` must be a capture of it
+   * taken since its last change (`stale` otherwise). The directory keeps its
+   * address as unloaded, so mail to the address becomes a dead letter with
+   * reason `unloaded` until load() brings it back; its delayed sends travel
+   * in the image. Throws `busy` while the actor has mail waiting, is inside
+   * a macrostep, or is quarantined, so unloading never drops accepted mail.
+   * Its ActorId is stale afterwards.
+   */
+  unload(actor, image) {
+    const { slot, generation } = actorOf(this, actor);
+    const handle = handleOf(image, this, 'unload()');
+    const scheduling = this.#native.scheduling(slot, generation);
+    if (scheduling !== 'idle' && scheduling !== 'none') {
+      throw new TinyactorsError(`unload(): the actor is ${scheduling}; unload it once it is idle`, 'busy');
+    }
+    core.actor_unload(this.#native, slot, generation, handle);
+  }
+
+  /**
+   * Bring an unloaded named actor back from its image (core ADR 0051): the
+   * same session ID, a new runtime ID (core ADR 0066), and the address
+   * resident again. `binding` defaults to the data root the image kept. An
+   * invocation that was active when it was captured does not come back: the
+   * actor gets `error.communication.invoke.<id>.unavailable` for it (core
+   * ADR 0038). The image stays the caller's to destroy.
+   */
+  load(image, options = {}) {
+    const handle = handleOf(image, this, 'load()');
+    const id = core.actor_load(this.#native, handle, this.#bindingFor(image, options));
+    return new ActorId(this, id.slot, id.generation);
+  }
+
+  /**
+   * Restore an image under a fresh runtime ID without touching the
+   * directory (core ADR 0052). It keeps the session ID unless a resident
+   * session holds it (core ADR 0066). `binding` defaults to the data root
+   * the image kept, which is shared with the captured actor if that still
+   * runs; pass one for an independent copy.
+   */
+  reconstruct(image, options = {}) {
+    const handle = handleOf(image, this, 'reconstruct()');
+    const id = core.actor_reconstruct(this.#native, handle, this.#bindingFor(image, options));
+    return new ActorId(this, id.slot, id.generation);
+  }
+
+  /** Release the address of an actor that stays unloaded; its image is the caller's to destroy. */
+  removeUnloaded(address) {
+    const { family, name } = addressOf(address, 'removeUnloaded()');
+    core.actor_remove_unloaded(this.#native, { family: { name: family }, name });
+  }
+
+  /**
+   * Create a fresh, unpublished actor of `definition` to replace the named
+   * actor `incumbent` in place (core ADR 0043; docs/design.md). It
+   * bootstraps like a spawned actor, and core holds its visible bootstrap
+   * effects until activate(). `binding` defaults to the incumbent's live
+   * data root when the new definition uses the JavaScript data model.
+   */
+  prepareReplacement(incumbent, definition, options = {}) {
+    const { slot, generation } = actorOf(this, incumbent);
+    if (!(definition instanceof Definition) || definition.system !== this) {
+      throw new TinyactorsError('prepareReplacement(): expected a Definition of this system', 'invalid');
+    }
+    let binding = options.binding;
+    if (binding === undefined && this.#usesJavaScript(definition.id)) {
+      const view = core.actor_inspect(this.#native, slot, generation);
+      binding = this.#dataRoot(view.definition_id, slot, generation);
+    }
+    const id = core.actor_prepare_replacement(this.#native, slot, generation, definition.id, binding);
+    return new PreparedActor(this, id.slot, id.generation, incumbent);
+  }
+
+  /**
+   * Publish `prepared` at its incumbent's address, then destroy the
+   * incumbent (docs/design.md). Mail still waiting for the incumbent moves,
+   * in order, to the front of the replacement's mailbox, so nothing accepted
+   * for the address is lost; the incumbent's delayed sends are discarded.
+   * Throws `busy` while the incumbent is inside a macrostep. If activation
+   * fails, the incumbent keeps the address and the prepared actor is left
+   * for the caller to destroy.
+   */
+  activate(prepared) {
+    if (!(prepared instanceof PreparedActor) || prepared.system !== this) {
+      throw new TinyactorsError('activate(): expected a prepared actor of this system', 'invalid');
+    }
+    const { incumbent } = prepared;
+    if (this.#native.scheduling(incumbent.slot, incumbent.generation) === 'runnable') {
+      throw new TinyactorsError('activate(): the incumbent is inside a macrostep; activate once it is idle', 'busy');
+    }
+    core.actor_activate_replacement(this.#native, incumbent.slot, incumbent.generation,
+      prepared.slot, prepared.generation);
+    core.actor_destroy(this.#native, incumbent.slot, incumbent.generation);
+    return new ActorId(this, prepared.slot, prepared.generation);
+  }
+
+  // The binding load() and reconstruct() pass: the option, or the image's root.
+  #bindingFor(image, options) {
+    if (options === null || typeof options !== 'object') {
+      throw new TinyactorsError('expected options { binding }', 'invalid');
+    }
+    return options.binding !== undefined ? options.binding : image.data;
+  }
+
+  // True when the definition runs the JavaScript data model; cached.
+  #usesJavaScript(definitionId) {
+    let javascript = this.#javascript.get(definitionId);
+    if (javascript === undefined) {
+      javascript = core.definition_inspect(this.#native, definitionId).datamodel === 'javascript';
+      this.#javascript.set(definitionId, javascript);
+    }
+    return javascript;
+  }
+
   /** Put an actor that faulted back into scheduling (ADR 0008). */
   release(actor) {
     const { slot, generation } = actorOf(this, actor);
@@ -812,8 +947,26 @@ function servicesOf(value, what) {
 
 native.setupEffects(effectHandler);
 
+// A fresh unpublished actor that replaces `incumbent` once activated (step 14).
+class PreparedActor extends ActorId {
+  constructor(system, slot, generation, incumbent) {
+    super(system, slot, generation);
+    this.incumbent = incumbent;
+  }
+
+  /** False until activate() publishes it at the incumbent's address. */
+  get published() {
+    return this.system.inspect(this).published;
+  }
+
+  /** Publish at the incumbent's address and destroy the incumbent (System.activate). */
+  activate() {
+    return this.system.activate(this);
+  }
+}
+
 function createSystem(options) {
   return new System(options);
 }
 
-module.exports = { System, createSystem, nativeOf, ActorId };
+module.exports = { System, createSystem, nativeOf, ActorId, PreparedActor, SessionImage };
