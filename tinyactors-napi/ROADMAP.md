@@ -381,8 +381,10 @@ websocket connection.
 - `test/scale.js`: a population benchmark in the style of tinyactors-test's
   `scale_test.c`. That test now measures 50,000, 200,000, 1,000,000 and
   4,000,000 actors, and core measures about 560 bytes per data-less actor.
-  `scale.js` uses the same populations and the same
-  `TAT_SCALE_MAX_POPULATION` limit for machines with less memory. It checks
+  `scale.js` uses the same populations and sizes itself the same way: the
+  first two always run, a larger one runs only when its predicted peak
+  fits in three quarters of the available memory, and
+  `TAT_SCALE_MAX_POPULATION` overrides that in both directions. It checks
   that each of the following stays flat per actor from one population to
   the next: spawn, post plus delivery, inspect, one enumeration page, and
   heap bytes. It measures CPU time, not wall time.
