@@ -28,6 +28,11 @@ class ActorId {
     );
   }
 
+  /** Queue an event for this actor (System.post). */
+  post(event, data, options) {
+    this.system.post(this, event, data, options);
+  }
+
   /** A snapshot of core's view of this actor. */
   inspect() {
     return this.system.inspect(this);

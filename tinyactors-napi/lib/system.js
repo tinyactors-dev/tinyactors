@@ -9,6 +9,7 @@ const { TinyactorsError } = require('./errors');
 const { Definition, identityOf } = require('./definition');
 const { DefinitionBuilder } = require('./statechart');
 const { ActorId } = require('./actor');
+const { EventNames } = require('./events');
 
 const NO_STATE = 4294967295;
 
@@ -53,6 +54,7 @@ let nativeOf;
 
 class System {
   #native;
+  #events;
 
   static {
     nativeOf = (system) => system.#native;
@@ -62,14 +64,19 @@ class System {
    * Options:
    * - scheduling: { resumeBudget, actionBudget, resumesPerTurn } (ADR 0007);
    * - finished: "destroy" (the default) or "retain" (ADR 0012);
-   * - done({ actor, finalState, data }) and fault({ actor, operation, code,
-   *   message }): hooks the pump calls at the end of a turn (ADRs 0008, 0012).
+   * - scheduling.messageBudget: deliveries per turn, and dead letters
+   *   reported per turn; scheduling.maxQueuedMessages: post() throws
+   *   `queue-full` beyond it (ADR 0005);
+   * - done({ actor, finalState, data }), fault({ actor, operation, code,
+   *   message }) and deadLetter({ target, event, reason }): hooks the pump
+   *   calls at the end of a turn (ADRs 0008, 0012).
    */
   constructor(options) {
     if (options !== undefined && (options === null || typeof options !== 'object')) {
       throw new TinyactorsError('createSystem options must be an object', 'invalid');
     }
     this.#native = new native.System(this, options);
+    this.#events = new EventNames(this.#native);
   }
 
   /** True once close() has run. */
@@ -179,6 +186,31 @@ class System {
     core.actor_destroy(this.#native, slot, generation);
   }
 
+  /**
+   * Queue `event` for `target` and return (ADR 0005). Nothing runs inside
+   * this call: a later pump turn delivers it, in the order posts to that
+   * target were accepted. Mail for an actor that is gone or finished is a
+   * dead letter (the `deadLetter` hook), not an error. Throws `queue-full`
+   * at scheduling.maxQueuedMessages. Event data needs the JavaScript data
+   * model (ROADMAP step 11); named targets need the directory (step 7).
+   */
+  post(target, event, data, options) {
+    if (data !== undefined) {
+      throw new TinyactorsError('post(): event data needs the JavaScript data model (ROADMAP step 11)', 'unsupported');
+    }
+    if (options?.signal?.aborted) {
+      throw new TinyactorsError('post(): the signal is already aborted', 'aborted');
+    }
+    if (!(target instanceof ActorId)) {
+      if (target !== null && typeof target === 'object' && 'name' in target) {
+        throw new TinyactorsError('post(): named targets need the actor directory (ROADMAP step 7)', 'unsupported');
+      }
+      throw new TinyactorsError('post(): expected an actor of this system', 'invalid');
+    }
+    const { slot, generation } = actorOf(this, target);
+    this.#native.post(slot, generation, this.#events.id(event));
+  }
+
   /** Put an actor that faulted back into scheduling (ADR 0008). */
   release(actor) {
     const { slot, generation } = actorOf(this, actor);
@@ -186,8 +218,8 @@ class System {
   }
 
   /**
-   * Resolves once the system is quiet: nothing runnable (later: nothing
-   * ready, nothing due). It spans as many pump turns as needed and yields to
+   * Resolves once the system is quiet: nothing runnable, nothing ready, no
+   * dead letters to report (later: nothing due). It spans as many pump turns as needed and yields to
    * the event loop between them. close() rejects it with `closed`.
    */
   flush() {

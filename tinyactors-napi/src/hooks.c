@@ -14,5 +14,6 @@ ta_result tna_hook_actor_created(tna_system *system, ta_actor_id actor) {
 
 ta_result tna_hook_actor_removed(tna_system *system, ta_actor_id actor) {
     tna_sched_remove(&system->sched, actor, TNA_DEAD_DESTROYED);
+    tna_system_want_turn(system); /* its mail is reported as dead letters */
     return TA_OK;
 }

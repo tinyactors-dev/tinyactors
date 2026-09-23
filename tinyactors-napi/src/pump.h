@@ -14,7 +14,9 @@
  *   for the turn's records, after the last core call (ADR 0007 point 5):
  *   `done` with { actor, finalState, data } (ADR 0012), then destroys the
  *   actor when `finished` is "destroy"; `fault` with
- *   { actor, operation, code, message } (ADR 0008). An exception from a hook
+ *   { actor, operation, code, message } (ADR 0008); `deadLetter` with
+ *   { target, event, reason } for a message whose target is gone, finished,
+ *   or refused it (ADR 0008; at most `messageBudget` per turn). An exception from a hook
  *   does not stop the turn: the first one is rethrown when the turn ends,
  *   so it surfaces as an uncaught exception from the setImmediate callback.
  * - flush() returns a native promise that settles at the end of the turn

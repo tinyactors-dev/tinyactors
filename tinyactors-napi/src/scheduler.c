@@ -442,10 +442,20 @@ static void tna_sched_deliver_one(tna_sched *sched, const tna_turn_params *param
         return;
     default:
         /*
-         * TA_ERR_BUSY cannot happen while the table is right: a ready actor is
-         * between macrosteps. It is a host bug, so it quarantines the actor,
-         * as any other failure does, and keeps its mail.
+         * Any other failure quarantines the actor and keeps its mailbox
+         * (ADR 0008). The envelope core refused (for example a malformed
+         * event) becomes a dead letter: delivering it again after release()
+         * would only fault again. TA_ERR_BUSY cannot happen while the table
+         * is right, because a ready actor is between macrosteps; it is a host
+         * bug, and that envelope is kept.
          */
+        if (result != TA_ERR_BUSY) {
+            entry->first = envelope->next;
+            if (entry->first == 0) {
+                entry->last = 0;
+            }
+            tna_sched_dead_append(sched, head, TNA_DEAD_REFUSED);
+        }
         tna_sched_fault(sched, params, (tna_turn_record){ .actor = actor, .operation = "deliver", .code = result });
         return;
     }

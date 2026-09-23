@@ -72,7 +72,8 @@ typedef struct {
 typedef enum {
     TNA_DEAD_NOT_FOUND = 0, /* no resident actor has the target's ID */
     TNA_DEAD_DONE,          /* the target reached a top-level final state */
-    TNA_DEAD_DESTROYED      /* the target was destroyed or unloaded with mail waiting */
+    TNA_DEAD_DESTROYED,     /* the target was destroyed or unloaded with mail waiting */
+    TNA_DEAD_REFUSED        /* core refused the message itself (for example a malformed event) */
 } tna_dead_reason;
 
 /* One queued message. `event` holds its own references (data, named origin). */

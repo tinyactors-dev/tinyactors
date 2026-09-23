@@ -37,6 +37,7 @@ struct tna_napi_system {
     napi_ref facade;              /* weak: the public System, for ActorId views */
     napi_ref done_hook;           /* ADR 0012 */
     napi_ref fault_hook;          /* ADR 0008 */
+    napi_ref dead_letter_hook;    /* ADR 0008 */
     bool destroy_finished;        /* finished: "destroy" (the default) */
     napi_deferred *waiters;       /* flush() promises */
     uint32_t waiter_count;

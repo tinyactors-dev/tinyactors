@@ -146,13 +146,17 @@ bool tna_pump_init(napi_env env, tna_napi_system *wrapper, napi_value facade, na
         !tna_count_option(env, scheduling, "resumeBudget", &budgets->microsteps) ||
         !tna_count_option(env, scheduling, "actionBudget", &budgets->actions) ||
         !tna_count_option(env, scheduling, "resumesPerTurn", &budgets->resumes) ||
+        !tna_count_option(env, scheduling, "messageBudget", &budgets->messages) ||
+        !tna_count_option(env, scheduling, "maxQueuedMessages", &wrapper->system->sched.max_queued) ||
         !tna_finished_option(env, options, &wrapper->destroy_finished) ||
         !tna_hook_option(env, options, "done", &wrapper->done_hook) ||
-        !tna_hook_option(env, options, "fault", &wrapper->fault_hook)) {
+        !tna_hook_option(env, options, "fault", &wrapper->fault_hook) ||
+        !tna_hook_option(env, options, "deadLetter", &wrapper->dead_letter_hook)) {
         return false;
     }
-    if (budgets->microsteps == 0 || budgets->resumes == 0) {
-        tna_throw(env, "invalid", "createSystem: scheduling.resumeBudget and resumesPerTurn must be at least 1");
+    if (budgets->microsteps == 0 || budgets->resumes == 0 || budgets->messages == 0) {
+        tna_throw(env, "invalid",
+                  "createSystem: scheduling.resumeBudget, resumesPerTurn and messageBudget must be at least 1");
         return false;
     }
     napi_value turn = NULL;
@@ -287,6 +291,54 @@ static void tna_fault_record(napi_env env, tna_napi_system *wrapper, const tna_t
     }
 }
 
+static const char *const tna_dead_reasons[] = {
+    [TNA_DEAD_NOT_FOUND] = "not-found",
+    [TNA_DEAD_DONE] = "done",
+    [TNA_DEAD_DESTROYED] = "destroyed",
+    [TNA_DEAD_REFUSED] = "refused",
+};
+
+/* The dotted text of an event name, formatted by core (ADR 0004), or NULL. */
+static napi_value tna_event_text(napi_env env, tna_system *system, ta_event_name_id name) {
+    char stack[256];
+    uint32_t needed = 0;
+    ta_event_name_format_params params = { .name = name, .buffer = stack, .capacity = sizeof stack, .needed = &needed };
+    ta_result result = ta_event_name_format(system->core, &params);
+    char *text = stack;
+    if (result == TA_ERR_NOMEM && needed > sizeof stack) {
+        text = ta_arena_alloc(&system->scratch.turn, needed, 1);
+        if (text == NULL) {
+            return NULL;
+        }
+        params.buffer = text;
+        params.capacity = needed;
+        result = ta_event_name_format(system->core, &params);
+    }
+    napi_value out = NULL;
+    if (result != TA_OK || napi_create_string_utf8(env, text, NAPI_AUTO_LENGTH, &out) != napi_ok) {
+        return NULL;
+    }
+    return out;
+}
+
+/* deadLetter({ target, event, reason }) (ADR 0008); counted in stats either way. */
+static void tna_dead_letter_record(napi_env env, tna_napi_system *wrapper, const tna_turn_record *record,
+                                   napi_value *first_error) {
+    if (wrapper->dead_letter_hook == NULL) {
+        return;
+    }
+    napi_value argument = NULL;
+    napi_value reason = NULL;
+    napi_value view = tna_actor_view(env, wrapper, record->actor);
+    napi_value event = tna_event_text(env, wrapper->system, record->event);
+    if (view != NULL && napi_create_object(env, &argument) == napi_ok &&
+        napi_create_string_utf8(env, tna_dead_reasons[record->reason], NAPI_AUTO_LENGTH, &reason) == napi_ok &&
+        tna_set(env, argument, "target", view) == napi_ok && tna_set(env, argument, "event", event) == napi_ok &&
+        tna_set(env, argument, "reason", reason) == napi_ok) {
+        tna_call_hook(env, wrapper->dead_letter_hook, argument, first_error);
+    }
+}
+
 /* ------------------------------------------------------------------------
  * Flush waiters
  */
@@ -361,6 +413,8 @@ static napi_value tna_turn_callback(napi_env env, napi_callback_info info) {
                 tna_done_record(env, wrapper, record, &first_error);
             } else if (record->kind == TNA_RECORD_FAULT) {
                 tna_fault_record(env, wrapper, record, &first_error);
+            } else {
+                tna_dead_letter_record(env, wrapper, record, &first_error);
             }
         }
         tna_system_end_turn(system);
@@ -408,4 +462,5 @@ void tna_pump_close(tna_napi_system *wrapper, bool env_usable) {
     tna_delete(env, &wrapper->facade, refs_usable);
     tna_delete(env, &wrapper->done_hook, refs_usable);
     tna_delete(env, &wrapper->fault_hook, refs_usable);
+    tna_delete(env, &wrapper->dead_letter_hook, refs_usable);
 }

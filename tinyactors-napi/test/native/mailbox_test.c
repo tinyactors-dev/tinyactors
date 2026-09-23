@@ -245,12 +245,20 @@ static void a_fault_stays_with_its_actor(void) {
     const tna_turn_record *record = system->sched.records;
     CHECK(record != NULL && record->kind == TNA_RECORD_FAULT && record->actor == bad);
     CHECK(strcmp(record->operation, "deliver") == 0 && record->code == TA_ERR_INVALID);
+    uint32_t refused = 0;
+    for (; record != NULL; record = record->next) {
+        refused += record->kind == TNA_RECORD_DEAD_LETTER && record->reason == TNA_DEAD_REFUSED ? 1u : 0u;
+    }
+    CHECK(refused == 1u); /* the refused envelope, not the actor's other mail */
     tna_system_end_turn(system);
     CHECK(settle(system) == 0u);
     CHECK(state(system, bad) == TNA_SCHED_QUARANTINED);
-    CHECK(tna_sched_mailbox_count(&system->sched, bad) == 1u); /* kept, not delivered */
     CHECK(strcmp(state_of(system, good), "b") == 0);
-    /* Destroying the quarantined actor discards its mailbox as dead letters. */
+    /* Mail for the quarantined actor is kept, not delivered. */
+    CHECK(post(system, bad, name(system, "x")) == TA_OK);
+    CHECK(settle(system) == 0u);
+    CHECK(tna_sched_mailbox_count(&system->sched, bad) == 1u);
+    /* Destroying it discards its mailbox as dead letters. */
     destroy(system, bad);
     CHECK(settle(system) == 1u);
     finish_system(system);

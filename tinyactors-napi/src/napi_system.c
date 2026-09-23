@@ -302,6 +302,44 @@ static napi_value tna_scheduling_method(napi_env env, napi_callback_info info) {
 }
 
 /*
+ * post(slot, generation, name): queues an event without data for an actor
+ * (ADR 0005). `name` is a ta_event_name_id from internEvent(). Mail for a
+ * stale ID is accepted as a dead letter. Throws "queue-full" at
+ * maxQueuedMessages. It never calls core, so it is allowed inside a core
+ * call (a data-model callback may post; ADR 0013).
+ */
+static napi_value tna_post_method(napi_env env, napi_callback_info info) {
+    size_t argc = 3;
+    napi_value argv[3] = { NULL, NULL, NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    uint32_t slot = 0;
+    uint32_t generation = 0;
+    uint32_t name = 0;
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    if (argc < 3 || napi_get_value_uint32(env, argv[0], &slot) != napi_ok ||
+        napi_get_value_uint32(env, argv[1], &generation) != napi_ok ||
+        napi_get_value_uint32(env, argv[2], &name) != napi_ok) {
+        return tna_throw(env, "invalid", "post: expected (slot, generation, name)");
+    }
+    ta_event event = { .name = name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+    ta_result result = tna_system_post(wrapper->system, ta_actor_id_make(slot, generation), &event);
+    if (result == TA_ERR_BUSY) {
+        return tna_throw(env, "queue-full", "post: the system holds maxQueuedMessages messages");
+    }
+    if (result != TA_OK) {
+        return tna_throw(env, tna_result_code(result), "post: the message was not accepted");
+    }
+    napi_value undefined = NULL;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+}
+
+/*
  * internEvent(text): the ta_event_name_id of a dotted event name (ADR 0004).
  * lib/events.js calls it once per distinct name and caches the answer.
  */
@@ -375,7 +413,10 @@ static const char *const tna_category_names[TNA_MEMORY_CATEGORY_COUNT] = {
     [TNA_MEMORY_OTHER] = "other",
 };
 
-/* stats(): { memory: { total, core, envelopes, ... }, allocatorCalls } (ADR 0009). */
+/*
+ * stats(): { memory: { total, core, envelopes, ... }, allocatorCalls,
+ * messages: { queued, delivered, deadLetters } } (ADRs 0008, 0009).
+ */
 static napi_value tna_stats_method(napi_env env, napi_callback_info info) {
     tna_napi_system *wrapper = tna_open_this(env, info);
     if (wrapper == NULL) {
@@ -395,6 +436,13 @@ static napi_value tna_stats_method(napi_env env, napi_callback_info info) {
     }
     if (status == napi_ok) status = napi_set_named_property(env, stats, "memory", memory);
     if (status == napi_ok) status = tna_set_number(env, stats, "allocatorCalls", (double)tna_allocator_calls(allocator));
+    const tna_sched *sched = &wrapper->system->sched;
+    napi_value messages = NULL;
+    if (status == napi_ok) status = napi_create_object(env, &messages);
+    if (status == napi_ok) status = tna_set_number(env, messages, "queued", (double)sched->queued);
+    if (status == napi_ok) status = tna_set_number(env, messages, "delivered", (double)sched->delivered);
+    if (status == napi_ok) status = tna_set_number(env, messages, "deadLetters", (double)sched->dead_letters);
+    if (status == napi_ok) status = napi_set_named_property(env, stats, "messages", messages);
     if (status != napi_ok) {
         return tna_throw(env, "out-of-memory", "cannot build the stats object");
     }
@@ -409,6 +457,7 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "release", NULL, tna_release_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "scheduling", NULL, tna_scheduling_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "internEvent", NULL, tna_intern_event_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "post", NULL, tna_post_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "closed", NULL, NULL, tna_closed_getter, NULL, NULL, napi_default_jsproperty, NULL },
     };
     napi_value constructor = NULL;

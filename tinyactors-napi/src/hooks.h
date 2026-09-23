@@ -12,7 +12,8 @@
  *   again and answers TA_ERR_NOMEM, so no actor exists that the scheduler
  *   does not know.
  * - tna_hook_actor_removed: after ta_actor_destroy and ta_actor_unload. It
- *   clears the actor's scheduling entry (step 6: and drops its mailbox).
+ *   moves the actor's mailbox to the dead letters, clears its scheduling
+ *   entry, and asks for a turn so the dead letters are reported.
  *
  * Hooks take the native system, not a call, so they stay free of Node-API
  * and native tests can drive them.
