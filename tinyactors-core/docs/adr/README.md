@@ -66,3 +66,4 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0060](0060-no-recursion-in-core.md) | [No recursion in core](0060-no-recursion-in-core.md) |
 | [0061](0061-a-macrostep-can-pause-inside-executable-content.md) | [A macrostep can pause inside executable content](0061-a-macrostep-can-pause-inside-executable-content.md) |
 | [0062](0062-the-actor-walk-is-paged-by-position.md) | [The actor walk is paged by position](0062-the-actor-walk-is-paged-by-position.md) |
+| [0063](0063-an-actor-is-one-allocation-in-a-paged-table.md) | [An actor is one allocation in a paged table](0063-an-actor-is-one-allocation-in-a-paged-table.md) (Proposed) |
