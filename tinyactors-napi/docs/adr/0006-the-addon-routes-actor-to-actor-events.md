@@ -17,7 +17,7 @@ message in the system had to come from JavaScript.
    - a runtime ID is used as it is;
    - a named address is resolved through the addon's actor directory.
 
-   The router then copies the borrowed delivery into a pooled envelope and
+   The router then copies the borrowed delivery into a reused envelope and
    appends it to the target's mailbox (ADR 0005). It returns
    `TA_EXTERNAL_EVENT_ACCEPTED`. Data is shared by retain, not cloned
    (tinyactors-core ADR 0050).

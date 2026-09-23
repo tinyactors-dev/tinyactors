@@ -17,8 +17,8 @@ much memory the addon itself used.
 1. **One small container module** (`src/containers.{c,h}`) provides:
    - `vec`: a growable array;
    - `ring`: a FIFO made of fixed-size chunks, so growing it never copies
-     the whole queue. Chunks come from the system's pools (ADR 0014) and
-     return to them when they are empty;
+     the whole queue. An empty ring keeps one spare chunk, so a queue that
+     fills and drains does not allocate each time (ADR 0014);
    - `map`: an open-addressing hash map keyed by `uint64_t`, used for the
      directory, which it keys by `ta_address` pointer (ADR 0006). Mailboxes
      do not use it, because the scheduling table indexes them by slot
@@ -30,13 +30,13 @@ much memory the addon itself used.
 2. **Temporary allocations use a scratch arena**, such as decoding a spec or
    building an inspection page. It is reset after each call, so error
    paths free nothing by hand. It is core's `ta_arena`, backed by the
-   system's chunk source (ADR 0014).
-3. **All allocations go through one counting pool allocator per system**
+   system allocator (ADR 0014).
+3. **All allocations go through one counting allocator per system**
    (ADR 0014). That allocator is also handed to core. `system.stats()`
    reports the addon's bytes by category (envelopes, scheduling table, value
-   boxes, directory, scratch high-water mark), the bytes held and
-   free in each size class, and the number of chunk requests, next to what
-   core reports for each actor.
+   boxes, directory, scratch high-water mark), the number of allocator
+   calls, and the free-list lengths, next to what core reports for each
+   actor.
 4. **The addon follows core's C rules where they make sense**: functions
    take at most three parameters, and helpers get their own module instead
    of living in `addon.c`.

@@ -15,7 +15,7 @@ global handle, so the per-value cost matters for the same reasons as in ADR
 
 1. **Values live in one handle table per system.** The table is a
    JavaScript array held by the system's only strong `napi_ref` for values.
-   - A value box is a small native record from the system's pools
+   - A value box is a small native record from the system's box free list
      (ADR 0014): an index into the table and a native reference count.
    - `retain` increments the count. `release` decrements it, and at zero it
      stores `undefined` at the index and puts the index on a native free
@@ -45,7 +45,7 @@ global handle, so the per-value cost matters for the same reasons as in ADR
 ## Consequences
 
 - Charts with data and events with payloads pay one array element and one
-  pool record per live value, and no global handle. `system.stats()` shows
+  box record per live value, and no global handle. `system.stats()` shows
   the live boxes and the table's length (ADR 0009).
 - The garbage collector still marks every live value, as it must. It does
   not visit a root per value, and in Node-API a value costs no

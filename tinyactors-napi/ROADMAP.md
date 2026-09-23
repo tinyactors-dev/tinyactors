@@ -14,8 +14,8 @@ corrected.
 - **Generated code:** everything JavaScript calls on core. The generator
   reads `tinyactors.api.json`, and its output is checked in (ADR 0013).
 - **Hand-written plumbing:**
-  - memory: a chunk source, size-class pools and arenas (ADR 0014);
-  - scheduling: the slot-indexed scheduling table, pooled mailboxes, ready
+  - memory: a counting allocator, free lists and arenas (ADR 0014);
+  - scheduling: the slot-indexed scheduling table, envelope mailboxes, ready
     and runnable queues, and the pump (ADRs 0005, 0007);
   - the router and the actor directory (ADR 0006);
   - the clock;
@@ -26,8 +26,9 @@ corrected.
   Nothing is allocated per actor on the JavaScript side.
 - **Singular calls** (ADR 0003). The only batch path is paged enumeration,
   which continues from a cursor.
-- **No `malloc` on the hot path** (ADR 0014). Memory is pooled by lifetime,
-  and a steady workload requests no new chunks after warm-up.
+- **No allocator call on the hot path** (ADR 0014). Memory is managed by
+  lifetime, and after warm-up a steady workload makes no allocator call in
+  the addon.
 
 ## Target file tree
 
@@ -55,10 +56,10 @@ tinyactors-napi/
 │   ├── runtime.{c,h}            support for generated code: primitive and (slot, generation) codecs,
 │   │                            result -> TinyactorsError, reentrancy guard, handle wrapping (ADR 0013)
 │   ├── system.{c,h}             native System: owns ta_system and all plumbing, close, stats (ADR 0012)
-│   ├── containers.{c,h}         vec, ring, map, slice over the pools (ADR 0009)
-│   ├── allocator.{c,h}          chunk source, counting size-class pools shared with core, turn and
-│   │                            call arenas over core's ta_arena (ADRs 0009, 0014)
-│   ├── scheduler.{c,h}          slot-indexed scheduling table, pooled envelope mailboxes, ready and
+│   ├── containers.{c,h}         vec, ring, map, slice, free lists (ADR 0009)
+│   ├── allocator.{c,h}          counting allocator shared with core, turn and call arenas over
+│   │                            core's ta_arena (ADRs 0009, 0014)
+│   ├── scheduler.{c,h}          slot-indexed scheduling table, envelope mailboxes, ready and
 │   │                            runnable queues, deliver/resume, one bounded turn, per-actor faults
 │   │                            and budgeted dead letters (ADRs 0005, 0008)
 │   ├── pump.{c,h}               setImmediate turns, deadline timer via global setTimeout, monotonic
@@ -86,7 +87,7 @@ tinyactors-napi/
 │           ├── policy.rb        load bindings.rb and enforce complete, non-stale classification
 │           └── emit.rb          format the plan as C
 ├── test/
-│   ├── native/                  C unit tests (pools, arenas, containers, scheduling table), built by
+│   ├── native/                  C unit tests (allocator, arenas, containers, scheduling table), built by
 │   │                            mise run test
 │   ├── *.js                     one suite per area (system, definition, actor, post, router, time, ...)
 │   └── scale.js                 population ratio benchmark and target-population measurements
@@ -114,30 +115,30 @@ needs, and a step waits for its prerequisites instead of working around them
 | 0059: an actor ID is a public slot and generation | step 3 | implemented |
 | 0061: a macrostep can pause inside executable content | step 5 | implemented |
 | 0062: the actor walk is paged by position | step 9 | implemented |
-| 0065: named addresses are shared, reference-counted handles | step 7 | proposed |
+| 0063: an actor is one allocation in a paged table | step 10 (measured there) | implemented |
+| 0064: an internal queue is lent to a running actor | step 10 (measured there) | implemented |
+| 0065: named addresses are shared, reference-counted handles | step 7 | implemented |
+| 0066: a session ID outlives residency | steps 5 and 14 | implemented |
 
-Core ADR 0065 also fixes a lifetime bug that the addon would hit. A named
-sender's origin strings are borrowed from the sender. A delivery kept with
-`ta_external_delivery_clone()`, which copies only the destination, or a
-submitted delayed send that outlives its owner, points at freed memory once
-the sender is destroyed. The addon destroys finished actors by default
-(ADR 0012), so this is a common case. Named routing in step 7 waits for
-0065.
+All of them are implemented. Two notes on what they mean for the addon:
+- **Core ADR 0065** fixed a use-after-free the addon would have hit: a named
+  origin kept after its sender was destroyed. The router keeps deliveries
+  with `ta_external_delivery_retain()`, and the directory receives
+  `ta_address` handles.
+- **Core ADR 0066:** a session keeps its ID across unload and load, but its
+  runtime ID changes. An `ActorId` (slot and generation, ADR 0002) is a
+  runtime ID, so it goes stale when a virtual actor pages out and back in.
+  Inspection reports `sessionId` (step 5). Step 14 names virtual actors by
+  address or session ID, not by `ActorId`.
+
+Core now measures about 532 bytes per actor without data.
 
 The libraries in this repository are private (root `AGENTS.md`). When the
 addon needs a core change, core's API changes in place and every caller
 moves with it, the addon included. There are no second functions and no
 compatibility shims.
 
-Two proposed core ADRs help but are not prerequisites, because the pools
-of ADR 0014 make their cost small:
-- 0063: an actor is one allocation, in a table that grows in fixed pages,
-  so no spawn copies the table;
-- 0064: a running actor is lent an internal queue, so a trivial macrostep
-  allocates nothing.
-
-`scale.js` (step 10) records the longest spawn and the chunk requests
-before and after each of them lands.
+One small core change is still needed before step 4: see step 4.
 
 ## Steps
 
@@ -148,20 +149,24 @@ both Node and Bun.
 ### 1. Reset the package
 
 - Delete `src/addon.c`, `src/binding.h`, `src/null_datamodel.{c,h}` and the
-  tests that exercise them. Keep `index.d.ts` as the target API.
+  tests that exercise them.
+- `index.d.ts` describes the public API, but parts of it predate the ADRs.
+  For example, it still types `ActorId` as a branded `bigint`, against
+  ADR 0002. Each step brings the types it touches in line with the ADRs.
 - Create the tree above with empty modules. `addon.c` exports only
   `version`.
 - Add `allocator.{c,h}` (ADR 0014):
-  - the chunk source, the only code that calls `malloc` or `mmap`;
-  - size-class pools with free lists, and dedicated allocations for large
-    or over-aligned requests;
+  - the system's counting allocator over `malloc`, which is also core's
+    allocator;
   - turn and call arenas over core's `ta_arena`;
-  - counters per size class, including chunk requests.
-- Add `containers.{c,h}` over the pools.
+  - counters for bytes in use and allocator calls, per category.
+  - Size-class pools are deferred (ADR 0014, point 5).
+- Add `containers.{c,h}`, including a free list for fixed-size records and a
+  ring that keeps one spare chunk.
 - Native unit tests under `test/native/` cover:
   - growing, wrapping, and map deletion with tombstones;
-  - pool reuse: freeing and allocating again requests no chunk;
-  - arenas that are reset request no chunk;
+  - free-list reuse: freeing and taking again makes no allocator call;
+  - arenas that are reset make no allocator call;
   - accounting that balances to zero.
 - `mise run build` compiles every `src/**/*.c` together with the core
   amalgamation.
@@ -171,15 +176,15 @@ and container tests pass.
 
 ### 2. Own a system
 
-- `system.{c,h}`: `createSystem()` builds a `ta_system` with the pool
+- `system.{c,h}`: `createSystem()` builds a `ta_system` with the counting
   allocator as core's allocator. `close()` is idempotent and authoritative,
-  and returns every chunk. The environment cleanup hook closes any system
-  still open. `stats()` reports the counters per lifetime and size class.
+  and frees everything the system holds. The environment cleanup hook
+  closes any system still open. `stats()` reports the counters per lifetime
+  and category.
 - `lib/errors.js` and `lib/system.js`.
 
 Exit criterion: many systems can be created, closed and finalized in any
-order without leaks (the bytes in use return to zero before `close()`
-returns the chunks).
+order without leaks (the allocator's bytes in use return to zero).
 
 ### 3. Generate the control plane
 
@@ -245,7 +250,7 @@ Needs core ADRs 0056 and 0061.
 
 - `lib/actor.js`: the `ActorId` view.
 - Spawn, run and destroy:
-  - the scheduling table (ADR 0005), in pages from the pools;
+  - the scheduling table (ADR 0005), in fixed pages that are never copied;
   - the spawn hook fills the actor's entry and puts it on the runnable
     queue;
   - `scheduler.{c,h}` runs the runnable part of one turn, with a handle
@@ -261,7 +266,8 @@ Needs core ADRs 0056 and 0061.
     code, and implements `flush()` with native promises;
   - hook records go into the turn arena;
   - the destroy hook clears the actor's entry.
-- `inspect()` goes through the generated `ta_actor_inspect`. `finalState`
+- `inspect()` goes through the generated `ta_actor_inspect`, and reports
+  `sessionId` (core ADR 0066) beside the actor's ID. `finalState`
   comes from the inspection's `final_state` (core ADR 0056), named through
   `ta_definition_state()`. It is `null` while the actor runs, while it is
   paused inside a microstep, and for a cancelled invoked child. The addon
@@ -288,7 +294,7 @@ Exit criterion:
 Needs core ADR 0055.
 
 - `events.{c,h}` and `lib/events.js` (ADR 0004).
-- `post()`, mailboxes of pooled envelopes and the ready queue (ADR 0005):
+- `post()`, mailboxes of reused envelopes and the ready queue (ADR 0005):
   - mail for a stale generation is a dead letter at enqueue;
   - delivery acts on `ta_actor_deliver`'s result alone. Core checks in
     this order: `TA_ERR_INVALID` for a malformed event, `TA_ERR_NOT_FOUND`,
@@ -311,8 +317,8 @@ Exit criterion:
   after the bootstrap, with no `TA_ERR_BUSY`;
 - a stale ID's mail never reaches the slot's next actor;
 - posting a name that was seen before does no string work;
-- after warm-up, posting and delivering messages without data requests no
-  chunk (ADR 0014).
+- after warm-up, posting and delivering messages without data makes no
+  allocator call in the addon (ADR 0014).
 
 ### 7. Route actor-to-actor events
 
@@ -337,8 +343,8 @@ Exit criterion:
 - sends to a named address follow the directory;
 - an external send to self is delivered in a later macrostep, with no
   `TA_ERR_BUSY`;
-- after warm-up, a named ping-pong pair requests no chunk and copies no
-  address;
+- after warm-up, a named ping-pong pair makes no allocator call and copies
+  no address;
 - a named sender finishes and is destroyed while its message waits in a
   mailbox. The envelope's origin stays valid: a native test reads it with
   `ta_address_view()` under AddressSanitizer, and step 11 checks
@@ -401,7 +407,7 @@ websocket connection.
 
 - `test/scale.js`: a population benchmark in the style of tinyactors-test's
   `scale_test.c`. That test now measures 50,000, 200,000, 1,000,000 and
-  4,000,000 actors, and core measures about 560 bytes per data-less actor.
+  4,000,000 actors, and core measures about 532 bytes per data-less actor.
   `scale.js` uses the same populations and sizes itself the same way: the
   first two always run, a larger one runs only when its predicted peak
   fits in three quarters of the available memory, and
@@ -410,7 +416,10 @@ websocket connection.
   the next: spawn, post plus delivery, inspect, one enumeration page, and
   heap bytes. It measures CPU time, not wall time.
 - A steady-state check: after warm-up, a round of posts and deliveries
-  requests no chunk (ADR 0014).
+  makes no allocator call in the addon. Core's allocator calls are
+  reported beside it (ADR 0014).
+- The longest single spawn at each population, and the largest block
+  allocated while spawning, which core ADR 0063 keeps at one page.
 - The end-to-end many-actor test from the old roadmap (spawn N, post `work`
   to all, flush once, all done), with N from the same populations.
 - At the largest population measured, the test reports:
@@ -419,12 +428,12 @@ websocket connection.
   - total GC pause time.
 
 Exit criterion: every ratio stays within its bound on Node and Bun, and
-steady state requests no chunk. No test asserts an absolute duration. The
+steady state makes no allocator call in the addon. No test asserts an absolute duration. The
 target-population numbers are recorded for comparison, not asserted.
 
 ### 11. The JavaScript data model
 
-- `values.{c,h}` (the handle table and value boxes from the pools) and
+- `values.{c,h}` (the handle table and value boxes from a free list) and
   `napi_datamodel.{c,h}`:
   - data declarations;
   - conditions, values, locations, assignments and scripts as
@@ -441,7 +450,8 @@ Exit criterion:
 - a receiver reads `_event.origin` of a message whose named sender was
   destroyed before delivery, and replies to it (core ADR 0065);
 - `test/scale.js` runs again with a chart that has data: its ratios stay
-  within their bounds, steady state with data requests no chunk, and the
+  within their bounds, steady state with data makes no allocator call in
+  the addon, and the
   target-population numbers are recorded.
 
 ### 12. `send()` and backpressure
@@ -473,14 +483,26 @@ Exit criterion:
 - Capture, unload, load and reconstruct, through generated calls with
   hooks.
 - `prepareReplacement()` and `activate()`.
+- A virtual actor keeps its session ID across unload and load, but gets a
+  new runtime ID (core ADR 0066). The JavaScript API names it by address
+  or session ID. An `ActorId` held from before the unload fails with
+  `not-found`.
 
-Exit criterion: an actor with pending delayed sends round-trips through
-capture and load, and a named actor is replaced in place with no lost
-messages.
+Exit criterion:
+- an actor with pending delayed sends round-trips through capture and load;
+- a named actor is replaced in place with no lost messages;
+- a delayed send to `#_scxml_<sessionid>` armed before an unload reaches
+  the actor after it is loaded again.
 
 ### Later
 
 - Port the tinyactors-test scenario suite to run against the addon.
 - Consider publishing a filtered raw core module (it would need an ADR, see
   ADR 0013).
+- A browser build over core compiled to WebAssembly (tinyactors-browser).
+  When it starts, extract the host-neutral part of `lib/` (the statechart
+  builder, the event-name cache, `ActorId`, errors, the `System` facade)
+  into a layer that both builds share.
+- Size-class pools behind the allocator, if the steady-state measurement
+  asks for them (ADR 0014).
 - Add bulk mutation only when a measurement justifies it (ADR 0003).

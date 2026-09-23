@@ -1,6 +1,6 @@
 # ADR 0005: Per-target mailboxes and a ready queue
 
-**Status:** Accepted; scheduling table and pooled envelopes added with ADR 0014
+**Status:** Accepted; scheduling table and envelope free list added with ADR 0014
 **Date:** 2026-09-23
 
 ## Context
@@ -24,7 +24,7 @@ That design has several faults:
 
 1. **A scheduling table indexed by slot.** The addon keeps one entry for
    each slot of core's actor table (ADR 0002). The table grows in fixed
-   pages taken from the system's pools (ADR 0014) and is never copied. An
+   pages from the system allocator (ADR 0014) and is never copied. An
    entry is 16 bytes, about 64 MB at four million actors, and holds:
    - the generation of the actor the addon knows in that slot (0 when
      none);
@@ -40,9 +40,9 @@ That design has several faults:
    ADR 0013 fill an entry for every new actor and put it on the runnable
    queue for bootstrap. The destroy and unload hooks, and the reclaiming of
    finished actors (ADR 0012), dead-letter its mailbox and clear the entry.
-3. **Mailboxes are lists of pooled envelopes.** Envelopes come from one
-   pool per system (ADR 0014). A mailbox is the list threaded through them
-   from the entry's first index to its last index. An empty mailbox costs
+3. **Mailboxes are lists of reused envelopes.** Envelopes come from the
+   system's envelope free list (ADR 0014). A mailbox is the list threaded
+   through them from the entry's first index to its last index. An empty mailbox costs
    nothing beyond the entry. Enqueueing:
    - checks the target's generation against the entry. A mismatch is a
      dead letter with reason `not-found`, recorded at once, so mail for a
