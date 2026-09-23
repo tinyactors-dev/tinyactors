@@ -1,6 +1,6 @@
 # ADR 0062: The actor walk is paged by position
 
-**Status:** Accepted; refines ADR 0018, prepares for ADR 0059
+**Status:** Accepted and implemented; refines ADR 0018, prepares for ADR 0059. See the implementation notes.
 **Date:** 2026-09-23
 
 ## Context
@@ -146,6 +146,30 @@ order.
 - Position is tied to slots. If core ever stores actors differently, the
   position must still be monotone and stable for a resident actor, or this
   ADR changes.
+
+## Implementation notes
+
+- **`next` is `TA_ALWAYS`.** The header annotates `next` so that bindings
+  return it whatever the result. Without the annotation, the test host
+  RPC dropped outputs on a non-`TA_OK` result, and a caller could not learn
+  where a failed page stopped.
+- **At the limit, `next` is the position after the last actor visited,
+  even when no resident actor follows it.** Only a position past the end
+  of the table is `TA_ACTOR_VISIT_END`. So a walk whose last page is
+  exactly full may take one more call, which visits nothing and answers
+  the end. Finding out that nothing follows would mean scanning ahead,
+  which a page must not do.
+- **Bad arguments:** `next` is written as `from` before the system and
+  `visit` are checked, so it is set whenever it is not null.
+- **Tests** are in `tinyactors-test`: `ruby/scenarios/actor_pages.rb`
+  covers pages of 1, 7 and more than the population, changes between
+  pages with slot reuse on both sides of the cursor, a failed visit, an
+  invoked child placed before its parent, and an empty system. The scale
+  test measures one page of 64 per actor visited, 3,000 pages from where
+  the last ended: 0.015 us at 50,000 residents and 0.012 us at 200,000.
+- **ADR 0059** is still Proposed and unimplemented. The position is the
+  slot, taken from the low 32 bits of the actor ID internally; nothing
+  public promises that yet.
 
 ## Sources
 
