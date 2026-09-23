@@ -26,7 +26,7 @@
 // the addon; core's calls are reported beside it (ADR 0014 point 6).
 //
 // No absolute duration is asserted. At the largest population measured the
-// test prints the longest spawn, the largest event-loop delay, RSS, V8 heap
+// test prints the longest spawn, the longest pump turn, RSS, V8 heap
 // and native bytes per actor, and total GC pause time, next to a plain
 // JavaScript baseline (one object per actor with a switch-based handler).
 
@@ -46,6 +46,9 @@ const SAMPLE = 1024;          // actors posted to and inspected, spread over the
 const REPEAT = 8;             // messages per sampled actor per round
 const ROUNDS = 7;             // measured rounds; the median is kept
 const PAGE_SIZE = 1024;
+// RSS at startup: each population's RSS per actor is measured from here,
+// since memory freed by a smaller population stays mapped.
+const PROCESS_RSS = process.memoryUsage().rss;
 
 // A full garbage collection on either runtime.
 const collect = (() => {
@@ -167,15 +170,19 @@ function loopDelayMonitor() {
     const { monitorEventLoopDelay } = require('node:perf_hooks');
     const histogram = monitorEventLoopDelay({ resolution: 1 });
     histogram.enable();
-    return { maxMs: () => histogram.max / 1e6, stop: () => histogram.disable() };
+    return {
+      maxMs: () => histogram.max / 1e6,
+      p99Ms: () => histogram.percentile(99) / 1e6,
+      p50Ms: () => histogram.percentile(50) / 1e6,
+      stop: () => histogram.disable(),
+    };
   } catch {
-    return { maxMs: () => null, stop() {} };
+    return { maxMs: () => null, p99Ms: () => null, p50Ms: () => null, stop() {} };
   }
 }
 
 async function measure(population) {
   const gc = gcObserver();
-  const rssBefore = process.memoryUsage().rss;
   const jsBefore = jsRetained();
 
   let done = 0;
@@ -262,17 +269,23 @@ async function measure(population) {
   }
   assert.equal(visited, population, 'the walk visits every actor once');
 
-  // End to end: post `work` to every actor, flush once, all done.
-  const loop = loopDelayMonitor();
+  // End to end: post `work` to every actor, flush once, all done. The
+  // event-loop delay is sampled only while the pump runs the flush, so its
+  // maximum is the longest pump turn (plus the hooks it calls), not the
+  // test's own synchronous post loop.
   const e2eStarted = cpuMicros();
   for (const page of system.actorIds({ pageSize: PAGE_SIZE })) {
     for (let at = 0; at < page.length; at += 2) {
       system.post(new ActorId(system, page[at], page[at + 1]), 'work');
     }
   }
+  const loop = loopDelayMonitor();
+  await new Promise((resolve) => setTimeout(resolve, 5)); // the monitor's first sample
   await system.flush();
   const e2eCost = (cpuMicros() - e2eStarted) / population;
   const loopDelayMs = loop.maxMs();
+  const loopDelayP99Ms = loop.p99Ms();
+  const loopDelayP50Ms = loop.p50Ms();
   loop.stop();
   assert.equal(done, population, 'every actor finished');
   assert.equal([...system.actorIds()].length, 0, 'finished actors were destroyed');
@@ -295,10 +308,12 @@ async function measure(population) {
     e2e: e2eCost,
     nativePerActor: nativeBytes / population,
     jsPerActor: (jsAfter - jsBefore) / population,
-    rssPerActor: (rssAfter - rssBefore) / population,
+    rssPerActor: (rssAfter - PROCESS_RSS) / population,
     peakRss: process.memoryUsage().rss,
     steady: { addon: callsAfter.addon - callsBefore.addon, core: callsAfter.core - callsBefore.core },
     loopDelayMs,
+    loopDelayP99Ms,
+    loopDelayP50Ms,
     gcPauseMs,
   };
 }
@@ -357,7 +372,7 @@ function report(result) {
       `page(${PAGE_SIZE}) ${f(result.page, 1)} us, end-to-end ${f(result.e2e)} us/actor, ` +
       `native ${f(result.nativePerActor, 1)} B/actor, js ${f(result.jsPerActor, 1)} B/actor, ` +
       `rss ${f(result.rssPerActor, 1)} B/actor, steady-state calls addon ${result.steady.addon} core ${result.steady.core}, ` +
-      `event-loop delay max ${f(result.loopDelayMs, 1)} ms, gc pause ${f(result.gcPauseMs, 1)} ms`,
+      `turns (event-loop delay during flush) p50 ${f(result.loopDelayP50Ms, 1)} p99 ${f(result.loopDelayP99Ms, 1)} max ${f(result.loopDelayMs, 1)} ms, gc pause ${f(result.gcPauseMs, 1)} ms`,
   );
 }
 
