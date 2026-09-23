@@ -15,6 +15,7 @@ end
 
 run('mise', 'run', 'build')
 run('mise', 'run', 'test-native')
+run('mise', 'run', 'test-native-asan')
 
 Dir[ROOT.join('test/*.js').to_s].sort.each do |suite|
   relative = Pathname.new(suite).relative_path_from(ROOT).to_s

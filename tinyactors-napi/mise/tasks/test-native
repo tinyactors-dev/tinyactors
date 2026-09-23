@@ -18,7 +18,7 @@ abort 'tinyactors-napi: no native tests found' if tests.empty?
 
 tests.each do |test|
   object = NapiCompile.objects([test]).first
-  binary = NapiCompile::BUILD.join('native', test.basename('.c'))
+  binary = NapiCompile::NATIVE.join(test.basename('.c'))
   NapiCompile.link([object, *shared], binary)
   puts binary.relative_path_from(root)
   pid = Process.spawn(binary.to_s, chdir: root.to_s)

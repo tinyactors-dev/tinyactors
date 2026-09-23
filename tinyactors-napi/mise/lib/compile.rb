@@ -15,7 +15,12 @@ require 'cache'
 module NapiCompile
   ROOT = Cache::ROOT
   BUILD = ROOT.join('build')
-  OBJECTS = BUILD.join('obj')
+  # TNA_SANITIZE=1 builds with AddressSanitizer and UBSan, into separate
+  # object and binary directories so the two modes never evict each other.
+  SANITIZE = ENV['TNA_SANITIZE'] == '1'
+  SANITIZE_FLAGS = %w[-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all -g].freeze
+  OBJECTS = BUILD.join(SANITIZE ? 'obj-asan' : 'obj')
+  NATIVE = BUILD.join(SANITIZE ? 'native-asan' : 'native')
   CORE_DIR = ROOT.join('../tinyactors-core/include').expand_path
   CORE_SOURCE = CORE_DIR.join('tinyactors.c')
 
@@ -44,6 +49,7 @@ module NapiCompile
     @command ||= [
       *compiler,
       *Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic -O2')),
+      *(SANITIZE ? SANITIZE_FLAGS : []),
       '-fPIC',
       '-DNAPI_VERSION=8',
       "-DTINYACTORS_NAPI_VERSION=\"#{version}\"",
@@ -82,7 +88,7 @@ module NapiCompile
   # Links `objects` into `output`, unless the same objects were linked the same
   # way last time and the output is still there.
   def link(objects, output, flags: [])
-    link_command = [*compiler, *flags, *objects.map(&:to_s), '-o', output.to_s]
+    link_command = [*compiler, *(SANITIZE ? SANITIZE_FLAGS : []), *flags, *objects.map(&:to_s), '-o', output.to_s]
     name = "link-#{output.relative_path_from(BUILD).to_s.tr('/', '_')}"
     key = Cache.digest(objects, link_command.join(' '), Cache.tool_id(compiler.first(1)))
     return if output.file? && Cache.stamped?(name, key)
