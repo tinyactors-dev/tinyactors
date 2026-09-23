@@ -31,6 +31,10 @@ Using the actor model, you can model just how a websocket connection behaves on 
 
 This is good for humans and for agents.
 
+## Status
+
+Under active development - breaking changes are made frequently to land on a good API.
+
 ## Repository layout
 
 - `tinyactors-core/` contains the freestanding-friendly C API and production
