@@ -484,6 +484,58 @@ interface should be tested against one real codec before it gains callers.
   against REXML. That is the concrete test of whether this interface was worth
   defining, and it is not claimed until it is done.
 
+## Implementation notes
+
+Recorded when this ADR was implemented (2026-09-23), where the implementation
+showed the text above to be wrong or silent.
+
+- **The codec is `tinyactors-scxml`, over txml.** It is freestanding C over
+  the repository's own XML library, not a vendored parser. It is a sibling
+  module because it depends on core and on txml, and neither may depend on
+  it. txml gained `TXML_WRITE_FRAGMENT` (txml ADR 0024) so the codec can
+  write a `<content>` element's children, which are not a document.
+- **A codec is configured.** Hard-coded bounds would not do for real
+  embedders, so the codec is made from `ta_scxml_codec_params`: input bytes,
+  parsed bytes, depth, attributes, text bytes, entity expansion, name length
+  and distinct names, with zero meaning a documented default. The bounds txml
+  also has are passed through to it, not enforced twice. A limit error's
+  `construct` names the field.
+- **What a literal content's bytes are.** Content with element children is
+  re-serialized as the §1 comment says. Content with only character data is
+  that character data, references resolved, not an escaped serialization:
+  a data model imports `{"k": 1}` or `some text`, not `some &amp; text`. Both
+  carry the codec's media type. To round-trip, encode writes bytes back as
+  markup only if they parse as markup and re-serialize to themselves;
+  otherwise it writes them as text.
+- **`<invoke src>` is not fetched.** §1 listed it for the resolver, but it is
+  a URI that the invoker interprets at run time (SCXML 6.4), so it stays in
+  the spec. The resolver serves `<data src>` and `<script src>`, and a
+  fetched `<data src>` becomes literal content in the codec's media type.
+- **`<content expr>` of markup.** A `<content expr>` whose value is markup
+  (test530 assigns an `<scxml>` document and invokes it) arrives as `data`, a
+  value. The test host's SCXML invoker reads a string value as SCXML text.
+  That is the invoker's rule, not core's.
+- **Where decoded text points.** Text is a slice of the input wherever XML
+  left it byte-for-byte unchanged. It points into txml's value pool, which is
+  also in the decode arena, when XML changed it: a character or entity
+  reference, attribute-value normalization, a CRLF, or text split across
+  nodes (the codec joins these). Only the join and `<content>` markup are
+  copies the codec makes.
+- **The compile error is a placeholder.** `ta_compile_error` has only
+  `TA_COMPILE_ERROR_NONE`, and an import that fails in the compiler reports
+  `TA_IMPORT_STAGE_COMPILE` with `located = false`, pending ADR 0058.
+- **Durations.** `ta_duration_parse` accepted only a whole part, which the
+  chart DSL never exposed because it wrote milliseconds. A document hands
+  the compiler the author's text, and SCXML durations are CSS2 times: `.5s`
+  is now accepted (W3C test175).
+- **The anonymous state ID** is `_ta_anonymous_N`, chosen to be distinct
+  from every authored state ID in the document, inline machines included.
+- **The consequence in the last bullet is claimed.** `document.rb` is
+  deleted. The IRP harness rewrites the suite's `conf:` markup into SCXML and
+  imports every document through the codec. The same 181 of 200 tests are
+  imported, and all 183 IRP scenarios pass, as they did through
+  `document.rb`.
+
 ## Sources
 
 Primary, verified when this ADR was written:
