@@ -263,5 +263,5 @@ Each package is one or more commits. After each: `mise run amalgamate`,
 
 - `docs/internal/definition-lifecycle.md` (steps 8 and 9: retirement),
   `docs/internal/definition.md`, `docs/internal/public-api.md`,
-  `docs/manual/inspection.md`, `docs/internal/api-gaps.md` if it lists these.
+  `docs/manual/inspection.md`.
 - ADR 0028's status notes the refinement by ADR 0043.

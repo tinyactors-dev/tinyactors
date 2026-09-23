@@ -12,7 +12,6 @@ Important cross-cutting references:
 - `routing.md` — normalized external-event scheduling boundary.
 - `invariants.md` — rules implementations must never violate.
 - `memory-model.md` — density strategy for millions of actors.
-- `api-gaps.md` — current header skeleton vs intended design.
 - `verification.md` — simulator/fuzzer integration.
 - `testing-and-api-change.md` — how to grow the test suite so it catches bugs,
   the traps in doing that, and when and how to change the public API.

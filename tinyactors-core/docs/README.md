@@ -21,5 +21,4 @@ An SCXML importer/exporter can be added as a separate component later.
 ## Status
 
 The C headers are currently a design skeleton. The ADRs distinguish accepted
-design decisions from implementation work that remains. `internal/api-gaps.md`
-records how previously identified public-surface gaps were closed.
+design decisions from implementation work that remains.
