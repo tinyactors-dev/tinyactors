@@ -273,8 +273,108 @@ async function valuesAfterClose() {
   assert.equal(native.environmentStats().leakedBytes, 0);
 }
 
+// The ping-pong player chart from docs/design.md, as written there. Two named
+// players rally a ball through delayed sends until each has hit `limit`
+// volleys.
+const player = () =>
+  statechart({ family: 'player', revision: 'player/v1', name: 'player' })
+    .data('partner', '#_actor_player/nobody')
+    .data('volleys', 0)
+    .data('limit', 15)
+    .data('rallying', false)
+    .data('server', false)
+    .initial('idle')
+    .state('idle', (idle) => {
+      idle.always((transition) => {
+        transition.when(({ data }) => data.rallying && data.server).target('rallying');
+      });
+      idle.on('serve', (transition) => {
+        transition.target('rallying').assign('volleys', 1).assign('rallying', true).assign('server', true);
+      });
+    })
+    .state('rallying', (rallying) => {
+      rallying.entry((actions) => {
+        actions
+          .log('hit', ({ data }) => `RALLY volley ${data.volleys} -> ${data.partner}`)
+          .send('ball', (send) => {
+            send.id('ball').to(({ data }) => data.partner).after('1s');
+          });
+      });
+      rallying.exit((actions) => {
+        actions.cancel('ball');
+      });
+      rallying.on('ball', (transition) => {
+        transition
+          .when(({ data }) => data.volleys < data.limit)
+          .target('rallying')
+          .assign('volleys', ({ data }) => data.volleys + 1);
+      });
+    });
+
+async function pingPong() {
+  const system = createSystem({ clock: 'manual' });
+  const definition = system.define(player());
+  const ping = system.spawn(definition, { name: 'ping', binding: { partner: '#_actor_player/pong' } });
+  const pong = system.spawn(definition, { name: 'pong', binding: { partner: '#_actor_player/ping' } });
+  await system.flush();
+  assert.deepEqual(ping.inspect().activeStates, ['idle']);
+  ping.post('serve');
+  pong.post('serve');
+  await system.flush();
+  for (let second = 0; second < 40; second += 1) {
+    await system.advanceBy(1000);
+  }
+  assert.equal(ping.inspect().data.volleys, 15);
+  assert.equal(pong.inspect().data.volleys, 15);
+  assert.deepEqual(ping.inspect().activeStates, ['rallying']);
+  system.close();
+}
+
+// A receiver reads _event.origin of a message whose named sender finished
+// and was destroyed before delivery, and replies to it (core ADR 0065): the
+// reply is a dead letter addressed to the sender's name.
+async function originOfADestroyedSender() {
+  const dead = [];
+  const system = createSystem({ scheduling: { messageBudget: 1 }, deadLetter: (record) => dead.push(record) });
+  const receiver = system.spawn(
+    system.define(
+      statechart({ family: 'receiver', revision: 'v1' })
+        .data('origin', null)
+        .state('idle', (s) =>
+          s.on('hello', (t) =>
+            t.assign('origin', ({ event }) => event.origin).send('reply', (send) => send.to(({ event }) => event.origin)),
+          ),
+        ),
+    ),
+    { name: 'b' },
+  );
+  receiver.post('first');
+  receiver.post('second');
+  const sender = system.spawn(
+    system.define(
+      statechart({ family: 'sender', revision: 'v1' })
+        .data('unused', 0)
+        .state('start', (s) => {
+          s.entry((a) => a.send('hello', (send) => send.to('#_actor_receiver/b')));
+          s.always((t) => t.target('done'));
+        })
+        .final('done'),
+    ),
+    { name: 'a' },
+  );
+  await system.flush();
+  assert.equal(system.exists(sender), false, 'the sender finished and was destroyed');
+  assert.equal(receiver.inspect().data.origin, '#_actor_sender/a');
+  const reply = dead.find((record) => record.event === 'reply');
+  assert.ok(reply, 'the reply became a dead letter');
+  assert.deepEqual(reply.target, { family: 'sender', name: 'a' });
+  system.close();
+}
+
 (async () => {
   await counter();
+  await pingPong();
+  await originOfADestroyedSender();
   await binding();
   await context();
   await errors();
