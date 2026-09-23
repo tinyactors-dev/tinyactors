@@ -723,7 +723,8 @@ needs a core change):
 - a limit on turns per macrostep that quarantines runaway actors (ADR 0008);
 - holding and releasing an actor's mailbox for flow control;
 - a helper for naming effects that expands to `send(...).via(...)`;
-- an xstate baseline next to the plain-object one in `scale.js`.
+- ~~an xstate baseline next to the plain-object one in `scale.js`~~: done.
+  `SCALE_BASELINES=xstate,object` runs it; `docs/scale.md` has the numbers.
 
 **Later:**
 - port the tinyactors-test scenario suite to run against the addon;
