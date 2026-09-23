@@ -107,6 +107,7 @@ tinyactors-napi/
 │                                (steps 10, 11, 13)
 └── docs/
     ├── design.md                earlier design notes; superseded where they differ from the ADRs
+    ├── scale.md                 dated scale.js measurements (step 10 and later)
     └── adr/                     binding ADRs
 ```
 
@@ -468,13 +469,15 @@ websocket connection.
 - `test/scale.js`: a population benchmark in the style of tinyactors-test's
   `scale_test.c`. That test now measures 50,000, 200,000, 1,000,000 and
   4,000,000 actors, and core measures about 532 bytes per data-less actor.
-  `scale.js` uses the same populations and sizes itself the same way: the
-  first two always run, a larger one runs only when its predicted peak
-  fits in three quarters of the available memory, and
-  `TAT_SCALE_MAX_POPULATION` overrides that in both directions. It checks
-  that each of the following stays flat per actor from one population to
-  the next: spawn, post plus delivery, inspect, one enumeration page, and
-  heap bytes. It measures CPU time, not wall time.
+  `scale.js` uses the same populations, but `mise run test` runs only the
+  first two (50,000 and 200,000): the full-size run in tinyactors-test
+  stalled this machine while other work was running.
+  `TAT_SCALE_MAX_POPULATION` raises the cap, and a population above
+  200,000 then runs only when its predicted peak fits in three quarters of
+  the available memory. It checks that each of the following stays flat per
+  actor from one population to the next: spawn plus bootstrap, post plus
+  delivery, inspect, one enumeration page, the end-to-end run, and native
+  bytes. It measures CPU time, except for the page and the pump turns.
 - A steady-state check: after warm-up, a round of posts and deliveries
   makes no allocator call in the addon. Core's allocator calls are
   reported beside it (ADR 0014).
@@ -488,8 +491,15 @@ websocket connection.
   - total GC pause time.
 
 Exit criterion: every ratio stays within its bound on Node and Bun, and
-steady state makes no allocator call in the addon. No test asserts an absolute duration. The
-target-population numbers are recorded for comparison, not asserted.
+steady state makes no allocator call in the addon. No test asserts an
+absolute duration. The target-population numbers are recorded for
+comparison, not asserted, in `docs/scale.md`.
+
+Done (2026-09-23). The baseline is in `docs/scale.md`: at 4M actors, 480
+native bytes and no JS heap per actor, 0.3 µs per post and delivery, a
+largest block of one 64 KiB page, and pump turns with a flat p99. One
+finding is for core: a chart with a top-level `<final>` makes core allocate
+and free once per delivered message.
 
 ### 11. The JavaScript data model
 
