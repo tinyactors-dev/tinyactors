@@ -276,7 +276,8 @@ static void test_import(ta_system *system) {
 }
 
 /* A decode error names the decode stage and its position; a compile error
- * names the compile stage and, until ADR 0058, no position. */
+ * names the compile stage and its code (ADR 0058). A chart with no states
+ * has no text to point at, so it is not located. */
 static void test_import_errors(ta_system *system) {
     stub_codec codec = {0};
     ta_arena arena;
@@ -294,6 +295,7 @@ static void test_import_errors(ta_system *system) {
     CHECK(import(system, &codec, &arena, (ta_bytes){ .ptr = (const uint8_t *)"", .len = 0 }, NULL, &id, &error) ==
           TA_ERR_INVALID);
     CHECK(error.stage == TA_IMPORT_STAGE_COMPILE);
+    CHECK(error.as.compile.code == TA_COMPILE_ERROR_NO_STATES);
     CHECK(!error.located);
 
     /* A codec that only writes cannot import. */

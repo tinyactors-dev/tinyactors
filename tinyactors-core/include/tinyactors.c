@@ -5875,6 +5875,14 @@ static ta_result ta_compile(ta_system *system, const ta_definition_compile_param
 static void ta_compile_rejected(ta_system *system, const ta_definition_compile_params *params,
                                 const ta_expression_rejection *rejection) {
     ta_compile_error *error = params->error;
+    /* Copied first: the message is the adapter's until core calls it again. */
+    ta_str message = TA_PHRASE("the data model refused this expression");
+    if (params->error_arena != NULL && rejection->message.ptr != NULL && rejection->message.len != 0) {
+        ta_str copy = {0};
+        if (ta_arena_copy_str(params->error_arena, rejection->message, &copy) == TA_OK) {
+            message = copy;
+        }
+    }
     if (rejection->expression != TA_EXPR_ID_NONE) {
         ta_result replayed = ta_compile(system, params, &(ta_compile_run_params){
                                                             .error = error,
@@ -5891,13 +5899,7 @@ static void ta_compile_rejected(ta_system *system, const ta_definition_compile_p
         error->subject_offset = rejection->offset;
         error->subject_length = rejection->length;
     }
-    error->message = TA_PHRASE("the data model refused this expression");
-    if (params->error_arena != NULL && rejection->message.ptr != NULL && rejection->message.len != 0) {
-        ta_str copy = {0};
-        if (ta_arena_copy_str(params->error_arena, rejection->message, &copy) == TA_OK) {
-            error->message = copy;
-        }
-    }
+    error->message = message;
 }
 
 TA_API ta_result ta_definition_compile_spec(ta_system *system, const ta_definition_compile_params *params) {

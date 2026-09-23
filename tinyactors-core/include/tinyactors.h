@@ -366,7 +366,8 @@ typedef struct {
  * Which expression a data model refused at prepare_definition(), and where in
  * its source (ADR 0058). `offset` and `length` are bytes within that
  * expression's source text; both zero when the whole expression is meant.
- * `message` need only live for the call: core copies it.
+ * `message` stays the adapter's: it must stay valid until core next calls
+ * the adapter, and core copies it before then.
  */
 typedef struct {
     ta_expr_id expression;
