@@ -15,6 +15,11 @@
 
 const native = require('./native');
 const { TinyactorsError } = require('./errors');
+const { Definition } = require('./definition');
+
+function isDefinition(value) {
+  return value instanceof Definition;
+}
 
 const literalBrand = Symbol('tinyactors.literal');
 native.setupLiteral(literalBrand);
@@ -355,8 +360,10 @@ class InvokeBuilder {
     return this.#set('src', stringSpec(source, 'invoke source'));
   }
 
+  // A Definition as content names the child of the in-system SCXML invoker:
+  // it is carried as its ID (adapters/invoker.h).
   content(value) {
-    return this.#set('data', valueSpec(value));
+    return this.#set('data', valueSpec(isDefinition(value) ? value.id : value));
   }
 
   param(name, value) {

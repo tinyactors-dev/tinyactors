@@ -899,50 +899,81 @@ export interface DoneDataSpec {
  * Host extensions
  * -------------------------------------------------------------------------- */
 
+/**
+ * An I/O processor for `<send type>` (ROADMAP step 13). Core calls it while an
+ * actor runs, so the call is queued and send() runs at the end of that pump
+ * turn, never inside core. A reply is an event the processor posts, now or
+ * later. Throwing, or returning a promise that rejects, fails the send: the
+ * sender gets an external `error.communication` event with data
+ * { sendId, type, error }.
+ */
 export interface IoProcessor {
   send(request: IoRequest, context: EffectContext): void | Promise<void>;
 }
 
 export interface IoRequest {
+  /** The sending actor: an ActorId, or its address when it is named. */
   readonly source: ActorId | ActorAddress;
-  readonly sendId: SendId;
+  /** The send's ID text (`<send id>` or core's generated one), or null for a send without one. */
+  readonly sendId: string | null;
   readonly event: EventName;
   readonly type: string;
   readonly target: unknown;
   readonly data: unknown;
+  /** A literal <content>, as text, with its media type. */
+  readonly content?: string;
+  readonly contentType?: string;
 }
 
+/** One per system: `signal` aborts on close(). */
 export interface EffectContext {
   readonly system: System;
   readonly signal: AbortSignal;
-  post(target: ActorTarget, event: EventName, data?: unknown): void;
+  post(target: ActorTarget, event: EventName, data?: unknown, options?: PostOptions): void;
 }
 
+/**
+ * An invoker for `<invoke type>` (ROADMAP step 13). start() runs at the end
+ * of the pump turn in which core started the invocation; the service's
+ * cancel() runs when the invoking state exits, and forward() gets
+ * autoforwarded events.
+ */
 export interface Invoker {
-  start(request: InvokeRequest, reporter: InvocationReporter): InvokedService;
+  start(request: InvokeRequest, reporter: InvocationReporter): InvokedService | void;
 }
 
 export interface InvokeRequest {
   readonly system: System;
   readonly parent: Actor;
   readonly invocationId: InvocationId;
+  /** The invoke ID's text: `<invoke id>` or the one core generated. */
+  readonly invokeId?: string;
   readonly type: string;
   readonly source?: unknown;
+  /** `<content expr>`'s value, or a literal <content> as text (then `contentType` is set). */
   readonly content?: unknown;
+  readonly contentType?: string;
   readonly params?: unknown;
   readonly autoforward: boolean;
 }
 
 export interface InvokedService {
-  cancel(reason?: unknown): void | Promise<void>;
-  forward?(event: ActorEvent): void | Promise<void>;
+  cancel?(reason?: unknown): void | Promise<void>;
+  forward?(event: { readonly name: EventName; readonly data?: unknown }): void | Promise<void>;
 }
 
+/**
+ * Reports from an invocation to its parent. event() and done() arrive as
+ * external events (done as done.invoke.<id>); unavailable() retires the
+ * invocation and the parent gets error.communication. Each returns false
+ * once the invocation has ended (done, unavailable, cancelled, closed).
+ */
 export interface InvocationReporter {
+  /** Aborts when the invocation ends: cancel, done, unavailable, or close(). */
   readonly signal: AbortSignal;
-  event(name: EventName, data?: unknown): void;
-  done(data?: unknown): void;
-  unavailable(error?: unknown): void;
+  event(name: EventName, data?: unknown): boolean;
+  done(data?: unknown): boolean;
+  unavailable(error?: unknown): boolean;
 }
 
 export interface LogRecord {

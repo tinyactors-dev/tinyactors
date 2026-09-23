@@ -51,6 +51,15 @@ function pathText(path) {
 // The native System behind a public one, for other lib/ modules and tests.
 // index.js does not export it.
 let nativeOf;
+// handler(system, kind, payload): the pump hands every service effect to it
+// (src/napi_services.h). It is one function for the environment, so no
+// native reference keeps a System alive.
+let effectHandler;
+
+// The SCXML invoker type core normalizes "scxml" and its URI to (core
+// ADR 0016); the in-system SCXML invoker is registered under it.
+const SCXML_INVOKER = 'http://www.w3.org/TR/scxml/';
+const SCXML_ALIASES = new Set(['scxml', 'http://www.w3.org/TR/scxml', SCXML_INVOKER]);
 
 class System {
   #native;
@@ -59,8 +68,19 @@ class System {
   // core once per definition.
   #javascript = new Map();
 
+  // Services (ROADMAP step 13): I/O processors by type, invokers by type,
+  // live JavaScript invocations by service handle, and the log sink.
+  #io = new Map();
+  #invokers = new Map();
+  #invocations = new Map();
+  #logSink;
+  // Aborted on close(): the signal every EffectContext carries.
+  #lifetime = new AbortController();
+  #effectContext;
+
   static {
     nativeOf = (system) => system.#native;
+    effectHandler = (system, kind, payload) => system.#effect(kind, payload);
   }
 
   /**
@@ -80,6 +100,222 @@ class System {
     }
     this.#native = new native.System(this, options);
     this.#events = new EventNames(this.#native);
+    const { io, invokers, log } = options ?? {};
+    for (const [type, processor] of Object.entries(servicesOf(io, 'createSystem(): io'))) {
+      this.registerIo(type, processor);
+    }
+    for (const [type, invoker] of Object.entries(servicesOf(invokers, 'createSystem(): invokers'))) {
+      this.registerInvoker(type, invoker);
+    }
+    if (log !== undefined) {
+      this.setLogSink(log);
+    }
+  }
+
+  /**
+   * Make `processor` the I/O processor for `<send type>` (core ADRs 0015,
+   * 0046). Core calls it while an actor runs, so the call is queued and
+   * processor.send(request, context) runs at the end of that pump turn,
+   * never inside core (ADR 0001 rule 3). `request` is { source, sendId,
+   * event, type, target, data } (and { content, contentType } for a literal
+   * <content>); `context` is { system, signal, post }, where `signal` aborts
+   * on close(). A reply is an event the processor posts, now or later. A
+   * processor that throws or whose promise rejects has failed the send: the
+   * sender gets an external `error.communication` event whose data is
+   * { sendId, type, error }.
+   */
+  registerIo(type, processor) {
+    if (typeof type !== 'string' || type === '') {
+      throw new TinyactorsError('registerIo(): expected a type string', 'invalid');
+    }
+    if (processor === null || typeof processor !== 'object' || typeof processor.send !== 'function') {
+      throw new TinyactorsError('registerIo(): expected an I/O processor with a send(request, context) method', 'invalid');
+    }
+    this.#native.registerIo(type);
+    this.#io.set(type, processor);
+  }
+
+  /**
+   * Make `invoker` the invoker for `<invoke type>` (core ADR 0016). Core
+   * starts, cancels and forwards to invocations while an actor runs, so each
+   * call is queued and runs at the end of that pump turn:
+   * invoker.start(request, reporter) returns the service, whose cancel() runs
+   * when the invoking state exits and whose optional forward(event) gets
+   * autoforwarded events. The reporter's event(name, data) and done(data)
+   * reach the parent as external events (done is done.invoke.<id>); its
+   * unavailable(error) retires the invocation, and the parent gets
+   * error.communication. Its signal aborts on cancel, done, unavailable and
+   * close(). "scxml" names the in-system SCXML invoker's type; registering
+   * it replaces that invoker.
+   */
+  registerInvoker(type, invoker) {
+    if (typeof type !== 'string' || type === '') {
+      throw new TinyactorsError('registerInvoker(): expected a type string', 'invalid');
+    }
+    if (invoker === null || typeof invoker !== 'object' || typeof invoker.start !== 'function') {
+      throw new TinyactorsError('registerInvoker(): expected an invoker with a start(request, reporter) method', 'invalid');
+    }
+    const canonical = SCXML_ALIASES.has(type) ? SCXML_INVOKER : type;
+    this.#native.registerInvoker(canonical);
+    this.#invokers.set(canonical, invoker);
+  }
+
+  /**
+   * Send `<log>` records to `sink` ({ source, label, hasValue, value }), at
+   * the end of the pump turn that ran them (core ADR 0045). Without a sink a
+   * <log> only evaluates its expression.
+   */
+  setLogSink(sink) {
+    if (sink !== undefined && typeof sink !== 'function') {
+      throw new TinyactorsError('setLogSink(): expected a function or undefined', 'invalid');
+    }
+    this.#native.setLogSink(sink !== undefined);
+    this.#logSink = sink;
+  }
+
+  // One service effect, in the order core made the calls (napi_services.h).
+  #effect(kind, payload) {
+    switch (kind) {
+      case 'log':
+        this.#logSink?.(payload);
+        return;
+      case 'io':
+        this.#runIo(payload);
+        return;
+      case 'invoke-start':
+        this.#startInvocation(payload);
+        return;
+      case 'invoke-cancel':
+        this.#cancelInvocation(payload.handle, undefined);
+        return;
+      case 'invoke-forward':
+        this.#forwardInvocation(payload);
+        return;
+      default:
+        return;
+    }
+  }
+
+  // The context every I/O processor call gets; made once per system.
+  #context() {
+    this.#effectContext ??= Object.freeze({
+      system: this,
+      signal: this.#lifetime.signal,
+      post: (target, event, data, options) => this.post(target, event, data, options),
+    });
+    return this.#effectContext;
+  }
+
+  #runIo(request) {
+    const processor = this.#io.get(request.type);
+    if (processor === undefined) {
+      this.#communicationError(request, new TinyactorsError(`no I/O processor for "${request.type}"`, 'not-found'));
+      return;
+    }
+    let outcome;
+    try {
+      outcome = processor.send(request, this.#context());
+    } catch (error) {
+      this.#communicationError(request, error);
+      return;
+    }
+    if (outcome !== null && typeof outcome === 'object' && typeof outcome.then === 'function') {
+      outcome.then(undefined, (error) => this.#communicationError(request, error));
+    }
+  }
+
+  // A failed send reaches its sender as error.communication (ADR 0008:
+  // failures after the call reach JavaScript through events or hooks).
+  #communicationError(request, error) {
+    if (this.closed || request.source === undefined) {
+      return;
+    }
+    try {
+      this.post(request.source, 'error.communication', { sendId: request.sendId, type: request.type, error });
+    } catch {
+      // The sender is gone or its mailbox is full: nobody is left to tell.
+    }
+  }
+
+  #startInvocation(payload) {
+    const { handle, parent, invocationId } = payload;
+    const controller = new AbortController();
+    const invocation = { controller, service: undefined, live: true };
+    this.#invocations.set(handle, invocation);
+    const report = (kind, name, data) => {
+      if (!invocation.live || this.closed) {
+        return false;
+      }
+      if (kind !== 'event') {
+        this.#endInvocation(handle, invocation);
+      }
+      return this.#native.reportInvoke(parent.slot, parent.generation, invocationId, kind, name, data);
+    };
+    const reporter = Object.freeze({
+      signal: controller.signal,
+      event: (name, data) => report('event', this.#events.id(name), data),
+      done: (data) => report('done', 0, data),
+      unavailable: (error) => report('unavailable', 0, error),
+    });
+    const invoker = this.#invokers.get(payload.type);
+    if (invoker === undefined) {
+      reporter.unavailable(new TinyactorsError(`no invoker for "${payload.type}"`, 'not-found'));
+      return;
+    }
+    const request = Object.freeze({
+      system: this,
+      parent,
+      invocationId,
+      invokeId: payload.invokeId,
+      type: payload.type,
+      source: payload.source,
+      content: payload.content,
+      contentType: payload.contentType,
+      params: payload.params,
+      autoforward: payload.autoforward,
+    });
+    try {
+      invocation.service = invoker.start(request, reporter);
+    } catch (error) {
+      reporter.unavailable(error);
+    }
+  }
+
+  #endInvocation(handle, invocation) {
+    invocation.live = false;
+    this.#invocations.delete(handle);
+    invocation.controller.abort();
+  }
+
+  #cancelInvocation(handle, reason) {
+    const invocation = this.#invocations.get(handle);
+    if (invocation === undefined) {
+      return;
+    }
+    this.#endInvocation(handle, invocation);
+    try {
+      const outcome = invocation.service?.cancel?.(reason);
+      if (outcome !== null && typeof outcome === 'object' && typeof outcome.then === 'function') {
+        outcome.then(undefined, () => {});
+      }
+    } catch {
+      // A service that fails to cancel is gone as far as the actor is concerned.
+    }
+  }
+
+  #forwardInvocation({ handle, event }) {
+    const invocation = this.#invocations.get(handle);
+    if (invocation === undefined || typeof invocation.service?.forward !== 'function') {
+      return;
+    }
+    try {
+      const outcome = invocation.service.forward(event);
+      if (outcome !== null && typeof outcome === 'object' && typeof outcome.then === 'function') {
+        outcome.then(undefined, () => {});
+      }
+    } catch {
+      // Forwarding is best effort (SCXML 6.4: autoforward has no error path).
+    }
   }
 
   /** True once close() has run. */
@@ -481,6 +717,14 @@ class System {
    * authoritative: afterwards every method except close() throws `closed`.
    */
   close() {
+    if (!this.#native.closed) {
+      // Services first: their signals abort and live invocations are
+      // cancelled; what core's teardown asks of them afterwards is dropped.
+      this.#lifetime.abort();
+      for (const handle of [...this.#invocations.keys()]) {
+        this.#cancelInvocation(handle, 'closed');
+      }
+    }
     this.#native.close();
   }
 
@@ -554,6 +798,19 @@ function addressOf(address, caller) {
   }
   return address;
 }
+
+// The io or invokers option: undefined or an object of services by type.
+function servicesOf(value, what) {
+  if (value === undefined) {
+    return {};
+  }
+  if (value === null || typeof value !== 'object') {
+    throw new TinyactorsError(`${what} must be an object of services by type`, 'invalid');
+  }
+  return value;
+}
+
+native.setupEffects(effectHandler);
 
 function createSystem(options) {
   return new System(options);
