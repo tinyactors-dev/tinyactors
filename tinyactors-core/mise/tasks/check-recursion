@@ -94,8 +94,6 @@ cycles = components.select { |component| component.length > 1 || calls[component
 ALLOWED = [
   %w[ta_compiler_collect],
   %w[ta_compiler_action ta_compiler_block ta_compiler_foreach],
-  %w[ta_export_action ta_export_actions],
-  %w[ta_export_state ta_export_states],
   %w[ta_exec_action ta_exec_foreach ta_run_block],
   %w[ta_actor_exit_invoked ta_interpreter_cancel ta_invoke_cancel_at ta_invoke_state_exited],
 ].map(&:sort).freeze

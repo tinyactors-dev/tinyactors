@@ -6395,7 +6395,18 @@ typedef struct {
     ta_arena *arena;
     /* The first failure; later allocations are skipped. */
     ta_result result;
+    /* Action blocks still to export, each with the member that receives it
+     * (ADR 0060: no recursion). At most one per block, so the capacity is
+     * bounded by the definition. */
+    struct ta_export_block *pending;
+    uint32_t pending_count;
+    uint32_t pending_capacity;
 } ta_exporter;
+
+struct ta_export_block {
+    ta_span32 block;
+    const ta_scxml_action_spec **out;
+};
 
 /* Non-null text for an empty literal, which the RPC codecs keep apart from absent. */
 static const char ta_export_empty[] = "";
@@ -6549,7 +6560,18 @@ static const ta_scxml_param_spec *ta_export_params(ta_exporter *exporter, ta_spa
     return items;
 }
 
-static const ta_scxml_action_spec *ta_export_actions(ta_exporter *exporter, ta_span32 block);
+/* Queues a nested block for ta_export_actions to fill into `*out`. */
+static void ta_export_later(ta_exporter *exporter, ta_span32 block, const ta_scxml_action_spec **out) {
+    *out = NULL;
+    if (block.length == 0 || exporter->result != TA_OK) {
+        return;
+    }
+    if (exporter->pending_count == exporter->pending_capacity) {
+        exporter->result = TA_ERR_NOMEM; /* unreachable: the capacity counts every block */
+        return;
+    }
+    exporter->pending[exporter->pending_count++] = (struct ta_export_block){ .block = block, .out = out };
+}
 
 static void ta_export_send(ta_exporter *exporter, const ta_send_action *send, ta_scxml_send_spec *out) {
     out->id = ta_export_id(exporter, &send->id);
@@ -6609,8 +6631,8 @@ static void ta_export_action(ta_exporter *exporter, const ta_action_def *action,
         case TA_ACTION_IF:
             out->kind = TA_SCXML_ACTION_IF;
             out->as.conditional.condition = ta_export_expression(exporter, action->as.conditional.condition);
-            out->as.conditional.then_actions = ta_export_actions(exporter, action->as.conditional.then_actions);
-            out->as.conditional.else_actions = ta_export_actions(exporter, action->as.conditional.else_actions);
+            ta_export_later(exporter, action->as.conditional.then_actions, &out->as.conditional.then_actions);
+            ta_export_later(exporter, action->as.conditional.else_actions, &out->as.conditional.else_actions);
             break;
         case TA_ACTION_FOREACH:
             out->kind = TA_SCXML_ACTION_FOREACH;
@@ -6619,7 +6641,7 @@ static void ta_export_action(ta_exporter *exporter, const ta_action_def *action,
             if (action->as.foreach.has_index) {
                 out->as.foreach.index = ta_export_atom(exporter, action->as.foreach.index);
             }
-            out->as.foreach.body = ta_export_actions(exporter, action->as.foreach.body_actions);
+            ta_export_later(exporter, action->as.foreach.body_actions, &out->as.foreach.body);
             break;
         default:
             /* The compiler accepts neither <invoke> nor extensions as executable content. */
@@ -6628,12 +6650,36 @@ static void ta_export_action(ta_exporter *exporter, const ta_action_def *action,
     }
 }
 
+/*
+ * Exports a block and every block nested in it. A nested block is queued by
+ * the action that owns it and filled in from the queue, so nothing recurses;
+ * each block's output is written through the member that receives it, so the
+ * order the queue is drained in does not matter.
+ */
 static const ta_scxml_action_spec *ta_export_actions(ta_exporter *exporter, ta_span32 block) {
-    ta_scxml_action_spec *items = ta_export_list(exporter, TA_VEC_LAYOUT(ta_scxml_action_spec), block.length);
-    for (uint32_t index = 0; items != NULL && index < block.length; index += 1) {
-        ta_export_action(exporter, &exporter->definition->action_defs[block.offset + index], &items[index]);
+    const ta_scxml_action_spec *result = NULL;
+    if (exporter->pending == NULL && exporter->result == TA_OK && exporter->definition->action_count != 0) {
+        /* Every block but a root block is nested in one action, and an
+         * action owns at most two: capacity for all of them at once. */
+        exporter->pending_capacity = 2u * exporter->definition->action_count + 1u;
+        exporter->pending = ta_arena_alloc(exporter->arena,
+                                           (size_t)exporter->pending_capacity * sizeof(struct ta_export_block),
+                                           _Alignof(struct ta_export_block));
+        if (exporter->pending == NULL) {
+            exporter->result = TA_ERR_NOMEM;
+        }
     }
-    return items;
+    ta_export_later(exporter, block, &result);
+    while (exporter->pending_count != 0 && exporter->result == TA_OK) {
+        struct ta_export_block next = exporter->pending[--exporter->pending_count];
+        ta_scxml_action_spec *items = ta_export_list(exporter, TA_VEC_LAYOUT(ta_scxml_action_spec), next.block.length);
+        *next.out = items;
+        for (uint32_t index = 0; items != NULL && index < next.block.length; index += 1) {
+            ta_export_action(exporter, &exporter->definition->action_defs[next.block.offset + index], &items[index]);
+        }
+    }
+    exporter->pending_count = 0;
+    return result;
 }
 
 /* One <onentry>/<onexit> handler per element; an empty handler keeps a non-null, empty action list. */
@@ -6782,15 +6828,13 @@ static ta_scxml_state_kind ta_export_state_kind(ta_state_kind kind) {
     }
 }
 
-static const ta_scxml_state_spec *ta_export_states(ta_exporter *exporter, const ta_state_id *ids, uint32_t count);
-
+/* Every member of a state's spec except its child states. */
 static void ta_export_state(ta_exporter *exporter, ta_state_id id, ta_scxml_state_spec *out) {
     const ta_definition *definition = exporter->definition;
     const ta_state_def *state = &definition->states[id];
     *out = (ta_scxml_state_spec){
         .kind = ta_export_state_kind(state->kind),
         .id = ta_export_state_id(exporter, id),
-        .states = ta_export_states(exporter, definition->children + state->children.offset, state->children.length),
         .initial = state->kind == TA_STATE_COMPOUND ? ta_export_initial(exporter, state->initial) : NULL,
         .transitions = ta_export_transitions(exporter, state->transitions),
         .onentry = ta_export_handlers(exporter, state->onentry_handlers),
@@ -6801,17 +6845,12 @@ static void ta_export_state(ta_exporter *exporter, ta_state_id id, ta_scxml_stat
     };
 }
 
-static const ta_scxml_state_spec *ta_export_states(ta_exporter *exporter, const ta_state_id *ids, uint32_t count) {
-    ta_scxml_state_spec *items = ta_export_list(exporter, TA_VEC_LAYOUT(ta_scxml_state_spec), count);
-    for (uint32_t index = 0; items != NULL && index < count; index += 1) {
-        ta_export_state(exporter, ids[index], &items[index]);
-    }
-    return items;
-}
-
 /*
- * Top-level states in document order. The compiler numbers states in
- * pre-order and records the roots first in `children`.
+ * The state tree in one pass, without recursion (ADR 0060). The compiler
+ * numbers states in document pre-order and records the roots first in
+ * `children`, so every state is visited after its parent: the parent
+ * allocates its list of child states and hands each child its slot, and the
+ * child fills it when its turn comes.
  */
 static const ta_scxml_state_spec *ta_export_roots(ta_exporter *exporter) {
     const ta_definition *definition = exporter->definition;
@@ -6819,7 +6858,32 @@ static const ta_scxml_state_spec *ta_export_roots(ta_exporter *exporter) {
     for (ta_state_id state = 0; state < definition->state_count; state += 1) {
         count += definition->states[state].parent == TA_STATE_NONE ? 1u : 0u;
     }
-    return ta_export_states(exporter, definition->children, count);
+    ta_scxml_state_spec *roots = ta_export_list(exporter, TA_VEC_LAYOUT(ta_scxml_state_spec), count);
+    if (roots == NULL) {
+        return NULL;
+    }
+    ta_scxml_state_spec **slots = ta_arena_alloc(exporter->arena,
+                                                 (size_t)definition->state_count * sizeof(ta_scxml_state_spec *),
+                                                 _Alignof(ta_scxml_state_spec *));
+    if (slots == NULL) {
+        exporter->result = TA_ERR_NOMEM;
+        return NULL;
+    }
+    for (uint32_t index = 0; index < count; index += 1) {
+        slots[definition->children[index]] = &roots[index];
+    }
+    for (ta_state_id id = 0; id < definition->state_count && exporter->result == TA_OK; id += 1) {
+        const ta_state_def *state = &definition->states[id];
+        ta_scxml_state_spec *out = slots[id];
+        ta_export_state(exporter, id, out);
+        ta_scxml_state_spec *children =
+            ta_export_list(exporter, TA_VEC_LAYOUT(ta_scxml_state_spec), state->children.length);
+        out->states = children;
+        for (uint32_t index = 0; children != NULL && index < state->children.length; index += 1) {
+            slots[definition->children[state->children.offset + index]] = &children[index];
+        }
+    }
+    return roots;
 }
 
 TA_API ta_result ta_definition_export(const ta_system *system, const ta_definition_export_params *params) {
