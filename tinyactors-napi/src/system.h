@@ -35,6 +35,7 @@
 #define TNA_DEFAULT_RESUMES_PER_TURN 1024u
 #define TNA_DEFAULT_RESUME_BUDGET 64u
 #define TNA_DEFAULT_ACTION_BUDGET 1024u
+#define TNA_DEFAULT_MESSAGE_BUDGET 1024u
 
 typedef struct tna_system tna_system;
 
@@ -68,6 +69,13 @@ bool tna_system_closed(const tna_system *system);
 size_t tna_system_leaked_bytes(const tna_system *system);
 void tna_system_free(tna_system *system);
 
+/*
+ * Accepts a message for `target` and asks for a turn (ADR 0005). On TA_OK the
+ * system owns `event`'s references. TA_ERR_BUSY: the queue is full
+ * (max_queued); TA_ERR_NOMEM: nothing accepted.
+ */
+ta_result tna_system_post(tna_system *system, ta_actor_id target, const ta_event *event);
+
 /* Asks for a turn unless one is pending or the system is quiet or closed. */
 void tna_system_want_turn(tna_system *system);
 /*
@@ -77,5 +85,5 @@ void tna_system_want_turn(tna_system *system);
  */
 void tna_system_turn(tna_system *system);
 void tna_system_end_turn(tna_system *system);
-/* No runnable actors (step 6: no ready actors; step 8: nothing due). */
+/* No runnable or ready actors and no dead letters to report (step 8: nothing due). */
 bool tna_system_quiet(const tna_system *system);

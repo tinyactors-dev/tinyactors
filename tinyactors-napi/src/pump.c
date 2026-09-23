@@ -239,7 +239,7 @@ static void tna_destroy_finished(tna_system *system, ta_actor_id actor) {
     ta_result result = ta_actor_destroy(system->core, actor);
     system->inside_core = false;
     if (result == TA_OK || result == TA_ERR_NOT_FOUND) {
-        tna_sched_remove(&system->sched, actor);
+        tna_sched_remove(&system->sched, actor, TNA_DEAD_DONE);
     }
 }
 
@@ -359,7 +359,7 @@ static napi_value tna_turn_callback(napi_env env, napi_callback_info info) {
             }
             if (record->kind == TNA_RECORD_DONE) {
                 tna_done_record(env, wrapper, record, &first_error);
-            } else {
+            } else if (record->kind == TNA_RECORD_FAULT) {
                 tna_fault_record(env, wrapper, record, &first_error);
             }
         }

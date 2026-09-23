@@ -17,7 +17,8 @@ static void table_pages(void) {
     tna_allocator allocator;
     tna_allocator_init(&allocator);
     tna_sched sched;
-    tna_sched_init(&sched, tna_allocator_for(&allocator, TNA_MEMORY_SCHEDULING));
+    tna_sched_init(&sched, tna_allocator_for(&allocator, TNA_MEMORY_SCHEDULING),
+                   tna_allocator_for(&allocator, TNA_MEMORY_ENVELOPES));
     CHECK(sizeof(tna_sched_entry) == 16u);
     CHECK(tna_sched_entry_at(&sched, 0) == NULL);
 
@@ -32,7 +33,7 @@ static void table_pages(void) {
 
     /* Another generation in the same slot is not this actor. */
     CHECK(tna_sched_lookup(&sched, ta_actor_id_make(TNA_SCHED_PAGE_ENTRIES + 5u, 4u)) == NULL);
-    tna_sched_remove(&sched, ta_actor_id_make(TNA_SCHED_PAGE_ENTRIES + 5u, 4u));
+    tna_sched_remove(&sched, ta_actor_id_make(TNA_SCHED_PAGE_ENTRIES + 5u, 4u), TNA_DEAD_DESTROYED);
     CHECK(sched.known == 1u);
 
     /* Pages never move: an entry pointer survives growth of the directory. */
@@ -40,7 +41,7 @@ static void table_pages(void) {
     CHECK(tna_sched_add(&sched, later) == TA_OK);
     CHECK(tna_sched_lookup(&sched, far) == entry);
 
-    tna_sched_remove(&sched, far);
+    tna_sched_remove(&sched, far, TNA_DEAD_DESTROYED);
     CHECK(tna_sched_lookup(&sched, far) == NULL);
     CHECK(sched.known == 1u);
     tna_sched_destroy(&sched);
