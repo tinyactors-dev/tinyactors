@@ -533,7 +533,12 @@ typedef struct txml_writer txml_writer TXML_HANDLE;
 enum TXML_FLAG_SET(txml_writer_flags, "TXML_WRITE_") {
     TXML_WRITE_DECLARATION = 1u << 0, /* emit <?xml version="1.0" encoding="UTF-8"?> */
     TXML_WRITE_INDENT = 1u << 1,      /* indent element content by depth */
-    TXML_WRITE_EMPTY_TAGS = 1u << 2   /* write childless elements as <a/> */
+    TXML_WRITE_EMPTY_TAGS = 1u << 2,  /* write childless elements as <a/> */
+    /* Write a content fragment (XML 1.0 [43] content) instead of a document:
+     * text, CDATA and any number of elements may stand at the top level. A
+     * fragment has no declaration or DOCTYPE, so combining this flag with
+     * TXML_WRITE_DECLARATION is TXML_ERR_INVALID at init. */
+    TXML_WRITE_FRAGMENT = 1u << 3
 };
 
 typedef struct {

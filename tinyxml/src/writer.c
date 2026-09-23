@@ -483,6 +483,12 @@ static void op_begin(txml_writer *w, op_kind kind) {
     queue_clear(&w->queue);
 }
 
+/* Whether the writer is where a document allows no content: before or after
+ * its element. A fragment (TXML_WRITE_FRAGMENT) has no such place. */
+static bool outside_root(const txml_writer *w) {
+    return (w->state == STATE_PROLOG || w->state == STATE_EPILOG) && (w->flags & TXML_WRITE_FRAGMENT) == 0u;
+}
+
 static void op_declaration_if_needed(txml_writer *w) {
     if ((w->flags & TXML_WRITE_DECLARATION) != 0u && !w->declaration_done) {
         w->declaration_done = true;
@@ -625,7 +631,7 @@ static txml_result compile_start(txml_writer *w, const start_request *request) {
     if (result != TXML_OK) {
         return result;
     }
-    if (w->state == STATE_EPILOG) {
+    if (w->state == STATE_EPILOG && (w->flags & TXML_WRITE_FRAGMENT) == 0u) {
         return TXML_ERR_INVALID;
     }
     if (w->depth >= w->limits.max_depth ||
@@ -784,14 +790,14 @@ static txml_result compile_text(txml_writer *w, const text_request *request) {
         if (!valid_text(request->text)) {
             return TXML_ERR_INVALID;
         }
-        if (w->state == STATE_PROLOG || w->state == STATE_EPILOG) {
+        if (outside_root(w)) {
             return TXML_ERR_INVALID;
         }
     }
     if (request->kind == OP_TEXT && request->text.length == 0u) {
         return TXML_OK; /* nothing to write, and it must not close the tag */
     }
-    if (request->kind == OP_CDATA && (w->state == STATE_PROLOG || w->state == STATE_EPILOG)) {
+    if (request->kind == OP_CDATA && outside_root(w)) {
         return TXML_ERR_INVALID;
     }
 
@@ -1120,7 +1126,7 @@ static txml_result walk_node(txml_writer *w) {
         return compile_leaf(w, &(leaf_request){ target.local, text, OP_PI, true });
     }
     case TXML_NODE_DECLARATION:
-        if (w->state != STATE_PROLOG || w->depth != 0u) {
+        if (w->state != STATE_PROLOG || w->depth != 0u || (w->flags & TXML_WRITE_FRAGMENT) != 0u) {
             return TXML_ERR_INVALID;
         }
         op_begin(w, OP_DECLARATION);
@@ -1131,7 +1137,7 @@ static txml_result walk_node(txml_writer *w) {
         }
         return TXML_OK;
     case TXML_NODE_DOCTYPE:
-        if (w->state != STATE_PROLOG || w->depth != 0u) {
+        if (w->state != STATE_PROLOG || w->depth != 0u || (w->flags & TXML_WRITE_FRAGMENT) != 0u) {
             return TXML_ERR_INVALID;
         }
         op_begin(w, OP_DOCTYPE);
@@ -1211,7 +1217,8 @@ static txml_result run(txml_writer *w, txml_result compiled) {
 txml_result txml_writer_init(txml_writer **out, const txml_writer_config *config) {
     if (out == NULL || config == NULL || config->allocator.v == NULL || config->allocator.v->alloc == NULL ||
         config->allocator.v->free == NULL || config->output.ptr == NULL || config->output.capacity == 0u ||
-        config->limits.max_depth == 0u || config->limits.max_depth > 65535u || config->limits.max_name_length == 0u) {
+        config->limits.max_depth == 0u || config->limits.max_depth > 65535u || config->limits.max_name_length == 0u ||
+        (config->flags & (TXML_WRITE_FRAGMENT | TXML_WRITE_DECLARATION)) == (TXML_WRITE_FRAGMENT | TXML_WRITE_DECLARATION)) {
         return TXML_ERR_INVALID;
     }
     txml_writer *w = (txml_writer *)config->allocator.v->alloc(config->allocator.self, sizeof(txml_writer), _Alignof(txml_writer));
@@ -1309,7 +1316,7 @@ txml_result txml_write_subtree(txml_writer *w, txml_cursor cursor) {
     if (cursor.doc == NULL || cursor.node >= txml_doc_node_count(cursor.doc) || end == TXML_INDEX_NONE) {
         return TXML_ERR_INVALID; /* absent, or still open: no bound to walk to */
     }
-    if (w->state == STATE_EPILOG) {
+    if (w->state == STATE_EPILOG && (w->flags & TXML_WRITE_FRAGMENT) == 0u) {
         return TXML_ERR_INVALID;
     }
     /* A document that carries its own declaration never gets a second one. */

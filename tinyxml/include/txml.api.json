@@ -217,6 +217,12 @@
           "value": 4,
           "symbol": "empty_tags",
           "doc": "write childless elements as"
+        },
+        {
+          "name": "TXML_WRITE_FRAGMENT",
+          "value": 8,
+          "symbol": "fragment",
+          "doc": "Write a content fragment (XML 1.0 [43] content) instead of a document: text, CDATA and any number of elements may stand at the top level. A fragment has no declaration or DOCTYPE, so combining this flag with TXML_WRITE_DECLARATION is TXML_ERR_INVALID at init."
         }
       ]
     }

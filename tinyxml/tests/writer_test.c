@@ -244,6 +244,17 @@ static void script_mixed_content(harness *h) {
     end(h);
 }
 
+/* A content fragment: text and several elements at the top level. */
+static void script_fragment(harness *h) {
+    text(h, "one ");
+    start(h, "urn:x", "a", "");
+    end(h);
+    text(h, " two&");
+    start(h, "", "b", "");
+    text(h, "three");
+    end(h);
+}
+
 typedef struct {
     const char *label;
     script_fn script;
@@ -279,6 +290,8 @@ static const writer_case cases[] = {
     { "xml declaration", script_text, TXML_WRITE_DECLARATION,
       "<?xml version=\"1.0\" encoding=\"UTF-8\"?><a>hi</a>" },
     { "mixed content", script_mixed_content, 0u, "<p>one<b>two</b>three</p>" },
+    { "a fragment has text and several elements at the top level", script_fragment,
+      TXML_WRITE_EMPTY_TAGS | TXML_WRITE_FRAGMENT, "one <a xmlns=\"urn:x\"/> two&amp;<b>three</b>" },
 };
 
 static void report_mismatch(const char *label, uint32_t capacity, const harness *h, const char *expected) {
@@ -362,6 +375,30 @@ static void test_refusals(void) {
     }
     harness_destroy(&h);
 
+    /* A document has no text, and no second element, at the top level. */
+    harness_init(&h, 4096u, 0u);
+    CHECK(txml_write_text(h.writer, str_of("x")) == TXML_ERR_INVALID);
+    start(&h, "", "a", "");
+    end(&h);
+    {
+        const txml_write_name second = name_of("", "b", "");
+        CHECK(txml_write_start(h.writer, &second) == TXML_ERR_INVALID);
+    }
+    harness_destroy(&h);
+
+    /* A fragment has no XML declaration. */
+    {
+        unsigned char buffer[64];
+        txml_writer *writer = NULL;
+        const txml_writer_config config = {
+            .allocator = heap,
+            .output = { .ptr = buffer, .capacity = sizeof(buffer) },
+            .limits = TXML_LIMITS_DEFAULT,
+            .flags = TXML_WRITE_FRAGMENT | TXML_WRITE_DECLARATION,
+        };
+        CHECK(txml_writer_init(&writer, &config) == TXML_ERR_INVALID);
+    }
+
     /* A prefix without a namespace is not a name the writer can honour. */
     harness_init(&h, 4096u, 0u);
     {
@@ -394,12 +431,52 @@ static void test_drain_protocol(void) {
     harness_destroy(&h);
 }
 
+/* ------------------------------------------------------------------------
+ * A fragment of a parsed document: every child of one element, written with
+ * the namespace declarations it needs from outside itself. This is what an
+ * SCXML <content> element's children must look like on their own (SCXML G.6).
+ */
+
+static void test_fragment_of_document(void) {
+    static const char source[] =
+        "<r xmlns=\"urn:d\" xmlns:c=\"urn:c\"><content>\n <m c:k=\"1\"><n/></m> <c:o/> t&lt;x</content></r>";
+    txml_parser *parser = NULL;
+    const txml_parser_config config = { .allocator = heap, .limits = TXML_LIMITS_DEFAULT };
+    CHECK(txml_parser_init(&parser, &config) == TXML_OK);
+    const txml_bytes input = { (const uint8_t *)source, (uint32_t)(sizeof(source) - 1u) };
+    CHECK(txml_parse_feed(parser, input, true) == input.length);
+    txml_step step;
+    while ((step = txml_parse_step(parser)) == TXML_STEP_PROGRESS) {
+    }
+    CHECK(step == TXML_STEP_DONE);
+
+    txml_cursor content = txml_doc_root(txml_parser_doc(parser));
+    CHECK(txml_first_child(&content) == TXML_MOVED); /* <r> */
+    CHECK(txml_first_child(&content) == TXML_MOVED); /* <content> */
+
+    harness h;
+    harness_init(&h, 7u, TXML_WRITE_EMPTY_TAGS | TXML_WRITE_FRAGMENT);
+    txml_cursor child = content;
+    for (txml_move move = txml_first_child(&child); move == TXML_MOVED; move = txml_next_sibling(&child)) {
+        CHECK(pump(&h, txml_write_subtree(h.writer, child)) == TXML_OK);
+    }
+    CHECK(harness_finish(&h) == TXML_OK);
+    static const char expected[] =
+        "\n <m c:k=\"1\" xmlns=\"urn:d\" xmlns:c=\"urn:c\"><n/></m> <c:o xmlns:c=\"urn:c\"/> t&lt;x";
+    if (h.sink_length != sizeof(expected) - 1u || memcmp(h.sink, expected, h.sink_length) != 0) {
+        report_mismatch("a fragment of a parsed document", 7u, &h, expected);
+    }
+    harness_destroy(&h);
+    txml_parser_destroy(parser);
+}
+
 int main(void) {
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         run_case(&cases[i]);
     }
     test_refusals();
     test_drain_protocol();
+    test_fragment_of_document();
 
     if (failures != 0) {
         fprintf(stderr, "writer_test: %d check(s) failed\n", failures);

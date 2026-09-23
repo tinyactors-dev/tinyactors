@@ -27,6 +27,12 @@ With `TXML_WRITE_DECLARATION`, `<?xml version="1.0" encoding="UTF-8"?>` is
 emitted before the first event. Writing text in `PROLOG` or `EPILOG`, or
 calling `txml_write_end` with no open element, is `TXML_ERR_INVALID`.
 
+With `TXML_WRITE_FRAGMENT` the output is a content fragment (ADR 0024):
+`PROLOG` and `EPILOG` also accept text, CDATA and a new start tag, so any
+number of elements and text runs may stand at the top level. A fragment has no
+declaration or DOCTYPE; the flag with `TXML_WRITE_DECLARATION` is refused at
+init.
+
 ## The element stack
 
 Each open element pushes a frame into the writer's arena:
