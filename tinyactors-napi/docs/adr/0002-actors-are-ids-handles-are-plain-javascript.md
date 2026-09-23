@@ -39,7 +39,7 @@ IDs. Both are 32-bit values, and tinyactors-core ADR 0059 makes them public.
    methods. It holds no native resource and needs no finalizer.
    - `Actor` is the same view. The two names are kept for the typings.
    - A view is only created when a singular API returns one or a caller asks
-     for one. Bulk paths never create views (ADR 0003).
+     for one. Paged enumeration never creates views (ADR 0003).
    - `system.fullId(actor)` returns the joined 64-bit value as a `bigint`,
      for logs and for interop with other bindings.
 5. **Equality is by value.** `a.slot === b.slot && a.generation ===
@@ -51,8 +51,8 @@ IDs. Both are 32-bit values, and tinyactors-core ADR 0059 makes them public.
 
 ## Consequences
 
-- Spawning four million actors in bulk creates no JavaScript objects per
-  actor. The IDs live in one typed array (ADR 0003).
+- Four million actors cost no JavaScript objects unless a caller asks for
+  views. Enumeration returns IDs in typed-array pages (ADR 0003).
 - A view of a destroyed actor is harmless: its calls fail with `not-found`,
   because core rejects the stale generation.
 - `index.d.ts` changes: `ActorId` becomes an interface with `slot` and

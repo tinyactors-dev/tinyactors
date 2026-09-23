@@ -11,7 +11,7 @@ particular on core ADRs 0011, 0029, 0040, 0047, 0050 and 0053–0057 and 0059.
 |---|---|
 | [0001](0001-core-interprets-the-addon-hosts-javascript-scripts.md) | [Core interprets, the addon hosts, JavaScript scripts](0001-core-interprets-the-addon-hosts-javascript-scripts.md) |
 | [0002](0002-actors-are-ids-handles-are-plain-javascript.md) | [Actors are IDs; handles are plain JavaScript](0002-actors-are-ids-handles-are-plain-javascript.md) |
-| [0003](0003-bulk-operations-cross-the-boundary-once-per-batch.md) | [Bulk operations cross the boundary once per batch](0003-bulk-operations-cross-the-boundary-once-per-batch.md) |
+| [0003](0003-singular-calls-are-primary-enumeration-is-paged.md) | [Singular calls are primary; enumeration is paged](0003-singular-calls-are-primary-enumeration-is-paged.md) |
 | [0004](0004-event-names-are-interned-once.md) | [Event names are interned once](0004-event-names-are-interned-once.md) |
 | [0005](0005-per-target-mailboxes-and-a-ready-queue.md) | [Per-target mailboxes and a ready queue](0005-per-target-mailboxes-and-a-ready-queue.md) |
 | [0006](0006-the-addon-routes-actor-to-actor-events.md) | [The addon routes actor-to-actor events](0006-the-addon-routes-actor-to-actor-events.md) |

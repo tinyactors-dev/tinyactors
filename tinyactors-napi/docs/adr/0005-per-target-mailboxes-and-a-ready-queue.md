@@ -49,7 +49,7 @@ That design has several faults:
    (ADR 0011). A post without data allocates no value.
 7. **Backpressure.** Limits on the total number of queued envelopes and on
    retained data bytes are checked when a message is accepted: at
-   `post`/`postMany` (ADR 0003), and in the router (ADR 0006), which answers
+   `post`, and in the router (ADR 0006), which answers
    `TA_EXTERNAL_EVENT_RETRY` when full. A message that has been accepted is
    never dropped because of a limit.
 

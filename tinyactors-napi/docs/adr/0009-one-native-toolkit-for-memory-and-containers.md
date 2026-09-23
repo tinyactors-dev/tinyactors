@@ -23,7 +23,7 @@ much memory the addon itself used.
    - `slice`: a view of a pointer and a length, used in every interface
      that passes a sequence.
 
-   Queues, batches and tables use these types and nothing else.
+   Queues, enumeration pages and tables use these types and nothing else.
 2. **Temporary allocations use a scratch arena**, such as decoding a spec or
    building an inspection page. It is reset after each call, so error
    paths free nothing by hand.
