@@ -41,6 +41,20 @@
 //     30-second idle timeout (a delayed send that exiting the state cancels
 //     and entering it arms again), so every actor always holds one delayed
 //     send.
+//
+// Baselines (printed beside tinyactors, never asserted): SCALE_BASELINES
+// takes a comma-separated list of
+//   - xstate: the same charts as xstate 5 actors (a dev dependency; skipped
+//     with a message when it is not installed);
+//   - object: the same loads as plain JavaScript objects with a
+//     switch-based handler, the ws one with a setTimeout per object.
+// They run the charts in SCALE_BASELINE_VARIANTS (plain,data,ws by default)
+// at the same populations, capped at 1,000,000 whatever
+// TAT_SCALE_MAX_POPULATION says, and a population above 200,000 only when
+// its predicted peak fits the memory check (and, on Node, the V8 heap
+// limit: raise it with NODE_OPTIONS=--max-old-space-size=...).
+// SCALE_VARIANTS= (empty) runs no tinyactors variant, so each
+// implementation can be measured in a process of its own.
 
 const assert = require('node:assert/strict');
 const os = require('node:os');
@@ -58,6 +72,7 @@ const SAMPLE = 1024;          // actors posted to and inspected, spread over the
 const REPEAT = 8;             // messages per sampled actor per round
 const ROUNDS = 7;             // measured rounds; the median is kept
 const PAGE_SIZE = 1024;
+const BASELINE_CAP = 1_000_000;
 // RSS at startup: each population's RSS per actor is measured from here,
 // since memory freed by a smaller population stays mapped.
 const PROCESS_RSS = process.memoryUsage().rss;
@@ -129,8 +144,11 @@ const gb = (bytes) => (bytes / 2 ** 30).toFixed(1);
 
 // Whether `population` runs: up to the cap, and above the default cap only
 // when the predicted peak fits in three quarters of what is available.
-function shouldRun(population, previous, peakRss) {
-  const cap = Number(process.env.TAT_SCALE_MAX_POPULATION ?? DEFAULT_CAP);
+function populationCap() {
+  return Number(process.env.TAT_SCALE_MAX_POPULATION ?? DEFAULT_CAP);
+}
+
+function shouldRun(population, previous, peakRss, cap = populationCap()) {
   if (population > cap) {
     return false;
   }
@@ -216,15 +234,17 @@ const VARIANTS = {
 // part spent in minor (scavenge) and major (mark-compact) collections.
 function gcObserver() {
   if (IS_BUN) {
-    return { total: () => null, minor: () => null, major: () => null, stop() {} };
+    return { total: () => null, minor: () => null, major: () => null, max: () => null, stop() {} };
   }
   const { PerformanceObserver, constants } = require('node:perf_hooks');
   let total = 0;
   let minor = 0;
   let major = 0;
+  let max = 0;
   const observer = new PerformanceObserver((list) => {
     for (const entry of list.getEntries()) {
       total += entry.duration;
+      max = Math.max(max, entry.duration);
       const kind = entry.detail?.kind ?? entry.kind;
       if (kind === constants.NODE_PERFORMANCE_GC_MINOR) {
         minor += entry.duration;
@@ -234,7 +254,7 @@ function gcObserver() {
     }
   });
   observer.observe({ entryTypes: ['gc'] });
-  return { total: () => total, minor: () => minor, major: () => major, stop: () => observer.disconnect() };
+  return { total: () => total, minor: () => minor, major: () => major, max: () => max, stop: () => observer.disconnect() };
 }
 
 function loopDelayMonitor() {
@@ -373,9 +393,11 @@ async function measure(population, variant) {
   }
   assert.equal([...system.actorIds()].length, 0, 'finished actors were destroyed');
 
+  await new Promise((resolve) => setTimeout(resolve, 20)); // GC entries arrive after a timer tick
   const gcPauseMs = gc.total();
   const gcMinorMs = gc.minor();
   const gcMajorMs = gc.major();
+  const gcMaxMs = gc.max();
   gc.stop();
   system.close();
 
@@ -404,6 +426,7 @@ async function measure(population, variant) {
     gcPauseMs,
     gcMinorMs,
     gcMajorMs,
+    gcMaxMs,
   };
 }
 
@@ -441,6 +464,260 @@ function plainBaseline(population) {
   return { bytes, perEvent };
 }
 
+// xstate 5, when it is installed (a dev dependency of this package).
+function loadXstate() {
+  try {
+    return require('xstate');
+  } catch {
+    return null;
+  }
+}
+
+// Baselines: the same three charts in other implementations. Each `make`
+// returns spawn/send/done over one variant; `counters.outbound` counts the
+// ws writes, as the tinyactors I/O processor does.
+const BASELINES = {
+  xstate: {
+    missing: () => (loadXstate() === null ? 'xstate is not installed (pnpm install in tinyactors-napi)' : null),
+    version: () => {
+      try {
+        return require('xstate/package.json').version;
+      } catch {
+        return 'unknown';
+      }
+    },
+    make(variant, counters) {
+      const { setup, assign, createActor } = loadXstate();
+      // An external self-transition, as the tinyactors charts' t.target('idle'):
+      // it exits and enters `idle`, which re-arms the ws idle timeout.
+      const ping = { target: 'idle', reenter: true };
+      let machine;
+      if (variant === 'plain') {
+        machine = setup({}).createMachine({
+          id: 'scale',
+          initial: 'idle',
+          states: { idle: { on: { ping, work: 'done' } }, done: { type: 'final' } },
+        });
+      } else {
+        const update = assign({
+          count: ({ context }) => context.count + 1,
+          last: ({ event }) => event.data,
+        });
+        const idle = {
+          on: { ping: { ...ping, actions: variant === 'ws' ? [update, 'wsWrite'] : [update] }, work: 'done' },
+        };
+        if (variant === 'ws') {
+          idle.after = { 30_000: 'done' };
+        }
+        machine = setup({
+          // The outbound socket, provided by name like an I/O processor.
+          actions: { wsWrite: () => { counters.outbound += 1; } },
+        }).createMachine({
+          id: `scale-${variant}`,
+          context: () => ({ count: 0, last: null }),
+          initial: 'idle',
+          states: { idle, done: { type: 'final' } },
+        });
+      }
+      return {
+        spawn: () => createActor(machine).start(),
+        send: (actor, type, data) => actor.send({ type, data }),
+        done: (actor) => actor.getSnapshot().status === 'done',
+      };
+    },
+  },
+  object: {
+    missing: () => null,
+    version: () => 'plain JavaScript',
+    make(variant, counters) {
+      const withData = variant !== 'plain';
+      const ws = variant === 'ws';
+      const idleTimeout = (conn) => {
+        conn.timer = null;
+        conn.state = 'done';
+      };
+      class Conn {
+        constructor() {
+          this.state = 'idle';
+          this.count = withData ? 0 : undefined;
+          this.last = withData ? null : undefined;
+          this.timer = ws ? setTimeout(idleTimeout, 30_000, this) : null;
+        }
+        on(type, data) {
+          switch (this.state) {
+            case 'idle':
+              if (type === 'ping') {
+                if (withData) {
+                  this.count += 1;
+                  this.last = data;
+                }
+                if (ws) {
+                  counters.outbound += 1;
+                  clearTimeout(this.timer);
+                  this.timer = setTimeout(idleTimeout, 30_000, this);
+                }
+              } else if (type === 'work') {
+                this.state = 'done';
+                if (ws) {
+                  clearTimeout(this.timer);
+                  this.timer = null;
+                }
+              }
+              break;
+            default:
+              break;
+          }
+        }
+      }
+      return {
+        spawn: () => new Conn(),
+        send: (conn, type, data) => conn.on(type, data),
+        done: (conn) => conn.state === 'done',
+      };
+    },
+  },
+};
+
+// Whether a baseline population runs: the tinyactors check, capped at
+// BASELINE_CAP, and on Node within the V8 heap limit.
+function shouldRunBaseline(population, previous) {
+  const cap = Math.min(populationCap(), BASELINE_CAP);
+  if (!shouldRun(population, previous.population, previous.peakRss, cap)) {
+    return false;
+  }
+  if (!IS_BUN) {
+    const { heap_size_limit: limit } = require('node:v8').getHeapStatistics();
+    const needed = previous.jsPerActor * population * 1.25;
+    if (needed > limit) {
+      console.log(`scale.js: stopping at ${previous.population}: ${population} would need about ${gb(needed)} GB ` +
+        `of V8 heap, the limit is ${gb(limit)} GB (NODE_OPTIONS=--max-old-space-size=... raises it)`);
+      return false;
+    }
+  }
+  return true;
+}
+
+async function measureBaseline(kind, variant, population) {
+  const counters = { outbound: 0 };
+  const impl = BASELINES[kind].make(variant, counters);
+  const { payload } = VARIANTS[variant];
+  const gc = gcObserver();
+  const jsBefore = jsRetained();
+
+  // Spawn, keeping every actor (the application would keep them, and they
+  // are the only way to reach them).
+  const actors = new Array(population);
+  const spawnStarted = cpuMicros();
+  for (let at = 0; at < population; at += 1) {
+    actors[at] = impl.spawn();
+  }
+  const spawn = (cpuMicros() - spawnStarted) / population;
+  const jsAfter = jsRetained();
+  const rssAfter = process.memoryUsage().rss;
+
+  // Per message: rounds of REPEAT pings to the same spread-out sample as the
+  // tinyactors measurement. xstate and the objects process a send
+  // synchronously, so the time of the send is the time of the work.
+  const stride = Math.floor(population / SAMPLE);
+  const sample = [];
+  for (let at = 0; at < SAMPLE; at += 1) {
+    sample.push(actors[at * stride]);
+  }
+  let sequence = 0;
+  const round = () => {
+    for (let repeat = 0; repeat < REPEAT; repeat += 1) {
+      for (const actor of sample) {
+        impl.send(actor, 'ping', payload(sequence += 1));
+      }
+    }
+  };
+  round(); // warm-up
+  const postCosts = [];
+  for (let at = 0; at < ROUNDS; at += 1) {
+    const started = cpuMicros();
+    round();
+    postCosts.push((cpuMicros() - started) / (sample.length * REPEAT));
+  }
+
+  // End to end: `work` to every actor. The loop is synchronous, so it
+  // blocks the event loop for its whole duration.
+  const e2eStarted = cpuMicros();
+  const wallStarted = process.hrtime.bigint();
+  for (const actor of actors) {
+    impl.send(actor, 'work');
+  }
+  const blockingMs = Number(process.hrtime.bigint() - wallStarted) / 1e6;
+  const e2e = (cpuMicros() - e2eStarted) / population;
+  let finished = 0;
+  for (const actor of actors) {
+    finished += impl.done(actor) ? 1 : 0;
+  }
+  assert.equal(finished, population, `${kind} ${variant}: every actor finished`);
+  if (variant === 'ws') {
+    assert.equal(counters.outbound, sequence, `${kind} ${variant}: every inbound message sent one outbound write`);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 20)); // GC entries arrive after a timer tick
+  const result = {
+    kind,
+    variant,
+    population,
+    spawn,
+    post: median(postCosts),
+    e2e,
+    blockingMs,
+    jsPerActor: (jsAfter - jsBefore) / population,
+    rssPerActor: (rssAfter - PROCESS_RSS) / population,
+    peakRss: process.memoryUsage().rss,
+    gcPauseMs: gc.total(),
+    gcMinorMs: gc.minor(),
+    gcMajorMs: gc.major(),
+    gcMaxMs: gc.max(),
+  };
+  gc.stop();
+  actors.fill(undefined);
+  return result;
+}
+
+function reportBaseline(result) {
+  const f = (value, digits = 3) => (value === null || value === undefined ? 'n/a' : value.toFixed(digits));
+  console.log(
+    `scale.js ${IS_BUN ? 'bun' : 'node'} baseline ${result.kind} ${result.variant} ${result.population}: ` +
+      `spawn ${f(result.spawn)} us/actor, post ${f(result.post)} us/msg, end-to-end ${f(result.e2e)} us/actor ` +
+      `(blocks the event loop ${f(result.blockingMs, 1)} ms), js ${f(result.jsPerActor, 1)} B/actor, ` +
+      `rss ${f(result.rssPerActor, 1)} B/actor, gc pause ${f(result.gcPauseMs, 1)} ms ` +
+      `(minor ${f(result.gcMinorMs, 1)}, major ${f(result.gcMajorMs, 1)}, longest ${f(result.gcMaxMs, 1)})`,
+  );
+}
+
+async function runBaselines(setCurrent) {
+  const kinds = (process.env.SCALE_BASELINES ?? '').split(',').filter(Boolean);
+  const variants = (process.env.SCALE_BASELINE_VARIANTS ?? 'plain,data,ws').split(',').filter(Boolean);
+  for (const kind of kinds) {
+    const baseline = BASELINES[kind];
+    assert.ok(baseline, `unknown baseline ${kind} (known: ${Object.keys(BASELINES).join(', ')})`);
+    const missing = baseline.missing();
+    if (missing !== null) {
+      console.log(`scale.js: skipping the ${kind} baseline: ${missing}`);
+      continue;
+    }
+    console.log(`scale.js: ${kind} baseline (${baseline.version()})`);
+    for (const variant of variants) {
+      let previous;
+      for (const population of POPULATIONS) {
+        if (previous && !shouldRunBaseline(population, previous)) {
+          break;
+        }
+        if (population > BASELINE_CAP) {
+          break;
+        }
+        setCurrent(`${kind} ${variant} with ${population} actors`);
+        previous = await measureBaseline(kind, variant, population);
+        reportBaseline(previous);
+      }
+    }
+  }
+}
+
 function requireFlat(what, small, large, bound) {
   const ratio = small.value > 0 ? large.value / small.value : 0;
   assert.ok(
@@ -462,7 +739,8 @@ function report(result) {
       `native ${f(result.nativePerActor, 1)} B/actor, js ${f(result.jsPerActor, 1)} B/actor, ` +
       `rss ${f(result.rssPerActor, 1)} B/actor, steady-state calls addon ${result.steady.addon} core ${result.steady.core}, ` +
       `turns (event-loop delay during flush) p50 ${f(result.loopDelayP50Ms, 1)} p99 ${f(result.loopDelayP99Ms, 1)} max ${f(result.loopDelayMs, 1)} ms, ` +
-      `gc pause ${f(result.gcPauseMs, 1)} ms (minor ${f(result.gcMinorMs, 1)}, major ${f(result.gcMajorMs, 1)})`,
+      `gc pause ${f(result.gcPauseMs, 1)} ms (minor ${f(result.gcMinorMs, 1)}, major ${f(result.gcMajorMs, 1)}, ` +
+      `longest ${f(result.gcMaxMs, 1)})`,
   );
 }
 
@@ -473,7 +751,7 @@ function report(result) {
     process.exit(1);
   }, Number(process.env.SCALE_TIMEOUT_MS ?? 30 * 60_000));
 
-  const variants = (process.env.SCALE_VARIANTS ?? 'plain,data,ws').split(',');
+  const variants = (process.env.SCALE_VARIANTS ?? 'plain,data,ws').split(',').filter(Boolean);
   let largest;
   for (const variant of variants) {
     const results = [];
@@ -524,11 +802,15 @@ function report(result) {
     largest = results.at(-1);
   }
 
-  const baseline = plainBaseline(largest.population);
-  console.log(
-    `scale.js ${IS_BUN ? 'bun' : 'node'} plain-object baseline at ${largest.population}: ` +
-      `${baseline.bytes.toFixed(1)} B/object (JS heap), ${baseline.perEvent.toFixed(3)} us/event (direct call)`,
-  );
+  if (largest !== undefined) {
+    const baseline = plainBaseline(largest.population);
+    console.log(
+      `scale.js ${IS_BUN ? 'bun' : 'node'} plain-object baseline at ${largest.population}: ` +
+        `${baseline.bytes.toFixed(1)} B/object (JS heap), ${baseline.perEvent.toFixed(3)} us/event (direct call)`,
+    );
+  }
+
+  await runBaselines((what) => { current = what; });
 
   clearTimeout(watchdog);
   console.log('scale.js passed');
