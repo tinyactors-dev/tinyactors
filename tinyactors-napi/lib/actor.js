@@ -33,6 +33,11 @@ class ActorId {
     this.system.post(this, event, data, options);
   }
 
+  /** Queue an event for this actor and await its macrostep (System.send). */
+  send(event, data, options) {
+    return this.system.send(this, event, data, options);
+  }
+
   /** A snapshot of core's view of this actor. */
   inspect() {
     return this.system.inspect(this);

@@ -95,8 +95,10 @@ void tna_sched_init(tna_sched *sched, ta_allocator allocator, ta_allocator envel
     tna_envelopes_init(&sched->envelopes, envelopes);
     tna_vec_init(&sched->waiters, envelopes, TNA_LAYOUT(tna_waiter));
     tna_map_init(&sched->inflight, allocator);
+    /* One chunk holds a default turn's settlements (messageBudget and
+     * resumesPerTurn are 1024 by default), so steady state reuses it. */
     tna_ring_init(&sched->settled, allocator,
-                  (tna_ring_shape){ .layout = TNA_LAYOUT(tna_settlement), .chunk_capacity = 256u });
+                  (tna_ring_shape){ .layout = TNA_LAYOUT(tna_settlement), .chunk_capacity = TNA_QUEUE_CHUNK });
 }
 
 void tna_sched_discard_mail(tna_sched *sched) {

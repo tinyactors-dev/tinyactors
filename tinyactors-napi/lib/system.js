@@ -343,25 +343,112 @@ class System {
    * dead letter (the `deadLetter` hook), not an error. `target` is an
    * ActorId or an address { family, name }, resolved through the directory
    * when the post is accepted (ADR 0006); a name with no resident actor is a
-   * dead letter too. Throws `queue-full` at scheduling.maxQueuedMessages.
-   * `data` is any JavaScript value, shared with the receiver, not copied
-   * (ADR 0011); it is `_event.data` (`context.event.data`) in the
-   * receiver's expressions.
+   * dead letter too. `data` is any JavaScript value, shared with the
+   * receiver, not copied (ADR 0011); it is `_event.data`
+   * (`context.event.data`) in the receiver's expressions. Throws
+   * `queue-full` when scheduling.maxQueuedMessages or maxRetainedBytes would
+   * be passed: post() has no promise to report it through (ADR 0008).
    */
   post(target, event, data, options) {
     if (options?.signal?.aborted) {
       throw new TinyactorsError('post(): the signal is already aborted', 'aborted');
     }
+    this.#accept(target, event, data, options, false, 'post()');
+  }
+
+  /**
+   * Queue `event` for `target` and return a promise (ADR 0005 point 11).
+   * With `until: "completed"` (the default) it resolves with
+   * { actor, status: "stable" | "done", completion } once the macrostep this
+   * message starts has ended: the actor is stable again, or it finished
+   * (`completion` is its done data). It rejects when the message becomes a
+   * dead letter (`not-found`, `done`, `unloaded`, `invalid`), when the
+   * macrostep faults (the fault's code; the actor is quarantined), on
+   * `options.signal` (`aborted`), after `options.timeout` milliseconds
+   * (`timeout`), and on close() (`closed`). Aborting or timing out withdraws
+   * the message if it is still queued; a message the actor already took is
+   * not undone. With `until: "accepted"` it resolves with
+   * { actor, status: "accepted" } as soon as the message is queued.
+   * A full queue rejects with `queue-full`; only misuse throws (ADR 0008).
+   */
+  send(target, event, data, options = {}) {
+    const until = options.until ?? 'completed';
+    if (until !== 'completed' && until !== 'accepted') {
+      throw new TinyactorsError('send(): options.until must be "completed" or "accepted"', 'invalid');
+    }
+    const timeout = options.timeout;
+    if (timeout !== undefined && !(typeof timeout === 'number' && timeout >= 0 && Number.isFinite(timeout))) {
+      throw new TinyactorsError('send(): options.timeout must be a non-negative number of milliseconds', 'invalid');
+    }
+    const signal = options.signal;
+    if (signal?.aborted) {
+      // Validate the call first: misuse throws even with an aborted signal.
+      if (!(target instanceof ActorId)) addressOf(target, 'send()');
+      else actorOf(this, target);
+      return Promise.reject(new TinyactorsError('send(): the signal is already aborted', 'aborted'));
+    }
+    let promise;
+    try {
+      promise = this.#accept(target, event, data, options, until === 'completed', 'send()');
+    } catch (error) {
+      if (error instanceof TinyactorsError && (error.code === 'queue-full' || error.code === 'out-of-memory')) {
+        return Promise.reject(error);
+      }
+      throw error;
+    }
+    if (until === 'accepted') {
+      return Promise.resolve({ actor: target instanceof ActorId ? target : undefined, status: 'accepted' });
+    }
+    if (signal === undefined && timeout === undefined) {
+      return promise;
+    }
+    const native = this.#native;
+    const token = native.lastSendToken;
+    const cancel = (code) => {
+      try {
+        if (!native.closed) native.cancelSend(token, code);
+      } catch {
+        // The system closed in the meantime; close() settled the promise.
+      }
+    };
+    const onAbort = () => cancel('aborted');
+    signal?.addEventListener('abort', onAbort, { once: true });
+    const timer = timeout === undefined ? undefined : setTimeout(() => cancel('timeout'), timeout);
+    timer?.unref?.();
+    const cleanup = () => {
+      signal?.removeEventListener('abort', onAbort);
+      if (timer !== undefined) clearTimeout(timer);
+    };
+    return promise.then(
+      (result) => {
+        cleanup();
+        return result;
+      },
+      (error) => {
+        cleanup();
+        throw error;
+      },
+    );
+  }
+
+  // Accepts one message for post() or send(); returns send()'s native promise.
+  #accept(target, event, data, options, completion, what) {
+    const bytes = retainedBytes(data, options, what);
     if (!(target instanceof ActorId)) {
       if (target !== null && typeof target === 'object' && 'name' in target) {
-        const { family, name } = addressOf(target, 'post()');
-        this.#native.postNamed(family, name, this.#events.id(event), data);
-        return;
+        const { family, name } = addressOf(target, what);
+        const id = this.#events.id(event);
+        return completion
+          ? this.#native.sendNamed(family, name, id, data, bytes)
+          : this.#native.postNamed(family, name, id, data, bytes);
       }
-      throw new TinyactorsError('post(): expected an actor of this system or an address', 'invalid');
+      throw new TinyactorsError(`${what}: expected an actor of this system or an address`, 'invalid');
     }
     const { slot, generation } = actorOf(this, target);
-    this.#native.post(slot, generation, this.#events.id(event), data);
+    const id = this.#events.id(event);
+    return completion
+      ? this.#native.send(slot, generation, id, data, bytes)
+      : this.#native.post(slot, generation, id, data, bytes);
   }
 
   /** Put an actor that faulted back into scheduling (ADR 0008). */
@@ -399,6 +486,39 @@ class System {
 
   [Symbol.dispose]() {
     this.close();
+  }
+}
+
+/*
+ * The retained-bytes estimate of a message's data (ADR 0005 point 9):
+ * `options.bytes` when given; otherwise 0 for no data and for numbers,
+ * booleans, null and the like (they ride inline, ADR 0011), 2 bytes per
+ * UTF-16 code unit for a string, byteLength for an ArrayBuffer or a view of
+ * one, and a flat 64 bytes for any other object. Objects are not walked:
+ * the estimate must stay O(1), so pass `bytes` for large objects.
+ */
+const OBJECT_BYTES = 64;
+function retainedBytes(data, options, what) {
+  const hint = options?.bytes;
+  if (hint !== undefined) {
+    if (!(typeof hint === 'number' && hint >= 0 && Number.isFinite(hint))) {
+      throw new TinyactorsError(`${what}: options.bytes must be a non-negative number`, 'invalid');
+    }
+    return Math.ceil(hint);
+  }
+  switch (typeof data) {
+    case 'string':
+      return data.length * 2;
+    case 'object':
+      if (data === null) return 0;
+      if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) return data.byteLength;
+      return OBJECT_BYTES;
+    case 'function':
+      return OBJECT_BYTES;
+    case 'bigint':
+      return 16;
+    default:
+      return 0;
   }
 }
 
