@@ -47,6 +47,8 @@ typedef struct {
     ta_activation_effects *activation_effects;
     ta_actor_parent parent;
     ta_actor_completion completion;
+    /* This actor's pending delayed sends, indexed by the system's owner heap. */
+    ta_timer_list timers;
     bool has_parent;
     bool completion_pending;
 } ta_actor_sparse_state;
@@ -115,6 +117,13 @@ void ta_actor_release_slot(ta_system *system, ta_actor_id id);
 /* The host directory's compare-and-swaps, which every residency change uses. */
 ta_result ta_actor_directory_swap(ta_system *system, const ta_actor_directory_replace_params *params);
 ta_result ta_actor_directory_drop(ta_system *system, const ta_actor_directory_remove_params *params);
+
+/* The actor's delayed sends, or null when it has no sparse state (so none). */
+ta_timer_list *ta_actor_timers(const ta_actor *actor);
+/* Stores a delayed send with its owner; takes the send's values on TA_OK. */
+ta_result ta_actor_schedule_send(ta_system *system, ta_actor *actor, const ta_delayed_send *send);
+/* The list a send owned by `owner` belongs in: the actor's, or the orphans when it is gone. */
+ta_result ta_actor_timer_home(ta_system *system, ta_actor_id owner, ta_timer_list **out);
 
 /* Materialized effects of an unpublished replacement's bootstrap. */
 ta_result ta_actor_hold_send(ta_system *system, ta_actor *actor, const ta_activation_send *send);

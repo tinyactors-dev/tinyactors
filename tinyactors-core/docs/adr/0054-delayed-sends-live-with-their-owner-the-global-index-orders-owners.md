@@ -60,7 +60,12 @@ available in O(1).
    sends and keeps submitted ones queued for their receivers. Core moves
    those sends into one system-owned sorted list, which takes part in the
    heap like an owner. They are no longer any actor's state, so they are
-   not reported by actor inspection.
+   not reported by actor inspection. Unloading an actor does the same. The
+   move may need room in that list; core reserves it before anything
+   changes, so `ta_actor_destroy()` and `ta_actor_unload()` can fail with
+   `TA_ERR_NOMEM` and leave the actor as it was. A send the router refuses
+   at dispatch goes back to its owner's list, or to the system-owned list
+   when the owner is gone. System teardown releases the list.
 4. **Inspection returns the list.** `ta_actor_inspection` replaces
    `uint32_t delayed_send_count` with a borrowed array:
 
@@ -85,9 +90,12 @@ available in O(1).
    `data`.
 7. **Rule:** a function that takes one `ta_actor_id` and reads state costs
    O(size of that actor) — its definition-sized session storage, its sparse
-   state and its own lists — never O(size of the system). A test inspects
-   one actor while the system holds many sends from other actors, and
-   asserts that the work does not depend on that number.
+   state and its own lists — never O(size of the system). A core test
+   (`tests/delayed_send_test.c`) checks one actor's list while thousands of
+   other actors hold sends. The population scale test
+   (`tinyactors-test/tests/scale_test.c`) gives every actor a send, measures
+   inspecting an actor and arming then cancelling one more send at two
+   populations, and requires the cost per operation to stay flat.
 
 ## Consequences
 
@@ -102,12 +110,17 @@ available in O(1).
 - Scheduling an actor's first delayed send may allocate sparse state and
   grow its array. Under ADR 0047 both happen on the existing retryable path,
   as `ta_timer_reserve()` does today.
+- An actor with a pending send keeps its sparse state. The other storage in
+  it is released when empty at the end of a macrostep, so an actor holds the
+  same bytes however long it has run. `allocated_bytes` now counts the
+  storage of the actor's sends.
 - An actor with a very large number of pending sends pays O(k) per insert or
   cancel for array moves. This is bounded by that actor's own state, which
   is the stated rule.
 - The public ABI changes: an inspection field changes type, two fields are
   added to `ta_delayed_send_info`, and `ta_actor_delayed_sends()` and its
   params type are removed.
-- Callers to update: the JSON-RPC test host and its Ruby scenario, trace and
-  workbench code, which call `ta_actor_delayed_sends` through the generated
-  bindings, and `tinyactors-napi/index.d.ts`, which declares the count.
+- Callers updated with the change: the JSON-RPC test host (its bindings are
+  generated from the header) and its Ruby scenario, trace and workbench
+  code. `tinyactors-napi/index.d.ts`, which declares the count, still needs
+  the same change.

@@ -890,7 +890,7 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
         record.origin = actor->record.self;
         record.invoke_id = ta_invoke_parent_id(actor, &record.destination);
     }
-    ta_result result = ta_timer_schedule(&system->timers, &record);
+    ta_result result = ta_actor_schedule_send(system, actor, &record);
     if (result != TA_OK) {
         ta_value_release(&state.data);
         ta_value_release(&state.target);
@@ -992,7 +992,7 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
             }
             if (status == TA_OP_OK && send_id != 0) {
                 (void)ta_actor_cancel_held_send(it->actor, send_id);
-                (void)ta_timer_cancel(&it->system->timers, it->actor->record.id, send_id);
+                (void)ta_timer_cancel(&it->system->timers, ta_actor_timers(it->actor), send_id);
             }
             break;
         }
@@ -1676,6 +1676,13 @@ static void ta_compact_sparse(ta_interpreter *it) {
         return;
     }
     ta_invoke_release(it->system, it->actor);
+    if (sparse->timers.count != 0) {
+        /* Pending delayed sends keep the sparse state (ADR 0054); nothing else
+         * it holds may grow with what the actor has done. */
+        ta_vec_destroy(&sparse->internal_events);
+        return;
+    }
+    ta_timer_list_destroy(&it->system->timers, &sparse->timers);
     ta_vec_destroy(&sparse->internal_events);
     ta_mem_free(it->system->allocator, sparse,
                 &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),
@@ -1722,7 +1729,7 @@ static ta_result ta_finish(ta_interpreter *it) {
     }
     ta_store_active(it);
     /* Sends the router already refused once stay queued: they were sent before termination. */
-    ta_timer_cancel_unsubmitted(&it->system->timers, it->actor->record.id);
+    ta_timer_cancel_unsubmitted(&it->system->timers, ta_actor_timers(it->actor));
     ta_actor_sparse_state *sparse = it->actor->sparse;
     ta_event event;
     while (sparse != NULL && ta_dequeue_internal(it->actor, &event)) {
@@ -1956,6 +1963,8 @@ void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor) {
         ta_event_release(&event);
     }
     ta_vec_destroy(&actor->sparse->internal_events);
+    /* The owner heap must not keep pointing into the freed sparse state. */
+    ta_timer_list_destroy(&system->timers, &actor->sparse->timers);
     ta_value_release(&actor->sparse->completion.data);
     ta_mem_free(system->allocator, actor->sparse,
                 &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),

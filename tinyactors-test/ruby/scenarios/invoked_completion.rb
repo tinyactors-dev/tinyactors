@@ -44,8 +44,9 @@ TinyactorsTest.scenarios 'invoked completion' do
   scenario 'a child that finishes while its parent is busy keeps its completion' do
     parent, child = InvokedCompletion.park(self)
 
-    assert_equal 1, child.inspect_actor.fetch(:delayed_send_count),
-                 'the undelivered completion is held for a retry'
+    held = Array(child.inspect_actor[:delayed_sends])
+    assert_equal 1, held.size, 'the undelivered completion is held for a retry'
+    assert_equal true, held.first[:submitted], 'the held completion waits to be offered again'
     assert_equal [], parent.data('.log').grep(/done/), 'the busy parent has not been told yet'
 
     run_system('let the parent finish its macrostep')
@@ -61,7 +62,7 @@ TinyactorsTest.scenarios 'invoked completion' do
 
     assert_equal 'ok', publish_completion(child)
     assert_equal 'ok', publish_completion(child), 'the retry is idempotent'
-    assert_equal 1, child.inspect_actor.fetch(:delayed_send_count), 'still one pending delivery'
+    assert_equal 1, Array(child.inspect_actor[:delayed_sends]).size, 'still one pending delivery'
 
     run_system('let the parent finish its macrostep')
     assert_equal ['progress 21', 'done 42'], parent.data('.log'),

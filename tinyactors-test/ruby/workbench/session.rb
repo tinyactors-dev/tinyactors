@@ -103,7 +103,7 @@ module Workbench
       old_definition = incumbent.definition
       children = child_actors(incumbent.handle)
       was_active = active_states(incumbent)
-      dropped = inspect_actor(incumbent.handle)&.dig(:delayed_send_count).to_i
+      dropped = Array(inspect_actor(incumbent.handle)&.dig(:delayed_sends)).size
 
       replacement = @context.prepare_replacement(incumbent, spec.chart, binding: carried)
       result = @context.activate_replacement(incumbent, replacement)
@@ -295,7 +295,7 @@ module Workbench
           running: view[:macrostep_in_progress],
           active: active_states(actor),
           internal: Array(view[:internal_events]).size,
-          sends: view[:delayed_send_count],
+          sends: Array(view[:delayed_sends]).size,
           children: child_actors(actor.handle).map { |child| child_view(child) }
         }
       end

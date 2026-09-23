@@ -63,6 +63,8 @@ void ta_system_destroy(ta_system *system) {
     if (system == NULL) {
         return;
     }
+    /* Teardown releases submitted sends instead of keeping them as orphans. */
+    system->timers.closing = true;
     for (uint32_t slot = 0; slot < system->actors.count; slot += 1) {
         ta_actor_slot *entry = ta_vec_at(&system->actors, slot);
         if (entry->actor != NULL) {
@@ -362,12 +364,7 @@ ta_result ta_system_next_deadline(const ta_system *system, ta_time *out) {
     if (system == NULL || out == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_delayed_send *next = ta_timer_peek(&system->timers);
-    if (next == NULL) {
-        return TA_ERR_NOT_FOUND;
-    }
-    *out = next->due;
-    return TA_OK;
+    return ta_timer_next_due(&system->timers, out) ? TA_OK : TA_ERR_NOT_FOUND;
 }
 
 ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch_params *params) {
@@ -379,15 +376,22 @@ ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch_params
     bool retry = false;
     ta_time now = ta_clock_now(&system->clock);
     while (dispatched < params->budget) {
-        const ta_delayed_send *next = ta_timer_peek(&system->timers);
-        if (next == NULL || next->due > now) {
+        ta_time due = 0;
+        if (!ta_timer_next_due(&system->timers, &due) || due > now) {
             break;
         }
         ta_delayed_send send;
         (void)ta_timer_pop(&system->timers, &send);
         if (ta_interpreter_dispatch_delayed(system, &send) == TA_EXTERNAL_EVENT_RETRY) {
-            /* Rescheduling keeps its ID, and so its place in deadline order. */
-            ta_result result = ta_timer_schedule(&system->timers, &send);
+            /*
+             * Rescheduling keeps its ID, and so its place in deadline order.
+             * The owner may be gone by now; its submitted sends are orphans.
+             */
+            ta_timer_list *home = NULL;
+            ta_result result = ta_actor_timer_home(system, send.owner, &home);
+            if (result == TA_OK) {
+                result = ta_timer_schedule(&system->timers, home, &send);
+            }
             if (result != TA_OK) {
                 ta_value_release(&send.target);
                 ta_value_release(&send.data);
@@ -398,8 +402,8 @@ ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch_params
         }
         dispatched += 1;
     }
-    const ta_delayed_send *next = ta_timer_peek(&system->timers);
+    ta_time next = 0;
     *params->dispatched = dispatched;
-    *params->more_due = retry || (next != NULL && next->due <= now);
+    *params->more_due = retry || (ta_timer_next_due(&system->timers, &next) && next <= now);
     return TA_OK;
 }

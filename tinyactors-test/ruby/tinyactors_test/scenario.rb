@@ -148,8 +148,9 @@ module TinyactorsTest
       outputs.first
     end
 
+    # How many delayed sends are pending; `sends` lists them.
     def delayed_sends
-      inspect_actor.fetch(:delayed_send_count)
+      Array(inspect_actor[:delayed_sends]).size
     end
 
     # True once the actor reached a top-level final state.

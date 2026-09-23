@@ -14,6 +14,32 @@ ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id) {
     return entry->generation == generation ? entry->actor : NULL;
 }
 
+ta_timer_list *ta_actor_timers(const ta_actor *actor) {
+    return actor->sparse == NULL ? NULL : &actor->sparse->timers;
+}
+
+ta_result ta_actor_schedule_send(ta_system *system, ta_actor *actor, const ta_delayed_send *send) {
+    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
+    if (sparse == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    return ta_timer_schedule(&system->timers, &sparse->timers, send);
+}
+
+ta_result ta_actor_timer_home(ta_system *system, ta_actor_id owner, ta_timer_list **out) {
+    ta_actor *actor = ta_actor_lookup(system, owner);
+    if (actor == NULL) {
+        *out = &system->timers.orphans;
+        return TA_OK;
+    }
+    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
+    if (sparse == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    *out = &sparse->timers;
+    return TA_OK;
+}
+
 static void ta_activation_effect_release(ta_activation_effect *effect) {
     if (effect->kind == TA_ACTIVATION_SEND) {
         ta_value_release(&effect->as.send.send.target);
@@ -530,7 +556,8 @@ static void ta_actor_release_activation_effects(ta_system *system, ta_actor *act
             send->origin = actor->record.self;
             send->invoke_id = ta_invoke_parent_id(actor, &send->destination);
         }
-        (void)ta_timer_schedule(&system->timers, send);
+        /* Reserved by ta_actor_activate_replacement(), so this cannot fail. */
+        (void)ta_timer_schedule(&system->timers, &sparse->timers, send);
     }
     ta_allocator allocator = effects->entries.allocator;
     ta_vec_destroy(&effects->entries);
@@ -556,7 +583,8 @@ ta_result ta_actor_activate_replacement(ta_system *system, const ta_actor_activa
     if (replacement->macrostep || replacement->record.residency != TA_ACTOR_IDLE) {
         return TA_ERR_BUSY;
     }
-    ta_result result = ta_timer_reserve(&system->timers, ta_actor_activation_send_count(replacement));
+    uint32_t sends = ta_actor_activation_send_count(replacement);
+    ta_result result = sends == 0 ? TA_OK : ta_timer_reserve(&system->timers, &replacement->sparse->timers, sends);
     if (result != TA_OK) {
         return result;
     }
@@ -633,8 +661,12 @@ ta_result ta_actor_destroy(ta_system *system, ta_actor_id id) {
             return TA_ERR_BUSY;
         }
     }
-    /* Sends already submitted stay queued for their receivers. */
-    ta_timer_cancel_unsubmitted(&system->timers, id);
+    /* Sends already submitted stay queued for their receivers (ADR 0054). */
+    ta_result result = ta_timer_reserve_orphans(&system->timers, ta_actor_timers(actor));
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_timer_orphan(&system->timers, ta_actor_timers(actor));
     ta_actor_release_address(system, actor);
     ta_actor_release_slot(system, id);
     ta_actor_free(system, actor);
@@ -671,6 +703,7 @@ static size_t ta_actor_allocated_bytes(const ta_actor *actor) {
             total += sizeof(ta_activation_effects);
             total += ta_vec_bytes(&sparse->activation_effects->entries);
         }
+        total += ta_timer_list_bytes(&sparse->timers);
     }
     return total;
 }
@@ -698,7 +731,6 @@ ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_inspectio
         .active_state_count = active,
         .macrostep_in_progress = actor->macrostep,
         .current_event = ta_actor_paused_event(actor),
-        .delayed_send_count = ta_timer_count_owner(&system->timers, id),
         .allocated_bytes = ta_actor_allocated_bytes(actor),
     };
     if (actor->sparse != NULL) {
@@ -706,6 +738,8 @@ ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_inspectio
         out->internal_count = actor->sparse->internal_events.count;
         out->invokes = actor->sparse->invokes;
         out->invoke_count = actor->sparse->invoke_count;
+        out->delayed_sends = actor->sparse->timers.count == 0 ? NULL : actor->sparse->timers.sends;
+        out->delayed_send_count = actor->sparse->timers.count;
         out->has_completion = actor->finished;
         out->completion = actor->finished ? &actor->sparse->completion : NULL;
     }
@@ -813,45 +847,6 @@ ta_result ta_actor_history(ta_system *system, const ta_actor_history_params *par
         if (ta_bits_get(words, state)) {
             params->states[at++] = state;
         }
-    }
-    return TA_OK;
-}
-
-ta_result ta_actor_delayed_sends(ta_system *system, const ta_actor_delayed_sends_params *params) {
-    if (params == NULL || params->count == NULL) {
-        return TA_ERR_INVALID;
-    }
-    if (ta_actor_lookup(system, params->actor) == NULL) {
-        return TA_ERR_NOT_FOUND;
-    }
-    uint32_t count = ta_timer_count_owner(&system->timers, params->actor);
-    *params->count = count;
-    if (count > params->capacity || (count != 0 && params->sends == NULL)) {
-        return TA_ERR_NOMEM;
-    }
-    /* Selection by (due, id) keeps the documented order without sorting the heap. */
-    ta_time last_due = 0;
-    ta_timer_id last_id = 0;
-    for (uint32_t at = 0; at < count; at += 1) {
-        const ta_delayed_send *best = NULL;
-        for (uint32_t index = 0; index < system->timers.count; index += 1) {
-            const ta_delayed_send *send = &system->timers.items[index];
-            bool after = at == 0 || send->due > last_due || (send->due == last_due && send->id > last_id);
-            bool better = best == NULL || send->due < best->due || (send->due == best->due && send->id < best->id);
-            if (send->owner == params->actor && after && better) {
-                best = send;
-            }
-        }
-        last_due = best->due;
-        last_id = best->id;
-        params->sends[at] = (ta_delayed_send_info){
-            .send_id = best->send_id,
-            .due = best->due,
-            .event = best->event,
-            .io_type = best->io_type,
-            .target = best->target,
-            .data = best->data,
-        };
     }
     return TA_OK;
 }

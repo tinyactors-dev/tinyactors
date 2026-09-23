@@ -9,9 +9,10 @@
 #
 # `actor_fixed_bytes` covers the actor record, session storage, and the
 # data-model instance before the actor processes events; it deliberately
-# excludes queue capacities and the sparse state of invoked actors. The
-# charts here arm no timers and invoke nothing before they are measured, so
-# the two numbers must agree exactly.
+# excludes queue capacities and sparse state. An actor's pending delayed
+# sends live in its sparse state (ADR 0054), so a chart that arms a timer on
+# entry holds more than its fixed size, and inspection counts it; charts
+# that arm no timers and invoke nothing must agree with it exactly.
 module ActorMemory
   def self.live(context) = context.allocator.stats.fetch(:live_bytes)
 
@@ -48,7 +49,7 @@ TinyactorsTest.scenarios 'actor memory' do
   # copying its tables into each actor would cost far more than its
   # reported fixed size.
   scenario 'an actor costs exactly the fixed size its definition reports' do
-    %i[counter_v1 relay traffic_light].each do |chart|
+    %i[counter_v1 relay].each do |chart|
       fixed = definition_facts(chart).fetch(:actor_fixed_bytes)
       first = spawn(chart)
       assert_equal fixed, first.inspect_actor.fetch(:allocated_bytes),
@@ -56,6 +57,20 @@ TinyactorsTest.scenarios 'actor memory' do
       assert_equal fixed, ActorMemory.marginal(self, chart),
                    "#{chart}: the allocator handed out exactly the fixed size for one more actor"
     end
+  end
+
+  # Catches: delayed-send storage that inspection does not count, or that
+  # lives somewhere other than with its owner. A traffic light arms a timer
+  # on entry; the send is the actor's (ADR 0054), so it adds to what the
+  # actor holds and the allocator agrees byte for byte.
+  scenario 'an actor that arms a timer holds its sends with it' do
+    fixed = definition_facts(:traffic_light).fetch(:actor_fixed_bytes)
+    light = spawn(:traffic_light)
+    held = light.inspect_actor.fetch(:allocated_bytes)
+    assert_equal 1, light.delayed_sends, 'the light has one timer pending'
+    assert held > fixed, "the pending send is counted: #{held} bytes against #{fixed} fixed"
+    assert_equal held, ActorMemory.marginal(self, :traffic_light),
+                 'the allocator handed out exactly what inspection reports for one more light'
   end
 
   # Catches: a definition compiled, copied, or indexed per actor. A chart

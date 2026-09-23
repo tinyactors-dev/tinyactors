@@ -567,7 +567,7 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
     };
     record.data = delivery->event.data;
     ta_value_retain(&record.data);
-    ta_result result = ta_timer_schedule(&system->timers, &record);
+    ta_result result = ta_actor_schedule_send(system, delivery->sender, &record);
     if (result != TA_OK) {
         ta_value_release(&record.data);
     }
@@ -847,10 +847,10 @@ ta_result ta_actor_publish_completion(ta_system *system, ta_actor_id id) {
     }
     ta_actor *parent = ta_actor_lookup(system, sparse->parent.actor);
     if (parent == NULL || ta_invoke_find(parent, sparse->parent.invoke_id) < 0) {
-        (void)ta_timer_withdraw(&system->timers, id, TA_SEND_ID_COMPLETION);
+        (void)ta_timer_withdraw(&system->timers, ta_actor_timers(actor), TA_SEND_ID_COMPLETION);
         return TA_ERR_NOT_FOUND;
     }
-    if (ta_timer_withdraw(&system->timers, id, TA_SEND_ID_COMPLETION) != TA_OK) {
+    if (ta_timer_withdraw(&system->timers, ta_actor_timers(actor), TA_SEND_ID_COMPLETION) != TA_OK) {
         return TA_OK; /* already delivered */
     }
     return ta_invoke_publish(system, actor);

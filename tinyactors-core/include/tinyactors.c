@@ -430,8 +430,24 @@ struct ta_continuation {
 
 
 /*
- * An evaluated delayed send. For the built-in SCXML processor `destination`
- * is the resolved external target; custom processors receive `target`.
+ * Delayed sends (ADR 0026, ADR 0054).
+ *
+ * A send is stored with its owner: each owner has a ta_timer_list, one array
+ * of public ta_delayed_send_info sorted by (due, timer id) plus a parallel
+ * array of private fields. The system keeps a min-heap of the lists that hold
+ * at least one send, keyed by each list's front. The heap's top list's front
+ * is the globally earliest send, so dispatch order is exactly (due, id).
+ *
+ * A list's address must stay stable while it holds sends: the heap points at
+ * it. Actors keep theirs in their sparse state; the sends whose session is
+ * gone live in the heap's own `orphans` list.
+ */
+
+/*
+ * An evaluated delayed send, the flat form used to schedule a send, to hand a
+ * due send to dispatch, and to carry sends in a session image. For the
+ * built-in SCXML processor `destination` is the resolved external target;
+ * custom processors receive `target`.
  */
 typedef struct {
     ta_timer_id id;
@@ -443,8 +459,6 @@ typedef struct {
     ta_actor_ref destination;
     ta_value target;
     ta_value data;
-    uint32_t heap_index;
-    bool active;
     /*
      * Already sent: the router accepted nothing and the send waits here to be
      * offered again. <cancel> and session termination leave it in place.
@@ -455,44 +469,78 @@ typedef struct {
     ta_invoke_id invoke_id;
 } ta_delayed_send;
 
-/* A binary min-heap ordered by (due, id); ids increase in scheduling order. */
+/* The private fields of one stored send, parallel to ta_timer_list.sends. */
+typedef struct {
+    ta_timer_id id;
+    ta_actor_id owner;
+    ta_actor_ref origin;
+    ta_invoke_id invoke_id;
+} ta_delayed_send_meta;
+
+/* One owner's pending sends, sorted by (due, id). Zero-initialized is empty. */
+typedef struct {
+    ta_delayed_send_info *sends;
+    ta_delayed_send_meta *meta;
+    uint32_t count;
+    uint32_t capacity;
+    /* Position in the owner heap; meaningful only while `indexed`. */
+    uint32_t heap_index;
+    /* In the owner heap: true exactly when count != 0. */
+    bool indexed;
+} ta_timer_list;
+
 typedef struct {
     ta_allocator allocator;
-    ta_delayed_send *items;
+    /* A binary min-heap of non-empty lists, keyed by each list's front. */
+    ta_timer_list **owners;
     uint32_t count;
     uint32_t capacity;
     ta_timer_id next_id;
+    /* Submitted sends whose sending session is gone (ADR 0054). */
+    ta_timer_list orphans;
+    /* Set while the system is destroyed: orphaning releases instead of keeping. */
+    bool closing;
 } ta_timer_heap;
 
 TA_PRIVATE ta_result ta_timer_heap_init(ta_timer_heap *heap, ta_allocator allocator);
+/* Releases every send still indexed, the orphans included. */
 TA_PRIVATE void ta_timer_heap_destroy(ta_timer_heap *heap);
-/* Makes the next `additional` schedules allocation-free. */
-TA_PRIVATE ta_result ta_timer_reserve(ta_timer_heap *heap, uint32_t additional);
-/* Takes ownership of the send's values; assigns send->id when it is zero. */
-TA_PRIVATE ta_result ta_timer_schedule(ta_timer_heap *heap, const ta_delayed_send *send);
-/* Removes and releases every pending, not yet submitted send of owner with send_id. */
-TA_PRIVATE ta_result ta_timer_cancel(ta_timer_heap *heap,
-                          ta_actor_id owner,
-                          ta_send_id send_id);
+/* Makes the next `additional` schedules into list allocation-free. */
+TA_PRIVATE ta_result ta_timer_reserve(ta_timer_heap *heap, ta_timer_list *list, uint32_t additional);
+/* Takes ownership of the send's values on TA_OK; assigns send->id when it is zero. */
+TA_PRIVATE ta_result ta_timer_schedule(ta_timer_heap *heap, ta_timer_list *list, const ta_delayed_send *send);
+/* Removes and releases every not yet submitted send in list with send_id. */
+TA_PRIVATE ta_result ta_timer_cancel(ta_timer_heap *heap, ta_timer_list *list, ta_send_id send_id);
 /* Like ta_timer_cancel(), but also removes submitted sends. */
-TA_PRIVATE ta_result ta_timer_withdraw(ta_timer_heap *heap,
-                            ta_actor_id owner,
-                            ta_send_id send_id);
-/* Removes and releases every not yet submitted send of owner (session termination). */
-TA_PRIVATE void ta_timer_cancel_unsubmitted(ta_timer_heap *heap, ta_actor_id owner);
-/* Removes and releases every pending send of owner. */
-TA_PRIVATE void ta_timer_cancel_owner(ta_timer_heap *heap, ta_actor_id owner);
-TA_PRIVATE uint32_t ta_timer_count_owner(const ta_timer_heap *heap, ta_actor_id owner);
+TA_PRIVATE ta_result ta_timer_withdraw(ta_timer_heap *heap, ta_timer_list *list, ta_send_id send_id);
+/* Removes and releases every not yet submitted send in list (session termination). */
+TA_PRIVATE void ta_timer_cancel_unsubmitted(ta_timer_heap *heap, ta_timer_list *list);
 /*
- * Copies the owner's not yet submitted sends, and returns how many there are;
- * a null `out` only counts. These are the sends a session belongs to, the
- * same set ta_timer_cancel_unsubmitted() drops when the session ends — a
- * submitted send outlives it and is the system's to re-offer. The copies
- * borrow their values; the caller takes its own references.
+ * Makes ta_timer_orphan(list) allocation-free: reserves room in the orphans
+ * for the list's submitted sends.
  */
-TA_PRIVATE uint32_t ta_timer_copy_unsubmitted(const ta_timer_heap *heap, ta_actor_id owner, ta_delayed_send *out);
-TA_PRIVATE const ta_delayed_send *ta_timer_peek(const ta_timer_heap *heap);
-/* Transfers ownership of the earliest send's values to *out. */
+TA_PRIVATE ta_result ta_timer_reserve_orphans(ta_timer_heap *heap, const ta_timer_list *list);
+/*
+ * The sending session is gone: releases the list's unsubmitted sends and
+ * moves its submitted ones to the orphans. Call ta_timer_reserve_orphans()
+ * first. Leaves the list empty and unindexed; its storage stays allocated.
+ */
+TA_PRIVATE void ta_timer_orphan(ta_timer_heap *heap, ta_timer_list *list);
+/* Releases every send in list, unindexes it, and frees its storage. */
+TA_PRIVATE void ta_timer_list_destroy(ta_timer_heap *heap, ta_timer_list *list);
+/* Bytes the list's storage occupies. */
+TA_PRIVATE size_t ta_timer_list_bytes(const ta_timer_list *list);
+/*
+ * Copies the list's not yet submitted sends in (due, id) order, and returns
+ * how many there are; a null `out` only counts. These are the sends a
+ * session belongs to — a submitted send outlives it and is the system's to
+ * re-offer. The copies borrow their values; the caller takes its own
+ * references.
+ */
+TA_PRIVATE uint32_t ta_timer_copy_unsubmitted(const ta_timer_list *list, ta_delayed_send *out);
+/* The earliest due time of any indexed send; false when there is none. */
+TA_PRIVATE bool ta_timer_next_due(const ta_timer_heap *heap, ta_time *out);
+/* Removes the earliest send and transfers ownership of its values to *out. */
 TA_PRIVATE ta_result ta_timer_pop(ta_timer_heap *heap, ta_delayed_send *out);
 
 
@@ -994,6 +1042,8 @@ typedef struct {
     ta_activation_effects *activation_effects;
     ta_actor_parent parent;
     ta_actor_completion completion;
+    /* This actor's pending delayed sends, indexed by the system's owner heap. */
+    ta_timer_list timers;
     bool has_parent;
     bool completion_pending;
 } ta_actor_sparse_state;
@@ -1062,6 +1112,13 @@ TA_PRIVATE void ta_actor_release_slot(ta_system *system, ta_actor_id id);
 /* The host directory's compare-and-swaps, which every residency change uses. */
 TA_PRIVATE ta_result ta_actor_directory_swap(ta_system *system, const ta_actor_directory_replace_params *params);
 TA_PRIVATE ta_result ta_actor_directory_drop(ta_system *system, const ta_actor_directory_remove_params *params);
+
+/* The actor's delayed sends, or null when it has no sparse state (so none). */
+TA_PRIVATE ta_timer_list *ta_actor_timers(const ta_actor *actor);
+/* Stores a delayed send with its owner; takes the send's values on TA_OK. */
+TA_PRIVATE ta_result ta_actor_schedule_send(ta_system *system, ta_actor *actor, const ta_delayed_send *send);
+/* The list a send owned by `owner` belongs in: the actor's, or the orphans when it is gone. */
+TA_PRIVATE ta_result ta_actor_timer_home(ta_system *system, ta_actor_id owner, ta_timer_list **out);
 
 /* Materialized effects of an unpublished replacement's bootstrap. */
 TA_PRIVATE ta_result ta_actor_hold_send(ta_system *system, ta_actor *actor, const ta_activation_send *send);
@@ -2332,63 +2389,296 @@ TA_PRIVATE uint64_t *ta_history_slot_words(const ta_history_state *history, uint
 
 
 
-static bool ta_timer_before(const ta_delayed_send *left, const ta_delayed_send *right) {
-    return left->due < right->due || (left->due == right->due && left->id < right->id);
+/* ------------------------------------------------------------------------
+ * Keys and the owner heap
+ */
+
+typedef struct {
+    ta_time due;
+    ta_timer_id id;
+} ta_timer_key;
+
+static bool ta_timer_key_before(ta_timer_key left, ta_timer_key right) {
+    return left.due < right.due || (left.due == right.due && left.id < right.id);
 }
 
-static void ta_timer_swap(ta_timer_heap *heap, uint32_t left, uint32_t right) {
-    ta_delayed_send swap = heap->items[left];
-    heap->items[left] = heap->items[right];
-    heap->items[right] = swap;
-    heap->items[left].heap_index = left;
-    heap->items[right].heap_index = right;
+static ta_timer_key ta_timer_key_at(const ta_timer_list *list, uint32_t index) {
+    return (ta_timer_key){ .due = list->sends[index].due, .id = list->meta[index].id };
+}
+
+static bool ta_timer_list_before(const ta_timer_list *left, const ta_timer_list *right) {
+    return ta_timer_key_before(ta_timer_key_at(left, 0), ta_timer_key_at(right, 0));
+}
+
+static void ta_timer_place(ta_timer_heap *heap, uint32_t index, ta_timer_list *list) {
+    heap->owners[index] = list;
+    list->heap_index = index;
 }
 
 static void ta_timer_sift_up(ta_timer_heap *heap, uint32_t index) {
+    ta_timer_list *list = heap->owners[index];
     while (index > 0) {
         uint32_t parent = (index - 1u) / 2u;
-        if (!ta_timer_before(&heap->items[index], &heap->items[parent])) {
-            return;
+        if (!ta_timer_list_before(list, heap->owners[parent])) {
+            break;
         }
-        ta_timer_swap(heap, index, parent);
+        ta_timer_place(heap, index, heap->owners[parent]);
         index = parent;
     }
+    ta_timer_place(heap, index, list);
 }
 
 static void ta_timer_sift_down(ta_timer_heap *heap, uint32_t index) {
+    ta_timer_list *list = heap->owners[index];
     for (;;) {
         uint32_t smallest = index;
+        const ta_timer_list *best = list;
         uint32_t left = index * 2u + 1u;
         uint32_t right = left + 1u;
-        if (left < heap->count && ta_timer_before(&heap->items[left], &heap->items[smallest])) {
+        if (left < heap->count && ta_timer_list_before(heap->owners[left], best)) {
             smallest = left;
+            best = heap->owners[left];
         }
-        if (right < heap->count && ta_timer_before(&heap->items[right], &heap->items[smallest])) {
+        if (right < heap->count && ta_timer_list_before(heap->owners[right], best)) {
             smallest = right;
         }
         if (smallest == index) {
-            return;
+            break;
         }
-        ta_timer_swap(heap, index, smallest);
+        ta_timer_place(heap, index, heap->owners[smallest]);
         index = smallest;
     }
+    ta_timer_place(heap, index, list);
 }
 
-static void ta_timer_remove_at(ta_timer_heap *heap, uint32_t index) {
+static void ta_timer_unindex(ta_timer_heap *heap, ta_timer_list *list) {
+    if (!list->indexed) {
+        return;
+    }
+    uint32_t index = list->heap_index;
+    list->indexed = false;
     heap->count -= 1u;
     if (index == heap->count) {
         return;
     }
-    heap->items[index] = heap->items[heap->count];
-    heap->items[index].heap_index = index;
+    ta_timer_place(heap, index, heap->owners[heap->count]);
     ta_timer_sift_down(heap, index);
     ta_timer_sift_up(heap, index);
 }
 
-static void ta_timer_release(ta_delayed_send *send) {
-    ta_value_release(&send->target);
-    ta_value_release(&send->data);
+/*
+ * Restores the heap after the list's front may have changed. Inserting a
+ * list needs a free heap slot; ta_timer_reserve_heap() provides it.
+ */
+static void ta_timer_reindex(ta_timer_heap *heap, ta_timer_list *list) {
+    if (list->count == 0) {
+        ta_timer_unindex(heap, list);
+        return;
+    }
+    if (!list->indexed) {
+        list->indexed = true;
+        ta_timer_place(heap, heap->count, list);
+        heap->count += 1u;
+        ta_timer_sift_up(heap, list->heap_index);
+        return;
+    }
+    uint32_t index = list->heap_index;
+    ta_timer_sift_down(heap, index);
+    ta_timer_sift_up(heap, list->heap_index);
 }
+
+static uint32_t ta_timer_grow_capacity(uint32_t current, uint32_t needed) {
+    uint32_t capacity = current == 0 ? 4u : current;
+    while (capacity < needed) {
+        if (capacity > UINT32_MAX / 2u) {
+            return needed;
+        }
+        capacity *= 2u;
+    }
+    return capacity;
+}
+
+static ta_result ta_timer_reserve_heap(ta_timer_heap *heap, uint32_t additional) {
+    if (additional > UINT32_MAX - heap->count) {
+        return TA_ERR_NOMEM;
+    }
+    if (additional <= heap->capacity - heap->count) {
+        return TA_OK;
+    }
+    uint32_t capacity = ta_timer_grow_capacity(heap->capacity, heap->count + additional);
+    ta_timer_list **owners = ta_mem_alloc(heap->allocator, (size_t)capacity * sizeof(ta_timer_list *),
+                                          _Alignof(ta_timer_list *));
+    if (owners == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    if (heap->owners != NULL) {
+        ta_mem_copy(owners, heap->owners, (size_t)heap->count * sizeof(ta_timer_list *));
+        ta_mem_free(heap->allocator, heap->owners,
+                    &(ta_allocator_free_params){ .size = (size_t)heap->capacity * sizeof(ta_timer_list *),
+                                                 .alignment = _Alignof(ta_timer_list *) });
+    }
+    heap->owners = owners;
+    heap->capacity = capacity;
+    return TA_OK;
+}
+
+/* ------------------------------------------------------------------------
+ * One owner's list
+ */
+
+static void ta_timer_free_storage(ta_allocator allocator, ta_timer_list *list) {
+    if (list->capacity == 0) {
+        return;
+    }
+    ta_mem_free(allocator, list->sends,
+                &(ta_allocator_free_params){ .size = (size_t)list->capacity * sizeof(ta_delayed_send_info),
+                                             .alignment = _Alignof(ta_delayed_send_info) });
+    ta_mem_free(allocator, list->meta,
+                &(ta_allocator_free_params){ .size = (size_t)list->capacity * sizeof(ta_delayed_send_meta),
+                                             .alignment = _Alignof(ta_delayed_send_meta) });
+    list->sends = NULL;
+    list->meta = NULL;
+    list->capacity = 0;
+}
+
+static ta_result ta_timer_reserve_list(ta_allocator allocator, ta_timer_list *list, uint32_t additional) {
+    if (additional > UINT32_MAX - list->count) {
+        return TA_ERR_NOMEM;
+    }
+    if (additional <= list->capacity - list->count) {
+        return TA_OK;
+    }
+    uint32_t capacity = ta_timer_grow_capacity(list->capacity, list->count + additional);
+    ta_delayed_send_info *sends = ta_mem_alloc(allocator, (size_t)capacity * sizeof(ta_delayed_send_info),
+                                               _Alignof(ta_delayed_send_info));
+    ta_delayed_send_meta *meta = ta_mem_alloc(allocator, (size_t)capacity * sizeof(ta_delayed_send_meta),
+                                              _Alignof(ta_delayed_send_meta));
+    if (sends == NULL || meta == NULL) {
+        if (sends != NULL) {
+            ta_mem_free(allocator, sends,
+                        &(ta_allocator_free_params){ .size = (size_t)capacity * sizeof(ta_delayed_send_info),
+                                                     .alignment = _Alignof(ta_delayed_send_info) });
+        }
+        if (meta != NULL) {
+            ta_mem_free(allocator, meta,
+                        &(ta_allocator_free_params){ .size = (size_t)capacity * sizeof(ta_delayed_send_meta),
+                                                     .alignment = _Alignof(ta_delayed_send_meta) });
+        }
+        return TA_ERR_NOMEM;
+    }
+    if (list->count != 0) {
+        ta_mem_copy(sends, list->sends, (size_t)list->count * sizeof(ta_delayed_send_info));
+        ta_mem_copy(meta, list->meta, (size_t)list->count * sizeof(ta_delayed_send_meta));
+    }
+    ta_timer_free_storage(allocator, list);
+    list->sends = sends;
+    list->meta = meta;
+    list->capacity = capacity;
+    return TA_OK;
+}
+
+static void ta_timer_split(const ta_delayed_send *send, ta_delayed_send_info *info, ta_delayed_send_meta *meta) {
+    *info = (ta_delayed_send_info){
+        .send_id = send->send_id,
+        .due = send->due,
+        .event = send->event,
+        .io_type = send->io_type,
+        .destination = send->destination,
+        .target = send->target,
+        .data = send->data,
+        .submitted = send->submitted,
+    };
+    *meta = (ta_delayed_send_meta){
+        .id = send->id,
+        .owner = send->owner,
+        .origin = send->origin,
+        .invoke_id = send->invoke_id,
+    };
+}
+
+static ta_delayed_send ta_timer_join(const ta_timer_list *list, uint32_t index) {
+    const ta_delayed_send_info *info = &list->sends[index];
+    const ta_delayed_send_meta *meta = &list->meta[index];
+    return (ta_delayed_send){
+        .id = meta->id,
+        .owner = meta->owner,
+        .send_id = info->send_id,
+        .due = info->due,
+        .event = info->event,
+        .io_type = info->io_type,
+        .destination = info->destination,
+        .target = info->target,
+        .data = info->data,
+        .submitted = info->submitted,
+        .origin = meta->origin,
+        .invoke_id = meta->invoke_id,
+    };
+}
+
+/* The index of the first stored send that sorts after key. */
+static uint32_t ta_timer_upper_bound(const ta_timer_list *list, ta_timer_key key) {
+    uint32_t low = 0;
+    uint32_t high = list->count;
+    while (low < high) {
+        uint32_t middle = low + (high - low) / 2u;
+        if (ta_timer_key_before(key, ta_timer_key_at(list, middle))) {
+            high = middle;
+        } else {
+            low = middle + 1u;
+        }
+    }
+    return low;
+}
+
+/* Inserts into reserved capacity; the caller reindexes. */
+static void ta_timer_insert(ta_timer_list *list, const ta_delayed_send *send) {
+    uint32_t at = ta_timer_upper_bound(list, (ta_timer_key){ .due = send->due, .id = send->id });
+    for (uint32_t index = list->count; index > at; index -= 1u) {
+        list->sends[index] = list->sends[index - 1u];
+        list->meta[index] = list->meta[index - 1u];
+    }
+    ta_timer_split(send, &list->sends[at], &list->meta[at]);
+    list->count += 1u;
+}
+
+typedef struct {
+    ta_send_id send_id;
+    bool any_send_id;
+    bool include_submitted;
+} ta_timer_selection;
+
+static bool ta_timer_selected(const ta_delayed_send_info *send, const ta_timer_selection *selection) {
+    return (selection->any_send_id || send->send_id == selection->send_id) &&
+           (selection->include_submitted || !send->submitted);
+}
+
+/* Releases and removes the selected sends, keeping order; reindexes the list. */
+static bool ta_timer_remove_selected(ta_timer_heap *heap, ta_timer_list *list, const ta_timer_selection *selection) {
+    if (list == NULL) {
+        return false;
+    }
+    uint32_t kept = 0;
+    for (uint32_t index = 0; index < list->count; index += 1u) {
+        if (ta_timer_selected(&list->sends[index], selection)) {
+            ta_value_release(&list->sends[index].target);
+            ta_value_release(&list->sends[index].data);
+            continue;
+        }
+        list->sends[kept] = list->sends[index];
+        list->meta[kept] = list->meta[index];
+        kept += 1u;
+    }
+    bool found = kept != list->count;
+    list->count = kept;
+    if (found) {
+        ta_timer_reindex(heap, list);
+    }
+    return found;
+}
+
+/* ------------------------------------------------------------------------
+ * Public within core
+ */
 
 TA_PRIVATE ta_result ta_timer_heap_init(ta_timer_heap *heap, ta_allocator allocator) {
     *heap = (ta_timer_heap){ .allocator = allocator, .next_id = 1 };
@@ -2396,163 +2686,160 @@ TA_PRIVATE ta_result ta_timer_heap_init(ta_timer_heap *heap, ta_allocator alloca
 }
 
 TA_PRIVATE void ta_timer_heap_destroy(ta_timer_heap *heap) {
-    for (uint32_t index = 0; index < heap->count; index += 1) {
-        ta_timer_release(&heap->items[index]);
+    /* Lists still indexed belong to actors that outlived the system's teardown. */
+    while (heap->count != 0) {
+        ta_timer_list *list = heap->owners[0];
+        (void)ta_timer_remove_selected(heap, list,
+                                       &(ta_timer_selection){ .any_send_id = true, .include_submitted = true });
     }
-    ta_mem_free(heap->allocator, heap->items,
-                &(ta_allocator_free_params){ .size = heap->capacity * sizeof(ta_delayed_send),
-                                             .alignment = _Alignof(ta_delayed_send) });
+    ta_timer_free_storage(heap->allocator, &heap->orphans);
+    if (heap->owners != NULL) {
+        ta_mem_free(heap->allocator, heap->owners,
+                    &(ta_allocator_free_params){ .size = (size_t)heap->capacity * sizeof(ta_timer_list *),
+                                                 .alignment = _Alignof(ta_timer_list *) });
+    }
     *heap = (ta_timer_heap){0};
 }
 
-TA_PRIVATE ta_result ta_timer_reserve(ta_timer_heap *heap, uint32_t additional) {
-    if (additional > UINT32_MAX - heap->count) {
-        return TA_ERR_NOMEM;
-    }
-    if (additional <= heap->capacity - heap->count) {
+TA_PRIVATE ta_result ta_timer_reserve(ta_timer_heap *heap, ta_timer_list *list, uint32_t additional) {
+    if (additional == 0) {
         return TA_OK;
     }
-    uint32_t needed = heap->count + additional;
-    uint32_t capacity = heap->capacity == 0 ? 16u : heap->capacity;
-    while (capacity < needed) {
-        if (capacity > UINT32_MAX / 2u) {
-            capacity = needed;
-            break;
-        }
-        capacity *= 2u;
-    }
-    ta_delayed_send *items = ta_mem_alloc(heap->allocator, capacity * sizeof(ta_delayed_send),
-                                          _Alignof(ta_delayed_send));
-    if (items == NULL) {
-        return TA_ERR_NOMEM;
-    }
-    if (heap->items != NULL) {
-        ta_mem_copy(items, heap->items, heap->count * sizeof(ta_delayed_send));
-        ta_mem_free(heap->allocator, heap->items,
-                    &(ta_allocator_free_params){ .size = heap->capacity * sizeof(ta_delayed_send),
-                                                 .alignment = _Alignof(ta_delayed_send) });
-    }
-    heap->items = items;
-    heap->capacity = capacity;
-    return TA_OK;
+    ta_result result = ta_timer_reserve_heap(heap, list->indexed ? 0u : 1u);
+    return result == TA_OK ? ta_timer_reserve_list(heap->allocator, list, additional) : result;
 }
 
-TA_PRIVATE ta_result ta_timer_schedule(ta_timer_heap *heap, const ta_delayed_send *send) {
-    if (heap->count == heap->capacity) {
-        ta_result result = ta_timer_reserve(heap, 1u);
-        if (result != TA_OK) {
-            return result;
-        }
+TA_PRIVATE ta_result ta_timer_schedule(ta_timer_heap *heap, ta_timer_list *list, const ta_delayed_send *send) {
+    ta_result result = ta_timer_reserve(heap, list, 1u);
+    if (result != TA_OK) {
+        return result;
     }
-    uint32_t index = heap->count;
-    heap->items[index] = *send;
-    if (heap->items[index].id == 0) {
-        heap->items[index].id = heap->next_id;
+    ta_delayed_send record = *send;
+    if (record.id == 0) {
+        record.id = heap->next_id;
         heap->next_id += 1u;
     }
-    heap->items[index].heap_index = index;
-    heap->items[index].active = true;
-    heap->count += 1u;
-    ta_timer_sift_up(heap, index);
+    ta_timer_insert(list, &record);
+    ta_timer_reindex(heap, list);
     return TA_OK;
 }
 
-typedef struct {
-    ta_actor_id owner;
-    ta_send_id send_id;
-    bool any_send_id;
-    bool include_submitted;
-} ta_timer_selection;
-
-static bool ta_timer_remove_selected(ta_timer_heap *heap, const ta_timer_selection *selection) {
-    bool found = false;
-    for (uint32_t index = heap->count; index > 0; index -= 1u) {
-        ta_delayed_send *send = &heap->items[index - 1u];
-        if (send->owner == selection->owner && (selection->any_send_id || send->send_id == selection->send_id) &&
-            (selection->include_submitted || !send->submitted)) {
-            ta_timer_release(send);
-            ta_timer_remove_at(heap, index - 1u);
-            found = true;
-            index = heap->count + 1u;
-        }
-    }
-    return found;
+TA_PRIVATE ta_result ta_timer_cancel(ta_timer_heap *heap, ta_timer_list *list, ta_send_id send_id) {
+    return ta_timer_remove_selected(heap, list, &(ta_timer_selection){ .send_id = send_id }) ? TA_OK
+                                                                                            : TA_ERR_NOT_FOUND;
 }
 
-TA_PRIVATE ta_result ta_timer_withdraw(ta_timer_heap *heap,
-                            ta_actor_id owner,
-                            ta_send_id send_id) {
-    return ta_timer_remove_selected(heap, &(ta_timer_selection){ .owner = owner, .send_id = send_id,
-                                                                 .include_submitted = true })
+TA_PRIVATE ta_result ta_timer_withdraw(ta_timer_heap *heap, ta_timer_list *list, ta_send_id send_id) {
+    return ta_timer_remove_selected(heap, list,
+                                    &(ta_timer_selection){ .send_id = send_id, .include_submitted = true })
                ? TA_OK
                : TA_ERR_NOT_FOUND;
 }
 
-TA_PRIVATE void ta_timer_cancel_unsubmitted(ta_timer_heap *heap, ta_actor_id owner) {
-    (void)ta_timer_remove_selected(heap, &(ta_timer_selection){ .owner = owner, .any_send_id = true });
+TA_PRIVATE void ta_timer_cancel_unsubmitted(ta_timer_heap *heap, ta_timer_list *list) {
+    (void)ta_timer_remove_selected(heap, list, &(ta_timer_selection){ .any_send_id = true });
 }
 
-TA_PRIVATE ta_result ta_timer_cancel(ta_timer_heap *heap,
-                          ta_actor_id owner,
-                          ta_send_id send_id) {
-    bool found = false;
-    for (uint32_t index = heap->count; index > 0; index -= 1u) {
-        ta_delayed_send *send = &heap->items[index - 1u];
-        if (send->owner == owner && send->send_id == send_id && !send->submitted) {
-            ta_timer_release(send);
-            ta_timer_remove_at(heap, index - 1u);
-            found = true;
-            /* Removal reorders the tail; restart the scan conservatively. */
-            index = heap->count + 1u;
-        }
-    }
-    return found ? TA_OK : TA_ERR_NOT_FOUND;
-}
-
-TA_PRIVATE void ta_timer_cancel_owner(ta_timer_heap *heap, ta_actor_id owner) {
-    for (uint32_t index = heap->count; index > 0; index -= 1u) {
-        ta_delayed_send *send = &heap->items[index - 1u];
-        if (send->owner == owner) {
-            ta_timer_release(send);
-            ta_timer_remove_at(heap, index - 1u);
-            index = heap->count + 1u;
-        }
-    }
-}
-
-TA_PRIVATE uint32_t ta_timer_count_owner(const ta_timer_heap *heap, ta_actor_id owner) {
+static uint32_t ta_timer_submitted_count(const ta_timer_list *list) {
     uint32_t count = 0;
-    for (uint32_t index = 0; index < heap->count; index += 1) {
-        count += heap->items[index].owner == owner ? 1u : 0u;
+    for (uint32_t index = 0; index < list->count; index += 1u) {
+        count += list->sends[index].submitted ? 1u : 0u;
     }
     return count;
 }
 
-TA_PRIVATE uint32_t ta_timer_copy_unsubmitted(const ta_timer_heap *heap, ta_actor_id owner, ta_delayed_send *out) {
+TA_PRIVATE ta_result ta_timer_reserve_orphans(ta_timer_heap *heap, const ta_timer_list *list) {
+    if (list == NULL || heap->closing) {
+        return TA_OK;
+    }
+    return ta_timer_reserve(heap, &heap->orphans, ta_timer_submitted_count(list));
+}
+
+TA_PRIVATE void ta_timer_orphan(ta_timer_heap *heap, ta_timer_list *list) {
+    if (list == NULL) {
+        return;
+    }
+    ta_timer_cancel_unsubmitted(heap, list);
+    if (heap->closing) {
+        (void)ta_timer_remove_selected(heap, list,
+                                       &(ta_timer_selection){ .any_send_id = true, .include_submitted = true });
+        return;
+    }
+    if (list->count == 0) {
+        return;
+    }
+    /* Merge the two sorted lists from the back into the reserved room. */
+    ta_timer_list *orphans = &heap->orphans;
+    uint32_t left = orphans->count;
+    uint32_t right = list->count;
+    uint32_t out = left + right;
+    while (right > 0) {
+        out -= 1u;
+        if (left > 0 && ta_timer_key_before(ta_timer_key_at(list, right - 1u), ta_timer_key_at(orphans, left - 1u))) {
+            left -= 1u;
+            orphans->sends[out] = orphans->sends[left];
+            orphans->meta[out] = orphans->meta[left];
+        } else {
+            right -= 1u;
+            orphans->sends[out] = list->sends[right];
+            orphans->meta[out] = list->meta[right];
+        }
+    }
+    orphans->count += list->count;
+    list->count = 0;
+    ta_timer_unindex(heap, list);
+    ta_timer_reindex(heap, orphans);
+}
+
+TA_PRIVATE void ta_timer_list_destroy(ta_timer_heap *heap, ta_timer_list *list) {
+    (void)ta_timer_remove_selected(heap, list,
+                                   &(ta_timer_selection){ .any_send_id = true, .include_submitted = true });
+    ta_timer_unindex(heap, list);
+    ta_timer_free_storage(heap->allocator, list);
+}
+
+TA_PRIVATE size_t ta_timer_list_bytes(const ta_timer_list *list) {
+    return list == NULL ? 0u
+                        : (size_t)list->capacity * (sizeof(ta_delayed_send_info) + sizeof(ta_delayed_send_meta));
+}
+
+TA_PRIVATE uint32_t ta_timer_copy_unsubmitted(const ta_timer_list *list, ta_delayed_send *out) {
+    if (list == NULL) {
+        return 0;
+    }
     uint32_t count = 0;
-    for (uint32_t index = 0; index < heap->count; index += 1) {
-        const ta_delayed_send *send = &heap->items[index];
-        if (send->owner != owner || send->submitted) {
+    for (uint32_t index = 0; index < list->count; index += 1u) {
+        if (list->sends[index].submitted) {
             continue;
         }
         if (out != NULL) {
-            out[count] = *send;
+            out[count] = ta_timer_join(list, index);
         }
         count += 1u;
     }
     return count;
 }
 
-TA_PRIVATE const ta_delayed_send *ta_timer_peek(const ta_timer_heap *heap) {
-    return heap->count == 0 ? NULL : &heap->items[0];
+TA_PRIVATE bool ta_timer_next_due(const ta_timer_heap *heap, ta_time *out) {
+    if (heap->count == 0) {
+        return false;
+    }
+    *out = heap->owners[0]->sends[0].due;
+    return true;
 }
 
 TA_PRIVATE ta_result ta_timer_pop(ta_timer_heap *heap, ta_delayed_send *out) {
     if (heap->count == 0) {
         return TA_ERR_NOT_FOUND;
     }
-    *out = heap->items[0];
-    ta_timer_remove_at(heap, 0);
+    ta_timer_list *list = heap->owners[0];
+    *out = ta_timer_join(list, 0);
+    for (uint32_t index = 1; index < list->count; index += 1u) {
+        list->sends[index - 1u] = list->sends[index];
+        list->meta[index - 1u] = list->meta[index];
+    }
+    list->count -= 1u;
+    ta_timer_reindex(heap, list);
     return TA_OK;
 }
 
@@ -3287,7 +3574,7 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
     };
     record.data = delivery->event.data;
     ta_value_retain(&record.data);
-    ta_result result = ta_timer_schedule(&system->timers, &record);
+    ta_result result = ta_actor_schedule_send(system, delivery->sender, &record);
     if (result != TA_OK) {
         ta_value_release(&record.data);
     }
@@ -3567,10 +3854,10 @@ TA_API ta_result ta_actor_publish_completion(ta_system *system, ta_actor_id id) 
     }
     ta_actor *parent = ta_actor_lookup(system, sparse->parent.actor);
     if (parent == NULL || ta_invoke_find(parent, sparse->parent.invoke_id) < 0) {
-        (void)ta_timer_withdraw(&system->timers, id, TA_SEND_ID_COMPLETION);
+        (void)ta_timer_withdraw(&system->timers, ta_actor_timers(actor), TA_SEND_ID_COMPLETION);
         return TA_ERR_NOT_FOUND;
     }
-    if (ta_timer_withdraw(&system->timers, id, TA_SEND_ID_COMPLETION) != TA_OK) {
+    if (ta_timer_withdraw(&system->timers, ta_actor_timers(actor), TA_SEND_ID_COMPLETION) != TA_OK) {
         return TA_OK; /* already delivered */
     }
     return ta_invoke_publish(system, actor);
@@ -5522,6 +5809,32 @@ TA_PRIVATE ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id) {
     return entry->generation == generation ? entry->actor : NULL;
 }
 
+TA_PRIVATE ta_timer_list *ta_actor_timers(const ta_actor *actor) {
+    return actor->sparse == NULL ? NULL : &actor->sparse->timers;
+}
+
+TA_PRIVATE ta_result ta_actor_schedule_send(ta_system *system, ta_actor *actor, const ta_delayed_send *send) {
+    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
+    if (sparse == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    return ta_timer_schedule(&system->timers, &sparse->timers, send);
+}
+
+TA_PRIVATE ta_result ta_actor_timer_home(ta_system *system, ta_actor_id owner, ta_timer_list **out) {
+    ta_actor *actor = ta_actor_lookup(system, owner);
+    if (actor == NULL) {
+        *out = &system->timers.orphans;
+        return TA_OK;
+    }
+    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
+    if (sparse == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    *out = &sparse->timers;
+    return TA_OK;
+}
+
 static void ta_activation_effect_release(ta_activation_effect *effect) {
     if (effect->kind == TA_ACTIVATION_SEND) {
         ta_value_release(&effect->as.send.send.target);
@@ -6038,7 +6351,8 @@ static void ta_actor_release_activation_effects(ta_system *system, ta_actor *act
             send->origin = actor->record.self;
             send->invoke_id = ta_invoke_parent_id(actor, &send->destination);
         }
-        (void)ta_timer_schedule(&system->timers, send);
+        /* Reserved by ta_actor_activate_replacement(), so this cannot fail. */
+        (void)ta_timer_schedule(&system->timers, &sparse->timers, send);
     }
     ta_allocator allocator = effects->entries.allocator;
     ta_vec_destroy(&effects->entries);
@@ -6064,7 +6378,8 @@ TA_API ta_result ta_actor_activate_replacement(ta_system *system, const ta_actor
     if (replacement->macrostep || replacement->record.residency != TA_ACTOR_IDLE) {
         return TA_ERR_BUSY;
     }
-    ta_result result = ta_timer_reserve(&system->timers, ta_actor_activation_send_count(replacement));
+    uint32_t sends = ta_actor_activation_send_count(replacement);
+    ta_result result = sends == 0 ? TA_OK : ta_timer_reserve(&system->timers, &replacement->sparse->timers, sends);
     if (result != TA_OK) {
         return result;
     }
@@ -6141,8 +6456,12 @@ TA_API ta_result ta_actor_destroy(ta_system *system, ta_actor_id id) {
             return TA_ERR_BUSY;
         }
     }
-    /* Sends already submitted stay queued for their receivers. */
-    ta_timer_cancel_unsubmitted(&system->timers, id);
+    /* Sends already submitted stay queued for their receivers (ADR 0054). */
+    ta_result result = ta_timer_reserve_orphans(&system->timers, ta_actor_timers(actor));
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_timer_orphan(&system->timers, ta_actor_timers(actor));
     ta_actor_release_address(system, actor);
     ta_actor_release_slot(system, id);
     ta_actor_free(system, actor);
@@ -6179,6 +6498,7 @@ static size_t ta_actor_allocated_bytes(const ta_actor *actor) {
             total += sizeof(ta_activation_effects);
             total += ta_vec_bytes(&sparse->activation_effects->entries);
         }
+        total += ta_timer_list_bytes(&sparse->timers);
     }
     return total;
 }
@@ -6206,7 +6526,6 @@ TA_API ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_in
         .active_state_count = active,
         .macrostep_in_progress = actor->macrostep,
         .current_event = ta_actor_paused_event(actor),
-        .delayed_send_count = ta_timer_count_owner(&system->timers, id),
         .allocated_bytes = ta_actor_allocated_bytes(actor),
     };
     if (actor->sparse != NULL) {
@@ -6214,6 +6533,8 @@ TA_API ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_in
         out->internal_count = actor->sparse->internal_events.count;
         out->invokes = actor->sparse->invokes;
         out->invoke_count = actor->sparse->invoke_count;
+        out->delayed_sends = actor->sparse->timers.count == 0 ? NULL : actor->sparse->timers.sends;
+        out->delayed_send_count = actor->sparse->timers.count;
         out->has_completion = actor->finished;
         out->completion = actor->finished ? &actor->sparse->completion : NULL;
     }
@@ -6321,45 +6642,6 @@ TA_API ta_result ta_actor_history(ta_system *system, const ta_actor_history_para
         if (ta_bits_get(words, state)) {
             params->states[at++] = state;
         }
-    }
-    return TA_OK;
-}
-
-TA_API ta_result ta_actor_delayed_sends(ta_system *system, const ta_actor_delayed_sends_params *params) {
-    if (params == NULL || params->count == NULL) {
-        return TA_ERR_INVALID;
-    }
-    if (ta_actor_lookup(system, params->actor) == NULL) {
-        return TA_ERR_NOT_FOUND;
-    }
-    uint32_t count = ta_timer_count_owner(&system->timers, params->actor);
-    *params->count = count;
-    if (count > params->capacity || (count != 0 && params->sends == NULL)) {
-        return TA_ERR_NOMEM;
-    }
-    /* Selection by (due, id) keeps the documented order without sorting the heap. */
-    ta_time last_due = 0;
-    ta_timer_id last_id = 0;
-    for (uint32_t at = 0; at < count; at += 1) {
-        const ta_delayed_send *best = NULL;
-        for (uint32_t index = 0; index < system->timers.count; index += 1) {
-            const ta_delayed_send *send = &system->timers.items[index];
-            bool after = at == 0 || send->due > last_due || (send->due == last_due && send->id > last_id);
-            bool better = best == NULL || send->due < best->due || (send->due == best->due && send->id < best->id);
-            if (send->owner == params->actor && after && better) {
-                best = send;
-            }
-        }
-        last_due = best->due;
-        last_id = best->id;
-        params->sends[at] = (ta_delayed_send_info){
-            .send_id = best->send_id,
-            .due = best->due,
-            .event = best->event,
-            .io_type = best->io_type,
-            .target = best->target,
-            .data = best->data,
-        };
     }
     return TA_OK;
 }
@@ -6487,7 +6769,7 @@ static ta_result ta_image_copy_identity(ta_arena *arena, ta_definition_identity 
  */
 
 /* What the arena has to hold, so one block usually serves the whole image. */
-static size_t ta_image_measure(const ta_actor *actor, const ta_system *system) {
+static size_t ta_image_measure(const ta_actor *actor) {
     const ta_actor_sparse_state *sparse = actor->sparse;
     size_t total = actor->session_bytes + 64u;
     total += (size_t)actor->definition->identity.family.name.len + 1u;
@@ -6501,13 +6783,12 @@ static size_t ta_image_measure(const ta_actor *actor, const ta_system *system) {
         total += (size_t)sparse->invoke_count * sizeof(ta_active_invoke);
         total += (size_t)sparse->pending_invokes.count * sizeof(ta_state_id);
     }
-    total += (size_t)ta_timer_copy_unsubmitted(&system->timers, actor->record.id, NULL) *
-             sizeof(ta_delayed_send);
+    total += (size_t)ta_timer_copy_unsubmitted(ta_actor_timers(actor), NULL) * sizeof(ta_delayed_send);
     return total;
 }
 
 /* Every arena allocation of a capture; nothing here retains anything. */
-static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor, ta_system *system) {
+static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
     ta_arena *arena = &image->arena;
     const ta_actor_sparse_state *sparse = actor->sparse;
 
@@ -6566,14 +6847,14 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor, t
         image->pending_invoke_count = count;
     }
 
-    uint32_t sends = ta_timer_copy_unsubmitted(&system->timers, actor->record.id, NULL);
+    uint32_t sends = ta_timer_copy_unsubmitted(ta_actor_timers(actor), NULL);
     if (sends != 0) {
         image->delayed_sends = ta_arena_alloc(arena, (size_t)sends * sizeof(ta_delayed_send),
                                               _Alignof(ta_delayed_send));
         if (image->delayed_sends == NULL) {
             return TA_ERR_NOMEM;
         }
-        (void)ta_timer_copy_unsubmitted(&system->timers, actor->record.id, image->delayed_sends);
+        (void)ta_timer_copy_unsubmitted(ta_actor_timers(actor), image->delayed_sends);
         image->delayed_send_count = sends;
         for (uint32_t index = 0; index < sends; index += 1) {
             ta_delayed_send *send = &image->delayed_sends[index];
@@ -6647,9 +6928,9 @@ TA_API ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_para
         .completion_pending = sparse != NULL && sparse->completion_pending,
         .completion = sparse != NULL ? sparse->completion : (ta_actor_completion){0},
     };
-    ta_result result = ta_arena_init(&image->arena, system->allocator, ta_image_measure(actor, system));
+    ta_result result = ta_arena_init(&image->arena, system->allocator, ta_image_measure(actor));
     if (result == TA_OK) {
-        result = ta_image_fill(image, actor, system);
+        result = ta_image_fill(image, actor);
     }
     if (result != TA_OK) {
         /* Nothing was retained yet, so the arena is the whole of it. */
@@ -6774,12 +7055,11 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
         /* A fresh timer ID; the SCXML send ID that <cancel> names is kept. */
         send.id = 0;
         send.owner = actor->record.id;
-        send.heap_index = 0;
         ta_image_rebind_self(&send.destination, image->source_actor, actor->record.id);
         ta_image_rebind_self(&send.origin, image->source_actor, actor->record.id);
         ta_value_retain(&send.target);
         ta_value_retain(&send.data);
-        ta_result result = ta_timer_schedule(&system->timers, &send);
+        ta_result result = ta_actor_schedule_send(system, actor, &send);
         if (result != TA_OK) {
             ta_value_release(&send.target);
             ta_value_release(&send.data);
@@ -6887,9 +7167,8 @@ TA_API ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstr
     if (result != TA_OK) {
         /* Nothing of this actor is published, so the image is untouched and
          * the caller may try again. */
-        ta_timer_cancel_owner(&system->timers, id);
         ta_actor_release_slot(system, id);
-        ta_actor_free(system, actor);
+        ta_actor_free(system, actor); /* frees its delayed sends too */
         return result;
     }
     *params->out = id;
@@ -6936,8 +7215,13 @@ TA_API ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params
     if (image->source_actor != actor->record.id || image->source_epoch != actor->session_epoch) {
         return TA_ERR_STALE;
     }
+    /* Room for the submitted sends to outlive the session, before anything changes. */
+    ta_result result = ta_timer_reserve_orphans(&system->timers, ta_actor_timers(actor));
+    if (result != TA_OK) {
+        return result;
+    }
 
-    ta_result result = ta_actor_directory_swap(
+    result = ta_actor_directory_swap(
         system,
         &(ta_actor_directory_replace_params){
             .address = &actor->record.self.as.named,
@@ -6956,7 +7240,7 @@ TA_API ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params
      * handed to the router is an envelope of its own and stays, exactly as
      * it does when a session ends.
      */
-    ta_timer_cancel_unsubmitted(&system->timers, actor->record.id);
+    ta_timer_orphan(&system->timers, ta_actor_timers(actor));
     ta_actor_release_slot(system, actor->record.id);
     ta_actor_free(system, actor);
     return TA_OK;
@@ -7001,9 +7285,8 @@ TA_API ta_result ta_actor_load(ta_system *system, const ta_actor_load_params *pa
          * the host may load it again.
          */
         ta_actor *actor = ta_actor_lookup(system, id);
-        ta_timer_cancel_owner(&system->timers, id);
         ta_actor_release_slot(system, id);
-        ta_actor_free(system, actor);
+        ta_actor_free(system, actor); /* frees its delayed sends too */
         return result;
     }
     *params->out = id;
@@ -7074,6 +7357,8 @@ TA_API void ta_system_destroy(ta_system *system) {
     if (system == NULL) {
         return;
     }
+    /* Teardown releases submitted sends instead of keeping them as orphans. */
+    system->timers.closing = true;
     for (uint32_t slot = 0; slot < system->actors.count; slot += 1) {
         ta_actor_slot *entry = ta_vec_at(&system->actors, slot);
         if (entry->actor != NULL) {
@@ -7373,12 +7658,7 @@ TA_API ta_result ta_system_next_deadline(const ta_system *system, ta_time *out) 
     if (system == NULL || out == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_delayed_send *next = ta_timer_peek(&system->timers);
-    if (next == NULL) {
-        return TA_ERR_NOT_FOUND;
-    }
-    *out = next->due;
-    return TA_OK;
+    return ta_timer_next_due(&system->timers, out) ? TA_OK : TA_ERR_NOT_FOUND;
 }
 
 TA_API ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch_params *params) {
@@ -7390,15 +7670,22 @@ TA_API ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch
     bool retry = false;
     ta_time now = ta_clock_now(&system->clock);
     while (dispatched < params->budget) {
-        const ta_delayed_send *next = ta_timer_peek(&system->timers);
-        if (next == NULL || next->due > now) {
+        ta_time due = 0;
+        if (!ta_timer_next_due(&system->timers, &due) || due > now) {
             break;
         }
         ta_delayed_send send;
         (void)ta_timer_pop(&system->timers, &send);
         if (ta_interpreter_dispatch_delayed(system, &send) == TA_EXTERNAL_EVENT_RETRY) {
-            /* Rescheduling keeps its ID, and so its place in deadline order. */
-            ta_result result = ta_timer_schedule(&system->timers, &send);
+            /*
+             * Rescheduling keeps its ID, and so its place in deadline order.
+             * The owner may be gone by now; its submitted sends are orphans.
+             */
+            ta_timer_list *home = NULL;
+            ta_result result = ta_actor_timer_home(system, send.owner, &home);
+            if (result == TA_OK) {
+                result = ta_timer_schedule(&system->timers, home, &send);
+            }
             if (result != TA_OK) {
                 ta_value_release(&send.target);
                 ta_value_release(&send.data);
@@ -7409,9 +7696,9 @@ TA_API ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch
         }
         dispatched += 1;
     }
-    const ta_delayed_send *next = ta_timer_peek(&system->timers);
+    ta_time next = 0;
     *params->dispatched = dispatched;
-    *params->more_due = retry || (next != NULL && next->due <= now);
+    *params->more_due = retry || (ta_timer_next_due(&system->timers, &next) && next <= now);
     return TA_OK;
 }
 
@@ -8306,7 +8593,7 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
         record.origin = actor->record.self;
         record.invoke_id = ta_invoke_parent_id(actor, &record.destination);
     }
-    ta_result result = ta_timer_schedule(&system->timers, &record);
+    ta_result result = ta_actor_schedule_send(system, actor, &record);
     if (result != TA_OK) {
         ta_value_release(&state.data);
         ta_value_release(&state.target);
@@ -8408,7 +8695,7 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
             }
             if (status == TA_OP_OK && send_id != 0) {
                 (void)ta_actor_cancel_held_send(it->actor, send_id);
-                (void)ta_timer_cancel(&it->system->timers, it->actor->record.id, send_id);
+                (void)ta_timer_cancel(&it->system->timers, ta_actor_timers(it->actor), send_id);
             }
             break;
         }
@@ -9092,6 +9379,13 @@ static void ta_compact_sparse(ta_interpreter *it) {
         return;
     }
     ta_invoke_release(it->system, it->actor);
+    if (sparse->timers.count != 0) {
+        /* Pending delayed sends keep the sparse state (ADR 0054); nothing else
+         * it holds may grow with what the actor has done. */
+        ta_vec_destroy(&sparse->internal_events);
+        return;
+    }
+    ta_timer_list_destroy(&it->system->timers, &sparse->timers);
     ta_vec_destroy(&sparse->internal_events);
     ta_mem_free(it->system->allocator, sparse,
                 &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),
@@ -9138,7 +9432,7 @@ static ta_result ta_finish(ta_interpreter *it) {
     }
     ta_store_active(it);
     /* Sends the router already refused once stay queued: they were sent before termination. */
-    ta_timer_cancel_unsubmitted(&it->system->timers, it->actor->record.id);
+    ta_timer_cancel_unsubmitted(&it->system->timers, ta_actor_timers(it->actor));
     ta_actor_sparse_state *sparse = it->actor->sparse;
     ta_event event;
     while (sparse != NULL && ta_dequeue_internal(it->actor, &event)) {
@@ -9372,6 +9666,8 @@ TA_PRIVATE void ta_interpreter_release_actor_state(ta_system *system, ta_actor *
         ta_event_release(&event);
     }
     ta_vec_destroy(&actor->sparse->internal_events);
+    /* The owner heap must not keep pointing into the freed sparse state. */
+    ta_timer_list_destroy(&system->timers, &actor->sparse->timers);
     ta_value_release(&actor->sparse->completion.data);
     ta_mem_free(system->allocator, actor->sparse,
                 &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),

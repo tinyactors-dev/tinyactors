@@ -481,74 +481,6 @@
         }
       }
     },
-    "ta_actor_delayed_sends_params": {
-      "kind": "struct",
-      "doc": "Pending delayed sends of one actor, ordered by due time, then send order.",
-      "fields": [
-        {
-          "name": "actor",
-          "type": {
-            "type": "ta_actor_id"
-          }
-        },
-        {
-          "name": "sends",
-          "type": {
-            "pointer": {
-              "type": "ta_delayed_send_info"
-            }
-          },
-          "capacity": "capacity",
-          "needed": "count",
-          "shape": "buffer",
-          "direction": "out",
-          "optional": true,
-          "valid_on": "success",
-          "lifetime": "system"
-        },
-        {
-          "name": "capacity",
-          "type": {
-            "builtin": "uint32_t"
-          },
-          "capacity_of": "sends"
-        },
-        {
-          "name": "count",
-          "type": {
-            "pointer": {
-              "builtin": "uint32_t"
-            }
-          },
-          "shape": "single",
-          "direction": "out",
-          "valid_on": "always",
-          "needed_of": "sends"
-        }
-      ],
-      "layout": {
-        "x86_64-unknown-linux-gnu": {
-          "size": 32,
-          "align": 8,
-          "offsets": {
-            "actor": 0,
-            "sends": 8,
-            "capacity": 16,
-            "count": 24
-          }
-        },
-        "wasm32-unknown-unknown": {
-          "size": 24,
-          "align": 8,
-          "offsets": {
-            "actor": 0,
-            "sends": 8,
-            "capacity": 12,
-            "count": 16
-          }
-        }
-      }
-    },
     "ta_actor_directory": {
       "kind": "struct",
       "semantic": "adapter",
@@ -1161,7 +1093,7 @@
     },
     "ta_actor_inspection": {
       "kind": "struct",
-      "doc": "A read-only operational view of one resident interpreter instance.\n\nFixed-size facts are fields; variable-length lists (active states, history, delayed sends) are read with the ta_actor_* list functions below, whose counts are reported here so a host can size buffers once.\n\nCore pointers are borrowed and valid only while the actor is externally synchronized against mutation. The completion pointer and its data are borrowed and must not be released. Inspection never calls the data-model adapter; read the data model with ta_actor_datamodel_root().",
+      "doc": "A read-only operational view of one resident interpreter instance.\n\nFixed-size facts are fields; the internal queue, the invocations and the delayed sends are borrowed arrays; the active configuration and history are read with the ta_actor_* list functions below, whose counts are reported here so a host can size buffers once. Inspecting one actor costs O(size of that actor), never O(size of the system) (ADR 0054).\n\nCore pointers are borrowed and valid only while the actor is externally synchronized against mutation. The completion pointer and its data are borrowed and must not be released. Inspection never calls the data-model adapter; read the data model with ta_actor_datamodel_root().",
       "fields": [
         {
           "name": "actor",
@@ -1267,10 +1199,25 @@
           "count_of": "invokes"
         },
         {
+          "name": "delayed_sends",
+          "type": {
+            "pointer": {
+              "type": "ta_delayed_send_info",
+              "const": true
+            }
+          },
+          "count": "delayed_send_count",
+          "shape": "counted",
+          "direction": "in",
+          "optional": true,
+          "doc": "Pending delayed sends, ordered by due time, then send order."
+        },
+        {
           "name": "delayed_send_count",
           "type": {
             "builtin": "uint32_t"
-          }
+          },
+          "count_of": "delayed_sends"
         },
         {
           "name": "has_completion",
@@ -1300,7 +1247,7 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 168,
+          "size": 176,
           "align": 8,
           "offsets": {
             "actor": 0,
@@ -1316,10 +1263,11 @@
             "internal_count": 120,
             "invokes": 128,
             "invoke_count": 136,
-            "delayed_send_count": 140,
-            "has_completion": 144,
-            "completion": 152,
-            "allocated_bytes": 160
+            "delayed_sends": 144,
+            "delayed_send_count": 152,
+            "has_completion": 156,
+            "completion": 160,
+            "allocated_bytes": 168
           }
         },
         "wasm32-unknown-unknown": {
@@ -1339,10 +1287,11 @@
             "internal_count": 80,
             "invokes": 84,
             "invoke_count": 88,
-            "delayed_send_count": 92,
-            "has_completion": 96,
-            "completion": 100,
-            "allocated_bytes": 104
+            "delayed_sends": 92,
+            "delayed_send_count": 96,
+            "has_completion": 100,
+            "completion": 104,
+            "allocated_bytes": 108
           }
         }
       }
@@ -5161,7 +5110,7 @@
     },
     "ta_delayed_send_info": {
       "kind": "struct",
-      "doc": "One pending delayed send owned by an actor. `target` and `data` are borrowed; retain them with ta_value_retain() to keep them past the call's synchronization window.",
+      "doc": "One pending delayed send owned by an actor (ADR 0054). `destination` is the resolved target for the built-in SCXML processor; custom processors receive `target` and leave `destination` unused. `submitted` means the router refused the send once and it waits to be offered again (ADR 0026, ADR 0040). Everything is borrowed; retain `target` and `data` with ta_value_retain() to keep them past the synchronization window.",
       "fields": [
         {
           "name": "send_id",
@@ -5188,6 +5137,12 @@
           }
         },
         {
+          "name": "destination",
+          "type": {
+            "type": "ta_actor_ref"
+          }
+        },
+        {
           "name": "target",
           "type": {
             "type": "ta_value"
@@ -5198,31 +5153,41 @@
           "type": {
             "type": "ta_value"
           }
+        },
+        {
+          "name": "submitted",
+          "type": {
+            "builtin": "bool"
+          }
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 56,
+          "size": 104,
           "align": 8,
           "offsets": {
             "send_id": 0,
             "due": 8,
             "event": 16,
             "io_type": 20,
-            "target": 24,
-            "data": 40
+            "destination": 24,
+            "target": 64,
+            "data": 80,
+            "submitted": 96
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 40,
+          "size": 72,
           "align": 8,
           "offsets": {
             "send_id": 0,
             "due": 8,
             "event": 16,
             "io_type": 20,
-            "target": 24,
-            "data": 32
+            "destination": 24,
+            "target": 48,
+            "data": 56,
+            "submitted": 64
           }
         }
       }
@@ -11746,41 +11711,6 @@
           "type": {
             "pointer": {
               "type": "ta_actor_history_params",
-              "const": true
-            }
-          },
-          "shape": "single",
-          "direction": "in"
-        }
-      ]
-    },
-    {
-      "name": "ta_actor_delayed_sends",
-      "public": true,
-      "static_inline": false,
-      "implemented": true,
-      "returns": {
-        "type": {
-          "type": "ta_result"
-        },
-        "success": "TA_OK"
-      },
-      "params": [
-        {
-          "name": "system",
-          "type": {
-            "pointer": {
-              "type": "ta_system"
-            }
-          },
-          "shape": "handle",
-          "direction": "in"
-        },
-        {
-          "name": "params",
-          "type": {
-            "pointer": {
-              "type": "ta_actor_delayed_sends_params",
               "const": true
             }
           },

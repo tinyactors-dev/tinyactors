@@ -1429,11 +1429,33 @@ TA_API ta_result ta_actor_destroy(ta_system *system, ta_actor_id actor);
 
 
 /*
+ * One pending delayed send owned by an actor (ADR 0054). `destination` is the
+ * resolved target for the built-in SCXML processor; custom processors
+ * receive `target` and leave `destination` unused. `submitted` means the
+ * router refused the send once and it waits to be offered again (ADR 0026,
+ * ADR 0040).
+ * Everything is borrowed; retain `target` and `data` with ta_value_retain()
+ * to keep them past the synchronization window.
+ */
+typedef struct {
+    ta_send_id send_id;
+    ta_time due;
+    ta_event_name_id event;
+    ta_atom io_type;
+    ta_actor_ref destination;
+    ta_value target;
+    ta_value data;
+    bool submitted;
+} ta_delayed_send_info;
+
+/*
  * A read-only operational view of one resident interpreter instance.
  *
- * Fixed-size facts are fields; variable-length lists (active states, history,
- * delayed sends) are read with the ta_actor_* list functions below, whose
- * counts are reported here so a host can size buffers once.
+ * Fixed-size facts are fields; the internal queue, the invocations and the
+ * delayed sends are borrowed arrays; the active configuration and history
+ * are read with the ta_actor_* list functions below, whose counts are
+ * reported here so a host can size buffers once. Inspecting one actor costs
+ * O(size of that actor), never O(size of the system) (ADR 0054).
  *
  * Core pointers are borrowed and valid only while the actor is externally
  * synchronized against mutation. The completion pointer and its data are
@@ -1457,6 +1479,8 @@ typedef struct {
     uint32_t internal_count;
     TA_COUNTED_BY(invoke_count) TA_OPTIONAL const ta_active_invoke *invokes;
     uint32_t invoke_count;
+    /* Pending delayed sends, ordered by due time, then send order. */
+    TA_COUNTED_BY(delayed_send_count) TA_OPTIONAL const ta_delayed_send_info *delayed_sends;
     uint32_t delayed_send_count;
     bool has_completion;
     TA_IN TA_OPTIONAL const ta_actor_completion *completion;
@@ -1525,30 +1549,6 @@ typedef struct {
     TA_OUT TA_ALWAYS uint32_t *count;
 } ta_actor_history_params;
 TA_API ta_result ta_actor_history(ta_system *system, TA_IN const ta_actor_history_params *params);
-
-/*
- * One pending delayed send owned by an actor. `target` and `data` are
- * borrowed; retain them with ta_value_retain() to keep them past the call's
- * synchronization window.
- */
-typedef struct {
-    ta_send_id send_id;
-    ta_time due;
-    ta_event_name_id event;
-    ta_atom io_type;
-    ta_value target;
-    ta_value data;
-} ta_delayed_send_info;
-
-/* Pending delayed sends of one actor, ordered by due time, then send order. */
-typedef struct {
-    ta_actor_id actor;
-    TA_BUFFER(capacity, count) TA_OPTIONAL TA_LIFETIME(system) ta_delayed_send_info *sends;
-    uint32_t capacity;
-    TA_OUT TA_ALWAYS uint32_t *count;
-} ta_actor_delayed_sends_params;
-TA_API ta_result ta_actor_delayed_sends(ta_system *system,
-                                        TA_IN const ta_actor_delayed_sends_params *params);
 
 /*
  * Static facts about one state of a registered definition. `id` is the

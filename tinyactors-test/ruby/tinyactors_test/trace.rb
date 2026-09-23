@@ -105,7 +105,7 @@ module TinyactorsTest
         active: Array(states[:states]).map { |state| @context.state_name(definition, state) },
         data: data(id),
         completion: completion(id, inspection),
-        delayed_sends: delayed_sends(id, inspection.fetch(:delayed_send_count)),
+        delayed_sends: delayed_sends(inspection),
         invokes: Array(inspection[:invokes]).map { |invoke| invoke.except(:service_handle) }
       }
     end
@@ -122,12 +122,9 @@ module TinyactorsTest
       { data: out[:has_data] ? out[:data] : nil }
     end
 
-    def delayed_sends(id, count)
-      return [] if count.zero?
-
-      sends = @context.core('ta_actor_delayed_sends',
-                            ta.actor.delayed_sends(system: system, actor: id, capacity: count)).fetch(:sends)
-      sends.map do |send|
+    # Inspection carries the actor's pending delayed sends, by due time (ADR 0054).
+    def delayed_sends(inspection)
+      Array(inspection[:delayed_sends]).map do |send|
         { due: send[:due], event: @context.event_text(send[:event]), send_id: send[:send_id],
           target: send[:target], data: send[:data] }
       end

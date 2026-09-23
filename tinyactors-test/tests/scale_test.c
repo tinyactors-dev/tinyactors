@@ -19,6 +19,10 @@
  * on a slower machine and pass on a faster one while a real regression hid
  * behind the hardware.
  *
+ * The same holds for delayed sends (ADR 0054): with every actor of the
+ * population holding one, inspecting an actor — which lists its sends — and
+ * arming then cancelling one more actor's send cost the same at both sizes.
+ *
  * Catches: a spawn, upgrade, or destroy that walks the actor table (the
  * free-list-less ta_actor_claim_slot() this file was written for: 18 us to
  * spawn an actor against 100k residents, 36 us against 200k); a per-actor
@@ -52,6 +56,8 @@
 #define SMALL_POPULATION 50000u
 #define LARGE_POPULATION 200000u
 #define CHURN_ACTORS 20000u
+#define INSPECTIONS 200000u
+#define INSPECTION_SAMPLE 256u
 #define REPETITIONS 3u
 
 /*
@@ -271,12 +277,38 @@ static const ta_scxml_state_spec STATES_V2[] = {
     {0},
 };
 
-static ta_definition_id register_revision(ta_system *system,
-                                          ta_allocator allocator,
-                                          const char *revision,
-                                          const ta_scxml_state_spec *states) {
+/* One delayed send far in the future, armed on entry: every timed actor holds one. */
+static const ta_scxml_state_spec STATES_TIMED[] = {
+    {
+        .kind = TA_SCXML_STATE_ATOMIC,
+        .id = STR("waiting"),
+        .onentry =
+            (const ta_scxml_handler_spec[]){
+                {.actions =
+                     (const ta_scxml_action_spec[]){
+                         {.kind = TA_SCXML_ACTION_SEND,
+                          .as.send = {.id = {.kind = TA_SCXML_ID_LITERAL, .as.literal = STR("timeout")},
+                                      .event = {.kind = TA_SCXML_EVENT_NAME, .as.name = STR("timeout")},
+                                      .delay = {.kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("60s")}}},
+                         {0},
+                     }},
+                {0},
+            },
+    },
+    {0},
+};
+
+typedef struct {
+    const char *family;
+    const char *revision;
+    const ta_scxml_state_spec *states;
+} revision_spec;
+
+static ta_definition_id register_revision(ta_system *system, ta_allocator allocator, const revision_spec *spec) {
+    const char *revision = spec->revision;
+    const ta_scxml_state_spec *states = spec->states;
     ta_definition_identity identity = {
-        .family = {STR("scale")},
+        .family = {.name = {.ptr = spec->family, .len = (uint32_t)strlen(spec->family)}},
         .revision = {.ptr = (const uint8_t *)revision, .len = (uint32_t)strlen(revision)},
     };
     ta_definition *definition = NULL;
@@ -302,6 +334,8 @@ typedef struct {
     double spawn_us;   /* per actor: spawn and bootstrap a named actor */
     double upgrade_us; /* per actor: prepare, run, activate, destroy incumbent */
     double churn_us;   /* per actor: spawn, bootstrap and destroy an ephemeral */
+    double inspect_us; /* per inspection of one timed actor, its sends listed */
+    double timer_us;   /* per actor: spawn a timed ephemeral (arms a send), destroy it (cancels it) */
     double actor_bytes;
     uint64_t peak_bytes;
 } round_cost;
@@ -330,8 +364,9 @@ static round_cost measure(size_t population) {
     require(ta_system_set_actor_directory(system, (ta_actor_directory){.self = &dir, .v = &DIRECTORY_VTABLE}) == TA_OK,
             "directory installation");
 
-    ta_definition_id v1 = register_revision(system, allocator, "v1", STATES_V1);
-    ta_definition_id v2 = register_revision(system, allocator, "v2", STATES_V2);
+    ta_definition_id v1 = register_revision(system, allocator, &(revision_spec){"scale", "v1", STATES_V1});
+    ta_definition_id v2 = register_revision(system, allocator, &(revision_spec){"scale", "v2", STATES_V2});
+    ta_definition_id timed = register_revision(system, allocator, &(revision_spec){"timed", "v1", STATES_TIMED});
 
     ta_actor_id *actors = calloc(population, sizeof(ta_actor_id));
     char *names = calloc(population, 24);
@@ -414,6 +449,58 @@ static round_cost measure(size_t population) {
     double churned = cpu_seconds();
 
     /*
+     * Delayed sends against the live population (ADR 0054): as many timed
+     * actors as there are residents, each holding one send in the system's
+     * deadline index. Neither inspecting one of them nor arming and
+     * cancelling one more send may walk that index.
+     */
+    ta_actor_id *timed_actors = calloc(population, sizeof(ta_actor_id));
+    require(timed_actors != NULL, "fixture allocation");
+    for (size_t index = 0; index < population; index += 1) {
+        require(ta_actor_spawn(system, &(ta_actor_spawn_params){.definition = timed, .out = &timed_actors[index]}) ==
+                    TA_OK,
+                "spawning a timed actor");
+        ta_run_status status = TA_RUN_ERROR;
+        require(ta_actor_resume(system, &(ta_actor_resume_params){
+                                            .actor = timed_actors[index],
+                                            .budget = 100,
+                                            .status = &status,
+                                        }) == TA_OK &&
+                    status == TA_RUN_STABLE,
+                "bootstrapping a timed actor");
+    }
+    /*
+     * A fixed sample spread over the population, inspected round-robin: the
+     * sample stays in cache at both sizes, so the ratio measures work done,
+     * not cache misses on a four times larger actor table.
+     */
+    size_t stride = population / INSPECTION_SAMPLE;
+    double inspect_started = cpu_seconds();
+    for (size_t index = 0; index < INSPECTIONS; index += 1) {
+        ta_actor_inspection timed_view;
+        require(ta_actor_inspect(system, timed_actors[(index % INSPECTION_SAMPLE) * stride], &timed_view) == TA_OK &&
+                    timed_view.delayed_send_count == 1 && timed_view.delayed_sends[0].due == 60000,
+                "inspecting a timed actor lists its one send");
+    }
+    double inspected = cpu_seconds();
+    for (size_t index = 0; index < CHURN_ACTORS; index += 1) {
+        ta_actor_id ephemeral = 0;
+        require(ta_actor_spawn(system, &(ta_actor_spawn_params){.definition = timed, .out = &ephemeral}) == TA_OK,
+                "spawning a timed ephemeral actor");
+        ta_run_status status = TA_RUN_ERROR;
+        require(ta_actor_resume(system, &(ta_actor_resume_params){
+                                            .actor = ephemeral,
+                                            .budget = 100,
+                                            .status = &status,
+                                        }) == TA_OK &&
+                    status == TA_RUN_STABLE,
+                "bootstrapping a timed ephemeral actor");
+        require(ta_actor_destroy(system, ephemeral) == TA_OK, "destroying a timed ephemeral actor");
+    }
+    double timers_churned = cpu_seconds();
+    free(timed_actors);
+
+    /*
      * The upgrade really happened: the address names the replacement, the
      * replacement runs v2, and v1 is gone with its last incumbent (ADR 0043).
      * A benchmark that measured a refused upgrade would otherwise look fast.
@@ -445,6 +532,8 @@ static round_cost measure(size_t population) {
         .spawn_us = per_actor_us(spawned - started, population),
         .upgrade_us = per_actor_us(upgraded - spawned, population),
         .churn_us = per_actor_us(churned - upgraded, CHURN_ACTORS),
+        .inspect_us = per_actor_us(inspected - inspect_started, INSPECTIONS),
+        .timer_us = per_actor_us(timers_churned - inspected, CHURN_ACTORS),
         .actor_bytes = actor_bytes,
         .peak_bytes = peak_bytes,
     };
@@ -464,20 +553,28 @@ static round_cost measure_best(size_t population, unsigned repetitions) {
         if (next.churn_us < best.churn_us) {
             best.churn_us = next.churn_us;
         }
+        if (next.inspect_us < best.inspect_us) {
+            best.inspect_us = next.inspect_us;
+        }
+        if (next.timer_us < best.timer_us) {
+            best.timer_us = next.timer_us;
+        }
     }
     return best;
 }
 
 static void report(const char *label, size_t population, round_cost cost) {
-    printf("%-10s %9zu   %8.2f %8.2f %8.2f   %7.1f %10.1f\n", label, population, cost.spawn_us, cost.upgrade_us,
-           cost.churn_us, cost.actor_bytes, (double)cost.peak_bytes / (1024.0 * 1024.0));
+    printf("%-10s %9zu   %8.2f %8.2f %8.2f %8.3f %8.2f   %7.1f %10.1f\n", label, population, cost.spawn_us,
+           cost.upgrade_us, cost.churn_us, cost.inspect_us, cost.timer_us, cost.actor_bytes,
+           (double)cost.peak_bytes / (1024.0 * 1024.0));
     /* A failure below writes to stderr; keep the table ahead of it. */
     fflush(stdout);
 }
 
 static void report_header(void) {
-    printf("%-10s %9s   %8s %8s %8s   %7s %10s\n", "", "actors", "spawn", "upgrade", "churn", "bytes", "peak MB");
-    printf("%-10s %9s   %8s %8s %8s   %7s %10s\n", "", "", "us", "us", "us", "/actor", "");
+    printf("%-10s %9s   %8s %8s %8s %8s %8s   %7s %10s\n", "", "actors", "spawn", "upgrade", "churn", "inspect",
+           "timer", "bytes", "peak MB");
+    printf("%-10s %9s   %8s %8s %8s %8s %8s   %7s %10s\n", "", "", "us", "us", "us", "us", "us", "/actor", "");
 }
 
 /* Names the two costs whose ratio failed, so the report says which walk. */
@@ -515,6 +612,8 @@ int main(int argc, char **argv) {
     require_flat("spawning an actor", small.spawn_us, large.spawn_us);
     require_flat("upgrading an actor", small.upgrade_us, large.upgrade_us);
     require_flat("an ephemeral actor", small.churn_us, large.churn_us);
+    require_flat("inspecting a timed actor", small.inspect_us, large.inspect_us);
+    require_flat("arming and cancelling a delayed send", small.timer_us, large.timer_us);
 
     /*
      * Per-actor memory is a population claim too: it may not grow with the

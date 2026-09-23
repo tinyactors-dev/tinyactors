@@ -103,7 +103,7 @@ static ta_result ta_image_copy_identity(ta_arena *arena, ta_definition_identity 
  */
 
 /* What the arena has to hold, so one block usually serves the whole image. */
-static size_t ta_image_measure(const ta_actor *actor, const ta_system *system) {
+static size_t ta_image_measure(const ta_actor *actor) {
     const ta_actor_sparse_state *sparse = actor->sparse;
     size_t total = actor->session_bytes + 64u;
     total += (size_t)actor->definition->identity.family.name.len + 1u;
@@ -117,13 +117,12 @@ static size_t ta_image_measure(const ta_actor *actor, const ta_system *system) {
         total += (size_t)sparse->invoke_count * sizeof(ta_active_invoke);
         total += (size_t)sparse->pending_invokes.count * sizeof(ta_state_id);
     }
-    total += (size_t)ta_timer_copy_unsubmitted(&system->timers, actor->record.id, NULL) *
-             sizeof(ta_delayed_send);
+    total += (size_t)ta_timer_copy_unsubmitted(ta_actor_timers(actor), NULL) * sizeof(ta_delayed_send);
     return total;
 }
 
 /* Every arena allocation of a capture; nothing here retains anything. */
-static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor, ta_system *system) {
+static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
     ta_arena *arena = &image->arena;
     const ta_actor_sparse_state *sparse = actor->sparse;
 
@@ -182,14 +181,14 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor, t
         image->pending_invoke_count = count;
     }
 
-    uint32_t sends = ta_timer_copy_unsubmitted(&system->timers, actor->record.id, NULL);
+    uint32_t sends = ta_timer_copy_unsubmitted(ta_actor_timers(actor), NULL);
     if (sends != 0) {
         image->delayed_sends = ta_arena_alloc(arena, (size_t)sends * sizeof(ta_delayed_send),
                                               _Alignof(ta_delayed_send));
         if (image->delayed_sends == NULL) {
             return TA_ERR_NOMEM;
         }
-        (void)ta_timer_copy_unsubmitted(&system->timers, actor->record.id, image->delayed_sends);
+        (void)ta_timer_copy_unsubmitted(ta_actor_timers(actor), image->delayed_sends);
         image->delayed_send_count = sends;
         for (uint32_t index = 0; index < sends; index += 1) {
             ta_delayed_send *send = &image->delayed_sends[index];
@@ -263,9 +262,9 @@ ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_params *par
         .completion_pending = sparse != NULL && sparse->completion_pending,
         .completion = sparse != NULL ? sparse->completion : (ta_actor_completion){0},
     };
-    ta_result result = ta_arena_init(&image->arena, system->allocator, ta_image_measure(actor, system));
+    ta_result result = ta_arena_init(&image->arena, system->allocator, ta_image_measure(actor));
     if (result == TA_OK) {
-        result = ta_image_fill(image, actor, system);
+        result = ta_image_fill(image, actor);
     }
     if (result != TA_OK) {
         /* Nothing was retained yet, so the arena is the whole of it. */
@@ -390,12 +389,11 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
         /* A fresh timer ID; the SCXML send ID that <cancel> names is kept. */
         send.id = 0;
         send.owner = actor->record.id;
-        send.heap_index = 0;
         ta_image_rebind_self(&send.destination, image->source_actor, actor->record.id);
         ta_image_rebind_self(&send.origin, image->source_actor, actor->record.id);
         ta_value_retain(&send.target);
         ta_value_retain(&send.data);
-        ta_result result = ta_timer_schedule(&system->timers, &send);
+        ta_result result = ta_actor_schedule_send(system, actor, &send);
         if (result != TA_OK) {
             ta_value_release(&send.target);
             ta_value_release(&send.data);
@@ -503,9 +501,8 @@ ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_par
     if (result != TA_OK) {
         /* Nothing of this actor is published, so the image is untouched and
          * the caller may try again. */
-        ta_timer_cancel_owner(&system->timers, id);
         ta_actor_release_slot(system, id);
-        ta_actor_free(system, actor);
+        ta_actor_free(system, actor); /* frees its delayed sends too */
         return result;
     }
     *params->out = id;
@@ -552,8 +549,13 @@ ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params *param
     if (image->source_actor != actor->record.id || image->source_epoch != actor->session_epoch) {
         return TA_ERR_STALE;
     }
+    /* Room for the submitted sends to outlive the session, before anything changes. */
+    ta_result result = ta_timer_reserve_orphans(&system->timers, ta_actor_timers(actor));
+    if (result != TA_OK) {
+        return result;
+    }
 
-    ta_result result = ta_actor_directory_swap(
+    result = ta_actor_directory_swap(
         system,
         &(ta_actor_directory_replace_params){
             .address = &actor->record.self.as.named,
@@ -572,7 +574,7 @@ ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params *param
      * handed to the router is an envelope of its own and stays, exactly as
      * it does when a session ends.
      */
-    ta_timer_cancel_unsubmitted(&system->timers, actor->record.id);
+    ta_timer_orphan(&system->timers, ta_actor_timers(actor));
     ta_actor_release_slot(system, actor->record.id);
     ta_actor_free(system, actor);
     return TA_OK;
@@ -617,9 +619,8 @@ ta_result ta_actor_load(ta_system *system, const ta_actor_load_params *params) {
          * the host may load it again.
          */
         ta_actor *actor = ta_actor_lookup(system, id);
-        ta_timer_cancel_owner(&system->timers, id);
         ta_actor_release_slot(system, id);
-        ta_actor_free(system, actor);
+        ta_actor_free(system, actor); /* frees its delayed sends too */
         return result;
     }
     *params->out = id;
