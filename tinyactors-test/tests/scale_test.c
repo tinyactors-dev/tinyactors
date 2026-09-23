@@ -37,11 +37,21 @@
  *
  *     tinyactors-test/build/scale_test --report 4000000
  */
+/* getrusage() and friends, which glibc hides under -std=c11. */
+#if defined(__linux__)
+#define _DEFAULT_SOURCE
+#endif
+
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+#include <sys/resource.h>
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#endif
 
 #include "allocator.h"
 
@@ -51,11 +61,18 @@
  * The populations measured, smallest first. Each neighbouring pair is a
  * ratio check, so each step grows the population by roughly four and a
  * table walk shows up as a ratio near the step against a bound of two.
- * Four million actors is the target of docs/internal/memory-model.md, and
- * it is measured by default: about 40 seconds and a peak of about 9.5 GB
- * for the whole test. On a machine without that much memory to spare, set
- * TAT_SCALE_MAX_POPULATION to leave out every population above it, for
- * example 200000 for the quick pair. At least two populations always run.
+ * Four million actors is the target of docs/internal/memory-model.md.
+ *
+ * The test sizes itself to the machine. The first two populations always
+ * run. Before each larger one it predicts the peak memory that population
+ * needs, from the process's own peak so far, and runs it only when that
+ * fits in three quarters of the memory available at that moment; otherwise
+ * it stops there and says why. Up to four million actors the whole test
+ * takes about 30 seconds and a peak of about 9.5 GB.
+ *
+ * TAT_SCALE_MAX_POPULATION overrides the sizing: every population up to it
+ * runs, whatever memory the machine reports, and none above it. At least
+ * two populations always run.
  */
 static const uint32_t POPULATIONS[] = {50000u, 200000u, 1000000u, 4000000u};
 #define POPULATION_COUNT (sizeof(POPULATIONS) / sizeof(POPULATIONS[0]))
@@ -63,7 +80,7 @@ static const uint32_t POPULATIONS[] = {50000u, 200000u, 1000000u, 4000000u};
 #define INSPECTIONS 200000u
 #define INSPECTION_SAMPLE 256u
 /* Pages of the actor walk (ADR 0062): their size, and how many are taken. */
-#define PAGE_SIZE 64u
+#define WALK_PAGE_SIZE 64u
 #define PAGES 3000u
 #define REPETITIONS 3u
 
@@ -578,14 +595,14 @@ static round_cost measure(size_t population) {
         require(ta_system_visit_actors(system, &(ta_actor_visit_params){
                                                    .inspector = {.self = &visited, .visit = count_visit},
                                                    .from = cursor,
-                                                   .limit = PAGE_SIZE,
+                                                   .limit = WALK_PAGE_SIZE,
                                                    .next = &next,
                                                }) == TA_OK,
                 "a page of the actor walk");
         cursor = next == TA_ACTOR_VISIT_END ? 0u : next;
     }
     double paged = cpu_seconds();
-    require(visited >= (size_t)PAGES * PAGE_SIZE / 2u, "the pages visited actors");
+    require(visited >= (size_t)PAGES * WALK_PAGE_SIZE / 2u, "the pages visited actors");
     free(timed_actors);
 
     /*
@@ -707,19 +724,100 @@ static void require_flat_pair(uint32_t small_count, const round_cost *small, uin
     require(large->actor_bytes <= small->actor_bytes + 1.0, "per-actor memory grows with the population");
 }
 
-/* How many of POPULATIONS to run: all, or those up to the cap, at least two. */
-static size_t population_count(void) {
-    const char *cap_text = getenv("TAT_SCALE_MAX_POPULATION");
-    if (cap_text == NULL || cap_text[0] == 0) {
-        return POPULATION_COUNT;
+/*
+ * The process's peak resident memory so far, in bytes: a high-water mark,
+ * so after a population has run it covers that population and the test's
+ * own arrays with it, not just what core allocated.
+ */
+static uint64_t peak_resident_bytes(void) {
+    struct rusage usage;
+    if (getrusage(RUSAGE_SELF, &usage) != 0) {
+        return 0;
     }
-    unsigned long long cap = strtoull(cap_text, NULL, 10);
-    size_t count = 0;
-    while (count < POPULATION_COUNT && POPULATIONS[count] <= cap) {
-        count += 1;
-    }
-    return count < 2 ? 2 : count;
+#if defined(__APPLE__)
+    return (uint64_t)usage.ru_maxrss; /* bytes on macOS */
+#else
+    return (uint64_t)usage.ru_maxrss * 1024u; /* kilobytes elsewhere */
+#endif
 }
+
+/*
+ * Memory the system could give this process now, in bytes: pages that are
+ * free or can be reclaimed without swapping. False when the platform does
+ * not say.
+ */
+static bool available_bytes(uint64_t *out) {
+#if defined(__APPLE__)
+    vm_statistics64_data_t vm;
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    if (host_statistics64(mach_host_self(), HOST_VM_INFO64, (host_info64_t)&vm, &count) != KERN_SUCCESS) {
+        return false;
+    }
+    uint64_t pages = (uint64_t)vm.free_count + vm.inactive_count + vm.speculative_count + vm.purgeable_count;
+    *out = pages * (uint64_t)vm_page_size;
+    return true;
+#elif defined(__linux__)
+    FILE *meminfo = fopen("/proc/meminfo", "r");
+    if (meminfo == NULL) {
+        return false;
+    }
+    char line[256];
+    bool found = false;
+    while (!found && fgets(line, sizeof(line), meminfo) != NULL) {
+        unsigned long long kilobytes = 0;
+        if (sscanf(line, "MemAvailable: %llu kB", &kilobytes) == 1) {
+            *out = (uint64_t)kilobytes * 1024u;
+            found = true;
+        }
+    }
+    fclose(meminfo);
+    return found;
+#else
+    (void)out;
+    return false;
+#endif
+}
+
+static double gigabytes(uint64_t bytes) {
+    return (double)bytes / (1024.0 * 1024.0 * 1024.0);
+}
+
+/*
+ * Whether the population at `index` should run. The first two always do;
+ * TAT_SCALE_MAX_POPULATION, when set, decides the rest; otherwise the
+ * population runs when its predicted peak fits in three quarters of what
+ * is available. The prediction scales the peak so far by population, which
+ * overstates it a little, since the peak includes the process's baseline.
+ */
+static bool should_run(size_t index) {
+    if (index < 2) {
+        return true;
+    }
+    uint32_t population = POPULATIONS[index];
+    const char *cap_text = getenv("TAT_SCALE_MAX_POPULATION");
+    if (cap_text != NULL && cap_text[0] != 0) {
+        return population <= strtoull(cap_text, NULL, 10);
+    }
+    uint64_t available = 0;
+    if (!available_bytes(&available)) {
+        printf("stopping at %u actors: this platform does not report available memory; set "
+               "TAT_SCALE_MAX_POPULATION to go further\n",
+               POPULATIONS[index - 1]);
+        return false;
+    }
+    double per_actor = (double)peak_resident_bytes() / (double)POPULATIONS[index - 1];
+    uint64_t needed = (uint64_t)(per_actor * (double)population);
+    if (needed > available / 4u * 3u) {
+        printf("stopping at %u actors: %u would need about %.1f GB, and %.1f GB is available (three quarters of it "
+               "may be used)\n",
+               POPULATIONS[index - 1], population, gigabytes(needed), gigabytes(available));
+        return false;
+    }
+    printf("measuring %u actors: needs about %.1f GB, %.1f GB available\n", population, gigabytes(needed),
+           gigabytes(available));
+    return true;
+}
+
 
 int main(int argc, char **argv) {
     if (argc == 3 && strcmp(argv[1], "--report") == 0) {
@@ -734,10 +832,11 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    size_t count = population_count();
+    size_t count = 0;
     round_cost costs[POPULATION_COUNT];
-    for (size_t index = 0; index < count; index += 1) {
-        costs[index] = measure_best(POPULATIONS[index], REPETITIONS);
+    while (count < POPULATION_COUNT && should_run(count)) {
+        costs[count] = measure_best(POPULATIONS[count], REPETITIONS);
+        count += 1;
     }
     report_header();
     for (size_t index = 0; index < count; index += 1) {

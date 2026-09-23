@@ -113,9 +113,25 @@ whole spawn/bootstrap/destroy life.
 at 50,000, 200,000, 1,000,000 and 4,000,000 actors, and fails when the cost
 of one actor grows from one population to the next, which is what an
 actor-table walk inside a spawn looks like. Measuring up to the target takes
-about 30 seconds and a peak of about 9.5 GB. On a machine without that much
-memory to spare, `TAT_SCALE_MAX_POPULATION=200000` limits it to the first
-two populations, which takes about a second. It asserts no absolute time — that would only measure the
+about 30 seconds and a peak of about 9.5 GB.
+
+The test sizes itself to the machine it runs on. The first two populations
+always run. Before each larger one, it predicts the memory that population
+needs from the process's own peak so far, and runs it only when that fits
+in three quarters of the memory available at that moment. Available memory
+is read from the Mach VM statistics on macOS and from `MemAvailable` on
+Linux. It prints its decision either way:
+
+```text
+measuring 4000000 actors: needs about 9.1 GB, 21.6 GB available
+stopping at 1000000 actors: 4000000 would need about 9.1 GB, and 4.0 GB is available (three quarters of it may be used)
+```
+
+On a platform that reports neither, it stops after the first two
+populations. `TAT_SCALE_MAX_POPULATION` overrides the sizing: every
+population up to it runs, whatever memory the machine reports, and none
+above it. `TAT_SCALE_MAX_POPULATION=200000` is the quick check, about a
+second. It asserts no absolute time — that would only measure the
 machine — and it measures CPU time, so a loaded machine slows it down
 without changing the verdict. Per-actor memory is held to a budget in the
 same way.
