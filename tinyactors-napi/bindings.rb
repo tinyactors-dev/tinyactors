@@ -35,7 +35,10 @@ module TinyactorsNapiBindings
     'ta_actor_prepare_replacement' => { hook: 'created', actor: 'params.out',
                                         reason: 'puts the prepared actor on the runnable queue (step 14)' },
     'ta_actor_destroy' => { hook: 'removed', actor: 'actor', reason: "drops the actor's mailbox (step 5)" },
-    'ta_actor_unload' => { hook: 'removed', actor: 'params.actor', reason: "drops the actor's mailbox (step 14)" }
+    'ta_actor_unload' => { hook: 'unloaded', actor: 'params.actor',
+                           reason: "dead-letters the actor's mailbox as unloaded (step 14)" },
+    'ta_actor_activate_replacement' => { hook: 'activated', actor: 'params',
+                                         reason: "moves the incumbent's waiting mail to the replacement (step 14)" }
   }.freeze
 
   PLUMBING_FUNCTIONS = {

@@ -84,7 +84,7 @@ typedef enum {
     TNA_DEAD_DONE,          /* the target reached a top-level final state */
     TNA_DEAD_DESTROYED,     /* the target was destroyed or unloaded with mail waiting */
     TNA_DEAD_REFUSED,       /* core refused the message itself (for example a malformed event) */
-    TNA_DEAD_UNLOADED       /* a named target that is unloaded; loading it is ROADMAP step 14 */
+    TNA_DEAD_UNLOADED       /* the target is unloaded (a named address, or an actor unloaded with mail waiting) */
 } tna_dead_reason;
 
 /*
@@ -242,6 +242,19 @@ tna_sched_entry *tna_sched_lookup(const tna_sched *sched, ta_actor_id actor);
 ta_result tna_sched_add(tna_sched *sched, ta_actor_id actor);
 /* The actor is gone (destroyed, unloaded): dead-letter its mailbox and clear its entry. */
 void tna_sched_remove(tna_sched *sched, ta_actor_id actor, tna_dead_reason reason);
+/*
+ * A named actor was replaced in place (ROADMAP step 14): the mail still
+ * waiting for `from` moves, in order, to the front of `to`'s mailbox, with
+ * its send() waiters. That mail was accepted for the address `to` now
+ * holds, and it is older than anything queued for `to` directly. An idle
+ * `to` becomes ready. TA_ERR_NOT_FOUND when the table knows either actor
+ * not; TA_ERR_NOMEM (nothing moved) when `to` cannot join the ready queue.
+ */
+typedef struct {
+    ta_actor_id from;
+    ta_actor_id to;
+} tna_sched_transfer_params;
+ta_result tna_sched_transfer(tna_sched *sched, const tna_sched_transfer_params *params);
 
 /*
  * Accepts a message for `message->target` (ADR 0005 point 3). On TA_OK the

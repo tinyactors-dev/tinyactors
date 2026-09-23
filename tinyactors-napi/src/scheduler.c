@@ -370,6 +370,43 @@ void tna_sched_remove(tna_sched *sched, ta_actor_id actor, tna_dead_reason reaso
     sched->known -= 1u;
 }
 
+ta_result tna_sched_transfer(tna_sched *sched, const tna_sched_transfer_params *params) {
+    tna_sched_entry *from = tna_sched_lookup(sched, params->from);
+    tna_sched_entry *to = tna_sched_lookup(sched, params->to);
+    if (from == NULL || to == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    if (from == to || from->first == 0) {
+        return TA_OK;
+    }
+    if (to->state == TNA_SCHED_IDLE && tna_ring_push(&sched->ready, &params->to) != TA_OK) {
+        return TA_ERR_NOMEM;
+    }
+    for (uint32_t index = from->first; index != 0;) {
+        tna_envelope *envelope = tna_sched_envelope(sched, index);
+        envelope->target = params->to;
+        tna_waiter *waiter = tna_sched_waiter(sched, envelope->waiter);
+        if (waiter != NULL && waiter->state == TNA_WAITER_QUEUED) {
+            waiter->actor = params->to;
+        }
+        index = envelope->next;
+    }
+    tna_sched_envelope(sched, from->last)->next = to->first;
+    if (to->last == 0) {
+        to->last = from->last;
+    }
+    to->first = from->first;
+    from->first = 0;
+    from->last = 0;
+    if (from->state == TNA_SCHED_READY) {
+        from->state = TNA_SCHED_IDLE; /* its ready-queue entry is skipped */
+    }
+    if (to->state == TNA_SCHED_IDLE) {
+        to->state = TNA_SCHED_READY;
+    }
+    return TA_OK;
+}
+
 ta_result tna_sched_wake(tna_sched *sched, ta_actor_id actor) {
     tna_sched_entry *entry = tna_sched_lookup(sched, actor);
     if (entry == NULL) {

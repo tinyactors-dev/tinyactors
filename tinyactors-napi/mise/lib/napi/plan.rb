@@ -506,7 +506,9 @@ module NapiGen
 
     def hook_plan(plan, entry)
       actor = entry.fetch(:actor)
-      target = if actor.start_with?("#{@policy.flatten_parameter}.")
+      target = if actor == @policy.flatten_parameter
+                 "&#{actor}" # the hook takes the whole params struct
+               elsif actor.start_with?("#{@policy.flatten_parameter}.")
                  member = actor.split('.', 2).last
                  output = plan.outputs.find { |each| each.key == member }
                  output ? output.storage : "#{@policy.flatten_parameter}.#{member}"

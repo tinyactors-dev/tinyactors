@@ -394,6 +394,55 @@ static void steady_state(void) {
     finish_system(system);
 }
 
+/*
+ * Replacement in place (ROADMAP step 14): the incumbent's waiting mail moves,
+ * in order, to the front of the replacement's mailbox, ahead of mail posted
+ * to the replacement directly.
+ */
+static void transfer_on_replacement(void) {
+    tna_system *system = make_system();
+    ta_definition_id chart = define_steps(system);
+    ta_actor_id incumbent = spawn(system, chart);
+    ta_actor_id replacement = spawn(system, chart);
+    settle(system);
+    CHECK(post(system, incumbent, name(system, "x")) == TA_OK);
+    CHECK(post(system, incumbent, name(system, "y")) == TA_OK);
+    CHECK(post(system, replacement, name(system, "z")) == TA_OK);
+    CHECK(state(system, incumbent) == TNA_SCHED_READY);
+    CHECK(tna_sched_transfer(&system->sched, &(tna_sched_transfer_params){ .from = incumbent, .to = replacement }) ==
+          TA_OK);
+    CHECK(tna_sched_mailbox_count(&system->sched, incumbent) == 0u);
+    CHECK(tna_sched_mailbox_count(&system->sched, replacement) == 3u);
+    CHECK(state(system, incumbent) == TNA_SCHED_IDLE);
+    CHECK(tna_sched_transfer(&system->sched, &(tna_sched_transfer_params){ .from = incumbent, .to = replacement }) ==
+          TA_OK); /* nothing left to move */
+    CHECK(settle(system) == 0u);
+    CHECK(strcmp(state_of(system, incumbent), "a") == 0);
+    CHECK(strcmp(state_of(system, replacement), "final") == 0); /* x, y, then z */
+    CHECK(tna_sched_transfer(&system->sched, &(tna_sched_transfer_params){ .from = 99u, .to = replacement }) ==
+          TA_ERR_NOT_FOUND);
+    finish_system(system);
+}
+
+/* Unloading an actor with mail waiting dead-letters that mail as `unloaded`. */
+static void unload_with_mail(void) {
+    tna_system *system = make_system();
+    ta_actor_id actor = spawn(system, define_steps(system));
+    settle(system);
+    CHECK(post(system, actor, name(system, "x")) == TA_OK);
+    CHECK(tna_hook_actor_unloaded(system, actor) == TA_OK); /* as after ta_actor_unload */
+    tna_system_turn(system);
+    uint32_t unloaded = 0;
+    for (const tna_turn_record *record = system->sched.records; record != NULL; record = record->next) {
+        unloaded += record->kind == TNA_RECORD_DEAD_LETTER && record->reason == TNA_DEAD_UNLOADED ? 1u : 0u;
+    }
+    tna_system_end_turn(system);
+    CHECK(unloaded == 1u);
+    CHECK(tna_sched_lookup(&system->sched, actor) == NULL);
+    destroy(system, actor); /* core still has it: the hook alone was driven */
+    finish_system(system);
+}
+
 /* Close releases queued mail and leaks nothing. */
 static void close_with_mail(void) {
     tna_system *system = make_system();
@@ -420,6 +469,8 @@ int main(void) {
     dead_letter_budget();
     steady_state();
     close_with_mail();
+    transfer_on_replacement();
+    unload_with_mail();
     puts("mailbox_test passed");
     return 0;
 }

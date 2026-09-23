@@ -17,3 +17,20 @@ ta_result tna_hook_actor_removed(tna_system *system, ta_actor_id actor) {
     tna_system_want_turn(system); /* its mail is reported as dead letters */
     return TA_OK;
 }
+
+ta_result tna_hook_actor_unloaded(tna_system *system, ta_actor_id actor) {
+    tna_sched_remove(&system->sched, actor, TNA_DEAD_UNLOADED);
+    tna_system_want_turn(system);
+    return TA_OK;
+}
+
+ta_result tna_hook_actor_activated(tna_system *system, const ta_actor_activate_replacement_params *params) {
+    ta_result result = tna_sched_transfer(&system->sched, &(tna_sched_transfer_params){
+                                                              .from = params->incumbent,
+                                                              .to = params->replacement,
+                                                          });
+    if (result == TA_OK) {
+        tna_system_want_turn(system);
+    }
+    return result;
+}
