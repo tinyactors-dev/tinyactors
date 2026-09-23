@@ -1,6 +1,6 @@
 # ADR 0045: `<log>` records go to a host sink
 
-**Status:** Accepted  
+**Status:** Accepted; the trace sink of ADR 0067 follows the same adapter pattern
 **Date:** 2026-09-20
 
 ## Context

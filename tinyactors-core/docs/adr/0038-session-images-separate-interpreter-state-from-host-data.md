@@ -1,6 +1,6 @@
 # ADR 0038: Session images separate interpreter state from host data
 
-- Status: Accepted
+- Status: Accepted; image contents extended by ADR 0067 (step counters and trace contexts)
 - Date: 2026-09-16
 
 ## Context

@@ -71,3 +71,23 @@ What to do instead, by kind of walk:
 
 `mise run check-recursion` builds core's call graph and fails on any cycle.
 It is part of `mise run test`.
+
+## ADRs are an append-only record
+
+`docs/adr/` is the history of the design. A reader must be able to go
+through the ADRs in order and see what each decision changed and what it
+cost, so an accepted ADR is not rewritten to match what came later.
+
+- **A change of mind is a new ADR.** Do not edit the Context, Decision or
+  Consequences of an accepted ADR, even to "correct" it after a later
+  decision.
+- **The only edits to an earlier ADR are on its Status line:** marking it
+  implemented, and pointers to later ADRs ("refined by ADR 0067",
+  "superseded by ADR 0038"), with a few words on what changed.
+- **Implementation notes belong to the change that implements that ADR.**
+  They record where the code differs from the text. A later ADR does not
+  revise them.
+- **Each ADR records its own costs** with before and after figures: bytes
+  per actor, per event and per pending send, allocations, image format
+  changes. When a later change moves a figure, its own ADR states the new
+  figure and its cause; the earlier ADR's figure stays as it was.
