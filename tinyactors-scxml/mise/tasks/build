@@ -1,0 +1,62 @@
+#!/usr/bin/env ruby
+#MISE description="Build the SCXML codec and its test binary against tinyactors-core's and txml's published dist/"
+# vim:ft=ruby
+#
+# The codec depends on both published artifacts and nothing else: core's
+# dist/ (tinyactors.h, libtinyactors.a) and txml's dist/ (txml.h, libtxml.a).
+# Like tinyactors-test/mise/tasks/build this task always runs and skips by
+# content: `mise run dist` in each producer is content-gated, Cache.compile
+# keys objects on their sources and headers, and the link keys on its inputs'
+# bytes. The codec itself compiles with -ffreestanding: it uses no C library.
+# $CC selects the compiler (default `cc`), as in the rest of the workspace.
+
+require 'pathname'
+require 'shellwords'
+require 'cache'
+
+ROOT = Cache::ROOT
+WORKSPACE = ROOT.parent
+CORE = WORKSPACE.join('tinyactors-core')
+XML = WORKSPACE.join('tinyxml')
+CORE_LIBRARY = CORE.join('dist/lib/release/libtinyactors.a')
+XML_LIBRARY = XML.join('dist/lib/release/libtxml.a')
+BUILD = ROOT.join('build')
+
+def run(*command, chdir: ROOT)
+  pid = Process.spawn(*command, chdir: chdir.to_s)
+  _pid, status = Process.wait2(pid)
+  exit(status.exitstatus || 1) unless status.success?
+end
+
+run('mise', 'run', 'dist', chdir: CORE)
+run('mise', 'run', 'dist', chdir: XML)
+
+COMPILER = Shellwords.split(ENV.fetch('CC', 'cc'))
+FLAGS = %w[-std=c11 -Wall -Wextra -Werror -pedantic -O2].freeze
+INCLUDES = ['-Iinclude', "-I#{CORE.join('dist/include')}", "-I#{XML.join('dist/include')}"].freeze
+
+objects = {
+  'src/ta_scxml.c' => [[*COMPILER, *FLAGS, '-ffreestanding', *INCLUDES], BUILD.join('objects/ta_scxml.o')],
+  'tests/ta_scxml_test.c' => [[*COMPILER, *FLAGS, *INCLUDES], BUILD.join('objects/ta_scxml_test.o')]
+}
+objects.each do |source, (command, object)|
+  outcome, output = Cache.compile(command, source, object)
+  if outcome == :failed
+    puts (command + ['-c', source]).shelljoin
+    abort output
+  end
+  puts output unless output.empty?
+end
+
+binary = BUILD.join('ta_scxml_test')
+link = [*COMPILER, *objects.values.map { |_command, object| object.to_s }, CORE_LIBRARY.to_s, XML_LIBRARY.to_s,
+        '-o', binary.to_s]
+key = Cache.digest(link.join(' '), Cache.tool_id(COMPILER.first(1)),
+                   [*objects.values.map(&:last), CORE_LIBRARY, XML_LIBRARY])
+if binary.file? && Cache.stamped?('link-ta_scxml_test', key)
+  puts 'ta_scxml_test: cached (link inputs unchanged)'
+else
+  Cache.unstamp('link-ta_scxml_test')
+  run(*link)
+  Cache.stamp('link-ta_scxml_test', key)
+end

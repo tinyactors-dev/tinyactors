@@ -81,3 +81,8 @@ exit(status.exitstatus || 1) unless status.success?
 pid = Process.spawn('mise', 'run', 'test', chdir: root.join('tinyxml').to_s)
 _pid, status = Process.wait2(pid)
 exit(status.exitstatus || 1) unless status.success?
+
+# The SCXML codec (ADR 0053): decode, encode, round trip, and its limits.
+pid = Process.spawn('mise', 'run', 'test', chdir: root.join('tinyactors-scxml').to_s)
+_pid, status = Process.wait2(pid)
+exit(status.exitstatus || 1) unless status.success?
