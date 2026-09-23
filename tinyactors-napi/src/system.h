@@ -16,19 +16,40 @@
  *   many.
  * - tna_system_free() closes the system if needed and frees the record.
  *
- * Later steps add the plumbing (queues, router, directory, pump, values);
- * each one is released by tna_system_close() in the order ADR 0012 gives.
+ * Scheduling (ADRs 0005, 0007): the system owns the scheduling table and
+ * its queues (scheduler.h). Adding work asks for a turn through `wake`,
+ * which the Node-API layer sets (pump.c) and native tests may set to anything;
+ * a flag coalesces the requests until the turn runs.
+ *
+ * Later steps add more plumbing (router, directory, values); each one is
+ * released by tna_system_close() in the order ADR 0012 gives.
  */
 #include <stdbool.h>
 #include <stddef.h>
 
 #include "allocator.h"
+#include "scheduler.h"
 #include "tinyactors.h"
 
-typedef struct tna_system {
+/* Defaults for SchedulingOptions (ADR 0007). */
+#define TNA_DEFAULT_RESUMES_PER_TURN 1024u
+#define TNA_DEFAULT_RESUME_BUDGET 64u
+#define TNA_DEFAULT_ACTION_BUDGET 1024u
+
+typedef struct tna_system tna_system;
+
+/* Asks the host to run tna_system_turn() soon, never inside the caller. */
+typedef void (*tna_wake_fn)(tna_system *system, void *context);
+
+struct tna_system {
     tna_allocator allocator;
     tna_scratch scratch;
     ta_system *core;
+    tna_sched sched;
+    tna_turn_budgets budgets;
+    tna_wake_fn wake;
+    void *wake_context;
+    bool turn_pending; /* wake was called and the turn has not run yet */
     bool closed;
     /*
      * Set around every core call (ADR 0013 point 4). A generated entry point
@@ -38,7 +59,7 @@ typedef struct tna_system {
     bool inside_core;
     /* Bytes still in use when close finished; nonzero means a leak. */
     size_t leaked_bytes;
-} tna_system;
+};
 
 /* TA_ERR_NOMEM when the record or core cannot be allocated. */
 ta_result tna_system_create(tna_system **out);
@@ -46,3 +67,15 @@ void tna_system_close(tna_system *system);
 bool tna_system_closed(const tna_system *system);
 size_t tna_system_leaked_bytes(const tna_system *system);
 void tna_system_free(tna_system *system);
+
+/* Asks for a turn unless one is pending or the system is quiet or closed. */
+void tna_system_want_turn(tna_system *system);
+/*
+ * Runs one turn (ADR 0007 point 1). The turn's records stay in
+ * system->sched until tna_system_end_turn(), which resets the turn arena and
+ * asks for the next turn when work remains.
+ */
+void tna_system_turn(tna_system *system);
+void tna_system_end_turn(tna_system *system);
+/* No runnable actors (step 6: no ready actors; step 8: nothing due). */
+bool tna_system_quiet(const tna_system *system);

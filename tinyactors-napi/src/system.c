@@ -11,8 +11,15 @@ ta_result tna_system_create(tna_system **out) {
     if (system == NULL) {
         return TA_ERR_NOMEM;
     }
-    *system = (tna_system){0};
+    *system = (tna_system){
+        .budgets = {
+            .resumes = TNA_DEFAULT_RESUMES_PER_TURN,
+            .microsteps = TNA_DEFAULT_RESUME_BUDGET,
+            .actions = TNA_DEFAULT_ACTION_BUDGET,
+        },
+    };
     tna_allocator_init(&system->allocator);
+    tna_sched_init(&system->sched, tna_allocator_for(&system->allocator, TNA_MEMORY_SCHEDULING));
     ta_result result = tna_scratch_init(&system->scratch, &system->allocator);
     if (result != TA_OK) {
         free(system);
@@ -37,8 +44,10 @@ void tna_system_close(tna_system *system) {
         return;
     }
     system->closed = true;
+    system->turn_pending = false;
     ta_system_destroy(system->core);
     system->core = NULL;
+    tna_sched_destroy(&system->sched);
     tna_scratch_destroy(&system->scratch);
     system->leaked_bytes = tna_allocator_total(&system->allocator).bytes_in_use;
 }
@@ -57,4 +66,42 @@ void tna_system_free(tna_system *system) {
     }
     tna_system_close(system);
     free(system);
+}
+
+bool tna_system_quiet(const tna_system *system) {
+    return tna_sched_quiet(&system->sched);
+}
+
+void tna_system_want_turn(tna_system *system) {
+    if (system == NULL || system->closed || system->turn_pending || tna_system_quiet(system)) {
+        return;
+    }
+    system->turn_pending = true;
+    if (system->wake != NULL) {
+        system->wake(system, system->wake_context);
+    }
+}
+
+void tna_system_turn(tna_system *system) {
+    system->turn_pending = false;
+    if (system->closed) {
+        return;
+    }
+    tna_sched_turn(&system->sched, &(tna_turn_params){
+                                       .core = system->core,
+                                       .arena = &system->scratch.turn,
+                                       .inside_core = &system->inside_core,
+                                       .budgets = system->budgets,
+                                   });
+}
+
+void tna_system_end_turn(tna_system *system) {
+    if (system->closed) {
+        return;
+    }
+    system->sched.records = NULL;
+    system->sched.last_record = NULL;
+    system->sched.record_count = 0;
+    tna_scratch_reset_turn(&system->scratch);
+    tna_system_want_turn(system);
 }

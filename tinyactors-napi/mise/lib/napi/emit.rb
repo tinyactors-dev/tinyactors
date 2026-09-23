@@ -601,7 +601,12 @@ module NapiGen
         body << '        return tna_call_end(c, tna_call_fail(c, r, detail));'
         body << '    }'
       end
-      body << "    #{function.hook[:name]}(tna_call_system(c), #{function.hook[:actor]});" if function.hook
+      if function.hook
+        body << "    r = #{function.hook[:name]}(tna_call_system(c), #{function.hook[:actor]});"
+        body << '    if (r != TA_OK) {'
+        body << '        return tna_call_end(c, tna_call_fail(c, r, NULL));'
+        body << '    }'
+      end
       encode_outputs(body, function)
       releases(body, function, indent: 1)
       body << '    if (result == NULL) {' << '        goto fail;' << '    }'

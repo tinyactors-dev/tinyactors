@@ -4558,7 +4558,10 @@ static napi_value tna_fn_actor_spawn(napi_env env, napi_callback_info info) {
         napi_value detail = NULL;
         return tna_call_end(c, tna_call_fail(c, r, detail));
     }
-    tna_hook_actor_created(tna_call_system(c), o_out);
+    r = tna_hook_actor_created(tna_call_system(c), o_out);
+    if (r != TA_OK) {
+        return tna_call_end(c, tna_call_fail(c, r, NULL));
+    }
     napi_value result = (r == TA_OK) ? tna_enc_ta_actor_id(c, &o_out) : tna_undefined(c);
     if (result == NULL) {
         goto fail;
@@ -4614,7 +4617,10 @@ static napi_value tna_fn_actor_prepare_replacement(napi_env env, napi_callback_i
         napi_value detail = NULL;
         return tna_call_end(c, tna_call_fail(c, r, detail));
     }
-    tna_hook_actor_created(tna_call_system(c), o_out);
+    r = tna_hook_actor_created(tna_call_system(c), o_out);
+    if (r != TA_OK) {
+        return tna_call_end(c, tna_call_fail(c, r, NULL));
+    }
     napi_value result = (r == TA_OK) ? tna_enc_ta_actor_id(c, &o_out) : tna_undefined(c);
     if (result == NULL) {
         goto fail;
@@ -4758,7 +4764,10 @@ static napi_value tna_fn_actor_unload(napi_env env, napi_callback_info info) {
         napi_value detail = NULL;
         return tna_call_end(c, tna_call_fail(c, r, detail));
     }
-    tna_hook_actor_removed(tna_call_system(c), params.actor);
+    r = tna_hook_actor_removed(tna_call_system(c), params.actor);
+    if (r != TA_OK) {
+        return tna_call_end(c, tna_call_fail(c, r, NULL));
+    }
     napi_value result = tna_undefined(c);
     if (result == NULL) {
         goto fail;
@@ -4817,7 +4826,10 @@ static napi_value tna_fn_actor_load(napi_env env, napi_callback_info info) {
         napi_value detail = NULL;
         return tna_call_end(c, tna_call_fail(c, r, detail));
     }
-    tna_hook_actor_created(tna_call_system(c), o_out);
+    r = tna_hook_actor_created(tna_call_system(c), o_out);
+    if (r != TA_OK) {
+        return tna_call_end(c, tna_call_fail(c, r, NULL));
+    }
     napi_value result = (r == TA_OK) ? tna_enc_ta_actor_id(c, &o_out) : tna_undefined(c);
     if (result == NULL) {
         goto fail;
@@ -4876,7 +4888,10 @@ static napi_value tna_fn_actor_reconstruct(napi_env env, napi_callback_info info
         napi_value detail = NULL;
         return tna_call_end(c, tna_call_fail(c, r, detail));
     }
-    tna_hook_actor_created(tna_call_system(c), o_out);
+    r = tna_hook_actor_created(tna_call_system(c), o_out);
+    if (r != TA_OK) {
+        return tna_call_end(c, tna_call_fail(c, r, NULL));
+    }
     napi_value result = (r == TA_OK) ? tna_enc_ta_actor_id(c, &o_out) : tna_undefined(c);
     if (result == NULL) {
         goto fail;
@@ -5007,7 +5022,10 @@ static napi_value tna_fn_actor_destroy(napi_env env, napi_callback_info info) {
         napi_value detail = NULL;
         return tna_call_end(c, tna_call_fail(c, r, detail));
     }
-    tna_hook_actor_removed(tna_call_system(c), a_actor);
+    r = tna_hook_actor_removed(tna_call_system(c), a_actor);
+    if (r != TA_OK) {
+        return tna_call_end(c, tna_call_fail(c, r, NULL));
+    }
     napi_value result = tna_undefined(c);
     if (result == NULL) {
         goto fail;
