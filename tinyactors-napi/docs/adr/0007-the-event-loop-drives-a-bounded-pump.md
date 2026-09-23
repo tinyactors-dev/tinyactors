@@ -94,7 +94,11 @@ unless someone called `flush()`, and delayed sends never fired.
    `deadLetter` functions (ADRs 0008 and 0012) are passed in the system
    options and held as references by the system. The pump calls them at
    the end of a turn, after the last core call, so no hook runs while core
-   is running.
+   is running. Service effects follow the hooks the same way (ROADMAP step
+   13): core's calls into the log sink, I/O processors and invokers are
+   queued natively (`src/effects.h`) and handed to JavaScript after the
+   hooks, in the order core made them. Waiting effects keep the system from
+   being quiet.
 6. **Nothing runs synchronously in API calls.** `post`, `spawn` and the
    others only enqueue. Bootstrapping a spawned actor is runnable work like
    any other.

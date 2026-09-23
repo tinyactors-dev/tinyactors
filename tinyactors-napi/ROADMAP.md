@@ -79,6 +79,10 @@ tinyactors-napi/
 │   ├── values.{c,h}             reference-counted value boxes, one napi_ref each (ADR 0011)
 │   ├── napi_datamodel.{c,h}     the JavaScript data model (ADR 0011)
 │   ├── enumerate.{c,h}          cursor-paged actor enumeration (ADR 0003)
+│   ├── effects.{c,h}            service effects queued in the turn arena until JavaScript can run
+│   │                            them (step 13); no Node-API
+│   ├── napi_services.{c,h}      registerIo/registerInvoker/setLogSink/reportInvoke, and the
+│   │                            dispatch of effects to lib/system.js (step 13)
 │   └── adapters/
 │       ├── io.{c,h}             JavaScript I/O processors
 │       ├── invoker.{c,h}        JavaScript invokers and the in-system SCXML invoker
@@ -606,6 +610,46 @@ Exit criterion:
   message, and an idle timeout that is re-armed on each message. Its
   ratios stay within their bounds, and the target-population numbers are
   recorded.
+
+Done (ADR 0001 rule 3, ADR 0007 point 5, core ADRs 0015, 0016, 0045, 0046):
+- **Nothing runs JavaScript inside core.** The adapters copy each call into
+  an effect (`src/effects.h`) in the turn arena, retaining its values. The
+  pump hands effects to `lib/system.js` after the turn's hooks, in the order
+  core made the calls. Waiting effects keep the system from being quiet,
+  and close releases them while core is alive.
+- **I/O processors:** `processor.send(request, context)` with request
+  `{ source, sendId, event, type, target, data }` (plus `content`,
+  `contentType`) and one frozen context per system `{ system, signal, post }`,
+  whose signal aborts on `close()`. `sendId` is the send's ID text, or
+  `null` for a send without one. A reply is an event the processor posts.
+  A processor that throws or rejects fails the send, and the sender gets an
+  external `error.communication` event with `{ sendId, type, error }`
+  (it cannot be an internal event: the send already returned).
+- **JavaScript invokers:** `start(request, reporter)` runs after the turn;
+  `cancel()` when the invoking state exits; `forward(event)` for
+  autoforwarded events. `reporter.event()` and `reporter.done()` post to the
+  parent's mailbox with the invoke ID set (done as `done.invoke.<id>`), so
+  they keep its order and backpressure; `reporter.unavailable()` goes
+  through core, which retires the invocation and queues
+  `error.communication`. The reporter's signal aborts on cancel, done,
+  unavailable and `close()`, which also cancels live services.
+- **The in-system SCXML invoker** (type `scxml`) spawns the child named by
+  the invoke's `content(definition)` (a definition ID) with core's parent
+  link, so core routes `#_<invokeid>`, `#_parent` and `done.invoke` itself;
+  the invoke's params become the child's data binding; exiting the parent's
+  state destroys the child.
+- **Log sink:** `<log>` records `{ source, label, hasValue, value }` reach
+  the sink after the turn.
+- **Scale (`scale.js` variant `ws`):** at 4M actors, 2.6 µs (Node) and
+  1.7 µs (Bun) per inbound message, including the outbound write and
+  re-arming the timeout. The addon makes no allocator call in steady state,
+  and neither does core. See `docs/scale.md`.
+- **A core finding:** core's delayed-send owner heap grows by doubling
+  (`ta_timer_reserve_heap`, `tinyactors-core/src/timer.c`). With one timeout
+  per actor, core's largest block is 32 MiB at 4M actors, and the spawn that
+  crosses a power of two copies the whole heap. That is the spike core
+  ADR 0063 removed from the actor table. `scale.js` reports it, and holds
+  the addon's own largest block flat. It needs a core change, like ADR 0063.
 
 ### 14. Persistence and replacement
 

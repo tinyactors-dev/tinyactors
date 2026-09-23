@@ -94,3 +94,51 @@ websocket connection. Same machine and options as above.
   actors. By ADR 0011 point 3, model A stays: B is not clearly better.
 - Every ratio from 50k to 4M stayed within its bound with data, on both
   runtimes and both models.
+
+## 2026-09-23: a websocket-shaped load (step 13)
+
+Chart `ws` (`scale.js`, `SCALE_VARIANTS=ws`): one actor per simulated
+connection, with data (`{ count, last }`). Every inbound `ping` carries a new
+object as event data; the transition assigns from it, sends it out through a
+registered I/O processor (`ws.write` via `"ws"`, which counts the writes),
+and re-enters the state, whose exit cancels the 30-second idle timeout and
+whose entry arms it again. So every actor always holds one delayed send, and
+every message cancels and arms one. Same machine and options as above.
+
+| | Node 1M | Node 4M | Bun 4M |
+|---|---|---|---|
+| spawn (call), µs/actor | 0.57 | 0.57 | 0.59 |
+| bootstrap (data, first timeout), µs/actor | 0.84 | 0.87 | 0.91 |
+| inbound post + delivery + outbound write + re-arm, µs/message | 2.36 | 2.61 | 1.74 |
+| inspect, µs | 5.21 | 5.36 | 2.95 |
+| end to end, µs/actor | 0.96 | 1.02 | 0.90 |
+| native bytes/actor (core + addon) | 1225 | 1224 | 1224 |
+| JS heap bytes/actor | 56 | 56 | 64 |
+| RSS bytes/actor (from startup) | 1564 | 1503 | 1679 |
+| GC pause over the population's life, ms (minor / major) | 43 (25 / 16) | 153 (104 / 46) | n/a |
+| pump turns during flush, p50 / p99 / max, ms | 0.9 / 1.8 / 15 | 0.9 / 1.9 / 56 | 0.4 / 1.0 / 66 |
+| longest single spawn, µs | 6,132 | 6,057 | 40,599 |
+| largest block, bytes (core's timer heap) | 8,388,608 | 33,554,432 | 33,554,432 |
+| allocator calls in steady state, addon / core | 0 / 0 | 0 / 0 | 0 / 0 |
+
+- **About 2.6 µs per message on Node and 1.7 µs on Bun** at 4M, for the
+  whole round trip of one connection's message: the inbound post, two
+  assign functions, one outbound I/O effect handed to JavaScript after the
+  turn, and a cancel plus a new delayed send. Against the `data` chart
+  (about 1 µs), the outbound write and the timer re-arm cost about 1.3 µs on
+  Node. Every ratio from 50k to 4M stayed within its bound.
+- **Holding a timeout per actor costs about 700 bytes** (1224 against 528
+  for `data`): the actor's sparse state and its delayed-send list in core.
+- **Core finding: the delayed-send owner heap doubles.** Core keeps one
+  entry per actor with a pending send (core ADR 0054) in one array grown by
+  doubling and copying (`ta_timer_reserve_heap` in
+  `tinyactors-core/src/timer.c`). Its largest block is 512 KiB at 50k
+  actors, 2 MiB at 200k, 8 MiB at 1M and 32 MiB at 4M, and the spawn that
+  crosses a power of two copies all of it: the longest spawn is about 6 ms
+  from 1M on (40 ms on Bun at 4M), where the `data` chart stays well under a
+  millisecond. This is the spike core ADR 0063 removed from the actor table;
+  the owner heap needs the same paging. `scale.js` prints it as a known core
+  finding and holds the addon's own largest block flat.
+- **The longest pump turn grows at 4M** (56–66 ms, one outlier among
+  thousands of turns; p99 stays about 2 ms). It is most likely a GC pause or
+  the heap copy above, not a turn's own work.

@@ -5,7 +5,8 @@
  * literal(), TinyactorsError, spawn(), inspect(), destroy(), flush(),
  * post() with data, the `done`, `fault` and `deadLetter` hooks, the
  * realtime and manual clocks (time, advanceTo(), advanceBy()), delayed
- * sends, paged enumeration and the JavaScript data model are implemented.
+ * sends, paged enumeration, the JavaScript data model, send(), and services
+ * (I/O processors, invokers, the log sink) are implemented.
  */
 export const version: string;
 
