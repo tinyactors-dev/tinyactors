@@ -13,9 +13,10 @@
 #include "routing.h"
 #include "timer.h"
 
-/* How many empty internal queues a system keeps for reuse (ADR 0064): one
- * per interpreter that can run at once, nested exits included (ADR 0060). */
-#define TA_INTERNAL_QUEUE_CACHE 4u
+/* How many empty event blocks a new system keeps for reuse (ADR 0064): one
+ * per interpreter that can run at once, nested exits included (ADR 0060).
+ * ta_system_set_event_block_cache() changes it (ADR 0069). */
+#define TA_EVENT_BLOCK_CACHE_DEFAULT 4u
 
 typedef struct {
     ta_definition *definition;
@@ -74,9 +75,12 @@ struct ta_system {
     ta_atom scxml_invoke_type;
     uint64_t next_invoke_serial;
     ta_arena scratch;
-    /* Empty internal queues, lent to the next run that needs one (ADR 0064). */
-    ta_internal_queue *queue_cache[TA_INTERNAL_QUEUE_CACHE];
-    uint32_t queue_cache_count;
+    /* Empty event blocks, lent to the next actor that needs one (ADR 0064),
+     * newest first, linked through `next_cached`; at most `block_cache_limit`
+     * of them (ADR 0069). */
+    ta_event_block *block_cache;
+    uint32_t block_cache_count;
+    uint32_t block_cache_limit;
 };
 
 /*

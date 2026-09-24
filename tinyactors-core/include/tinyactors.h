@@ -2410,6 +2410,17 @@ typedef struct {
 TA_API ta_result ta_system_create(TA_IN const ta_system_config *config, ta_system **out);
 TA_API void ta_system_destroy(TA_DESTROYS ta_system *system);
 TA_API ta_result ta_system_set_actor_directory(ta_system *system, ta_actor_directory directory);
+/*
+ * How many empty event blocks the system keeps for reuse (ADR 0064,
+ * ADR 0069); 4 when a system is created. An actor holds a block from
+ * ta_actor_deliver() until its macrostep ends, so a host that delivers a
+ * batch of events before it resumes the actors needs a cache as large as
+ * the batch for delivery to make no allocator call. The cache takes no
+ * memory until blocks are returned to it, and it keeps only small blocks,
+ * so it holds at most `blocks` of them. A smaller setting frees the cached
+ * blocks above it.
+ */
+TA_API ta_result ta_system_set_event_block_cache(ta_system *system, uint32_t blocks);
 /* Installs the scheduler for normalized external SCXML-session events. */
 TA_API ta_result ta_system_set_external_event_router(ta_system *system,
                                                       ta_external_event_router router);

@@ -781,7 +781,7 @@ const ta_event *ta_actor_bound_event(const ta_actor *actor) {
     case TA_BOUND_EXTERNAL:
         return &actor->slots.external_event;
     case TA_BOUND_INTERNAL:
-        return &actor->internal_queue->events[0].event;
+        return &actor->event_block->events[0].event;
     case TA_BOUND_KEPT:
         return &actor->slots.kept_event;
     case TA_BOUND_NONE:
@@ -791,10 +791,10 @@ const ta_event *ta_actor_bound_event(const ta_actor *actor) {
 }
 
 uint32_t ta_actor_waiting_internal(const ta_actor *actor) {
-    if (actor->internal_queue == NULL) {
+    if (actor->event_block == NULL) {
         return 0;
     }
-    return actor->internal_queue->count - (actor->slots.bound == TA_BOUND_INTERNAL ? 1u : 0u);
+    return actor->event_block->count - (actor->slots.bound == TA_BOUND_INTERNAL ? 1u : 0u);
 }
 
 static size_t ta_vec_bytes(const ta_vec *vec) {
@@ -804,8 +804,8 @@ static size_t ta_vec_bytes(const ta_vec *vec) {
 /* Everything the core allocates for the actor now; see ta_actor_inspection. */
 static size_t ta_actor_allocated_bytes(const ta_actor *actor) {
     size_t total = actor->definition->actor_block_bytes;
-    if (actor->internal_queue != NULL) {
-        total += ta_internal_queue_bytes(actor->internal_queue->capacity);
+    if (actor->event_block != NULL) {
+        total += ta_event_block_bytes(actor->event_block->capacity);
     }
     const ta_actor_sparse_state *sparse = actor->sparse;
     if (sparse != NULL) {
@@ -855,7 +855,7 @@ ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_inspectio
     /* A taken head is `_event`, not work that waits. */
     uint32_t waiting = ta_actor_waiting_internal(actor);
     if (waiting != 0) {
-        out->internal_events = actor->internal_queue->events + (actor->internal_queue->count - waiting);
+        out->internal_events = actor->event_block->events + (actor->event_block->count - waiting);
         out->internal_count = waiting;
     }
     if (actor->sparse != NULL) {

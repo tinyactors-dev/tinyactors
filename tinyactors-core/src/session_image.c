@@ -189,8 +189,8 @@ static size_t ta_image_measure(const ta_actor *actor) {
         ta_actor_address view = ta_address_view(actor->record.self.as.named);
         total += sizeof(ta_address) + (size_t)view.family.name.len + (size_t)view.name.len + 2u;
     }
-    if (actor->internal_queue != NULL) {
-        total += (size_t)actor->internal_queue->count * sizeof(ta_queued_event);
+    if (actor->event_block != NULL) {
+        total += (size_t)actor->event_block->count * sizeof(ta_queued_event);
     }
     if (sparse != NULL) {
         total += (size_t)sparse->invoke_count * sizeof(ta_active_invoke);
@@ -230,15 +230,15 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
         return result;
     }
 
-    if (actor->internal_queue != NULL && actor->internal_queue->count != 0) {
-        uint32_t count = actor->internal_queue->count;
+    if (actor->event_block != NULL && actor->event_block->count != 0) {
+        uint32_t count = actor->event_block->count;
         image->internal_events = ta_arena_alloc(arena, (size_t)count * sizeof(ta_queued_event),
                                                 _Alignof(ta_queued_event));
         if (image->internal_events == NULL) {
             return TA_ERR_NOMEM;
         }
         for (uint32_t index = 0; index < count; index += 1) {
-            image->internal_events[index] = actor->internal_queue->events[index];
+            image->internal_events[index] = actor->event_block->events[index];
             result = ta_image_copy_origin(system, arena, &image->internal_events[index].event);
             if (result != TA_OK) {
                 return result;

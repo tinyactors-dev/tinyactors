@@ -36,15 +36,18 @@ typedef struct ta_activation_effects {
 } ta_activation_effects;
 
 /*
- * An actor's internal event queue (ADR 0064): its events, oldest first, and
- * its capacity, in one allocation. It is lent to an actor while it runs, and
- * the actor keeps it only while events are queued or a microstep is paused.
+ * An actor's event block (ADR 0064, ADR 0069): its internal event queue,
+ * oldest first, and the queue's capacity, in one allocation. It is lent to
+ * an actor while it runs, and the actor keeps it only while events are
+ * queued or a microstep is paused.
  */
-typedef struct ta_internal_queue {
+typedef struct ta_event_block {
     uint32_t count;
     uint32_t capacity;
+    /* While the block is in the system's cache, the next cached block. */
+    struct ta_event_block *next_cached;
     ta_queued_event events[];
-} ta_internal_queue;
+} ta_event_block;
 
 /* Where an actor's external event is (ADR 0069). */
 typedef enum {
@@ -118,8 +121,8 @@ struct ta_actor {
     void *datamodel_instance;
     bool datamodel_initialized;
     ta_actor_sparse_state *sparse;
-    /* Its internal event queue (ADR 0064), or null. */
-    ta_internal_queue *internal_queue;
+    /* Its event block (ADR 0064), or null. */
+    ta_event_block *event_block;
     ta_actor_id replacement_of;
     /* The session this actor holds (ADR 0066), and its entry in the session
      * table when that ID is not this actor's runtime ID. */

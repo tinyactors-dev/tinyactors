@@ -15265,6 +15265,37 @@
       ]
     },
     {
+      "name": "ta_system_set_event_block_cache",
+      "doc": "How many empty event blocks the system keeps for reuse (ADR 0064, ADR 0069); 4 when a system is created. An actor holds a block from ta_actor_deliver() until its macrostep ends, so a host that delivers a batch of events before it resumes the actors needs a cache as large as the batch for delivery to make no allocator call. The cache takes no memory until blocks are returned to it, and it keeps only small blocks, so it holds at most `blocks` of them. A smaller setting frees the cached blocks above it.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "blocks",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        }
+      ]
+    },
+    {
       "name": "ta_system_set_external_event_router",
       "doc": "Installs the scheduler for normalized external SCXML-session events.",
       "public": true,

@@ -94,89 +94,103 @@ static ta_actor_sparse_state *ta_sparse(ta_system *system, ta_actor *actor) {
 }
 
 /* ------------------------------------------------------------------------
- * Internal queues (ADR 0064)
+ * Event blocks (ADR 0064, ADR 0069)
  */
 
-/* A queue's first capacity, and the largest one the system caches. */
-#define TA_INTERNAL_QUEUE_INITIAL 8u
-#define TA_INTERNAL_QUEUE_CACHED_MAX 64u
+/* The first capacity of a block's queue, which is also the largest a block
+ * the system caches may have: the cache holds small blocks only. */
+#define TA_EVENT_BLOCK_QUEUE_INITIAL 8u
 
-size_t ta_internal_queue_bytes(uint32_t capacity) {
-    return offsetof(ta_internal_queue, events) + (size_t)capacity * sizeof(ta_queued_event);
+size_t ta_event_block_bytes(uint32_t capacity) {
+    return offsetof(ta_event_block, events) + (size_t)capacity * sizeof(ta_queued_event);
 }
 
-static void ta_queue_free(ta_system *system, ta_internal_queue *queue) {
-    ta_mem_free(system->allocator, queue,
-                &(ta_allocator_free_params){ .size = ta_internal_queue_bytes(queue->capacity),
-                                             .alignment = _Alignof(ta_internal_queue) });
+static void ta_block_free(ta_system *system, ta_event_block *block) {
+    ta_mem_free(system->allocator, block,
+                &(ta_allocator_free_params){ .size = ta_event_block_bytes(block->capacity),
+                                             .alignment = _Alignof(ta_event_block) });
+}
+
+/* An empty block: the newest cached one, else a new one with room for
+ * `capacity` events. Null when there is no memory for one. */
+static ta_event_block *ta_block_take(ta_system *system, uint32_t capacity) {
+    ta_event_block *block = system->block_cache;
+    if (block != NULL) {
+        system->block_cache = block->next_cached;
+        system->block_cache_count -= 1u;
+    } else {
+        block = ta_mem_alloc(system->allocator, ta_event_block_bytes(capacity), _Alignof(ta_event_block));
+        if (block == NULL) {
+            return NULL;
+        }
+        block->capacity = capacity;
+    }
+    block->count = 0;
+    block->next_cached = NULL;
+    return block;
 }
 
 /*
- * Makes sure the actor holds a queue with room for one more event: its own,
- * else one from the system's cache, else a new one; a full queue doubles.
- * TA_ERR_NOMEM leaves the actor as it was, apart from a queue taken from
- * the cache, which it may keep.
+ * Makes sure the actor holds a block with room for one more internal event:
+ * its own, else one from the system's cache, else a new one; a full queue
+ * doubles. TA_ERR_NOMEM leaves the actor as it was, apart from a block
+ * taken from the cache, which it may keep.
  */
 static ta_result ta_queue_room(ta_system *system, ta_actor *actor) {
-    ta_internal_queue *queue = actor->internal_queue;
-    if (queue == NULL) {
-        if (system->queue_cache_count != 0) {
-            system->queue_cache_count -= 1u;
-            queue = system->queue_cache[system->queue_cache_count];
-        } else {
-            queue = ta_mem_alloc(system->allocator, ta_internal_queue_bytes(TA_INTERNAL_QUEUE_INITIAL),
-                                 _Alignof(ta_internal_queue));
-            if (queue == NULL) {
-                return TA_ERR_NOMEM;
-            }
-            queue->capacity = TA_INTERNAL_QUEUE_INITIAL;
+    ta_event_block *block = actor->event_block;
+    if (block == NULL) {
+        block = ta_block_take(system, TA_EVENT_BLOCK_QUEUE_INITIAL);
+        if (block == NULL) {
+            return TA_ERR_NOMEM;
         }
-        queue->count = 0;
-        actor->internal_queue = queue;
+        actor->event_block = block;
     }
-    if (queue->count < queue->capacity) {
+    if (block->count < block->capacity) {
         return TA_OK;
     }
-    if (queue->capacity > UINT32_MAX / 2u) {
+    if (block->capacity > UINT32_MAX / 2u) {
         return TA_ERR_NOMEM;
     }
-    uint32_t capacity = queue->capacity * 2u;
-    ta_internal_queue *grown = ta_mem_alloc(system->allocator, ta_internal_queue_bytes(capacity),
-                                            _Alignof(ta_internal_queue));
+    uint32_t capacity = block->capacity == 0 ? TA_EVENT_BLOCK_QUEUE_INITIAL : block->capacity * 2u;
+    ta_event_block *grown = ta_mem_alloc(system->allocator, ta_event_block_bytes(capacity),
+                                         _Alignof(ta_event_block));
     if (grown == NULL) {
         return TA_ERR_NOMEM;
     }
-    grown->count = queue->count;
+    ta_mem_copy(grown, block, ta_event_block_bytes(block->count));
     grown->capacity = capacity;
-    ta_mem_copy(grown->events, queue->events, (size_t)queue->count * sizeof(ta_queued_event));
-    ta_queue_free(system, queue);
-    actor->internal_queue = grown;
+    ta_block_free(system, block);
+    actor->event_block = grown;
     return TA_OK;
 }
 
 /*
- * Gives an actor's queue back when the actor no longer needs it: it is
- * empty and no microstep is paused. It goes to the system's cache, or is
- * freed when the cache is full or the queue grew large. Cannot fail.
+ * Gives an actor's block back when the actor no longer needs it: its queue
+ * is empty and no microstep is paused. It goes to the system's cache, or is
+ * freed when the cache is full or the block grew past the first capacity.
+ * Cannot fail.
  */
-static void ta_queue_settle(ta_system *system, ta_actor *actor) {
-    ta_internal_queue *queue = actor->internal_queue;
-    if (queue == NULL || queue->count != 0 || (actor->sparse != NULL && actor->sparse->paused != NULL)) {
+static void ta_block_settle(ta_system *system, ta_actor *actor) {
+    ta_event_block *block = actor->event_block;
+    if (block == NULL || block->count != 0 || (actor->sparse != NULL && actor->sparse->paused != NULL)) {
         return;
     }
-    actor->internal_queue = NULL;
-    if (system->queue_cache_count < TA_INTERNAL_QUEUE_CACHE && queue->capacity <= TA_INTERNAL_QUEUE_CACHED_MAX) {
-        system->queue_cache[system->queue_cache_count] = queue;
-        system->queue_cache_count += 1u;
+    actor->event_block = NULL;
+    if (system->block_cache_count < system->block_cache_limit && block->capacity <= TA_EVENT_BLOCK_QUEUE_INITIAL) {
+        block->next_cached = system->block_cache;
+        system->block_cache = block;
+        system->block_cache_count += 1u;
         return;
     }
-    ta_queue_free(system, queue);
+    ta_block_free(system, block);
 }
 
-void ta_interpreter_queue_cache_destroy(ta_system *system) {
-    while (system->queue_cache_count != 0) {
-        system->queue_cache_count -= 1u;
-        ta_queue_free(system, system->queue_cache[system->queue_cache_count]);
+void ta_interpreter_block_cache_trim(ta_system *system) {
+    while (system->block_cache_count > system->block_cache_limit) {
+        ta_event_block *block = system->block_cache;
+        system->block_cache = block->next_cached;
+        system->block_cache_count -= 1u;
+        ta_block_free(system, block);
     }
 }
 
@@ -184,11 +198,11 @@ ta_result ta_interpreter_enqueue_internal(ta_system *system, ta_actor *actor, ta
     ta_actor_touch(actor);
     ta_result result = ta_queue_room(system, actor);
     if (result != TA_OK) {
-        ta_queue_settle(system, actor);
+        ta_block_settle(system, actor);
         ta_event_release(event);
         return result;
     }
-    ta_internal_queue *queue = actor->internal_queue;
+    ta_event_block *queue = actor->event_block;
     queue->events[queue->count] = (ta_queued_event){
         .event = *event,
         .flags = TA_EVENT_FLAG_OWNS_DATA | (event->type == TA_EVENT_PLATFORM ? TA_EVENT_FLAG_GENERATED : 0u),
@@ -199,7 +213,7 @@ ta_result ta_interpreter_enqueue_internal(ta_system *system, ta_actor *actor, ta
 
 /* Removes the queue's head; its event is the caller's now. */
 static ta_event ta_queue_pop(ta_actor *actor) {
-    ta_internal_queue *queue = actor->internal_queue;
+    ta_event_block *queue = actor->event_block;
     ta_event head = queue->events[0].event;
     for (uint32_t index = 1; index < queue->count; index += 1) {
         queue->events[index - 1u] = queue->events[index];
@@ -253,7 +267,7 @@ static void ta_unbind_event(ta_actor *actor) {
  * its kept event and its external event. */
 static void ta_release_events(ta_actor *actor) {
     ta_event_slots *slots = &actor->slots;
-    while (actor->internal_queue != NULL && actor->internal_queue->count != 0) {
+    while (actor->event_block != NULL && actor->event_block->count != 0) {
         ta_event event = ta_queue_pop(actor);
         ta_event_release(&event);
     }
@@ -2539,7 +2553,7 @@ ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_act
     /* The live set lives in scratch memory; between calls In() derives from the configuration. */
     actor->live_active = NULL;
     /* An empty queue goes back; queued events or a paused microstep keep it. */
-    ta_queue_settle(system, actor);
+    ta_block_settle(system, actor);
     return result;
 }
 
@@ -2690,12 +2704,12 @@ bool ta_interpreter_internal_pending(const ta_actor *actor) {
 void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor) {
     ta_release_events(actor);
     if (actor->sparse == NULL) {
-        ta_queue_settle(system, actor);
+        ta_block_settle(system, actor);
         return;
     }
     ta_invoke_release(system, actor); /* Invoke: cancel services, free bookkeeping. */
     ta_continuation_free(system->allocator, &actor->sparse->paused);
-    ta_queue_settle(system, actor); /* empty, and no longer paused */
+    ta_block_settle(system, actor); /* empty, and no longer paused */
     /* The owner heap must not keep pointing into the freed sparse state. */
     ta_timer_list_destroy(&system->timers, &actor->sparse->timers);
     ta_value_release(&actor->sparse->completion.data);

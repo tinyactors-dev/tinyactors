@@ -20,7 +20,7 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
     if (system == NULL) {
         return TA_ERR_NOMEM;
     }
-    *system = (ta_system){ .allocator = config->allocator };
+    *system = (ta_system){ .allocator = config->allocator, .block_cache_limit = TA_EVENT_BLOCK_CACHE_DEFAULT };
     ta_clock_set(&system->clock, config->initial_time);
     ta_vec_init(&system->actors.pages, config->allocator, TA_VEC_LAYOUT(ta_actor_slot *));
     system->free_actor_slot = UINT32_MAX;
@@ -98,7 +98,8 @@ void ta_system_destroy(ta_system *system) {
     ta_vec_destroy(&system->io_processors);
     ta_vec_destroy(&system->invokers);
     ta_arena_destroy(&system->scratch);
-    ta_interpreter_queue_cache_destroy(system);
+    system->block_cache_limit = 0;
+    ta_interpreter_block_cache_trim(system);
     /* Unloaded sessions hold addresses; give them back before the table goes. */
     ta_session_table_destroy(&system->sessions);
     /* Last: everything above gave its addresses back. */
@@ -123,6 +124,15 @@ ta_result ta_system_set_log_sink(ta_system *system, ta_log_sink sink) {
         return TA_ERR_INVALID;
     }
     system->log_sink = sink;
+    return TA_OK;
+}
+
+ta_result ta_system_set_event_block_cache(ta_system *system, uint32_t blocks) {
+    if (system == NULL) {
+        return TA_ERR_INVALID;
+    }
+    system->block_cache_limit = blocks;
+    ta_interpreter_block_cache_trim(system);
     return TA_OK;
 }
 
