@@ -486,8 +486,15 @@ struct ta_actor;
  * UNLOADED or DESTROYED), with `parent` as its context and cause when
  * there is one. Lifecycle records are outside macrosteps and never sampled.
  */
-TA_PRIVATE void ta_trace_lifecycle(ta_system *system, const struct ta_actor *actor, ta_trace_kind kind,
+TA_PRIVATE void ta_trace_lifecycle(ta_system *system, struct ta_actor *actor, ta_trace_kind kind,
                         const ta_trace_parent *parent);
+
+/*
+ * The key of the actor's next lifecycle record: (session, 0, n), where n
+ * counts the session's lifecycle records from 1. It moves whether or not a
+ * sink wants the record, so keys are the same with tracing on or off.
+ */
+TA_PRIVATE ta_step_key ta_trace_lifecycle_key(struct ta_actor *actor);
 
 /* Writes a record the caller built because `sink.kinds` asked for it. */
 TA_PRIVATE inline void ta_trace_write(const ta_trace_sink *sink, const ta_trace_record *record) {
@@ -1578,6 +1585,10 @@ struct ta_actor {
     ta_session_node *session_node;
     uint64_t session_epoch;
     bool published;
+    /* Lifecycle records written for this session, from 1 (ADR 0067; napi
+     * ADR 0016): a lifecycle record's key is (session, 0, this count), so
+     * each has its own span ID. Sits in the padding after `published`. */
+    uint32_t trace_lifecycle;
     ta_dm_host_impl host_impl;
     ta_dm_host host;
 
@@ -3528,13 +3539,19 @@ TA_PRIVATE uint32_t ta_trace_macrostep_kinds(const ta_trace_sink *sink, const ta
     return sink->kinds & TA_TRACE_LIFECYCLE;
 }
 
-TA_PRIVATE void ta_trace_lifecycle(ta_system *system, const ta_actor *actor, ta_trace_kind kind,
+TA_PRIVATE ta_step_key ta_trace_lifecycle_key(ta_actor *actor) {
+    actor->trace_lifecycle += 1u;
+    return (ta_step_key){ .session = actor->session_id, .microstep = actor->trace_lifecycle };
+}
+
+TA_PRIVATE void ta_trace_lifecycle(ta_system *system, ta_actor *actor, ta_trace_kind kind,
                         const ta_trace_parent *parent) {
+    ta_step_key key = ta_trace_lifecycle_key(actor);
     if ((system->trace.kinds & TA_TRACE_BIT(kind)) == 0) {
         return;
     }
     ta_trace_record record = ta_trace_record_blank(kind);
-    record.key = (ta_step_key){ .session = actor->session_id };
+    record.key = key;
     record.actor = actor->record.id;
     record.definition = actor->definition->id;
     record.now = ta_clock_now(&system->clock);
@@ -11014,6 +11031,7 @@ struct ta_session_image {
      * the macrostep's trace parent is in `slots`. */
     bool trace_begun;
     uint32_t trace_microstep;
+    uint32_t trace_lifecycle;
     uint64_t trace_macrostep;
     /* The external and kept events and what `_event` names (ADR 0069). A
      * bound queue head is internal_events[0]. */
@@ -11350,6 +11368,7 @@ TA_API ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_para
         .finished = actor->finished,
         .trace_begun = actor->trace_begun,
         .trace_microstep = actor->trace_microstep,
+        .trace_lifecycle = actor->trace_lifecycle,
         .trace_macrostep = actor->trace_macrostep,
         /*
          * An event is the actor's only while its flag says so. Releasing an
@@ -11617,6 +11636,11 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
     actor->finished = image->finished;
     actor->trace_begun = image->trace_begun;
     actor->trace_microstep = image->trace_microstep;
+    /* Skip the ordinal an UNLOADED record takes after this image was
+     * captured (ta_actor_unload validates the image first, then writes it),
+     * so the LOADED that follows never reuses its key. After a reconstruct
+     * the ordinal is simply unused. */
+    actor->trace_lifecycle = image->trace_lifecycle + 1u;
     actor->trace_macrostep = image->trace_macrostep;
     actor->next_send_id = image->next_send_id;
     actor->session_epoch = image->source_epoch;
@@ -15492,8 +15516,15 @@ static ta_result ta_run_finish(ta_interpreter *it) {
     it->at = (ta_micro_position){0};
     ta_trace_end(it);
     ta_actor *actor = it->actor;
+    /* A lifecycle record: its own key, and the step that finished as cause. */
+    ta_step_key step = ta_trace_key(it);
+    ta_step_key key = ta_trace_lifecycle_key(actor);
     if ((it->system->trace.kinds & TA_TRACE_BIT(TA_TRACE_FINISHED)) != 0) {
         ta_trace_record record = ta_trace_record_now(it, TA_TRACE_FINISHED);
+        record.key = key;
+        record.cause = step;
+        record.position = (ta_trace_position){ .at = TA_TRACE_AT_NONE, .state = TA_STATE_NONE,
+                                               .transition = TA_TRANSITION_NONE, .action = TA_ACTION_NONE };
         record.state = actor->sparse != NULL ? actor->sparse->final_state : TA_STATE_NONE;
         ta_trace_emit(it, &record);
     }

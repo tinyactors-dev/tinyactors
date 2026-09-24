@@ -486,7 +486,7 @@ static void test_mask_suppresses_construction(void) {
     CHECK(masked == untraced);
     long lifecycle = whole_life(recording_sink(TA_TRACE_BIT(TA_TRACE_SPAWNED) | TA_TRACE_BIT(TA_TRACE_DESTROYED)));
     CHECK(lifecycle == untraced);
-    expect_journal("spawned 0.0; destroyed 0.0; ");
+    expect_journal("spawned 0.1; destroyed 0.3; ");
 }
 
 /*
@@ -504,7 +504,7 @@ static void test_exact_sequence(void) {
     CHECK(ta_system_set_trace_sink(r.system, recording_sink(ALL_KINDS)) == TA_OK);
     spawn(&r, (ta_trace_parent){0});
     settle(&r);
-    expect_journal("spawned 0.0; begin 1.0 -; data 1.0 @boot x; micro 1.1 - t[] x[] e[0]; "
+    expect_journal("spawned 0.1; begin 1.0 -; data 1.0 @boot x; micro 1.1 - t[] x[] e[0]; "
                    "assign 1.1 @enter:0; end 1.1 in[0]; ");
 
     journal_reset();
@@ -520,11 +520,11 @@ static void test_exact_sequence(void) {
     journal_reset();
     deliver(&r, "stop", (ta_trace_parent){0});
     settle(&r);
-    expect_journal("begin 3.0 stop; micro 3.1 stop t[5] x[5] e[6]; end 3.1 in[]; finished 0.0 s6; ");
+    expect_journal("begin 3.0 stop; micro 3.1 stop t[5] x[5] e[6]; end 3.1 in[]; finished 0.2 s6; ");
 
     journal_reset();
     CHECK(ta_actor_destroy(r.system, r.actor) == TA_OK);
-    expect_journal("destroyed 0.0; ");
+    expect_journal("destroyed 0.3; ");
     finish(&r);
 }
 
@@ -768,6 +768,57 @@ static void test_records_are_written_once(void) {
     journal_control = 1;
 }
 
+/* ------------------------------------------------------------------------
+ * Lifecycle records have keys of their own (napi ADR 0016): OTLP needs a
+ * distinct span ID for each, including two LOADED records of one session
+ * on either side of an image.
+ */
+
+static uint64_t lifecycle_spans[16];
+static uint32_t lifecycle_count = 0;
+static void lifecycle_write(void *self, const ta_trace_record *record) {
+    record_write(self, record);
+    if (lifecycle_count < 16u) {
+        lifecycle_spans[lifecycle_count++] = ta_step_key_span_id(record->key);
+    }
+}
+static const ta_trace_sink_vtable lifecycle_vtable = { .write = lifecycle_write };
+
+static void test_lifecycle_keys(void) {
+    run r;
+    start_system(&r);
+    uint32_t kinds = TA_TRACE_BIT(TA_TRACE_SPAWNED) | TA_TRACE_BIT(TA_TRACE_LOADED) |
+                     TA_TRACE_BIT(TA_TRACE_UNLOADED) | TA_TRACE_BIT(TA_TRACE_DESTROYED);
+    CHECK(ta_system_set_trace_sink(r.system, (ta_trace_sink){ .v = &lifecycle_vtable, .kinds = kinds }) == TA_OK);
+    journal_reset();
+    lifecycle_count = 0;
+    spawn(&r, (ta_trace_parent){0});
+    settle(&r);
+    for (int round = 0; round < 2; round += 1) {
+        ta_session_image *image = NULL;
+        CHECK(ta_actor_capture(r.system, &(ta_actor_capture_params){ .actor = r.actor, .out = &image }) == TA_OK);
+        CHECK(ta_actor_destroy(r.system, r.actor) == TA_OK);
+        CHECK(ta_actor_reconstruct(r.system, &(ta_actor_reconstruct_params){ .image = image, .out = &r.actor }) ==
+              TA_OK);
+        ta_session_image_destroy(image);
+    }
+    CHECK(ta_actor_destroy(r.system, r.actor) == TA_OK);
+    /* Each image holds the count at capture; restoring skips the ordinal an
+     * UNLOADED would take next, which the DESTROYED of the source used. */
+    expect_journal("spawned 0.1; destroyed 0.2; loaded 0.3; destroyed 0.4; loaded 0.5; destroyed 0.6; ");
+    CHECK(lifecycle_count == 6);
+    for (uint32_t a = 0; a < lifecycle_count; a += 1u) {
+        CHECK(lifecycle_spans[a] != 0);
+        for (uint32_t b = a + 1u; b < lifecycle_count; b += 1u) {
+            CHECK(lifecycle_spans[a] != lifecycle_spans[b]);
+        }
+    }
+    /* Golden values: lifecycle keys go through the same derivation. */
+    CHECK(ta_step_key_span_id((ta_step_key){ .session = 1, .macrostep = 0, .microstep = 1 }) == 0x65c672b9ddbfb556ULL);
+    CHECK(ta_step_key_span_id((ta_step_key){ .session = 1, .macrostep = 0, .microstep = 3 }) == 0xb4ed65a25541f516ULL);
+    finish(&r);
+}
+
 int main(void) {
     test_null_sink();
     test_mask_suppresses_construction();
@@ -777,6 +828,7 @@ int main(void) {
     test_sampling();
     test_span_ids();
     test_counters_and_parents_survive_an_image();
+    test_lifecycle_keys();
     test_records_are_written_once();
     CHECK(live_allocations == 0);
     if (failures != 0) {

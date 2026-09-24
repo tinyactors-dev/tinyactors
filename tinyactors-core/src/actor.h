@@ -140,6 +140,10 @@ struct ta_actor {
     ta_session_node *session_node;
     uint64_t session_epoch;
     bool published;
+    /* Lifecycle records written for this session, from 1 (ADR 0067; napi
+     * ADR 0016): a lifecycle record's key is (session, 0, this count), so
+     * each has its own span ID. Sits in the padding after `published`. */
+    uint32_t trace_lifecycle;
     ta_dm_host_impl host_impl;
     ta_dm_host host;
 

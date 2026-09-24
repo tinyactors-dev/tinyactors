@@ -60,13 +60,19 @@ uint32_t ta_trace_macrostep_kinds(const ta_trace_sink *sink, const ta_trace_cont
     return sink->kinds & TA_TRACE_LIFECYCLE;
 }
 
-void ta_trace_lifecycle(ta_system *system, const ta_actor *actor, ta_trace_kind kind,
+ta_step_key ta_trace_lifecycle_key(ta_actor *actor) {
+    actor->trace_lifecycle += 1u;
+    return (ta_step_key){ .session = actor->session_id, .microstep = actor->trace_lifecycle };
+}
+
+void ta_trace_lifecycle(ta_system *system, ta_actor *actor, ta_trace_kind kind,
                         const ta_trace_parent *parent) {
+    ta_step_key key = ta_trace_lifecycle_key(actor);
     if ((system->trace.kinds & TA_TRACE_BIT(kind)) == 0) {
         return;
     }
     ta_trace_record record = ta_trace_record_blank(kind);
-    record.key = (ta_step_key){ .session = actor->session_id };
+    record.key = key;
     record.actor = actor->record.id;
     record.definition = actor->definition->id;
     record.now = ta_clock_now(&system->clock);

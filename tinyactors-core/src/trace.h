@@ -39,8 +39,15 @@ struct ta_actor;
  * UNLOADED or DESTROYED), with `parent` as its context and cause when
  * there is one. Lifecycle records are outside macrosteps and never sampled.
  */
-void ta_trace_lifecycle(ta_system *system, const struct ta_actor *actor, ta_trace_kind kind,
+void ta_trace_lifecycle(ta_system *system, struct ta_actor *actor, ta_trace_kind kind,
                         const ta_trace_parent *parent);
+
+/*
+ * The key of the actor's next lifecycle record: (session, 0, n), where n
+ * counts the session's lifecycle records from 1. It moves whether or not a
+ * sink wants the record, so keys are the same with tracing on or off.
+ */
+ta_step_key ta_trace_lifecycle_key(struct ta_actor *actor);
 
 /* Writes a record the caller built because `sink.kinds` asked for it. */
 static inline void ta_trace_write(const ta_trace_sink *sink, const ta_trace_record *record) {

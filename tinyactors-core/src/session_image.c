@@ -42,6 +42,7 @@ struct ta_session_image {
      * the macrostep's trace parent is in `slots`. */
     bool trace_begun;
     uint32_t trace_microstep;
+    uint32_t trace_lifecycle;
     uint64_t trace_macrostep;
     /* The external and kept events and what `_event` names (ADR 0069). A
      * bound queue head is internal_events[0]. */
@@ -378,6 +379,7 @@ ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_params *par
         .finished = actor->finished,
         .trace_begun = actor->trace_begun,
         .trace_microstep = actor->trace_microstep,
+        .trace_lifecycle = actor->trace_lifecycle,
         .trace_macrostep = actor->trace_macrostep,
         /*
          * An event is the actor's only while its flag says so. Releasing an
@@ -645,6 +647,11 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
     actor->finished = image->finished;
     actor->trace_begun = image->trace_begun;
     actor->trace_microstep = image->trace_microstep;
+    /* Skip the ordinal an UNLOADED record takes after this image was
+     * captured (ta_actor_unload validates the image first, then writes it),
+     * so the LOADED that follows never reuses its key. After a reconstruct
+     * the ordinal is simply unused. */
+    actor->trace_lifecycle = image->trace_lifecycle + 1u;
     actor->trace_macrostep = image->trace_macrostep;
     actor->next_send_id = image->next_send_id;
     actor->session_epoch = image->source_epoch;

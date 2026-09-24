@@ -3145,8 +3145,15 @@ static ta_result ta_run_finish(ta_interpreter *it) {
     it->at = (ta_micro_position){0};
     ta_trace_end(it);
     ta_actor *actor = it->actor;
+    /* A lifecycle record: its own key, and the step that finished as cause. */
+    ta_step_key step = ta_trace_key(it);
+    ta_step_key key = ta_trace_lifecycle_key(actor);
     if ((it->system->trace.kinds & TA_TRACE_BIT(TA_TRACE_FINISHED)) != 0) {
         ta_trace_record record = ta_trace_record_now(it, TA_TRACE_FINISHED);
+        record.key = key;
+        record.cause = step;
+        record.position = (ta_trace_position){ .at = TA_TRACE_AT_NONE, .state = TA_STATE_NONE,
+                                               .transition = TA_TRANSITION_NONE, .action = TA_ACTION_NONE };
         record.state = actor->sparse != NULL ? actor->sparse->final_state : TA_STATE_NONE;
         ta_trace_emit(it, &record);
     }

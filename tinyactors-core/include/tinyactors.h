@@ -324,7 +324,11 @@ typedef enum { TA_RUN_STABLE = 0, TA_RUN_PAUSED = 1, TA_RUN_DONE = 2, TA_RUN_ERR
  * macrostep itself. Macrosteps count from 1 per session, and 0 is outside a
  * macrostep. The counters run whether or not a trace sink is installed, so
  * keys are the same with tracing on or off. A cause with `session` 0 is the
- * host's: `macrostep` holds its parent span ID, or 0 for none.
+ * host's: `macrostep` holds its parent span ID, or 0 for none. A lifecycle
+ * record (SPAWNED, LOADED, UNLOADED, FINISHED, DESTROYED) is outside every
+ * macrostep: its key is (session, 0, n), where n counts the session's
+ * lifecycle records from 1 across residency, so each has its own span ID.
+ * FINISHED names the step that finished as its `cause`.
  */
 typedef struct { uint64_t session; uint64_t macrostep; uint32_t microstep; } ta_step_key;
 /*
