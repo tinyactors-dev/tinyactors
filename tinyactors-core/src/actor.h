@@ -46,6 +46,13 @@ typedef struct ta_internal_queue {
     ta_queued_event events[];
 } ta_internal_queue;
 
+/* Where an actor's external event is (ADR 0069). */
+typedef enum {
+    TA_EXTERNAL_NONE = 0,
+    TA_EXTERNAL_WAITING, /* delivered, behind any internal events */
+    TA_EXTERNAL_TAKEN    /* taken by the running macrostep, kept until it ends */
+} ta_external_state;
+
 /* Allocated only for actors that use one of these uncommon facilities. */
 typedef struct {
     ta_active_invoke *invokes;
@@ -98,10 +105,14 @@ struct ta_actor {
     bool bootstrapped;
     bool macrostep;
     bool finished;
-    bool has_external_event;
+    /*
+     * The external event of the running macrostep, from ta_actor_deliver
+     * until the macrostep ends, and whether the macrostep has taken it
+     * (ta_external_state). Inspection reports it while the macrostep runs
+     * (ADR 0047, ADR 0069).
+     */
+    uint8_t external;
     ta_event external_event;
-    bool has_macrostep_event;
-    ta_event macrostep_event;
     bool has_current_event;
     ta_event current_event;
     uint64_t next_send_id;

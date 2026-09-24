@@ -1,13 +1,9 @@
 /*
- * A session image holds only the events the actor holds (ADR 0038). An actor
- * keeps three events, each valid only while its flag says so:
- * external_event (has_external_event), macrostep_event (has_macrostep_event)
- * and current_event (has_current_event). When a macrostep takes its external
- * event, the interpreter moves it into current_event and clears the flag, but
- * leaves the bytes behind, so a failed microstep can put it back. An internal
- * event that becomes current_event later releases it.
+ * A session image holds only the events the actor holds (ADR 0038). An
+ * actor's event slots are valid only while its flags say so: releasing an
+ * event, or taking it off the queue, leaves its bytes behind (ADR 0069).
  *
- * Capture used to copy, retain and detach all three whatever their flags. It
+ * Capture used to copy, retain and detach every slot whatever its flag. It
  * then retained a host value the actor had already released, and the image
  * released it once more when destroyed: a double free in any host that
  * reuses value storage. That is the crash the paging scenario found

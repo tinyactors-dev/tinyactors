@@ -210,11 +210,21 @@ static bool ta_dequeue_internal(ta_actor *actor, ta_event *out) {
     return true;
 }
 
+/* Releases the external event when its macrostep ends. */
+static void ta_release_external(ta_actor *actor) {
+    if (actor->external != TA_EXTERNAL_NONE) {
+        ta_event_release(&actor->external_event);
+        actor->external = TA_EXTERNAL_NONE;
+    }
+}
+
 /* Puts the event selected for a failed microstep back where resume finds it. */
 static void ta_restore_current_event(ta_actor *actor, bool external) {
     if (external) {
-        /* ta_set_current_event moved the retained external_event into current_event. */
-        actor->has_external_event = true;
+        /* The external event never left its slot: it waits to be taken again,
+         * and current_event lets go of its own reference. */
+        ta_event_release(&actor->current_event);
+        actor->external = TA_EXTERNAL_WAITING;
     } else {
         /* The event came out of this queue, so it has room for it again. */
         ta_internal_queue *queue = actor->internal_queue;
@@ -2305,10 +2315,7 @@ static ta_result ta_finish(ta_interpreter *it) {
     while (ta_dequeue_internal(it->actor, &event)) {
         ta_event_release(&event);
     }
-    if (it->actor->has_macrostep_event) {
-        ta_event_release(&it->actor->macrostep_event);
-        it->actor->has_macrostep_event = false;
-    }
+    ta_release_external(it->actor);
     it->actor->macrostep = false;
     it->actor->record.residency = TA_ACTOR_DONE;
     /* Invoke: cancel this session's invocations and report done.invoke to its parent. */
@@ -2449,9 +2456,13 @@ static ta_result ta_interpreter_run(ta_system *system, ta_actor *actor, const ta
             break; /* Invoke: the macrostep ended, so start its states' invocations. */
         } else if (ta_interpreter_internal_pending(actor)) {
             continue;
-        } else if (actor->has_external_event) {
-            actor->has_external_event = false;
-            ta_set_current_event(actor, &actor->external_event);
+        } else if (actor->external == TA_EXTERNAL_WAITING) {
+            /* The event stays in its slot for inspection until the
+             * macrostep ends; current_event holds a reference of its own. */
+            ta_event taken;
+            ta_event_retain(&actor->external_event, &taken);
+            ta_set_current_event(actor, &taken);
+            actor->external = TA_EXTERNAL_TAKEN;
             restore_external = true;
             /* Invoke: <finalize> and autoforwarding. */
             result = ta_invoke_before_external(it);
@@ -2460,10 +2471,7 @@ static ta_result ta_interpreter_run(ta_system *system, ta_actor *actor, const ta
             }
         } else {
             ta_compact_sparse(it);
-            if (actor->has_macrostep_event) {
-                ta_event_release(&actor->macrostep_event);
-                actor->has_macrostep_event = false;
-            }
+            ta_release_external(actor);
             actor->macrostep = false;
             actor->record.residency = TA_ACTOR_IDLE;
             *status = TA_RUN_STABLE;
@@ -2648,14 +2656,7 @@ bool ta_interpreter_internal_pending(const ta_actor *actor) {
 }
 
 void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor) {
-    if (actor->has_external_event) {
-        ta_event_release(&actor->external_event);
-        actor->has_external_event = false;
-    }
-    if (actor->has_macrostep_event) {
-        ta_event_release(&actor->macrostep_event);
-        actor->has_macrostep_event = false;
-    }
+    ta_release_external(actor);
     if (actor->has_current_event) {
         ta_event_release(&actor->current_event);
         actor->has_current_event = false;

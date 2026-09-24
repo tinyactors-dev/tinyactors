@@ -718,7 +718,7 @@ ta_result ta_actor_deliver(ta_system *system, ta_actor_id id, const ta_event *ev
     if (actor->finished) {
         return TA_ERR_DONE;
     }
-    if (actor->macrostep || actor->has_external_event) {
+    if (actor->macrostep || actor->external != TA_EXTERNAL_NONE) {
         return TA_ERR_BUSY;
     }
     ta_event accepted = *event;
@@ -726,12 +726,8 @@ ta_result ta_actor_deliver(ta_system *system, ta_actor_id id, const ta_event *ev
     if (result != TA_OK) {
         return result;
     }
-    ta_event copy;
-    ta_event_retain(&accepted, &copy);
-    actor->external_event = copy;
-    actor->has_external_event = true;
-    ta_event_retain(&accepted, &actor->macrostep_event);
-    actor->has_macrostep_event = true;
+    ta_event_retain(&accepted, &actor->external_event);
+    actor->external = TA_EXTERNAL_WAITING;
     actor->macrostep = true;
     ta_actor_touch(actor);
     actor->record.residency = TA_ACTOR_RUNNING;
@@ -777,10 +773,7 @@ static const ta_event *ta_actor_paused_event(const ta_actor *actor) {
     if (!actor->macrostep) {
         return NULL;
     }
-    if (actor->has_macrostep_event) {
-        return &actor->macrostep_event;
-    }
-    return NULL;
+    return actor->external == TA_EXTERNAL_NONE ? NULL : &actor->external_event;
 }
 
 static size_t ta_vec_bytes(const ta_vec *vec) {

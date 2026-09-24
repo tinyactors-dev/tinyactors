@@ -38,10 +38,8 @@ struct ta_session_image {
     bool bootstrapped;
     bool macrostep;
     bool finished;
-    bool has_external_event;
+    uint8_t external; /* ta_external_state */
     ta_event external_event;
-    bool has_macrostep_event;
-    ta_event macrostep_event;
     bool has_current_event;
     ta_event current_event;
     uint64_t next_send_id;
@@ -227,9 +225,6 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
         result = ta_image_copy_origin(system, arena, &image->external_event);
     }
     if (result == TA_OK) {
-        result = ta_image_copy_origin(system, arena, &image->macrostep_event);
-    }
-    if (result == TA_OK) {
         result = ta_image_copy_origin(system, arena, &image->current_event);
     }
     if (result != TA_OK) {
@@ -314,7 +309,6 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
 /* The second half of a capture: infallible, so it cannot leave a half-image. */
 static void ta_image_retain(ta_session_image *image) {
     ta_value_retain(&image->external_event.data);
-    ta_value_retain(&image->macrostep_event.data);
     ta_value_retain(&image->current_event.data);
     ta_value_retain(&image->completion.data);
     for (uint32_t index = 0; index < image->internal_count; index += 1) {
@@ -362,17 +356,13 @@ ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_params *par
         .macrostep = actor->macrostep,
         .finished = actor->finished,
         /*
-         * An event is the actor's only while its flag is set. A cleared flag
-         * can leave stale bytes behind: taking the external event moves it
-         * into current_event and keeps the copy so a failed microstep can put
-         * it back, and releasing an event leaves its origin in place. The
-         * image takes, and later retains, detaches and releases, only what
-         * the flags say the actor holds.
+         * An event is the actor's only while its flag says so. Releasing an
+         * event leaves its bytes, origin included, in place, so the image
+         * takes, and later retains, detaches and releases, only what the
+         * flags say the actor holds.
          */
-        .has_external_event = actor->has_external_event,
-        .external_event = actor->has_external_event ? actor->external_event : (ta_event){0},
-        .has_macrostep_event = actor->has_macrostep_event,
-        .macrostep_event = actor->has_macrostep_event ? actor->macrostep_event : (ta_event){0},
+        .external = actor->external,
+        .external_event = actor->external != TA_EXTERNAL_NONE ? actor->external_event : (ta_event){0},
         .has_current_event = actor->has_current_event,
         .current_event = actor->has_current_event ? actor->current_event : (ta_event){0},
         .next_send_id = actor->next_send_id,
@@ -426,7 +416,6 @@ void ta_session_image_destroy(ta_session_image *image) {
     }
     /* The mirror of ta_image_retain(), in the same order. */
     ta_value_release(&image->external_event.data);
-    ta_value_release(&image->macrostep_event.data);
     ta_value_release(&image->current_event.data);
     ta_value_release(&image->completion.data);
     for (uint32_t index = 0; index < image->internal_count; index += 1) {
@@ -630,13 +619,9 @@ ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_par
     actor->finished = image->finished;
     actor->next_send_id = image->next_send_id;
     actor->session_epoch = image->source_epoch;
-    if (image->has_external_event) {
+    if (image->external != TA_EXTERNAL_NONE) {
         ta_event_retain(&image->external_event, &actor->external_event);
-        actor->has_external_event = true;
-    }
-    if (image->has_macrostep_event) {
-        ta_event_retain(&image->macrostep_event, &actor->macrostep_event);
-        actor->has_macrostep_event = true;
+        actor->external = image->external;
     }
     if (image->has_current_event) {
         ta_event_retain(&image->current_event, &actor->current_event);
@@ -648,11 +633,8 @@ ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_par
      * releasing ignores.
      */
     result = ta_actor_ref_localize(system, &actor->record.self);
-    if (result == TA_OK && actor->has_external_event) {
+    if (result == TA_OK && actor->external != TA_EXTERNAL_NONE) {
         result = ta_image_localize_origin(system, &actor->external_event);
-    }
-    if (result == TA_OK && actor->has_macrostep_event) {
-        result = ta_image_localize_origin(system, &actor->macrostep_event);
     }
     if (result == TA_OK && actor->has_current_event) {
         result = ta_image_localize_origin(system, &actor->current_event);
