@@ -714,9 +714,13 @@ needs a core change):
   other. The JavaScript data model shares objects by reference (ADR 0011).
   Fixing it needs a core data-model operation for values leaving a session
   (gap G4);
-- `ioProcessors` lists only the SCXML processor. SCXML §5.10 says it MUST
-  list every processor, including those registered with `registerIo`
-  (gap G2, needs core support).
+- ~~`ioProcessors` lists only the SCXML processor~~: done (gap G2, core
+  ADR 0068). `ioProcessors` lists every processor, with the location its
+  `registerIo(type, processor, { location })` template renders. Gaps G1 and
+  G3 are fixed too: `post()`/`send()` take `options.origin` (a request's
+  URI, a scope from `openScope()`, or a token rendered by an `origin`
+  template), and events from invoked services name the service's type as
+  `originType`.
 
 **Open decisions:**
 - importing XML charts whose expressions are ECMAScript source text

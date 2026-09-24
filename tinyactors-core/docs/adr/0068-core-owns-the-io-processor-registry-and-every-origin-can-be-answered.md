@@ -1,6 +1,6 @@
 # ADR 0068: Core owns the I/O processor registry, and every origin can be answered
 
-**Status:** Accepted; refines ADR 0015, ADR 0016, ADR 0040, ADR 0046 and ADR 0065. Revised in place while Proposed:
+**Status:** Accepted and implemented; refines ADR 0015, ADR 0016, ADR 0040, ADR 0046 and ADR 0065. See the implementation notes for where the code differs from the text. Revised in place while Proposed:
 - 2026-09-24, first review: origins reference the registry instead of copying from it, and text is rendered on demand.
 - 2026-09-24, second review: I/O origins use three storage classes (computed, scoped, per message) instead of processor tokens with an inverse callback.
 **Date:** 2026-09-24
@@ -516,3 +516,79 @@ TA_API ta_result ta_dm_host_text(const ta_dm_host *host, TA_IN const ta_dm_text_
   - two text kinds removed and two added;
   - `ta_event_retain()` and `ta_event_release()` now also manage
     per-message origins.
+
+## Implementation notes
+
+Recorded when this ADR was implemented (2026-09-24).
+
+- **`ta_io_origin` carries its own class tag.** Decision 2 made the three
+  classes three outer kinds of `ta_origin`, with one union member selected
+  by several `TA_WHEN` constants. The API description cannot express a
+  union inside `ta_io_origin` that the *outer* tag selects: a union needs
+  its tag in its own struct (`TA_TAGGED`). So `ta_origin` keeps one kind,
+  `TA_ORIGIN_IO`, and `ta_io_origin` is
+  `{ uint32_t processor; ta_io_origin_class origin_class; union as }` with
+  `TA_TAGGED(origin_class, as)`. It is still 16 bytes, and `ta_origin` still
+  24. `TA_WHEN` with several constants was then not needed, and was not
+  added (root `AGENTS.md`: remove what nothing uses).
+- **`ta_io_origin_entry` is a `TA_VIEW`**, not a `TA_HANDLE`: hosts never
+  create or destroy one directly.
+- **`ta_origin_text()` was added** (`include/tinyactors.h`). Hosts that show
+  events outside a data model need an origin's text too: napi's codec for
+  `ta_io_origin` and inspection use it. It renders any origin kind into a
+  caller's arena, and returns views of stored URIs.
+- **A closed scope keeps its type.** `_event.origintype` of an event whose
+  scope closed still names the processor, while `_event.origin` is empty.
+  The reply idiom then reaches the processor with no target, and the
+  processor refuses it, so the sender sees `error.communication`, as
+  decision 2 says. Answering no type would have failed the send earlier,
+  with `error.execution` for an unknown processor.
+- **The arena is `system->scratch`.** While a cancelled child is exited
+  (ADR 0060), the exit frame swaps its own arena into `system->scratch`, so
+  "the running interpreter's arena" needs no further plumbing. A view read
+  outside a run lives until the next run starts. Rendered text is also
+  NUL-terminated; the length does not count the NUL.
+- **Records.** Scopes and entries use one record type (80 bytes, a 48-byte
+  inline URI) in two tables (`src/io_origin.c`). A scope record keeps its
+  own index in `refs`, which the free list reuses; an entry never needs its
+  index, so freeing one does not look it up. Detached copies in session
+  images use the same record type with no table: the URI lives in the
+  image's arena, and the processor type text in the inline buffer.
+- **Invoke origins in images** keep the invoke ID and the invoker's registry
+  index, as they are in memory, rather than the invoker's type text.
+  Reconstructing into a system whose invoker registry differs can then name
+  another invoker for an event that was held while it was captured.
+- **Delayed sends hold no I/O origins.** A stored send keeps its sender's
+  actor reference as its origin (ADR 0054), never an event's origin, so
+  the "held in delayed sends" case of the reference counts does not exist.
+  Events with I/O origins are held by hosts, by an actor's external, current
+  and macrostep events, by its internal queue, and by images.
+- **The internal registry lookup was renamed** `ta_system_io_of()`, because
+  the public `ta_system_find_io()` took its name.
+- **Sizes and allocations, measured.** `sizeof` on a 64-bit host:
+  `ta_origin` 24, `ta_event` 64, `ta_queued_event` 72, `ta_send` 96,
+  `ta_active_invoke` 32, unchanged. tinyactors-test's scale test measures,
+  after warm-up, 0 allocator calls per event with a 41-byte message origin,
+  and 1 allocation plus 1 free (the spill) with a 73-byte one; a resident
+  actor still costs 531 bytes. `tests/io_origin_test.c` checks the same
+  zero with 1,000 retain and release rounds.
+- **Tests.**
+  - Core: `tests/io_origin_test.c`, also under AddressSanitizer
+    (`mise run asan`): registry indices, each class, stale scopes, reference
+    counts, delivery and refusal, and image round trips, including an
+    unknown processor type at load, which gives no origin.
+  - tinyactors-test: three new instruments, `io.peer` (computed),
+    `io.connection` (scoped) and `io.request` (per message, answered once),
+    driven by `ruby/scenarios/io_origins.rb`. The scenarios cover
+    `_ioprocessors` in the jq and ECMAScript data models (with a Basic HTTP
+    location), a reply per class, a late reply to a closed scope, a URI
+    longer than the inline buffer, origins held by the host, through an
+    action-budget pause, refused by a finished actor and dropped, invoke
+    origins of a non-SCXML service with the SCXML 6.4 send form, and
+    capture and reconstruction of each class.
+  - napi: `test/origins.js` on Node and Bun.
+- **napi's templates are host-level.** Core renders no templates (design 2
+  above). napi's JavaScript processors cannot run inside core, so
+  `registerIo(type, processor, { location, origin })` gives the native
+  adapter templates with `{session}`, `{family}`, `{name}` and `{token}`,
+  which it expands in C (`tinyactors-napi/src/adapters/io.c`).

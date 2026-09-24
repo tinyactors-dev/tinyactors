@@ -223,9 +223,11 @@ system, multiplied by thousands, has not been measured yet.
 
 These are gaps between the implementation and the W3C SCXML
 Recommendation, not new features. Distribution makes them visible.
-G1–G3 are addressed by core
+G1–G3 are fixed by core
 [ADR 0068](../../tinyactors-core/docs/adr/0068-core-owns-the-io-processor-registry-and-every-origin-can-be-answered.md)
-(Proposed). Core owns the processor registry with stable indices. An I/O
+(accepted and implemented on 2026-09-24, in core, the test host and napi;
+the ADR's implementation notes record where the code differs). G4 is still
+open. Core owns the processor registry with stable indices. An I/O
 origin is a processor index plus one of three storage classes that the
 processor declares:
 - **computed:** a token rendered by a pure callback, for peers and
