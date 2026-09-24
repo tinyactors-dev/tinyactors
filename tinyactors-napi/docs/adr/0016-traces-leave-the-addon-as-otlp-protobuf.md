@@ -1,6 +1,6 @@
 # ADR 0016: Traces leave the addon as OTLP protobuf
 
-**Status:** Proposed. It would supersede ADR 0015 points 1 and 3, and relax one constraint the user set for ADR 0015 (see "Constraints"). Research: [`docs/research/trace-handoff-formats.md`](../../../docs/research/trace-handoff-formats.md).
+**Status:** Accepted; not yet implemented. Supersedes ADR 0015 points 1 and 3, and relaxes one constraint the user set for ADR 0015 (see "Constraints"). Revised while Proposed, 2026-09-24: the encoder is written against core's public header and a small host interface, so any host can link it (point 3); trace IDs come from that interface (point 4); a section on using the official OpenTelemetry SDK; lifecycle span IDs (point 2). Research: [`docs/research/trace-handoff-formats.md`](../../../docs/research/trace-handoff-formats.md).
 **Date:** 2026-09-24
 
 ## Context
@@ -53,7 +53,12 @@ otel-tui (HTTP 200), which showed the traces with their spans.
 
    Every field of every record is an attribute, named with ADR 0067's
    `scxml.*` names, and a table in this ADR's implementation notes lists
-   them. Span IDs are `ta_step_key_span_id()`. Parents follow ADR 0067
+   them. Span IDs are `ta_step_key_span_id()`. OTLP requires span IDs to be
+   unique within a trace, and today two lifecycle records of the same kind
+   in one session (two `LOADED`, say) derive the same one (ADR 0015 open
+   point 3). Core fixes that first: each session gets a lifecycle counter,
+   kept in the session image, and the span-ID derivation includes it, the
+   same way in every host. Parents follow ADR 0067
    section 6: the cause, or a link when `parent: "link"`. The mapping
    `lib/tracing.js` does today is the reference, and its gaps become
    requirements. For example, it drops records that fall outside an open
@@ -66,11 +71,34 @@ otel-tui (HTTP 200), which showed the traces with their spans.
    the repository. HTTP, retries, batching across turns, gzip and where the
    bytes go all stay in JavaScript and belong to the user.
 
+   **Any host can link it.** The encoder uses only core's public header
+   (`tinyactors.h`) and a small host interface of its own, with no napi
+   internals:
+   - **a clock:** wall time in Unix nanoseconds, since core has only
+     logical time;
+   - **names:** the lookups of point 5, through core's public API;
+   - **trace IDs:** a source of random 16-byte IDs (point 4);
+   - **values** (optional): text for a value, for `values: true` (point 6).
+
+   napi implements that interface in its own files. The encoder's source
+   is not in `NODE_API_SOURCES` (`mise/lib/compile.rb`), so `test-native`
+   fails if Node-API ever reaches it, and it has native tests of its own. It stays in
+   napi's directory until a second host needs it. Then it moves to a place
+   every host links. That may be the host kernel, but it need not be: the
+   database hosts (the SQLite and PostgreSQL proposals) won't use the
+   kernel, because their mailboxes and timers are tables, and they will
+   want the same traces. Where it moves is decided when that host
+   starts.
+
 4. **A trace always has an ID.** When a sink is installed and a delivery or
    spawn carries no `traceparent`, napi starts a trace with a random trace
    ID. Core never generates IDs; the host does. Core then propagates the
    context as usual. This replaces the step-derived trace IDs and the
-   unbounded span-to-trace map in `TraceSpans`.
+   unbounded span-to-trace map in `TraceSpans`. The IDs come from the host
+   interface's source (point 3). napi's source is the operating system's
+   random bytes. `setTraceSink` takes a `seed` for tests, which makes the
+   IDs a fixed sequence, so golden bytes and repeated runs compare
+   equal.
 
 5. **Names come from core, cached per definition.** Event names, state
    IDs, and the transition, action and expression facts of core ADR 0071
@@ -95,6 +123,45 @@ otel-tui (HTTP 200), which showed the traces with their spans.
 8. **`tools/otlp.js` shrinks to a POST.** The test exporter and the
    otel-tui demo post the hook's bytes. The in-process receiver in
    `test/otlp.js` decodes them with `decodeTraces`.
+
+## Using the official OpenTelemetry SDK
+
+tinyactors does not depend on the SDK, and posting the hook's bytes needs
+no SDK at all: one `fetch` to `/v1/traces` is the whole export. A user who
+also runs the official OpenTelemetry JS SDK is in one of three cases.
+
+1. **Both send to the same collector.** This is the expected case, and it
+   needs no glue. The SDK exports the user's own spans, and the user
+   posts our bytes to the same OTLP endpoint.
+   - **One trace:** to join the two into one trace, the user passes the
+     active span's context as `traceparent` on `post`, `send` and `spawn`.
+     Our spans then carry the user's trace ID and name the user's span as
+     parent.
+   - **Sampling:** the SDK's sampling decision carries over through the
+     sampled flag in `traceparent`, which core honours (ADR 0067
+     section 6).
+   - **Resource:** the SDK's resource (`service.name`, ...) does not apply
+     to bytes the SDK never sees, so the user sets `resource` on
+     `setTraceSink` (point 1).
+2. **Our spans go through the SDK's pipeline:** its span processors, its
+   sampler, or an exporter that does not speak OTLP. The SDK cannot take
+   in OTLP bytes, and it has no public decoder. The route is
+   `decodeTraces(bytes)` (point 7), then objects shaped like the SDK's
+   `ReadableSpan`, handed to the SDK's exporter or processor. Our span IDs
+   are kept, so the links between spans hold. Recreating the spans through
+   the SDK's tracer would give them new IDs and break those links, so the
+   docs advise against it.
+3. **An in-process consumer that isn't OpenTelemetry,** such as a
+   verifier, reads `decodeTraces` output directly. The lossless mapping
+   (point 2) is its contract.
+
+**The docs carry worked examples, not a dependency.** `docs/tracing.md`
+shows case 1: posting the bytes, and passing the SDK's active context as
+`traceparent`. It also shows case 2: `decodeTraces` output turned into
+`ReadableSpan` objects and exported by the SDK's OTLP exporter. The case 2
+example is tested in `test/`, against a pinned SDK version installed as a
+**dev** dependency only, on Node and Bun, so an SDK change that breaks it
+is noticed. `package.json`'s runtime `dependencies` stay empty.
 
 ## Alternatives
 
@@ -130,10 +197,8 @@ otel-tui (HTTP 200), which showed the traces with their spans.
   lossless so that nothing is lost by that.
 - **Relaxed: "C only hooks".** C now knows OTLP's span model and wire
   format. It still does no export: no transport, no retries, no policy. The
-  user should confirm this relaxation, since the proposal rests on it. If
-  it is not accepted, the next best design is the custom columnar layout
-  (alternative 4), with the span mapping and a protobuf writer in
-  JavaScript.
+  user accepted this relaxation on 2026-09-24, together with OTLP as the
+  only output and random trace IDs in napi.
 
 ## Relation to other decisions
 
@@ -147,9 +212,16 @@ otel-tui (HTTP 200), which showed the traces with their spans.
 - **Core ADR 0071:** provides the names in point 5. Until it lands,
   transitions, actions and expressions cross as numbers.
 - **The host kernel** (`docs/proposals/host-kernel.md`): the encoder has
-  no Node-API in it and moves into the kernel when the kernel is extracted,
-  so a browser or Python host emits the same bytes. Its clock then comes
-  from the kernel's pump-driver interface.
+  no Node-API in it and depends only on core's public header and its own
+  host interface (point 3), so it can move into the kernel, or into a
+  small library of its own, whichever the second host needs. A browser,
+  Python or database host then emits the same bytes. A kernel host could
+  implement the clock through the kernel's pump-driver interface.
+- **Core ADR 0067, open points:** the mapping is lossless over the records
+  core writes. Three kinds of events still leave no record: an internal
+  event that enables no transition, events queued outside a run, and
+  autoforwarding. They show up in OTLP only once core records them. The
+  lifecycle span-ID collision is fixed as part of this ADR (point 2).
 
 ## Consequences
 
@@ -176,4 +248,10 @@ otel-tui (HTTP 200), which showed the traces with their spans.
   - posting them to the in-process receiver works.
 - **Bench:** `test/bench/tracing.js` reports the OTLP hand-off next to
   untraced.
+- **SDK example:** the case 2 example from "Using the official
+  OpenTelemetry SDK" runs against a pinned SDK dev dependency, on Node and
+  Bun.
+- **Lifecycle span IDs:** core golden values show that two `LOADED`
+  records of one session get different span IDs, including across an
+  image.
 - **By hand:** `mise run otel-demo` shows the demo in otel-tui.
