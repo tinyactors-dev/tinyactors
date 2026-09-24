@@ -196,7 +196,11 @@ export interface System {
   /** Publish a prepared actor and destroy its incumbent (PreparedActor.activate). */
   activate<Data extends object>(prepared: PreparedActor<Data>): Actor<Data>;
 
-  registerIo(type: string, processor: IoProcessor): void;
+  registerIo(type: string, processor: IoProcessor, options?: IoProcessorOptions): void;
+  /** Open a scope that stores `uri` once, for a connection or a session (core ADR 0068). */
+  openScope(type: string, uri: string): IoScope;
+  /** Close a scope; events naming it then carry no origin. Idempotent. */
+  closeScope(scope: IoScope): void;
   registerInvoker(type: string, invoker: Invoker): void;
   setLogSink(sink?: LogSink): void;
 
@@ -339,6 +343,36 @@ export interface PostOptions {
   signal?: AbortSignal;
   /** The retained-bytes estimate of `data`, instead of the default (ADR 0005 point 9). */
   bytes?: number;
+  /**
+   * Who the receiver answers with `event.origin` and `event.originType`
+   * (core ADR 0068): an I/O processor's type plus one request's reply URI,
+   * a scope from openScope(), or a token its origin template renders.
+   */
+  origin?: IoOrigin;
+}
+
+export type IoOrigin =
+  | { readonly type: string; readonly uri: string }
+  | { readonly type: string; readonly scope: IoScope }
+  | { readonly type: string; readonly token: number | bigint };
+
+/** A scope from System.openScope(); stale once closed. */
+export interface IoScope {
+  readonly type: string;
+  readonly uri: string;
+  readonly index: number;
+  readonly generation: number;
+}
+
+/**
+ * Templates the native adapter renders without running JavaScript (core ADR
+ * 0068): `location` is this session's address through the processor,
+ * listed in `ioProcessors` ({session}, {family}, {name}); `origin` is the
+ * URI of a computed origin ({token}).
+ */
+export interface IoProcessorOptions {
+  location?: string;
+  origin?: string;
 }
 
 export interface SendOptions extends PostOptions {
@@ -972,7 +1006,7 @@ export interface DoneDataSpec {
  * sender gets an external `error.communication` event with data
  * { sendId, type, error }.
  */
-export interface IoProcessor {
+export interface IoProcessor extends IoProcessorOptions {
   send(request: IoRequest, context: EffectContext): void | Promise<void>;
 }
 

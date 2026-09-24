@@ -330,22 +330,225 @@ static tna_napi_system *tna_services_this(napi_env env, napi_callback_info info,
     return wrapper;
 }
 
-/* registerIo(type): core sends <send type> to the JavaScript processors (lib/system.js). */
+/* An optional string argument copied into the call arena; empty when undefined. */
+static bool tna_optional_text(napi_env env, tna_system *system, napi_value value, ta_str *out) {
+    napi_valuetype type = napi_undefined;
+    *out = (ta_str){ NULL, 0 };
+    if (value == NULL || napi_typeof(env, value, &type) != napi_ok || type == napi_undefined) {
+        return true;
+    }
+    size_t length = 0;
+    if (type != napi_string || napi_get_value_string_utf8(env, value, NULL, 0, &length) != napi_ok) {
+        return false;
+    }
+    char *text = ta_arena_alloc(&system->scratch.call, length + 1u, 1);
+    if (text == NULL) {
+        return false;
+    }
+    napi_get_value_string_utf8(env, value, text, length + 1u, &length);
+    *out = (ta_str){ .ptr = text, .len = (uint32_t)length };
+    return true;
+}
+
+/*
+ * registerIo(type, location?, origin?): core sends <send type> to the
+ * JavaScript processors (lib/system.js). `location` and `origin` are the
+ * templates the native adapter renders for _ioprocessors and for computed
+ * origins (adapters/io.h, core ADR 0068). Returns the registry index.
+ */
 napi_value tna_register_io_method(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value argv[1] = { NULL };
+    size_t argc = 3;
+    napi_value argv[3] = { NULL, NULL, NULL };
     tna_napi_system *wrapper = tna_services_this(env, info, &argc, argv);
     ta_atom atom = 0;
     if (wrapper == NULL || !tna_type_atom(env, wrapper->system, argv[0], "registerIo(): expected a type string", &atom)) {
         return NULL;
     }
     tna_system *system = wrapper->system;
-    ta_result result = ta_system_register_io(
-        system->core, &(ta_io_registration_params){ .type = atom, .io = tna_io_adapter(system) });
+    tna_io_registration registration = { .type = atom };
+    uint32_t index = 0;
+    registration.index = &index;
+    if (!tna_optional_text(env, system, argc > 1 ? argv[1] : NULL, &registration.location) ||
+        !tna_optional_text(env, system, argc > 2 ? argv[2] : NULL, &registration.origin)) {
+        tna_scratch_reset_call(&system->scratch);
+        return tna_throw(env, "invalid", "registerIo(): options.location and options.origin must be strings");
+    }
+    ta_result result = tna_io_register(system, &registration);
+    tna_scratch_reset_call(&system->scratch);
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result),
                          "registerIo(): core refused the type (the SCXML event processor's type is reserved)");
     }
+    napi_value out = NULL;
+    napi_create_uint32(env, index, &out);
+    return out;
+}
+
+/* The registry index of a registered I/O processor type (core ADR 0068); throws otherwise. */
+static bool tna_processor_index(napi_env env, tna_system *system, napi_value type, const char *what, uint32_t *out) {
+    ta_atom atom = 0;
+    if (!tna_type_atom(env, system, type, what, &atom)) {
+        return false;
+    }
+    if (ta_system_find_io(system->core, atom, out) != TA_OK || *out == 0) {
+        tna_throw(env, "invalid", "no JavaScript I/O processor is registered for the origin's type");
+        return false;
+    }
+    return true;
+}
+
+static bool tna_object_member(napi_env env, napi_value object, const char *name, napi_value *out) {
+    bool has = false;
+    napi_valuetype type = napi_undefined;
+    *out = NULL;
+    if (napi_has_named_property(env, object, name, &has) != napi_ok || !has ||
+        napi_get_named_property(env, object, name, out) != napi_ok || napi_typeof(env, *out, &type) != napi_ok ||
+        type == napi_undefined) {
+        *out = NULL;
+    }
+    return *out != NULL;
+}
+
+bool tna_origin_argument(napi_env env, tna_system *system, napi_value value, ta_origin *out) {
+    *out = (ta_origin){ .kind = TA_ORIGIN_NONE };
+    napi_valuetype type = napi_undefined;
+    if (value == NULL || napi_typeof(env, value, &type) != napi_ok || type == napi_undefined) {
+        return true;
+    }
+    napi_value field = NULL;
+    if (type != napi_object || !tna_object_member(env, value, "type", &field)) {
+        tna_throw(env, "invalid", "origin: expected { type, uri } or { type, scope } or { type, token }");
+        return false;
+    }
+    if (system->inside_core) {
+        tna_throw(env, "reentrant", "origin: an origin cannot be made from inside a core call (ADR 0013)");
+        return false;
+    }
+    ta_io_origin_make_params params = { .out = out };
+    if (!tna_processor_index(env, system, field, "origin.type: expected a processor type string", &params.processor)) {
+        return false;
+    }
+    napi_value uri = NULL;
+    napi_value scope = NULL;
+    napi_value token = NULL;
+    if (tna_object_member(env, value, "uri", &uri)) {
+        size_t length = 0;
+        if (napi_get_value_string_utf8(env, uri, NULL, 0, &length) != napi_ok) {
+            tna_throw(env, "invalid", "origin.uri: expected a string");
+            return false;
+        }
+        char *text = ta_arena_alloc(&system->scratch.call, length + 1u, 1);
+        if (text == NULL) {
+            tna_throw(env, "out-of-memory", "origin: cannot read the URI");
+            return false;
+        }
+        napi_get_value_string_utf8(env, uri, text, length + 1u, &length);
+        params.origin_class = TA_IO_ORIGIN_MESSAGE;
+        params.uri = (ta_str){ .ptr = text, .len = (uint32_t)length };
+    } else if (tna_object_member(env, value, "scope", &scope)) {
+        napi_value index = NULL;
+        napi_value generation = NULL;
+        if (!tna_object_member(env, scope, "index", &index) || !tna_object_member(env, scope, "generation", &generation) ||
+            napi_get_value_uint32(env, index, &params.scope.index) != napi_ok ||
+            napi_get_value_uint32(env, generation, &params.scope.generation) != napi_ok) {
+            tna_throw(env, "invalid", "origin.scope: expected a scope from openScope()");
+            return false;
+        }
+        params.origin_class = TA_IO_ORIGIN_SCOPED;
+    } else if (tna_object_member(env, value, "token", &token)) {
+        napi_valuetype kind = napi_undefined;
+        double number = 0;
+        bool lossless = true;
+        napi_typeof(env, token, &kind);
+        if (kind == napi_bigint ? napi_get_value_bigint_uint64(env, token, &params.token, &lossless) != napi_ok || !lossless
+                                : napi_get_value_double(env, token, &number) != napi_ok || !(number >= 0) ||
+                                      number != (double)(uint64_t)number) {
+            tna_throw(env, "invalid", "origin.token: expected a non-negative integer or bigint");
+            return false;
+        }
+        if (kind != napi_bigint) {
+            params.token = (uint64_t)number;
+        }
+        if (!tna_io_renders_origins(system, params.processor)) {
+            tna_throw(env, "invalid", "origin.token: the processor was registered without an origin template");
+            return false;
+        }
+        params.origin_class = TA_IO_ORIGIN_COMPUTED;
+    } else {
+        tna_throw(env, "invalid", "origin: expected { type, uri } or { type, scope } or { type, token }");
+        return false;
+    }
+    ta_result result = ta_io_origin_make(system->core, &params);
+    tna_scratch_reset_call(&system->scratch);
+    if (result == TA_ERR_NOT_FOUND) {
+        tna_throw(env, "stale", "origin.scope: the scope is closed");
+        return false;
+    }
+    if (result != TA_OK) {
+        tna_throw(env, tna_result_code(result), "origin: core refused it");
+        return false;
+    }
+    return true;
+}
+
+/* openScope(type, uri): a connection's scope, { index, generation } (core ADR 0068). */
+napi_value tna_open_scope_method(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2] = { NULL, NULL };
+    tna_napi_system *wrapper = tna_services_this(env, info, &argc, argv);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    tna_system *system = wrapper->system;
+    if (system->inside_core) {
+        return tna_throw(env, "reentrant", "openScope(): cannot run inside a core call (ADR 0013)");
+    }
+    uint32_t processor = 0;
+    if (!tna_processor_index(env, system, argv[0], "openScope(): expected a processor type string", &processor)) {
+        return NULL;
+    }
+    ta_str uri = { NULL, 0 };
+    if (!tna_optional_text(env, system, argc > 1 ? argv[1] : NULL, &uri) || uri.len == 0) {
+        tna_scratch_reset_call(&system->scratch);
+        return tna_throw(env, "invalid", "openScope(): expected a URI string");
+    }
+    ta_io_scope scope = { 0, 0 };
+    ta_result result =
+        ta_io_scope_open(system->core, &(ta_io_scope_open_params){ .processor = processor, .uri = uri, .out = &scope });
+    tna_scratch_reset_call(&system->scratch);
+    if (result != TA_OK) {
+        return tna_throw(env, tna_result_code(result), "openScope(): core refused it");
+    }
+    napi_value out = NULL;
+    napi_value index = NULL;
+    napi_value generation = NULL;
+    if (napi_create_object(env, &out) != napi_ok || napi_create_uint32(env, scope.index, &index) != napi_ok ||
+        napi_create_uint32(env, scope.generation, &generation) != napi_ok ||
+        napi_set_named_property(env, out, "index", index) != napi_ok ||
+        napi_set_named_property(env, out, "generation", generation) != napi_ok) {
+        return NULL;
+    }
+    return out;
+}
+
+/* closeScope(index, generation): events from the scope keep no origin text afterwards. */
+napi_value tna_close_scope_method(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2] = { NULL, NULL };
+    tna_napi_system *wrapper = tna_services_this(env, info, &argc, argv);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    tna_system *system = wrapper->system;
+    if (system->inside_core) {
+        return tna_throw(env, "reentrant", "closeScope(): cannot run inside a core call (ADR 0013)");
+    }
+    ta_io_scope scope = { 0, 0 };
+    if (argc < 2 || napi_get_value_uint32(env, argv[0], &scope.index) != napi_ok ||
+        napi_get_value_uint32(env, argv[1], &scope.generation) != napi_ok) {
+        return tna_throw(env, "invalid", "closeScope(): expected a scope from openScope()");
+    }
+    ta_io_scope_close(system->core, scope);
     return tna_js_undefined(env);
 }
 

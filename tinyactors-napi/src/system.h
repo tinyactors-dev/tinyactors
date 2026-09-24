@@ -90,6 +90,8 @@ typedef struct {
     ta_time armed_deadline;
 } tna_clock;
 
+typedef struct tna_io_processor tna_io_processor;
+
 struct tna_system {
     tna_allocator allocator;
     tna_scratch scratch;
@@ -129,6 +131,8 @@ struct tna_system {
      */
     ta_result (*resolve_child)(void *context, const ta_value *value, ta_definition_id *out);
     void *resolve_context;
+    /* One record per registered I/O processor type (adapters/io.h, core ADR 0068). */
+    tna_vec io_processors; /* tna_io_processor * */
 };
 
 /* TA_ERR_NOMEM when the record or core cannot be allocated. */

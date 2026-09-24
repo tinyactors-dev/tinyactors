@@ -9,6 +9,7 @@
 #include <time.h>
 
 #include "adapters/invoker.h"
+#include "adapters/io.h"
 #include "router.h"
 
 ta_result tna_system_create(tna_system **out) {
@@ -35,6 +36,8 @@ ta_result tna_system_create(tna_system **out) {
     tna_sched_init(&system->sched, tna_allocator_for(&system->allocator, TNA_MEMORY_SCHEDULING),
                    tna_allocator_for(&system->allocator, TNA_MEMORY_ENVELOPES));
     tna_directory_init(&system->directory, tna_allocator_for(&system->allocator, TNA_MEMORY_DIRECTORY));
+    tna_vec_init(&system->io_processors, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER),
+                 TNA_LAYOUT(tna_io_processor *));
     ta_result result = tna_scratch_init(&system->scratch, &system->allocator);
     if (result != TA_OK) {
         free(system);
@@ -84,6 +87,8 @@ void tna_system_close(tna_system *system) {
     tna_effects_close(&system->effects);
     ta_system_destroy(system->core);
     system->core = NULL;
+    /* Core held the I/O processor records as adapters until now. */
+    tna_io_close(system);
     tna_sched_destroy(&system->sched);
     if (system->after_core != NULL) {
         system->after_core(system->after_core_context);

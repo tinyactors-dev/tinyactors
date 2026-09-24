@@ -103,7 +103,7 @@ class System {
     this.#events = new EventNames(this.#native);
     const { io, invokers, log } = options ?? {};
     for (const [type, processor] of Object.entries(servicesOf(io, 'createSystem(): io'))) {
-      this.registerIo(type, processor);
+      this.registerIo(type, processor, { location: processor?.location, origin: processor?.origin });
     }
     for (const [type, invoker] of Object.entries(servicesOf(invokers, 'createSystem(): invokers'))) {
       this.registerInvoker(type, invoker);
@@ -124,16 +124,54 @@ class System {
    * processor that throws or whose promise rejects has failed the send: the
    * sender gets an external `error.communication` event whose data is
    * { sendId, type, error }.
+   *
+   * `options` says how core renders the processor's text without running
+   * JavaScript (core ADR 0068):
+   * - `location`: this session's address through the processor, listed in
+   *   `_ioprocessors` (`context.ioProcessors`). `{session}` is the session
+   *   ID, `{family}` and `{name}` its named address.
+   * - `origin`: the URI of a computed origin (post with `origin: { type,
+   *   token }`); `{token}` is the token.
+   * A processor posts events with an origin so a chart can answer them
+   * with `send(...).via(({ event }) => event.originType).to(({ event }) => event.origin)`: see post().
    */
-  registerIo(type, processor) {
+  registerIo(type, processor, options = {}) {
     if (typeof type !== 'string' || type === '') {
       throw new TinyactorsError('registerIo(): expected a type string', 'invalid');
     }
     if (processor === null || typeof processor !== 'object' || typeof processor.send !== 'function') {
       throw new TinyactorsError('registerIo(): expected an I/O processor with a send(request, context) method', 'invalid');
     }
-    this.#native.registerIo(type);
+    const { location, origin } = options ?? {};
+    for (const [name, value] of [['location', location], ['origin', origin]]) {
+      if (value !== undefined && typeof value !== 'string') {
+        throw new TinyactorsError(`registerIo(): options.${name} must be a string template`, 'invalid');
+      }
+    }
+    this.#native.registerIo(type, location, origin);
     this.#io.set(type, processor);
+  }
+
+  /**
+   * Open a scope for a connection or a session of processor `type`, storing
+   * `uri` once (core ADR 0068). Events posted with `origin: { type, scope }`
+   * name it; after closeScope() their origin is empty, so a late reply
+   * reaches the processor with no target.
+   */
+  openScope(type, uri) {
+    if (typeof uri !== 'string' || uri === '') {
+      throw new TinyactorsError('openScope(): expected a URI string', 'invalid');
+    }
+    const { index, generation } = this.#native.openScope(type, uri);
+    return Object.freeze({ type, uri, index, generation });
+  }
+
+  /** Close a scope from openScope(). Closing it again does nothing. */
+  closeScope(scope) {
+    if (scope === null || typeof scope !== 'object') {
+      throw new TinyactorsError('closeScope(): expected a scope from openScope()', 'invalid');
+    }
+    this.#native.closeScope(scope.index, scope.generation);
   }
 
   /**
@@ -666,21 +704,22 @@ class System {
   // Accepts one message for post() or send(); returns send()'s native promise.
   #accept(target, event, data, options, completion, what) {
     const bytes = retainedBytes(data, options, what);
+    const origin = originOf(options?.origin, what);
     if (!(target instanceof ActorId)) {
       if (target !== null && typeof target === 'object' && 'name' in target) {
         const { family, name } = addressOf(target, what);
         const id = this.#events.id(event);
         return completion
-          ? this.#native.sendNamed(family, name, id, data, bytes)
-          : this.#native.postNamed(family, name, id, data, bytes);
+          ? this.#native.sendNamed(family, name, id, data, bytes, origin)
+          : this.#native.postNamed(family, name, id, data, bytes, origin);
       }
       throw new TinyactorsError(`${what}: expected an actor of this system or an address`, 'invalid');
     }
     const { slot, generation } = actorOf(this, target);
     const id = this.#events.id(event);
     return completion
-      ? this.#native.send(slot, generation, id, data, bytes)
-      : this.#native.post(slot, generation, id, data, bytes);
+      ? this.#native.send(slot, generation, id, data, bytes, origin)
+      : this.#native.post(slot, generation, id, data, bytes, origin);
   }
 
   /*
@@ -877,6 +916,23 @@ class System {
  * the estimate must stay O(1), so pass `bytes` for large objects.
  */
 const OBJECT_BYTES = 64;
+/*
+ * The origin option of post() and send() (core ADR 0068): who a chart
+ * answers with `_event.origin`. { type, uri } is one request's reply URI,
+ * { type, scope } names a scope from openScope(), { type, token } a
+ * computed origin rendered from the processor's origin template.
+ */
+function originOf(origin, what) {
+  if (origin === undefined) return undefined;
+  if (origin === null || typeof origin !== 'object' || typeof origin.type !== 'string') {
+    throw new TinyactorsError(`${what}: options.origin must be { type, uri }, { type, scope } or { type, token }`, 'invalid');
+  }
+  if (origin.scope !== undefined) {
+    return { type: origin.type, scope: { index: origin.scope.index, generation: origin.scope.generation } };
+  }
+  return origin;
+}
+
 function retainedBytes(data, options, what) {
   const hint = options?.bytes;
   if (hint !== undefined) {

@@ -491,8 +491,8 @@ static napi_value tna_accept_done(napi_env env, tna_napi_system *wrapper, tna_ac
  * allowed inside a core call (a data-model callback may post; ADR 0013).
  */
 static napi_value tna_post_common(napi_env env, napi_callback_info info, bool send) {
-    size_t argc = 5;
-    napi_value argv[5] = { NULL, NULL, NULL, NULL, NULL };
+    size_t argc = 6;
+    napi_value argv[6] = { NULL, NULL, NULL, NULL, NULL, NULL };
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
         return NULL;
     }
@@ -513,9 +513,13 @@ static napi_value tna_post_common(napi_env env, napi_callback_info info, bool se
     if (!tna_post_event(env, wrapper, name, argv[3], &event)) {
         return NULL;
     }
+    if (!tna_origin_argument(env, wrapper->system, argv[5], &event.origin)) {
+        ta_event_release(&event);
+        return NULL;
+    }
     tna_accepting accepting = { .send = send };
     if (!tna_accept_begin(env, wrapper, &accepting)) {
-        ta_value_release(&event.data);
+        ta_event_release(&event);
         return NULL;
     }
     ta_result result = send && accepting.waiter == 0
@@ -527,7 +531,7 @@ static napi_value tna_post_common(napi_env env, napi_callback_info info, bool se
                                                                   .waiter = accepting.waiter,
                                                               });
     if (result != TA_OK) {
-        ta_value_release(&event.data);
+        ta_event_release(&event);
         return tna_accept_failed(env, wrapper, &accepting, result);
     }
     return tna_accept_done(env, wrapper, &accepting);
@@ -682,8 +686,8 @@ static napi_value tna_id_page_method(napi_env env, napi_callback_info info) {
  * these are not allowed inside a core call.
  */
 static napi_value tna_post_named_common(napi_env env, napi_callback_info info, bool send) {
-    size_t argc = 5;
-    napi_value argv[5] = { NULL, NULL, NULL, NULL, NULL };
+    size_t argc = 6;
+    napi_value argv[6] = { NULL, NULL, NULL, NULL, NULL, NULL };
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
         return NULL;
     }
@@ -715,10 +719,15 @@ static napi_value tna_post_named_common(napi_env env, napi_callback_info info, b
         ta_address_release(address);
         return NULL;
     }
+    if (!tna_origin_argument(env, system, argv[5], &event.origin)) {
+        ta_address_release(address);
+        ta_event_release(&event);
+        return NULL;
+    }
     tna_accepting accepting = { .send = send };
     if (!tna_accept_begin(env, wrapper, &accepting)) {
         ta_address_release(address);
-        ta_value_release(&event.data);
+        ta_event_release(&event);
         return NULL;
     }
     result = send && accepting.waiter == 0
@@ -727,7 +736,7 @@ static napi_value tna_post_named_common(napi_env env, napi_callback_info info, b
                                          &(tna_message){ .event = &event, .bytes = bytes, .waiter = accepting.waiter });
     ta_address_release(address);
     if (result != TA_OK) {
-        ta_value_release(&event.data);
+        ta_event_release(&event);
         return tna_accept_failed(env, wrapper, &accepting, result);
     }
     tna_system_want_turn(system);
@@ -879,6 +888,8 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "lastSendToken", NULL, NULL, tna_last_send_token_getter, NULL, NULL, napi_default_jsproperty, NULL },
         { "idPage", NULL, tna_id_page_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "registerIo", NULL, tna_register_io_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "openScope", NULL, tna_open_scope_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "closeScope", NULL, tna_close_scope_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "registerInvoker", NULL, tna_register_invoker_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "setLogSink", NULL, tna_set_log_sink_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "reportInvoke", NULL, tna_report_invoke_method, NULL, NULL, NULL, napi_default_method, NULL },

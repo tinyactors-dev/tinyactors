@@ -43,6 +43,14 @@ void tna_services_init(tna_napi_system *wrapper);
 
 /* System methods (napi_system.c's property table). */
 napi_value tna_register_io_method(napi_env env, napi_callback_info info);
+napi_value tna_open_scope_method(napi_env env, napi_callback_info info);
+napi_value tna_close_scope_method(napi_env env, napi_callback_info info);
+/*
+ * The origin option of post()/send() (core ADR 0068): { type, uri } makes a
+ * MESSAGE origin, { type, scope } a SCOPED one, { type, token } a COMPUTED
+ * one. Undefined leaves no origin. Throws and answers false otherwise.
+ */
+bool tna_origin_argument(napi_env env, tna_system *system, napi_value value, ta_origin *out);
 napi_value tna_register_invoker_method(napi_env env, napi_callback_info info);
 napi_value tna_set_log_sink_method(napi_env env, napi_callback_info info);
 napi_value tna_report_invoke_method(napi_env env, napi_callback_info info);
