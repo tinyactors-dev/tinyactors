@@ -6,7 +6,11 @@
 #include "system.h"
 
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
+#if !defined(__APPLE__) && !defined(__FreeBSD__) && !defined(__OpenBSD__) && !defined(__NetBSD__)
+#include <sys/random.h>
+#endif
 
 #include "adapters/invoker.h"
 #include "adapters/io.h"
@@ -44,7 +48,6 @@ ta_result tna_system_create(tna_system **out) {
         return result;
     }
     tna_effects_init(&system->effects, &system->scratch.turn);
-    tna_traces_init(&system->traces, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER));
     ta_system_config config = {
         .allocator = tna_allocator_for(&system->allocator, TNA_MEMORY_CORE),
         .initial_time = 0,
@@ -86,7 +89,10 @@ void tna_system_close(tna_system *system) {
     /* Waiting effects hold values and addresses; what core's teardown asks
      * of a service from here on is dropped (the adapters in adapters/). */
     tna_effects_close(&system->effects);
-    tna_traces_close(&system->traces);
+    if (system->tracing) {
+        tna_otlp_destroy(&system->otlp);
+        system->tracing = false;
+    }
     ta_system_destroy(system->core);
     system->core = NULL;
     /* Core held the I/O processor records as adapters until now. */
@@ -123,16 +129,75 @@ static bool tna_system_due_now(const tna_system *system) {
 }
 
 bool tna_system_quiet(const tna_system *system) {
-    return tna_sched_quiet(&system->sched) && system->effects.count == 0 && tna_traces_count(&system->traces) == 0 &&
+    return tna_sched_quiet(&system->sched) && system->effects.count == 0 &&
+           (!system->tracing || system->otlp.span_count == 0) &&
            !tna_system_due_now(system);
 }
 
-bool tna_system_trace(tna_system *system, const ta_trace_record *record) {
-    bool queued = tna_traces_push(&system->traces, record);
-    if (queued) {
+void tna_system_trace(tna_system *system, const ta_trace_record *record) {
+    if (!system->tracing) {
+        return;
+    }
+    uint32_t before = system->otlp.span_count;
+    tna_otlp_write(&system->otlp, record);
+    if (system->otlp.span_count != before) {
         tna_system_want_turn(system);
     }
-    return queued;
+}
+
+uint64_t tna_system_wall_ns(void) {
+    struct timespec now;
+    if (timespec_get(&now, TIME_UTC) != TIME_UTC) {
+        return 0;
+    }
+    return (uint64_t)now.tv_sec * 1000000000u + (uint64_t)now.tv_nsec;
+}
+
+/* SplitMix64: the seeded sequence is the same on every platform. */
+static uint64_t tna_splitmix(uint64_t *state) {
+    uint64_t value = (*state += 0x9e3779b97f4a7c15ull);
+    value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ull;
+    value = (value ^ (value >> 27)) * 0x94d049bb133111ebull;
+    return value ^ (value >> 31);
+}
+
+void tna_system_trace_id(tna_system *system, uint8_t out[16]) {
+    if (system->trace_seeded) {
+        uint64_t high = tna_splitmix(&system->trace_seed);
+        uint64_t low = tna_splitmix(&system->trace_seed);
+        for (int at = 0; at < 8; at += 1) {
+            out[at] = (uint8_t)(high >> (56 - 8 * at));
+            out[8 + at] = (uint8_t)(low >> (56 - 8 * at));
+        }
+        return;
+    }
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+    arc4random_buf(out, 16);
+#else
+    if (getrandom(out, 16, 0) != 16) {
+        /* No entropy: a trace ID only has to be unlikely to collide. */
+        uint64_t state = tna_system_wall_ns() ^ (uint64_t)(uintptr_t)system;
+        uint64_t high = tna_splitmix(&state);
+        uint64_t low = tna_splitmix(&state);
+        memcpy(out, &high, 8);
+        memcpy(out + 8, &low, 8);
+    }
+#endif
+    /* W3C: an all-zero trace ID is invalid. */
+    out[15] |= (uint8_t)(out[0] == 0 && out[15] == 0);
+}
+
+void tna_system_start_trace(tna_system *system, ta_trace_context *context) {
+    if (!system->tracing || context->trace_id_high != 0 || context->trace_id_low != 0) {
+        return;
+    }
+    uint8_t id[16];
+    tna_system_trace_id(system, id);
+    for (int at = 0; at < 8; at += 1) {
+        context->trace_id_high = (context->trace_id_high << 8) | id[at];
+        context->trace_id_low = (context->trace_id_low << 8) | id[8 + at];
+    }
+    context->flags |= TA_TRACE_FLAG_SAMPLED;
 }
 
 bool tna_system_effect(tna_system *system, const tna_effect *effect) {

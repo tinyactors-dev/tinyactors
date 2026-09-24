@@ -4,7 +4,8 @@ const native = require('./lib/native');
 const { TinyactorsError } = require('./lib/errors');
 const { createSystem } = require('./lib/system');
 const { statechart, literal } = require('./lib/statechart');
-const { TRACE_KINDS, TraceSpans, parseTraceparent, formatTraceparent, stepSpanId } = require('./lib/tracing');
+const { TRACE_KINDS, parseTraceparent, formatTraceparent, stepSpanId } = require('./lib/tracing');
+const { decodeTraces } = require('./lib/otlp');
 
 module.exports = {
   version: native.version,
@@ -12,9 +13,10 @@ module.exports = {
   statechart,
   literal,
   TinyactorsError,
-  // Tracing (core ADR 0067, ADR 0015): plain data, no telemetry dependency.
+  // Tracing (core ADR 0067, napi ADR 0016): OTLP bytes, and a decoder; no
+  // telemetry dependency.
   TRACE_KINDS,
-  TraceSpans,
+  decodeTraces,
   parseTraceparent,
   formatTraceparent,
   stepSpanId,

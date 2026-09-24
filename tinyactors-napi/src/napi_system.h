@@ -47,6 +47,9 @@ struct tna_napi_system {
     tna_values values;            /* value boxes (ADR 0011) */
     tna_js_datamodel dm;          /* the JavaScript data model (ADR 0011) */
     double last_send_token;       /* the token of the last send(), for cancelSend() */
+    /* Tracing with values (napi ADR 0016): a value's JSON text, cut. */
+    uint32_t trace_value_limit;
+    char trace_value[1024];
     napi_deferred *waiters;       /* flush() promises */
     uint32_t waiter_count;
     uint32_t waiter_capacity;

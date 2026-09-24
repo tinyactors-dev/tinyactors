@@ -8,8 +8,8 @@ assert.equal(addon.version, packageMetadata.version);
 assert.deepEqual(Object.keys(addon).sort(), [
   'TRACE_KINDS',
   'TinyactorsError',
-  'TraceSpans',
   'createSystem',
+  'decodeTraces',
   'formatTraceparent',
   'literal',
   'parseTraceparent',

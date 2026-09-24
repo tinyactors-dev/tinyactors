@@ -11,7 +11,7 @@
 // macrostep it causes lands in one trace under the request's span.
 
 const { randomBytes } = require('node:crypto');
-const { createSystem, statechart, TraceSpans, formatTraceparent } = require('..');
+const { createSystem, statechart, formatTraceparent } = require('..');
 const { OtlpExporter } = require('./otlp');
 
 function charts(system) {
@@ -54,11 +54,35 @@ function charts(system) {
   return { gateway, inventory, payments };
 }
 
+// The host's own request span, as its HTTP handler would export it: one
+// span in OTLP JSON, posted beside tinyactors' protobuf.
+async function postRequestSpan(endpoint, { traceId, spanId, start, end }) {
+  const nanos = (ms) => (BigInt(ms) * 1000000n).toString();
+  const body = {
+    resourceSpans: [{
+      resource: { attributes: [{ key: 'service.name', value: { stringValue: 'tinyactors-demo' } }] },
+      scopeSpans: [{
+        scope: { name: 'demo-http' },
+        spans: [{
+          traceId, spanId, name: 'POST /orders', kind: 2, startTimeUnixNano: nanos(start), endTimeUnixNano: nanos(end),
+          attributes: [{ key: 'http.request.method', value: { stringValue: 'POST' } },
+                       { key: 'url.path', value: { stringValue: '/orders' } }],
+          status: { code: 1 },
+        }],
+      }],
+    }],
+  };
+  const response = await fetch(`${endpoint}/v1/traces`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(`OTLP export failed: HTTP ${response.status}`);
+}
+
 async function main() {
-  const exporter = new OtlpExporter({ serviceName: 'tinyactors-demo' });
+  const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? 'http://127.0.0.1:4318';
+  const exporter = new OtlpExporter({ endpoint });
   const system = createSystem();
-  const spans = new TraceSpans({ onSpan: exporter.onSpan, system, values: true });
-  system.setTraceSink((records) => spans.write(records));
+  system.setTraceSink(exporter.sink, { values: true, resource: { 'service.name': 'tinyactors-demo' } });
   const { gateway, inventory, payments } = charts(system);
   system.spawn(inventory, { name: 'main' });
   system.spawn(payments, { name: 'main' });
@@ -77,14 +101,10 @@ async function main() {
     await system.flush();
   }
   const end = Date.now();
-  exporter.onSpan({
-    traceId, spanId: requestSpan, name: 'POST /orders', kind: 'internal', startTime: start, endTime: end,
-    attributes: { 'http.request.method': 'POST', 'url.path': '/orders' }, events: [], links: [],
-    status: { code: 'ok' },
-  });
   system.close();
   const sent = await exporter.flush();
-  console.log(`exported ${sent} spans of trace ${traceId}`);
+  await postRequestSpan(endpoint, { traceId, spanId: requestSpan, start, end });
+  console.log(`exported ${sent} OTLP requests for trace ${traceId}`);
 }
 
 main().catch((error) => {

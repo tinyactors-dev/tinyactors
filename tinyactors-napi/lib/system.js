@@ -215,21 +215,59 @@ class System {
   }
 
   /**
-   * Hand trace records (core ADR 0067) to `sink`, one array per pump turn,
-   * after the turn's last core call (ADR 0015). Records are plain objects
-   * (napi_trace.h, index.d.ts TraceRecord); TraceSpans (lib/tracing.js)
-   * turns them into span-shaped data. `options.kinds` lists the record
-   * kinds wanted (every kind by default): core builds no other record.
-   * `options.unsampled` also traces macrosteps whose traceparent is not
-   * sampled. Without a sink (undefined) core builds no record at all.
+   * Hand traces to `sink` as OTLP protobuf (napi ADR 0016): once per pump
+   * turn, one Uint8Array holding one ExportTraceServiceRequest with the
+   * spans that ended in that turn. Post it to any OTLP/HTTP `/v1/traces`
+   * endpoint as it is (Content-Type: application/x-protobuf), or decode it
+   * with decodeTraces(). Without a sink (undefined) core builds no record.
+   *
+   * options:
+   * - kinds: the record kinds wanted (TRACE_KINDS names; every kind by
+   *   default): core builds no other record;
+   * - unsampled: also trace macrosteps whose traceparent is not sampled;
+   * - resource: resource attributes, { "service.name": "orders", ... },
+   *   strings only;
+   * - values: put event data and assigned values in attributes, as JSON
+   *   cut at `valueLimit` characters (default 256, at most 1023). Off by
+   *   default: values may hold personal data;
+   * - parent: "cause" (default) parents a macrostep under the step that
+   *   caused it; "link" makes it a root and links it to its cause;
+   * - seed: a bigint; trace IDs the system starts (for deliveries and
+   *   spawns without a traceparent) become a fixed sequence, for tests.
+   *
+   * Replacing or removing a sink ends the spans still open, marked
+   * `scxml.incomplete`, and hands them to the previous sink first.
    */
   setTraceSink(sink, options = {}) {
     if (sink !== undefined && typeof sink !== 'function') {
       throw new TinyactorsError('setTraceSink(): expected a function or undefined', 'invalid');
     }
-    const mask = kindMask(options?.kinds);
-    this.#native.setTraceSink(sink !== undefined, mask, options?.unsampled === true);
+    const { kinds, unsampled = false, resource = {}, values = false, valueLimit = 256, parent = 'cause', seed } =
+      options ?? {};
+    const mask = kindMask(kinds);
+    if (parent !== 'cause' && parent !== 'link') {
+      throw new TinyactorsError('setTraceSink(): options.parent must be "cause" or "link"', 'invalid');
+    }
+    if (!Number.isInteger(valueLimit) || valueLimit < 0 || valueLimit > 1023) {
+      throw new TinyactorsError('setTraceSink(): options.valueLimit must be an integer from 0 to 1023', 'invalid');
+    }
+    if (resource === null || typeof resource !== 'object') {
+      throw new TinyactorsError('setTraceSink(): options.resource must be an object of strings', 'invalid');
+    }
+    const pairs = [];
+    for (const [key, value] of Object.entries(resource)) {
+      if (typeof value !== 'string') {
+        throw new TinyactorsError(`setTraceSink(): resource attribute "${key}" must be a string`, 'invalid');
+      }
+      pairs.push(key, value);
+    }
+    const previous = this.#traceSink;
+    const remaining = this.#native.setTraceSink(sink !== undefined, mask, unsampled === true, values === true,
+                                                valueLimit, parent === 'link', pairs, seed);
     this.#traceSink = sink;
+    if (remaining !== undefined) {
+      previous?.(remaining);
+    }
   }
 
   // One service effect, in the order core made the calls (napi_services.h).
@@ -482,7 +520,10 @@ class System {
     } else if (options.name !== undefined) {
       address = { family: { name: definition.identity.family }, name: options.name };
     }
-    const trace = spawnTrace(options.traceparent);
+    const trace = spawnTrace(options.traceparent,
+                             options.traceparent === undefined && this.#traceSink !== undefined
+                               ? this.#native.newTrace()
+                               : undefined);
     const id = core.actor_spawn(this.#native, definition.id, address, options.binding, undefined, trace);
     return new ActorId(this, id.slot, id.generation);
   }

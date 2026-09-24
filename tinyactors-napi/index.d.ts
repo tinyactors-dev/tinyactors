@@ -204,10 +204,12 @@ export interface System {
   registerInvoker(type: string, invoker: Invoker): void;
   setLogSink(sink?: LogSink): void;
   /**
-   * Hand trace records (core ADR 0067) to `sink`, one array per pump turn
-   * (ADR 0015). Without a sink core builds no record.
+   * Hand traces to `sink` as OTLP protobuf (napi ADR 0016): once per pump
+   * turn, one Uint8Array holding one ExportTraceServiceRequest with the
+   * spans that ended. Post it to an OTLP/HTTP `/v1/traces` endpoint as it
+   * is, or read it with decodeTraces(). Without a sink core builds no record.
    */
-  setTraceSink(sink?: (records: TraceRecord[]) => void, options?: TraceSinkOptions): void;
+  setTraceSink(sink?: (bytes: Uint8Array) => void, options?: TraceSinkOptions): void;
 
   /**
    * Queue a message and return; a later pump turn delivers it (ADR 0005).
@@ -1121,7 +1123,8 @@ export class TinyactorsError extends Error {
 }
 
 // ---------------------------------------------------------------------------
-// Tracing (core ADR 0067, ADR 0015). Plain data; no telemetry dependency.
+// Tracing (core ADR 0067, napi ADR 0016). OTLP bytes and a decoder; no
+// telemetry dependency.
 
 export type TraceKind =
   | 'spawned' | 'loaded' | 'unloaded' | 'finished' | 'destroyed'
@@ -1133,83 +1136,44 @@ export type TraceKind =
 export declare const TRACE_KINDS: readonly TraceKind[];
 
 export interface TraceSinkOptions {
-  /** The kinds wanted; every kind by default. */
+  /** The record kinds wanted; every kind by default. Core builds no other record. */
   kinds?: TraceKind[];
   /** Also trace macrosteps whose traceparent is not sampled. */
   unsampled?: boolean;
+  /** Resource attributes every request carries, such as `service.name`. */
+  resource?: Record<string, string>;
+  /** Event data and assigned values as JSON attributes, cut at `valueLimit` (default 256, at most 1023). */
+  values?: boolean;
+  valueLimit?: number;
+  /** "cause" (default): a macrostep's parent is its cause; "link": a root, linked to its cause. */
+  parent?: 'cause' | 'link';
+  /** Trace IDs the system starts become a fixed sequence (tests). */
+  seed?: bigint;
 }
 
-export interface TraceStepKey {
-  readonly session: bigint;
-  readonly macrostep: bigint;
-  readonly microstep: number;
-}
-
-/** One record as the hook receives it; fields beyond the first group depend on the kind. */
-export interface TraceRecord {
-  readonly kind: TraceKind;
-  readonly session: bigint;
-  readonly macrostep: number;
-  readonly microstep: number;
-  readonly actor: ActorId;
-  /** The definition whose transition, action and expression IDs the record names. */
-  readonly definition: bigint;
-  /** Core's logical time. */
-  readonly now: number;
-  /** Milliseconds since the epoch. */
-  readonly wallTime: number;
-  readonly at?: 'select' | 'exit' | 'transition' | 'enter' | 'bootstrap' | 'finalize' | 'invoke';
-  readonly state?: string | number;
-  readonly transition?: number;
-  readonly action?: number;
-  readonly iteration?: number;
-  /** 32 hex digits, absent when the macrostep has no trace. */
-  readonly traceId?: string;
-  readonly sampled?: boolean;
-  /** macrostepBegin and spawned: the step that caused it; session 0 is the host's span. */
-  readonly cause?: TraceStepKey;
-  readonly event?: { name: string; type: string; sendId?: string | null; invokeId?: string; data?: unknown };
-  readonly fault?: { code: number; detail?: string };
-  readonly expr?: number;
-  readonly result?: boolean;
-  readonly name?: string;
-  readonly value?: unknown;
-  readonly sendId?: string;
-  readonly invokeId?: string;
-  readonly finalState?: string | number;
-  readonly transitions?: number[];
-  readonly exited?: (string | number)[];
-  readonly entered?: (string | number)[];
-  readonly history?: (string | number)[];
-  readonly states?: (string | number)[];
-}
-
-export interface TraceSpan {
+/** A span as decodeTraces() reads it. IDs are lowercase hex. */
+export interface DecodedSpan {
   traceId: string;
   spanId: string;
   parentSpanId?: string;
   name: string;
-  kind: 'internal';
+  kind: 'unspecified' | 'internal' | 'server' | 'client' | 'producer' | 'consumer';
   /** Milliseconds since the epoch. */
   startTime: number;
   endTime: number;
-  attributes: Record<string, string | number | boolean | (string | number)[]>;
-  events: { name: string; time: number; attributes: Record<string, unknown> }[];
-  links: { traceId: string; spanId: string }[];
-  status: { code: 'ok' | 'error' };
+  startTimeUnixNano: bigint;
+  endTimeUnixNano: bigint;
+  attributes: Record<string, unknown>;
+  events: { name: string; time: number; timeUnixNano: bigint; attributes: Record<string, unknown> }[];
+  links: { traceId: string; spanId: string; attributes: Record<string, unknown> }[];
+  status: { code: 'unset' | 'ok' | 'error'; message?: string };
+  /** Shared by the spans of one resource. */
+  resource: { attributes: Record<string, unknown> };
+  scope: { name: string; version: string };
 }
 
-export declare class TraceSpans {
-  /** `system`: the System whose records these are; transitions and actions are named through its definitions. */
-  constructor(options: {
-    onSpan(span: TraceSpan): void;
-    system: System;
-    parent?: 'cause' | 'link';
-    values?: boolean;
-    valueLimit?: number;
-  });
-  write(records: TraceRecord[]): void;
-}
+/** Reads OTLP protobuf trace bytes; throws on a malformed message. */
+export declare function decodeTraces(bytes: Uint8Array): DecodedSpan[];
 
 export declare function parseTraceparent(header: string | undefined):
   { traceId: string; parentSpanId: string; flags: number; sampled: boolean } | undefined;

@@ -1,19 +1,17 @@
 'use strict';
 
-// Tracing (core ADR 0067, ADR 0015). The addon hands a registered hook the
-// records core wrote, one array per pump turn (System.setTraceSink). This
-// module turns them into plain data a tracer can take: span-shaped objects
-// with W3C trace and span IDs, parents, times, attributes and events. It
-// depends on no telemetry package; a user maps these objects onto the
-// OpenTelemetry SDK or any other tracer (see docs/tracing.md).
+// Tracing (core ADR 0067, napi ADR 0016). The addon hands a registered hook
+// the spans that ended in each pump turn as OTLP protobuf bytes
+// (System.setTraceSink); lib/otlp.js decodes them for those who want
+// objects. This module holds what JavaScript still needs: the kind mask,
+// W3C traceparent parsing and formatting, and span IDs derived from step
+// keys exactly as core derives them. It depends on no telemetry package.
 
 const native = require('./native');
 const { TinyactorsError } = require('./errors');
 
 /** Record kinds, in core's order; a sink's mask is built from these names. */
 const TRACE_KINDS = Object.freeze([...native.traceKinds]);
-
-const LIFECYCLE = new Set(['spawned', 'loaded', 'unloaded', 'finished', 'destroyed']);
 
 /** The mask for `kinds` (names from TRACE_KINDS); every kind when undefined. */
 function kindMask(kinds) {
@@ -81,11 +79,19 @@ function nativeTrace(traceparent, what) {
   };
 }
 
-// The same, as ta_actor_spawn_params.trace for the generated binding.
-function spawnTrace(traceparent) {
+// The same, as ta_actor_spawn_params.trace for the generated binding. With
+// no traceparent, `started` is a new trace ([high, low] bigints) the system
+// started because a sink is installed (napi ADR 0016 point 4), or undefined.
+function spawnTrace(traceparent, started) {
   const trace = nativeTrace(traceparent, 'spawn()');
   if (trace === undefined) {
-    return undefined;
+    if (started === undefined) {
+      return undefined;
+    }
+    return {
+      context: { trace_id_high: started[0], trace_id_low: started[1], flags: 1 },
+      cause: { session: 0n, macrostep: 0n, microstep: 0 },
+    };
   }
   return {
     context: { trace_id_high: trace.high, trace_id_low: trace.low, flags: trace.flags },
@@ -126,12 +132,6 @@ function stepSpanId(session, macrostep, microstep = 0) {
   return hex16(span === 0n ? 1n : span);
 }
 
-// A trace ID for a macrostep that came with none: derived from its step, so
-// it is stable and every host derives the same one.
-function derivedTraceId(session, macrostep) {
-  return stepSpanId(session, macrostep, 0) + stepSpanId(session, macrostep, 0xffffffff);
-}
-
 /** A traceparent naming the step a send or an invocation came from (the "trace" of an I/O request). */
 function traceparentOf(trace) {
   if (trace === undefined) {
@@ -145,392 +145,6 @@ function traceparentOf(trace) {
   return formatTraceparent({ traceId, spanId: stepSpanId(session, macrostep, microstep), flags: trace.flags });
 }
 
-// ------------------------------------------------------------------------
-// Records to span-shaped data
-
-// Attribute names are ours: OpenTelemetry has no statechart convention.
-const EVENT_NAMES = {
-  condition: 'scxml.condition',
-  raised: 'scxml.raise',
-  dataInit: 'scxml.data',
-  assign: 'scxml.assign',
-  script: 'scxml.script',
-  foreach: 'scxml.foreach',
-  actionFailed: 'scxml.error',
-  sent: 'scxml.send',
-  cancelled: 'scxml.cancel',
-  invoked: 'scxml.invoke',
-  invokeCancelled: 'scxml.invoke.cancel',
-  paused: 'scxml.paused',
-  resumed: 'scxml.resumed',
-  stopped: 'scxml.stopped',
-};
-
-function valueText(value, limit) {
-  if (value === undefined) {
-    return undefined;
-  }
-  let text;
-  try {
-    text = typeof value === 'string' ? value : JSON.stringify(value);
-  } catch {
-    text = String(value);
-  }
-  return text === undefined || text.length <= limit ? text : `${text.slice(0, limit)}...`;
-}
-
-// ------------------------------------------------------------------------
-// Readable names for compiled IDs (core ADR 0071)
-
-const ID_NONE = 0xffffffff;
-
-/**
- * Names the transitions and actions of one system's definitions by
- * compiled ID, through definition inspection (core ADR 0071), and caches
- * each label. A definition that is gone (retired and freed) answers with
- * the bare ID: "t7", "a3".
- */
-class ChartLabels {
-  #native;
-  #cache = new Map();
-
-  constructor(system) {
-    // Required here, not at the top: lib/system.js requires this module.
-    this.#native = require('./system').nativeOf(system);
-  }
-
-  #cached(key, make) {
-    let label = this.#cache.get(key);
-    if (label === undefined) {
-      label = make();
-      this.#cache.set(key, label);
-    }
-    return label;
-  }
-
-  // A lookup's answer, or undefined for a definition or ID that is gone.
-  #lookup(fn) {
-    try {
-      return fn();
-    } catch (error) {
-      if (error instanceof TinyactorsError && error.code === 'not-found') {
-        return undefined;
-      }
-      throw error;
-    }
-  }
-
-  #state(definition, state) {
-    return this.#cached(`${definition}:s${state}`, () =>
-      this.#lookup(() => native.core.definition_state(this.#native, definition, state).id) ?? `s${state}`);
-  }
-
-  /**
-   * "idle → busy on order.placed", "one → two", "idle on count [guarded]",
-   * "three → y on inside (internal)", "initial of three → x".
-   */
-  transition(definition, transition) {
-    return this.#cached(`${definition}:t${transition}`, () => {
-      const info = this.#lookup(() => native.core.definition_transition(this.#native, definition, transition));
-      if (info === undefined) {
-        return `t${transition}`;
-      }
-      const targets = (info.targets ?? []).map((state) => this.#state(definition, state)).join(' ');
-      if (info.origin !== 'authored') {
-        const owner = info.origin === 'bootstrap' ? 'the document' : this.#state(definition, info.source);
-        return `initial of ${owner} → ${targets}`;
-      }
-      let label = this.#state(definition, info.source);
-      if (targets !== '') label += ` → ${targets}`;
-      if (info.event !== '') label += ` on ${info.event}`;
-      if (info.condition !== ID_NONE) label += ' [guarded]';
-      if (info.type === 'internal') label += ' (internal)';
-      return label;
-    });
-  }
-
-  /**
-   * "<assign> in onentry of busy", "<raise> in then of <if> in onexit of
-   * idle", "<log> in idle → busy on go", "<assign> in finalize of <invoke>
-   * #2 in busy".
-   */
-  action(definition, action) {
-    return this.#cached(`${definition}:a${action}`, () => {
-      const parts = [];
-      let id = action;
-      for (;;) {
-        const info = this.#lookup(() => native.core.definition_action(this.#native, definition, id));
-        if (info === undefined) {
-          return `a${action}`;
-        }
-        parts.push(`<${info.kind}>`);
-        const nth = info.block_index > 0 ? ` #${info.block_index + 1}` : '';
-        switch (info.block) {
-          case 'then':
-          case 'else':
-            parts.push(`in ${info.block} of`);
-            id = info.owner;
-            continue;
-          case 'foreach':
-            parts.push('in the body of');
-            id = info.owner;
-            continue;
-          case 'onentry':
-          case 'onexit':
-            parts.push(`in ${info.block}${nth} of ${this.#state(definition, info.owner)}`);
-            break;
-          case 'transition':
-            parts.push(`in ${this.transition(definition, info.owner)}`);
-            break;
-          case 'finalize':
-            parts.push(`in finalize of <invoke>${nth} in ${this.#state(definition, info.owner)}`);
-            break;
-          default:
-            parts.push("in the document's <script>");
-        }
-        return parts.join(' ');
-      }
-    });
-  }
-}
-
-function eventAttributes(event, attributes) {
-  if (event === undefined) return;
-  attributes['scxml.event.name'] = event.name;
-  attributes['scxml.event.type'] = event.type;
-  if (event.sendId !== undefined && event.sendId !== null) attributes['scxml.event.sendid'] = event.sendId;
-  if (event.invokeId !== undefined) attributes['scxml.event.invokeid'] = event.invokeId;
-}
-
-/**
- * Turns trace records into finished spans, handed to `onSpan` as each one
- * ends: one span per macrostep, a child span per microstep, and the data
- * and decision records as span events on the step they happened in.
- * Lifecycle records (spawned, finished, ...) are spans of no duration.
- *
- * options:
- * - onSpan(span): required;
- * - system: required, the System whose records these are. Transitions and
- *   actions are named through its definitions: `scxml.transition` is a
- *   label such as "idle → busy on order.placed" and `scxml.action` one
- *   such as "<assign> in onentry of busy", while `scxml.transition.id` and
- *   `scxml.action.id` keep the compiled IDs (core ADR 0071);
- * - parent: "cause" (the default) puts a macrostep under the step that
- *   caused it: the host's span for a delivery that came with a
- *   traceparent, else the sending step's span. "link" makes every
- *   macrostep a root of its trace and links it to its cause instead.
- * - values: include values (assignments, data, event data) as JSON text
- *   attributes, cut at `valueLimit` characters (default 256). Off by
- *   default: values may hold personal data.
- *
- * A span: { traceId, spanId, parentSpanId?, name, kind: "internal",
- * startTime, endTime (milliseconds since the epoch), attributes,
- * events: [{ name, time, attributes }], links: [{ traceId, spanId }],
- * status: { code: "ok" | "error" } }.
- */
-class TraceSpans {
-  #onSpan;
-  #labels;
-  #parenting;
-  #values;
-  #limit;
-  // Open macrosteps by session: { span, microstep }.
-  #open = new Map();
-  // Trace IDs of spans seen, by span ID, so a macrostep a traced step
-  // caused joins that trace even when its record carries none.
-  #traces = new Map();
-
-  constructor(options) {
-    const { onSpan, system, parent = 'cause', values = false, valueLimit = 256 } = options ?? {};
-    if (typeof onSpan !== 'function') {
-      throw new TinyactorsError('TraceSpans: options.onSpan must be a function', 'invalid');
-    }
-    if (system === undefined) {
-      throw new TinyactorsError('TraceSpans: options.system must be the System whose records these are', 'invalid');
-    }
-    this.#labels = new ChartLabels(system);
-    if (parent !== 'cause' && parent !== 'link') {
-      throw new TinyactorsError('TraceSpans: options.parent must be "cause" or "link"', 'invalid');
-    }
-    this.#onSpan = onSpan;
-    this.#parenting = parent;
-    this.#values = values === true;
-    this.#limit = valueLimit;
-  }
-
-  /** Feeds a batch of records, as the trace sink receives them. */
-  write(records) {
-    for (const record of records) {
-      this.#record(record);
-    }
-  }
-
-  #record(record) {
-    if (LIFECYCLE.has(record.kind)) {
-      this.#lifecycle(record);
-      return;
-    }
-    switch (record.kind) {
-      case 'macrostepBegin':
-        this.#begin(record);
-        return;
-      case 'macrostepEnd':
-        this.#end(record);
-        return;
-      case 'microstep':
-        this.#microstep(record);
-        return;
-      default:
-        this.#event(record);
-    }
-  }
-
-  #traceOf(record, causeSpan) {
-    return record.traceId ?? this.#traces.get(causeSpan) ?? derivedTraceId(record.session, record.macrostep);
-  }
-
-  #causeSpan(cause) {
-    if (cause === undefined) return undefined;
-    if (cause.session === 0n && cause.macrostep === 0n) return undefined;
-    return stepSpanId(cause.session, cause.macrostep, cause.microstep);
-  }
-
-  #span({ traceId, spanId, parentSpanId, name, time, attributes, links = [] }) {
-    this.#traces.set(spanId, traceId);
-    return { traceId, spanId, parentSpanId, name, kind: 'internal', startTime: time, endTime: time, attributes,
-             events: [], links, status: { code: 'ok' } };
-  }
-
-  // Where in the macrostep a record was written, with transitions and
-  // actions named.
-  #position(record, attributes) {
-    if (record.at !== undefined) attributes['scxml.position'] = record.at;
-    if (record.state !== undefined) attributes['scxml.state'] = String(record.state);
-    if (record.transition !== undefined) {
-      attributes['scxml.transition'] = this.#labels.transition(record.definition, record.transition);
-      attributes['scxml.transition.id'] = record.transition;
-    }
-    if (record.action !== undefined) {
-      attributes['scxml.action'] = this.#labels.action(record.definition, record.action);
-      attributes['scxml.action.id'] = record.action;
-    }
-  }
-
-  #baseAttributes(record) {
-    return {
-      'scxml.session_id': record.session.toString(),
-      'scxml.macrostep': record.macrostep,
-      'scxml.actor': `${record.actor.slot}:${record.actor.generation}`,
-      'scxml.time': record.now,
-    };
-  }
-
-  #begin(record) {
-    const causeSpan = this.#causeSpan(record.cause);
-    const traceId = this.#traceOf(record, causeSpan);
-    const attributes = this.#baseAttributes(record);
-    eventAttributes(record.event, attributes);
-    if (this.#values && record.event?.data !== undefined) {
-      attributes['scxml.event.data'] = valueText(record.event.data, this.#limit);
-    }
-    const linked = this.#parenting === 'link' && causeSpan !== undefined;
-    const span = this.#span({
-      traceId,
-      spanId: stepSpanId(record.session, record.macrostep, 0),
-      parentSpanId: linked ? undefined : causeSpan,
-      name: `scxml.macrostep ${record.event?.name ?? (record.macrostep === 1 ? 'bootstrap' : '(no event)')}`,
-      time: record.wallTime,
-      attributes,
-      links: linked ? [{ traceId: this.#traces.get(causeSpan) ?? traceId, spanId: causeSpan }] : [],
-    });
-    this.#open.set(record.session, { span, microstep: undefined });
-  }
-
-  #closeMicrostep(open, time) {
-    if (open.microstep !== undefined) {
-      open.microstep.endTime = time;
-      this.#onSpan(open.microstep);
-      open.microstep = undefined;
-    }
-  }
-
-  #microstep(record) {
-    const open = this.#open.get(record.session);
-    if (open === undefined) return;
-    this.#closeMicrostep(open, record.wallTime);
-    const attributes = this.#baseAttributes(record);
-    attributes['scxml.microstep'] = record.microstep;
-    eventAttributes(record.event, attributes);
-    attributes['scxml.transition'] = record.transitions.map((id) => this.#labels.transition(record.definition, id));
-    attributes['scxml.transition.id'] = record.transitions;
-    attributes['scxml.state.exited'] = record.exited.map(String);
-    attributes['scxml.state.entered'] = record.entered.map(String);
-    if (record.history !== undefined) attributes['scxml.state.history'] = record.history.map(String);
-    open.microstep = this.#span({
-      traceId: open.span.traceId,
-      spanId: stepSpanId(record.session, record.macrostep, record.microstep),
-      parentSpanId: open.span.spanId,
-      name: `scxml.microstep ${record.event?.name ?? '(eventless)'}`,
-      time: record.wallTime,
-      attributes,
-    });
-  }
-
-  #end(record) {
-    const open = this.#open.get(record.session);
-    if (open === undefined) return;
-    this.#closeMicrostep(open, record.wallTime);
-    open.span.attributes['scxml.state'] = record.states.map(String);
-    open.span.endTime = record.wallTime;
-    this.#open.delete(record.session);
-    this.#onSpan(open.span);
-  }
-
-  #event(record) {
-    const open = this.#open.get(record.session);
-    if (open === undefined) return;
-    const target = open.microstep !== undefined && record.microstep !== 0 ? open.microstep : open.span;
-    const attributes = {};
-    this.#position(record, attributes);
-    eventAttributes(record.event, attributes);
-    if (record.expr !== undefined) attributes['scxml.expression'] = record.expr;
-    if (record.result !== undefined) attributes['scxml.result'] = record.result;
-    if (record.name !== undefined) attributes['scxml.data.name'] = record.name;
-    if (record.kind === 'foreach') attributes['scxml.iteration'] = record.iteration;
-    if (record.sendId !== undefined && record.sendId !== null) attributes['scxml.send_id'] = record.sendId;
-    if (record.invokeId !== undefined) attributes['scxml.invoke_id'] = record.invokeId;
-    if (record.fault !== undefined) {
-      attributes['scxml.fault.code'] = record.fault.code;
-      if (record.fault.detail !== undefined) attributes['scxml.fault.detail'] = record.fault.detail;
-      target.status = { code: 'error' };
-    }
-    if (this.#values && record.value !== undefined) {
-      attributes['scxml.value'] = valueText(record.value, this.#limit);
-    }
-    if (record.kind === 'sent') {
-      // What the send starts elsewhere names this step as its cause.
-      attributes['scxml.cause.span_id'] = stepSpanId(record.session, record.macrostep, record.microstep);
-    }
-    target.events.push({ name: EVENT_NAMES[record.kind] ?? `scxml.${record.kind}`, time: record.wallTime, attributes });
-  }
-
-  #lifecycle(record) {
-    const causeSpan = this.#causeSpan(record.cause);
-    const attributes = { 'scxml.session_id': record.session.toString(),
-                         'scxml.actor': `${record.actor.slot}:${record.actor.generation}` };
-    if (record.finalState !== undefined) attributes['scxml.state'] = String(record.finalState);
-    const traceId = record.traceId ?? this.#traces.get(causeSpan) ?? derivedTraceId(record.session, 0);
-    this.#onSpan(this.#span({
-      traceId,
-      spanId: stepSpanId(record.session, 0, TRACE_KINDS.indexOf(record.kind) + 1),
-      parentSpanId: causeSpan,
-      name: `scxml.${record.kind}`,
-      time: record.wallTime,
-      attributes,
-    }));
-  }
-}
-
 module.exports = {
   TRACE_KINDS,
   kindMask,
@@ -540,5 +154,4 @@ module.exports = {
   stepSpanId,
   nativeTrace,
   spawnTrace,
-  TraceSpans,
 };

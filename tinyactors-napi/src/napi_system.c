@@ -541,6 +541,7 @@ static napi_value tna_post_common(napi_env env, napi_callback_info info, bool se
     if (!tna_trace_argument(env, argv[6], &trace)) {
         return NULL;
     }
+    tna_system_start_trace(wrapper->system, &trace.context);
     ta_event event;
     if (!tna_post_event(env, wrapper, name, argv[3], &event)) {
         return NULL;
@@ -736,6 +737,7 @@ static napi_value tna_post_named_common(napi_env env, napi_callback_info info, b
     if (!tna_trace_argument(env, argv[6], &trace)) {
         return NULL;
     }
+    tna_system_start_trace(wrapper->system, &trace.context);
     ta_actor_address text = {0};
     uint32_t name = 0;
     uint32_t bytes = 0;
@@ -932,6 +934,7 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "registerInvoker", NULL, tna_register_invoker_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "setLogSink", NULL, tna_set_log_sink_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "setTraceSink", NULL, tna_set_trace_sink_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "newTrace", NULL, tna_new_trace_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "reportInvoke", NULL, tna_report_invoke_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "closed", NULL, NULL, tna_closed_getter, NULL, NULL, napi_default_jsproperty, NULL },
     };

@@ -24,8 +24,9 @@ The test loads the same native addon with Node.js and Bun. See
 
 ## Tracing
 
-`System.setTraceSink()` hands core's trace records to a function you
-register; `TraceSpans` turns them into plain span-shaped data for the
-tracer you already use. There is no telemetry dependency. See
+`System.setTraceSink()` hands a function you register the spans of each
+pump turn as OTLP protobuf bytes, which any OTLP/HTTP collector takes as
+they are; `decodeTraces()` reads them back into objects. There is no
+telemetry dependency. See
 [`docs/tracing.md`](docs/tracing.md), and `mise run otel-demo` to look at
 a trace in otel-tui.

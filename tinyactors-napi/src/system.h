@@ -54,7 +54,7 @@
 #include "allocator.h"
 #include "directory.h"
 #include "effects.h"
-#include "traces.h"
+#include "otlp.h"
 #include "scheduler.h"
 #include "tinyactors.h"
 
@@ -123,9 +123,15 @@ struct tna_system {
     void *after_core_context;
     /* Effects waiting for JavaScript (effects.h), in the turn arena. */
     tna_effects effects;
-    /* Trace records waiting for the JavaScript hook (traces.h). Empty unless
-     * a hook is registered (core ADR 0067). */
-    tna_traces traces;
+    /* The trace encoder (otlp.h), while a sink is installed (napi ADR 0016):
+     * core's records become OTLP spans as they are written, and the pump
+     * hands the spans that ended to JavaScript as bytes, once per turn. */
+    tna_otlp otlp;
+    bool tracing;
+    /* Trace IDs for deliveries and spawns that bring none: a fixed sequence
+     * from `trace_seed` when seeded (tests), else the OS's random bytes. */
+    bool trace_seeded;
+    uint64_t trace_seed;
     /* The last service handle a JavaScript invoker's start was given. */
     uint64_t next_service;
     /*
@@ -159,11 +165,18 @@ ta_result tna_system_post(tna_system *system, const tna_message *message);
  */
 bool tna_system_effect(tna_system *system, const tna_effect *effect);
 
+/* Encodes a trace record (otlp.h) and asks for a turn. */
+void tna_system_trace(tna_system *system, const ta_trace_record *record);
+/* Wall-clock time in nanoseconds since the Unix epoch. */
+uint64_t tna_system_wall_ns(void);
+/* A new trace ID: the next of the seeded sequence, or 16 random bytes. */
+void tna_system_trace_id(tna_system *system, uint8_t out[16]);
 /*
- * Queues a copy of a trace record (traces.h) and asks for a turn. False
- * when it was dropped (closing, or no memory).
+ * Gives `context` a new, sampled trace ID when tracing is on and it has
+ * none, so a delivery or spawn that brings no traceparent starts a trace
+ * (napi ADR 0016 point 4). Core never generates IDs; the host does.
  */
-bool tna_system_trace(tna_system *system, const ta_trace_record *record);
+void tna_system_start_trace(tna_system *system, ta_trace_context *context);
 /* Asks for a turn unless one is pending or the system is quiet or closed. */
 void tna_system_want_turn(tna_system *system);
 /*
