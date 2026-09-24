@@ -231,8 +231,9 @@ same host interface (clock, names, IDs, values). The host posts them to
 - Metrics are read when the host asks, at its export interval, from
   core's counters and occupancy plus its own.
 
-napi's part is a later napi ADR, **napi ADR 0017, "Metrics and logs leave
-the addon as OTLP protobuf"**. It covers the JavaScript API, the export
+napi's part is a later napi ADR, **napi ADR 0017** (proposed as "Observability
+owns its encoder, and makes off and sampled-out free", which revises this
+section for metrics). It covers the JavaScript API, the export
 interval, rate limits, the default log catalogue, and how
 `setTraceSink`'s options extend to logs.
 

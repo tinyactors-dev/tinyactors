@@ -1,0 +1,303 @@
+# ADR 0017: Observability owns its encoder, and makes off and sampled-out free
+
+**Status:** Proposed. It would revise ADR 0016 (points 1 and 4, and its performance), move `traceparent` parsing from ADR 0015 point 4 into C, and take the napi slot core ADR 0072 names for metrics and logs, revising that ADR's section 7 for metrics. Research: [`docs/research/observability-build-vs-reuse.md`](../../../docs/research/observability-build-vs-reuse.md).
+**Date:** 2026-09-24
+
+## Context
+
+The user asked for a clear-eyed review before more is built: "this is too
+expensive and we're rebuilding a lot of the stuff the otel ecosystem has
+already built. Maybe that's necessary, maybe that isn't."
+
+The research note measures both halves of that. On the tracing bench
+(100,000 actors, four records per event, Node 26, ns per event):
+
+| | ns/event | Events/s |
+|---|---|---|
+| Untraced | 418 | 2.39M |
+| **Untraced, but `post` gets a `traceparent`** | **912** | **1.10M** |
+| Sink installed, `traceparent` sampled out | 924 | 1.08M |
+| Macrostep spans only | 941 | 1.06M |
+| Every record | 1573 | 0.64M |
+| Every record, through the OpenTelemetry JS SDK instead, serialized, excluding the crossing from C | ≈ 5800 | ≈ 0.17M |
+
+What the profiles show:
+
+- **Core is cheap.** Building records costs 17–41 ns per event, and core's
+  sampling gate costs 12 ns: a sampled-out macrostep costs almost nothing
+  in core.
+- **The expensive parts are napi's, and most are avoidable:**
+  - parsing a `traceparent` in JavaScript: 494 ns per post, even with no
+    sink installed;
+  - a cryptographic random trace ID on every post: ~120 ns;
+  - copying each span twice: ~100 ns;
+  - reading the wall clock for every record: ~30–100 ns;
+  - formatting event names for every record: ~20–40 ns.
+
+  Two of these fixes (a seeded generator, and fewer clock reads) together
+  measured −152 ns per event.
+- **The ecosystem is more expensive, not less.** The official SDK takes
+  1331 ns per event for one macrostep span serialized to OTLP, and 5415 ns
+  for our "every record". That is before tinyactors runs or any record
+  reaches JavaScript. Its sampled-out path costs 388 ns per span; ours
+  costs 12 ns per event.
+- **The bytes are inherent.** A lossless macrostep span is about 300 bytes,
+  because OTLP repeats every attribute name in every span.
+
+OpenTelemetry advises that "Libraries should only use the OpenTelemetry
+API". That advice assumes spans are created in the SDK's language, at a
+rate where one API call per span is cheap. Ours are created by core in C,
+millions per second, for every host. Section 4 of the research note weighs
+this in full.
+
+So: **what we built is the cheaper design, and it is necessary for a
+runtime whose spans start in C.** What is wrong is a set of costs on the
+paths that should be free (off, and sampled out) and a set of hot spots on
+the path that is paid for (traced).
+
+## Decision
+
+### 1. Keep the encoder for the high-volume signals: traces and logs
+
+The portable C encoder of ADR 0016 stays, and stays the only trace
+output. It also writes logs (section 7). Its code is the price of spans
+that start in C; the measurements say the alternative costs four to seven
+times more per event, and would have to be rebuilt in every host.
+
+### 2. Off and sampled-out are free, and a bench holds them to it
+
+- **`traceparent` is parsed in C.** `post`, `send` and `spawn` pass the
+  string through unchanged, and the addon parses its 55 characters. The
+  JavaScript regular expression and the three BigInts go.
+  `parseTraceparent` and `formatTraceparent` stay in `lib/tracing.js` for
+  users.
+- **Trace IDs come from a fast generator seeded once.** Each system seeds
+  SplitMix64 (or xoshiro256**) from the OS's random bytes when the sink is
+  installed. It then draws two 64-bit words per new trace. The spec
+  requires random IDs, not cryptographic ones [research note §4]. `seed`
+  keeps its meaning.
+- **Budgets checked by the bench** (`test/bench/tracing.js`, reported, not
+  a CI gate):
+  - untraced with a `traceparent`: within 40 ns of untraced without one;
+  - sink installed, macrostep sampled out: within 40 ns of untraced;
+  - watch set empty (section 3): no measurable cost.
+
+### 3. Turning tracing on, off and down at 3am
+
+- **A ratio sampler for the traces napi starts.**
+  `sample: <0..1>` decides with OpenTelemetry's `TraceIdRatioBased`
+  algorithm, on the new trace ID. Every process that sees the trace makes
+  the same decision. An incoming `traceparent` keeps its caller's decision
+  (parent-based). Today, installing a sink traces everything; with
+  `sample`, a production system can run with `sample: 0` and pay nothing
+  until something is watched.
+- **Watch one actor, one definition, or one request.**
+  - `system.watchTraces({ sessions, families, addresses })` returns a
+    handle whose `stop()` removes the watch. napi checks the watch set at
+    each delivery it makes (`post`, `send`, timers, routed mail) and marks
+    matching deliveries sampled.
+  - Everything the watched delivery causes follows, because core
+    propagates the flag (ADR 0067 section 6).
+  - No core change and no per-actor memory. When no watch is active, the
+    check is one branch.
+  - A request is watched by sending it with a sampled `traceparent`, as
+    today.
+- **Change settings without reinstalling.** `system.configureTraces({
+  kinds, detail, sample })` changes the kind mask and the sampler in place.
+  Open spans are not ended early. `setTraceSink` stays the way to install
+  and remove the sink itself.
+- **Detail presets over the kind mask:**
+  - `summary`: macrostep begin and end, plus the failure kinds;
+  - `decisions`: adds microsteps and conditions;
+  - `full`: every kind, as today.
+
+  `kinds` still overrides.
+
+### 4. The traced path: named hot spots, with targets
+
+- **One copy.** Spans are written straight into the request buffer, with
+  sizes computed before writing (ADR 0016 already calls for this), instead
+  of being built in a span buffer and copied at `tna_span_end`.
+- **Fewer clock reads.** Read the wall clock at span boundaries only:
+  macrostep begin and end, and microstep start. Span events carry their
+  span's last reading. That is one read per span boundary instead of one
+  per record.
+- **Names formatted once.** Event names are cached per event-name atom,
+  and labels per definition (section 5), so no record formats a name.
+- **Targets on the bench machine:**
+  - macrostep spans only: ≤ 700 ns per event (≥ 1.4M/s);
+  - every record: ≤ 1.2 µs per event (≥ 0.8M/s).
+
+  The implementation notes record what is reached.
+
+### 5. State lives as long as what it describes
+
+This is what the user's "new arena with a new lifetime" is right about.
+The encoder already reuses its buffers, and a per-turn arena cannot hold a
+macrostep that stays open across turns. What each piece of state needs is
+the lifetime it describes:
+
+- **The name cache** is keyed by definition ID, generation included, so a
+  stale entry never matches. It is swept when it holds twice as many
+  definitions as the system has live: an entry whose
+  `ta_definition_inspect` answers `TA_ERR_NOT_FOUND` is dropped. This
+  closes ADR 0016's "the name cache never evicts".
+- **Open spans** go in an open-addressing table keyed by session. An entry
+  is added at macrostep begin, removed at its end, and ended as incomplete
+  when its actor is unloaded or destroyed. This closes ADR 0016's "open
+  spans are kept in a linear array".
+
+### 6. Replies stay in the trace
+
+This closes ADR 0016's open point 1.
+
+- **I/O processors.** The context an I/O processor receives with a
+  request becomes per-request. Its `post` defaults `traceparent` to the
+  request's (the sending step), so a reply is a child of the step that
+  sent the request. An explicit `options.traceparent` wins.
+- **Invokers.** The invoker's `reporter` does the same for events from
+  the invoked service, using the invoking step.
+- **Tested end to end:** a request to a JavaScript I/O processor that
+  replies asynchronously lands in the original trace, in the otel-tui
+  demo and in `test/otlp.js`.
+
+### 7. Logs through the encoder; metrics as plain data
+
+This revises core ADR 0072 section 7.
+
+- **Logs** are high-volume in an error loop, and they come from records
+  that already flow through the encoder. The encoder writes an
+  `ExportLogsServiceRequest` from the failure kinds and `<log>`, as ADR
+  0072 decides. `setTraceSink`'s callback receives it next to the traces,
+  as `{ traces, logs }` bytes per turn.
+  - **Rate limits** (ADR 0072 open question 4): at most N log records per
+    definition and event name (or record kind) per interval. When one is
+    dropped, the next log that passes carries `tinyactors.suppressed` with
+    the count dropped. The counters of ADR 0072 still count every failure.
+- **Metrics** are read once per export interval, not per event, so the
+  encoder's speed does not matter for them. The user's Meter pipeline
+  (views, temporality, exporters) is exactly what an SDK user wants.
+  - `system.metrics()` returns a plain snapshot: core's counters and
+    occupancy (ADR 0072), plus napi's gauges and histograms (mailboxes,
+    dead letters, quarantine, turn duration, backlog, timer lateness).
+  - `docs/tracing.md` shows the snapshot read by the SDK's observable
+    instruments, tested like ADR 0016's SDK example against the pinned
+    dev dependencies.
+  - Users with no SDK get `metricsToOtlp(snapshot)` in `lib/`, a small
+    JavaScript OTLP metrics writer with no dependency, if the user wants
+    it in `lib/` (question 2).
+  - **No metrics encoder in C.**
+
+### 8. The package still depends on nothing
+
+`lib/` keeps no telemetry dependency. Automatic context propagation, which
+means reading the application's active OpenTelemetry context at `post`
+time instead of passing `traceparent`, is the one thing the API would give
+us cheaply. It would live in a separate optional adapter package that
+depends only on `@opentelemetry/api`, if the user wants one (question 3).
+
+## Alternatives
+
+- **Delegate spans to `@opentelemetry/api` and the user's SDK,** with a
+  separate adapter over core's record sink.
+  - Measured, the SDK alone costs 1331 ns per event for one span and
+    5415 ns for "every record", serialized. Every record would also have
+    to cross into JavaScript first (ADR 0015 measured about 4.8 µs for
+    that), so the whole system would run at roughly 0.1M events/s.
+  - Its sampled-out spans cost 388 ns each, against our 12 ns.
+  - It serves only JavaScript: the browser, Python and database hosts
+    would each need their own adapter.
+  - What it gives, automatic propagation and the application's sampler,
+    is available more cheaply (sections 3 and 8).
+- **An always-on summary of macrostep spans.** Even after section 4, a
+  macrostep span costs on the order of 300 ns per event: a third of the
+  untraced event. That cannot be always on. The always-on summary is ADR
+  0072's counters and occupancy, which cost increments, not spans.
+- **Correlation IDs indexing a table of trace contexts** (the user's first
+  idea). It would save memory on pending delayed sends (48 bytes to 4).
+  It would save no CPU: core's record building is 17–41 ns per event. It
+  would add reference counts, a free list and entries in session images.
+  At the JavaScript boundary, where an ID table would save the 494 ns
+  parse, parsing in C does the same with no lifetime to manage. Revisit if
+  the memory of pending sends becomes the constraint.
+- **A new arena for tracing** (the user's second idea). Buffers are
+  already reused (malloc is 3% of traced time), and a per-turn arena can't
+  hold spans that outlive a turn. Its useful core, state tied to its
+  lifetime, is section 5.
+- **Swallow the cost, but make toggling easy** (the user's third idea).
+  This is, in substance, the decision. The difference is that about 40% of
+  today's traced overhead is not a cost to swallow: it is the hot spots in
+  sections 2 and 4.
+- **A custom columnar layout.** Rejected by ADR 0016, and nothing here
+  changes that. The bytes are not where the time goes.
+
+## Relation to other decisions
+
+- **ADR 0015:** point 4 (`traceparent` in and out) stands. Parsing moves
+  from JavaScript to C.
+- **ADR 0016:**
+  - Point 1 (one format out) gains logs next to traces, and the
+    `sample` and `detail` options.
+  - Point 4 (a trace always has an ID) now uses a generator seeded once.
+  - Its open points 1, 3 and 4 close here (sections 6 and 5), and open
+    point 2 has targets (section 4).
+  - The mapping, the lossless requirement, the host interface and
+    `decodeTraces` are unchanged.
+- **Core ADR 0067:** unchanged. The measurements confirm its design: core
+  costs 17–41 ns per event, and its sampling gate costs 12 ns.
+- **Core ADR 0072:**
+  - This is the napi ADR it names for napi's part.
+  - Its section 7 is revised for metrics: plain data and a JavaScript
+    writer, no C encoder.
+  - Logs are as it decides, with the rate limit of section 7 here.
+  - Its counters are the always-on summary.
+- **Core ADR 0071:** it supplies the labels that section 4 caches.
+
+## Consequences
+
+- The paths that should be free become free. Propagating a caller's
+  context stops halving throughput, and a production system can install a
+  sink with `sample: 0` and watch only what it needs.
+- The traced path gets faster by the hot spots in section 4. Its
+  remaining cost is the encoder and the bytes, and that is the price of
+  lossless OTLP.
+- napi's API grows by `sample`, `detail`, `configureTraces`,
+  `watchTraces`, `metrics`, and possibly `metricsToOtlp`. `setTraceSink`'s
+  callback receives `{ traces, logs }`.
+- We keep owning the C encoder (about 1200 lines) and the decoder. The
+  measurements are the reason: nothing in the ecosystem produces these
+  spans more cheaply.
+
+## Testing (when implemented)
+
+- **Bench budgets** (section 2), reported by `test/bench/tracing.js` next
+  to the numbers in the research note.
+- **Sampling:** `sample` decides as `TraceIdRatioBased` does for known
+  trace IDs, with a fixed `seed`. A parent's decision wins.
+- **Watches:** a watched session, family or address is traced; everything
+  it causes is traced; nothing else is. After `stop()`, nothing is traced.
+- **`configureTraces`:** changes take effect with no incomplete spans.
+- **Replies:** the reply of a JavaScript I/O processor and an event from
+  an invoked service carry the request's trace ID and parent.
+- **Lifetimes:** the name cache shrinks after definitions are freed. Open
+  spans with 10,000 paused actors cost O(1) per record.
+- **Logs:** failure records produce log records correlated with their
+  spans. Rate limits report the number suppressed.
+- **Metrics:** the snapshot matches the counters. The SDK example reads
+  it through observable instruments. By hand, otel-tui shows traces, logs
+  and metrics.
+
+## Questions for the user
+
+1. **Default detail** when a sink is installed: `summary` (macrostep spans
+   plus failures) or `full` (lossless, as today)?
+2. **Metrics without an SDK:** ship `metricsToOtlp` in `lib/`, or only a
+   writer in `tools/` for the demo?
+3. **An optional adapter package** depending only on `@opentelemetry/api`,
+   for automatic context propagation: wanted, or not now?
+4. **Trace IDs from a seeded fast generator,** which the spec allows,
+   instead of the OS's cryptographic generator per trace: acceptable?
+5. **"Summary for everyone, full detail for watched actors"** would need
+   core to carry a detail bit on the trace context, because the kind mask
+   is per system. Worth a core change, or is "watched actors fully,
+   everyone else sampled out" enough?
