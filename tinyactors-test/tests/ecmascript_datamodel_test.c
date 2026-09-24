@@ -556,7 +556,7 @@ static void test_system(tat_js_datamodel_context *context) {
     require(tat_js_value_from_json(context, S("[1,2]"), &data_value) == TA_OK, "event data");
     ta_event event = {.name = event_name(system, "go"), .type = TA_EVENT_EXTERNAL,
                       .invoke_id = TA_INVOKE_ID_NONE, .data = data_value};
-    require(ta_actor_deliver(system, actor, &event) == TA_OK, "deliver");
+    require(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .event = &event }) == TA_OK, "deliver");
     ta_value_release(&data_value);
     run(system, actor);
     check(root_contains(system, actor, "\"inB\":true"), "In() sees the other parallel region");

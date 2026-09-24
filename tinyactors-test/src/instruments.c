@@ -632,7 +632,7 @@ static ta_result tat_router_deliver(tat_instrument *instrument, const ta_externa
         }
         id = resolved.actor;
     }
-    return ta_actor_deliver(instrument->system, id, &delivery->event);
+    return ta_actor_deliver(instrument->system, &(ta_actor_deliver_params){ .actor = id, .event = &delivery->event, .trace = delivery->trace });
 }
 
 static ta_external_event_submit_status tat_recording_submit(void *self, const ta_external_event_submit_params *params) {
@@ -1686,7 +1686,7 @@ static jv tat_endpoint_held_record(const tat_endpoint_state *state) {
 /* Delivers one event with its origin; keeps it when the actor is busy and `hold` says so. */
 static jv tat_endpoint_deliver(tat_instrument *instrument, ta_actor_id actor, ta_event *event, bool hold) {
     tat_endpoint_state *state = &instrument->endpoint;
-    ta_result result = ta_actor_deliver(instrument->system, actor, event);
+    ta_result result = ta_actor_deliver(instrument->system, &(ta_actor_deliver_params){ .actor = actor, .event = event });
     if (result == TA_ERR_BUSY && hold) {
         if (state->held_count == state->held_capacity) {
             size_t capacity = state->held_capacity == 0 ? 8 : state->held_capacity * 2;
@@ -1788,7 +1788,7 @@ static jv tat_endpoint_flush(tat_instrument *instrument) {
     size_t taken = 0;
     while (taken < state->held_count) {
         tat_held_event *held = &state->held[taken];
-        ta_result result = ta_actor_deliver(instrument->system, held->actor, &held->event);
+        ta_result result = ta_actor_deliver(instrument->system, &(ta_actor_deliver_params){ .actor = held->actor, .event = &held->event });
         if (result == TA_ERR_BUSY) {
             break;
         }

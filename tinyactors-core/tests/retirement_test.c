@@ -303,7 +303,7 @@ static void test_retire_with_actors(void) {
           TA_OK);
     /* Running grows the system's scratch arena, which it keeps. */
     CHECK(run(&f, warm_actors[0]) == TA_RUN_STABLE);
-    CHECK(ta_actor_deliver(f.system, warm_actors[0], &(ta_event){ .name = warm_go, .type = TA_EVENT_EXTERNAL }) ==
+    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .actor = warm_actors[0], .event = &(ta_event){ .name = warm_go, .type = TA_EVENT_EXTERNAL } }) ==
           TA_OK);
     CHECK(run(&f, warm_actors[0]) == TA_RUN_STABLE);
     CHECK(ta_system_retire_definition(f.system, warm) == TA_OK);
@@ -341,7 +341,7 @@ static void test_retire_with_actors(void) {
     ta_atom segment = 0;
     CHECK(ta_system_intern_atom(f.system, (ta_str)STR("go"), &segment) == TA_OK);
     CHECK(ta_event_name_intern(f.system, &(ta_atom_list){ .atoms = &segment, .count = 1 }, &go) == TA_OK);
-    CHECK(ta_actor_deliver(f.system, first, &(ta_event){ .name = go, .type = TA_EVENT_EXTERNAL }) == TA_OK);
+    CHECK(ta_actor_deliver(f.system, &(ta_actor_deliver_params){ .actor = first, .event = &(ta_event){ .name = go, .type = TA_EVENT_EXTERNAL } }) == TA_OK);
     CHECK(run(&f, first) == TA_RUN_STABLE);
     CHECK(run(&f, second) == TA_RUN_STABLE);
     ta_actor_inspection actor;

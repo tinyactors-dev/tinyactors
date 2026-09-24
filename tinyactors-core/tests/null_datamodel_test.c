@@ -113,7 +113,7 @@ static bool lands_in(const ta_scxml_spec *spec, const char *event, const char *e
         if (event != NULL) {
             ta_event delivered = { .name = event_name(system, event), .type = TA_EVENT_EXTERNAL,
                                    .invoke_id = TA_INVOKE_ID_NONE };
-            CHECK(ta_actor_deliver(system, actor, &delivered) == TA_OK);
+            CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .event = &delivered }) == TA_OK);
             CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100,
                                                                     .status = &status }) == TA_OK);
         }

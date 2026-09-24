@@ -20,7 +20,9 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
     if (system == NULL) {
         return TA_ERR_NOMEM;
     }
-    *system = (ta_system){ .allocator = config->allocator, .block_cache_limit = TA_EVENT_BLOCK_CACHE_DEFAULT };
+    *system = (ta_system){ .allocator = config->allocator,
+                           .block_cache_limit = TA_EVENT_BLOCK_CACHE_DEFAULT,
+                           .trace = ta_null_trace_sink() };
     ta_clock_set(&system->clock, config->initial_time);
     ta_vec_init(&system->actors.pages, config->allocator, TA_VEC_LAYOUT(ta_actor_slot *));
     system->free_actor_slot = UINT32_MAX;

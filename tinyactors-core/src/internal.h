@@ -9,6 +9,7 @@
 #include "session.h"
 #include "event_name.h"
 #include "event.h"
+#include "trace.h"
 #include "fault.h"
 #include "scxml_uri.h"
 #include "routing.h"

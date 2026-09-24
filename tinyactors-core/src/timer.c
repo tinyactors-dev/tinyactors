@@ -207,6 +207,7 @@ static void ta_timer_split(const ta_delayed_send *send, ta_delayed_send_info *in
         .invoke_id = send->invoke_id,
         .has_content = send->has_content,
         .content = send->content,
+        .trace = send->trace,
     };
 }
 
@@ -228,6 +229,7 @@ static ta_delayed_send ta_timer_join(const ta_timer_list *list, uint32_t index) 
         .invoke_id = meta->invoke_id,
         .has_content = meta->has_content,
         .content = meta->content,
+        .trace = meta->trace,
     };
 }
 

@@ -234,7 +234,7 @@ static ta_event_name_id event_name(ta_system *system, const char *text) {
 static void deliver(ta_system *system, ta_actor_id actor, const char *event) {
     ta_event delivered = { .name = event_name(system, event), .type = TA_EVENT_EXTERNAL,
                            .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(system, actor, &delivered) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .event = &delivered }) == TA_OK);
     run(system, actor);
 }
 

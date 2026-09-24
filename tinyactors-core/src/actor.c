@@ -512,6 +512,18 @@ ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params)
     }
     ta_actor_id id = actor->record.id;
 
+    /* A traced spawn's parent waits in an event block for the bootstrap
+     * macrostep (ADR 0067); an untraced one needs no block. */
+    if (!ta_trace_parent_empty(&params->trace)) {
+        result = ta_interpreter_hold_block(system, actor);
+        if (result != TA_OK) {
+            ta_actor_release_slot(system, id);
+            ta_actor_free(system, actor);
+            return result;
+        }
+        actor->event_block->slots.trace = params->trace;
+    }
+
     if (params->parent != NULL) {
         actor->sparse = ta_mem_alloc(system->allocator, sizeof(ta_actor_sparse_state),
                                      _Alignof(ta_actor_sparse_state));
@@ -551,6 +563,7 @@ ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params)
         /* Invoke: the invoking parent routes #_<invokeid> and autoforwarding to this child. */
         ta_invoke_attach_child(system, params->parent, id);
     }
+    ta_trace_lifecycle(system, actor, TA_TRACE_SPAWNED, &params->trace);
     *params->out = id;
     return TA_OK;
 }
@@ -711,11 +724,12 @@ static ta_result ta_actor_accept_origin(const ta_system *system, const ta_actor 
     return TA_OK;
 }
 
-ta_result ta_actor_deliver(ta_system *system, ta_actor_id id, const ta_event *event) {
-    if (event == NULL) {
+ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *params) {
+    if (params == NULL || params->event == NULL) {
         return TA_ERR_INVALID;
     }
-    ta_actor *actor = ta_actor_lookup(system, id);
+    const ta_event *event = params->event;
+    ta_actor *actor = ta_actor_lookup(system, params->actor);
     if (actor == NULL) {
         return TA_ERR_NOT_FOUND;
     }
@@ -744,6 +758,8 @@ ta_result ta_actor_deliver(ta_system *system, ta_actor_id id, const ta_event *ev
     ta_event_slots *slots = &actor->event_block->slots;
     ta_event_retain(&accepted, &slots->external_event);
     slots->external = TA_EXTERNAL_WAITING;
+    /* The macrostep that takes it runs under the delivery's parent. */
+    slots->trace = params->trace;
     actor->macrostep = true;
     ta_actor_touch(actor);
     actor->record.residency = TA_ACTOR_RUNNING;
@@ -779,6 +795,7 @@ ta_result ta_actor_destroy(ta_system *system, ta_actor_id id) {
         return result;
     }
     ta_timer_orphan(&system->timers, ta_actor_timers(actor));
+    ta_trace_lifecycle(system, actor, TA_TRACE_DESTROYED, NULL);
     ta_actor_release_address(system, actor);
     ta_actor_release_slot(system, id);
     ta_actor_free(system, actor);

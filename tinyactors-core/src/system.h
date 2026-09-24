@@ -12,6 +12,7 @@
 #include "invoke.h"
 #include "routing.h"
 #include "timer.h"
+#include "trace.h"
 
 /* How many empty event blocks a new system keeps for reuse (ADR 0064): one
  * per interpreter that can run at once, nested exits included (ADR 0060).
@@ -68,6 +69,8 @@ struct ta_system {
     ta_actor_directory directory;
     ta_external_event_router external_events;
     ta_log_sink log_sink;
+    /* Never null: ta_null_trace_sink() when the host installed none (ADR 0067). */
+    ta_trace_sink trace;
     ta_atom scxml_io_type;
     /* The short form "scxml" also selects the built-in processor. */
     ta_atom scxml_io_alias;

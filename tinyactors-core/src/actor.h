@@ -69,6 +69,13 @@ typedef struct {
      * while the macrostep runs (ADR 0047). */
     ta_event external_event;
     ta_event kept_event;
+    /*
+     * What the running macrostep runs under (ADR 0067): its delivery's, its
+     * spawn's, or the failed send's that queued its first event. Set when a
+     * macrostep starts, and kept while it runs, so a block that holds only a
+     * parent stays with its actor until the macrostep ends.
+     */
+    ta_trace_parent trace;
 } ta_event_slots;
 
 /*
@@ -140,6 +147,14 @@ struct ta_actor {
     bool bootstrapped;
     bool macrostep;
     bool finished;
+    /* The running macrostep has written MACROSTEP_BEGIN (ADR 0067): taking
+     * its event can no longer be undone, and its key is `trace_macrostep`. */
+    bool trace_begun;
+    /* The step counters (ADR 0067 section 3): the current or last macrostep,
+     * from 1, and the current or last microstep within it, from 1. They run
+     * whether or not anything traces, and move only when a step commits. */
+    uint32_t trace_microstep;
+    uint64_t trace_macrostep;
     uint64_t next_send_id;
     /*
      * While the interpreter runs, the full active set it is updating (ancestors

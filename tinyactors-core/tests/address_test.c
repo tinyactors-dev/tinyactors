@@ -246,7 +246,7 @@ static void test_delivered_origin_outlives_the_host_reference(void) {
     ta_event event = { .name = poke, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE,
                        .origin = { .kind = TA_ORIGIN_ACTOR,
                                    .as.actor = { .kind = TA_ACTOR_REF_NAMED, .as.named = origin } } };
-    CHECK(ta_actor_deliver(system, actor, &event) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .event = &event }) == TA_OK);
     ta_address_release(origin);
 
     ta_actor_inspection view;

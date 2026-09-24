@@ -23,7 +23,7 @@ COMMAND = [*Shellwords.split(ENV.fetch('CC', 'cc')), *Shellwords.split(ENV.fetch
 # Kept in sync with build/_default's TESTS_WITH_RUNTIME + STANDALONE_TESTS by
 # hand, the same way the old build task's link calls were hand-maintained; a
 # renamed or removed test here needs the matching entry updated there too.
-TESTS = %w[actor_id_test session_id_test address_test io_origin_test session_image_test deep_test delayed_send_test null_datamodel_test pause_test inspection_test retirement_test export_test codec_test compile_error_test event_pattern_test scxml_uri_test send_id_test tree_test].freeze
+TESTS = %w[actor_id_test session_id_test address_test io_origin_test session_image_test deep_test delayed_send_test null_datamodel_test pause_test trace_test inspection_test retirement_test export_test codec_test compile_error_test event_pattern_test scxml_uri_test send_id_test tree_test].freeze
 
 compiled = 0
 reused = 0

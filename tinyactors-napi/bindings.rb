@@ -48,6 +48,7 @@ module TinyactorsNapiBindings
     'ta_system_set_event_block_cache' => 'sized from scheduling.messageBudget at system creation (core ADR 0069)',
     'ta_system_register_{io,invoker}' => 'reached through hand-written registration (step 13)',
     'ta_system_set_log_sink' => 'reached through hand-written registration (step 13)',
+    'ta_system_set_trace_sink' => 'installed by the tracing hook, which hands records to JavaScript (core ADR 0067)',
     'ta_actor_report_invoke' => 'invoker adapters report through the plumbing (step 13)',
     'ta_system_{create,destroy}' => 'the native System owns the ta_system (ADR 0012)',
     'ta_system_visit_actors' => 'paged enumeration is plumbing (ADR 0003, step 9)',
@@ -70,6 +71,7 @@ module TinyactorsNapiBindings
     'ta_actor_id_{slot,generation,make}' => 'actor IDs cross as (slot, generation); the runtime codec splits and joins them (ADR 0002)',
     'ta_dm_host_*' => 'callable only from inside data-model callbacks (step 11)',
     'ta_null_datamodel' => 'the plumbing chooses the data model; it is injected into compile_spec',
+    'ta_null_trace_sink' => 'the tracing hook installs it when no JavaScript callback is registered (core ADR 0067)',
     'ta_definition_{import,encode}' => 'needs a chart codec adapter; the addon registers none yet (step 11 decides XML import)'
   }.freeze
 
@@ -106,6 +108,7 @@ module TinyactorsNapiBindings
     'ta_io_{registration,origin_make,scope_open}_params' => 'arguments of plumbing-owned functions (core ADR 0068)',
     'ta_origin_text_params' => 'argument of a plumbing-owned function (core ADR 0068)',
     'ta_log_record' => 'log sink callback argument (step 13)',
+    'ta_trace_{record,sink}' => 'trace sink plumbing: records reach JavaScript through the tracing hook (core ADR 0067)',
     'ta_named_value' => 'data-model callback argument (step 11)',
     'ta_fault' => 'callback fault record; faults reach JavaScript through hooks (ADR 0008)',
     'ta_datamodel_*_params' => 'data-model callback arguments (step 11)',

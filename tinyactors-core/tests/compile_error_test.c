@@ -997,7 +997,7 @@ static void test_history_default_chains(void) {
     ta_event_name_id go_name = 0;
     CHECK(ta_event_name_intern(system_under_test, &(ta_atom_list){ .atoms = &go_atom, .count = 1 }, &go_name) == TA_OK);
     ta_event event = { .name = go_name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
-    CHECK(ta_actor_deliver(system_under_test, actor, &event) == TA_OK);
+    CHECK(ta_actor_deliver(system_under_test, &(ta_actor_deliver_params){ .actor = actor, .event = &event }) == TA_OK);
     CHECK(ta_actor_resume(system_under_test, &(ta_actor_resume_params){ .actor = actor, .budget = 100,
                                                                         .status = &status }) == TA_OK);
     CHECK(status == TA_RUN_STABLE);

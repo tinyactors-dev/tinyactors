@@ -325,7 +325,7 @@ static void test_delivery(void) {
     /* An unknown processor index is refused. */
     ta_event bad = message_event(system, request, "ping", "http://c/r/0");
     bad.origin.as.io.processor = 9;
-    CHECK(ta_actor_deliver(system, actor, &bad) == TA_ERR_INVALID);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .event = &bad }) == TA_ERR_INVALID);
     bad.origin.as.io.processor = request;
     ta_event_release(&bad);
     /* A delivered event lives in an event block (ADR 0069): one plain
@@ -334,14 +334,14 @@ static void test_delivery(void) {
     ta_event warm = { .name = event_name(system, "ping"), .type = TA_EVENT_EXTERNAL,
                       .invoke_id = TA_INVOKE_ID_NONE };
     ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_deliver(system, actor, &warm) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .event = &warm }) == TA_OK);
     CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
           TA_OK);
     long before = live_blocks;
 
     /* The actor holds the origin after the host lets go; destroy gives it back. */
     ta_event event = message_event(system, request, "ping", long_uri);
-    CHECK(ta_actor_deliver(system, actor, &event) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .event = &event }) == TA_OK);
     ta_event_release(&event);
     CHECK(live_blocks == before + 1);
     ta_actor_inspection inspection;
@@ -355,14 +355,14 @@ static void test_delivery(void) {
 
     /* A finished actor refuses; the host releases, and nothing is left. */
     ta_event stop = message_event(system, request, "stop", long_uri);
-    CHECK(ta_actor_deliver(system, actor, &stop) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .event = &stop }) == TA_OK);
     ta_event_release(&stop);
     CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
           TA_OK);
     CHECK(status == TA_RUN_DONE);
     long finished = live_blocks;
     ta_event late = message_event(system, request, "ping", long_uri);
-    CHECK(ta_actor_deliver(system, actor, &late) == TA_ERR_DONE);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .event = &late }) == TA_ERR_DONE);
     ta_event_release(&late);
     CHECK(live_blocks == finished);
     CHECK(ta_actor_destroy(system, actor) == TA_OK);
@@ -389,7 +389,7 @@ static void test_image(void) {
                                                                  .origin_class = TA_IO_ORIGIN_COMPUTED,
                                                                  .token = 42,
                                                                  .out = &event.origin }) == TA_OK);
-    CHECK(ta_actor_deliver(system, actor, &event) == TA_OK);
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .event = &event }) == TA_OK);
     ta_session_image *image = NULL;
     CHECK(ta_actor_capture(system, &(ta_actor_capture_params){ .actor = actor, .out = &image }) == TA_OK);
     CHECK(ta_actor_destroy(system, actor) == TA_OK);

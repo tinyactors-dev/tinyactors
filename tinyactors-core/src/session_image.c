@@ -38,6 +38,11 @@ struct ta_session_image {
     bool bootstrapped;
     bool macrostep;
     bool finished;
+    /* The step counters, and whether the macrostep has begun (ADR 0067);
+     * the macrostep's trace parent is in `slots`. */
+    bool trace_begun;
+    uint32_t trace_microstep;
+    uint64_t trace_macrostep;
     /* The external and kept events and what `_event` names (ADR 0069). A
      * bound queue head is internal_events[0]. */
     ta_event_slots slots;
@@ -335,6 +340,7 @@ static ta_event_slots ta_image_slots(const ta_actor *actor) {
         .has_kept = slots->has_kept,
         .external_event = slots->external != TA_EXTERNAL_NONE ? slots->external_event : (ta_event){0},
         .kept_event = slots->has_kept ? slots->kept_event : (ta_event){0},
+        .trace = actor->macrostep ? slots->trace : (ta_trace_parent){0},
     };
 }
 
@@ -370,6 +376,9 @@ ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_params *par
         .bootstrapped = actor->bootstrapped,
         .macrostep = actor->macrostep,
         .finished = actor->finished,
+        .trace_begun = actor->trace_begun,
+        .trace_microstep = actor->trace_microstep,
+        .trace_macrostep = actor->trace_macrostep,
         /*
          * An event is the actor's only while its flag says so. Releasing an
          * event leaves its bytes, origin included, in place, so the image
@@ -550,9 +559,8 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
      * Reporting the lost invocations put work in the queue of an actor the
      * image recorded as idle, so it has a macrostep to run again.
      */
-    if (!actor->macrostep && ta_interpreter_internal_pending(actor)) {
-        actor->macrostep = true;
-        actor->record.residency = TA_ACTOR_RUNNING;
+    if (ta_interpreter_internal_pending(actor)) {
+        ta_interpreter_start_macrostep(actor, NULL);
     }
     return TA_OK;
 }
@@ -577,7 +585,9 @@ static ta_result ta_image_restore_pause(const ta_session_image *image, ta_actor 
     return TA_OK;
 }
 
-ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_params *params) {
+/* Reconstruction without its LOADED record, which a load writes only once
+ * the directory publishes the session. */
+static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstruct_params *params) {
     if (system == NULL || params == NULL || params->image == NULL || params->out == NULL) {
         return TA_ERR_INVALID;
     }
@@ -633,14 +643,21 @@ ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_par
     actor->bootstrapped = image->bootstrapped;
     actor->macrostep = image->macrostep;
     actor->finished = image->finished;
+    actor->trace_begun = image->trace_begun;
+    actor->trace_microstep = image->trace_microstep;
+    actor->trace_macrostep = image->trace_macrostep;
     actor->next_send_id = image->next_send_id;
     actor->session_epoch = image->source_epoch;
     /* The events live in an event block (ADR 0069). What `_event` names is
      * restored with the queue it may point into. */
     ta_event_slots *slots = NULL;
-    if (image->slots.external != TA_EXTERNAL_NONE || image->slots.has_kept) {
+    if (image->slots.external != TA_EXTERNAL_NONE || image->slots.has_kept ||
+        !ta_trace_parent_empty(&image->slots.trace)) {
         result = ta_interpreter_hold_block(system, actor);
         slots = result == TA_OK ? &actor->event_block->slots : NULL;
+    }
+    if (slots != NULL) {
+        slots->trace = image->slots.trace;
     }
     if (slots != NULL && image->slots.external != TA_EXTERNAL_NONE) {
         ta_event_retain(&image->slots.external_event, &slots->external_event);
@@ -712,6 +729,14 @@ ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_par
     }
     *params->out = id;
     return TA_OK;
+}
+
+ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_params *params) {
+    ta_result result = ta_image_reconstruct(system, params);
+    if (result == TA_OK) {
+        ta_trace_lifecycle(system, ta_actor_lookup(system, *params->out), TA_TRACE_LOADED, NULL);
+    }
+    return result;
 }
 
 /* ------------------------------------------------------------------------
@@ -793,6 +818,7 @@ ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params *param
     parked->address = address;
     ta_address_retain(address);
     ta_timer_orphan(&system->timers, ta_actor_timers(actor));
+    ta_trace_lifecycle(system, actor, TA_TRACE_UNLOADED, NULL);
     ta_actor_release_slot(system, actor->record.id);
     ta_actor_free(system, actor);
     if (address->unloaded != NULL) {
@@ -820,7 +846,7 @@ ta_result ta_actor_load(ta_system *system, const ta_actor_load_params *params) {
      * the queue and the timers — happens here.
      */
     ta_actor_id id = 0;
-    ta_result result = ta_actor_reconstruct(
+    ta_result result = ta_image_reconstruct(
         system,
         &(ta_actor_reconstruct_params){ .image = image,
                                         .datamodel_binding = params->datamodel_binding,
@@ -848,12 +874,14 @@ ta_result ta_actor_load(ta_system *system, const ta_actor_load_params *params) {
         return result;
     }
     /* The session is resident again: its parked entry goes (ADR 0066). */
-    ta_address *address = ta_actor_lookup(system, id)->record.self.as.named;
+    ta_actor *loaded = ta_actor_lookup(system, id);
+    ta_address *address = loaded->record.self.as.named;
     if (address->unloaded != NULL) {
         ta_session_node *parked = address->unloaded;
         ta_session_remove(&system->sessions, parked);
         ta_session_node_free(&system->sessions, parked);
     }
+    ta_trace_lifecycle(system, loaded, TA_TRACE_LOADED, NULL);
     *params->out = id;
     return TA_OK;
 }

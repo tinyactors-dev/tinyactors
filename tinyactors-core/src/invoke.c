@@ -251,6 +251,7 @@ ta_result ta_invoke_state_exited(ta_interpreter *it, ta_state_id state) {
     ta_invoke_forget_pending(it->actor, state);
     for (uint32_t index = sparse->invoke_count; index > 0; index -= 1u) {
         if (sparse->invoke_meta[index - 1u].state == state) {
+            ta_interpreter_trace_invoke(it, TA_TRACE_INVOKE_CANCELLED, sparse->invokes[index - 1u].id);
             ta_invoke_cancel_at(it->system, sparse, index - 1u);
         }
     }
@@ -494,6 +495,7 @@ static ta_result ta_invoke_launch(ta_interpreter *it, const ta_invoke_launch_par
         .data = values->data,
         .params = values->params,
         .autoforward = decl->autoforward,
+        .trace = ta_interpreter_trace_here(it),
     };
     if (decl->data.kind == TA_VALUE_SOURCE_CONTENT) {
         ta_interpreter_literal_content(it->definition, decl->data.as.content, &request.content_type,
@@ -539,6 +541,7 @@ static ta_result ta_invoke_start(ta_interpreter *it, ta_invoke_decl_id decl_id) 
     if (result != TA_OK) {
         return result;
     }
+    uint32_t mark = ta_interpreter_queue_mark(it->actor);
     ta_invoke_values values = {0};
     ta_invoke_id id = 0;
     ta_atom type = 0;
@@ -553,16 +556,26 @@ static ta_result ta_invoke_start(ta_interpreter *it, ta_invoke_decl_id decl_id) 
     if (result == TA_OK) {
         result = ta_invoke_resolve_values(it, decl, &values);
     }
+    bool launched = false;
     if (result == TA_OK) {
         result = ta_invoke_launch(it, &(ta_invoke_launch_params){
                                           .decl = decl_id, .id = id, .type = type, .invoker = invoker,
                                           .values = &values });
+        launched = result == TA_OK && ta_invoke_find(it->actor, id) >= 0;
     } else if (result == TA_INVOKE_FAILED) {
         result = ta_interpreter_execution_error(it, &values.fault);
     }
     ta_invoke_values_release(&values);
-    if (result != TA_ERR_NOMEM && decl->id.kind != TA_ID_SOURCE_LITERAL) {
-        system->next_invoke_serial += 1u;
+    if (result != TA_ERR_NOMEM) {
+        /* The invocation has an outcome: INVOKED when it started, then the
+         * error it raised when it did not (ADR 0067). */
+        if (launched) {
+            ta_interpreter_trace_invoke(it, TA_TRACE_INVOKED, id);
+        }
+        ta_interpreter_trace_raised(it, mark);
+        if (decl->id.kind != TA_ID_SOURCE_LITERAL) {
+            system->next_invoke_serial += 1u;
+        }
     }
     return result;
 }
@@ -613,6 +626,7 @@ typedef struct {
     ta_actor *sender;
     ta_actor_ref destination;
     ta_event event;
+    ta_trace_parent trace;
 } ta_invoke_delivery;
 
 /*
@@ -636,7 +650,8 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
     ta_external_event_submit_status status = TA_EXTERNAL_EVENT_ERROR;
     ta_fault fault = {0};
     if (system->external_events.v != NULL) {
-        ta_external_delivery external = { .destination = delivery->destination, .event = delivery->event };
+        ta_external_delivery external = { .destination = delivery->destination, .event = delivery->event,
+                                          .trace = delivery->trace };
         status = system->external_events.v->submit(system->external_events.self,
                                                    &(ta_external_event_submit_params){
                                                        .delivery = &external, .fault = &fault });
@@ -656,6 +671,7 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
         .origin = delivery->event.origin.kind == TA_ORIGIN_ACTOR ? delivery->event.origin.as.actor
                                                                   : delivery->sender->record.self,
         .invoke_id = delivery->event.invoke_id,
+        .trace = delivery->trace,
     };
     record.data = delivery->event.data;
     ta_value_retain(&record.data);
@@ -721,6 +737,7 @@ static ta_result ta_invoke_forward(ta_interpreter *it, uint32_t index, const ta_
                                                 .destination = { .kind = TA_ACTOR_REF_RUNTIME,
                                                                  .as.runtime = meta.child },
                                                 .event = copy,
+                                                .trace = ta_interpreter_trace_here(it),
                                             });
     }
     if (meta.invoker.v != NULL && meta.invoker.v->forward != NULL) {
@@ -785,8 +802,10 @@ ta_result ta_invoke_autoforward(ta_interpreter *it, const ta_event *event, uint3
     return TA_OK;
 }
 
-/* Sends done.invoke.<id> with the completion data to the invoking parent. */
-static ta_result ta_invoke_publish(ta_system *system, ta_actor *actor) {
+/* Sends done.invoke.<id> with the completion data to the invoking parent,
+ * under `trace`, the finishing step's, or none when the host publishes it
+ * again after a refusal. */
+static ta_result ta_invoke_publish(ta_system *system, ta_actor *actor, ta_trace_parent trace) {
     ta_actor_sparse_state *sparse = actor->sparse;
     ta_event_name_id name = 0;
     ta_result result = ta_invoke_done_name(system, sparse->parent.invoke_id, &name);
@@ -806,6 +825,7 @@ static ta_result ta_invoke_publish(ta_system *system, ta_actor *actor) {
                                         .destination = { .kind = TA_ACTOR_REF_RUNTIME,
                                                          .as.runtime = sparse->parent.actor },
                                         .event = event,
+                                        .trace = trace,
                                     });
 }
 
@@ -815,6 +835,7 @@ ta_result ta_invoke_finished(ta_interpreter *it) {
         return TA_OK;
     }
     while (sparse->invoke_count != 0) {
+        ta_interpreter_trace_invoke(it, TA_TRACE_INVOKE_CANCELLED, sparse->invokes[sparse->invoke_count - 1u].id);
         ta_invoke_cancel_at(it->system, sparse, sparse->invoke_count - 1u);
     }
     sparse->pending_invokes.count = 0;
@@ -822,7 +843,7 @@ ta_result ta_invoke_finished(ta_interpreter *it) {
         return TA_OK;
     }
     sparse->completion_pending = true;
-    return ta_invoke_publish(it->system, it->actor);
+    return ta_invoke_publish(it->system, it->actor, ta_interpreter_trace_here(it));
 }
 
 void ta_invoke_release(ta_system *system, ta_actor *actor) {
@@ -905,9 +926,8 @@ static ta_result ta_invoke_unavailable(ta_system *system, ta_actor *actor, const
         ta_value_retain(&event.data);
     }
     result = ta_interpreter_enqueue_internal(system, actor, &event);
-    if (result == TA_OK && !actor->macrostep) {
-        actor->macrostep = true;
-        actor->record.residency = TA_ACTOR_RUNNING;
+    if (result == TA_OK) {
+        ta_interpreter_start_macrostep(actor, NULL);
     }
     return result;
 }
@@ -950,7 +970,7 @@ ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_report_param
             event.invoke_id = params->invoke_id;
             /* Core fills the origin of a service's own event, whatever the host passed (ADR 0068). */
             event.origin = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
-            return ta_actor_deliver(system, params->actor, &event);
+            return ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = params->actor, .event = &event });
         case TA_INVOKE_REPORT_DONE: {
             ta_result result = ta_invoke_done_name(system, params->invoke_id, &event.name);
             if (result != TA_OK) {
@@ -960,7 +980,7 @@ ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_report_param
                 event.data = *params->as.done_data;
             }
             event.origin = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
-            return ta_actor_deliver(system, params->actor, &event);
+            return ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = params->actor, .event = &event });
         }
         case TA_INVOKE_REPORT_UNAVAILABLE:
             ta_invoke_remove_at(actor->sparse, (uint32_t)index);
@@ -987,5 +1007,5 @@ ta_result ta_actor_publish_completion(ta_system *system, ta_actor_id id) {
     if (ta_timer_withdraw(&system->timers, ta_actor_timers(actor), TA_SEND_ID_COMPLETION) != TA_OK) {
         return TA_OK; /* already delivered */
     }
-    return ta_invoke_publish(system, actor);
+    return ta_invoke_publish(system, actor, (ta_trace_parent){0});
 }

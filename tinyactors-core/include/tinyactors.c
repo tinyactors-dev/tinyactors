@@ -449,6 +449,53 @@ TA_PRIVATE uint32_t ta_event_name_segments(const ta_event_name_table *table,
 
 
 
+/*
+ * Tracing (ADR 0067): the sink a system writes records to, and the rules
+ * every call site shares. The interpreter builds the records; this module
+ * decides which ones are built at all.
+ */
+
+/* The kinds written outside macrosteps, which sampling never removes. */
+#define TA_TRACE_LIFECYCLE                                                                                    \
+    (TA_TRACE_BIT(TA_TRACE_SPAWNED) | TA_TRACE_BIT(TA_TRACE_LOADED) | TA_TRACE_BIT(TA_TRACE_UNLOADED) |       \
+     TA_TRACE_BIT(TA_TRACE_FINISHED) | TA_TRACE_BIT(TA_TRACE_DESTROYED))
+
+TA_PRIVATE inline bool ta_trace_context_empty(const ta_trace_context *context) {
+    return context->trace_id_high == 0 && context->trace_id_low == 0;
+}
+
+TA_PRIVATE inline bool ta_trace_parent_empty(const ta_trace_parent *parent) {
+    return ta_trace_context_empty(&parent->context) && parent->context.flags == 0 && parent->cause.session == 0 &&
+           parent->cause.macrostep == 0 && parent->cause.microstep == 0;
+}
+
+/*
+ * The kinds a macrostep under `context` builds: all the sink wants when the
+ * context has no trace ID, is sampled, or the sink traces unsampled ones;
+ * otherwise only lifecycle kinds (section 6).
+ */
+TA_PRIVATE uint32_t ta_trace_macrostep_kinds(const ta_trace_sink *sink, const ta_trace_context *context);
+
+/* A record with every ID set to NONE and everything else zero. */
+TA_PRIVATE ta_trace_record ta_trace_record_blank(ta_trace_kind kind);
+
+struct ta_actor;
+
+/*
+ * Writes the lifecycle record `kind` for `actor` (SPAWNED, LOADED,
+ * UNLOADED or DESTROYED), with `parent` as its context and cause when
+ * there is one. Lifecycle records are outside macrosteps and never sampled.
+ */
+TA_PRIVATE void ta_trace_lifecycle(ta_system *system, const struct ta_actor *actor, ta_trace_kind kind,
+                        const ta_trace_parent *parent);
+
+/* Writes a record the caller built because `sink.kinds` asked for it. */
+TA_PRIVATE inline void ta_trace_write(const ta_trace_sink *sink, const ta_trace_record *record) {
+    sink->v->write(sink->self, record);
+}
+
+
+
 typedef enum {
     TA_FAULT_CONTEXT_CONDITION,
     TA_FAULT_CONTEXT_VALUE,
@@ -772,6 +819,8 @@ typedef struct {
     /* Submitted sends only: the envelope, which outlives the sending session. */
     ta_actor_ref origin;
     ta_invoke_id invoke_id;
+    /* The sending step (ADR 0067): a send that fires later still names it. */
+    ta_trace_parent trace;
 } ta_delayed_send;
 
 /* The private fields of one stored send, parallel to ta_timer_list.sends. */
@@ -783,6 +832,7 @@ typedef struct {
     /* See ta_delayed_send.content. */
     bool has_content;
     ta_content_id content;
+    ta_trace_parent trace;
 } ta_delayed_send_meta;
 
 /* One owner's pending sends, sorted by (due, id). Zero-initialized is empty. */
@@ -1428,6 +1478,13 @@ typedef struct {
      * while the macrostep runs (ADR 0047). */
     ta_event external_event;
     ta_event kept_event;
+    /*
+     * What the running macrostep runs under (ADR 0067): its delivery's, its
+     * spawn's, or the failed send's that queued its first event. Set when a
+     * macrostep starts, and kept while it runs, so a block that holds only a
+     * parent stays with its actor until the macrostep ends.
+     */
+    ta_trace_parent trace;
 } ta_event_slots;
 
 /*
@@ -1499,6 +1556,14 @@ struct ta_actor {
     bool bootstrapped;
     bool macrostep;
     bool finished;
+    /* The running macrostep has written MACROSTEP_BEGIN (ADR 0067): taking
+     * its event can no longer be undone, and its key is `trace_macrostep`. */
+    bool trace_begun;
+    /* The step counters (ADR 0067 section 3): the current or last macrostep,
+     * from 1, and the current or last microstep within it, from 1. They run
+     * whether or not anything traces, and move only when a step commits. */
+    uint32_t trace_microstep;
+    uint64_t trace_macrostep;
     uint64_t next_send_id;
     /*
      * While the interpreter runs, the full active set it is updating (ancestors
@@ -1659,6 +1724,8 @@ struct ta_system {
     ta_actor_directory directory;
     ta_external_event_router external_events;
     ta_log_sink log_sink;
+    /* Never null: ta_null_trace_sink() when the host installed none (ADR 0067). */
+    ta_trace_sink trace;
     ta_atom scxml_io_type;
     /* The short form "scxml" also selects the built-in processor. */
     ta_atom scxml_io_alias;
@@ -1767,6 +1834,21 @@ typedef struct {
      * the bootstrap does not initialize (`decl_words` words). */
     uint64_t *bound_decls;
     uint32_t decl_words;
+    /*
+     * Tracing (ADR 0067). `trace_kinds` is what the running macrostep builds,
+     * from the sink's mask and the macrostep's context. `trace_action` is the
+     * unit of executable content running now. `trace_states` is scratch for
+     * a record's state lists (3 * state_count), and `conditions` holds the
+     * guards of the selection in progress, written only once it completes;
+     * both are null when the sink wants no record that needs them.
+     */
+    uint32_t trace_kinds;
+    ta_trace_context trace_context;
+    ta_action_id trace_action;
+    ta_state_id *trace_states;
+    struct ta_trace_condition *conditions;
+    uint32_t condition_count;
+    uint32_t condition_capacity;
 } ta_interpreter;
 
 TA_PRIVATE ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_actor_resume_params *params);
@@ -1821,6 +1903,25 @@ TA_PRIVATE ta_result ta_interpreter_execution_error(ta_interpreter *it, ta_fault
 /* Makes sure the actor's queue has room for one more internal event, so
  * queueing it cannot fail (ADR 0070). */
 TA_PRIVATE ta_result ta_interpreter_queue_room(ta_system *system, ta_actor *actor);
+/* How many events the actor's queue holds, a taken head included: a mark
+ * a step's RAISED records start from. */
+TA_PRIVATE uint32_t ta_interpreter_queue_mark(const ta_actor *actor);
+/* Writes a RAISED record for every event queued after `mark`, once the step
+ * that queued them has committed (ADR 0067). */
+TA_PRIVATE void ta_interpreter_trace_raised(ta_interpreter *it, uint32_t mark);
+/* Writes an INVOKED or INVOKE_CANCELLED record for `invoke`. */
+TA_PRIVATE void ta_interpreter_trace_invoke(ta_interpreter *it, ta_trace_kind kind, ta_invoke_id invoke);
+/* What a step running now passes to what it produces: the macrostep's
+ * context, and the step's own key as the cause (ADR 0067 section 6). */
+TA_PRIVATE ta_trace_parent ta_interpreter_trace_here(const ta_interpreter *it);
+/* The parent the actor's current macrostep runs under; all zero for none. */
+TA_PRIVATE ta_trace_parent ta_actor_macrostep_parent(const ta_actor *actor);
+/*
+ * Makes an idle actor run a macrostep for work queued outside any run, such
+ * as a failed send's error, under `trace` (null: none). An actor already in
+ * a macrostep is left alone.
+ */
+TA_PRIVATE void ta_interpreter_start_macrostep(ta_actor *actor, const ta_trace_parent *trace);
 TA_PRIVATE bool ta_interpreter_internal_pending(const ta_actor *actor);
 
 /* ------------------------------------------------------------------------
@@ -3339,6 +3440,95 @@ TA_API void ta_origin_release(ta_origin *origin) {
 }
 
 
+/* ------------------------------------------------------------------------
+ * The null sink (ADR 0067 section 2)
+ */
+
+static void ta_null_trace_write(void *self, const ta_trace_record *record) {
+    (void)self;
+    (void)record;
+}
+
+static const ta_trace_sink_vtable ta_null_trace_vtable = { .write = ta_null_trace_write };
+
+TA_API ta_trace_sink ta_null_trace_sink(void) {
+    return (ta_trace_sink){ .self = NULL, .v = &ta_null_trace_vtable, .kinds = 0, .unsampled = false };
+}
+
+TA_API ta_result ta_system_set_trace_sink(ta_system *system, ta_trace_sink sink) {
+    if (system == NULL || sink.v == NULL || sink.v->write == NULL) {
+        return TA_ERR_INVALID;
+    }
+    system->trace = sink;
+    return TA_OK;
+}
+
+/* ------------------------------------------------------------------------
+ * Step keys as span IDs (section 6)
+ */
+
+/* The finalizer of MurmurHash3's 64-bit variant: every input bit reaches
+ * every output bit. Fixed, so every host derives the same span IDs. */
+static uint64_t ta_trace_mix(uint64_t value) {
+    value ^= value >> 33;
+    value *= 0xff51afd7ed558ccdull;
+    value ^= value >> 33;
+    value *= 0xc4ceb9fe1a85ec53ull;
+    value ^= value >> 33;
+    return value;
+}
+
+TA_API uint64_t ta_step_key_span_id(ta_step_key key) {
+    if (key.session == 0) {
+        return key.macrostep;
+    }
+    uint64_t span = ta_trace_mix(key.session);
+    span = ta_trace_mix(span ^ key.macrostep);
+    span = ta_trace_mix(span ^ ((uint64_t)key.microstep | ((uint64_t)1u << 32)));
+    return span == 0 ? 1u : span;
+}
+
+/* ------------------------------------------------------------------------
+ * What is built
+ */
+
+TA_PRIVATE uint32_t ta_trace_macrostep_kinds(const ta_trace_sink *sink, const ta_trace_context *context) {
+    if (ta_trace_context_empty(context) || (context->flags & TA_TRACE_FLAG_SAMPLED) != 0 || sink->unsampled) {
+        return sink->kinds;
+    }
+    return sink->kinds & TA_TRACE_LIFECYCLE;
+}
+
+TA_PRIVATE void ta_trace_lifecycle(ta_system *system, const ta_actor *actor, ta_trace_kind kind,
+                        const ta_trace_parent *parent) {
+    if ((system->trace.kinds & TA_TRACE_BIT(kind)) == 0) {
+        return;
+    }
+    ta_trace_record record = ta_trace_record_blank(kind);
+    record.key = (ta_step_key){ .session = actor->session_id };
+    record.actor = actor->record.id;
+    record.definition = actor->definition->id;
+    record.now = ta_clock_now(&system->clock);
+    if (parent != NULL) {
+        record.context = parent->context;
+        record.cause = parent->cause;
+    }
+    ta_trace_write(&system->trace, &record);
+}
+
+TA_PRIVATE ta_trace_record ta_trace_record_blank(ta_trace_kind kind) {
+    return (ta_trace_record){
+        .kind = kind,
+        .position = { .at = TA_TRACE_AT_NONE, .state = TA_STATE_NONE, .transition = TA_TRANSITION_NONE,
+                      .action = TA_ACTION_NONE },
+        .state = TA_STATE_NONE,
+        .expr = TA_EXPR_ID_NONE,
+        .action = TA_ACTION_NONE,
+        .invoke = TA_INVOKE_ID_NONE,
+    };
+}
+
+
 
 
 /*
@@ -3880,6 +4070,7 @@ static void ta_timer_split(const ta_delayed_send *send, ta_delayed_send_info *in
         .invoke_id = send->invoke_id,
         .has_content = send->has_content,
         .content = send->content,
+        .trace = send->trace,
     };
 }
 
@@ -3901,6 +4092,7 @@ static ta_delayed_send ta_timer_join(const ta_timer_list *list, uint32_t index) 
         .invoke_id = meta->invoke_id,
         .has_content = meta->has_content,
         .content = meta->content,
+        .trace = meta->trace,
     };
 }
 
@@ -5082,6 +5274,7 @@ TA_PRIVATE ta_result ta_invoke_state_exited(ta_interpreter *it, ta_state_id stat
     ta_invoke_forget_pending(it->actor, state);
     for (uint32_t index = sparse->invoke_count; index > 0; index -= 1u) {
         if (sparse->invoke_meta[index - 1u].state == state) {
+            ta_interpreter_trace_invoke(it, TA_TRACE_INVOKE_CANCELLED, sparse->invokes[index - 1u].id);
             ta_invoke_cancel_at(it->system, sparse, index - 1u);
         }
     }
@@ -5325,6 +5518,7 @@ static ta_result ta_invoke_launch(ta_interpreter *it, const ta_invoke_launch_par
         .data = values->data,
         .params = values->params,
         .autoforward = decl->autoforward,
+        .trace = ta_interpreter_trace_here(it),
     };
     if (decl->data.kind == TA_VALUE_SOURCE_CONTENT) {
         ta_interpreter_literal_content(it->definition, decl->data.as.content, &request.content_type,
@@ -5370,6 +5564,7 @@ static ta_result ta_invoke_start(ta_interpreter *it, ta_invoke_decl_id decl_id) 
     if (result != TA_OK) {
         return result;
     }
+    uint32_t mark = ta_interpreter_queue_mark(it->actor);
     ta_invoke_values values = {0};
     ta_invoke_id id = 0;
     ta_atom type = 0;
@@ -5384,16 +5579,26 @@ static ta_result ta_invoke_start(ta_interpreter *it, ta_invoke_decl_id decl_id) 
     if (result == TA_OK) {
         result = ta_invoke_resolve_values(it, decl, &values);
     }
+    bool launched = false;
     if (result == TA_OK) {
         result = ta_invoke_launch(it, &(ta_invoke_launch_params){
                                           .decl = decl_id, .id = id, .type = type, .invoker = invoker,
                                           .values = &values });
+        launched = result == TA_OK && ta_invoke_find(it->actor, id) >= 0;
     } else if (result == TA_INVOKE_FAILED) {
         result = ta_interpreter_execution_error(it, &values.fault);
     }
     ta_invoke_values_release(&values);
-    if (result != TA_ERR_NOMEM && decl->id.kind != TA_ID_SOURCE_LITERAL) {
-        system->next_invoke_serial += 1u;
+    if (result != TA_ERR_NOMEM) {
+        /* The invocation has an outcome: INVOKED when it started, then the
+         * error it raised when it did not (ADR 0067). */
+        if (launched) {
+            ta_interpreter_trace_invoke(it, TA_TRACE_INVOKED, id);
+        }
+        ta_interpreter_trace_raised(it, mark);
+        if (decl->id.kind != TA_ID_SOURCE_LITERAL) {
+            system->next_invoke_serial += 1u;
+        }
     }
     return result;
 }
@@ -5444,6 +5649,7 @@ typedef struct {
     ta_actor *sender;
     ta_actor_ref destination;
     ta_event event;
+    ta_trace_parent trace;
 } ta_invoke_delivery;
 
 /*
@@ -5467,7 +5673,8 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
     ta_external_event_submit_status status = TA_EXTERNAL_EVENT_ERROR;
     ta_fault fault = {0};
     if (system->external_events.v != NULL) {
-        ta_external_delivery external = { .destination = delivery->destination, .event = delivery->event };
+        ta_external_delivery external = { .destination = delivery->destination, .event = delivery->event,
+                                          .trace = delivery->trace };
         status = system->external_events.v->submit(system->external_events.self,
                                                    &(ta_external_event_submit_params){
                                                        .delivery = &external, .fault = &fault });
@@ -5487,6 +5694,7 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
         .origin = delivery->event.origin.kind == TA_ORIGIN_ACTOR ? delivery->event.origin.as.actor
                                                                   : delivery->sender->record.self,
         .invoke_id = delivery->event.invoke_id,
+        .trace = delivery->trace,
     };
     record.data = delivery->event.data;
     ta_value_retain(&record.data);
@@ -5552,6 +5760,7 @@ static ta_result ta_invoke_forward(ta_interpreter *it, uint32_t index, const ta_
                                                 .destination = { .kind = TA_ACTOR_REF_RUNTIME,
                                                                  .as.runtime = meta.child },
                                                 .event = copy,
+                                                .trace = ta_interpreter_trace_here(it),
                                             });
     }
     if (meta.invoker.v != NULL && meta.invoker.v->forward != NULL) {
@@ -5616,8 +5825,10 @@ TA_PRIVATE ta_result ta_invoke_autoforward(ta_interpreter *it, const ta_event *e
     return TA_OK;
 }
 
-/* Sends done.invoke.<id> with the completion data to the invoking parent. */
-static ta_result ta_invoke_publish(ta_system *system, ta_actor *actor) {
+/* Sends done.invoke.<id> with the completion data to the invoking parent,
+ * under `trace`, the finishing step's, or none when the host publishes it
+ * again after a refusal. */
+static ta_result ta_invoke_publish(ta_system *system, ta_actor *actor, ta_trace_parent trace) {
     ta_actor_sparse_state *sparse = actor->sparse;
     ta_event_name_id name = 0;
     ta_result result = ta_invoke_done_name(system, sparse->parent.invoke_id, &name);
@@ -5637,6 +5848,7 @@ static ta_result ta_invoke_publish(ta_system *system, ta_actor *actor) {
                                         .destination = { .kind = TA_ACTOR_REF_RUNTIME,
                                                          .as.runtime = sparse->parent.actor },
                                         .event = event,
+                                        .trace = trace,
                                     });
 }
 
@@ -5646,6 +5858,7 @@ TA_PRIVATE ta_result ta_invoke_finished(ta_interpreter *it) {
         return TA_OK;
     }
     while (sparse->invoke_count != 0) {
+        ta_interpreter_trace_invoke(it, TA_TRACE_INVOKE_CANCELLED, sparse->invokes[sparse->invoke_count - 1u].id);
         ta_invoke_cancel_at(it->system, sparse, sparse->invoke_count - 1u);
     }
     sparse->pending_invokes.count = 0;
@@ -5653,7 +5866,7 @@ TA_PRIVATE ta_result ta_invoke_finished(ta_interpreter *it) {
         return TA_OK;
     }
     sparse->completion_pending = true;
-    return ta_invoke_publish(it->system, it->actor);
+    return ta_invoke_publish(it->system, it->actor, ta_interpreter_trace_here(it));
 }
 
 TA_PRIVATE void ta_invoke_release(ta_system *system, ta_actor *actor) {
@@ -5736,9 +5949,8 @@ static ta_result ta_invoke_unavailable(ta_system *system, ta_actor *actor, const
         ta_value_retain(&event.data);
     }
     result = ta_interpreter_enqueue_internal(system, actor, &event);
-    if (result == TA_OK && !actor->macrostep) {
-        actor->macrostep = true;
-        actor->record.residency = TA_ACTOR_RUNNING;
+    if (result == TA_OK) {
+        ta_interpreter_start_macrostep(actor, NULL);
     }
     return result;
 }
@@ -5781,7 +5993,7 @@ TA_API ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_repor
             event.invoke_id = params->invoke_id;
             /* Core fills the origin of a service's own event, whatever the host passed (ADR 0068). */
             event.origin = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
-            return ta_actor_deliver(system, params->actor, &event);
+            return ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = params->actor, .event = &event });
         case TA_INVOKE_REPORT_DONE: {
             ta_result result = ta_invoke_done_name(system, params->invoke_id, &event.name);
             if (result != TA_OK) {
@@ -5791,7 +6003,7 @@ TA_API ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_repor
                 event.data = *params->as.done_data;
             }
             event.origin = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
-            return ta_actor_deliver(system, params->actor, &event);
+            return ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = params->actor, .event = &event });
         }
         case TA_INVOKE_REPORT_UNAVAILABLE:
             ta_invoke_remove_at(actor->sparse, (uint32_t)index);
@@ -5818,7 +6030,7 @@ TA_API ta_result ta_actor_publish_completion(ta_system *system, ta_actor_id id) 
     if (ta_timer_withdraw(&system->timers, ta_actor_timers(actor), TA_SEND_ID_COMPLETION) != TA_OK) {
         return TA_OK; /* already delivered */
     }
-    return ta_invoke_publish(system, actor);
+    return ta_invoke_publish(system, actor, (ta_trace_parent){0});
 }
 
 
@@ -10001,6 +10213,18 @@ TA_API ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *
     }
     ta_actor_id id = actor->record.id;
 
+    /* A traced spawn's parent waits in an event block for the bootstrap
+     * macrostep (ADR 0067); an untraced one needs no block. */
+    if (!ta_trace_parent_empty(&params->trace)) {
+        result = ta_interpreter_hold_block(system, actor);
+        if (result != TA_OK) {
+            ta_actor_release_slot(system, id);
+            ta_actor_free(system, actor);
+            return result;
+        }
+        actor->event_block->slots.trace = params->trace;
+    }
+
     if (params->parent != NULL) {
         actor->sparse = ta_mem_alloc(system->allocator, sizeof(ta_actor_sparse_state),
                                      _Alignof(ta_actor_sparse_state));
@@ -10040,6 +10264,7 @@ TA_API ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *
         /* Invoke: the invoking parent routes #_<invokeid> and autoforwarding to this child. */
         ta_invoke_attach_child(system, params->parent, id);
     }
+    ta_trace_lifecycle(system, actor, TA_TRACE_SPAWNED, &params->trace);
     *params->out = id;
     return TA_OK;
 }
@@ -10200,11 +10425,12 @@ static ta_result ta_actor_accept_origin(const ta_system *system, const ta_actor 
     return TA_OK;
 }
 
-TA_API ta_result ta_actor_deliver(ta_system *system, ta_actor_id id, const ta_event *event) {
-    if (event == NULL) {
+TA_API ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *params) {
+    if (params == NULL || params->event == NULL) {
         return TA_ERR_INVALID;
     }
-    ta_actor *actor = ta_actor_lookup(system, id);
+    const ta_event *event = params->event;
+    ta_actor *actor = ta_actor_lookup(system, params->actor);
     if (actor == NULL) {
         return TA_ERR_NOT_FOUND;
     }
@@ -10233,6 +10459,8 @@ TA_API ta_result ta_actor_deliver(ta_system *system, ta_actor_id id, const ta_ev
     ta_event_slots *slots = &actor->event_block->slots;
     ta_event_retain(&accepted, &slots->external_event);
     slots->external = TA_EXTERNAL_WAITING;
+    /* The macrostep that takes it runs under the delivery's parent. */
+    slots->trace = params->trace;
     actor->macrostep = true;
     ta_actor_touch(actor);
     actor->record.residency = TA_ACTOR_RUNNING;
@@ -10268,6 +10496,7 @@ TA_API ta_result ta_actor_destroy(ta_system *system, ta_actor_id id) {
         return result;
     }
     ta_timer_orphan(&system->timers, ta_actor_timers(actor));
+    ta_trace_lifecycle(system, actor, TA_TRACE_DESTROYED, NULL);
     ta_actor_release_address(system, actor);
     ta_actor_release_slot(system, id);
     ta_actor_free(system, actor);
@@ -10568,6 +10797,11 @@ struct ta_session_image {
     bool bootstrapped;
     bool macrostep;
     bool finished;
+    /* The step counters, and whether the macrostep has begun (ADR 0067);
+     * the macrostep's trace parent is in `slots`. */
+    bool trace_begun;
+    uint32_t trace_microstep;
+    uint64_t trace_macrostep;
     /* The external and kept events and what `_event` names (ADR 0069). A
      * bound queue head is internal_events[0]. */
     ta_event_slots slots;
@@ -10865,6 +11099,7 @@ static ta_event_slots ta_image_slots(const ta_actor *actor) {
         .has_kept = slots->has_kept,
         .external_event = slots->external != TA_EXTERNAL_NONE ? slots->external_event : (ta_event){0},
         .kept_event = slots->has_kept ? slots->kept_event : (ta_event){0},
+        .trace = actor->macrostep ? slots->trace : (ta_trace_parent){0},
     };
 }
 
@@ -10900,6 +11135,9 @@ TA_API ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_para
         .bootstrapped = actor->bootstrapped,
         .macrostep = actor->macrostep,
         .finished = actor->finished,
+        .trace_begun = actor->trace_begun,
+        .trace_microstep = actor->trace_microstep,
+        .trace_macrostep = actor->trace_macrostep,
         /*
          * An event is the actor's only while its flag says so. Releasing an
          * event leaves its bytes, origin included, in place, so the image
@@ -11080,9 +11318,8 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
      * Reporting the lost invocations put work in the queue of an actor the
      * image recorded as idle, so it has a macrostep to run again.
      */
-    if (!actor->macrostep && ta_interpreter_internal_pending(actor)) {
-        actor->macrostep = true;
-        actor->record.residency = TA_ACTOR_RUNNING;
+    if (ta_interpreter_internal_pending(actor)) {
+        ta_interpreter_start_macrostep(actor, NULL);
     }
     return TA_OK;
 }
@@ -11107,7 +11344,9 @@ static ta_result ta_image_restore_pause(const ta_session_image *image, ta_actor 
     return TA_OK;
 }
 
-TA_API ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_params *params) {
+/* Reconstruction without its LOADED record, which a load writes only once
+ * the directory publishes the session. */
+static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstruct_params *params) {
     if (system == NULL || params == NULL || params->image == NULL || params->out == NULL) {
         return TA_ERR_INVALID;
     }
@@ -11163,14 +11402,21 @@ TA_API ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstr
     actor->bootstrapped = image->bootstrapped;
     actor->macrostep = image->macrostep;
     actor->finished = image->finished;
+    actor->trace_begun = image->trace_begun;
+    actor->trace_microstep = image->trace_microstep;
+    actor->trace_macrostep = image->trace_macrostep;
     actor->next_send_id = image->next_send_id;
     actor->session_epoch = image->source_epoch;
     /* The events live in an event block (ADR 0069). What `_event` names is
      * restored with the queue it may point into. */
     ta_event_slots *slots = NULL;
-    if (image->slots.external != TA_EXTERNAL_NONE || image->slots.has_kept) {
+    if (image->slots.external != TA_EXTERNAL_NONE || image->slots.has_kept ||
+        !ta_trace_parent_empty(&image->slots.trace)) {
         result = ta_interpreter_hold_block(system, actor);
         slots = result == TA_OK ? &actor->event_block->slots : NULL;
+    }
+    if (slots != NULL) {
+        slots->trace = image->slots.trace;
     }
     if (slots != NULL && image->slots.external != TA_EXTERNAL_NONE) {
         ta_event_retain(&image->slots.external_event, &slots->external_event);
@@ -11242,6 +11488,14 @@ TA_API ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstr
     }
     *params->out = id;
     return TA_OK;
+}
+
+TA_API ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_params *params) {
+    ta_result result = ta_image_reconstruct(system, params);
+    if (result == TA_OK) {
+        ta_trace_lifecycle(system, ta_actor_lookup(system, *params->out), TA_TRACE_LOADED, NULL);
+    }
+    return result;
 }
 
 /* ------------------------------------------------------------------------
@@ -11323,6 +11577,7 @@ TA_API ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params
     parked->address = address;
     ta_address_retain(address);
     ta_timer_orphan(&system->timers, ta_actor_timers(actor));
+    ta_trace_lifecycle(system, actor, TA_TRACE_UNLOADED, NULL);
     ta_actor_release_slot(system, actor->record.id);
     ta_actor_free(system, actor);
     if (address->unloaded != NULL) {
@@ -11350,7 +11605,7 @@ TA_API ta_result ta_actor_load(ta_system *system, const ta_actor_load_params *pa
      * the queue and the timers — happens here.
      */
     ta_actor_id id = 0;
-    ta_result result = ta_actor_reconstruct(
+    ta_result result = ta_image_reconstruct(
         system,
         &(ta_actor_reconstruct_params){ .image = image,
                                         .datamodel_binding = params->datamodel_binding,
@@ -11378,12 +11633,14 @@ TA_API ta_result ta_actor_load(ta_system *system, const ta_actor_load_params *pa
         return result;
     }
     /* The session is resident again: its parked entry goes (ADR 0066). */
-    ta_address *address = ta_actor_lookup(system, id)->record.self.as.named;
+    ta_actor *loaded = ta_actor_lookup(system, id);
+    ta_address *address = loaded->record.self.as.named;
     if (address->unloaded != NULL) {
         ta_session_node *parked = address->unloaded;
         ta_session_remove(&system->sessions, parked);
         ta_session_node_free(&system->sessions, parked);
     }
+    ta_trace_lifecycle(system, loaded, TA_TRACE_LOADED, NULL);
     *params->out = id;
     return TA_OK;
 }
@@ -11409,7 +11666,9 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
     if (system == NULL) {
         return TA_ERR_NOMEM;
     }
-    *system = (ta_system){ .allocator = config->allocator, .block_cache_limit = TA_EVENT_BLOCK_CACHE_DEFAULT };
+    *system = (ta_system){ .allocator = config->allocator,
+                           .block_cache_limit = TA_EVENT_BLOCK_CACHE_DEFAULT,
+                           .trace = ta_null_trace_sink() };
     ta_clock_set(&system->clock, config->initial_time);
     ta_vec_init(&system->actors.pages, config->allocator, TA_VEC_LAYOUT(ta_actor_slot *));
     system->free_actor_slot = UINT32_MAX;
@@ -11953,6 +12212,328 @@ static bool ta_bits_any(const ta_interpreter *it, const uint64_t *words) {
 }
 
 /* ------------------------------------------------------------------------
+ * Tracing (ADR 0067)
+ *
+ * Every record is written once, when the step that produced it commits: a
+ * step that runs out of memory and runs again (ADR 0070) writes its records
+ * on the run that commits, and on no other. Events a step queued are written
+ * as RAISED records from a queue mark, after the step's own record. The
+ * guards of a selection wait in `conditions` until the selection completes.
+ */
+
+/* One guard the selection in progress evaluated. */
+struct ta_trace_condition {
+    ta_transition_id transition;
+    ta_expr_id expr;
+    bool result;
+    bool failed;
+    ta_event_name_id detail;
+    int32_t code;
+    /* The queue index of the error.execution it raised, or UINT32_MAX. */
+    uint32_t raised;
+};
+
+static bool ta_tracing(const ta_interpreter *it, ta_trace_kind kind) {
+    return (it->trace_kinds & TA_TRACE_BIT(kind)) != 0;
+}
+
+TA_PRIVATE ta_trace_parent ta_actor_macrostep_parent(const ta_actor *actor) {
+    return actor->event_block == NULL ? (ta_trace_parent){0} : actor->event_block->slots.trace;
+}
+
+/* The key of the step running now; outside a macrostep, the session alone. */
+static ta_step_key ta_trace_key(const ta_interpreter *it) {
+    const ta_actor *actor = it->actor;
+    if (!actor->trace_begun) {
+        return (ta_step_key){ .session = actor->session_id };
+    }
+    return (ta_step_key){ .session = actor->session_id, .macrostep = actor->trace_macrostep,
+                          .microstep = actor->trace_microstep };
+}
+
+TA_PRIVATE ta_trace_parent ta_interpreter_trace_here(const ta_interpreter *it) {
+    return (ta_trace_parent){ .context = it->trace_context, .cause = ta_trace_key(it) };
+}
+
+/* The iteration of the innermost <foreach> whose body runs, from 0. */
+static uint32_t ta_trace_iteration(const ta_interpreter *it) {
+    for (uint32_t index = it->exec_count; index > 0; index -= 1u) {
+        const ta_exec_frame *frame = &it->exec_frames[index - 1u];
+        if (frame->kind == TA_EXEC_FRAME_FOREACH) {
+            return frame->iteration == 0 ? 0 : frame->iteration - 1u;
+        }
+    }
+    return 0;
+}
+
+static ta_trace_position ta_trace_nowhere(void) {
+    return (ta_trace_position){ .at = TA_TRACE_AT_NONE, .state = TA_STATE_NONE, .transition = TA_TRANSITION_NONE,
+                                .action = TA_ACTION_NONE };
+}
+
+/* Where the interpreter stands, from the phase and position it keeps. */
+static ta_trace_position ta_trace_position_now(const ta_interpreter *it) {
+    ta_trace_position position = ta_trace_nowhere();
+    position.action = it->trace_action;
+    position.iteration = ta_trace_iteration(it);
+    switch (it->at.phase) {
+        case TA_PHASE_FINISH:
+            if (it->at.stage != TA_FINISH_EXIT) {
+                break;
+            }
+            /* fall through: exiting every state, highest first */
+        case TA_PHASE_EXIT:
+            position.at = TA_TRACE_AT_EXIT;
+            position.state = it->at.state == 0 ? TA_STATE_NONE : it->at.state - 1u;
+            break;
+        case TA_PHASE_TRANSITIONS:
+            position.at = TA_TRACE_AT_TRANSITION;
+            if (it->at.state < it->enabled_count && it->enabled[it->at.state] != TA_TRANSITION_BOOTSTRAP) {
+                position.transition = it->enabled[it->at.state];
+                position.state = it->definition->transitions[position.transition].source;
+            }
+            break;
+        case TA_PHASE_ENTER:
+            position.at = TA_TRACE_AT_ENTER;
+            position.state = it->at.state;
+            break;
+        case TA_PHASE_DATA:
+        case TA_PHASE_SCRIPT:
+            position.at = TA_TRACE_AT_BOOTSTRAP;
+            break;
+        case TA_PHASE_FINALIZE:
+            position.at = TA_TRACE_AT_FINALIZE;
+            break;
+        case TA_PHASE_SELECT:
+            position.at = TA_TRACE_AT_SELECT;
+            break;
+        case TA_PHASE_INVOKES:
+            position.at = TA_TRACE_AT_INVOKE;
+            position.state = it->at.state;
+            break;
+        case TA_PHASE_NONE:
+        default:
+            break;
+    }
+    return position;
+}
+
+/* A record of `kind` at the step and position running now. */
+static ta_trace_record ta_trace_record_now(const ta_interpreter *it, ta_trace_kind kind) {
+    ta_trace_record record = ta_trace_record_blank(kind);
+    record.key = ta_trace_key(it);
+    record.position = ta_trace_position_now(it);
+    record.context = it->trace_context;
+    record.actor = it->actor->record.id;
+    record.definition = it->definition->id;
+    record.now = ta_clock_now(&it->system->clock);
+    return record;
+}
+
+static void ta_trace_emit(const ta_interpreter *it, const ta_trace_record *record) {
+    ta_trace_write(&it->system->trace, record);
+}
+
+/* A fault's detail and code; its data went into the error event. */
+static void ta_trace_fault(ta_trace_record *record, const ta_fault *fault) {
+    record->has_fault = true;
+    if (fault != NULL) {
+        record->fault = (ta_fault){ .detail = fault->detail, .code = fault->code };
+    }
+}
+
+TA_PRIVATE void ta_interpreter_trace_raised(ta_interpreter *it, uint32_t mark) {
+    const ta_event_block *queue = it->actor->event_block;
+    if (!ta_tracing(it, TA_TRACE_RAISED) || queue == NULL) {
+        return;
+    }
+    for (uint32_t index = mark; index < queue->count; index += 1u) {
+        ta_trace_record record = ta_trace_record_now(it, TA_TRACE_RAISED);
+        record.event = &queue->events[index].event;
+        ta_trace_emit(it, &record);
+    }
+}
+
+TA_PRIVATE void ta_interpreter_trace_invoke(ta_interpreter *it, ta_trace_kind kind, ta_invoke_id invoke) {
+    if (!ta_tracing(it, kind)) {
+        return;
+    }
+    ta_trace_record record = ta_trace_record_now(it, kind);
+    record.invoke = invoke;
+    ta_trace_emit(it, &record);
+}
+
+/* An action of the running unit failed; its error is queued. */
+static void ta_trace_action_failed(ta_interpreter *it, const ta_fault *fault) {
+    if (!ta_tracing(it, TA_TRACE_ACTION_FAILED)) {
+        return;
+    }
+    ta_trace_record record = ta_trace_record_now(it, TA_TRACE_ACTION_FAILED);
+    record.action = it->trace_action;
+    ta_trace_fault(&record, fault);
+    ta_trace_emit(it, &record);
+}
+
+/* The states of `set` into `out`, in document order or its reverse. */
+static uint32_t ta_trace_states(const ta_interpreter *it, const uint64_t *set, ta_state_id *out, bool reverse) {
+    uint32_t count = 0;
+    uint32_t states = it->definition->state_count;
+    for (uint32_t index = 0; index < states; index += 1u) {
+        ta_state_id state = reverse ? states - 1u - index : index;
+        if (ta_bits_get(set, state)) {
+            out[count++] = state;
+        }
+    }
+    return count;
+}
+
+/*
+ * The macrostep's first step has committed: taking its event can no longer
+ * be undone. Its counter moves, and MACROSTEP_BEGIN is written, once. The
+ * actor changes, so an image taken before no longer describes it.
+ */
+static void ta_trace_begin(ta_interpreter *it) {
+    ta_actor *actor = it->actor;
+    if (actor->trace_begun) {
+        return;
+    }
+    ta_actor_touch(actor);
+    actor->trace_begun = true;
+    actor->trace_macrostep += 1u;
+    actor->trace_microstep = 0;
+    ta_trace_parent parent = ta_actor_macrostep_parent(actor);
+    it->trace_context = parent.context;
+    it->trace_kinds = ta_trace_macrostep_kinds(&it->system->trace, &parent.context);
+    if (!ta_tracing(it, TA_TRACE_MACROSTEP_BEGIN)) {
+        return;
+    }
+    ta_trace_record record = ta_trace_record_now(it, TA_TRACE_MACROSTEP_BEGIN);
+    record.position = ta_trace_nowhere();
+    record.cause = parent.cause;
+    const ta_event_block *block = actor->event_block;
+    if (block != NULL && block->slots.external == TA_EXTERNAL_TAKEN) {
+        record.event = &block->slots.external_event;
+    }
+    ta_trace_emit(it, &record);
+}
+
+/* The macrostep ended, stable or finished: MACROSTEP_END, with the active
+ * configuration. */
+static void ta_trace_end(ta_interpreter *it) {
+    ta_actor *actor = it->actor;
+    if (!actor->trace_begun) {
+        return;
+    }
+    if (ta_tracing(it, TA_TRACE_MACROSTEP_END) && it->trace_states != NULL) {
+        ta_trace_record record = ta_trace_record_now(it, TA_TRACE_MACROSTEP_END);
+        record.position = ta_trace_nowhere();
+        record.states = it->trace_states;
+        record.state_count = ta_trace_states(it, it->active, it->trace_states, false);
+        ta_trace_emit(it, &record);
+    }
+    actor->trace_begun = false;
+}
+
+/*
+ * A microstep leaves selection and becomes visible: its counter moves, and
+ * one MICROSTEP record names its event, its transitions in selection order,
+ * the exit set in exit order, the entry set in entry order, and the history
+ * states the exit recorded. It is written before its actions run.
+ */
+static void ta_trace_microstep(ta_interpreter *it, const ta_event *event) {
+    it->actor->trace_microstep += 1u;
+    if (!ta_tracing(it, TA_TRACE_MICROSTEP) || it->trace_states == NULL) {
+        return;
+    }
+    ta_trace_record record = ta_trace_record_now(it, TA_TRACE_MICROSTEP);
+    record.position = ta_trace_nowhere();
+    record.event = event;
+    if (it->enabled_count != 0 && it->enabled[0] != TA_TRANSITION_BOOTSTRAP) {
+        record.transitions = it->enabled;
+        record.transition_count = it->enabled_count;
+    }
+    ta_state_id *lists = it->trace_states;
+    record.exited = lists;
+    record.exited_count = ta_trace_states(it, it->to_exit, lists, true);
+    record.entered = lists + record.exited_count;
+    record.entered_count = ta_trace_states(it, it->to_enter, lists + record.exited_count, false);
+    ta_state_id *history = lists + record.exited_count + record.entered_count;
+    const ta_definition *definition = it->definition;
+    for (ta_state_id state = 0; state < definition->state_count; state += 1u) {
+        const ta_state_def *def = &definition->states[state];
+        if ((def->kind == TA_STATE_HISTORY_SHALLOW || def->kind == TA_STATE_HISTORY_DEEP) &&
+            ta_bits_get(it->to_exit, def->parent)) {
+            history[record.history_count++] = state;
+        }
+    }
+    record.history = history;
+    ta_trace_emit(it, &record);
+}
+
+/* Keeps a guard the selection evaluated, to be written when it completes. */
+static void ta_trace_guard(ta_interpreter *it, const struct ta_trace_condition *guard) {
+    if (it->conditions != NULL && it->condition_count < it->condition_capacity) {
+        it->conditions[it->condition_count++] = *guard;
+    }
+}
+
+/*
+ * A selection completed: its guards, in evaluation order, each followed by
+ * the error it raised, or, without guards to write, the events it queued
+ * after `mark`.
+ */
+static void ta_trace_selection(ta_interpreter *it, uint32_t mark) {
+    uint32_t count = it->condition_count;
+    it->condition_count = 0;
+    if (it->conditions == NULL || !ta_tracing(it, TA_TRACE_CONDITION)) {
+        ta_interpreter_trace_raised(it, mark);
+        return;
+    }
+    const ta_event_block *queue = it->actor->event_block;
+    for (uint32_t index = 0; index < count; index += 1u) {
+        const struct ta_trace_condition *guard = &it->conditions[index];
+        ta_trace_record record = ta_trace_record_now(it, TA_TRACE_CONDITION);
+        record.position = ta_trace_nowhere();
+        record.position.at = TA_TRACE_AT_SELECT;
+        record.position.transition = guard->transition;
+        record.position.state = it->definition->transitions[guard->transition].source;
+        record.state = record.position.state;
+        record.expr = guard->expr;
+        record.result = guard->result;
+        if (guard->failed) {
+            record.has_fault = true;
+            record.fault = (ta_fault){ .detail = guard->detail, .code = guard->code };
+        }
+        ta_trace_emit(it, &record);
+        if (guard->raised != UINT32_MAX && queue != NULL && guard->raised < queue->count &&
+            ta_tracing(it, TA_TRACE_RAISED)) {
+            ta_trace_record raised = ta_trace_record_now(it, TA_TRACE_RAISED);
+            raised.position = record.position;
+            raised.event = &queue->events[guard->raised].event;
+            ta_trace_emit(it, &raised);
+        }
+    }
+}
+
+/* The most guards one selection can evaluate: each atomic state walks its
+ * ancestors' transitions, so shared ancestors count once per atomic state. */
+static uint32_t ta_trace_guard_capacity(const ta_definition *definition) {
+    uint64_t total = 0;
+    for (ta_state_id atomic = 0; atomic < definition->state_count; atomic += 1u) {
+        if (!ta_definition_is_atomic(definition, atomic)) {
+            continue;
+        }
+        for (ta_state_id state = atomic; state != TA_STATE_NONE; state = definition->states[state].parent) {
+            ta_span32 transitions = definition->states[state].transitions;
+            for (uint32_t index = 0; index < transitions.length; index += 1u) {
+                total += definition->transitions[transitions.offset + index].condition != UINT32_MAX ? 1u : 0u;
+            }
+        }
+    }
+    return total > UINT32_MAX ? UINT32_MAX : (uint32_t)total;
+}
+
+/* ------------------------------------------------------------------------
  * Events and errors
  */
 
@@ -12054,14 +12635,15 @@ static ta_result ta_queue_room(ta_system *system, ta_actor *actor) {
 
 /*
  * Gives an actor's block back when the actor no longer needs it: it holds
- * no event and no microstep is paused. It goes to the system's cache, or is
- * freed when the cache is full or the block grew past the first capacity.
- * Cannot fail.
+ * no event, no microstep is paused, and no running macrostep's trace parent
+ * (ADR 0067). It goes to the system's cache, or is freed when the cache is
+ * full or the block grew past the first capacity. Cannot fail.
  */
 static void ta_block_settle(ta_system *system, ta_actor *actor) {
     ta_event_block *block = actor->event_block;
     if (block == NULL || block->count != 0 || block->slots.external != TA_EXTERNAL_NONE || block->slots.has_kept ||
-        (actor->sparse != NULL && actor->sparse->paused != NULL)) {
+        (actor->sparse != NULL && actor->sparse->paused != NULL) ||
+        (actor->macrostep && !ta_trace_parent_empty(&block->slots.trace))) {
         return;
     }
     actor->event_block = NULL;
@@ -12225,6 +12807,9 @@ typedef struct {
     ta_event_name_id name;
     ta_send_id send_id;
     ta_fault *fault;
+    /* A communication error that makes an idle actor run: what its
+     * macrostep runs under, the failed send's parent. Null for none. */
+    const ta_trace_parent *trace;
 } ta_error_params;
 
 /* Queues a platform error event; the fault's data becomes the event data. */
@@ -12407,11 +12992,10 @@ static ta_result ta_initialize_data(ta_interpreter *it, ta_state_id owner, uint3
         }
         ta_fault fault = {0};
         ta_value value = {0};
-        ta_op_status status = ta_eval_source(it, &(ta_value_params){
-                                                     .source = definition->initializers[decl->initializer].value,
-                                                     .out = &value,
-                                                     .fault = &fault,
-                                                 });
+        uint32_t mark = ta_queue_mark(it->actor);
+        const ta_value_source *source = &definition->initializers[decl->initializer].value;
+        ta_op_status status = ta_eval_source(it, &(ta_value_params){ .source = *source, .out = &value,
+                                                                     .fault = &fault });
         if (status == TA_OP_OK) {
             status = v->set_named == NULL
                          ? TA_OP_ERROR
@@ -12424,15 +13008,31 @@ static ta_result ta_initialize_data(ta_interpreter *it, ta_state_id owner, uint3
                                             .host = &it->actor->host,
                                             .fault = &fault,
                                         });
-            ta_value_release(&value);
         }
+        ta_result result = TA_OK;
         if (status != TA_OP_OK) {
             /* The binding stays declared; the error does not stop other initializers. */
-            ta_result result = ta_op_failed(it, status, &fault);
+            result = ta_op_failed(it, status, &fault);
             if (result != TA_EXEC_FAILED) {
+                ta_value_release(&value);
                 return result;
             }
         }
+        if (ta_tracing(it, TA_TRACE_DATA_INIT)) {
+            ta_trace_record record = ta_trace_record_now(it, TA_TRACE_DATA_INIT);
+            record.state = owner;
+            record.name = ta_atom_text(&it->system->atoms, decl->name);
+            record.expr = source->kind == TA_VALUE_SOURCE_EXPR ? source->as.expr : TA_EXPR_ID_NONE;
+            if (result == TA_OK) {
+                record.has_value = true;
+                record.value = value;
+            } else {
+                ta_trace_fault(&record, &fault);
+            }
+            ta_trace_emit(it, &record);
+        }
+        ta_value_release(&value);
+        ta_interpreter_trace_raised(it, mark);
     }
     return TA_OK;
 }
@@ -12464,10 +13064,20 @@ static ta_result ta_declare_data(ta_interpreter *it, uint32_t *cursor) {
             ta_bits_put(it->bound_decls, index, true);
         }
         if (status != TA_OP_OK) {
+            uint32_t mark = ta_queue_mark(it->actor);
             ta_result result = ta_op_failed(it, status, &fault);
             if (result != TA_EXEC_FAILED) {
                 return result;
             }
+            /* A declaration that failed: DATA_INIT with its fault. */
+            if (ta_tracing(it, TA_TRACE_DATA_INIT)) {
+                ta_trace_record record = ta_trace_record_now(it, TA_TRACE_DATA_INIT);
+                record.state = definition->data_decls[index].owner_state;
+                record.name = ta_atom_text(&it->system->atoms, definition->data_decls[index].name);
+                ta_trace_fault(&record, &fault);
+                ta_trace_emit(it, &record);
+            }
+            ta_interpreter_trace_raised(it, mark);
         }
     }
     return TA_OK;
@@ -12549,6 +13159,7 @@ typedef struct {
     ta_send_id send_id;
     const ta_value *data;
     ta_fault *fault;
+    ta_trace_parent trace;
 } ta_submit_params;
 
 static ta_external_event_submit_status ta_submit_external(ta_system *system, const ta_submit_params *params) {
@@ -12568,6 +13179,7 @@ static ta_external_event_submit_status ta_submit_external(ta_system *system, con
             .invoke_id = params->invoke_id,
             .data = *params->data,
         },
+        .trace = params->trace,
     };
     ta_external_event_submit_status status =
         system->external_events.v->submit(system->external_events.self,
@@ -12593,12 +13205,22 @@ static ta_result ta_communication_error(ta_system *system, ta_actor *actor, cons
     ta_error_params error = *params;
     error.name = TA_EVENT_NAME_ERROR_COMMUNICATION;
     ta_result result = ta_raise_error(system, actor, &error);
-    if (result == TA_OK && !actor->macrostep) {
+    if (result == TA_OK) {
         /* An asynchronous failure makes an idle actor runnable again. */
-        actor->macrostep = true;
-        actor->record.residency = TA_ACTOR_RUNNING;
+        ta_interpreter_start_macrostep(actor, params->trace);
     }
     return result;
+}
+
+TA_PRIVATE void ta_interpreter_start_macrostep(ta_actor *actor, const ta_trace_parent *trace) {
+    if (actor->macrostep) {
+        return;
+    }
+    actor->macrostep = true;
+    actor->record.residency = TA_ACTOR_RUNNING;
+    if (actor->event_block != NULL) {
+        actor->event_block->slots.trace = trace != NULL ? *trace : (ta_trace_parent){0};
+    }
 }
 
 TA_PRIVATE void ta_interpreter_literal_content(const ta_definition *definition, ta_content_id content, ta_str *media_type,
@@ -12636,6 +13258,7 @@ TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_sy
                                                 .send_id = send->send_id,
                                                 .data = &send->data,
                                                 .fault = &fault,
+                                                .trace = send->trace,
                                             });
     } else {
         const ta_io *io = ta_system_io_of(system, send->io_type);
@@ -12646,6 +13269,7 @@ TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_sy
             .io_type = send->io_type,
             .target = send->target,
             .data = send->data,
+            .trace = send->trace,
         };
         /* A send to a host processor is dispatched while its sender lives,
          * so the content resolves against the sender's definition. */
@@ -12680,7 +13304,8 @@ TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_sy
     }
     if (status == TA_EXTERNAL_EVENT_ERROR && sender != NULL) {
         (void)ta_communication_error(system, sender,
-                                     &(ta_error_params){ .send_id = send->send_id, .fault = &fault });
+                                     &(ta_error_params){ .send_id = send->send_id, .fault = &fault,
+                                                         .trace = &send->trace });
     }
     ta_value_release(&fault.data);
     ta_value_release(&send->target);
@@ -12706,6 +13331,9 @@ typedef struct {
     bool has_content;
     bool generated_id;
     ta_content_id content;
+    /* The send left the actor: dispatched, stored to fire later, or held
+     * for an unpublished actor's activation (ADR 0067's SENT). */
+    bool sent;
 } ta_send_state;
 
 static void ta_send_state_release(ta_send_state *state) {
@@ -13052,6 +13680,7 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
         .data = state->data,
         .has_content = state->has_content,
         .content = state->content,
+        .trace = ta_interpreter_trace_here(it),
     };
     /* A named target's reference passes to the send record (ADR 0065). */
     if (state->scxml_io && !ta_send_destination(it, &state->scxml, &record.destination)) {
@@ -13066,11 +13695,13 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
             ta_value_release(&record.target);
             ta_actor_ref_release(&record.destination);
         }
+        state->sent = result == TA_OK;
         return result;
     }
     if (state->delay == 0) {
         ta_external_event_submit_status submitted = ta_interpreter_dispatch_delayed(system, &record);
         if (submitted != TA_EXTERNAL_EVENT_RETRY) {
+            state->sent = submitted == TA_EXTERNAL_EVENT_ACCEPTED;
             return TA_OK;
         }
         /*
@@ -13086,7 +13717,28 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
         ta_actor_ref_release(&record.destination);
         ta_actor_ref_release(&record.origin);
     }
+    state->sent = result == TA_OK;
     return result;
+}
+
+/*
+ * The SENT record of a committed send: its ID, and the event as it left,
+ * whose data the record holds a reference to, since committing gave the
+ * send's own away (ADR 0067).
+ */
+static void ta_trace_sent(ta_interpreter *it, const ta_send_state *state, const ta_value *data) {
+    ta_event event = {
+        .name = state->event,
+        .type = TA_EVENT_EXTERNAL,
+        .send_id = state->send_id,
+        .origin = { .kind = TA_ORIGIN_ACTOR, .as.actor = it->actor->record.self },
+        .invoke_id = TA_INVOKE_ID_NONE,
+        .data = *data,
+    };
+    ta_trace_record record = ta_trace_record_now(it, TA_TRACE_SENT);
+    record.send = state->send_id;
+    record.event = &event;
+    ta_trace_emit(it, &record);
 }
 
 /*
@@ -13101,11 +13753,26 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
     ta_fault fault = {0};
     ta_result result = ta_send_evaluate(it, send, &state, &fault);
     if (result == TA_OK) {
+        /* Committing gives the data away; SENT reports it afterwards. */
+        bool traced = ta_tracing(it, TA_TRACE_SENT);
+        ta_value data = state.data;
+        if (traced) {
+            ta_value_retain(&data);
+        }
         result = ta_send_commit(it, &state);
+        if (traced && result == TA_OK && state.sent) {
+            ta_trace_sent(it, &state, &data);
+        }
+        if (traced) {
+            ta_value_release(&data);
+        }
     } else {
         ta_send_state_release(&state);
         if (result == TA_EXEC_FAILED) {
             result = ta_send_execution_error(it, state.send_id, &fault);
+            if (result == TA_EXEC_FAILED) {
+                ta_trace_action_failed(it, &fault);
+            }
         } else {
             ta_value_release(&fault.data);
         }
@@ -13144,7 +13811,14 @@ static ta_result ta_foreach_begin(ta_interpreter *it, ta_exec_frame *loop) {
                                 .count = &loop->iteration_count,
                                 .fault = &fault,
                             });
-    return snapshot == TA_OP_OK ? TA_OK : ta_op_failed(it, snapshot, &fault);
+    if (snapshot == TA_OP_OK) {
+        return TA_OK;
+    }
+    ta_result result = ta_op_failed(it, snapshot, &fault);
+    if (result == TA_EXEC_FAILED) {
+        ta_trace_action_failed(it, &fault);
+    }
+    return result;
 }
 
 /* Binds the item and index for the loop's next position. */
@@ -13166,6 +13840,16 @@ static ta_result ta_foreach_bind(ta_interpreter *it, ta_exec_frame *loop) {
                                                                    .fault = &fault,
                                                                });
     ta_result result = bound == TA_OP_OK ? TA_OK : ta_op_failed(it, bound, &fault);
+    if (result == TA_OK && ta_tracing(it, TA_TRACE_FOREACH)) {
+        ta_trace_record record = ta_trace_record_now(it, TA_TRACE_FOREACH);
+        record.iteration = loop->iteration;
+        record.position.iteration = loop->iteration;
+        record.has_value = true;
+        record.value = loop->iteration_snapshot;
+        ta_trace_emit(it, &record);
+    } else if (result == TA_EXEC_FAILED) {
+        ta_trace_action_failed(it, &fault);
+    }
     if (result != TA_ERR_NOMEM) {
         loop->iteration += 1u; /* an iteration whose error could not be queued runs again */
     }
@@ -13214,6 +13898,11 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
             if (status == TA_OP_OK && send_id != 0) {
                 (void)ta_actor_cancel_held_send(it->actor, send_id);
                 (void)ta_timer_cancel(&it->system->timers, ta_actor_timers(it->actor), send_id);
+                if (ta_tracing(it, TA_TRACE_CANCELLED)) {
+                    ta_trace_record record = ta_trace_record_now(it, TA_TRACE_CANCELLED);
+                    record.send = send_id;
+                    ta_trace_emit(it, &record);
+                }
             }
             break;
         }
@@ -13233,6 +13922,13 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
                                              .host = &it->actor->host,
                                              .fault = &fault,
                                          });
+                if (status == TA_OP_OK && ta_tracing(it, TA_TRACE_ASSIGN)) {
+                    ta_trace_record record = ta_trace_record_now(it, TA_TRACE_ASSIGN);
+                    record.expr = action->as.assign.location;
+                    record.has_value = true;
+                    record.value = value;
+                    ta_trace_emit(it, &record);
+                }
                 ta_value_release(&value);
             }
             break;
@@ -13248,6 +13944,25 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
                                                  .host = &it->actor->host,
                                                  .fault = &fault,
                                              });
+            if (status != TA_OP_NOMEM) {
+                /* A <script> reports its own failure: SCRIPT with the fault. */
+                ta_result result = TA_OK;
+                if (status != TA_OP_OK) {
+                    result = ta_op_failed(it, status, &fault);
+                    if (result == TA_ERR_NOMEM) {
+                        return result;
+                    }
+                }
+                if (ta_tracing(it, TA_TRACE_SCRIPT)) {
+                    ta_trace_record record = ta_trace_record_now(it, TA_TRACE_SCRIPT);
+                    record.expr = action->as.script;
+                    if (status != TA_OP_OK) {
+                        ta_trace_fault(&record, &fault);
+                    }
+                    ta_trace_emit(it, &record);
+                }
+                return result;
+            }
             break;
         case TA_ACTION_LOG: {
             /*
@@ -13286,7 +14001,14 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
             status = TA_OP_ERROR;
             break;
     }
-    return status == TA_OP_OK ? TA_OK : ta_op_failed(it, status, &fault);
+    if (status == TA_OP_OK) {
+        return TA_OK;
+    }
+    ta_result result = ta_op_failed(it, status, &fault);
+    if (result == TA_EXEC_FAILED) {
+        ta_trace_action_failed(it, &fault);
+    }
+    return result;
 }
 
 static ta_result ta_exec_push(ta_interpreter *it, ta_exec_frame frame) {
@@ -13369,7 +14091,12 @@ static ta_result ta_run_block(ta_interpreter *it, ta_span32 block) {
             result = ta_unit_reserve(it, NULL);
             if (result == TA_OK) {
                 it->actions += 1u;
+                it->trace_action = frame->cursor;
+                uint32_t mark = ta_queue_mark(it->actor);
                 result = ta_foreach_bind(it, frame);
+                if (result != TA_ERR_NOMEM) {
+                    ta_interpreter_trace_raised(it, mark);
+                }
             }
             if (result == TA_OK) {
                 result = ta_exec_block(it, frame->actions);
@@ -13392,13 +14119,26 @@ static ta_result ta_run_block(ta_interpreter *it, ta_span32 block) {
         }
         it->actions += 1u;
         frame->cursor += 1u;
+        it->trace_action = index;
+        uint32_t mark = ta_queue_mark(it->actor);
         if (action->kind == TA_ACTION_IF) {
             bool condition = false;
             ta_fault fault = {0};
             ta_op_status status = ta_eval_condition(it, action->as.conditional.condition, &condition, &fault);
-            result = status != TA_OP_OK ? ta_op_failed(it, status, &fault)
-                                        : ta_exec_block(it, condition ? action->as.conditional.then_actions
-                                                                      : action->as.conditional.else_actions);
+            result = status != TA_OP_OK ? ta_op_failed(it, status, &fault) : TA_OK;
+            if (result != TA_ERR_NOMEM && ta_tracing(it, TA_TRACE_CONDITION)) {
+                ta_trace_record record = ta_trace_record_now(it, TA_TRACE_CONDITION);
+                record.expr = action->as.conditional.condition;
+                record.result = condition && result == TA_OK;
+                if (result != TA_OK) {
+                    ta_trace_fault(&record, &fault);
+                }
+                ta_trace_emit(it, &record);
+            }
+            if (result == TA_OK) {
+                result = ta_exec_block(it, condition ? action->as.conditional.then_actions
+                                                     : action->as.conditional.else_actions);
+            }
         } else if (action->kind == TA_ACTION_FOREACH) {
             ta_exec_frame loop = { .kind = TA_EXEC_FRAME_FOREACH, .actions = action->as.foreach.body_actions,
                                    .cursor = index };
@@ -13411,6 +14151,10 @@ static ta_result ta_run_block(ta_interpreter *it, ta_span32 block) {
             }
         } else {
             result = ta_exec_action(it, action);
+        }
+        if (result != TA_ERR_NOMEM) {
+            /* The unit committed: the events it queued, after its own record. */
+            ta_interpreter_trace_raised(it, mark);
         }
         if (result == TA_ERR_NOMEM && it->exec_count == top + 1u) {
             /* Nothing was opened above it: the unit runs again from its start. */
@@ -13434,6 +14178,7 @@ static ta_result ta_run_block(ta_interpreter *it, ta_span32 block) {
 /* A failed block has already queued its error; execution continues with the next block. */
 static ta_result ta_run_block_isolated(ta_interpreter *it, ta_span32 block) {
     ta_result result = ta_run_block(it, block);
+    it->trace_action = TA_ACTION_NONE;
     return result == TA_EXEC_FAILED ? TA_OK : result;
 }
 
@@ -13613,6 +14358,7 @@ static bool ta_transition_matches(ta_interpreter *it, const ta_transition_def *t
 static ta_result ta_select_transitions(ta_interpreter *it, const ta_event *event) {
     const ta_definition *definition = it->definition;
     it->enabled_count = 0;
+    it->condition_count = 0;
     for (ta_state_id atomic = 0; atomic < definition->state_count; atomic += 1) {
         if (!ta_bits_get(it->active, atomic) || !ta_definition_is_atomic(definition, atomic)) {
             continue;
@@ -13630,13 +14376,20 @@ static ta_result ta_select_transitions(ta_interpreter *it, const ta_event *event
                 if (transition->condition != UINT32_MAX) {
                     ta_fault fault = {0};
                     ta_op_status status = ta_eval_condition(it, transition->condition, &enabled, &fault);
+                    struct ta_trace_condition guard = { .transition = id, .expr = transition->condition,
+                                                        .result = enabled, .raised = UINT32_MAX };
                     if (status != TA_OP_OK) {
                         enabled = false;
                         ta_result result = ta_op_failed(it, status, &fault);
                         if (result != TA_EXEC_FAILED) {
                             return result;
                         }
+                        guard = (struct ta_trace_condition){ .transition = id, .expr = transition->condition,
+                                                             .failed = true, .detail = fault.detail,
+                                                             .code = fault.code,
+                                                             .raised = ta_queue_mark(it->actor) - 1u };
                     }
+                    ta_trace_guard(it, &guard);
                 }
                 if (!enabled) {
                     continue;
@@ -14074,8 +14827,12 @@ static ta_result ta_exit_states(ta_interpreter *it) {
     return TA_OK;
 }
 
-/* Computes the entry set, once, after the transitions' content has run. */
-static void ta_enter_begin(ta_interpreter *it) {
+/*
+ * Computes the entry set, once, as the microstep begins, after the exit set
+ * and the history it records, which is all the entry set depends on: the
+ * MICROSTEP record names it before any action runs (ADR 0067).
+ */
+static void ta_enter_set(ta_interpreter *it) {
     const ta_definition *definition = it->definition;
     ta_bits_clear(it, it->to_enter);
     ta_bits_clear(it, it->default_entry);
@@ -14100,8 +14857,6 @@ static void ta_enter_begin(ta_interpreter *it) {
             }
         }
     }
-    it->at.state = 0;
-    it->at.stage = TA_ENTER_ACTIVATE;
 }
 
 /*
@@ -14212,6 +14967,7 @@ static ta_result ta_enter_states(ta_interpreter *it) {
                 }
                 return result;
             }
+            ta_interpreter_trace_raised(it, mark);
         }
         it->at.state += 1u;
         it->at.stage = TA_ENTER_ACTIVATE;
@@ -14265,13 +15021,16 @@ static void ta_compact_sparse(ta_interpreter *it) {
  * Running a microstep
  */
 
-/* Opens the microstep of the enabled transitions: the exit set, and history
- * recorded before anything exits. It changes the actor, so an image taken
- * before it no longer describes it. */
-static void ta_microstep_begin(ta_interpreter *it) {
+/* Opens the microstep of the enabled transitions: the exit set, history
+ * recorded before anything exits, and the entry set; then its MICROSTEP
+ * record. It changes the actor, so an image taken before it no longer
+ * describes it. `event` is the event it takes, or null. */
+static void ta_microstep_begin(ta_interpreter *it, const ta_event *event) {
     ta_actor_touch(it->actor);
     it->at = (ta_micro_position){ .phase = TA_PHASE_EXIT };
     ta_exit_begin(it);
+    ta_enter_set(it);
+    ta_trace_microstep(it, event);
 }
 
 /*
@@ -14299,8 +15058,9 @@ static ta_result ta_microstep(ta_interpreter *it) {
             }
         }
         if (result == TA_OK) {
-            ta_enter_begin(it);
             it->at.phase = TA_PHASE_ENTER;
+            it->at.state = 0;
+            it->at.stage = TA_ENTER_ACTIVATE;
         }
     }
     if (result == TA_OK && it->at.phase == TA_PHASE_ENTER) {
@@ -14318,11 +15078,15 @@ static ta_result ta_microstep(ta_interpreter *it) {
     return result;
 }
 
-/* After selecting transitions for an event: their microstep, or, when none
- * is enabled, the event is consumed. */
-static void ta_after_selection(ta_interpreter *it) {
+/*
+ * A selection for an event completed: its guards are written, then the
+ * microstep of its transitions, or, when none is enabled, the event is
+ * consumed.
+ */
+static void ta_after_selection(ta_interpreter *it, uint32_t mark) {
+    ta_trace_selection(it, mark);
     if (it->enabled_count != 0) {
-        ta_microstep_begin(it);
+        ta_microstep_begin(it, ta_actor_bound_event(it->actor));
         return;
     }
     it->at = (ta_micro_position){0};
@@ -14332,7 +15096,8 @@ static void ta_after_selection(ta_interpreter *it) {
 /*
  * Selects the transitions for an event just taken. Nothing has run for it
  * yet, so running out of memory gives it back, and takes back the errors
- * its guards queued: the next run takes it again (ADR 0069, ADR 0070).
+ * its guards queued: the next run takes it again (ADR 0069, ADR 0070). A
+ * selection that completes commits the take, and so the macrostep.
  */
 static ta_result ta_select_taken(ta_interpreter *it) {
     /* A copy: an error.execution a guard raises can grow the queue, which
@@ -14347,7 +15112,8 @@ static ta_result ta_select_taken(ta_interpreter *it) {
         }
         return result;
     }
-    ta_after_selection(it);
+    ta_trace_begin(it);
+    ta_after_selection(it, mark);
     return TA_OK;
 }
 
@@ -14392,7 +15158,7 @@ static ta_result ta_run_script(ta_interpreter *it) {
     }
     it->enabled[0] = TA_TRANSITION_BOOTSTRAP;
     it->enabled_count = 1;
-    ta_microstep_begin(it);
+    ta_microstep_begin(it, NULL);
     return TA_OK;
 }
 
@@ -14440,13 +15206,14 @@ static ta_result ta_run_select(ta_interpreter *it) {
         }
         return result;
     }
-    ta_after_selection(it);
+    ta_after_selection(it, mark);
     return TA_OK;
 }
 
 /* Starts the invocations of the states the macrostep entered, from the
  * state and <invoke> `at` names. */
 static ta_result ta_run_invokes(ta_interpreter *it) {
+    ta_trace_begin(it);
     ta_result result = ta_invoke_start_pending(it, &it->at.state, &it->at.handler);
     if (result != TA_OK) {
         return result;
@@ -14488,8 +15255,15 @@ static ta_result ta_run_finish(ta_interpreter *it) {
         return result;
     }
     it->at = (ta_micro_position){0};
-    it->actor->macrostep = false;
-    it->actor->record.residency = TA_ACTOR_DONE;
+    ta_trace_end(it);
+    ta_actor *actor = it->actor;
+    if ((it->system->trace.kinds & TA_TRACE_BIT(TA_TRACE_FINISHED)) != 0) {
+        ta_trace_record record = ta_trace_record_now(it, TA_TRACE_FINISHED);
+        record.state = actor->sparse != NULL ? actor->sparse->final_state : TA_STATE_NONE;
+        ta_trace_emit(it, &record);
+    }
+    actor->macrostep = false;
+    actor->record.residency = TA_ACTOR_DONE;
     return TA_OK;
 }
 
@@ -14523,12 +15297,17 @@ static ta_result ta_continue_phase(ta_interpreter *it) {
  * An eventless transition first, then the next internal event, then the
  * invocations of the states the macrostep entered, then the next external
  * event. Right after the invocations started, eventless transitions are
- * selected again only if they queued an internal event. With nothing left,
+ * selected again only if they queued an internal event. A macrostep that
+ * starts with a delivered event takes it first: the last one ended stable,
+ * so SCXML selects no eventless transition before it. With nothing left,
  * the macrostep has ended and `*stable` is set.
  */
 static ta_result ta_next_step(ta_interpreter *it, bool *stable) {
     ta_actor *actor = it->actor;
-    bool skip_to_external = it->after_invokes && !ta_interpreter_internal_pending(actor);
+    bool external_waiting =
+        actor->event_block != NULL && actor->event_block->slots.external == TA_EXTERNAL_WAITING;
+    bool skip_to_external = !ta_interpreter_internal_pending(actor) &&
+                            (it->after_invokes || (external_waiting && !actor->trace_begun));
     it->after_invokes = false;
     if (!skip_to_external) {
         uint32_t mark = ta_queue_mark(actor);
@@ -14539,8 +15318,12 @@ static ta_result ta_next_step(ta_interpreter *it, bool *stable) {
             }
             return result;
         }
+        /* A selection that completes is the macrostep's first step, if
+         * nothing else was. */
+        ta_trace_begin(it);
+        ta_trace_selection(it, mark);
         if (it->enabled_count != 0) {
-            ta_microstep_begin(it);
+            ta_microstep_begin(it, NULL);
             return TA_OK;
         }
         if (ta_interpreter_internal_pending(actor)) {
@@ -14556,14 +15339,17 @@ static ta_result ta_next_step(ta_interpreter *it, bool *stable) {
         /* It stays in its slot, where inspection reports it, until the
          * macrostep ends. */
         ta_bind_event(actor, TA_BOUND_EXTERNAL);
-        /* Invoke: <finalize> and autoforwarding. */
+        /* Invoke: <finalize> and autoforwarding. The event cannot be given
+         * back once they start, so taking it commits the macrostep. */
         if (ta_invoke_before_external(actor, ta_actor_bound_event(actor))) {
             it->at = (ta_micro_position){ .phase = TA_PHASE_FINALIZE, .stage = TA_FINALIZE_BLOCK };
+            ta_trace_begin(it);
             return TA_OK;
         }
         return ta_select_taken(it);
     }
     ta_compact_sparse(it);
+    ta_trace_end(it);
     ta_end_macrostep_events(actor);
     actor->macrostep = false;
     actor->record.residency = TA_ACTOR_IDLE;
@@ -14778,6 +15564,30 @@ static ta_result ta_interpreter_init(ta_interpreter *it, ta_system *system, ta_a
     if (it->entry_frames == NULL || it->history_stack == NULL || it->exec_frames == NULL || it->bound_decls == NULL) {
         return TA_ERR_NOMEM;
     }
+    /* Tracing (ADR 0067): what this macrostep builds, and the scratch its
+     * records need, taken only when the sink wants those records. */
+    ta_trace_parent parent = ta_actor_macrostep_parent(actor);
+    it->trace_context = parent.context;
+    it->trace_kinds = ta_trace_macrostep_kinds(&system->trace, &parent.context);
+    it->trace_action = TA_ACTION_NONE;
+    uint32_t wanted = system->trace.kinds;
+    if ((wanted & (TA_TRACE_BIT(TA_TRACE_MICROSTEP) | TA_TRACE_BIT(TA_TRACE_MACROSTEP_END))) != 0) {
+        it->trace_states = ta_arena_alloc(&system->scratch, (3u * (size_t)definition->state_count + 1u) *
+                                                                sizeof(ta_state_id),
+                                          _Alignof(ta_state_id));
+        if (it->trace_states == NULL) {
+            return TA_ERR_NOMEM;
+        }
+    }
+    if ((wanted & TA_TRACE_BIT(TA_TRACE_CONDITION)) != 0) {
+        it->condition_capacity = ta_trace_guard_capacity(definition);
+        it->conditions = ta_arena_alloc(&system->scratch,
+                                        ((size_t)it->condition_capacity + 1u) * sizeof(struct ta_trace_condition),
+                                        _Alignof(struct ta_trace_condition));
+        if (it->conditions == NULL) {
+            return TA_ERR_NOMEM;
+        }
+    }
     ta_bits_clear(it, it->history_busy);
     ta_load_active(it);
     if (actor->sparse != NULL && actor->sparse->paused != NULL) {
@@ -14785,6 +15595,15 @@ static ta_result ta_interpreter_init(ta_interpreter *it, ta_system *system, ta_a
     }
     actor->live_active = it->active;
     return TA_OK;
+}
+
+/* PAUSED, RESUMED or STOPPED, for a macrostep that has begun, at the
+ * position the run stands at. */
+static void ta_trace_control(ta_interpreter *it, ta_trace_kind kind) {
+    if (it->actor->trace_begun && ta_tracing(it, kind)) {
+        ta_trace_record record = ta_trace_record_now(it, kind);
+        ta_trace_emit(it, &record);
+    }
 }
 
 /*
@@ -14803,6 +15622,8 @@ static ta_result ta_run(ta_interpreter *it, uint32_t budget, ta_run_status *stat
         } else if (!actor->bootstrapped) {
             it->at = (ta_micro_position){ .phase = TA_PHASE_DATA, .stage = TA_DATA_DECLARE };
             ta_mem_zero(it->bound_decls, (size_t)it->decl_words * sizeof(uint64_t));
+            /* The bootstrap has no event to give back: it begins here. */
+            ta_trace_begin(it);
         } else if (actor->finished) {
             if (actor->record.residency == TA_ACTOR_DONE) {
                 *status = TA_RUN_DONE;
@@ -14811,6 +15632,7 @@ static ta_result ta_run(ta_interpreter *it, uint32_t budget, ta_run_status *stat
             it->at = (ta_micro_position){ .phase = TA_PHASE_FINISH, .state = it->definition->state_count,
                                           .stage = TA_FINISH_EXIT };
         } else if (it->steps >= budget) {
+            ta_trace_control(it, TA_TRACE_PAUSED);
             *status = TA_RUN_PAUSED;
             return TA_OK;
         } else {
@@ -14825,9 +15647,13 @@ static ta_result ta_run(ta_interpreter *it, uint32_t budget, ta_run_status *stat
             continue;
         }
         if (result == TA_EXEC_PAUSED) {
+            ta_trace_control(it, TA_TRACE_PAUSED);
             ta_stop(it);
             *status = TA_RUN_PAUSED;
             return TA_OK;
+        }
+        if (result == TA_ERR_NOMEM) {
+            ta_trace_control(it, TA_TRACE_STOPPED);
         }
         if (result == TA_ERR_NOMEM && it->at.phase != TA_PHASE_NONE) {
             ta_stop(it);
@@ -14841,6 +15667,11 @@ TA_PRIVATE ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, c
     ta_run_status *status = params->status;
     if (actor->finished && (actor->sparse == NULL || actor->sparse->paused == NULL)) {
         *status = TA_RUN_DONE;
+        return TA_OK;
+    }
+    if (!actor->macrostep) {
+        /* Idle: its last macrostep ended stable, and nothing waits. */
+        *status = TA_RUN_STABLE;
         return TA_OK;
     }
     ta_interpreter interpreter;
@@ -14860,6 +15691,7 @@ TA_PRIVATE ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, c
          * taken while it was stopped no longer describes it. */
         ta_actor_touch(actor);
     }
+    ta_trace_control(it, TA_TRACE_RESUMED);
     result = ta_run(it, params->budget, status);
     /* The live set lives in scratch memory; between calls In() derives from the configuration. */
     actor->live_active = NULL;
@@ -14939,7 +15771,12 @@ static void ta_exit_step(ta_system *system, ta_vec *frames) {
         if (!ta_invoke_take(frame->actor, frame->exiting, &frame->cursor, &frame->taken)) {
             ta_bits_put(it->active, frame->exiting, false);
             frame->exiting = TA_STATE_NONE;
-        } else if (frame->taken.meta.has_child) {
+            it->at = (ta_micro_position){0};
+            frame->arena = system->scratch;
+            return;
+        }
+        ta_interpreter_trace_invoke(it, TA_TRACE_INVOKE_CANCELLED, frame->taken.active.id);
+        if (frame->taken.meta.has_child) {
             frame->waiting = true;
             frame->arena = system->scratch;
             ta_exit_open(system, frames, frame->taken.meta.child); /* may move `frame` */
@@ -14961,6 +15798,8 @@ static void ta_exit_step(ta_system *system, ta_vec *frames) {
         return;
     }
     ta_state_id state = --frame->next;
+    /* The position records report: the <onexit> of `state` (ADR 0067). */
+    it->at = (ta_micro_position){ .phase = TA_PHASE_EXIT, .state = state + 1u };
     ta_result result = ta_run_handlers(it, ta_state(it, state)->onexit_handlers);
     frame->arena = system->scratch;
     if (result != TA_OK) {
@@ -15014,12 +15853,20 @@ TA_PRIVATE ta_result ta_interpreter_queue_room(ta_system *system, ta_actor *acto
     return ta_queue_room(system, actor);
 }
 
+TA_PRIVATE uint32_t ta_interpreter_queue_mark(const ta_actor *actor) {
+    return ta_queue_mark(actor);
+}
+
 TA_PRIVATE bool ta_interpreter_internal_pending(const ta_actor *actor) {
     return ta_actor_waiting_internal(actor) != 0;
 }
 
 TA_PRIVATE void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor) {
     ta_release_events(actor);
+    if (actor->event_block != NULL) {
+        /* The actor goes: its block goes too, whatever it ran under. */
+        actor->event_block->slots.trace = (ta_trace_parent){0};
+    }
     if (actor->sparse == NULL) {
         ta_block_settle(system, actor);
         return;

@@ -652,7 +652,7 @@ static void tna_sched_deliver_one(tna_sched *sched, const tna_turn_params *param
     uint32_t head = entry->first;
     tna_envelope *envelope = tna_sched_envelope(sched, head);
     *params->inside_core = true;
-    ta_result result = ta_actor_deliver(params->core, actor, &envelope->event);
+    ta_result result = ta_actor_deliver(params->core, &(ta_actor_deliver_params){ .actor = actor, .event = &envelope->event });
     *params->inside_core = false;
     switch (result) {
     case TA_OK:

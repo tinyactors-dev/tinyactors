@@ -117,6 +117,13 @@
   },
   "constants": [
     {
+      "name": "TA_ACTION_NONE",
+      "type": {
+        "type": "ta_action_id"
+      },
+      "value": 4294967295
+    },
+    {
       "name": "TA_ACTOR_VISIT_END",
       "type": {
         "builtin": "uint32_t"
@@ -183,6 +190,20 @@
       "name": "TA_STATE_NONE",
       "type": {
         "type": "ta_state_id"
+      },
+      "value": 4294967295
+    },
+    {
+      "name": "TA_TRACE_FLAG_SAMPLED",
+      "type": {
+        "builtin": "uint8_t"
+      },
+      "value": 1
+    },
+    {
+      "name": "TA_TRANSITION_NONE",
+      "type": {
+        "type": "ta_transition_id"
       },
       "value": 4294967295
     }
@@ -526,6 +547,55 @@
           "offsets": {
             "has_data": 0,
             "data": 4
+          }
+        }
+      }
+    },
+    "ta_actor_deliver_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          }
+        },
+        {
+          "name": "event",
+          "type": {
+            "pointer": {
+              "type": "ta_event",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        },
+        {
+          "name": "trace",
+          "type": {
+            "type": "ta_trace_parent"
+          },
+          "doc": "What the macrostep that takes the event runs under (ADR 0067); a router passes ta_external_delivery.trace. All zero is none."
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "actor": 0,
+            "event": 8,
+            "trace": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "actor": 0,
+            "event": 8,
+            "trace": 16
           }
         }
       }
@@ -1897,6 +1967,7 @@
     },
     "ta_actor_spawn_params": {
       "kind": "struct",
+      "doc": "`trace` is what the bootstrap macrostep runs under (ADR 0067): the trace context, and the cause, the key of the step that spawned it or the host's parent span. All zero is none.",
       "fields": [
         {
           "name": "definition",
@@ -1950,29 +2021,37 @@
           "shape": "single",
           "direction": "out",
           "valid_on": "success"
+        },
+        {
+          "name": "trace",
+          "type": {
+            "type": "ta_trace_parent"
+          }
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 40,
+          "size": 88,
           "align": 8,
           "offsets": {
             "definition": 0,
             "address": 8,
             "datamodel_binding": 16,
             "parent": 24,
-            "out": 32
+            "out": 32,
+            "trace": 40
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 24,
+          "size": 72,
           "align": 8,
           "offsets": {
             "definition": 0,
             "address": 8,
             "datamodel_binding": 12,
             "parent": 16,
-            "out": 20
+            "out": 20,
+            "trace": 24
           }
         }
       }
@@ -7643,7 +7722,7 @@
     },
     "ta_external_delivery": {
       "kind": "struct",
-      "doc": "A fully normalized event destined for another SCXML external event queue.",
+      "doc": "A fully normalized event destined for another SCXML external event queue, with the trace parent the receiver's macrostep runs under: the sending macrostep's context, and the key of the step that sent it (ADR 0067). A router passes `trace` on to ta_actor_deliver().",
       "fields": [
         {
           "name": "destination",
@@ -7656,23 +7735,31 @@
           "type": {
             "type": "ta_event"
           }
+        },
+        {
+          "name": "trace",
+          "type": {
+            "type": "ta_trace_parent"
+          }
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 80,
+          "size": 128,
           "align": 8,
           "offsets": {
             "destination": 0,
-            "event": 16
+            "event": 16,
+            "trace": 80
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 72,
+          "size": 120,
           "align": 8,
           "offsets": {
             "destination": 0,
-            "event": 16
+            "event": 16,
+            "trace": 72
           }
         }
       }
@@ -8277,7 +8364,7 @@
     },
     "ta_invoke_request": {
       "kind": "struct",
-      "doc": "One invocation to start. `type` is the resolved invoker type; the SCXML aliases \"scxml\" and \"http://www.w3.org/TR/scxml\" are normalized to \"http://www.w3.org/TR/scxml/\". `src` is the evaluated src/srcexpr, `data` the evaluated ` <content expr>`, and `params` the data model's aggregate of <param >/namelist values; each is empty (null vtable) when absent. A literal <content > is not imported: it arrives as `content`, the bytes the chart holds, with `content_type` its media type (empty when nothing said), and interpreting it is the invoker's business (ADR 0053, SCXML 6.4.2). Values and bytes are borrowed for the call. A service for an SCXML session spawns its child with ta_actor_spawn() and a `parent` of {parent, invoke_id}; the core then routes `#_ <invokeid >` sends, autoforwarding, and done.invoke itself.",
+      "doc": "One invocation to start. `type` is the resolved invoker type; the SCXML aliases \"scxml\" and \"http://www.w3.org/TR/scxml\" are normalized to \"http://www.w3.org/TR/scxml/\". `src` is the evaluated src/srcexpr, `data` the evaluated ` <content expr>`, and `params` the data model's aggregate of <param >/namelist values; each is empty (null vtable) when absent. A literal <content > is not imported: it arrives as `content`, the bytes the chart holds, with `content_type` its media type (empty when nothing said), and interpreting it is the invoker's business (ADR 0053, SCXML 6.4.2). Values and bytes are borrowed for the call. A service for an SCXML session spawns its child with ta_actor_spawn() and a `parent` of {parent, invoke_id}; the core then routes `#_ <invokeid >` sends, autoforwarding, and done.invoke itself. `trace` is the invoking macrostep's context and the key of the step that invoked, which such a service passes to ta_actor_spawn(), so the child's bootstrap runs under it (ADR 0067).",
       "fields": [
         {
           "name": "system",
@@ -8342,11 +8429,17 @@
           "type": {
             "builtin": "bool"
           }
+        },
+        {
+          "name": "trace",
+          "type": {
+            "type": "ta_trace_parent"
+          }
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 120,
+          "size": 168,
           "align": 8,
           "offsets": {
             "system": 0,
@@ -8358,11 +8451,12 @@
             "content_type": 64,
             "content": 80,
             "params": 96,
-            "autoforward": 112
+            "autoforward": 112,
+            "trace": 120
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 72,
+          "size": 120,
           "align": 8,
           "offsets": {
             "system": 0,
@@ -8374,7 +8468,8 @@
             "content_type": 44,
             "content": 52,
             "params": 60,
-            "autoforward": 68
+            "autoforward": 68,
+            "trace": 72
           }
         }
       }
@@ -11736,7 +11831,7 @@
     },
     "ta_send": {
       "kind": "struct",
-      "doc": "One send to a host I/O processor. `data` is the evaluated ` <content expr>`, namelist or <param >s; `content` is a literal <content >, delivered as the bytes the chart holds and not imported into the data model (ADR 0053). `content_type` is the literal's media type, empty when nothing said. At most one of `data` and `content` is present. Everything is borrowed for the call.",
+      "doc": "One send to a host I/O processor. `data` is the evaluated ` <content expr>`, namelist or <param >s; `content` is a literal <content >, delivered as the bytes the chart holds and not imported into the data model (ADR 0053). `content_type` is the literal's media type, empty when nothing said. At most one of `data` and `content` is present. `trace` is the sending macrostep's context and the key of the step that sent it (ADR 0067), for the processor to carry, as a `traceparent` header for example. Everything is borrowed for the call.",
       "fields": [
         {
           "name": "source",
@@ -11785,11 +11880,17 @@
           "type": {
             "type": "ta_bytes"
           }
+        },
+        {
+          "name": "trace",
+          "type": {
+            "type": "ta_trace_parent"
+          }
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 96,
+          "size": 144,
           "align": 8,
           "offsets": {
             "source": 0,
@@ -11799,11 +11900,12 @@
             "target": 32,
             "data": 48,
             "content_type": 64,
-            "content": 80
+            "content": 80,
+            "trace": 96
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 64,
+          "size": 112,
           "align": 8,
           "offsets": {
             "source": 0,
@@ -11813,7 +11915,8 @@
             "target": 32,
             "data": 40,
             "content_type": 48,
-            "content": 56
+            "content": 56,
+            "trace": 64
           }
         }
       }
@@ -12275,6 +12378,50 @@
         }
       }
     },
+    "ta_step_key": {
+      "kind": "struct",
+      "doc": "Trace context and cause (ADR 0067). They travel next to an event, not in it: an SCXML event has no such field, so data models never see them, and internal queue entries do not carry them.\n\nA step key names one step of one session: macrostep `macrostep` of session `session` (ADR 0066), and microstep `microstep` within it, where 0 is the macrostep itself. Macrosteps count from 1 per session, and 0 is outside a macrostep. The counters run whether or not a trace sink is installed, so keys are the same with tracing on or off. A cause with `session` 0 is the host's: `macrostep` holds its parent span ID, or 0 for none.",
+      "fields": [
+        {
+          "name": "session",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "macrostep",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "microstep",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "session": 0,
+            "macrostep": 8,
+            "microstep": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "session": 0,
+            "macrostep": 8,
+            "microstep": 16
+          }
+        }
+      }
+    },
     "ta_str": {
       "kind": "struct",
       "semantic": "string",
@@ -12400,6 +12547,788 @@
         "wasm32-unknown-unknown": {
           "size": 8,
           "align": 8
+        }
+      }
+    },
+    "ta_trace_at": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_TRACE_AT_NONE",
+          "value": 0,
+          "symbol": "none",
+          "doc": "not inside a step"
+        },
+        {
+          "name": "TA_TRACE_AT_SELECT",
+          "value": 1,
+          "symbol": "select",
+          "doc": "selecting transitions (guards)"
+        },
+        {
+          "name": "TA_TRACE_AT_EXIT",
+          "value": 2,
+          "symbol": "exit",
+          "doc": "onexit of `state`"
+        },
+        {
+          "name": "TA_TRACE_AT_TRANSITION",
+          "value": 3,
+          "symbol": "transition",
+          "doc": "content of `transition`, whose source is `state`"
+        },
+        {
+          "name": "TA_TRACE_AT_ENTER",
+          "value": 4,
+          "symbol": "enter",
+          "doc": "onentry, initial, history or late data of `state`"
+        },
+        {
+          "name": "TA_TRACE_AT_BOOTSTRAP",
+          "value": 5,
+          "symbol": "bootstrap",
+          "doc": "the bootstrap's <data > and top-level <script >"
+        },
+        {
+          "name": "TA_TRACE_AT_FINALIZE",
+          "value": 6,
+          "symbol": "finalize",
+          "doc": "<finalize >, and autoforwarding"
+        },
+        {
+          "name": "TA_TRACE_AT_INVOKE",
+          "value": 7,
+          "symbol": "invoke",
+          "doc": "starting the invocations of `state`"
+        }
+      ],
+      "doc": "Where in a macrostep a record was written.",
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
+    "ta_trace_context": {
+      "kind": "struct",
+      "doc": "A W3C trace context, which core copies and never creates or interprets: the trace-id is `trace_id_high` then `trace_id_low`, each big-endian, and all zero means none; `flags` are the trace-flags, of which core reads only TA_TRACE_FLAG_SAMPLED.",
+      "fields": [
+        {
+          "name": "trace_id_high",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "trace_id_low",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "flags",
+          "type": {
+            "builtin": "uint8_t"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "trace_id_high": 0,
+            "trace_id_low": 8,
+            "flags": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "trace_id_high": 0,
+            "trace_id_low": 8,
+            "flags": 16
+          }
+        }
+      }
+    },
+    "ta_trace_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_TRACE_SPAWNED",
+          "value": 0,
+          "symbol": "spawned",
+          "doc": "`cause`: the spawn's; bootstrap follows as macrostep 1"
+        },
+        {
+          "name": "TA_TRACE_LOADED",
+          "value": 1,
+          "symbol": "loaded"
+        },
+        {
+          "name": "TA_TRACE_UNLOADED",
+          "value": 2,
+          "symbol": "unloaded"
+        },
+        {
+          "name": "TA_TRACE_FINISHED",
+          "value": 3,
+          "symbol": "finished",
+          "doc": "`state`: the top-level final state (ADR 0056)"
+        },
+        {
+          "name": "TA_TRACE_DESTROYED",
+          "value": 4,
+          "symbol": "destroyed"
+        },
+        {
+          "name": "TA_TRACE_MACROSTEP_BEGIN",
+          "value": 5,
+          "symbol": "macrostep_begin",
+          "doc": "`event`: the external event, or none; `cause`: the macrostep's"
+        },
+        {
+          "name": "TA_TRACE_MACROSTEP_END",
+          "value": 6,
+          "symbol": "macrostep_end",
+          "doc": "stable, or finished; `states`: the active configuration"
+        },
+        {
+          "name": "TA_TRACE_CONDITION",
+          "value": 7,
+          "symbol": "condition",
+          "doc": "`expr`, `result` or `fault`; a guard's `transition`, or an <if >'s"
+        },
+        {
+          "name": "TA_TRACE_MICROSTEP",
+          "value": 8,
+          "symbol": "microstep",
+          "doc": "`event` (none: eventless), `transitions`, `exited`, `entered`, `history`"
+        },
+        {
+          "name": "TA_TRACE_RAISED",
+          "value": 9,
+          "symbol": "raised",
+          "doc": "`event`: one core queued internally"
+        },
+        {
+          "name": "TA_TRACE_DATA_INIT",
+          "value": 10,
+          "symbol": "data_init",
+          "doc": "`name`, `expr` or none, `value` or `fault`: a <data >"
+        },
+        {
+          "name": "TA_TRACE_ASSIGN",
+          "value": 11,
+          "symbol": "assign",
+          "doc": "`expr` (the location), `value`"
+        },
+        {
+          "name": "TA_TRACE_SCRIPT",
+          "value": 12,
+          "symbol": "script",
+          "doc": "`expr` (the script), success or `fault`"
+        },
+        {
+          "name": "TA_TRACE_FOREACH",
+          "value": 13,
+          "symbol": "foreach",
+          "doc": "`value` (the snapshot), `iteration`"
+        },
+        {
+          "name": "TA_TRACE_ACTION_FAILED",
+          "value": 14,
+          "symbol": "action_failed",
+          "doc": "`action`, `fault`; the error.execution is the RAISED record that follows"
+        },
+        {
+          "name": "TA_TRACE_SENT",
+          "value": 15,
+          "symbol": "sent",
+          "doc": "`send`, `event`; its cause is this record's key"
+        },
+        {
+          "name": "TA_TRACE_CANCELLED",
+          "value": 16,
+          "symbol": "cancelled",
+          "doc": "`send`"
+        },
+        {
+          "name": "TA_TRACE_INVOKED",
+          "value": 17,
+          "symbol": "invoked",
+          "doc": "`invoke`"
+        },
+        {
+          "name": "TA_TRACE_INVOKE_CANCELLED",
+          "value": 18,
+          "symbol": "invoke_cancelled",
+          "doc": "`invoke`"
+        },
+        {
+          "name": "TA_TRACE_PAUSED",
+          "value": 19,
+          "symbol": "paused",
+          "doc": "a budget ran out"
+        },
+        {
+          "name": "TA_TRACE_RESUMED",
+          "value": 20,
+          "symbol": "resumed",
+          "doc": "a run continues a macrostep begun before"
+        },
+        {
+          "name": "TA_TRACE_STOPPED",
+          "value": 21,
+          "symbol": "stopped",
+          "doc": "an allocation failed; the run stopped where it stood (ADR 0070)"
+        }
+      ],
+      "doc": "======================================================================== Tracing (ADR 0067)\n\nCore reports its decisions and the data they changed to one trace sink per system, as flat records. A record is written once, when the step that produced it has committed: a step that runs out of memory and runs again (ADR 0070) writes its records on the run that commits, and the step counters move only then, so an interrupted run and an uninterrupted one write the same records apart from PAUSED, RESUMED and STOPPED.",
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
+    "ta_trace_parent": {
+      "kind": "struct",
+      "doc": "What a step inherits from what caused it: the trace context, and the key of the step that produced it. All zero is no parent.",
+      "fields": [
+        {
+          "name": "context",
+          "type": {
+            "type": "ta_trace_context"
+          }
+        },
+        {
+          "name": "cause",
+          "type": {
+            "type": "ta_step_key"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "context": 0,
+            "cause": 24
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "context": 0,
+            "cause": 24
+          }
+        }
+      }
+    },
+    "ta_trace_position": {
+      "kind": "struct",
+      "doc": "The public view of where the interpreter stands (ADR 0060, ADR 0061). IDs are the definition's compiled IDs: `action` indexes its actions, and `iteration` is the <foreach > iteration, from 0, of the innermost loop.",
+      "fields": [
+        {
+          "name": "at",
+          "type": {
+            "type": "ta_trace_at"
+          }
+        },
+        {
+          "name": "state",
+          "type": {
+            "type": "ta_state_id"
+          }
+        },
+        {
+          "name": "transition",
+          "type": {
+            "type": "ta_transition_id"
+          }
+        },
+        {
+          "name": "action",
+          "type": {
+            "type": "ta_action_id"
+          }
+        },
+        {
+          "name": "iteration",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 20,
+          "align": 4,
+          "offsets": {
+            "at": 0,
+            "state": 4,
+            "transition": 8,
+            "action": 12,
+            "iteration": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 20,
+          "align": 4,
+          "offsets": {
+            "at": 0,
+            "state": 4,
+            "transition": 8,
+            "action": 12,
+            "iteration": 16
+          }
+        }
+      }
+    },
+    "ta_trace_record": {
+      "kind": "struct",
+      "doc": "One record. Only the fields its kind names are meaningful; the rest are zero, or NONE for IDs. Everything is borrowed for the call: retain a value to keep it (ADR 0006). `context` is the running macrostep's; `cause`, for MACROSTEP_BEGIN and SPAWNED, is the key of the step that caused it. A fault carries its `detail` and `code`; its data went into the error.execution event of the RAISED record that follows.",
+      "fields": [
+        {
+          "name": "kind",
+          "type": {
+            "type": "ta_trace_kind"
+          }
+        },
+        {
+          "name": "key",
+          "type": {
+            "type": "ta_step_key"
+          }
+        },
+        {
+          "name": "position",
+          "type": {
+            "type": "ta_trace_position"
+          }
+        },
+        {
+          "name": "context",
+          "type": {
+            "type": "ta_trace_context"
+          }
+        },
+        {
+          "name": "cause",
+          "type": {
+            "type": "ta_step_key"
+          }
+        },
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          }
+        },
+        {
+          "name": "definition",
+          "type": {
+            "type": "ta_definition_id"
+          }
+        },
+        {
+          "name": "now",
+          "type": {
+            "type": "ta_time"
+          }
+        },
+        {
+          "name": "event",
+          "type": {
+            "pointer": {
+              "type": "ta_event",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in",
+          "optional": true
+        },
+        {
+          "name": "state",
+          "type": {
+            "type": "ta_state_id"
+          }
+        },
+        {
+          "name": "expr",
+          "type": {
+            "type": "ta_expr_id"
+          }
+        },
+        {
+          "name": "name",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "action",
+          "type": {
+            "type": "ta_action_id"
+          }
+        },
+        {
+          "name": "iteration",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "send",
+          "type": {
+            "type": "ta_send_id"
+          }
+        },
+        {
+          "name": "invoke",
+          "type": {
+            "type": "ta_invoke_id"
+          }
+        },
+        {
+          "name": "result",
+          "type": {
+            "builtin": "bool"
+          }
+        },
+        {
+          "name": "has_value",
+          "type": {
+            "builtin": "bool"
+          }
+        },
+        {
+          "name": "value",
+          "type": {
+            "type": "ta_value"
+          }
+        },
+        {
+          "name": "has_fault",
+          "type": {
+            "builtin": "bool"
+          }
+        },
+        {
+          "name": "fault",
+          "type": {
+            "type": "ta_fault"
+          }
+        },
+        {
+          "name": "transitions",
+          "type": {
+            "pointer": {
+              "type": "ta_transition_id",
+              "const": true
+            }
+          },
+          "count": "transition_count",
+          "shape": "counted",
+          "direction": "in"
+        },
+        {
+          "name": "transition_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "count_of": "transitions"
+        },
+        {
+          "name": "exited",
+          "type": {
+            "pointer": {
+              "type": "ta_state_id",
+              "const": true
+            }
+          },
+          "count": "exited_count",
+          "shape": "counted",
+          "direction": "in"
+        },
+        {
+          "name": "exited_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "count_of": "exited"
+        },
+        {
+          "name": "entered",
+          "type": {
+            "pointer": {
+              "type": "ta_state_id",
+              "const": true
+            }
+          },
+          "count": "entered_count",
+          "shape": "counted",
+          "direction": "in"
+        },
+        {
+          "name": "entered_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "count_of": "entered"
+        },
+        {
+          "name": "history",
+          "type": {
+            "pointer": {
+              "type": "ta_state_id",
+              "const": true
+            }
+          },
+          "count": "history_count",
+          "shape": "counted",
+          "direction": "in"
+        },
+        {
+          "name": "history_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "count_of": "history"
+        },
+        {
+          "name": "states",
+          "type": {
+            "pointer": {
+              "type": "ta_state_id",
+              "const": true
+            }
+          },
+          "count": "state_count",
+          "shape": "counted",
+          "direction": "in"
+        },
+        {
+          "name": "state_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "count_of": "states"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 336,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "key": 8,
+            "position": 32,
+            "context": 56,
+            "cause": 80,
+            "actor": 104,
+            "definition": 112,
+            "now": 120,
+            "event": 128,
+            "state": 136,
+            "expr": 140,
+            "name": 144,
+            "action": 160,
+            "iteration": 164,
+            "send": 168,
+            "invoke": 176,
+            "result": 184,
+            "has_value": 185,
+            "value": 192,
+            "has_fault": 208,
+            "fault": 216,
+            "transitions": 256,
+            "transition_count": 264,
+            "exited": 272,
+            "exited_count": 280,
+            "entered": 288,
+            "entered_count": 296,
+            "history": 304,
+            "history_count": 312,
+            "states": 320,
+            "state_count": 328
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 256,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "key": 8,
+            "position": 32,
+            "context": 56,
+            "cause": 80,
+            "actor": 104,
+            "definition": 112,
+            "now": 120,
+            "event": 128,
+            "state": 132,
+            "expr": 136,
+            "name": 140,
+            "action": 148,
+            "iteration": 152,
+            "send": 160,
+            "invoke": 168,
+            "result": 176,
+            "has_value": 177,
+            "value": 180,
+            "has_fault": 188,
+            "fault": 192,
+            "transitions": 216,
+            "transition_count": 220,
+            "exited": 224,
+            "exited_count": 228,
+            "entered": 232,
+            "entered_count": 236,
+            "history": 240,
+            "history_count": 244,
+            "states": 248,
+            "state_count": 252
+          }
+        }
+      }
+    },
+    "ta_trace_sink": {
+      "kind": "struct",
+      "semantic": "adapter",
+      "doc": "`kinds` holds TA_TRACE_BIT(kind) for every kind the sink wants: core builds no other record. A macrostep whose context has a trace ID and a clear sampled flag builds none of its records either, unless `unsampled` is set; lifecycle records are not sampled.",
+      "fields": [
+        {
+          "name": "self",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            }
+          },
+          "shape": "raw",
+          "direction": "in"
+        },
+        {
+          "name": "v",
+          "type": {
+            "pointer": {
+              "type": "ta_trace_sink_vtable",
+              "const": true
+            }
+          },
+          "shape": "vtable",
+          "direction": "in"
+        },
+        {
+          "name": "kinds",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "unsampled",
+          "type": {
+            "builtin": "bool"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "self": 0,
+            "v": 8,
+            "kinds": 16,
+            "unsampled": 20
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "self": 0,
+            "v": 4,
+            "kinds": 8,
+            "unsampled": 12
+          }
+        }
+      }
+    },
+    "ta_trace_sink_vtable": {
+      "kind": "struct",
+      "semantic": "vtable",
+      "doc": "Writing a record cannot fail and cannot change the run. A sink must not call back into the system for the actor that is running; it may read the record, retain values it keeps, and inspect other actors.",
+      "fields": [
+        {
+          "name": "write",
+          "type": {
+            "pointer": {
+              "function": {
+                "returns": {
+                  "type": {
+                    "builtin": "void"
+                  }
+                },
+                "params": [
+                  {
+                    "name": "self",
+                    "type": {
+                      "pointer": {
+                        "builtin": "void"
+                      }
+                    },
+                    "shape": "raw",
+                    "direction": "in"
+                  },
+                  {
+                    "name": "record",
+                    "type": {
+                      "pointer": {
+                        "type": "ta_trace_record",
+                        "const": true
+                      }
+                    },
+                    "shape": "single",
+                    "direction": "in"
+                  }
+                ]
+              }
+            }
+          },
+          "shape": "callback",
+          "direction": "in"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 8,
+          "align": 8,
+          "offsets": {
+            "write": 0
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4,
+          "offsets": {
+            "write": 0
+          }
         }
       }
     },
@@ -13008,6 +13937,26 @@
       "value_model": {
         "kind": "any"
       }
+    },
+    {
+      "name": "ta_step_key_span_id",
+      "doc": "An 8-byte span ID for a step, derived the same way in every host (ADR 0067): a fixed 64-bit mix of the key, never 0. A host cause (`session` 0) returns `macrostep`, the host's own span ID, unchanged.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "uint64_t"
+        }
+      },
+      "params": [
+        {
+          "name": "key",
+          "type": {
+            "type": "ta_step_key"
+          }
+        }
+      ]
     },
     {
       "name": "ta_event_retain",
@@ -13706,6 +14655,19 @@
       ]
     },
     {
+      "name": "ta_null_trace_sink",
+      "doc": "The sink a system starts with: it wants nothing and writes nothing.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_trace_sink"
+        }
+      },
+      "params": []
+    },
+    {
       "name": "ta_actor_report_invoke",
       "doc": "Externally synchronize this call; do not call it reentrantly from start.",
       "public": true,
@@ -14344,16 +15306,10 @@
           "direction": "in"
         },
         {
-          "name": "actor",
-          "type": {
-            "type": "ta_actor_id"
-          }
-        },
-        {
-          "name": "event",
+          "name": "params",
           "type": {
             "pointer": {
-              "type": "ta_event",
+              "type": "ta_actor_deliver_params",
               "const": true
             }
           },
@@ -14364,6 +15320,7 @@
       "value_model": {
         "kind": "actor",
         "path": [
+          "params",
           "actor"
         ]
       }
@@ -15563,6 +16520,37 @@
           "name": "sink",
           "type": {
             "type": "ta_log_sink"
+          }
+        }
+      ]
+    },
+    {
+      "name": "ta_system_set_trace_sink",
+      "doc": "Installs the trace sink (ADR 0067); ta_null_trace_sink() stops tracing. TA_ERR_INVALID for a sink whose `v` or `v->write` is null.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "sink",
+          "type": {
+            "type": "ta_trace_sink"
           }
         }
       ]

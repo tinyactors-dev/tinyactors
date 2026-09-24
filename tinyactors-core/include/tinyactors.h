@@ -314,6 +314,39 @@ typedef struct { ta_event_name_id detail; int32_t code; ta_str message; TA_RELEA
 typedef enum { TA_OP_OK TA_SUCCESS = 0, TA_OP_ERROR = 1, TA_OP_NOMEM = 2 } ta_op_status TA_SYMBOLS("TA_OP_");
 typedef enum { TA_RUN_STABLE = 0, TA_RUN_PAUSED = 1, TA_RUN_DONE = 2, TA_RUN_ERROR = 3 } ta_run_status TA_SYMBOLS("TA_RUN_");
 
+/*
+ * Trace context and cause (ADR 0067). They travel next to an event, not in
+ * it: an SCXML event has no such field, so data models never see them, and
+ * internal queue entries do not carry them.
+ *
+ * A step key names one step of one session: macrostep `macrostep` of session
+ * `session` (ADR 0066), and microstep `microstep` within it, where 0 is the
+ * macrostep itself. Macrosteps count from 1 per session, and 0 is outside a
+ * macrostep. The counters run whether or not a trace sink is installed, so
+ * keys are the same with tracing on or off. A cause with `session` 0 is the
+ * host's: `macrostep` holds its parent span ID, or 0 for none.
+ */
+typedef struct { uint64_t session; uint64_t macrostep; uint32_t microstep; } ta_step_key;
+/*
+ * A W3C trace context, which core copies and never creates or interprets:
+ * the trace-id is `trace_id_high` then `trace_id_low`, each big-endian, and
+ * all zero means none; `flags` are the trace-flags, of which core reads only
+ * TA_TRACE_FLAG_SAMPLED.
+ */
+typedef struct { uint64_t trace_id_high; uint64_t trace_id_low; uint8_t flags; } ta_trace_context;
+#define TA_TRACE_FLAG_SAMPLED ((uint8_t)1u)
+/*
+ * What a step inherits from what caused it: the trace context, and the key
+ * of the step that produced it. All zero is no parent.
+ */
+typedef struct { ta_trace_context context; ta_step_key cause; } ta_trace_parent;
+/*
+ * An 8-byte span ID for a step, derived the same way in every host (ADR
+ * 0067): a fixed 64-bit mix of the key, never 0. A host cause (`session` 0)
+ * returns `macrostep`, the host's own span ID, unchanged.
+ */
+TA_API uint64_t ta_step_key_span_id(ta_step_key key);
+
 
 typedef struct {
     ta_event event;
@@ -339,10 +372,16 @@ TA_API void ta_event_release(TA_INOUT ta_event *event) TA_ANY_VALUE_MODEL;
  */
 
 
-/* A fully normalized event destined for another SCXML external event queue. */
+/*
+ * A fully normalized event destined for another SCXML external event queue,
+ * with the trace parent the receiver's macrostep runs under: the sending
+ * macrostep's context, and the key of the step that sent it (ADR 0067). A
+ * router passes `trace` on to ta_actor_deliver().
+ */
 typedef struct {
     ta_actor_ref destination;
     ta_event event;
+    ta_trace_parent trace;
 } ta_external_delivery;
 
 /*
@@ -719,11 +758,13 @@ TA_API ta_result ta_dm_host_state_name(const ta_dm_host *host,
  * namelist or <param>s; `content` is a literal <content>, delivered as the
  * bytes the chart holds and not imported into the data model (ADR 0053).
  * `content_type` is the literal's media type, empty when nothing said. At
- * most one of `data` and `content` is present. Everything is borrowed for
- * the call.
+ * most one of `data` and `content` is present. `trace` is the sending
+ * macrostep's context and the key of the step that sent it (ADR 0067), for
+ * the processor to carry, as a `traceparent` header for example. Everything
+ * is borrowed for the call.
  */
 typedef struct { ta_actor_ref source; ta_send_id send_id; ta_event_name_id event; ta_atom io_type; ta_value target; ta_value data;
-                 ta_str content_type; ta_bytes content; } ta_send;
+                 ta_str content_type; ta_bytes content; ta_trace_parent trace; } ta_send;
 /*
  * What an I/O processor renders (ADR 0068): the URI of one of its COMPUTED
  * origins, or this session's location through it (`_ioprocessors`).
@@ -852,6 +893,154 @@ typedef struct {
 
 
 /* ========================================================================
+ * Tracing (ADR 0067)
+ *
+ * Core reports its decisions and the data they changed to one trace sink
+ * per system, as flat records. A record is written once, when the step
+ * that produced it has committed: a step that runs out of memory and runs
+ * again (ADR 0070) writes its records on the run that commits, and the step
+ * counters move only then, so an interrupted run and an uninterrupted one
+ * write the same records apart from PAUSED, RESUMED and STOPPED.
+ */
+
+typedef enum {
+    /* Lifecycle; outside macrosteps, and never sampled. */
+    TA_TRACE_SPAWNED = 0,       /* `cause`: the spawn's; bootstrap follows as macrostep 1 */
+    TA_TRACE_LOADED,
+    TA_TRACE_UNLOADED,
+    TA_TRACE_FINISHED,          /* `state`: the top-level final state (ADR 0056) */
+    TA_TRACE_DESTROYED,
+
+    /* Macrosteps. */
+    TA_TRACE_MACROSTEP_BEGIN,   /* `event`: the external event, or none; `cause`: the macrostep's */
+    TA_TRACE_MACROSTEP_END,     /* stable, or finished; `states`: the active configuration */
+
+    /* Decisions. */
+    TA_TRACE_CONDITION,         /* `expr`, `result` or `fault`; a guard's `transition`, or an <if>'s */
+    TA_TRACE_MICROSTEP,         /* `event` (none: eventless), `transitions`, `exited`, `entered`, `history` */
+    TA_TRACE_RAISED,            /* `event`: one core queued internally */
+
+    /* Data. */
+    TA_TRACE_DATA_INIT,         /* `name`, `expr` or none, `value` or `fault`: a <data> */
+    TA_TRACE_ASSIGN,            /* `expr` (the location), `value` */
+    TA_TRACE_SCRIPT,            /* `expr` (the script), success or `fault` */
+    TA_TRACE_FOREACH,           /* `value` (the snapshot), `iteration` */
+    TA_TRACE_ACTION_FAILED,     /* `action`, `fault`; the error.execution is the RAISED record that follows */
+
+    /* Effects that leave the actor. */
+    TA_TRACE_SENT,              /* `send`, `event`; its cause is this record's key */
+    TA_TRACE_CANCELLED,         /* `send` */
+    TA_TRACE_INVOKED,           /* `invoke` */
+    TA_TRACE_INVOKE_CANCELLED,  /* `invoke` */
+
+    /* Execution control. */
+    TA_TRACE_PAUSED,            /* a budget ran out */
+    TA_TRACE_RESUMED,           /* a run continues a macrostep begun before */
+    TA_TRACE_STOPPED            /* an allocation failed; the run stopped where it stood (ADR 0070) */
+} ta_trace_kind TA_SYMBOLS("TA_TRACE_");
+
+/* The bit of `kind` in a sink's mask. */
+#define TA_TRACE_BIT(kind) ((uint32_t)1u << (uint32_t)(kind))
+
+/* Where in a macrostep a record was written. */
+typedef enum {
+    TA_TRACE_AT_NONE = 0,       /* not inside a step                                */
+    TA_TRACE_AT_SELECT,         /* selecting transitions (guards)                   */
+    TA_TRACE_AT_EXIT,           /* onexit of `state`                                */
+    TA_TRACE_AT_TRANSITION,     /* content of `transition`, whose source is `state` */
+    TA_TRACE_AT_ENTER,          /* onentry, initial, history or late data of `state` */
+    TA_TRACE_AT_BOOTSTRAP,      /* the bootstrap's <data> and top-level <script>    */
+    TA_TRACE_AT_FINALIZE,       /* <finalize>, and autoforwarding                   */
+    TA_TRACE_AT_INVOKE          /* starting the invocations of `state`              */
+} ta_trace_at TA_SYMBOLS("TA_TRACE_AT_");
+
+#define TA_TRANSITION_NONE ((ta_transition_id)UINT32_MAX)
+#define TA_ACTION_NONE ((ta_action_id)UINT32_MAX)
+
+/*
+ * The public view of where the interpreter stands (ADR 0060, ADR 0061).
+ * IDs are the definition's compiled IDs: `action` indexes its actions, and
+ * `iteration` is the <foreach> iteration, from 0, of the innermost loop.
+ */
+typedef struct {
+    ta_trace_at at;
+    ta_state_id state;
+    ta_transition_id transition;
+    ta_action_id action;
+    uint32_t iteration;
+} ta_trace_position;
+
+/*
+ * One record. Only the fields its kind names are meaningful; the rest are
+ * zero, or NONE for IDs. Everything is borrowed for the call: retain a value
+ * to keep it (ADR 0006). `context` is the running macrostep's; `cause`, for
+ * MACROSTEP_BEGIN and SPAWNED, is the key of the step that caused it. A
+ * fault carries its `detail` and `code`; its data went into the
+ * error.execution event of the RAISED record that follows.
+ */
+typedef struct {
+    ta_trace_kind kind;
+    ta_step_key key;
+    ta_trace_position position;
+    ta_trace_context context;
+    ta_step_key cause;
+    ta_actor_id actor;
+    ta_definition_id definition;
+    ta_time now;
+
+    TA_IN TA_OPTIONAL const ta_event *event;
+    ta_state_id state;
+    ta_expr_id expr;
+    ta_str name;
+    ta_action_id action;
+    uint32_t iteration;
+    ta_send_id send;
+    ta_invoke_id invoke;
+    bool result;
+    bool has_value;
+    ta_value value;
+    bool has_fault;
+    ta_fault fault;
+
+    TA_COUNTED_BY(transition_count) const ta_transition_id *transitions;
+    uint32_t transition_count;
+    TA_COUNTED_BY(exited_count) const ta_state_id *exited;
+    uint32_t exited_count;
+    TA_COUNTED_BY(entered_count) const ta_state_id *entered;
+    uint32_t entered_count;
+    TA_COUNTED_BY(history_count) const ta_state_id *history;
+    uint32_t history_count;
+    TA_COUNTED_BY(state_count) const ta_state_id *states;
+    uint32_t state_count;
+} ta_trace_record;
+
+/*
+ * Writing a record cannot fail and cannot change the run. A sink must not
+ * call back into the system for the actor that is running; it may read the
+ * record, retain values it keeps, and inspect other actors.
+ */
+typedef struct ta_trace_sink_vtable {
+    void (*write)(void *self, TA_IN const ta_trace_record *record);
+} ta_trace_sink_vtable TA_VTABLE;
+
+/*
+ * `kinds` holds TA_TRACE_BIT(kind) for every kind the sink wants: core
+ * builds no other record. A macrostep whose context has a trace ID and a
+ * clear sampled flag builds none of its records either, unless `unsampled`
+ * is set; lifecycle records are not sampled.
+ */
+typedef struct {
+    void *self;
+    const ta_trace_sink_vtable *v;
+    uint32_t kinds;
+    bool unsampled;
+} ta_trace_sink TA_ADAPTER;
+
+/* The sink a system starts with: it wants nothing and writes nothing. */
+TA_API ta_trace_sink ta_null_trace_sink(void);
+
+
+/* ========================================================================
  * Invokers
  */
 
@@ -867,10 +1056,13 @@ typedef struct {
  * interpreting it is the invoker's business (ADR 0053, SCXML 6.4.2). Values
  * and bytes are borrowed for the call. A service for an SCXML session spawns its child with
  * ta_actor_spawn() and a `parent` of {parent, invoke_id}; the core then routes
- * `#_<invokeid>` sends, autoforwarding, and done.invoke itself.
+ * `#_<invokeid>` sends, autoforwarding, and done.invoke itself. `trace` is the
+ * invoking macrostep's context and the key of the step that invoked, which
+ * such a service passes to ta_actor_spawn(), so the child's bootstrap runs
+ * under it (ADR 0067).
  */
 typedef struct { ta_system *system; ta_actor_id parent; ta_invoke_id invoke_id; ta_atom type; ta_value src; ta_value data;
-                 ta_str content_type; ta_bytes content; ta_value params; bool autoforward; } ta_invoke_request;
+                 ta_str content_type; ta_bytes content; ta_value params; bool autoforward; ta_trace_parent trace; } ta_invoke_request;
 typedef struct { TA_IN const ta_invoke_request *request; TA_OUT uint64_t *service_handle; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_invoker_start_params;
 typedef struct { uint64_t service_handle; TA_IN const ta_event *event; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_invoker_forward_params;
 
@@ -1977,12 +2169,18 @@ typedef struct {
     ta_invoke_id invoke_id;
 } ta_actor_parent;
 
+/*
+ * `trace` is what the bootstrap macrostep runs under (ADR 0067): the trace
+ * context, and the cause, the key of the step that spawned it or the
+ * host's parent span. All zero is none.
+ */
 typedef struct {
     ta_definition_id definition;
     TA_IN TA_OPTIONAL const ta_actor_address *address;
     TA_IN TA_OPTIONAL const ta_value *datamodel_binding;
     TA_IN TA_OPTIONAL const ta_actor_parent *parent;
     TA_OUT ta_actor_id *out;
+    ta_trace_parent trace;
 } ta_actor_spawn_params;
 typedef struct { TA_IN const ta_actor_address *address; TA_OUT ta_actor_id *out; } ta_actor_find_params;
 /*
@@ -2035,6 +2233,13 @@ TA_API ta_result ta_actor_prepare_replacement(ta_system *system,
 TA_API ta_result ta_actor_activate_replacement(ta_system *system,
                                                TA_IN const ta_actor_activate_replacement_params *params);
 TA_API ta_result ta_actor_find(ta_system *system, TA_IN const ta_actor_find_params *params);
+typedef struct {
+    ta_actor_id actor;
+    TA_IN const ta_event *event;
+    /* What the macrostep that takes the event runs under (ADR 0067); a
+     * router passes ta_external_delivery.trace. All zero is none. */
+    ta_trace_parent trace;
+} ta_actor_deliver_params;
 /*
  * Offers an external event to a resident actor: the admission test
  * (ADR 0055). The result alone tells a host what to do with the message,
@@ -2057,8 +2262,8 @@ TA_API ta_result ta_actor_find(ta_system *system, TA_IN const ta_actor_find_para
  * finished actor is TA_ERR_DONE, never TA_ERR_BUSY: finishing is permanent,
  * so a host that kept a message queued would wait forever.
  */
-TA_API ta_result ta_actor_deliver(ta_system *system, ta_actor_id actor, TA_IN const ta_event *event)
-    TA_VALUE_MODEL(actor, actor);
+TA_API ta_result ta_actor_deliver(ta_system *system, TA_IN const ta_actor_deliver_params *params)
+    TA_VALUE_MODEL(actor, params.actor);
 TA_API ta_result ta_actor_resume(ta_system *system, TA_IN const ta_actor_resume_params *params);
 /*
  * Evicts a named actor without terminating it. The image must be a fresh
@@ -2477,6 +2682,11 @@ TA_API ta_result ta_system_register_io(ta_system *system, TA_IN const ta_io_regi
 TA_API ta_result ta_system_find_io(const ta_system *system, ta_atom type, TA_OUT uint32_t *index);
 /* Installs where <log> goes; without one, a <log> only evaluates its expr. */
 TA_API ta_result ta_system_set_log_sink(ta_system *system, ta_log_sink sink);
+/*
+ * Installs the trace sink (ADR 0067); ta_null_trace_sink() stops tracing.
+ * TA_ERR_INVALID for a sink whose `v` or `v->write` is null.
+ */
+TA_API ta_result ta_system_set_trace_sink(ta_system *system, ta_trace_sink sink);
 TA_API ta_result ta_system_register_invoker(ta_system *system,
                                             ta_atom type,
                                             ta_invoker invoker);

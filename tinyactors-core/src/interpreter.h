@@ -69,6 +69,21 @@ typedef struct {
      * the bootstrap does not initialize (`decl_words` words). */
     uint64_t *bound_decls;
     uint32_t decl_words;
+    /*
+     * Tracing (ADR 0067). `trace_kinds` is what the running macrostep builds,
+     * from the sink's mask and the macrostep's context. `trace_action` is the
+     * unit of executable content running now. `trace_states` is scratch for
+     * a record's state lists (3 * state_count), and `conditions` holds the
+     * guards of the selection in progress, written only once it completes;
+     * both are null when the sink wants no record that needs them.
+     */
+    uint32_t trace_kinds;
+    ta_trace_context trace_context;
+    ta_action_id trace_action;
+    ta_state_id *trace_states;
+    struct ta_trace_condition *conditions;
+    uint32_t condition_count;
+    uint32_t condition_capacity;
 } ta_interpreter;
 
 ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_actor_resume_params *params);
@@ -123,6 +138,25 @@ ta_result ta_interpreter_execution_error(ta_interpreter *it, ta_fault *fault);
 /* Makes sure the actor's queue has room for one more internal event, so
  * queueing it cannot fail (ADR 0070). */
 ta_result ta_interpreter_queue_room(ta_system *system, ta_actor *actor);
+/* How many events the actor's queue holds, a taken head included: a mark
+ * a step's RAISED records start from. */
+uint32_t ta_interpreter_queue_mark(const ta_actor *actor);
+/* Writes a RAISED record for every event queued after `mark`, once the step
+ * that queued them has committed (ADR 0067). */
+void ta_interpreter_trace_raised(ta_interpreter *it, uint32_t mark);
+/* Writes an INVOKED or INVOKE_CANCELLED record for `invoke`. */
+void ta_interpreter_trace_invoke(ta_interpreter *it, ta_trace_kind kind, ta_invoke_id invoke);
+/* What a step running now passes to what it produces: the macrostep's
+ * context, and the step's own key as the cause (ADR 0067 section 6). */
+ta_trace_parent ta_interpreter_trace_here(const ta_interpreter *it);
+/* The parent the actor's current macrostep runs under; all zero for none. */
+ta_trace_parent ta_actor_macrostep_parent(const ta_actor *actor);
+/*
+ * Makes an idle actor run a macrostep for work queued outside any run, such
+ * as a failed send's error, under `trace` (null: none). An actor already in
+ * a macrostep is left alone.
+ */
+void ta_interpreter_start_macrostep(ta_actor *actor, const ta_trace_parent *trace);
 bool ta_interpreter_internal_pending(const ta_actor *actor);
 
 /* ------------------------------------------------------------------------
