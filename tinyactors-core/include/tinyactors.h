@@ -2040,6 +2040,9 @@ TA_API ta_result ta_actor_find(ta_system *system, TA_IN const ta_actor_find_para
  *   unloaded). The receiver is gone from here; drop or route the message.
  * - TA_ERR_INVALID: a caller error only: a null event, an event name this
  *   system never issued, or the root name.
+ * - TA_ERR_NOMEM: no memory for the event block the event would live in
+ *   until its macrostep ends (ADR 0069). Keep the message and try again
+ *   later; ta_system_set_event_block_cache() keeps blocks for reuse.
  * On any result but TA_OK nothing is retained and the event is untouched.
  * A malformed event is TA_ERR_INVALID whatever the actor's state, and a
  * finished actor is TA_ERR_DONE, never TA_ERR_BUSY: finishing is permanent,

@@ -718,7 +718,7 @@ ta_result ta_actor_deliver(ta_system *system, ta_actor_id id, const ta_event *ev
     if (actor->finished) {
         return TA_ERR_DONE;
     }
-    if (actor->macrostep || actor->slots.external != TA_EXTERNAL_NONE) {
+    if (actor->macrostep || ta_actor_external_event(actor) != NULL) {
         return TA_ERR_BUSY;
     }
     ta_event accepted = *event;
@@ -726,8 +726,16 @@ ta_result ta_actor_deliver(ta_system *system, ta_actor_id id, const ta_event *ev
     if (result != TA_OK) {
         return result;
     }
-    ta_event_retain(&accepted, &actor->slots.external_event);
-    actor->slots.external = TA_EXTERNAL_WAITING;
+    /* The event lives in the actor's event block until its macrostep ends
+     * (ADR 0069): the only step here that can fail, and it changes nothing
+     * when it does. */
+    result = ta_interpreter_hold_block(system, actor);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_event_slots *slots = &actor->event_block->slots;
+    ta_event_retain(&accepted, &slots->external_event);
+    slots->external = TA_EXTERNAL_WAITING;
     actor->macrostep = true;
     ta_actor_touch(actor);
     actor->record.residency = TA_ACTOR_RUNNING;
@@ -773,17 +781,29 @@ static const ta_event *ta_actor_paused_event(const ta_actor *actor) {
     if (!actor->macrostep) {
         return NULL;
     }
-    return actor->slots.external == TA_EXTERNAL_NONE ? NULL : &actor->slots.external_event;
+    return ta_actor_external_event(actor);
+}
+
+const ta_event *ta_actor_external_event(const ta_actor *actor) {
+    const ta_event_block *block = actor->event_block;
+    if (block == NULL || block->slots.external == TA_EXTERNAL_NONE) {
+        return NULL;
+    }
+    return &block->slots.external_event;
 }
 
 const ta_event *ta_actor_bound_event(const ta_actor *actor) {
-    switch ((ta_event_binding)actor->slots.bound) {
+    const ta_event_block *block = actor->event_block;
+    if (block == NULL) {
+        return NULL;
+    }
+    switch ((ta_event_binding)block->slots.bound) {
     case TA_BOUND_EXTERNAL:
-        return &actor->slots.external_event;
+        return &block->slots.external_event;
     case TA_BOUND_INTERNAL:
-        return &actor->event_block->events[0].event;
+        return &block->events[0].event;
     case TA_BOUND_KEPT:
-        return &actor->slots.kept_event;
+        return &block->slots.kept_event;
     case TA_BOUND_NONE:
     default:
         return NULL;
@@ -791,10 +811,11 @@ const ta_event *ta_actor_bound_event(const ta_actor *actor) {
 }
 
 uint32_t ta_actor_waiting_internal(const ta_actor *actor) {
-    if (actor->event_block == NULL) {
+    const ta_event_block *block = actor->event_block;
+    if (block == NULL) {
         return 0;
     }
-    return actor->event_block->count - (actor->slots.bound == TA_BOUND_INTERNAL ? 1u : 0u);
+    return block->count - (block->slots.bound == TA_BOUND_INTERNAL ? 1u : 0u);
 }
 
 static size_t ta_vec_bytes(const ta_vec *vec) {

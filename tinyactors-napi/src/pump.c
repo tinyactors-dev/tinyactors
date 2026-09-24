@@ -288,6 +288,10 @@ bool tna_pump_init(napi_env env, tna_napi_system *wrapper, napi_value facade, na
                   "createSystem: scheduling.resumeBudget, resumesPerTurn, messageBudget and dueBudget must be at least 1");
         return false;
     }
+    /* A delivered event holds a core event block until its actor is resumed,
+     * the next turn at the latest, so core caches a turn's worth of them and
+     * delivery makes no allocator call once warm (core ADR 0069). */
+    (void)ta_system_set_event_block_cache(wrapper->system->core, budgets->messages);
     if (tna_system_set_clock(wrapper->system, clock, initial) != TA_OK) {
         tna_throw(env, "invalid", "createSystem: cannot set the clock");
         return false;

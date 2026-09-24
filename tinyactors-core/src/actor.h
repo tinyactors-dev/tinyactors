@@ -35,20 +35,6 @@ typedef struct ta_activation_effects {
     ta_vec entries; /* ta_activation_effect, in authored order */
 } ta_activation_effects;
 
-/*
- * An actor's event block (ADR 0064, ADR 0069): its internal event queue,
- * oldest first, and the queue's capacity, in one allocation. It is lent to
- * an actor while it runs, and the actor keeps it only while events are
- * queued or a microstep is paused.
- */
-typedef struct ta_event_block {
-    uint32_t count;
-    uint32_t capacity;
-    /* While the block is in the system's cache, the next cached block. */
-    struct ta_event_block *next_cached;
-    ta_queued_event events[];
-} ta_event_block;
-
 /* Where an actor's external event is (ADR 0069). */
 typedef enum {
     TA_EXTERNAL_NONE = 0,
@@ -84,6 +70,23 @@ typedef struct {
     ta_event external_event;
     ta_event kept_event;
 } ta_event_slots;
+
+/*
+ * An actor's event block (ADR 0064, ADR 0069): its events and its internal
+ * queue, oldest first, with the queue's capacity, in one allocation. It is
+ * lent to an actor from ta_actor_deliver(), or the first internal event,
+ * until the macrostep ends; an actor keeps it longer only while events are
+ * queued, a microstep is paused, or it keeps an event. An idle actor that
+ * nobody invoked holds none, so it carries no event.
+ */
+typedef struct ta_event_block {
+    uint32_t count;
+    uint32_t capacity; /* 0 for a header only, which grows with the first internal event */
+    /* While the block is in the system's cache, the next cached block. */
+    struct ta_event_block *next_cached;
+    ta_event_slots slots;
+    ta_queued_event events[];
+} ta_event_block;
 
 /* Allocated only for actors that use one of these uncommon facilities. */
 typedef struct {
@@ -137,7 +140,6 @@ struct ta_actor {
     bool bootstrapped;
     bool macrostep;
     bool finished;
-    ta_event_slots slots;
     uint64_t next_send_id;
     /*
      * While the interpreter runs, the full active set it is updating (ancestors
@@ -197,8 +199,10 @@ void ta_actor_release_slot(ta_system *system, ta_actor_id id);
 ta_result ta_actor_directory_swap(ta_system *system, const ta_actor_directory_replace_params *params);
 ta_result ta_actor_directory_drop(ta_system *system, const ta_actor_directory_remove_params *params);
 
+/* The external event the actor holds, waiting or taken, or null. */
+const ta_event *ta_actor_external_event(const ta_actor *actor);
 /* The event `_event` names, or null (ADR 0069). The pointer is valid until
- * the actor's internal queue grows or the event is released. */
+ * the actor's event block grows or the event is released. */
 const ta_event *ta_actor_bound_event(const ta_actor *actor);
 /* Internal events waiting to be taken: the queue without a taken head. */
 uint32_t ta_actor_waiting_internal(const ta_actor *actor);

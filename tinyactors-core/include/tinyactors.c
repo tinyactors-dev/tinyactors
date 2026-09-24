@@ -1357,20 +1357,6 @@ typedef struct ta_activation_effects {
     ta_vec entries; /* ta_activation_effect, in authored order */
 } ta_activation_effects;
 
-/*
- * An actor's event block (ADR 0064, ADR 0069): its internal event queue,
- * oldest first, and the queue's capacity, in one allocation. It is lent to
- * an actor while it runs, and the actor keeps it only while events are
- * queued or a microstep is paused.
- */
-typedef struct ta_event_block {
-    uint32_t count;
-    uint32_t capacity;
-    /* While the block is in the system's cache, the next cached block. */
-    struct ta_event_block *next_cached;
-    ta_queued_event events[];
-} ta_event_block;
-
 /* Where an actor's external event is (ADR 0069). */
 typedef enum {
     TA_EXTERNAL_NONE = 0,
@@ -1406,6 +1392,23 @@ typedef struct {
     ta_event external_event;
     ta_event kept_event;
 } ta_event_slots;
+
+/*
+ * An actor's event block (ADR 0064, ADR 0069): its events and its internal
+ * queue, oldest first, with the queue's capacity, in one allocation. It is
+ * lent to an actor from ta_actor_deliver(), or the first internal event,
+ * until the macrostep ends; an actor keeps it longer only while events are
+ * queued, a microstep is paused, or it keeps an event. An idle actor that
+ * nobody invoked holds none, so it carries no event.
+ */
+typedef struct ta_event_block {
+    uint32_t count;
+    uint32_t capacity; /* 0 for a header only, which grows with the first internal event */
+    /* While the block is in the system's cache, the next cached block. */
+    struct ta_event_block *next_cached;
+    ta_event_slots slots;
+    ta_queued_event events[];
+} ta_event_block;
 
 /* Allocated only for actors that use one of these uncommon facilities. */
 typedef struct {
@@ -1459,7 +1462,6 @@ struct ta_actor {
     bool bootstrapped;
     bool macrostep;
     bool finished;
-    ta_event_slots slots;
     uint64_t next_send_id;
     /*
      * While the interpreter runs, the full active set it is updating (ancestors
@@ -1519,8 +1521,10 @@ TA_PRIVATE void ta_actor_release_slot(ta_system *system, ta_actor_id id);
 TA_PRIVATE ta_result ta_actor_directory_swap(ta_system *system, const ta_actor_directory_replace_params *params);
 TA_PRIVATE ta_result ta_actor_directory_drop(ta_system *system, const ta_actor_directory_remove_params *params);
 
+/* The external event the actor holds, waiting or taken, or null. */
+TA_PRIVATE const ta_event *ta_actor_external_event(const ta_actor *actor);
 /* The event `_event` names, or null (ADR 0069). The pointer is valid until
- * the actor's internal queue grows or the event is released. */
+ * the actor's event block grows or the event is released. */
 TA_PRIVATE const ta_event *ta_actor_bound_event(const ta_actor *actor);
 /* Internal events waiting to be taken: the queue without a taken head. */
 TA_PRIVATE uint32_t ta_actor_waiting_internal(const ta_actor *actor);
@@ -1730,6 +1734,9 @@ TA_PRIVATE void ta_interpreter_release_actor_state(ta_system *system, ta_actor *
 /* Frees cached event blocks until the cache holds no more than its limit
  * (ADR 0069); a limit of 0 frees them all, at teardown. */
 TA_PRIVATE void ta_interpreter_block_cache_trim(ta_system *system);
+/* Lends the actor an event block if it holds none: a cached one, else a
+ * header only. TA_ERR_NOMEM changes nothing (ADR 0069). */
+TA_PRIVATE ta_result ta_interpreter_hold_block(ta_system *system, ta_actor *actor);
 /* The bytes an event block with room for this many internal events takes. */
 TA_PRIVATE size_t ta_event_block_bytes(uint32_t capacity);
 
@@ -10047,7 +10054,7 @@ TA_API ta_result ta_actor_deliver(ta_system *system, ta_actor_id id, const ta_ev
     if (actor->finished) {
         return TA_ERR_DONE;
     }
-    if (actor->macrostep || actor->slots.external != TA_EXTERNAL_NONE) {
+    if (actor->macrostep || ta_actor_external_event(actor) != NULL) {
         return TA_ERR_BUSY;
     }
     ta_event accepted = *event;
@@ -10055,8 +10062,16 @@ TA_API ta_result ta_actor_deliver(ta_system *system, ta_actor_id id, const ta_ev
     if (result != TA_OK) {
         return result;
     }
-    ta_event_retain(&accepted, &actor->slots.external_event);
-    actor->slots.external = TA_EXTERNAL_WAITING;
+    /* The event lives in the actor's event block until its macrostep ends
+     * (ADR 0069): the only step here that can fail, and it changes nothing
+     * when it does. */
+    result = ta_interpreter_hold_block(system, actor);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_event_slots *slots = &actor->event_block->slots;
+    ta_event_retain(&accepted, &slots->external_event);
+    slots->external = TA_EXTERNAL_WAITING;
     actor->macrostep = true;
     ta_actor_touch(actor);
     actor->record.residency = TA_ACTOR_RUNNING;
@@ -10102,17 +10117,29 @@ static const ta_event *ta_actor_paused_event(const ta_actor *actor) {
     if (!actor->macrostep) {
         return NULL;
     }
-    return actor->slots.external == TA_EXTERNAL_NONE ? NULL : &actor->slots.external_event;
+    return ta_actor_external_event(actor);
+}
+
+TA_PRIVATE const ta_event *ta_actor_external_event(const ta_actor *actor) {
+    const ta_event_block *block = actor->event_block;
+    if (block == NULL || block->slots.external == TA_EXTERNAL_NONE) {
+        return NULL;
+    }
+    return &block->slots.external_event;
 }
 
 TA_PRIVATE const ta_event *ta_actor_bound_event(const ta_actor *actor) {
-    switch ((ta_event_binding)actor->slots.bound) {
+    const ta_event_block *block = actor->event_block;
+    if (block == NULL) {
+        return NULL;
+    }
+    switch ((ta_event_binding)block->slots.bound) {
     case TA_BOUND_EXTERNAL:
-        return &actor->slots.external_event;
+        return &block->slots.external_event;
     case TA_BOUND_INTERNAL:
-        return &actor->event_block->events[0].event;
+        return &block->events[0].event;
     case TA_BOUND_KEPT:
-        return &actor->slots.kept_event;
+        return &block->slots.kept_event;
     case TA_BOUND_NONE:
     default:
         return NULL;
@@ -10120,10 +10147,11 @@ TA_PRIVATE const ta_event *ta_actor_bound_event(const ta_actor *actor) {
 }
 
 TA_PRIVATE uint32_t ta_actor_waiting_internal(const ta_actor *actor) {
-    if (actor->event_block == NULL) {
+    const ta_event_block *block = actor->event_block;
+    if (block == NULL) {
         return 0;
     }
-    return actor->event_block->count - (actor->slots.bound == TA_BOUND_INTERNAL ? 1u : 0u);
+    return block->count - (block->slots.bound == TA_BOUND_INTERNAL ? 1u : 0u);
 }
 
 static size_t ta_vec_bytes(const ta_vec *vec) {
@@ -10662,6 +10690,22 @@ static void ta_image_retain(ta_session_image *image) {
     }
 }
 
+/* The actor's event slots, with only the events it holds (see below). */
+static ta_event_slots ta_image_slots(const ta_actor *actor) {
+    if (actor->event_block == NULL) {
+        return (ta_event_slots){0};
+    }
+    const ta_event_slots *slots = &actor->event_block->slots;
+    return (ta_event_slots){
+        .external = slots->external,
+        .bound = slots->bound,
+        .bound_before = slots->bound_before,
+        .has_kept = slots->has_kept,
+        .external_event = slots->external != TA_EXTERNAL_NONE ? slots->external_event : (ta_event){0},
+        .kept_event = slots->has_kept ? slots->kept_event : (ta_event){0},
+    };
+}
+
 TA_API ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_params *params) {
     if (system == NULL || params == NULL || params->out == NULL) {
         return TA_ERR_INVALID;
@@ -10700,14 +10744,7 @@ TA_API ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_para
          * takes, and later retains, detaches and releases, only what the
          * flags say the actor holds.
          */
-        .slots = {
-            .external = actor->slots.external,
-            .bound = actor->slots.bound,
-            .bound_before = actor->slots.bound_before,
-            .has_kept = actor->slots.has_kept,
-            .external_event = actor->slots.external != TA_EXTERNAL_NONE ? actor->slots.external_event : (ta_event){0},
-            .kept_event = actor->slots.has_kept ? actor->slots.kept_event : (ta_event){0},
-        },
+        .slots = ta_image_slots(actor),
         .next_send_id = actor->next_send_id,
         .has_parent = sparse != NULL && sparse->has_parent,
         .parent = sparse != NULL ? sparse->parent : (ta_actor_parent){0},
@@ -10833,8 +10870,10 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
             return result;
         }
     }
-    actor->slots.bound = image->slots.bound;
-    actor->slots.bound_before = image->slots.bound_before;
+    if (actor->event_block != NULL) {
+        actor->event_block->slots.bound = image->slots.bound;
+        actor->event_block->slots.bound_before = image->slots.bound_before;
+    }
     /*
      * Invoker service handles do not survive an image, so every invocation
      * that was active is retired and reported once, in the order it was
@@ -10964,26 +11003,34 @@ TA_API ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstr
     actor->finished = image->finished;
     actor->next_send_id = image->next_send_id;
     actor->session_epoch = image->source_epoch;
-    /* What `_event` names is restored with the queue it may point into. */
-    if (image->slots.external != TA_EXTERNAL_NONE) {
-        ta_event_retain(&image->slots.external_event, &actor->slots.external_event);
-        actor->slots.external = image->slots.external;
+    /* The events live in an event block (ADR 0069). What `_event` names is
+     * restored with the queue it may point into. */
+    ta_event_slots *slots = NULL;
+    if (image->slots.external != TA_EXTERNAL_NONE || image->slots.has_kept) {
+        result = ta_interpreter_hold_block(system, actor);
+        slots = result == TA_OK ? &actor->event_block->slots : NULL;
     }
-    if (image->slots.has_kept) {
-        ta_event_retain(&image->slots.kept_event, &actor->slots.kept_event);
-        actor->slots.has_kept = true;
+    if (slots != NULL && image->slots.external != TA_EXTERNAL_NONE) {
+        ta_event_retain(&image->slots.external_event, &slots->external_event);
+        slots->external = image->slots.external;
+    }
+    if (slots != NULL && image->slots.has_kept) {
+        ta_event_retain(&image->slots.kept_event, &slots->kept_event);
+        slots->has_kept = true;
     }
     /*
      * The image carries detached addresses; the actor holds this system's
      * handles (ADR 0065). A failure leaves a detached one behind, which
      * releasing ignores.
      */
-    result = ta_actor_ref_localize(system, &actor->record.self);
-    if (result == TA_OK && actor->slots.external != TA_EXTERNAL_NONE) {
-        result = ta_image_localize_origin(system, &actor->slots.external_event);
+    if (result == TA_OK) {
+        result = ta_actor_ref_localize(system, &actor->record.self);
     }
-    if (result == TA_OK && actor->slots.has_kept) {
-        result = ta_image_localize_origin(system, &actor->slots.kept_event);
+    if (result == TA_OK && slots != NULL && slots->external != TA_EXTERNAL_NONE) {
+        result = ta_image_localize_origin(system, &slots->external_event);
+    }
+    if (result == TA_OK && slots != NULL && slots->has_kept) {
+        result = ta_image_localize_origin(system, &slots->kept_event);
     }
     if (result == TA_OK && image->paused != NULL) {
         result = ta_image_restore_pause(image, actor, system);
@@ -11792,7 +11839,20 @@ static ta_event_block *ta_block_take(ta_system *system, uint32_t capacity) {
     }
     block->count = 0;
     block->next_cached = NULL;
+    block->slots = (ta_event_slots){0};
     return block;
+}
+
+TA_PRIVATE ta_result ta_interpreter_hold_block(ta_system *system, ta_actor *actor) {
+    if (actor->event_block == NULL) {
+        /* A delivered event needs no queue room: a new block is a header
+         * only, which grows when the first internal event is queued. */
+        actor->event_block = ta_block_take(system, 0);
+        if (actor->event_block == NULL) {
+            return TA_ERR_NOMEM;
+        }
+    }
+    return TA_OK;
 }
 
 /*
@@ -11830,14 +11890,15 @@ static ta_result ta_queue_room(ta_system *system, ta_actor *actor) {
 }
 
 /*
- * Gives an actor's block back when the actor no longer needs it: its queue
- * is empty and no microstep is paused. It goes to the system's cache, or is
+ * Gives an actor's block back when the actor no longer needs it: it holds
+ * no event and no microstep is paused. It goes to the system's cache, or is
  * freed when the cache is full or the block grew past the first capacity.
  * Cannot fail.
  */
 static void ta_block_settle(ta_system *system, ta_actor *actor) {
     ta_event_block *block = actor->event_block;
-    if (block == NULL || block->count != 0 || (actor->sparse != NULL && actor->sparse->paused != NULL)) {
+    if (block == NULL || block->count != 0 || block->slots.external != TA_EXTERNAL_NONE || block->slots.has_kept ||
+        (actor->sparse != NULL && actor->sparse->paused != NULL)) {
         return;
     }
     actor->event_block = NULL;
@@ -11888,8 +11949,7 @@ static ta_event ta_queue_pop(ta_actor *actor) {
 }
 
 /* Makes `event`, and its references, the kept event (ADR 0069). */
-static void ta_keep_event(ta_actor *actor, const ta_event *event) {
-    ta_event_slots *slots = &actor->slots;
+static void ta_keep_event(ta_event_slots *slots, const ta_event *event) {
     if (slots->has_kept) {
         ta_event_release(&slots->kept_event);
     }
@@ -11898,15 +11958,16 @@ static void ta_keep_event(ta_actor *actor, const ta_event *event) {
 }
 
 /*
- * Binds `_event` to an event just taken (SCXML 5.10.1). Nothing moves but a
- * taken queue head, which leaves the queue for the kept slot, so that a
- * retry can bind it again.
+ * Binds `_event` to an event just taken (SCXML 5.10.1); the actor holds a
+ * block, since it holds the event. Nothing moves but a taken queue head,
+ * which leaves the queue for the kept slot, so that a retry can bind it
+ * again.
  */
 static void ta_bind_event(ta_actor *actor, ta_event_binding taken) {
-    ta_event_slots *slots = &actor->slots;
+    ta_event_slots *slots = &actor->event_block->slots;
     if (slots->bound == TA_BOUND_INTERNAL) {
         ta_event head = ta_queue_pop(actor);
-        ta_keep_event(actor, &head);
+        ta_keep_event(slots, &head);
         slots->bound = TA_BOUND_KEPT;
     }
     slots->bound_before = slots->bound;
@@ -11921,7 +11982,7 @@ static void ta_bind_event(ta_actor *actor, ta_event_binding taken) {
  * never left its slot or the queue, so only the marks go back.
  */
 static void ta_unbind_event(ta_actor *actor) {
-    ta_event_slots *slots = &actor->slots;
+    ta_event_slots *slots = &actor->event_block->slots;
     if (slots->bound == TA_BOUND_EXTERNAL) {
         slots->external = TA_EXTERNAL_WAITING;
     }
@@ -11931,11 +11992,15 @@ static void ta_unbind_event(ta_actor *actor) {
 /* Releases every event the actor holds: its queue, taken head included,
  * its kept event and its external event. */
 static void ta_release_events(ta_actor *actor) {
-    ta_event_slots *slots = &actor->slots;
-    while (actor->event_block != NULL && actor->event_block->count != 0) {
+    ta_event_block *block = actor->event_block;
+    if (block == NULL) {
+        return;
+    }
+    while (block->count != 0) {
         ta_event event = ta_queue_pop(actor);
         ta_event_release(&event);
     }
+    ta_event_slots *slots = &block->slots;
     if (slots->has_kept) {
         ta_event_release(&slots->kept_event);
         slots->has_kept = false;
@@ -11949,21 +12014,23 @@ static void ta_release_events(ta_actor *actor) {
 
 /*
  * A macrostep ended with no internal event waiting. An invoked session keeps
- * the event `_event` names, since cancelling it runs its <onexit> between
- * its macrosteps (SCXML 6.4); any other session lets go of every event.
+ * the event `_event` names, and so its block, since cancelling it runs its
+ * <onexit> between its macrosteps (SCXML 6.4); any other session lets go of
+ * every event, and its block goes back when the run returns.
  */
 static void ta_end_macrostep_events(ta_actor *actor) {
-    ta_event_slots *slots = &actor->slots;
-    if (actor->sparse == NULL || !actor->sparse->has_parent) {
+    ta_event_block *block = actor->event_block;
+    if (block == NULL || actor->sparse == NULL || !actor->sparse->has_parent) {
         ta_release_events(actor);
         return;
     }
+    ta_event_slots *slots = &block->slots;
     if (slots->bound == TA_BOUND_INTERNAL) {
         ta_event head = ta_queue_pop(actor);
-        ta_keep_event(actor, &head);
+        ta_keep_event(slots, &head);
         slots->bound = TA_BOUND_KEPT;
     } else if (slots->bound == TA_BOUND_EXTERNAL) {
-        ta_keep_event(actor, &slots->external_event);
+        ta_keep_event(slots, &slots->external_event);
         slots->external = TA_EXTERNAL_NONE;
         slots->bound = TA_BOUND_KEPT;
     }
@@ -14169,7 +14236,7 @@ static ta_result ta_interpreter_run(ta_system *system, ta_actor *actor, const ta
             break; /* Invoke: the macrostep ended, so start its states' invocations. */
         } else if (ta_interpreter_internal_pending(actor)) {
             continue;
-        } else if (actor->slots.external == TA_EXTERNAL_WAITING) {
+        } else if (actor->event_block != NULL && actor->event_block->slots.external == TA_EXTERNAL_WAITING) {
             /* It stays in its slot, where inspection reports it, until the
              * macrostep ends. */
             ta_bind_event(actor, TA_BOUND_EXTERNAL);

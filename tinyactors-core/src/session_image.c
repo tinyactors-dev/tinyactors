@@ -322,6 +322,22 @@ static void ta_image_retain(ta_session_image *image) {
     }
 }
 
+/* The actor's event slots, with only the events it holds (see below). */
+static ta_event_slots ta_image_slots(const ta_actor *actor) {
+    if (actor->event_block == NULL) {
+        return (ta_event_slots){0};
+    }
+    const ta_event_slots *slots = &actor->event_block->slots;
+    return (ta_event_slots){
+        .external = slots->external,
+        .bound = slots->bound,
+        .bound_before = slots->bound_before,
+        .has_kept = slots->has_kept,
+        .external_event = slots->external != TA_EXTERNAL_NONE ? slots->external_event : (ta_event){0},
+        .kept_event = slots->has_kept ? slots->kept_event : (ta_event){0},
+    };
+}
+
 ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_params *params) {
     if (system == NULL || params == NULL || params->out == NULL) {
         return TA_ERR_INVALID;
@@ -360,14 +376,7 @@ ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_params *par
          * takes, and later retains, detaches and releases, only what the
          * flags say the actor holds.
          */
-        .slots = {
-            .external = actor->slots.external,
-            .bound = actor->slots.bound,
-            .bound_before = actor->slots.bound_before,
-            .has_kept = actor->slots.has_kept,
-            .external_event = actor->slots.external != TA_EXTERNAL_NONE ? actor->slots.external_event : (ta_event){0},
-            .kept_event = actor->slots.has_kept ? actor->slots.kept_event : (ta_event){0},
-        },
+        .slots = ta_image_slots(actor),
         .next_send_id = actor->next_send_id,
         .has_parent = sparse != NULL && sparse->has_parent,
         .parent = sparse != NULL ? sparse->parent : (ta_actor_parent){0},
@@ -493,8 +502,10 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
             return result;
         }
     }
-    actor->slots.bound = image->slots.bound;
-    actor->slots.bound_before = image->slots.bound_before;
+    if (actor->event_block != NULL) {
+        actor->event_block->slots.bound = image->slots.bound;
+        actor->event_block->slots.bound_before = image->slots.bound_before;
+    }
     /*
      * Invoker service handles do not survive an image, so every invocation
      * that was active is retired and reported once, in the order it was
@@ -624,26 +635,34 @@ ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_par
     actor->finished = image->finished;
     actor->next_send_id = image->next_send_id;
     actor->session_epoch = image->source_epoch;
-    /* What `_event` names is restored with the queue it may point into. */
-    if (image->slots.external != TA_EXTERNAL_NONE) {
-        ta_event_retain(&image->slots.external_event, &actor->slots.external_event);
-        actor->slots.external = image->slots.external;
+    /* The events live in an event block (ADR 0069). What `_event` names is
+     * restored with the queue it may point into. */
+    ta_event_slots *slots = NULL;
+    if (image->slots.external != TA_EXTERNAL_NONE || image->slots.has_kept) {
+        result = ta_interpreter_hold_block(system, actor);
+        slots = result == TA_OK ? &actor->event_block->slots : NULL;
     }
-    if (image->slots.has_kept) {
-        ta_event_retain(&image->slots.kept_event, &actor->slots.kept_event);
-        actor->slots.has_kept = true;
+    if (slots != NULL && image->slots.external != TA_EXTERNAL_NONE) {
+        ta_event_retain(&image->slots.external_event, &slots->external_event);
+        slots->external = image->slots.external;
+    }
+    if (slots != NULL && image->slots.has_kept) {
+        ta_event_retain(&image->slots.kept_event, &slots->kept_event);
+        slots->has_kept = true;
     }
     /*
      * The image carries detached addresses; the actor holds this system's
      * handles (ADR 0065). A failure leaves a detached one behind, which
      * releasing ignores.
      */
-    result = ta_actor_ref_localize(system, &actor->record.self);
-    if (result == TA_OK && actor->slots.external != TA_EXTERNAL_NONE) {
-        result = ta_image_localize_origin(system, &actor->slots.external_event);
+    if (result == TA_OK) {
+        result = ta_actor_ref_localize(system, &actor->record.self);
     }
-    if (result == TA_OK && actor->slots.has_kept) {
-        result = ta_image_localize_origin(system, &actor->slots.kept_event);
+    if (result == TA_OK && slots != NULL && slots->external != TA_EXTERNAL_NONE) {
+        result = ta_image_localize_origin(system, &slots->external_event);
+    }
+    if (result == TA_OK && slots != NULL && slots->has_kept) {
+        result = ta_image_localize_origin(system, &slots->kept_event);
     }
     if (result == TA_OK && image->paused != NULL) {
         result = ta_image_restore_pause(image, actor, system);

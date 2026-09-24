@@ -84,6 +84,9 @@ void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor);
 /* Frees cached event blocks until the cache holds no more than its limit
  * (ADR 0069); a limit of 0 frees them all, at teardown. */
 void ta_interpreter_block_cache_trim(ta_system *system);
+/* Lends the actor an event block if it holds none: a cached one, else a
+ * header only. TA_ERR_NOMEM changes nothing (ADR 0069). */
+ta_result ta_interpreter_hold_block(ta_system *system, ta_actor *actor);
 /* The bytes an event block with room for this many internal events takes. */
 size_t ta_event_block_bytes(uint32_t capacity);
 

@@ -127,7 +127,20 @@ static ta_event_block *ta_block_take(ta_system *system, uint32_t capacity) {
     }
     block->count = 0;
     block->next_cached = NULL;
+    block->slots = (ta_event_slots){0};
     return block;
+}
+
+ta_result ta_interpreter_hold_block(ta_system *system, ta_actor *actor) {
+    if (actor->event_block == NULL) {
+        /* A delivered event needs no queue room: a new block is a header
+         * only, which grows when the first internal event is queued. */
+        actor->event_block = ta_block_take(system, 0);
+        if (actor->event_block == NULL) {
+            return TA_ERR_NOMEM;
+        }
+    }
+    return TA_OK;
 }
 
 /*
@@ -165,14 +178,15 @@ static ta_result ta_queue_room(ta_system *system, ta_actor *actor) {
 }
 
 /*
- * Gives an actor's block back when the actor no longer needs it: its queue
- * is empty and no microstep is paused. It goes to the system's cache, or is
+ * Gives an actor's block back when the actor no longer needs it: it holds
+ * no event and no microstep is paused. It goes to the system's cache, or is
  * freed when the cache is full or the block grew past the first capacity.
  * Cannot fail.
  */
 static void ta_block_settle(ta_system *system, ta_actor *actor) {
     ta_event_block *block = actor->event_block;
-    if (block == NULL || block->count != 0 || (actor->sparse != NULL && actor->sparse->paused != NULL)) {
+    if (block == NULL || block->count != 0 || block->slots.external != TA_EXTERNAL_NONE || block->slots.has_kept ||
+        (actor->sparse != NULL && actor->sparse->paused != NULL)) {
         return;
     }
     actor->event_block = NULL;
@@ -223,8 +237,7 @@ static ta_event ta_queue_pop(ta_actor *actor) {
 }
 
 /* Makes `event`, and its references, the kept event (ADR 0069). */
-static void ta_keep_event(ta_actor *actor, const ta_event *event) {
-    ta_event_slots *slots = &actor->slots;
+static void ta_keep_event(ta_event_slots *slots, const ta_event *event) {
     if (slots->has_kept) {
         ta_event_release(&slots->kept_event);
     }
@@ -233,15 +246,16 @@ static void ta_keep_event(ta_actor *actor, const ta_event *event) {
 }
 
 /*
- * Binds `_event` to an event just taken (SCXML 5.10.1). Nothing moves but a
- * taken queue head, which leaves the queue for the kept slot, so that a
- * retry can bind it again.
+ * Binds `_event` to an event just taken (SCXML 5.10.1); the actor holds a
+ * block, since it holds the event. Nothing moves but a taken queue head,
+ * which leaves the queue for the kept slot, so that a retry can bind it
+ * again.
  */
 static void ta_bind_event(ta_actor *actor, ta_event_binding taken) {
-    ta_event_slots *slots = &actor->slots;
+    ta_event_slots *slots = &actor->event_block->slots;
     if (slots->bound == TA_BOUND_INTERNAL) {
         ta_event head = ta_queue_pop(actor);
-        ta_keep_event(actor, &head);
+        ta_keep_event(slots, &head);
         slots->bound = TA_BOUND_KEPT;
     }
     slots->bound_before = slots->bound;
@@ -256,7 +270,7 @@ static void ta_bind_event(ta_actor *actor, ta_event_binding taken) {
  * never left its slot or the queue, so only the marks go back.
  */
 static void ta_unbind_event(ta_actor *actor) {
-    ta_event_slots *slots = &actor->slots;
+    ta_event_slots *slots = &actor->event_block->slots;
     if (slots->bound == TA_BOUND_EXTERNAL) {
         slots->external = TA_EXTERNAL_WAITING;
     }
@@ -266,11 +280,15 @@ static void ta_unbind_event(ta_actor *actor) {
 /* Releases every event the actor holds: its queue, taken head included,
  * its kept event and its external event. */
 static void ta_release_events(ta_actor *actor) {
-    ta_event_slots *slots = &actor->slots;
-    while (actor->event_block != NULL && actor->event_block->count != 0) {
+    ta_event_block *block = actor->event_block;
+    if (block == NULL) {
+        return;
+    }
+    while (block->count != 0) {
         ta_event event = ta_queue_pop(actor);
         ta_event_release(&event);
     }
+    ta_event_slots *slots = &block->slots;
     if (slots->has_kept) {
         ta_event_release(&slots->kept_event);
         slots->has_kept = false;
@@ -284,21 +302,23 @@ static void ta_release_events(ta_actor *actor) {
 
 /*
  * A macrostep ended with no internal event waiting. An invoked session keeps
- * the event `_event` names, since cancelling it runs its <onexit> between
- * its macrosteps (SCXML 6.4); any other session lets go of every event.
+ * the event `_event` names, and so its block, since cancelling it runs its
+ * <onexit> between its macrosteps (SCXML 6.4); any other session lets go of
+ * every event, and its block goes back when the run returns.
  */
 static void ta_end_macrostep_events(ta_actor *actor) {
-    ta_event_slots *slots = &actor->slots;
-    if (actor->sparse == NULL || !actor->sparse->has_parent) {
+    ta_event_block *block = actor->event_block;
+    if (block == NULL || actor->sparse == NULL || !actor->sparse->has_parent) {
         ta_release_events(actor);
         return;
     }
+    ta_event_slots *slots = &block->slots;
     if (slots->bound == TA_BOUND_INTERNAL) {
         ta_event head = ta_queue_pop(actor);
-        ta_keep_event(actor, &head);
+        ta_keep_event(slots, &head);
         slots->bound = TA_BOUND_KEPT;
     } else if (slots->bound == TA_BOUND_EXTERNAL) {
-        ta_keep_event(actor, &slots->external_event);
+        ta_keep_event(slots, &slots->external_event);
         slots->external = TA_EXTERNAL_NONE;
         slots->bound = TA_BOUND_KEPT;
     }
@@ -2504,7 +2524,7 @@ static ta_result ta_interpreter_run(ta_system *system, ta_actor *actor, const ta
             break; /* Invoke: the macrostep ended, so start its states' invocations. */
         } else if (ta_interpreter_internal_pending(actor)) {
             continue;
-        } else if (actor->slots.external == TA_EXTERNAL_WAITING) {
+        } else if (actor->event_block != NULL && actor->event_block->slots.external == TA_EXTERNAL_WAITING) {
             /* It stays in its slot, where inspection reports it, until the
              * macrostep ends. */
             ta_bind_event(actor, TA_BOUND_EXTERNAL);

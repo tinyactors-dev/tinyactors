@@ -328,6 +328,15 @@ static void test_delivery(void) {
     CHECK(ta_actor_deliver(system, actor, &bad) == TA_ERR_INVALID);
     bad.origin.as.io.processor = request;
     ta_event_release(&bad);
+    /* A delivered event lives in an event block (ADR 0069): one plain
+     * delivery leaves a block in the system's cache, so the counts below
+     * see only the origin. */
+    ta_event warm = { .name = event_name(system, "ping"), .type = TA_EVENT_EXTERNAL,
+                      .invoke_id = TA_INVOKE_ID_NONE };
+    ta_run_status status = TA_RUN_ERROR;
+    CHECK(ta_actor_deliver(system, actor, &warm) == TA_OK);
+    CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
+          TA_OK);
     long before = live_blocks;
 
     /* The actor holds the origin after the host lets go; destroy gives it back. */
@@ -337,7 +346,6 @@ static void test_delivery(void) {
     CHECK(live_blocks == before + 1);
     ta_actor_inspection inspection;
     CHECK(ta_actor_inspect(system, actor, &inspection) == TA_OK);
-    ta_run_status status = TA_RUN_ERROR;
     CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
           TA_OK);
     CHECK(status == TA_RUN_STABLE);
@@ -358,7 +366,8 @@ static void test_delivery(void) {
     ta_event_release(&late);
     CHECK(live_blocks == finished);
     CHECK(ta_actor_destroy(system, actor) == TA_OK);
-    CHECK(live_blocks == before);
+    /* Everything but the actor's own allocation (ADR 0063), counted in `before`. */
+    CHECK(live_blocks == before - 1);
     ta_system_destroy(system);
     CHECK(live_blocks == 0);
 }
