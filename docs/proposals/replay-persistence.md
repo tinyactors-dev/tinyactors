@@ -263,6 +263,13 @@ PostgreSQL, S3 and cold archives all need it.
 - How per-actor compaction into chunks works, and when it runs.
 - For several napi processes sharing PostgreSQL: how ownership, leases and
   fencing work, and how mail for an actor owned elsewhere is forwarded.
+  The `(address, seq)` key stops a second writer from forking the log, but
+  it does not stop a "zombie" process from acting while its commits fail.
+  Orleans concluded that leases are the only practical way to get a single
+  activation: a process gives up its actors when its lease expires, and
+  evicted processes are tombstoned
+  ([research](../research/actor-runtime-distribution-hindsight.md), Orleans
+  lesson 2).
 - The log records event data, so the log store needs a value codec. That is
   the same codec that network handoff and the database hosts need.
 - Whether eviction destroys the actor or unloads it, and what the directory

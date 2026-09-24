@@ -707,6 +707,17 @@ needs a core change):
 - the delayed-send owner heap grows by doubling, so with one timeout per
   actor one spawn copies up to 32 MiB at 4M actors (step 13).
 
+**SCXML conformance gaps** (found while checking the spec for the
+[distributed systems proposal](../docs/proposals/distributed-systems.md)):
+- event data sent between sessions is shared, not copied. SCXML C.1 says it
+  MUST be a copy, so that a mutation in one session never shows in the
+  other. The JavaScript data model shares objects by reference (ADR 0011).
+  Fixing it needs a core data-model operation for values leaving a session
+  (gap G4);
+- `ioProcessors` lists only the SCXML processor. SCXML §5.10 says it MUST
+  list every processor, including those registered with `registerIo`
+  (gap G2, needs core support).
+
 **Open decisions:**
 - importing XML charts whose expressions are ECMAScript source text
   (`ta_definition_import` stays skipped);

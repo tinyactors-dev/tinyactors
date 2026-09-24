@@ -43,3 +43,7 @@ so no outside code depends on an API or ABI staying the same.
 instructions: do not implement anything from a proposal unless asked to.
 Where a proposal disagrees with an ADR or a roadmap, the ADR or roadmap wins.
 See `docs/proposals/README.md` for what each status means.
+
+`docs/research/` holds background research (what other projects did, with
+sources). Read it before repeating the same research. It is not a decision
+and not an instruction.

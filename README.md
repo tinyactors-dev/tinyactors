@@ -44,6 +44,8 @@ Under active development - breaking changes are made frequently to land on a goo
   Ruby driver.
 - `docs/proposals/` holds outlines of possible future work, such as new
   hosts. They are not plans or decisions; see its README.
+- `docs/research/` holds background research that informed the designs,
+  with sources, so it need not be repeated.
 
 Run `mise run build` to build both projects and `mise run test` to exercise the
 test-host protocol.
