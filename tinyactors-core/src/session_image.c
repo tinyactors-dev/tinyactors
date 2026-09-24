@@ -93,13 +93,76 @@ static ta_result ta_image_copy_address(ta_arena *arena, ta_actor_ref *ref) {
     return ta_actor_ref_detach(arena, ref);
 }
 
-static ta_result ta_image_copy_origin(ta_arena *arena, ta_event *event) {
+/*
+ * An I/O origin goes into the image as text (ADR 0068): the processor type
+ * and the URI, whatever its class. A closed scope, or a COMPUTED origin its
+ * processor cannot render, is stored as no origin. Nothing is retained.
+ */
+static ta_result ta_image_copy_io_origin(const ta_system *system, ta_arena *arena, ta_origin *origin) {
+    ta_str type = {0};
+    ta_str uri = {0};
+    ta_result result = ta_io_origin_type(system, origin, &type);
+    if (result == TA_OK) {
+        result = ta_io_origin_uri(system, &(ta_io_origin_render_params){
+                                              .origin = origin,
+                                              .arena = ta_arena_allocator(arena),
+                                              .out = &uri,
+                                          });
+    }
+    if (result == TA_ERR_NOT_FOUND) {
+        *origin = (ta_origin){ .kind = TA_ORIGIN_NONE };
+        return TA_OK;
+    }
+    ta_io_origin_entry *detached = NULL;
+    if (result == TA_OK) {
+        result = ta_io_origin_detach(arena, &(ta_io_origin_detach_params){ .type = type, .uri = uri, .out = &detached });
+    }
+    if (result != TA_OK) {
+        return result;
+    }
+    *origin = (ta_origin){ .kind = TA_ORIGIN_IO,
+                           .as.io = { .origin_class = TA_IO_ORIGIN_MESSAGE, .as.entry = detached } };
+    return TA_OK;
+}
+
+static ta_result ta_image_copy_origin(const ta_system *system, ta_arena *arena, ta_event *event) {
+    if (event->origin.kind == TA_ORIGIN_IO) {
+        return ta_image_copy_io_origin(system, arena, &event->origin);
+    }
     ta_actor_ref *origin = ta_event_origin_ref(event);
     return origin == NULL ? TA_OK : ta_actor_ref_detach(arena, origin);
 }
 
+/*
+ * A detached I/O origin becomes a MESSAGE origin of this system holding its
+ * URI. An unknown processor type leaves no origin: the event is delivered,
+ * and only a reply is lost.
+ */
+static ta_result ta_image_localize_io_origin(ta_system *system, ta_origin *origin) {
+    const ta_io_origin_entry *detached = origin->as.io.as.entry;
+    if (origin->as.io.origin_class != TA_IO_ORIGIN_MESSAGE || !ta_io_origin_entry_detached(detached)) {
+        return TA_OK;
+    }
+    ta_atom type = TA_ATOM_NONE;
+    uint32_t processor = 0;
+    if (ta_atom_find(&system->atoms, ta_io_origin_detached_type(detached), &type) != TA_OK ||
+        ta_system_find_io(system, type, &processor) != TA_OK || processor == 0) {
+        *origin = (ta_origin){ .kind = TA_ORIGIN_NONE };
+        return TA_OK;
+    }
+    return ta_io_origin_make(system, &(ta_io_origin_make_params){
+                                         .processor = processor,
+                                         .origin_class = TA_IO_ORIGIN_MESSAGE,
+                                         .uri = ta_io_origin_entry_uri(detached),
+                                         .out = origin,
+                                     });
+}
+
 /* Makes an event restored from an image hold this system's origin handle. */
 static ta_result ta_image_localize_origin(ta_system *system, ta_event *event) {
+    if (event->origin.kind == TA_ORIGIN_IO) {
+        return ta_image_localize_io_origin(system, &event->origin);
+    }
     ta_actor_ref *origin = ta_event_origin_ref(event);
     return origin == NULL ? TA_OK : ta_actor_ref_localize(system, origin);
 }
@@ -146,6 +209,7 @@ static size_t ta_image_measure(const ta_actor *actor) {
 /* Every arena allocation of a capture; nothing here retains anything. */
 static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
     ta_arena *arena = &image->arena;
+    const ta_system *system = actor->host_impl.system;
     const ta_actor_sparse_state *sparse = actor->sparse;
 
     image->session_storage = ta_arena_alloc(arena, actor->session_bytes, _Alignof(uint64_t));
@@ -160,13 +224,13 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
         result = ta_image_copy_address(arena, &image->self);
     }
     if (result == TA_OK) {
-        result = ta_image_copy_origin(arena, &image->external_event);
+        result = ta_image_copy_origin(system, arena, &image->external_event);
     }
     if (result == TA_OK) {
-        result = ta_image_copy_origin(arena, &image->macrostep_event);
+        result = ta_image_copy_origin(system, arena, &image->macrostep_event);
     }
     if (result == TA_OK) {
-        result = ta_image_copy_origin(arena, &image->current_event);
+        result = ta_image_copy_origin(system, arena, &image->current_event);
     }
     if (result != TA_OK) {
         return result;
@@ -181,7 +245,7 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
         }
         for (uint32_t index = 0; index < count; index += 1) {
             image->internal_events[index] = actor->internal_queue->events[index];
-            result = ta_image_copy_origin(arena, &image->internal_events[index].event);
+            result = ta_image_copy_origin(system, arena, &image->internal_events[index].event);
             if (result != TA_OK) {
                 return result;
             }

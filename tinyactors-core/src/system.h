@@ -8,6 +8,7 @@
 #include "builder.h"
 #include "event_name.h"
 #include "io.h"
+#include "io_origin.h"
 #include "invoke.h"
 #include "routing.h"
 #include "timer.h"
@@ -55,8 +56,13 @@ struct ta_system {
 
     ta_timer_heap timers;
 
+    /* The I/O processor registry (ADR 0068): registry index i is element i - 1; 0 is SCXML. */
     ta_vec io_processors; /* ta_io_registration */
+    /* Invokers, whose element index is their registry index. */
     ta_vec invokers;      /* ta_invoker_registration */
+    /* Stored URIs of SCOPED and MESSAGE I/O origins (ADR 0068). */
+    ta_io_origin_table io_scopes;
+    ta_io_origin_table io_messages;
 
     ta_actor_directory directory;
     ta_external_event_router external_events;
@@ -80,5 +86,12 @@ struct ta_system {
 ta_definition *ta_system_definition(const ta_system *system, ta_definition_id id);
 /* Frees a registered definition and its slot; no actor may use it. */
 void ta_system_free_definition(ta_system *system, ta_definition *definition);
-const ta_io *ta_system_find_io(const ta_system *system, ta_atom type);
+/* The adapter registered for `type`, or null (not for the SCXML processor). */
+const ta_io *ta_system_io_of(const ta_system *system, ta_atom type);
+/* The registration at registry index `index`, or null; index 0 (SCXML) has none. */
+const ta_io_registration *ta_system_io_at(const ta_system *system, uint32_t index);
+/* The registry index of the invoker for `type`; UINT32_MAX when none. */
+uint32_t ta_system_invoker_index(const ta_system *system, ta_atom type);
+/* The type of the invoker at registry index `index`; TA_ATOM_NONE when none. */
+ta_atom ta_system_invoker_type(const ta_system *system, uint32_t index);
 bool ta_system_is_scxml_io(const ta_system *system, ta_atom type);

@@ -96,6 +96,18 @@ TA_PRIVATE void ta_text_put(ta_text_writer *writer, ta_str text);
 TA_PRIVATE void ta_text_put_u64(ta_text_writer *writer, uint64_t value);
 /* NUL-terminates; TA_ERR_NOMEM (and nothing useful written) when it did not fit. */
 TA_PRIVATE ta_result ta_text_finish(ta_text_writer *writer, uint32_t *needed);
+/*
+ * Writes text of unknown length into memory from `allocator`: `write` runs
+ * once to measure and once to fill. It answers false when there is no text,
+ * which becomes TA_ERR_NOT_FOUND.
+ */
+typedef bool (*ta_text_write_fn)(const void *context, ta_text_writer *writer);
+typedef struct {
+    ta_text_write_fn write;
+    const void *context;
+    ta_str *out;
+} ta_text_render_params;
+TA_PRIVATE ta_result ta_text_render(ta_allocator allocator, const ta_text_render_params *params);
 TA_PRIVATE inline ta_str ta_str_from_cstr(const char *text) {
     ta_str out = { .ptr = text, .len = 0 };
     while (text[out.len] != '\0') {
@@ -240,6 +252,80 @@ TA_PRIVATE ta_result ta_address_table_intern(ta_address_table *table, const ta_a
  */
 TA_PRIVATE ta_result ta_address_detach(ta_arena *arena, const ta_address *address, ta_address **out);
 TA_PRIVATE bool ta_address_in(const ta_address *address, const ta_address_table *table);
+
+
+
+/*
+ * Stored URIs of I/O origins (ADR 0068): SCOPED origins name a record in the
+ * system's scope table by index and generation; MESSAGE origins point at a
+ * reference-counted record in the entry table. Records are fixed-size, live
+ * in pages that never move, and are reused through a free list, so a URI of
+ * up to TA_IO_ORIGIN_INLINE bytes costs no allocation after warm-up.
+ */
+#define TA_IO_ORIGIN_INLINE 48u
+#define TA_IO_ORIGIN_PAGE 256u
+
+typedef struct ta_io_origin_table ta_io_origin_table;
+
+struct ta_io_origin_entry {
+    /* MESSAGE: references held by events. SCOPED: the record's own index. */
+    uint32_t refs;
+    /* SCOPED: incremented when the scope closes, so stale handles miss. */
+    uint32_t generation;
+    /* The owning table; null for a detached copy in a session image. */
+    ta_io_origin_table *table;
+    /* The processor's registry index; unused in a detached copy. */
+    uint32_t processor;
+    /* The URI's length; UINT32_MAX while the record is free. */
+    uint32_t length;
+    /* A URI longer than the inline buffer; the next free record while free. */
+    char *spill;
+    /* The URI when it fits; a detached copy keeps its processor type text here. */
+    char text[TA_IO_ORIGIN_INLINE];
+};
+
+struct ta_io_origin_table {
+    ta_allocator allocator;
+    /* A scope table keeps each record's index in `refs`; an entry table counts references there. */
+    bool scoped;
+    ta_vec pages; /* ta_io_origin_entry *, TA_IO_ORIGIN_PAGE records each */
+    uint32_t issued;
+    uint32_t live;
+    ta_io_origin_entry *free;
+};
+
+TA_PRIVATE void ta_io_origin_table_init(ta_io_origin_table *table, ta_allocator allocator, bool scoped);
+TA_PRIVATE void ta_io_origin_table_destroy(ta_io_origin_table *table);
+
+/* A live record holding a copy of `uri`, with its index in `*index`; null when out of memory. */
+typedef struct {
+    uint32_t processor;
+    ta_str uri;
+    uint32_t *index;
+} ta_io_origin_take_params;
+TA_PRIVATE ta_io_origin_entry *ta_io_origin_take(ta_io_origin_table *table, const ta_io_origin_take_params *params);
+/* Frees a record's spill and returns it to its table's free list. */
+TA_PRIVATE void ta_io_origin_give(ta_io_origin_entry *entry);
+/* The live record at `index`, or null. */
+TA_PRIVATE ta_io_origin_entry *ta_io_origin_at(const ta_io_origin_table *table, uint32_t index);
+
+/* MESSAGE references; both ignore null and detached records. */
+TA_PRIVATE void ta_io_origin_entry_retain(ta_io_origin_entry *entry);
+TA_PRIVATE void ta_io_origin_entry_release(ta_io_origin_entry *entry);
+
+/* The stored URI. */
+TA_PRIVATE ta_str ta_io_origin_entry_uri(const ta_io_origin_entry *entry);
+
+/* A detached copy for a session image: the processor type text and the URI, both in `arena`. */
+typedef struct {
+    ta_str type;
+    ta_str uri;
+    ta_io_origin_entry **out;
+} ta_io_origin_detach_params;
+TA_PRIVATE ta_result ta_io_origin_detach(ta_arena *arena, const ta_io_origin_detach_params *params);
+TA_PRIVATE bool ta_io_origin_entry_detached(const ta_io_origin_entry *entry);
+/* The processor type text of a detached copy. */
+TA_PRIVATE ta_str ta_io_origin_detached_type(const ta_io_origin_entry *entry);
 
 
 
@@ -750,6 +836,23 @@ typedef struct {
     ta_io io;
 } ta_io_registration;
 
+/*
+ * Rendering origins (ADR 0068). `session_id` and `address` describe the
+ * session the origin was delivered to, for a COMPUTED origin's `text`
+ * callback. Stored URIs come back as views; everything else is written into
+ * `arena`.
+ */
+typedef struct {
+    const ta_origin *origin;
+    uint64_t session_id;
+    ta_address *address;
+    ta_allocator arena;
+    ta_str *out;
+} ta_io_origin_render_params;
+TA_PRIVATE ta_result ta_io_origin_uri(const ta_system *system, const ta_io_origin_render_params *params);
+/* The processor type of an origin; TA_ERR_NOT_FOUND for none. */
+TA_PRIVATE ta_result ta_io_origin_type(const ta_system *system, const ta_origin *origin, ta_str *out);
+
 
 
 typedef struct {
@@ -778,6 +881,11 @@ typedef struct {
  * queues its error.communication.invoke.<id>.unavailable event.
  */
 TA_PRIVATE ta_result ta_invoke_report_lost(ta_system *system, ta_actor *actor, ta_invoke_id invoke);
+
+/* The origin of an event from `invoke`: its ID and its invoker's registry index (ADR 0068). */
+TA_PRIVATE ta_origin ta_invoke_origin_of(const ta_system *system, const ta_active_invoke *invoke);
+/* The origin of an event from the actor's active invocation `invoke`; false when there is none. */
+TA_PRIVATE bool ta_invoke_origin_for(const ta_system *system, const ta_actor *actor, ta_invoke_id invoke, ta_origin *out);
 
 
 
@@ -1455,8 +1563,13 @@ struct ta_system {
 
     ta_timer_heap timers;
 
+    /* The I/O processor registry (ADR 0068): registry index i is element i - 1; 0 is SCXML. */
     ta_vec io_processors; /* ta_io_registration */
+    /* Invokers, whose element index is their registry index. */
     ta_vec invokers;      /* ta_invoker_registration */
+    /* Stored URIs of SCOPED and MESSAGE I/O origins (ADR 0068). */
+    ta_io_origin_table io_scopes;
+    ta_io_origin_table io_messages;
 
     ta_actor_directory directory;
     ta_external_event_router external_events;
@@ -1480,7 +1593,14 @@ struct ta_system {
 TA_PRIVATE ta_definition *ta_system_definition(const ta_system *system, ta_definition_id id);
 /* Frees a registered definition and its slot; no actor may use it. */
 TA_PRIVATE void ta_system_free_definition(ta_system *system, ta_definition *definition);
-TA_PRIVATE const ta_io *ta_system_find_io(const ta_system *system, ta_atom type);
+/* The adapter registered for `type`, or null (not for the SCXML processor). */
+TA_PRIVATE const ta_io *ta_system_io_of(const ta_system *system, ta_atom type);
+/* The registration at registry index `index`, or null; index 0 (SCXML) has none. */
+TA_PRIVATE const ta_io_registration *ta_system_io_at(const ta_system *system, uint32_t index);
+/* The registry index of the invoker for `type`; UINT32_MAX when none. */
+TA_PRIVATE uint32_t ta_system_invoker_index(const ta_system *system, ta_atom type);
+/* The type of the invoker at registry index `index`; TA_ATOM_NONE when none. */
+TA_PRIVATE ta_atom ta_system_invoker_type(const ta_system *system, uint32_t index);
 TA_PRIVATE bool ta_system_is_scxml_io(const ta_system *system, ta_atom type);
 
 
@@ -1782,6 +1902,22 @@ TA_PRIVATE ta_result ta_text_finish(ta_text_writer *writer, uint32_t *needed) {
         return TA_ERR_NOMEM;
     }
     writer->buffer[writer->length] = '\0';
+    return TA_OK;
+}
+
+TA_PRIVATE ta_result ta_text_render(ta_allocator allocator, const ta_text_render_params *params) {
+    ta_text_writer measure = {0};
+    if (!params->write(params->context, &measure)) {
+        return TA_ERR_NOT_FOUND;
+    }
+    char *buffer = ta_mem_alloc(allocator, (size_t)measure.length + 1u, 1);
+    if (buffer == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    ta_text_writer writer = { .buffer = buffer, .capacity = measure.length + 1u };
+    (void)params->write(params->context, &writer);
+    buffer[measure.length] = '\0';
+    *params->out = (ta_str){ .ptr = buffer, .len = measure.length };
     return TA_OK;
 }
 
@@ -2461,6 +2597,192 @@ TA_API ta_actor_address ta_address_view(const ta_address *address) {
 }
 
 
+#define TA_IO_ORIGIN_FREE UINT32_MAX
+
+static ta_allocator_free_params ta_io_origin_page_layout(void) {
+    return (ta_allocator_free_params){ .size = (size_t)TA_IO_ORIGIN_PAGE * sizeof(ta_io_origin_entry),
+                                       .alignment = _Alignof(ta_io_origin_entry) };
+}
+
+TA_PRIVATE void ta_io_origin_table_init(ta_io_origin_table *table, ta_allocator allocator, bool scoped) {
+    *table = (ta_io_origin_table){ .allocator = allocator, .scoped = scoped };
+    ta_vec_init(&table->pages, allocator, TA_VEC_LAYOUT(ta_io_origin_entry *));
+}
+
+static void ta_io_origin_free_spill(ta_io_origin_entry *entry) {
+    if (entry->length > TA_IO_ORIGIN_INLINE && entry->spill != NULL) {
+        ta_mem_free(entry->table->allocator, entry->spill,
+                    &(ta_allocator_free_params){ .size = entry->length, .alignment = 1 });
+    }
+    entry->spill = NULL;
+}
+
+/*
+ * Frees every page and every spill still held. Live records at this point
+ * belong to events a host has not released yet; like addresses (ADR 0065),
+ * a host releases every event before destroying the system.
+ */
+TA_PRIVATE void ta_io_origin_table_destroy(ta_io_origin_table *table) {
+    for (uint32_t page = 0; page < table->pages.count; page += 1) {
+        ta_io_origin_entry *records = *(ta_io_origin_entry **)ta_vec_at(&table->pages, page);
+        uint32_t used = table->issued - page * TA_IO_ORIGIN_PAGE;
+        used = used > TA_IO_ORIGIN_PAGE ? TA_IO_ORIGIN_PAGE : used;
+        for (uint32_t index = 0; index < used; index += 1) {
+            if (records[index].length != TA_IO_ORIGIN_FREE) {
+                ta_io_origin_free_spill(&records[index]);
+            }
+        }
+        ta_allocator_free_params layout = ta_io_origin_page_layout();
+        ta_mem_free(table->allocator, records, &layout);
+    }
+    ta_vec_destroy(&table->pages);
+    *table = (ta_io_origin_table){0};
+}
+
+TA_PRIVATE ta_io_origin_entry *ta_io_origin_at(const ta_io_origin_table *table, uint32_t index) {
+    if (index >= table->issued) {
+        return NULL;
+    }
+    ta_io_origin_entry *records = *(ta_io_origin_entry **)ta_vec_at(&table->pages, index / TA_IO_ORIGIN_PAGE);
+    ta_io_origin_entry *entry = &records[index % TA_IO_ORIGIN_PAGE];
+    return entry->length == TA_IO_ORIGIN_FREE ? NULL : entry;
+}
+
+/* A record off the free list, or the next unissued one, with its index. */
+static ta_io_origin_entry *ta_io_origin_slot(ta_io_origin_table *table, uint32_t *index) {
+    if (table->free != NULL) {
+        ta_io_origin_entry *entry = table->free;
+        table->free = (ta_io_origin_entry *)(void *)entry->spill;
+        entry->spill = NULL;
+        *index = entry->refs;
+        return entry;
+    }
+    if (table->issued % TA_IO_ORIGIN_PAGE == 0) {
+        ta_allocator_free_params layout = ta_io_origin_page_layout();
+        ta_io_origin_entry *page = ta_mem_alloc(table->allocator, layout.size, layout.alignment);
+        if (page == NULL) {
+            return NULL;
+        }
+        if (ta_vec_push(&table->pages, &page) != TA_OK) {
+            ta_mem_free(table->allocator, page, &layout);
+            return NULL;
+        }
+    }
+    *index = table->issued;
+    ta_io_origin_entry *records = *(ta_io_origin_entry **)ta_vec_at(&table->pages, *index / TA_IO_ORIGIN_PAGE);
+    table->issued += 1;
+    ta_io_origin_entry *entry = &records[*index % TA_IO_ORIGIN_PAGE];
+    *entry = (ta_io_origin_entry){ .generation = 1, .table = table, .length = TA_IO_ORIGIN_FREE };
+    return entry;
+}
+
+/* Puts a record on the free list; a free record keeps its index in `refs`. */
+static void ta_io_origin_park(ta_io_origin_table *table, ta_io_origin_entry *entry, uint32_t index) {
+    entry->refs = index;
+    entry->length = TA_IO_ORIGIN_FREE;
+    entry->spill = (char *)(void *)table->free;
+    table->free = entry;
+}
+
+TA_PRIVATE ta_io_origin_entry *ta_io_origin_take(ta_io_origin_table *table, const ta_io_origin_take_params *params) {
+    uint32_t index = 0;
+    ta_io_origin_entry *entry = ta_io_origin_slot(table, &index);
+    if (entry == NULL) {
+        return NULL;
+    }
+    ta_str uri = params->uri;
+    char *spill = NULL;
+    if (uri.len > TA_IO_ORIGIN_INLINE) {
+        spill = ta_mem_alloc(table->allocator, uri.len, 1);
+        if (spill == NULL) {
+            ta_io_origin_park(table, entry, index);
+            return NULL;
+        }
+        ta_mem_copy(spill, uri.ptr, uri.len);
+    } else if (uri.len != 0) {
+        ta_mem_copy(entry->text, uri.ptr, uri.len);
+    }
+    entry->refs = table->scoped ? index : 1u;
+    entry->table = table;
+    entry->processor = params->processor;
+    entry->length = uri.len;
+    entry->spill = spill;
+    table->live += 1;
+    if (params->index != NULL) {
+        *params->index = index;
+    }
+    return entry;
+}
+
+TA_PRIVATE void ta_io_origin_give(ta_io_origin_entry *entry) {
+    if (entry == NULL || entry->table == NULL) {
+        return;
+    }
+    ta_io_origin_table *table = entry->table;
+    ta_io_origin_free_spill(entry);
+    entry->generation += 1;
+    table->live -= 1;
+    /* Only scopes are found by index; an entry's index is never read. */
+    ta_io_origin_park(table, entry, table->scoped ? entry->refs : 0u);
+}
+
+TA_PRIVATE void ta_io_origin_entry_retain(ta_io_origin_entry *entry) {
+    if (entry != NULL && entry->table != NULL) {
+        entry->refs += 1;
+    }
+}
+
+TA_PRIVATE void ta_io_origin_entry_release(ta_io_origin_entry *entry) {
+    if (entry == NULL || entry->table == NULL) {
+        return;
+    }
+    entry->refs -= 1;
+    if (entry->refs == 0) {
+        ta_io_origin_give(entry);
+    }
+}
+
+TA_PRIVATE ta_str ta_io_origin_entry_uri(const ta_io_origin_entry *entry) {
+    if (entry == NULL || entry->length == TA_IO_ORIGIN_FREE) {
+        return (ta_str){0};
+    }
+    if (entry->table == NULL || entry->length > TA_IO_ORIGIN_INLINE) {
+        return (ta_str){ .ptr = entry->spill, .len = entry->length };
+    }
+    return (ta_str){ .ptr = entry->text, .len = entry->length };
+}
+
+TA_PRIVATE ta_result ta_io_origin_detach(ta_arena *arena, const ta_io_origin_detach_params *params) {
+    ta_io_origin_entry *entry = ta_arena_alloc(arena, sizeof(ta_io_origin_entry), _Alignof(ta_io_origin_entry));
+    if (entry == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    ta_str type;
+    ta_str uri;
+    ta_result result = ta_arena_copy_str(arena, params->type, &type);
+    if (result == TA_OK) {
+        result = ta_arena_copy_str(arena, params->uri, &uri);
+    }
+    if (result != TA_OK) {
+        return result;
+    }
+    *entry = (ta_io_origin_entry){ .spill = (char *)uri.ptr, .length = uri.len };
+    ta_mem_copy(entry->text, &type, sizeof(type));
+    *params->out = entry;
+    return TA_OK;
+}
+
+TA_PRIVATE bool ta_io_origin_entry_detached(const ta_io_origin_entry *entry) {
+    return entry != NULL && entry->table == NULL;
+}
+
+TA_PRIVATE ta_str ta_io_origin_detached_type(const ta_io_origin_entry *entry) {
+    ta_str type;
+    ta_mem_copy(&type, entry->text, sizeof(type));
+    return type;
+}
+
+
 static uint32_t ta_session_hash(uint64_t id) {
     /* A 64-bit finalizer: runtime IDs differ mostly in their low slot bits. */
     id ^= id >> 33;
@@ -2863,6 +3185,8 @@ TA_API void ta_event_retain(const ta_event *event, ta_event *out) {
     ta_value_retain(&out->data);
     if (out->origin.kind == TA_ORIGIN_ACTOR) {
         ta_actor_ref_retain(&out->origin.as.actor);
+    } else if (out->origin.kind == TA_ORIGIN_IO && out->origin.as.io.origin_class == TA_IO_ORIGIN_MESSAGE) {
+        ta_io_origin_entry_retain(out->origin.as.io.as.entry);
     }
 }
 
@@ -2872,8 +3196,18 @@ TA_API void ta_event_release(ta_event *event) {
     }
     ta_value_release(&event->data);
     event->data = (ta_value){0};
-    if (event->origin.kind == TA_ORIGIN_ACTOR) {
-        ta_actor_ref_release(&event->origin.as.actor);
+    ta_origin_release(&event->origin);
+}
+
+TA_API void ta_origin_release(ta_origin *origin) {
+    if (origin == NULL) {
+        return;
+    }
+    if (origin->kind == TA_ORIGIN_ACTOR) {
+        ta_actor_ref_release(&origin->as.actor);
+    } else if (origin->kind == TA_ORIGIN_IO && origin->as.io.origin_class == TA_IO_ORIGIN_MESSAGE) {
+        ta_io_origin_entry_release(origin->as.io.as.entry);
+        origin->as.io.as.entry = NULL;
     }
 }
 
@@ -3691,109 +4025,174 @@ static bool ta_dm_host_valid(const ta_dm_host *host) {
     return host != NULL && host->impl != NULL && host->impl->actor != NULL && host->impl->system != NULL;
 }
 
-/*
- * The URI of an actor reference, written with the grammar core parses
- * (ADR 0044): a session URI for a runtime actor, a logical address for a
- * named one. A chart can send to whatever it reads here.
- */
-static bool ta_dm_write_actor_uri(const ta_system *system, ta_text_writer *writer, ta_actor_ref actor) {
-    ta_scxml_target target = { .kind = TA_SCXML_TARGET_ACTOR, .as.actor = actor };
-    return ta_scxml_uri_write(system, writer, &target);
+/* The scratch arena of the interpreter run that is calling the data model (ADR 0068). */
+static ta_allocator ta_dm_arena(const ta_dm_host *host) {
+    return ta_arena_allocator(&host->impl->system->scratch);
 }
 
-/* Writes one event field; false when the field has no value. */
-static bool ta_dm_write_event_field(const ta_dm_host *host, ta_dm_text_kind kind, ta_text_writer *writer) {
-    const ta_system *system = host->impl->system;
-    const ta_event *event = ta_dm_host_event(host);
+typedef struct {
+    const ta_dm_host *host;
+    ta_dm_text_kind kind;
+} ta_dm_field;
+
+/* Writes the fields that core renders as text; false when the field has no value. */
+static bool ta_dm_write_field(const void *context, ta_text_writer *writer) {
+    const ta_dm_field *field = context;
+    const ta_system *system = field->host->impl->system;
+    const ta_actor *actor = field->host->impl->actor;
+    if (field->kind == TA_DM_TEXT_SESSION_ID) {
+        ta_text_put_u64(writer, actor->session_id);
+        return true;
+    }
+    if (field->kind == TA_DM_TEXT_IO_LOCATION) {
+        /* The SCXML processor's location: the address a chart can send to (ADR 0044). */
+        ta_scxml_target target = { .kind = TA_SCXML_TARGET_ACTOR, .as.actor = actor->record.self };
+        return ta_scxml_uri_write(system, writer, &target);
+    }
+    const ta_event *event = ta_dm_host_event(field->host);
     if (event == NULL) {
         return false;
     }
-    switch (kind) {
-        case TA_DM_TEXT_EVENT_NAME: {
-            ta_atom segments[TA_EVENT_NAME_MAX_DEPTH];
-            uint32_t count = ta_event_name_segments(&system->event_names, event->name, segments);
-            for (uint32_t index = 0; index < count; index += 1) {
-                if (index != 0) {
-                    ta_text_put(writer, (ta_str){ .ptr = ".", .len = 1 });
-                }
-                ta_text_put(writer, ta_atom_text(&system->atoms, segments[index]));
-            }
-            return count != 0;
+    if (field->kind == TA_DM_TEXT_EVENT_SENDID) {
+        if (event->send_id == 0) {
+            return false;
         }
+        ta_send_id_write(system, event->send_id, writer);
+        return true;
+    }
+    ta_atom segments[TA_EVENT_NAME_MAX_DEPTH];
+    uint32_t count = ta_event_name_segments(&system->event_names, event->name, segments);
+    for (uint32_t index = 0; index < count; index += 1) {
+        if (index != 0) {
+            ta_text_put(writer, (ta_str){ .ptr = ".", .len = 1 });
+        }
+        ta_text_put(writer, ta_atom_text(&system->atoms, segments[index]));
+    }
+    return count != 0;
+}
+
+static ta_result ta_dm_render_field(const ta_dm_host *host, ta_dm_text_kind kind, ta_str *out) {
+    ta_dm_field field = { .host = host, .kind = kind };
+    return ta_text_render(ta_dm_arena(host),
+                          &(ta_text_render_params){ .write = ta_dm_write_field, .context = &field, .out = out });
+}
+
+static ta_address *ta_dm_address(const ta_actor *actor) {
+    return actor->record.self.kind == TA_ACTOR_REF_NAMED ? actor->record.self.as.named : NULL;
+}
+
+/* An event field that is stored or rendered from the event's origin. */
+static ta_result ta_dm_event_text(const ta_dm_host *host, ta_dm_text_kind kind, ta_str *out) {
+    const ta_system *system = host->impl->system;
+    const ta_actor *actor = host->impl->actor;
+    const ta_event *event = ta_dm_host_event(host);
+    if (event == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    switch (kind) {
         case TA_DM_TEXT_EVENT_TYPE: {
             static const char *const types[] = { "external", "internal", "platform" };
             if ((uint32_t)event->type >= TA_ARRAY_COUNT(types)) {
-                return false;
+                return TA_ERR_NOT_FOUND;
             }
-            ta_text_put(writer, ta_str_from_cstr(types[event->type]));
-            return true;
+            *out = ta_str_from_cstr(types[event->type]);
+            return TA_OK;
         }
-        case TA_DM_TEXT_EVENT_SENDID:
-            if (event->send_id == 0) {
-                return false;
-            }
-            ta_send_id_write(system, event->send_id, writer);
-            return true;
         case TA_DM_TEXT_EVENT_ORIGIN:
-            if (event->origin.kind == TA_ORIGIN_ACTOR) {
-                return ta_dm_write_actor_uri(system, writer, event->origin.as.actor);
-            }
-            if (event->origin.kind == TA_ORIGIN_INVOKE) {
-                ta_scxml_target target = { .kind = TA_SCXML_TARGET_INVOKE, .as.invoke = event->origin.as.invoke };
-                return ta_scxml_uri_write(system, writer, &target);
-            }
-            return false;
+            return ta_io_origin_uri(system, &(ta_io_origin_render_params){
+                                                .origin = &event->origin,
+                                                .session_id = actor->session_id,
+                                                .address = ta_dm_address(actor),
+                                                .arena = ta_dm_arena(host),
+                                                .out = out,
+                                            });
         case TA_DM_TEXT_EVENT_ORIGINTYPE:
-            if (event->origin.kind != TA_ORIGIN_ACTOR && event->origin.kind != TA_ORIGIN_INVOKE) {
-                return false;
+            /* An origin with no URI, such as a closed scope, has no type either. */
+            if (event->origin.kind == TA_ORIGIN_IO && event->origin.as.io.origin_class == TA_IO_ORIGIN_SCOPED) {
+                ta_str uri;
+                ta_result result = ta_io_origin_uri(system, &(ta_io_origin_render_params){
+                                                                .origin = &event->origin,
+                                                                .arena = ta_dm_arena(host),
+                                                                .out = &uri,
+                                                            });
+                if (result != TA_OK) {
+                    return result;
+                }
             }
-            ta_text_put(writer, ta_atom_text(&system->atoms, system->scxml_io_type));
-            return true;
+            return ta_io_origin_type(system, &event->origin, out);
         case TA_DM_TEXT_EVENT_INVOKEID:
             if (event->invoke_id == TA_INVOKE_ID_NONE) {
-                return false;
+                return TA_ERR_NOT_FOUND;
             }
             /* The SCXML ID text, e.g. the author's ID or `<stateid>.<platformid>`. */
-            ta_text_put(writer, ta_invoke_id_text(system, event->invoke_id));
-            return true;
+            *out = ta_invoke_id_text(system, event->invoke_id);
+            return TA_OK;
         default:
-            return false;
+            return ta_dm_render_field(host, kind, out);
     }
 }
 
-TA_API ta_result ta_dm_host_text(const ta_dm_host *host, const ta_dm_text_params *params) {
-    if (!ta_dm_host_valid(host) || params == NULL || params->needed == NULL) {
-        return TA_ERR_INVALID;
-    }
+/* One entry of `_ioprocessors`: its type, or this session's location through it. */
+static ta_result ta_dm_io_text(const ta_dm_host *host, const ta_dm_text_params *params) {
     const ta_system *system = host->impl->system;
     const ta_actor *actor = host->impl->actor;
-    ta_text_writer writer = { .buffer = params->buffer, .capacity = params->capacity };
-    bool present = true;
-    switch (params->kind) {
-        case TA_DM_TEXT_SESSION_ID:
-            ta_text_put_u64(&writer, actor->session_id);
-            break;
-        case TA_DM_TEXT_SESSION_NAME:
-            present = actor->definition->document_name != TA_ATOM_NONE;
-            if (present) {
-                ta_text_put(&writer, ta_atom_text(&system->atoms, actor->definition->document_name));
-            }
-            break;
-        case TA_DM_TEXT_SCXML_IO_LOCATION:
-            present = ta_dm_write_actor_uri(system, &writer, actor->record.self);
-            break;
-        case TA_DM_TEXT_SCXML_IO_TYPE:
-            ta_text_put(&writer, ta_atom_text(&system->atoms, system->scxml_io_type));
-            break;
-        default:
-            present = ta_dm_write_event_field(host, params->kind, &writer);
-            break;
+    if (params->io_index == 0) {
+        if (params->kind == TA_DM_TEXT_IO_TYPE) {
+            *params->out = ta_atom_text(&system->atoms, system->scxml_io_type);
+            return TA_OK;
+        }
+        return ta_dm_render_field(host, TA_DM_TEXT_IO_LOCATION, params->out);
     }
-    if (!present) {
-        *params->needed = 0;
+    const ta_io_registration *registration = ta_system_io_at(system, params->io_index);
+    if (registration == NULL) {
         return TA_ERR_NOT_FOUND;
     }
-    return ta_text_finish(&writer, params->needed);
+    if (params->kind == TA_DM_TEXT_IO_TYPE) {
+        *params->out = ta_atom_text(&system->atoms, registration->type);
+        return TA_OK;
+    }
+    if (registration->io.v->text == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    return registration->io.v->text(registration->io.self, &(ta_io_text_params){
+                                                               .kind = TA_IO_TEXT_LOCATION,
+                                                               .session_id = actor->session_id,
+                                                               .address = ta_dm_address(actor),
+                                                               .arena = ta_dm_arena(host),
+                                                               .out = params->out,
+                                                           });
+}
+
+TA_API ta_result ta_dm_host_text(const ta_dm_host *host, const ta_dm_text_params *params) {
+    if (!ta_dm_host_valid(host) || params == NULL || params->out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    *params->out = (ta_str){0};
+    const ta_system *system = host->impl->system;
+    const ta_actor *actor = host->impl->actor;
+    ta_result result;
+    switch (params->kind) {
+        case TA_DM_TEXT_SESSION_ID:
+            result = ta_dm_render_field(host, params->kind, params->out);
+            break;
+        case TA_DM_TEXT_SESSION_NAME:
+            if (actor->definition->document_name == TA_ATOM_NONE) {
+                return TA_ERR_NOT_FOUND;
+            }
+            *params->out = ta_atom_text(&system->atoms, actor->definition->document_name);
+            return TA_OK;
+        case TA_DM_TEXT_IO_TYPE:
+        case TA_DM_TEXT_IO_LOCATION:
+            result = ta_dm_io_text(host, params);
+            break;
+        default:
+            result = ta_dm_event_text(host, params->kind, params->out);
+            break;
+    }
+    if (result != TA_OK) {
+        *params->out = (ta_str){0};
+    }
+    return result;
 }
 
 TA_API ta_result ta_dm_host_state_name(const ta_dm_host *host, ta_state_id state, ta_str *out) {
@@ -4099,6 +4498,209 @@ TA_API ta_datamodel ta_null_datamodel(void) {
     return (ta_datamodel){ .self = NULL, .v = &ta_null_datamodel_vtable };
 }
 
+
+typedef struct {
+    const ta_system *system;
+    ta_scxml_target target;
+} ta_io_target_text;
+
+static bool ta_io_write_target(const void *context, ta_text_writer *writer) {
+    const ta_io_target_text *text = context;
+    return ta_scxml_uri_write(text->system, writer, &text->target);
+}
+
+static ta_result ta_io_render_target(const ta_system *system, ta_scxml_target target, ta_allocator arena,
+                                     ta_str *out) {
+    ta_io_target_text text = { .system = system, .target = target };
+    return ta_text_render(arena, &(ta_text_render_params){ .write = ta_io_write_target, .context = &text, .out = out });
+}
+
+/* The live scope a SCOPED origin names, or null once it closed. */
+static const ta_io_origin_entry *ta_io_scope_record(const ta_system *system, const ta_io_origin *io) {
+    const ta_io_origin_entry *record = ta_io_origin_at(&system->io_scopes, io->as.scope.index);
+    if (record == NULL || record->generation != io->as.scope.generation || record->processor != io->processor) {
+        return NULL;
+    }
+    return record;
+}
+
+TA_PRIVATE ta_result ta_io_origin_uri(const ta_system *system, const ta_io_origin_render_params *params) {
+    const ta_origin *origin = params->origin;
+    switch (origin->kind) {
+        case TA_ORIGIN_ACTOR:
+            return ta_io_render_target(system,
+                                       (ta_scxml_target){ .kind = TA_SCXML_TARGET_ACTOR, .as.actor = origin->as.actor },
+                                       params->arena, params->out);
+        case TA_ORIGIN_INVOKE:
+            return ta_io_render_target(
+                system, (ta_scxml_target){ .kind = TA_SCXML_TARGET_INVOKE, .as.invoke = origin->as.invoke.invoke },
+                params->arena, params->out);
+        case TA_ORIGIN_IO:
+            break;
+        default:
+            return TA_ERR_NOT_FOUND;
+    }
+    const ta_io_origin *io = &origin->as.io;
+    switch (io->origin_class) {
+        case TA_IO_ORIGIN_COMPUTED: {
+            const ta_io_registration *registration = ta_system_io_at(system, io->processor);
+            if (registration == NULL || registration->io.v->text == NULL) {
+                return TA_ERR_NOT_FOUND;
+            }
+            return registration->io.v->text(registration->io.self, &(ta_io_text_params){
+                                                                       .kind = TA_IO_TEXT_ORIGIN,
+                                                                       .session_id = params->session_id,
+                                                                       .address = params->address,
+                                                                       .token = io->as.token,
+                                                                       .arena = params->arena,
+                                                                       .out = params->out,
+                                                                   });
+        }
+        case TA_IO_ORIGIN_SCOPED: {
+            const ta_io_origin_entry *record = ta_io_scope_record(system, io);
+            if (record == NULL) {
+                return TA_ERR_NOT_FOUND;
+            }
+            *params->out = ta_io_origin_entry_uri(record);
+            return TA_OK;
+        }
+        case TA_IO_ORIGIN_MESSAGE:
+            if (io->as.entry == NULL) {
+                return TA_ERR_NOT_FOUND;
+            }
+            *params->out = ta_io_origin_entry_uri(io->as.entry);
+            return TA_OK;
+        default:
+            return TA_ERR_NOT_FOUND;
+    }
+}
+
+TA_PRIVATE ta_result ta_io_origin_type(const ta_system *system, const ta_origin *origin, ta_str *out) {
+    ta_atom type = TA_ATOM_NONE;
+    switch (origin->kind) {
+        case TA_ORIGIN_ACTOR:
+            type = system->scxml_io_type;
+            break;
+        case TA_ORIGIN_INVOKE: {
+            /*
+             * The processor that reaches `#_<invokeid>`: the SCXML one for an
+             * SCXML child session, otherwise the invocation's own type, which
+             * SCXML 6.4 uses for sends to a non-SCXML service.
+             */
+            ta_atom invoker = ta_system_invoker_type(system, origin->as.invoke.invoker);
+            type = invoker == TA_ATOM_NONE || invoker == system->scxml_invoke_type ? system->scxml_io_type : invoker;
+            break;
+        }
+        case TA_ORIGIN_IO: {
+            const ta_io_origin_entry *entry = origin->as.io.origin_class == TA_IO_ORIGIN_MESSAGE ? origin->as.io.as.entry
+                                                                                                 : NULL;
+            if (ta_io_origin_entry_detached(entry)) {
+                *out = ta_io_origin_detached_type(entry);
+                return TA_OK;
+            }
+            const ta_io_registration *registration = ta_system_io_at(system, origin->as.io.processor);
+            if (registration == NULL) {
+                return TA_ERR_NOT_FOUND;
+            }
+            type = registration->type;
+            break;
+        }
+        default:
+            return TA_ERR_NOT_FOUND;
+    }
+    *out = ta_atom_text(&system->atoms, type);
+    return TA_OK;
+}
+
+TA_API ta_result ta_io_origin_make(ta_system *system, const ta_io_origin_make_params *params) {
+    if (system == NULL || params == NULL || params->out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    *params->out = (ta_origin){ .kind = TA_ORIGIN_NONE };
+    const ta_io_registration *registration = ta_system_io_at(system, params->processor);
+    if (registration == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    ta_io_origin io = { .processor = params->processor, .origin_class = params->origin_class };
+    switch (params->origin_class) {
+        case TA_IO_ORIGIN_COMPUTED:
+            if (registration->io.v->text == NULL) {
+                return TA_ERR_UNSUPPORTED;
+            }
+            io.as.token = params->token;
+            break;
+        case TA_IO_ORIGIN_SCOPED:
+            io.as.scope = params->scope;
+            if (ta_io_scope_record(system, &io) == NULL) {
+                return TA_ERR_NOT_FOUND;
+            }
+            break;
+        case TA_IO_ORIGIN_MESSAGE: {
+            if (params->uri.ptr == NULL && params->uri.len != 0) {
+                return TA_ERR_INVALID;
+            }
+            io.as.entry = ta_io_origin_take(&system->io_messages,
+                                            &(ta_io_origin_take_params){ .processor = params->processor,
+                                                                         .uri = params->uri });
+            if (io.as.entry == NULL) {
+                return TA_ERR_NOMEM;
+            }
+            break;
+        }
+        default:
+            return TA_ERR_INVALID;
+    }
+    *params->out = (ta_origin){ .kind = TA_ORIGIN_IO, .as.io = io };
+    return TA_OK;
+}
+
+TA_API ta_result ta_io_scope_open(ta_system *system, const ta_io_scope_open_params *params) {
+    if (system == NULL || params == NULL || params->out == NULL ||
+        (params->uri.ptr == NULL && params->uri.len != 0)) {
+        return TA_ERR_INVALID;
+    }
+    if (ta_system_io_at(system, params->processor) == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    uint32_t index = 0;
+    ta_io_origin_entry *record = ta_io_origin_take(
+        &system->io_scopes,
+        &(ta_io_origin_take_params){ .processor = params->processor, .uri = params->uri, .index = &index });
+    if (record == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    *params->out = (ta_io_scope){ .index = index, .generation = record->generation };
+    return TA_OK;
+}
+
+TA_API void ta_io_scope_close(ta_system *system, ta_io_scope scope) {
+    if (system == NULL) {
+        return;
+    }
+    ta_io_origin_entry *record = ta_io_origin_at(&system->io_scopes, scope.index);
+    if (record != NULL && record->generation == scope.generation) {
+        ta_io_origin_give(record);
+    }
+}
+
+TA_API ta_result ta_origin_text(const ta_system *system, const ta_origin_text_params *params) {
+    if (system == NULL || params == NULL || params->origin == NULL || params->type == NULL ||
+        params->uri == NULL) {
+        return TA_ERR_INVALID;
+    }
+    *params->type = (ta_str){0};
+    *params->uri = (ta_str){0};
+    ta_result result = ta_io_origin_type(system, params->origin, params->type);
+    if (result != TA_OK) {
+        return result;
+    }
+    return ta_io_origin_uri(system, &(ta_io_origin_render_params){
+                                        .origin = params->origin,
+                                        .session_id = params->session_id,
+                                        .arena = params->arena,
+                                        .out = params->uri,
+                                    });
+}
 
 
 /*
@@ -4933,6 +5535,21 @@ static ta_result ta_invoke_unavailable(ta_system *system, ta_actor *actor, const
     return result;
 }
 
+TA_PRIVATE ta_origin ta_invoke_origin_of(const ta_system *system, const ta_active_invoke *invoke) {
+    return (ta_origin){ .kind = TA_ORIGIN_INVOKE,
+                        .as.invoke = { .invoke = invoke->id,
+                                       .invoker = ta_system_invoker_index(system, invoke->type) } };
+}
+
+TA_PRIVATE bool ta_invoke_origin_for(const ta_system *system, const ta_actor *actor, ta_invoke_id invoke, ta_origin *out) {
+    int64_t index = ta_invoke_find(actor, invoke);
+    if (index < 0) {
+        return false;
+    }
+    *out = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
+    return true;
+}
+
 TA_API ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_report_params *params) {
     if (system == NULL || params == NULL) {
         return TA_ERR_INVALID;
@@ -4954,6 +5571,8 @@ TA_API ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_repor
             event = *params->as.event;
             event.type = TA_EVENT_EXTERNAL;
             event.invoke_id = params->invoke_id;
+            /* Core fills the origin of a service's own event, whatever the host passed (ADR 0068). */
+            event.origin = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
             return ta_actor_deliver(system, params->actor, &event);
         case TA_INVOKE_REPORT_DONE: {
             ta_result result = ta_invoke_done_name(system, params->invoke_id, &event.name);
@@ -4963,6 +5582,7 @@ TA_API ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_repor
             if (params->as.done_data != NULL) {
                 event.data = *params->as.done_data;
             }
+            event.origin = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
             return ta_actor_deliver(system, params->actor, &event);
         }
         case TA_INVOKE_REPORT_UNAVAILABLE:
@@ -9350,6 +9970,28 @@ TA_API ta_result ta_actor_activate_replacement(ta_system *system, const ta_actor
     return TA_OK;
 }
 
+/*
+ * Checks an I/O origin against the registry, and gives an event from one of
+ * the actor's invocations an invoke origin when it has none (ADR 0068).
+ * That covers hosts that post invoker events through their own mailbox.
+ */
+static ta_result ta_actor_accept_origin(const ta_system *system, const ta_actor *actor, ta_event *event) {
+    if (event->origin.kind == TA_ORIGIN_IO) {
+        const ta_io_origin *io = &event->origin.as.io;
+        if (ta_system_io_at(system, io->processor) == NULL ||
+            (io->origin_class == TA_IO_ORIGIN_MESSAGE && io->as.entry == NULL) ||
+            (uint32_t)io->origin_class > (uint32_t)TA_IO_ORIGIN_MESSAGE) {
+            return TA_ERR_INVALID;
+        }
+        return TA_OK;
+    }
+    if (event->origin.kind != TA_ORIGIN_NONE || event->invoke_id == TA_INVOKE_ID_NONE) {
+        return TA_OK;
+    }
+    (void)ta_invoke_origin_for(system, actor, event->invoke_id, &event->origin);
+    return TA_OK;
+}
+
 TA_API ta_result ta_actor_deliver(ta_system *system, ta_actor_id id, const ta_event *event) {
     if (event == NULL) {
         return TA_ERR_INVALID;
@@ -9368,11 +10010,16 @@ TA_API ta_result ta_actor_deliver(ta_system *system, ta_actor_id id, const ta_ev
     if (actor->macrostep || actor->has_external_event) {
         return TA_ERR_BUSY;
     }
+    ta_event accepted = *event;
+    ta_result result = ta_actor_accept_origin(system, actor, &accepted);
+    if (result != TA_OK) {
+        return result;
+    }
     ta_event copy;
-    ta_event_retain(event, &copy);
+    ta_event_retain(&accepted, &copy);
     actor->external_event = copy;
     actor->has_external_event = true;
-    ta_event_retain(event, &actor->macrostep_event);
+    ta_event_retain(&accepted, &actor->macrostep_event);
     actor->has_macrostep_event = true;
     actor->macrostep = true;
     ta_actor_touch(actor);
@@ -9730,13 +10377,76 @@ static ta_result ta_image_copy_address(ta_arena *arena, ta_actor_ref *ref) {
     return ta_actor_ref_detach(arena, ref);
 }
 
-static ta_result ta_image_copy_origin(ta_arena *arena, ta_event *event) {
+/*
+ * An I/O origin goes into the image as text (ADR 0068): the processor type
+ * and the URI, whatever its class. A closed scope, or a COMPUTED origin its
+ * processor cannot render, is stored as no origin. Nothing is retained.
+ */
+static ta_result ta_image_copy_io_origin(const ta_system *system, ta_arena *arena, ta_origin *origin) {
+    ta_str type = {0};
+    ta_str uri = {0};
+    ta_result result = ta_io_origin_type(system, origin, &type);
+    if (result == TA_OK) {
+        result = ta_io_origin_uri(system, &(ta_io_origin_render_params){
+                                              .origin = origin,
+                                              .arena = ta_arena_allocator(arena),
+                                              .out = &uri,
+                                          });
+    }
+    if (result == TA_ERR_NOT_FOUND) {
+        *origin = (ta_origin){ .kind = TA_ORIGIN_NONE };
+        return TA_OK;
+    }
+    ta_io_origin_entry *detached = NULL;
+    if (result == TA_OK) {
+        result = ta_io_origin_detach(arena, &(ta_io_origin_detach_params){ .type = type, .uri = uri, .out = &detached });
+    }
+    if (result != TA_OK) {
+        return result;
+    }
+    *origin = (ta_origin){ .kind = TA_ORIGIN_IO,
+                           .as.io = { .origin_class = TA_IO_ORIGIN_MESSAGE, .as.entry = detached } };
+    return TA_OK;
+}
+
+static ta_result ta_image_copy_origin(const ta_system *system, ta_arena *arena, ta_event *event) {
+    if (event->origin.kind == TA_ORIGIN_IO) {
+        return ta_image_copy_io_origin(system, arena, &event->origin);
+    }
     ta_actor_ref *origin = ta_event_origin_ref(event);
     return origin == NULL ? TA_OK : ta_actor_ref_detach(arena, origin);
 }
 
+/*
+ * A detached I/O origin becomes a MESSAGE origin of this system holding its
+ * URI. An unknown processor type leaves no origin: the event is delivered,
+ * and only a reply is lost.
+ */
+static ta_result ta_image_localize_io_origin(ta_system *system, ta_origin *origin) {
+    const ta_io_origin_entry *detached = origin->as.io.as.entry;
+    if (origin->as.io.origin_class != TA_IO_ORIGIN_MESSAGE || !ta_io_origin_entry_detached(detached)) {
+        return TA_OK;
+    }
+    ta_atom type = TA_ATOM_NONE;
+    uint32_t processor = 0;
+    if (ta_atom_find(&system->atoms, ta_io_origin_detached_type(detached), &type) != TA_OK ||
+        ta_system_find_io(system, type, &processor) != TA_OK || processor == 0) {
+        *origin = (ta_origin){ .kind = TA_ORIGIN_NONE };
+        return TA_OK;
+    }
+    return ta_io_origin_make(system, &(ta_io_origin_make_params){
+                                         .processor = processor,
+                                         .origin_class = TA_IO_ORIGIN_MESSAGE,
+                                         .uri = ta_io_origin_entry_uri(detached),
+                                         .out = origin,
+                                     });
+}
+
 /* Makes an event restored from an image hold this system's origin handle. */
 static ta_result ta_image_localize_origin(ta_system *system, ta_event *event) {
+    if (event->origin.kind == TA_ORIGIN_IO) {
+        return ta_image_localize_io_origin(system, &event->origin);
+    }
     ta_actor_ref *origin = ta_event_origin_ref(event);
     return origin == NULL ? TA_OK : ta_actor_ref_localize(system, origin);
 }
@@ -9783,6 +10493,7 @@ static size_t ta_image_measure(const ta_actor *actor) {
 /* Every arena allocation of a capture; nothing here retains anything. */
 static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
     ta_arena *arena = &image->arena;
+    const ta_system *system = actor->host_impl.system;
     const ta_actor_sparse_state *sparse = actor->sparse;
 
     image->session_storage = ta_arena_alloc(arena, actor->session_bytes, _Alignof(uint64_t));
@@ -9797,13 +10508,13 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
         result = ta_image_copy_address(arena, &image->self);
     }
     if (result == TA_OK) {
-        result = ta_image_copy_origin(arena, &image->external_event);
+        result = ta_image_copy_origin(system, arena, &image->external_event);
     }
     if (result == TA_OK) {
-        result = ta_image_copy_origin(arena, &image->macrostep_event);
+        result = ta_image_copy_origin(system, arena, &image->macrostep_event);
     }
     if (result == TA_OK) {
-        result = ta_image_copy_origin(arena, &image->current_event);
+        result = ta_image_copy_origin(system, arena, &image->current_event);
     }
     if (result != TA_OK) {
         return result;
@@ -9818,7 +10529,7 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
         }
         for (uint32_t index = 0; index < count; index += 1) {
             image->internal_events[index] = actor->internal_queue->events[index];
-            result = ta_image_copy_origin(arena, &image->internal_events[index].event);
+            result = ta_image_copy_origin(system, arena, &image->internal_events[index].event);
             if (result != TA_OK) {
                 return result;
             }
@@ -10454,6 +11165,8 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
     ta_vec_init(&system->io_processors, config->allocator, TA_VEC_LAYOUT(ta_io_registration));
     ta_vec_init(&system->invokers, config->allocator, TA_VEC_LAYOUT(ta_invoker_registration));
     ta_address_table_init(&system->addresses, config->allocator);
+    ta_io_origin_table_init(&system->io_scopes, config->allocator, true);
+    ta_io_origin_table_init(&system->io_messages, config->allocator, false);
     ta_result result = ta_session_table_init(&system->sessions, config->allocator);
     if (result == TA_OK) {
         result = ta_atom_table_init(&system->atoms, config->allocator);
@@ -10515,6 +11228,9 @@ TA_API void ta_system_destroy(ta_system *system) {
     ta_vec_destroy(&system->definitions);
     ta_timer_heap_destroy(&system->timers);
     ta_actor_table_destroy(&system->actors, system->allocator);
+    /* After the actors: their held events released their MESSAGE origins. */
+    ta_io_origin_table_destroy(&system->io_scopes);
+    ta_io_origin_table_destroy(&system->io_messages);
     ta_vec_destroy(&system->io_processors);
     ta_vec_destroy(&system->invokers);
     ta_arena_destroy(&system->scratch);
@@ -10681,7 +11397,7 @@ TA_PRIVATE bool ta_system_is_scxml_io(const ta_system *system, ta_atom type) {
     return type == system->scxml_io_type || type == system->scxml_io_alias;
 }
 
-TA_PRIVATE const ta_io *ta_system_find_io(const ta_system *system, ta_atom type) {
+TA_PRIVATE const ta_io *ta_system_io_of(const ta_system *system, ta_atom type) {
     for (uint32_t index = 0; index < system->io_processors.count; index += 1) {
         const ta_io_registration *entry = ta_vec_at(&system->io_processors, index);
         if (entry->type == type) {
@@ -10691,20 +11407,71 @@ TA_PRIVATE const ta_io *ta_system_find_io(const ta_system *system, ta_atom type)
     return NULL;
 }
 
-TA_API ta_result ta_system_register_io(ta_system *system, ta_atom type, ta_io io) {
-    if (system == NULL || io.v == NULL || io.v->send == NULL || !ta_atom_valid(&system->atoms, type) ||
-        ta_system_is_scxml_io(system, type)) {
+TA_PRIVATE const ta_io_registration *ta_system_io_at(const ta_system *system, uint32_t index) {
+    if (index == 0 || index > system->io_processors.count) {
+        return NULL;
+    }
+    return ta_vec_at(&system->io_processors, index - 1u);
+}
+
+TA_API ta_result ta_system_find_io(const ta_system *system, ta_atom type, uint32_t *index) {
+    if (system == NULL || index == NULL) {
         return TA_ERR_INVALID;
     }
-    for (uint32_t index = 0; index < system->io_processors.count; index += 1) {
-        ta_io_registration *entry = ta_vec_at(&system->io_processors, index);
+    if (ta_system_is_scxml_io(system, type)) {
+        *index = 0;
+        return TA_OK;
+    }
+    for (uint32_t at = 0; at < system->io_processors.count; at += 1) {
+        const ta_io_registration *entry = ta_vec_at(&system->io_processors, at);
         if (entry->type == type) {
-            entry->io = io;
+            *index = at + 1u;
             return TA_OK;
         }
     }
-    ta_io_registration entry = { .type = type, .io = io };
-    return ta_vec_push(&system->io_processors, &entry);
+    return TA_ERR_NOT_FOUND;
+}
+
+/* Registering a type again replaces its adapter at the same index (ADR 0068). */
+TA_API ta_result ta_system_register_io(ta_system *system, const ta_io_registration_params *params) {
+    if (system == NULL || params == NULL || params->io.v == NULL || params->io.v->send == NULL ||
+        !ta_atom_valid(&system->atoms, params->type) || ta_system_is_scxml_io(system, params->type)) {
+        return TA_ERR_INVALID;
+    }
+    uint32_t index = 0;
+    if (ta_system_find_io(system, params->type, &index) == TA_OK) {
+        ta_io_registration *entry = ta_vec_at(&system->io_processors, index - 1u);
+        entry->io = params->io;
+    } else {
+        ta_io_registration entry = { .type = params->type, .io = params->io };
+        ta_result result = ta_vec_push(&system->io_processors, &entry);
+        if (result != TA_OK) {
+            return result;
+        }
+        index = system->io_processors.count;
+    }
+    if (params->index != NULL) {
+        *params->index = index;
+    }
+    return TA_OK;
+}
+
+TA_PRIVATE uint32_t ta_system_invoker_index(const ta_system *system, ta_atom type) {
+    for (uint32_t index = 0; index < system->invokers.count; index += 1) {
+        const ta_invoker_registration *entry = ta_vec_at(&system->invokers, index);
+        if (entry->type == type) {
+            return index;
+        }
+    }
+    return UINT32_MAX;
+}
+
+TA_PRIVATE ta_atom ta_system_invoker_type(const ta_system *system, uint32_t index) {
+    if (index >= system->invokers.count) {
+        return TA_ATOM_NONE;
+    }
+    const ta_invoker_registration *entry = ta_vec_at(&system->invokers, index);
+    return entry->type;
 }
 
 TA_API ta_result ta_system_register_invoker(ta_system *system, ta_atom type, ta_invoker invoker) {
@@ -11462,7 +12229,7 @@ TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_sy
                                                 .fault = &fault,
                                             });
     } else {
-        const ta_io *io = ta_system_find_io(system, send->io_type);
+        const ta_io *io = ta_system_io_of(system, send->io_type);
         ta_send request = {
             .source = origin,
             .send_id = send->send_id,
@@ -11678,7 +12445,7 @@ static ta_op_status ta_send_io_type(ta_interpreter *it, const ta_send_action *se
     }
     state->scxml_io = ta_system_is_scxml_io(system, type);
     state->io_type = state->scxml_io ? system->scxml_io_type : type;
-    return state->scxml_io || ta_system_find_io(system, type) != NULL ? TA_OP_OK : TA_OP_ERROR;
+    return state->scxml_io || ta_system_io_of(system, type) != NULL ? TA_OP_OK : TA_OP_ERROR;
 }
 
 /* Resolves `event` / `eventexpr`; the expression's text is a dotted event name. */

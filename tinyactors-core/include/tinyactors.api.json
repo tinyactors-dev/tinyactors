@@ -6966,19 +6966,19 @@
           "doc": "_name: the <scxml > name attribute."
         },
         {
-          "name": "TA_DM_TEXT_SCXML_IO_LOCATION",
+          "name": "TA_DM_TEXT_IO_TYPE",
           "value": 8,
-          "symbol": "scxml_io_location",
-          "doc": "_ioprocessors: the SCXML Event I/O Processor's location for this session."
+          "symbol": "io_type",
+          "doc": "_ioprocessors: the type URI of the processor at io_index."
         },
         {
-          "name": "TA_DM_TEXT_SCXML_IO_TYPE",
+          "name": "TA_DM_TEXT_IO_LOCATION",
           "value": 9,
-          "symbol": "scxml_io_type",
-          "doc": "_ioprocessors: the SCXML Event I/O Processor's type URI."
+          "symbol": "io_location",
+          "doc": "_ioprocessors: this session's location through the processor at io_index."
         }
       ],
-      "doc": "Text of the SCXML system variables, for data models that expose them (SCXML 5.10). Each field is formatted into the caller's buffer following the list-output convention: `*needed` always receives the size including the terminating NUL, and a too-small buffer yields TA_ERR_NOMEM without writing. TA_ERR_NOT_FOUND means the field has no value, e.g. no event has been processed yet, or the current event has no send ID or origin.",
+      "doc": "Text of the SCXML system variables, for data models that expose them (SCXML 5.10, ADR 0068). `*out` is a view, not NUL-terminated, valid until the interpreter run that is calling the data model ends: core renders it into the run's scratch arena, or points at text it stores. Copy it before returning to core. TA_ERR_NOT_FOUND means the field has no value, e.g. no event has been processed yet, the current event has no send ID or origin, or `io_index` is past the last processor. TA_ERR_NOMEM means the arena could not grow.\n\n`_ioprocessors` is enumerated by reading TA_DM_TEXT_IO_TYPE for io_index 0, 1, 2, ... until TA_ERR_NOT_FOUND. Index 0 is the SCXML processor.",
       "layout": {
         "x86_64-unknown-linux-gnu": {
           "size": 4,
@@ -7000,58 +7000,42 @@
           }
         },
         {
-          "name": "buffer",
-          "type": {
-            "pointer": {
-              "builtin": "char"
-            }
-          },
-          "capacity": "capacity",
-          "needed": "needed",
-          "shape": "buffer",
-          "direction": "out",
-          "optional": true,
-          "valid_on": "success"
-        },
-        {
-          "name": "capacity",
+          "name": "io_index",
           "type": {
             "builtin": "uint32_t"
           },
-          "capacity_of": "buffer"
+          "doc": "TA_DM_TEXT_IO_TYPE and TA_DM_TEXT_IO_LOCATION: the processor's registry index."
         },
         {
-          "name": "needed",
+          "name": "out",
           "type": {
             "pointer": {
-              "builtin": "uint32_t"
+              "type": "ta_str"
             }
           },
           "shape": "single",
           "direction": "out",
-          "valid_on": "always",
-          "needed_of": "buffer"
+          "valid_on": "success",
+          "lifetime": "run"
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 32,
+          "size": 16,
           "align": 8,
           "offsets": {
             "kind": 0,
-            "buffer": 8,
-            "capacity": 16,
-            "needed": 24
+            "io_index": 4,
+            "out": 8
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 16,
+          "size": 12,
           "align": 4,
           "offsets": {
             "kind": 0,
-            "buffer": 4,
-            "capacity": 8,
-            "needed": 12
+            "io_index": 4,
+            "out": 8
           }
         }
       }
@@ -8115,6 +8099,42 @@
         }
       }
     },
+    "ta_invoke_origin": {
+      "kind": "struct",
+      "doc": "An event from an invoked service (ADR 0068). Core fills it: `invoker` is the registry index of the invocation's invoker, so the origin keeps its type after the invocation ends.",
+      "fields": [
+        {
+          "name": "invoke",
+          "type": {
+            "type": "ta_invoke_id"
+          }
+        },
+        {
+          "name": "invoker",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "invoke": 0,
+            "invoker": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "invoke": 0,
+            "invoker": 8
+          }
+        }
+      }
+    },
     "ta_invoke_report_kind": {
       "kind": "enum",
       "constants": [
@@ -8716,9 +8736,455 @@
         }
       }
     },
+    "ta_io_origin": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "processor",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "The processor's registry index (ADR 0068); never 0, the SCXML processor."
+        },
+        {
+          "name": "origin_class",
+          "type": {
+            "type": "ta_io_origin_class"
+          }
+        },
+        {
+          "name": "as",
+          "type": {
+            "record": {
+              "kind": "union",
+              "fields": [
+                {
+                  "name": "token",
+                  "type": {
+                    "builtin": "uint64_t"
+                  },
+                  "when": "TA_IO_ORIGIN_COMPUTED"
+                },
+                {
+                  "name": "scope",
+                  "type": {
+                    "type": "ta_io_scope"
+                  },
+                  "when": "TA_IO_ORIGIN_SCOPED"
+                },
+                {
+                  "name": "entry",
+                  "type": {
+                    "pointer": {
+                      "type": "ta_io_origin_entry"
+                    }
+                  },
+                  "when": "TA_IO_ORIGIN_MESSAGE",
+                  "shape": "view",
+                  "direction": "in"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tagged": {
+        "tag": "origin_class",
+        "union": "as",
+        "enum": "ta_io_origin_class",
+        "members": {
+          "TA_IO_ORIGIN_COMPUTED": "token",
+          "TA_IO_ORIGIN_SCOPED": "scope",
+          "TA_IO_ORIGIN_MESSAGE": "entry"
+        }
+      },
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "processor": 0,
+            "origin_class": 4,
+            "as": 8,
+            "as.token": 8,
+            "as.scope": 8,
+            "as.entry": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "processor": 0,
+            "origin_class": 4,
+            "as": 8,
+            "as.token": 8,
+            "as.scope": 8,
+            "as.entry": 8
+          }
+        }
+      }
+    },
+    "ta_io_origin_class": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_IO_ORIGIN_COMPUTED",
+          "value": 0,
+          "symbol": "computed"
+        },
+        {
+          "name": "TA_IO_ORIGIN_SCOPED",
+          "value": 1,
+          "symbol": "scoped"
+        },
+        {
+          "name": "TA_IO_ORIGIN_MESSAGE",
+          "value": 2,
+          "symbol": "message"
+        }
+      ],
+      "doc": "How long the URI of an event that came through an I/O processor lives, and who stores it (ADR 0068). The processor chooses the class when it builds the origin with ta_io_origin_make(): - COMPUTED: the origin holds a token, and the processor renders the URI from it with its `text` callback. Nothing is stored. For peer links, and connections whose URI follows a formula. - SCOPED: the origin names a scope (ta_io_scope_open()) that stores the URI once, for a connection or a session. After ta_io_scope_close() the origin renders empty. - MESSAGE: core stores the URI in a reference-counted entry that lives as long as any copy of the event holding it. For one request or message.",
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
+    "ta_io_origin_entry": {
+      "kind": "view",
+      "doc": "A stored URI of a MESSAGE origin; core owns it."
+    },
+    "ta_io_origin_make_params": {
+      "kind": "struct",
+      "doc": "Origins of events that come through an I/O processor (ADR 0068). A host builds one before it delivers the event, and puts it in the event. A MESSAGE origin comes back holding one reference, which the event then owns: ta_event_release() gives it back. An origin that never went into a delivered event is released with ta_origin_release().",
+      "fields": [
+        {
+          "name": "processor",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "The processor's registry index, from ta_system_register_io()."
+        },
+        {
+          "name": "origin_class",
+          "type": {
+            "type": "ta_io_origin_class"
+          }
+        },
+        {
+          "name": "token",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "COMPUTED: rendered by the processor's `text` callback."
+        },
+        {
+          "name": "scope",
+          "type": {
+            "type": "ta_io_scope"
+          },
+          "doc": "SCOPED: an open scope of this processor."
+        },
+        {
+          "name": "uri",
+          "type": {
+            "type": "ta_str"
+          },
+          "doc": "MESSAGE: copied into core's storage."
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_origin"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "release": "ta_origin_release"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "processor": 0,
+            "origin_class": 4,
+            "token": 8,
+            "scope": 16,
+            "uri": 24,
+            "out": 40
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "processor": 0,
+            "origin_class": 4,
+            "token": 8,
+            "scope": 16,
+            "uri": 24,
+            "out": 32
+          }
+        }
+      }
+    },
+    "ta_io_registration_params": {
+      "kind": "struct",
+      "doc": "The I/O processor registry (ADR 0068). Index 0 is always the SCXML processor; registered processors get 1, 2, 3, ... in registration order. An index never changes while the system lives: registering a type again replaces its adapter at the same index. The atom returned by ta_system_scxml_io_type() is reserved.",
+      "fields": [
+        {
+          "name": "type",
+          "type": {
+            "type": "ta_atom"
+          }
+        },
+        {
+          "name": "io",
+          "type": {
+            "type": "ta_io"
+          }
+        },
+        {
+          "name": "index",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "type": 0,
+            "io": 8,
+            "index": 24
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "type": 0,
+            "io": 4,
+            "index": 12
+          }
+        }
+      }
+    },
+    "ta_io_scope": {
+      "kind": "struct",
+      "doc": "A scope of a SCOPED origin: stale once closed, never another scope's.",
+      "fields": [
+        {
+          "name": "index",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "generation",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "index": 0,
+            "generation": 4
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "index": 0,
+            "generation": 4
+          }
+        }
+      }
+    },
+    "ta_io_scope_open_params": {
+      "kind": "struct",
+      "doc": "A scope stores one URI for a connection or a session. Events refer to it without holding it: once closed, an origin naming it renders empty, so a late reply fails. Closing is idempotent for a stale scope.",
+      "fields": [
+        {
+          "name": "processor",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "uri",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_io_scope"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "processor": 0,
+            "uri": 8,
+            "out": 24
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "processor": 0,
+            "uri": 4,
+            "out": 12
+          }
+        }
+      }
+    },
+    "ta_io_text_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_IO_TEXT_ORIGIN",
+          "value": 0,
+          "symbol": "origin"
+        },
+        {
+          "name": "TA_IO_TEXT_LOCATION",
+          "value": 1,
+          "symbol": "location"
+        }
+      ],
+      "doc": "What an I/O processor renders (ADR 0068): the URI of one of its COMPUTED origins, or this session's location through it (`_ioprocessors`).",
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
+    "ta_io_text_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": {
+            "type": "ta_io_text_kind"
+          }
+        },
+        {
+          "name": "session_id",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "The session the text is for (ADR 0066); 0 when there is none."
+        },
+        {
+          "name": "address",
+          "type": {
+            "pointer": {
+              "type": "ta_address"
+            }
+          },
+          "shape": "handle",
+          "direction": "in",
+          "optional": true,
+          "doc": "Its named address, or null."
+        },
+        {
+          "name": "token",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "TA_IO_TEXT_ORIGIN: the COMPUTED origin's token."
+        },
+        {
+          "name": "arena",
+          "type": {
+            "type": "ta_allocator"
+          },
+          "doc": "Where the text must be allocated."
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_str"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "arena"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "session_id": 8,
+            "address": 16,
+            "token": 24,
+            "arena": 32,
+            "out": 48
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "session_id": 8,
+            "address": 16,
+            "token": 24,
+            "arena": 32,
+            "out": 40
+          }
+        }
+      }
+    },
     "ta_io_vtable": {
       "kind": "struct",
       "semantic": "vtable",
+      "doc": "`text` is optional. Its contract (ADR 0068): - pure: the text depends only on the processor's registration, the session and the token, for the life of the system, so a replayed history reads the same text; - it makes no calls into core: it runs while a data model evaluates an expression inside a macrostep; - all memory for the text comes from `arena`, and it keeps no pointer into it; - it answers TA_OK with the text, TA_ERR_NOT_FOUND when there is no such text (the field is then empty), or TA_ERR_NOMEM when the arena cannot grow. A processor without `text` has no location and cannot make COMPUTED origins. A Basic HTTP processor must render a location (SCXML C.2.3).",
       "fields": [
         {
           "name": "send",
@@ -8771,21 +9237,64 @@
           },
           "shape": "callback",
           "direction": "in"
+        },
+        {
+          "name": "text",
+          "type": {
+            "pointer": {
+              "function": {
+                "returns": {
+                  "type": {
+                    "type": "ta_result"
+                  },
+                  "success": "TA_OK"
+                },
+                "params": [
+                  {
+                    "name": "self",
+                    "type": {
+                      "pointer": {
+                        "builtin": "void"
+                      }
+                    },
+                    "shape": "raw",
+                    "direction": "in"
+                  },
+                  {
+                    "name": "params",
+                    "type": {
+                      "pointer": {
+                        "type": "ta_io_text_params",
+                        "const": true
+                      }
+                    },
+                    "shape": "single",
+                    "direction": "in"
+                  }
+                ]
+              }
+            }
+          },
+          "shape": "callback",
+          "direction": "in",
+          "optional": true
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 8,
+          "size": 16,
           "align": 8,
           "offsets": {
-            "send": 0
+            "send": 0,
+            "text": 8
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 4,
+          "size": 8,
           "align": 4,
           "offsets": {
-            "send": 0
+            "send": 0,
+            "text": 4
           }
         }
       }
@@ -9040,18 +9549,18 @@
                   "when": "TA_ORIGIN_ACTOR"
                 },
                 {
-                  "name": "invoke",
+                  "name": "io",
                   "type": {
-                    "type": "ta_invoke_id"
-                  },
-                  "when": "TA_ORIGIN_INVOKE"
-                },
-                {
-                  "name": "opaque",
-                  "type": {
-                    "builtin": "uint64_t"
+                    "type": "ta_io_origin"
                   },
                   "when": "TA_ORIGIN_IO"
+                },
+                {
+                  "name": "invoke",
+                  "type": {
+                    "type": "ta_invoke_origin"
+                  },
+                  "when": "TA_ORIGIN_INVOKE"
                 }
               ]
             }
@@ -9065,7 +9574,7 @@
         "members": {
           "TA_ORIGIN_NONE": null,
           "TA_ORIGIN_ACTOR": "actor",
-          "TA_ORIGIN_IO": "opaque",
+          "TA_ORIGIN_IO": "io",
           "TA_ORIGIN_INVOKE": "invoke"
         }
       },
@@ -9077,8 +9586,8 @@
             "kind": 0,
             "as": 8,
             "as.actor": 8,
-            "as.invoke": 8,
-            "as.opaque": 8
+            "as.io": 8,
+            "as.invoke": 8
           }
         },
         "wasm32-unknown-unknown": {
@@ -9088,8 +9597,8 @@
             "kind": 0,
             "as": 8,
             "as.actor": 8,
-            "as.invoke": 8,
-            "as.opaque": 8
+            "as.io": 8,
+            "as.invoke": 8
           }
         }
       }
@@ -9126,6 +9635,84 @@
         "wasm32-unknown-unknown": {
           "size": 4,
           "align": 4
+        }
+      }
+    },
+    "ta_origin_text_params": {
+      "kind": "struct",
+      "doc": "The text of any origin, for hosts that show or log events outside a data model. `*type` is the processor type (empty for no origin) and lives with the system. `*uri` is rendered into `arena` for actor, invoke and COMPUTED origins, and is a view of stored text for SCOPED and MESSAGE ones, valid while the origin is held and its scope is open. TA_ERR_NOT_FOUND when the origin has no text: none, or a closed scope.",
+      "fields": [
+        {
+          "name": "origin",
+          "type": {
+            "pointer": {
+              "type": "ta_origin",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        },
+        {
+          "name": "session_id",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "The session the origin was delivered to, for the processor's `text`; 0 when unknown."
+        },
+        {
+          "name": "arena",
+          "type": {
+            "type": "ta_allocator"
+          }
+        },
+        {
+          "name": "type",
+          "type": {
+            "pointer": {
+              "type": "ta_str"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "system"
+        },
+        {
+          "name": "uri",
+          "type": {
+            "pointer": {
+              "type": "ta_str"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "arena"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "origin": 0,
+            "session_id": 8,
+            "arena": 16,
+            "type": 32,
+            "uri": 40
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "origin": 0,
+            "session_id": 8,
+            "arena": 16,
+            "type": 24,
+            "uri": 28
+          }
         }
       }
     },
@@ -12418,7 +13005,7 @@
     },
     {
       "name": "ta_event_retain",
-      "doc": "An event owns its data and, when its origin is a named actor, a reference to that address (ADR 0065). Retaining copies the envelope and retains both; it cannot fail. Releasing gives both back.",
+      "doc": "An event owns its data, a reference to its origin's address when that is a named actor (ADR 0065), and a reference to its origin's entry when that is a MESSAGE I/O origin (ADR 0068). Retaining copies the envelope and retains all of them; it cannot fail. Releasing gives them back.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -12950,6 +13537,165 @@
           "direction": "out",
           "valid_on": "success",
           "lifetime": "definition"
+        }
+      ]
+    },
+    {
+      "name": "ta_io_origin_make",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_io_origin_make_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_origin_release",
+      "doc": "Releases a made origin that never went into a delivered event; accepts any origin.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "void"
+        }
+      },
+      "params": [
+        {
+          "name": "origin",
+          "type": {
+            "pointer": {
+              "type": "ta_origin"
+            }
+          },
+          "shape": "single",
+          "direction": "inout"
+        }
+      ]
+    },
+    {
+      "name": "ta_io_scope_open",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_io_scope_open_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_io_scope_close",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "void"
+        }
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "scope",
+          "type": {
+            "type": "ta_io_scope"
+          }
+        }
+      ]
+    },
+    {
+      "name": "ta_origin_text",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_origin_text_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
         }
       ]
     },
@@ -14677,7 +15423,6 @@
     },
     {
       "name": "ta_system_register_io",
-      "doc": "The atom returned by ta_system_scxml_io_type() is reserved.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -14699,16 +15444,58 @@
           "direction": "in"
         },
         {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_io_registration_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_system_find_io",
+      "doc": "The registry index of a processor type; TA_ERR_NOT_FOUND when none.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
           "name": "type",
           "type": {
             "type": "ta_atom"
           }
         },
         {
-          "name": "io",
+          "name": "index",
           "type": {
-            "type": "ta_io"
-          }
+            "pointer": {
+              "builtin": "uint32_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success"
         }
       ]
     },

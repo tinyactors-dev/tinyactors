@@ -50,7 +50,11 @@ module TinyactorsNapiBindings
     'ta_actor_report_invoke' => 'invoker adapters report through the plumbing (step 13)',
     'ta_system_{create,destroy}' => 'the native System owns the ta_system (ADR 0012)',
     'ta_system_visit_actors' => 'paged enumeration is plumbing (ADR 0003, step 9)',
-    'ta_event_name_intern' => 'events.{c,h} interns dotted names from text once (ADR 0004)'
+    'ta_event_name_intern' => 'events.{c,h} interns dotted names from text once (ADR 0004)',
+    'ta_io_origin_make' => 'I/O origins are made by the plumbing when JavaScript posts with an origin (core ADR 0068)',
+    'ta_origin_release' => 'the plumbing releases the origins it makes (core ADR 0068)',
+    'ta_io_scope_{open,close}' => 'scopes are opened and closed through hand-written System methods (core ADR 0068)',
+    'ta_origin_text' => 'the ta_io_origin codec renders an origin into the call arena (core ADR 0068)'
   }.freeze
 
   OVERRIDE_FUNCTIONS = {}.freeze
@@ -72,6 +76,7 @@ module TinyactorsNapiBindings
   OVERRIDE_TYPES = {
     'ta_actor_id' => 'crosses as (slot, generation): two positional numbers at the top level, {slot, generation} inside objects (ADR 0002)',
     'ta_actor_ref' => 'a named ref is an interned ta_address handle; it crosses as family and name text (ADR 0006)',
+    'ta_io_origin' => 'crosses out as {processor, origin_class, uri}: a MESSAGE entry is a core view (core ADR 0068); JavaScript never passes one in',
     'ta_value' => 'values cross as value boxes (ADR 0011); undefined is an absent value',
     'ta_expression' => 'source text crosses as a string; a function, literal() or { get, set } is a host expression of the JavaScript data model (ADR 0011)'
   }.freeze
@@ -96,6 +101,9 @@ module TinyactorsNapiBindings
     'ta_invoke_{request,report_params}' => 'invoker plumbing (step 13)',
     'ta_invoker_*_params' => 'invoker callback arguments (step 13)',
     'ta_send' => 'I/O processor callback argument (step 13)',
+    'ta_io_text_params' => 'I/O processor callback argument (core ADR 0068)',
+    'ta_io_{registration,origin_make,scope_open}_params' => 'arguments of plumbing-owned functions (core ADR 0068)',
+    'ta_origin_text_params' => 'argument of a plumbing-owned function (core ADR 0068)',
     'ta_log_record' => 'log sink callback argument (step 13)',
     'ta_named_value' => 'data-model callback argument (step 11)',
     'ta_fault' => 'callback fault record; faults reach JavaScript through hooks (ADR 0008)',

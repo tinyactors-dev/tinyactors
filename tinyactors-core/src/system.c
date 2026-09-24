@@ -29,6 +29,8 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
     ta_vec_init(&system->io_processors, config->allocator, TA_VEC_LAYOUT(ta_io_registration));
     ta_vec_init(&system->invokers, config->allocator, TA_VEC_LAYOUT(ta_invoker_registration));
     ta_address_table_init(&system->addresses, config->allocator);
+    ta_io_origin_table_init(&system->io_scopes, config->allocator, true);
+    ta_io_origin_table_init(&system->io_messages, config->allocator, false);
     ta_result result = ta_session_table_init(&system->sessions, config->allocator);
     if (result == TA_OK) {
         result = ta_atom_table_init(&system->atoms, config->allocator);
@@ -90,6 +92,9 @@ void ta_system_destroy(ta_system *system) {
     ta_vec_destroy(&system->definitions);
     ta_timer_heap_destroy(&system->timers);
     ta_actor_table_destroy(&system->actors, system->allocator);
+    /* After the actors: their held events released their MESSAGE origins. */
+    ta_io_origin_table_destroy(&system->io_scopes);
+    ta_io_origin_table_destroy(&system->io_messages);
     ta_vec_destroy(&system->io_processors);
     ta_vec_destroy(&system->invokers);
     ta_arena_destroy(&system->scratch);
@@ -256,7 +261,7 @@ bool ta_system_is_scxml_io(const ta_system *system, ta_atom type) {
     return type == system->scxml_io_type || type == system->scxml_io_alias;
 }
 
-const ta_io *ta_system_find_io(const ta_system *system, ta_atom type) {
+const ta_io *ta_system_io_of(const ta_system *system, ta_atom type) {
     for (uint32_t index = 0; index < system->io_processors.count; index += 1) {
         const ta_io_registration *entry = ta_vec_at(&system->io_processors, index);
         if (entry->type == type) {
@@ -266,20 +271,71 @@ const ta_io *ta_system_find_io(const ta_system *system, ta_atom type) {
     return NULL;
 }
 
-ta_result ta_system_register_io(ta_system *system, ta_atom type, ta_io io) {
-    if (system == NULL || io.v == NULL || io.v->send == NULL || !ta_atom_valid(&system->atoms, type) ||
-        ta_system_is_scxml_io(system, type)) {
+const ta_io_registration *ta_system_io_at(const ta_system *system, uint32_t index) {
+    if (index == 0 || index > system->io_processors.count) {
+        return NULL;
+    }
+    return ta_vec_at(&system->io_processors, index - 1u);
+}
+
+ta_result ta_system_find_io(const ta_system *system, ta_atom type, uint32_t *index) {
+    if (system == NULL || index == NULL) {
         return TA_ERR_INVALID;
     }
-    for (uint32_t index = 0; index < system->io_processors.count; index += 1) {
-        ta_io_registration *entry = ta_vec_at(&system->io_processors, index);
+    if (ta_system_is_scxml_io(system, type)) {
+        *index = 0;
+        return TA_OK;
+    }
+    for (uint32_t at = 0; at < system->io_processors.count; at += 1) {
+        const ta_io_registration *entry = ta_vec_at(&system->io_processors, at);
         if (entry->type == type) {
-            entry->io = io;
+            *index = at + 1u;
             return TA_OK;
         }
     }
-    ta_io_registration entry = { .type = type, .io = io };
-    return ta_vec_push(&system->io_processors, &entry);
+    return TA_ERR_NOT_FOUND;
+}
+
+/* Registering a type again replaces its adapter at the same index (ADR 0068). */
+ta_result ta_system_register_io(ta_system *system, const ta_io_registration_params *params) {
+    if (system == NULL || params == NULL || params->io.v == NULL || params->io.v->send == NULL ||
+        !ta_atom_valid(&system->atoms, params->type) || ta_system_is_scxml_io(system, params->type)) {
+        return TA_ERR_INVALID;
+    }
+    uint32_t index = 0;
+    if (ta_system_find_io(system, params->type, &index) == TA_OK) {
+        ta_io_registration *entry = ta_vec_at(&system->io_processors, index - 1u);
+        entry->io = params->io;
+    } else {
+        ta_io_registration entry = { .type = params->type, .io = params->io };
+        ta_result result = ta_vec_push(&system->io_processors, &entry);
+        if (result != TA_OK) {
+            return result;
+        }
+        index = system->io_processors.count;
+    }
+    if (params->index != NULL) {
+        *params->index = index;
+    }
+    return TA_OK;
+}
+
+uint32_t ta_system_invoker_index(const ta_system *system, ta_atom type) {
+    for (uint32_t index = 0; index < system->invokers.count; index += 1) {
+        const ta_invoker_registration *entry = ta_vec_at(&system->invokers, index);
+        if (entry->type == type) {
+            return index;
+        }
+    }
+    return UINT32_MAX;
+}
+
+ta_atom ta_system_invoker_type(const ta_system *system, uint32_t index) {
+    if (index >= system->invokers.count) {
+        return TA_ATOM_NONE;
+    }
+    const ta_invoker_registration *entry = ta_vec_at(&system->invokers, index);
+    return entry->type;
 }
 
 ta_result ta_system_register_invoker(ta_system *system, ta_atom type, ta_invoker invoker) {

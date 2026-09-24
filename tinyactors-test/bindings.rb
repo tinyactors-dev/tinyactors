@@ -20,7 +20,11 @@ module TinyactorsBindings
     'ta_address_*' => 'named addresses cross the protocol as {family, name}; the ta_actor_ref codec interns them',
     'ta_scxml_target_release' => 'the ta_actor_ref codec releases what a request interned or received',
     'ta_external_delivery_release' => 'used inside asynchronous router adapters, not by hosts',
-    'ta_dm_host_*' => 'callable only from inside data-model callbacks'
+    'ta_dm_host_*' => 'callable only from inside data-model callbacks',
+    'ta_io_origin_make' => 'I/O origins are made in C by the io.* instruments (src/instruments.c); scenarios steer them with instrument commands',
+    'ta_origin_release' => 'C lifetime helper; the io.* instruments release the origins they make',
+    'ta_io_scope_{open,close}' => 'scopes belong to the io.connection instrument, which opens and closes them on command',
+    'ta_origin_text' => 'renders into a C arena; the ta_io_origin codec reports what an origin is'
   }.freeze
 
   # Functions with a hand-written `tat_handler_<function>` in src/. None yet.

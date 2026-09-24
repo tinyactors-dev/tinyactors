@@ -2,6 +2,7 @@
 #include "actor.h"
 #include "interpreter.h"
 #include "scxml_uri.h"
+#include "system.h"
 
 bool ta_dm_host_in_state(const ta_dm_host *host, ta_state_id state) {
     if (host == NULL || host->impl == NULL || host->impl->actor == NULL) {
@@ -29,109 +30,174 @@ static bool ta_dm_host_valid(const ta_dm_host *host) {
     return host != NULL && host->impl != NULL && host->impl->actor != NULL && host->impl->system != NULL;
 }
 
-/*
- * The URI of an actor reference, written with the grammar core parses
- * (ADR 0044): a session URI for a runtime actor, a logical address for a
- * named one. A chart can send to whatever it reads here.
- */
-static bool ta_dm_write_actor_uri(const ta_system *system, ta_text_writer *writer, ta_actor_ref actor) {
-    ta_scxml_target target = { .kind = TA_SCXML_TARGET_ACTOR, .as.actor = actor };
-    return ta_scxml_uri_write(system, writer, &target);
+/* The scratch arena of the interpreter run that is calling the data model (ADR 0068). */
+static ta_allocator ta_dm_arena(const ta_dm_host *host) {
+    return ta_arena_allocator(&host->impl->system->scratch);
 }
 
-/* Writes one event field; false when the field has no value. */
-static bool ta_dm_write_event_field(const ta_dm_host *host, ta_dm_text_kind kind, ta_text_writer *writer) {
-    const ta_system *system = host->impl->system;
-    const ta_event *event = ta_dm_host_event(host);
+typedef struct {
+    const ta_dm_host *host;
+    ta_dm_text_kind kind;
+} ta_dm_field;
+
+/* Writes the fields that core renders as text; false when the field has no value. */
+static bool ta_dm_write_field(const void *context, ta_text_writer *writer) {
+    const ta_dm_field *field = context;
+    const ta_system *system = field->host->impl->system;
+    const ta_actor *actor = field->host->impl->actor;
+    if (field->kind == TA_DM_TEXT_SESSION_ID) {
+        ta_text_put_u64(writer, actor->session_id);
+        return true;
+    }
+    if (field->kind == TA_DM_TEXT_IO_LOCATION) {
+        /* The SCXML processor's location: the address a chart can send to (ADR 0044). */
+        ta_scxml_target target = { .kind = TA_SCXML_TARGET_ACTOR, .as.actor = actor->record.self };
+        return ta_scxml_uri_write(system, writer, &target);
+    }
+    const ta_event *event = ta_dm_host_event(field->host);
     if (event == NULL) {
         return false;
     }
-    switch (kind) {
-        case TA_DM_TEXT_EVENT_NAME: {
-            ta_atom segments[TA_EVENT_NAME_MAX_DEPTH];
-            uint32_t count = ta_event_name_segments(&system->event_names, event->name, segments);
-            for (uint32_t index = 0; index < count; index += 1) {
-                if (index != 0) {
-                    ta_text_put(writer, (ta_str){ .ptr = ".", .len = 1 });
-                }
-                ta_text_put(writer, ta_atom_text(&system->atoms, segments[index]));
-            }
-            return count != 0;
+    if (field->kind == TA_DM_TEXT_EVENT_SENDID) {
+        if (event->send_id == 0) {
+            return false;
         }
+        ta_send_id_write(system, event->send_id, writer);
+        return true;
+    }
+    ta_atom segments[TA_EVENT_NAME_MAX_DEPTH];
+    uint32_t count = ta_event_name_segments(&system->event_names, event->name, segments);
+    for (uint32_t index = 0; index < count; index += 1) {
+        if (index != 0) {
+            ta_text_put(writer, (ta_str){ .ptr = ".", .len = 1 });
+        }
+        ta_text_put(writer, ta_atom_text(&system->atoms, segments[index]));
+    }
+    return count != 0;
+}
+
+static ta_result ta_dm_render_field(const ta_dm_host *host, ta_dm_text_kind kind, ta_str *out) {
+    ta_dm_field field = { .host = host, .kind = kind };
+    return ta_text_render(ta_dm_arena(host),
+                          &(ta_text_render_params){ .write = ta_dm_write_field, .context = &field, .out = out });
+}
+
+static ta_address *ta_dm_address(const ta_actor *actor) {
+    return actor->record.self.kind == TA_ACTOR_REF_NAMED ? actor->record.self.as.named : NULL;
+}
+
+/* An event field that is stored or rendered from the event's origin. */
+static ta_result ta_dm_event_text(const ta_dm_host *host, ta_dm_text_kind kind, ta_str *out) {
+    const ta_system *system = host->impl->system;
+    const ta_actor *actor = host->impl->actor;
+    const ta_event *event = ta_dm_host_event(host);
+    if (event == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    switch (kind) {
         case TA_DM_TEXT_EVENT_TYPE: {
             static const char *const types[] = { "external", "internal", "platform" };
             if ((uint32_t)event->type >= TA_ARRAY_COUNT(types)) {
-                return false;
+                return TA_ERR_NOT_FOUND;
             }
-            ta_text_put(writer, ta_str_from_cstr(types[event->type]));
-            return true;
+            *out = ta_str_from_cstr(types[event->type]);
+            return TA_OK;
         }
-        case TA_DM_TEXT_EVENT_SENDID:
-            if (event->send_id == 0) {
-                return false;
-            }
-            ta_send_id_write(system, event->send_id, writer);
-            return true;
         case TA_DM_TEXT_EVENT_ORIGIN:
-            if (event->origin.kind == TA_ORIGIN_ACTOR) {
-                return ta_dm_write_actor_uri(system, writer, event->origin.as.actor);
-            }
-            if (event->origin.kind == TA_ORIGIN_INVOKE) {
-                ta_scxml_target target = { .kind = TA_SCXML_TARGET_INVOKE, .as.invoke = event->origin.as.invoke };
-                return ta_scxml_uri_write(system, writer, &target);
-            }
-            return false;
+            return ta_io_origin_uri(system, &(ta_io_origin_render_params){
+                                                .origin = &event->origin,
+                                                .session_id = actor->session_id,
+                                                .address = ta_dm_address(actor),
+                                                .arena = ta_dm_arena(host),
+                                                .out = out,
+                                            });
         case TA_DM_TEXT_EVENT_ORIGINTYPE:
-            if (event->origin.kind != TA_ORIGIN_ACTOR && event->origin.kind != TA_ORIGIN_INVOKE) {
-                return false;
+            /* An origin with no URI, such as a closed scope, has no type either. */
+            if (event->origin.kind == TA_ORIGIN_IO && event->origin.as.io.origin_class == TA_IO_ORIGIN_SCOPED) {
+                ta_str uri;
+                ta_result result = ta_io_origin_uri(system, &(ta_io_origin_render_params){
+                                                                .origin = &event->origin,
+                                                                .arena = ta_dm_arena(host),
+                                                                .out = &uri,
+                                                            });
+                if (result != TA_OK) {
+                    return result;
+                }
             }
-            ta_text_put(writer, ta_atom_text(&system->atoms, system->scxml_io_type));
-            return true;
+            return ta_io_origin_type(system, &event->origin, out);
         case TA_DM_TEXT_EVENT_INVOKEID:
             if (event->invoke_id == TA_INVOKE_ID_NONE) {
-                return false;
+                return TA_ERR_NOT_FOUND;
             }
             /* The SCXML ID text, e.g. the author's ID or `<stateid>.<platformid>`. */
-            ta_text_put(writer, ta_invoke_id_text(system, event->invoke_id));
-            return true;
+            *out = ta_invoke_id_text(system, event->invoke_id);
+            return TA_OK;
         default:
-            return false;
+            return ta_dm_render_field(host, kind, out);
     }
 }
 
-ta_result ta_dm_host_text(const ta_dm_host *host, const ta_dm_text_params *params) {
-    if (!ta_dm_host_valid(host) || params == NULL || params->needed == NULL) {
-        return TA_ERR_INVALID;
-    }
+/* One entry of `_ioprocessors`: its type, or this session's location through it. */
+static ta_result ta_dm_io_text(const ta_dm_host *host, const ta_dm_text_params *params) {
     const ta_system *system = host->impl->system;
     const ta_actor *actor = host->impl->actor;
-    ta_text_writer writer = { .buffer = params->buffer, .capacity = params->capacity };
-    bool present = true;
-    switch (params->kind) {
-        case TA_DM_TEXT_SESSION_ID:
-            ta_text_put_u64(&writer, actor->session_id);
-            break;
-        case TA_DM_TEXT_SESSION_NAME:
-            present = actor->definition->document_name != TA_ATOM_NONE;
-            if (present) {
-                ta_text_put(&writer, ta_atom_text(&system->atoms, actor->definition->document_name));
-            }
-            break;
-        case TA_DM_TEXT_SCXML_IO_LOCATION:
-            present = ta_dm_write_actor_uri(system, &writer, actor->record.self);
-            break;
-        case TA_DM_TEXT_SCXML_IO_TYPE:
-            ta_text_put(&writer, ta_atom_text(&system->atoms, system->scxml_io_type));
-            break;
-        default:
-            present = ta_dm_write_event_field(host, params->kind, &writer);
-            break;
+    if (params->io_index == 0) {
+        if (params->kind == TA_DM_TEXT_IO_TYPE) {
+            *params->out = ta_atom_text(&system->atoms, system->scxml_io_type);
+            return TA_OK;
+        }
+        return ta_dm_render_field(host, TA_DM_TEXT_IO_LOCATION, params->out);
     }
-    if (!present) {
-        *params->needed = 0;
+    const ta_io_registration *registration = ta_system_io_at(system, params->io_index);
+    if (registration == NULL) {
         return TA_ERR_NOT_FOUND;
     }
-    return ta_text_finish(&writer, params->needed);
+    if (params->kind == TA_DM_TEXT_IO_TYPE) {
+        *params->out = ta_atom_text(&system->atoms, registration->type);
+        return TA_OK;
+    }
+    if (registration->io.v->text == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    return registration->io.v->text(registration->io.self, &(ta_io_text_params){
+                                                               .kind = TA_IO_TEXT_LOCATION,
+                                                               .session_id = actor->session_id,
+                                                               .address = ta_dm_address(actor),
+                                                               .arena = ta_dm_arena(host),
+                                                               .out = params->out,
+                                                           });
+}
+
+ta_result ta_dm_host_text(const ta_dm_host *host, const ta_dm_text_params *params) {
+    if (!ta_dm_host_valid(host) || params == NULL || params->out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    *params->out = (ta_str){0};
+    const ta_system *system = host->impl->system;
+    const ta_actor *actor = host->impl->actor;
+    ta_result result;
+    switch (params->kind) {
+        case TA_DM_TEXT_SESSION_ID:
+            result = ta_dm_render_field(host, params->kind, params->out);
+            break;
+        case TA_DM_TEXT_SESSION_NAME:
+            if (actor->definition->document_name == TA_ATOM_NONE) {
+                return TA_ERR_NOT_FOUND;
+            }
+            *params->out = ta_atom_text(&system->atoms, actor->definition->document_name);
+            return TA_OK;
+        case TA_DM_TEXT_IO_TYPE:
+        case TA_DM_TEXT_IO_LOCATION:
+            result = ta_dm_io_text(host, params);
+            break;
+        default:
+            result = ta_dm_event_text(host, params->kind, params->out);
+            break;
+    }
+    if (result != TA_OK) {
+        *params->out = (ta_str){0};
+    }
+    return result;
 }
 
 ta_result ta_dm_host_state_name(const ta_dm_host *host, ta_state_id state, ta_str *out) {

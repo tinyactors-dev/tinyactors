@@ -767,28 +767,21 @@ static tna_js_datamodel *tna_context_dm(napi_env env, napi_callback_info info, s
     return dm;
 }
 
-/* System-variable text (core's formatting), or undefined when absent. */
-static napi_value tna_host_text(napi_env env, const ta_dm_host *host, ta_dm_text_kind kind) {
-    char stack[256];
-    uint32_t needed = 0;
+/* System-variable text (core's view, ADR 0068), or undefined when absent. */
+static napi_value tna_host_io_text(napi_env env, const ta_dm_host *host, ta_dm_text_kind kind, uint32_t io_index) {
+    ta_str text = { 0 };
     napi_value out = NULL;
-    ta_result result = ta_dm_host_text(host, &(ta_dm_text_params){ .kind = kind, .buffer = stack,
-                                                                   .capacity = sizeof stack, .needed = &needed });
-    if (result == TA_ERR_NOMEM && needed > sizeof stack) {
-        char *heap = malloc(needed);
-        if (heap != NULL &&
-            ta_dm_host_text(host, &(ta_dm_text_params){ .kind = kind, .buffer = heap, .capacity = needed,
-                                                        .needed = &needed }) == TA_OK) {
-            napi_create_string_utf8(env, heap, needed - 1u, &out);
-        }
-        free(heap);
-    } else if (result == TA_OK) {
-        napi_create_string_utf8(env, stack, needed == 0 ? 0 : needed - 1u, &out);
+    if (ta_dm_host_text(host, &(ta_dm_text_params){ .kind = kind, .io_index = io_index, .out = &text }) == TA_OK) {
+        napi_create_string_utf8(env, text.len == 0 ? "" : text.ptr, text.len, &out);
     }
     if (out == NULL) {
         napi_get_undefined(env, &out);
     }
     return out;
+}
+
+static napi_value tna_host_text(napi_env env, const ta_dm_host *host, ta_dm_text_kind kind) {
+    return tna_host_io_text(env, host, kind, 0);
 }
 
 static napi_value tna_get_data(napi_env env, napi_callback_info info) {
@@ -858,24 +851,42 @@ static napi_value tna_get_name(napi_env env, napi_callback_info info) {
 }
 
 /* _ioprocessors: the SCXML Event I/O Processor, by its type URI and "scxml". */
+/*
+ * _ioprocessors: one {location} per processor core lists, keyed by its type
+ * (SCXML 5.10, ADR 0068). The SCXML processor, index 0, is also "scxml".
+ */
 static napi_value tna_get_io_processors(napi_env env, napi_callback_info info) {
     tna_js_datamodel *dm = tna_context_dm(env, info, NULL, NULL);
     if (dm == NULL) {
         return NULL;
     }
     napi_value processors = NULL;
-    napi_value entry = NULL;
-    napi_value type = tna_host_text(env, dm->host, TA_DM_TEXT_SCXML_IO_TYPE);
-    size_t length = 0;
-    char key[256];
-    if (napi_create_object(env, &processors) != napi_ok || napi_create_object(env, &entry) != napi_ok ||
-        napi_set_named_property(env, entry, "location", tna_host_text(env, dm->host, TA_DM_TEXT_SCXML_IO_LOCATION)) !=
-            napi_ok ||
-        napi_set_named_property(env, processors, "scxml", entry) != napi_ok) {
+    if (napi_create_object(env, &processors) != napi_ok) {
         return NULL;
     }
-    if (napi_get_value_string_utf8(env, type, key, sizeof key, &length) == napi_ok && length > 0) {
-        napi_set_named_property(env, processors, key, entry);
+    for (uint32_t index = 0;; index += 1) {
+        ta_str type = { 0 };
+        if (ta_dm_host_text(dm->host, &(ta_dm_text_params){ .kind = TA_DM_TEXT_IO_TYPE, .io_index = index,
+                                                            .out = &type }) != TA_OK) {
+            break;
+        }
+        napi_value entry = NULL;
+        napi_valuetype kind = napi_undefined;
+        napi_value location = tna_host_io_text(env, dm->host, TA_DM_TEXT_IO_LOCATION, index);
+        if (napi_create_object(env, &entry) != napi_ok || napi_typeof(env, location, &kind) != napi_ok) {
+            return NULL;
+        }
+        if (kind == napi_string) {
+            napi_set_named_property(env, entry, "location", location);
+        }
+        napi_value key = NULL;
+        if (napi_create_string_utf8(env, type.ptr, type.len, &key) != napi_ok ||
+            napi_set_property(env, processors, key, entry) != napi_ok) {
+            return NULL;
+        }
+        if (index == 0) {
+            napi_set_named_property(env, processors, "scxml", entry);
+        }
     }
     return processors;
 }

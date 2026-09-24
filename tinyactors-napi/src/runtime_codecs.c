@@ -452,6 +452,41 @@ napi_value tna_enc_ta_actor_ref(tna_call *call, const ta_actor_ref *in) {
     return object;
 }
 
+bool tna_dec_ta_io_origin(tna_call *call, napi_value value, ta_io_origin *out) {
+    (void)value;
+    *out = (ta_io_origin){ 0 };
+    return tna_invalid(call, "no I/O origin: origins are made by the plumbing (post with an origin option)");
+}
+
+napi_value tna_enc_ta_io_origin(tna_call *call, const ta_io_origin *in) {
+    static const char *const classes[] = { "computed", "scoped", "message" };
+    napi_value object = tna_object(call);
+    napi_value processor = tna_enc_uint32_t(call, &in->processor);
+    napi_value origin_class = tna_string(call, (uint32_t)in->origin_class < 3u ? classes[in->origin_class] : "unknown");
+    if (object == NULL || processor == NULL || origin_class == NULL ||
+        !tna_ok(call, napi_set_named_property(call->env, object, "processor", processor)) ||
+        !tna_ok(call, napi_set_named_property(call->env, object, "origin_class", origin_class))) {
+        return NULL;
+    }
+    ta_arena *arena = call->core == NULL ? NULL : tna_call_arena(call);
+    if (arena == NULL) {
+        return object;
+    }
+    ta_origin origin = { .kind = TA_ORIGIN_IO, .as.io = *in };
+    ta_str type = { NULL, 0 };
+    ta_str uri = { NULL, 0 };
+    if (ta_origin_text(call->core, &(ta_origin_text_params){ .origin = &origin,
+                                                             .arena = ta_arena_allocator(arena),
+                                                             .type = &type,
+                                                             .uri = &uri }) == TA_OK) {
+        napi_value text = tna_enc_ta_str(call, &uri);
+        if (text == NULL || !tna_ok(call, napi_set_named_property(call->env, object, "uri", text))) {
+            return NULL;
+        }
+    }
+    return object;
+}
+
 /* ------------------------------------------------------------------------
  * Adapters the plumbing supplies (INJECT_TYPES).
  */

@@ -25,7 +25,7 @@ flags = %W[-I#{root.join("include")} -std=c11 -Wall -Wextra -Werror -pedantic -g
            -fsanitize=address,undefined -fno-sanitize-recover=all]
 
 # Tests that link the amalgamation, and tests that include it themselves.
-WITH_RUNTIME = %w[address_test session_image_test delayed_send_test null_datamodel_test pause_test inspection_test
+WITH_RUNTIME = %w[address_test io_origin_test session_image_test delayed_send_test null_datamodel_test pause_test inspection_test
                   retirement_test scxml_uri_test send_id_test tree_test].freeze
 # Of the tests that include the amalgamation themselves, and so compile it
 # again, only the one about actor lifetimes runs: codec, export, compile

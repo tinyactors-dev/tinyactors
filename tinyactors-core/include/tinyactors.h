@@ -256,12 +256,46 @@ static inline void ta_value_release(TA_INOUT TA_OPTIONAL ta_value *value) TA_ANY
 
 typedef enum { TA_EVENT_EXTERNAL = 0, TA_EVENT_INTERNAL = 1, TA_EVENT_PLATFORM = 2 } ta_event_type TA_SYMBOLS("TA_EVENT_");
 typedef enum { TA_ORIGIN_NONE = 0, TA_ORIGIN_ACTOR = 1, TA_ORIGIN_IO = 2, TA_ORIGIN_INVOKE = 3 } ta_origin_kind TA_SYMBOLS("TA_ORIGIN_");
+/*
+ * How long the URI of an event that came through an I/O processor lives, and
+ * who stores it (ADR 0068). The processor chooses the class when it builds
+ * the origin with ta_io_origin_make():
+ * - COMPUTED: the origin holds a token, and the processor renders the URI
+ *   from it with its `text` callback. Nothing is stored. For peer links, and
+ *   connections whose URI follows a formula.
+ * - SCOPED: the origin names a scope (ta_io_scope_open()) that stores the URI
+ *   once, for a connection or a session. After ta_io_scope_close() the
+ *   origin renders empty.
+ * - MESSAGE: core stores the URI in a reference-counted entry that lives as
+ *   long as any copy of the event holding it. For one request or message.
+ */
+typedef enum { TA_IO_ORIGIN_COMPUTED = 0, TA_IO_ORIGIN_SCOPED = 1, TA_IO_ORIGIN_MESSAGE = 2 } ta_io_origin_class TA_SYMBOLS("TA_IO_ORIGIN_");
+/* A stored URI of a MESSAGE origin; core owns it. */
+typedef struct ta_io_origin_entry ta_io_origin_entry TA_VIEW;
+/* A scope of a SCOPED origin: stale once closed, never another scope's. */
+typedef struct { uint32_t index; uint32_t generation; } ta_io_scope;
+typedef struct {
+    /* The processor's registry index (ADR 0068); never 0, the SCXML processor. */
+    uint32_t processor;
+    ta_io_origin_class origin_class;
+    union {
+        TA_WHEN(TA_IO_ORIGIN_COMPUTED) uint64_t token;
+        TA_WHEN(TA_IO_ORIGIN_SCOPED) ta_io_scope scope;
+        TA_WHEN(TA_IO_ORIGIN_MESSAGE) ta_io_origin_entry *entry;
+    } as;
+} ta_io_origin TA_TAGGED(origin_class, as);
+/*
+ * An event from an invoked service (ADR 0068). Core fills it: `invoker` is
+ * the registry index of the invocation's invoker, so the origin keeps its
+ * type after the invocation ends.
+ */
+typedef struct { ta_invoke_id invoke; uint32_t invoker; } ta_invoke_origin;
 typedef struct {
     ta_origin_kind kind;
     union {
         TA_WHEN(TA_ORIGIN_ACTOR) ta_actor_ref actor;
-        TA_WHEN(TA_ORIGIN_INVOKE) ta_invoke_id invoke;
-        TA_WHEN(TA_ORIGIN_IO) uint64_t opaque;
+        TA_WHEN(TA_ORIGIN_IO) ta_io_origin io;
+        TA_WHEN(TA_ORIGIN_INVOKE) ta_invoke_origin invoke;
     } as;
 } ta_origin TA_TAGGED(kind, as);
 typedef struct { ta_event_name_id name; ta_event_type type; ta_send_id send_id; ta_origin origin; ta_invoke_id invoke_id; ta_value data; } ta_event;
@@ -283,9 +317,10 @@ enum TA_FLAG_SET(ta_event_flags, "TA_EVENT_FLAG_") {
 };
 
 /*
- * An event owns its data and, when its origin is a named actor, a reference
- * to that address (ADR 0065). Retaining copies the envelope and retains
- * both; it cannot fail. Releasing gives both back.
+ * An event owns its data, a reference to its origin's address when that is
+ * a named actor (ADR 0065), and a reference to its origin's entry when that
+ * is a MESSAGE I/O origin (ADR 0068). Retaining copies the envelope and
+ * retains all of them; it cannot fail. Releasing gives them back.
  */
 TA_API void ta_event_retain(TA_IN const ta_event *event, TA_OUT TA_RELEASE(ta_event_release) ta_event *out)
     TA_ANY_VALUE_MODEL;
@@ -621,11 +656,16 @@ TA_API ta_datamodel ta_null_datamodel(void);
 
 /*
  * Text of the SCXML system variables, for data models that expose them
- * (SCXML 5.10). Each field is formatted into the caller's buffer following
- * the list-output convention: `*needed` always receives the size including
- * the terminating NUL, and a too-small buffer yields TA_ERR_NOMEM without
- * writing. TA_ERR_NOT_FOUND means the field has no value, e.g. no event has
- * been processed yet, or the current event has no send ID or origin.
+ * (SCXML 5.10, ADR 0068). `*out` is a view, not NUL-terminated, valid until
+ * the interpreter run that is calling the data model ends: core renders it
+ * into the run's scratch arena, or points at text it stores. Copy it before
+ * returning to core. TA_ERR_NOT_FOUND means the field has no value, e.g. no
+ * event has been processed yet, the current event has no send ID or origin,
+ * or `io_index` is past the last processor. TA_ERR_NOMEM means the arena
+ * could not grow.
+ *
+ * `_ioprocessors` is enumerated by reading TA_DM_TEXT_IO_TYPE for io_index
+ * 0, 1, 2, ... until TA_ERR_NOT_FOUND. Index 0 is the SCXML processor.
  */
 typedef enum {
     /* _event.name, dotted. */
@@ -644,16 +684,16 @@ typedef enum {
     TA_DM_TEXT_SESSION_ID,
     /* _name: the <scxml> name attribute. */
     TA_DM_TEXT_SESSION_NAME,
-    /* _ioprocessors: the SCXML Event I/O Processor's location for this session. */
-    TA_DM_TEXT_SCXML_IO_LOCATION,
-    /* _ioprocessors: the SCXML Event I/O Processor's type URI. */
-    TA_DM_TEXT_SCXML_IO_TYPE
+    /* _ioprocessors: the type URI of the processor at io_index. */
+    TA_DM_TEXT_IO_TYPE,
+    /* _ioprocessors: this session's location through the processor at io_index. */
+    TA_DM_TEXT_IO_LOCATION
 } ta_dm_text_kind TA_SYMBOLS("TA_DM_TEXT_");
 typedef struct {
     ta_dm_text_kind kind;
-    TA_BUFFER(capacity, needed) TA_OPTIONAL char *buffer;
-    uint32_t capacity;
-    TA_OUT TA_ALWAYS uint32_t *needed;
+    /* TA_DM_TEXT_IO_TYPE and TA_DM_TEXT_IO_LOCATION: the processor's registry index. */
+    uint32_t io_index;
+    TA_OUT TA_LIFETIME(run) ta_str *out;
 } ta_dm_text_params;
 TA_API ta_result ta_dm_host_text(const ta_dm_host *host, TA_IN const ta_dm_text_params *params);
 /* The author's ID of a state; TA_ERR_NOT_FOUND ends iteration over 0, 1, 2, ... */
@@ -675,12 +715,95 @@ TA_API ta_result ta_dm_host_state_name(const ta_dm_host *host,
  */
 typedef struct { ta_actor_ref source; ta_send_id send_id; ta_event_name_id event; ta_atom io_type; ta_value target; ta_value data;
                  ta_str content_type; ta_bytes content; } ta_send;
+/*
+ * What an I/O processor renders (ADR 0068): the URI of one of its COMPUTED
+ * origins, or this session's location through it (`_ioprocessors`).
+ */
+typedef enum { TA_IO_TEXT_ORIGIN = 0, TA_IO_TEXT_LOCATION = 1 } ta_io_text_kind TA_SYMBOLS("TA_IO_TEXT_");
+typedef struct {
+    ta_io_text_kind kind;
+    /* The session the text is for (ADR 0066); 0 when there is none. */
+    uint64_t session_id;
+    /* Its named address, or null. */
+    TA_OPTIONAL ta_address *address;
+    /* TA_IO_TEXT_ORIGIN: the COMPUTED origin's token. */
+    uint64_t token;
+    /* Where the text must be allocated. */
+    ta_allocator arena;
+    TA_OUT TA_LIFETIME(arena) ta_str *out;
+} ta_io_text_params;
+/*
+ * `text` is optional. Its contract (ADR 0068):
+ * - pure: the text depends only on the processor's registration, the
+ *   session and the token, for the life of the system, so a replayed
+ *   history reads the same text;
+ * - it makes no calls into core: it runs while a data model evaluates an
+ *   expression inside a macrostep;
+ * - all memory for the text comes from `arena`, and it keeps no pointer into
+ *   it;
+ * - it answers TA_OK with the text, TA_ERR_NOT_FOUND when there is no such
+ *   text (the field is then empty), or TA_ERR_NOMEM when the arena cannot
+ *   grow.
+ * A processor without `text` has no location and cannot make COMPUTED
+ * origins. A Basic HTTP processor must render a location (SCXML C.2.3).
+ */
 typedef struct ta_io_vtable {
     ta_op_status (*send)(void *self,
                          TA_IN const ta_send *send,
                          TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault);
+    TA_OPTIONAL ta_result (*text)(void *self, TA_IN const ta_io_text_params *params);
 } ta_io_vtable TA_VTABLE;
 typedef struct { void *self; const ta_io_vtable *v; } ta_io TA_ADAPTER;
+
+/*
+ * Origins of events that come through an I/O processor (ADR 0068). A host
+ * builds one before it delivers the event, and puts it in the event. A
+ * MESSAGE origin comes back holding one reference, which the event then
+ * owns: ta_event_release() gives it back. An origin that never went into a
+ * delivered event is released with ta_origin_release().
+ */
+typedef struct {
+    /* The processor's registry index, from ta_system_register_io(). */
+    uint32_t processor;
+    ta_io_origin_class origin_class;
+    /* COMPUTED: rendered by the processor's `text` callback. */
+    uint64_t token;
+    /* SCOPED: an open scope of this processor. */
+    ta_io_scope scope;
+    /* MESSAGE: copied into core's storage. */
+    ta_str uri;
+    TA_OUT TA_RELEASE(ta_origin_release) ta_origin *out;
+} ta_io_origin_make_params;
+TA_API ta_result ta_io_origin_make(ta_system *system, TA_IN const ta_io_origin_make_params *params);
+/* Releases a made origin that never went into a delivered event; accepts any origin. */
+TA_API void ta_origin_release(TA_INOUT ta_origin *origin);
+
+/*
+ * A scope stores one URI for a connection or a session. Events refer to it
+ * without holding it: once closed, an origin naming it renders empty, so a
+ * late reply fails. Closing is idempotent for a stale scope.
+ */
+typedef struct { uint32_t processor; ta_str uri; TA_OUT ta_io_scope *out; } ta_io_scope_open_params;
+TA_API ta_result ta_io_scope_open(ta_system *system, TA_IN const ta_io_scope_open_params *params);
+TA_API void ta_io_scope_close(ta_system *system, ta_io_scope scope);
+
+/*
+ * The text of any origin, for hosts that show or log events outside a data
+ * model. `*type` is the processor type (empty for no origin) and lives with
+ * the system. `*uri` is rendered into `arena` for actor, invoke and COMPUTED
+ * origins, and is a view of stored text for SCOPED and MESSAGE ones, valid
+ * while the origin is held and its scope is open. TA_ERR_NOT_FOUND when the
+ * origin has no text: none, or a closed scope.
+ */
+typedef struct {
+    TA_IN const ta_origin *origin;
+    /* The session the origin was delivered to, for the processor's `text`; 0 when unknown. */
+    uint64_t session_id;
+    ta_allocator arena;
+    TA_OUT TA_LIFETIME(system) ta_str *type;
+    TA_OUT TA_LIFETIME(arena) ta_str *uri;
+} ta_origin_text_params;
+TA_API ta_result ta_origin_text(const ta_system *system, TA_IN const ta_origin_text_params *params);
 
 
 /* ========================================================================
@@ -2314,8 +2437,21 @@ TA_API ta_result ta_system_find_definition(const ta_system *system,
  * TA_ERR_NOT_FOUND when the ID was never issued.
  */
 TA_API ta_result ta_system_retire_definition(ta_system *system, ta_definition_id definition);
-/* The atom returned by ta_system_scxml_io_type() is reserved. */
-TA_API ta_result ta_system_register_io(ta_system *system, ta_atom type, ta_io io);
+/*
+ * The I/O processor registry (ADR 0068). Index 0 is always the SCXML
+ * processor; registered processors get 1, 2, 3, ... in registration order.
+ * An index never changes while the system lives: registering a type again
+ * replaces its adapter at the same index. The atom returned by
+ * ta_system_scxml_io_type() is reserved.
+ */
+typedef struct {
+    ta_atom type;
+    ta_io io;
+    TA_OUT TA_OPTIONAL uint32_t *index;
+} ta_io_registration_params;
+TA_API ta_result ta_system_register_io(ta_system *system, TA_IN const ta_io_registration_params *params);
+/* The registry index of a processor type; TA_ERR_NOT_FOUND when none. */
+TA_API ta_result ta_system_find_io(const ta_system *system, ta_atom type, TA_OUT uint32_t *index);
 /* Installs where <log> goes; without one, a <log> only evaluates its expr. */
 TA_API ta_result ta_system_set_log_sink(ta_system *system, ta_log_sink sink);
 TA_API ta_result ta_system_register_invoker(ta_system *system,

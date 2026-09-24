@@ -30,3 +30,8 @@ typedef struct {
  * queues its error.communication.invoke.<id>.unavailable event.
  */
 ta_result ta_invoke_report_lost(ta_system *system, ta_actor *actor, ta_invoke_id invoke);
+
+/* The origin of an event from `invoke`: its ID and its invoker's registry index (ADR 0068). */
+ta_origin ta_invoke_origin_of(const ta_system *system, const ta_active_invoke *invoke);
+/* The origin of an event from the actor's active invocation `invoke`; false when there is none. */
+bool ta_invoke_origin_for(const ta_system *system, const ta_actor *actor, ta_invoke_id invoke, ta_origin *out);

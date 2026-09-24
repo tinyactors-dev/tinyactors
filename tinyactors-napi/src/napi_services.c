@@ -340,7 +340,8 @@ napi_value tna_register_io_method(napi_env env, napi_callback_info info) {
         return NULL;
     }
     tna_system *system = wrapper->system;
-    ta_result result = ta_system_register_io(system->core, atom, tna_io_adapter(system));
+    ta_result result = ta_system_register_io(
+        system->core, &(ta_io_registration_params){ .type = atom, .io = tna_io_adapter(system) });
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result),
                          "registerIo(): core refused the type (the SCXML event processor's type is reserved)");
@@ -481,7 +482,7 @@ napi_value tna_report_invoke_method(napi_env env, napi_callback_info info) {
     ta_event event = {
         .name = name,
         .type = TA_EVENT_EXTERNAL,
-        .origin = { .kind = TA_ORIGIN_INVOKE, .as.invoke = invoke },
+        /* No origin: core gives the service's event its invoke origin on delivery (ADR 0068). */
         .invoke_id = invoke,
     };
     napi_valuetype type = napi_undefined;

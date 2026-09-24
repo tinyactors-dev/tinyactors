@@ -114,7 +114,7 @@ Facts:
 | `TA_VALID_ON(CONSTANT)` | The output is valid only after that result, for example a `ta_fault` after `TA_OP_ERROR`. |
 | `TA_RELEASE(function)` | The receiver owns the output and releases it with `function`. On a by-value host value member (`ta_fault.data`), the member is owned by whoever receives the struct. |
 | `TA_RELEASE_IF(function, flag)` | Like `TA_RELEASE` for a by-value member, when bool sibling `flag` is true (`ta_actor_completion.data`). |
-| `TA_LIFETIME(scope)` | Borrowed data stays valid for `scope`: `call` (until the call or callback returns), `system` (while the system is externally synchronized against mutation), `definition` (while the definition exists), `arena` (until the arena is reset), or `input` (while the input it came from is retained). An output that holds borrowed references (pointers, strings, host values, adapters) needs `TA_LIFETIME` or `TA_RELEASE`. |
+| `TA_LIFETIME(scope)` | Borrowed data stays valid for `scope`: `call` (until the call or callback returns), `system` (while the system is externally synchronized against mutation), `definition` (while the definition exists), `arena` (until the arena is reset), `input` (while the input it came from is retained), or `run` (until the interpreter run that is calling a data-model callback ends; ADR 0068). An output that holds borrowed references (pointers, strings, host values, adapters) needs `TA_LIFETIME` or `TA_RELEASE`. |
 | `TA_DESTROYS` | On a handle parameter: the function destroys the handle. |
 | `TA_CONSUMED_ON_OK` | On a handle parameter: the callee takes ownership when it returns `TA_OK`. |
 | `TA_WHEN(CONSTANT)` | On a member of a tagged union: `CONSTANT` selects it. |

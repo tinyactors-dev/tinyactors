@@ -155,3 +155,19 @@ ta_result ta_text_finish(ta_text_writer *writer, uint32_t *needed) {
     writer->buffer[writer->length] = '\0';
     return TA_OK;
 }
+
+ta_result ta_text_render(ta_allocator allocator, const ta_text_render_params *params) {
+    ta_text_writer measure = {0};
+    if (!params->write(params->context, &measure)) {
+        return TA_ERR_NOT_FOUND;
+    }
+    char *buffer = ta_mem_alloc(allocator, (size_t)measure.length + 1u, 1);
+    if (buffer == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    ta_text_writer writer = { .buffer = buffer, .capacity = measure.length + 1u };
+    (void)params->write(params->context, &writer);
+    buffer[measure.length] = '\0';
+    *params->out = (ta_str){ .ptr = buffer, .len = measure.length };
+    return TA_OK;
+}

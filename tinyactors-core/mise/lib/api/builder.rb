@@ -22,7 +22,7 @@ module Api
               'TA_VALID_ON' => 1, 'TA_RELEASE' => 1, 'TA_LIFETIME' => 1, 'TA_VALUE_MODEL' => 2 }.freeze
     ANNOTATIONS = (TYPE_ANNOTATIONS + SLOT_ANNOTATIONS + FUNCTION_ANNOTATIONS +
                    %w[TA_CONSTANTS_OF TA_FLAG_SET TA_SUCCESS]).uniq.freeze
-    SCOPES = %w[call system definition arena input].freeze
+    SCOPES = %w[call system definition arena input run].freeze
     INTEGERS = %w[int int8_t int16_t int32_t int64_t uint8_t uint16_t uint32_t uint64_t size_t].freeze
     VALUE_MODELS = { 'actor' => 'ta_actor_id', 'definition' => 'ta_definition_id', 'session_image' => 'ta_session_image' }.freeze
     OUTPUT_SHAPES = %w[single buffer view_out handle_out raw].freeze

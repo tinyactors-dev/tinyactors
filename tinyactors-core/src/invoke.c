@@ -833,6 +833,21 @@ static ta_result ta_invoke_unavailable(ta_system *system, ta_actor *actor, const
     return result;
 }
 
+ta_origin ta_invoke_origin_of(const ta_system *system, const ta_active_invoke *invoke) {
+    return (ta_origin){ .kind = TA_ORIGIN_INVOKE,
+                        .as.invoke = { .invoke = invoke->id,
+                                       .invoker = ta_system_invoker_index(system, invoke->type) } };
+}
+
+bool ta_invoke_origin_for(const ta_system *system, const ta_actor *actor, ta_invoke_id invoke, ta_origin *out) {
+    int64_t index = ta_invoke_find(actor, invoke);
+    if (index < 0) {
+        return false;
+    }
+    *out = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
+    return true;
+}
+
 ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_report_params *params) {
     if (system == NULL || params == NULL) {
         return TA_ERR_INVALID;
@@ -854,6 +869,8 @@ ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_report_param
             event = *params->as.event;
             event.type = TA_EVENT_EXTERNAL;
             event.invoke_id = params->invoke_id;
+            /* Core fills the origin of a service's own event, whatever the host passed (ADR 0068). */
+            event.origin = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
             return ta_actor_deliver(system, params->actor, &event);
         case TA_INVOKE_REPORT_DONE: {
             ta_result result = ta_invoke_done_name(system, params->invoke_id, &event.name);
@@ -863,6 +880,7 @@ ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_report_param
             if (params->as.done_data != NULL) {
                 event.data = *params->as.done_data;
             }
+            event.origin = ta_invoke_origin_of(system, &actor->sparse->invokes[index]);
             return ta_actor_deliver(system, params->actor, &event);
         }
         case TA_INVOKE_REPORT_UNAVAILABLE:

@@ -206,25 +206,41 @@ static char *tat_json_source(tat_json_datamodel_context *context, ta_str express
     return source;
 }
 
-/* One system-variable field as a JSON string, or null when it has no value. */
-static jv tat_json_host_text(const ta_dm_host *host, ta_dm_text_kind kind) {
-    char buffer[256];
-    uint32_t needed = 0;
-    ta_dm_text_params params = {.kind = kind, .buffer = buffer, .capacity = sizeof(buffer), .needed = &needed};
-    ta_result result = ta_dm_host_text(host, &params);
-    if (result == TA_ERR_NOMEM && needed != 0) {
-        char *large = malloc(needed);
-        if (large == NULL) {
-            return jv_null();
-        }
-        params.buffer = large;
-        params.capacity = needed;
-        result = ta_dm_host_text(host, &params);
-        jv text = result == TA_OK ? jv_string_sized(large, (int)(needed - 1)) : jv_null();
-        free(large);
-        return text;
+/* One system-variable field as a JSON string, or null when it has no value (ADR 0068: a view). */
+static jv tat_json_host_io_text(const ta_dm_host *host, ta_dm_text_kind kind, uint32_t io_index) {
+    ta_str text = {0};
+    if (ta_dm_host_text(host, &(ta_dm_text_params){.kind = kind, .io_index = io_index, .out = &text}) != TA_OK) {
+        return jv_null();
     }
-    return result == TA_OK ? jv_string_sized(buffer, (int)(needed - 1)) : jv_null();
+    return jv_string_sized(text.len == 0 ? "" : text.ptr, (int)text.len);
+}
+
+static jv tat_json_host_text(const ta_dm_host *host, ta_dm_text_kind kind) {
+    return tat_json_host_io_text(host, kind, 0);
+}
+
+/* $_ioprocessors: {type: {location}} for every processor core lists; SCXML also as "scxml". */
+static jv tat_json_ioprocessors(const ta_dm_host *host) {
+    jv processors = jv_object();
+    for (uint32_t index = 0;; index += 1) {
+        jv type = tat_json_host_io_text(host, TA_DM_TEXT_IO_TYPE, index);
+        if (jv_get_kind(type) != JV_KIND_STRING) {
+            jv_free(type);
+            break;
+        }
+        jv processor = jv_object();
+        jv location = tat_json_host_io_text(host, TA_DM_TEXT_IO_LOCATION, index);
+        if (jv_get_kind(location) == JV_KIND_STRING) {
+            processor = jv_object_set(processor, jv_string("location"), location);
+        } else {
+            jv_free(location);
+        }
+        if (index == 0) {
+            processors = jv_object_set(processors, jv_string("scxml"), jv_copy(processor));
+        }
+        processors = jv_object_set(processors, type, processor);
+    }
+    return processors;
 }
 
 /* $_event: null until the first event, then an object with every SCXML field. */
@@ -271,16 +287,7 @@ static jv tat_json_arguments(const ta_dm_host *host, jv arguments) {
     arguments = jv_object_set(arguments, jv_string("_event"), event);
     arguments = jv_object_set(arguments, jv_string("_sessionid"), tat_json_host_text(host, TA_DM_TEXT_SESSION_ID));
     arguments = jv_object_set(arguments, jv_string("_name"), tat_json_host_text(host, TA_DM_TEXT_SESSION_NAME));
-    jv processor = jv_object_set(jv_object(), jv_string("location"),
-                                 tat_json_host_text(host, TA_DM_TEXT_SCXML_IO_LOCATION));
-    jv type = tat_json_host_text(host, TA_DM_TEXT_SCXML_IO_TYPE);
-    jv processors = jv_object();
-    if (jv_get_kind(type) == JV_KIND_STRING) {
-        processors = jv_object_set(processors, jv_copy(type), jv_copy(processor));
-    }
-    jv_free(type);
-    /* The short type name selects the same processor. */
-    processors = jv_object_set(processors, jv_string("scxml"), processor);
+    jv processors = tat_json_ioprocessors(host);
     arguments = jv_object_set(arguments, jv_string("_ioprocessors"), processors);
     jv active = jv_array();
     ta_str name = {0};

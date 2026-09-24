@@ -681,6 +681,28 @@ ta_result ta_actor_activate_replacement(ta_system *system, const ta_actor_activa
     return TA_OK;
 }
 
+/*
+ * Checks an I/O origin against the registry, and gives an event from one of
+ * the actor's invocations an invoke origin when it has none (ADR 0068).
+ * That covers hosts that post invoker events through their own mailbox.
+ */
+static ta_result ta_actor_accept_origin(const ta_system *system, const ta_actor *actor, ta_event *event) {
+    if (event->origin.kind == TA_ORIGIN_IO) {
+        const ta_io_origin *io = &event->origin.as.io;
+        if (ta_system_io_at(system, io->processor) == NULL ||
+            (io->origin_class == TA_IO_ORIGIN_MESSAGE && io->as.entry == NULL) ||
+            (uint32_t)io->origin_class > (uint32_t)TA_IO_ORIGIN_MESSAGE) {
+            return TA_ERR_INVALID;
+        }
+        return TA_OK;
+    }
+    if (event->origin.kind != TA_ORIGIN_NONE || event->invoke_id == TA_INVOKE_ID_NONE) {
+        return TA_OK;
+    }
+    (void)ta_invoke_origin_for(system, actor, event->invoke_id, &event->origin);
+    return TA_OK;
+}
+
 ta_result ta_actor_deliver(ta_system *system, ta_actor_id id, const ta_event *event) {
     if (event == NULL) {
         return TA_ERR_INVALID;
@@ -699,11 +721,16 @@ ta_result ta_actor_deliver(ta_system *system, ta_actor_id id, const ta_event *ev
     if (actor->macrostep || actor->has_external_event) {
         return TA_ERR_BUSY;
     }
+    ta_event accepted = *event;
+    ta_result result = ta_actor_accept_origin(system, actor, &accepted);
+    if (result != TA_OK) {
+        return result;
+    }
     ta_event copy;
-    ta_event_retain(event, &copy);
+    ta_event_retain(&accepted, &copy);
     actor->external_event = copy;
     actor->has_external_event = true;
-    ta_event_retain(event, &actor->macrostep_event);
+    ta_event_retain(&accepted, &actor->macrostep_event);
     actor->has_macrostep_event = true;
     actor->macrostep = true;
     ta_actor_touch(actor);

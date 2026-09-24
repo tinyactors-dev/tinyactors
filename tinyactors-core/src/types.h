@@ -79,6 +79,18 @@ void ta_text_put(ta_text_writer *writer, ta_str text);
 void ta_text_put_u64(ta_text_writer *writer, uint64_t value);
 /* NUL-terminates; TA_ERR_NOMEM (and nothing useful written) when it did not fit. */
 ta_result ta_text_finish(ta_text_writer *writer, uint32_t *needed);
+/*
+ * Writes text of unknown length into memory from `allocator`: `write` runs
+ * once to measure and once to fill. It answers false when there is no text,
+ * which becomes TA_ERR_NOT_FOUND.
+ */
+typedef bool (*ta_text_write_fn)(const void *context, ta_text_writer *writer);
+typedef struct {
+    ta_text_write_fn write;
+    const void *context;
+    ta_str *out;
+} ta_text_render_params;
+ta_result ta_text_render(ta_allocator allocator, const ta_text_render_params *params);
 static inline ta_str ta_str_from_cstr(const char *text) {
     ta_str out = { .ptr = text, .len = 0 };
     while (text[out.len] != '\0') {

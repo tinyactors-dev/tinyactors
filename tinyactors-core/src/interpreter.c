@@ -618,7 +618,7 @@ ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *syste
                                                 .fault = &fault,
                                             });
     } else {
-        const ta_io *io = ta_system_find_io(system, send->io_type);
+        const ta_io *io = ta_system_io_of(system, send->io_type);
         ta_send request = {
             .source = origin,
             .send_id = send->send_id,
@@ -834,7 +834,7 @@ static ta_op_status ta_send_io_type(ta_interpreter *it, const ta_send_action *se
     }
     state->scxml_io = ta_system_is_scxml_io(system, type);
     state->io_type = state->scxml_io ? system->scxml_io_type : type;
-    return state->scxml_io || ta_system_find_io(system, type) != NULL ? TA_OP_OK : TA_OP_ERROR;
+    return state->scxml_io || ta_system_io_of(system, type) != NULL ? TA_OP_OK : TA_OP_ERROR;
 }
 
 /* Resolves `event` / `eventexpr`; the expression's text is a dotted event name. */

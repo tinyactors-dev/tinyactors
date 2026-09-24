@@ -1,6 +1,6 @@
 # ADR 0068: Core owns the I/O processor registry, and every origin can be answered
 
-**Status:** Proposed; refines ADR 0015, ADR 0016, ADR 0040, ADR 0046 and ADR 0065. Revised in place while Proposed:
+**Status:** Accepted; refines ADR 0015, ADR 0016, ADR 0040, ADR 0046 and ADR 0065. Revised in place while Proposed:
 - 2026-09-24, first review: origins reference the registry instead of copying from it, and text is rendered on demand.
 - 2026-09-24, second review: I/O origins use three storage classes (computed, scoped, per message) instead of processor tokens with an inverse callback.
 **Date:** 2026-09-24

@@ -100,7 +100,7 @@
         }
       ]
     },
-    "scope": { "enum": ["call", "system", "definition", "arena", "input"] },
+    "scope": { "enum": ["call", "system", "definition", "arena", "input", "run"] },
     "slot": {
       "type": "object",
       "required": ["name", "type"],

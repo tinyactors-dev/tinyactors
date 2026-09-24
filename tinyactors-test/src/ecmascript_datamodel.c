@@ -594,26 +594,20 @@ static bool tat_js_set_global(tat_js_instance *instance, JSAtom atom, JSValue va
  * System variables and In()
  */
 
-/* One SCXML system-variable field as a JS string, or undefined when absent. */
-static JSValue tat_js_host_text(tat_js_instance *instance, ta_dm_text_kind kind) {
-    JSContext *context = instance->context;
-    char small[256];
-    uint32_t needed = 0;
-    ta_dm_text_params params = {.kind = kind, .buffer = small, .capacity = sizeof(small), .needed = &needed};
-    ta_result result = ta_dm_host_text(instance->host, &params);
-    if (result == TA_ERR_NOMEM && needed != 0) {
-        char *large = js_malloc(context, needed);
-        if (large == NULL) {
-            return JS_EXCEPTION;
-        }
-        params.buffer = large;
-        params.capacity = needed;
-        result = ta_dm_host_text(instance->host, &params);
-        JSValue text = result == TA_OK ? JS_NewStringLen(context, large, needed - 1) : JS_UNDEFINED;
-        js_free(context, large);
-        return text;
+/* One SCXML system-variable field as a JS string, or undefined when absent (ADR 0068: a view). */
+static JSValue tat_js_host_io_text(tat_js_instance *instance, ta_dm_text_kind kind, uint32_t io_index) {
+    ta_str text = {0};
+    ta_result result =
+        ta_dm_host_text(instance->host, &(ta_dm_text_params){.kind = kind, .io_index = io_index, .out = &text});
+    if (result == TA_ERR_NOMEM) {
+        return JS_ThrowOutOfMemory(instance->context);
     }
-    return result == TA_OK ? JS_NewStringLen(context, small, needed - 1) : JS_UNDEFINED;
+    return result == TA_OK ? JS_NewStringLen(instance->context, text.len == 0 ? "" : text.ptr, text.len)
+                           : JS_UNDEFINED;
+}
+
+static JSValue tat_js_host_text(tat_js_instance *instance, ta_dm_text_kind kind) {
+    return tat_js_host_io_text(instance, kind, 0);
 }
 
 static bool tat_js_same_event(const ta_event *a, const ta_event *b) {
@@ -674,30 +668,50 @@ static JSValue tat_js_event(tat_js_instance *instance) {
     return object;
 }
 
+/*
+ * _ioprocessors: one frozen {location} per processor core lists, keyed by its
+ * type (SCXML 5.10, B.2, ADR 0068). Index 0, the SCXML processor, is also
+ * reachable as "scxml". A processor without a location has an entry with no
+ * location field.
+ */
 static JSValue tat_js_ioprocessors(tat_js_instance *instance) {
     JSContext *context = instance->context;
-    JSValue location = tat_js_host_text(instance, TA_DM_TEXT_SCXML_IO_LOCATION);
-    if (JS_IsException(location)) {
-        return location;
-    }
-    JSValue processor = JS_NewObject(context);
     JSValue processors = JS_NewObject(context);
-    if (JS_IsException(processor) || JS_IsException(processors)) {
-        JS_FreeValue(context, location);
-        JS_FreeValue(context, processor);
-        JS_FreeValue(context, processors);
-        return JS_EXCEPTION;
+    if (JS_IsException(processors)) {
+        return processors;
     }
-    JS_DefinePropertyValueStr(context, processor, "location", location, JS_PROP_ENUMERABLE);
-    JS_FreezeObject(context, processor);
-    JSValue type = tat_js_host_text(instance, TA_DM_TEXT_SCXML_IO_TYPE);
-    if (JS_IsString(type)) {
+    for (uint32_t index = 0;; index += 1) {
+        JSValue type = tat_js_host_io_text(instance, TA_DM_TEXT_IO_TYPE, index);
+        if (JS_IsException(type)) {
+            JS_FreeValue(context, processors);
+            return type;
+        }
+        if (!JS_IsString(type)) {
+            break;
+        }
+        JSValue location = tat_js_host_io_text(instance, TA_DM_TEXT_IO_LOCATION, index);
+        JSValue processor = JS_NewObject(context);
+        if (JS_IsException(location) || JS_IsException(processor)) {
+            JS_FreeValue(context, type);
+            JS_FreeValue(context, location);
+            JS_FreeValue(context, processor);
+            JS_FreeValue(context, processors);
+            return JS_EXCEPTION;
+        }
+        if (JS_IsString(location)) {
+            JS_DefinePropertyValueStr(context, processor, "location", location, JS_PROP_ENUMERABLE);
+        } else {
+            JS_FreeValue(context, location);
+        }
+        JS_FreezeObject(context, processor);
+        if (index == 0) {
+            JS_DefinePropertyValueStr(context, processors, "scxml", JS_DupValue(context, processor), JS_PROP_ENUMERABLE);
+        }
         JSAtom atom = JS_ValueToAtom(context, type);
-        JS_DefinePropertyValue(context, processors, atom, JS_DupValue(context, processor), JS_PROP_ENUMERABLE);
+        JS_DefinePropertyValue(context, processors, atom, processor, JS_PROP_ENUMERABLE);
         JS_FreeAtom(context, atom);
+        JS_FreeValue(context, type);
     }
-    JS_FreeValue(context, type);
-    JS_DefinePropertyValueStr(context, processors, "scxml", processor, JS_PROP_ENUMERABLE);
     JS_FreezeObject(context, processors);
     return processors;
 }
