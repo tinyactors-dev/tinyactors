@@ -223,6 +223,10 @@ system, multiplied by thousands, has not been measured yet.
 
 These are gaps between the implementation and the W3C SCXML
 Recommendation, not new features. Distribution makes them visible.
+G1–G3 are addressed by core
+[ADR 0068](../../tinyactors-core/docs/adr/0068-core-owns-the-io-processor-registry-and-every-origin-can-be-answered.md)
+(Proposed): core owns the processor registry, processors declare a location
+template, and I/O and invoke origins carry their processor type.
 
 | Gap | Spec | Level | Needed by | Change |
 |---|---|---|---|---|
