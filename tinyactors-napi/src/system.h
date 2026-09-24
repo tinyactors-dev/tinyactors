@@ -54,6 +54,7 @@
 #include "allocator.h"
 #include "directory.h"
 #include "effects.h"
+#include "traces.h"
 #include "scheduler.h"
 #include "tinyactors.h"
 
@@ -122,6 +123,9 @@ struct tna_system {
     void *after_core_context;
     /* Effects waiting for JavaScript (effects.h), in the turn arena. */
     tna_effects effects;
+    /* Trace records waiting for the JavaScript hook (traces.h). Empty unless
+     * a hook is registered (core ADR 0067). */
+    tna_traces traces;
     /* The last service handle a JavaScript invoker's start was given. */
     uint64_t next_service;
     /*
@@ -155,6 +159,11 @@ ta_result tna_system_post(tna_system *system, const tna_message *message);
  */
 bool tna_system_effect(tna_system *system, const tna_effect *effect);
 
+/*
+ * Queues a copy of a trace record (traces.h) and asks for a turn. False
+ * when it was dropped (closing, or no memory).
+ */
+bool tna_system_trace(tna_system *system, const ta_trace_record *record);
 /* Asks for a turn unless one is pending or the system is quiet or closed. */
 void tna_system_want_turn(tna_system *system);
 /*

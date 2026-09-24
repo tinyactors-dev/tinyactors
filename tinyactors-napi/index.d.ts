@@ -203,6 +203,11 @@ export interface System {
   closeScope(scope: IOScope): void;
   registerInvoker(type: string, invoker: Invoker): void;
   setLogSink(sink?: LogSink): void;
+  /**
+   * Hand trace records (core ADR 0067) to `sink`, one array per pump turn
+   * (ADR 0015). Without a sink core builds no record.
+   */
+  setTraceSink(sink?: (records: TraceRecord[]) => void, options?: TraceSinkOptions): void;
 
   /**
    * Queue a message and return; a later pump turn delivers it (ADR 0005).
@@ -340,6 +345,8 @@ export type InvocationId = bigint & { readonly [invocationIdBrand]: true };
 export type SendId = bigint & { readonly [sendIdBrand]: true };
 
 export interface PostOptions {
+  /** A W3C traceparent: the macrostep this message starts runs under it (ADR 0015). */
+  traceparent?: string;
   signal?: AbortSignal;
   /** The retained-bytes estimate of `data`, instead of the default (ADR 0005 point 9). */
   bytes?: number;
@@ -629,6 +636,8 @@ export interface DoneDataBuilder<Data extends object> {
  * -------------------------------------------------------------------------- */
 
 export interface SpawnOptions<Data extends object> {
+  /** A W3C traceparent: the bootstrap runs under it (ADR 0015). */
+  traceparent?: string;
   /** Omit both name and address for an anonymous actor. */
   readonly name?: string;
   readonly address?: ActorAddress;
@@ -1110,3 +1119,90 @@ export class TinyactorsError extends Error {
   readonly code: TinyactorsErrorCode;
   readonly detail?: unknown;
 }
+
+// ---------------------------------------------------------------------------
+// Tracing (core ADR 0067, ADR 0015). Plain data; no telemetry dependency.
+
+export type TraceKind =
+  | 'spawned' | 'loaded' | 'unloaded' | 'finished' | 'destroyed'
+  | 'macrostepBegin' | 'macrostepEnd' | 'condition' | 'microstep' | 'raised'
+  | 'dataInit' | 'assign' | 'script' | 'foreach' | 'actionFailed'
+  | 'sent' | 'cancelled' | 'invoked' | 'invokeCancelled'
+  | 'paused' | 'resumed' | 'stopped';
+
+export declare const TRACE_KINDS: readonly TraceKind[];
+
+export interface TraceSinkOptions {
+  /** The kinds wanted; every kind by default. */
+  kinds?: TraceKind[];
+  /** Also trace macrosteps whose traceparent is not sampled. */
+  unsampled?: boolean;
+}
+
+export interface TraceStepKey {
+  readonly session: bigint;
+  readonly macrostep: bigint;
+  readonly microstep: number;
+}
+
+/** One record as the hook receives it; fields beyond the first group depend on the kind. */
+export interface TraceRecord {
+  readonly kind: TraceKind;
+  readonly session: bigint;
+  readonly macrostep: number;
+  readonly microstep: number;
+  readonly actor: ActorId;
+  /** Core's logical time. */
+  readonly now: number;
+  /** Milliseconds since the epoch. */
+  readonly wallTime: number;
+  readonly at?: 'select' | 'exit' | 'transition' | 'enter' | 'bootstrap' | 'finalize' | 'invoke';
+  readonly state?: string | number;
+  readonly transition?: number;
+  readonly action?: number;
+  readonly iteration?: number;
+  /** 32 hex digits, absent when the macrostep has no trace. */
+  readonly traceId?: string;
+  readonly sampled?: boolean;
+  /** macrostepBegin and spawned: the step that caused it; session 0 is the host's span. */
+  readonly cause?: TraceStepKey;
+  readonly event?: { name: string; type: string; sendId?: string | null; invokeId?: string; data?: unknown };
+  readonly fault?: { code: number; detail?: string };
+  readonly expr?: number;
+  readonly result?: boolean;
+  readonly name?: string;
+  readonly value?: unknown;
+  readonly sendId?: string;
+  readonly invokeId?: string;
+  readonly finalState?: string | number;
+  readonly transitions?: number[];
+  readonly exited?: (string | number)[];
+  readonly entered?: (string | number)[];
+  readonly history?: (string | number)[];
+  readonly states?: (string | number)[];
+}
+
+export interface TraceSpan {
+  traceId: string;
+  spanId: string;
+  parentSpanId?: string;
+  name: string;
+  kind: 'internal';
+  /** Milliseconds since the epoch. */
+  startTime: number;
+  endTime: number;
+  attributes: Record<string, string | number | boolean | (string | number)[]>;
+  events: { name: string; time: number; attributes: Record<string, unknown> }[];
+  links: { traceId: string; spanId: string }[];
+  status: { code: 'ok' | 'error' };
+}
+
+export declare class TraceSpans {
+  constructor(options: { onSpan(span: TraceSpan): void; parent?: 'cause' | 'link'; values?: boolean; valueLimit?: number });
+  write(records: TraceRecord[]): void;
+}
+
+export declare function parseTraceparent(header: string | undefined):
+  { traceId: string; parentSpanId: string; flags: number; sampled: boolean } | undefined;
+export declare function formatTraceparent(span: { traceId: string; spanId: string; sampled?: boolean; flags?: number }): string;
+export declare function stepSpanId(session: bigint | number, macrostep: bigint | number, microstep?: number): string;

@@ -26,6 +26,7 @@ static ta_op_status tna_io_send(void *self, const ta_send *send, ta_fault *fault
         .target = send->target,
         .content_type = send->content_type,
         .content = send->content,
+        .trace = send->trace,
     };
     if (effect.source.kind == TA_ACTOR_REF_NAMED) {
         ta_address_retain(effect.source.as.named);

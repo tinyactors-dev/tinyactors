@@ -62,6 +62,9 @@ typedef struct tna_effect {
     bool autoforward;
     /* FORWARD: the event, retained. */
     ta_event forwarded;
+    /* IO, START: the sending or invoking step's trace parent (core ADR 0067),
+     * for JavaScript to pass on as a traceparent. */
+    ta_trace_parent trace;
 } tna_effect;
 
 typedef struct {

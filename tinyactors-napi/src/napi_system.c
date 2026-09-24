@@ -6,6 +6,7 @@
 #include "enumerate.h"
 #include "events.h"
 #include "napi_services.h"
+#include "napi_trace.h"
 #include "pump.h"
 #include "router.h"
 
@@ -518,8 +519,8 @@ static napi_value tna_accept_done(napi_env env, tna_napi_system *wrapper, tna_ac
  * allowed inside a core call (a data-model callback may post; ADR 0013).
  */
 static napi_value tna_post_common(napi_env env, napi_callback_info info, bool send) {
-    size_t argc = 6;
-    napi_value argv[6] = { NULL, NULL, NULL, NULL, NULL, NULL };
+    size_t argc = 7;
+    napi_value argv[7] = { NULL, NULL, NULL, NULL, NULL, NULL, NULL };
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
         return NULL;
     }
@@ -535,6 +536,10 @@ static napi_value tna_post_common(napi_env env, napi_callback_info info, bool se
         napi_get_value_uint32(env, argv[1], &generation) != napi_ok ||
         napi_get_value_uint32(env, argv[2], &name) != napi_ok || !tna_bytes_argument(env, argv[4], &bytes)) {
         return tna_throw(env, "invalid", "post: expected (slot, generation, name, data, bytes)");
+    }
+    ta_trace_parent trace;
+    if (!tna_trace_argument(env, argv[6], &trace)) {
+        return NULL;
     }
     ta_event event;
     if (!tna_post_event(env, wrapper, name, argv[3], &event)) {
@@ -556,6 +561,7 @@ static napi_value tna_post_common(napi_env env, napi_callback_info info, bool se
                                                                   .event = &event,
                                                                   .bytes = bytes,
                                                                   .waiter = accepting.waiter,
+                                                                  .trace = &trace,
                                                               });
     if (result != TA_OK) {
         ta_event_release(&event);
@@ -713,8 +719,8 @@ static napi_value tna_id_page_method(napi_env env, napi_callback_info info) {
  * these are not allowed inside a core call.
  */
 static napi_value tna_post_named_common(napi_env env, napi_callback_info info, bool send) {
-    size_t argc = 6;
-    napi_value argv[6] = { NULL, NULL, NULL, NULL, NULL, NULL };
+    size_t argc = 7;
+    napi_value argv[7] = { NULL, NULL, NULL, NULL, NULL, NULL, NULL };
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
         return NULL;
     }
@@ -725,6 +731,10 @@ static napi_value tna_post_named_common(napi_env env, napi_callback_info info, b
     tna_system *system = wrapper->system;
     if (system->inside_core) {
         return tna_throw(env, "reentrant", "post: a named target cannot be resolved from inside a core call (ADR 0013)");
+    }
+    ta_trace_parent trace;
+    if (!tna_trace_argument(env, argv[6], &trace)) {
+        return NULL;
     }
     ta_actor_address text = {0};
     uint32_t name = 0;
@@ -760,7 +770,8 @@ static napi_value tna_post_named_common(napi_env env, napi_callback_info info, b
     result = send && accepting.waiter == 0
                  ? TA_ERR_NOMEM
                  : tna_router_post_named(system, address,
-                                         &(tna_message){ .event = &event, .bytes = bytes, .waiter = accepting.waiter });
+                                         &(tna_message){ .event = &event, .bytes = bytes, .waiter = accepting.waiter,
+                                                         .trace = &trace });
     ta_address_release(address);
     if (result != TA_OK) {
         ta_event_release(&event);
@@ -920,6 +931,7 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "closeScope", NULL, tna_close_scope_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "registerInvoker", NULL, tna_register_invoker_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "setLogSink", NULL, tna_set_log_sink_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "setTraceSink", NULL, tna_set_trace_sink_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "reportInvoke", NULL, tna_report_invoke_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "closed", NULL, NULL, tna_closed_getter, NULL, NULL, napi_default_jsproperty, NULL },
     };

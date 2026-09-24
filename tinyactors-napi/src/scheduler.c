@@ -61,6 +61,9 @@ static void tna_envelope_give(tna_sched *sched, uint32_t index) {
     sched->retained -= envelope->bytes;
     ta_event_release(&envelope->event);
     ta_address_release(envelope->address);
+    if (envelope->trace != NULL) {
+        tna_free_list_give(&sched->traces, envelope->trace);
+    }
     *envelope = (tna_envelope){ .next = sched->envelopes.free_head };
     sched->envelopes.free_head = index;
     sched->envelopes.live -= 1u;
@@ -93,6 +96,7 @@ void tna_sched_init(tna_sched *sched, ta_allocator allocator, ta_allocator envel
     tna_ring_init(&sched->runnable, allocator, shape);
     tna_ring_init(&sched->ready, allocator, shape);
     tna_envelopes_init(&sched->envelopes, envelopes);
+    tna_free_list_init(&sched->traces, envelopes, TNA_LAYOUT(ta_trace_parent));
     tna_vec_init(&sched->waiters, envelopes, TNA_LAYOUT(tna_waiter));
     tna_map_init(&sched->inflight, allocator);
     /* One chunk holds a default turn's settlements (messageBudget and
@@ -110,6 +114,10 @@ void tna_sched_discard_mail(tna_sched *sched) {
             envelope->event = (ta_event){0};
             ta_address_release(envelope->address);
             envelope->address = NULL;
+            if (envelope->trace != NULL) {
+                tna_free_list_give(&sched->traces, envelope->trace);
+                envelope->trace = NULL;
+            }
         }
     }
 }
@@ -128,7 +136,9 @@ void tna_sched_destroy(tna_sched *sched) {
     tna_vec_destroy(&sched->pages);
     tna_ring_destroy(&sched->runnable);
     tna_ring_destroy(&sched->ready);
+    tna_sched_discard_mail(sched); /* gives back the trace parents envelopes hold */
     tna_envelopes_destroy(&sched->envelopes);
+    tna_free_list_destroy(&sched->traces);
     tna_vec_destroy(&sched->waiters);
     tna_map_destroy(&sched->inflight);
     tna_ring_destroy(&sched->settled);
@@ -464,9 +474,27 @@ static bool tna_sched_full(const tna_sched *sched, uint32_t bytes) {
            (sched->max_retained != 0 && sched->retained + bytes > sched->max_retained);
 }
 
+/* A copy of the message's trace parent from the free list, or NULL for an
+ * untraced message. False when there is no memory for one. */
+static bool tna_sched_take_trace(tna_sched *sched, const tna_message *message, ta_trace_parent **out) {
+    *out = NULL;
+    const ta_trace_parent *trace = message->trace;
+    if (trace == NULL || (trace->context.trace_id_high == 0 && trace->context.trace_id_low == 0 &&
+                          trace->cause.session == 0 && trace->cause.macrostep == 0)) {
+        return true;
+    }
+    *out = tna_free_list_take(&sched->traces);
+    if (*out == NULL) {
+        return false;
+    }
+    **out = *trace;
+    return true;
+}
+
 /* Fills a taken envelope from the message and attaches its waiter. */
-static void tna_sched_fill(tna_sched *sched, uint32_t index, const tna_message *message) {
+static void tna_sched_fill(tna_sched *sched, uint32_t index, const tna_message *message, ta_trace_parent *trace) {
     tna_envelope *envelope = tna_sched_envelope(sched, index);
+    envelope->trace = trace;
     envelope->event = *message->event;
     envelope->target = message->target;
     envelope->bytes = message->bytes;
@@ -492,12 +520,19 @@ ta_result tna_sched_post(tna_sched *sched, const tna_message *message) {
     if (!dead && entry->state == TNA_SCHED_IDLE && tna_ring_push(&sched->ready, &target) != TA_OK) {
         return TA_ERR_NOMEM;
     }
+    ta_trace_parent *trace = NULL;
+    if (!tna_sched_take_trace(sched, message, &trace)) {
+        return TA_ERR_NOMEM; /* a ready-queue entry pushed above names an idle actor; delivery skips it */
+    }
     uint32_t index = tna_envelope_take(sched);
     if (index == 0) {
         /* A ready-queue entry pushed above names an idle actor; delivery skips it. */
+        if (trace != NULL) {
+            tna_free_list_give(&sched->traces, trace);
+        }
         return TA_ERR_NOMEM;
     }
-    tna_sched_fill(sched, index, message);
+    tna_sched_fill(sched, index, message, trace);
     if (dead) {
         tna_sched_dead_append(sched, index, entry == NULL ? TNA_DEAD_NOT_FOUND : TNA_DEAD_DONE);
         return TA_OK;
@@ -518,11 +553,18 @@ ta_result tna_sched_post_dead(tna_sched *sched, const tna_dead_post *post) {
     if (tna_sched_full(sched, post->message->bytes)) {
         return TA_ERR_BUSY;
     }
-    uint32_t index = tna_envelope_take(sched);
-    if (index == 0) {
+    ta_trace_parent *trace = NULL;
+    if (!tna_sched_take_trace(sched, post->message, &trace)) {
         return TA_ERR_NOMEM;
     }
-    tna_sched_fill(sched, index, post->message);
+    uint32_t index = tna_envelope_take(sched);
+    if (index == 0) {
+        if (trace != NULL) {
+            tna_free_list_give(&sched->traces, trace);
+        }
+        return TA_ERR_NOMEM;
+    }
+    tna_sched_fill(sched, index, post->message, trace);
     tna_envelope *envelope = tna_sched_envelope(sched, index);
     envelope->target = 0;
     envelope->address = post->address;
@@ -652,7 +694,12 @@ static void tna_sched_deliver_one(tna_sched *sched, const tna_turn_params *param
     uint32_t head = entry->first;
     tna_envelope *envelope = tna_sched_envelope(sched, head);
     *params->inside_core = true;
-    ta_result result = ta_actor_deliver(params->core, &(ta_actor_deliver_params){ .actor = actor, .event = &envelope->event });
+    ta_result result = ta_actor_deliver(params->core, &(ta_actor_deliver_params){
+                                                         .actor = actor,
+                                                         .event = &envelope->event,
+                                                         .trace = envelope->trace != NULL ? *envelope->trace
+                                                                                          : (ta_trace_parent){0},
+                                                     });
     *params->inside_core = false;
     switch (result) {
     case TA_OK:

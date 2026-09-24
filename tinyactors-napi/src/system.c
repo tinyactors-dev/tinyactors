@@ -44,6 +44,7 @@ ta_result tna_system_create(tna_system **out) {
         return result;
     }
     tna_effects_init(&system->effects, &system->scratch.turn);
+    tna_traces_init(&system->traces, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER));
     ta_system_config config = {
         .allocator = tna_allocator_for(&system->allocator, TNA_MEMORY_CORE),
         .initial_time = 0,
@@ -85,6 +86,7 @@ void tna_system_close(tna_system *system) {
     /* Waiting effects hold values and addresses; what core's teardown asks
      * of a service from here on is dropped (the adapters in adapters/). */
     tna_effects_close(&system->effects);
+    tna_traces_close(&system->traces);
     ta_system_destroy(system->core);
     system->core = NULL;
     /* Core held the I/O processor records as adapters until now. */
@@ -121,7 +123,16 @@ static bool tna_system_due_now(const tna_system *system) {
 }
 
 bool tna_system_quiet(const tna_system *system) {
-    return tna_sched_quiet(&system->sched) && system->effects.count == 0 && !tna_system_due_now(system);
+    return tna_sched_quiet(&system->sched) && system->effects.count == 0 && tna_traces_count(&system->traces) == 0 &&
+           !tna_system_due_now(system);
+}
+
+bool tna_system_trace(tna_system *system, const ta_trace_record *record) {
+    bool queued = tna_traces_push(&system->traces, record);
+    if (queued) {
+        tna_system_want_turn(system);
+    }
+    return queued;
 }
 
 bool tna_system_effect(tna_system *system, const tna_effect *effect) {

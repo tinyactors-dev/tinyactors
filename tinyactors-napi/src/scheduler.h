@@ -96,6 +96,10 @@ typedef struct {
     ta_event event;
     ta_actor_id target;
     ta_address *address;
+    /* The trace parent the message's macrostep runs under (core ADR 0067),
+     * from the scheduler's free list, or NULL: only traced mail pays for
+     * one. */
+    ta_trace_parent *trace;
     uint32_t next;   /* the next envelope in its list, 0 when last */
     uint32_t waiter; /* the send() waiting for this message, or 0 */
     uint32_t bytes;  /* counted against max_retained (ADR 0005 point 9) */
@@ -109,6 +113,7 @@ typedef struct {
     const ta_event *event;
     uint32_t bytes;         /* retained-bytes estimate of its data, 0 for none */
     uint32_t waiter;        /* a send() waiting for it, or 0 */
+    const ta_trace_parent *trace; /* its trace parent, or NULL (core ADR 0067) */
 } tna_message;
 
 typedef enum {
@@ -179,6 +184,8 @@ typedef struct {
     tna_ring runnable;      /* ta_actor_id */
     tna_ring ready;         /* ta_actor_id */
     tna_envelopes envelopes;
+    /* Trace parents of queued traced messages (ta_trace_parent). */
+    tna_free_list traces;
     uint32_t known;         /* entries not in state NONE */
     /* Accepted messages not yet delivered or reported: mailboxes plus the dead list. */
     uint32_t queued;

@@ -30,7 +30,8 @@ static ta_external_event_submit_status tna_router_submit(void *self, const ta_ex
     ta_event_retain(&delivery->event, &event);
     /* Mail between actors carries no retained-bytes estimate: its data is a
      * value made inside a chart, and sizing it would mean calling JavaScript. */
-    tna_message message = { .target = delivery->destination.as.runtime, .event = &event };
+    /* Traced mail keeps the sending step as its parent (core ADR 0067). */
+    tna_message message = { .target = delivery->destination.as.runtime, .event = &event, .trace = &delivery->trace };
     ta_result result = delivery->destination.kind == TA_ACTOR_REF_NAMED
                            ? tna_router_post_named(system, delivery->destination.as.named, &message)
                            : tna_sched_post(&system->sched, &message);

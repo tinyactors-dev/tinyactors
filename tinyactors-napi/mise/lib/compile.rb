@@ -124,6 +124,7 @@ module NapiCompile
     src/napi_datamodel.c
     src/napi_services.c
     src/napi_system.c
+    src/napi_trace.c
     src/pump.c
     src/runtime.c
     src/runtime_codecs.c

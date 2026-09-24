@@ -17,6 +17,8 @@
  * - System: the native system class (ADR 0012), used by lib/system.js;
  * - environmentStats(): counters for tests (systems created and closed,
  *   bytes leaked at close);
+ * - traceKinds: the trace record kinds, in core's order, which
+ *   lib/tracing.js turns into masks for System.setTraceSink (napi ADR 0015);
  * - core: the generated control plane (ADR 0013), one function per bound
  *   core function. It is internal: index.js does not re-export it.
  */
@@ -24,6 +26,7 @@
 
 #include "gen/ta_napi.h"
 #include "napi_system.h"
+#include "napi_trace.h"
 #include "runtime.h"
 
 #ifndef TINYACTORS_NAPI_VERSION
@@ -167,6 +170,7 @@ static napi_value tna_init(napi_env env, napi_value exports) {
     if (tna_env_init(env, &data) != napi_ok ||
         napi_create_string_utf8(env, TINYACTORS_NAPI_VERSION, NAPI_AUTO_LENGTH, &version) != napi_ok ||
         napi_set_named_property(env, exports, "version", version) != napi_ok ||
+        napi_set_named_property(env, exports, "traceKinds", tna_trace_kind_names(env)) != napi_ok ||
         tna_export_function(env, exports, "setup", tna_setup) != napi_ok ||
         tna_export_function(env, exports, "setupActor", tna_setup_actor) != napi_ok ||
         tna_export_function(env, exports, "setupLiteral", tna_setup_literal) != napi_ok ||

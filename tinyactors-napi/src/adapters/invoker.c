@@ -29,6 +29,7 @@ static ta_op_status tna_js_start(void *self, const ta_invoker_start_params *para
         .content_type = request->content_type,
         .content = request->content,
         .autoforward = request->autoforward,
+        .trace = request->trace,
     };
     ta_value_retain(&effect.value);
     ta_value_retain(&effect.target);
@@ -93,6 +94,8 @@ static ta_op_status tna_scxml_start(void *self, const ta_invoker_start_params *p
                                                         .parent = &(ta_actor_parent){ .actor = request->parent,
                                                                                       .invoke_id = request->invoke_id },
                                                         .out = &child,
+                                                        /* The child's bootstrap runs under the invoking step. */
+                                                        .trace = request->trace,
                                                     });
     if (result != TA_OK) {
         return TNA_FAULT(params->fault, result, "invoker.scxml: could not spawn the child");

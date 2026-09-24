@@ -1,0 +1,13 @@
+#include "trace.h"
+
+#include "../system.h"
+
+static void tna_trace_write(void *self, const ta_trace_record *record) {
+    (void)tna_system_trace(self, record); /* writing a record cannot fail (core ADR 0067) */
+}
+
+static const ta_trace_sink_vtable tna_trace_vtable = { .write = tna_trace_write };
+
+ta_trace_sink tna_trace_sink_adapter(tna_system *system, uint32_t kinds, bool unsampled) {
+    return (ta_trace_sink){ .self = system, .v = &tna_trace_vtable, .kinds = kinds, .unsampled = unsampled };
+}

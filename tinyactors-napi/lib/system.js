@@ -11,6 +11,7 @@ const { DefinitionBuilder, needsJavaScript } = require('./statechart');
 const { ActorId } = require('./actor');
 const { EventNames } = require('./events');
 const { SessionImage, handleOf } = require('./image');
+const { kindMask, nativeTrace, spawnTrace, traceparentOf } = require('./tracing');
 
 const NO_STATE = 4294967295;
 
@@ -75,6 +76,7 @@ class System {
   #invokers = new Map();
   #invocations = new Map();
   #logSink;
+  #traceSink;
   // Aborted on close(): the signal every EffectContext carries.
   #lifetime = new AbortController();
   #effectContext;
@@ -212,11 +214,32 @@ class System {
     this.#logSink = sink;
   }
 
+  /**
+   * Hand trace records (core ADR 0067) to `sink`, one array per pump turn,
+   * after the turn's last core call (ADR 0015). Records are plain objects
+   * (napi_trace.h, index.d.ts TraceRecord); TraceSpans (lib/tracing.js)
+   * turns them into span-shaped data. `options.kinds` lists the record
+   * kinds wanted (every kind by default): core builds no other record.
+   * `options.unsampled` also traces macrosteps whose traceparent is not
+   * sampled. Without a sink (undefined) core builds no record at all.
+   */
+  setTraceSink(sink, options = {}) {
+    if (sink !== undefined && typeof sink !== 'function') {
+      throw new TinyactorsError('setTraceSink(): expected a function or undefined', 'invalid');
+    }
+    const mask = kindMask(options?.kinds);
+    this.#native.setTraceSink(sink !== undefined, mask, options?.unsampled === true);
+    this.#traceSink = sink;
+  }
+
   // One service effect, in the order core made the calls (napi_services.h).
   #effect(kind, payload) {
     switch (kind) {
       case 'log':
         this.#logSink?.(payload);
+        return;
+      case 'trace':
+        this.#traceSink?.(payload);
         return;
       case 'io':
         this.#runIO(payload);
@@ -245,7 +268,13 @@ class System {
     return this.#effectContext;
   }
 
-  #runIO(request) {
+  #runIO(payload) {
+    // The sending step, as the traceparent a processor carries along (ADR 0015).
+    const { trace, ...request } = payload;
+    const traceparent = traceparentOf(trace);
+    if (traceparent !== undefined) {
+      request.traceparent = traceparent;
+    }
     const processor = this.#io.get(request.type);
     if (processor === undefined) {
       this.#communicationError(request, new TinyactorsError(`no I/O processor for "${request.type}"`, 'not-found'));
@@ -312,6 +341,8 @@ class System {
       contentType: payload.contentType,
       params: payload.params,
       autoforward: payload.autoforward,
+      // The invoking step, for a service that starts work elsewhere (ADR 0015).
+      traceparent: traceparentOf(payload.trace),
     });
     try {
       invocation.service = invoker.start(request, reporter);
@@ -451,7 +482,8 @@ class System {
     } else if (options.name !== undefined) {
       address = { family: { name: definition.identity.family }, name: options.name };
     }
-    const id = core.actor_spawn(this.#native, definition.id, address, options.binding);
+    const trace = spawnTrace(options.traceparent);
+    const id = core.actor_spawn(this.#native, definition.id, address, options.binding, undefined, trace);
     return new ActorId(this, id.slot, id.generation);
   }
 
@@ -705,21 +737,22 @@ class System {
   #accept(target, event, data, options, completion, what) {
     const bytes = retainedBytes(data, options, what);
     const origin = originOf(options?.origin, what);
+    const trace = nativeTrace(options?.traceparent, what);
     if (!(target instanceof ActorId)) {
       if (target !== null && typeof target === 'object' && 'name' in target) {
         const { family, name } = addressOf(target, what);
         const id = this.#events.id(event);
         return completion
-          ? this.#native.sendNamed(family, name, id, data, bytes, origin)
-          : this.#native.postNamed(family, name, id, data, bytes, origin);
+          ? this.#native.sendNamed(family, name, id, data, bytes, origin, trace)
+          : this.#native.postNamed(family, name, id, data, bytes, origin, trace);
       }
       throw new TinyactorsError(`${what}: expected an actor of this system or an address`, 'invalid');
     }
     const { slot, generation } = actorOf(this, target);
     const id = this.#events.id(event);
     return completion
-      ? this.#native.send(slot, generation, id, data, bytes, origin)
-      : this.#native.post(slot, generation, id, data, bytes, origin);
+      ? this.#native.send(slot, generation, id, data, bytes, origin, trace)
+      : this.#native.post(slot, generation, id, data, bytes, origin, trace);
   }
 
   /*
