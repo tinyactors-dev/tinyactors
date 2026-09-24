@@ -1835,6 +1835,10 @@ static ta_result ta_compiler_finish(ta_compiler *compiler) {
     if (result != TA_OK) {
         return result;
     }
+    result = ta_definition_place_actions(definition);
+    if (result != TA_OK) {
+        return result;
+    }
     definition->max_action_depth = compiler->action_depth;
     if (definition->global_script_actions.length != 0 && definition->max_action_depth == 0) {
         definition->max_action_depth = 1;

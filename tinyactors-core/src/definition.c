@@ -138,14 +138,14 @@ ta_result ta_definition_state(const ta_system *system, const ta_definition_state
 }
 
 ta_result ta_definition_content(const ta_system *system, const ta_definition_content_params *params) {
-    if (system == NULL || params == NULL || params->media_type == NULL || params->out == NULL) {
+    if (system == NULL || params == NULL || params->out == NULL) {
         return TA_ERR_INVALID;
     }
     const ta_definition *definition = ta_definition_lookup(system, params->definition);
     if (definition == NULL || params->content >= definition->content_count) {
         return TA_ERR_NOT_FOUND;
     }
-    ta_interpreter_literal_content(definition, params->content, params->media_type, params->out);
+    ta_interpreter_literal_content(definition, params->content, &params->out->media_type, &params->out->bytes);
     return TA_OK;
 }
 
@@ -168,6 +168,166 @@ ta_result ta_definition_find_state(const ta_system *system, const ta_definition_
         }
     }
     return TA_ERR_NOT_FOUND;
+}
+
+/* Places the actions of one block. */
+static void ta_place_block(ta_definition *definition, ta_span32 block, ta_action_place place) {
+    for (uint32_t index = 0; index < block.length; index += 1u) {
+        place.index = index;
+        definition->action_places[block.offset + index] = place;
+    }
+}
+
+ta_result ta_definition_place_actions(ta_definition *definition) {
+    definition->action_places = NULL;
+    if (definition->action_count == 0) {
+        return TA_OK;
+    }
+    definition->action_places = ta_arena_alloc(&definition->arena,
+                                               (size_t)definition->action_count * sizeof(ta_action_place),
+                                               _Alignof(ta_action_place));
+    if (definition->action_places == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    /* The top-level blocks: handlers, transitions, <finalize>, the <script>. */
+    for (ta_state_id state = 0; state < definition->state_count; state += 1u) {
+        const ta_state_def *def = &definition->states[state];
+        for (uint32_t handler = 0; handler < def->onentry_handlers.length; handler += 1u) {
+            ta_place_block(definition, definition->handlers[def->onentry_handlers.offset + handler],
+                           (ta_action_place){ .block = TA_ACTION_IN_ONENTRY, .owner = state, .block_index = handler });
+        }
+        for (uint32_t handler = 0; handler < def->onexit_handlers.length; handler += 1u) {
+            ta_place_block(definition, definition->handlers[def->onexit_handlers.offset + handler],
+                           (ta_action_place){ .block = TA_ACTION_IN_ONEXIT, .owner = state, .block_index = handler });
+        }
+    }
+    for (ta_transition_id transition = 0; transition < definition->transition_count; transition += 1u) {
+        ta_place_block(definition, definition->transitions[transition].actions,
+                       (ta_action_place){ .block = TA_ACTION_IN_TRANSITION, .owner = transition });
+    }
+    for (uint32_t initial = 0; initial < definition->initial_transition_count; initial += 1u) {
+        ta_place_block(definition, definition->initial_transitions[initial].actions,
+                       (ta_action_place){ .block = TA_ACTION_IN_TRANSITION,
+                                          .owner = definition->transition_count + initial });
+    }
+    for (uint32_t invoke = 0; invoke < definition->invoke_decl_count; invoke += 1u) {
+        /* Which <invoke> of its state: the declarations of a state are in document order. */
+        uint32_t nth = 0;
+        for (uint32_t earlier = 0; earlier < invoke; earlier += 1u) {
+            nth += definition->invokes[earlier].owner == definition->invokes[invoke].owner ? 1u : 0u;
+        }
+        ta_place_block(definition, definition->invokes[invoke].finalize_actions,
+                       (ta_action_place){ .block = TA_ACTION_IN_FINALIZE, .owner = definition->invokes[invoke].owner,
+                                          .block_index = nth });
+    }
+    ta_place_block(definition, definition->global_script_actions,
+                   (ta_action_place){ .block = TA_ACTION_IN_SCRIPT, .owner = TA_STATE_NONE });
+    /* The blocks nested in <if> and <foreach>, whose owner is an action. */
+    for (ta_action_id action = 0; action < definition->action_count; action += 1u) {
+        const ta_action_def *def = &definition->action_defs[action];
+        if (def->kind == TA_ACTION_IF) {
+            ta_place_block(definition, def->as.conditional.then_actions,
+                           (ta_action_place){ .block = TA_ACTION_IN_THEN, .owner = action });
+            ta_place_block(definition, def->as.conditional.else_actions,
+                           (ta_action_place){ .block = TA_ACTION_IN_ELSE, .owner = action });
+        } else if (def->kind == TA_ACTION_FOREACH) {
+            ta_place_block(definition, def->as.foreach.body_actions,
+                           (ta_action_place){ .block = TA_ACTION_IN_FOREACH, .owner = action });
+        }
+    }
+    return TA_OK;
+}
+
+ta_result ta_definition_transition(const ta_system *system, const ta_definition_transition_params *params) {
+    if (system == NULL || params == NULL || params->out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_definition *definition = ta_definition_lookup(system, params->definition);
+    if (definition == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    ta_transition_id id = params->transition;
+    if (id < definition->transition_count) {
+        const ta_transition_def *def = &definition->transitions[id];
+        *params->out = (ta_transition_info){
+            .origin = TA_TRANSITION_AUTHORED,
+            .source = def->source,
+            .type = def->type == TA_TRANSITION_INTERNAL ? TA_SCXML_TRANSITION_INTERNAL : TA_SCXML_TRANSITION_EXTERNAL,
+            .event = def->event_text == TA_AUTHORED_TEXT_NONE ? (ta_str){ .ptr = "", .len = 0 }
+                                                                : definition->authored_texts[def->event_text],
+            .targets = def->targets.length == 0 ? NULL : definition->targets + def->targets.offset,
+            .target_count = def->targets.length,
+            .condition = def->condition,
+            .action_count = def->actions.length,
+            .document_order = def->document_order,
+        };
+        return TA_OK;
+    }
+    /* After the authored transitions come the initial ones (see the header). */
+    uint32_t initial = id - definition->transition_count;
+    if (initial >= definition->initial_transition_count) {
+        return TA_ERR_NOT_FOUND;
+    }
+    const ta_initial_transition_def *def = &definition->initial_transitions[initial];
+    bool bootstrap = initial == definition->root_initial;
+    *params->out = (ta_transition_info){
+        .origin = bootstrap ? TA_TRANSITION_BOOTSTRAP : TA_TRANSITION_INITIAL,
+        .source = bootstrap ? TA_STATE_NONE : def->owner,
+        .type = TA_SCXML_TRANSITION_EXTERNAL,
+        .event = { .ptr = "", .len = 0 },
+        .targets = def->targets.length == 0 ? NULL : definition->targets + def->targets.offset,
+        .target_count = def->targets.length,
+        .default_targets = !def->authored_targets,
+        .condition = TA_EXPR_ID_NONE,
+        .action_count = def->actions.length,
+    };
+    return TA_OK;
+}
+
+static ta_scxml_action_kind ta_public_action_kind(ta_action_kind kind) {
+    switch (kind) {
+        case TA_ACTION_RAISE: return TA_SCXML_ACTION_RAISE;
+        case TA_ACTION_SEND: return TA_SCXML_ACTION_SEND;
+        case TA_ACTION_CANCEL: return TA_SCXML_ACTION_CANCEL;
+        case TA_ACTION_ASSIGN: return TA_SCXML_ACTION_ASSIGN;
+        case TA_ACTION_SCRIPT: return TA_SCXML_ACTION_SCRIPT;
+        case TA_ACTION_LOG: return TA_SCXML_ACTION_LOG;
+        case TA_ACTION_IF: return TA_SCXML_ACTION_IF;
+        case TA_ACTION_FOREACH: return TA_SCXML_ACTION_FOREACH;
+        case TA_ACTION_INVOKE: return TA_SCXML_ACTION_INVOKE;
+    }
+    return TA_SCXML_ACTION_NONE;
+}
+
+ta_result ta_definition_action(const ta_system *system, const ta_definition_action_params *params) {
+    if (system == NULL || params == NULL || params->out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_definition *definition = ta_definition_lookup(system, params->definition);
+    if (definition == NULL || params->action >= definition->action_count) {
+        return TA_ERR_NOT_FOUND;
+    }
+    const ta_action_place *place = &definition->action_places[params->action];
+    *params->out = (ta_action_info){
+        .kind = ta_public_action_kind(definition->action_defs[params->action].kind),
+        .block = place->block,
+        .owner = place->owner,
+        .block_index = place->block_index,
+        .index = place->index,
+    };
+    return TA_OK;
+}
+
+ta_result ta_definition_expression(const ta_system *system, const ta_definition_expression_params *params) {
+    if (system == NULL || params == NULL || params->out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_definition *definition = ta_definition_lookup(system, params->definition);
+    if (definition == NULL || params->expression >= definition->expression_count) {
+        return TA_ERR_NOT_FOUND;
+    }
+    *params->out = definition->expressions[params->expression];
+    return TA_OK;
 }
 
 size_t ta_definition_session_bytes(const ta_definition *definition) {
@@ -196,6 +356,10 @@ ta_result ta_definition_inspect(const ta_system *system,
         .datamodel = definition->datamodel,
         .binding = definition->binding_mode == TA_BINDING_LATE ? TA_SCXML_BINDING_LATE : TA_SCXML_BINDING_EARLY,
         .state_count = definition->state_count,
+        .transition_count = definition->transition_count + definition->initial_transition_count,
+        .action_count = definition->action_count,
+        .expression_count = definition->expression_count,
+        .content_count = definition->content_count,
         .retired = definition->retired,
         .actor_count = definition->actor_count,
         .actor_fixed_bytes = definition->actor_block_bytes,

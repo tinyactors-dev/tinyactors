@@ -816,12 +816,18 @@ module TinyactorsTest
     end
 
     # Destroys this run's system and fails when the counting allocator still
-    # holds allocations, or saw a free it did not hand out. Runs once.
+    # holds allocations, or saw a free it did not hand out, or when a trace
+    # record names an ID its definition cannot answer for. Runs once.
     def teardown!
       return if @system.nil? || @torn_down
 
       @torn_down = true
+      unresolved = unresolved_trace_ids
       ta.system.destroy(system: @system)
+      unless unresolved.empty?
+        raise AssertionFailed, "#{@run}: trace records name IDs their definitions cannot answer for " \
+                               "(ADR 0071): #{unresolved.first(5).join('; ')}"
+      end
       stats = allocator.stats
       anomalies = allocator.journal.select { |entry| entry[:op].start_with?('free_') }
       unless anomalies.empty?
@@ -831,6 +837,56 @@ module TinyactorsTest
 
       raise AssertionFailed, "#{@run}: ta_system_destroy left #{stats[:live_allocations]} allocation(s) " \
                              "(#{stats[:live_bytes]} bytes) live"
+    end
+
+    ID_NONE = 4_294_967_295
+
+    # Every state, transition, action and expression ID in every trace
+    # record, looked up in the record's definition (ADR 0071). Transitions
+    # in records are always <transition> elements. A definition that is no
+    # longer registered (retired and freed) is skipped: its IDs are stale.
+    # Returns the IDs that did not resolve, described.
+    def unresolved_trace_ids
+      sink = @instruments['trace']
+      return [] unless sink
+
+      answers = {}
+      sink.journal.select { |entry| entry[:op] == 'trace' }.flat_map do |record|
+        definition = record[:definition]
+        next [] unless definition_registered?(definition, answers)
+
+        trace_ids(record).filter_map do |lookup, id|
+          answer = answers[[definition, lookup, id]] ||= trace_id_answer(definition, lookup, id)
+          "#{record[:kind]} names #{lookup} #{id}: #{answer}" unless answer == :ok
+        end
+      end
+    end
+
+    # [lookup, id] for every ID a record names.
+    def trace_ids(record)
+      position = record[:position] || {}
+      ids = [[:state, position[:state]], [:transition, position[:transition]], [:action, position[:action]],
+             [:state, record[:state]], [:expression, record[:expr]], [:action, record[:action]]]
+      ids.concat(Array(record[:transitions]).map { |id| [:transition, id] })
+      %i[exited entered history states].each { |list| ids.concat(Array(record[list]).map { |id| [:state, id] }) }
+      ids.reject { |_, id| id.nil? || Integer(id) == ID_NONE }
+    end
+
+    def definition_registered?(definition, answers)
+      answers.fetch([definition, :registered]) do
+        answers[[definition, :registered]] =
+          ta.definition.inspect(system: system_handle, definition: definition)[:result] == 'ok'
+      end
+    end
+
+    # :ok, or why the lookup failed.
+    def trace_id_answer(definition, lookup, id)
+      response = ta.definition.public_send(lookup, system: system_handle, definition: definition, lookup => id)
+      return response[:result] unless response[:result] == 'ok'
+      return :ok unless lookup == :transition
+
+      origin = response.dig(:out, :out, :origin)
+      origin == 'authored' ? :ok : "a record names the #{origin} transition"
     end
 
     # Everything a Trace records about one actor.
@@ -1153,7 +1209,7 @@ module TinyactorsTest
 
       core('ta_definition_content',
            ta.definition.content(system: system_handle, definition: definition, content: send[:target_text]))
-        .fetch(:out)
+        .fetch(:out).fetch(:bytes)
     end
 
     # Interns one atom of the system.

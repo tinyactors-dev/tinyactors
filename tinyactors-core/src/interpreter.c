@@ -13,8 +13,10 @@
 /* A block stopped at a pause point with its frames left open (ADR 0061). */
 #define TA_EXEC_PAUSED 2
 
-/* The root initial transition taken at bootstrap. */
-#define TA_TRANSITION_BOOTSTRAP (UINT32_MAX - 1u)
+/* In `enabled`: the document's initial transition, which bootstrap takes. It
+ * is not a transition ID (ADR 0071 numbers initial transitions after the
+ * authored ones); it only marks the bootstrap microstep. */
+#define TA_ENABLED_BOOTSTRAP (UINT32_MAX - 1u)
 
 typedef struct {
     ta_state_id source;
@@ -25,7 +27,7 @@ typedef struct {
 
 static ta_transition_view ta_view(const ta_interpreter *it, ta_transition_id transition) {
     const ta_definition *definition = it->definition;
-    if (transition == TA_TRANSITION_BOOTSTRAP) {
+    if (transition == TA_ENABLED_BOOTSTRAP) {
         const ta_initial_transition_def *initial = &definition->initial_transitions[definition->root_initial];
         return (ta_transition_view){
             .source = TA_STATE_NONE,
@@ -154,7 +156,7 @@ static ta_trace_position ta_trace_position_now(const ta_interpreter *it) {
             break;
         case TA_PHASE_TRANSITIONS:
             position.at = TA_TRACE_AT_TRANSITION;
-            if (it->at.state < it->enabled_count && it->enabled[it->at.state] != TA_TRANSITION_BOOTSTRAP) {
+            if (it->at.state < it->enabled_count && it->enabled[it->at.state] != TA_ENABLED_BOOTSTRAP) {
                 position.transition = it->enabled[it->at.state];
                 position.state = it->definition->transitions[position.transition].source;
             }
@@ -314,7 +316,7 @@ static void ta_trace_microstep(ta_interpreter *it, const ta_event *event) {
     ta_trace_record record = ta_trace_record_now(it, TA_TRACE_MICROSTEP);
     record.position = ta_trace_nowhere();
     record.event = event;
-    if (it->enabled_count != 0 && it->enabled[0] != TA_TRANSITION_BOOTSTRAP) {
+    if (it->enabled_count != 0 && it->enabled[0] != TA_ENABLED_BOOTSTRAP) {
         record.transitions = it->enabled;
         record.transition_count = it->enabled_count;
     }
@@ -3042,7 +3044,7 @@ static ta_result ta_run_script(ta_interpreter *it) {
     if (result != TA_OK) {
         return result;
     }
-    it->enabled[0] = TA_TRANSITION_BOOTSTRAP;
+    it->enabled[0] = TA_ENABLED_BOOTSTRAP;
     it->enabled_count = 1;
     ta_microstep_begin(it, NULL);
     return TA_OK;

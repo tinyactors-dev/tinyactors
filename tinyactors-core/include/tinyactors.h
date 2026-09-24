@@ -2513,23 +2513,6 @@ typedef struct {
     TA_OUT ta_state_id *out;
 } ta_definition_find_state_params;
 
-typedef struct {
-    ta_definition_id definition;
-    ta_content_id content;
-    /* The media type the chart gave, empty when it gave none. */
-    TA_OUT TA_LIFETIME(definition) ta_str *media_type;
-    TA_OUT TA_LIFETIME(definition) ta_bytes *out;
-} ta_definition_content_params;
-
-/*
- * The bytes of a definition's literal content: a <content> body or a literal
- * send target, as the chart holds them (ADR 0053). Inspection names content
- * by ID, as ta_delayed_send_info.target_text does. TA_ERR_NOT_FOUND for a
- * definition or content ID that does not exist.
- */
-TA_API ta_result ta_definition_content(const ta_system *system,
-                                       TA_IN const ta_definition_content_params *params);
-
 /*
  * The state of a definition with this author ID: the inverse of
  * ta_definition_state (ADR 0049). TA_ERR_NOT_FOUND when the definition has
@@ -2537,6 +2520,123 @@ TA_API ta_result ta_definition_content(const ta_system *system,
  */
 TA_API ta_result ta_definition_find_state(const ta_system *system,
                                           TA_IN const ta_definition_find_state_params *params);
+
+/*
+ * Lookups by ID, in the style of ta_definition_state: literal content, and
+ * transitions, actions and expressions (ADR 0071). Each takes the definition
+ * and one ID and writes one view, whose text and arrays are borrowed from
+ * the definition. TA_ERR_NOT_FOUND ends a walk over IDs 0, 1, 2, ... (the
+ * counts are in ta_definition_inspection) and is also the answer for an
+ * unknown or stale definition. A retired definition is readable until it is
+ * freed.
+ */
+
+/*
+ * The bytes of a definition's literal content: a <content> body or a literal
+ * send target, as the chart holds them (ADR 0053). Inspection names content
+ * by ID, as ta_delayed_send_info.target_text does.
+ */
+typedef struct {
+    /* The media type the chart gave, empty when it gave none. */
+    ta_str media_type;
+    ta_bytes bytes;
+} ta_content_info;
+typedef struct {
+    ta_definition_id definition;
+    ta_content_id content;
+    TA_OUT TA_LIFETIME(definition) ta_content_info *out;
+} ta_definition_content_params;
+TA_API ta_result ta_definition_content(const ta_system *system,
+                                       TA_IN const ta_definition_content_params *params);
+
+/*
+ * Transition IDs: the <transition> elements come first, and they are the
+ * only transitions trace records name. After them come the initial
+ * transitions, one per compound state and one for the document: an
+ * <initial> element, an `initial` attribute, or SCXML's default (the first
+ * child state). The document's is the one the bootstrap takes.
+ */
+typedef enum {
+    TA_TRANSITION_AUTHORED = 0,   /* a <transition> element                            */
+    TA_TRANSITION_INITIAL,        /* a compound state's initial transition             */
+    TA_TRANSITION_BOOTSTRAP       /* the document's initial transition, which bootstrap takes */
+} ta_transition_origin TA_SYMBOLS("TA_TRANSITION_");
+
+typedef struct {
+    ta_transition_origin origin;
+    /* The state it leaves: its <transition>'s parent, or the state an initial
+     * transition belongs to; TA_STATE_NONE for BOOTSTRAP. */
+    ta_state_id source;
+    /* EXTERNAL or INTERNAL; initial transitions are EXTERNAL. */
+    ta_scxml_transition_kind type;
+    /* The event descriptor as authored; empty for an eventless or initial one. */
+    ta_str event;
+    TA_COUNTED_BY(target_count) TA_LIFETIME(definition) const ta_state_id *targets;
+    uint32_t target_count;
+    /* True when the targets are SCXML's default, the first child state, and
+     * not authored. Only an initial transition can have default targets. */
+    bool default_targets;
+    /* TA_EXPR_ID_NONE when unguarded; initial transitions never have a guard. */
+    ta_expr_id condition;
+    /* The size of its block of executable content. */
+    uint32_t action_count;
+    /* Its place among the <transition> elements of the document; 0 for an
+     * initial transition. */
+    uint32_t document_order;
+} ta_transition_info;
+typedef struct {
+    ta_definition_id definition;
+    ta_transition_id transition;
+    TA_OUT TA_LIFETIME(definition) ta_transition_info *out;
+} ta_definition_transition_params;
+TA_API ta_result ta_definition_transition(const ta_system *system,
+                                          TA_IN const ta_definition_transition_params *params);
+
+/* The block of executable content an action sits in, and what `owner` is. */
+typedef enum {
+    TA_ACTION_IN_ONENTRY = 0,     /* owner: a state; block_index: which <onentry>         */
+    TA_ACTION_IN_ONEXIT,          /* owner: a state; block_index: which <onexit>          */
+    TA_ACTION_IN_TRANSITION,      /* owner: a transition ID, initial transitions included */
+    TA_ACTION_IN_THEN,            /* owner: an <if> action                                */
+    TA_ACTION_IN_ELSE,            /* owner: an <if> action; an <elseif> is an <if> here   */
+    TA_ACTION_IN_FOREACH,         /* owner: a <foreach> action                            */
+    TA_ACTION_IN_FINALIZE,        /* owner: the <invoke>'s state; block_index: which <invoke> */
+    TA_ACTION_IN_SCRIPT           /* the document's top-level <script>; owner: TA_STATE_NONE */
+} ta_action_block TA_SYMBOLS("TA_ACTION_IN_");
+
+typedef struct {
+    /* The element: raise, send, cancel, assign, script, log, if or foreach. */
+    ta_scxml_action_kind kind;
+    ta_action_block block;
+    /* A state, transition or action ID, as `block` says. */
+    uint32_t owner;
+    /* Which of the owner's blocks of that kind, from 0, in document order:
+     * the <onentry> or <onexit> element, or the <invoke> of FINALIZE; 0 for
+     * every other block. */
+    uint32_t block_index;
+    /* Its place in the block, from 0. */
+    uint32_t index;
+} ta_action_info;
+typedef struct {
+    ta_definition_id definition;
+    ta_action_id action;
+    TA_OUT ta_action_info *out;
+} ta_definition_action_params;
+TA_API ta_result ta_definition_action(const ta_system *system,
+                                      TA_IN const ta_definition_action_params *params);
+
+/*
+ * An expression as the definition stores it: SOURCE text the compiler
+ * copied, or a HOST expression's retained value, which only the host that
+ * built it can read. Core never invents text for a host expression.
+ */
+typedef struct {
+    ta_definition_id definition;
+    ta_expr_id expression;
+    TA_OUT TA_LIFETIME(definition) ta_expression *out;
+} ta_definition_expression_params;
+TA_API ta_result ta_definition_expression(const ta_system *system,
+                                          TA_IN const ta_definition_expression_params *params);
 
 /*
  * A read-only view of one registered definition. Text and the adapter are
@@ -2559,6 +2659,14 @@ typedef struct {
     ta_scxml_binding_kind binding;
     /* States readable with ta_definition_state(). */
     uint32_t state_count;
+    /* Transitions readable with ta_definition_transition(), initial ones included. */
+    uint32_t transition_count;
+    /* Actions readable with ta_definition_action(). */
+    uint32_t action_count;
+    /* Expressions readable with ta_definition_expression(). */
+    uint32_t expression_count;
+    /* Literal content readable with ta_definition_content(). */
+    uint32_t content_count;
     /* True after the definition is retired (ADR 0043). */
     bool retired;
     /* Resident actors using this definition, unpublished replacements included. */

@@ -440,6 +440,367 @@ static void test_reading_identities_back(ta_system *system, counting_model *mode
     CHECK(ta_system_invoke_id_text(system, target.as.invoke, NULL) == TA_ERR_INVALID);
 }
 
+/* ------------------------------------------------------------------------
+ * Transitions, actions and expressions by ID (ADR 0071)
+ */
+
+#define SRC(text) { .kind = TA_EXPRESSION_SOURCE, .as.source = STR(text) }
+#define LOG(text) { .kind = TA_SCXML_ACTION_LOG, .as.log = { .label = STR(text) } }
+
+/*
+ * A chart with every kind of block: <onentry> twice, <onexit>, transition
+ * content, <if> with an <else>, a <foreach> body, <finalize> of two
+ * <invoke>s, an <initial> with content, and the document's <script>. q has
+ * no <initial>, so SCXML's default applies to it and to the document.
+ */
+static const ta_scxml_state_spec every_block[] = {
+    {
+        .kind = TA_SCXML_STATE_COMPOUND,
+        .id = STR("p"),
+        .initial = &(const ta_scxml_initial_spec){
+            .targets = (const ta_str[]){ STR("a"), {0} },
+            .actions = (const ta_scxml_action_spec[]){ LOG("init"), {0} },
+        },
+        .states = (const ta_scxml_state_spec[]){
+            {
+                .kind = TA_SCXML_STATE_ATOMIC,
+                .id = STR("a"),
+                .onentry = (const ta_scxml_handler_spec[]){
+                    { .actions = (const ta_scxml_action_spec[]){
+                          { .kind = TA_SCXML_ACTION_ASSIGN,
+                            .as.assign = { .location = SRC("x"),
+                                           .value = { .kind = TA_SCXML_VALUE_EXPR, .as.expr = SRC("1") } } },
+                          { .kind = TA_SCXML_ACTION_IF,
+                            .as.conditional = {
+                                .condition = SRC("c1"),
+                                .then_actions = (const ta_scxml_action_spec[]){
+                                    { .kind = TA_SCXML_ACTION_RAISE, .as.raise = { .event = STR("r") } }, {0} },
+                                .else_actions = (const ta_scxml_action_spec[]){ LOG("no"), {0} },
+                            } },
+                          {0} } },
+                    { .actions = (const ta_scxml_action_spec[]){
+                          { .kind = TA_SCXML_ACTION_SEND,
+                            .as.send = { .event = { .kind = TA_SCXML_EVENT_NAME, .as.name = STR("e") } } },
+                          {0} } },
+                    {0},
+                },
+                .onexit = (const ta_scxml_handler_spec[]){
+                    { .actions = (const ta_scxml_action_spec[]){
+                          { .kind = TA_SCXML_ACTION_FOREACH,
+                            .as.foreach = { .array = SRC("items"), .item = STR("it"),
+                                            .body = (const ta_scxml_action_spec[]){ LOG("each"), {0} } } },
+                          {0} } },
+                    {0},
+                },
+                .transitions = (const ta_scxml_transition_spec[]){
+                    { .kind = TA_SCXML_TRANSITION_EXTERNAL,
+                      .event = STR("go.now"),
+                      .condition = SRC("ready"),
+                      .targets = (const ta_str[]){ STR("b"), {0} },
+                      .actions = (const ta_scxml_action_spec[]){
+                          { .kind = TA_SCXML_ACTION_CANCEL,
+                            .as.cancel = { .sendid = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("s1") } } },
+                          {0} } },
+                    { .kind = TA_SCXML_TRANSITION_EXTERNAL, .targets = (const ta_str[]){ STR("b"), {0} } },
+                    {0},
+                },
+                .invokes = (const ta_scxml_invoke_spec[]){
+                    { .kind = TA_SCXML_INVOKE,
+                      .type = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("svc") },
+                      .finalize = (const ta_scxml_action_spec[]){
+                          { .kind = TA_SCXML_ACTION_ASSIGN,
+                            .as.assign = { .location = SRC("y"),
+                                           .value = { .kind = TA_SCXML_VALUE_EXPR, .as.expr = SRC("2") } } },
+                          {0} } },
+                    { .kind = TA_SCXML_INVOKE,
+                      .type = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("svc") },
+                      .finalize = (const ta_scxml_action_spec[]){ LOG("done"), {0} } },
+                    {0},
+                },
+            },
+            { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("b") },
+            {0},
+        },
+    },
+    {
+        .kind = TA_SCXML_STATE_COMPOUND,
+        .id = STR("q"),
+        .states = (const ta_scxml_state_spec[]){ { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("c") }, {0} },
+        .transitions = (const ta_scxml_transition_spec[]){
+            { .kind = TA_SCXML_TRANSITION_INTERNAL, .event = STR("back"), .targets = (const ta_str[]){ STR("c"), {0} } },
+            {0},
+        },
+    },
+    {0},
+};
+
+static ta_state_id state_named(ta_system *system, ta_definition_id definition, const char *id) {
+    uint32_t length = 0;
+    while (id[length] != '\0') {
+        length += 1;
+    }
+    ta_state_id state = TA_STATE_NONE;
+    CHECK(ta_definition_find_state(system, &(ta_definition_find_state_params){
+                                               .definition = definition, .id = { id, length }, .out = &state }) == TA_OK);
+    return state;
+}
+
+static bool targets_are(const ta_transition_info *info, ta_state_id only) {
+    return info->target_count == 1 && info->targets != NULL && info->targets[0] == only;
+}
+
+static ta_transition_info transition_at(ta_system *system, ta_definition_id definition, ta_transition_id transition) {
+    ta_transition_info info = { .origin = TA_TRANSITION_AUTHORED };
+    CHECK(ta_definition_transition(system, &(ta_definition_transition_params){
+                                               .definition = definition, .transition = transition, .out = &info }) ==
+          TA_OK);
+    return info;
+}
+
+/* Every transition, <initial>s and the document's included; returns go.now's ID. */
+static ta_transition_id check_transitions(ta_system *system, ta_definition_id definition, uint32_t count) {
+    ta_state_id p = state_named(system, definition, "p");
+    ta_state_id q = state_named(system, definition, "q");
+    ta_state_id a = state_named(system, definition, "a");
+    ta_state_id b = state_named(system, definition, "b");
+    ta_state_id c = state_named(system, definition, "c");
+    CHECK(count == 6); /* three <transition>s, then the initial transitions of p, q and the document */
+    uint32_t authored = 0;
+    uint32_t initial = 0;
+    uint32_t bootstrap = 0;
+    ta_transition_id go_now = TA_TRANSITION_NONE;
+    for (ta_transition_id id = 0; id < count; id += 1u) {
+        ta_transition_info info = transition_at(system, definition, id);
+        switch (info.origin) {
+            case TA_TRANSITION_AUTHORED:
+                CHECK(authored == id); /* the <transition>s come first */
+                authored += 1u;
+                CHECK(!info.default_targets);
+                if (str_is(info.event, "go.now")) {
+                    go_now = id;
+                    CHECK(info.source == a && targets_are(&info, b));
+                    CHECK(info.type == TA_SCXML_TRANSITION_EXTERNAL);
+                    CHECK(info.condition != TA_EXPR_ID_NONE && info.action_count == 1);
+                } else if (str_is(info.event, "back")) {
+                    CHECK(info.source == q && targets_are(&info, c));
+                    CHECK(info.type == TA_SCXML_TRANSITION_INTERNAL);
+                    CHECK(info.condition == TA_EXPR_ID_NONE && info.action_count == 0);
+                } else {
+                    CHECK(info.event.len == 0); /* eventless */
+                    CHECK(info.source == a && targets_are(&info, b));
+                }
+                break;
+            case TA_TRANSITION_INITIAL:
+                initial += 1u;
+                CHECK(info.event.len == 0 && info.condition == TA_EXPR_ID_NONE);
+                CHECK(info.type == TA_SCXML_TRANSITION_EXTERNAL);
+                if (info.source == p) {
+                    CHECK(targets_are(&info, a) && !info.default_targets && info.action_count == 1);
+                } else {
+                    CHECK(info.source == q && targets_are(&info, c) && info.default_targets);
+                    CHECK(info.action_count == 0);
+                }
+                break;
+            case TA_TRANSITION_BOOTSTRAP:
+                bootstrap += 1u;
+                CHECK(info.source == TA_STATE_NONE && targets_are(&info, p) && info.default_targets);
+                break;
+        }
+    }
+    CHECK(authored == 3 && initial == 2 && bootstrap == 1);
+    CHECK(go_now != TA_TRANSITION_NONE);
+    ta_transition_info info;
+    CHECK(ta_definition_transition(system, &(ta_definition_transition_params){
+                                               .definition = definition, .transition = count, .out = &info }) ==
+          TA_ERR_NOT_FOUND);
+    CHECK(ta_definition_transition(system, &(ta_definition_transition_params){
+                                               .definition = definition, .transition = TA_TRANSITION_NONE,
+                                               .out = &info }) == TA_ERR_NOT_FOUND);
+    return go_now;
+}
+
+static ta_action_info action_at(ta_system *system, ta_definition_id definition, ta_action_id action) {
+    ta_action_info info = { .kind = TA_SCXML_ACTION_NONE };
+    CHECK(ta_definition_action(system, &(ta_definition_action_params){
+                                           .definition = definition, .action = action, .out = &info }) == TA_OK);
+    return info;
+}
+
+/* Where each of the twelve actions sits. */
+static void check_actions(ta_system *system, ta_definition_id definition, uint32_t count, ta_transition_id go_now) {
+    ta_state_id p = state_named(system, definition, "p");
+    ta_state_id a = state_named(system, definition, "a");
+    CHECK(count == 12);
+    uint32_t logs = 0;
+    uint32_t assigns = 0;
+    for (ta_action_id id = 0; id < count; id += 1u) {
+        ta_action_info info = action_at(system, definition, id);
+        switch (info.kind) {
+            case TA_SCXML_ACTION_SCRIPT:
+                CHECK(info.block == TA_ACTION_IN_SCRIPT && info.owner == TA_STATE_NONE && info.index == 0);
+                break;
+            case TA_SCXML_ACTION_ASSIGN:
+                assigns += 1u;
+                CHECK(info.owner == a && info.block_index == 0 && info.index == 0);
+                /* The first <onentry>, or the first <invoke>'s <finalize>. */
+                CHECK(info.block == TA_ACTION_IN_ONENTRY || info.block == TA_ACTION_IN_FINALIZE);
+                break;
+            case TA_SCXML_ACTION_IF:
+                CHECK(info.block == TA_ACTION_IN_ONENTRY && info.owner == a && info.block_index == 0 &&
+                      info.index == 1);
+                break;
+            case TA_SCXML_ACTION_RAISE:
+                CHECK(info.block == TA_ACTION_IN_THEN && info.index == 0);
+                CHECK(action_at(system, definition, info.owner).kind == TA_SCXML_ACTION_IF);
+                break;
+            case TA_SCXML_ACTION_SEND:
+                /* The second <onentry>. */
+                CHECK(info.block == TA_ACTION_IN_ONENTRY && info.owner == a && info.block_index == 1 &&
+                      info.index == 0);
+                break;
+            case TA_SCXML_ACTION_FOREACH:
+                CHECK(info.block == TA_ACTION_IN_ONEXIT && info.owner == a && info.block_index == 0 && info.index == 0);
+                break;
+            case TA_SCXML_ACTION_CANCEL:
+                CHECK(info.block == TA_ACTION_IN_TRANSITION && info.owner == go_now && info.index == 0);
+                break;
+            case TA_SCXML_ACTION_LOG:
+                logs += 1u;
+                CHECK(info.index == 0);
+                if (info.block == TA_ACTION_IN_TRANSITION) {
+                    /* p's <initial>, numbered after the <transition>s. */
+                    ta_transition_info owner = transition_at(system, definition, info.owner);
+                    CHECK(owner.origin == TA_TRANSITION_INITIAL && owner.source == p);
+                } else if (info.block == TA_ACTION_IN_ELSE) {
+                    CHECK(action_at(system, definition, info.owner).kind == TA_SCXML_ACTION_IF);
+                } else if (info.block == TA_ACTION_IN_FOREACH) {
+                    CHECK(action_at(system, definition, info.owner).kind == TA_SCXML_ACTION_FOREACH);
+                } else {
+                    /* The second <invoke>'s <finalize>. */
+                    CHECK(info.block == TA_ACTION_IN_FINALIZE && info.owner == a && info.block_index == 1);
+                }
+                break;
+            default:
+                CHECK(!"an action of an unexpected kind");
+                break;
+        }
+    }
+    CHECK(logs == 4 && assigns == 2);
+    ta_action_info info;
+    CHECK(ta_definition_action(system, &(ta_definition_action_params){
+                                           .definition = definition, .action = count, .out = &info }) ==
+          TA_ERR_NOT_FOUND);
+}
+
+/* Every expression comes back as the source text the compiler copied. */
+static void check_expressions(ta_system *system, ta_definition_id definition, uint32_t count,
+                              ta_transition_id go_now) {
+    static const char *const expected[] = { "boot()", "x", "1", "c1", "items", "ready", "y", "2" };
+    const uint32_t expected_count = (uint32_t)(sizeof(expected) / sizeof(expected[0]));
+    CHECK(count == expected_count);
+    uint32_t seen = 0;
+    for (ta_expr_id id = 0; id < count; id += 1u) {
+        ta_expression expression = { .kind = TA_EXPRESSION_NONE };
+        CHECK(ta_definition_expression(system, &(ta_definition_expression_params){
+                                                   .definition = definition, .expression = id,
+                                                   .out = &expression }) == TA_OK);
+        CHECK(expression.kind == TA_EXPRESSION_SOURCE);
+        for (uint32_t index = 0; index < expected_count; index += 1u) {
+            seen |= str_is(expression.as.source, expected[index]) ? 1u << index : 0u;
+        }
+    }
+    CHECK(seen == (1u << expected_count) - 1u);
+    ta_expression condition = { .kind = TA_EXPRESSION_NONE };
+    CHECK(ta_definition_expression(system, &(ta_definition_expression_params){
+                                               .definition = definition,
+                                               .expression = transition_at(system, definition, go_now).condition,
+                                               .out = &condition }) == TA_OK);
+    CHECK(condition.kind == TA_EXPRESSION_SOURCE && str_is(condition.as.source, "ready"));
+    CHECK(ta_definition_expression(system, &(ta_definition_expression_params){
+                                               .definition = definition, .expression = count,
+                                               .out = &condition }) == TA_ERR_NOT_FOUND);
+}
+
+/* A host expression comes back as the host's value; core has no text for it. */
+static int host_value;
+
+static ta_result host_retain(void *self, void *value, ta_allocator unused, void **out) {
+    (void)self;
+    (void)unused;
+    *out = value;
+    return TA_OK;
+}
+
+static void host_release(void *self, void *value, ta_allocator unused) {
+    (void)self;
+    (void)value;
+    (void)unused;
+}
+
+static const ta_expression_host_vtable host_vtable = { .retain = host_retain, .release = host_release };
+
+static void check_host_expression(ta_system *system, ta_datamodel model) {
+    const ta_scxml_state_spec guarded[] = {
+        { .kind = TA_SCXML_STATE_ATOMIC,
+          .id = STR("idle"),
+          .transitions = (const ta_scxml_transition_spec[]){
+              { .kind = TA_SCXML_TRANSITION_EXTERNAL,
+                .event = STR("go"),
+                .condition = { .kind = TA_EXPRESSION_HOST, .as.host = { .v = &host_vtable, .value = &host_value } },
+                .targets = (const ta_str[]){ STR("idle"), {0} } },
+              {0} } },
+        {0},
+    };
+    ta_definition_id definition = 0;
+    CHECK(compile(system, (compile_request){&(ta_scxml_spec){ .name = STR("hosted"), .states = guarded }, model,
+                                            &definition}) == TA_OK);
+    ta_expression expression = { .kind = TA_EXPRESSION_NONE };
+    CHECK(ta_definition_expression(system, &(ta_definition_expression_params){
+                                               .definition = definition, .expression = 0, .out = &expression }) ==
+          TA_OK);
+    CHECK(expression.kind == TA_EXPRESSION_HOST && expression.as.host.value == &host_value);
+    CHECK(expression.as.host.v == &host_vtable);
+}
+
+static void test_elements_by_id(ta_system *system, counting_model *model) {
+    ta_datamodel counting = { .self = model, .v = &counting_vtable };
+    ta_definition_id definition = 0;
+    CHECK(compile(system, (compile_request){&(ta_scxml_spec){ .name = STR("blocks"), .script = SRC("boot()"),
+                                                              .states = every_block },
+                                            counting, &definition}) == TA_OK);
+    ta_definition_inspection view;
+    CHECK(ta_definition_inspect(system, definition, &view) == TA_OK);
+    ta_transition_id go_now = check_transitions(system, definition, view.transition_count);
+    check_actions(system, definition, view.action_count, go_now);
+    check_expressions(system, definition, view.expression_count, go_now);
+    check_host_expression(system, counting);
+
+    /* Unknown definitions and missing outputs, as for ta_definition_state. */
+    ta_transition_info transition;
+    ta_action_info action;
+    ta_expression expression;
+    CHECK(ta_definition_transition(system, &(ta_definition_transition_params){
+                                               .definition = definition + 100u, .transition = 0,
+                                               .out = &transition }) == TA_ERR_NOT_FOUND);
+    CHECK(ta_definition_action(system, &(ta_definition_action_params){
+                                           .definition = definition + 100u, .action = 0, .out = &action }) ==
+          TA_ERR_NOT_FOUND);
+    CHECK(ta_definition_expression(system, &(ta_definition_expression_params){
+                                               .definition = definition + 100u, .expression = 0,
+                                               .out = &expression }) == TA_ERR_NOT_FOUND);
+    CHECK(ta_definition_transition(system, &(ta_definition_transition_params){ .definition = definition }) ==
+          TA_ERR_INVALID);
+    CHECK(ta_definition_action(system, &(ta_definition_action_params){ .definition = definition }) == TA_ERR_INVALID);
+    CHECK(ta_definition_expression(system, &(ta_definition_expression_params){ .definition = definition }) ==
+          TA_ERR_INVALID);
+
+    /* Retired with no actors, the definition is freed and its ID is stale. */
+    CHECK(ta_system_retire_definition(system, definition) == TA_OK);
+    CHECK(ta_definition_action(system, &(ta_definition_action_params){
+                                           .definition = definition, .action = 0, .out = &action }) ==
+          TA_ERR_NOT_FOUND);
+}
+
 int main(void) {
     ta_system *system = NULL;
     if (ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) != TA_OK) {
@@ -451,6 +812,7 @@ int main(void) {
     test_find_definition(system, &model);
     test_actor_inspection(system, &model);
     test_reading_identities_back(system, &model);
+    test_elements_by_id(system, &model);
     ta_system_destroy(system);
     if (failures != 0) {
         fprintf(stderr, "inspection test: %d check(s) failed\n", failures);

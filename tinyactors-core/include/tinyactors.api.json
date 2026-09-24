@@ -239,6 +239,70 @@
     }
   },
   "types": {
+    "ta_action_block": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_ACTION_IN_ONENTRY",
+          "value": 0,
+          "symbol": "onentry",
+          "doc": "owner: a state; block_index: which <onentry >"
+        },
+        {
+          "name": "TA_ACTION_IN_ONEXIT",
+          "value": 1,
+          "symbol": "onexit",
+          "doc": "owner: a state; block_index: which <onexit >"
+        },
+        {
+          "name": "TA_ACTION_IN_TRANSITION",
+          "value": 2,
+          "symbol": "transition",
+          "doc": "owner: a transition ID, initial transitions included"
+        },
+        {
+          "name": "TA_ACTION_IN_THEN",
+          "value": 3,
+          "symbol": "then",
+          "doc": "owner: an <if > action"
+        },
+        {
+          "name": "TA_ACTION_IN_ELSE",
+          "value": 4,
+          "symbol": "else",
+          "doc": "owner: an <if > action; an <elseif > is an <if > here"
+        },
+        {
+          "name": "TA_ACTION_IN_FOREACH",
+          "value": 5,
+          "symbol": "foreach",
+          "doc": "owner: a <foreach > action"
+        },
+        {
+          "name": "TA_ACTION_IN_FINALIZE",
+          "value": 6,
+          "symbol": "finalize",
+          "doc": "owner: the <invoke >'s state; block_index: which <invoke >"
+        },
+        {
+          "name": "TA_ACTION_IN_SCRIPT",
+          "value": 7,
+          "symbol": "script",
+          "doc": "the document's top-level <script >; owner: TA_STATE_NONE"
+        }
+      ],
+      "doc": "The block of executable content an action sits in, and what `owner` is.",
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
     "ta_action_block_id": {
       "kind": "alias",
       "type": {
@@ -268,6 +332,69 @@
         "wasm32-unknown-unknown": {
           "size": 4,
           "align": 4
+        }
+      }
+    },
+    "ta_action_info": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": {
+            "type": "ta_scxml_action_kind"
+          },
+          "doc": "The element: raise, send, cancel, assign, script, log, if or foreach."
+        },
+        {
+          "name": "block",
+          "type": {
+            "type": "ta_action_block"
+          }
+        },
+        {
+          "name": "owner",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "A state, transition or action ID, as `block` says."
+        },
+        {
+          "name": "block_index",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "Which of the owner's blocks of that kind, from 0, in document order: the <onentry > or <onexit > element, or the <invoke > of FINALIZE; 0 for every other block."
+        },
+        {
+          "name": "index",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "Its place in the block, from 0."
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 20,
+          "align": 4,
+          "offsets": {
+            "kind": 0,
+            "block": 4,
+            "owner": 8,
+            "block_index": 12,
+            "index": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 20,
+          "align": 4,
+          "offsets": {
+            "kind": 0,
+            "block": 4,
+            "owner": 8,
+            "block_index": 12,
+            "index": 16
+          }
         }
       }
     },
@@ -3819,6 +3946,43 @@
         }
       }
     },
+    "ta_content_info": {
+      "kind": "struct",
+      "doc": "The bytes of a definition's literal content: a <content > body or a literal send target, as the chart holds them (ADR 0053). Inspection names content by ID, as ta_delayed_send_info.target_text does.",
+      "fields": [
+        {
+          "name": "media_type",
+          "type": {
+            "type": "ta_str"
+          },
+          "doc": "The media type the chart gave, empty when it gave none."
+        },
+        {
+          "name": "bytes",
+          "type": {
+            "type": "ta_bytes"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "media_type": 0,
+            "bytes": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "media_type": 0,
+            "bytes": 8
+          }
+        }
+      }
+    },
     "ta_data_decl_id": {
       "kind": "alias",
       "type": {
@@ -6242,6 +6406,54 @@
         }
       ]
     },
+    "ta_definition_action_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "definition",
+          "type": {
+            "type": "ta_definition_id"
+          }
+        },
+        {
+          "name": "action",
+          "type": {
+            "type": "ta_action_id"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_action_info"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "definition": 0,
+            "action": 8,
+            "out": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "definition": 0,
+            "action": 8,
+            "out": 12
+          }
+        }
+      }
+    },
     "ta_definition_compile_params": {
       "kind": "struct",
       "fields": [
@@ -6351,23 +6563,10 @@
           }
         },
         {
-          "name": "media_type",
-          "type": {
-            "pointer": {
-              "type": "ta_str"
-            }
-          },
-          "shape": "single",
-          "direction": "out",
-          "valid_on": "success",
-          "lifetime": "definition",
-          "doc": "The media type the chart gave, empty when it gave none."
-        },
-        {
           "name": "out",
           "type": {
             "pointer": {
-              "type": "ta_bytes"
+              "type": "ta_content_info"
             }
           },
           "shape": "single",
@@ -6378,23 +6577,21 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 32,
-          "align": 8,
-          "offsets": {
-            "definition": 0,
-            "content": 8,
-            "media_type": 16,
-            "out": 24
-          }
-        },
-        "wasm32-unknown-unknown": {
           "size": 24,
           "align": 8,
           "offsets": {
             "definition": 0,
             "content": 8,
-            "media_type": 12,
             "out": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "definition": 0,
+            "content": 8,
+            "out": 12
           }
         }
       }
@@ -6555,6 +6752,56 @@
           "offsets": {
             "definition": 0,
             "arena": 8,
+            "out": 12
+          }
+        }
+      }
+    },
+    "ta_definition_expression_params": {
+      "kind": "struct",
+      "doc": "An expression as the definition stores it: SOURCE text the compiler copied, or a HOST expression's retained value, which only the host that built it can read. Core never invents text for a host expression.",
+      "fields": [
+        {
+          "name": "definition",
+          "type": {
+            "type": "ta_definition_id"
+          }
+        },
+        {
+          "name": "expression",
+          "type": {
+            "type": "ta_expr_id"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_expression"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "definition"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "definition": 0,
+            "expression": 8,
+            "out": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "definition": 0,
+            "expression": 8,
             "out": 12
           }
         }
@@ -6858,6 +7105,34 @@
           "doc": "States readable with ta_definition_state()."
         },
         {
+          "name": "transition_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "Transitions readable with ta_definition_transition(), initial ones included."
+        },
+        {
+          "name": "action_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "Actions readable with ta_definition_action()."
+        },
+        {
+          "name": "expression_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "Expressions readable with ta_definition_expression()."
+        },
+        {
+          "name": "content_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "Literal content readable with ta_definition_content()."
+        },
+        {
           "name": "retired",
           "type": {
             "builtin": "bool"
@@ -6888,7 +7163,7 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 104,
+          "size": 120,
           "align": 8,
           "offsets": {
             "id": 0,
@@ -6897,14 +7172,18 @@
             "datamodel": 56,
             "binding": 72,
             "state_count": 76,
-            "retired": 80,
-            "actor_count": 84,
-            "actor_fixed_bytes": 88,
-            "definition_bytes": 96
+            "transition_count": 80,
+            "action_count": 84,
+            "expression_count": 88,
+            "content_count": 92,
+            "retired": 96,
+            "actor_count": 100,
+            "actor_fixed_bytes": 104,
+            "definition_bytes": 112
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 64,
+          "size": 80,
           "align": 8,
           "offsets": {
             "id": 0,
@@ -6913,10 +7192,14 @@
             "datamodel": 32,
             "binding": 40,
             "state_count": 44,
-            "retired": 48,
-            "actor_count": 52,
-            "actor_fixed_bytes": 56,
-            "definition_bytes": 60
+            "transition_count": 48,
+            "action_count": 52,
+            "expression_count": 56,
+            "content_count": 60,
+            "retired": 64,
+            "actor_count": 68,
+            "actor_fixed_bytes": 72,
+            "definition_bytes": 76
           }
         }
       }
@@ -6965,6 +7248,55 @@
           "offsets": {
             "definition": 0,
             "state": 8,
+            "out": 12
+          }
+        }
+      }
+    },
+    "ta_definition_transition_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "definition",
+          "type": {
+            "type": "ta_definition_id"
+          }
+        },
+        {
+          "name": "transition",
+          "type": {
+            "type": "ta_transition_id"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_transition_info"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "definition"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "definition": 0,
+            "transition": 8,
+            "out": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "definition": 0,
+            "transition": 8,
             "out": 12
           }
         }
@@ -13436,6 +13768,154 @@
         }
       }
     },
+    "ta_transition_info": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "origin",
+          "type": {
+            "type": "ta_transition_origin"
+          }
+        },
+        {
+          "name": "source",
+          "type": {
+            "type": "ta_state_id"
+          },
+          "doc": "The state it leaves: its <transition >'s parent, or the state an initial transition belongs to; TA_STATE_NONE for BOOTSTRAP."
+        },
+        {
+          "name": "type",
+          "type": {
+            "type": "ta_scxml_transition_kind"
+          },
+          "doc": "EXTERNAL or INTERNAL; initial transitions are EXTERNAL."
+        },
+        {
+          "name": "event",
+          "type": {
+            "type": "ta_str"
+          },
+          "doc": "The event descriptor as authored; empty for an eventless or initial one."
+        },
+        {
+          "name": "targets",
+          "type": {
+            "pointer": {
+              "type": "ta_state_id",
+              "const": true
+            }
+          },
+          "count": "target_count",
+          "shape": "counted",
+          "direction": "in",
+          "lifetime": "definition"
+        },
+        {
+          "name": "target_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "count_of": "targets"
+        },
+        {
+          "name": "default_targets",
+          "type": {
+            "builtin": "bool"
+          },
+          "doc": "True when the targets are SCXML's default, the first child state, and not authored. Only an initial transition can have default targets."
+        },
+        {
+          "name": "condition",
+          "type": {
+            "type": "ta_expr_id"
+          },
+          "doc": "TA_EXPR_ID_NONE when unguarded; initial transitions never have a guard."
+        },
+        {
+          "name": "action_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "The size of its block of executable content."
+        },
+        {
+          "name": "document_order",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "Its place among the <transition > elements of the document; 0 for an initial transition."
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "origin": 0,
+            "source": 4,
+            "type": 8,
+            "event": 16,
+            "targets": 32,
+            "target_count": 40,
+            "default_targets": 44,
+            "condition": 48,
+            "action_count": 52,
+            "document_order": 56
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 44,
+          "align": 4,
+          "offsets": {
+            "origin": 0,
+            "source": 4,
+            "type": 8,
+            "event": 12,
+            "targets": 20,
+            "target_count": 24,
+            "default_targets": 28,
+            "condition": 32,
+            "action_count": 36,
+            "document_order": 40
+          }
+        }
+      }
+    },
+    "ta_transition_origin": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_TRANSITION_AUTHORED",
+          "value": 0,
+          "symbol": "authored",
+          "doc": "a <transition > element"
+        },
+        {
+          "name": "TA_TRANSITION_INITIAL",
+          "value": 1,
+          "symbol": "initial",
+          "doc": "a compound state's initial transition"
+        },
+        {
+          "name": "TA_TRANSITION_BOOTSTRAP",
+          "value": 2,
+          "symbol": "bootstrap",
+          "doc": "the document's initial transition, which bootstrap takes"
+        }
+      ],
+      "doc": "Transition IDs: the <transition > elements come first, and they are the only transitions trace records name. After them come the initial transitions, one per compound state and one for the document: an <initial > element, an `initial` attribute, or SCXML's default (the first child state). The document's is the one the bootstrap takes.",
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
     "ta_tree": {
       "kind": "struct",
       "doc": "Storage for dynamically authored specification trees. A tree owns all allocations made through it until ta_tree_destroy(). Its first allocation failure is retained and reported by ta_tree_result(); subsequent writes are ignored so import code can report one result at its outer boundary.",
@@ -15999,8 +16479,44 @@
       ]
     },
     {
+      "name": "ta_definition_find_state",
+      "doc": "The state of a definition with this author ID: the inverse of ta_definition_state (ADR 0049). TA_ERR_NOT_FOUND when the definition has no such state, which is a question, not a failure.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_definition_find_state_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
       "name": "ta_definition_content",
-      "doc": "The bytes of a definition's literal content: a <content > body or a literal send target, as the chart holds them (ADR 0053). Inspection names content by ID, as ta_delayed_send_info.target_text does. TA_ERR_NOT_FOUND for a definition or content ID that does not exist.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -16036,8 +16552,7 @@
       ]
     },
     {
-      "name": "ta_definition_find_state",
-      "doc": "The state of a definition with this author ID: the inverse of ta_definition_state (ADR 0049). TA_ERR_NOT_FOUND when the definition has no such state, which is a question, not a failure.",
+      "name": "ta_definition_transition",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -16063,7 +16578,79 @@
           "name": "params",
           "type": {
             "pointer": {
-              "type": "ta_definition_find_state_params",
+              "type": "ta_definition_transition_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_definition_action",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_definition_action_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_definition_expression",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_definition_expression_params",
               "const": true
             }
           },

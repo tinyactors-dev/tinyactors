@@ -292,6 +292,18 @@ typedef struct {
     bool authored_targets;
 } ta_initial_transition_def;
 
+/*
+ * Where an action sits (ADR 0071): its block, the block's owner, which of
+ * the owner's blocks of that kind, and its place in the block. The public
+ * ta_action_info, less the element kind, which the action itself holds.
+ */
+typedef struct {
+    ta_action_block block;
+    uint32_t owner;
+    uint32_t block_index;
+    uint32_t index;
+} ta_action_place;
+
 struct ta_definition {
     ta_allocator allocator;
     /* Owns every array and string below. */
@@ -342,6 +354,9 @@ struct ta_definition {
     /* Action blocks are ta_span32 ranges of action_defs. */
     ta_action_def *action_defs;
     uint32_t action_count;
+    /* Where each action sits, indexed like action_defs; computed once the
+     * definition is sealed (ta_definition_place_actions). */
+    ta_action_place *action_places;
     /*
      * The action block of each <onentry>/<onexit> handler. SCXML runs every
      * handler as a separate block (3.8, 3.9), so the handlers of a state are
@@ -403,6 +418,13 @@ struct ta_definition {
 const ta_definition *ta_definition_lookup(const ta_system *system, ta_definition_id id);
 /* Bytes of one actor's session storage: two configurations and history. */
 size_t ta_definition_session_bytes(const ta_definition *definition);
+/*
+ * Fills `action_places` from the sealed blocks, in the definition's arena.
+ * Every action belongs to exactly one block, so one pass over the top-level
+ * blocks and one over the actions (for the blocks nested in <if> and
+ * <foreach>) place them all, with no recursion (ADR 0060).
+ */
+ta_result ta_definition_place_actions(ta_definition *definition);
 bool ta_definition_is_atomic(const ta_definition *definition, ta_state_id state);
 bool ta_definition_is_descendant(const ta_definition *definition, ta_state_id state, ta_state_id ancestor);
 bool ta_event_pattern_matches(const ta_definition *definition,

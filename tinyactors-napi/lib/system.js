@@ -555,7 +555,7 @@ class System {
       ioType: core.system_atom_text(this.#native, send.io_type),
       destination: this.#destination(send.destination),
       target: send.has_target_text
-        ? new TextDecoder().decode(core.definition_content(this.#native, definitionId, send.target_text).out)
+        ? new TextDecoder().decode(core.definition_content(this.#native, definitionId, send.target_text).bytes)
         : send.target,
       data: send.data,
       submitted: send.submitted,
