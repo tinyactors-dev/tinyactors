@@ -265,6 +265,12 @@ module TinyactorsTest
     MAX_ROUNDS = 10_000
 
     attr_reader :now, :instruments, :trace, :run
+    # With count_allocations: how many allocations each logical
+    # ta_actor_resume made, in order.
+    attr_reader :resume_costs
+    # What each stop an armed allocation fault caused looked like:
+    # {resume:, microstep:, data:}, the data-model root of the stopped actor.
+    attr_reader :stops
 
     # `run` names this run; instrument names are prefixed with it, so
     # several runs can share one host process. `trace: true` records a Trace
@@ -274,8 +280,13 @@ module TinyactorsTest
     # after_step.call(context, step_index) once a step is quiescent, before
     # it is traced and its invariants are checked; the system is run to
     # quiescence again after it, without further hooks or trace steps.
+    # `count_allocations: true` records what every ta_actor_resume the run
+    # makes costs (#resume_costs); `allocation_fault:` {resume:, after:,
+    # count:, on_stop:} fails allocations inside one of them (see
+    # #assert_allocation_failures_invisible).
     def initialize(driver, group, charts, run: 'main', trace: false, resume_budget: RESUME_BUDGET,
-                   dispatch_budget: DISPATCH_BUDGET, resume_action_budget: 0, after_step: nil)
+                   dispatch_budget: DISPATCH_BUDGET, resume_action_budget: 0, after_step: nil,
+                   count_allocations: false, allocation_fault: nil)
       @driver = driver
       @group = group
       @charts = charts
@@ -296,6 +307,11 @@ module TinyactorsTest
       @in_hook = false
       @now = 0
       @trace = trace ? Trace.new(self) : nil
+      @count_allocations = count_allocations
+      @allocation_fault = allocation_fault
+      @resume_index = 0
+      @resume_costs = []
+      @stops = []
     end
 
     # Spawns an actor of a chart, named by its registry name or given as a
@@ -437,6 +453,49 @@ module TinyactorsTest
         raise AssertionFailed, difference if difference
       end
       baseline
+    end
+
+    # Fails one allocation at a time in every ta_actor_resume that `body`
+    # makes (ADR 0047, ADR 0070). A baseline run counts the allocations of
+    # each resume; then, for each of those allocations and each entry of
+    # `counts`, a fresh run fails that allocation and the count - 1 after
+    # it. The resume must answer err_nomem and leave the actor stopped
+    # (#stopped checks it), and resuming until it runs must end the run
+    # with the baseline's trace, step by step. `on_stop: :cycle` also moves
+    # every stopped named actor out of residency and back before it is
+    # resumed.
+    # `chart_errors: true` says the chart's own content raises error events,
+    # so a stopped actor may have some queued; any error event the failure
+    # added still shows in the trace.
+    #
+    # Returns {runs:, unreported:, stops:}: how many runs failed an
+    # allocation; the names of those whose resume never answered err_nomem,
+    # because the allocation that failed was a host operation's (a router
+    # delivering to another actor), which handled it itself; and every stop
+    # (#stops) of every run.
+    def assert_allocation_failures_invisible(counts: [1], on_stop: nil, chart_errors: false, normalize: nil, &body)
+      raise ScenarioError, 'assert_allocation_failures_invisible needs a block' unless body
+
+      reference = fresh_run('baseline', normalize, count_allocations: true, &body)
+      points = reference.resume_costs.each_with_index.flat_map do |allocations, resume|
+        Array.new(allocations) do |after|
+          counts.map do |count|
+            { resume: resume, after: after, count: count, on_stop: on_stop, chart_errors: chart_errors }
+          end
+        end.flatten
+      end
+      unreported = []
+      stops = []
+      points.each do |fault|
+        name = "allocation #{fault[:after] + 1} of resume #{fault[:resume]} failing #{fault[:count]}x"
+        run = fresh_run(name, normalize, allocation_fault: fault, &body)
+        difference = Trace.difference(reference.trace, run.trace, actual_name: name)
+        raise AssertionFailed, difference if difference
+
+        unreported << name if run.stops.none? { |stop| stop[:resume] == fault[:resume] }
+        stops.concat(run.stops)
+      end
+      { runs: points.size, unreported: unreported, stops: stops }
     end
 
     # Runs one interruption after baseline step `at` and passes only when its
@@ -1068,14 +1127,17 @@ module TinyactorsTest
     # One run of an assert_equivalent_runs body in a fresh context with a
     # trace; returns the trace, normalized.
     def traced_run(name, normalize, **options, &body)
+      fresh_run(name, normalize, **options, &body).trace
+    end
+
+    # Runs `body` in a fresh context with a trace, tears it down, and
+    # returns the context, its trace normalized.
+    def fresh_run(name, normalize, **options, &body)
       context = Context.new(@driver, @group, @charts, run: "#{@run}/#{name}", trace: true, **options)
       context.instance_exec(&body)
       context.teardown!
-      return context.trace unless normalize
-
-      context.trace.tap do |trace|
-        trace.steps.map! { |step| step.with(state: normalize.call(step.state)) }
-      end
+      context.trace.steps.map! { |step| step.with(state: normalize.call(step.state)) } if normalize
+      context
     end
 
     def quiesce(step)
@@ -1099,8 +1161,7 @@ module TinyactorsTest
     # be destroyed while others run, when its parent cancels the invocation.
     def settle(id)
       MAX_ROUNDS.times do
-        response = ta.actor.resume(system: system_handle, actor: id, budget: @resume_budget,
-                                   action_budget: @resume_action_budget)
+        response, id = resume_logical(id)
         return if response[:result] == 'err_not_found'
 
         status = core('ta_actor_resume', response).fetch(:status)
@@ -1108,6 +1169,78 @@ module TinyactorsTest
         raise CoreResultError.new('ta_actor_resume', "status #{status}") unless status == 'paused'
       end
       raise ScenarioError, "actor #{id}: macrostep did not finish in #{MAX_ROUNDS} resumes"
+    end
+
+    def resume_actor(id)
+      ta.actor.resume(system: system_handle, actor: id, budget: @resume_budget, action_budget: @resume_action_budget)
+    end
+
+    # One logical ta_actor_resume. A run counting allocations records what
+    # it costs. A run whose allocation fault is armed for it fails the
+    # fault's allocations inside it, checks the actor each time that stops
+    # it with err_nomem (#stopped), and resumes it again until it runs:
+    # those retries are part of the same logical resume. Returns the last
+    # response and the actor's ID, which a residency cycle changes.
+    def resume_logical(id)
+      index = @resume_index
+      @resume_index += 1
+      return [resume_actor(id), id] unless @allocation_fault || @count_allocations
+
+      fault = @allocation_fault if @allocation_fault && @allocation_fault[:resume] == index
+      probe_event
+      before = allocator.stats[:allocations]
+      allocator.arm_fault(after: fault[:after], count: fault[:count]) if fault
+      response = resume_actor(id)
+      retries = 0
+      while fault && response[:result] == 'err_nomem'
+        retries += 1
+        raise ScenarioError, "resume #{index}: still out of memory after #{retries} retries" if retries > fault[:count] + 1
+
+        id = stopped(id, index, fault)
+        response = resume_actor(id)
+      end
+      allocator.clear_faults if fault
+      @resume_costs << allocator.stats[:allocations] - before if @count_allocations
+      [response, id]
+    end
+
+    # An event name to offer a stopped actor. Every sweep run interns it
+    # before its first resume, so that offering it allocates nothing and
+    # every run numbers its atoms alike.
+    def probe_event
+      @probe_event ||= event_name('probe')
+    end
+
+    # Checks an actor that a failed allocation stopped (ADR 0047): it is in
+    # its macrostep, refuses a new event, and no error event was queued for
+    # the failure. With `on_stop: :cycle` a named actor is then captured,
+    # unloaded and loaded again (ADR 0038), and the retry runs on the loaded
+    # actor. Returns the ID to resume.
+    def stopped(id, index, fault)
+      where = "resume #{index} stopped by allocation #{fault[:after] + 1}"
+      inspection = core('ta_actor_inspect', ta.actor.inspect(system: system_handle, actor: id)).fetch(:out)
+      root = ta.actor.datamodel_root(system: system_handle, actor: id)
+      @stops << { resume: index, microstep: inspection[:microstep_in_progress], data: root.dig(:out, :out) }
+      raise AssertionFailed, "#{where}: the actor is not in a macrostep" unless inspection[:macrostep_in_progress]
+
+      unless fault[:chart_errors]
+        errors = Array(inspection[:internal_events]).map { |queued| event_text(queued.dig(:event, :name)) }
+                                                      .grep(/\Aerror\./)
+        raise AssertionFailed, "#{where}: running out of memory queued #{errors.inspect}" unless errors.empty?
+      end
+
+      event = { name: probe_event, type: 'external', invoke_id: INVOKE_ID_NONE }
+      refused = ta.actor.deliver(system: system_handle, actor: id, event: event)[:result]
+      expected = inspection[:has_completion] ? 'err_done' : 'err_busy'
+      raise AssertionFailed, "#{where}: an event offered to it was answered #{refused}" unless refused == expected
+      return id unless fault[:on_stop] == :cycle
+
+      actor = @actors.find { |candidate| candidate.handle == id }
+      return id if actor.nil? || actor.address.nil?
+
+      allocator.clear_faults
+      cycle_residency(actor)
+      actor.handle
     end
 
     # Compiles and registers a chart once per scenario; the system then owns
