@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="Build and test the tinyactors Node-API addon: binding staleness, native unit tests, then the JS suites on Node.js and Bun"
+#MISE description="Build and test the tinyactors Node-API addon: binding staleness, native unit tests, the package contents, then the JS suites on Node.js and Bun"
 # vim:ft=ruby
 
 require 'pathname'
@@ -17,6 +17,7 @@ run('mise', 'run', 'bindings', '--check')
 run('mise', 'run', 'build')
 run('mise', 'run', 'test-native')
 run('mise', 'run', 'test-native-asan')
+run('mise', 'run', 'pack-check')
 
 Dir[ROOT.join('test/*.js').to_s].sort.each do |suite|
   relative = Pathname.new(suite).relative_path_from(ROOT).to_s
