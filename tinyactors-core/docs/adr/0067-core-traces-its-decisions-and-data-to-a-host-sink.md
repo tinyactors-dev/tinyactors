@@ -1,6 +1,6 @@
 # ADR 0067: Core traces its decisions and data to a host sink
 
-**Status:** Accepted; not yet implemented. Applies ADR 0045, ADR 0047, ADR 0057, ADR 0061 and ADR 0066; refines ADR 0038 and ADR 0054; serves ADR 0020 and ADR 0021. Section 8 refined by ADR 0069 (the macrostep's trace parent lives in the event block, so an idle actor carries only the step counters).
+**Status:** Accepted; not yet implemented. Applies ADR 0045, ADR 0047, ADR 0057, ADR 0061 and ADR 0066; refines ADR 0038 and ADR 0054; serves ADR 0020 and ADR 0021. Section 8 refined by ADR 0069 (the macrostep's trace parent lives in the event block, so an idle actor carries only the step counters). Section 7 and the `RETRIED` kind are replaced, and section 8 is brought up to date, by the implementation notes (every record is written once, under ADR 0070).
 **Date:** 2026-09-23
 
 ## Context
@@ -416,3 +416,87 @@ twice, and the implementation must keep it so.
   back to it.
 - **Scale:** the scale test runs with the null sink and asserts that
   per-actor memory grows by no more than section 8 allows.
+
+## Implementation notes
+
+These notes were written before implementation starts. They reconcile the
+decision with ADR 0069 and ADR 0070, which were accepted after it. Where
+they disagree with the sections above, the notes win.
+
+### Every record is written once (replaces section 7)
+
+ADR 0070 stops a run that runs out of memory at the unit that failed, and
+a retry runs some units again: evaluation, selection, `<donedata>`, late
+and bootstrap data, autoforwarding, the end of the session. Section 7
+promised that only `CONDITION` records could be written twice, and that
+`RETRIED` would void them. That promise no longer holds. The rule is
+now simpler and holds everywhere:
+
+**A record is written only when the unit that produced it has
+committed.** A unit commits when ADR 0070 says it has an outcome and will
+not run again. Writing a record cannot fail and allocates nothing
+(section 1), so writing it after the commit is always possible. A unit
+that stops for lack of memory writes nothing, and its retry writes the
+records once.
+
+What that means for each kind:
+
+- **`CONDITION`.** Selection can run again, so its records wait until
+  selection completes. The interpreter keeps each guard's outcome
+  (transition, expression, result or fault) in scratch memory, sized at
+  interpreter init from the definition's guard count, so collecting them
+  cannot fail. It writes them when selection completes, in evaluation
+  order. A fault that one of them carries is held until it is written.
+  A selection that stops writes none of them.
+- **`MACROSTEP_BEGIN`** is written when taking the event can no longer be
+  undone. Under ADR 0070 that is when selection for it completes, or
+  when `<finalize>` or autoforwarding commits a unit first. It is
+  written immediately before the first other record of the macrostep. A
+  failed selection gives the event back and writes no `BEGIN`.
+- **`MICROSTEP`** is written once, when the microstep leaves selection
+  and becomes visible. Continuing from a saved continuation, after a
+  pause or after running out of memory, does not write it again.
+- **Data and effect records** (`DATA_INIT`, `ASSIGN`, `SCRIPT`,
+  `FOREACH`, `ACTION_FAILED`, `RAISED`, `SENT`, `CANCELLED`, `INVOKED`,
+  `INVOKE_CANCELLED`) are written when their unit commits: after its
+  reservations and its data model call have succeeded, or after a failure
+  that ends the unit, such as `error.execution`. A unit that ADR 0070
+  runs again writes its records on the run that commits, and on no other.
+- **Step counters move on commit only.** The microstep counter moves
+  when a `MICROSTEP` record is written, and the macrostep counter when
+  `MACROSTEP_BEGIN` is. So a retried unit keeps its step key. That is
+  what makes the traces of an interrupted run and an uninterrupted run
+  equal.
+- **`RETRIED` becomes `STOPPED`.** It no longer voids anything. Like
+  `PAUSED`, it records that a run stopped at a position, here because an
+  allocation failed; `RESUMED` follows when a later resume continues. It
+  carries no key of its own beyond the step it stopped in.
+
+**The test that states it** (replaces "Retry equivalence" under
+Testing): with the fault sweep of ADR 0070 failing each allocation of a
+scenario in turn, the trace equals the trace of the run without failures
+once the execution-control records (`PAUSED`, `RESUMED`, `STOPPED`) are
+removed. Nothing else is filtered out.
+
+### Memory (brings section 8 up to date)
+
+- **Per actor:** the two step counters, 12 bytes. Per ADR 0069 note 7,
+  the current macrostep's `ta_trace_parent` lives in the event block,
+  next to the external event it came with, not on the actor. The three
+  per-actor `ta_event` copies that section 8 guards against no longer
+  exist. The baseline is 224 bytes per `ta_actor` and 324 bytes per actor
+  in the scale test, not 532.
+- **The public `ta_event` grows** by the size of `ta_trace_parent`. That
+  lands in napi's mailbox envelopes, in the external slot of every event
+  block, and in every internal queue entry that stores a whole
+  `ta_event`. Section 6 says internal events store nothing extra: if the
+  queue holds `ta_event` values, give the queue an entry type without the
+  parent, rather than letting it grow. Measure all three, record them
+  here, and keep the scale test's budget.
+- **Per pending delayed send:** its parent.
+- **Images** carry the counters, the macrostep's parent from the block,
+  and each pending send's parent. The image format version changes.
+- **ADR 0070's spare continuation** needs nothing new. The counters are
+  on the actor, and a continuation resumes inside the step whose key they
+  already hold.
+
