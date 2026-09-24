@@ -206,10 +206,35 @@ static char *tat_json_source(tat_json_datamodel_context *context, ta_str express
     return source;
 }
 
-/* One system-variable field as a JSON string, or null when it has no value (ADR 0068: a view). */
+/*
+ * Core could not render a system variable for lack of memory. Every
+ * operation of this data model is a jq program that changes nothing until
+ * it has succeeded, so the operation answers TA_OP_NOMEM and core runs it
+ * again later (ADR 0070): the variable is never read as null instead.
+ */
+#define TAT_JSON_NOMEM "tinyactors-test: core ran out of memory rendering a system variable"
+
+static jv tat_json_nomem(void) {
+    return jv_invalid_with_msg(jv_string(TAT_JSON_NOMEM));
+}
+
+/* Whether an invalid value is tat_json_nomem(); does not consume it. */
+static bool tat_json_is_nomem(jv value) {
+    jv message = jv_invalid_get_msg(jv_copy(value));
+    bool nomem = jv_get_kind(message) == JV_KIND_STRING && strcmp(jv_string_value(message), TAT_JSON_NOMEM) == 0;
+    jv_free(message);
+    return nomem;
+}
+
+/* One system-variable field as a JSON string, or null when it has no value
+ * (ADR 0068: a view), or tat_json_nomem(). */
 static jv tat_json_host_io_text(const ta_dm_host *host, ta_dm_text_kind kind, uint32_t io_index) {
     ta_str text = {0};
-    if (ta_dm_host_text(host, &(ta_dm_text_params){.kind = kind, .io_index = io_index, .out = &text}) != TA_OK) {
+    ta_result result = ta_dm_host_text(host, &(ta_dm_text_params){.kind = kind, .io_index = io_index, .out = &text});
+    if (result == TA_ERR_NOMEM) {
+        return tat_json_nomem();
+    }
+    if (result != TA_OK) {
         return jv_null();
     }
     return jv_string_sized(text.len == 0 ? "" : text.ptr, (int)text.len);
@@ -224,12 +249,22 @@ static jv tat_json_ioprocessors(const ta_dm_host *host) {
     jv processors = jv_object();
     for (uint32_t index = 0;; index += 1) {
         jv type = tat_json_host_io_text(host, TA_DM_TEXT_IO_TYPE, index);
+        if (!jv_is_valid(type)) {
+            jv_free(processors);
+            return type;
+        }
         if (jv_get_kind(type) != JV_KIND_STRING) {
             jv_free(type);
             break;
         }
         jv processor = jv_object();
         jv location = tat_json_host_io_text(host, TA_DM_TEXT_IO_LOCATION, index);
+        if (!jv_is_valid(location)) {
+            jv_free(type);
+            jv_free(processor);
+            jv_free(processors);
+            return location;
+        }
         if (jv_get_kind(location) == JV_KIND_STRING) {
             processor = jv_object_set(processor, jv_string("location"), location);
         } else {
@@ -256,7 +291,12 @@ static jv tat_json_event(const ta_dm_host *host) {
     };
     jv object = jv_object();
     for (size_t index = 0; index < sizeof(fields) / sizeof(fields[0]); index += 1) {
-        object = jv_object_set(object, jv_string(fields[index].name), tat_json_host_text(host, fields[index].kind));
+        jv field = tat_json_host_text(host, fields[index].kind);
+        if (!jv_is_valid(field)) {
+            jv_free(object);
+            return field;
+        }
+        object = jv_object_set(object, jv_string(fields[index].name), field);
     }
     jv data;
     if (!tat_json_unwrap(&event->data, &data)) {
@@ -285,9 +325,20 @@ static jv tat_json_arguments(const ta_dm_host *host, jv arguments) {
         return event;
     }
     arguments = jv_object_set(arguments, jv_string("_event"), event);
-    arguments = jv_object_set(arguments, jv_string("_sessionid"), tat_json_host_text(host, TA_DM_TEXT_SESSION_ID));
-    arguments = jv_object_set(arguments, jv_string("_name"), tat_json_host_text(host, TA_DM_TEXT_SESSION_NAME));
-    jv processors = tat_json_ioprocessors(host);
+    jv session = tat_json_host_text(host, TA_DM_TEXT_SESSION_ID);
+    jv session_name = jv_is_valid(session) ? tat_json_host_text(host, TA_DM_TEXT_SESSION_NAME) : jv_null();
+    jv processors = jv_is_valid(session) && jv_is_valid(session_name) ? tat_json_ioprocessors(host) : jv_null();
+    jv failed = !jv_is_valid(session) ? session : !jv_is_valid(session_name) ? session_name : processors;
+    if (!jv_is_valid(failed)) {
+        jv failure = jv_copy(failed);
+        jv_free(session);
+        jv_free(session_name);
+        jv_free(processors);
+        jv_free(arguments);
+        return failure;
+    }
+    arguments = jv_object_set(arguments, jv_string("_sessionid"), session);
+    arguments = jv_object_set(arguments, jv_string("_name"), session_name);
     arguments = jv_object_set(arguments, jv_string("_ioprocessors"), processors);
     jv active = jv_array();
     ta_str name = {0};
@@ -305,8 +356,12 @@ static ta_op_status tat_json_run_source(const char *source,
                                         jv *out,
                                         ta_fault *fault) {
     if (!jv_is_valid(arguments)) {
+        bool nomem = tat_json_is_nomem(arguments);
         jv_free(input);
         jv_free(arguments);
+        if (nomem) {
+            return TA_OP_NOMEM;
+        }
         tat_json_fault(fault, TA_ERR_UNSUPPORTED, "event data is not a JSON value");
         return TA_OP_ERROR;
     }
@@ -314,8 +369,7 @@ static ta_op_status tat_json_run_source(const char *source,
     if (jq == NULL) {
         jv_free(input);
         jv_free(arguments);
-        tat_json_fault(fault, TA_ERR_NOMEM, "could not initialize JSON expression");
-        return TA_OP_ERROR;
+        return TA_OP_NOMEM;
     }
     int compiled = jq_compile_args(jq, source, arguments);
     if (!compiled) {
@@ -364,8 +418,7 @@ static ta_op_status tat_json_run(tat_json_datamodel_context *context,
     if (source == NULL) {
         jv_free(input);
         jv_free(arguments);
-        tat_json_fault(fault, TA_ERR_NOMEM, "could not stage JSON expression");
-        return TA_OP_ERROR;
+        return TA_OP_NOMEM;
     }
     return tat_json_run_source(source, input, arguments, out, fault);
 }
@@ -498,8 +551,7 @@ static ta_op_status tat_json_eval_value(void *self,
                                        params->fault);
     if (status == TA_OP_OK &&
         tat_json_wrap(instance->context, result, params->out) != TA_OK) {
-        tat_json_fault(params->fault, TA_ERR_NOMEM, "could not retain JSON result");
-        return TA_OP_ERROR;
+        return TA_OP_NOMEM;
     }
     return status;
 }
@@ -555,8 +607,7 @@ static ta_op_status tat_json_assign(void *self,
                                    _Alignof(char));
     if (program == NULL) {
         jv_free(assigned);
-        tat_json_fault(params->fault, TA_ERR_NOMEM, "could not stage JSON assignment");
-        return TA_OP_ERROR;
+        return TA_OP_NOMEM;
     }
     snprintf(program, program_size, TAT_JSON_PRELUDE "(%.*s) = $value", (int)location.len,
              location.ptr);
@@ -616,8 +667,7 @@ static ta_op_status tat_json_make_params(void *self,
     }
     tat_json_instance *instance = params->instance;
     if (tat_json_wrap(instance->context, values, params->out) != TA_OK) {
-        tat_json_fault(params->fault, TA_ERR_NOMEM, "could not retain JSON parameters");
-        return TA_OP_ERROR;
+        return TA_OP_NOMEM;
     }
     return TA_OP_OK;
 }
@@ -652,8 +702,7 @@ static ta_op_status tat_json_text_value(void *self, const ta_datamodel_text_valu
     }
     jv text = jv_string_sized(params->text.len == 0 ? "" : params->text.ptr, (int)params->text.len);
     if (tat_json_wrap(instance->context, text, params->out) != TA_OK) {
-        tat_json_fault(params->fault, TA_ERR_NOMEM, "could not retain JSON text");
-        return TA_OP_ERROR;
+        return TA_OP_NOMEM;
     }
     return TA_OP_OK;
 }
@@ -675,8 +724,7 @@ static ta_op_status tat_json_import_content(void *self, const ta_datamodel_impor
         jv_free(value);
         char *normalized = malloc((size_t)params->content.len + 1);
         if (normalized == NULL) {
-            tat_json_fault(params->fault, TA_ERR_NOMEM, "could not import content");
-            return TA_OP_ERROR;
+            return TA_OP_NOMEM;
         }
         size_t length = 0;
         bool space = false;
@@ -696,8 +744,7 @@ static ta_op_status tat_json_import_content(void *self, const ta_datamodel_impor
         free(normalized);
     }
     if (tat_json_wrap(instance->context, value, params->out) != TA_OK) {
-        tat_json_fault(params->fault, TA_ERR_NOMEM, "could not retain JSON content");
-        return TA_OP_ERROR;
+        return TA_OP_NOMEM;
     }
     return TA_OP_OK;
 }
@@ -743,8 +790,7 @@ static ta_op_status tat_json_foreach_snapshot(void *self,
     }
     *params->count = (uint32_t)jv_array_length(jv_copy(collection));
     if (tat_json_wrap(instance->context, collection, params->out) != TA_OK) {
-        tat_json_fault(params->fault, TA_ERR_NOMEM, "could not retain foreach snapshot");
-        return TA_OP_ERROR;
+        return TA_OP_NOMEM;
     }
     return TA_OP_OK;
 }

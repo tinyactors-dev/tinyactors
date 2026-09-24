@@ -685,7 +685,9 @@ static ta_external_event_submit_status tat_recording_submit(void *self, const ta
         tat_journal(instrument, "submit", jv_object_set(entry, jv_string("status"), jv_string("accepted")));
         return TA_EXTERNAL_EVENT_ACCEPTED;
     }
-    if (result == TA_ERR_BUSY) {
+    /* Like router.direct: a receiver that is busy, or out of memory, takes
+     * the event later (ADR 0070). */
+    if (result == TA_ERR_BUSY || result == TA_ERR_NOMEM) {
         tat_journal(instrument, "submit", jv_object_set(entry, jv_string("status"), jv_string("retry")));
         return TA_EXTERNAL_EVENT_RETRY;
     }
@@ -1499,8 +1501,9 @@ static jv tat_control_router(tat_instrument *instrument, const char *command, jv
             return entry;
         }
         ta_result result = tat_router_deliver(instrument, &state->held[index].delivery, &entry);
-        /* A busy actor keeps the delivery held; release it again later. */
-        if (result != TA_ERR_BUSY) {
+        /* A busy actor, or one out of memory, keeps the delivery held;
+         * release it again later. */
+        if (result != TA_ERR_BUSY && result != TA_ERR_NOMEM) {
             tat_held_remove(state, index);
         }
         entry = jv_object_set(entry, jv_string("result"), tat_result_name(result));

@@ -65,8 +65,9 @@ static bool tat_make_ecmascript_datamodel(tat_bind *bind, jv config, void *out) 
  * Resolution answers TA_ERR_UNSUPPORTED when no directory is installed,
  * TA_ERR_UNLOADED for an actor the directory holds but has not loaded (this
  * router cannot load one; a real host would), and TA_ERR_NOT_FOUND for an
- * address it does not know. A busy actor makes the router answer RETRY, so
- * core keeps the event and offers it again on a later dispatch. Config:
+ * address it does not know. A busy actor, or one that ran out of memory
+ * taking the event, makes the router answer RETRY, so core keeps the event
+ * and offers it again on a later dispatch. Config:
  * {"system": <system handle>}.
  */
 static ta_external_event_submit_status tat_direct_submit(void *self,
@@ -90,7 +91,10 @@ static ta_external_event_submit_status tat_direct_submit(void *self,
     if (result == TA_OK) {
         return TA_EXTERNAL_EVENT_ACCEPTED;
     }
-    if (result == TA_ERR_BUSY) {
+    /* A busy receiver, or one that could not take the event for lack of
+     * memory, takes it later: running out of memory is never an error the
+     * sender's chart sees (ADR 0047, ADR 0070). */
+    if (result == TA_ERR_BUSY || result == TA_ERR_NOMEM) {
         return TA_EXTERNAL_EVENT_RETRY;
     }
     *params->fault = (ta_fault){.code = result, .message = {.ptr = not_found, .len = sizeof(not_found) - 1}};
@@ -370,39 +374,43 @@ static void tat_invoker_remember(tat_scxml_invoker *invoker, jv key, ta_definiti
     invoker->definitions = jv_object_set(invoker->definitions, key, jv_string_fmt("%llu", (unsigned long long)id));
 }
 
-static bool tat_invoker_spec_definition(tat_scxml_invoker *invoker, jv spec, ta_datamodel model,
-                                        ta_definition_id *out) {
-    /* A spec without `datamodel` compiles once per data model that invokes it. */
+/* A chart spec, compiled once per data model that invokes it and kept.
+ * TA_ERR_NOMEM leaves nothing behind (ADR 0070). */
+static ta_result tat_invoker_spec_definition(tat_scxml_invoker *invoker, jv spec, ta_datamodel model,
+                                             ta_definition_id *out) {
     jv key = jv_string_fmt("spec:%.*s:", (int)model.v->name.len, model.v->name.ptr);
     key = jv_string_concat(key, jv_dump_string(jv_copy(spec), JV_PRINT_SORTED));
     if (tat_invoker_cached(invoker, key, out)) {
         jv_free(key);
-        return true;
+        return TA_OK;
     }
     tat_bind *bind = invoker->bind;
     ta_scxml_spec decoded;
-    bool ok = tat_decode_ta_scxml_spec(bind, spec, &decoded);
+    ta_result result = tat_decode_ta_scxml_spec(bind, spec, &decoded) ? TA_OK : TA_ERR_INVALID;
     /* A nested decode must not leave its error on the enclosing request. */
     jv_free(bind->error);
     bind->error = jv_invalid();
     ta_definition *definition = NULL;
-    ok = ok && ta_definition_compile_spec(invoker->system,
-                                          &(ta_definition_compile_params){
-                                              .spec = &decoded,
-                                              .datamodel = model,
-                                              .allocator = tat_libc_allocator(),
-                                              .out = &definition,
-                                          }) == TA_OK;
-    if (ok && ta_system_register_definition(invoker->system, definition, out) != TA_OK) {
-        ta_definition_destroy(definition);
-        ok = false;
+    if (result == TA_OK) {
+        result = ta_definition_compile_spec(invoker->system, &(ta_definition_compile_params){
+                                                                 .spec = &decoded,
+                                                                 .datamodel = model,
+                                                                 .allocator = tat_libc_allocator(),
+                                                                 .out = &definition,
+                                                             });
     }
-    if (ok) {
+    if (result == TA_OK) {
+        result = ta_system_register_definition(invoker->system, definition, out);
+        if (result != TA_OK) {
+            ta_definition_destroy(definition);
+        }
+    }
+    if (result == TA_OK) {
         tat_invoker_remember(invoker, key, *out);
     } else {
         jv_free(key);
     }
-    return ok;
+    return result;
 }
 
 /* An SCXML document, imported through the codec with the parent's data
@@ -507,15 +515,21 @@ static ta_op_status tat_invoker_start(void *self, const ta_invoker_start_params 
             tat_invoker_fault(params->fault, "invoker.scxml: the child's data model differs from the parent's");
             return TA_OP_ERROR;
         }
-        bool compiled = tat_invoker_spec_definition(invoker, child, model, &definition);
+        ta_result compiled = tat_invoker_spec_definition(invoker, child, model, &definition);
         jv_free(child);
-        if (!compiled) {
+        if (compiled == TA_ERR_NOMEM) {
+            return TA_OP_NOMEM;
+        }
+        if (compiled != TA_OK) {
             tat_invoker_fault(params->fault, "invoker.scxml: the child chart did not compile");
             return TA_OP_ERROR;
         }
     } else {
         ta_result imported = tat_invoker_scxml_definition(invoker, child, model, &definition);
         jv_free(child);
+        if (imported == TA_ERR_NOMEM) {
+            return TA_OP_NOMEM;
+        }
         if (imported != TA_OK) {
             tat_invoker_fault(params->fault, imported == TA_ERR_UNSUPPORTED
                                                  ? "invoker.scxml: the child's data model differs from the parent's"
@@ -547,6 +561,11 @@ static ta_op_status tat_invoker_start(void *self, const ta_invoker_start_params 
                                           .out = &spawned,
                                       });
     ta_value_release(&value);
+    /* A spawn that ran out of memory left no child: nothing started, and
+     * core starts the invocation again later (ADR 0070). */
+    if (result == TA_ERR_NOMEM) {
+        return TA_OP_NOMEM;
+    }
     if (result != TA_OK) {
         tat_invoker_fault(params->fault, "invoker.scxml: could not spawn the child");
         return TA_OP_ERROR;
