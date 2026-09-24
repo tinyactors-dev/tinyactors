@@ -225,11 +225,19 @@ These are gaps between the implementation and the W3C SCXML
 Recommendation, not new features. Distribution makes them visible.
 G1–G3 are addressed by core
 [ADR 0068](../../tinyactors-core/docs/adr/0068-core-owns-the-io-processor-registry-and-every-origin-can-be-answered.md)
-(Proposed): core owns the processor registry with stable indices, origins
-reference registry entries (a processor index plus the processor's token, or
-an invoke ID plus the invoker's index) with no growth of `ta_event`, and
-processors render origin and location text on demand into the
-interpreter's scratch arena.
+(Proposed). Core owns the processor registry with stable indices. An I/O
+origin is a processor index plus one of three storage classes that the
+processor declares:
+- **computed:** a token rendered by a pure callback, for peers and
+  formula-based URIs;
+- **scoped:** a URI stored once per connection or session, where a stale
+  scope renders empty;
+- **per message:** a reference-counted copy freed with the last event copy.
+
+Invoke origins carry the invoker's index, so `origintype` names the right
+processor. `ta_event` stays 64 bytes. Locations are rendered on demand into
+the interpreter's scratch arena, and images store origin text, which comes
+back at load as per-message origins.
 
 | Gap | Spec | Level | Needed by | Change |
 |---|---|---|---|---|
