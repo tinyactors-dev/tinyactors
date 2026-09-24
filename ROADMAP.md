@@ -4,13 +4,14 @@ Work across packages, in the order it is meant to happen. Each package's
 own `ROADMAP.md` holds its detailed steps; ideas that are not decided yet
 are in [`docs/proposals/`](docs/proposals/README.md).
 
-- [ ] **Decide the event memory optimization.** Accept, change or drop
+- [x] **Decide the event memory optimization.** Accept, change or drop
   [An idle actor carries no event](docs/proposals/lean-actor-events.md):
   whether steps 1 and 2 land first, how the block cache is sized, and
   what `_event` is between macrosteps (keep the last event for invoked
   sessions, or declare the deviation). The experiment is on branch
   `worktree-agent-ac40da141657c3d16`. Decide this before the tracing ADR,
   because it moves where the trace parent is stored (ADR 0067 section 8).
+  Done: [core ADR 0069](tinyactors-core/docs/adr/0069-an-idle-actor-carries-no-event.md).
 - [ ] **Drive the tracing ADR to accepted and implemented.**
   [Core ADR 0067](tinyactors-core/docs/adr/0067-core-traces-its-decisions-and-data-to-a-host-sink.md):
   the trace sink, the null sink, step keys, and the W3C trace context and

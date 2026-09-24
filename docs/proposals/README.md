@@ -37,5 +37,5 @@ Every proposal starts with a status line:
 | [Host kernel](host-kernel.md) | Sketch | tinyactors-napi, future language hosts |
 | [Replay-based persistence](replay-persistence.md) | Sketch | tinyactors-core, tinyactors-napi |
 | [Distributed actor systems](distributed-systems.md) | Sketch | tinyactors-core (conformance gaps), tinyactors-napi, the browser build |
-| [An idle actor carries no event](lean-actor-events.md) | Proposed | tinyactors-core, tinyactors-napi |
+| [An idle actor carries no event](lean-actor-events.md) | Adopted → [core ADR 0069](../../tinyactors-core/docs/adr/0069-an-idle-actor-carries-no-event.md) | tinyactors-core, tinyactors-napi |
 | [Packaging and releases](packaging.md) | Sketch | tinyactors-napi, tinyactors-core, root release tasks |
