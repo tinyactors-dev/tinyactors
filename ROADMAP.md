@@ -12,11 +12,14 @@ are in [`docs/proposals/`](docs/proposals/README.md).
   `worktree-agent-ac40da141657c3d16`. Decide this before the tracing ADR,
   because it moves where the trace parent is stored (ADR 0067 section 8).
   Done: [core ADR 0069](tinyactors-core/docs/adr/0069-an-idle-actor-carries-no-event.md).
-- [ ] **Drive the tracing ADR to accepted and implemented.**
+- [x] **Drive the tracing ADR to accepted and implemented.**
   [Core ADR 0067](tinyactors-core/docs/adr/0067-core-traces-its-decisions-and-data-to-a-host-sink.md):
   the trace sink, the null sink, step keys, and the W3C trace context and
   cause carried on events. Then a `trace.recording` instrument in
   tinyactors-test and an OTEL exporter in napi.
+  Done: core ADR 0067 (implementation notes), the `trace.recording`
+  instrument, and [napi ADR 0015](tinyactors-napi/docs/adr/0015-tracing-is-a-hook-that-hands-javascript-plain-records.md):
+  a hook with plain span-shaped data and no telemetry dependency.
 - [ ] **Close the core API gaps for log-based durability.** The core
   capabilities that
   [replay-based persistence](docs/proposals/replay-persistence.md#core-support-an-actor-can-be-replayed-in-place)

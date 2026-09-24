@@ -1,6 +1,6 @@
 # ADR 0067: Core traces its decisions and data to a host sink
 
-**Status:** Accepted; not yet implemented. Applies ADR 0045, ADR 0047, ADR 0057, ADR 0061 and ADR 0066; refines ADR 0038 and ADR 0054; serves ADR 0020 and ADR 0021. Section 8 refined by ADR 0069 (the macrostep's trace parent lives in the event block, so an idle actor carries only the step counters). Section 7 and the `RETRIED` kind are replaced, and section 8 is brought up to date, by the implementation notes (every record is written once, under ADR 0070).
+**Status:** Accepted and implemented (2026-09-24); see the implementation notes for where the code differs from the text. Applies ADR 0045, ADR 0047, ADR 0057, ADR 0061 and ADR 0066; refines ADR 0038 and ADR 0054; serves ADR 0020 and ADR 0021. Section 8 refined by ADR 0069 (the macrostep's trace parent lives in the event block, so an idle actor carries only the step counters). Section 7 and the `RETRIED` kind are replaced, and section 8 is brought up to date, by the implementation notes (every record is written once, under ADR 0070).
 **Date:** 2026-09-23
 
 ## Context
@@ -499,4 +499,91 @@ removed. Nothing else is filtered out.
 - **ADR 0070's spare continuation** needs nothing new. The counters are
   on the actor, and a continuation resumes inside the step whose key they
   already hold.
+
+### As built (2026-09-24)
+
+Where the code differs from the text above and from the notes written
+before it was built:
+
+- **The trace parent travels next to the event, not in it.** `ta_event`
+  is handed to data models by pointer (`ta_dm_host_event`) and to hosts in
+  inspection (`ta_queued_event`), so internal queue entries could not get
+  a slimmer entry type. Instead `ta_external_delivery`, `ta_send`,
+  `ta_invoke_request` and `ta_actor_spawn_params` carry a `trace`, and
+  `ta_actor_deliver()` takes `ta_actor_deliver_params { actor, event,
+  trace }`; every caller moved. Data models never see a trace, and
+  `ta_event`, `ta_queued_event` and internal queue entries do not grow.
+- **The trace-id is two `uint64_t`s** (`trace_id_high`, `trace_id_low`,
+  big-endian halves): the API extractor and the binding generators do
+  not support arrays.
+- **The record has two fields section 4 does not list:** `cause`, the
+  cause of a MACROSTEP_BEGIN or SPAWNED, which a sink needs to parent the
+  macrostep; and `name`, the `<data>` ID of a DATA_INIT. `ta_trace_at`
+  gains `FINALIZE` and `INVOKE`, the phases ADR 0070 added.
+- **Faults** carry `detail` and `code` only: their data went into the
+  error event, and their message is borrowed only for the operation that
+  set it. A `<script>` reports its failure as SCRIPT with a fault; every
+  other action as ACTION_FAILED. A guard's error is a CONDITION with a
+  fault, followed by the RAISED error.
+- **Where records are written once.** `MACROSTEP_BEGIN` commits when the
+  bootstrap enters its data, when selection for a taken event completes,
+  when `<finalize>` or autoforwarding starts, at the first completed
+  eventless selection, or when invocations start, whichever comes first
+  (`ta_trace_begin()`, idempotent). RAISED records are written at each
+  step's commit from a queue mark, after the step's own record. Guards
+  wait in scratch (sized from the definition: every atomic state's
+  guarded ancestor transitions) until their selection completes.
+- **Two behaviours changed to make this exact.** A macrostep that starts
+  with a delivered event takes it first, without selecting eventless
+  transitions: the previous macrostep ended stable, and SCXML's
+  mainEventLoop does not select them again before the external event.
+  Resuming an idle actor (not in a macrostep) now runs nothing. The entry
+  set is computed as a microstep begins, from the exit set and the
+  history it records, so MICROSTEP names it before any action runs.
+- **Lifecycle records** have key `(session, 0, 0)`, FINISHED included; it
+  follows the session's last MACROSTEP_END. The onexit records of an
+  invoked session that its parent cancels have macrostep 0.
+- **Images** carry the counters, `trace_begun`, the macrostep's parent
+  and each pending send's parent. Images are in-memory structures with
+  no format version, so none changed.
+- **Span IDs**: `ta_step_key_span_id()` is MurmurHash3's 64-bit finalizer
+  over session, then macrostep, then microstep with bit 32 set; never 0.
+  Golden values are in `tests/trace_test.c` and `tinyactors-napi/test/tracing.js`.
+
+Memory, measured:
+
+| | Before | After |
+|---|---|---|
+| `sizeof(ta_actor)` | 224 | 232 (the counters partly fill padding) |
+| scale test, bytes per actor (null sink) | 324 | 331 |
+| event block header | 152 | 200 (the macrostep's parent) |
+| event block with room for 8 events | 728 | 776 |
+| `ta_event`, `ta_queued_event` | 64, 72 | unchanged |
+| pending delayed send (private fields) | 48 | 96 |
+| napi mailbox envelope | 96 | 104 (a pointer to an optional parent) |
+
+Throughput with the null sink is unchanged (napi: 2.2 to 2.3M events/s,
+`tinyactors-napi/test/bench/tracing.js`). Core's cost of building records
+for a sink that wants every kind is about 4% there; the rest of a traced
+host's cost is the host's own copying (napi ADR 0015).
+
+Tests: `tests/trace_test.c` (the null sink, the mask, exact sequences,
+sampling, span IDs, counters and parents across an image, every
+allocation of a macrostep failing in turn); `tinyactors-test`'s
+`trace.recording` instrument and `ruby/scenarios/tracing.rb`, whose sweep
+runs the out-of-memory charts on jq and ECMAScript with each allocation
+failing once and twice and compares the records with the run that failed
+nothing, apart from PAUSED, RESUMED and STOPPED.
+
+Open points:
+
+1. An internal event that enables no transition is consumed without a
+   MICROSTEP, so it has a RAISED record and no record that takes it.
+2. Records are not written for events queued outside a run (a failed
+   delayed send's error.communication, an invocation lost across an
+   image); the macrostep they start shows them as its first MICROSTEP's
+   event.
+3. Autoforwarding writes no record.
+4. There is no API to name transitions, expressions and actions from
+   their IDs besides exporting the definition.
 

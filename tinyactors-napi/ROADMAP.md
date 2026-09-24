@@ -696,6 +696,18 @@ What was built (`lib/image.js`, `test/persist.js`):
   replacement's mailbox (ADR 0005 point 12), and then destroys the
   incumbent.
 
+### 15. Tracing
+
+Done (ADR 0015, core ADR 0067): `System.setTraceSink(sink, { kinds,
+unsampled })` hands the turn's trace records to JavaScript as one array;
+core's null sink runs without one. `options.traceparent` on `post()`,
+`send()` and `spawn()`; `request.traceparent` for I/O processors and
+invokers. `lib/tracing.js`: `TraceSpans`, `parseTraceparent`,
+`formatTraceparent`, `stepSpanId`, with no telemetry dependency.
+`tools/otlp.js` (tests and `mise run otel-demo` only) exports OTLP/HTTP
+JSON. Tests: `test/tracing.js`, `test/otlp.js`; bench:
+`test/bench/tracing.js`. See `docs/tracing.md`.
+
 ## Open follow-ups
 
 **Core findings** (measured in `scale.js`, recorded in `docs/scale.md`; each
@@ -740,6 +752,12 @@ needs a core change):
 - a helper for naming effects that expands to `send(...).via(...)`;
 - ~~an xstate baseline next to the plain-object one in `scale.js`~~: done.
   `SCALE_BASELINES=xstate,object` runs it; `docs/scale.md` has the numbers.
+
+**Tracing** (ADR 0015 open points):
+- building JavaScript objects is most of what tracing costs; a columnar
+  batch would be cheaper;
+- a `<send>` with no data to a JavaScript I/O processor fails with
+  error.execution (`unsupported`), which predates tracing.
 
 **Later:**
 - port the tinyactors-test scenario suite to run against the addon;

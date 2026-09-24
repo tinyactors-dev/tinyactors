@@ -24,3 +24,4 @@ particular on core ADRs 0011, 0029, 0040, 0047, 0050, 0053–0059, 0061,
 | [0012](0012-lifecycle-close-is-authoritative-finished-actors-are-reclaimed.md) | [Lifecycle: close is authoritative, finished actors are reclaimed](0012-lifecycle-close-is-authoritative-finished-actors-are-reclaimed.md) |
 | [0013](0013-the-control-plane-is-generated-the-plumbing-is-hand-written.md) | [The control plane is generated; the plumbing is hand-written](0013-the-control-plane-is-generated-the-plumbing-is-hand-written.md) |
 | [0014](0014-memory-is-pooled-by-lifetime.md) | [Memory is pooled by lifetime](0014-memory-is-pooled-by-lifetime.md) |
+| [0015](0015-tracing-is-a-hook-that-hands-javascript-plain-records.md) | [Tracing is a hook that hands JavaScript plain records](0015-tracing-is-a-hook-that-hands-javascript-plain-records.md) |
