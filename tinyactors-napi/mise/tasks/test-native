@@ -9,8 +9,10 @@ require_relative '../lib/compile'
 # objects that do not use Node-API and the core amalgamation. An object whose
 # translation unit included node_api.h cannot link without a Node process, so
 # it is left out; a native test exercises only plumbing that does not need it.
+# Only the sources in NapiCompile::NODE_API_SOURCES may include node_api.h;
+# any other source that does fails this task instead of losing its tests.
 root = NapiCompile::ROOT
-plumbing = NapiCompile.objects(NapiCompile.sources).reject { |object| NapiCompile.uses_node_api?(object) }
+plumbing, _node_api = NapiCompile.partition_node_api(NapiCompile.sources)
 shared = plumbing + [NapiCompile.core_object]
 
 tests = Cache.files('test/native/*_test.c')

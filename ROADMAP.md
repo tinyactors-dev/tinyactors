@@ -27,7 +27,12 @@ are in [`docs/proposals/`](docs/proposals/README.md).
 - [ ] **Extract the host kernel.** Move napi's host C that never touches
   Node-API (scheduling, mailboxes, routing, the directory, timers,
   enumeration, effects) into a shared library:
-  [Host kernel](docs/proposals/host-kernel.md).
+  [Host kernel](docs/proposals/host-kernel.md). When: as the first step
+  of the browser build, which is the second host and so shapes the host
+  interface; not earlier. Until then, `test-native` fails if Node-API
+  reaches a source outside `NODE_API_SOURCES` in
+  `tinyactors-napi/mise/lib/compile.rb`, so the portable part stays
+  portable.
 - [ ] **Bootstrap a browser build.** Core compiled to WebAssembly on the
   host kernel, with a JavaScript surface shared with napi. Core already
   compiles for `wasm32-freestanding`, but no build task or test covers

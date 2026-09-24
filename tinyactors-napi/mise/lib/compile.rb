@@ -115,6 +115,40 @@ module NapiCompile
     Cache.dependencies(dep).any? { |header| File.basename(header) == 'node_api.h' }
   end
 
+  # The only sources allowed to include node_api.h, directly or through a
+  # header. Every other source is portable plumbing for a future host kernel
+  # (docs/proposals/host-kernel.md) and must link, and be tested, without Node.
+  NODE_API_SOURCES = %w[
+    src/addon.c
+    src/gen/ta_napi.c
+    src/napi_datamodel.c
+    src/napi_services.c
+    src/napi_system.c
+    src/pump.c
+    src/runtime.c
+    src/runtime_codecs.c
+    src/values.c
+  ].freeze
+
+  # Splits the addon's objects into [portable, node_api] and aborts if the
+  # split differs from NODE_API_SOURCES in either direction.
+  def partition_node_api(sources)
+    node_api, portable = sources.zip(objects(sources)).partition { |_source, object| uses_node_api?(object) }
+    found = node_api.map { |source, _| source.relative_path_from(ROOT).to_s }.sort
+    unexpected = found - NODE_API_SOURCES
+    stale = NODE_API_SOURCES - found
+    unless unexpected.empty?
+      abort "tinyactors-napi: these sources include node_api.h but are not in " \
+            "NapiCompile::NODE_API_SOURCES (mise/lib/compile.rb):\n  #{unexpected.join("\n  ")}\n" \
+            'Keep Node-API out of the portable plumbing, or add the file to the list on purpose.'
+    end
+    unless stale.empty?
+      abort "tinyactors-napi: these sources in NODE_API_SOURCES (mise/lib/compile.rb) no longer " \
+            "include node_api.h; remove them from the list:\n  #{stale.join("\n  ")}"
+    end
+    [portable.map(&:last), node_api.map(&:last)]
+  end
+
   def addon_link_flags
     case RbConfig::CONFIG.fetch('host_os')
     when /darwin/ then %w[-bundle -undefined dynamic_lookup]
