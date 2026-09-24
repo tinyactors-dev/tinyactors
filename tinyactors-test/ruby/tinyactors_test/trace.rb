@@ -130,12 +130,20 @@ module TinyactorsTest
       end
     end
 
+    # Trace records a run writes when it pauses, resumes, or stops for lack
+    # of memory: the only ones that may differ between runs that do the same
+    # work (ADR 0067), so a Trace leaves them out.
+    CONTROL_RECORDS = %w[paused resumed stopped].freeze
+
     def journals
       @context.instruments.each_value.filter_map do |instrument|
         next if instrument.kind == 'allocator.counting'
 
         entries = instrument.journal(since: @journal_cursors[instrument.name])
         @journal_cursors[instrument.name] = entries.last[:seq] unless entries.empty?
+        if instrument.kind == 'trace.recording'
+          entries = entries.reject { |entry| CONTROL_RECORDS.include?(entry[:kind]) }
+        end
         [instrument.label, entries.map { |entry| @context.label_actors(entry.except(:seq)) }]
       end.to_h
     end

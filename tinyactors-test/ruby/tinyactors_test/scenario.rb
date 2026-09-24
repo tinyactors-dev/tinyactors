@@ -167,15 +167,17 @@ module TinyactorsTest
     end
 
     # Delivers an external event and runs the system until it is quiescent.
-    def deliver(event, data: nil)
-      @context.core('ta_actor_deliver', offer(event, data: data))
+    # `trace:` is the trace parent its macrostep runs under (ADR 0067), as
+    # TinyactorsTest.trace_parent builds it.
+    def deliver(event, data: nil, trace: nil)
+      @context.core('ta_actor_deliver', offer(event, data: data, trace: trace))
       @context.run_system("deliver #{event}")
     end
 
     # Offers an external event without running the system, and returns the
     # ta_actor_deliver result: "ok", "err_busy", "err_not_found", ...
-    def post(event, data: nil)
-      offer(event, data: data)[:result]
+    def post(event, data: nil, trace: nil)
+      offer(event, data: data, trace: trace)[:result]
     end
 
     # One ta_actor_resume call with `budget` microsteps and, when not zero,
@@ -237,15 +239,36 @@ module TinyactorsTest
 
     private
 
-    def offer(event, data:)
+    def offer(event, data:, trace: nil)
       params = { name: @context.event_name(event), type: 'external', invoke_id: INVOKE_ID_NONE }
       params[:data] = data unless data.nil?
-      @context.ta.actor.deliver(system: @context.system_handle, actor: handle, event: params)
+      delivery = { system: @context.system_handle, actor: handle, event: params }
+      delivery[:trace] = trace unless trace.nil?
+      @context.ta.actor.deliver(**delivery)
     end
   end
 
   # TA_INVOKE_ID_NONE; 64-bit values above 2^53-1 travel as decimal strings.
   INVOKE_ID_NONE = '18446744073709551615'
+
+  # A trace parent (ADR 0067) as ta_actor_deliver and ta_actor_spawn take
+  # it: the W3C trace-id `trace_id` (32 hex digits), its trace-flags, and
+  # the host's parent span ID, which is the cause of a host delivery.
+  def self.trace_parent(trace_id:, sampled: true, parent_span: 0)
+    high = Integer(trace_id[0, 16], 16)
+    low = Integer(trace_id[16, 16], 16)
+    { context: { trace_id_high: u64(high), trace_id_low: u64(low), flags: sampled ? 1 : 0 },
+      cause: { session: 0, macrostep: u64(parent_span), microstep: 0 } }
+  end
+
+  # A 64-bit value as the protocol carries it: a number up to 2^53-1, else
+  # decimal text.
+  def self.u64(value) = value <= 9_007_199_254_740_991 ? value : value.to_s
+
+  # The trace-id of a record's context, as 32 hex digits.
+  def self.trace_id(context)
+    format('%016x%016x', Integer(context[:trace_id_high]), Integer(context[:trace_id_low]))
+  end
 
   # The receiver of a scenario block: the steps and assertions of the DSL.
   # Steps drive the generated ta.* bindings of the public C API directly.
@@ -320,13 +343,14 @@ module TinyactorsTest
     # definition's family, name) in the actor directory, which is a
     # memory_directory instrument unless the scenario installed one.
     # `binding:` is the host data-model binding the actor starts from.
-    def spawn(chart = @group.chart, name: nil, binding: nil)
+    def spawn(chart = @group.chart, name: nil, binding: nil, trace: nil)
       raise ScenarioError, "#{@group.name}: spawn needs a chart" if chart.nil?
 
       chart_name = chart.is_a?(Chart) || chart.is_a?(ScxmlChart) ? chart.name.to_sym : chart.to_sym
       definition = definition_id(chart)
       params = { system: system_handle, definition: definition }
       params[:datamodel_binding] = binding unless binding.nil?
+      params[:trace] = trace unless trace.nil?
       if name
         memory_directory
         params[:address] = { family: { name: definition_family(definition) }, name: name.to_s }
@@ -720,6 +744,43 @@ module TinyactorsTest
       end
     end
 
+    # ----------------------------------------------------------------------
+    # Trace records (ADR 0067)
+
+    # Installs a trace.recording instrument as the system's trace sink.
+    # `kinds:` lists the ta_trace_kind symbols it wants (every kind by
+    # default), and `unsampled: true` also traces unsampled macrosteps. A
+    # Trace of the run then compares its records, without PAUSED, RESUMED
+    # and STOPPED (Trace#journals).
+    def recording_trace(kinds: nil, unsampled: false)
+      @instruments['trace'] || begin
+        sink = instrument('trace', 'trace.recording')
+        config = { system: system_handle }
+        config[:kinds] = kinds.map(&:to_s) if kinds
+        config[:unsampled] = true if unsampled
+        core('ta_system_set_trace_sink',
+             ta.system.set_trace_sink(system: system_handle, sink: sink.adapter(**config)))
+        sink
+      end
+    end
+
+    # The records the trace sink wrote, oldest first, as the codec encodes
+    # ta_trace_record. `since:` skips records up to that journal seq.
+    def trace_records(since: nil)
+      sink = @instruments['trace']
+      raise ScenarioError, 'trace_records: install the sink with `recording_trace` first' unless sink
+
+      sink.journal(since: since).select { |entry| entry[:op] == 'trace' }
+    end
+
+    # Records as one line each, for exact comparisons: the kind, the step
+    # key (macrostep.microstep), where it was written, and what the kind
+    # carries, with states and events by name. `actor:` keeps one actor's.
+    def trace_lines(records = trace_records, actor: nil)
+      records = records.select { |record| Integer(record[:actor]) == actor.handle } if actor
+      records.map { |record| TraceLine.new(self, record).to_s }
+    end
+
     # Installs a directory.memory instrument as the actor directory.
     def memory_directory
       @instruments['directory'] || begin
@@ -1059,12 +1120,13 @@ module TinyactorsTest
       when Hash then value.to_h { |name, inner| [name, label_actors(inner, name)] }
       when Array then value.map { |inner| label_actors(inner, key) }
       when Integer, String
-        ACTOR_ID_KEYS.include?(key) && value.to_s.match?(/\A\d+\z/) ? actor_label(Integer(value)) : value
+        ACTOR_ID_KEYS.include?(key) && value.to_s.match?(/\A[1-9]\d*\z/) ? actor_label(Integer(value)) : value
       else value
       end
     end
 
-    ACTOR_ID_KEYS = %i[runtime parent actor].freeze
+    # A session ID is the runtime ID its session started with (ADR 0066).
+    ACTOR_ID_KEYS = %i[runtime parent actor session].freeze
 
     # Points `actor` at a new runtime ID (after a reload); its trace label stays.
     # Points an Actor at the session it has become. Load resolves the image's

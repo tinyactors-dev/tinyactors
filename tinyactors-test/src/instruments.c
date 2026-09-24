@@ -36,13 +36,14 @@ typedef enum {
     TAT_INSTRUMENT_PEER,
     TAT_INSTRUMENT_CONNECTION,
     TAT_INSTRUMENT_REQUEST,
+    TAT_INSTRUMENT_TRACE,
 } tat_instrument_kind;
 
 static const char *const TAT_INSTRUMENT_KINDS[] = {
     "allocator.counting", "router.recording", "directory.memory",
     "invoker.scripted",   "io.recording",     "log.recording",
     "inspector.recording", "io.peer",          "io.connection",
-    "io.request",
+    "io.request",         "trace.recording",
 };
 
 /* allocator.counting: the size and alignment of every live allocation. */
@@ -148,6 +149,10 @@ typedef struct tat_instrument {
     tat_invoker_state invoker;
     tat_inspector_state inspector;
     tat_endpoint_state endpoint;
+    /* trace.recording: the sink's mask and whether it traces unsampled
+     * macrosteps, fixed when it is created. */
+    uint32_t trace_kinds;
+    bool trace_unsampled;
 } tat_instrument;
 
 static ta_result tat_directory_resolve(void *self, const ta_actor_directory_resolve_params *params);
@@ -1252,6 +1257,76 @@ bool tat_make_recording_log(tat_bind *bind, jv config, void *out) {
 }
 
 /* ------------------------------------------------------------------------
+ * trace.recording
+ *
+ * The system's trace sink (ADR 0067). It journals each record as the
+ * generated codec encodes ta_trace_record (op "trace"), with the dotted
+ * name of its event as event.name_text. Config: {"name", "system",
+ * "kinds"?: [kind symbols] (default: every kind), "unsampled"?: bool}.
+ * Writing a record cannot fail, so it has no commands.
+ */
+
+static void tat_recording_trace(void *self, const ta_trace_record *record) {
+    tat_instrument *instrument = self;
+    jv entry = tat_encode_ta_trace_record(instrument->bind, record);
+    if (record->event != NULL) {
+        jv event = jv_object_get(jv_copy(entry), jv_string("event"));
+        event = jv_object_set(event, jv_string("name_text"), tat_event_name_text(instrument->system, record->event->name));
+        entry = jv_object_set(entry, jv_string("event"), event);
+    }
+    tat_journal(instrument, "trace", entry);
+}
+
+static const ta_trace_sink_vtable TAT_RECORDING_TRACE = {.write = tat_recording_trace};
+
+/* The mask config.kinds names; every kind when it is absent. */
+static bool tat_trace_kinds(tat_bind *bind, jv config, uint32_t *out) {
+    jv kinds = jv_object_get(jv_copy(config), jv_string("kinds"));
+    if (!jv_is_valid(kinds) || jv_get_kind(kinds) == JV_KIND_NULL) {
+        jv_free(kinds);
+        *out = UINT32_MAX;
+        return true;
+    }
+    bool ok = jv_get_kind(kinds) == JV_KIND_ARRAY;
+    uint32_t mask = 0;
+    for (int index = 0; ok && index < jv_array_length(jv_copy(kinds)); index += 1) {
+        ta_trace_kind kind = TA_TRACE_SPAWNED;
+        jv name = jv_array_get(jv_copy(kinds), index);
+        ok = tat_decode_ta_trace_kind(bind, name, &kind);
+        jv_free(name);
+        mask |= ok ? TA_TRACE_BIT(kind) : 0u;
+    }
+    jv_free(kinds);
+    if (!ok) {
+        tat_fail(bind, "trace.recording: config.kinds must be a list of ta_trace_kind symbols");
+        return false;
+    }
+    *out = mask;
+    return true;
+}
+
+bool tat_make_recording_trace(tat_bind *bind, jv config, void *out) {
+    static const char *const keys[] = {"kinds", "unsampled", NULL};
+    bool created = false;
+    tat_instrument *instrument = tat_instrument_resolve(bind, config, TAT_INSTRUMENT_TRACE, keys, true, &created);
+    if (instrument == NULL) {
+        return false;
+    }
+    if (created) {
+        if (!tat_trace_kinds(bind, config, &instrument->trace_kinds)) {
+            return false;
+        }
+        jv unsampled = jv_object_get(jv_copy(config), jv_string("unsampled"));
+        instrument->trace_unsampled = jv_get_kind(unsampled) == JV_KIND_TRUE;
+        jv_free(unsampled);
+    }
+    *(ta_trace_sink *)out = (ta_trace_sink){.self = instrument, .v = &TAT_RECORDING_TRACE,
+                                            .kinds = instrument->trace_kinds,
+                                            .unsampled = instrument->trace_unsampled};
+    return true;
+}
+
+/* ------------------------------------------------------------------------
  * inspector.recording
  *
  * The ta_actor_inspector ta_system_visit_actors() walks resident actors
@@ -1599,11 +1674,11 @@ static jv tat_control_invoker(tat_instrument *instrument, const char *command, j
 }
 
 static jv tat_control_log(tat_instrument *instrument, const char *command, jv args, int *error_code) {
-    (void)instrument;
     (void)command;
     (void)args;
-    return tat_invalid(error_code,
-                       jv_string("log.recording has no commands; read its journal with instrument.journal"));
+    return tat_invalid(error_code, jv_string(instrument->kind == TAT_INSTRUMENT_TRACE
+                                                 ? "trace.recording has no commands; read its journal with instrument.journal"
+                                                 : "log.recording has no commands; read its journal with instrument.journal"));
 }
 
 /*
@@ -1916,6 +1991,7 @@ jv tat_instrument_control_method(tat_bind *bind, jv params, int *error_code) {
             result = tat_control_invoker(instrument, jv_string_value(command), args, error_code);
             break;
         case TAT_INSTRUMENT_LOG:
+        case TAT_INSTRUMENT_TRACE:
             result = tat_control_log(instrument, jv_string_value(command), args, error_code);
             break;
         case TAT_INSTRUMENT_INSPECTOR:

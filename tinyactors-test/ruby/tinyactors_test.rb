@@ -5,6 +5,7 @@ require_relative 'tinyactors_test/chart'
 require_relative 'tinyactors_test/scxml_chart'
 require_relative 'tinyactors_test/instruments'
 require_relative 'tinyactors_test/trace'
+require_relative 'tinyactors_test/trace_line'
 require_relative 'tinyactors_test/scenario'
 require_relative 'tinyactors_test/runner'
 

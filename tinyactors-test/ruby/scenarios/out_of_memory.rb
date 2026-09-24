@@ -346,13 +346,13 @@ end
                              datamodel: datamodel
 end
 
-TinyactorsTest.scenarios 'running out of memory' do
-  # Every chart, in both data models, runs its body with each allocation of
-  # each resume failing once. Each body sends every event its chart takes,
-  # twice where a cache or a grown array would hide the second time.
-  # Each body takes the chart and a name: named actors can be moved out of
-  # residency and back while stopped.
-  bodies = {
+module OutOfMemory
+  # What each sweep runs against its chart: every event the chart takes,
+  # twice where a cache or a grown array would hide the second time. Each
+  # body takes the chart and a name: named actors can be moved out of
+  # residency and back while stopped. The trace sweep (tracing.rb) runs the
+  # same bodies.
+  BODIES = {
     # Catches: a raise that is lost or queued twice when the queue could
     # not grow, and a microstep left half done.
     raises: lambda do |chart, name|
@@ -433,8 +433,17 @@ TinyactorsTest.scenarios 'running out of memory' do
       actor = spawn chart, name: name
       actor.deliver 'work'
     end
-  }
-  chart_errors = %i[guards boot_early boot_late invokes]
+  }.freeze
+
+  # Charts whose own content raises error events.
+  CHART_ERRORS = %i[guards boot_early boot_late invokes].freeze
+end
+
+TinyactorsTest.scenarios 'running out of memory' do
+  # Every chart, in both data models, runs its body with each allocation of
+  # each resume failing once.
+  bodies = OutOfMemory::BODIES
+  chart_errors = OutOfMemory::CHART_ERRORS
   # Charts whose content only core runs: every failed allocation is core's
   # own, so every one must stop the resume with err_nomem.
   self_contained = bodies.keys - %i[family]
