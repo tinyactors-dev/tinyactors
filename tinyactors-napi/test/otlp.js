@@ -33,8 +33,8 @@ function receiver() {
 (async () => {
   const collector = await receiver();
   const exporter = new OtlpExporter({ endpoint: collector.endpoint, serviceName: 'otlp-test' });
-  const spans = new TraceSpans({ onSpan: exporter.onSpan });
   const system = createSystem();
+  const spans = new TraceSpans({ onSpan: exporter.onSpan, system });
   system.setTraceSink((records) => spans.write(records));
   const definition = system.define(
     statechart({ family: 'relay', revision: 'v1' })

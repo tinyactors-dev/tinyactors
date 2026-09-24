@@ -198,6 +198,8 @@ static napi_value tna_js_record(napi_env env, tna_napi_system *wrapper, const tn
     tna_js_put(env, out, "macrostep", tna_js_number(env, (double)record->key.macrostep));
     tna_js_put(env, out, "microstep", tna_js_number(env, record->key.microstep));
     tna_js_put(env, out, "actor", tna_actor_view(env, wrapper, record->actor));
+    /* Its IDs name elements of this definition (core ADR 0071; lib/tracing.js labels them). */
+    tna_js_put(env, out, "definition", tna_js_bigint(env, record->definition));
     tna_js_put(env, out, "now", tna_js_number(env, (double)record->now));
     tna_js_put(env, out, "wallTime", tna_js_number(env, entry->wall_time));
     const ta_trace_position *position = &record->position;

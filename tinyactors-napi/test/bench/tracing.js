@@ -52,7 +52,7 @@ const variants = {
   macrosteps: (system) => system.setTraceSink(() => {}, { kinds: ['macrostepBegin', 'macrostepEnd'] }),
   'every record': (system) => system.setTraceSink(() => {}),
   spans: (system) => {
-    const spans = new TraceSpans({ onSpan: () => {} });
+    const spans = new TraceSpans({ onSpan: () => {}, system });
     system.setTraceSink((records) => spans.write(records));
   },
 };

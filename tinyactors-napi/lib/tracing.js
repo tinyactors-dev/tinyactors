@@ -179,11 +179,119 @@ function valueText(value, limit) {
   return text === undefined || text.length <= limit ? text : `${text.slice(0, limit)}...`;
 }
 
-function position(record, attributes) {
-  if (record.at !== undefined) attributes['scxml.position'] = record.at;
-  if (record.state !== undefined) attributes['scxml.state'] = String(record.state);
-  if (record.transition !== undefined) attributes['scxml.transition'] = record.transition;
-  if (record.action !== undefined) attributes['scxml.action'] = record.action;
+// ------------------------------------------------------------------------
+// Readable names for compiled IDs (core ADR 0071)
+
+const ID_NONE = 0xffffffff;
+
+/**
+ * Names the transitions and actions of one system's definitions by
+ * compiled ID, through definition inspection (core ADR 0071), and caches
+ * each label. A definition that is gone (retired and freed) answers with
+ * the bare ID: "t7", "a3".
+ */
+class ChartLabels {
+  #native;
+  #cache = new Map();
+
+  constructor(system) {
+    // Required here, not at the top: lib/system.js requires this module.
+    this.#native = require('./system').nativeOf(system);
+  }
+
+  #cached(key, make) {
+    let label = this.#cache.get(key);
+    if (label === undefined) {
+      label = make();
+      this.#cache.set(key, label);
+    }
+    return label;
+  }
+
+  // A lookup's answer, or undefined for a definition or ID that is gone.
+  #lookup(fn) {
+    try {
+      return fn();
+    } catch (error) {
+      if (error instanceof TinyactorsError && error.code === 'not-found') {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
+  #state(definition, state) {
+    return this.#cached(`${definition}:s${state}`, () =>
+      this.#lookup(() => native.core.definition_state(this.#native, definition, state).id) ?? `s${state}`);
+  }
+
+  /**
+   * "idle → busy on order.placed", "one → two", "idle on count [guarded]",
+   * "three → y on inside (internal)", "initial of three → x".
+   */
+  transition(definition, transition) {
+    return this.#cached(`${definition}:t${transition}`, () => {
+      const info = this.#lookup(() => native.core.definition_transition(this.#native, definition, transition));
+      if (info === undefined) {
+        return `t${transition}`;
+      }
+      const targets = (info.targets ?? []).map((state) => this.#state(definition, state)).join(' ');
+      if (info.origin !== 'authored') {
+        const owner = info.origin === 'bootstrap' ? 'the document' : this.#state(definition, info.source);
+        return `initial of ${owner} → ${targets}`;
+      }
+      let label = this.#state(definition, info.source);
+      if (targets !== '') label += ` → ${targets}`;
+      if (info.event !== '') label += ` on ${info.event}`;
+      if (info.condition !== ID_NONE) label += ' [guarded]';
+      if (info.type === 'internal') label += ' (internal)';
+      return label;
+    });
+  }
+
+  /**
+   * "<assign> in onentry of busy", "<raise> in then of <if> in onexit of
+   * idle", "<log> in idle → busy on go", "<assign> in finalize of <invoke>
+   * #2 in busy".
+   */
+  action(definition, action) {
+    return this.#cached(`${definition}:a${action}`, () => {
+      const parts = [];
+      let id = action;
+      for (;;) {
+        const info = this.#lookup(() => native.core.definition_action(this.#native, definition, id));
+        if (info === undefined) {
+          return `a${action}`;
+        }
+        parts.push(`<${info.kind}>`);
+        const nth = info.block_index > 0 ? ` #${info.block_index + 1}` : '';
+        switch (info.block) {
+          case 'then':
+          case 'else':
+            parts.push(`in ${info.block} of`);
+            id = info.owner;
+            continue;
+          case 'foreach':
+            parts.push('in the body of');
+            id = info.owner;
+            continue;
+          case 'onentry':
+          case 'onexit':
+            parts.push(`in ${info.block}${nth} of ${this.#state(definition, info.owner)}`);
+            break;
+          case 'transition':
+            parts.push(`in ${this.transition(definition, info.owner)}`);
+            break;
+          case 'finalize':
+            parts.push(`in finalize of <invoke>${nth} in ${this.#state(definition, info.owner)}`);
+            break;
+          default:
+            parts.push("in the document's <script>");
+        }
+        return parts.join(' ');
+      }
+    });
+  }
 }
 
 function eventAttributes(event, attributes) {
@@ -202,6 +310,11 @@ function eventAttributes(event, attributes) {
  *
  * options:
  * - onSpan(span): required;
+ * - system: required, the System whose records these are. Transitions and
+ *   actions are named through its definitions: `scxml.transition` is a
+ *   label such as "idle → busy on order.placed" and `scxml.action` one
+ *   such as "<assign> in onentry of busy", while `scxml.transition.id` and
+ *   `scxml.action.id` keep the compiled IDs (core ADR 0071);
  * - parent: "cause" (the default) puts a macrostep under the step that
  *   caused it: the host's span for a delivery that came with a
  *   traceparent, else the sending step's span. "link" makes every
@@ -217,6 +330,7 @@ function eventAttributes(event, attributes) {
  */
 class TraceSpans {
   #onSpan;
+  #labels;
   #parenting;
   #values;
   #limit;
@@ -227,10 +341,14 @@ class TraceSpans {
   #traces = new Map();
 
   constructor(options) {
-    const { onSpan, parent = 'cause', values = false, valueLimit = 256 } = options ?? {};
+    const { onSpan, system, parent = 'cause', values = false, valueLimit = 256 } = options ?? {};
     if (typeof onSpan !== 'function') {
       throw new TinyactorsError('TraceSpans: options.onSpan must be a function', 'invalid');
     }
+    if (system === undefined) {
+      throw new TinyactorsError('TraceSpans: options.system must be the System whose records these are', 'invalid');
+    }
+    this.#labels = new ChartLabels(system);
     if (parent !== 'cause' && parent !== 'link') {
       throw new TinyactorsError('TraceSpans: options.parent must be "cause" or "link"', 'invalid');
     }
@@ -283,6 +401,21 @@ class TraceSpans {
              events: [], links, status: { code: 'ok' } };
   }
 
+  // Where in the macrostep a record was written, with transitions and
+  // actions named.
+  #position(record, attributes) {
+    if (record.at !== undefined) attributes['scxml.position'] = record.at;
+    if (record.state !== undefined) attributes['scxml.state'] = String(record.state);
+    if (record.transition !== undefined) {
+      attributes['scxml.transition'] = this.#labels.transition(record.definition, record.transition);
+      attributes['scxml.transition.id'] = record.transition;
+    }
+    if (record.action !== undefined) {
+      attributes['scxml.action'] = this.#labels.action(record.definition, record.action);
+      attributes['scxml.action.id'] = record.action;
+    }
+  }
+
   #baseAttributes(record) {
     return {
       'scxml.session_id': record.session.toString(),
@@ -328,7 +461,8 @@ class TraceSpans {
     const attributes = this.#baseAttributes(record);
     attributes['scxml.microstep'] = record.microstep;
     eventAttributes(record.event, attributes);
-    attributes['scxml.transition'] = record.transitions;
+    attributes['scxml.transition'] = record.transitions.map((id) => this.#labels.transition(record.definition, id));
+    attributes['scxml.transition.id'] = record.transitions;
     attributes['scxml.state.exited'] = record.exited.map(String);
     attributes['scxml.state.entered'] = record.entered.map(String);
     if (record.history !== undefined) attributes['scxml.state.history'] = record.history.map(String);
@@ -357,7 +491,7 @@ class TraceSpans {
     if (open === undefined) return;
     const target = open.microstep !== undefined && record.microstep !== 0 ? open.microstep : open.span;
     const attributes = {};
-    position(record, attributes);
+    this.#position(record, attributes);
     eventAttributes(record.event, attributes);
     if (record.expr !== undefined) attributes['scxml.expression'] = record.expr;
     if (record.result !== undefined) attributes['scxml.result'] = record.result;

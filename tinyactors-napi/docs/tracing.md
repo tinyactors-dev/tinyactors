@@ -9,7 +9,7 @@ it to the tracer you already use.
 const { createSystem, TraceSpans } = require('tinyactors-napi');
 
 const system = createSystem();
-const spans = new TraceSpans({ onSpan: (span) => exportSomewhere(span) });
+const spans = new TraceSpans({ onSpan: (span) => exportSomewhere(span), system });
 system.setTraceSink((records) => spans.write(records));
 
 // A request that came in with a W3C traceparent: every macrostep it
@@ -23,7 +23,11 @@ system.post(actor, 'order', body, { traceparent: request.headers.traceparent });
 - `TraceSpans` makes one span per macrostep, a child span per microstep,
   and span events for conditions, assignments, raises, sends and the rest.
   `parent: "link"` makes each macrostep a trace root linked to its cause
-  instead. `values: true` adds values as JSON text (off by default: they
+  instead. It names transitions and actions through `system`'s
+  definitions (core ADR 0071): `scxml.transition` reads like
+  `idle → busy on order.placed [guarded]` and `scxml.action` like
+  `<assign> in onentry of busy`, and `scxml.transition.id` and
+  `scxml.action.id` keep the compiled IDs. `values: true` adds values as JSON text (off by default: they
   may hold personal data).
 - I/O processors and invokers get `request.traceparent`, naming the step
   that sent or invoked, to pass on to what they call.

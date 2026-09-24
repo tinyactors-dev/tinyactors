@@ -1152,6 +1152,8 @@ export interface TraceRecord {
   readonly macrostep: number;
   readonly microstep: number;
   readonly actor: ActorId;
+  /** The definition whose transition, action and expression IDs the record names. */
+  readonly definition: bigint;
   /** Core's logical time. */
   readonly now: number;
   /** Milliseconds since the epoch. */
@@ -1198,7 +1200,14 @@ export interface TraceSpan {
 }
 
 export declare class TraceSpans {
-  constructor(options: { onSpan(span: TraceSpan): void; parent?: 'cause' | 'link'; values?: boolean; valueLimit?: number });
+  /** `system`: the System whose records these are; transitions and actions are named through its definitions. */
+  constructor(options: {
+    onSpan(span: TraceSpan): void;
+    system: System;
+    parent?: 'cause' | 'link';
+    values?: boolean;
+    valueLimit?: number;
+  });
   write(records: TraceRecord[]): void;
 }
 

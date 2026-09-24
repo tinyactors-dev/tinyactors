@@ -56,8 +56,8 @@ function charts(system) {
 
 async function main() {
   const exporter = new OtlpExporter({ serviceName: 'tinyactors-demo' });
-  const spans = new TraceSpans({ onSpan: exporter.onSpan, values: true });
   const system = createSystem();
+  const spans = new TraceSpans({ onSpan: exporter.onSpan, system, values: true });
   system.setTraceSink((records) => spans.write(records));
   const { gateway, inventory, payments } = charts(system);
   system.spawn(inventory, { name: 'main' });

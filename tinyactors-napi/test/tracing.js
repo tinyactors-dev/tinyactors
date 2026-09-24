@@ -15,6 +15,8 @@ const {
   stepSpanId,
   TinyactorsError,
 } = require('..');
+const { core } = require('../lib/native');
+const { nativeOf } = require('../lib/system');
 
 const TRACE_ID = '4bf92f3577b34da6a3ce929d0e0e4736';
 const traceparent = (span, flags = '01') => `00-${TRACE_ID}-${span}-${flags}`;
@@ -186,7 +188,7 @@ async function causality() {
   assert.deepEqual(ping.cause, { session: sent.session, macrostep: BigInt(sent.macrostep), microstep: sent.microstep });
 
   const all = [];
-  new TraceSpans({ onSpan: (span) => all.push(span) }).write(sink.records);
+  new TraceSpans({ onSpan: (span) => all.push(span), system }).write(sink.records);
   const go = all.find((span) => span.name === 'scxml.macrostep go');
   const goStep = all.find((span) => span.name === 'scxml.microstep go');
   const pinged = all.find((span) => span.name === 'scxml.macrostep ping');
@@ -231,7 +233,7 @@ async function spans() {
   system.post(actor, 'go', undefined, { traceparent: traceparent('00f067aa0ba902b7') });
   await system.flush();
   const plain = [];
-  new TraceSpans({ onSpan: (span) => plain.push(span) }).write(sink.records);
+  new TraceSpans({ onSpan: (span) => plain.push(span), system }).write(sink.records);
   const macrostep = plain.find((span) => span.name === 'scxml.macrostep go');
   const microstep = plain.find((span) => span.name === 'scxml.microstep go');
   assert.equal(macrostep.traceId, TRACE_ID);
@@ -244,15 +246,74 @@ async function spans() {
   assert.equal(assign.attributes['scxml.value'], undefined, 'values are left out by default');
   assert.ok(microstep.startTime <= microstep.endTime && macrostep.endTime >= microstep.endTime);
   const withValues = [];
-  new TraceSpans({ onSpan: (span) => withValues.push(span), values: true }).write(sink.records);
+  new TraceSpans({ onSpan: (span) => withValues.push(span), system, values: true }).write(sink.records);
   const valued = withValues.find((span) => span.name === 'scxml.microstep go').events.find((event) => event.name === 'scxml.assign');
   assert.equal(valued.attributes['scxml.value'], '1');
   // "link" makes the macrostep a root, linked to its cause.
   const linked = [];
-  new TraceSpans({ onSpan: (span) => linked.push(span), parent: 'link' }).write(sink.records);
+  new TraceSpans({ onSpan: (span) => linked.push(span), system, parent: 'link' }).write(sink.records);
   const root = linked.find((span) => span.name === 'scxml.macrostep go');
   assert.equal(root.parentSpanId, undefined);
   assert.deepEqual(root.links, [{ traceId: TRACE_ID, spanId: '00f067aa0ba902b7' }]);
+  system.close();
+}
+
+// Spans name transitions and actions through the definition (core ADR
+// 0071), and keep the compiled IDs beside the labels; a record's
+// expression IDs resolve to the function or the text the chart gave.
+async function labels() {
+  const system = createSystem();
+  const sink = recorder(system);
+  const definition = system.define(
+    statechart({ family: 'labelled', revision: 'v1' })
+      .data('n', 0)
+      .data('item', null)
+      .state('idle', (s) => s.on('order.placed', (t) => t.when(() => true).target('busy')))
+      .state('busy', (s) => {
+        s.entry((a) =>
+          a.choose(
+            () => false,
+            (then) => then.assign('n', () => 1),
+            (otherwise) => otherwise.forEach(() => [1, 2], 'item', (body) =>
+              body.assign('n', function () { return this.n + this.item; })),
+          ));
+        s.on('poke', (t) => t.internal().assign('n', () => 0));
+      }),
+  );
+  const actor = system.spawn(definition);
+  await system.flush();
+  system.post(actor, 'order.placed');
+  system.post(actor, 'poke');
+  await system.flush();
+  assert.throws(() => new TraceSpans({ onSpan: () => {} }), /options\.system/);
+  const all = [];
+  new TraceSpans({ onSpan: (span) => all.push(span), system }).write(sink.records);
+
+  const placed = all.find((span) => span.name === 'scxml.microstep order.placed');
+  assert.deepEqual(placed.attributes['scxml.transition'], ['idle → busy on order.placed [guarded]']);
+  assert.deepEqual(placed.attributes['scxml.transition.id'], [0]);
+  const guard = all.find((span) => span.name === 'scxml.macrostep order.placed').events
+    .find((event) => event.name === 'scxml.condition');
+  assert.equal(guard.attributes['scxml.transition'], 'idle → busy on order.placed [guarded]');
+  assert.equal(guard.attributes['scxml.transition.id'], 0);
+  const assigns = placed.events.filter((event) => event.name === 'scxml.assign');
+  assert.equal(assigns.length, 2, 'the <foreach> body assigned twice');
+  assert.equal(assigns[0].attributes['scxml.action'],
+               '<assign> in the body of <foreach> in else of <if> in onentry of busy');
+  assert.equal(typeof assigns[0].attributes['scxml.action.id'], 'number');
+
+  const poke = all.find((span) => span.name === 'scxml.microstep poke');
+  assert.deepEqual(poke.attributes['scxml.transition'], ['busy on poke (internal)']);
+  const reset = poke.events.find((event) => event.name === 'scxml.assign');
+  assert.equal(reset.attributes['scxml.action'], '<assign> in busy on poke (internal)');
+
+  // Expressions come back as the chart gave them: a function, or text.
+  const native = nativeOf(system);
+  const condition = sink.records.find((record) => record.kind === 'condition');
+  assert.equal(typeof core.definition_expression(native, condition.definition, condition.expr), 'function');
+  const assigned = sink.records.find((record) => record.kind === 'assign');
+  assert.equal(core.definition_expression(native, assigned.definition, assigned.expr), 'n',
+               'an assignment\'s location is the data name the chart gave');
   system.close();
 }
 
@@ -265,6 +326,7 @@ async function spans() {
   await causality();
   await traceparentOut();
   await spans();
+  await labels();
   console.log('tracing.js passed');
 })().catch((error) => {
   console.error(error);
