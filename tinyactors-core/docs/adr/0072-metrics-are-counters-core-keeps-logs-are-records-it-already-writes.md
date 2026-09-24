@@ -280,6 +280,12 @@ interval, rate limits, the default log catalogue, and how
 
 ## Open questions
 
+**Resolved 2026-09-24:** the user accepted each proposal below: no
+per-actor "last active" time; occupancy always on; ADR 0016's span events
+stay as they are for now; rate limits go to napi ADR 0017. The ADR stays
+Proposed until a review of the whole observability design (tracing
+included) against what the OpenTelemetry ecosystem already provides.
+
 1. **Per-actor "last active" time.** Should core keep, per actor, the
    logical time of its last macrostep? It would let inspection sort
    actors by how long they have been idle, which answers "stuck for how
