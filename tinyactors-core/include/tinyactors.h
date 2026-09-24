@@ -302,7 +302,16 @@ typedef struct { ta_event_name_id name; ta_event_type type; ta_send_id send_id; 
 /* invoke_id is TA_INVOKE_ID_NONE unless an invoked child generated the event. */
 /* A receiver of a fault owns its data; the message is borrowed. */
 typedef struct { ta_event_name_id detail; int32_t code; ta_str message; TA_RELEASE(ta_value_release) ta_value data; } ta_fault;
-typedef enum { TA_OP_OK TA_SUCCESS = 0, TA_OP_ERROR = 1 } ta_op_status TA_SYMBOLS("TA_OP_");
+/*
+ * What a data-model, invoker or I/O-processor operation answers. ERROR is
+ * the chart's failure: core raises the event SCXML defines for it. NOMEM
+ * says the operation could not get memory and changed nothing: core stops
+ * the run where it stands, ta_actor_resume() answers TA_ERR_NOMEM, and the
+ * operation is called again when the host resumes the actor (ADR 0047,
+ * ADR 0070). An operation that may have changed something before it ran
+ * out of memory answers ERROR.
+ */
+typedef enum { TA_OP_OK TA_SUCCESS = 0, TA_OP_ERROR = 1, TA_OP_NOMEM = 2 } ta_op_status TA_SYMBOLS("TA_OP_");
 typedef enum { TA_RUN_STABLE = 0, TA_RUN_PAUSED = 1, TA_RUN_DONE = 2, TA_RUN_ERROR = 3 } ta_run_status TA_SYMBOLS("TA_RUN_");
 
 

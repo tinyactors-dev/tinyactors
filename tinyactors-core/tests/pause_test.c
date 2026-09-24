@@ -33,7 +33,8 @@ static int failures = 0;
 static long live_allocations = 0;
 static int refuse_all = 0;
 /* Set: the next script `x1` starts refusing, inside the microstep, after its
- * queue slot is reserved (ADR 0047), so saving a pause is what gets refused. */
+ * queue slot is reserved (ADR 0070), so every pause after it must save
+ * without allocating. */
 static int refuse_from_x1 = 0;
 
 static void *test_alloc(void *self, size_t size, size_t alignment) {
@@ -461,10 +462,11 @@ static void test_capture_inside_foreach(void) {
     CHECK(live_snapshots == 0);
 }
 
-/* A pause that cannot save its position does not pause: the resume runs on
- * and the result is the same. Allocations are refused from inside the
- * microstep on, where saving a pause is the only one left. */
-static void test_unsaved_pause_keeps_running(void) {
+/* A pause needs no allocation (ADR 0070): the run stops into a continuation
+ * reserved before it started, or into the one it resumed from. With every
+ * allocation refused from inside the microstep on, it still pauses after
+ * each unit, and the macrostep ends as the first "go" did. */
+static void test_pause_needs_no_allocation(void) {
     trace_length = 0;
     run r;
     start(&r, 1);
@@ -479,7 +481,13 @@ static void test_unsaved_pause_keeps_running(void) {
     ta_run_status status = resume_once(&r);
     refuse_from_x1 = 0;
     CHECK(refuse_all == 1);
+    CHECK(status == TA_RUN_PAUSED);
+    uint32_t pauses = 0;
+    while ((status = resume_once(&r)) == TA_RUN_PAUSED && pauses < 10000u) {
+        pauses += 1u;
+    }
     refuse_all = 0;
+    CHECK(pauses > 10u);
     CHECK(status == TA_RUN_STABLE);
     note_configuration(&r);
     finish(&r);
@@ -496,7 +504,7 @@ static void test_unsaved_pause_keeps_running(void) {
 int main(void) {
     test_every_budget_is_invisible();
     test_capture_inside_foreach();
-    test_unsaved_pause_keeps_running();
+    test_pause_needs_no_allocation();
     CHECK(live_allocations == 0);
     if (failures != 0) {
         fprintf(stderr, "pause test: %d check(s) failed\n", failures);

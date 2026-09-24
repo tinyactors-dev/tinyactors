@@ -293,25 +293,44 @@ static ta_op_status ta_invoke_value_text(ta_interpreter *it, ta_datamodel_value_
     return definition->datamodel.v->value_text(definition->datamodel.self, params);
 }
 
-/* The invoke's ID: the author's, or `<stateid>.<platformid>`, also stored through idlocation. */
-static ta_op_status ta_invoke_resolve_id(ta_interpreter *it, const ta_invoke_decl *decl,
-                                         ta_invoke_values *values, ta_invoke_id *out) {
+/* A step of starting an invocation that failed as an execution error; the
+ * fault in its ta_invoke_values says why. */
+#define TA_INVOKE_FAILED 1
+
+static ta_result ta_invoke_op(ta_op_status status) {
+    return status == TA_OP_OK ? TA_OK : status == TA_OP_NOMEM ? TA_ERR_NOMEM : TA_INVOKE_FAILED;
+}
+
+/* Core's own allocation failing is TA_ERR_NOMEM (ADR 0047); anything else
+ * core refuses is an execution error. */
+static ta_result ta_invoke_core(ta_result result) {
+    return result == TA_OK || result == TA_ERR_NOMEM ? result : TA_INVOKE_FAILED;
+}
+
+/*
+ * The invoke's ID: the author's, or `<stateid>.<platformid>`, also stored
+ * through idlocation. A generated ID takes the system's next serial, which
+ * moves only once the invocation has an outcome (ta_invoke_start), so an
+ * invocation that runs out of memory and starts again stores the same ID
+ * (ADR 0070).
+ */
+static ta_result ta_invoke_resolve_id(ta_interpreter *it, const ta_invoke_decl *decl,
+                                      ta_invoke_values *values, ta_invoke_id *out) {
     ta_system *system = it->system;
     if (decl->id.kind == TA_ID_SOURCE_LITERAL) {
         *out = (ta_invoke_id)decl->id.as.literal + 1u;
-        return TA_OP_OK;
+        return TA_OK;
     }
     ta_str state = ta_atom_text(&system->atoms, it->definition->states[decl->owner].name);
-    system->next_invoke_serial += 1u;
     char digits[20];
     uint32_t digit_count = 0;
-    for (uint64_t serial = system->next_invoke_serial; serial != 0 || digit_count == 0; serial /= 10u) {
+    for (uint64_t serial = system->next_invoke_serial + 1u; serial != 0 || digit_count == 0; serial /= 10u) {
         digits[digit_count++] = (char)('0' + serial % 10u);
     }
     uint32_t length = state.len + 1u + digit_count;
     char *text = ta_arena_alloc(&system->scratch, length, 1);
     if (text == NULL) {
-        return TA_OP_ERROR;
+        return TA_ERR_NOMEM;
     }
     ta_mem_copy(text, state.ptr, state.len);
     text[state.len] = '.';
@@ -319,11 +338,9 @@ static ta_op_status ta_invoke_resolve_id(ta_interpreter *it, const ta_invoke_dec
         text[state.len + 1u + index] = digits[digit_count - 1u - index];
     }
     ta_str id = { .ptr = text, .len = length };
-    if (ta_invoke_id_from_text(system, id, out) != TA_OK) {
-        return TA_OP_ERROR;
-    }
-    if (decl->id.kind != TA_ID_SOURCE_LOCATION) {
-        return TA_OP_OK;
+    ta_result result = ta_invoke_core(ta_invoke_id_from_text(system, id, out));
+    if (result != TA_OK || decl->id.kind != TA_ID_SOURCE_LOCATION) {
+        return result;
     }
     const ta_definition *definition = it->definition;
     ta_value value = {0};
@@ -343,19 +360,19 @@ static ta_op_status ta_invoke_resolve_id(ta_interpreter *it, const ta_invoke_dec
                                                        });
         ta_value_release(&value);
     }
-    return status;
+    return ta_invoke_op(status);
 }
 
-static ta_op_status ta_invoke_resolve_type(ta_interpreter *it, const ta_invoke_decl *decl,
-                                           ta_invoke_values *values, ta_atom *out) {
+static ta_result ta_invoke_resolve_type(ta_interpreter *it, const ta_invoke_decl *decl,
+                                        ta_invoke_values *values, ta_atom *out) {
     ta_system *system = it->system;
     if (decl->type.kind == TA_TEXT_SOURCE_NONE) {
         *out = system->scxml_invoke_type;
-        return TA_OP_OK;
+        return TA_OK;
     }
     if (decl->type.kind == TA_TEXT_SOURCE_ATOM) {
         *out = ta_invoke_normalize_type(system, decl->type.as.atom);
-        return TA_OP_OK;
+        return TA_OK;
     }
     ta_value value = {0};
     ta_str text = {0};
@@ -369,18 +386,19 @@ static ta_op_status ta_invoke_resolve_type(ta_interpreter *it, const ta_invoke_d
         status = ta_invoke_value_text(it, &(ta_datamodel_value_text_params){
                                               .value = &value, .out = &text, .fault = &values->fault });
     }
-    if (status == TA_OP_OK) {
+    ta_result result = ta_invoke_op(status);
+    if (result == TA_OK) {
         ta_atom atom = 0;
-        status = ta_atom_intern(&system->atoms, text, &atom) == TA_OK ? TA_OP_OK : TA_OP_ERROR;
+        result = ta_invoke_core(ta_atom_intern(&system->atoms, text, &atom));
         *out = ta_invoke_normalize_type(system, atom);
     }
     ta_value_release(&value);
-    return status;
+    return result;
 }
 
 /* src (a literal becomes a data-model value), inline content, and params. */
-static ta_op_status ta_invoke_resolve_values(ta_interpreter *it, const ta_invoke_decl *decl,
-                                             ta_invoke_values *values) {
+static ta_result ta_invoke_resolve_values(ta_interpreter *it, const ta_invoke_decl *decl,
+                                          ta_invoke_values *values) {
     const ta_definition *definition = it->definition;
     const ta_datamodel_vtable *v = definition->datamodel.v;
     ta_op_status status = TA_OP_OK;
@@ -407,15 +425,15 @@ static ta_op_status ta_invoke_resolve_values(ta_interpreter *it, const ta_invoke
                                              .source = decl->data, .out = &values->data, .fault = &values->fault });
     }
     if (status != TA_OP_OK || decl->params.length == 0) {
-        return status;
+        return ta_invoke_op(status);
     }
     if (v->make_params == NULL) {
-        return TA_OP_ERROR;
+        return TA_INVOKE_FAILED;
     }
     ta_named_value *named = ta_arena_alloc(&it->system->scratch, decl->params.length * sizeof(ta_named_value),
                                            _Alignof(ta_named_value));
     if (named == NULL) {
-        return TA_OP_ERROR;
+        return TA_ERR_NOMEM;
     }
     uint32_t evaluated = 0;
     for (; evaluated < decl->params.length && status == TA_OP_OK; evaluated += 1) {
@@ -440,53 +458,41 @@ static ta_op_status ta_invoke_resolve_values(ta_interpreter *it, const ta_invoke
     for (uint32_t index = 0; index < evaluated; index += 1) {
         ta_value_release(&named[index].value);
     }
-    return status;
+    return ta_invoke_op(status);
 }
 
-static ta_result ta_invoke_start(ta_interpreter *it, ta_invoke_decl_id decl_id) {
+typedef struct {
+    ta_invoke_decl_id decl;
+    ta_invoke_id id;
+    ta_atom type;
+    const ta_invoker *invoker;
+    ta_invoke_values *values;
+} ta_invoke_launch_params;
+
+/* Records an evaluated invocation and asks its invoker to start it; the
+ * room for the record and for an error was reserved. */
+static ta_result ta_invoke_launch(ta_interpreter *it, const ta_invoke_launch_params *params) {
     ta_system *system = it->system;
-    const ta_invoke_decl *decl = &it->definition->invokes[decl_id];
-    ta_invoke_values values = {0};
-    ta_invoke_id id = 0;
-    ta_atom type = 0;
-    ta_op_status status = ta_invoke_resolve_id(it, decl, &values, &id);
-    if (status == TA_OP_OK) {
-        status = ta_invoke_resolve_type(it, decl, &values, &type);
-    }
-    const ta_invoker *invoker = status == TA_OP_OK ? ta_invoke_find_invoker(system, type) : NULL;
-    if (invoker == NULL || invoker->v == NULL || invoker->v->start == NULL) {
-        status = TA_OP_ERROR;
-    }
-    if (status == TA_OP_OK) {
-        status = ta_invoke_resolve_values(it, decl, &values);
-    }
-    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, it->actor);
-    if (status == TA_OP_OK && (sparse == NULL || ta_invoke_grow(system, sparse) != TA_OK)) {
-        ta_invoke_values_release(&values);
-        return TA_ERR_NOMEM;
-    }
-    if (status != TA_OP_OK) {
-        ta_result result = ta_interpreter_execution_error(it, &values.fault);
-        ta_invoke_values_release(&values);
-        return result;
-    }
+    ta_actor_sparse_state *sparse = it->actor->sparse;
+    const ta_invoke_decl *decl = &it->definition->invokes[params->decl];
+    ta_invoke_values *values = params->values;
     /* Record first, so a child spawned during start() can attach to it. */
     uint32_t index = sparse->invoke_count;
     sparse->invokes[index] = (ta_active_invoke){
-        .id = id, .type = type, .autoforward = decl->autoforward, .active = true,
+        .id = params->id, .type = params->type, .autoforward = decl->autoforward, .active = true,
     };
     sparse->invoke_meta[index] = (ta_invoke_meta){
-        .decl = decl_id, .state = decl->owner, .invoker = *invoker, .child = 0,
+        .decl = params->decl, .state = decl->owner, .invoker = *params->invoker, .child = 0,
     };
     sparse->invoke_count += 1u;
     ta_invoke_request request = {
         .system = system,
         .parent = it->actor->record.id,
-        .invoke_id = id,
-        .type = type,
-        .src = values.src,
-        .data = values.data,
-        .params = values.params,
+        .invoke_id = params->id,
+        .type = params->type,
+        .src = values->src,
+        .data = values->data,
+        .params = values->params,
         .autoforward = decl->autoforward,
     };
     if (decl->data.kind == TA_VALUE_SOURCE_CONTENT) {
@@ -494,24 +500,78 @@ static ta_result ta_invoke_start(ta_interpreter *it, ta_invoke_decl_id decl_id) 
                                        &request.content);
     }
     uint64_t service = 0;
-    status = invoker->v->start(invoker->self, &(ta_invoker_start_params){
-                                                  .request = &request, .service_handle = &service,
-                                                  .fault = &values.fault });
-    int64_t found = ta_invoke_find(it->actor, id);
-    ta_result result = TA_OK;
-    if (status == TA_OP_OK && found >= 0) {
-        sparse->invokes[found].service_handle = service;
-    } else if (status != TA_OP_OK) {
+    const ta_invoker *invoker = params->invoker;
+    ta_op_status status = invoker->v->start(invoker->self, &(ta_invoker_start_params){
+                                                               .request = &request, .service_handle = &service,
+                                                               .fault = &values->fault });
+    int64_t found = ta_invoke_find(it->actor, params->id);
+    if (status == TA_OP_OK) {
         if (found >= 0) {
-            ta_invoke_remove_at(sparse, (uint32_t)found);
+            sparse->invokes[found].service_handle = service;
         }
+        return TA_OK;
+    }
+    if (found >= 0) {
+        ta_invoke_remove_at(sparse, (uint32_t)found);
+    }
+    /* An invoker that ran out of memory started nothing: the invocation
+     * starts again when the host resumes the actor (ADR 0070). */
+    return status == TA_OP_NOMEM ? TA_ERR_NOMEM : ta_interpreter_execution_error(it, &values->fault);
+}
+
+/*
+ * Starts one invocation, in three parts (ADR 0070). First the room it needs:
+ * the sparse state, a record, and an internal event for its error. Then
+ * its ID, type, src, data and params, which may run out of memory interning
+ * text or taking scratch. Last the record and the invoker's start(), which
+ * cannot run out of memory. An invocation that runs out of memory starts
+ * again from the beginning; what it did before is evaluation, and storing
+ * the same ID through idlocation.
+ */
+static ta_result ta_invoke_start(ta_interpreter *it, ta_invoke_decl_id decl_id) {
+    ta_system *system = it->system;
+    const ta_invoke_decl *decl = &it->definition->invokes[decl_id];
+    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, it->actor);
+    ta_result result = sparse == NULL ? TA_ERR_NOMEM : ta_invoke_grow(system, sparse);
+    if (result == TA_OK) {
+        result = ta_interpreter_queue_room(system, it->actor);
+    }
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_invoke_values values = {0};
+    ta_invoke_id id = 0;
+    ta_atom type = 0;
+    result = ta_invoke_resolve_id(it, decl, &values, &id);
+    if (result == TA_OK) {
+        result = ta_invoke_resolve_type(it, decl, &values, &type);
+    }
+    const ta_invoker *invoker = result == TA_OK ? ta_invoke_find_invoker(system, type) : NULL;
+    if (result == TA_OK && (invoker == NULL || invoker->v == NULL || invoker->v->start == NULL)) {
+        result = TA_INVOKE_FAILED;
+    }
+    if (result == TA_OK) {
+        result = ta_invoke_resolve_values(it, decl, &values);
+    }
+    if (result == TA_OK) {
+        result = ta_invoke_launch(it, &(ta_invoke_launch_params){
+                                          .decl = decl_id, .id = id, .type = type, .invoker = invoker,
+                                          .values = &values });
+    } else if (result == TA_INVOKE_FAILED) {
         result = ta_interpreter_execution_error(it, &values.fault);
     }
     ta_invoke_values_release(&values);
+    if (result != TA_ERR_NOMEM && decl->id.kind != TA_ID_SOURCE_LITERAL) {
+        system->next_invoke_serial += 1u;
+    }
     return result;
 }
 
-ta_result ta_invoke_start_pending(ta_interpreter *it) {
+bool ta_invoke_has_pending(const ta_actor *actor) {
+    return actor->sparse != NULL && actor->sparse->pending_invokes.count != 0;
+}
+
+ta_result ta_invoke_start_pending(ta_interpreter *it, uint32_t *state, uint32_t *decl) {
     ta_actor_sparse_state *sparse = it->actor->sparse;
     if (sparse == NULL || sparse->pending_invokes.count == 0) {
         return TA_OK;
@@ -523,19 +583,19 @@ ta_result ta_invoke_start_pending(ta_interpreter *it) {
     }
     const ta_definition *definition = it->definition;
     ta_vec *pending = &sparse->pending_invokes;
-    for (ta_state_id state = 0; state < definition->state_count; state += 1) {
+    for (; *state < definition->state_count; *state += 1u, *decl = 0) {
         bool listed = false;
         for (uint32_t index = 0; index < pending->count && !listed; index += 1) {
-            listed = *(ta_state_id *)ta_vec_at(pending, index) == state;
+            listed = *(ta_state_id *)ta_vec_at(pending, index) == *state;
         }
-        if (!listed || !ta_actor_state_active(it->actor, state)) {
+        if (!listed || !ta_actor_state_active(it->actor, *state)) {
             continue;
         }
-        for (uint32_t decl = 0; decl < definition->invoke_decl_count; decl += 1) {
-            if (definition->invokes[decl].owner != state) {
+        for (; *decl < definition->invoke_decl_count; *decl += 1u) {
+            if (definition->invokes[*decl].owner != *state) {
                 continue;
             }
-            ta_result result = ta_invoke_start(it, decl);
+            ta_result result = ta_invoke_start(it, *decl);
             if (result != TA_OK) {
                 return result;
             }
@@ -675,32 +735,48 @@ static ta_result ta_invoke_forward(ta_interpreter *it, uint32_t index, const ta_
     return TA_OK;
 }
 
-ta_result ta_invoke_before_external(ta_interpreter *it) {
-    /* A copy: <finalize> may grow the internal queue, which can hold the
-     * bound event (ADR 0069). The slot keeps the data retained. */
-    const ta_event bound = *ta_actor_bound_event(it->actor);
-    const ta_event *event = &bound;
-    if (event->invoke_id != TA_INVOKE_ID_NONE) {
-        /*
-         * An event of an invocation cancelled since it was queued is still
-         * processed, without <finalize>: cancelling destroys the service, so
-         * nothing it sends afterwards arrives, and stale host reports are
-         * refused by ta_actor_report_invoke().
-         */
-        int64_t index = ta_invoke_find(it->actor, event->invoke_id);
-        if (index < 0) {
-            return TA_OK;
-        }
-        ta_span32 finalize = it->definition->invokes[it->actor->sparse->invoke_meta[index].decl].finalize_actions;
-        ta_result result = ta_interpreter_run_actions(it, finalize);
-        if (result != TA_OK) {
-            return result;
-        }
+/* The active invocation an event came from, or -1. */
+static int64_t ta_invoke_source(const ta_actor *actor, const ta_event *event) {
+    return event->invoke_id == TA_INVOKE_ID_NONE ? -1 : ta_invoke_find(actor, event->invoke_id);
+}
+
+bool ta_invoke_before_external(const ta_actor *actor, const ta_event *event) {
+    /*
+     * An event of an invocation cancelled since it was queued is still
+     * processed, without <finalize> or autoforwarding: cancelling destroys
+     * the service, so nothing it sends afterwards arrives, and stale host
+     * reports are refused by ta_actor_report_invoke().
+     */
+    if (event->invoke_id != TA_INVOKE_ID_NONE && ta_invoke_source(actor, event) < 0) {
+        return false;
     }
-    ta_actor_sparse_state *sparse = it->actor->sparse;
+    const ta_actor_sparse_state *sparse = actor->sparse;
+    ta_span32 finalize = {0};
+    if (ta_invoke_finalize_actions(actor, event, &finalize) && finalize.length != 0) {
+        return true;
+    }
     for (uint32_t index = 0; sparse != NULL && index < sparse->invoke_count; index += 1) {
         if (sparse->invokes[index].autoforward) {
-            ta_result result = ta_invoke_forward(it, index, event);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ta_invoke_finalize_actions(const ta_actor *actor, const ta_event *event, ta_span32 *out) {
+    int64_t index = ta_invoke_source(actor, event);
+    if (index < 0) {
+        return false;
+    }
+    *out = actor->definition->invokes[actor->sparse->invoke_meta[index].decl].finalize_actions;
+    return true;
+}
+
+ta_result ta_invoke_autoforward(ta_interpreter *it, const ta_event *event, uint32_t *cursor) {
+    ta_actor_sparse_state *sparse = it->actor->sparse;
+    for (; sparse != NULL && *cursor < sparse->invoke_count; *cursor += 1u) {
+        if (sparse->invokes[*cursor].autoforward) {
+            ta_result result = ta_invoke_forward(it, *cursor, event);
             if (result != TA_OK) {
                 return result;
             }

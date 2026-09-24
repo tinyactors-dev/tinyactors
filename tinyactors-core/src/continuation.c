@@ -3,6 +3,7 @@
 /* Offsets of the arrays that follow a continuation's header, in order. */
 typedef struct {
     size_t sets;
+    size_t decls;
     size_t history;
     size_t enabled;
     size_t frames;
@@ -12,7 +13,8 @@ typedef struct {
 static ta_continuation_layout ta_continuation_offsets(const ta_continuation *shape) {
     ta_continuation_layout layout;
     layout.sets = ta_align_up(sizeof(ta_continuation), _Alignof(uint64_t));
-    layout.history = ta_align_up(layout.sets + (size_t)shape->words * 4u * sizeof(uint64_t), _Alignof(ta_state_id));
+    layout.decls = layout.sets + (size_t)shape->words * 4u * sizeof(uint64_t);
+    layout.history = ta_align_up(layout.decls + (size_t)shape->decl_words * sizeof(uint64_t), _Alignof(ta_state_id));
     layout.enabled = ta_align_up(layout.history + (size_t)shape->state_count * sizeof(ta_state_id),
                                  _Alignof(ta_transition_id));
     layout.frames = ta_align_up(layout.enabled + (size_t)shape->enabled_count * sizeof(ta_transition_id),
@@ -27,6 +29,10 @@ size_t ta_continuation_bytes(const ta_continuation *shape) {
 
 uint64_t *ta_continuation_sets(ta_continuation *continuation) {
     return (uint64_t *)((unsigned char *)continuation + ta_continuation_offsets(continuation).sets);
+}
+
+uint64_t *ta_continuation_decls(ta_continuation *continuation) {
+    return (uint64_t *)((unsigned char *)continuation + ta_continuation_offsets(continuation).decls);
 }
 
 ta_state_id *ta_continuation_history(ta_continuation *continuation) {
@@ -67,4 +73,8 @@ void ta_continuation_free(ta_allocator allocator, ta_continuation **continuation
     ta_continuation_release(held);
     ta_mem_free(allocator, held, &(ta_allocator_free_params){ .size = held->bytes, .alignment = TA_CONTINUATION_ALIGN });
     *continuation = NULL;
+}
+
+bool ta_run_phase_in_microstep(ta_run_phase phase) {
+    return phase == TA_PHASE_EXIT || phase == TA_PHASE_TRANSITIONS || phase == TA_PHASE_ENTER;
 }

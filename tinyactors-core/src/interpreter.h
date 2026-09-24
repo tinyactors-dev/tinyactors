@@ -4,10 +4,11 @@
 #include "datamodel.h"
 
 /*
- * Per-call interpreter scratch. Between microsteps the actor holds all
- * state: configuration, history, internal queue, and pending event. A pause
- * inside a microstep (ADR 0061) moves the rest, the position, the sets and
- * the executor's frames, into the actor's continuation.
+ * Per-call interpreter scratch. Between steps the actor holds all state:
+ * configuration, history, internal queue, and pending event. A run that
+ * stops inside a phase, paused (ADR 0061) or out of memory (ADR 0070),
+ * moves the rest, the position, the sets and the executor's frames, into
+ * the actor's continuation.
  */
 typedef struct {
     ta_system *system;
@@ -49,17 +50,25 @@ typedef struct {
     uint32_t exec_count;
     uint32_t exec_capacity;
     /*
-     * Pausing inside a microstep (ADR 0061): where the microstep stands, the
-     * units of executable content this call may run and has run, and
-     * whether the block running now is one a pause may stop.
+     * Where the run stands inside a phase (ADR 0061, ADR 0070), the units of
+     * executable content this call may run and has run, and whether the
+     * block running now is one a pause may stop.
      */
     ta_micro_position at;
     uint32_t action_budget;
     uint32_t actions;
     bool pausable;
     bool in_microstep;
-    /* Bootstrap only: data declarations the instance's binding already supplies. */
+    /* The continuation this call resumed from, which the actor no longer
+     * holds: the run stops into it again, or gives it to the system. */
+    ta_continuation *resumed;
+    /* The invocations of the macrostep's states just started: eventless
+     * transitions are selected again only if that queued an internal event. */
+    bool after_invokes;
+    /* The data declarations the instance's binding already supplies, which
+     * the bootstrap does not initialize (`decl_words` words). */
     uint64_t *bound_decls;
+    uint32_t decl_words;
 } ta_interpreter;
 
 ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_actor_resume_params *params);
@@ -84,6 +93,9 @@ void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor);
 /* Frees cached event blocks until the cache holds no more than its limit
  * (ADR 0069); a limit of 0 frees them all, at teardown. */
 void ta_interpreter_block_cache_trim(ta_system *system);
+/* Frees the continuation and sparse state the system keeps for a run that
+ * stops (ADR 0070), at teardown. */
+void ta_interpreter_release_spares(ta_system *system);
 /* Lends the actor an event block if it holds none: a cached one, else a
  * header only. TA_ERR_NOMEM changes nothing (ADR 0069). */
 ta_result ta_interpreter_hold_block(ta_system *system, ta_actor *actor);
@@ -108,8 +120,9 @@ ta_actor_sparse_state *ta_interpreter_sparse(ta_system *system, ta_actor *actor)
 ta_op_status ta_interpreter_eval(ta_interpreter *it, const ta_interpreter_value_params *params);
 /* Queues error.execution; returns TA_OK unless queueing itself failed. */
 ta_result ta_interpreter_execution_error(ta_interpreter *it, ta_fault *fault);
-/* Runs a block; a failed block has already queued its error. */
-ta_result ta_interpreter_run_actions(ta_interpreter *it, ta_span32 block);
+/* Makes sure the actor's queue has room for one more internal event, so
+ * queueing it cannot fail (ADR 0070). */
+ta_result ta_interpreter_queue_room(ta_system *system, ta_actor *actor);
 bool ta_interpreter_internal_pending(const ta_actor *actor);
 
 /* ------------------------------------------------------------------------
@@ -133,10 +146,24 @@ void ta_invoke_forget_pending(ta_actor *actor, ta_state_id state);
 bool ta_invoke_take(ta_actor *actor, ta_state_id state, uint32_t *cursor, ta_invoke_taken *out);
 /* Tells the invoker to cancel the service of a taken invocation. */
 void ta_invoke_cancel_service(const ta_invoke_taken *taken);
-/* Starts the invokes of states entered during the finished macrostep. */
-ta_result ta_invoke_start_pending(ta_interpreter *it);
-/* Applies <finalize> and autoforwarding to the actor's current (external) event. */
-ta_result ta_invoke_before_external(ta_interpreter *it);
+/* Whether states the macrostep entered have invocations still to start. */
+bool ta_invoke_has_pending(const ta_actor *actor);
+/*
+ * Starts the invocations of the states entered during the finished
+ * macrostep, from state `*state` and <invoke> declaration `*decl` on. On
+ * TA_ERR_NOMEM they name the invocation that did not start, and nothing of
+ * it happened; the next call starts from there (ADR 0070).
+ */
+ta_result ta_invoke_start_pending(ta_interpreter *it, uint32_t *state, uint32_t *decl);
+/* Whether <finalize> and autoforwarding apply to an external event just
+ * taken: not for an event of an invocation cancelled since it was queued. */
+bool ta_invoke_before_external(const ta_actor *actor, const ta_event *event);
+/* The <finalize> actions of the invocation `event` came from; false when it
+ * came from none that is still active. */
+bool ta_invoke_finalize_actions(const ta_actor *actor, const ta_event *event, ta_span32 *out);
+/* Autoforwards `event` to every invocation that asks for it, from index
+ * `*cursor` on; on TA_ERR_NOMEM `*cursor` names the one to forward next. */
+ta_result ta_invoke_autoforward(ta_interpreter *it, const ta_event *event, uint32_t *cursor);
 /* Cancels every invocation and publishes done.invoke to the parent, if any. */
 ta_result ta_invoke_finished(ta_interpreter *it);
 bool ta_invoke_destination(const ta_actor *actor, ta_invoke_id invoke, ta_actor_ref *out);

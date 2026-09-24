@@ -81,6 +81,14 @@ struct ta_system {
     ta_event_block *block_cache;
     uint32_t block_cache_count;
     uint32_t block_cache_limit;
+    /*
+     * What a run that stops inside a phase takes (ADR 0070): a continuation
+     * at least as large as the running definition needs, and a sparse state
+     * for an actor that has none. ta_interpreter_resume reserves both before
+     * it runs anything, so stopping never allocates. Null when taken.
+     */
+    ta_continuation *spare_continuation;
+    ta_actor_sparse_state *spare_sparse;
 };
 
 /*

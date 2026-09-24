@@ -100,6 +100,7 @@ void ta_system_destroy(ta_system *system) {
     ta_arena_destroy(&system->scratch);
     system->block_cache_limit = 0;
     ta_interpreter_block_cache_trim(system);
+    ta_interpreter_release_spares(system);
     /* Unloaded sessions hold addresses; give them back before the table goes. */
     ta_session_table_destroy(&system->sessions);
     /* Last: everything above gave its addresses back. */

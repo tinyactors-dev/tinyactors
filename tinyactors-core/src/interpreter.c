@@ -236,6 +236,24 @@ static ta_event ta_queue_pop(ta_actor *actor) {
     return head;
 }
 
+/* How many events the actor's queue holds, a taken head included. */
+static uint32_t ta_queue_mark(const ta_actor *actor) {
+    return actor->event_block == NULL ? 0 : actor->event_block->count;
+}
+
+/*
+ * Takes back, and releases, the events queued after `mark`: a step that ran
+ * out of memory after queueing some is done again, and queues them again
+ * (ADR 0070). Only events of that step lie after the mark.
+ */
+static void ta_queue_truncate(ta_actor *actor, uint32_t mark) {
+    ta_event_block *queue = actor->event_block;
+    while (queue != NULL && queue->count > mark) {
+        queue->count -= 1u;
+        ta_event_release(&queue->events[queue->count].event);
+    }
+}
+
 /* Makes `event`, and its references, the kept event (ADR 0069). */
 static void ta_keep_event(ta_event_slots *slots, const ta_event *event) {
     if (slots->has_kept) {
@@ -355,6 +373,32 @@ static ta_result ta_execution_error(ta_interpreter *it, ta_fault *fault) {
     return result == TA_OK ? TA_EXEC_FAILED : result;
 }
 
+/*
+ * What a failed step of evaluation is. A data-model or plugin operation
+ * that fails is an execution error. One that ran out of memory and changed
+ * nothing (TA_OP_NOMEM), like core's own allocation failing while it
+ * interns a name or takes scratch, is TA_ERR_NOMEM: it stops the step with
+ * nothing visible, never an error event (ADR 0047, ADR 0070).
+ */
+static ta_result ta_op_result(ta_op_status status) {
+    return status == TA_OP_OK ? TA_OK : status == TA_OP_NOMEM ? TA_ERR_NOMEM : TA_EXEC_FAILED;
+}
+
+/* A failed operation: TA_ERR_NOMEM for TA_OP_NOMEM, which drops the fault,
+ * otherwise error.execution with the fault's data (SCXML 5.10). */
+static ta_result ta_op_failed(ta_interpreter *it, ta_op_status status, ta_fault *fault) {
+    if (status == TA_OP_NOMEM) {
+        ta_value_release(&fault->data);
+        *fault = (ta_fault){0};
+        return TA_ERR_NOMEM;
+    }
+    return ta_execution_error(it, fault);
+}
+
+static ta_result ta_core_result(ta_result result) {
+    return result == TA_OK || result == TA_ERR_NOMEM ? result : TA_EXEC_FAILED;
+}
+
 /* ------------------------------------------------------------------------
  * Data-model calls
  */
@@ -470,13 +514,20 @@ static ta_op_status ta_eval_condition(ta_interpreter *it, ta_expr_id expr, bool 
                                                    });
 }
 
-static ta_result ta_initialize_data(ta_interpreter *it, ta_state_id owner) {
+/*
+ * Initializes `owner`'s data from declaration `*cursor` on, and leaves
+ * `*cursor` at the declaration whose error could not be queued when it
+ * returns TA_ERR_NOMEM: that declaration's initializer failed, so running
+ * it again changes nothing that ran before (ADR 0070).
+ */
+static ta_result ta_initialize_data(ta_interpreter *it, ta_state_id owner, uint32_t *cursor) {
     const ta_definition *definition = it->definition;
     const ta_datamodel_vtable *v = definition->datamodel.v;
-    for (uint32_t index = 0; index < definition->data_decl_count; index += 1) {
+    for (; *cursor < definition->data_decl_count; *cursor += 1u) {
+        uint32_t index = *cursor;
         const ta_data_decl *decl = &definition->data_decls[index];
         if (decl->owner_state != owner || decl->initializer == TA_INITIALIZER_NONE ||
-            (it->bound_decls != NULL && ta_bits_get(it->bound_decls, index))) {
+            (it->at.phase == TA_PHASE_DATA && ta_bits_get(it->bound_decls, index))) {
             continue;
         }
         ta_fault fault = {0};
@@ -502,7 +553,7 @@ static ta_result ta_initialize_data(ta_interpreter *it, ta_state_id owner) {
         }
         if (status != TA_OP_OK) {
             /* The binding stays declared; the error does not stop other initializers. */
-            ta_result result = ta_execution_error(it, &fault);
+            ta_result result = ta_op_failed(it, status, &fault);
             if (result != TA_EXEC_FAILED) {
                 return result;
             }
@@ -511,10 +562,17 @@ static ta_result ta_initialize_data(ta_interpreter *it, ta_state_id owner) {
     return TA_OK;
 }
 
-static ta_result ta_declare_data(ta_interpreter *it) {
+/*
+ * Declares every datum from declaration `*cursor` on, and records the ones
+ * the instance's binding supplies. On TA_ERR_NOMEM `*cursor` names the
+ * declaration whose error could not be queued; it failed, so declaring it
+ * again repeats nothing (ADR 0070).
+ */
+static ta_result ta_declare_data(ta_interpreter *it, uint32_t *cursor) {
     const ta_definition *definition = it->definition;
     const ta_datamodel_vtable *v = definition->datamodel.v;
-    for (uint32_t index = 0; index < definition->data_decl_count && v->declare != NULL; index += 1) {
+    for (; *cursor < definition->data_decl_count && v->declare != NULL; *cursor += 1u) {
+        uint32_t index = *cursor;
         ta_fault fault = {0};
         bool bound = false;
         ta_op_status status = v->declare(definition->datamodel.self,
@@ -527,11 +585,11 @@ static ta_result ta_declare_data(ta_interpreter *it) {
                                              .fault = &fault,
                                              .bound = &bound,
                                          });
-        if (bound && it->bound_decls != NULL) {
+        if (bound) {
             ta_bits_put(it->bound_decls, index, true);
         }
         if (status != TA_OP_OK) {
-            ta_result result = ta_execution_error(it, &fault);
+            ta_result result = ta_op_failed(it, status, &fault);
             if (result != TA_EXEC_FAILED) {
                 return result;
             }
@@ -720,9 +778,12 @@ ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *syste
             ta_interpreter_literal_content(sender->definition, send->content, &request.content_type,
                                            &request.content);
         }
-        if (io != NULL && io->v->send(io->self, &request, &fault) == TA_OP_OK) {
-            status = TA_EXTERNAL_EVENT_ACCEPTED;
-        }
+        ta_op_status sent = io == NULL ? TA_OP_ERROR : io->v->send(io->self, &request, &fault);
+        /* A processor that ran out of memory accepted nothing: the send
+         * waits, due now, like one a router answered RETRY for (ADR 0070). */
+        status = sent == TA_OP_OK      ? TA_EXTERNAL_EVENT_ACCEPTED
+                 : sent == TA_OP_NOMEM ? TA_EXTERNAL_EVENT_RETRY
+                                       : TA_EXTERNAL_EVENT_ERROR;
     }
     if (status == TA_EXTERNAL_EVENT_RETRY) {
         /*
@@ -754,19 +815,32 @@ ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *syste
     return status;
 }
 
+/*
+ * A <send> being evaluated. `event` and `delay` are its evaluated name and
+ * delay; the values are owned until the send is committed.
+ */
 typedef struct {
     ta_value data;
     ta_value target;
     ta_scxml_target scxml;
     ta_atom io_type;
     ta_send_id send_id;
+    ta_event_name_id event;
+    ta_time delay;
     bool scxml_io;
     bool has_content;
+    bool generated_id;
     ta_content_id content;
 } ta_send_state;
 
-static ta_op_status ta_send_payload(ta_interpreter *it, const ta_send_action *send, ta_send_state *state,
-                                    ta_fault *fault) {
+static void ta_send_state_release(ta_send_state *state) {
+    ta_value_release(&state->data);
+    ta_value_release(&state->target);
+    ta_scxml_target_release(&state->scxml);
+}
+
+static ta_result ta_send_payload(ta_interpreter *it, const ta_send_action *send, ta_send_state *state,
+                                 ta_fault *fault) {
     if (!state->scxml_io && send->data.kind == TA_VALUE_SOURCE_CONTENT) {
         /*
          * A host I/O processor receives literal content as bytes: its
@@ -776,20 +850,21 @@ static ta_op_status ta_send_payload(ta_interpreter *it, const ta_send_action *se
          */
         state->has_content = true;
         state->content = send->data.as.content;
-        return TA_OP_OK;
+        return TA_OK;
     }
     if (send->params.length == 0) {
-        return ta_eval_source(it, &(ta_value_params){ .source = send->data, .out = &state->data, .fault = fault });
+        return ta_op_result(
+            ta_eval_source(it, &(ta_value_params){ .source = send->data, .out = &state->data, .fault = fault }));
     }
     const ta_definition *definition = it->definition;
     const ta_datamodel_vtable *v = definition->datamodel.v;
     if (v->make_params == NULL) {
-        return TA_OP_ERROR;
+        return TA_EXEC_FAILED;
     }
     ta_named_value *values = ta_arena_alloc(&it->system->scratch, send->params.length * sizeof(ta_named_value),
                                             _Alignof(ta_named_value));
     if (values == NULL) {
-        return TA_OP_ERROR;
+        return TA_ERR_NOMEM;
     }
     uint32_t evaluated = 0;
     ta_op_status status = TA_OP_OK;
@@ -814,21 +889,21 @@ static ta_op_status ta_send_payload(ta_interpreter *it, const ta_send_action *se
     for (uint32_t index = 0; index < evaluated; index += 1) {
         ta_value_release(&values[index].value);
     }
-    return status;
+    return ta_op_result(status);
 }
 
-static ta_op_status ta_send_target(ta_interpreter *it, const ta_send_action *send, ta_send_state *state,
-                                   ta_fault *fault) {
+static ta_result ta_send_target(ta_interpreter *it, const ta_send_action *send, ta_send_state *state,
+                                ta_fault *fault) {
     if (!state->scxml_io) {
         /* A custom I/O processor receives the evaluated value, not a URI. */
         return send->target.kind == TA_VALUE_SOURCE_NONE
-                   ? TA_OP_OK
-                   : ta_eval_source(it, &(ta_value_params){ .source = send->target, .out = &state->target,
-                                                            .fault = fault });
+                   ? TA_OK
+                   : ta_op_result(ta_eval_source(it, &(ta_value_params){ .source = send->target,
+                                                                         .out = &state->target, .fault = fault }));
     }
     if (send->target.kind == TA_VALUE_SOURCE_NONE) {
         state->scxml = (ta_scxml_target){ .kind = TA_SCXML_TARGET_SELF };
-        return TA_OP_OK;
+        return TA_OK;
     }
     /*
      * One grammar for both spellings (ADR 0044): a literal target is the
@@ -846,10 +921,10 @@ static ta_op_status ta_send_target(ta_interpreter *it, const ta_send_action *sen
         ta_op_status status = ta_eval_source(it, &(ta_value_params){ .source = send->target, .out = &state->target,
                                                                      .fault = fault });
         if (status != TA_OP_OK) {
-            return status;
+            return ta_op_result(status);
         }
         if (v->value_text == NULL) {
-            return TA_OP_ERROR;
+            return TA_EXEC_FAILED;
         }
         status = v->value_text(definition->datamodel.self,
                                &(ta_datamodel_value_text_params){
@@ -861,10 +936,11 @@ static ta_op_status ta_send_target(ta_interpreter *it, const ta_send_action *sen
                                    .fault = fault,
                                });
         if (status != TA_OP_OK) {
-            return status;
+            return ta_op_result(status);
         }
     }
-    return ta_scxml_target_parse(it->system, text, &state->scxml) == TA_OK ? TA_OP_OK : TA_OP_ERROR;
+    /* Interning a named address may run out of memory. */
+    return ta_core_result(ta_scxml_target_parse(it->system, text, &state->scxml));
 }
 
 /* Resolves an SCXML target to an external destination; false means inaccessible. */
@@ -898,8 +974,8 @@ static bool ta_send_destination(ta_interpreter *it, const ta_scxml_target *targe
 }
 
 /* Resolves `type` / `typeexpr`; an unknown processor is an execution error. */
-static ta_op_status ta_send_io_type(ta_interpreter *it, const ta_send_action *send, ta_send_state *state,
-                                    ta_fault *fault) {
+static ta_result ta_send_io_type(ta_interpreter *it, const ta_send_action *send, ta_send_state *state,
+                                 ta_fault *fault) {
     ta_system *system = it->system;
     ta_atom type = system->scxml_io_type;
     if (send->type.kind == TA_TEXT_SOURCE_ATOM) {
@@ -907,52 +983,52 @@ static ta_op_status ta_send_io_type(ta_interpreter *it, const ta_send_action *se
     } else if (send->type.kind == TA_TEXT_SOURCE_EXPR) {
         ta_value holder = {0};
         ta_str text = {0};
-        ta_op_status status = ta_eval_text(it, &(ta_text_eval_params){
-                                                   .expr = send->type.as.expr, .holder = &holder,
-                                                   .text = &text, .fault = fault,
-                                               });
-        if (status == TA_OP_OK && (text.len == 0 || ta_atom_intern(&system->atoms, text, &type) != TA_OK)) {
-            status = TA_OP_ERROR;
+        ta_result result = ta_op_result(ta_eval_text(it, &(ta_text_eval_params){
+                                                             .expr = send->type.as.expr, .holder = &holder,
+                                                             .text = &text, .fault = fault,
+                                                         }));
+        if (result == TA_OK) {
+            result = text.len == 0 ? TA_EXEC_FAILED : ta_core_result(ta_atom_intern(&system->atoms, text, &type));
         }
         ta_value_release(&holder);
-        if (status != TA_OP_OK) {
-            return status;
+        if (result != TA_OK) {
+            return result;
         }
     }
     state->scxml_io = ta_system_is_scxml_io(system, type);
     state->io_type = state->scxml_io ? system->scxml_io_type : type;
-    return state->scxml_io || ta_system_io_of(system, type) != NULL ? TA_OP_OK : TA_OP_ERROR;
+    return state->scxml_io || ta_system_io_of(system, type) != NULL ? TA_OK : TA_EXEC_FAILED;
 }
 
 /* Resolves `event` / `eventexpr`; the expression's text is a dotted event name. */
-static ta_op_status ta_send_event_name(ta_interpreter *it, const ta_send_action *send, ta_event_name_id *out,
-                                       ta_fault *fault) {
+static ta_result ta_send_event_name(ta_interpreter *it, const ta_send_action *send, ta_event_name_id *out,
+                                    ta_fault *fault) {
     if (send->event.kind == TA_EVENT_SOURCE_NAME) {
         *out = send->event.as.name;
-        return TA_OP_OK;
+        return TA_OK;
     }
     ta_value holder = {0};
     ta_str text = {0};
-    ta_op_status status = ta_eval_text(it, &(ta_text_eval_params){
-                                               .expr = send->event.as.expr, .holder = &holder,
-                                               .text = &text, .fault = fault,
-                                           });
-    if (status == TA_OP_OK && ta_event_name_intern_dotted(&it->system->event_names, text, out) != TA_OK) {
-        status = TA_OP_ERROR;
+    ta_result result = ta_op_result(ta_eval_text(it, &(ta_text_eval_params){
+                                                         .expr = send->event.as.expr, .holder = &holder,
+                                                         .text = &text, .fault = fault,
+                                                     }));
+    if (result == TA_OK) {
+        result = ta_core_result(ta_event_name_intern_dotted(&it->system->event_names, text, out));
     }
     ta_value_release(&holder);
-    return status;
+    return result;
 }
 
 /* Resolves `delay` / `delayexpr`; the expression's text is an SCXML duration. */
-static ta_op_status ta_send_delay(ta_interpreter *it, const ta_send_action *send, ta_time *out, ta_fault *fault) {
+static ta_result ta_send_delay(ta_interpreter *it, const ta_send_action *send, ta_time *out, ta_fault *fault) {
     *out = 0;
     if (send->delay.kind == TA_DELAY_SOURCE_LITERAL) {
         *out = send->delay.as.literal;
-        return TA_OP_OK;
+        return TA_OK;
     }
     if (send->delay.kind != TA_DELAY_SOURCE_EXPR) {
-        return TA_OP_OK;
+        return TA_OK;
     }
     ta_value holder = {0};
     ta_str text = {0};
@@ -964,7 +1040,7 @@ static ta_op_status ta_send_delay(ta_interpreter *it, const ta_send_action *send
         status = TA_OP_ERROR;
     }
     ta_value_release(&holder);
-    return status;
+    return ta_op_result(status);
 }
 
 /* Stores generated text, such as an ID, through a location (`idlocation`). */
@@ -1007,28 +1083,31 @@ static ta_op_status ta_store_text(ta_interpreter *it, const ta_store_text_params
 
 /*
  * Assigns the send ID. Without `id` or `idlocation` the send has no ID, so
- * its events carry a blank sendid (SCXML 5.10.1).
+ * its events carry a blank sendid (SCXML 5.10.1). A generated ID is the
+ * next value of the actor's counter, which moves only once the send is done
+ * (ta_exec_send), so a send that runs out of memory and runs again stores
+ * the same ID through idlocation (ADR 0070).
  */
-static ta_op_status ta_send_assign_id(ta_interpreter *it, const ta_send_action *send, ta_send_state *state,
-                               ta_fault *fault) {
+static ta_result ta_send_assign_id(ta_interpreter *it, const ta_send_action *send, ta_send_state *state,
+                                   ta_fault *fault) {
     state->send_id = 0;
     if (send->id.kind == TA_ID_SOURCE_LITERAL) {
         state->send_id = ta_literal_send_id(send->id.as.literal);
-        return TA_OP_OK;
+        return TA_OK;
     }
     if (send->id.kind != TA_ID_SOURCE_LOCATION) {
-        return TA_OP_OK;
+        return TA_OK;
     }
-    it->actor->next_send_id += 1u;
-    state->send_id = TA_GENERATED_SEND_ID_BIT | it->actor->next_send_id;
+    state->generated_id = true;
+    state->send_id = TA_GENERATED_SEND_ID_BIT | (it->actor->next_send_id + 1u);
     char buffer[48];
     ta_text_writer writer = { .buffer = buffer, .capacity = sizeof(buffer) };
     ta_send_id_write(it->system, state->send_id, &writer);
-    return ta_store_text(it, &(ta_store_text_params){
-                                 .location = send->id.as.location,
-                                 .text = { .ptr = buffer, .len = writer.length },
-                                 .fault = fault,
-                             });
+    return ta_op_result(ta_store_text(it, &(ta_store_text_params){
+                                              .location = send->id.as.location,
+                                              .text = { .ptr = buffer, .len = writer.length },
+                                              .fault = fault,
+                                          }));
 }
 
 /* An error while evaluating a <send> carries that send's ID (SCXML 5.10.1). */
@@ -1039,49 +1118,49 @@ static ta_result ta_send_execution_error(ta_interpreter *it, ta_send_id send_id,
     return result == TA_OK ? TA_EXEC_FAILED : result;
 }
 
-static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
+/* Evaluates every attribute of a <send>, in the order SCXML 6.2 gives them. */
+static ta_result ta_send_evaluate(ta_interpreter *it, const ta_send_action *send, ta_send_state *state,
+                                  ta_fault *fault) {
+    ta_result result = ta_send_assign_id(it, send, state, fault);
+    if (result == TA_OK) {
+        result = ta_send_event_name(it, send, &state->event, fault);
+    }
+    if (result == TA_OK) {
+        result = ta_send_io_type(it, send, state, fault);
+    }
+    if (result == TA_OK) {
+        result = ta_send_delay(it, send, &state->delay, fault);
+    }
+    if (result == TA_OK) {
+        result = ta_send_payload(it, send, state, fault);
+    }
+    if (result == TA_OK) {
+        result = ta_send_target(it, send, state, fault);
+    }
+    if (result == TA_OK && state->scxml_io && state->scxml.kind == TA_SCXML_TARGET_INTERNAL && state->delay != 0) {
+        result = TA_EXEC_FAILED; /* a delayed send cannot target the internal queue */
+    }
+    return result;
+}
+
+/*
+ * Queues, dispatches, holds or stores an evaluated <send>, which owns the
+ * state's values from here. It runs out of memory only where nothing is
+ * visible yet: holding it for an unpublished actor, or keeping one the
+ * router refused with RETRY, which accepted nothing (ADR 0040).
+ */
+static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
     ta_system *system = it->system;
     ta_actor *actor = it->actor;
-    ta_send_state state = { .io_type = system->scxml_io_type, .scxml_io = true };
-    ta_fault fault = {0};
-    ta_event_name_id event_name = 0;
-    ta_time delay = 0;
-    ta_op_status status = ta_send_assign_id(it, send, &state, &fault);
-    if (status == TA_OP_OK) {
-        status = ta_send_event_name(it, send, &event_name, &fault);
-    }
-    if (status == TA_OP_OK) {
-        status = ta_send_io_type(it, send, &state, &fault);
-    }
-    if (status == TA_OP_OK) {
-        status = ta_send_delay(it, send, &delay, &fault);
-    }
-    if (status != TA_OP_OK) {
-        return ta_send_execution_error(it, state.send_id, &fault);
-    }
-    status = ta_send_payload(it, send, &state, &fault);
-    if (status == TA_OP_OK) {
-        status = ta_send_target(it, send, &state, &fault);
-    }
-    if (status == TA_OP_OK && state.scxml_io && state.scxml.kind == TA_SCXML_TARGET_INTERNAL && delay != 0) {
-        status = TA_OP_ERROR; /* a delayed send cannot target the internal queue */
-    }
-    if (status != TA_OP_OK) {
-        ta_value_release(&state.data);
-        ta_value_release(&state.target);
-        ta_scxml_target_release(&state.scxml);
-        return ta_send_execution_error(it, state.send_id, &fault);
-    }
-
-    if (state.scxml_io && state.scxml.kind == TA_SCXML_TARGET_INTERNAL) {
-        ta_value_release(&state.target);
+    if (state->scxml_io && state->scxml.kind == TA_SCXML_TARGET_INTERNAL) {
+        ta_value_release(&state->target);
         ta_event event = {
-            .name = event_name,
+            .name = state->event,
             .type = TA_EVENT_INTERNAL,
-            .send_id = state.send_id,
+            .send_id = state->send_id,
             .origin = { .kind = TA_ORIGIN_ACTOR, .as.actor = actor->record.self },
             .invoke_id = TA_INVOKE_ID_NONE,
-            .data = state.data,
+            .data = state->data,
         };
         /* The queued event owns its origin reference (ADR 0065). */
         ta_actor_ref_retain(&event.origin.as.actor);
@@ -1090,33 +1169,31 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
 
     ta_delayed_send record = {
         .owner = actor->record.id,
-        .send_id = state.send_id,
-        .due = ta_clock_now(&system->clock) + delay,
-        .event = event_name,
-        .io_type = state.io_type,
-        .target = state.target,
-        .data = state.data,
-        .has_content = state.has_content,
-        .content = state.content,
+        .send_id = state->send_id,
+        .due = ta_clock_now(&system->clock) + state->delay,
+        .event = state->event,
+        .io_type = state->io_type,
+        .target = state->target,
+        .data = state->data,
+        .has_content = state->has_content,
+        .content = state->content,
     };
     /* A named target's reference passes to the send record (ADR 0065). */
-    if (state.scxml_io && !ta_send_destination(it, &state.scxml, &record.destination)) {
-        ta_value_release(&state.data);
-        ta_value_release(&state.target);
-        ta_scxml_target_release(&state.scxml);
-        return ta_communication_error(system, actor, &(ta_error_params){ .send_id = state.send_id });
+    if (state->scxml_io && !ta_send_destination(it, &state->scxml, &record.destination)) {
+        ta_send_state_release(state);
+        return ta_communication_error(system, actor, &(ta_error_params){ .send_id = state->send_id });
     }
     if (!actor->published) {
         ta_result result = ta_actor_hold_send(
-            system, actor, &(ta_activation_send){ .send = record, .immediate = delay == 0 });
+            system, actor, &(ta_activation_send){ .send = record, .immediate = state->delay == 0 });
         if (result != TA_OK) {
-            ta_value_release(&state.data);
-            ta_value_release(&state.target);
+            ta_value_release(&record.data);
+            ta_value_release(&record.target);
             ta_actor_ref_release(&record.destination);
         }
         return result;
     }
-    if (delay == 0) {
+    if (state->delay == 0) {
         ta_external_event_submit_status submitted = ta_interpreter_dispatch_delayed(system, &record);
         if (submitted != TA_EXTERNAL_EVENT_RETRY) {
             return TA_OK;
@@ -1129,10 +1206,37 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
     }
     ta_result result = ta_actor_schedule_send(system, actor, &record);
     if (result != TA_OK) {
-        ta_value_release(&state.data);
-        ta_value_release(&state.target);
+        ta_value_release(&record.data);
+        ta_value_release(&record.target);
         ta_actor_ref_release(&record.destination);
         ta_actor_ref_release(&record.origin);
+    }
+    return result;
+}
+
+/*
+ * <send> in two parts (ADR 0070): evaluate every attribute, which may run
+ * out of memory interning a name or taking scratch, then commit. A send
+ * that runs out of memory is run again from the start: what it did before
+ * is evaluation, and storing the same generated ID again, so the actor's
+ * counter moves here, once the send has an outcome.
+ */
+static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
+    ta_send_state state = { .io_type = it->system->scxml_io_type, .scxml_io = true };
+    ta_fault fault = {0};
+    ta_result result = ta_send_evaluate(it, send, &state, &fault);
+    if (result == TA_OK) {
+        result = ta_send_commit(it, &state);
+    } else {
+        ta_send_state_release(&state);
+        if (result == TA_EXEC_FAILED) {
+            result = ta_send_execution_error(it, state.send_id, &fault);
+        } else {
+            ta_value_release(&fault.data);
+        }
+    }
+    if (result != TA_ERR_NOMEM && state.generated_id) {
+        it->actor->next_send_id += 1u;
     }
     return result;
 }
@@ -1155,7 +1259,7 @@ static ta_result ta_foreach_begin(ta_interpreter *it, ta_exec_frame *loop) {
         return ta_execution_error(it, NULL);
     }
     ta_fault fault = {0};
-    if (v->foreach_snapshot(definition->datamodel.self,
+    ta_op_status snapshot = v->foreach_snapshot(definition->datamodel.self,
                             &(ta_datamodel_foreach_snapshot_params){
                                 .shared = definition->datamodel_shared,
                                 .instance = it->actor->datamodel_instance,
@@ -1164,10 +1268,8 @@ static ta_result ta_foreach_begin(ta_interpreter *it, ta_exec_frame *loop) {
                                 .out = &loop->iteration_snapshot,
                                 .count = &loop->iteration_count,
                                 .fault = &fault,
-                            }) != TA_OP_OK) {
-        return ta_execution_error(it, &fault);
-    }
-    return TA_OK;
+                            });
+    return snapshot == TA_OP_OK ? TA_OK : ta_op_failed(it, snapshot, &fault);
 }
 
 /* Binds the item and index for the loop's next position. */
@@ -1188,8 +1290,11 @@ static ta_result ta_foreach_bind(ta_interpreter *it, ta_exec_frame *loop) {
                                                                    .host = &it->actor->host,
                                                                    .fault = &fault,
                                                                });
-    loop->iteration += 1u;
-    return bound == TA_OP_OK ? TA_OK : ta_execution_error(it, &fault);
+    ta_result result = bound == TA_OP_OK ? TA_OK : ta_op_failed(it, bound, &fault);
+    if (result != TA_ERR_NOMEM) {
+        loop->iteration += 1u; /* an iteration whose error could not be queued runs again */
+    }
+    return result;
 }
 
 static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action) {
@@ -1306,7 +1411,7 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
             status = TA_OP_ERROR;
             break;
     }
-    return status == TA_OP_OK ? TA_OK : ta_execution_error(it, &fault);
+    return status == TA_OP_OK ? TA_OK : ta_op_failed(it, status, &fault);
 }
 
 static ta_result ta_exec_push(ta_interpreter *it, ta_exec_frame frame) {
@@ -1322,38 +1427,60 @@ static ta_result ta_exec_block(ta_interpreter *it, ta_span32 block) {
 }
 
 /*
+ * Whether the executor stops before its next unit (ADR 0061): only in a
+ * microstep's own block of a bootstrapped actor, never in <finalize> or at
+ * termination, and only once this call has run its action budget.
+ */
+static bool ta_exec_should_pause(const ta_interpreter *it, uint32_t floor) {
+    return it->pausable && it->in_microstep && it->actor->bootstrapped && floor == 0 && it->action_budget != 0 &&
+           it->actions >= it->action_budget;
+}
+
+/*
+ * What a unit of executable content needs before it runs (ADR 0070): room
+ * for the one internal event it may queue, its own or the error it raises,
+ * and for a published actor's <send> with a delay, room to store the send.
+ * Running out of memory here stops the run before the unit, with nothing
+ * of it done; so a <script> that changed the data model and then failed
+ * never runs twice because its error could not be queued.
+ */
+static ta_result ta_unit_reserve(ta_interpreter *it, const ta_action_def *action) {
+    ta_result result = ta_queue_room(it->system, it->actor);
+    if (result == TA_OK && action != NULL && action->kind == TA_ACTION_SEND &&
+        action->as.send.delay.kind != TA_DELAY_SOURCE_NONE && it->actor->published) {
+        result = ta_actor_reserve_send(it->system, it->actor);
+    }
+    return result;
+}
+
+/*
  * Runs a block of executable content and every block nested in it, without
  * recursion (ADR 0060). Each open block is an ACTIONS frame; an <if> opens
  * the block its condition picks, and a <foreach> is a FOREACH frame that
  * opens its body once per position. The frames come from the interpreter's
  * scratch, so nothing here allocates them. An error anywhere stops the whole
  * block, as SCXML 4.9 requires, and every snapshot still held is released.
+ *
+ * A pause (ADR 0061) and running out of memory (ADR 0070) both stop before
+ * a unit and leave the frames open, `at.block_open` set, for the run to
+ * save. A unit that runs out of memory had no effect a second run of it
+ * would repeat, so its frame is put back to before it.
  */
-/*
- * Whether the executor stops before its next unit (ADR 0061): only in a
- * microstep's own block, never in <finalize> or at termination, and only
- * once this call has run its action budget.
- */
-static bool ta_exec_should_pause(const ta_interpreter *it, uint32_t floor) {
-    return it->pausable && it->in_microstep && floor == 0 && it->action_budget != 0 &&
-           it->actions >= it->action_budget;
-}
-
 static ta_result ta_run_block(ta_interpreter *it, ta_span32 block) {
     const ta_definition *definition = it->definition;
     uint32_t floor = it->exec_count;
     ta_result result = TA_OK;
     if (it->at.block_open) {
-        /* Resuming: the frames the pause left, from the bottom, are this
-         * block's, which a pause only ever leaves at the microstep's level. */
+        /* Resuming: the frames the stop left, from the bottom, are this
+         * block's, which a stop only ever leaves at the step's own level. */
         floor = 0;
         it->at.block_open = false;
     } else {
-        it->at.block_open = false;
         result = ta_exec_block(it, block);
     }
     while (result == TA_OK && it->exec_count > floor) {
-        ta_exec_frame *frame = &it->exec_frames[it->exec_count - 1u];
+        uint32_t top = it->exec_count - 1u;
+        ta_exec_frame *frame = &it->exec_frames[top];
         if (frame->kind == TA_EXEC_FRAME_FOREACH) {
             if (frame->iteration == frame->iteration_count) {
                 ta_value_release(&frame->iteration_snapshot);
@@ -1364,8 +1491,11 @@ static ta_result ta_run_block(ta_interpreter *it, ta_span32 block) {
                 it->at.block_open = true;
                 return TA_EXEC_PAUSED;
             }
-            it->actions += 1u;
-            result = ta_foreach_bind(it, frame);
+            result = ta_unit_reserve(it, NULL);
+            if (result == TA_OK) {
+                it->actions += 1u;
+                result = ta_foreach_bind(it, frame);
+            }
             if (result == TA_OK) {
                 result = ta_exec_block(it, frame->actions);
             }
@@ -1379,15 +1509,19 @@ static ta_result ta_run_block(ta_interpreter *it, ta_span32 block) {
             it->at.block_open = true;
             return TA_EXEC_PAUSED;
         }
-        it->actions += 1u;
         uint32_t index = frame->actions.offset + frame->cursor;
-        frame->cursor += 1u;
         const ta_action_def *action = &definition->action_defs[index];
+        result = ta_unit_reserve(it, action);
+        if (result != TA_OK) {
+            break;
+        }
+        it->actions += 1u;
+        frame->cursor += 1u;
         if (action->kind == TA_ACTION_IF) {
             bool condition = false;
             ta_fault fault = {0};
             ta_op_status status = ta_eval_condition(it, action->as.conditional.condition, &condition, &fault);
-            result = status != TA_OP_OK ? ta_execution_error(it, &fault)
+            result = status != TA_OP_OK ? ta_op_failed(it, status, &fault)
                                         : ta_exec_block(it, condition ? action->as.conditional.then_actions
                                                                       : action->as.conditional.else_actions);
         } else if (action->kind == TA_ACTION_FOREACH) {
@@ -1403,6 +1537,15 @@ static ta_result ta_run_block(ta_interpreter *it, ta_span32 block) {
         } else {
             result = ta_exec_action(it, action);
         }
+        if (result == TA_ERR_NOMEM && it->exec_count == top + 1u) {
+            /* Nothing was opened above it: the unit runs again from its start. */
+            it->exec_frames[top].cursor -= 1u;
+            it->actions -= 1u;
+        }
+    }
+    if (result == TA_ERR_NOMEM && floor == 0 && it->exec_count != 0) {
+        it->at.block_open = true;
+        return result;
     }
     while (it->exec_count > floor) {
         ta_exec_frame *frame = &it->exec_frames[--it->exec_count];
@@ -1611,9 +1754,10 @@ static ta_result ta_select_transitions(ta_interpreter *it, const ta_event *event
                 bool enabled = true;
                 if (transition->condition != UINT32_MAX) {
                     ta_fault fault = {0};
-                    if (ta_eval_condition(it, transition->condition, &enabled, &fault) != TA_OP_OK) {
+                    ta_op_status status = ta_eval_condition(it, transition->condition, &enabled, &fault);
+                    if (status != TA_OP_OK) {
                         enabled = false;
-                        ta_result result = ta_execution_error(it, &fault);
+                        ta_result result = ta_op_failed(it, status, &fault);
                         if (result != TA_EXEC_FAILED) {
                             return result;
                         }
@@ -1913,30 +2057,34 @@ static ta_result ta_done_data_params(ta_interpreter *it, ta_span32 params, ta_va
         const ta_param_def *param = &definition->params[params.offset + index];
         ta_fault fault = {0};
         values[count].name = ta_atom_text(&it->system->atoms, param->name);
-        if (ta_eval_source(it, &(ta_value_params){ .source = param->value, .out = &values[count].value,
-                                                   .fault = &fault }) == TA_OP_OK) {
+        ta_op_status status = ta_eval_source(it, &(ta_value_params){ .source = param->value,
+                                                                     .out = &values[count].value, .fault = &fault });
+        if (status == TA_OP_OK) {
             count += 1;
         } else {
-            result = ta_execution_error(it, &fault);
+            result = ta_op_failed(it, status, &fault);
             result = result == TA_EXEC_FAILED ? TA_OK : result;
         }
     }
     ta_fault fault = {0};
-    if (result == TA_OK && count != 0 &&
-        (v->make_params == NULL ||
-         v->make_params(definition->datamodel.self,
-                        &(ta_datamodel_make_params_params){
-                            .shared = definition->datamodel_shared,
-                            .instance = it->actor->datamodel_instance,
-                            .values = values,
-                            .count = count,
-                            .host = &it->actor->host,
-                            .out = out,
-                            .fault = &fault,
-                        }) != TA_OP_OK)) {
-        *out = (ta_value){0};
-        result = ta_execution_error(it, &fault);
-        result = result == TA_EXEC_FAILED ? TA_OK : result;
+    if (result == TA_OK && count != 0) {
+        ta_op_status status = v->make_params == NULL
+                                  ? TA_OP_ERROR
+                                  : v->make_params(definition->datamodel.self,
+                                                   &(ta_datamodel_make_params_params){
+                                                       .shared = definition->datamodel_shared,
+                                                       .instance = it->actor->datamodel_instance,
+                                                       .values = values,
+                                                       .count = count,
+                                                       .host = &it->actor->host,
+                                                       .out = out,
+                                                       .fault = &fault,
+                                                   });
+        if (status != TA_OP_OK) {
+            *out = (ta_value){0};
+            result = ta_op_failed(it, status, &fault);
+            result = result == TA_EXEC_FAILED ? TA_OK : result;
+        }
     }
     for (uint32_t index = 0; index < count; index += 1) {
         ta_value_release(&values[index].value);
@@ -1980,21 +2128,17 @@ static ta_result ta_done_data_value(ta_interpreter *it, ta_done_data_id id, ta_v
         return TA_OK;
     }
     *out = (ta_value){0};
-    ta_result result = ta_execution_error(it, &fault);
+    ta_result result = ta_op_failed(it, status, &fault);
     return result == TA_EXEC_FAILED ? TA_OK : result;
 }
 
-/* Keeps a top-level final state's done data as the actor's completion. */
-static ta_result ta_store_completion(ta_interpreter *it, ta_value *data) {
-    ta_actor_sparse_state *sparse = ta_sparse(it->system, it->actor);
-    if (sparse == NULL) {
-        ta_value_release(data);
-        return TA_ERR_NOMEM;
-    }
+/* Keeps a top-level final state's done data as the actor's completion; the
+ * actor holds its sparse state already. */
+static void ta_store_completion(ta_interpreter *it, ta_value *data) {
+    ta_actor_sparse_state *sparse = it->actor->sparse;
     ta_value_release(&sparse->completion.data);
     sparse->completion = (ta_actor_completion){ .has_data = data->v != NULL, .data = *data };
     *data = (ta_value){0};
-    return TA_OK;
 }
 
 /* Computes the exit set and records history, once, as a microstep begins. */
@@ -2085,21 +2229,28 @@ static void ta_enter_begin(ta_interpreter *it) {
     it->at.stage = TA_ENTER_ACTIVATE;
 }
 
-/* Done data and done.state events for a final state just entered. */
+/*
+ * Done data and done.state events for a final state just entered, or for a
+ * top-level one the session's completion. It runs again from its start
+ * when it runs out of memory (ADR 0070): its caller takes back the errors
+ * and events it queued, and nothing else it does is visible until it
+ * succeeds.
+ */
 static ta_result ta_enter_final(ta_interpreter *it, ta_state_id state) {
     const ta_state_def *def = ta_state(it, state);
+    if (def->parent == TA_STATE_NONE && ta_sparse(it->system, it->actor) == NULL) {
+        return TA_ERR_NOMEM;
+    }
     ta_value data = {0};
     ta_result result = ta_done_data_value(it, def->done_data, &data);
     if (result != TA_OK) {
         return result;
     }
     if (def->parent == TA_STATE_NONE) {
+        ta_store_completion(it, &data);
+        it->actor->sparse->final_state = state; /* ADR 0056 */
         it->actor->finished = true;
-        result = ta_store_completion(it, &data);
-        if (result == TA_OK) {
-            it->actor->sparse->final_state = state; /* ADR 0056 */
-        }
-        return result;
+        return TA_OK;
     }
     result = ta_raise_done(it, def->parent, &data);
     ta_state_id grandparent = ta_state(it, def->parent)->parent;
@@ -2114,7 +2265,8 @@ static ta_result ta_enter_final(ta_interpreter *it, ta_state_id state) {
 /*
  * Enters the entry set, lowest first, from where `at` stands. Each stage
  * of a state happens once; `at.stage` records the ones done, so a paused
- * microstep never activates a state or starts its data twice (ADR 0061).
+ * or stopped microstep never activates a state or starts its data twice
+ * (ADR 0061, ADR 0070).
  */
 static ta_result ta_enter_states(ta_interpreter *it) {
     const ta_definition *definition = it->definition;
@@ -2127,15 +2279,27 @@ static ta_result ta_enter_states(ta_interpreter *it) {
         const ta_state_def *def = ta_state(it, state);
         ta_result result = TA_OK;
         if (it->at.stage == TA_ENTER_ACTIVATE) {
-            ta_bits_put(it->active, state, true);
-            result = ta_invoke_state_entered(it, state); /* Invoke: start after the macrostep. */
-            if (definition->binding_mode == TA_BINDING_LATE && !ta_bits_get(it->actor->late_initialized, state)) {
-                ta_bits_put(it->actor->late_initialized, state, true);
-                result = ta_initialize_data(it, state);
-            }
+            /* Invoke: start after the macrostep. Recording it is the only
+             * part that allocates, and it changes nothing when it fails. */
+            result = ta_invoke_state_entered(it, state);
             if (result != TA_OK) {
                 return result;
             }
+            ta_bits_put(it->active, state, true);
+            it->at.stage = TA_ENTER_DATA;
+            it->at.handler = 0;
+        }
+        if (it->at.stage == TA_ENTER_DATA) {
+            /* Late binding: the state's data, once, from the declaration
+             * `at.handler` names. */
+            if (definition->binding_mode == TA_BINDING_LATE && !ta_bits_get(it->actor->late_initialized, state)) {
+                result = ta_initialize_data(it, state, &it->at.handler);
+                if (result != TA_OK) {
+                    return result;
+                }
+                ta_bits_put(it->actor->late_initialized, state, true);
+            }
+            it->at.handler = 0;
             it->at.stage = TA_ENTER_HANDLERS;
         }
         if (it->at.stage == TA_ENTER_HANDLERS) {
@@ -2165,8 +2329,12 @@ static ta_result ta_enter_states(ta_interpreter *it) {
             it->at.stage = TA_ENTER_DONE;
         }
         if (def->kind == TA_STATE_FINAL) {
+            uint32_t mark = ta_queue_mark(it->actor);
             result = ta_enter_final(it, state);
             if (result != TA_OK) {
+                if (result == TA_ERR_NOMEM) {
+                    ta_queue_truncate(it->actor, mark);
+                }
                 return result;
             }
         }
@@ -2199,24 +2367,6 @@ static void ta_store_active(ta_interpreter *it) {
     }
 }
 
-/*
- * Before exit, actions and entry make the microstep visible, make sure the
- * actor holds an internal queue with room for one event (lent, ADR 0064) and,
- * when the microstep may need it, its sparse state. So a full allocator
- * pauses at the boundary, and a retry starts the same microstep again
- * (ADR 0047).
- */
-static ta_result ta_prepare_microstep_queue(ta_interpreter *it) {
-    ta_result result = ta_queue_room(it->system, it->actor);
-    /* A microstep that may keep a send, a completion, an invocation or a
-     * held effect gets its sparse state now, while nothing is visible. */
-    if (result == TA_OK && (it->definition->microstep_needs_sparse || !it->actor->published) &&
-        ta_sparse(it->system, it->actor) == NULL) {
-        result = TA_ERR_NOMEM;
-    }
-    return result;
-}
-
 static void ta_compact_sparse(ta_interpreter *it) {
     ta_actor_sparse_state *sparse = it->actor->sparse;
     if (sparse == NULL || sparse->paused != NULL || sparse->invoke_count != 0 ||
@@ -2236,36 +2386,37 @@ static void ta_compact_sparse(ta_interpreter *it) {
     it->actor->sparse = NULL;
 }
 
+/* ------------------------------------------------------------------------
+ * Running a microstep
+ */
+
+/* Opens the microstep of the enabled transitions: the exit set, and history
+ * recorded before anything exits. It changes the actor, so an image taken
+ * before it no longer describes it. */
+static void ta_microstep_begin(ta_interpreter *it) {
+    ta_actor_touch(it->actor);
+    it->at = (ta_micro_position){ .phase = TA_PHASE_EXIT };
+    ta_exit_begin(it);
+}
+
 /*
- * Runs a microstep, or continues the one `at` describes. TA_EXEC_PAUSED
- * leaves it open: the position, the sets and the frames stay in the
- * interpreter for ta_pause_save (ADR 0061), and the actor's configuration
- * is still the one before the microstep.
+ * Runs the open microstep from where `at` stands. A pause (TA_EXEC_PAUSED)
+ * or a failed allocation (TA_ERR_NOMEM) leaves it open: the position, the
+ * sets and the frames stay in the interpreter for the run to save, and the
+ * actor's configuration is still the one before the microstep (ADR 0061,
+ * ADR 0070).
  */
 static ta_result ta_microstep(ta_interpreter *it) {
     ta_result result = TA_OK;
-    if (it->at.phase == TA_MICRO_NONE) {
-        /* A microstep changes the configuration, history, or the queue: an
-         * image taken before it no longer describes this actor. */
-        if (it->actor->bootstrapped) {
-            result = ta_prepare_microstep_queue(it);
-        }
-        if (result != TA_OK) {
-            return result;
-        }
-        ta_actor_touch(it->actor);
-        ta_exit_begin(it);
-        it->at.phase = TA_MICRO_EXIT;
-    }
     it->in_microstep = true;
-    if (it->at.phase == TA_MICRO_EXIT) {
+    if (it->at.phase == TA_PHASE_EXIT) {
         result = ta_exit_states(it);
         if (result == TA_OK) {
-            it->at.phase = TA_MICRO_TRANSITIONS;
+            it->at.phase = TA_PHASE_TRANSITIONS;
             it->at.state = 0;
         }
     }
-    if (result == TA_OK && it->at.phase == TA_MICRO_TRANSITIONS) {
+    if (result == TA_OK && it->at.phase == TA_PHASE_TRANSITIONS) {
         for (; result == TA_OK && it->at.state < it->enabled_count; it->at.state += 1u) {
             result = ta_run_block_isolated(it, ta_view(it, it->enabled[it->at.state]).actions);
             if (result != TA_OK) {
@@ -2274,63 +2425,420 @@ static ta_result ta_microstep(ta_interpreter *it) {
         }
         if (result == TA_OK) {
             ta_enter_begin(it);
-            it->at.phase = TA_MICRO_ENTER;
+            it->at.phase = TA_PHASE_ENTER;
         }
     }
-    if (result == TA_OK && it->at.phase == TA_MICRO_ENTER) {
+    if (result == TA_OK && it->at.phase == TA_PHASE_ENTER) {
         result = ta_enter_states(it);
     }
     it->in_microstep = false;
-    if (result == TA_EXEC_PAUSED) {
+    if (result == TA_EXEC_PAUSED || result == TA_ERR_NOMEM) {
         return result;
     }
     it->at = (ta_micro_position){0};
     ta_store_active(it);
     it->steps += 1u;
+    /* The first microstep an actor completes is its bootstrap's. */
+    it->actor->bootstrapped = true;
     return result;
 }
 
+/* After selecting transitions for an event: their microstep, or, when none
+ * is enabled, the event is consumed. */
+static void ta_after_selection(ta_interpreter *it) {
+    if (it->enabled_count != 0) {
+        ta_microstep_begin(it);
+        return;
+    }
+    it->at = (ta_micro_position){0};
+    it->steps += 1u;
+}
+
 /*
- * Moves a paused microstep out of scratch into the actor (ADR 0061
- * section 3). The frames' snapshots move with them. Fails without
- * changing anything when there is no memory.
+ * Selects the transitions for an event just taken. Nothing has run for it
+ * yet, so running out of memory gives it back, and takes back the errors
+ * its guards queued: the next run takes it again (ADR 0069, ADR 0070).
  */
-static ta_result ta_pause_save(ta_interpreter *it) {
-    ta_actor_sparse_state *sparse = ta_sparse(it->system, it->actor);
-    if (sparse == NULL) {
-        return TA_ERR_NOMEM;
+static ta_result ta_select_taken(ta_interpreter *it) {
+    /* A copy: an error.execution a guard raises can grow the queue, which
+     * moves a bound queue head. */
+    ta_event taken = *ta_actor_bound_event(it->actor);
+    uint32_t mark = ta_queue_mark(it->actor);
+    ta_result result = ta_select_transitions(it, &taken);
+    if (result != TA_OK) {
+        if (result == TA_ERR_NOMEM) {
+            ta_queue_truncate(it->actor, mark);
+            ta_unbind_event(it->actor);
+        }
+        return result;
     }
-    ta_continuation shape = { .at = it->at, .words = it->words, .state_count = it->definition->state_count,
-                              .enabled_count = it->enabled_count, .frame_count = it->exec_count };
-    shape.bytes = ta_continuation_bytes(&shape);
-    ta_continuation *saved = ta_mem_alloc(it->system->allocator, shape.bytes, TA_CONTINUATION_ALIGN);
+    ta_after_selection(it);
+    return TA_OK;
+}
+
+/* ------------------------------------------------------------------------
+ * Phases outside a microstep (ADR 0070)
+ */
+
+/*
+ * The bootstrap's data (SCXML 5.2): declares every datum, then initializes
+ * the top-level data and, with early binding, every state's, from where
+ * `at` stands; then the top-level <script>.
+ */
+static ta_result ta_run_data(ta_interpreter *it) {
+    const ta_definition *definition = it->definition;
+    ta_result result = TA_OK;
+    if (it->at.stage == TA_DATA_DECLARE) {
+        result = ta_declare_data(it, &it->at.handler);
+        if (result != TA_OK) {
+            return result;
+        }
+        it->at.stage = TA_DATA_INITIALIZE;
+        it->at.state = 0;
+        it->at.handler = 0;
+    }
+    uint32_t owners = definition->binding_mode == TA_BINDING_EARLY ? definition->state_count + 1u : 1u;
+    for (; it->at.state < owners; it->at.state += 1u, it->at.handler = 0) {
+        ta_state_id owner = it->at.state == 0 ? TA_STATE_NONE : it->at.state - 1u;
+        result = ta_initialize_data(it, owner, &it->at.handler);
+        if (result != TA_OK) {
+            return result;
+        }
+    }
+    it->at = (ta_micro_position){ .phase = TA_PHASE_SCRIPT };
+    return TA_OK;
+}
+
+/* The bootstrap's top-level <script> (SCXML 5.8), then its initial microstep. */
+static ta_result ta_run_script(ta_interpreter *it) {
+    ta_result result = ta_run_block_isolated(it, it->definition->global_script_actions);
+    if (result != TA_OK) {
+        return result;
+    }
+    it->enabled[0] = TA_TRANSITION_BOOTSTRAP;
+    it->enabled_count = 1;
+    ta_microstep_begin(it);
+    return TA_OK;
+}
+
+/*
+ * An external event was taken (SCXML mainEventLoop): the <finalize> of the
+ * invocation it came from, then autoforwarding it to every invocation that
+ * asks for that; its transitions are selected after both.
+ */
+static ta_result ta_run_finalize(ta_interpreter *it) {
+    /* A copy: <finalize> may grow the internal queue, which can move the
+     * bound event (ADR 0069). The slot keeps the data retained. */
+    const ta_event event = *ta_actor_bound_event(it->actor);
+    if (it->at.stage == TA_FINALIZE_BLOCK) {
+        ta_span32 finalize = {0};
+        if (!it->at.block_open) {
+            (void)ta_invoke_finalize_actions(it->actor, &event, &finalize);
+        }
+        ta_result result = ta_run_block_isolated(it, finalize);
+        if (result != TA_OK) {
+            return result;
+        }
+        it->at.stage = TA_FINALIZE_FORWARD;
+        it->at.state = 0;
+    }
+    ta_result result = ta_invoke_autoforward(it, &event, &it->at.state);
+    if (result != TA_OK) {
+        return result;
+    }
+    it->at = (ta_micro_position){ .phase = TA_PHASE_SELECT };
+    return TA_OK;
+}
+
+/*
+ * Selects the transitions for the external event <finalize> ran for. The
+ * event cannot be given back any more, so running out of memory stops the
+ * run here, and the next one selects again.
+ */
+static ta_result ta_run_select(ta_interpreter *it) {
+    ta_event taken = *ta_actor_bound_event(it->actor);
+    uint32_t mark = ta_queue_mark(it->actor);
+    ta_result result = ta_select_transitions(it, &taken);
+    if (result != TA_OK) {
+        if (result == TA_ERR_NOMEM) {
+            ta_queue_truncate(it->actor, mark);
+        }
+        return result;
+    }
+    ta_after_selection(it);
+    return TA_OK;
+}
+
+/* Starts the invocations of the states the macrostep entered, from the
+ * state and <invoke> `at` names. */
+static ta_result ta_run_invokes(ta_interpreter *it) {
+    ta_result result = ta_invoke_start_pending(it, &it->at.state, &it->at.handler);
+    if (result != TA_OK) {
+        return result;
+    }
+    it->at = (ta_micro_position){0};
+    it->after_invokes = true;
+    return TA_OK;
+}
+
+/*
+ * A top-level final state was entered (SCXML exitInterpreter): every
+ * active state is exited, highest first, running its <onexit>; then the
+ * session ends, and an invoked one reports done.invoke to its parent. The
+ * end runs again when it runs out of memory storing that report, and
+ * repeats nothing visible: the invocations it cancelled are gone.
+ */
+static ta_result ta_run_finish(ta_interpreter *it) {
+    if (it->at.stage == TA_FINISH_EXIT) {
+        for (; it->at.state > 0; it->at.state -= 1u) {
+            ta_state_id state = it->at.state - 1u;
+            if (!ta_bits_get(it->active, state)) {
+                continue;
+            }
+            ta_result result = ta_run_handlers(it, ta_state(it, state)->onexit_handlers);
+            if (result != TA_OK) {
+                return result;
+            }
+            ta_bits_put(it->active, state, false);
+        }
+        ta_store_active(it);
+        it->at.stage = TA_FINISH_END;
+    }
+    /* Sends the router already refused once stay queued: they were sent before termination. */
+    ta_timer_cancel_unsubmitted(&it->system->timers, ta_actor_timers(it->actor));
+    ta_release_events(it->actor);
+    /* Invoke: cancel this session's invocations and report done.invoke to its parent. */
+    ta_result result = ta_invoke_finished(it);
+    if (result != TA_OK) {
+        return result;
+    }
+    it->at = (ta_micro_position){0};
+    it->actor->macrostep = false;
+    it->actor->record.residency = TA_ACTOR_DONE;
+    return TA_OK;
+}
+
+/* Continues the phase `at` names. */
+static ta_result ta_continue_phase(ta_interpreter *it) {
+    switch (it->at.phase) {
+        case TA_PHASE_EXIT:
+        case TA_PHASE_TRANSITIONS:
+        case TA_PHASE_ENTER:
+            return ta_microstep(it);
+        case TA_PHASE_DATA:
+            return ta_run_data(it);
+        case TA_PHASE_SCRIPT:
+            return ta_run_script(it);
+        case TA_PHASE_FINALIZE:
+            return ta_run_finalize(it);
+        case TA_PHASE_SELECT:
+            return ta_run_select(it);
+        case TA_PHASE_INVOKES:
+            return ta_run_invokes(it);
+        case TA_PHASE_FINISH:
+            return ta_run_finish(it);
+        case TA_PHASE_NONE:
+        default:
+            return TA_ERR_INVALID;
+    }
+}
+
+/*
+ * Nothing is open: the next step of the macrostep (SCXML mainEventLoop).
+ * An eventless transition first, then the next internal event, then the
+ * invocations of the states the macrostep entered, then the next external
+ * event. Right after the invocations started, eventless transitions are
+ * selected again only if they queued an internal event. With nothing left,
+ * the macrostep has ended and `*stable` is set.
+ */
+static ta_result ta_next_step(ta_interpreter *it, bool *stable) {
+    ta_actor *actor = it->actor;
+    bool skip_to_external = it->after_invokes && !ta_interpreter_internal_pending(actor);
+    it->after_invokes = false;
+    if (!skip_to_external) {
+        uint32_t mark = ta_queue_mark(actor);
+        ta_result result = ta_select_transitions(it, NULL);
+        if (result != TA_OK) {
+            if (result == TA_ERR_NOMEM) {
+                ta_queue_truncate(actor, mark);
+            }
+            return result;
+        }
+        if (it->enabled_count != 0) {
+            ta_microstep_begin(it);
+            return TA_OK;
+        }
+        if (ta_interpreter_internal_pending(actor)) {
+            ta_bind_event(actor, TA_BOUND_INTERNAL);
+            return ta_select_taken(it);
+        }
+        if (actor->published && ta_invoke_has_pending(actor)) {
+            it->at = (ta_micro_position){ .phase = TA_PHASE_INVOKES };
+            return TA_OK;
+        }
+    }
+    if (actor->event_block != NULL && actor->event_block->slots.external == TA_EXTERNAL_WAITING) {
+        /* It stays in its slot, where inspection reports it, until the
+         * macrostep ends. */
+        ta_bind_event(actor, TA_BOUND_EXTERNAL);
+        /* Invoke: <finalize> and autoforwarding. */
+        if (ta_invoke_before_external(actor, ta_actor_bound_event(actor))) {
+            it->at = (ta_micro_position){ .phase = TA_PHASE_FINALIZE, .stage = TA_FINALIZE_BLOCK };
+            return TA_OK;
+        }
+        return ta_select_taken(it);
+    }
+    ta_compact_sparse(it);
+    ta_end_macrostep_events(actor);
+    actor->macrostep = false;
+    actor->record.residency = TA_ACTOR_IDLE;
+    *stable = true;
+    return TA_OK;
+}
+
+/* ------------------------------------------------------------------------
+ * Stopping inside a phase (ADR 0061, ADR 0070)
+ */
+
+/* The executor's frames: an open block per level, and a <foreach> frame
+ * under each body (ADR 0060). */
+static uint32_t ta_exec_capacity(const ta_definition *definition) {
+    return 2u * definition->max_action_depth + 1u;
+}
+
+/* The words of a set over the definition's data declarations; never 0. */
+static uint32_t ta_decl_words(const ta_definition *definition) {
+    return ta_bits_words(definition->data_decl_count) + 1u;
+}
+
+/* The largest continuation a run of this definition can save: every set,
+ * every enabled transition, and every frame the executor can open. */
+static size_t ta_continuation_capacity(const ta_definition *definition) {
+    ta_continuation shape = {
+        .words = ta_bits_words(definition->state_count),
+        .decl_words = ta_decl_words(definition),
+        .state_count = definition->state_count,
+        .enabled_count = definition->state_count + 1u,
+        .frame_count = ta_exec_capacity(definition),
+    };
+    return ta_continuation_bytes(&shape);
+}
+
+static void ta_continuation_forget(ta_system *system, ta_continuation *continuation) {
+    /* Its frames moved into scratch or were never there: nothing to release. */
+    ta_mem_free(system->allocator, continuation,
+                &(ta_allocator_free_params){ .size = continuation->bytes, .alignment = TA_CONTINUATION_ALIGN });
+}
+
+/* Gives a continuation whose frames moved back into scratch to the system
+ * as its spare, keeping the larger of the two. */
+static void ta_continuation_recycle(ta_system *system, ta_continuation *continuation) {
+    ta_continuation *spare = system->spare_continuation;
+    if (spare != NULL && spare->bytes >= continuation->bytes) {
+        ta_continuation_forget(system, continuation);
+        return;
+    }
+    if (spare != NULL) {
+        ta_continuation_forget(system, spare);
+    }
+    system->spare_continuation = continuation;
+}
+
+void ta_interpreter_release_spares(ta_system *system) {
+    if (system->spare_continuation != NULL) {
+        ta_continuation_forget(system, system->spare_continuation);
+        system->spare_continuation = NULL;
+    }
+    if (system->spare_sparse != NULL) {
+        ta_mem_free(system->allocator, system->spare_sparse,
+                    &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),
+                                                 .alignment = _Alignof(ta_actor_sparse_state) });
+        system->spare_sparse = NULL;
+    }
+}
+
+/*
+ * Makes sure a run of the actor can stop anywhere without allocating
+ * (ADR 0070): a continuation large enough for its definition and, for an
+ * actor without one, a sparse state to hang it from. An actor that stopped
+ * before stops into its own continuation again. TA_ERR_NOMEM here happens
+ * before the run does anything.
+ */
+static ta_result ta_reserve_stop(ta_system *system, ta_actor *actor) {
+    if (actor->sparse != NULL && actor->sparse->paused != NULL) {
+        return TA_OK;
+    }
+    size_t bytes = ta_continuation_capacity(actor->definition);
+    ta_continuation *spare = system->spare_continuation;
+    if (spare == NULL || spare->bytes < bytes) {
+        ta_continuation *grown = ta_mem_alloc(system->allocator, bytes, TA_CONTINUATION_ALIGN);
+        if (grown == NULL) {
+            return TA_ERR_NOMEM;
+        }
+        *grown = (ta_continuation){ .bytes = bytes };
+        if (spare != NULL) {
+            ta_continuation_forget(system, spare);
+        }
+        system->spare_continuation = grown;
+    }
+    if (actor->sparse == NULL && system->spare_sparse == NULL) {
+        system->spare_sparse = ta_mem_alloc(system->allocator, sizeof(ta_actor_sparse_state),
+                                            _Alignof(ta_actor_sparse_state));
+        if (system->spare_sparse == NULL) {
+            return TA_ERR_NOMEM;
+        }
+    }
+    return TA_OK;
+}
+
+/*
+ * Stops the run where `at` stands: the position, the sets and the frames
+ * move out of scratch into a continuation the actor owns, the one it
+ * resumed from or the system's spare, which ta_reserve_stop provided, so
+ * stopping cannot fail. The frames' snapshots move with them.
+ */
+static void ta_stop(ta_interpreter *it) {
+    ta_system *system = it->system;
+    ta_actor *actor = it->actor;
+    if (actor->sparse == NULL) {
+        actor->sparse = system->spare_sparse;
+        system->spare_sparse = NULL;
+        *actor->sparse = (ta_actor_sparse_state){ .final_state = TA_STATE_NONE };
+    }
+    ta_continuation *saved = it->resumed;
+    it->resumed = NULL;
     if (saved == NULL) {
-        return TA_ERR_NOMEM;
+        saved = system->spare_continuation;
+        system->spare_continuation = NULL;
     }
-    *saved = shape;
+    *saved = (ta_continuation){ .bytes = saved->bytes, .at = it->at, .words = it->words,
+                                .decl_words = it->decl_words, .state_count = it->definition->state_count,
+                                .enabled_count = it->enabled_count, .frame_count = it->exec_count };
+    ta_mem_copy(ta_continuation_decls(saved), it->bound_decls, (size_t)it->decl_words * sizeof(uint64_t));
     uint64_t *sets = ta_continuation_sets(saved);
     const uint64_t *from[] = { it->active, it->to_exit, it->to_enter, it->default_entry };
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(from); index += 1u) {
         ta_mem_copy(sets + (size_t)index * it->words, from[index], (size_t)it->words * sizeof(uint64_t));
     }
     ta_mem_copy(ta_continuation_history(saved), it->default_history,
-                (size_t)shape.state_count * sizeof(ta_state_id));
-    ta_mem_copy(ta_continuation_enabled(saved), it->enabled, (size_t)shape.enabled_count * sizeof(ta_transition_id));
-    ta_mem_copy(ta_continuation_frames(saved), it->exec_frames, (size_t)shape.frame_count * sizeof(ta_exec_frame));
-    sparse->paused = saved;
+                (size_t)saved->state_count * sizeof(ta_state_id));
+    ta_mem_copy(ta_continuation_enabled(saved), it->enabled, (size_t)saved->enabled_count * sizeof(ta_transition_id));
+    ta_mem_copy(ta_continuation_frames(saved), it->exec_frames, (size_t)saved->frame_count * sizeof(ta_exec_frame));
+    actor->sparse->paused = saved;
     it->exec_count = 0;
     it->at = (ta_micro_position){0};
-    return TA_OK;
 }
 
-/* Moves a paused microstep back into scratch; the actor no longer holds it. */
-static void ta_pause_restore(ta_interpreter *it) {
+/* Moves a stopped run back into scratch. The actor no longer holds the
+ * continuation; the run keeps it, to stop into again or to recycle. */
+static void ta_stop_restore(ta_interpreter *it) {
     ta_continuation *saved = it->actor->sparse->paused;
     const uint64_t *sets = ta_continuation_sets(saved);
     uint64_t *to[] = { it->active, it->to_exit, it->to_enter, it->default_entry };
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(to); index += 1u) {
         ta_mem_copy(to[index], sets + (size_t)index * it->words, (size_t)it->words * sizeof(uint64_t));
     }
+    ta_mem_copy(it->bound_decls, ta_continuation_decls(saved), (size_t)saved->decl_words * sizeof(uint64_t));
     ta_mem_copy(it->default_history, ta_continuation_history(saved), (size_t)saved->state_count * sizeof(ta_state_id));
     ta_mem_copy(it->enabled, ta_continuation_enabled(saved), (size_t)saved->enabled_count * sizeof(ta_transition_id));
     ta_mem_copy(it->exec_frames, ta_continuation_frames(saved), (size_t)saved->frame_count * sizeof(ta_exec_frame));
@@ -2338,12 +2846,12 @@ static void ta_pause_restore(ta_interpreter *it) {
     it->exec_count = saved->frame_count;
     it->at = saved->at;
     it->actor->sparse->paused = NULL;
-    ta_mem_free(it->system->allocator, saved,
-                &(ta_allocator_free_params){ .size = saved->bytes, .alignment = TA_CONTINUATION_ALIGN });
+    it->resumed = saved;
 }
 
-/* Drops a restored pause without finishing it: its snapshots are released. */
-static void ta_pause_drop(ta_interpreter *it) {
+/* Drops a restored stop without finishing it: its snapshots are released,
+ * and its continuation goes back to the system. */
+static void ta_stop_drop(ta_interpreter *it) {
     while (it->exec_count > 0) {
         ta_exec_frame *frame = &it->exec_frames[--it->exec_count];
         if (frame->kind == TA_EXEC_FRAME_FOREACH) {
@@ -2351,80 +2859,10 @@ static void ta_pause_drop(ta_interpreter *it) {
         }
     }
     it->at = (ta_micro_position){0};
-}
-
-/*
- * Runs or continues a microstep. A pause that cannot be saved does not
- * pause: the microstep runs one more unit and tries again (ADR 0061
- * section 3), so the budget never turns into an error.
- */
-static ta_result ta_run_microstep(ta_interpreter *it) {
-    for (;;) {
-        ta_result result = ta_microstep(it);
-        if (result != TA_EXEC_PAUSED) {
-            return result;
-        }
-        if (ta_pause_save(it) == TA_OK) {
-            return TA_EXEC_PAUSED;
-        }
-        it->action_budget = it->actions + 1u;
+    if (it->resumed != NULL) {
+        ta_continuation_recycle(it->system, it->resumed);
+        it->resumed = NULL;
     }
-}
-
-/* Exits every active state in exit order when a top-level final state is reached. */
-static ta_result ta_finish(ta_interpreter *it) {
-    const ta_definition *definition = it->definition;
-    for (ta_state_id index = definition->state_count; index > 0; index -= 1u) {
-        ta_state_id state = index - 1u;
-        if (!ta_bits_get(it->active, state)) {
-            continue;
-        }
-        ta_result result = ta_run_handlers(it, ta_state(it, state)->onexit_handlers);
-        if (result != TA_OK) {
-            return result;
-        }
-        ta_bits_put(it->active, state, false);
-    }
-    ta_store_active(it);
-    /* Sends the router already refused once stay queued: they were sent before termination. */
-    ta_timer_cancel_unsubmitted(&it->system->timers, ta_actor_timers(it->actor));
-    ta_release_events(it->actor);
-    it->actor->macrostep = false;
-    it->actor->record.residency = TA_ACTOR_DONE;
-    /* Invoke: cancel this session's invocations and report done.invoke to its parent. */
-    return ta_invoke_finished(it);
-}
-
-static ta_result ta_bootstrap(ta_interpreter *it) {
-    const ta_definition *definition = it->definition;
-    /* Top-level data is initialized at bootstrap under either binding (it belongs to <scxml>). */
-    it->bound_decls = ta_arena_alloc(&it->system->scratch,
-                                     (ta_bits_words(definition->data_decl_count) + 1u) * sizeof(uint64_t),
-                                     _Alignof(uint64_t));
-    if (it->bound_decls == NULL) {
-        return TA_ERR_NOMEM;
-    }
-    ta_mem_zero(it->bound_decls, (ta_bits_words(definition->data_decl_count) + 1u) * sizeof(uint64_t));
-    ta_result result = ta_declare_data(it);
-    if (result == TA_OK) {
-        result = ta_initialize_data(it, TA_STATE_NONE);
-    }
-    for (ta_state_id state = 0; result == TA_OK && state < definition->state_count &&
-                                definition->binding_mode == TA_BINDING_EARLY;
-         state += 1) {
-        result = ta_initialize_data(it, state);
-    }
-    if (result == TA_OK) {
-        result = ta_run_block_isolated(it, definition->global_script_actions);
-    }
-    if (result == TA_OK) {
-        it->enabled[0] = TA_TRANSITION_BOOTSTRAP;
-        it->enabled_count = 1;
-        result = ta_microstep(it);
-    }
-    it->bound_decls = NULL;
-    it->actor->bootstrapped = true;
-    return result;
 }
 
 static ta_result ta_interpreter_init(ta_interpreter *it, ta_system *system, ta_actor *actor) {
@@ -2458,121 +2896,102 @@ static ta_result ta_interpreter_init(ta_interpreter *it, ta_system *system, ta_a
     /* Each history state is expanded at most once. */
     it->history_stack = ta_arena_alloc(&system->scratch, (definition->history.slot_count + 1u) * sizeof(ta_state_id),
                                        _Alignof(ta_state_id));
-    /* An open block per level, and a <foreach> frame under each body. */
-    it->exec_capacity = 2u * definition->max_action_depth + 1u;
+    it->exec_capacity = ta_exec_capacity(definition);
     it->exec_frames = ta_arena_alloc(&system->scratch, it->exec_capacity * sizeof(ta_exec_frame), _Alignof(ta_exec_frame));
-    if (it->entry_frames == NULL || it->history_stack == NULL || it->exec_frames == NULL) {
+    it->decl_words = ta_decl_words(definition);
+    it->bound_decls = ta_arena_alloc(&system->scratch, (size_t)it->decl_words * sizeof(uint64_t), _Alignof(uint64_t));
+    if (it->entry_frames == NULL || it->history_stack == NULL || it->exec_frames == NULL || it->bound_decls == NULL) {
         return TA_ERR_NOMEM;
     }
     ta_bits_clear(it, it->history_busy);
     ta_load_active(it);
     if (actor->sparse != NULL && actor->sparse->paused != NULL) {
-        ta_pause_restore(it); /* the live set, too, is the paused microstep's */
+        ta_stop_restore(it); /* the live set, too, is the stopped run's */
     }
     actor->live_active = it->active;
     return TA_OK;
 }
 
-static ta_result ta_interpreter_run(ta_system *system, ta_actor *actor, const ta_actor_resume_params *params) {
+/*
+ * Runs the actor until its macrostep ends, the microstep budget is spent,
+ * or a pause or a failed allocation stops it inside a phase, where the
+ * next run continues (ADR 0047, ADR 0061, ADR 0070). A failed allocation
+ * with nothing open, while selecting transitions, leaves nothing to
+ * continue: the next run selects again.
+ */
+static ta_result ta_run(ta_interpreter *it, uint32_t budget, ta_run_status *status) {
+    ta_actor *actor = it->actor;
+    for (;;) {
+        ta_result result = TA_OK;
+        if (it->at.phase != TA_PHASE_NONE) {
+            result = ta_continue_phase(it);
+        } else if (!actor->bootstrapped) {
+            it->at = (ta_micro_position){ .phase = TA_PHASE_DATA, .stage = TA_DATA_DECLARE };
+            ta_mem_zero(it->bound_decls, (size_t)it->decl_words * sizeof(uint64_t));
+        } else if (actor->finished) {
+            if (actor->record.residency == TA_ACTOR_DONE) {
+                *status = TA_RUN_DONE;
+                return TA_OK;
+            }
+            it->at = (ta_micro_position){ .phase = TA_PHASE_FINISH, .state = it->definition->state_count,
+                                          .stage = TA_FINISH_EXIT };
+        } else if (it->steps >= budget) {
+            *status = TA_RUN_PAUSED;
+            return TA_OK;
+        } else {
+            bool stable = false;
+            result = ta_next_step(it, &stable);
+            if (result == TA_OK && stable) {
+                *status = TA_RUN_STABLE;
+                return TA_OK;
+            }
+        }
+        if (result == TA_OK) {
+            continue;
+        }
+        if (result == TA_EXEC_PAUSED) {
+            ta_stop(it);
+            *status = TA_RUN_PAUSED;
+            return TA_OK;
+        }
+        if (result == TA_ERR_NOMEM && it->at.phase != TA_PHASE_NONE) {
+            ta_stop(it);
+        }
+        *status = TA_RUN_ERROR;
+        return result;
+    }
+}
+
+ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_actor_resume_params *params) {
     ta_run_status *status = params->status;
-    if (actor->finished) {
+    if (actor->finished && (actor->sparse == NULL || actor->sparse->paused == NULL)) {
         *status = TA_RUN_DONE;
         return TA_OK;
     }
     ta_interpreter interpreter;
     ta_interpreter *it = &interpreter;
-    ta_result result = ta_interpreter_init(it, system, actor);
-    if (result == TA_OK && !actor->bootstrapped) {
-        result = ta_bootstrap(it);
-    }
-    it->pausable = true;
-    it->action_budget = params->action_budget;
-    if (result == TA_OK && it->at.phase != TA_MICRO_NONE) {
-        /* Continue the microstep a pause inside executable content left. The
-         * actor changes again, so an image taken while paused is stale. */
-        ta_actor_touch(actor);
-        bool took_event = it->at.took_event;
-        result = ta_run_microstep(it);
-        if (result == TA_EXEC_PAUSED) {
-            *status = TA_RUN_PAUSED;
-            return TA_OK;
-        }
-        if (result == TA_ERR_NOMEM && took_event) {
-            ta_unbind_event(actor);
-        }
-    }
-    while (result == TA_OK && !actor->finished) {
-        if (it->steps >= params->budget) {
-            *status = TA_RUN_PAUSED;
-            return TA_OK;
-        }
-        result = ta_select_transitions(it, NULL);
-        if (result != TA_OK) {
-            break;
-        }
-        if (it->enabled_count != 0) {
-            result = ta_run_microstep(it);
-            if (result == TA_EXEC_PAUSED) {
-                *status = TA_RUN_PAUSED;
-                return TA_OK;
-            }
-            continue;
-        }
-        if (ta_interpreter_internal_pending(actor)) {
-            ta_bind_event(actor, TA_BOUND_INTERNAL);
-        } else if ((result = ta_invoke_start_pending(it)) != TA_OK) {
-            break; /* Invoke: the macrostep ended, so start its states' invocations. */
-        } else if (ta_interpreter_internal_pending(actor)) {
-            continue;
-        } else if (actor->event_block != NULL && actor->event_block->slots.external == TA_EXTERNAL_WAITING) {
-            /* It stays in its slot, where inspection reports it, until the
-             * macrostep ends. */
-            ta_bind_event(actor, TA_BOUND_EXTERNAL);
-            /* Invoke: <finalize> and autoforwarding. */
-            result = ta_invoke_before_external(it);
-            if (result != TA_OK) {
-                break;
-            }
-        } else {
-            ta_compact_sparse(it);
-            ta_end_macrostep_events(actor);
-            actor->macrostep = false;
-            actor->record.residency = TA_ACTOR_IDLE;
-            *status = TA_RUN_STABLE;
-            return TA_OK;
-        }
-        /* A copy: an error.execution a guard raises can grow the queue,
-         * which moves a bound queue head. */
-        ta_event taken = *ta_actor_bound_event(actor);
-        result = ta_select_transitions(it, &taken);
-        if (result == TA_OK && it->enabled_count != 0) {
-            it->at.took_event = true;
-            result = ta_run_microstep(it);
-            if (result == TA_EXEC_PAUSED) {
-                *status = TA_RUN_PAUSED;
-                return TA_OK;
-            }
-            if (result == TA_ERR_NOMEM) {
-                ta_unbind_event(actor);
-            }
-        } else {
-            it->steps += 1u;
-        }
+    ta_result result = ta_reserve_stop(system, actor);
+    if (result == TA_OK) {
+        result = ta_interpreter_init(it, system, actor);
     }
     if (result != TA_OK) {
         *status = TA_RUN_ERROR;
         return result;
     }
-    result = ta_finish(it);
-    *status = result == TA_OK ? TA_RUN_DONE : TA_RUN_ERROR;
-    return result;
-}
-
-ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_actor_resume_params *params) {
-    ta_result result = ta_interpreter_run(system, actor, params);
+    it->pausable = true;
+    it->action_budget = params->action_budget;
+    if (it->at.phase != TA_PHASE_NONE) {
+        /* Continuing a stopped run changes the actor again, so an image
+         * taken while it was stopped no longer describes it. */
+        ta_actor_touch(actor);
+    }
+    result = ta_run(it, params->budget, status);
     /* The live set lives in scratch memory; between calls In() derives from the configuration. */
     actor->live_active = NULL;
-    /* An empty queue goes back; queued events or a paused microstep keep it. */
+    if (it->resumed != NULL) {
+        ta_continuation_recycle(system, it->resumed);
+    }
+    /* An empty queue goes back; queued events or a stopped run keep it. */
     ta_block_settle(system, actor);
     return result;
 }
@@ -2612,9 +3031,9 @@ static void ta_exit_open(ta_system *system, ta_vec *frames, ta_actor_id id) {
     ta_arena previous = system->scratch;
     system->scratch = frame.arena;
     ta_result result = ta_interpreter_init(&frame.it, system, actor);
-    /* A session paused inside a microstep exits its live set; the rest of
-     * the pause is dropped (ADR 0061 section 6). */
-    ta_pause_drop(&frame.it);
+    /* A session stopped inside a microstep exits its live set; the rest of
+     * the stop is dropped (ADR 0061 section 6). */
+    ta_stop_drop(&frame.it);
     frame.arena = system->scratch;
     frame.next = actor->definition->state_count;
     if (result == TA_OK) {
@@ -2670,6 +3089,9 @@ static void ta_exit_step(ta_system *system, ta_vec *frames) {
     ta_result result = ta_run_handlers(it, ta_state(it, state)->onexit_handlers);
     frame->arena = system->scratch;
     if (result != TA_OK) {
+        /* Nothing continues an exit: a block that ran out of memory left its
+         * frames open for a stop, and they are dropped. */
+        ta_stop_drop(it);
         ta_bits_put(it->active, state, false);
         frame->next = 0; /* exitInterpreter stops at a failure, as it did */
         return;
@@ -2713,8 +3135,8 @@ ta_result ta_interpreter_execution_error(ta_interpreter *it, ta_fault *fault) {
     return result == TA_EXEC_FAILED ? TA_OK : result;
 }
 
-ta_result ta_interpreter_run_actions(ta_interpreter *it, ta_span32 block) {
-    return ta_run_block_isolated(it, block);
+ta_result ta_interpreter_queue_room(ta_system *system, ta_actor *actor) {
+    return ta_queue_room(system, actor);
 }
 
 bool ta_interpreter_internal_pending(const ta_actor *actor) {

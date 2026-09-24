@@ -321,14 +321,6 @@ struct ta_definition {
      * no <if> or <foreach> in them, 0 for a chart with no blocks at all.
      * Sizes the executor's frames (ADR 0060). */
     uint32_t max_action_depth;
-    /*
-     * Whether a microstep of this chart can need the actor's sparse state: it
-     * has a <send> (a refused or delayed send is kept there), an <invoke>, or
-     * a top-level final state (its completion is kept there). Such a chart's
-     * sparse state is made before the microstep is visible (ADR 0047), with
-     * its internal queue (ADR 0064); any other chart's actors need none.
-     */
-    bool microstep_needs_sparse;
     ta_transition_def *transitions;
     uint32_t transition_count;
     ta_initial_transition_def *initial_transitions;

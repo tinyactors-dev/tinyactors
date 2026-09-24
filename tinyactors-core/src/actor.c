@@ -99,6 +99,14 @@ ta_result ta_actor_schedule_send(ta_system *system, ta_actor *actor, const ta_de
     return ta_timer_schedule(&system->timers, &sparse->timers, send);
 }
 
+ta_result ta_actor_reserve_send(ta_system *system, ta_actor *actor) {
+    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
+    if (sparse == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    return ta_timer_reserve(&system->timers, &sparse->timers, 1u);
+}
+
 ta_result ta_actor_timer_home(ta_system *system, ta_actor_id owner, ta_timer_list **out) {
     ta_actor *actor = ta_actor_lookup(system, owner);
     if (actor == NULL) {
@@ -868,7 +876,8 @@ ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_inspectio
         .published = actor->published,
         .active_state_count = active,
         .macrostep_in_progress = actor->macrostep,
-        .microstep_in_progress = actor->sparse != NULL && actor->sparse->paused != NULL,
+        .microstep_in_progress = actor->sparse != NULL && actor->sparse->paused != NULL &&
+                                 ta_run_phase_in_microstep(actor->sparse->paused->at.phase),
         .current_event = ta_actor_paused_event(actor),
         .allocated_bytes = ta_actor_allocated_bytes(actor),
         .final_state = TA_STATE_NONE,

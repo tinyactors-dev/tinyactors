@@ -9513,8 +9513,14 @@
           "name": "TA_OP_ERROR",
           "value": 1,
           "symbol": "error"
+        },
+        {
+          "name": "TA_OP_NOMEM",
+          "value": 2,
+          "symbol": "nomem"
         }
       ],
+      "doc": "What a data-model, invoker or I/O-processor operation answers. ERROR is the chart's failure: core raises the event SCXML defines for it. NOMEM says the operation could not get memory and changed nothing: core stops the run where it stands, ta_actor_resume() answers TA_ERR_NOMEM, and the operation is called again when the host resumes the actor (ADR 0047, ADR 0070). An operation that may have changed something before it ran out of memory answers ERROR.",
       "layout": {
         "x86_64-unknown-linux-gnu": {
           "size": 4,

@@ -211,6 +211,9 @@ uint32_t ta_actor_waiting_internal(const ta_actor *actor);
 ta_timer_list *ta_actor_timers(const ta_actor *actor);
 /* Stores a delayed send with its owner; takes the send's values on TA_OK. */
 ta_result ta_actor_schedule_send(ta_system *system, ta_actor *actor, const ta_delayed_send *send);
+/* Makes room to store one more delayed send, so that storing it cannot fail
+ * (ADR 0070). */
+ta_result ta_actor_reserve_send(ta_system *system, ta_actor *actor);
 /* The list a send owned by `owner` belongs in: the actor's, or the orphans when it is gone. */
 ta_result ta_actor_timer_home(ta_system *system, ta_actor_id owner, ta_timer_list **out);
 
