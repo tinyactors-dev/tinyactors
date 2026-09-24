@@ -1010,6 +1010,69 @@ static void check_event_allocations(void) {
 }
 
 /* ------------------------------------------------------------------------
+ * Batched delivery (ADR 0069). A delivered event lives in an event block
+ * until its macrostep ends, so a host that delivers a batch before it
+ * resumes the actors holds a block per actor. With the cache sized to the
+ * batch, a warm system makes no allocator call; with the default cache of
+ * 4, every delivery past the fourth takes a new block and frees it again.
+ */
+
+#define DELIVERY_BATCH 256u
+#define DELIVERY_ROUNDS 20u
+
+static void deliver_batch(ta_system *system, const ta_actor_id *actors, ta_event_name_id name) {
+    ta_event event = {.name = name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE};
+    for (unsigned index = 0; index < DELIVERY_BATCH; index += 1u) {
+        require(ta_actor_deliver(system, actors[index], &event) == TA_OK, "delivering an event of the batch");
+    }
+    for (unsigned index = 0; index < DELIVERY_BATCH; index += 1u) {
+        run_to_stable(system, actors[index]);
+    }
+}
+
+/* Allocator calls per delivered event over DELIVERY_ROUNDS go/done rounds. */
+static double batch_allocations(ta_system *system, const ta_actor_id *actors, counting_allocator *counts) {
+    ta_event_name_id go = intern_event(system, (ta_str)STR("go"));
+    ta_event_name_id done = intern_event(system, (ta_str)STR("done"));
+    /* Warm-up: the first round fills the cache as far as it reaches. */
+    deliver_batch(system, actors, go);
+    deliver_batch(system, actors, done);
+    counts->alloc_calls = 0;
+    for (unsigned round = 0; round < DELIVERY_ROUNDS; round += 1u) {
+        deliver_batch(system, actors, go);
+        deliver_batch(system, actors, done);
+    }
+    return (double)counts->alloc_calls / (2.0 * DELIVERY_ROUNDS * DELIVERY_BATCH);
+}
+
+static void check_batched_delivery_allocations(void) {
+    counting_allocator counts = {.backing = tat_libc_allocator()};
+    ta_allocator allocator = {.self = &counts, .v = &COUNTING_VTABLE};
+    ta_system *system = NULL;
+    require(ta_system_create(&(ta_system_config){.allocator = allocator}, &system) == TA_OK, "system creation");
+    ta_definition_id simple = register_revision(system, allocator, &(revision_spec){"batched", "v2", STATES_V2});
+    ta_actor_id actors[DELIVERY_BATCH];
+    for (unsigned index = 0; index < DELIVERY_BATCH; index += 1u) {
+        require(ta_actor_spawn(system, &(ta_actor_spawn_params){.definition = simple, .out = &actors[index]}) == TA_OK,
+                "spawning an actor of the batch");
+        run_to_stable(system, actors[index]);
+    }
+    double small_cache = batch_allocations(system, actors, &counts);
+    require(ta_system_set_event_block_cache(system, DELIVERY_BATCH) == TA_OK, "sizing the block cache");
+    double sized_cache = batch_allocations(system, actors, &counts);
+    size_t cached_bytes = counts.live_bytes;
+    require(ta_system_set_event_block_cache(system, 0) == TA_OK, "emptying the block cache");
+    size_t block_bytes = (cached_bytes - counts.live_bytes) / DELIVERY_BATCH;
+    printf("allocator calls per event delivered in batches of %u: %.2f with the default block cache, %.2f with a "
+           "cache of %u; %zu bytes per cached block\n",
+           DELIVERY_BATCH, small_cache, sized_cache, DELIVERY_BATCH, block_bytes);
+    ta_system_destroy(system);
+    require(counts.live_bytes == 0, "the batched system returned every byte it was given");
+    require(small_cache > 0.9, "a batch larger than the default cache takes a block per delivery (ADR 0069)");
+    require(sized_cache == 0.0, "a batch no larger than the block cache calls the allocator (ADR 0069)");
+}
+
+/* ------------------------------------------------------------------------
  * Events that carry a MESSAGE I/O origin (ADR 0068). Core stores the URI in
  * a pooled record, shared by every copy of the event and returned to the
  * free list with the last: after warm-up a URI of up to 48 bytes costs no
@@ -1239,6 +1302,7 @@ int main(int argc, char **argv) {
         require_flat_pair(POPULATIONS[index - 1], &costs[index - 1], POPULATIONS[index], &costs[index]);
     }
     check_event_allocations();
+    check_batched_delivery_allocations();
     check_kept_delivery_allocations();
     check_io_origin_allocations();
     /* And every population stays inside the budget the target implies. */
