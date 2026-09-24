@@ -1,6 +1,6 @@
 # ADR 0061: A macrostep can pause inside executable content
 
-**Status:** Accepted and implemented; completes ADR 0033, applies ADR 0009, ADR 0038, ADR 0047 and ADR 0060
+**Status:** Accepted and implemented; completes ADR 0033, applies ADR 0009, ADR 0038, ADR 0047 and ADR 0060; section 3 superseded by ADR 0070 (saving a pause cannot fail)
 **Date:** 2026-09-23
 
 ## Context

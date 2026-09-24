@@ -73,3 +73,4 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0067](0067-core-traces-its-decisions-and-data-to-a-host-sink.md) | [Core traces its decisions and data to a host sink](0067-core-traces-its-decisions-and-data-to-a-host-sink.md) |
 | [0068](0068-core-owns-the-io-processor-registry-and-every-origin-can-be-answered.md) | [Core owns the I/O processor registry, and every origin can be answered](0068-core-owns-the-io-processor-registry-and-every-origin-can-be-answered.md) |
 | [0069](0069-an-idle-actor-carries-no-event.md) | [An idle actor carries no event](0069-an-idle-actor-carries-no-event.md) |
+| [0070](0070-a-run-that-runs-out-of-memory-stops-where-it-stands.md) | [A run that runs out of memory stops where it stands](0070-a-run-that-runs-out-of-memory-stops-where-it-stands.md) |
