@@ -698,15 +698,18 @@ What was built (`lib/image.js`, `test/persist.js`):
 
 ### 15. Tracing
 
-Done (ADR 0015, core ADR 0067): `System.setTraceSink(sink, { kinds,
-unsampled })` hands the turn's trace records to JavaScript as one array;
-core's null sink runs without one. `options.traceparent` on `post()`,
-`send()` and `spawn()`; `request.traceparent` for I/O processors and
-invokers. `lib/tracing.js`: `TraceSpans`, `parseTraceparent`,
-`formatTraceparent`, `stepSpanId`, with no telemetry dependency.
-`tools/otlp.js` (tests and `mise run otel-demo` only) exports OTLP/HTTP
-JSON. Tests: `test/tracing.js`, `test/otlp.js`; bench:
-`test/bench/tracing.js`. See `docs/tracing.md`.
+Done (ADR 0015, then ADR 0016; core ADR 0067): `System.setTraceSink(sink,
+{ kinds, unsampled, resource, values, parent, seed })` hands the spans that
+ended in each turn to JavaScript as one OTLP protobuf request, encoded in C
+by the portable `src/otlp.c`; core's null sink runs without one.
+`options.traceparent` on `post()`, `send()` and `spawn()`, and a started
+trace when there is none; `request.traceparent` for I/O processors and
+invokers. `lib/otlp.js`: `decodeTraces`; `lib/tracing.js`:
+`parseTraceparent`, `formatTraceparent`, `stepSpanId`; no telemetry
+dependency. `tools/otlp.js` (tests and `mise run otel-demo` only) posts
+the bytes. Tests: `test/tracing.js`, `test/otlp.js`, `test/otel-sdk.js`
+(the official SDK, a pinned dev dependency), `test/native/otlp_test.c`;
+bench: `test/bench/tracing.js`. See `docs/tracing.md`.
 
 ## Open follow-ups
 
@@ -753,9 +756,12 @@ needs a core change):
 - ~~an xstate baseline next to the plain-object one in `scale.js`~~: done.
   `SCALE_BASELINES=xstate,object` runs it; `docs/scale.md` has the numbers.
 
-**Tracing** (ADR 0015 open points):
-- building JavaScript objects is most of what tracing costs; a columnar
-  batch would be cheaper.
+**Tracing** (ADR 0016 open points):
+- events handed back by services start no trace; carrying
+  `request.traceparent` back on the reply would join them;
+- the encoder runs at 0.62M events/s against the prototype's 0.83M;
+  pre-encoded keys and optional attribute sets would narrow it;
+- open spans are a linear array, and the name cache never evicts.
 
 **Later:**
 - port the tinyactors-test scenario suite to run against the addon;

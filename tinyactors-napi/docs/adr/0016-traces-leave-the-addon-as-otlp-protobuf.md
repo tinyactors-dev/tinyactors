@@ -1,6 +1,6 @@
 # ADR 0016: Traces leave the addon as OTLP protobuf
 
-**Status:** Accepted; not yet implemented. Supersedes ADR 0015 points 1 and 3, and relaxes one constraint the user set for ADR 0015 (see "Constraints"). Revised while Proposed, 2026-09-24: the encoder is written against core's public header and a small host interface, so any host can link it (point 3); trace IDs come from that interface (point 4); a section on using the official OpenTelemetry SDK; lifecycle span IDs (point 2). Research: [`docs/research/trace-handoff-formats.md`](../../../docs/research/trace-handoff-formats.md).
+**Status:** Accepted and implemented. See the implementation notes for where the code differs from the text. Supersedes ADR 0015 points 1 and 3, and relaxes one constraint the user set for ADR 0015 (see "Constraints"). Revised while Proposed, 2026-09-24: the encoder is written against core's public header and a small host interface, so any host can link it (point 3); trace IDs come from that interface (point 4); a section on using the official OpenTelemetry SDK; lifecycle span IDs (point 2). Research: [`docs/research/trace-handoff-formats.md`](../../../docs/research/trace-handoff-formats.md).
 **Date:** 2026-09-24
 
 ## Context
@@ -255,3 +255,114 @@ is noticed. `package.json`'s runtime `dependencies` stay empty.
   records of one session get different span IDs, including across an
   image.
 - **By hand:** `mise run otel-demo` shows the demo in otel-tui.
+
+## Implementation notes
+
+Implemented in `b1fcac5` (core: lifecycle keys), `7effa89` (the encoder),
+`2ca32f7` (the hook, `decodeTraces`, the tools) and `ee14770` (the SDK
+example and docs).
+
+### The mapping (point 2)
+
+| Record | OTLP |
+|---|---|
+| `MACROSTEP_BEGIN` | opens span `scxml.macrostep <event>` (`bootstrap` for macrostep 1 with no event, `(no event)` otherwise); ID = step key (session, macrostep, 0); parent = the cause's span, or a link with `parent: "link"` |
+| `MICROSTEP` | ends the open microstep and opens child span `scxml.microstep <event>` or `(eventless)`; ID = (session, macrostep, microstep) |
+| `MACROSTEP_END` | adds `scxml.state` and `scxml.state.id` (the configuration) and ends the macrostep and its open microstep |
+| `SPAWNED`, `LOADED`, `UNLOADED`, `FINISHED`, `DESTROYED` | span `scxml.<kind>` of no duration; ID = the lifecycle key (session, 0, n); parent = its cause |
+| every other kind | span event `scxml.<name>` on the open microstep when the record's microstep is that one, else on the macrostep. Names: `condition`, `raise`, `data`, `assign`, `script`, `foreach`, `error` (ACTION_FAILED), `send`, `cancel`, `invoke`, `invoke.cancel`, `paused`, `resumed`, `stopped` |
+
+Span attributes: `scxml.session_id` (decimal text), `scxml.macrostep`,
+`scxml.actor` (`slot:generation`), `scxml.definition`, `scxml.time`
+(logical time); on a macrostep also the event attributes below,
+`scxml.cause.session_id`/`.macrostep`/`.microstep` and
+`scxml.trace.flags`; on a microstep also `scxml.microstep`,
+`scxml.transition` (labels) and `scxml.transition.id`, and
+`scxml.state.exited`/`.entered`/`.history` with their `.id` twins.
+
+Event attributes: `scxml.position`, `scxml.state` (+ `.id`),
+`scxml.transition` (+ `.id`), `scxml.action` (+ `.id`), `scxml.iteration`,
+`scxml.microstep`, `scxml.time`, `scxml.expression.id`, `scxml.result`,
+`scxml.data.name`, `scxml.send_id`, `scxml.invoke_id`,
+`scxml.fault.code`, `scxml.fault.detail`, `scxml.value` (with `values`),
+`scxml.final_state`, the cause attributes, and the event's
+`scxml.event.name`, `.type`, `.sendid`, `.invokeid`, `.data` (with
+`values`). A record with a fault, and ACTION_FAILED, sets its span's status
+to error. A span still open when its session unloads or is destroyed, or
+when the sink is replaced, ends with `scxml.incomplete: true`; a record
+for a macrostep whose BEGIN the encoder never saw opens
+`scxml.macrostep (continued)` with `scxml.continued: true`, so no record
+is dropped.
+
+### Where the code differs from the text
+
+- **Lifecycle keys (point 2).** Core gives every lifecycle record the key
+  (session, 0, n), where n counts the session's lifecycle records from 1
+  and is kept in the session image. FINISHED is a lifecycle record too
+  (it had the key of the microstep that finished, which collided with
+  that microstep's span); it names that step as its cause. Restoring an
+  image skips the ordinal the UNLOADED written after the capture takes.
+  Core's ADR 0067 has a status-line pointer. Session images are in-memory
+  handles, so there was no serialized format version to change. The
+  counter sits in padding: `ta_actor` stays 232 bytes.
+- **The host interface (point 3)** is a clock, a trace-ID source and
+  optional value text. Names are not a host call: the encoder reads them
+  through core's public lookups directly (ADR 0071), which every host has.
+- **Values (point 6)** are rendered when the record is written, inside
+  the core call, by `JSON.stringify` through the host interface, not at
+  the end of the turn: the record's value is borrowed only for the call,
+  and keeping it would mean retaining every value until the turn ends.
+- **Names are cached per definition** for transitions and actions, in the
+  encoder's own table; state names are core's stored text and need no
+  cache. Constant attribute keys are copied from literals rather than
+  encoded in advance; sizes are computed before every write.
+- **Trace IDs (point 4)** are started for `post`, `send` and `spawn`
+  without a traceparent (the OS's random bytes, `arc4random_buf` or
+  `getrandom`; SplitMix64 from `seed`). Events a JavaScript service or
+  I/O processor hands back arrive without a context; their spans get a
+  fresh trace ID from the encoder (see open points).
+- **`setTraceSink`** returns the bytes of the spans it ended to the
+  previous JavaScript sink; the native method returns them to `lib/`.
+- **`decodeTraces`** returns each span with its `resource` and `scope`
+  (shared objects), and times both as milliseconds and as nanosecond
+  bigints.
+- **The demo** posts the host's own `POST /orders` span as one OTLP JSON
+  request beside the protobuf, as an HTTP handler with its own exporter
+  would.
+
+### Numbers
+
+`test/bench/tracing.js`, 100,000 actors, every record kind unless said
+(Node 26.10 / Bun 1.4.1, medians):
+
+| | Node | Bun |
+|---|---|---|
+| Untraced | 2.26–2.31M events/s | 2.79M |
+| Macrostep records only | 0.99–1.02M | 1.09M |
+| **Every record, OTLP bytes (this ADR)** | **0.62M** | **0.62M** |
+| Every record, then `decodeTraces` of each batch | 0.11M | 0.10M |
+| Before: record objects (ADR 0015) | 0.19M | |
+| Before: objects mapped to spans | 0.13M | |
+| Prototype encoder (research note) | 0.83M | |
+
+That is 3.3 times the object hand-off and 4.8 times the path that ended in
+spans. OTLP bytes per event: 1110 (the prototype's 458 had fewer
+attributes; the mapping is lossless now). Core bytes per idle actor: 281
+untraced, 283 with a sink.
+
+### Open points
+
+1. **Events handed back by services start no trace.** An invoker's or
+   I/O processor's reply carries no trace context, so its macrostep's
+   spans get a fresh trace ID from the encoder, unconnected to the
+   request that caused the call. Carrying `request.traceparent` back on
+   the reply would join them.
+2. **Throughput below the prototype.** 0.62M against 0.83M, for 2.4 times
+   the bytes. Pre-encoding constant keys, and optional attribute sets (the
+   `.id` twins, the logical time) would narrow it.
+3. **Open spans are a linear array**, searched from the end. That is
+   fast while few macrosteps are open across turns; very many paused
+   actors would make it slow, and would want a map.
+4. **The name cache never evicts.** Definition IDs are generational, so a
+   freed definition's entries are never wrong, only kept.
+

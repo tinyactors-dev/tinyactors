@@ -1,6 +1,6 @@
 # ADR 0015: Tracing is a hook that hands JavaScript plain records
 
-**Status:** Accepted and implemented; serves core ADR 0067. Open point 2 (naming IDs) is addressed by core ADR 0071: `TraceSpans` takes the system and labels transitions and actions.
+**Status:** Accepted and implemented; serves core ADR 0067. Open point 2 (naming IDs) is addressed by core ADR 0071: `TraceSpans` takes the system and labels transitions and actions. Points 1 and 3 superseded by ADR 0016: the hook hands JavaScript OTLP protobuf bytes, and `TraceSpans` is removed (its open point 1, the cost of objects, is what ADR 0016 answers).
 **Date:** 2026-09-24
 
 ## Context
