@@ -1,6 +1,6 @@
 # ADR 0071: Transitions, actions and expressions are inspectable by ID
 
-**Status:** Accepted; not yet implemented. Refines ADR 0042 and ADR 0049; serves ADR 0067 (closes its open point 4).
+**Status:** Accepted and implemented; refines ADR 0042 and ADR 0049; serves ADR 0067 (closes its open point 4). See the implementation notes for where the code differs from the text.
 **Date:** 2026-09-24
 
 ## Context
@@ -166,3 +166,59 @@ chooses its format; the OTEL attribute names stay those of ADR 0067.
   scenarios resolves through the lookups.
 - **Hosts:** napi returns the function for a host expression and the text
   for a source expression, on Node and Bun.
+
+## Implementation notes
+
+Where the code differs from the decision above:
+
+- **Initial transitions are numbered after the `<transition>` elements.**
+  IDs `0 .. n-1` are the `<transition>` elements, and the initial
+  transitions of compound states and of the document follow them, so one
+  walk covers both. `transition_count` in inspection counts both. Trace
+  records never name an initial transition: the bootstrap's `MICROSTEP`
+  lists none, and an `<initial>`'s content runs while entering. So the
+  numbering is new rather than an existing one made public. The
+  interpreter's private marker for the bootstrap microstep was called
+  `TA_TRANSITION_BOOTSTRAP`, which clashed with the public origin, and is
+  now `TA_ENABLED_BOOTSTRAP`.
+- **`ta_transition_info` gains `default_targets`.** A compound state with
+  no `<initial>` and no `initial` attribute still has an initial
+  transition, to SCXML's default (its first child). The flag says so; the
+  export writes nothing for such a transition when it has no content.
+- **`branch` became `block_index`.** The spec has no `<elseif>`: the codec
+  lowers it to an `<if>` in the `<else>` block, so an `<if>` has exactly
+  one THEN block and `branch` would always be 0. What does need an index
+  is which of a state's `<onentry>` or `<onexit>` elements an action is
+  in (SCXML runs each as its own block), and which `<invoke>` a
+  `<finalize>` belongs to. `block_index` carries that, and is 0 for every
+  other block.
+- **`ta_definition_content()` joined the family.** It landed on `main` at
+  the same time (a custom I/O processor reads a literal send target by
+  content ID), with two outputs, `media_type` and `out`. It now writes one
+  view, `ta_content_info { media_type, bytes }`, like the other lookups,
+  and inspection gains `content_count`. Its callers in napi's `lib/` and
+  in the test host moved with it.
+- **Cost.** The action table is 16 bytes per action in the definition's
+  arena. `definition_bytes` counts arena blocks, and for the charts
+  measured the table fit in blocks the definition already had:
+
+  | Chart | Actions | `definition_bytes` before | after |
+  |---|---|---|---|
+  | `traffic_light` | 7 | 4136 | 4136 |
+  | `counter_v2` | 3 | 4136 | 4136 |
+  | `trace_basic` | 3 | 4136 | 4136 |
+  | `oom_raises_jq` | 14 | 4136 | 4136 |
+  | `oom_invokes_jq` | 14 | 8272 | 8272 |
+  | `oom_phases_jq` | 69 | 9151 | 9151 |
+
+  A definition with many actions pays up to 16 bytes each; nothing is
+  per actor.
+- **Tests.** `inspection_test` covers a chart with every kind of block, a
+  host expression, and unknown, stale and missing-output cases. The export
+  round-trip check (`tinyactors-test/ruby/export_roundtrip_check.rb`)
+  compares the lookups with the export for all 263 charts of the
+  catalogue: each transition as a tuple, each initial transition, and each
+  action as the path of its place in the exported tree. A scenario's
+  teardown looks up every state, transition, action and expression ID in
+  every trace record it recorded, and fails if one does not resolve or if
+  a record names an initial transition.
