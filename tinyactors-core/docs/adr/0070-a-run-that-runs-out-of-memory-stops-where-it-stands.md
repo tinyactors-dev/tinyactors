@@ -1,6 +1,6 @@
 # ADR 0070: A run that runs out of memory stops where it stands
 
-**Status:** Accepted and implemented; refines ADR 0047, ADR 0061 (section 3 superseded: saving a pause cannot fail) and ADR 0069 (its open point on transition selection is closed). Adds `TA_OP_NOMEM` to the plugin contract. See the implementation notes.
+**Status:** Accepted and implemented; refines ADR 0047, ADR 0061 (section 3 superseded: saving a pause cannot fail) and ADR 0069 (its open point on transition selection is closed). Adds `TA_OP_NOMEM` to the plugin contract. See the implementation notes. Open point 7 fixed in napi by 9ff6637 (a failed rendering throws and fails the call as `error.execution`; open point 1 remains).
 **Date:** 2026-09-24
 
 ## Context
@@ -232,10 +232,7 @@ an immediate send the router refused can do.
    undefined.** `tna_host_io_text` in `tinyactors-napi/src/napi_datamodel.c`
    treats any result other than `TA_OK` from `ta_dm_host_text` as "no
    value", as the jq test adapter did before this change. It has the same
-   problem as open point 1 and was left for the napi work. **Fixed**
-   (2026-09-24): the getter throws `out-of-memory` and the call fails as
-   `error.execution`, even when the chart's code catches the exception, as
-   in the test host's ECMAScript data model. What remains is open point 1.
+   problem as open point 1 and was left for the napi work.
 8. **Reentrant resume is not supported.** The spare is per system, as the
    scratch arena is: a plugin that resumes another actor from inside a
    callback would take it.
