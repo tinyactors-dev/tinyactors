@@ -755,9 +755,7 @@ needs a core change):
 
 **Tracing** (ADR 0015 open points):
 - building JavaScript objects is most of what tracing costs; a columnar
-  batch would be cheaper;
-- a `<send>` with no data to a JavaScript I/O processor fails with
-  error.execution (`unsupported`), which predates tracing.
+  batch would be cheaper.
 
 **Later:**
 - port the tinyactors-test scenario suite to run against the addon;

@@ -519,7 +519,7 @@ class System {
       macrostepInProgress: view.macrostep_in_progress,
       internalEventCount: view.internal_events.length,
       delayedSendCount: view.delayed_sends.length,
-      delayedSends: view.delayed_sends.map((send) => this.#delayedSend(send)),
+      delayedSends: view.delayed_sends.map((send) => this.#delayedSend(view.definition_id, send)),
       scheduling: this.#native.scheduling(slot, generation),
       // The top-level final it reached, or null (core ADR 0056).
       finalState: view.final_state === NO_STATE ? null : stateName(view.final_state),
@@ -538,7 +538,8 @@ class System {
   }
 
   // One pending delayed send, from core's ta_delayed_send_info (core ADR 0054).
-  #delayedSend(send) {
+  // A literal target is text in the owner's definition, named by content ID.
+  #delayedSend(definitionId, send) {
     let id = null;
     try {
       id = core.send_id_format(this.#native, send.send_id);
@@ -553,7 +554,9 @@ class System {
       event: this.#events.name(send.event),
       ioType: core.system_atom_text(this.#native, send.io_type),
       destination: this.#destination(send.destination),
-      target: send.target,
+      target: send.has_target_text
+        ? new TextDecoder().decode(core.definition_content(this.#native, definitionId, send.target_text).out)
+        : send.target,
       data: send.data,
       submitted: send.submitted,
     };

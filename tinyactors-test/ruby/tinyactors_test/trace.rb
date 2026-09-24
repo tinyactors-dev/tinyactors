@@ -126,7 +126,7 @@ module TinyactorsTest
     def delayed_sends(inspection)
       Array(inspection[:delayed_sends]).map do |send|
         { due: send[:due], event: @context.event_text(send[:event]), send_id: send[:send_id],
-          target: send[:target], data: send[:data] }
+          target: @context.send_target(inspection[:definition_id], send), data: send[:data] }
       end
     end
 

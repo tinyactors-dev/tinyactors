@@ -42,6 +42,13 @@ typedef struct {
     bool has_content;
     ta_content_id content;
     /*
+     * A send to a host I/O processor with a literal `target`: its content ID
+     * in the owner's definition, for the same reason. `target` is then
+     * absent. Public, in ta_delayed_send_info, so inspection can name it.
+     */
+    bool has_target_text;
+    ta_content_id target_text;
+    /*
      * Already sent: the router accepted nothing and the send waits here to be
      * offered again. <cancel> and session termination leave it in place.
      */

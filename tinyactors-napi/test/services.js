@@ -96,6 +96,61 @@ async function ioCompletes() {
   system.close();
 }
 
+// A literal target is the text the chart wrote. It reaches the processor as
+// that string, without the data model: a chart that only sends compiles
+// against core's null data model, which has no values, and a target that
+// reads as JSON stays text. A send with no data has data undefined, and one
+// with only params gets them as an object.
+async function ioLiteralTarget() {
+  const requests = [];
+  const system = createSystem({ io: { ws: { send(request) { requests.push(request); } } } });
+  const plain = system.define(
+    statechart({ family: 'plain-sender', revision: 'v1' })
+      .state('idle', (s) => {
+        s.on('go', (t) => t.send('ping', (send) => send.via('ws').to('client-7')));
+        s.on('later', (t) => t.send('tick', (send) => send.via('ws').to('client-8').after(5)));
+        s.on('park', (t) => t.send('parked', (send) => send.via('ws').to('client-9').after(60_000)));
+        s.on('error.execution', (t) => t.target('failed'));
+      })
+      .state('failed'),
+  );
+  assert.equal(plain.inspect().datamodel, 'null', 'a chart that only sends needs no data model');
+  const sender = system.spawn(plain);
+  await system.flush();
+  sender.post('go');
+  await system.flush();
+  assert.deepEqual(sender.inspect().activeStates, ['idle'], 'the send did not fail');
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].target, 'client-7');
+  assert.equal(requests[0].data, undefined);
+  sender.post('later');
+  await until(system, () => requests.length === 2, 'the delayed send');
+  assert.equal(requests[1].target, 'client-8', 'a delayed send keeps its literal target');
+  sender.post('park');
+  await system.flush();
+  assert.deepEqual(
+    sender.inspect().delayedSends.map((send) => send.target),
+    ['client-9'],
+    'inspection reports a pending literal target as its text',
+  );
+
+  const scripted = system.define(
+    statechart({ family: 'param-sender', revision: 'v1' })
+      .state('idle', (s) => {
+        s.on('go', (t) => t.send('call', (send) => send.via('ws').to('42').param('n', () => 1)));
+      }),
+  );
+  assert.equal(scripted.inspect().datamodel, 'javascript');
+  const other = system.spawn(scripted);
+  await system.flush();
+  other.post('go');
+  await system.flush();
+  assert.equal(requests.length, 3);
+  assert.equal(requests[2].target, '42', 'a literal target is text, not parsed as JSON');
+  assert.deepEqual(requests[2].data, { n: 1 });
+  system.close();
+}
+
 // A processor that throws, or rejects, fails the send: the sender gets
 // error.communication with { sendId, type, error }.
 async function ioFails() {
@@ -348,7 +403,7 @@ async function steadyState() {
     process.exit(1);
   }, Number(process.env.SERVICES_TIMEOUT_MS ?? 60_000));
   for (const test of [
-    logSink, ioCompletes, ioFails, delayedCustomSend, javascriptInvoker, unavailableInvoker, scxmlInvoker, scxmlCancel,
+    logSink, ioCompletes, ioLiteralTarget, ioFails, delayedCustomSend, javascriptInvoker, unavailableInvoker, scxmlInvoker, scxmlCancel,
     closeCancels, steadyState,
   ]) {
     current = test.name;

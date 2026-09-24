@@ -1146,6 +1146,16 @@ module TinyactorsTest
                                 ta.event.name_format(system: system_handle, name: id, capacity: 1024)).fetch(:buffer)
     end
 
+    # A pending delayed send's target, from its ta_delayed_send_info: a literal
+    # target is text in the owner's definition, named by content ID.
+    def send_target(definition, send)
+      return send[:target] unless send[:has_target_text]
+
+      core('ta_definition_content',
+           ta.definition.content(system: system_handle, definition: definition, content: send[:target_text]))
+        .fetch(:out)
+    end
+
     # Interns one atom of the system.
     def atom(text)
       core('ta_system_intern_atom', ta.system.intern_atom(system: system_handle, text: text.to_s)).fetch(:out)

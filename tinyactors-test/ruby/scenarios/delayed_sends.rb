@@ -89,7 +89,9 @@ TinyactorsTest.scenarios 'delayed sends at their owner' do
                  'a send through the SCXML processor names the actor it resolved to')
     custom = to_io.inspect_actor[:delayed_sends].first
     assert_equal 20_000, custom[:due]
-    assert_equal 'elsewhere', custom[:target], 'a custom processor keeps the target it was given'
+    assert_equal 'elsewhere', send_target(to_io.inspect_actor[:definition_id], custom),
+                 'a custom processor keeps the literal target the chart wrote'
+    assert_equal nil, custom[:target], 'a literal target is text, not a value of the data model'
     assert_equal({ kind: 'runtime', runtime: 0 }, custom[:destination],
                  'a custom processor resolves no destination: the field is zero, which names no actor')
   end

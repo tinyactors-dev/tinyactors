@@ -754,17 +754,21 @@ TA_API ta_result ta_dm_host_state_name(const ta_dm_host *host,
 
 
 /*
- * One send to a host I/O processor. `data` is the evaluated `<content expr>`,
- * namelist or <param>s; `content` is a literal <content>, delivered as the
- * bytes the chart holds and not imported into the data model (ADR 0053).
+ * One send to a host I/O processor. `target` is the evaluated `targetexpr`;
+ * `target_text` is a literal `target`, the text the chart wrote, which is
+ * never imported into the data model, so a chart on the null data model can
+ * name one. At most one of them is present. `data` is the evaluated
+ * `<content expr>`, namelist or <param>s; `content` is a literal <content>,
+ * delivered as the bytes the chart holds and not imported into the data
+ * model (ADR 0053).
  * `content_type` is the literal's media type, empty when nothing said. At
  * most one of `data` and `content` is present. `trace` is the sending
  * macrostep's context and the key of the step that sent it (ADR 0067), for
  * the processor to carry, as a `traceparent` header for example. Everything
  * is borrowed for the call.
  */
-typedef struct { ta_actor_ref source; ta_send_id send_id; ta_event_name_id event; ta_atom io_type; ta_value target; ta_value data;
-                 ta_str content_type; ta_bytes content; ta_trace_parent trace; } ta_send;
+typedef struct { ta_actor_ref source; ta_send_id send_id; ta_event_name_id event; ta_atom io_type; ta_value target;
+                 ta_str target_text; ta_value data; ta_str content_type; ta_bytes content; ta_trace_parent trace; } ta_send;
 /*
  * What an I/O processor renders (ADR 0068): the URI of one of its COMPUTED
  * origins, or this session's location through it (`_ioprocessors`).
@@ -2302,7 +2306,10 @@ TA_API ta_result ta_actor_destroy(ta_system *system, ta_actor_id actor);
 /*
  * One pending delayed send owned by an actor (ADR 0054). `destination` is the
  * resolved target for the built-in SCXML processor; custom processors
- * receive `target` and leave `destination` unused. `submitted` means the
+ * receive `target`, or a literal target's text, and leave `destination`
+ * unused. `has_target_text` means the target is literal: `target` is absent,
+ * and `target_text` names the text in the owner's definition, which
+ * ta_definition_content() reads. `submitted` means the
  * router refused the send once and it waits to be offered again (ADR 0026,
  * ADR 0040).
  * Everything is borrowed; retain `target` and `data` with ta_value_retain()
@@ -2317,6 +2324,8 @@ typedef struct {
     ta_value target;
     ta_value data;
     bool submitted;
+    bool has_target_text;
+    ta_content_id target_text;
 } ta_delayed_send_info;
 
 /*
@@ -2503,6 +2512,23 @@ typedef struct {
     ta_str id;
     TA_OUT ta_state_id *out;
 } ta_definition_find_state_params;
+
+typedef struct {
+    ta_definition_id definition;
+    ta_content_id content;
+    /* The media type the chart gave, empty when it gave none. */
+    TA_OUT TA_LIFETIME(definition) ta_str *media_type;
+    TA_OUT TA_LIFETIME(definition) ta_bytes *out;
+} ta_definition_content_params;
+
+/*
+ * The bytes of a definition's literal content: a <content> body or a literal
+ * send target, as the chart holds them (ADR 0053). Inspection names content
+ * by ID, as ta_delayed_send_info.target_text does. TA_ERR_NOT_FOUND for a
+ * definition or content ID that does not exist.
+ */
+TA_API ta_result ta_definition_content(const ta_system *system,
+                                       TA_IN const ta_definition_content_params *params);
 
 /*
  * The state of a definition with this author ID: the inverse of

@@ -24,6 +24,7 @@ static ta_op_status tna_io_send(void *self, const ta_send *send, ta_fault *fault
         .type = send->io_type,
         .value = send->data,
         .target = send->target,
+        .target_text = send->target_text,
         .content_type = send->content_type,
         .content = send->content,
         .trace = send->trace,

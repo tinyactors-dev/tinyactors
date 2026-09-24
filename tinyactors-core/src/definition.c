@@ -1,4 +1,5 @@
 #include "definition.h"
+#include "interpreter.h"
 #include "system.h"
 
 void ta_definition_destroy(ta_definition *definition) {
@@ -133,6 +134,18 @@ ta_result ta_definition_state(const ta_system *system, const ta_definition_state
         .parent = state->parent,
         .kind = state->kind,
     };
+    return TA_OK;
+}
+
+ta_result ta_definition_content(const ta_system *system, const ta_definition_content_params *params) {
+    if (system == NULL || params == NULL || params->media_type == NULL || params->out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_definition *definition = ta_definition_lookup(system, params->definition);
+    if (definition == NULL || params->content >= definition->content_count) {
+        return TA_ERR_NOT_FOUND;
+    }
+    ta_interpreter_literal_content(definition, params->content, params->media_type, params->out);
     return TA_OK;
 }
 

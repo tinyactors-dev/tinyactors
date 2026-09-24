@@ -45,15 +45,19 @@ bool tna_effects_push(tna_effects *effects, const tna_effect *effect) {
         const uint8_t *label = NULL;
         const uint8_t *content_type = NULL;
         const uint8_t *content = NULL;
+        const uint8_t *target_text = NULL;
         bool copied =
             tna_copy_bytes(effects->arena, (const uint8_t *)effect->label.ptr, effect->label.len, &label) &&
             tna_copy_bytes(effects->arena, (const uint8_t *)effect->content_type.ptr, effect->content_type.len,
                            &content_type) &&
-            tna_copy_bytes(effects->arena, effect->content.ptr, effect->content.len, &content);
+            tna_copy_bytes(effects->arena, effect->content.ptr, effect->content.len, &content) &&
+            tna_copy_bytes(effects->arena, (const uint8_t *)effect->target_text.ptr, effect->target_text.len,
+                           &target_text);
         if (copied) {
             copy->label.ptr = (const char *)label;
             copy->content_type.ptr = (const char *)content_type;
             copy->content.ptr = content;
+            copy->target_text.ptr = (const char *)target_text;
             if (effects->last != NULL) {
                 effects->last->next = copy;
             } else {

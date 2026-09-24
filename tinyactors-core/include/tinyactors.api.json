@@ -6335,6 +6335,70 @@
         }
       }
     },
+    "ta_definition_content_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "definition",
+          "type": {
+            "type": "ta_definition_id"
+          }
+        },
+        {
+          "name": "content",
+          "type": {
+            "type": "ta_content_id"
+          }
+        },
+        {
+          "name": "media_type",
+          "type": {
+            "pointer": {
+              "type": "ta_str"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "definition",
+          "doc": "The media type the chart gave, empty when it gave none."
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_bytes"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "definition"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "definition": 0,
+            "content": 8,
+            "media_type": 16,
+            "out": 24
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "definition": 0,
+            "content": 8,
+            "media_type": 12,
+            "out": 16
+          }
+        }
+      }
+    },
     "ta_definition_encode_params": {
       "kind": "struct",
       "doc": "Writes a registered definition in `codec`'s syntax: ta_definition_export() followed by the codec's `encode` (ADR 0053 section 4). `identity`, when asked for, is the definition's explicit identity, which no chart syntax carries, or null when the definition was fingerprinted: feed it back as ta_definition_import()'s `identity` and the import has the same revision. A retired definition encodes until it is freed, as it exports.\n\nTA_ERR_UNSUPPORTED when the codec cannot encode (its `encode` is null). TA_ERR_NOT_FOUND when no definition has the ID. TA_ERR_INVALID with `error` from the codec, for example TA_CHART_ERROR_UNREPRESENTABLE.",
@@ -6908,7 +6972,7 @@
     },
     "ta_delayed_send_info": {
       "kind": "struct",
-      "doc": "One pending delayed send owned by an actor (ADR 0054). `destination` is the resolved target for the built-in SCXML processor; custom processors receive `target` and leave `destination` unused. `submitted` means the router refused the send once and it waits to be offered again (ADR 0026, ADR 0040). Everything is borrowed; retain `target` and `data` with ta_value_retain() to keep them past the synchronization window.",
+      "doc": "One pending delayed send owned by an actor (ADR 0054). `destination` is the resolved target for the built-in SCXML processor; custom processors receive `target`, or a literal target's text, and leave `destination` unused. `has_target_text` means the target is literal: `target` is absent, and `target_text` names the text in the owner's definition, which ta_definition_content() reads. `submitted` means the router refused the send once and it waits to be offered again (ADR 0026, ADR 0040). Everything is borrowed; retain `target` and `data` with ta_value_retain() to keep them past the synchronization window.",
       "fields": [
         {
           "name": "send_id",
@@ -6957,6 +7021,18 @@
           "type": {
             "builtin": "bool"
           }
+        },
+        {
+          "name": "has_target_text",
+          "type": {
+            "builtin": "bool"
+          }
+        },
+        {
+          "name": "target_text",
+          "type": {
+            "type": "ta_content_id"
+          }
         }
       ],
       "layout": {
@@ -6971,7 +7047,9 @@
             "destination": 24,
             "target": 40,
             "data": 56,
-            "submitted": 72
+            "submitted": 72,
+            "has_target_text": 73,
+            "target_text": 76
           }
         },
         "wasm32-unknown-unknown": {
@@ -6985,7 +7063,9 @@
             "destination": 24,
             "target": 40,
             "data": 48,
-            "submitted": 56
+            "submitted": 56,
+            "has_target_text": 57,
+            "target_text": 60
           }
         }
       }
@@ -11831,7 +11911,7 @@
     },
     "ta_send": {
       "kind": "struct",
-      "doc": "One send to a host I/O processor. `data` is the evaluated ` <content expr>`, namelist or <param >s; `content` is a literal <content >, delivered as the bytes the chart holds and not imported into the data model (ADR 0053). `content_type` is the literal's media type, empty when nothing said. At most one of `data` and `content` is present. `trace` is the sending macrostep's context and the key of the step that sent it (ADR 0067), for the processor to carry, as a `traceparent` header for example. Everything is borrowed for the call.",
+      "doc": "One send to a host I/O processor. `target` is the evaluated `targetexpr`; `target_text` is a literal `target`, the text the chart wrote, which is never imported into the data model, so a chart on the null data model can name one. At most one of them is present. `data` is the evaluated ` <content expr>`, namelist or <param >s; `content` is a literal <content >, delivered as the bytes the chart holds and not imported into the data model (ADR 0053). `content_type` is the literal's media type, empty when nothing said. At most one of `data` and `content` is present. `trace` is the sending macrostep's context and the key of the step that sent it (ADR 0067), for the processor to carry, as a `traceparent` header for example. Everything is borrowed for the call.",
       "fields": [
         {
           "name": "source",
@@ -11864,6 +11944,12 @@
           }
         },
         {
+          "name": "target_text",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
           "name": "data",
           "type": {
             "type": "ta_value"
@@ -11890,7 +11976,7 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 144,
+          "size": 160,
           "align": 8,
           "offsets": {
             "source": 0,
@@ -11898,14 +11984,15 @@
             "event": 24,
             "io_type": 28,
             "target": 32,
-            "data": 48,
-            "content_type": 64,
-            "content": 80,
-            "trace": 96
+            "target_text": 48,
+            "data": 64,
+            "content_type": 80,
+            "content": 96,
+            "trace": 112
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 112,
+          "size": 120,
           "align": 8,
           "offsets": {
             "source": 0,
@@ -11913,10 +12000,11 @@
             "event": 24,
             "io_type": 28,
             "target": 32,
-            "data": 40,
-            "content_type": 48,
-            "content": 56,
-            "trace": 64
+            "target_text": 40,
+            "data": 48,
+            "content_type": 56,
+            "content": 64,
+            "trace": 72
           }
         }
       }
@@ -15902,6 +15990,43 @@
           "type": {
             "pointer": {
               "type": "ta_definition_state_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_definition_content",
+      "doc": "The bytes of a definition's literal content: a <content > body or a literal send target, as the chart holds them (ADR 0053). Inspection names content by ID, as ta_delayed_send_info.target_text does. TA_ERR_NOT_FOUND for a definition or content ID that does not exist.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_definition_content_params",
               "const": true
             }
           },

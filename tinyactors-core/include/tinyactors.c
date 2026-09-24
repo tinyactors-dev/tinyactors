@@ -812,6 +812,13 @@ typedef struct {
     bool has_content;
     ta_content_id content;
     /*
+     * A send to a host I/O processor with a literal `target`: its content ID
+     * in the owner's definition, for the same reason. `target` is then
+     * absent. Public, in ta_delayed_send_info, so inspection can name it.
+     */
+    bool has_target_text;
+    ta_content_id target_text;
+    /*
      * Already sent: the router accepted nothing and the send waits here to be
      * offered again. <cancel> and session termination leave it in place.
      */
@@ -4062,6 +4069,8 @@ static void ta_timer_split(const ta_delayed_send *send, ta_delayed_send_info *in
         .target = send->target,
         .data = send->data,
         .submitted = send->submitted,
+        .has_target_text = send->has_target_text,
+        .target_text = send->target_text,
     };
     *meta = (ta_delayed_send_meta){
         .id = send->id,
@@ -4092,6 +4101,8 @@ static ta_delayed_send ta_timer_join(const ta_timer_list *list, uint32_t index) 
         .invoke_id = meta->invoke_id,
         .has_content = meta->has_content,
         .content = meta->content,
+        .has_target_text = info->has_target_text,
+        .target_text = info->target_text,
         .trace = meta->trace,
     };
 }
@@ -6166,6 +6177,18 @@ TA_API ta_result ta_definition_state(const ta_system *system, const ta_definitio
         .parent = state->parent,
         .kind = state->kind,
     };
+    return TA_OK;
+}
+
+TA_API ta_result ta_definition_content(const ta_system *system, const ta_definition_content_params *params) {
+    if (system == NULL || params == NULL || params->media_type == NULL || params->out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_definition *definition = ta_definition_lookup(system, params->definition);
+    if (definition == NULL || params->content >= definition->content_count) {
+        return TA_ERR_NOT_FOUND;
+    }
+    ta_interpreter_literal_content(definition, params->content, params->media_type, params->out);
     return TA_OK;
 }
 
@@ -13277,6 +13300,12 @@ TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_sy
             ta_interpreter_literal_content(sender->definition, send->content, &request.content_type,
                                            &request.content);
         }
+        if (send->has_target_text && sender != NULL) {
+            ta_str media_type = { 0 };
+            ta_bytes text = { 0 };
+            ta_interpreter_literal_content(sender->definition, send->target_text, &media_type, &text);
+            request.target_text = (ta_str){ .ptr = (const char *)text.ptr, .len = text.len };
+        }
         ta_op_status sent = io == NULL ? TA_OP_ERROR : io->v->send(io->self, &request, &fault);
         /* A processor that ran out of memory accepted nothing: the send
          * waits, due now, like one a router answered RETRY for (ADR 0070). */
@@ -13331,6 +13360,9 @@ typedef struct {
     bool has_content;
     bool generated_id;
     ta_content_id content;
+    /* A custom processor's literal target (ta_send.target_text). */
+    bool has_target_text;
+    ta_content_id target_text;
     /* The send left the actor: dispatched, stored to fire later, or held
      * for an unpublished actor's activation (ADR 0067's SENT). */
     bool sent;
@@ -13398,7 +13430,16 @@ static ta_result ta_send_payload(ta_interpreter *it, const ta_send_action *send,
 static ta_result ta_send_target(ta_interpreter *it, const ta_send_action *send, ta_send_state *state,
                                 ta_fault *fault) {
     if (!state->scxml_io) {
-        /* A custom I/O processor receives the evaluated value, not a URI. */
+        /*
+         * A custom I/O processor receives a literal target as the text the
+         * chart wrote, without the data model, and a targetexpr as the value
+         * it evaluates to, not as a URI.
+         */
+        if (send->target.kind == TA_VALUE_SOURCE_CONTENT) {
+            state->has_target_text = true;
+            state->target_text = send->target.as.content;
+            return TA_OK;
+        }
         return send->target.kind == TA_VALUE_SOURCE_NONE
                    ? TA_OK
                    : ta_op_result(ta_eval_source(it, &(ta_value_params){ .source = send->target,
@@ -13680,6 +13721,8 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
         .data = state->data,
         .has_content = state->has_content,
         .content = state->content,
+        .has_target_text = state->has_target_text,
+        .target_text = state->target_text,
         .trace = ta_interpreter_trace_here(it),
     };
     /* A named target's reference passes to the send record (ADR 0065). */

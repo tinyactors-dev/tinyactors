@@ -212,6 +212,14 @@ static jv tat_value_or_null(const ta_value *value) {
     return value->v == NULL ? jv_null() : tat_value_encode(value);
 }
 
+/* A send's target: the literal text the chart wrote, or the evaluated targetexpr. */
+static jv tat_send_target(const ta_send *send) {
+    if (send->target_text.ptr != NULL) {
+        return jv_string_sized(send->target_text.ptr, (int)send->target_text.len);
+    }
+    return tat_value_or_null(&send->target);
+}
+
 /* The dotted text of an event name, or null when it cannot be formatted. */
 static jv tat_event_name_text(const ta_system *system, ta_event_name_id name) {
     if (system == NULL) {
@@ -1065,7 +1073,7 @@ static ta_op_status tat_recording_send(void *self, const ta_send *send, ta_fault
     entry = jv_object_set(entry, jv_string("event"), tat_u64(send->event));
     entry = jv_object_set(entry, jv_string("event_text"), tat_event_name_text(instrument->system, send->event));
     entry = jv_object_set(entry, jv_string("io_type"), tat_atom_text(instrument->system, send->io_type));
-    entry = jv_object_set(entry, jv_string("target"), tat_value_or_null(&send->target));
+    entry = jv_object_set(entry, jv_string("target"), tat_send_target(send));
     entry = jv_object_set(entry, jv_string("data"), tat_value_or_null(&send->data));
     entry = tat_put_content(entry, send->content_type, send->content);
     jv spec;
@@ -1145,7 +1153,7 @@ static const char *tat_endpoint_refusal(tat_instrument *instrument, jv target) {
 
 static ta_op_status tat_endpoint_send(void *self, const ta_send *send, ta_fault *fault) {
     tat_instrument *instrument = self;
-    jv target = tat_value_or_null(&send->target);
+    jv target = tat_send_target(send);
     jv entry = jv_object();
     entry = jv_object_set(entry, jv_string("source"), tat_encode_ta_actor_ref(instrument->bind, &send->source));
     entry = jv_object_set(entry, jv_string("send_id"), tat_u64(send->send_id));

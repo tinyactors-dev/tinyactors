@@ -43,8 +43,10 @@ typedef struct tna_effect {
     /* LOG: has_value and value; IO: value is the data; START: the data. */
     bool has_value;
     ta_value value;
-    /* IO: the target; START: src. */
+    /* IO: the evaluated targetexpr; START: src. */
     ta_value target;
+    /* IO: a literal target, copied; ptr is NULL when there is none. */
+    ta_str target_text;
     /* START: the params. */
     ta_value params;
     /* IO: the send. */
@@ -80,7 +82,7 @@ void tna_effects_init(tna_effects *effects, ta_arena *arena);
 /*
  * Queues a copy of `effect`, which hands over the references it holds
  * (values, source address, forwarded event). Copies the label, the content
- * type and the content into the arena. False when the effect cannot be
+ * type, the content and a literal target into the arena. False when the effect cannot be
  * queued (no memory, or the queue is closed); its references are then
  * released.
  */
