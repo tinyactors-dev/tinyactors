@@ -43,41 +43,15 @@ end
   exit(status.exitstatus || 1) unless status.success?
 end
 
-pid = Process.spawn('ruby', 'tinyactors-test/ruby/smoke.rb', chdir: root.to_s)
-_pid, status = Process.wait2(pid)
-exit(status.exitstatus || 1) unless status.success?
-
 pid = Process.spawn('mise', 'run', 'api-test', chdir: root.join('tinyactors-core').to_s)
 _pid, status = Process.wait2(pid)
 exit(status.exitstatus || 1) unless status.success?
 
-pid = Process.spawn('ruby', 'tinyactors-test/ruby/bindings_test.rb', chdir: root.to_s)
-_pid, status = Process.wait2(pid)
-exit(status.exitstatus || 1) unless status.success?
-
-pid = Process.spawn('ruby', 'tinyactors-test/ruby/bindings_generator_test.rb', chdir: root.to_s)
-_pid, status = Process.wait2(pid)
-exit(status.exitstatus || 1) unless status.success?
-
-pid = Process.spawn('ruby', 'tinyactors-test/ruby/runner_selftest.rb', chdir: root.to_s)
-_pid, status = Process.wait2(pid)
-exit(status.exitstatus || 1) unless status.success?
-
-pid = Process.spawn('ruby', 'tinyactors-test/ruby/export_roundtrip_check.rb', chdir: root.to_s)
-_pid, status = Process.wait2(pid)
-exit(status.exitstatus || 1) unless status.success?
-
-pid = Process.spawn('tinyactors-test/build/json_datamodel_test', chdir: root.to_s)
-_pid, status = Process.wait2(pid)
-exit(status.exitstatus || 1) unless status.success?
-
-pid = Process.spawn('tinyactors-test/build/ecmascript_datamodel_test', chdir: root.to_s)
-_pid, status = Process.wait2(pid)
-exit(status.exitstatus || 1) unless status.success?
-
-# Invariant 17: per-actor cost does not grow with the population. It links
-# core's release archive, so it measures what a host would get.
-pid = Process.spawn('tinyactors-test/build/scale_test', chdir: root.to_s)
+# The test host's whole suite: its data model and scale tests, the smoke,
+# bindings, runner and export checks, and every scenario (tinyactors-test's
+# own test task). The scale test checks invariant 17: per-actor cost does
+# not grow with the population.
+pid = Process.spawn('mise', 'run', 'test', chdir: root.join('tinyactors-test').to_s)
 _pid, status = Process.wait2(pid)
 exit(status.exitstatus || 1) unless status.success?
 
