@@ -351,7 +351,7 @@ static bool tna_optional_text(napi_env env, tna_system *system, napi_value value
 }
 
 /*
- * registerIo(type, location?, origin?): core sends <send type> to the
+ * registerIO(type, location?, origin?): core sends <send type> to the
  * JavaScript processors (lib/system.js). `location` and `origin` are the
  * templates the native adapter renders for _ioprocessors and for computed
  * origins (adapters/io.h, core ADR 0068). Returns the registry index.
@@ -361,7 +361,7 @@ napi_value tna_register_io_method(napi_env env, napi_callback_info info) {
     napi_value argv[3] = { NULL, NULL, NULL };
     tna_napi_system *wrapper = tna_services_this(env, info, &argc, argv);
     ta_atom atom = 0;
-    if (wrapper == NULL || !tna_type_atom(env, wrapper->system, argv[0], "registerIo(): expected a type string", &atom)) {
+    if (wrapper == NULL || !tna_type_atom(env, wrapper->system, argv[0], "registerIO(): expected a type string", &atom)) {
         return NULL;
     }
     tna_system *system = wrapper->system;
@@ -371,13 +371,13 @@ napi_value tna_register_io_method(napi_env env, napi_callback_info info) {
     if (!tna_optional_text(env, system, argc > 1 ? argv[1] : NULL, &registration.location) ||
         !tna_optional_text(env, system, argc > 2 ? argv[2] : NULL, &registration.origin)) {
         tna_scratch_reset_call(&system->scratch);
-        return tna_throw(env, "invalid", "registerIo(): options.location and options.origin must be strings");
+        return tna_throw(env, "invalid", "registerIO(): options.location and options.origin must be strings");
     }
     ta_result result = tna_io_register(system, &registration);
     tna_scratch_reset_call(&system->scratch);
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result),
-                         "registerIo(): core refused the type (the SCXML event processor's type is reserved)");
+                         "registerIO(): core refused the type (the SCXML event processor's type is reserved)");
     }
     napi_value out = NULL;
     napi_create_uint32(env, index, &out);

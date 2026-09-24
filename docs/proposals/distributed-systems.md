@@ -75,7 +75,7 @@ The chart names the transport and the remote address:
   processor MUST bind `_ioprocessors` to one entry per Event I/O Processor
   it supports. **Gap G2:** core exposes only the SCXML processor's type and
   location (`TA_DM_TEXT_SCXML_IO_*`), and napi's `ioProcessors` lists only
-  that entry, so processors registered with `registerIo` are missing. A
+  that entry, so processors registered with `registerIO` are missing. A
   processor needs a way to report its `location` for a session, the address
   others use to reach this session through it.
 

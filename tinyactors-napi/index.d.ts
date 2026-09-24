@@ -42,7 +42,7 @@ export interface SystemOptions {
    * dead letters are only counted in stats().
    */
   deadLetter?: (record: DeadLetterRecord) => void;
-  io?: Readonly<Record<string, IoProcessor>>;
+  io?: Readonly<Record<string, IOProcessor>>;
   invokers?: Readonly<Record<string, Invoker>>;
   log?: LogSink;
 }
@@ -196,11 +196,11 @@ export interface System {
   /** Publish a prepared actor and destroy its incumbent (PreparedActor.activate). */
   activate<Data extends object>(prepared: PreparedActor<Data>): Actor<Data>;
 
-  registerIo(type: string, processor: IoProcessor, options?: IoProcessorOptions): void;
+  registerIO(type: string, processor: IOProcessor, options?: IOProcessorOptions): void;
   /** Open a scope that stores `uri` once, for a connection or a session (core ADR 0068). */
-  openScope(type: string, uri: string): IoScope;
+  openScope(type: string, uri: string): IOScope;
   /** Close a scope; events naming it then carry no origin. Idempotent. */
-  closeScope(scope: IoScope): void;
+  closeScope(scope: IOScope): void;
   registerInvoker(type: string, invoker: Invoker): void;
   setLogSink(sink?: LogSink): void;
 
@@ -348,16 +348,16 @@ export interface PostOptions {
    * (core ADR 0068): an I/O processor's type plus one request's reply URI,
    * a scope from openScope(), or a token its origin template renders.
    */
-  origin?: IoOrigin;
+  origin?: IOOrigin;
 }
 
-export type IoOrigin =
+export type IOOrigin =
   | { readonly type: string; readonly uri: string }
-  | { readonly type: string; readonly scope: IoScope }
+  | { readonly type: string; readonly scope: IOScope }
   | { readonly type: string; readonly token: number | bigint };
 
 /** A scope from System.openScope(); stale once closed. */
-export interface IoScope {
+export interface IOScope {
   readonly type: string;
   readonly uri: string;
   readonly index: number;
@@ -370,7 +370,7 @@ export interface IoScope {
  * listed in `ioProcessors` ({session}, {family}, {name}); `origin` is the
  * URI of a computed origin ({token}).
  */
-export interface IoProcessorOptions {
+export interface IOProcessorOptions {
   location?: string;
   origin?: string;
 }
@@ -1006,11 +1006,11 @@ export interface DoneDataSpec {
  * sender gets an external `error.communication` event with data
  * { sendId, type, error }.
  */
-export interface IoProcessor extends IoProcessorOptions {
-  send(request: IoRequest, context: EffectContext): void | Promise<void>;
+export interface IOProcessor extends IOProcessorOptions {
+  send(request: IORequest, context: EffectContext): void | Promise<void>;
 }
 
-export interface IoRequest {
+export interface IORequest {
   /** The sending actor: an ActorId, or its address when it is named. */
   readonly source: ActorId | ActorAddress;
   /** The send's ID text (`<send id>` or core's generated one), or null for a send without one. */

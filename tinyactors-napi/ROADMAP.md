@@ -85,7 +85,7 @@ tinyactors-napi/
 │   ├── enumerate.{c,h}          cursor-paged actor enumeration (ADR 0003)
 │   ├── effects.{c,h}            service effects queued in the turn arena until JavaScript can run
 │   │                            them (step 13); no Node-API
-│   ├── napi_services.{c,h}      registerIo/registerInvoker/setLogSink/reportInvoke, and the
+│   ├── napi_services.{c,h}      registerIO/registerInvoker/setLogSink/reportInvoke, and the
 │   │                            dispatch of effects to lib/system.js (step 13)
 │   └── adapters/
 │       ├── io.{c,h}             JavaScript I/O processors
@@ -604,7 +604,7 @@ Done (ADR 0005 points 9 and 11, ADR 0008 point 3):
 
 - `adapters/io`, `adapters/invoker` (JavaScript invokers and the in-system
   SCXML invoker) and `adapters/log`.
-- JavaScript-facing `registerIo`, `registerInvoker` and `setLogSink`.
+- JavaScript-facing `registerIO`, `registerInvoker` and `setLogSink`.
 
 Exit criterion:
 - an asynchronous I/O processor completes by enqueuing an event;
@@ -716,7 +716,7 @@ needs a core change):
   (gap G4);
 - ~~`ioProcessors` lists only the SCXML processor~~: done (gap G2, core
   ADR 0068). `ioProcessors` lists every processor, with the location its
-  `registerIo(type, processor, { location })` template renders. Gaps G1 and
+  `registerIO(type, processor, { location })` template renders. Gaps G1 and
   G3 are fixed too: `post()`/`send()` take `options.origin` (a request's
   URI, a scope from `openScope()`, or a token rendered by an `origin`
   template), and events from invoked services name the service's type as

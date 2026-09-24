@@ -103,7 +103,7 @@ class System {
     this.#events = new EventNames(this.#native);
     const { io, invokers, log } = options ?? {};
     for (const [type, processor] of Object.entries(servicesOf(io, 'createSystem(): io'))) {
-      this.registerIo(type, processor, { location: processor?.location, origin: processor?.origin });
+      this.registerIO(type, processor, { location: processor?.location, origin: processor?.origin });
     }
     for (const [type, invoker] of Object.entries(servicesOf(invokers, 'createSystem(): invokers'))) {
       this.registerInvoker(type, invoker);
@@ -135,20 +135,20 @@ class System {
    * A processor posts events with an origin so a chart can answer them
    * with `send(...).via(({ event }) => event.originType).to(({ event }) => event.origin)`: see post().
    */
-  registerIo(type, processor, options = {}) {
+  registerIO(type, processor, options = {}) {
     if (typeof type !== 'string' || type === '') {
-      throw new TinyactorsError('registerIo(): expected a type string', 'invalid');
+      throw new TinyactorsError('registerIO(): expected a type string', 'invalid');
     }
     if (processor === null || typeof processor !== 'object' || typeof processor.send !== 'function') {
-      throw new TinyactorsError('registerIo(): expected an I/O processor with a send(request, context) method', 'invalid');
+      throw new TinyactorsError('registerIO(): expected an I/O processor with a send(request, context) method', 'invalid');
     }
     const { location, origin } = options ?? {};
     for (const [name, value] of [['location', location], ['origin', origin]]) {
       if (value !== undefined && typeof value !== 'string') {
-        throw new TinyactorsError(`registerIo(): options.${name} must be a string template`, 'invalid');
+        throw new TinyactorsError(`registerIO(): options.${name} must be a string template`, 'invalid');
       }
     }
-    this.#native.registerIo(type, location, origin);
+    this.#native.registerIO(type, location, origin);
     this.#io.set(type, processor);
   }
 
@@ -219,7 +219,7 @@ class System {
         this.#logSink?.(payload);
         return;
       case 'io':
-        this.#runIo(payload);
+        this.#runIO(payload);
         return;
       case 'invoke-start':
         this.#startInvocation(payload);
@@ -245,7 +245,7 @@ class System {
     return this.#effectContext;
   }
 
-  #runIo(request) {
+  #runIO(request) {
     const processor = this.#io.get(request.type);
     if (processor === undefined) {
       this.#communicationError(request, new TinyactorsError(`no I/O processor for "${request.type}"`, 'not-found'));

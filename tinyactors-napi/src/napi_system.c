@@ -887,7 +887,7 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "cancelSend", NULL, tna_cancel_send_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "lastSendToken", NULL, NULL, tna_last_send_token_getter, NULL, NULL, napi_default_jsproperty, NULL },
         { "idPage", NULL, tna_id_page_method, NULL, NULL, NULL, napi_default_method, NULL },
-        { "registerIo", NULL, tna_register_io_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "registerIO", NULL, tna_register_io_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "openScope", NULL, tna_open_scope_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "closeScope", NULL, tna_close_scope_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "registerInvoker", NULL, tna_register_invoker_method, NULL, NULL, NULL, napi_default_method, NULL },
