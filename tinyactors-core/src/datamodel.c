@@ -112,18 +112,11 @@ static ta_result ta_dm_event_text(const ta_dm_host *host, ta_dm_text_kind kind, 
                                                 .out = out,
                                             });
         case TA_DM_TEXT_EVENT_ORIGINTYPE:
-            /* An origin with no URI, such as a closed scope, has no type either. */
-            if (event->origin.kind == TA_ORIGIN_IO && event->origin.as.io.origin_class == TA_IO_ORIGIN_SCOPED) {
-                ta_str uri;
-                ta_result result = ta_io_origin_uri(system, &(ta_io_origin_render_params){
-                                                                .origin = &event->origin,
-                                                                .arena = ta_dm_arena(host),
-                                                                .out = &uri,
-                                                            });
-                if (result != TA_OK) {
-                    return result;
-                }
-            }
+            /*
+             * A closed scope keeps its type: a reply then reaches the
+             * processor with an empty target, which the processor refuses,
+             * so the sender sees error.communication (ADR 0068).
+             */
             return ta_io_origin_type(system, &event->origin, out);
         case TA_DM_TEXT_EVENT_INVOKEID:
             if (event->invoke_id == TA_INVOKE_ID_NONE) {

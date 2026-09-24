@@ -21,6 +21,9 @@ bool tat_make_recording_router(tat_bind *bind, jv config, void *out);
 bool tat_make_memory_directory(tat_bind *bind, jv config, void *out);
 bool tat_make_scripted_invoker(tat_bind *bind, jv config, void *out);
 bool tat_make_recording_io(tat_bind *bind, jv config, void *out);
+bool tat_make_peer_io(tat_bind *bind, jv config, void *out);
+bool tat_make_connection_io(tat_bind *bind, jv config, void *out);
+bool tat_make_request_io(tat_bind *bind, jv config, void *out);
 bool tat_make_recording_log(tat_bind *bind, jv config, void *out);
 bool tat_make_recording_inspector(tat_bind *bind, jv config, void *out);
 

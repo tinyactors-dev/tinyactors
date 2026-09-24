@@ -629,6 +629,9 @@ const tat_adapter TAT_ADAPTERS[] = {
     {"directory.memory", "ta_actor_directory", sizeof(ta_actor_directory), tat_make_memory_directory},
     {"invoker.scripted", "ta_invoker", sizeof(ta_invoker), tat_make_scripted_invoker},
     {"io.recording", "ta_io", sizeof(ta_io), tat_make_recording_io},
+    {"io.peer", "ta_io", sizeof(ta_io), tat_make_peer_io},
+    {"io.connection", "ta_io", sizeof(ta_io), tat_make_connection_io},
+    {"io.request", "ta_io", sizeof(ta_io), tat_make_request_io},
     {"log.recording", "ta_log_sink", sizeof(ta_log_sink), tat_make_recording_log},
     {"inspector.recording", "ta_actor_inspector", sizeof(ta_actor_inspector), tat_make_recording_inspector},
 };

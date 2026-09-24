@@ -10,6 +10,8 @@ module TinyactorsTest
     # `name` is unique in the host process; `label` is the name within one
     # scenario run, which traces use so that two runs compare equal.
     attr_reader :name, :kind, :label
+    # An I/O processor's registry index (ADR 0068), once it is registered.
+    attr_accessor :processor
 
     def initialize(driver, name:, kind:, label:)
       @driver = driver

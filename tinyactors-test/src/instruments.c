@@ -33,12 +33,16 @@ typedef enum {
     TAT_INSTRUMENT_IO,
     TAT_INSTRUMENT_LOG,
     TAT_INSTRUMENT_INSPECTOR,
+    TAT_INSTRUMENT_PEER,
+    TAT_INSTRUMENT_CONNECTION,
+    TAT_INSTRUMENT_REQUEST,
 } tat_instrument_kind;
 
 static const char *const TAT_INSTRUMENT_KINDS[] = {
     "allocator.counting", "router.recording", "directory.memory",
     "invoker.scripted",   "io.recording",     "log.recording",
-    "inspector.recording",
+    "inspector.recording", "io.peer",          "io.connection",
+    "io.request",
 };
 
 /* allocator.counting: the size and alignment of every live allocation. */
@@ -109,6 +113,25 @@ typedef struct {
     ta_result fail_result;
 } tat_inspector_state;
 
+/*
+ * io.peer, io.connection and io.request (ADR 0068): events they delivered
+ * while the actor was busy, held with their origins until "flush".
+ */
+typedef struct {
+    ta_actor_id actor;
+    ta_event event;
+} tat_held_event;
+
+typedef struct {
+    tat_held_event *held;
+    size_t held_count;
+    size_t held_capacity;
+    /* io.request: reply targets already answered -> true. */
+    jv answered;
+    /* io.connection: URI of an open connection -> {"index", "generation"}. */
+    jv open;
+} tat_endpoint_state;
+
 typedef struct tat_instrument {
     char *name;
     tat_instrument_kind kind;
@@ -124,6 +147,7 @@ typedef struct tat_instrument {
     tat_directory_state directory;
     tat_invoker_state invoker;
     tat_inspector_state inspector;
+    tat_endpoint_state endpoint;
 } tat_instrument;
 
 static ta_result tat_directory_resolve(void *self, const ta_actor_directory_resolve_params *params);
@@ -141,7 +165,7 @@ static uint64_t tat_journal_sequence;
 static const char *const TAT_RESULT_NAMES[] = {
     "ok",       "err_invalid",     "err_nomem",       "err_not_found",          "err_not_reconstructible",
     "err_busy", "err_unsupported", "err_corrupt",     "err_definition_mismatch", "err_unloaded",
-    "err_stale",
+    "err_stale", "err_done",
 };
 
 static jv tat_result_name(ta_result result) {
@@ -376,6 +400,8 @@ static tat_instrument *tat_instrument_resolve(tat_bind *bind, jv config, tat_ins
     instrument->directory.entries = jv_object();
     instrument->invoker.services = jv_object();
     instrument->invoker.next_service = 1;
+    instrument->endpoint.answered = jv_object();
+    instrument->endpoint.open = jv_object();
     tat_instruments[tat_instrument_count++] = instrument;
     *created = true;
     return instrument;
@@ -1059,6 +1085,140 @@ bool tat_make_recording_io(tat_bind *bind, jv config, void *out) {
 }
 
 /* ------------------------------------------------------------------------
+ * io.peer, io.connection, io.request (ADR 0068)
+ *
+ * Event I/O Processors that deliver events with an origin of one storage
+ * class each, and accept replies to it:
+ * - io.peer: COMPUTED origins "peer://node/<token>", rendered by `text`;
+ * - io.connection: SCOPED origins, one scope per open connection. A reply
+ *   to a connection that is not open is refused;
+ * - io.request: MESSAGE origins, one per request. A request is answered
+ *   once: a second reply to the same target is refused.
+ * Each renders this session's location as <scheme>://here/session/<id>
+ * (scheme peer, ws or http). A refusal answers TA_OP_ERROR, which the
+ * sender sees as error.communication. Sends are journaled as for
+ * io.recording (op "send"), with "refused" when refused.
+ * Config: {"name", "system"}.
+ */
+
+static const char *tat_endpoint_scheme(const tat_instrument *instrument) {
+    switch (instrument->kind) {
+        case TAT_INSTRUMENT_PEER:
+            return "peer";
+        case TAT_INSTRUMENT_CONNECTION:
+            return "ws";
+        default:
+            return "http";
+    }
+}
+
+/* Why a reply is refused, or NULL when it is accepted. */
+static const char *tat_endpoint_refusal(tat_instrument *instrument, jv target) {
+    if (instrument->kind == TAT_INSTRUMENT_PEER) {
+        return NULL;
+    }
+    if (jv_get_kind(target) != JV_KIND_STRING || jv_string_length_bytes(jv_copy(target)) == 0) {
+        return "a reply needs a target";
+    }
+    if (instrument->kind == TAT_INSTRUMENT_CONNECTION) {
+        jv open = jv_object_get(jv_copy(instrument->endpoint.open), jv_copy(target));
+        bool known = jv_get_kind(open) == JV_KIND_OBJECT;
+        jv_free(open);
+        return known ? NULL : "no open connection has that URI";
+    }
+    jv answered = jv_object_get(jv_copy(instrument->endpoint.answered), jv_copy(target));
+    bool again = jv_get_kind(answered) == JV_KIND_TRUE;
+    jv_free(answered);
+    if (again) {
+        return "the request was already answered";
+    }
+    instrument->endpoint.answered = jv_object_set(instrument->endpoint.answered, jv_copy(target), jv_true());
+    return NULL;
+}
+
+static ta_op_status tat_endpoint_send(void *self, const ta_send *send, ta_fault *fault) {
+    tat_instrument *instrument = self;
+    jv target = tat_value_or_null(&send->target);
+    jv entry = jv_object();
+    entry = jv_object_set(entry, jv_string("source"), tat_encode_ta_actor_ref(instrument->bind, &send->source));
+    entry = jv_object_set(entry, jv_string("send_id"), tat_u64(send->send_id));
+    entry = jv_object_set(entry, jv_string("event_text"), tat_event_name_text(instrument->system, send->event));
+    entry = jv_object_set(entry, jv_string("io_type"), tat_atom_text(instrument->system, send->io_type));
+    entry = jv_object_set(entry, jv_string("target"), jv_copy(target));
+    entry = jv_object_set(entry, jv_string("data"), tat_value_or_null(&send->data));
+    jv spec;
+    if (tat_take_fault(instrument, "send", &spec)) {
+        jv_free(target);
+        tat_fault_fill(instrument, spec, TA_ERR_UNSUPPORTED, fault);
+        jv_free(spec);
+        tat_journal(instrument, "send", tat_injected(entry));
+        return TA_OP_ERROR;
+    }
+    const char *refusal = tat_endpoint_refusal(instrument, target);
+    jv_free(target);
+    if (refusal != NULL) {
+        free(instrument->fault_message);
+        instrument->fault_message = tat_strdup(refusal);
+        *fault = (ta_fault){.code = TA_ERR_NOT_FOUND,
+                            .message = {.ptr = instrument->fault_message,
+                                        .len = instrument->fault_message == NULL ? 0 : (uint32_t)strlen(refusal)}};
+        tat_journal(instrument, "send", jv_object_set(entry, jv_string("refused"), jv_string(refusal)));
+        return TA_OP_ERROR;
+    }
+    tat_journal(instrument, "send", entry);
+    return TA_OP_OK;
+}
+
+static ta_result tat_endpoint_text(void *self, const ta_io_text_params *params) {
+    const tat_instrument *instrument = self;
+    char buffer[96];
+    int length;
+    if (params->kind == TA_IO_TEXT_ORIGIN) {
+        if (instrument->kind != TAT_INSTRUMENT_PEER) {
+            return TA_ERR_NOT_FOUND;
+        }
+        length = snprintf(buffer, sizeof(buffer), "peer://node/%llu", (unsigned long long)params->token);
+    } else {
+        length = snprintf(buffer, sizeof(buffer), "%s://here/session/%llu", tat_endpoint_scheme(instrument),
+                          (unsigned long long)params->session_id);
+    }
+    if (length <= 0 || (size_t)length >= sizeof(buffer)) {
+        return TA_ERR_NOT_FOUND;
+    }
+    char *text = params->arena.v->alloc(params->arena.self, (size_t)length, 1);
+    if (text == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    memcpy(text, buffer, (size_t)length);
+    *params->out = (ta_str){.ptr = text, .len = (uint32_t)length};
+    return TA_OK;
+}
+
+static const ta_io_vtable TAT_ENDPOINT_IO = {.send = tat_endpoint_send, .text = tat_endpoint_text};
+
+static bool tat_make_endpoint(tat_bind *bind, jv config, tat_instrument_kind kind, void *out) {
+    bool created = false;
+    tat_instrument *instrument = tat_instrument_resolve(bind, config, kind, NULL, true, &created);
+    if (instrument == NULL) {
+        return false;
+    }
+    *(ta_io *)out = (ta_io){.self = instrument, .v = &TAT_ENDPOINT_IO};
+    return true;
+}
+
+bool tat_make_peer_io(tat_bind *bind, jv config, void *out) {
+    return tat_make_endpoint(bind, config, TAT_INSTRUMENT_PEER, out);
+}
+
+bool tat_make_connection_io(tat_bind *bind, jv config, void *out) {
+    return tat_make_endpoint(bind, config, TAT_INSTRUMENT_CONNECTION, out);
+}
+
+bool tat_make_request_io(tat_bind *bind, jv config, void *out) {
+    return tat_make_endpoint(bind, config, TAT_INSTRUMENT_REQUEST, out);
+}
+
+/* ------------------------------------------------------------------------
  * log.recording
  *
  * The system's <log> sink (ADR 0045). It journals each record (op "log":
@@ -1494,6 +1654,228 @@ static jv tat_control_io(tat_instrument *instrument, const char *command, jv arg
     return tat_invalid(error_code, jv_string("io.recording commands: fail {op, ...}, clear_faults"));
 }
 
+/* The event name of dotted text, interned in the instrument's system. */
+static bool tat_endpoint_event_name(ta_system *system, const char *text, ta_event_name_id *out) {
+    ta_atom atoms[16];
+    uint32_t count = 0;
+    const char *start = text;
+    for (const char *at = text;; at += 1) {
+        if (*at == '.' || *at == '\0') {
+            if (count == sizeof(atoms) / sizeof(atoms[0]) ||
+                ta_system_intern_atom(system, (ta_str){.ptr = start, .len = (uint32_t)(at - start)}, &atoms[count]) !=
+                    TA_OK) {
+                return false;
+            }
+            count += 1;
+            if (*at == '\0') {
+                break;
+            }
+            start = at + 1;
+        }
+    }
+    return ta_event_name_intern(system, &(ta_atom_list){.atoms = atoms, .count = count}, out) == TA_OK;
+}
+
+static jv tat_endpoint_held_record(const tat_endpoint_state *state) {
+    return jv_number((double)state->held_count);
+}
+
+/* Delivers one event with its origin; keeps it when the actor is busy and `hold` says so. */
+static jv tat_endpoint_deliver(tat_instrument *instrument, ta_actor_id actor, ta_event *event, bool hold) {
+    tat_endpoint_state *state = &instrument->endpoint;
+    ta_result result = ta_actor_deliver(instrument->system, actor, event);
+    if (result == TA_ERR_BUSY && hold) {
+        if (state->held_count == state->held_capacity) {
+            size_t capacity = state->held_capacity == 0 ? 8 : state->held_capacity * 2;
+            tat_held_event *grown = realloc(state->held, capacity * sizeof(*grown));
+            if (grown == NULL) {
+                ta_event_release(event);
+                return jv_string("err_nomem");
+            }
+            state->held = grown;
+            state->held_capacity = capacity;
+        }
+        state->held[state->held_count++] = (tat_held_event){.actor = actor, .event = *event};
+        return jv_string("held");
+    }
+    ta_event_release(event);
+    return tat_result_name(result);
+}
+
+/* receive {processor, actor, event, data?, hold?, token? | uri?}: one event from outside. */
+static jv tat_endpoint_receive(tat_instrument *instrument, jv args, int *error_code) {
+    uint64_t processor = 0;
+    uint64_t actor = 0;
+    jv event_name = jv_object_get(jv_copy(args), jv_string("event"));
+    if (!tat_arg_u64(instrument->bind, args, "processor", &processor) ||
+        !tat_arg_u64(instrument->bind, args, "actor", &actor) || jv_get_kind(event_name) != JV_KIND_STRING) {
+        jv_free(event_name);
+        return tat_invalid(error_code, jv_string("receive needs args.processor, args.actor and args.event"));
+    }
+    ta_event event = {.type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE};
+    bool named = tat_endpoint_event_name(instrument->system, jv_string_value(event_name), &event.name);
+    jv_free(event_name);
+    if (!named) {
+        return tat_invalid(error_code, jv_string("receive: args.event is not a valid event name"));
+    }
+    ta_io_origin_make_params origin = {.processor = (uint32_t)processor, .out = &event.origin};
+    jv uri = jv_object_get(jv_copy(args), jv_string("uri"));
+    switch (instrument->kind) {
+        case TAT_INSTRUMENT_PEER:
+            origin.origin_class = TA_IO_ORIGIN_COMPUTED;
+            (void)tat_arg_u64(instrument->bind, args, "token", &origin.token);
+            break;
+        case TAT_INSTRUMENT_CONNECTION: {
+            origin.origin_class = TA_IO_ORIGIN_SCOPED;
+            jv scope = jv_get_kind(uri) == JV_KIND_STRING
+                           ? jv_object_get(jv_copy(instrument->endpoint.open), jv_copy(uri))
+                           : jv_invalid();
+            uint64_t index = 0;
+            uint64_t generation = 0;
+            bool open = jv_get_kind(scope) == JV_KIND_OBJECT && tat_arg_u64(instrument->bind, scope, "index", &index) &&
+                        tat_arg_u64(instrument->bind, scope, "generation", &generation);
+            jv_free(scope);
+            if (!open) {
+                jv_free(uri);
+                return tat_invalid(error_code, jv_string("receive: args.uri names no open connection"));
+            }
+            origin.scope = (ta_io_scope){.index = (uint32_t)index, .generation = (uint32_t)generation};
+            break;
+        }
+        default:
+            origin.origin_class = TA_IO_ORIGIN_MESSAGE;
+            if (jv_get_kind(uri) != JV_KIND_STRING) {
+                jv_free(uri);
+                return tat_invalid(error_code, jv_string("receive: args.uri, the request's reply URI, is required"));
+            }
+            origin.uri = (ta_str){.ptr = jv_string_value(uri), .len = (uint32_t)jv_string_length_bytes(jv_copy(uri))};
+            break;
+    }
+    ta_result made = ta_io_origin_make(instrument->system, &origin);
+    jv_free(uri);
+    if (made != TA_OK) {
+        return jv_object_set(jv_object(), jv_string("result"), tat_result_name(made));
+    }
+    jv data = jv_object_get(jv_copy(args), jv_string("data"));
+    if (jv_is_valid(data) && jv_get_kind(data) != JV_KIND_NULL) {
+        ta_datamodel model = {0};
+        ta_result result = tat_actor_datamodel(instrument->system, (ta_actor_id)actor, &model);
+        if (result == TA_OK) {
+            result = tat_value_decode(model, jv_copy(data), &event.data);
+        }
+        if (result != TA_OK) {
+            jv_free(data);
+            ta_event_release(&event);
+            return jv_object_set(jv_object(), jv_string("result"), tat_result_name(result));
+        }
+    }
+    jv_free(data);
+    jv hold = jv_object_get(jv_copy(args), jv_string("hold"));
+    bool holding = jv_get_kind(hold) == JV_KIND_TRUE;
+    jv_free(hold);
+    jv outcome = tat_endpoint_deliver(instrument, (ta_actor_id)actor, &event, holding);
+    jv record = jv_object_set(jv_object(), jv_string("result"), outcome);
+    return jv_object_set(record, jv_string("held"), tat_endpoint_held_record(&instrument->endpoint));
+}
+
+/* flush: offers held events again, oldest first, until one is still refused as busy. */
+static jv tat_endpoint_flush(tat_instrument *instrument) {
+    tat_endpoint_state *state = &instrument->endpoint;
+    jv results = jv_array();
+    size_t taken = 0;
+    while (taken < state->held_count) {
+        tat_held_event *held = &state->held[taken];
+        ta_result result = ta_actor_deliver(instrument->system, held->actor, &held->event);
+        if (result == TA_ERR_BUSY) {
+            break;
+        }
+        ta_event_release(&held->event);
+        results = jv_array_append(results, tat_result_name(result));
+        taken += 1;
+    }
+    memmove(state->held, state->held + taken, (state->held_count - taken) * sizeof(*state->held));
+    state->held_count -= taken;
+    return jv_object_set(jv_object_set(jv_object(), jv_string("results"), results), jv_string("held"),
+                         tat_endpoint_held_record(state));
+}
+
+/* drop: releases every held event without delivering it. */
+static jv tat_endpoint_drop(tat_instrument *instrument) {
+    tat_endpoint_state *state = &instrument->endpoint;
+    for (size_t index = 0; index < state->held_count; index += 1) {
+        ta_event_release(&state->held[index].event);
+    }
+    jv dropped = jv_number((double)state->held_count);
+    state->held_count = 0;
+    return jv_object_set(jv_object(), jv_string("dropped"), dropped);
+}
+
+/* open {processor, uri} / close {uri}: io.connection's connections, one scope each. */
+static jv tat_endpoint_connection(tat_instrument *instrument, const char *command, jv args, int *error_code) {
+    jv uri = jv_object_get(jv_copy(args), jv_string("uri"));
+    if (jv_get_kind(uri) != JV_KIND_STRING) {
+        jv_free(uri);
+        return tat_invalid(error_code, jv_string("open and close need args.uri"));
+    }
+    if (strcmp(command, "close") == 0) {
+        jv scope = jv_object_get(jv_copy(instrument->endpoint.open), jv_copy(uri));
+        uint64_t index = 0;
+        uint64_t generation = 0;
+        if (jv_get_kind(scope) == JV_KIND_OBJECT && tat_arg_u64(instrument->bind, scope, "index", &index) &&
+            tat_arg_u64(instrument->bind, scope, "generation", &generation)) {
+            ta_io_scope_close(instrument->system, (ta_io_scope){.index = (uint32_t)index,
+                                                                .generation = (uint32_t)generation});
+        }
+        instrument->endpoint.open = jv_object_delete(instrument->endpoint.open, uri);
+        return scope;
+    }
+    uint64_t processor = 0;
+    if (!tat_arg_u64(instrument->bind, args, "processor", &processor)) {
+        jv_free(uri);
+        return tat_invalid(error_code, jv_string("open needs args.processor"));
+    }
+    ta_io_scope scope = {0};
+    ta_result result = ta_io_scope_open(
+        instrument->system,
+        &(ta_io_scope_open_params){.processor = (uint32_t)processor,
+                                   .uri = {.ptr = jv_string_value(uri),
+                                           .len = (uint32_t)jv_string_length_bytes(jv_copy(uri))},
+                                   .out = &scope});
+    if (result != TA_OK) {
+        jv_free(uri);
+        return jv_object_set(jv_object(), jv_string("result"), tat_result_name(result));
+    }
+    jv record = jv_object_set(jv_object(), jv_string("index"), jv_number(scope.index));
+    record = jv_object_set(record, jv_string("generation"), jv_number(scope.generation));
+    instrument->endpoint.open = jv_object_set(instrument->endpoint.open, uri, jv_copy(record));
+    return record;
+}
+
+static jv tat_control_endpoint(tat_instrument *instrument, const char *command, jv args, int *error_code) {
+    static const char *const ops[] = {"send", NULL};
+    if (strcmp(command, "receive") == 0) {
+        return tat_endpoint_receive(instrument, args, error_code);
+    }
+    if (strcmp(command, "flush") == 0) {
+        return tat_endpoint_flush(instrument);
+    }
+    if (strcmp(command, "drop") == 0) {
+        return tat_endpoint_drop(instrument);
+    }
+    if (instrument->kind == TAT_INSTRUMENT_CONNECTION && (strcmp(command, "open") == 0 || strcmp(command, "close") == 0)) {
+        return tat_endpoint_connection(instrument, command, args, error_code);
+    }
+    if (strcmp(command, "fail") == 0) {
+        return tat_arm_fault(instrument, ops, args, error_code);
+    }
+    return tat_invalid(error_code, jv_string_fmt("%s commands: receive {processor, actor, event, data?, hold?, "
+                                                 "token? | uri?}, flush, drop, fail {op}%s",
+                                                 TAT_INSTRUMENT_KINDS[instrument->kind],
+                                                 instrument->kind == TAT_INSTRUMENT_CONNECTION
+                                                     ? ", open {processor, uri}, close {uri}"
+                                                     : ""));
+}
+
 /* {"name", "command", "args"?}: steers one instrument between steps. */
 jv tat_instrument_control_method(tat_bind *bind, jv params, int *error_code) {
     jv error;
@@ -1535,6 +1917,11 @@ jv tat_instrument_control_method(tat_bind *bind, jv params, int *error_code) {
             break;
         case TAT_INSTRUMENT_INSPECTOR:
             result = tat_control_inspector(instrument, jv_string_value(command), args, error_code);
+            break;
+        case TAT_INSTRUMENT_PEER:
+        case TAT_INSTRUMENT_CONNECTION:
+        case TAT_INSTRUMENT_REQUEST:
+            result = tat_control_endpoint(instrument, jv_string_value(command), args, error_code);
             break;
         case TAT_INSTRUMENT_IO:
         default:

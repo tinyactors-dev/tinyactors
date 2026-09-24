@@ -1010,6 +1010,94 @@ static void check_event_allocations(void) {
 }
 
 /* ------------------------------------------------------------------------
+ * Events that carry a MESSAGE I/O origin (ADR 0068). Core stores the URI in
+ * a pooled record, shared by every copy of the event and returned to the
+ * free list with the last: after warm-up a URI of up to 48 bytes costs no
+ * allocator call, and a longer one one allocation and one free for its
+ * spill. The sizes of the event types do not grow.
+ */
+
+static ta_op_status silent_send(void *self, const ta_send *send, ta_fault *fault) {
+    (void)self;
+    (void)send;
+    (void)fault;
+    return TA_OP_OK;
+}
+
+static const ta_io_vtable SILENT_IO = {.send = silent_send};
+
+static void run_origin_event(ta_system *system, ta_actor_id actor, ta_event_name_id name, const ta_io_origin_make_params *origin) {
+    ta_event event = {.name = name, .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE};
+    ta_io_origin_make_params params = *origin;
+    params.out = &event.origin;
+    require(ta_io_origin_make(system, &params) == TA_OK, "making a message origin");
+    require(ta_actor_deliver(system, actor, &event) == TA_OK, "delivering an event with an origin");
+    ta_event_release(&event);
+    run_to_stable(system, actor);
+}
+
+static void check_io_origin_allocations(void) {
+    counting_allocator counts = {.backing = tat_libc_allocator()};
+    ta_allocator allocator = {.self = &counts, .v = &COUNTING_VTABLE};
+    ta_system *system = NULL;
+    require(ta_system_create(&(ta_system_config){.allocator = allocator}, &system) == TA_OK, "system creation");
+    ta_atom type = 0;
+    uint32_t processor = 0;
+    require(ta_system_intern_atom(system, (ta_str)STR("urn:scale:request"), &type) == TA_OK &&
+                ta_system_register_io(system, &(ta_io_registration_params){.type = type,
+                                                                           .io = {.v = &SILENT_IO},
+                                                                           .index = &processor}) == TA_OK,
+            "registering a processor");
+    ta_definition_id simple = register_revision(system, allocator, &(revision_spec){"events", "v2", STATES_V2});
+    ta_actor_id actor = 0;
+    require(ta_actor_spawn(system, &(ta_actor_spawn_params){.definition = simple, .out = &actor}) == TA_OK,
+            "spawning the origin actor");
+    run_to_stable(system, actor);
+    ta_event_name_id go = intern_event(system, (ta_str)STR("go"));
+    ta_event_name_id done = intern_event(system, (ta_str)STR("done"));
+    ta_io_origin_make_params short_uri = {.processor = processor,
+                                          .origin_class = TA_IO_ORIGIN_MESSAGE,
+                                          .uri = STR("http://client.example/requests/0123456789")};
+    ta_io_origin_make_params long_uri = short_uri;
+    long_uri.uri = (ta_str)STR("http://client.example/callbacks/requests/0123456789abcdef0123456789abcdef");
+    /* Warm-up: the first origin takes a page of records. */
+    run_origin_event(system, actor, go, &short_uri);
+    run_origin_event(system, actor, done, &short_uri);
+
+    counts.alloc_calls = 0;
+    counts.free_calls = 0;
+    for (unsigned round = 0; round < EVENT_ROUNDS; round += 1u) {
+        run_origin_event(system, actor, go, &short_uri);
+        run_origin_event(system, actor, done, &short_uri);
+    }
+    double short_allocs = (double)counts.alloc_calls / (2.0 * EVENT_ROUNDS);
+    double short_frees = (double)counts.free_calls / (2.0 * EVENT_ROUNDS);
+    counts.alloc_calls = 0;
+    counts.free_calls = 0;
+    for (unsigned round = 0; round < EVENT_ROUNDS; round += 1u) {
+        run_origin_event(system, actor, go, &long_uri);
+        run_origin_event(system, actor, done, &long_uri);
+    }
+    /* The actor keeps its last event as _event; the next one releases it. */
+    run_origin_event(system, actor, go, &short_uri);
+    double long_allocs = (double)counts.alloc_calls / (2.0 * EVENT_ROUNDS);
+    double long_frees = (double)counts.free_calls / (2.0 * EVENT_ROUNDS);
+    printf("sizes: ta_origin %zu, ta_event %zu, ta_queued_event %zu, ta_send %zu, ta_active_invoke %zu bytes\n",
+           sizeof(ta_origin), sizeof(ta_event), sizeof(ta_queued_event), sizeof(ta_send), sizeof(ta_active_invoke));
+    printf("allocator calls per event with a message origin after warm-up: %.2f allocations and %.2f frees for a "
+           "%u-byte URI, %.2f and %.2f for a %u-byte URI\n",
+           short_allocs, short_frees, short_uri.uri.len, long_allocs, long_frees, long_uri.uri.len);
+    ta_system_destroy(system);
+    require(counts.live_bytes == 0, "the origin system returned every byte it was given");
+    require(short_allocs == 0.0 && short_frees == 0.0,
+            "an event with a short message origin calls the allocator (ADR 0068)");
+    require(long_allocs == 1.0 && long_frees == 1.0,
+            "an event with a long message origin does more than spill its URI once (ADR 0068)");
+    require(sizeof(ta_origin) == 24u && sizeof(ta_event) == 64u && sizeof(ta_queued_event) == 72u,
+            "an event type grew (ADR 0068 keeps them at 24, 64 and 72 bytes)");
+}
+
+/* ------------------------------------------------------------------------
  * A router that keeps a delivery and releases it later (ADR 0065). The
  * delivery's named destination and origin are shared handles, so keeping
  * it retains three references and releasing it gives them back: once the
@@ -1152,6 +1240,7 @@ int main(int argc, char **argv) {
     }
     check_event_allocations();
     check_kept_delivery_allocations();
+    check_io_origin_allocations();
     /* And every population stays inside the budget the target implies. */
     for (size_t index = 0; index < count; index += 1) {
         require(costs[index].actor_bytes <= (double)ACTOR_BYTE_BUDGET, "a resident actor costs more than its byte budget");

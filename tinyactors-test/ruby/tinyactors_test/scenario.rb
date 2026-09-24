@@ -628,6 +628,28 @@ module TinyactorsTest
       end
     end
 
+    # Registers an io.peer, io.connection or io.request instrument as the
+    # I/O processor for `type` (ADR 0068); its `processor` is the registry
+    # index core gave it.
+    def endpoint_io(type, kind)
+      @instruments["io #{type}"] || begin
+        io = instrument("io #{type}", kind)
+        out = core('ta_system_register_io',
+                   ta.system.register_io(system: system_handle, type: atom(type), io: io.adapter(system: system_handle)))
+        io.processor = out.fetch(:index)
+        io
+      end
+    end
+
+    # One event from outside through an endpoint instrument, with the
+    # origin of that instrument's class, then runs the system unless `run:
+    # false`. Returns the instrument's answer ({result, held}).
+    def receive(io, actor, event, run: true, **args)
+      answer = io.control('receive', processor: io.processor, actor: actor.handle, event: event, **args)
+      run_system("receive #{event}") if run
+      answer
+    end
+
     # Installs a log.recording instrument as the system's <log> sink, so a
     # scenario can read what its charts log (ADR 0045).
     def recording_log
