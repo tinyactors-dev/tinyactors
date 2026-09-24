@@ -718,7 +718,7 @@ ta_result ta_actor_deliver(ta_system *system, ta_actor_id id, const ta_event *ev
     if (actor->finished) {
         return TA_ERR_DONE;
     }
-    if (actor->macrostep || actor->external != TA_EXTERNAL_NONE) {
+    if (actor->macrostep || actor->slots.external != TA_EXTERNAL_NONE) {
         return TA_ERR_BUSY;
     }
     ta_event accepted = *event;
@@ -726,8 +726,8 @@ ta_result ta_actor_deliver(ta_system *system, ta_actor_id id, const ta_event *ev
     if (result != TA_OK) {
         return result;
     }
-    ta_event_retain(&accepted, &actor->external_event);
-    actor->external = TA_EXTERNAL_WAITING;
+    ta_event_retain(&accepted, &actor->slots.external_event);
+    actor->slots.external = TA_EXTERNAL_WAITING;
     actor->macrostep = true;
     ta_actor_touch(actor);
     actor->record.residency = TA_ACTOR_RUNNING;
@@ -773,7 +773,28 @@ static const ta_event *ta_actor_paused_event(const ta_actor *actor) {
     if (!actor->macrostep) {
         return NULL;
     }
-    return actor->external == TA_EXTERNAL_NONE ? NULL : &actor->external_event;
+    return actor->slots.external == TA_EXTERNAL_NONE ? NULL : &actor->slots.external_event;
+}
+
+const ta_event *ta_actor_bound_event(const ta_actor *actor) {
+    switch ((ta_event_binding)actor->slots.bound) {
+    case TA_BOUND_EXTERNAL:
+        return &actor->slots.external_event;
+    case TA_BOUND_INTERNAL:
+        return &actor->internal_queue->events[0].event;
+    case TA_BOUND_KEPT:
+        return &actor->slots.kept_event;
+    case TA_BOUND_NONE:
+    default:
+        return NULL;
+    }
+}
+
+uint32_t ta_actor_waiting_internal(const ta_actor *actor) {
+    if (actor->internal_queue == NULL) {
+        return 0;
+    }
+    return actor->internal_queue->count - (actor->slots.bound == TA_BOUND_INTERNAL ? 1u : 0u);
 }
 
 static size_t ta_vec_bytes(const ta_vec *vec) {
@@ -831,9 +852,11 @@ ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_inspectio
         .allocated_bytes = ta_actor_allocated_bytes(actor),
         .final_state = TA_STATE_NONE,
     };
-    if (actor->internal_queue != NULL && actor->internal_queue->count != 0) {
-        out->internal_events = actor->internal_queue->events;
-        out->internal_count = actor->internal_queue->count;
+    /* A taken head is `_event`, not work that waits. */
+    uint32_t waiting = ta_actor_waiting_internal(actor);
+    if (waiting != 0) {
+        out->internal_events = actor->internal_queue->events + (actor->internal_queue->count - waiting);
+        out->internal_count = waiting;
     }
     if (actor->sparse != NULL) {
         out->invokes = actor->sparse->invokes;

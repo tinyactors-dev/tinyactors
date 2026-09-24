@@ -57,9 +57,9 @@ typedef struct {
     uint32_t handler;
     /* The executor's frames hold an open block that the current step resumes. */
     bool block_open;
-    /* Where the microstep's event came from, for the TA_ERR_NOMEM path. */
-    bool restore_internal;
-    bool restore_external;
+    /* The microstep is for an event it took, which TA_ERR_NOMEM gives back
+     * (ADR 0047, ADR 0069); an eventless microstep took none. */
+    bool took_event;
 } ta_micro_position;
 
 /*

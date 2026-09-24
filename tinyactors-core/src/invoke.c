@@ -676,7 +676,10 @@ static ta_result ta_invoke_forward(ta_interpreter *it, uint32_t index, const ta_
 }
 
 ta_result ta_invoke_before_external(ta_interpreter *it) {
-    const ta_event *event = &it->actor->current_event;
+    /* A copy: <finalize> may grow the internal queue, which can hold the
+     * bound event (ADR 0069). The slot keeps the data retained. */
+    const ta_event bound = *ta_actor_bound_event(it->actor);
+    const ta_event *event = &bound;
     if (event->invoke_id != TA_INVOKE_ID_NONE) {
         /*
          * An event of an invocation cancelled since it was queued is still

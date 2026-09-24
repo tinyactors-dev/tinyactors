@@ -38,10 +38,9 @@ struct ta_session_image {
     bool bootstrapped;
     bool macrostep;
     bool finished;
-    uint8_t external; /* ta_external_state */
-    ta_event external_event;
-    bool has_current_event;
-    ta_event current_event;
+    /* The external and kept events and what `_event` names (ADR 0069). A
+     * bound queue head is internal_events[0]. */
+    ta_event_slots slots;
     uint64_t next_send_id;
 
     ta_queued_event *internal_events;
@@ -222,10 +221,10 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
         result = ta_image_copy_address(arena, &image->self);
     }
     if (result == TA_OK) {
-        result = ta_image_copy_origin(system, arena, &image->external_event);
+        result = ta_image_copy_origin(system, arena, &image->slots.external_event);
     }
     if (result == TA_OK) {
-        result = ta_image_copy_origin(system, arena, &image->current_event);
+        result = ta_image_copy_origin(system, arena, &image->slots.kept_event);
     }
     if (result != TA_OK) {
         return result;
@@ -308,8 +307,8 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
 
 /* The second half of a capture: infallible, so it cannot leave a half-image. */
 static void ta_image_retain(ta_session_image *image) {
-    ta_value_retain(&image->external_event.data);
-    ta_value_retain(&image->current_event.data);
+    ta_value_retain(&image->slots.external_event.data);
+    ta_value_retain(&image->slots.kept_event.data);
     ta_value_retain(&image->completion.data);
     for (uint32_t index = 0; index < image->internal_count; index += 1) {
         ta_value_retain(&image->internal_events[index].event.data);
@@ -361,10 +360,14 @@ ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_params *par
          * takes, and later retains, detaches and releases, only what the
          * flags say the actor holds.
          */
-        .external = actor->external,
-        .external_event = actor->external != TA_EXTERNAL_NONE ? actor->external_event : (ta_event){0},
-        .has_current_event = actor->has_current_event,
-        .current_event = actor->has_current_event ? actor->current_event : (ta_event){0},
+        .slots = {
+            .external = actor->slots.external,
+            .bound = actor->slots.bound,
+            .bound_before = actor->slots.bound_before,
+            .has_kept = actor->slots.has_kept,
+            .external_event = actor->slots.external != TA_EXTERNAL_NONE ? actor->slots.external_event : (ta_event){0},
+            .kept_event = actor->slots.has_kept ? actor->slots.kept_event : (ta_event){0},
+        },
         .next_send_id = actor->next_send_id,
         .has_parent = sparse != NULL && sparse->has_parent,
         .parent = sparse != NULL ? sparse->parent : (ta_actor_parent){0},
@@ -415,8 +418,8 @@ void ta_session_image_destroy(ta_session_image *image) {
         return;
     }
     /* The mirror of ta_image_retain(), in the same order. */
-    ta_value_release(&image->external_event.data);
-    ta_value_release(&image->current_event.data);
+    ta_value_release(&image->slots.external_event.data);
+    ta_value_release(&image->slots.kept_event.data);
     ta_value_release(&image->completion.data);
     for (uint32_t index = 0; index < image->internal_count; index += 1) {
         ta_value_release(&image->internal_events[index].event.data);
@@ -490,6 +493,8 @@ static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *act
             return result;
         }
     }
+    actor->slots.bound = image->slots.bound;
+    actor->slots.bound_before = image->slots.bound_before;
     /*
      * Invoker service handles do not survive an image, so every invocation
      * that was active is retired and reported once, in the order it was
@@ -619,13 +624,14 @@ ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_par
     actor->finished = image->finished;
     actor->next_send_id = image->next_send_id;
     actor->session_epoch = image->source_epoch;
-    if (image->external != TA_EXTERNAL_NONE) {
-        ta_event_retain(&image->external_event, &actor->external_event);
-        actor->external = image->external;
+    /* What `_event` names is restored with the queue it may point into. */
+    if (image->slots.external != TA_EXTERNAL_NONE) {
+        ta_event_retain(&image->slots.external_event, &actor->slots.external_event);
+        actor->slots.external = image->slots.external;
     }
-    if (image->has_current_event) {
-        ta_event_retain(&image->current_event, &actor->current_event);
-        actor->has_current_event = true;
+    if (image->slots.has_kept) {
+        ta_event_retain(&image->slots.kept_event, &actor->slots.kept_event);
+        actor->slots.has_kept = true;
     }
     /*
      * The image carries detached addresses; the actor holds this system's
@@ -633,11 +639,11 @@ ta_result ta_actor_reconstruct(ta_system *system, const ta_actor_reconstruct_par
      * releasing ignores.
      */
     result = ta_actor_ref_localize(system, &actor->record.self);
-    if (result == TA_OK && actor->external != TA_EXTERNAL_NONE) {
-        result = ta_image_localize_origin(system, &actor->external_event);
+    if (result == TA_OK && actor->slots.external != TA_EXTERNAL_NONE) {
+        result = ta_image_localize_origin(system, &actor->slots.external_event);
     }
-    if (result == TA_OK && actor->has_current_event) {
-        result = ta_image_localize_origin(system, &actor->current_event);
+    if (result == TA_OK && actor->slots.has_kept) {
+        result = ta_image_localize_origin(system, &actor->slots.kept_event);
     }
     if (result == TA_OK && image->paused != NULL) {
         result = ta_image_restore_pause(image, actor, system);

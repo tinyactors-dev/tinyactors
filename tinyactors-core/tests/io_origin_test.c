@@ -341,8 +341,9 @@ static void test_delivery(void) {
     CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
           TA_OK);
     CHECK(status == TA_RUN_STABLE);
-    /* The last event stays bound to `_event`, so the actor still holds it. */
-    CHECK(live_blocks == before + 1);
+    /* The macrostep is over, and an actor nobody invoked keeps no event
+     * between macrosteps (ADR 0069), so the origin is given back. */
+    CHECK(live_blocks == before);
 
     /* A finished actor refuses; the host releases, and nothing is left. */
     ta_event stop = message_event(system, request, "stop", long_uri);

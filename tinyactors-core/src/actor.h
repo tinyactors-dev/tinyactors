@@ -53,6 +53,35 @@ typedef enum {
     TA_EXTERNAL_TAKEN    /* taken by the running macrostep, kept until it ends */
 } ta_external_state;
 
+/* What `_event` names (ADR 0069). */
+typedef enum {
+    TA_BOUND_NONE = 0,
+    TA_BOUND_EXTERNAL, /* the external event */
+    TA_BOUND_INTERNAL, /* the head of the internal queue, which stays queued while bound */
+    TA_BOUND_KEPT      /* the kept event */
+} ta_event_binding;
+
+/*
+ * An actor's events other than its queued internal ones (ADR 0069). Taking
+ * an event does not move it: `bound` names where it is. An event leaves
+ * only when `_event` moves on, and it moves into `kept_event` when
+ * something may still read it:
+ * - a taken queue head, when the next event is taken, so that a retry can
+ *   bind it again;
+ * - the last event of an invoked session, when its macrostep ends, so that
+ *   the session's <onexit> sees it if the parent cancels it (SCXML 6.4).
+ */
+typedef struct {
+    uint8_t external;     /* ta_external_state */
+    uint8_t bound;        /* ta_event_binding */
+    uint8_t bound_before; /* what `bound` was before the last take, for a retry (ADR 0047) */
+    bool has_kept;
+    /* The external event of the running macrostep. Inspection reports it
+     * while the macrostep runs (ADR 0047). */
+    ta_event external_event;
+    ta_event kept_event;
+} ta_event_slots;
+
 /* Allocated only for actors that use one of these uncommon facilities. */
 typedef struct {
     ta_active_invoke *invokes;
@@ -105,16 +134,7 @@ struct ta_actor {
     bool bootstrapped;
     bool macrostep;
     bool finished;
-    /*
-     * The external event of the running macrostep, from ta_actor_deliver
-     * until the macrostep ends, and whether the macrostep has taken it
-     * (ta_external_state). Inspection reports it while the macrostep runs
-     * (ADR 0047, ADR 0069).
-     */
-    uint8_t external;
-    ta_event external_event;
-    bool has_current_event;
-    ta_event current_event;
+    ta_event_slots slots;
     uint64_t next_send_id;
     /*
      * While the interpreter runs, the full active set it is updating (ancestors
@@ -173,6 +193,12 @@ void ta_actor_release_slot(ta_system *system, ta_actor_id id);
 /* The host directory's compare-and-swaps, which every residency change uses. */
 ta_result ta_actor_directory_swap(ta_system *system, const ta_actor_directory_replace_params *params);
 ta_result ta_actor_directory_drop(ta_system *system, const ta_actor_directory_remove_params *params);
+
+/* The event `_event` names, or null (ADR 0069). The pointer is valid until
+ * the actor's internal queue grows or the event is released. */
+const ta_event *ta_actor_bound_event(const ta_actor *actor);
+/* Internal events waiting to be taken: the queue without a taken head. */
+uint32_t ta_actor_waiting_internal(const ta_actor *actor);
 
 /* The actor's delayed sends, or null when it has no sparse state (so none). */
 ta_timer_list *ta_actor_timers(const ta_actor *actor);

@@ -12,11 +12,10 @@ bool ta_dm_host_in_state(const ta_dm_host *host, ta_state_id state) {
 }
 
 const ta_event *ta_dm_host_event(const ta_dm_host *host) {
-    if (host == NULL || host->impl == NULL || host->impl->actor == NULL ||
-        !host->impl->actor->has_current_event) {
+    if (host == NULL || host->impl == NULL || host->impl->actor == NULL) {
         return NULL;
     }
-    return &host->impl->actor->current_event;
+    return ta_actor_bound_event(host->impl->actor);
 }
 
 ta_actor_id ta_dm_host_actor(const ta_dm_host *host) {
