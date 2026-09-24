@@ -26,6 +26,9 @@ static void *tna_lane_alloc(void *self, size_t size, size_t alignment) {
     if (size == 0 || !tna_valid_alignment(alignment)) {
         return NULL;
     }
+    if (lane->owner->refuse_from != 0 && size >= lane->owner->refuse_from) {
+        return NULL;
+    }
     void *ptr = tna_system_alloc(size, alignment);
     if (ptr == NULL) {
         return NULL;
@@ -57,6 +60,10 @@ static const ta_allocator_vtable tna_lane_vtable = {
     .alloc = tna_lane_alloc,
     .free = tna_lane_free,
 };
+
+void tna_allocator_refuse_from(tna_allocator *allocator, size_t bytes) {
+    allocator->refuse_from = bytes;
+}
 
 void tna_allocator_init(tna_allocator *allocator) {
     *allocator = (tna_allocator){0};

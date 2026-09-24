@@ -52,6 +52,8 @@ typedef struct {
 struct tna_allocator {
     tna_allocator_lane lanes[TNA_MEMORY_CATEGORY_COUNT];
     tna_memory_counters counters[TNA_MEMORY_CATEGORY_COUNT];
+    /* Tests only: refuse every allocation of at least this many bytes; 0 refuses none. */
+    size_t refuse_from;
 };
 
 void tna_allocator_init(tna_allocator *allocator);
@@ -63,6 +65,13 @@ tna_memory_counters tna_allocator_counters(const tna_allocator *allocator, tna_m
 tna_memory_counters tna_allocator_total(const tna_allocator *allocator);
 /* Allocations plus frees, over every category: the steady-state test signal. */
 uint64_t tna_allocator_calls(const tna_allocator *allocator);
+/*
+ * Tests only: from now on, refuse every allocation of at least `bytes`, in
+ * every category, as a full pool would; 0 refuses none again. A size, not a
+ * count, names the allocation to fail, so a test can fail one large
+ * allocation without depending on how many small ones come before it.
+ */
+void tna_allocator_refuse_from(tna_allocator *allocator, size_t bytes);
 
 /*
  * Convenience over a ta_allocator (a lane or any other). A zero size or an

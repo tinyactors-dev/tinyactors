@@ -56,6 +56,12 @@ typedef struct tna_js_datamodel {
     const ta_dm_host *host;
     void *instance;
     napi_ref event;       /* the event object of the call, built on first use */
+    /*
+     * Core could not render a system variable during the call in progress.
+     * The getter throws, and the call fails even if the chart's code
+     * catches that exception, so no expression runs on a missing value.
+     */
+    bool text_failed;
     /* False while close runs from a finalizer, where no JavaScript may run. */
     bool js_usable;
     /*

@@ -90,8 +90,28 @@ static void backs_a_core_system(void) {
     CHECK(core.allocations == core.frees);
 }
 
+/* The test switch refuses allocations from a size on, and counts none of them. */
+static void refuses_from_a_size(void) {
+    tna_allocator allocator;
+    tna_allocator_init(&allocator);
+    ta_allocator core = tna_allocator_for(&allocator, TNA_MEMORY_CORE);
+    tna_allocator_refuse_from(&allocator, 1024);
+    void *small = tna_alloc(core, 1023, 8);
+    CHECK(small != NULL);
+    CHECK(tna_alloc(core, 1024, 8) == NULL);
+    CHECK(tna_alloc(tna_allocator_for(&allocator, TNA_MEMORY_VALUES), 4096, 8) == NULL);
+    CHECK(tna_allocator_calls(&allocator) == 1);
+    tna_allocator_refuse_from(&allocator, 0);
+    void *large = tna_alloc(core, 4096, 8);
+    CHECK(large != NULL);
+    tna_free(core, &(ta_allocator_free_params){ .ptr = small, .size = 1023, .alignment = 8 });
+    tna_free(core, &(ta_allocator_free_params){ .ptr = large, .size = 4096, .alignment = 8 });
+    CHECK(tna_allocator_total(&allocator).bytes_in_use == 0);
+}
+
 int main(void) {
     counts_by_category();
+    refuses_from_a_size();
     honours_alignment();
     reset_arenas_make_no_allocator_call();
     backs_a_core_system();

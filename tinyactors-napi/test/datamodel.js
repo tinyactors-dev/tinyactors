@@ -374,8 +374,70 @@ async function originOfADestroyedSender() {
   system.close();
 }
 
+// When core cannot render a system variable for lack of memory, reading it
+// throws and the expression fails as error.execution (core ADR 0070, open
+// point 1). It never reads as undefined, and catching the exception in the
+// chart's code does not hide the failure.
+async function failedSystemVariable() {
+  const system = createSystem();
+  const definition = system.define(
+    statechart({ family: 'unrendered', revision: 'v1' })
+      .data('seen', null)
+      .data('caught', null)
+      .data('errors', [])
+      .state('idle', (s) => {
+        s.on('long', (t) => t.assign('seen', ({ event }) => event.name));
+        s.on('quiet', (t) =>
+          t.script(function (context) {
+            try {
+              this.caught = context.event.name;
+            } catch (error) {
+              this.caught = error.code;
+            }
+          }),
+        );
+        s.on('error.execution', (t) =>
+          t.assign('errors', function ({ event }) { return [...this.errors, event.data?.message]; }),
+        );
+      }),
+  );
+  const actor = system.spawn(definition);
+  await system.flush();
+  // One segment far larger than any scratch block: joining `long.` and it
+  // is the only allocation of 100 KB or more the delivery makes, because
+  // the name is interned when it is posted.
+  const segment = 'x'.repeat(200_000);
+  const nativeSystem = nativeOf(system);
+
+  actor.post(`long.${segment}`);
+  nativeSystem.refuseAllocationsFrom(100_000);
+  await system.flush();
+  nativeSystem.refuseAllocationsFrom(0);
+  let data = actor.inspect().data;
+  assert.equal(data.seen, null, 'a failed rendering is not read as undefined');
+  assert.equal(data.errors.length, 1, 'the failure is error.execution');
+  assert.match(data.errors[0], /could not render a system variable/);
+
+  actor.post(`quiet.${segment}`);
+  nativeSystem.refuseAllocationsFrom(100_000);
+  await system.flush();
+  nativeSystem.refuseAllocationsFrom(0);
+  data = actor.inspect().data;
+  assert.equal(data.caught, 'out-of-memory', 'the getter threw');
+  assert.equal(data.errors.length, 2, 'catching the exception does not hide the failure');
+
+  // With memory again, the same variable renders.
+  actor.post(`long.${segment}`);
+  await system.flush();
+  assert.equal(actor.inspect().data.seen, `long.${segment}`);
+  assert.equal(actor.inspect().data.errors.length, 2);
+  system.close();
+  assert.equal(native.environmentStats().leakedBytes, 0);
+}
+
 (async () => {
   await counter();
+  await failedSystemVariable();
   await pingPong();
   await originOfADestroyedSender();
   await binding();

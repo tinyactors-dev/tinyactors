@@ -230,6 +230,7 @@ typedef struct {
     const ta_dm_host *saved_host;
     void *saved_instance;
     napi_ref saved_event;
+    bool saved_text_failed;
 } tna_frame;
 
 static void tna_fault(tna_frame *frame, const char *message) {
@@ -267,9 +268,11 @@ static bool tna_begin(tna_frame *frame, tna_js_datamodel *dm, void *instance, co
     frame->saved_host = dm->host;
     frame->saved_instance = dm->instance;
     frame->saved_event = dm->event;
+    frame->saved_text_failed = dm->text_failed;
     dm->host = host;
     dm->instance = instance;
     dm->event = NULL;
+    dm->text_failed = false;
     return true;
 }
 
@@ -281,6 +284,7 @@ static void tna_end(tna_frame *frame) {
     dm->host = frame->saved_host;
     dm->instance = frame->saved_instance;
     dm->event = frame->saved_event;
+    dm->text_failed = frame->saved_text_failed;
     napi_close_handle_scope(dm->env, frame->scope);
 }
 
@@ -290,6 +294,18 @@ static bool tna_root(tna_frame *frame, napi_value *out) {
 
 static bool tna_context(tna_frame *frame, napi_value *out) {
     return napi_get_reference_value(frame->dm->env, frame->dm->context, out) == napi_ok && *out != NULL;
+}
+
+/*
+ * Calls into JavaScript. A call during which core could not render a system
+ * variable fails, even when the chart's code caught the getter's exception.
+ */
+static bool tna_js_call(tna_frame *frame, napi_value self, napi_value function, size_t argc, const napi_value *argv,
+                        napi_value *result) {
+    napi_value ignored = NULL;
+    return napi_call_function(frame->dm->env, self, function, argc, argv, result == NULL ? &ignored : result) ==
+               napi_ok &&
+           !frame->dm->text_failed;
 }
 
 /* Calls `function` with `this` = the root and (args..., context). */
@@ -302,9 +318,7 @@ static bool tna_invoke(tna_frame *frame, napi_value function, size_t argc, const
     for (size_t at = 0; at < argc; at += 1) {
         argv[at] = args[at];
     }
-    napi_value ignored = NULL;
-    return napi_call_function(frame->dm->env, root, function, argc + 1u, argv, result == NULL ? &ignored : result) ==
-           napi_ok;
+    return tna_js_call(frame, root, function, argc + 1u, argv, result);
 }
 
 static const ta_expression *tna_expression(const tna_dm_shared *shared, ta_expr_id id) {
@@ -684,7 +698,7 @@ static ta_op_status tna_dm_foreach_snapshot(void *self, const ta_datamodel_forea
         status = tna_fail(&frame, "javascript: foreach array is not an array");
     } else if (napi_get_reference_value(env, frame.dm->array_from, &from) != napi_ok ||
                napi_get_global(env, &global) != napi_ok ||
-               napi_call_function(env, global, from, 1, &array, &snapshot) != napi_ok ||
+               !tna_js_call(&frame, global, from, 1, &array, &snapshot) ||
                napi_get_array_length(env, snapshot, &length) != napi_ok) {
         status = tna_fail(&frame, "javascript: cannot copy the foreach array");
     } else if (!tna_value_make(&frame.dm->wrapper->values, snapshot, params->out)) {
@@ -767,21 +781,30 @@ static tna_js_datamodel *tna_context_dm(napi_env env, napi_callback_info info, s
     return dm;
 }
 
-/* System-variable text (core's view, ADR 0068), or undefined when absent. */
-static napi_value tna_host_io_text(napi_env env, const ta_dm_host *host, ta_dm_text_kind kind, uint32_t io_index) {
+/*
+ * System-variable text (core's view, ADR 0068): a string, or undefined when
+ * the variable has no value. When core cannot render it for lack of memory,
+ * it throws and marks the call failed (see `text_failed`), so the failure
+ * reaches core as TA_OP_ERROR instead of reading as undefined.
+ */
+static bool tna_host_io_text(napi_env env, tna_js_datamodel *dm, ta_dm_text_kind kind, uint32_t io_index,
+                             napi_value *out) {
     ta_str text = { 0 };
-    napi_value out = NULL;
-    if (ta_dm_host_text(host, &(ta_dm_text_params){ .kind = kind, .io_index = io_index, .out = &text }) == TA_OK) {
-        napi_create_string_utf8(env, text.len == 0 ? "" : text.ptr, text.len, &out);
+    *out = NULL;
+    ta_result result = ta_dm_host_text(dm->host, &(ta_dm_text_params){ .kind = kind, .io_index = io_index, .out = &text });
+    if (result == TA_OK) {
+        return napi_create_string_utf8(env, text.len == 0 ? "" : text.ptr, text.len, out) == napi_ok;
     }
-    if (out == NULL) {
-        napi_get_undefined(env, &out);
+    if (result == TA_ERR_NOT_FOUND) {
+        return napi_get_undefined(env, out) == napi_ok;
     }
-    return out;
+    dm->text_failed = true;
+    tna_throw(env, "out-of-memory", "core could not render a system variable");
+    return false;
 }
 
-static napi_value tna_host_text(napi_env env, const ta_dm_host *host, ta_dm_text_kind kind) {
-    return tna_host_io_text(env, host, kind, 0);
+static bool tna_host_text(napi_env env, tna_js_datamodel *dm, ta_dm_text_kind kind, napi_value *out) {
+    return tna_host_io_text(env, dm, kind, 0, out);
 }
 
 static napi_value tna_get_data(napi_env env, napi_callback_info info) {
@@ -795,12 +818,14 @@ static napi_value tna_get_data(napi_env env, napi_callback_info info) {
 
 static const char *const tna_event_types[] = { "external", "internal", "platform" };
 
-static napi_status tna_set_text(napi_env env, napi_value object, const char *name, napi_value text) {
+/* object[name] = the variable's text, unless it has no value. */
+static bool tna_set_text(napi_env env, tna_js_datamodel *dm, napi_value object, const char *name, ta_dm_text_kind kind) {
+    napi_value text = NULL;
     napi_valuetype type = napi_undefined;
-    if (napi_typeof(env, text, &type) != napi_ok || type == napi_undefined) {
-        return napi_ok;
+    if (!tna_host_text(env, dm, kind, &text) || napi_typeof(env, text, &type) != napi_ok) {
+        return false;
     }
-    return napi_set_named_property(env, object, name, text);
+    return type == napi_undefined || napi_set_named_property(env, object, name, text) == napi_ok;
 }
 
 /*
@@ -824,15 +849,16 @@ static napi_value tna_get_event(napi_env env, napi_callback_info info) {
         napi_get_undefined(env, &object);
         return object;
     }
-    if (napi_create_object(env, &object) != napi_ok ||
-        napi_set_named_property(env, object, "name", tna_host_text(env, dm->host, TA_DM_TEXT_EVENT_NAME)) != napi_ok ||
+    napi_value name = NULL;
+    if (napi_create_object(env, &object) != napi_ok || !tna_host_text(env, dm, TA_DM_TEXT_EVENT_NAME, &name) ||
+        napi_set_named_property(env, object, "name", name) != napi_ok ||
         napi_create_string_utf8(env, tna_event_types[event->type <= TA_EVENT_PLATFORM ? event->type : 0], NAPI_AUTO_LENGTH,
                                 &type) != napi_ok ||
         napi_set_named_property(env, object, "type", type) != napi_ok ||
-        tna_set_text(env, object, "sendId", tna_host_text(env, dm->host, TA_DM_TEXT_EVENT_SENDID)) != napi_ok ||
-        tna_set_text(env, object, "origin", tna_host_text(env, dm->host, TA_DM_TEXT_EVENT_ORIGIN)) != napi_ok ||
-        tna_set_text(env, object, "originType", tna_host_text(env, dm->host, TA_DM_TEXT_EVENT_ORIGINTYPE)) != napi_ok ||
-        tna_set_text(env, object, "invocationId", tna_host_text(env, dm->host, TA_DM_TEXT_EVENT_INVOKEID)) != napi_ok ||
+        !tna_set_text(env, dm, object, "sendId", TA_DM_TEXT_EVENT_SENDID) ||
+        !tna_set_text(env, dm, object, "origin", TA_DM_TEXT_EVENT_ORIGIN) ||
+        !tna_set_text(env, dm, object, "originType", TA_DM_TEXT_EVENT_ORIGINTYPE) ||
+        !tna_set_text(env, dm, object, "invocationId", TA_DM_TEXT_EVENT_INVOKEID) ||
         !tna_value_get(env, &event->data, &data) || napi_set_named_property(env, object, "data", data) != napi_ok) {
         return NULL;
     }
@@ -842,12 +868,14 @@ static napi_value tna_get_event(napi_env env, napi_callback_info info) {
 
 static napi_value tna_get_session_id(napi_env env, napi_callback_info info) {
     tna_js_datamodel *dm = tna_context_dm(env, info, NULL, NULL);
-    return dm == NULL ? NULL : tna_host_text(env, dm->host, TA_DM_TEXT_SESSION_ID);
+    napi_value text = NULL;
+    return dm != NULL && tna_host_text(env, dm, TA_DM_TEXT_SESSION_ID, &text) ? text : NULL;
 }
 
 static napi_value tna_get_name(napi_env env, napi_callback_info info) {
     tna_js_datamodel *dm = tna_context_dm(env, info, NULL, NULL);
-    return dm == NULL ? NULL : tna_host_text(env, dm->host, TA_DM_TEXT_SESSION_NAME);
+    napi_value text = NULL;
+    return dm != NULL && tna_host_text(env, dm, TA_DM_TEXT_SESSION_NAME, &text) ? text : NULL;
 }
 
 /* _ioprocessors: the SCXML Event I/O Processor, by its type URI and "scxml". */
@@ -865,23 +893,26 @@ static napi_value tna_get_io_processors(napi_env env, napi_callback_info info) {
         return NULL;
     }
     for (uint32_t index = 0;; index += 1) {
-        ta_str type = { 0 };
-        if (ta_dm_host_text(dm->host, &(ta_dm_text_params){ .kind = TA_DM_TEXT_IO_TYPE, .io_index = index,
-                                                            .out = &type }) != TA_OK) {
+        /* Processors are listed until the type at an index has no value. */
+        napi_value key = NULL;
+        napi_valuetype kind = napi_undefined;
+        if (!tna_host_io_text(env, dm, TA_DM_TEXT_IO_TYPE, index, &key) || napi_typeof(env, key, &kind) != napi_ok) {
+            return NULL;
+        }
+        if (kind == napi_undefined) {
             break;
         }
         napi_value entry = NULL;
-        napi_valuetype kind = napi_undefined;
-        napi_value location = tna_host_io_text(env, dm->host, TA_DM_TEXT_IO_LOCATION, index);
-        if (napi_create_object(env, &entry) != napi_ok || napi_typeof(env, location, &kind) != napi_ok) {
+        napi_value location = NULL;
+        if (napi_create_object(env, &entry) != napi_ok ||
+            !tna_host_io_text(env, dm, TA_DM_TEXT_IO_LOCATION, index, &location) ||
+            napi_typeof(env, location, &kind) != napi_ok) {
             return NULL;
         }
         if (kind == napi_string) {
             napi_set_named_property(env, entry, "location", location);
         }
-        napi_value key = NULL;
-        if (napi_create_string_utf8(env, type.ptr, type.len, &key) != napi_ok ||
-            napi_set_property(env, processors, key, entry) != napi_ok) {
+        if (napi_set_property(env, processors, key, entry) != napi_ok) {
             return NULL;
         }
         if (index == 0) {

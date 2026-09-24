@@ -232,7 +232,10 @@ an immediate send the router refused can do.
    undefined.** `tna_host_io_text` in `tinyactors-napi/src/napi_datamodel.c`
    treats any result other than `TA_OK` from `ta_dm_host_text` as "no
    value", as the jq test adapter did before this change. It has the same
-   problem as open point 1 and was left for the napi work.
+   problem as open point 1 and was left for the napi work. **Fixed**
+   (2026-09-24): the getter throws `out-of-memory` and the call fails as
+   `error.execution`, even when the chart's code catches the exception, as
+   in the test host's ECMAScript data model. What remains is open point 1.
 8. **Reentrant resume is not supported.** The spare is per system, as the
    scratch arena is: a plugin that resumes another actor from inside a
    callback would take it.

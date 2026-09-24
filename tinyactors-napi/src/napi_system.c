@@ -294,6 +294,33 @@ static napi_value tna_advance_to_method(napi_env env, napi_callback_info info) {
     return tna_pump_advance_to(env, wrapper, argv[0]);
 }
 
+/*
+ * refuseAllocationsFrom(bytes): tests only. From now on the system's
+ * allocator refuses every allocation of at least `bytes`, as a full pool
+ * would; 0 refuses none again. It is not part of the public API: lib/
+ * never calls it, and tests reach it through nativeOf(system).
+ */
+static napi_value tna_refuse_allocations_from_method(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value argv[1] = { NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    double bytes = -1;
+    if (argc < 1 || napi_get_value_double(env, argv[0], &bytes) != napi_ok || !(bytes >= 0) ||
+        bytes > 9007199254740991.0) {
+        return tna_throw(env, "invalid", "refuseAllocationsFrom(): expected a byte count");
+    }
+    tna_allocator_refuse_from(&wrapper->system->allocator, (size_t)bytes);
+    napi_value undefined = NULL;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+}
+
 /* clock: "realtime" or "manual". */
 static napi_value tna_clock_getter(napi_env env, napi_callback_info info) {
     tna_napi_system *wrapper = tna_open_this(env, info);
@@ -872,6 +899,7 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
     napi_property_descriptor properties[] = {
         { "close", NULL, tna_close_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "stats", NULL, tna_stats_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "refuseAllocationsFrom", NULL, tna_refuse_allocations_from_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "flush", NULL, tna_flush_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "advanceTo", NULL, tna_advance_to_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "clock", NULL, NULL, tna_clock_getter, NULL, NULL, napi_default_jsproperty, NULL },
