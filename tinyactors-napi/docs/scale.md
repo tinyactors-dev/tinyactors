@@ -226,3 +226,31 @@ What the comparison is and isn't:
 - **The plain objects are a floor, not a competitor.** They have no
   statechart semantics: no hierarchy, no run-to-completion, no event
   queue, no delayed-send bookkeeping, no inspection.
+
+## 2026-09-24: an idle actor carries no event (core ADR 0069)
+
+Core moved an actor's events into the event block it lends a running
+actor, so an idle actor holds no event. The addon sizes core's block
+cache to `messageBudget`. `TAT_SCALE_MAX_POPULATION=1000000 node
+test/scale.js`, same machine, before (`0a37619`) and after:
+
+| At 1M actors, Node | plain | data | ws |
+|---|---|---|---|
+| native bytes/actor, before | 480 | 528 | 1225 |
+| native bytes/actor, after | 272 | 320 | 1017 |
+| RSS bytes/actor, before | 518 | 1411 | 2135 |
+| RSS bytes/actor, after | 319 | 700 | 1456 |
+| core allocator calls per steady-state round, before and after | 16384 | 16384 | 0 |
+
+Every ratio stayed within its bound, and the times per operation did not
+move beyond run-to-run noise.
+
+`test/bench/event_blocks.js` (200,000 actors) measures the rest:
+- core bytes per idle actor: 464 before, 256 after;
+- while every actor holds a delivered event it has not taken: 152 more
+  bytes per actor, a header-only block;
+- after the flush, with `messageBudget` at 200,000: 728 bytes per actor
+  in core's block cache. At the default budget of 1,024 the cache keeps at
+  most about 745 KB;
+- delivery throughput: 2.9 M events/s on Node and 3.4 M on Bun, before
+  and after.
