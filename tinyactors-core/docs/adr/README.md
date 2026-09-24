@@ -71,4 +71,4 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0065](0065-named-addresses-are-shared-reference-counted-handles.md) | [Named addresses are shared, reference-counted handles](0065-named-addresses-are-shared-reference-counted-handles.md) |
 | [0066](0066-a-session-id-outlives-residency.md) | [A session ID outlives residency](0066-a-session-id-outlives-residency.md) |
 | [0067](0067-core-traces-its-decisions-and-data-to-a-host-sink.md) | [Core traces its decisions and data to a host sink](0067-core-traces-its-decisions-and-data-to-a-host-sink.md) |
-| [0068](0068-core-owns-the-io-processor-registry-and-every-origin-can-be-answered.md) | [Core owns the I/O processor registry, and every origin can be answered](0068-core-owns-the-io-processor-registry-and-every-origin-can-be-answered.md) (Proposed) |
+| [0068](0068-core-owns-the-io-processor-registry-and-every-origin-can-be-answered.md) | [Core owns the I/O processor registry, and every origin can be answered](0068-core-owns-the-io-processor-registry-and-every-origin-can-be-answered.md) |
