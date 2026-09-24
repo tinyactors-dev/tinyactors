@@ -1,6 +1,6 @@
 # ADR 0069: An idle actor carries no event
 
-**Status:** Accepted; not yet implemented. Refines ADR 0038, ADR 0047, ADR 0055, ADR 0064 and ADR 0067 (section 8).
+**Status:** Accepted and implemented; refines ADR 0038, ADR 0047, ADR 0055, ADR 0064 and ADR 0067 (section 8). See the implementation notes for where the code differs from the text.
 **Date:** 2026-09-24
 
 ## Context
@@ -159,4 +159,90 @@ child's `<onexit>` failed with `error.execution` instead. No test covered it.
 
 ## Implementation notes
 
-Not yet implemented.
+2026-09-24. Built fresh on `main` in the proposal's three steps, one
+commit each, after the scenarios below. The experiment branch was the
+guide, not the source.
+
+- **Names.** The block is `ta_event_block` (`src/actor.h`), which was
+  `ta_internal_queue`; `ta_actor.event_block` is the one pointer. The
+  events live in `ta_event_slots` inside it: the external event and its
+  `ta_external_state`, `bound` (a `ta_event_binding`: none, external,
+  internal, kept), `bound_before`, and the kept event.
+  `ta_actor_bound_event()` is what `ta_dm_host_event()` returns.
+- **A take remembers what `_event` was.** Point 3's retry rule is
+  `bound_before`: taking an event records what `bound` was, and
+  `ta_unbind_event()` puts it back. A taken queue head moves into the kept
+  slot when the next event is taken, so the event a retry must bind again
+  is still held. The continuation's two restore flags became one,
+  `took_event`, since the unbind no longer needs to know where the event
+  came from.
+- **Invoked sessions.** "Invoked" is `sparse->has_parent`. Such a session
+  keeps its whole block between macrosteps, which is 152 bytes when its
+  last macrostep queued nothing and 728 when the queue grew to its first
+  capacity. The point 4 scenarios check the kept event on both data
+  models.
+- **Deviation: a delivered block rarely stays a header.** ADR 0064's
+  reservation makes room for one internal event before every microstep,
+  so a header-only block grows to the first capacity as soon as its actor
+  runs, even if the microstep raises nothing. A delivery with an empty
+  cache therefore costs two allocator calls (the header, then the
+  growth), and the blocks in a warm cache are mostly 728 bytes. The
+  header-only block still bounds what an actor costs while it waits to be
+  resumed with a cold cache: 152 bytes instead of 728.
+- **Cache.** `system->block_cache` is a list through
+  `ta_event_block.next_cached`, with `block_cache_count` and
+  `block_cache_limit`. `ta_interpreter_block_cache_trim()` frees down to
+  the limit; teardown sets the limit to 0 and trims.
+- **napi.** `pump.c` calls `ta_system_set_event_block_cache()` with
+  `messageBudget` after parsing the scheduling options, and `bindings.rb`
+  lists the function as plumbing-owned. At the default budget of 1,024 the
+  cache keeps at most about 745 KB. A host that raises `messageBudget`
+  also raises what the cache may keep after a burst: the bench below,
+  with a budget of 200,000, keeps 728 bytes per actor.
+- **`ta_actor_deliver`** takes the block after the origin checks, so
+  `TA_ERR_NOMEM` leaves the event and the actor untouched. The addon
+  already backs off and retries on it (napi ADR 0008).
+- **Tests.**
+  - `tinyactors-test/ruby/scenarios/event_binding.rb`: a cancelled child's
+    `<onexit>` sees its last external event, its last internal event, and
+    not an event it was handed but did not take, on jq and ECMAScript.
+    They passed before the change, and failed when the experiment's rule
+    (release at the end of every macrostep) was put back.
+  - The same file fails each allocation of the reservation before a
+    microstep in turn, with paused actors holding every cached block, and
+    checks that the resumed macrostep binds the same `_event` values.
+  - `io_origin_test.c` now expects a top-level actor to give its last
+    event's origin back when the macrostep ends, and warms the block cache
+    before counting allocations.
+  - `scale_test.c`, `check_batched_delivery_allocations`: 256 actors each
+    delivered an event before any is resumed.
+- **Measurements**, macOS on Apple silicon, before (`0a37619`) and after:
+
+  | | Before | After |
+  |---|---|---|
+  | `sizeof(ta_actor)` | 432 | 224 |
+  | Scale test, bytes per actor (50k to 4M) | 532 | 324 |
+  | Scale test, allocator calls per event, one actor at a time | 0 | 0 |
+  | Scale test, allocator calls per event, batches of 256, default cache | not measured | 1.97 |
+  | Scale test, allocator calls per event, batches of 256, cache of 256 | not measured | 0 |
+  | Event block header (`offsetof(ta_event_block, events)`) | 8 | 152 |
+  | Cached block with room for 8 events | 584 | 728 |
+  | napi bench, core bytes per idle actor (200k) | 464 | 256 |
+  | napi bench, extra core bytes per actor holding a delivered event | 0 | 152 |
+  | napi bench, delivery throughput, Node / Bun (M events/s) | 2.9 / 3.4 | 2.9 / 3.4 |
+  | napi at 1M actors, native bytes per actor (plain / data / ws) | 480 / 528 / 1225 | 272 / 320 / 1017 |
+  | napi at 1M actors, RSS bytes per actor (plain / data / ws) | 518 / 1411 / 2135 | 319 / 700 / 1456 |
+  | napi steady-state core allocator calls per round (plain / ws) | 16384 / 0 | 16384 / 0 |
+
+  The napi bench is `tinyactors-napi/test/bench/event_blocks.js`; the 1M
+  figures come from `TAT_SCALE_MAX_POPULATION=1000000 node test/scale.js`.
+  The 16,384 calls per round on the plain chart predate this ADR (napi
+  `docs/scale.md`).
+- **Open points.**
+  - A retry after `TA_ERR_NOMEM` in transition selection itself, as
+    opposed to the microstep it chose, does not give the taken event back;
+    that was true before this ADR too, and is unchanged.
+  - An invoked session keeps a block that may have grown. Swapping it for
+    a cached header-only block when the macrostep ends would bound it at
+    152 bytes, but the cache holds blocks of mixed sizes, so this is left
+    until invoked populations are measured.

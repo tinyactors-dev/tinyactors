@@ -1,6 +1,6 @@
 # ADR 0038: Session images separate interpreter state from host data
 
-- Status: Accepted; image contents extended by ADR 0067 (step counters and trace contexts)
+- Status: Accepted; image contents extended by ADR 0067 (step counters and trace contexts); event slots changed by ADR 0069 (the external and kept events and what `_event` names, instead of three event copies)
 - Date: 2026-09-16
 
 ## Context

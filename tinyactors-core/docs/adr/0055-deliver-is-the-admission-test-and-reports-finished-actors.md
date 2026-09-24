@@ -1,6 +1,6 @@
 # ADR 0055: `ta_actor_deliver` is the admission test and reports finished actors
 
-**Status:** Accepted and implemented; refines ADR 0011, ADR 0014 and ADR 0029. See the implementation notes for where the code differs from the text.
+**Status:** Accepted and implemented; refines ADR 0011, ADR 0014 and ADR 0029. See the implementation notes for where the code differs from the text. Refined by ADR 0069 (deliver can return `TA_ERR_NOMEM`).
 **Date:** 2026-09-23
 
 ## Context

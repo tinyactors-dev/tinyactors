@@ -1,6 +1,6 @@
 # ADR 0067: Core traces its decisions and data to a host sink
 
-**Status:** Accepted; not yet implemented. Applies ADR 0045, ADR 0047, ADR 0057, ADR 0061 and ADR 0066; refines ADR 0038 and ADR 0054; serves ADR 0020 and ADR 0021.
+**Status:** Accepted; not yet implemented. Applies ADR 0045, ADR 0047, ADR 0057, ADR 0061 and ADR 0066; refines ADR 0038 and ADR 0054; serves ADR 0020 and ADR 0021. Section 8 refined by ADR 0069 (the macrostep's trace parent lives in the event block, so an idle actor carries only the step counters).
 **Date:** 2026-09-23
 
 ## Context

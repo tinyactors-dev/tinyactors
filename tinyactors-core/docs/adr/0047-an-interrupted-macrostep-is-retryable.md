@@ -1,6 +1,6 @@
 # ADR 0047: An allocation failure inside a macrostep is retryable
 
-**Status:** Accepted; applies ADR 0009 and ADR 0023
+**Status:** Accepted; applies ADR 0009 and ADR 0023; refined by ADR 0069 (a retry restores where `_event` was instead of moving the event back)
 **Date:** 2026-09-20
 
 ## Context
