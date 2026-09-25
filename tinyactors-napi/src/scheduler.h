@@ -348,6 +348,12 @@ ta_result tna_sched_post_waiting(tna_sched *sched, const tna_waiting_post *post)
 ta_result tna_sched_hand_over(tna_sched *sched, tna_mailbox *box, ta_actor_id to);
 /* The load failed: every waiting message becomes a dead letter with `reason`. */
 void tna_sched_bury_waiting(tna_sched *sched, tna_mailbox *box, tna_dead_reason reason);
+/*
+ * Withdraws the envelope at `index` from the waiting mailbox `box` and
+ * frees it, as cancelling a send() does for mail in an actor's mailbox (ADR
+ * 0005 point 11). False, changing nothing, when `box` does not hold it.
+ */
+bool tna_sched_withdraw_waiting(tna_sched *sched, tna_mailbox *box, uint32_t index);
 /* The envelope at `index` (for tests and the router), or NULL. */
 tna_envelope *tna_sched_envelope(const tna_sched *sched, uint32_t index);
 /* Messages waiting in `actor`'s mailbox. */

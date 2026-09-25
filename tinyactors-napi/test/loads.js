@@ -133,6 +133,31 @@ async function failedLoads() {
   }
 }
 
+// Cancelling a send() whose message waits for a load withdraws the
+// message, as for one still in a mailbox: it is not delivered after the
+// load, and the other waiting mail still is, in order.
+async function cancelWhileWaiting() {
+  const system = createSystem();
+  const image = await unloaded(system);
+  let release;
+  const loaded = new Promise((resolve) => { release = resolve; });
+  system.setLoader('counter', async () => { await loaded; return image; });
+  const controller = new AbortController();
+  const first = system.send(ONE, 'hit', 'kept-1');
+  const cancelled = system.send(ONE, 'hit', 'cancelled', { signal: controller.signal });
+  const last = system.send(ONE, 'hit', 'kept-2');
+  await tick(10); // not flush(): it waits for the load, which waits for us
+  controller.abort();
+  await assert.rejects(cancelled, (error) => error.code === 'aborted');
+  assert.equal(system.metrics().metrics.find((m) => m.name === 'tinyactors.messages.waiting').points[0].value, 2,
+               'the withdrawn message no longer waits');
+  release();
+  await Promise.all([first, last]);
+  await system.flush();
+  assert.deepEqual(logOf(system, ONE), ['kept-1', 'kept-2']);
+  system.close();
+}
+
 // A slow loader within its timeout loads; one past it times out, and the
 // image it returns later is destroyed.
 async function slowAndTimedOutLoads() {
@@ -344,6 +369,7 @@ async function arguments_() {
   await waitingMailInOrder();
   await secondMessageMidLoad();
   await failedLoads();
+  await cancelWhileWaiting();
   await slowAndTimedOutLoads();
   await waitingFull();
   await virtualFamily();

@@ -341,6 +341,7 @@ bool tna_sched_cancel(tna_sched *sched, uint32_t index) {
         return false;
     }
     if (waiter->state == TNA_WAITER_QUEUED) {
+        /* A message waiting for a load is withdrawn by tna_system_cancel(). */
         tna_envelope *envelope = tna_sched_envelope(sched, waiter->envelope);
         tna_sched_entry *entry = tna_sched_lookup(sched, waiter->actor);
         if (envelope != NULL && entry != NULL && tna_sched_unlink(sched, entry, waiter->envelope)) {
@@ -476,6 +477,28 @@ void tna_sched_bury_waiting(tna_sched *sched, tna_mailbox *box, tna_dead_reason 
         index = next;
     }
     *box = (tna_mailbox){ 0 };
+}
+
+bool tna_sched_withdraw_waiting(tna_sched *sched, tna_mailbox *box, uint32_t index) {
+    uint32_t previous = 0;
+    for (uint32_t at = box->first; at != 0; at = tna_sched_envelope(sched, at)->next) {
+        if (at == index) {
+            uint32_t next = tna_sched_envelope(sched, at)->next;
+            if (previous == 0) {
+                box->first = next;
+            } else {
+                tna_sched_envelope(sched, previous)->next = next;
+            }
+            if (box->last == index) {
+                box->last = previous;
+            }
+            box->count -= 1u;
+            tna_envelope_give(sched, index);
+            return true;
+        }
+        previous = at;
+    }
+    return false;
 }
 
 ta_result tna_sched_wake(tna_sched *sched, ta_actor_id actor) {

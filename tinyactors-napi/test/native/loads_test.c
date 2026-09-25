@@ -325,8 +325,49 @@ static void a_wake_up_starts_a_load(void) {
     finish_system(system);
 }
 
+/*
+ * A cancelled send() withdraws its message from the load's mailbox: the
+ * rest still move, in order; withdrawing it again, or a message that is
+ * not waiting, changes nothing.
+ */
+static void a_waiting_message_can_be_withdrawn(void) {
+    tna_system *system = make_system();
+    ta_definition_id chart = define_receiver(system);
+    ta_actor_id first = spawn(system, chart, &recv_name);
+    CHECK(settle(system, NULL) == 0u);
+    ta_session_image *image = unload(system, first);
+    CHECK(tna_loads_set_family(&system->loads, S("r"), 10) == TA_OK);
+    ta_address *address = intern(system, &recv_name);
+
+    CHECK(post(system, address, "a") == TA_OK);
+    CHECK(post(system, address, "b") == TA_OK);
+    CHECK(post(system, address, "c") == TA_OK);
+    tna_load_request request = next_request(system);
+    tna_load *record = tna_loads_find(&system->loads, request.index, request.generation);
+    CHECK(record != NULL);
+    uint32_t middle = tna_sched_envelope(&system->sched, record->mail.first)->next;
+    uint32_t live = system->sched.envelopes.live;
+    CHECK(tna_loads_withdraw(&system->loads, &system->sched, middle));
+    CHECK(system->loads.waiting == 2u && record->mail.count == 2u);
+    CHECK(system->sched.envelopes.live == live - 1u);
+    CHECK(!tna_loads_withdraw(&system->loads, &system->sched, middle));
+    uint32_t last = record->mail.last;
+    CHECK(tna_loads_withdraw(&system->loads, &system->sched, last)); /* the tail moves back */
+    CHECK(record->mail.count == 1u && record->mail.first == record->mail.last);
+    CHECK(post(system, address, "d") == TA_OK); /* appends after the new tail */
+
+    ta_actor_id loaded = load(system, image);
+    CHECK(finish(system, request, TNA_LOAD_LOADED, loaded) == TA_OK);
+    static const char *const order[] = { "a", "d" };
+    mailbox_is(system, loaded, order, 2);
+    CHECK(settle(system, NULL) == 0u);
+    ta_address_release(address);
+    finish_system(system);
+}
+
 int main(void) {
     waiting_mail_moves_in_order();
+    a_waiting_message_can_be_withdrawn();
     waiting_mail_is_bounded();
     a_failed_load_dead_letters_its_mail();
     a_virtual_family_spawns();

@@ -732,7 +732,7 @@ static napi_value tna_cancel_send_method(napi_env env, napi_callback_info info) 
     bool cancelled = false;
     if (waiter != NULL && waiter->generation == generation && waiter->host != NULL) {
         napi_deferred deferred = waiter->host;
-        cancelled = tna_sched_cancel(sched, index);
+        cancelled = tna_system_cancel(wrapper->system, index);
         if (cancelled) {
             const char *message = strcmp(code, "timeout") == 0 ? "send: the timeout passed before the message completed"
                                                                 : "send: the signal was aborted";

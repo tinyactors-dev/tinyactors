@@ -99,6 +99,13 @@ void tna_loads_init(tna_loads *loads, ta_allocator allocator);
  */
 void tna_loads_close(tna_loads *loads);
 
+/*
+ * Withdraws the waiting envelope at `index` from its load's mailbox, when
+ * it is there: a send() waiting for it was cancelled. False when it is not
+ * waiting (it is in an actor's mailbox or on the dead list).
+ */
+bool tna_loads_withdraw(tna_loads *loads, tna_sched *sched, uint32_t index);
+
 /* Registers `family`'s loader limit; `max_waiting` 0 removes the loader. */
 ta_result tna_loads_set_family(tna_loads *loads, ta_str family, uint32_t max_waiting);
 

@@ -407,6 +407,18 @@ void tna_system_end_turn(tna_system *system) {
     tna_system_arm(system);
 }
 
+bool tna_system_cancel(tna_system *system, uint32_t index) {
+    tna_waiter *waiter = tna_sched_waiter(&system->sched, index);
+    if (waiter == NULL) {
+        return false;
+    }
+    if (waiter->state == TNA_WAITER_QUEUED && tna_loads_withdraw(&system->loads, &system->sched, waiter->envelope)) {
+        waiter->state = TNA_WAITER_SETTLING;
+        return true;
+    }
+    return tna_sched_cancel(&system->sched, index);
+}
+
 ta_result tna_system_post(tna_system *system, const tna_message *message) {
     if (system == NULL || system->closed) {
         return TA_ERR_INVALID;

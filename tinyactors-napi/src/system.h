@@ -215,6 +215,13 @@ void tna_system_want_turn(tna_system *system);
  * asks for the next turn when work remains.
  */
 void tna_system_turn(tna_system *system);
+/*
+ * Cancels the send() waiter at `index` (ADR 0005 point 11). A message still
+ * waiting for a load is withdrawn from the load's mailbox (napi ADR 0020),
+ * as one in an actor's mailbox is; otherwise tna_sched_cancel(). True when
+ * the waiter was cancelled; the caller settles and gives it back.
+ */
+bool tna_system_cancel(tna_system *system, uint32_t index);
 void tna_system_end_turn(tna_system *system);
 /*
  * No runnable or ready actors, no dead letters to report, no effects or load

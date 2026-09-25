@@ -127,6 +127,22 @@ bool tna_loads_waiting(const tna_loads *loads, const ta_address *address) {
            tna_map_get(&loads->by_address, (uint64_t)(uintptr_t)address, &index);
 }
 
+bool tna_loads_withdraw(tna_loads *loads, tna_sched *sched, uint32_t index) {
+    tna_envelope *envelope = tna_sched_envelope(sched, index);
+    uint64_t load_index = 0;
+    if (envelope == NULL || envelope->target != 0 || envelope->address == NULL ||
+        tna_map_count(&loads->by_address) == 0 ||
+        !tna_map_get(&loads->by_address, (uint64_t)(uintptr_t)envelope->address, &load_index)) {
+        return false;
+    }
+    tna_load *load = tna_vec_at(&loads->loads, (uint32_t)load_index);
+    if (!tna_sched_withdraw_waiting(sched, &load->mail, index)) {
+        return false;
+    }
+    loads->waiting -= 1u;
+    return true;
+}
+
 /* A free record's index, with the record reset; 0 when there is no memory. */
 static uint32_t tna_loads_take(tna_loads *loads) {
     if (loads->loads.count == 0) {
