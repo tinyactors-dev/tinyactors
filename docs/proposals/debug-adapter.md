@@ -43,8 +43,8 @@ asks for.
   `ta_actor_reconstruct`, which does not touch the directory (core ADR 0052),
   so the copy is never routable. Everything is allowed on the copy.
 - **live.** The attached actor itself. `send`, `set` and `goto` as `allow`
-  permits. Stopping the live actor needs `hold`, and it resumes by itself
-  after a timeout.
+  permits. Stopping the live actor needs `hold`, and stops only between
+  macrosteps (see "Holding a live actor" below).
 
 ### What a fork is for
 
@@ -80,8 +80,9 @@ asks for.
   revision it was captured under (`ta_session_image_definition`).
 
 A session image is not a wire format: it holds references to live host
-values (core ADR 0038). So the debug server for production runs inside the
-production process, and the fork lives there too.
+values (core ADR 0038). So the debug adapter for production runs inside
+the production process, and the fork lives there too. It opens no socket
+of its own (see "Transport, authentication and audit" below).
 
 ## Poking: the debug console
 
@@ -105,7 +106,8 @@ extension could call.
 | `send <event> [json]` | Delivers through the same router and mailbox as any mail, under a sampled, watched traceparent | fork; live with `send` |
 | `goto <state…> [from <state>]` | An operator transition (below) | fork; live with `goto` |
 | `abandon` | Abandons a macrostep that never ends (below) | fork; live with `goto` |
-| `replace <file>` | Hot-replaces the actor with a new revision; it restarts from the initial state and keeps its data | fork; live with `goto` |
+| `replace <file>` | Hot-replaces the actor with a new revision; it restarts from the initial state and keeps its data. napi refuses while the actor is inside a macrostep, so a runaway macrostep needs `abandon` first | fork; live with `goto` |
+| `cancel <send ID>` | Withdraws one pending delayed send of this actor (below) | fork; live with `goto` |
 | `clock +<duration>` | Advances logical time | fork |
 | `fork` | Copies the live actor and switches to the copy | live |
 | `<expression>` | Evaluated in the actor's data model | all |
@@ -243,7 +245,7 @@ in napi or the workbench. **core** needs a core ADR.
 |---|---|---|
 | `threads` | The attached actor and its invoked children; every actor in the workbench. Named by address and active leaf states | ✓ |
 | `thread` event | From the `SPAWNED`, `FINISHED` and `DESTROYED` records | ✓ |
-| `pause` | A busy actor stops at the next unit. An idle one has its mailbox held and reports `stopped` at its stable configuration | host |
+| `pause` | In a fork, a busy actor stops at the next unit. A live actor has its mailbox held and reports `stopped` when its current macrostep ends | host |
 | `continue` | Resume with the normal budgets and release held mail | ✓ |
 | `stepIn` | One unit (`action_budget: 1`, core ADR 0061): an action or a `<foreach>` iteration, into `<if>` and `<foreach>` bodies | ✓ |
 | `next` | The next action at the same block depth or shallower | host |
@@ -266,6 +268,9 @@ in napi or the workbench. **core** needs a core ADR.
 | `setExceptionBreakpoints` | Filters `error.execution`, `error.communication`, `error.platform`, `ignored` (an event that enabled no transition), `stopped` (out of memory), `dead-letter` (napi) | ✓ |
 | `dataBreakpointInfo` / `setDataBreakpoints` | A data location; stops after an `ASSIGN` record writes it | host |
 | `stopped` reasons | `breakpoint`, `step`, `pause`, `exception`, `goto`, `data breakpoint`, `function breakpoint` | ✓ |
+
+On a live actor, only breakpoints between macrosteps stop it (see "Holding a
+live actor" below); inside a macrostep they act as logpoints.
 
 Breakpoints start with the host single-stepping on `action_budget: 1` and
 comparing each position with the breakpoints. A breakpoint set over
@@ -335,7 +340,8 @@ ending a thread would destroy an actor.
 | The paused position in `ta_actor_inspection` | core | attaching to an actor that is already paused |
 | A breakpoint set over compiled IDs | core, later | only if host single-stepping is too slow |
 | Recording operator jumps | [replay-based persistence](replay-persistence.md) | debugging past events; replay keeping manual fixes |
-| Debug server, `debug` I/O processor, forks, modes and audit | tinyactors-napi | production attach |
+| Withdrawing one delayed send by owner and send ID | the core ADR that adds replay's withdrawal by time | `cancel` |
+| A DAP session object, `debug` I/O processor, forks, modes, audit hook | tinyactors-napi | production attach |
 | A DAP adapter over the existing JSON-RPC | tinyactors-test | the first version: the workbench and failing scenarios |
 | An extension that registers the debug type | new, about 50 lines | VS Code; the other clients need only configuration |
 
@@ -355,20 +361,96 @@ there. An operator jump is an input like a delivered event, so the log has
 to record it, with states by name rather than ID, because replay runs
 against the current revision.
 
-## Open points
+## Answers from the ADRs
 
-1. Whether `ta_actor_prepare_replacement` accepts an incumbent that is
-   inside a macrostep. Its header comment does not say. If it refuses,
-   `abandon` is the only way out of a macrostep that never ends, and
-   `replace` must say so.
-2. Whether an operator can cancel one delayed send from outside the
-   chart. A timer that should not fire is a common wedge; this may need a
-   core operation of its own.
-3. How a live `hold` interacts with a webhook handler that waits for its
-   macrostep: Stripe retries a webhook that times out. The hold timeout
-   may need to be shorter than the caller's.
-4. Who may attach, and to what. The debug server sees customer data and
-   can change production state, so it needs authentication, an audit log,
-   and read-only by default. None of that is designed here.
-5. Whether `next` should wait for the next event when the actor is idle, or
-   do nothing.
+The first draft left five points open. Each is answered by an existing
+ADR, or by the code that implements it.
+
+### Replacing an actor inside a macrostep
+
+Core does not check the incumbent: `ta_actor_prepare_replacement` and
+`ta_actor_activate_replacement` refuse only a *replacement* that is busy
+(`src/actor.c`). napi refuses the incumbent: napi ADR 0005 point 12 says
+`activate()` answers `busy` while the incumbent is inside a macrostep,
+because activation moves the incumbent's waiting mail to the replacement
+and must not drop mail it has accepted. So in napi, `replace` cannot
+rescue a macrostep that never ends. That is what `abandon` is for, and it
+comes first. Relaxing napi's rule would not be better: the replacement
+binds the incumbent's data-model root (core ADR 0037), which a half-run
+microstep may have half changed.
+
+### Cancelling one delayed send from outside the chart
+
+There is no public operation. Core ADR 0012 scopes cancellation to the
+session that created the send, and a `<cancel>` inside the chart is the
+only way in. Core already has the mechanism: core ADR 0054 removes a
+cancelled or withdrawn send from its owner's array in O(k + log A), and
+`ta_timer_withdraw` does it for completion sends (`src/invoke.c`).
+
+The root roadmap's next core item ("Close the core API gaps for log-based
+durability") already needs a withdrawal: [replay-based
+persistence](replay-persistence.md) withdraws pending sends due at or
+before a given time when replay ends. An operator withdrawal by actor and
+send ID belongs in the same ADR. It names the owning actor, so it keeps
+ADR 0012's scope: only that actor's sends can be withdrawn. The send ID is
+the text core owns (core ADR 0048), which the Timers scope shows.
+
+### Holding a live actor, webhook timeouts and retries
+
+napi ADR 0005 point 11 settles what a waiting caller sees:
+
+- A `send()` promise completes when the macrostep its message starts ends.
+  A macrostep paused by a budget has not ended.
+- With `timeout` or `signal`, a message *still in a mailbox* is withdrawn
+  and never delivered. A message the actor *already took* is not undone:
+  its macrostep runs, and only the promise rejects.
+- With `until: "accepted"`, the promise resolves as soon as the message is
+  queued.
+
+So a hold that stops the actor **between macrosteps**, with its mailbox
+held, is safe for a webhook. A handler that waits for completion times
+out, its message is withdrawn, and Stripe's retry delivers it once, later.
+A handler that acknowledges on `accepted` has already answered, and its
+message waits for the hold to end.
+
+A hold that stops the actor **inside** a macrostep a webhook started is
+the one that duplicates: the handler's promise rejects, Stripe retries,
+and the first delivery still completes when the hold ends. So a live
+`hold` stops only between macrosteps, and breakpoints inside a live
+actor's macrosteps are not offered. Stepping through a macrostep is what
+a fork is for.
+
+### Transport, authentication and audit
+
+Core ADR 0002 makes Tinyactors an in-process library whose embedder owns
+I/O. napi follows it for traces: napi ADR 0015 hands records to a
+JavaScript hook with "no HTTP", and napi ADR 0016 hands the application
+OTLP bytes that it posts itself, with no telemetry dependency.
+
+The debug adapter follows the same rule. napi opens no port and checks no
+credentials. It offers a DAP session object: the application passes it
+each incoming DAP message and sends on what it returns. The application
+puts it behind its own transport and authentication (a WebSocket behind
+its admin login, stdio over SSH), and decides `mode` and `allow` for each
+user before it creates the session.
+
+For audit, the debugger's messages, jumps and withdrawals run as
+macrosteps under watched trace contexts, so they reach the application's
+trace sink like everything else, marked as the debugger's. Attaching,
+detaching and each console command go to a hook the application stores
+wherever it keeps audit records.
+
+### `next` on an idle actor
+
+Core ADR 0011 gives the host the external queue and the choice of which
+event an actor gets next. An idle actor holds no event (core ADR 0069) and
+has nothing to step. So `next`, `stepIn` and `stepOut` on an idle actor
+are the host's to define: the adapter takes the next message from the
+held mailbox and stops at the start of its macrostep, before transition
+selection.
+
+When the mailbox is empty, DAP allows the request to answer at once and
+send `stopped` later, so the actor stays running until the next message
+arrives. In a fork nothing arrives by itself: time moves only when told
+to (core ADR 0012), so the console says what is next due and suggests
+`clock`.
