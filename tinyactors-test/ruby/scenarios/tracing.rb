@@ -115,7 +115,8 @@ TinyactorsTest.scenarios 'tracing' do
     assert_equal 'begin 2 bad', lines[0]
     assert_equal 'micro 2.1 bad [t2] exit[] enter[]', lines[1]
     assert lines[2].start_with?('failed 2.1 transition:idle a'), "an ACTION_FAILED record: #{lines.inspect}"
-    assert_equal ['raised 2.1 transition:idle error.execution', 'end 2 [idle]'], lines[3..]
+    # Nothing handles the error, so it is taken and ignored (ADR 0072).
+    assert_equal ['raised 2.1 transition:idle error.execution', 'ignored 2.1', 'end 2 [idle]'], lines[3..]
   end
 
   # Catches: eventless microsteps that share a key or skip one, a guard
@@ -133,7 +134,7 @@ TinyactorsTest.scenarios 'tracing' do
 
   # Catches: an internal transition that exits its source, and a macrostep
   # whose event enables nothing written as anything but BEGIN and END.
-  scenario 'an internal transition exits only below its source, and an ignored event is BEGIN then END' do
+  scenario 'an internal transition exits only below its source, and an ignored event is BEGIN, IGNORED, then END' do
     actor = spawn :trace_basic
     actor.deliver 'count'
     actor.deliver 'go'
@@ -141,7 +142,7 @@ TinyactorsTest.scenarios 'tracing' do
     actor.deliver 'inside'
     actor.deliver 'unknown'
     assert_equal ['begin 4 inside', 'micro 4.1 inside [t5] exit[x] enter[y]', 'end 4 [three,y]',
-                  'begin 5 unknown', 'end 5 [three,y]'], trace_lines
+                  'begin 5 unknown', 'ignored 5.0', 'end 5 [three,y]'], trace_lines
   end
 
   # Catches: parallel transitions out of selection order, exit sets out of

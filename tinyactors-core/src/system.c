@@ -166,6 +166,14 @@ ta_result ta_system_register_definition(ta_system *system, ta_definition *defini
     if (slot == system->free_definition_slot) {
         system->free_definition_slot = entry->next_free;
     }
+    if (definition->occupancy == NULL && definition->state_count != 0) {
+        definition->occupancy = ta_arena_alloc(&definition->arena, (size_t)definition->state_count * sizeof(uint32_t),
+                                               _Alignof(uint32_t));
+        if (definition->occupancy == NULL) {
+            return TA_ERR_NOMEM;
+        }
+        ta_mem_zero(definition->occupancy, (size_t)definition->state_count * sizeof(uint32_t));
+    }
     entry->definition = definition;
     entry->next_free = UINT32_MAX;
     if (definition->unregistered_previous != NULL) {
@@ -462,7 +470,17 @@ ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch_params
         }
         ta_delayed_send send;
         (void)ta_timer_pop(&system->timers, &send);
-        if (ta_interpreter_dispatch_delayed(system, &send) == TA_EXTERNAL_EVENT_RETRY) {
+        const ta_actor *owner = ta_actor_lookup(system, send.owner);
+        const ta_definition *owner_definition = owner != NULL ? owner->definition : NULL;
+        ta_external_event_submit_status fired = ta_interpreter_dispatch_delayed(system, &send);
+        if (fired != TA_EXTERNAL_EVENT_RETRY) {
+            if (owner_definition != NULL) {
+                TA_COUNT(system, owner_definition, delayed_fired);
+            } else {
+                system->counters.delayed_fired += 1u;
+            }
+        }
+        if (fired == TA_EXTERNAL_EVENT_RETRY) {
             /*
              * Rescheduling keeps its ID, and so its place in deadline order.
              * The owner may be gone by now; its submitted sends are orphans.
@@ -485,5 +503,43 @@ ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch_params
     ta_time next = 0;
     *params->dispatched = dispatched;
     *params->more_due = retry || (ta_timer_next_due(&system->timers, &next) && next <= now);
+    return TA_OK;
+}
+
+/* ------------------------------------------------------------------------
+ * Counters and occupancy (ADR 0072)
+ */
+
+ta_result ta_definition_counters(const ta_system *system, ta_definition_id definition, ta_counters *out) {
+    const ta_definition *found = ta_system_definition(system, definition);
+    if (found == NULL || out == NULL) {
+        return out == NULL ? TA_ERR_INVALID : TA_ERR_NOT_FOUND;
+    }
+    *out = found->counters;
+    return TA_OK;
+}
+
+void ta_system_counters(const ta_system *system, ta_counters *out) {
+    if (system != NULL && out != NULL) {
+        *out = system->counters;
+    }
+}
+
+ta_result ta_definition_occupancy(const ta_system *system, const ta_definition_occupancy_params *params) {
+    if (params == NULL || params->count == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_definition *definition = ta_system_definition(system, params->definition);
+    if (definition == NULL) {
+        *params->count = 0;
+        return TA_ERR_NOT_FOUND;
+    }
+    *params->count = definition->state_count;
+    if (params->states == NULL || params->capacity < definition->state_count) {
+        return TA_ERR_NOMEM;
+    }
+    if (definition->state_count != 0) {
+        ta_mem_copy(params->states, definition->occupancy, (size_t)definition->state_count * sizeof(uint32_t));
+    }
     return TA_OK;
 }

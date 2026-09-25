@@ -1311,6 +1311,11 @@ struct ta_definition {
     ta_allocator allocator;
     /* Owns every array and string below. */
     ta_arena arena;
+    /* Counters and state occupancy (ADR 0072): bookkeeping about the
+     * definition's actors, the only fields that change after registration.
+     * `occupancy` has `state_count` entries, from registration on. */
+    ta_counters counters;
+    uint32_t *occupancy;
     /* The system whose atoms and event names this definition uses. */
     ta_system *system;
     bool registered;
@@ -1778,6 +1783,8 @@ struct ta_system {
     /* The trace-ID generator's state and the sampler's threshold (ADR 0073). */
     uint64_t trace_rng[4];
     uint64_t trace_threshold;
+    /* Every definition's counters, freed ones included (ADR 0072). */
+    ta_counters counters;
     ta_atom scxml_io_type;
     /* The short form "scxml" also selects the built-in processor. */
     ta_atom scxml_io_alias;
@@ -1817,6 +1824,17 @@ TA_PRIVATE uint32_t ta_system_invoker_index(const ta_system *system, ta_atom typ
 /* The type of the invoker at registry index `index`; TA_ATOM_NONE when none. */
 TA_PRIVATE ta_atom ta_system_invoker_type(const ta_system *system, uint32_t index);
 TA_PRIVATE bool ta_system_is_scxml_io(const ta_system *system, ta_atom type);
+
+/*
+ * Counts one occurrence for `definition` and for the system (ADR 0072). A
+ * definition's counters are bookkeeping, not part of what it compiled to,
+ * so they change through a definition core otherwise treats as read-only.
+ */
+#define TA_COUNT(system, definition, field)                                                                   \
+    do {                                                                                                      \
+        ((ta_definition *)(definition))->counters.field += 1u;                                               \
+        (system)->counters.field += 1u;                                                                       \
+    } while (0)
 
 
 
@@ -1968,6 +1986,13 @@ TA_PRIVATE void ta_interpreter_trace_invoke(ta_interpreter *it, ta_trace_kind ki
 TA_PRIVATE ta_trace_parent ta_interpreter_trace_here(const ta_interpreter *it);
 /* The parent the actor's current macrostep runs under; all zero for none. */
 TA_PRIVATE ta_trace_parent ta_actor_macrostep_parent(const ta_actor *actor);
+/* Adds the actor's active states to its definition's occupancy, or takes
+ * them away (ADR 0072), when it becomes resident or stops being so. */
+TA_PRIVATE void ta_interpreter_occupancy(ta_actor *actor, bool arrive);
+/* Counts and records an event core queued outside a run (ADR 0072), with
+ * `parent` as its cause when there is one. */
+TA_PRIVATE void ta_interpreter_raised_outside(ta_system *system, ta_actor *actor, ta_event_name_id name,
+                                   const ta_trace_parent *parent);
 /*
  * Makes an idle actor run a macrostep for work queued outside any run, such
  * as a failed send's error, under `trace` (null: none). An actor already in
@@ -3559,6 +3584,23 @@ TA_PRIVATE ta_step_key ta_trace_lifecycle_key(ta_actor *actor) {
 TA_PRIVATE void ta_trace_lifecycle(ta_system *system, ta_actor *actor, ta_trace_kind kind,
                         const ta_trace_parent *parent) {
     ta_step_key key = ta_trace_lifecycle_key(actor);
+    /* Counters and occupancy (ADR 0072): every residency change passes here. */
+    switch (kind) {
+    case TA_TRACE_SPAWNED: TA_COUNT(system, actor->definition, spawned); break;
+    case TA_TRACE_LOADED:
+        TA_COUNT(system, actor->definition, loaded);
+        ta_interpreter_occupancy(actor, true);
+        break;
+    case TA_TRACE_UNLOADED:
+        TA_COUNT(system, actor->definition, unloaded);
+        ta_interpreter_occupancy(actor, false);
+        break;
+    case TA_TRACE_DESTROYED:
+        TA_COUNT(system, actor->definition, destroyed);
+        ta_interpreter_occupancy(actor, false);
+        break;
+    default: break;
+    }
     ta_trace_context none = { 0 };
     if (!ta_trace_lifecycle_wanted(&system->trace, kind, parent != NULL ? &parent->context : &none)) {
         return;
@@ -12306,6 +12348,14 @@ TA_API ta_result ta_system_register_definition(ta_system *system, ta_definition 
     if (slot == system->free_definition_slot) {
         system->free_definition_slot = entry->next_free;
     }
+    if (definition->occupancy == NULL && definition->state_count != 0) {
+        definition->occupancy = ta_arena_alloc(&definition->arena, (size_t)definition->state_count * sizeof(uint32_t),
+                                               _Alignof(uint32_t));
+        if (definition->occupancy == NULL) {
+            return TA_ERR_NOMEM;
+        }
+        ta_mem_zero(definition->occupancy, (size_t)definition->state_count * sizeof(uint32_t));
+    }
     entry->definition = definition;
     entry->next_free = UINT32_MAX;
     if (definition->unregistered_previous != NULL) {
@@ -12602,7 +12652,17 @@ TA_API ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch
         }
         ta_delayed_send send;
         (void)ta_timer_pop(&system->timers, &send);
-        if (ta_interpreter_dispatch_delayed(system, &send) == TA_EXTERNAL_EVENT_RETRY) {
+        const ta_actor *owner = ta_actor_lookup(system, send.owner);
+        const ta_definition *owner_definition = owner != NULL ? owner->definition : NULL;
+        ta_external_event_submit_status fired = ta_interpreter_dispatch_delayed(system, &send);
+        if (fired != TA_EXTERNAL_EVENT_RETRY) {
+            if (owner_definition != NULL) {
+                TA_COUNT(system, owner_definition, delayed_fired);
+            } else {
+                system->counters.delayed_fired += 1u;
+            }
+        }
+        if (fired == TA_EXTERNAL_EVENT_RETRY) {
             /*
              * Rescheduling keeps its ID, and so its place in deadline order.
              * The owner may be gone by now; its submitted sends are orphans.
@@ -12625,6 +12685,44 @@ TA_API ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch
     ta_time next = 0;
     *params->dispatched = dispatched;
     *params->more_due = retry || (ta_timer_next_due(&system->timers, &next) && next <= now);
+    return TA_OK;
+}
+
+/* ------------------------------------------------------------------------
+ * Counters and occupancy (ADR 0072)
+ */
+
+TA_API ta_result ta_definition_counters(const ta_system *system, ta_definition_id definition, ta_counters *out) {
+    const ta_definition *found = ta_system_definition(system, definition);
+    if (found == NULL || out == NULL) {
+        return out == NULL ? TA_ERR_INVALID : TA_ERR_NOT_FOUND;
+    }
+    *out = found->counters;
+    return TA_OK;
+}
+
+TA_API void ta_system_counters(const ta_system *system, ta_counters *out) {
+    if (system != NULL && out != NULL) {
+        *out = system->counters;
+    }
+}
+
+TA_API ta_result ta_definition_occupancy(const ta_system *system, const ta_definition_occupancy_params *params) {
+    if (params == NULL || params->count == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_definition *definition = ta_system_definition(system, params->definition);
+    if (definition == NULL) {
+        *params->count = 0;
+        return TA_ERR_NOT_FOUND;
+    }
+    *params->count = definition->state_count;
+    if (params->states == NULL || params->capacity < definition->state_count) {
+        return TA_ERR_NOMEM;
+    }
+    if (definition->state_count != 0) {
+        ta_mem_copy(params->states, definition->occupancy, (size_t)definition->state_count * sizeof(uint32_t));
+    }
     return TA_OK;
 }
 
@@ -12839,7 +12937,26 @@ static void ta_trace_fault(ta_trace_record *record, const ta_fault *fault) {
     }
 }
 
-TA_PRIVATE void ta_interpreter_trace_raised(ta_interpreter *it, uint32_t mark) {
+/* Counts one error event by its kind (ADR 0072); other events count nothing. */
+static void ta_count_error(ta_system *system, const ta_actor *actor, ta_event_name_id name) {
+    if (ta_event_name_matches_internal(&system->event_names, name, TA_EVENT_NAME_ERROR_EXECUTION)) {
+        TA_COUNT(system, actor->definition, errors_execution);
+    } else if (ta_event_name_matches_internal(&system->event_names, name, TA_EVENT_NAME_ERROR_COMMUNICATION)) {
+        TA_COUNT(system, actor->definition, errors_communication);
+    } else if (ta_event_name_matches_internal(&system->event_names, name, TA_EVENT_NAME_ERROR_PLATFORM)) {
+        TA_COUNT(system, actor->definition, errors_platform);
+    }
+}
+
+/* Counts the errors a unit queued after `mark`, when it commits. */
+static void ta_count_raised(ta_interpreter *it, uint32_t mark) {
+    const ta_event_block *queue = it->actor->event_block;
+    for (uint32_t index = mark; queue != NULL && index < queue->count; index += 1u) {
+        ta_count_error(it->system, it->actor, queue->events[index].event.name);
+    }
+}
+
+static void ta_trace_raised_records(ta_interpreter *it, uint32_t mark) {
     const ta_event_block *queue = it->actor->event_block;
     if (!ta_tracing(it, TA_TRACE_RAISED) || queue == NULL) {
         return;
@@ -12851,7 +12968,17 @@ TA_PRIVATE void ta_interpreter_trace_raised(ta_interpreter *it, uint32_t mark) {
     }
 }
 
+TA_PRIVATE void ta_interpreter_trace_raised(ta_interpreter *it, uint32_t mark) {
+    ta_count_raised(it, mark);
+    ta_trace_raised_records(it, mark);
+}
+
 TA_PRIVATE void ta_interpreter_trace_invoke(ta_interpreter *it, ta_trace_kind kind, ta_invoke_id invoke) {
+    if (kind == TA_TRACE_INVOKED) {
+        TA_COUNT(it->system, it->actor->definition, invocations_started);
+    } else if (kind == TA_TRACE_INVOKE_CANCELLED) {
+        TA_COUNT(it->system, it->actor->definition, invocations_ended);
+    }
     if (!ta_tracing(it, kind)) {
         return;
     }
@@ -12897,6 +13024,7 @@ static void ta_trace_begin(ta_interpreter *it) {
     ta_actor_touch(actor);
     actor->trace_begun = true;
     actor->trace_macrostep += 1u;
+    TA_COUNT(it->system, actor->definition, macrosteps);
     actor->trace_microstep = 0;
     ta_trace_parent parent = ta_actor_macrostep_parent(actor);
     it->trace_context = parent.context;
@@ -12939,6 +13067,7 @@ static void ta_trace_end(ta_interpreter *it) {
  */
 static void ta_trace_microstep(ta_interpreter *it, const ta_event *event) {
     it->actor->trace_microstep += 1u;
+    TA_COUNT(it->system, it->actor->definition, microsteps);
     if (!ta_tracing(it, TA_TRACE_MICROSTEP) || it->trace_states == NULL) {
         return;
     }
@@ -12982,8 +13111,9 @@ static void ta_trace_guard(ta_interpreter *it, const struct ta_trace_condition *
 static void ta_trace_selection(ta_interpreter *it, uint32_t mark) {
     uint32_t count = it->condition_count;
     it->condition_count = 0;
+    ta_count_raised(it, mark);
     if (it->conditions == NULL || !ta_tracing(it, TA_TRACE_CONDITION)) {
-        ta_interpreter_trace_raised(it, mark);
+        ta_trace_raised_records(it, mark);
         return;
     }
     const ta_event_block *queue = it->actor->event_block;
@@ -13657,6 +13787,7 @@ typedef struct {
     const ta_value *data;
     ta_fault *fault;
     ta_trace_parent trace;
+    ta_time due;
 } ta_submit_params;
 
 static ta_external_event_submit_status ta_submit_external(ta_system *system, const ta_submit_params *params) {
@@ -13677,6 +13808,7 @@ static ta_external_event_submit_status ta_submit_external(ta_system *system, con
             .data = *params->data,
         },
         .trace = params->trace,
+        .due = params->due,
     };
     ta_external_event_submit_status status =
         system->external_events.v->submit(system->external_events.self,
@@ -13688,6 +13820,31 @@ static ta_external_event_submit_status ta_submit_external(ta_system *system, con
         ta_actor_ref_release(&destination);
     }
     return status;
+}
+
+TA_PRIVATE void ta_interpreter_raised_outside(ta_system *system, ta_actor *actor, ta_event_name_id name,
+                                   const ta_trace_parent *parent) {
+    ta_count_error(system, actor, name);
+    ta_trace_context none = { 0 };
+    const ta_trace_context *context = parent != NULL ? &parent->context : &none;
+    if ((ta_trace_macrostep_kinds(&system->trace, context) & TA_TRACE_BIT(TA_TRACE_RAISED)) == 0) {
+        return;
+    }
+    const ta_event_block *queue = actor->event_block;
+    if (queue == NULL || queue->count == 0) {
+        return;
+    }
+    ta_trace_record record = ta_trace_record_blank(TA_TRACE_RAISED);
+    record.key = (ta_step_key){ .session = actor->session_id };
+    record.actor = actor->record.id;
+    record.definition = actor->definition->id;
+    record.now = ta_clock_now(&system->clock);
+    record.event = &queue->events[queue->count - 1u].event;
+    if (parent != NULL) {
+        record.context = parent->context;
+        record.cause = parent->cause;
+    }
+    ta_trace_write(&system->trace, &record);
 }
 
 static ta_result ta_communication_error(ta_system *system, ta_actor *actor, const ta_error_params *params) {
@@ -13702,6 +13859,11 @@ static ta_result ta_communication_error(ta_system *system, ta_actor *actor, cons
     ta_error_params error = *params;
     error.name = TA_EVENT_NAME_ERROR_COMMUNICATION;
     ta_result result = ta_raise_error(system, actor, &error);
+    if (result == TA_OK && params->trace != NULL) {
+        /* Queued outside a run, by a delayed send that failed: no unit
+         * commits it, so it is counted and recorded here (ADR 0072). */
+        ta_interpreter_raised_outside(system, actor, TA_EVENT_NAME_ERROR_COMMUNICATION, params->trace);
+    }
     if (result == TA_OK) {
         /* An asynchronous failure makes an idle actor runnable again. */
         ta_interpreter_start_macrostep(actor, params->trace);
@@ -13756,6 +13918,7 @@ TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_sy
                                                 .data = &send->data,
                                                 .fault = &fault,
                                                 .trace = send->trace,
+                                                .due = send->due,
                                             });
     } else {
         const ta_io *io = ta_system_io_of(system, send->io_type);
@@ -13767,6 +13930,7 @@ TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_sy
             .target = send->target,
             .data = send->data,
             .trace = send->trace,
+            .due = send->due,
         };
         /* A send to a host processor is dispatched while its sender lives,
          * so the content resolves against the sender's definition. */
@@ -14487,7 +14651,8 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
              * ordinary execution error; writing the record cannot, so a
              * <log> never changes interpretation.
              */
-            ta_log_record record = { .source = it->actor->record.self };
+            ta_log_record record = { .source = it->actor->record.self, .key = ta_trace_key(it),
+                                     .context = it->trace_context };
             if (action->as.log.has_label) {
                 record.label = ta_atom_text(&it->system->atoms, action->as.log.label);
             }
@@ -15505,14 +15670,26 @@ static void ta_load_active(ta_interpreter *it) {
     }
 }
 
+TA_PRIVATE void ta_interpreter_occupancy(ta_actor *actor, bool arrive) {
+    ta_definition *definition = (ta_definition *)actor->definition;
+    for (ta_state_id state = 0; state < definition->state_count; state += 1) {
+        if (ta_configuration_contains_atomic(&actor->configuration, state)) {
+            uint32_t *count = &definition->occupancy[state];
+            *count = arrive ? *count + 1u : (*count == 0 ? 0 : *count - 1u);
+        }
+    }
+}
+
 static void ta_store_active(ta_interpreter *it) {
     const ta_definition *definition = it->definition;
+    ta_interpreter_occupancy(it->actor, false);
     ta_configuration_clear(&it->actor->configuration);
     for (ta_state_id state = 0; state < definition->state_count; state += 1) {
         if (ta_bits_get(it->active, state) && ta_definition_is_atomic(definition, state)) {
             ta_configuration_set_atomic(&it->actor->configuration, state, true);
         }
     }
+    ta_interpreter_occupancy(it->actor, true);
 }
 
 static void ta_compact_sparse(ta_interpreter *it) {
@@ -15602,9 +15779,25 @@ static ta_result ta_microstep(ta_interpreter *it) {
  */
 static void ta_after_selection(ta_interpreter *it, uint32_t mark) {
     ta_trace_selection(it, mark);
+    ta_actor *actor = it->actor;
+    bool external = actor->event_block != NULL && actor->event_block->slots.bound == TA_BOUND_EXTERNAL;
+    if (external) {
+        TA_COUNT(it->system, actor->definition, events_taken);
+    }
     if (it->enabled_count != 0) {
-        ta_microstep_begin(it, ta_actor_bound_event(it->actor));
+        ta_microstep_begin(it, ta_actor_bound_event(actor));
         return;
+    }
+    /* The event is consumed and enabled nothing (ADR 0072). */
+    if (external) {
+        TA_COUNT(it->system, actor->definition, events_ignored);
+    } else {
+        TA_COUNT(it->system, actor->definition, internal_ignored);
+    }
+    if (ta_tracing(it, TA_TRACE_IGNORED)) {
+        ta_trace_record record = ta_trace_record_now(it, TA_TRACE_IGNORED);
+        record.event = ta_actor_bound_event(actor);
+        ta_trace_emit(it, &record);
     }
     it->at = (ta_micro_position){0};
     it->steps += 1u;
@@ -15777,6 +15970,7 @@ static ta_result ta_run_finish(ta_interpreter *it) {
     /* A lifecycle record: its own key, and the step that finished as cause. */
     ta_step_key step = ta_trace_key(it);
     ta_step_key key = ta_trace_lifecycle_key(actor);
+    TA_COUNT(it->system, actor->definition, finished);
     if (ta_trace_lifecycle_wanted(&it->system->trace, TA_TRACE_FINISHED, &it->trace_context)) {
         ta_trace_record record = ta_trace_record_now(it, TA_TRACE_FINISHED);
         record.key = key;
@@ -16124,6 +16318,11 @@ static ta_result ta_interpreter_init(ta_interpreter *it, ta_system *system, ta_a
 /* PAUSED, RESUMED or STOPPED, for a macrostep that has begun, at the
  * position the run stands at. */
 static void ta_trace_control(ta_interpreter *it, ta_trace_kind kind) {
+    if (kind == TA_TRACE_PAUSED) {
+        TA_COUNT(it->system, it->actor->definition, runs_paused);
+    } else if (kind == TA_TRACE_STOPPED) {
+        TA_COUNT(it->system, it->actor->definition, runs_stopped);
+    }
     if (it->actor->trace_begun && ta_tracing(it, kind)) {
         ta_trace_record record = ta_trace_record_now(it, kind);
         ta_trace_emit(it, &record);

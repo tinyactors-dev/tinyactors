@@ -74,6 +74,8 @@ struct ta_system {
     /* The trace-ID generator's state and the sampler's threshold (ADR 0073). */
     uint64_t trace_rng[4];
     uint64_t trace_threshold;
+    /* Every definition's counters, freed ones included (ADR 0072). */
+    ta_counters counters;
     ta_atom scxml_io_type;
     /* The short form "scxml" also selects the built-in processor. */
     ta_atom scxml_io_alias;
@@ -113,3 +115,14 @@ uint32_t ta_system_invoker_index(const ta_system *system, ta_atom type);
 /* The type of the invoker at registry index `index`; TA_ATOM_NONE when none. */
 ta_atom ta_system_invoker_type(const ta_system *system, uint32_t index);
 bool ta_system_is_scxml_io(const ta_system *system, ta_atom type);
+
+/*
+ * Counts one occurrence for `definition` and for the system (ADR 0072). A
+ * definition's counters are bookkeeping, not part of what it compiled to,
+ * so they change through a definition core otherwise treats as read-only.
+ */
+#define TA_COUNT(system, definition, field)                                                                   \
+    do {                                                                                                      \
+        ((ta_definition *)(definition))->counters.field += 1u;                                               \
+        (system)->counters.field += 1u;                                                                       \
+    } while (0)

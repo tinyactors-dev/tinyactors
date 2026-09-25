@@ -3997,6 +3997,202 @@
         }
       }
     },
+    "ta_counters": {
+      "kind": "struct",
+      "doc": "Counters core keeps per definition and per system (ADR 0072). They are always on, count occurrences and never time, and move only when the step they count commits (ADR 0070), so a retry never counts twice. The system's block includes every definition that has been freed, so a sum never goes backwards.",
+      "fields": [
+        {
+          "name": "spawned",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "loaded",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "unloaded",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "finished",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "destroyed",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "events_taken",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "external events that began a macrostep"
+        },
+        {
+          "name": "events_ignored",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "external events that enabled nothing"
+        },
+        {
+          "name": "internal_ignored",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "internal events that enabled nothing"
+        },
+        {
+          "name": "macrosteps",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "microsteps",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "errors_execution",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "error.execution raised"
+        },
+        {
+          "name": "errors_communication",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "error.communication raised, in a run or not"
+        },
+        {
+          "name": "errors_platform",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "error.platform raised"
+        },
+        {
+          "name": "sends",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "sends_delayed",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "sends_cancelled",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "delayed_fired",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "invocations_started",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "invocations_ended",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "runs_paused",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "a budget ran out"
+        },
+        {
+          "name": "runs_stopped",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "an allocation failed (ADR 0070)"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 168,
+          "align": 8,
+          "offsets": {
+            "spawned": 0,
+            "loaded": 8,
+            "unloaded": 16,
+            "finished": 24,
+            "destroyed": 32,
+            "events_taken": 40,
+            "events_ignored": 48,
+            "internal_ignored": 56,
+            "macrosteps": 64,
+            "microsteps": 72,
+            "errors_execution": 80,
+            "errors_communication": 88,
+            "errors_platform": 96,
+            "sends": 104,
+            "sends_delayed": 112,
+            "sends_cancelled": 120,
+            "delayed_fired": 128,
+            "invocations_started": 136,
+            "invocations_ended": 144,
+            "runs_paused": 152,
+            "runs_stopped": 160
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 168,
+          "align": 8,
+          "offsets": {
+            "spawned": 0,
+            "loaded": 8,
+            "unloaded": 16,
+            "finished": 24,
+            "destroyed": 32,
+            "events_taken": 40,
+            "events_ignored": 48,
+            "internal_ignored": 56,
+            "macrosteps": 64,
+            "microsteps": 72,
+            "errors_execution": 80,
+            "errors_communication": 88,
+            "errors_platform": 96,
+            "sends": 104,
+            "sends_delayed": 112,
+            "sends_cancelled": 120,
+            "delayed_fired": 128,
+            "invocations_started": 136,
+            "invocations_ended": 144,
+            "runs_paused": 152,
+            "runs_stopped": 160
+          }
+        }
+      }
+    },
     "ta_data_decl_id": {
       "kind": "alias",
       "type": {
@@ -7218,6 +7414,73 @@
         }
       }
     },
+    "ta_definition_occupancy_params": {
+      "kind": "struct",
+      "doc": "How many resident actors have each state active, indexed by state ID; only atomic states are ever non-zero (ADR 0072). `*count` receives the definition's state count; a smaller buffer yields TA_ERR_NOMEM.",
+      "fields": [
+        {
+          "name": "definition",
+          "type": {
+            "type": "ta_definition_id"
+          }
+        },
+        {
+          "name": "states",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            }
+          },
+          "capacity": "capacity",
+          "needed": "count",
+          "shape": "buffer",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success"
+        },
+        {
+          "name": "capacity",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "capacity_of": "states"
+        },
+        {
+          "name": "count",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "always",
+          "needed_of": "states"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "definition": 0,
+            "states": 8,
+            "capacity": 16,
+            "count": 24
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "definition": 0,
+            "states": 8,
+            "capacity": 12,
+            "count": 16
+          }
+        }
+      }
+    },
     "ta_definition_state_params": {
       "kind": "struct",
       "fields": [
@@ -8167,25 +8430,34 @@
           "type": {
             "type": "ta_trace_parent"
           }
+        },
+        {
+          "name": "due",
+          "type": {
+            "type": "ta_time"
+          },
+          "doc": "When the send was due (ADR 0072): the time it was sent for an immediate send, its deadline for a delayed one. A host subtracts it from its own clock to measure how late a timer fired."
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
+          "size": 136,
+          "align": 8,
+          "offsets": {
+            "destination": 0,
+            "event": 16,
+            "trace": 80,
+            "due": 128
+          }
+        },
+        "wasm32-unknown-unknown": {
           "size": 128,
           "align": 8,
           "offsets": {
             "destination": 0,
             "event": 16,
-            "trace": 80
-          }
-        },
-        "wasm32-unknown-unknown": {
-          "size": 120,
-          "align": 8,
-          "offsets": {
-            "destination": 0,
-            "event": 16,
-            "trace": 72
+            "trace": 72,
+            "due": 120
           }
         }
       }
@@ -9841,6 +10113,19 @@
           "doc": "The actor that ran the <log >."
         },
         {
+          "name": "key",
+          "type": {
+            "type": "ta_step_key"
+          },
+          "doc": "The step that ran it, and its trace context (ADR 0072), so a log lands next to the spans of its macrostep."
+        },
+        {
+          "name": "context",
+          "type": {
+            "type": "ta_trace_context"
+          }
+        },
+        {
           "name": "label",
           "type": {
             "type": "ta_str"
@@ -9864,23 +10149,27 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 56,
+          "size": 104,
           "align": 8,
           "offsets": {
             "source": 0,
-            "label": 16,
-            "has_value": 32,
-            "value": 40
+            "key": 16,
+            "context": 40,
+            "label": 64,
+            "has_value": 80,
+            "value": 88
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 40,
+          "size": 88,
           "align": 8,
           "offsets": {
             "source": 0,
-            "label": 16,
-            "has_value": 24,
-            "value": 28
+            "key": 16,
+            "context": 40,
+            "label": 64,
+            "has_value": 72,
+            "value": 76
           }
         }
       }
@@ -12327,11 +12616,17 @@
           "type": {
             "type": "ta_trace_parent"
           }
+        },
+        {
+          "name": "due",
+          "type": {
+            "type": "ta_time"
+          }
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 160,
+          "size": 168,
           "align": 8,
           "offsets": {
             "source": 0,
@@ -12343,11 +12638,12 @@
             "data": 64,
             "content_type": 80,
             "content": 96,
-            "trace": 112
+            "trace": 112,
+            "due": 160
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 120,
+          "size": 128,
           "align": 8,
           "offsets": {
             "source": 0,
@@ -12359,7 +12655,8 @@
             "data": 48,
             "content_type": 56,
             "content": 64,
-            "trace": 72
+            "trace": 72,
+            "due": 120
           }
         }
       }
@@ -13372,6 +13669,12 @@
           "value": 21,
           "symbol": "stopped",
           "doc": "an allocation failed; the run stopped where it stood (ADR 0070)"
+        },
+        {
+          "name": "TA_TRACE_IGNORED",
+          "value": 22,
+          "symbol": "ignored",
+          "doc": "`event`: taken, and it enabled no transition"
         }
       ],
       "doc": "======================================================================== Tracing (ADR 0067)\n\nCore reports its decisions and the data they changed to one trace sink per system, as flat records. A record is written once, when the step that produced it has committed: a step that runs out of memory and runs again (ADR 0070) writes its records on the run that commits, and the step counters move only then, so an interrupted run and an uninterrupted one write the same records apart from PAUSED, RESUMED and STOPPED.",
@@ -17701,6 +18004,121 @@
           "type": {
             "type": "ta_trace_sink"
           }
+        }
+      ]
+    },
+    {
+      "name": "ta_definition_counters",
+      "doc": "A definition's counters; TA_ERR_NOT_FOUND for an unknown or freed one.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "definition",
+          "type": {
+            "type": "ta_definition_id"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_counters"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success"
+        }
+      ]
+    },
+    {
+      "name": "ta_system_counters",
+      "doc": "The system's totals, freed definitions included.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "void"
+        }
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_counters"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "always"
+        }
+      ]
+    },
+    {
+      "name": "ta_definition_occupancy",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_definition_occupancy_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
         }
       ]
     },

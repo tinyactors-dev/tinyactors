@@ -449,6 +449,10 @@ typedef struct {
     ta_actor_ref destination;
     ta_event event;
     ta_trace_parent trace;
+    /* When the send was due (ADR 0072): the time it was sent for an
+     * immediate send, its deadline for a delayed one. A host subtracts it
+     * from its own clock to measure how late a timer fired. */
+    ta_time due;
 } ta_external_delivery;
 
 /*
@@ -835,7 +839,8 @@ TA_API ta_result ta_dm_host_state_name(const ta_dm_host *host,
  * is borrowed for the call.
  */
 typedef struct { ta_actor_ref source; ta_send_id send_id; ta_event_name_id event; ta_atom io_type; ta_value target;
-                 ta_str target_text; ta_value data; ta_str content_type; ta_bytes content; ta_trace_parent trace; } ta_send;
+                 ta_str target_text; ta_value data; ta_str content_type; ta_bytes content; ta_trace_parent trace;
+                 ta_time due; } ta_send;
 /*
  * What an I/O processor renders (ADR 0068): the URI of one of its COMPUTED
  * origins, or this session's location through it (`_ioprocessors`).
@@ -940,6 +945,10 @@ TA_API ta_result ta_origin_text(const ta_system *system, TA_IN const ta_origin_t
 typedef struct {
     /* The actor that ran the <log>. */
     ta_actor_ref source;
+    /* The step that ran it, and its trace context (ADR 0072), so a log
+     * lands next to the spans of its macrostep. */
+    ta_step_key key;
+    ta_trace_context context;
     /* <log label>; empty when the author wrote none. */
     ta_str label;
     /* False when the <log> has no expr, or when evaluating it failed. */
@@ -1007,7 +1016,10 @@ typedef enum {
     /* Execution control. */
     TA_TRACE_PAUSED,            /* a budget ran out */
     TA_TRACE_RESUMED,           /* a run continues a macrostep begun before */
-    TA_TRACE_STOPPED            /* an allocation failed; the run stopped where it stood (ADR 0070) */
+    TA_TRACE_STOPPED,           /* an allocation failed; the run stopped where it stood (ADR 0070) */
+
+    /* Decisions, again (ADR 0072). */
+    TA_TRACE_IGNORED            /* `event`: taken, and it enabled no transition */
 } ta_trace_kind TA_SYMBOLS("TA_TRACE_");
 
 /* The bit of `kind` in a sink's mask. */
@@ -2900,6 +2912,56 @@ TA_API ta_result ta_system_set_log_sink(ta_system *system, ta_log_sink sink);
  * TA_ERR_INVALID for a sink whose `v` or `v->write` is null.
  */
 TA_API ta_result ta_system_set_trace_sink(ta_system *system, ta_trace_sink sink);
+
+/*
+ * Counters core keeps per definition and per system (ADR 0072). They are
+ * always on, count occurrences and never time, and move only when the step
+ * they count commits (ADR 0070), so a retry never counts twice. The system's
+ * block includes every definition that has been freed, so a sum never goes
+ * backwards.
+ */
+typedef struct {
+    uint64_t spawned;
+    uint64_t loaded;
+    uint64_t unloaded;
+    uint64_t finished;
+    uint64_t destroyed;
+    uint64_t events_taken;         /* external events that began a macrostep */
+    uint64_t events_ignored;       /* external events that enabled nothing */
+    uint64_t internal_ignored;     /* internal events that enabled nothing */
+    uint64_t macrosteps;
+    uint64_t microsteps;
+    uint64_t errors_execution;     /* error.execution raised */
+    uint64_t errors_communication; /* error.communication raised, in a run or not */
+    uint64_t errors_platform;      /* error.platform raised */
+    uint64_t sends;
+    uint64_t sends_delayed;
+    uint64_t sends_cancelled;
+    uint64_t delayed_fired;
+    uint64_t invocations_started;
+    uint64_t invocations_ended;
+    uint64_t runs_paused;          /* a budget ran out */
+    uint64_t runs_stopped;         /* an allocation failed (ADR 0070) */
+} ta_counters;
+
+/* A definition's counters; TA_ERR_NOT_FOUND for an unknown or freed one. */
+TA_API ta_result ta_definition_counters(const ta_system *system, ta_definition_id definition,
+                                        TA_OUT ta_counters *out);
+/* The system's totals, freed definitions included. */
+TA_API void ta_system_counters(const ta_system *system, TA_OUT ta_counters *out);
+
+/*
+ * How many resident actors have each state active, indexed by state ID;
+ * only atomic states are ever non-zero (ADR 0072). `*count` receives the
+ * definition's state count; a smaller buffer yields TA_ERR_NOMEM.
+ */
+typedef struct {
+    ta_definition_id definition;
+    TA_BUFFER(capacity, count) TA_OPTIONAL uint32_t *states;
+    uint32_t capacity;
+    TA_OUT TA_ALWAYS uint32_t *count;
+} ta_definition_occupancy_params;
+TA_API ta_result ta_definition_occupancy(const ta_system *system, TA_IN const ta_definition_occupancy_params *params);
 
 /*
  * The system's trace-ID generator (ADR 0073): xoshiro256** seeded through

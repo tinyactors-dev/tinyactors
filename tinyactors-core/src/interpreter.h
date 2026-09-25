@@ -151,6 +151,13 @@ void ta_interpreter_trace_invoke(ta_interpreter *it, ta_trace_kind kind, ta_invo
 ta_trace_parent ta_interpreter_trace_here(const ta_interpreter *it);
 /* The parent the actor's current macrostep runs under; all zero for none. */
 ta_trace_parent ta_actor_macrostep_parent(const ta_actor *actor);
+/* Adds the actor's active states to its definition's occupancy, or takes
+ * them away (ADR 0072), when it becomes resident or stops being so. */
+void ta_interpreter_occupancy(ta_actor *actor, bool arrive);
+/* Counts and records an event core queued outside a run (ADR 0072), with
+ * `parent` as its cause when there is one. */
+void ta_interpreter_raised_outside(ta_system *system, ta_actor *actor, ta_event_name_id name,
+                                   const ta_trace_parent *parent);
 /*
  * Makes an idle actor run a macrostep for work queued outside any run, such
  * as a failed send's error, under `trace` (null: none). An actor already in

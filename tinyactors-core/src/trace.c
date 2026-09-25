@@ -1,5 +1,6 @@
 #include "trace.h"
 #include "system.h"
+#include "interpreter.h"
 
 /* ------------------------------------------------------------------------
  * The null sink (ADR 0067 section 2)
@@ -68,6 +69,23 @@ ta_step_key ta_trace_lifecycle_key(ta_actor *actor) {
 void ta_trace_lifecycle(ta_system *system, ta_actor *actor, ta_trace_kind kind,
                         const ta_trace_parent *parent) {
     ta_step_key key = ta_trace_lifecycle_key(actor);
+    /* Counters and occupancy (ADR 0072): every residency change passes here. */
+    switch (kind) {
+    case TA_TRACE_SPAWNED: TA_COUNT(system, actor->definition, spawned); break;
+    case TA_TRACE_LOADED:
+        TA_COUNT(system, actor->definition, loaded);
+        ta_interpreter_occupancy(actor, true);
+        break;
+    case TA_TRACE_UNLOADED:
+        TA_COUNT(system, actor->definition, unloaded);
+        ta_interpreter_occupancy(actor, false);
+        break;
+    case TA_TRACE_DESTROYED:
+        TA_COUNT(system, actor->definition, destroyed);
+        ta_interpreter_occupancy(actor, false);
+        break;
+    default: break;
+    }
     ta_trace_context none = { 0 };
     if (!ta_trace_lifecycle_wanted(&system->trace, kind, parent != NULL ? &parent->context : &none)) {
         return;

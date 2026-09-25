@@ -199,7 +199,7 @@ static void put_states(const char *label, const ta_state_id *states, uint32_t co
 static const char *const kind_names[] = {
     "spawned", "loaded",  "unloaded", "finished", "destroyed", "begin", "end",     "cond",
     "micro",   "raised",  "data",     "assign",   "script",    "foreach", "failed", "sent",
-    "cancelled", "invoked", "uninvoked", "paused", "resumed", "stopped",
+    "cancelled", "invoked", "uninvoked", "paused", "resumed", "stopped", "ignored",
 };
 static const char *const at_names[] = { "", "select", "exit", "transition", "enter", "boot", "finalize", "invoke" };
 
@@ -515,7 +515,7 @@ static void test_exact_sequence(void) {
                    "foreach 2.1 @transition:0 i1; script 2.1 @transition:0; "
                    "micro 2.2 inner t[2] x[1] e[2,3]; cond 2.2 @transition:1 t2 !7; "
                    "raised 2.2 @transition:1 error.execution; micro 2.3 - t[4] x[3] e[4]; "
-                   "raised 2.3 @enter:4 done.state.c; micro 2.4 done.state.c t[3] x[4,2] e[5]; end 2.4 in[5]; ");
+                   "raised 2.3 @enter:4 done.state.c; ignored 2.3; micro 2.4 done.state.c t[3] x[4,2] e[5]; end 2.4 in[5]; ");
 
     journal_reset();
     deliver(&r, "stop", (ta_trace_parent){0});
@@ -538,7 +538,7 @@ static void test_ignored_event(void) {
     journal_reset();
     deliver(&r, "unknown", (ta_trace_parent){0});
     settle(&r);
-    expect_journal("begin 2.0 unknown; end 2.0 in[0]; ");
+    expect_journal("begin 2.0 unknown; ignored 2.0; end 2.0 in[0]; ");
     /* Resuming an idle actor runs nothing, so it writes nothing. */
     journal_reset();
     settle(&r);
@@ -951,6 +951,61 @@ static void test_watched_detail(void) {
     CHECK(watched_run(TA_TRACE_DETAIL_WATCHED) > 1);
 }
 
+/* ------------------------------------------------------------------------
+ * Counters and occupancy (ADR 0072)
+ */
+
+static uint32_t occupied(run *r) {
+    uint32_t states[64];
+    uint32_t count = 0;
+    CHECK(ta_definition_occupancy(r->system, &(ta_definition_occupancy_params){ .definition = r->definition,
+                                                                                .states = states,
+                                                                                .capacity = 64,
+                                                                                .count = &count }) == TA_OK);
+    uint32_t total = 0;
+    for (uint32_t state = 0; state < count; state += 1u) {
+        total += states[state];
+    }
+    return total;
+}
+
+/* Counters move whether or not a sink is installed; occupancy follows residency. */
+static void test_counters_and_occupancy(void) {
+    run r;
+    start_system(&r);
+    spawn(&r, (ta_trace_parent){0});
+    settle(&r);
+    CHECK(occupied(&r) == 1);
+    deliver(&r, "unknown", (ta_trace_parent){0});
+    settle(&r);
+    deliver(&r, "go", (ta_trace_parent){0});
+    settle(&r);
+    ta_counters counters;
+    CHECK(ta_definition_counters(r.system, r.definition, &counters) == TA_OK);
+    CHECK(counters.spawned == 1 && counters.destroyed == 0);
+    CHECK(counters.macrosteps == 3); /* bootstrap, unknown, go */
+    CHECK(counters.events_taken == 2 && counters.events_ignored == 1);
+    CHECK(counters.internal_ignored == 1); /* the error.execution nothing handles */
+    CHECK(counters.errors_execution == 1);
+    CHECK(counters.microsteps >= 5);
+    CHECK(occupied(&r) >= 1);
+
+    ta_counters total;
+    ta_system_counters(r.system, &total);
+    CHECK(total.macrosteps == counters.macrosteps && total.errors_execution == 1);
+    CHECK(ta_definition_counters(r.system, r.definition + 1u, &counters) == TA_ERR_NOT_FOUND);
+    uint32_t count = 0;
+    CHECK(ta_definition_occupancy(r.system, &(ta_definition_occupancy_params){ .definition = r.definition,
+                                                                               .count = &count }) ==
+          TA_ERR_NOMEM);
+    CHECK(count != 0);
+
+    CHECK(ta_actor_destroy(r.system, r.actor) == TA_OK);
+    CHECK(occupied(&r) == 0);
+    CHECK(ta_definition_counters(r.system, r.definition, &counters) == TA_OK && counters.destroyed == 1);
+    finish(&r);
+}
+
 int main(void) {
     test_null_sink();
     test_mask_suppresses_construction();
@@ -966,6 +1021,7 @@ int main(void) {
     test_generator();
     test_sampler();
     test_watched_detail();
+    test_counters_and_occupancy();
     CHECK(live_allocations == 0);
     if (failures != 0) {
         fprintf(stderr, "trace_test: %d failure(s)\n", failures);

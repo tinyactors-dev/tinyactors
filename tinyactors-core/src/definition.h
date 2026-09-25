@@ -308,6 +308,11 @@ struct ta_definition {
     ta_allocator allocator;
     /* Owns every array and string below. */
     ta_arena arena;
+    /* Counters and state occupancy (ADR 0072): bookkeeping about the
+     * definition's actors, the only fields that change after registration.
+     * `occupancy` has `state_count` entries, from registration on. */
+    ta_counters counters;
+    uint32_t *occupancy;
     /* The system whose atoms and event names this definition uses. */
     ta_system *system;
     bool registered;

@@ -317,7 +317,7 @@ static void open_across_turns(void) {
     const span_view *go_micro = named(spans, count, "scxml.microstep go");
     CHECK(go_macro != NULL && go_micro != NULL);
     CHECK(go_micro->parent_span_id == go_macro->span_id);
-    CHECK(go_micro->events == 1u); /* the raise */
+    CHECK(go_micro->events == 2u); /* the raise, and x ignored: nothing takes it */
 
     /* Destroying is a lifecycle span of its own. */
     CHECK(ta_actor_destroy(f.core, f.actor) == TA_OK);
