@@ -1,5 +1,4 @@
 {
-  "test152": "not investigated yet: outcome fail",
   "test191": "napi has no invoker for SCXML child sessions (type http://www.w3.org/TR/scxml/)",
   "test192": "napi has no invoker for SCXML child sessions (type http://www.w3.org/TR/scxml/)",
   "test207": "napi has no invoker for SCXML child sessions (type http://www.w3.org/TR/scxml/)",
@@ -23,16 +22,10 @@
   "test247": "napi has no invoker for SCXML child sessions (type http://www.w3.org/TR/scxml/)",
   "test253": "napi has no invoker for SCXML child sessions (type http://www.w3.org/TR/scxml/)",
   "test276": "napi has no invoker for SCXML child sessions (type http://www.w3.org/TR/scxml/)",
-  "test302": "likely the example compiler: a <script> variable stays in the function scope instead of becoming data (not confirmed)",
-  "test304": "likely the example compiler: a <script> variable stays in the function scope instead of becoming data (not confirmed)",
-  "test326": "likely the example compiler: system variables are getters, so assigning one is silently ignored instead of raising error.execution (not confirmed)",
-  "test329": "likely the example compiler: system variables are getters, so assigning one is silently ignored instead of raising error.execution (not confirmed)",
   "test338": "napi has no invoker for SCXML child sessions (type http://www.w3.org/TR/scxml/)",
   "test347": "napi has no invoker for SCXML child sessions (type http://www.w3.org/TR/scxml/)",
   "test422": "napi has no invoker for SCXML child sessions (type http://www.w3.org/TR/scxml/)",
-  "test452": "not investigated yet: outcome fail",
-  "test457": "not investigated yet: outcome fail",
-  "test496": "not investigated yet: outcome fail",
-  "test521": "not investigated yet: outcome fail",
+  "test496": "napi dead-letters mail between actors to an unreachable session (reason not-found, napi ADRs 0006 and 0008), where SCXML 6.2.4 requires error.communication in the sender; a routing decision, not a small fix",
+  "test521": "napi dead-letters mail between actors to an unreachable session (reason not-found, napi ADRs 0006 and 0008), where SCXML 6.2.4 requires error.communication in the sender; a routing decision, not a small fix",
   "test530": "napi has no invoker for SCXML child sessions (type http://www.w3.org/TR/scxml/)"
 }

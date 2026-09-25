@@ -38,19 +38,58 @@ function scxmlEvent(event) {
   };
 }
 
-// The system variables of one call, each read only when an expression uses it.
-function scope(context) {
-  let event;
+// SCXML compares system variables by identity (tests 326, 329: a copy taken
+// earlier == the variable now), and napi builds a fresh object each call.
+// So each actor's data keeps the last _event and _ioprocessors it saw, and
+// hands out the same object while the event, or the processors, are the
+// same.
+const kept = new WeakMap(); // the actor's data -> { event, io }
+
+function keptFor(data) {
+  let entry = kept.get(data);
+  if (entry === undefined) {
+    entry = {};
+    kept.set(data, entry);
+  }
+  return entry;
+}
+
+function sameEvent(data, event) {
+  const key = [event.name, event.type, event.sendID, event.origin, event.originType, event.invocationID].join('\u0000');
+  const entry = keptFor(data);
+  if (entry.event === undefined || entry.event.key !== key || entry.event.data !== event.data) {
+    entry.event = { key, data: event.data, value: scxmlEvent(event) };
+  }
+  return entry.event.value;
+}
+
+function sameProcessors(data, processors) {
+  const key = JSON.stringify(processors);
+  const entry = keptFor(data);
+  if (entry.io === undefined || entry.io.key !== key) {
+    entry.io = { key, value: processors };
+  }
+  return entry.io.value;
+}
+
+// The system variables of one call, each read only when an expression uses
+// it. Assigning one is an error.execution (SCXML 5.10). Compiled code is
+// not strict, where assigning to a getter is silently ignored, so each has
+// a setter that throws.
+function scope(context, data) {
+  const readOnly = (name) => () => { throw new TypeError(`${name} is a system variable and cannot be assigned`); };
   return {
     get _event() {
-      if (event === undefined) {
-        event = scxmlEvent(context.event);
-      }
-      return event;
+      const event = context.event;
+      return event === undefined ? undefined : sameEvent(data, event);
     },
+    set _event(_) { readOnly('_event')(); },
     get _sessionid() { return String(context.sessionID); },
+    set _sessionid(_) { readOnly('_sessionid')(); },
     get _name() { return context.name; },
-    get _ioprocessors() { return context.ioProcessors; },
+    set _name(_) { readOnly('_name')(); },
+    get _ioprocessors() { return sameProcessors(data, context.ioProcessors); },
+    set _ioprocessors(_) { readOnly('_ioprocessors')(); },
     In(id) { return context.inState(id); },
   };
 }
@@ -82,14 +121,34 @@ function compile(source, role) {
   }
 }
 
+// The names a script declares at its top level with var, let, const or
+// function. In SCXML they are the data model's variables (SCXML B.2), so
+// they outlive the script; a `new Function` body keeps them local. This is
+// a scan, not a parse: good enough for the example, not for every program.
+const DECLARED = /(?:^|[;{}\n])\s*(?:(?:var|let|const)\s+([A-Za-z_$][\w$]*)|function\s*\*?\s*([A-Za-z_$][\w$]*)\s*\()/g;
+
+function declaredNames(source) {
+  const names = new Set();
+  for (const match of source.matchAll(DECLARED)) {
+    names.add(match[1] ?? match[2]);
+  }
+  return [...names];
+}
+
 function compileNow(source, role) {
   if (role === 'script') {
-    const run = scoped(`${source}\n`);
-    return function script(context) { run.call(this, scope(context)); };
+    // After the script, each name it declared becomes data (this.name).
+    const keep = declaredNames(source)
+      .map((name) => `if (typeof ${name} !== 'undefined') this.${name} = ${name};`)
+      .join('\n');
+    const run = scoped(`${source}\n;${keep}`);
+    return function script(context) { run.call(this, scope(context, this)); };
   }
   if (role !== 'location') {
-    const run = scoped(`return (${source}\n);`);
-    return function expression(context) { return run.call(this, scope(context)); };
+    // An expression written as a statement (`new testobject();`) still is one.
+    const expression = source.trim().replace(/;+$/, '');
+    const run = scoped(`return (${expression}\n);`);
+    return function expression(context) { return run.call(this, scope(context, this)); };
   }
   const location = source.trim();
   if (IDENTIFIER.test(location)) {
@@ -99,8 +158,8 @@ function compileNow(source, role) {
   const read = scoped(`return (${location});`);
   const write = scoped(`(${location}) = __value;`, '__value');
   return {
-    get(context) { return read.call(this, scope(context)); },
-    set(value, context) { write.call(this, scope(context), value); },
+    get(context) { return read.call(this, scope(context, this)); },
+    set(value, context) { write.call(this, scope(context, this), value); },
   };
 }
 

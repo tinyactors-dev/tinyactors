@@ -931,10 +931,36 @@ static ta_op_status tna_dm_foreach_snapshot(void *self, const ta_datamodel_forea
     return status;
 }
 
+/*
+ * A variable name, as SCXML 4.6 requires of <foreach>'s `item` and `index`:
+ * an identifier, [A-Za-z_$] then [A-Za-z0-9_$]. A byte past ASCII is taken
+ * as part of a Unicode identifier.
+ */
+static bool tna_variable_name(ta_str name) {
+    if (name.len == 0) {
+        return false;
+    }
+    for (uint32_t at = 0; at < name.len; at += 1) {
+        unsigned char c = (unsigned char)name.ptr[at];
+        bool letter = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == '$' || c >= 0x80u;
+        if (!letter && !(at != 0 && c >= '0' && c <= '9')) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static ta_op_status tna_dm_foreach_bind(void *self, const ta_datamodel_foreach_bind_params *params) {
     tna_frame frame;
     if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
+    }
+    /* Checked before anything is bound, so a bad name changes nothing. */
+    if (!tna_variable_name(params->item) ||
+        (params->index_name.ptr != NULL && !tna_variable_name(params->index_name))) {
+        ta_op_status refused = tna_fail(&frame, "javascript: a <foreach> item or index is not a variable name");
+        tna_end(&frame);
+        return refused;
     }
     napi_env env = frame.dm->env;
     napi_value snapshot = NULL;

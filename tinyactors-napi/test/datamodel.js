@@ -192,6 +192,30 @@ async function foreachAndDoneData() {
   system.close();
 }
 
+// A <foreach> item or index that is not a variable name is error.execution
+// before anything is bound or run (SCXML 4.6).
+async function foreachNames() {
+  const system = createSystem();
+  for (const [item, index] of [["'continue'", undefined], ['item', 'not a name']]) {
+    const definition = system.define(
+      statechart({ family: 'names', revision: 'v1' })
+        .data('runs', 0)
+        .data('errors', 0)
+        .state('run', (s) => {
+          s.on('go', (t) =>
+            t.forEach(() => [1, 2, 3], item, (b) => b.assign('runs', function () { return this.runs + 1; }), index));
+          s.on('error.execution', (t) => t.assign('errors', function () { return this.errors + 1; }));
+        }),
+    );
+    const actor = system.spawn(definition);
+    await system.flush();
+    actor.post('go');
+    await system.flush();
+    assert.deepEqual(actor.inspect().data, { runs: 0, errors: 1 }, `${item} / ${index}`);
+  }
+  system.close();
+}
+
 // A small actionBudget splits a <foreach> over a large array across turns,
 // and other actors run between them (core ADR 0061; left by step 5).
 async function foreachAcrossTurns() {
@@ -444,6 +468,7 @@ async function failedSystemVariable() {
   await context();
   await errors();
   await foreachAndDoneData();
+  await foreachNames();
   await foreachAcrossTurns();
   await handleScopes();
   await valuesAfterClose();
