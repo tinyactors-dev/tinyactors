@@ -1239,7 +1239,7 @@ void ta_interpreter_literal_content(const ta_definition *definition, ta_content_
     *bytes = def->bytes.ptr != NULL ? def->bytes : (ta_bytes){ .ptr = empty, .len = 0 };
 }
 
-ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send) {
+ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send, bool in_run) {
     ta_actor *sender = ta_actor_lookup(system, send->owner);
     ta_fault fault = {0};
     ta_external_event_submit_status status = TA_EXTERNAL_EVENT_ERROR;
@@ -1321,7 +1321,7 @@ ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *syste
     if (status == TA_EXTERNAL_EVENT_ERROR && sender != NULL) {
         (void)ta_communication_error(system, sender,
                                      &(ta_error_params){ .send_id = send->send_id, .fault = &fault,
-                                                         .trace = &send->trace });
+                                                         .trace = in_run ? NULL : &send->trace });
     }
     ta_value_release(&fault.data);
     ta_value_release(&send->target);
@@ -1751,7 +1751,7 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
         return result;
     }
     if (state->delay == 0) {
-        ta_external_event_submit_status submitted = ta_interpreter_dispatch_delayed(system, &record);
+        ta_external_event_submit_status submitted = ta_interpreter_dispatch_delayed(system, &record, true);
         if (submitted != TA_EXTERNAL_EVENT_RETRY) {
             state->sent = submitted == TA_EXTERNAL_EVENT_ACCEPTED;
             return TA_OK;

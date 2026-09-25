@@ -472,7 +472,7 @@ ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch_params
         (void)ta_timer_pop(&system->timers, &send);
         const ta_actor *owner = ta_actor_lookup(system, send.owner);
         const ta_definition *owner_definition = owner != NULL ? owner->definition : NULL;
-        ta_external_event_submit_status fired = ta_interpreter_dispatch_delayed(system, &send);
+        ta_external_event_submit_status fired = ta_interpreter_dispatch_delayed(system, &send, false);
         if (fired != TA_EXTERNAL_EVENT_RETRY) {
             if (owner_definition != NULL) {
                 TA_COUNT(system, owner_definition, delayed_fired);

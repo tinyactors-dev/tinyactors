@@ -1949,7 +1949,13 @@ TA_PRIVATE void ta_interpreter_exit_invoked(ta_system *system, ta_actor_id id);
 /* Takes ownership of the event's data. */
 TA_PRIVATE ta_result ta_interpreter_enqueue_internal(ta_system *system, ta_actor *actor, ta_event *event);
 /* Dispatches a due delayed send; RETRY leaves the send owned by the caller. */
-TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send);
+/*
+ * `in_run` says the sender's own run dispatches it (an immediate <send>):
+ * a failure is then raised in that run, and the unit that sent it counts
+ * and records it. Otherwise (a timer, a held send released) the failure is
+ * raised outside a run, and counted and recorded here (ADR 0072).
+ */
+TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send, bool in_run);
 /*
  * A literal content as a host adapter receives it (ADR 0053): its media type
  * and its bytes. The bytes' pointer is non-null even for empty content, so an
@@ -11115,7 +11121,7 @@ static void ta_actor_release_activation_effects(ta_system *system, ta_actor *act
         }
         ta_delayed_send *send = &effect->as.send.send;
         if (effect->as.send.immediate) {
-            ta_external_event_submit_status status = ta_interpreter_dispatch_delayed(system, send);
+            ta_external_event_submit_status status = ta_interpreter_dispatch_delayed(system, send, false);
             if (status != TA_EXTERNAL_EVENT_RETRY) {
                 continue;
             }
@@ -13482,7 +13488,7 @@ TA_API ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch
         (void)ta_timer_pop(&system->timers, &send);
         const ta_actor *owner = ta_actor_lookup(system, send.owner);
         const ta_definition *owner_definition = owner != NULL ? owner->definition : NULL;
-        ta_external_event_submit_status fired = ta_interpreter_dispatch_delayed(system, &send);
+        ta_external_event_submit_status fired = ta_interpreter_dispatch_delayed(system, &send, false);
         if (fired != TA_EXTERNAL_EVENT_RETRY) {
             if (owner_definition != NULL) {
                 TA_COUNT(system, owner_definition, delayed_fired);
@@ -14809,7 +14815,7 @@ TA_PRIVATE void ta_interpreter_literal_content(const ta_definition *definition, 
     *bytes = def->bytes.ptr != NULL ? def->bytes : (ta_bytes){ .ptr = empty, .len = 0 };
 }
 
-TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send) {
+TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send, bool in_run) {
     ta_actor *sender = ta_actor_lookup(system, send->owner);
     ta_fault fault = {0};
     ta_external_event_submit_status status = TA_EXTERNAL_EVENT_ERROR;
@@ -14891,7 +14897,7 @@ TA_PRIVATE ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_sy
     if (status == TA_EXTERNAL_EVENT_ERROR && sender != NULL) {
         (void)ta_communication_error(system, sender,
                                      &(ta_error_params){ .send_id = send->send_id, .fault = &fault,
-                                                         .trace = &send->trace });
+                                                         .trace = in_run ? NULL : &send->trace });
     }
     ta_value_release(&fault.data);
     ta_value_release(&send->target);
@@ -15321,7 +15327,7 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
         return result;
     }
     if (state->delay == 0) {
-        ta_external_event_submit_status submitted = ta_interpreter_dispatch_delayed(system, &record);
+        ta_external_event_submit_status submitted = ta_interpreter_dispatch_delayed(system, &record, true);
         if (submitted != TA_EXTERNAL_EVENT_RETRY) {
             state->sent = submitted == TA_EXTERNAL_EVENT_ACCEPTED;
             return TA_OK;

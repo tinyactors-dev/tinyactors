@@ -716,7 +716,7 @@ static void ta_actor_release_activation_effects(ta_system *system, ta_actor *act
         }
         ta_delayed_send *send = &effect->as.send.send;
         if (effect->as.send.immediate) {
-            ta_external_event_submit_status status = ta_interpreter_dispatch_delayed(system, send);
+            ta_external_event_submit_status status = ta_interpreter_dispatch_delayed(system, send, false);
             if (status != TA_EXTERNAL_EVENT_RETRY) {
                 continue;
             }

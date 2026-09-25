@@ -101,7 +101,13 @@ void ta_interpreter_exit_invoked(ta_system *system, ta_actor_id id);
 /* Takes ownership of the event's data. */
 ta_result ta_interpreter_enqueue_internal(ta_system *system, ta_actor *actor, ta_event *event);
 /* Dispatches a due delayed send; RETRY leaves the send owned by the caller. */
-ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send);
+/*
+ * `in_run` says the sender's own run dispatches it (an immediate <send>):
+ * a failure is then raised in that run, and the unit that sent it counts
+ * and records it. Otherwise (a timer, a held send released) the failure is
+ * raised outside a run, and counted and recorded here (ADR 0072).
+ */
+ta_external_event_submit_status ta_interpreter_dispatch_delayed(ta_system *system, ta_delayed_send *send, bool in_run);
 /*
  * A literal content as a host adapter receives it (ADR 0053): its media type
  * and its bytes. The bytes' pointer is non-null even for empty content, so an
