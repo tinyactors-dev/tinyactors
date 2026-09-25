@@ -724,6 +724,18 @@ typedef struct { void *shared; void *instance; const ta_dm_host *host; TA_OUT TA
  */
 typedef struct { void *shared; void *instance; TA_IN const ta_value *value; const ta_dm_host *host; TA_OUT TA_LIFETIME(input) ta_str *out; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_value_text_params;
 typedef struct { void *shared; void *instance; ta_str text; const ta_dm_host *host; TA_OUT TA_RELEASE(ta_value_release) ta_value *out; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_text_value_params;
+/*
+ * Offloading an unloaded actor (ADR 0074). value_encode writes one value as
+ * bytes into `arena`; value_decode makes a value from bytes value_encode
+ * wrote, in the same process and system. What the bytes are is the data
+ * model's choice: a handle to a value it keeps alive, or the value itself.
+ * TA_OP_NOMEM means nothing changed (ADR 0070); TA_OP_ERROR means the value
+ * has no byte form. Either operation may be null: the data model then has no
+ * byte form for any value, and an actor holding one of its values does not
+ * offload.
+ */
+typedef struct { void *shared; TA_IN const ta_value *value; TA_ARENA ta_arena *arena; TA_OUT TA_LIFETIME(arena) ta_bytes *out; } ta_datamodel_value_encode_params;
+typedef struct { void *shared; ta_bytes bytes; TA_OUT TA_RELEASE(ta_value_release) ta_value *out; } ta_datamodel_value_decode_params;
 /* Imports literal <content> or <data> content into a legal data-model value. */
 typedef struct { void *shared; void *instance; ta_bytes content; const ta_dm_host *host; TA_OUT TA_RELEASE(ta_value_release) ta_value *out; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_datamodel_import_content_params;
 /*
@@ -760,6 +772,8 @@ typedef struct ta_datamodel_vtable {
     ta_op_status (*import_content)(void *self, TA_IN const ta_datamodel_import_content_params *params);
     ta_op_status (*foreach_snapshot)(void *self, TA_IN const ta_datamodel_foreach_snapshot_params *params);
     ta_op_status (*foreach_bind)(void *self, TA_IN const ta_datamodel_foreach_bind_params *params);
+    TA_OPTIONAL ta_op_status (*value_encode)(void *self, TA_IN const ta_datamodel_value_encode_params *params);
+    TA_OPTIONAL ta_op_status (*value_decode)(void *self, TA_IN const ta_datamodel_value_decode_params *params);
 } ta_datamodel_vtable TA_VTABLE;
 typedef struct { void *self; const ta_datamodel_vtable *v; } ta_datamodel TA_ADAPTER;
 
@@ -2300,6 +2314,40 @@ typedef struct {
 } ta_actor_parent;
 
 /*
+ * One pending delayed send owned by an actor (ADR 0054). `destination` is the
+ * resolved target for the built-in SCXML processor; custom processors
+ * receive `target`, or a literal target's text, and leave `destination`
+ * unused. `has_target_text` means the target is literal: `target` is absent,
+ * and `target_text` names the text in the owner's definition, which
+ * ta_definition_content() reads. `submitted` means the
+ * router refused the send once and it waits to be offered again (ADR 0026,
+ * ADR 0040).
+ * Everything is borrowed; retain `target` and `data` with ta_value_retain()
+ * to keep them past the synchronization window.
+ *
+ * The same record re-arms a send when a host spawns an actor again from its
+ * stored data (ADR 0074 section 8): ta_actor_spawn_params.pending_sends.
+ */
+typedef struct {
+    ta_send_id send_id;
+    ta_time due;
+    ta_event_name_id event;
+    ta_atom io_type;
+    ta_actor_ref destination;
+    ta_value target;
+    ta_value data;
+    bool submitted;
+    bool has_target_text;
+    ta_content_id target_text;
+    /* A literal <content> for a host I/O processor, by ID in the owner's
+     * definition (ADR 0053); the processor gets its bytes at dispatch. */
+    bool has_content;
+    ta_content_id content;
+    /* The sending step (ADR 0067): the send, when it fires, names it. */
+    ta_trace_parent trace;
+} ta_delayed_send_info;
+
+/*
  * `trace` is what the bootstrap macrostep runs under (ADR 0067): the trace
  * context, and the cause, the key of the step that spawned it or the
  * host's parent span. All zero is none.
@@ -2311,6 +2359,20 @@ typedef struct {
     TA_IN TA_OPTIONAL const ta_actor_parent *parent;
     TA_OUT ta_actor_id *out;
     ta_trace_parent trace;
+    /*
+     * Delayed sends to re-arm in the new session before it bootstraps
+     * (ADR 0074 section 8): records a host read from ta_actor_inspect() of
+     * an earlier session of this actor and stored with its data. Each keeps
+     * its send ID, due time, event, destination, target, data, content and
+     * trace parent; a due time already past fires on the next dispatch.
+     * The session's generated-ID counter moves past every generated ID
+     * among them. Event names must be this system's and content IDs the
+     * definition's (TA_ERR_INVALID otherwise). `target` and `data` are
+     * retained. `submitted` and `destination` of a custom processor's send
+     * are ignored: every record is armed afresh.
+     */
+    TA_COUNTED_BY(pending_send_count) TA_OPTIONAL const ta_delayed_send_info *pending_sends;
+    uint32_t pending_send_count;
 } ta_actor_spawn_params;
 typedef struct { TA_IN const ta_actor_address *address; TA_OUT ta_actor_id *out; } ta_actor_find_params;
 /*
@@ -2338,10 +2400,39 @@ typedef struct {
     const ta_session_image *image;
 } ta_actor_unload_params;
 typedef struct { TA_IN const ta_actor_address *address; } ta_actor_remove_unloaded_params;
+/*
+ * Captures a stable named actor as bytes and unloads it in one step (ADR
+ * 0074): the bytes go into `arena`, only this system can load them, and
+ * their layout may change in any build. Values go through the actor's data
+ * model (value_encode). `root`, when given, is the data-model root to
+ * include, which ta_actor_load() hands back. TA_ERR_BUSY: the actor is inside
+ * a macrostep, has queued internal events, a pending completion or a parent.
+ * TA_ERR_UNSUPPORTED: its data model has no byte form for a value it holds.
+ * TA_ERR_INVALID: an anonymous actor. On any failure the actor is resident
+ * and unchanged.
+ */
 typedef struct {
-    const ta_session_image *image;
+    ta_actor_id actor;
+    TA_IN TA_OPTIONAL const ta_value *root;
+    TA_ARENA ta_arena *arena;
+    TA_OUT TA_LIFETIME(arena) ta_bytes *out;
+} ta_actor_offload_params;
+TA_API ta_result ta_actor_offload(ta_system *system, TA_IN const ta_actor_offload_params *params)
+    TA_VALUE_MODEL(actor, params.actor);
+/*
+ * ta_actor_load() restores from `image`, or, when `image` is null, from
+ * `bytes` that ta_actor_offload() wrote in this system (TA_ERR_STALE for
+ * bytes from another system). With bytes, the root they carry is the
+ * data-model binding when `datamodel_binding` is null, and `root`, when
+ * non-null, receives a reference to it (none: absent), for the caller to
+ * release. `bytes` are only read.
+ */
+typedef struct {
+    TA_OPTIONAL const ta_session_image *image;
+    ta_bytes bytes;
     TA_IN TA_OPTIONAL const ta_value *datamodel_binding;
     TA_OUT ta_actor_id *out;
+    TA_OUT TA_OPTIONAL TA_RELEASE(ta_value_release) ta_value *root;
     /*
      * The trace parent of what caused the load (ADR 0067), such as the
      * message that found the actor unloaded: the LOADED record is written
@@ -2440,30 +2531,6 @@ TA_API ta_result ta_actor_destroy(ta_system *system, ta_actor_id actor);
 
 
 
-/*
- * One pending delayed send owned by an actor (ADR 0054). `destination` is the
- * resolved target for the built-in SCXML processor; custom processors
- * receive `target`, or a literal target's text, and leave `destination`
- * unused. `has_target_text` means the target is literal: `target` is absent,
- * and `target_text` names the text in the owner's definition, which
- * ta_definition_content() reads. `submitted` means the
- * router refused the send once and it waits to be offered again (ADR 0026,
- * ADR 0040).
- * Everything is borrowed; retain `target` and `data` with ta_value_retain()
- * to keep them past the synchronization window.
- */
-typedef struct {
-    ta_send_id send_id;
-    ta_time due;
-    ta_event_name_id event;
-    ta_atom io_type;
-    ta_actor_ref destination;
-    ta_value target;
-    ta_value data;
-    bool submitted;
-    bool has_target_text;
-    ta_content_id target_text;
-} ta_delayed_send_info;
 
 /*
  * A read-only operational view of one resident interpreter instance.

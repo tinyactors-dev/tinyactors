@@ -1680,6 +1680,7 @@
     },
     "ta_actor_load_params": {
       "kind": "struct",
+      "doc": "ta_actor_load() restores from `image`, or, when `image` is null, from `bytes` that ta_actor_offload() wrote in this system (TA_ERR_STALE for bytes from another system). With bytes, the root they carry is the data-model binding when `datamodel_binding` is null, and `root`, when non-null, receives a reference to it (none: absent), for the caller to release. `bytes` are only read.",
       "fields": [
         {
           "name": "image",
@@ -1690,7 +1691,14 @@
             }
           },
           "shape": "handle",
-          "direction": "in"
+          "direction": "in",
+          "optional": true
+        },
+        {
+          "name": "bytes",
+          "type": {
+            "type": "ta_bytes"
+          }
         },
         {
           "name": "datamodel_binding",
@@ -1716,6 +1724,19 @@
           "valid_on": "success"
         },
         {
+          "name": "root",
+          "type": {
+            "pointer": {
+              "type": "ta_value"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success",
+          "release": "ta_value_release"
+        },
+        {
           "name": "trace",
           "type": {
             "type": "ta_trace_parent"
@@ -1725,23 +1746,95 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
+          "size": 96,
+          "align": 8,
+          "offsets": {
+            "image": 0,
+            "bytes": 8,
+            "datamodel_binding": 24,
+            "out": 32,
+            "root": 40,
+            "trace": 48
+          }
+        },
+        "wasm32-unknown-unknown": {
           "size": 72,
           "align": 8,
           "offsets": {
             "image": 0,
-            "datamodel_binding": 8,
+            "bytes": 4,
+            "datamodel_binding": 12,
             "out": 16,
+            "root": 20,
             "trace": 24
+          }
+        }
+      }
+    },
+    "ta_actor_offload_params": {
+      "kind": "struct",
+      "doc": "Captures a stable named actor as bytes and unloads it in one step (ADR 0074): the bytes go into `arena`, only this system can load them, and their layout may change in any build. Values go through the actor's data model (value_encode). `root`, when given, is the data-model root to include, which ta_actor_load() hands back. TA_ERR_BUSY: the actor is inside a macrostep, has queued internal events, a pending completion or a parent. TA_ERR_UNSUPPORTED: its data model has no byte form for a value it holds. TA_ERR_INVALID: an anonymous actor. On any failure the actor is resident and unchanged.",
+      "fields": [
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          }
+        },
+        {
+          "name": "root",
+          "type": {
+            "pointer": {
+              "type": "ta_value",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in",
+          "optional": true
+        },
+        {
+          "name": "arena",
+          "type": {
+            "pointer": {
+              "type": "ta_arena"
+            }
+          },
+          "shape": "arena",
+          "direction": "inout"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_bytes"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "arena"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "actor": 0,
+            "root": 8,
+            "arena": 16,
+            "out": 24
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 64,
+          "size": 24,
           "align": 8,
           "offsets": {
-            "image": 0,
-            "datamodel_binding": 4,
-            "out": 8,
-            "trace": 16
+            "actor": 0,
+            "root": 8,
+            "arena": 12,
+            "out": 16
           }
         }
       }
@@ -2193,11 +2286,32 @@
           "type": {
             "type": "ta_trace_parent"
           }
+        },
+        {
+          "name": "pending_sends",
+          "type": {
+            "pointer": {
+              "type": "ta_delayed_send_info",
+              "const": true
+            }
+          },
+          "count": "pending_send_count",
+          "shape": "counted",
+          "direction": "in",
+          "optional": true,
+          "doc": "Delayed sends to re-arm in the new session before it bootstraps (ADR 0074 section 8): records a host read from ta_actor_inspect() of an earlier session of this actor and stored with its data. Each keeps its send ID, due time, event, destination, target, data, content and trace parent; a due time already past fires on the next dispatch. The session's generated-ID counter moves past every generated ID among them. Event names must be this system's and content IDs the definition's (TA_ERR_INVALID otherwise). `target` and `data` are retained. `submitted` and `destination` of a custom processor's send are ignored: every record is armed afresh."
+        },
+        {
+          "name": "pending_send_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "count_of": "pending_sends"
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 88,
+          "size": 104,
           "align": 8,
           "offsets": {
             "definition": 0,
@@ -2205,11 +2319,13 @@
             "datamodel_binding": 16,
             "parent": 24,
             "out": 32,
-            "trace": 40
+            "trace": 40,
+            "pending_sends": 88,
+            "pending_send_count": 96
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 72,
+          "size": 80,
           "align": 8,
           "offsets": {
             "definition": 0,
@@ -2217,7 +2333,9 @@
             "datamodel_binding": 12,
             "parent": 16,
             "out": 20,
-            "trace": 24
+            "trace": 24,
+            "pending_sends": 72,
+            "pending_send_count": 76
           }
         }
       }
@@ -5671,6 +5789,130 @@
         }
       }
     },
+    "ta_datamodel_value_decode_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "shared",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            }
+          },
+          "shape": "raw",
+          "direction": "in"
+        },
+        {
+          "name": "bytes",
+          "type": {
+            "type": "ta_bytes"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_value"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "release": "ta_value_release"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "shared": 0,
+            "bytes": 8,
+            "out": 24
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "shared": 0,
+            "bytes": 4,
+            "out": 12
+          }
+        }
+      }
+    },
+    "ta_datamodel_value_encode_params": {
+      "kind": "struct",
+      "doc": "Offloading an unloaded actor (ADR 0074). value_encode writes one value as bytes into `arena`; value_decode makes a value from bytes value_encode wrote, in the same process and system. What the bytes are is the data model's choice: a handle to a value it keeps alive, or the value itself. TA_OP_NOMEM means nothing changed (ADR 0070); TA_OP_ERROR means the value has no byte form. Either operation may be null: the data model then has no byte form for any value, and an actor holding one of its values does not offload.",
+      "fields": [
+        {
+          "name": "shared",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            }
+          },
+          "shape": "raw",
+          "direction": "in"
+        },
+        {
+          "name": "value",
+          "type": {
+            "pointer": {
+              "type": "ta_value",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        },
+        {
+          "name": "arena",
+          "type": {
+            "pointer": {
+              "type": "ta_arena"
+            }
+          },
+          "shape": "arena",
+          "direction": "inout"
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_bytes"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "arena"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "shared": 0,
+            "value": 8,
+            "arena": 16,
+            "out": 24
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "shared": 0,
+            "value": 4,
+            "arena": 8,
+            "out": 12
+          }
+        }
+      }
+    },
     "ta_datamodel_value_text_params": {
       "kind": "struct",
       "doc": "Conversions the SCXML `*expr` attribute forms need. value_text reads an evaluated value as text (eventexpr, typeexpr, sendidexpr, srcexpr, delayexpr, targetexpr); `*out` is borrowed from `value` and valid while it is retained, so core can parse a target URI out of it and keep the named address a send needs (ADR 0044). text_value makes a value from text, e.g. a generated send or invoke ID stored through idlocation.",
@@ -6587,11 +6829,93 @@
           },
           "shape": "callback",
           "direction": "in"
+        },
+        {
+          "name": "value_encode",
+          "type": {
+            "pointer": {
+              "function": {
+                "returns": {
+                  "type": {
+                    "type": "ta_op_status"
+                  },
+                  "success": "TA_OP_OK"
+                },
+                "params": [
+                  {
+                    "name": "self",
+                    "type": {
+                      "pointer": {
+                        "builtin": "void"
+                      }
+                    },
+                    "shape": "raw",
+                    "direction": "in"
+                  },
+                  {
+                    "name": "params",
+                    "type": {
+                      "pointer": {
+                        "type": "ta_datamodel_value_encode_params",
+                        "const": true
+                      }
+                    },
+                    "shape": "single",
+                    "direction": "in"
+                  }
+                ]
+              }
+            }
+          },
+          "shape": "callback",
+          "direction": "in",
+          "optional": true
+        },
+        {
+          "name": "value_decode",
+          "type": {
+            "pointer": {
+              "function": {
+                "returns": {
+                  "type": {
+                    "type": "ta_op_status"
+                  },
+                  "success": "TA_OP_OK"
+                },
+                "params": [
+                  {
+                    "name": "self",
+                    "type": {
+                      "pointer": {
+                        "builtin": "void"
+                      }
+                    },
+                    "shape": "raw",
+                    "direction": "in"
+                  },
+                  {
+                    "name": "params",
+                    "type": {
+                      "pointer": {
+                        "type": "ta_datamodel_value_decode_params",
+                        "const": true
+                      }
+                    },
+                    "shape": "single",
+                    "direction": "in"
+                  }
+                ]
+              }
+            }
+          },
+          "shape": "callback",
+          "direction": "in",
+          "optional": true
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 176,
+          "size": 192,
           "align": 8,
           "offsets": {
             "name": 0,
@@ -6614,11 +6938,13 @@
             "text_value": 144,
             "import_content": 152,
             "foreach_snapshot": 160,
-            "foreach_bind": 168
+            "foreach_bind": 168,
+            "value_encode": 176,
+            "value_decode": 184
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 88,
+          "size": 96,
           "align": 4,
           "offsets": {
             "name": 0,
@@ -6641,7 +6967,9 @@
             "text_value": 72,
             "import_content": 76,
             "foreach_snapshot": 80,
-            "foreach_bind": 84
+            "foreach_bind": 84,
+            "value_encode": 88,
+            "value_decode": 92
           }
         }
       }
@@ -7657,7 +7985,7 @@
     },
     "ta_delayed_send_info": {
       "kind": "struct",
-      "doc": "One pending delayed send owned by an actor (ADR 0054). `destination` is the resolved target for the built-in SCXML processor; custom processors receive `target`, or a literal target's text, and leave `destination` unused. `has_target_text` means the target is literal: `target` is absent, and `target_text` names the text in the owner's definition, which ta_definition_content() reads. `submitted` means the router refused the send once and it waits to be offered again (ADR 0026, ADR 0040). Everything is borrowed; retain `target` and `data` with ta_value_retain() to keep them past the synchronization window.",
+      "doc": "One pending delayed send owned by an actor (ADR 0054). `destination` is the resolved target for the built-in SCXML processor; custom processors receive `target`, or a literal target's text, and leave `destination` unused. `has_target_text` means the target is literal: `target` is absent, and `target_text` names the text in the owner's definition, which ta_definition_content() reads. `submitted` means the router refused the send once and it waits to be offered again (ADR 0026, ADR 0040). Everything is borrowed; retain `target` and `data` with ta_value_retain() to keep them past the synchronization window.\n\nThe same record re-arms a send when a host spawns an actor again from its stored data (ADR 0074 section 8): ta_actor_spawn_params.pending_sends.",
       "fields": [
         {
           "name": "send_id",
@@ -7718,11 +8046,31 @@
           "type": {
             "type": "ta_content_id"
           }
+        },
+        {
+          "name": "has_content",
+          "type": {
+            "builtin": "bool"
+          },
+          "doc": "A literal <content > for a host I/O processor, by ID in the owner's definition (ADR 0053); the processor gets its bytes at dispatch."
+        },
+        {
+          "name": "content",
+          "type": {
+            "type": "ta_content_id"
+          }
+        },
+        {
+          "name": "trace",
+          "type": {
+            "type": "ta_trace_parent"
+          },
+          "doc": "The sending step (ADR 0067): the send, when it fires, names it."
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 80,
+          "size": 136,
           "align": 8,
           "offsets": {
             "send_id": 0,
@@ -7734,11 +8082,14 @@
             "data": 56,
             "submitted": 72,
             "has_target_text": 73,
-            "target_text": 76
+            "target_text": 76,
+            "has_content": 80,
+            "content": 84,
+            "trace": 88
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 64,
+          "size": 120,
           "align": 8,
           "offsets": {
             "send_id": 0,
@@ -7750,7 +8101,10 @@
             "data": 48,
             "submitted": 56,
             "has_target_text": 57,
-            "target_text": 60
+            "target_text": 60,
+            "has_content": 64,
+            "content": 68,
+            "trace": 72
           }
         }
       }
@@ -16573,6 +16927,48 @@
           "direction": "in"
         }
       ]
+    },
+    {
+      "name": "ta_actor_offload",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_offload_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ],
+      "value_model": {
+        "kind": "actor",
+        "path": [
+          "params",
+          "actor"
+        ]
+      }
     },
     {
       "name": "ta_actor_spawn",

@@ -223,15 +223,15 @@ static void ta_timer_split(const ta_delayed_send *send, ta_delayed_send_info *in
         .submitted = send->submitted,
         .has_target_text = send->has_target_text,
         .target_text = send->target_text,
+        .has_content = send->has_content,
+        .content = send->content,
+        .trace = send->trace,
     };
     *meta = (ta_delayed_send_meta){
         .id = send->id,
         .owner = send->owner,
         .origin = send->origin,
         .invoke_id = send->invoke_id,
-        .has_content = send->has_content,
-        .content = send->content,
-        .trace = send->trace,
     };
 }
 
@@ -251,11 +251,11 @@ static ta_delayed_send ta_timer_join(const ta_timer_list *list, uint32_t index) 
         .submitted = info->submitted,
         .origin = meta->origin,
         .invoke_id = meta->invoke_id,
-        .has_content = meta->has_content,
-        .content = meta->content,
+        .has_content = info->has_content,
+        .content = info->content,
         .has_target_text = info->has_target_text,
         .target_text = info->target_text,
-        .trace = meta->trace,
+        .trace = info->trace,
     };
 }
 

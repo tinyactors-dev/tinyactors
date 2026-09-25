@@ -749,6 +749,46 @@ static ta_op_status tat_json_import_content(void *self, const ta_datamodel_impor
     return TA_OP_OK;
 }
 
+/*
+ * Offloading (core ADR 0074): a JSON value's bytes are its JSON text, so an
+ * offloaded actor's values leave the value arena. Parsing the text back makes
+ * an equal value; jq values are immutable, so equal is the same.
+ */
+static ta_op_status tat_json_value_encode(void *self, const ta_datamodel_value_encode_params *params) {
+    (void)self;
+    if (params->value == NULL || params->value->v != &TAT_JSON_VALUE_VTABLE || params->value->self == NULL) {
+        return TA_OP_ERROR;
+    }
+    const tat_json_value *wrapped = params->value->self;
+    jv text = jv_dump_string(jv_copy(wrapped->value), 0);
+    if (!jv_is_valid(text)) {
+        jv_free(text);
+        return TA_OP_ERROR;
+    }
+    int length = jv_string_length_bytes(jv_copy(text));
+    uint8_t *copy = ta_arena_alloc(params->arena, length == 0 ? 1u : (size_t)length, 1);
+    if (copy == NULL) {
+        jv_free(text);
+        return TA_OP_NOMEM;
+    }
+    memcpy(copy, jv_string_value(text), (size_t)length);
+    jv_free(text);
+    *params->out = (ta_bytes){ .ptr = copy, .len = (size_t)length };
+    return TA_OP_OK;
+}
+
+static ta_op_status tat_json_value_decode(void *self, const ta_datamodel_value_decode_params *params) {
+    if (params->bytes.len > INT_MAX) {
+        return TA_OP_ERROR;
+    }
+    jv value = jv_parse_sized(params->bytes.len == 0 ? "" : (const char *)params->bytes.ptr, (int)params->bytes.len);
+    if (!jv_is_valid(value)) {
+        jv_free(value);
+        return TA_OP_ERROR;
+    }
+    return tat_json_wrap(self, value, params->out) == TA_OK ? TA_OP_OK : TA_OP_NOMEM;
+}
+
 static ta_result tat_json_inspect(void *self, const ta_datamodel_inspect_params *params) {
     (void)self;
     tat_json_instance *instance = params->instance;
@@ -854,6 +894,8 @@ static const ta_datamodel_vtable TAT_JSON_DATAMODEL_VTABLE = {
     .import_content = tat_json_import_content,
     .foreach_snapshot = tat_json_foreach_snapshot,
     .foreach_bind = tat_json_foreach_bind,
+    .value_encode = tat_json_value_encode,
+    .value_decode = tat_json_value_decode,
 };
 
 ta_datamodel tat_json_datamodel(tat_json_datamodel_context *context) {

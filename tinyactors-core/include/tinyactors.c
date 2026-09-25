@@ -852,10 +852,6 @@ typedef struct {
     ta_actor_id owner;
     ta_actor_ref origin;
     ta_invoke_id invoke_id;
-    /* See ta_delayed_send.content. */
-    bool has_content;
-    ta_content_id content;
-    ta_trace_parent trace;
 } ta_delayed_send_meta;
 
 /* One owner's pending sends, sorted by (due, id). Zero-initialized is empty. */
@@ -1794,6 +1790,9 @@ struct ta_system {
     /* The trace-ID generator's state and the sampler's threshold (ADR 0073). */
     uint64_t trace_rng[4];
     uint64_t trace_threshold;
+    /* Marks the bytes this system offloads (ADR 0074), drawn from the ID
+     * generator at the first offload; 0 until then. */
+    uint64_t offload_token;
     /* Every definition's counters, freed ones included (ADR 0072). */
     ta_counters counters;
     /* Microsteps one macrostep may run, for definitions that set none (ADR
@@ -1851,6 +1850,9 @@ TA_PRIVATE bool ta_system_is_scxml_io(const ta_system *system, ta_atom type);
     } while (0)
 
 
+
+/* A generated send ID (`#_send.<n>`, ADR 0048) is this bit and the session's counter n. */
+#define TA_GENERATED_SEND_ID_BIT ((ta_send_id)1u << 63)
 
 /*
  * Per-call interpreter scratch. Between steps the actor holds all state:
@@ -4489,15 +4491,15 @@ static void ta_timer_split(const ta_delayed_send *send, ta_delayed_send_info *in
         .submitted = send->submitted,
         .has_target_text = send->has_target_text,
         .target_text = send->target_text,
+        .has_content = send->has_content,
+        .content = send->content,
+        .trace = send->trace,
     };
     *meta = (ta_delayed_send_meta){
         .id = send->id,
         .owner = send->owner,
         .origin = send->origin,
         .invoke_id = send->invoke_id,
-        .has_content = send->has_content,
-        .content = send->content,
-        .trace = send->trace,
     };
 }
 
@@ -4517,11 +4519,11 @@ static ta_delayed_send ta_timer_join(const ta_timer_list *list, uint32_t index) 
         .submitted = info->submitted,
         .origin = meta->origin,
         .invoke_id = meta->invoke_id,
-        .has_content = meta->has_content,
-        .content = meta->content,
+        .has_content = info->has_content,
+        .content = info->content,
         .has_target_text = info->has_target_text,
         .target_text = info->target_text,
-        .trace = meta->trace,
+        .trace = info->trace,
     };
 }
 
@@ -5218,6 +5220,20 @@ static ta_op_status ta_null_foreach_bind(void *self, const ta_datamodel_foreach_
     return ta_null_unsupported(params->fault, TA_NULL_TEXT("the null data model has no collections to iterate"));
 }
 
+/* It owns no values, so none has a byte form (ADR 0074). A null-data-model
+ * actor holds no values while it is stable, so it still offloads. */
+static ta_op_status ta_null_value_encode(void *self, const ta_datamodel_value_encode_params *params) {
+    (void)self;
+    (void)params;
+    return TA_OP_ERROR;
+}
+
+static ta_op_status ta_null_value_decode(void *self, const ta_datamodel_value_decode_params *params) {
+    (void)self;
+    (void)params;
+    return TA_OP_ERROR;
+}
+
 /*
  * `inspect` stays absent: the profile gives the application no data to read,
  * so ta_actor_datamodel_root() reports TA_ERR_UNSUPPORTED for these actors.
@@ -5243,6 +5259,8 @@ static const ta_datamodel_vtable ta_null_datamodel_vtable = {
     .import_content = ta_null_import_content,
     .foreach_snapshot = ta_null_foreach_snapshot,
     .foreach_bind = ta_null_foreach_bind,
+    .value_encode = ta_null_value_encode,
+    .value_decode = ta_null_value_decode,
 };
 
 TA_API ta_datamodel ta_null_datamodel(void) {
@@ -10878,6 +10896,73 @@ TA_PRIVATE ta_result ta_actor_new(ta_system *system, ta_definition *definition, 
     return TA_OK;
 }
 
+/*
+ * Re-arms the delayed sends a host captured from an earlier session of this
+ * actor (ADR 0074 section 8). Everything is checked and the timer list
+ * reserved first, so scheduling cannot fail halfway; a failure leaves the
+ * actor to be freed by the caller, which frees whatever was armed.
+ */
+static ta_result ta_actor_rearm_sends(ta_system *system, ta_actor *actor, const ta_actor_spawn_params *params) {
+    uint32_t count = params->pending_send_count;
+    if (count == 0) {
+        return TA_OK;
+    }
+    if (params->pending_sends == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_definition *definition = actor->definition;
+    for (uint32_t index = 0; index < count; index += 1) {
+        const ta_delayed_send_info *info = &params->pending_sends[index];
+        if (!ta_event_name_valid(&system->event_names, info->event) ||
+            (info->has_content && info->content >= definition->content_count) ||
+            (info->has_target_text && info->target_text >= definition->content_count)) {
+            return TA_ERR_INVALID;
+        }
+    }
+    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
+    if (sparse == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    ta_result result = ta_timer_reserve(&system->timers, &sparse->timers, count);
+    for (uint32_t index = 0; result == TA_OK && index < count; index += 1) {
+        const ta_delayed_send_info *info = &params->pending_sends[index];
+        ta_delayed_send send = {
+            .owner = actor->record.id,
+            .send_id = info->send_id,
+            .due = info->due,
+            .event = info->event,
+            .io_type = info->io_type,
+            .destination = info->destination,
+            .target = info->target,
+            .data = info->data,
+            .has_content = info->has_content,
+            .content = info->content,
+            .has_target_text = info->has_target_text,
+            .target_text = info->target_text,
+            .invoke_id = TA_INVOKE_ID_NONE,
+            .trace = info->trace,
+        };
+        ta_actor_ref_retain(&send.destination);
+        ta_value_retain(&send.target);
+        ta_value_retain(&send.data);
+        result = ta_timer_schedule(&system->timers, &sparse->timers, &send);
+        if (result != TA_OK) {
+            ta_actor_ref_release(&send.destination);
+            ta_value_release(&send.target);
+            ta_value_release(&send.data);
+            break;
+        }
+        /* A later <send> never reuses a re-armed generated ID. */
+        if ((send.send_id & TA_GENERATED_SEND_ID_BIT) != 0) {
+            uint64_t counter = send.send_id & ~TA_GENERATED_SEND_ID_BIT;
+            if (counter > actor->next_send_id) {
+                actor->next_send_id = counter;
+            }
+        }
+    }
+    return result;
+}
+
 TA_API ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params) {
     if (system == NULL || params == NULL || params->out == NULL) {
         return TA_ERR_INVALID;
@@ -10930,6 +11015,12 @@ TA_API ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *
         return result;
     }
     actor->datamodel_initialized = true;
+    result = ta_actor_rearm_sends(system, actor, params);
+    if (result != TA_OK) {
+        ta_actor_release_slot(system, id);
+        ta_actor_free(system, actor); /* frees what was re-armed, too */
+        return result;
+    }
     /* The claim is the last fallible step: bootstrap has not run yet, so a
      * refused address leaves no trace of this spawn anywhere. */
     if (params->address != NULL) {
@@ -12276,10 +12367,15 @@ TA_API ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params
     return TA_OK;
 }
 
-TA_API ta_result ta_actor_load(ta_system *system, const ta_actor_load_params *params) {
-    if (system == NULL || params == NULL || params->image == NULL || params->out == NULL) {
-        return TA_ERR_INVALID;
-    }
+/* A load from an in-memory image, with the binding to use. */
+typedef struct {
+    const ta_session_image *image;
+    const ta_value *binding;
+    const ta_trace_parent *trace;
+    ta_actor_id *out;
+} ta_image_load_params;
+
+static ta_result ta_image_load(ta_system *system, const ta_image_load_params *params) {
     const ta_session_image *image = params->image;
     if (image->self.kind != TA_ACTOR_REF_NAMED) {
         return TA_ERR_INVALID;
@@ -12295,7 +12391,7 @@ TA_API ta_result ta_actor_load(ta_system *system, const ta_actor_load_params *pa
     ta_result result = ta_image_reconstruct(
         system,
         &(ta_actor_reconstruct_params){ .image = image,
-                                        .datamodel_binding = params->datamodel_binding,
+                                        .datamodel_binding = params->binding,
                                         .out = &id });
     if (result != TA_OK) {
         return result;
@@ -12327,9 +12423,590 @@ TA_API ta_result ta_actor_load(ta_system *system, const ta_actor_load_params *pa
         ta_session_remove(&system->sessions, parked);
         ta_session_node_free(&system->sessions, parked);
     }
-    ta_trace_lifecycle(system, loaded, TA_TRACE_LOADED, &params->trace);
+    ta_trace_lifecycle(system, loaded, TA_TRACE_LOADED, params->trace);
     *params->out = id;
     return TA_OK;
+}
+
+/* ------------------------------------------------------------------------
+ * Offloading (ADR 0074)
+ *
+ * An offloaded actor is its image as bytes, in this build's private layout,
+ * read only by the system that wrote them. Offloading is capture, encode,
+ * unload; loading is decode, then the load above. The image is the one
+ * place the actor's state is gathered already, so going through it keeps
+ * one definition of "what an unloaded actor is".
+ *
+ * The layout: a header; the session storage; the definition identity's
+ * text; the self address; the invocation records and pending invokes, raw;
+ * the delayed sends, raw, each followed by its destination and origin; and
+ * the values, each through the actor's data model (value_encode): the root,
+ * the completion data, then each send's target and data. Raw records are
+ * safe because nothing but this build reads them; their pointers and values
+ * are rewritten on the way back in.
+ */
+
+#define TA_OFFLOAD_MAGIC 0x464f4154u /* "TAOF" */
+
+typedef struct {
+    uint32_t magic;
+    uint32_t header_bytes;
+    uint64_t system;
+    uint64_t token;
+    ta_actor_id source_actor;
+    uint64_t session_id;
+    uint64_t source_epoch;
+    uint64_t trace_macrostep;
+    uint64_t next_send_id;
+    uint32_t trace_microstep;
+    uint32_t trace_lifecycle;
+    uint32_t residency;
+    ta_state_id final_state;
+    uint32_t session_bytes;
+    uint32_t family_len;
+    uint32_t revision_len;
+    uint32_t invoke_count;
+    uint32_t pending_invoke_count;
+    uint32_t delayed_send_count;
+    uint8_t published;
+    uint8_t bootstrapped;
+    uint8_t finished;
+    uint8_t trace_begun;
+} ta_offload_header;
+
+/* Value `index` of an image, in the order the bytes carry them: the root,
+ * the completion data, then each send's target and data. */
+static ta_value *ta_offload_slot(ta_session_image *image, ta_value *root, uint32_t index) {
+    if (index == 0) {
+        return root;
+    }
+    if (index == 1) {
+        return &image->completion.data;
+    }
+    ta_delayed_send *send = &image->delayed_sends[(index - 2u) / 2u];
+    return (index - 2u) % 2u == 0 ? &send->target : &send->data;
+}
+
+static size_t ta_offload_address_bytes(const ta_address *address) {
+    return sizeof(ta_address) + (size_t)address->family_len + (size_t)address->name_len + 2u;
+}
+
+/* A ref: the raw record, then a named one's address record. */
+static size_t ta_offload_ref_bytes(const ta_actor_ref *ref) {
+    size_t bytes = sizeof(ta_actor_ref);
+    if (ref->kind == TA_ACTOR_REF_NAMED && ref->as.named != NULL) {
+        bytes += sizeof(uint32_t) + ta_offload_address_bytes(ref->as.named);
+    }
+    return bytes;
+}
+
+static uint8_t *ta_offload_put(uint8_t *at, const void *source, size_t bytes) {
+    if (bytes != 0) {
+        ta_mem_copy(at, source, bytes);
+    }
+    return at + bytes;
+}
+
+static uint8_t *ta_offload_put_ref(uint8_t *at, const ta_actor_ref *ref) {
+    at = ta_offload_put(at, ref, sizeof(ta_actor_ref));
+    if (ref->kind == TA_ACTOR_REF_NAMED && ref->as.named != NULL) {
+        uint32_t bytes = (uint32_t)ta_offload_address_bytes(ref->as.named);
+        at = ta_offload_put(at, &bytes, sizeof bytes);
+        at = ta_offload_put(at, ref->as.named, bytes);
+    }
+    return at;
+}
+
+/* One value through the data model; an absent value is stored as absent. */
+typedef struct {
+    const ta_definition *definition;
+    const ta_value *value;
+    ta_arena *arena;
+    ta_bytes *out;
+} ta_offload_value_params;
+
+static ta_result ta_offload_encode_value(const ta_offload_value_params *params) {
+    *params->out = (ta_bytes){0};
+    if (params->value == NULL || params->value->v == NULL) {
+        return TA_OK;
+    }
+    const ta_datamodel *datamodel = &params->definition->datamodel;
+    if (datamodel->v->value_encode == NULL) {
+        return TA_ERR_UNSUPPORTED;
+    }
+    ta_bytes bytes = {0};
+    ta_op_status status = datamodel->v->value_encode(
+        datamodel->self, &(ta_datamodel_value_encode_params){ .shared = params->definition->datamodel_shared,
+                                                              .value = params->value,
+                                                              .arena = params->arena,
+                                                              .out = &bytes });
+    if (status == TA_OP_NOMEM) {
+        return TA_ERR_NOMEM;
+    }
+    if (status != TA_OP_OK || bytes.len > UINT32_MAX - 1u || (bytes.len != 0 && bytes.ptr == NULL)) {
+        return TA_ERR_UNSUPPORTED;
+    }
+    *params->out = bytes;
+    return TA_OK;
+}
+
+/* A stable actor only (ADR 0074 section 6): nothing runs, waits or is owed. */
+static bool ta_offload_stable(const ta_session_image *image) {
+    return !image->macrostep && image->paused == NULL && image->internal_count == 0 &&
+           !image->completion_pending && !image->has_parent && image->slots.external == TA_EXTERNAL_NONE &&
+           !image->slots.has_kept;
+}
+
+typedef struct {
+    ta_session_image *image;
+    const ta_definition *definition;
+    const ta_value *root;
+    ta_system *system;
+    ta_arena *arena;
+    ta_bytes *out;
+} ta_offload_encode_params;
+
+static size_t ta_offload_records_bytes(const ta_session_image *image) {
+    size_t total = sizeof(ta_offload_header) + image->session_bytes + image->definition.family.name.len +
+                   image->definition.revision.len + ta_offload_ref_bytes(&image->self) +
+                   (size_t)image->invoke_count * sizeof(ta_active_invoke) +
+                   (size_t)image->pending_invoke_count * sizeof(ta_state_id) +
+                   (size_t)image->delayed_send_count * sizeof(ta_delayed_send);
+    for (uint32_t index = 0; index < image->delayed_send_count; index += 1) {
+        total += ta_offload_ref_bytes(&image->delayed_sends[index].destination);
+        total += ta_offload_ref_bytes(&image->delayed_sends[index].origin);
+    }
+    return total;
+}
+
+static uint8_t *ta_offload_put_records(uint8_t *at, const ta_session_image *image, const ta_offload_header *header) {
+    at = ta_offload_put(at, header, sizeof *header);
+    at = ta_offload_put(at, image->session_storage, image->session_bytes);
+    at = ta_offload_put(at, image->definition.family.name.ptr, image->definition.family.name.len);
+    at = ta_offload_put(at, image->definition.revision.ptr, image->definition.revision.len);
+    at = ta_offload_put_ref(at, &image->self);
+    at = ta_offload_put(at, image->invokes, (size_t)image->invoke_count * sizeof(ta_active_invoke));
+    at = ta_offload_put(at, image->pending_invokes, (size_t)image->pending_invoke_count * sizeof(ta_state_id));
+    for (uint32_t index = 0; index < image->delayed_send_count; index += 1) {
+        const ta_delayed_send *send = &image->delayed_sends[index];
+        at = ta_offload_put(at, send, sizeof *send);
+        at = ta_offload_put_ref(at, &send->destination);
+        at = ta_offload_put_ref(at, &send->origin);
+    }
+    return at;
+}
+
+static ta_offload_header ta_offload_header_of(const ta_session_image *image, const ta_system *system) {
+    return (ta_offload_header){
+        .magic = TA_OFFLOAD_MAGIC,
+        .header_bytes = sizeof(ta_offload_header),
+        .system = (uint64_t)(uintptr_t)system,
+        .token = system->offload_token,
+        .source_actor = image->source_actor,
+        .session_id = image->session_id,
+        .source_epoch = image->source_epoch,
+        .trace_macrostep = image->trace_macrostep,
+        .next_send_id = image->next_send_id,
+        .trace_microstep = image->trace_microstep,
+        .trace_lifecycle = image->trace_lifecycle,
+        .residency = (uint32_t)image->residency,
+        .final_state = image->final_state,
+        .session_bytes = (uint32_t)image->session_bytes,
+        .family_len = image->definition.family.name.len,
+        .revision_len = (uint32_t)image->definition.revision.len,
+        .invoke_count = image->invoke_count,
+        .pending_invoke_count = image->pending_invoke_count,
+        .delayed_send_count = image->delayed_send_count,
+        .published = image->published,
+        .bootstrapped = image->bootstrapped,
+        .finished = image->finished,
+        .trace_begun = image->trace_begun,
+    };
+}
+
+static ta_result ta_offload_encode(const ta_offload_encode_params *params) {
+    ta_session_image *image = params->image;
+    uint32_t value_count = 2u + 2u * image->delayed_send_count;
+    ta_bytes *values = ta_arena_alloc(params->arena, (size_t)value_count * sizeof(ta_bytes), _Alignof(ta_bytes));
+    if (values == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    ta_value root = params->root != NULL ? *params->root : (ta_value){0};
+    size_t total = ta_offload_records_bytes(image);
+    for (uint32_t index = 0; index < value_count; index += 1) {
+        ta_result result = ta_offload_encode_value(&(ta_offload_value_params){
+            .definition = params->definition,
+            .value = ta_offload_slot(image, &root, index),
+            .arena = params->arena,
+            .out = &values[index],
+        });
+        if (result != TA_OK) {
+            return result;
+        }
+        total += sizeof(uint32_t) + values[index].len;
+    }
+    uint8_t *buffer = ta_arena_alloc(params->arena, total, _Alignof(uint64_t));
+    if (buffer == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    if (params->system->offload_token == 0) {
+        params->system->offload_token = ta_system_new_span_id(params->system);
+    }
+    ta_offload_header header = ta_offload_header_of(image, params->system);
+    uint8_t *at = ta_offload_put_records(buffer, image, &header);
+    for (uint32_t index = 0; index < value_count; index += 1) {
+        const ta_value *value = ta_offload_slot(image, &root, index);
+        /* A present value's length carries +1, so zero bytes still say "present". */
+        uint32_t length = value->v == NULL ? 0u : (uint32_t)values[index].len + 1u;
+        at = ta_offload_put(at, &length, sizeof length);
+        at = ta_offload_put(at, values[index].ptr, values[index].len);
+    }
+    *params->out = (ta_bytes){ .ptr = buffer, .len = (size_t)(at - buffer) };
+    return TA_OK;
+}
+
+TA_API ta_result ta_actor_offload(ta_system *system, const ta_actor_offload_params *params) {
+    if (system == NULL || params == NULL || params->arena == NULL || params->out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    *params->out = (ta_bytes){0};
+    ta_actor *actor = ta_actor_lookup(system, params->actor);
+    if (actor == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    if (actor->record.self.kind != TA_ACTOR_REF_NAMED) {
+        return TA_ERR_INVALID;
+    }
+    const ta_definition *definition = actor->definition;
+    ta_session_image *image = NULL;
+    ta_result result = ta_actor_capture(system, &(ta_actor_capture_params){ .actor = params->actor, .out = &image });
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_bytes bytes = {0};
+    result = ta_offload_stable(image) ? TA_OK : TA_ERR_BUSY;
+    if (result == TA_OK) {
+        result = ta_offload_encode(&(ta_offload_encode_params){ .image = image,
+                                                                .definition = definition,
+                                                                .root = params->root,
+                                                                .system = system,
+                                                                .arena = params->arena,
+                                                                .out = &bytes });
+    }
+    if (result == TA_OK) {
+        result = ta_actor_unload(system, &(ta_actor_unload_params){ .actor = params->actor, .image = image });
+    }
+    ta_session_image_destroy(image);
+    if (result == TA_OK) {
+        *params->out = bytes;
+    }
+    return result;
+}
+
+typedef struct {
+    const uint8_t *at;
+    const uint8_t *end;
+} ta_offload_reader;
+
+static bool ta_offload_take(ta_offload_reader *reader, void *out, size_t bytes) {
+    if ((size_t)(reader->end - reader->at) < bytes) {
+        return false;
+    }
+    if (bytes != 0) {
+        ta_mem_copy(out, reader->at, bytes);
+    }
+    reader->at += bytes;
+    return true;
+}
+
+/* A ref as ta_offload_put_ref() wrote it; a named one's address goes into `arena`, detached. */
+static ta_result ta_offload_take_ref(ta_offload_reader *reader, ta_arena *arena, ta_actor_ref *ref) {
+    if (!ta_offload_take(reader, ref, sizeof *ref)) {
+        *ref = (ta_actor_ref){0};
+        return TA_ERR_INVALID;
+    }
+    if (ref->kind != TA_ACTOR_REF_NAMED || ref->as.named == NULL) {
+        return TA_OK;
+    }
+    ref->as.named = NULL;
+    uint32_t bytes = 0;
+    if (!ta_offload_take(reader, &bytes, sizeof bytes) || bytes < sizeof(ta_address) ||
+        (size_t)(reader->end - reader->at) < bytes) {
+        *ref = (ta_actor_ref){0};
+        return TA_ERR_INVALID;
+    }
+    ta_address *address = ta_arena_alloc(arena, bytes, _Alignof(ta_address));
+    if (address == NULL) {
+        *ref = (ta_actor_ref){0};
+        return TA_ERR_NOMEM;
+    }
+    (void)ta_offload_take(reader, address, bytes);
+    if (ta_offload_address_bytes(address) != bytes) {
+        *ref = (ta_actor_ref){0};
+        return TA_ERR_INVALID;
+    }
+    address->table = NULL;
+    address->next = NULL;
+    address->unloaded = NULL;
+    address->references = 0;
+    ref->as.named = address;
+    return TA_OK;
+}
+
+/* The text of the image's identity, copied into its arena. */
+static ta_result ta_offload_take_identity(ta_offload_reader *reader, const ta_offload_header *header,
+                                          ta_session_image *image) {
+    char *family = ta_arena_alloc(&image->arena, (size_t)header->family_len + 1u, 1);
+    uint8_t *revision = ta_arena_alloc(&image->arena, (size_t)header->revision_len + 1u, 1);
+    if (family == NULL || revision == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    if (!ta_offload_take(reader, family, header->family_len) ||
+        !ta_offload_take(reader, revision, header->revision_len)) {
+        return TA_ERR_INVALID;
+    }
+    family[header->family_len] = '\0';
+    image->definition = (ta_definition_identity){
+        .family = { .name = { .ptr = family, .len = header->family_len } },
+        .revision = { .ptr = revision, .len = header->revision_len },
+    };
+    return TA_OK;
+}
+
+/* An array of raw records, copied into the image's arena. */
+typedef struct {
+    ta_offload_reader *reader;
+    ta_arena *arena;
+    uint32_t count;
+    size_t size;
+    size_t alignment;
+    void **out;
+} ta_offload_array_params;
+
+static ta_result ta_offload_take_array(const ta_offload_array_params *params) {
+    *params->out = NULL;
+    if (params->count == 0) {
+        return TA_OK;
+    }
+    size_t bytes = (size_t)params->count * params->size;
+    void *copy = ta_arena_alloc(params->arena, bytes, params->alignment);
+    if (copy == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    if (!ta_offload_take(params->reader, copy, bytes)) {
+        return TA_ERR_INVALID;
+    }
+    *params->out = copy;
+    return TA_OK;
+}
+
+static ta_result ta_offload_take_sends(ta_offload_reader *reader, uint32_t count, ta_session_image *image) {
+    if (count == 0) {
+        return TA_OK;
+    }
+    image->delayed_sends = ta_arena_alloc(&image->arena, (size_t)count * sizeof(ta_delayed_send),
+                                          _Alignof(ta_delayed_send));
+    if (image->delayed_sends == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    for (uint32_t index = 0; index < count; index += 1) {
+        ta_delayed_send *send = &image->delayed_sends[index];
+        if (!ta_offload_take(reader, send, sizeof *send)) {
+            return TA_ERR_INVALID;
+        }
+        /* From here on the values and refs are this image's own. */
+        send->target = (ta_value){0};
+        send->data = (ta_value){0};
+        send->origin = (ta_actor_ref){0};
+        image->delayed_send_count = index + 1u;
+        ta_result result = ta_offload_take_ref(reader, &image->arena, &send->destination);
+        if (result == TA_OK) {
+            result = ta_offload_take_ref(reader, &image->arena, &send->origin);
+        }
+        if (result != TA_OK) {
+            return result;
+        }
+    }
+    return TA_OK;
+}
+
+/* Everything but the values: arena copies of the records, refs detached. */
+static ta_result ta_offload_take_records(ta_offload_reader *reader, const ta_offload_header *header,
+                                         ta_session_image *image) {
+    ta_arena *arena = &image->arena;
+    ta_result result = ta_offload_take_array(&(ta_offload_array_params){
+        .reader = reader, .arena = arena, .count = header->session_bytes, .size = 1,
+        .alignment = _Alignof(uint64_t), .out = &image->session_storage });
+    image->session_bytes = header->session_bytes;
+    if (result == TA_OK) {
+        result = ta_offload_take_identity(reader, header, image);
+    }
+    if (result == TA_OK) {
+        result = ta_offload_take_ref(reader, arena, &image->self);
+    }
+    if (result == TA_OK) {
+        result = ta_offload_take_array(&(ta_offload_array_params){
+            .reader = reader, .arena = arena, .count = header->invoke_count, .size = sizeof(ta_active_invoke),
+            .alignment = _Alignof(ta_active_invoke), .out = (void **)&image->invokes });
+        image->invoke_count = image->invokes != NULL ? header->invoke_count : 0;
+    }
+    if (result == TA_OK) {
+        result = ta_offload_take_array(&(ta_offload_array_params){
+            .reader = reader, .arena = arena, .count = header->pending_invoke_count, .size = sizeof(ta_state_id),
+            .alignment = _Alignof(ta_state_id), .out = (void **)&image->pending_invokes });
+        image->pending_invoke_count = image->pending_invokes != NULL ? header->pending_invoke_count : 0;
+    }
+    if (result == TA_OK) {
+        result = ta_offload_take_sends(reader, header->delayed_send_count, image);
+    }
+    return result;
+}
+
+/* The values, through the data model of the definition the image names. */
+static ta_result ta_offload_take_values(ta_offload_reader *reader, ta_system *system, ta_session_image *image,
+                                        ta_value *root) {
+    ta_definition_id definition_id = 0;
+    ta_result result = ta_session_image_definition(system, image, &definition_id);
+    if (result != TA_OK) {
+        return result;
+    }
+    const ta_definition *definition = ta_system_definition(system, definition_id);
+    const ta_datamodel *datamodel = &definition->datamodel;
+    uint32_t value_count = 2u + 2u * image->delayed_send_count;
+    for (uint32_t index = 0; index < value_count; index += 1) {
+        uint32_t length = 0;
+        if (!ta_offload_take(reader, &length, sizeof length) ||
+            (length != 0 && (size_t)(reader->end - reader->at) < (size_t)length - 1u)) {
+            return TA_ERR_INVALID;
+        }
+        if (length == 0) {
+            continue;
+        }
+        ta_bytes bytes = { .ptr = reader->at, .len = (size_t)length - 1u };
+        reader->at += length - 1u;
+        if (datamodel->v->value_decode == NULL) {
+            return TA_ERR_UNSUPPORTED;
+        }
+        ta_value value = {0};
+        ta_op_status status = datamodel->v->value_decode(
+            datamodel->self, &(ta_datamodel_value_decode_params){ .shared = definition->datamodel_shared,
+                                                                  .bytes = bytes,
+                                                                  .out = &value });
+        if (status == TA_OP_NOMEM) {
+            return TA_ERR_NOMEM;
+        }
+        if (status != TA_OP_OK) {
+            return TA_ERR_INVALID;
+        }
+        *ta_offload_slot(image, root, index) = value;
+    }
+    image->completion.has_data = image->completion.data.v != NULL;
+    return reader->at == reader->end ? TA_OK : TA_ERR_INVALID;
+}
+
+static void ta_offload_free_image(ta_system *system, ta_session_image *image) {
+    ta_mem_free(system->allocator, image,
+                &(ta_allocator_free_params){ .size = sizeof(ta_session_image),
+                                             .alignment = _Alignof(ta_session_image) });
+}
+
+/* A fresh image for bytes whose header says they are this system's. */
+static ta_result ta_offload_image(ta_system *system, const ta_offload_header *header, size_t bytes,
+                                  ta_session_image **out) {
+    ta_session_image *image = ta_mem_alloc(system->allocator, sizeof(ta_session_image), _Alignof(ta_session_image));
+    if (image == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    *image = (ta_session_image){
+        .allocator = system->allocator,
+        .source_actor = header->source_actor,
+        .session_id = header->session_id,
+        .source_epoch = header->source_epoch,
+        .residency = (ta_actor_residency)header->residency,
+        .published = header->published != 0,
+        .bootstrapped = header->bootstrapped != 0,
+        .finished = header->finished != 0,
+        .trace_begun = header->trace_begun != 0,
+        .trace_microstep = header->trace_microstep,
+        .trace_lifecycle = header->trace_lifecycle,
+        .trace_macrostep = header->trace_macrostep,
+        .next_send_id = header->next_send_id,
+        .final_state = header->final_state,
+    };
+    ta_result result = ta_arena_init(&image->arena, system->allocator, bytes + 256u);
+    if (result != TA_OK) {
+        ta_offload_free_image(system, image);
+        return result;
+    }
+    *out = image;
+    return TA_OK;
+}
+
+/* Bytes this system offloaded, back as an image; nothing is kept on failure. */
+static ta_result ta_offload_decode(ta_system *system, ta_bytes bytes, ta_session_image **out, ta_value *root) {
+    *root = (ta_value){0};
+    ta_offload_reader reader = { .at = bytes.ptr, .end = bytes.ptr + bytes.len };
+    ta_offload_header header;
+    if (bytes.ptr == NULL || !ta_offload_take(&reader, &header, sizeof header) || header.magic != TA_OFFLOAD_MAGIC ||
+        header.header_bytes != sizeof(ta_offload_header)) {
+        return TA_ERR_INVALID;
+    }
+    if (header.system != (uint64_t)(uintptr_t)system || system->offload_token == 0 ||
+        header.token != system->offload_token) {
+        return TA_ERR_STALE;
+    }
+    ta_session_image *image = NULL;
+    ta_result result = ta_offload_image(system, &header, bytes.len, &image);
+    if (result == TA_OK) {
+        result = ta_offload_take_records(&reader, &header, image);
+        if (result == TA_OK) {
+            result = ta_offload_take_values(&reader, system, image, root);
+        }
+        if (result != TA_OK) {
+            ta_value_release(root);
+            *root = (ta_value){0};
+            ta_session_image_destroy(image);
+            return result;
+        }
+        *out = image;
+    }
+    return result;
+}
+
+TA_API ta_result ta_actor_load(ta_system *system, const ta_actor_load_params *params) {
+    if (system == NULL || params == NULL || params->out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    if (params->root != NULL) {
+        *params->root = (ta_value){0};
+    }
+    if (params->image != NULL) {
+        return ta_image_load(system, &(ta_image_load_params){ .image = params->image,
+                                                              .binding = params->datamodel_binding,
+                                                              .trace = &params->trace,
+                                                              .out = params->out });
+    }
+    ta_session_image *image = NULL;
+    ta_value root = {0};
+    ta_result result = ta_offload_decode(system, params->bytes, &image, &root);
+    if (result != TA_OK) {
+        return result;
+    }
+    const ta_value *binding = params->datamodel_binding;
+    if (binding == NULL && root.v != NULL) {
+        binding = &root;
+    }
+    result = ta_image_load(system, &(ta_image_load_params){ .image = image,
+                                                            .binding = binding,
+                                                            .trace = &params->trace,
+                                                            .out = params->out });
+    ta_session_image_destroy(image);
+    if (result == TA_OK && params->root != NULL) {
+        *params->root = root;
+    } else {
+        ta_value_release(&root);
+    }
+    return result;
 }
 
 
@@ -13946,7 +14623,6 @@ static ta_send_id ta_literal_send_id(ta_atom atom) {
  * ID is TA_GENERATED_SEND_ID_PREFIX followed by the actor-local counter. Both
  * forms round-trip, so idlocation, sendidexpr, and _event.sendid agree.
  */
-#define TA_GENERATED_SEND_ID_BIT ((ta_send_id)1u << 63)
 #define TA_GENERATED_SEND_ID_PREFIX "#_send."
 
 TA_PRIVATE void ta_send_id_write(const ta_system *system, ta_send_id id, ta_text_writer *writer) {

@@ -429,6 +429,31 @@ static void test_operations(tat_js_datamodel_context *context) {
     ta_value_release(&array);
     ta_value_release(&shared);
 
+    /* Offloading (core ADR 0074): a value's bytes decode to an equal value,
+     * and bytes that are not a serialized value are refused. */
+    ta_arena arena;
+    require(ta_arena_init(&arena, tat_libc_allocator(), 64) == TA_OK, "offload arena");
+    ta_bytes bytes = {0};
+    check(model.v->value_encode(model.self, &(ta_datamodel_value_encode_params){ .shared = s.shared,
+                                                                                  .value = &object,
+                                                                                  .arena = &arena,
+                                                                                  .out = &bytes }) == TA_OP_OK &&
+              bytes.len > 1,
+          "value_encode writes an object");
+    ta_value back = {0};
+    check(model.v->value_decode(model.self, &(ta_datamodel_value_decode_params){ .shared = s.shared,
+                                                                                  .bytes = bytes,
+                                                                                  .out = &back }) == TA_OP_OK,
+          "value_decode reads it back");
+    check(json_is(&back, "{\"n\":5}"), "the decoded value equals the encoded one");
+    ta_value_release(&back);
+    uint8_t junk[] = { 0, 0xff, 0xfe };
+    check(model.v->value_decode(model.self, &(ta_datamodel_value_decode_params){
+                                              .shared = s.shared, .bytes = { .ptr = junk, .len = sizeof junk },
+                                              .out = &back }) == TA_OP_ERROR,
+          "value_decode refuses bytes that are no value");
+    ta_arena_destroy(&arena);
+
     /* A value outlives its session. */
     close_session(&s);
     check(json_is(&object, "{\"n\":5}"), "a value outlives its session");

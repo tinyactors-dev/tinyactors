@@ -1053,7 +1053,6 @@ static ta_send_id ta_literal_send_id(ta_atom atom) {
  * ID is TA_GENERATED_SEND_ID_PREFIX followed by the actor-local counter. Both
  * forms round-trip, so idlocation, sendidexpr, and _event.sendid agree.
  */
-#define TA_GENERATED_SEND_ID_BIT ((ta_send_id)1u << 63)
 #define TA_GENERATED_SEND_ID_PREFIX "#_send."
 
 void ta_send_id_write(const ta_system *system, ta_send_id id, ta_text_writer *writer) {

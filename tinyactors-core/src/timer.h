@@ -66,10 +66,6 @@ typedef struct {
     ta_actor_id owner;
     ta_actor_ref origin;
     ta_invoke_id invoke_id;
-    /* See ta_delayed_send.content. */
-    bool has_content;
-    ta_content_id content;
-    ta_trace_parent trace;
 } ta_delayed_send_meta;
 
 /* One owner's pending sends, sorted by (due, id). Zero-initialized is empty. */

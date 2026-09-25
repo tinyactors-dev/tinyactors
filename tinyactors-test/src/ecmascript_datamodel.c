@@ -1232,6 +1232,52 @@ static ta_op_status tat_js_value_text(void *self, const ta_datamodel_value_text_
     return TA_OP_OK;
 }
 
+/*
+ * Offloading (core ADR 0074): a value's bytes are QuickJS's structured
+ * serialization (JS_WriteObject), after one byte for the wrapper's `wire`
+ * flag, so an offloaded actor's objects leave the JavaScript heap.
+ */
+static ta_op_status tat_js_value_encode(void *self, const ta_datamodel_value_encode_params *params) {
+    (void)self;
+    tat_js_value *wrapped = tat_js_unwrap(params->value);
+    if (wrapped == NULL) {
+        return TA_OP_ERROR;
+    }
+    JSContext *utility = wrapped->state->utility;
+    tat_js_begin_work(wrapped->state);
+    size_t length = 0;
+    uint8_t *written = JS_WriteObject(utility, &length, wrapped->value, JS_WRITE_OBJ_REFERENCE);
+    if (written == NULL) {
+        tat_js_clear_exception(utility);
+        return TA_OP_ERROR;
+    }
+    uint8_t *copy = ta_arena_alloc(params->arena, length + 1u, 1);
+    if (copy == NULL) {
+        js_free(utility, written);
+        return TA_OP_NOMEM;
+    }
+    copy[0] = wrapped->wire ? 1u : 0u;
+    memcpy(copy + 1, written, length);
+    js_free(utility, written);
+    *params->out = (ta_bytes){ .ptr = copy, .len = length + 1u };
+    return TA_OP_OK;
+}
+
+static ta_op_status tat_js_value_decode(void *self, const ta_datamodel_value_decode_params *params) {
+    tat_js_state *state = ((tat_js_datamodel_context *)self)->state;
+    if (params->bytes.len < 1u) {
+        return TA_OP_ERROR;
+    }
+    JSContext *utility = state->utility;
+    tat_js_begin_work(state);
+    JSValue value = JS_ReadObject(utility, params->bytes.ptr + 1, params->bytes.len - 1u, JS_READ_OBJ_REFERENCE);
+    if (JS_IsException(value)) {
+        tat_js_clear_exception(utility);
+        return TA_OP_ERROR;
+    }
+    return tat_js_wrap(state, value, params->bytes.ptr[0] != 0, params->out) == TA_OK ? TA_OP_OK : TA_OP_NOMEM;
+}
+
 static ta_op_status tat_js_text_value(void *self, const ta_datamodel_text_value_params *params) {
     (void)self;
     tat_js_instance *instance = params->instance;
@@ -1404,6 +1450,8 @@ static const ta_datamodel_vtable TAT_JS_DATAMODEL_VTABLE = {
     .import_content = tat_js_import_content,
     .foreach_snapshot = tat_js_foreach_snapshot,
     .foreach_bind = tat_js_foreach_bind,
+    .value_encode = tat_js_value_encode,
+    .value_decode = tat_js_value_decode,
 };
 
 ta_datamodel tat_js_datamodel(tat_js_datamodel_context *context) {

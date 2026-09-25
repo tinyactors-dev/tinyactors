@@ -3,6 +3,9 @@
 #include "system.h"
 #include "datamodel.h"
 
+/* A generated send ID (`#_send.<n>`, ADR 0048) is this bit and the session's counter n. */
+#define TA_GENERATED_SEND_ID_BIT ((ta_send_id)1u << 63)
+
 /*
  * Per-call interpreter scratch. Between steps the actor holds all state:
  * configuration, history, internal queue, and pending event. A run that

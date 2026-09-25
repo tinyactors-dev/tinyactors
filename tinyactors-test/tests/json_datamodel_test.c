@@ -151,6 +151,36 @@ int main(void) {
 
     model.v->destroy_instance(model.self, shared, instance);
     model.v->destroy_definition(model.self, shared, tat_libc_allocator());
+    /* Offloading (core ADR 0074): a value's bytes are its JSON text, and they
+     * decode to an equal value; bytes that are not JSON are refused. */
+    ta_arena arena;
+    require(ta_arena_init(&arena, tat_libc_allocator(), 64) == TA_OK, "offload arena");
+    ta_bytes bytes = {0};
+    require(model.v->value_encode(model.self, &(ta_datamodel_value_encode_params){ .shared = shared,
+                                                                                    .value = &binding,
+                                                                                    .arena = &arena,
+                                                                                    .out = &bytes }) == TA_OP_OK,
+            "value_encode");
+    require(bytes.len > 2 && bytes.ptr[0] == '{' && bytes.ptr[bytes.len - 1u] == '}',
+            "value_encode writes the JSON text");
+    ta_value back = {0};
+    require(model.v->value_decode(model.self, &(ta_datamodel_value_decode_params){ .shared = shared,
+                                                                                    .bytes = bytes,
+                                                                                    .out = &back }) == TA_OP_OK,
+            "value_decode");
+    ta_bytes again = {0};
+    require(model.v->value_encode(model.self, &(ta_datamodel_value_encode_params){ .shared = shared,
+                                                                                    .value = &back,
+                                                                                    .arena = &arena,
+                                                                                    .out = &again }) == TA_OP_OK &&
+                again.len == bytes.len && memcmp(again.ptr, bytes.ptr, bytes.len) == 0,
+            "the decoded value equals the encoded one");
+    ta_value_release(&back);
+    require(model.v->value_decode(model.self, &(ta_datamodel_value_decode_params){
+                                                  .shared = shared, .bytes = { .ptr = (const uint8_t *)"{", .len = 1 },
+                                                  .out = &back }) == TA_OP_ERROR,
+            "value_decode refuses bytes that are not JSON");
+    ta_arena_destroy(&arena);
     ta_value_release(&binding);
     free(instance);
     tat_json_datamodel_context_destroy(&context);

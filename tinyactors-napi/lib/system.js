@@ -1131,7 +1131,7 @@ class System {
    */
   load(image, options = {}) {
     const handle = handleOf(image, this, 'load()');
-    const id = core.actor_load(this.#native, handle, this.#bindingFor(image, options), undefined);
+    const id = core.actor_load(this.#native, handle, undefined, this.#bindingFor(image, options), undefined).out;
     return new ActorID(this, id.slot, id.generation);
   }
 
@@ -1295,8 +1295,8 @@ class System {
       throw new TinyactorsError(`the loader returned an image of another address than ${address.family}/${address.name}`,
         'invalid');
     }
-    const id = core.actor_load(this.#native, handle, this.#bindingFor(image, {}),
-      this.#native.loadTrace(index, generation));
+    const id = core.actor_load(this.#native, handle, undefined, this.#bindingFor(image, {}),
+      this.#native.loadTrace(index, generation)).out;
     return new ActorID(this, id.slot, id.generation);
   }
 

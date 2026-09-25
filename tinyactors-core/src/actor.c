@@ -497,6 +497,73 @@ ta_result ta_actor_new(ta_system *system, ta_definition *definition, ta_actor **
     return TA_OK;
 }
 
+/*
+ * Re-arms the delayed sends a host captured from an earlier session of this
+ * actor (ADR 0074 section 8). Everything is checked and the timer list
+ * reserved first, so scheduling cannot fail halfway; a failure leaves the
+ * actor to be freed by the caller, which frees whatever was armed.
+ */
+static ta_result ta_actor_rearm_sends(ta_system *system, ta_actor *actor, const ta_actor_spawn_params *params) {
+    uint32_t count = params->pending_send_count;
+    if (count == 0) {
+        return TA_OK;
+    }
+    if (params->pending_sends == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_definition *definition = actor->definition;
+    for (uint32_t index = 0; index < count; index += 1) {
+        const ta_delayed_send_info *info = &params->pending_sends[index];
+        if (!ta_event_name_valid(&system->event_names, info->event) ||
+            (info->has_content && info->content >= definition->content_count) ||
+            (info->has_target_text && info->target_text >= definition->content_count)) {
+            return TA_ERR_INVALID;
+        }
+    }
+    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
+    if (sparse == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    ta_result result = ta_timer_reserve(&system->timers, &sparse->timers, count);
+    for (uint32_t index = 0; result == TA_OK && index < count; index += 1) {
+        const ta_delayed_send_info *info = &params->pending_sends[index];
+        ta_delayed_send send = {
+            .owner = actor->record.id,
+            .send_id = info->send_id,
+            .due = info->due,
+            .event = info->event,
+            .io_type = info->io_type,
+            .destination = info->destination,
+            .target = info->target,
+            .data = info->data,
+            .has_content = info->has_content,
+            .content = info->content,
+            .has_target_text = info->has_target_text,
+            .target_text = info->target_text,
+            .invoke_id = TA_INVOKE_ID_NONE,
+            .trace = info->trace,
+        };
+        ta_actor_ref_retain(&send.destination);
+        ta_value_retain(&send.target);
+        ta_value_retain(&send.data);
+        result = ta_timer_schedule(&system->timers, &sparse->timers, &send);
+        if (result != TA_OK) {
+            ta_actor_ref_release(&send.destination);
+            ta_value_release(&send.target);
+            ta_value_release(&send.data);
+            break;
+        }
+        /* A later <send> never reuses a re-armed generated ID. */
+        if ((send.send_id & TA_GENERATED_SEND_ID_BIT) != 0) {
+            uint64_t counter = send.send_id & ~TA_GENERATED_SEND_ID_BIT;
+            if (counter > actor->next_send_id) {
+                actor->next_send_id = counter;
+            }
+        }
+    }
+    return result;
+}
+
 ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params) {
     if (system == NULL || params == NULL || params->out == NULL) {
         return TA_ERR_INVALID;
@@ -549,6 +616,12 @@ ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params)
         return result;
     }
     actor->datamodel_initialized = true;
+    result = ta_actor_rearm_sends(system, actor, params);
+    if (result != TA_OK) {
+        ta_actor_release_slot(system, id);
+        ta_actor_free(system, actor); /* frees what was re-armed, too */
+        return result;
+    }
     /* The claim is the last fallible step: bootstrap has not run yet, so a
      * refused address leaves no trace of this spawn anywhere. */
     if (params->address != NULL) {
