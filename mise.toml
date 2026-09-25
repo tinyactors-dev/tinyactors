@@ -9,6 +9,10 @@ ruby = "4"
 # major releases (clang 22 dropped the ElaboratedType wrapper around a
 # typedef's tag). Pin the line the description in include/ was generated with.
 clang = "22"
+# The JavaScript runtimes napi pins (tinyactors-napi/mise.toml), so `mise exec`
+# from the root runs the same Node as the package, not whatever is on PATH.
+node = "22"
+bun = "1"
 
 [env]
 # Puts the workspace's shared task library (mise/lib/) on Ruby's load path so
