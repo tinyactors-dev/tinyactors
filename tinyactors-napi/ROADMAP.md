@@ -728,15 +728,20 @@ Done (ADR 0017; core ADRs 0072 and 0073):
 - **Metrics.** `system.metrics()` returns core's counters, occupancy,
   messages and memory as plain data, and `metricsToOTLP()` writes them as
   OTLP.
-- **Tests:** `test/tracing.js`, `test/metrics.js` and
-  `test/native/otlp_test.c`.
+- **Failure logs say why:** the failing action's label and the thrown
+  message, in the body and as `exception.message`.
+- **Host metrics:** turn duration and timer lateness as histograms with
+  exemplars, overdue timers, the run queues, quarantine, faults by code,
+  dead letters by reason; quarantines and dead letters are also logs.
+- **The SDK example** with observable instruments, tested against the
+  official metrics SDK (a dev dependency).
+- **Tests:** `test/tracing.js`, `test/metrics.js`, `test/otel-metrics.js`,
+  `test/native/otlp_test.c` and `test/native/host_metrics_test.c`.
 
-Open (ADR 0017's implementation notes):
-- the traced-path targets;
-- Bun's sampled-out budget;
-- the SDK example with observable instruments;
-- host metrics for turn duration, timer lateness, quarantine and dead
-  letters.
+Open (ADR 0017's implementation notes, follow-up of 2026-09-25):
+- the traced-path targets: structural work (no copy into JavaScript, or
+  smaller hand-offs during a turn, or slimmer summary spans);
+- Bun's budgets for `traceparent` and sampled out.
 
 ## Open follow-ups
 

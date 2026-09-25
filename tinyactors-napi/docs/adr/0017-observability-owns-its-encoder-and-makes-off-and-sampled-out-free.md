@@ -1,6 +1,6 @@
 # ADR 0017: Observability owns its encoder, and makes off and sampled-out free
 
-**Status:** Accepted and implemented, except where the implementation notes say otherwise. Revises ADR 0016 (points 1 and 4, and its performance), move `traceparent` parsing from ADR 0015 point 4 into C, and take the napi slot core ADR 0072 names for metrics and logs, revising that ADR's section 7 for metrics. Research: [`docs/research/observability-build-vs-reuse.md`](../../../docs/research/observability-build-vs-reuse.md).
+**Status:** Accepted and implemented, except where the implementation notes say otherwise. The follow-up of 2026-09-25 in the notes adds failure logs that say why, the host metrics and the SDK metrics example; the traced-path targets and Bun's budgets stay open. Revises ADR 0016 (points 1 and 4, and its performance), move `traceparent` parsing from ADR 0015 point 4 into C, and take the napi slot core ADR 0072 names for metrics and logs, revising that ADR's section 7 for metrics. Research: [`docs/research/observability-build-vs-reuse.md`](../../../docs/research/observability-build-vs-reuse.md).
 **Date:** 2026-09-24
 
 ## Context
@@ -387,3 +387,82 @@ The original questions were:
   request's trace, with `POST /orders` and the actors' spans, and the
   metrics (`tinyactors.actors.spawned` and the rest). The demo chart has
   no failure and no `<log>`, so it sends no logs.
+
+### Follow-up, 2026-09-25
+
+- **Failure logs say why.** Found in otel-tui: a `<script>` that threw left
+  one WARN log whose body was `error.execution`, with no reason and no
+  action, and no `tinyactors.action.failed` at all.
+  - Core wrote `SCRIPT` with the fault for a failed `<script>`, never
+    `ACTION_FAILED`. It now writes both, like every other action. A
+    record's fault carries its message, and `ACTION_FAILED` borrows the
+    data its error event holds (core ADR 0067's status line points here).
+  - The body is the message, as OTLP's log data model makes the body the
+    human-readable part: `<script> in ready on reserve failed: Error:
+    cannot reserve 50 items`, and `error.execution: Error: cannot reserve
+    50 items`. The attributes add `exception.message` (OpenTelemetry's
+    semantic convention), `scxml.action` and `scxml.action.id`,
+    `scxml.fault.code` and `scxml.fault.message`. The reason is written
+    whatever `values` says.
+  - napi renders a thrown `Error` as `Error: message`; `JSON.stringify`
+    gave `{}`.
+- **Host metrics (section 7, and core ADR 0072 section 4).**
+  - `tinyactors.pump.turn.duration` and `tinyactors.timers.lateness` are
+    histograms with explicit buckets, in seconds. Each bucket keeps an
+    exemplar: the latest sampled macrostep that ran in the turn, or the
+    trace that set the timer.
+  - `tinyactors.timers.overdue` is how far behind the earliest pending
+    timer is.
+  - `tinyactors.scheduler.runnable` and `.ready` are the run queues'
+    lengths, counting entries a later turn skips.
+  - `tinyactors.actors.quarantined`, `tinyactors.faults` by
+    `tinyactors.fault.code`, and `tinyactors.messages.dead_lettered` by
+    `tinyactors.dead_letter.reason`.
+  - Quarantines and dead letters are WARN logs,
+    `tinyactors.actor.quarantined` and `tinyactors.message.dead_lettered`,
+    through the same rate limit.
+  - Lateness is measured where a dispatched delayed send reaches the
+    router or an I/O processor. A delayed send to `#_internal` stays in
+    core and is not a host timer, so it is not measured.
+  - The histograms live in a portable module (`src/host_metrics.{c,h}`),
+    with a native test. Every metric is listed from the first snapshot.
+- **The SDK example** with observable instruments is tested
+  (`test/otel-metrics.js`), against `@opentelemetry/sdk-metrics` 2.11.0, a
+  pinned dev dependency. The SDK has no asynchronous histogram, so the two
+  histograms go through `metricsToOTLP` only.
+- **The traced path.** The request's header is written into a gap before
+  the spans, so taking a request no longer copies every span; event names
+  are cached; short copies are inlined. Measured with mise's Node 22.23.2
+  and Bun 1.4.1 (load average about 3 on 16 cores), median of three runs,
+  ns per event:
+
+  | | Untraced | Macrostep spans | Every record |
+  |---|---|---|---|
+  | Node, before | 614–616 | 1,182–1,183 | 2,090–2,129 |
+  | Node, after | 634–661 | 1,121–1,227 | 2,064–2,178 |
+  | Bun, before | 546–550 | 1,117–1,137 | not measured |
+  | Bun, after | 522–531 | 1,099–1,112 | 2,106–2,134 |
+
+  The machine was slower than when the targets were set: untraced was
+  418 ns then. Over untraced, macrostep spans cost about 540 ns and every
+  record about 1,450 ns, against targets of about 280 ns and 780 ns. The
+  changes' gain is within the noise.
+  - **Where the time goes** (macOS `sample`, macrostep spans only, ns per
+    event over untraced): the encoder about 190, core about 120, copying
+    about 80, V8 about 100, clock reads about 30. Core and V8 slow down
+    broadly, not in one place: each turn writes about 350 KB of spans
+    (338 bytes a macrostep span) and copies it into a fresh, zero-filled
+    ArrayBuffer, which crowds the caches.
+  - **Open point: the targets.** What would reach them is structural:
+    hand the span buffer to JavaScript without the copy (an external
+    ArrayBuffer returned to a small pool on finalize, which some runtimes
+    refuse, and whose finalizer can outlive the system's allocator), or
+    hand spans over in smaller chunks during a turn so they stay in cache,
+    or slimmer spans in `summary`.
+  - **Open point: Bun's budgets.** Bun is over both 40 ns budgets:
+    `traceparent` +38 to +57 ns and sampled out +55 to +84 ns, before
+    these changes as after. Node is within them (+32 to +39 and +19 to
+    +43, the latter noisy). Taking the `traceparent` string out of
+    JavaScript costs more on Bun; caching the last parsed text is the
+    likely fix.
+

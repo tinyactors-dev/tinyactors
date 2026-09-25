@@ -1,6 +1,6 @@
 # ADR 0072: Metrics are counters core keeps; logs are records it already writes
 
-**Status:** Accepted and implemented in core (2026-09-25); the host parts are partly implemented in napi (napi ADR 0017). See the implementation notes. Refines ADR 0045 (a log record carries its step key and trace context) and ADR 0067 (sampling becomes a per-kind mask; two of its open points close); it builds on ADR 0070 and ADR 0071, and on napi ADR 0016's encoder. Research: [`docs/research/otel-metrics-and-logs-for-actors.md`](../../../docs/research/otel-metrics-and-logs-for-actors.md).
+**Status:** Accepted and implemented in core (2026-09-25); the host parts are partly implemented in napi (napi ADR 0017). See the implementation notes. Refines ADR 0045 (a log record carries its step key and trace context) and ADR 0067 (sampling becomes a per-kind mask; two of its open points close); it builds on ADR 0070 and ADR 0071, and on napi ADR 0016's encoder. Research: [`docs/research/otel-metrics-and-logs-for-actors.md`](../../../docs/research/otel-metrics-and-logs-for-actors.md). The host side of section 4 is built in napi: turn duration and timer lateness histograms with exemplars, overdue timers, run queues, quarantine, faults and dead letters by reason (2026-09-25; see napi ADR 0017's follow-up notes).
 **Date:** 2026-09-24
 
 ## Context
