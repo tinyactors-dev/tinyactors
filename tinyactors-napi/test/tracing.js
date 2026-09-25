@@ -356,6 +356,44 @@ async function logs() {
   system.close();
 }
 
+// A failure log says what failed and why (napi ADR 0017 section 7): the
+// action's label and the thrown message are in the body, and in the
+// attributes for filtering, for <script> as well as <assign>, whatever
+// `values` says.
+async function failureLogsSayWhy() {
+  for (const element of ['script', 'assign']) {
+    const system = createSystem();
+    const text = [];
+    system.setTraceSink((traces, batch) => {
+      if (batch !== undefined) text.push(...protobufStrings(batch));
+    });
+    const definition = system.define(
+      statechart({ family: 'stock', revision: 'v1' })
+        .data('n', 0)
+        .state('ready', (s) =>
+          s.on('reserve', (t) =>
+            element === 'script'
+              ? t.script(() => { throw new Error('cannot reserve 50 items'); })
+              : t.assign('n', () => { throw new Error('cannot reserve 50 items'); }),
+          ),
+        ),
+    );
+    const actor = system.spawn(definition);
+    await system.flush();
+    actor.post('reserve');
+    await system.flush();
+    const failed = `<${element}> in ready on reserve failed: Error: cannot reserve 50 items`;
+    assert.ok(text.includes('tinyactors.action.failed'), `${element}: an action.failed log: ${text}`);
+    assert.ok(text.includes(failed), `${element}: the body names the action and the reason: ${text}`);
+    assert.ok(text.includes('error.execution: Error: cannot reserve 50 items'), `${element}: error.raised says why`);
+    assert.ok(text.includes('exception.message') && text.includes('Error: cannot reserve 50 items'),
+              `${element}: exception.message carries the reason`);
+    assert.ok(text.includes(`<${element}> in ready on reserve`) && text.includes('scxml.action.id'),
+              `${element}: the failing action, labelled and by ID`);
+    system.close();
+  }
+}
+
 // Values only when asked for; links instead of parents when asked for.
 async function valuesAndLinks() {
   const system = createSystem();
@@ -485,6 +523,7 @@ async function watchAndSample() {
   await traceparentOut();
   await repliesStayInTheTrace();
   await logs();
+  await failureLogsSayWhy();
   await valuesAndLinks();
   await lifecycle();
   console.log('tracing.js passed');

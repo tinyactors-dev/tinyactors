@@ -1366,34 +1366,93 @@ static bool tna_log_attributes(tna_otlp *otlp, const ta_trace_record *record) {
         ok = tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.state"),
                            tna_state_name(otlp, record->definition, record->position.state));
     }
-    if (ok && record->action != TA_ACTION_NONE) {
-        ok = tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.action"),
-                           tna_action_name(otlp, record->definition, record->action));
+    ta_action_id action = record->action != TA_ACTION_NONE ? record->action : record->position.action;
+    if (ok && action != TA_ACTION_NONE) {
+        ok = tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.action"), tna_action_name(otlp, record->definition, action)) &&
+             tna_kv_int(buf, F_LOG_ATTRIBUTES, LIT("scxml.action.id"), (int64_t)action);
     }
     if (ok && record->has_fault) {
-        ok = tna_kv_int(buf, F_LOG_ATTRIBUTES, LIT("scxml.fault.code"), (int64_t)record->fault.code);
+        ok = tna_kv_int(buf, F_LOG_ATTRIBUTES, LIT("scxml.fault.code"), (int64_t)record->fault.code) &&
+             (record->fault.message.len == 0 ||
+              tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.fault.message"), record->fault.message));
     }
     return ok;
+}
+
+/*
+ * What went wrong, in words: the text of the value the failure carries
+ * (for napi, a thrown Error as "Error: message"), else the fault's own
+ * message. Written whatever `values` says: at 3am the reason is the one
+ * value an operator cannot do without. The host cuts it to its limit.
+ */
+static ta_str tna_fault_text(tna_otlp *otlp, const ta_value *data, ta_str message) {
+    ta_str text = { 0 };
+    if (data != NULL && data->v != NULL && otlp->config.host.value_text != NULL &&
+        otlp->config.host.value_text(otlp->config.host.self, data, &text) && text.len != 0) {
+        return text;
+    }
+    return message;
+}
+
+/* `log_body` = "<prefix>: <reason>", or the prefix alone when there is no reason. */
+static bool tna_log_body(tna_otlp *otlp, ta_str prefix, ta_str reason) {
+    otlp->log_body.len = 0;
+    if (!tna_buf_room(&otlp->log_body, prefix.len + 2u + reason.len)) {
+        return false;
+    }
+    tna_put_bytes(&otlp->log_body, prefix.ptr, prefix.len);
+    if (reason.len != 0) {
+        tna_put_bytes(&otlp->log_body, ": ", 2);
+        tna_put_bytes(&otlp->log_body, reason.ptr, reason.len);
+    }
+    return true;
 }
 
 static bool tna_starts_with(ta_str text, ta_str prefix) {
     return text.len >= prefix.len && memcmp(text.ptr, prefix.ptr, prefix.len) == 0;
 }
 
-/* A failure record as a WARN log (core ADR 0072 section 5). Other records log nothing. */
+/*
+ * A failure record as a WARN log (core ADR 0072 section 5). Other records
+ * log nothing. The body says what failed and why, in words, because the
+ * OTLP log data model makes the body the human-readable message; the same
+ * facts are attributes, for filtering:
+ *
+ *   tinyactors.action.failed  "<script> in ready on reserve failed: Error: cannot reserve 50 items"
+ *   tinyactors.error.raised   "error.execution: Error: cannot reserve 50 items"
+ *
+ * `exception.message` (OpenTelemetry's semantic convention) carries the
+ * reason alone.
+ */
 static bool tna_log_failure(tna_otlp *otlp, const ta_trace_record *record, uint64_t now) {
     tna_log_line line = { .now = now, .severity = SEVERITY_WARN, .severity_text = LIT("WARN"),
                           .context = &record->context, .key = record->key, .definition = record->definition };
+    ta_str reason = { 0 };
+    size_t name_len = 0; /* RAISED: the event name's length at the start of the body */
+    bool ok;
     switch (record->kind) {
-    case TA_TRACE_ACTION_FAILED:
+    case TA_TRACE_ACTION_FAILED: {
         line.event_name = LIT("tinyactors.action.failed");
-        /* The body names the error the failure raised, error.execution or a detail below it. */
-        line.body = record->has_fault && record->fault.detail != 0 ? tna_event_name(otlp, record->fault.detail)
-                                                                    : LIT("an action failed");
+        reason = tna_fault_text(otlp, record->has_fault ? &record->fault.data : NULL,
+                                record->has_fault ? record->fault.message : (ta_str){ 0 });
+        /* The reason lives in the host's buffer, which naming the action may not touch. */
+        ta_str what = record->action != TA_ACTION_NONE ? tna_action_name(otlp, record->definition, record->action)
+                                                       : LIT("an action");
+        otlp->log_body.len = 0;
+        ok = tna_buf_room(&otlp->log_body, what.len + 9u + reason.len);
+        if (ok) {
+            tna_put_bytes(&otlp->log_body, what.ptr, what.len);
+            tna_put_bytes(&otlp->log_body, " failed", 7);
+            if (reason.len != 0) {
+                tna_put_bytes(&otlp->log_body, ": ", 2);
+                tna_put_bytes(&otlp->log_body, reason.ptr, reason.len);
+            }
+        }
         break;
+    }
     case TA_TRACE_STOPPED:
         line.event_name = LIT("tinyactors.run.stopped");
-        line.body = LIT("the run stopped: an allocation failed (ADR 0070)");
+        ok = tna_log_body(otlp, LIT("the run stopped: an allocation failed (ADR 0070)"), (ta_str){ 0 });
         break;
     case TA_TRACE_RAISED: {
         if (record->event == NULL) {
@@ -1404,23 +1463,37 @@ static bool tna_log_failure(tna_otlp *otlp, const ta_trace_record *record, uint6
             return true;
         }
         line.event_name = LIT("tinyactors.error.raised");
-        line.body = name;
+        /* The name is in `text`, which the reason does not use: copy both. */
+        otlp->log_body.len = 0;
+        ok = tna_buf_room(&otlp->log_body, name.len);
+        if (ok) {
+            tna_put_bytes(&otlp->log_body, name.ptr, name.len);
+            name_len = name.len;
+            reason = tna_fault_text(otlp, &record->event->data, (ta_str){ 0 });
+            ok = tna_buf_room(&otlp->log_body, 2u + reason.len);
+            if (ok && reason.len != 0) {
+                tna_put_bytes(&otlp->log_body, ": ", 2);
+                tna_put_bytes(&otlp->log_body, reason.ptr, reason.len);
+            }
+        }
         break;
     }
     default:
         return true;
     }
-    line.key_name = line.event_name;
-    /* The body may live in `text`, which the attributes reuse: copy it first. */
-    otlp->log_body.len = 0;
-    if (!tna_buf_room(&otlp->log_body, line.body.len)) {
+    if (!ok) {
         return false;
     }
-    tna_put_bytes(&otlp->log_body, line.body.ptr, line.body.len);
-    line.body = (ta_str){ (const char *)otlp->log_body.data, line.body.len };
+    line.key_name = line.event_name;
+    line.body = (ta_str){ (const char *)otlp->log_body.data, (uint32_t)otlp->log_body.len };
+    /* The reason and the event name, as attributes, point into log_body. */
+    ta_str kept_reason = { line.body.ptr + (line.body.len - reason.len), reason.len };
     return tna_log_attributes(otlp, record) &&
+           (reason.len == 0 ||
+            tna_kv_string(&otlp->scratch, F_LOG_ATTRIBUTES, LIT("exception.message"), kept_reason)) &&
            (record->kind != TA_TRACE_RAISED ||
-            tna_kv_string(&otlp->scratch, F_LOG_ATTRIBUTES, LIT("scxml.event.name"), line.body)) &&
+            tna_kv_string(&otlp->scratch, F_LOG_ATTRIBUTES, LIT("scxml.event.name"),
+                          (ta_str){ line.body.ptr, (uint32_t)name_len })) &&
            tna_log_append(otlp, &line);
 }
 

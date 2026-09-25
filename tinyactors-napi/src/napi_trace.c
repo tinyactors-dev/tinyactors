@@ -104,11 +104,17 @@ static bool tna_host_value_text(void *self, const ta_value *value, ta_str *out) 
     napi_value stringify = NULL;
     napi_value text = NULL;
     napi_valuetype type = napi_undefined;
-    if (tna_value_get(env, value, &js) && napi_get_global(env, &global) == napi_ok &&
-        napi_get_named_property(env, global, "JSON", &json) == napi_ok &&
-        napi_get_named_property(env, json, "stringify", &stringify) == napi_ok &&
-        napi_call_function(env, json, stringify, 1, &js, &text) == napi_ok && napi_typeof(env, text, &type) == napi_ok &&
-        type == napi_string) {
+    bool error = false;
+    /* A thrown Error is "Error: message": JSON.stringify gives "{}" for one. */
+    bool got = tna_value_get(env, value, &js);
+    if (got && napi_is_error(env, js, &error) == napi_ok && error) {
+        got = napi_coerce_to_string(env, js, &text) == napi_ok;
+    } else if (got) {
+        got = napi_get_global(env, &global) == napi_ok && napi_get_named_property(env, global, "JSON", &json) == napi_ok &&
+              napi_get_named_property(env, json, "stringify", &stringify) == napi_ok &&
+              napi_call_function(env, json, stringify, 1, &js, &text) == napi_ok;
+    }
+    if (got && napi_typeof(env, text, &type) == napi_ok && type == napi_string) {
         size_t limit = wrapper->trace_value_limit < sizeof wrapper->trace_value ? wrapper->trace_value_limit
                                                                                 : sizeof wrapper->trace_value - 1u;
         size_t written = 0;

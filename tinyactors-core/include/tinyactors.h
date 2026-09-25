@@ -1058,8 +1058,10 @@ typedef struct {
  * zero, or NONE for IDs. Everything is borrowed for the call: retain a value
  * to keep it (ADR 0006). `context` is the running macrostep's; `cause`, for
  * MACROSTEP_BEGIN and SPAWNED, is the key of the step that caused it. A
- * fault carries its `detail` and `code`; its data went into the
- * error.execution event of the RAISED record that follows.
+ * fault carries its `detail`, `code` and `message`. Its data went into the
+ * error.execution event of the RAISED record that follows; ACTION_FAILED
+ * also borrows it, so a sink can say why an action failed from one record.
+ * A sink never releases a record's fault data.
  */
 typedef struct {
     ta_trace_kind kind;

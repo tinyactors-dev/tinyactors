@@ -206,7 +206,8 @@ static void ta_trace_emit(const ta_interpreter *it, const ta_trace_record *recor
 static void ta_trace_fault(ta_trace_record *record, const ta_fault *fault) {
     record->has_fault = true;
     if (fault != NULL) {
-        record->fault = (ta_fault){ .detail = fault->detail, .code = fault->code };
+        /* The data moved into the error event; ACTION_FAILED borrows it back. */
+        record->fault = (ta_fault){ .detail = fault->detail, .code = fault->code, .message = fault->message };
     }
 }
 
@@ -268,6 +269,12 @@ static void ta_trace_action_failed(ta_interpreter *it, const ta_fault *fault) {
     ta_trace_record record = ta_trace_record_now(it, TA_TRACE_ACTION_FAILED);
     record.action = it->trace_action;
     ta_trace_fault(&record, fault);
+    /* The error the failure just queued is the queue's last event, and its
+     * data is what the operation reported: borrow it for the record. */
+    const ta_event_block *queue = it->actor->event_block;
+    if (queue != NULL && queue->count != 0) {
+        record.fault.data = queue->events[queue->count - 1u].event.data;
+    }
     ta_trace_emit(it, &record);
 }
 
@@ -1907,7 +1914,7 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
                                                  .fault = &fault,
                                              });
             if (status != TA_OP_NOMEM) {
-                /* A <script> reports its own failure: SCRIPT with the fault. */
+                /* A <script> reports its own run: SCRIPT, with the fault if it failed. */
                 ta_result result = TA_OK;
                 if (status != TA_OP_OK) {
                     result = ta_op_failed(it, status, &fault);
@@ -1922,6 +1929,11 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
                         ta_trace_fault(&record, &fault);
                     }
                     ta_trace_emit(it, &record);
+                }
+                /* Like every other action that fails, it also writes
+                 * ACTION_FAILED, which a host may want without SCRIPT. */
+                if (result == TA_EXEC_FAILED) {
+                    ta_trace_action_failed(it, &fault);
                 }
                 return result;
             }
