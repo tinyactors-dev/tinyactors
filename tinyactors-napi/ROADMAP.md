@@ -796,11 +796,13 @@ Open (ADR 0017's implementation notes, follow-up of 2026-09-25, and ADR
 - a host-neutral `lib/` shared with a WebAssembly browser build;
 - size-class pools behind the allocator, if the steady-state measurement
   asks for them (ADR 0014);
-- a limit that quarantines runaway actors (ADR 0008): **decided
-  2026-09-25, a limit on microsteps per macrostep, then quarantine**. It
-  counts microsteps, not turns, so a long `<foreach>` (one microstep,
-  however many turns it pauses across) never trips it while an endless
-  eventless or raise loop does;
+- ~~a limit that quarantines runaway actors (ADR 0008)~~: **done**, core
+  ADR 0074. A macrostep that runs `scheduling.microstepLimit` microsteps
+  (default 100,000; per definition with `define(chart, {
+  microstepLimit })`) quarantines its actor with fault code `runaway`,
+  after a `tinyactors.macrostep.long` log at a tenth of it. It counts
+  microsteps, not turns, so a long `<foreach>` never trips it.
+  `release()` lets the macrostep finish;
 - ~~holding and releasing an actor's mailbox for flow control~~:
   **decided 2026-09-25, nothing new** (option D). Hosts pause an actor by
   unloading it, which keeps graceful restarts easy to reason about. With

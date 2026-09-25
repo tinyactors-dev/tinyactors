@@ -15,8 +15,9 @@ static const char *const tna_trace_kinds[] = {
     "macrostepEnd",   "condition", "microstep", "raised",     "dataInit",       "assign",
     "script",         "foreach",  "actionFailed", "sent",    "cancelled",      "invoked",
     "invokeCancelled", "paused",  "resumed",   "stopped",    "ignored",        "forwarded",
+    "longMacrostep",  "runaway",
 };
-_Static_assert(sizeof tna_trace_kinds / sizeof tna_trace_kinds[0] == (size_t)TA_TRACE_FORWARDED + 1u,
+_Static_assert(sizeof tna_trace_kinds / sizeof tna_trace_kinds[0] == (size_t)TA_TRACE_RUNAWAY + 1u,
                "one name per ta_trace_kind");
 
 static void tna_js_put(napi_env env, napi_value object, const char *name, napi_value value) {
@@ -277,7 +278,8 @@ static tna_trace_masks tna_trace_masks_asked(const tna_trace_masks *masks, bool 
      * (core ADR 0072 section 2); the encoder turns them into spans only
      * when they were asked for. */
     uint32_t failures = logs ? TA_TRACE_BIT(TA_TRACE_ACTION_FAILED) | TA_TRACE_BIT(TA_TRACE_RAISED) |
-                                   TA_TRACE_BIT(TA_TRACE_STOPPED)
+                                   TA_TRACE_BIT(TA_TRACE_STOPPED) | TA_TRACE_BIT(TA_TRACE_LONG_MACROSTEP) |
+                                   TA_TRACE_BIT(TA_TRACE_RUNAWAY)
                              : 0u;
     return (tna_trace_masks){ .kinds = masks->kinds | ending | failures,
                               .watched_kinds = masks->watched_kinds | ending | failures,

@@ -22,8 +22,7 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
     }
     *system = (ta_system){ .allocator = config->allocator,
                            .block_cache_limit = TA_EVENT_BLOCK_CACHE_DEFAULT,
-                           .trace = ta_null_trace_sink(),
-                           .microstep_limit = config->microstep_limit };
+                           .trace = ta_null_trace_sink() };
     ta_system_seed_trace_ids(system, 0);
     ta_clock_set(&system->clock, config->initial_time);
     ta_vec_init(&system->actors.pages, config->allocator, TA_VEC_LAYOUT(ta_actor_slot *));
@@ -518,6 +517,12 @@ ta_result ta_definition_counters(const ta_system *system, ta_definition_id defin
     }
     *out = found->counters;
     return TA_OK;
+}
+
+void ta_system_set_microstep_limit(ta_system *system, uint32_t limit) {
+    if (system != NULL) {
+        system->microstep_limit = limit;
+    }
 }
 
 ta_result ta_definition_set_microstep_limit(ta_system *system, ta_definition_id definition, uint32_t limit) {

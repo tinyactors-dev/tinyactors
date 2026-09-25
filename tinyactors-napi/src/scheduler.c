@@ -642,6 +642,7 @@ static void tna_sched_resume_one(tna_sched *sched, const tna_turn_params *params
         .budget = params->budgets.microsteps,
         .status = &status,
         .action_budget = params->budgets.actions,
+        .no_microstep_limit = (entry->flags & TNA_SCHED_UNLIMITED) != 0,
     };
     *params->inside_core = true;
     ta_result result = ta_actor_resume(params->core, &resume);
@@ -657,6 +658,11 @@ static void tna_sched_resume_one(tna_sched *sched, const tna_turn_params *params
         return;
     }
     if (result != TA_OK) {
+        if (result == TA_ERR_RUNAWAY) {
+            /* Quarantined as a runaway: an operator's release() lets this
+             * macrostep finish; the next one has the limit again. */
+            entry->flags |= TNA_SCHED_UNLIMITED;
+        }
         tna_sched_complete(sched, actor, (tna_settlement){ .kind = TNA_SETTLE_FAULT, .code = result });
         tna_sched_fault(sched, params, (tna_turn_record){ .actor = actor, .operation = "resume", .code = result });
         return;
@@ -666,6 +672,7 @@ static void tna_sched_resume_one(tna_sched *sched, const tna_turn_params *params
         tna_sched_requeue(sched, params, &sched->runnable, actor);
         return;
     case TA_RUN_DONE:
+        entry->flags &= (uint8_t)~TNA_SCHED_UNLIMITED;
         tna_sched_complete(sched, actor, (tna_settlement){ .kind = TNA_SETTLE_DONE });
         entry->state = TNA_SCHED_IDLE;
         tna_sched_bury(sched, entry, TNA_DEAD_DONE);
@@ -676,6 +683,7 @@ static void tna_sched_resume_one(tna_sched *sched, const tna_turn_params *params
         return;
     case TA_RUN_STABLE:
     default:
+        entry->flags &= (uint8_t)~TNA_SCHED_UNLIMITED;
         tna_sched_complete(sched, actor, (tna_settlement){ .kind = TNA_SETTLE_STABLE });
         tna_sched_settle(sched, params, entry, actor);
         return;

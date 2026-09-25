@@ -21,6 +21,21 @@ const { core } = native;
 // Compiles a spec in the generated shape. A refused chart throws with core's
 // compile error formatted into the message (ADR 0058), and the error itself,
 // with a readable path, as `detail`.
+/* Core's TA_MICROSTEP_LIMIT_NONE: this definition has no limit (ADR 0074). */
+const MICROSTEP_LIMIT_NONE = 0xffffffff;
+
+/* `options.microstepLimit`: undefined, or a count from 0 (none) up. */
+function microstepLimitOption(options, where) {
+  if (options === null || typeof options !== 'object') {
+    throw new TinyactorsError(`${where}: options must be an object`, 'invalid');
+  }
+  const limit = options.microstepLimit;
+  if (limit !== undefined && !(Number.isInteger(limit) && limit >= 0 && limit < MICROSTEP_LIMIT_NONE)) {
+    throw new TinyactorsError(`${where}: microstepLimit must be a whole number from 0 (none)`, 'invalid');
+  }
+  return limit;
+}
+
 function compile(system, spec) {
   try {
     return core.definition_compile_spec(system, spec);
@@ -601,8 +616,14 @@ class System {
    * anywhere compiles against the JavaScript data model ("javascript", ADR
    * 0011); any other chart against core's null data model ("null"), which
    * costs nothing per actor. A spec's `datamodel` chooses explicitly.
+   *
+   * `options.microstepLimit` overrides the system's
+   * `scheduling.microstepLimit` for this definition's actors (core ADR
+   * 0074): the microsteps one macrostep may run before its actor is
+   * quarantined as a runaway; 0 for no limit.
    */
-  define(source) {
+  define(source, options = {}) {
+    const limit = microstepLimitOption(options, 'define()');
     let spec = source;
     if (source instanceof DefinitionBuilder) {
       spec = source.build();
@@ -613,6 +634,9 @@ class System {
     this.#native.selectDatamodel(datamodel === 'null' ? 'null' : 'javascript');
     const compiled = compile(this.#native, spec);
     const id = core.system_register_definition(this.#native, compiled.out);
+    if (limit !== undefined) {
+      core.definition_set_microstep_limit(this.#native, id, limit === 0 ? MICROSTEP_LIMIT_NONE : limit);
+    }
     const definition = new Definition(this, this.#native, id);
     const identity = definition.identity;
     this.#definitionIdentities.set(id, identity);

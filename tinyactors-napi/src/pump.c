@@ -267,6 +267,9 @@ bool tna_pump_init(napi_env env, tna_napi_system *wrapper, napi_value facade, na
     napi_value initial_value = NULL;
     tna_clock_kind clock = TNA_CLOCK_REALTIME;
     ta_time initial = 0;
+    /* Microsteps one macrostep may run before its actor is quarantined as a
+     * runaway (core ADR 0074); 0 for no limit. */
+    uint32_t microstep_limit = TNA_DEFAULT_MICROSTEP_LIMIT;
     tna_turn_budgets *budgets = &wrapper->system->budgets;
     if (!tna_option(env, options, "scheduling", &scheduling) ||
         !tna_count_option(env, scheduling, "resumeBudget", &budgets->microsteps) ||
@@ -276,6 +279,7 @@ bool tna_pump_init(napi_env env, tna_napi_system *wrapper, napi_value facade, na
         !tna_count_option(env, scheduling, "maxQueuedMessages", &wrapper->system->sched.max_queued) ||
         !tna_bytes_option(env, scheduling, "maxRetainedBytes", &wrapper->system->sched.max_retained) ||
         !tna_count_option(env, scheduling, "dueBudget", &wrapper->system->due_budget) ||
+        !tna_count_option(env, scheduling, "microstepLimit", &microstep_limit) ||
         !tna_clock_option(env, options, &clock) || !tna_option(env, options, "initialTime", &initial_value) ||
         (initial_value != NULL && !tna_time_value(env, initial_value, "createSystem: initialTime", &initial)) ||
         !tna_finished_option(env, options, &wrapper->destroy_finished) ||
@@ -293,6 +297,7 @@ bool tna_pump_init(napi_env env, tna_napi_system *wrapper, napi_value facade, na
      * the next turn at the latest, so core caches a turn's worth of them and
      * delivery makes no allocator call once warm (core ADR 0069). */
     (void)ta_system_set_event_block_cache(wrapper->system->core, budgets->messages);
+    ta_system_set_microstep_limit(wrapper->system->core, microstep_limit);
     if (tna_system_set_clock(wrapper->system, clock, initial) != TA_OK) {
         tna_throw(env, "invalid", "createSystem: cannot set the clock");
         return false;

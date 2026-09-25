@@ -65,6 +65,9 @@
 #define TNA_DEFAULT_ACTION_BUDGET 1024u
 #define TNA_DEFAULT_MESSAGE_BUDGET 1024u
 #define TNA_DEFAULT_DUE_BUDGET 1024u
+/* Microsteps one macrostep may run before its actor is a runaway (core ADR
+ * 0074): far past any ordinary chart, about a tenth of a second of work. */
+#define TNA_DEFAULT_MICROSTEP_LIMIT 100000u
 
 typedef struct tna_system tna_system;
 

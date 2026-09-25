@@ -2856,12 +2856,7 @@ TA_API void ta_session_image_destroy(TA_DESTROYS ta_session_image *image);
  */
 
 
-/*
- * `microstep_limit` (ADR 0074): the microsteps one macrostep may run before
- * ta_actor_resume() answers TA_ERR_RUNAWAY, for definitions that set none
- * of their own; 0 for no limit.
- */
-typedef struct { ta_allocator allocator; ta_time initial_time; uint32_t microstep_limit; } ta_system_config;
+typedef struct { ta_allocator allocator; ta_time initial_time; } ta_system_config;
 typedef struct {
     ta_event_name_id name;
     TA_BUFFER(capacity, needed) TA_OPTIONAL char *buffer;
@@ -2966,6 +2961,12 @@ typedef struct {
     uint64_t runaways;             /* a macrostep reached its microstep limit (ADR 0074) */
 } ta_counters;
 
+/*
+ * The microsteps one macrostep may run before ta_actor_resume() answers
+ * TA_ERR_RUNAWAY (ADR 0074), for definitions that set none of their own;
+ * 0 for no limit, the default. It applies from the next resume on.
+ */
+TA_API void ta_system_set_microstep_limit(ta_system *system, uint32_t limit);
 /*
  * A definition's microstep limit (ADR 0074): 0 takes the system's,
  * TA_MICROSTEP_LIMIT_NONE is none. TA_ERR_NOT_FOUND for an unknown or freed

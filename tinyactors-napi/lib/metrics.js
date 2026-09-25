@@ -40,6 +40,8 @@ const COUNTERS = [
   ['invocations_ended', 'tinyactors.invocations.ended', '{invocation}'],
   ['runs_paused', 'tinyactors.runs.paused', '{run}'],
   ['runs_stopped', 'tinyactors.runs.stopped', '{run}'],
+  ['macrosteps_long', 'tinyactors.macrosteps.long', '{macrostep}'],
+  ['runaways', 'tinyactors.macrosteps.runaway', '{macrostep}'],
 ];
 
 /**

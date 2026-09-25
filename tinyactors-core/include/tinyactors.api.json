@@ -13329,7 +13329,7 @@
     },
     "ta_system_config": {
       "kind": "struct",
-      "doc": "`microstep_limit` (ADR 0074): the microsteps one macrostep may run before ta_actor_resume() answers TA_ERR_RUNAWAY, for definitions that set none of their own; 0 for no limit.",
+      "doc": "======================================================================== Systems",
       "fields": [
         {
           "name": "allocator",
@@ -13342,31 +13342,23 @@
           "type": {
             "type": "ta_time"
           }
-        },
-        {
-          "name": "microstep_limit",
-          "type": {
-            "builtin": "uint32_t"
-          }
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 32,
-          "align": 8,
-          "offsets": {
-            "allocator": 0,
-            "initial_time": 16,
-            "microstep_limit": 24
-          }
-        },
-        "wasm32-unknown-unknown": {
           "size": 24,
           "align": 8,
           "offsets": {
             "allocator": 0,
-            "initial_time": 8,
-            "microstep_limit": 16
+            "initial_time": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "allocator": 0,
+            "initial_time": 8
           }
         }
       }
@@ -18069,6 +18061,36 @@
           "name": "sink",
           "type": {
             "type": "ta_trace_sink"
+          }
+        }
+      ]
+    },
+    {
+      "name": "ta_system_set_microstep_limit",
+      "doc": "The microsteps one macrostep may run before ta_actor_resume() answers TA_ERR_RUNAWAY (ADR 0074), for definitions that set none of their own; 0 for no limit, the default. It applies from the next resume on.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "void"
+        }
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "limit",
+          "type": {
+            "builtin": "uint32_t"
           }
         }
       ]

@@ -637,8 +637,9 @@ static const char *const tna_kind_names[] = {
     "spawned",   "loaded",    "unloaded", "finished", "destroyed", "macrostep_begin", "macrostep_end", "condition",
     "microstep", "raise",     "data",     "assign",   "script",    "foreach",         "error",         "send",
     "cancel",    "invoke",    "invoke.cancel", "paused", "resumed", "stopped",  "ignored", "forward",
+    "macrostep.long", "runaway",
 };
-_Static_assert(sizeof tna_kind_names / sizeof tna_kind_names[0] == (size_t)TA_TRACE_FORWARDED + 1u,
+_Static_assert(sizeof tna_kind_names / sizeof tna_kind_names[0] == (size_t)TA_TRACE_RUNAWAY + 1u,
                "one name per ta_trace_kind");
 
 static const char *const tna_at_names[] = { "none", "select", "exit", "transition", "enter", "bootstrap", "finalize",
@@ -1412,6 +1413,18 @@ static bool tna_log_attributes(tna_otlp *otlp, const ta_trace_record *record) {
         ok = tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.action"), tna_action_name(otlp, record->definition, action)) &&
              tna_kv_int(buf, F_LOG_ATTRIBUTES, LIT("scxml.action.id"), (int64_t)action);
     }
+    /* A long or runaway macrostep (core ADR 0074): where the actor was, and
+     * the transition it was looping through. */
+    if (ok && record->state_count != 0 && record->position.state == TA_STATE_NONE) {
+        ok = tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.state"),
+                           tna_state_name(otlp, record->definition, record->states[0]));
+    }
+    if (ok && record->transition_count != 0 &&
+        (record->kind == TA_TRACE_LONG_MACROSTEP || record->kind == TA_TRACE_RUNAWAY)) {
+        ok = tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.transition"),
+                           tna_transition_name(otlp, record->definition, record->transitions[0])) &&
+             tna_kv_int(buf, F_LOG_ATTRIBUTES, LIT("scxml.transition.id"), (int64_t)record->transitions[0]);
+    }
     if (ok && record->has_fault) {
         ok = tna_kv_int(buf, F_LOG_ATTRIBUTES, LIT("scxml.fault.code"), (int64_t)record->fault.code) &&
              (record->fault.message.len == 0 ||
@@ -1495,6 +1508,28 @@ static bool tna_log_failure(tna_otlp *otlp, const ta_trace_record *record, uint6
         line.event_name = LIT("tinyactors.run.stopped");
         ok = tna_log_body(otlp, LIT("the run stopped: an allocation failed (ADR 0070)"), (ta_str){ 0 });
         break;
+    case TA_TRACE_LONG_MACROSTEP:
+    case TA_TRACE_RUNAWAY: {
+        /* Core ADR 0074: how many microsteps, and through which transition. */
+        bool runaway = record->kind == TA_TRACE_RUNAWAY;
+        line.event_name = runaway ? LIT("tinyactors.actor.runaway") : LIT("tinyactors.macrostep.long");
+        char digits[24];
+        ta_str count = tna_decimal(record->key.microstep, digits);
+        ta_str intro = LIT(" microsteps in one macrostep, the last through ");
+        ta_str through = record->transition_count != 0
+                             ? tna_transition_name(otlp, record->definition, record->transitions[0])
+                             : LIT("the initial transition");
+        ta_str outro = runaway ? LIT(": the microstep limit, so the run stopped") : LIT(": a tenth of the microstep limit");
+        otlp->log_body.len = 0;
+        ok = tna_buf_room(&otlp->log_body, count.len + intro.len + through.len + outro.len);
+        if (ok) {
+            tna_put_bytes(&otlp->log_body, count.ptr, count.len);
+            tna_put_bytes(&otlp->log_body, intro.ptr, intro.len);
+            tna_put_bytes(&otlp->log_body, through.ptr, through.len);
+            tna_put_bytes(&otlp->log_body, outro.ptr, outro.len);
+        }
+        break;
+    }
     case TA_TRACE_RAISED: {
         if (record->event == NULL) {
             return true;
@@ -1672,7 +1707,7 @@ size_t tna_otlp_put_logs(tna_otlp *otlp, uint8_t *out, size_t size) {
 }
 
 void tna_otlp_write(tna_otlp *otlp, const ta_trace_record *record) {
-    if ((uint32_t)record->kind > (uint32_t)TA_TRACE_FORWARDED) {
+    if ((uint32_t)record->kind > (uint32_t)TA_TRACE_RUNAWAY) {
         otlp->dropped += 1u;
         return;
     }

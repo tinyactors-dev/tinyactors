@@ -68,7 +68,10 @@ typedef enum {
 
 enum {
     TNA_SCHED_BACKOFF = 1u << 0,  /* ran out of memory: skip one turn (ADR 0008) */
-    TNA_SCHED_FINISHED = 1u << 1  /* reached a top-level final state */
+    TNA_SCHED_FINISHED = 1u << 1, /* reached a top-level final state */
+    /* quarantined as a runaway (core ADR 0074): once released, it runs with
+     * no microstep limit until its macrostep ends */
+    TNA_SCHED_UNLIMITED = 1u << 2
 };
 
 typedef struct {

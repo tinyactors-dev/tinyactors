@@ -92,6 +92,13 @@ export interface SchedulingOptions {
   /** Maximum due sends dispatched during one pump turn; at least 1, default 1024. */
   dueBudget?: number;
   /**
+   * Microsteps one macrostep may run before its actor is quarantined with
+   * fault code `runaway` (core ADR 0074); 0 for no limit, default 100000. A
+   * tenth of it writes a `tinyactors.macrostep.long` log. `release()` lets a
+   * runaway finish its macrostep; the next one has the limit again.
+   */
+  microstepLimit?: number;
+  /**
    * Deliveries started during one pump turn, and dead letters reported in
    * one turn; at least 1, default 1024.
    */
@@ -122,10 +129,12 @@ export interface System {
    * Compile and register a chart: a statechart() builder, or a spec in the
    * generated shape (the shape core's definition export returns). A refused
    * chart throws `invalid` or `unsupported`, with core's compile error as
-   * `detail` (ChartRefusal).
+   * `detail` (ChartRefusal). `options.microstepLimit` overrides the system's
+   * `scheduling.microstepLimit` for this definition; 0 for no limit.
    */
   define<Data extends object = Record<string, unknown>>(
     source: DefinitionSpec | DefinitionBuilder<Data>,
+    options?: { microstepLimit?: number },
   ): Definition<Data>;
 
   /** The newest registered, unretired definition with this identity. */
@@ -1146,7 +1155,7 @@ export type TraceKind =
   | 'macrostepBegin' | 'macrostepEnd' | 'condition' | 'microstep' | 'raised'
   | 'dataInit' | 'assign' | 'script' | 'foreach' | 'actionFailed'
   | 'sent' | 'cancelled' | 'invoked' | 'invokeCancelled'
-  | 'paused' | 'resumed' | 'stopped' | 'ignored' | 'forwarded';
+  | 'paused' | 'resumed' | 'stopped' | 'ignored' | 'forwarded' | 'longMacrostep' | 'runaway';
 
 export declare const TRACE_KINDS: readonly TraceKind[];
 

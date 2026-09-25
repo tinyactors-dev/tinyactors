@@ -1,6 +1,6 @@
 # ADR 0075: A macrostep that runs too many microsteps stops as a runaway
 
-**Status:** Accepted; not yet implemented. Applies ADR 0067 (the step counters), ADR 0070 (commits and retries) and ADR 0072 (counters, logs as records); napi's part applies napi ADRs 0007, 0008 and 0017.
+**Status:** Accepted and implemented (2026-09-25); see the implementation notes. Applies ADR 0067 (the step counters), ADR 0070 (commits and retries) and ADR 0072 (counters, logs as records); napi's part applies napi ADRs 0007, 0008 and 0017.
 **Date:** 2026-09-25
 
 ## Context
@@ -148,3 +148,48 @@ would pay a call per resume, and every host would repeat the rule.
 - **napi, on Node and Bun:** quarantine with code `runaway`, the fault
   hook, the metric and the logs; the per-definition override; `release()`
   lets the macrostep finish and the next one has the limit again.
+
+## Implementation notes
+
+- **The system default is a setter, not a config field.**
+  `ta_system_set_microstep_limit(system, limit)` replaces the proposed
+  `ta_system_config.microstep_limit`: napi creates core's system before it
+  reads its scheduling options, as it does for
+  `ta_system_set_event_block_cache`. It applies from the next resume on.
+- **Where the check and the marks sit.** The stop is a branch of the run
+  loop between steps, before the budget check, when the macrostep has
+  begun (`trace_begun`) and `trace_microstep` has reached the limit. The
+  marks are written by the microstep's commit (`ta_trace_microstep`),
+  after its MICROSTEP record. The limit in force is worked out once per
+  resume: `no_microstep_limit`, else the definition's, else the system's.
+- **Records** carry the transitions of the microstep that reached the
+  count and the configuration before it (`states`). The test host prints
+  them as `long 2.10 [t1] [spin]` and `runaway 2.100 [t1] [spin]`.
+- **napi:** `scheduling.microstepLimit` (default 100,000; 0 for none) and
+  `define(chart, { microstepLimit })` (0 for none). A resume that answers
+  `TA_ERR_RUNAWAY` goes through the existing fault path, so quarantine,
+  the fault hook (`code: 'runaway'`), `tinyactors.faults` by code and the
+  quarantine gauge needed no new code. The scheduling entry's
+  `TNA_SCHED_UNLIMITED` bit is set when an actor is quarantined as a
+  runaway, so `release()` resumes it with `no_microstep_limit`, and it is
+  cleared when the macrostep ends. The records become the WARN logs
+  `tinyactors.macrostep.long` and `tinyactors.actor.runaway`, whose body
+  reads, for example, "100 microsteps in one macrostep, the last through
+  spin → spin: the microstep limit, so the run stopped", with
+  `scxml.state`, `scxml.transition` and `scxml.transition.id` attributes.
+  The counters are the metrics `tinyactors.macrosteps.long` and
+  `tinyactors.macrosteps.runaway`. The trace kinds are `longMacrostep` and
+  `runaway` in JavaScript.
+- **Tests:** `tinyactors-test/ruby/scenarios/runaway.rb` (an eventless
+  loop and a ping-pong stop at the limit; a lifted limit finishes the
+  macrostep and the next is limited again; a `<foreach>` pausing across
+  more than 50 resumes is one microstep; the override and none; the fault
+  sweep warns once, at the same microstep) and `tinyactors-napi/test/
+  runaway.js` on Node and Bun (quarantine, fault, logs, metrics, release,
+  overrides, a system limit of 0, a long `<foreach>`).
+- **Cost:** untraced throughput at a million actors was 619 to 623 ns per
+  event on Node 22 and 540 to 546 on Bun (load 5.7), against the accepted
+  baseline's 622 and 531: within the run-to-run spread. `ta_actor` does
+  not grow; each definition gains 4 bytes; the counters gain 16 bytes per
+  definition and per system.
+
