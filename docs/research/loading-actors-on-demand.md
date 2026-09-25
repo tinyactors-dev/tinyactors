@@ -1,7 +1,7 @@
 # Loading actors on demand: how virtual-actor runtimes hold mail while an actor starts
 
 **Date:** 2026-09-25
-**Used by:** [napi ADR 0019](../../tinyactors-napi/docs/adr/0019-mail-for-an-unloaded-actor-waits-while-a-loader-brings-it-back.md) (Proposed)
+**Used by:** [napi ADR 0020](../../tinyactors-napi/docs/adr/0020-mail-for-an-unloaded-actor-waits-while-a-loader-brings-it-back.md) (Proposed)
 
 The question: when mail arrives for an actor that is not in memory, where
 does the mail wait while the actor is brought back, how is that bounded,

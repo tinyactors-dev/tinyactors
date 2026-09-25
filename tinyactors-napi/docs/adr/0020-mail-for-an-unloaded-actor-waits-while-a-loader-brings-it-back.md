@@ -1,4 +1,4 @@
-# ADR 0019: Mail for an unloaded actor waits while a loader brings it back
+# ADR 0020: Mail for an unloaded actor waits while a loader brings it back
 
 **Status:** Proposed. It would refine ADR 0005 (a mailbox can belong to an address, not only to an actor), ADR 0006 point 4 (an unloaded or unknown name is no longer always a dead letter) and ADR 0012. Research: [`docs/research/loading-actors-on-demand.md`](../../../docs/research/loading-actors-on-demand.md).
 **Date:** 2026-09-25
