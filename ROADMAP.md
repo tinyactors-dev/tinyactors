@@ -18,8 +18,13 @@ are in [`docs/proposals/`](docs/proposals/README.md).
   cause carried on events. Then a `trace.recording` instrument in
   tinyactors-test and an OTEL exporter in napi.
   Done: core ADR 0067 (implementation notes), the `trace.recording`
-  instrument, and [napi ADR 0015](tinyactors-napi/docs/adr/0015-tracing-is-a-hook-that-hands-javascript-plain-records.md):
-  a hook with plain span-shaped data and no telemetry dependency.
+  instrument, and napi ADRs 0015 to 0018: traces, logs and metrics leave
+  the addon as OTLP protobuf, with no telemetry dependency. Core ADR 0071
+  names transitions, actions and expressions; core ADR 0072 adds
+  counters, occupancy and failure logs; core ADR 0073 builds, generates
+  and samples trace contexts. Throughput is accepted as the baseline in
+  `tinyactors-napi/docs/scale.md`; open items are in the napi roadmap's
+  "Tracing" follow-ups.
 - [ ] **Close the core API gaps for log-based durability.** The core
   capabilities that
   [replay-based persistence](docs/proposals/replay-persistence.md#core-support-an-actor-can-be-replayed-in-place)
