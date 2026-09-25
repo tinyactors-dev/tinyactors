@@ -784,12 +784,12 @@ Open (ADR 0017's implementation notes, follow-up of 2026-09-25, and ADR
   **done, ADR 0019.** `registerDatamodel(name, { compile })` and
   `define(xml, { format: 'scxml' })`, with the SCXML codec linked in and
   `tools/ecmascript-datamodel.js` as the example compiler. The W3C IRP
-  suite runs against the addon (`mise run irp`): 174 of 176 pass
-  (2026-09-25), with the known failures listed in
-  `test/irp/expected-failures.json`. The SCXML child-session invoker is
-  done (ADR 0021), and so are the `<data src>` resolver and `value_text`'s
-  `TA_OP_NOMEM`. Open: tests 496 and 521 need a routing decision
-  (`error.communication` in the sender for mail to an unknown session);
+  suite runs against the addon (`mise run irp`): all 176 that run pass
+  (2026-09-25), and `test/irp/expected-failures.json` is empty. The SCXML
+  child-session invoker is done (ADR 0021), and so are the `<data src>`
+  resolver and `value_text`'s `TA_OP_NOMEM`. Tests 496 and 521 pass since
+  ADR 0022: mail a chart sends to a target that does not exist raises
+  `error.communication` in the sender (decision 8, option A);
 - ~~the public spec shape uses core's C field names~~: **decided
   2026-09-25, keep them** (option A). Specs keep core's and SCXML's names
   (`onentry`, `history_shallow`, `{ kind, … }`), as ADR 0013 point 6 says;
@@ -798,8 +798,8 @@ Open (ADR 0017's implementation notes, follow-up of 2026-09-25, and ADR
   address~~: **done**, ADR 0020. `setLoader(family, loader, { timeout,
   maxWaiting })` and `wakeAt(address, time)`; the waiting mail and the
   loads are portable C (`src/loads.{c,h}`) that moves to the host kernel.
-  Open: dead letters carry no data, so an outbox cannot replay a refused
-  message as it was (ADR 0020 implementation notes);
+  Dead letters carry their message's data and `traceparent` (a9a47d7), so
+  an outbox replays a refused message as it was;
 - network handoff of actors, modeled explicitly with I/O processors rather
   than by serializing session images;
 - a host-neutral `lib/` shared with a WebAssembly browser build;

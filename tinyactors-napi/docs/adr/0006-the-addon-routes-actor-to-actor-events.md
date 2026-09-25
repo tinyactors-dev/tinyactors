@@ -1,6 +1,6 @@
 # ADR 0006: The addon routes actor-to-actor events
 
-**Status:** Accepted; named addresses use tinyactors-core ADR 0065 (proposed)
+**Status:** Accepted; named addresses use tinyactors-core ADR 0065 (proposed) Point 4 refined by ADR 0022: mail a chart sends to a target that does not exist raises `error.communication` in the sender instead of becoming a dead letter.
 **Date:** 2026-09-23
 
 ## Context

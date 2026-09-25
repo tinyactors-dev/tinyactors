@@ -1,6 +1,6 @@
 # ADR 0008: Faults are per actor
 
-**Status:** Accepted
+**Status:** Accepted Refined by ADR 0022: a chart's mail to a target that does not exist is `error.communication` in the sender, not a dead letter; mail from JavaScript is unchanged.
 **Date:** 2026-09-23
 
 ## Context
