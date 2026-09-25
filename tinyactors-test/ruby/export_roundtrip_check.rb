@@ -270,7 +270,7 @@ class Check
   def import(source, datamodel, files)
     response = @ta.definition.import(system: @system, codec: CODEC, input: source,
                                      resolver: { '$adapter' => 'resolver.map', 'config' => { 'files' => files } },
-                                     datamodel: datamodel, allocator: ALLOCATOR)
+                                     datamodels: [datamodel], allocator: ALLOCATOR)
     unless response[:result] == 'ok'
       return [nil, "#{response[:result]} #{TinyactorsTest.describe_import_error(@ta, response.dig(:out, :error))}"]
     end

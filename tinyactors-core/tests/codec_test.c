@@ -209,7 +209,8 @@ static ta_result import(ta_system *system, stub_codec *codec, ta_arena *arena, t
                                             .input = input,
                                             .arena = arena,
                                             .identity = identity,
-                                            .datamodel = ta_null_datamodel(),
+                                            .datamodels = (ta_datamodel[]){ ta_null_datamodel() },
+                                            .datamodel_count = 1,
                                             .allocator = test_allocator,
                                             .out = out,
                                             .error = error,
@@ -268,7 +269,8 @@ static void test_import_errors(ta_system *system) {
                                            .codec = { .self = &codec, .v = &stub_writer_vtable },
                                            .input = { .ptr = (const uint8_t *)"s", .len = 1 },
                                            .arena = &arena,
-                                           .datamodel = ta_null_datamodel(),
+                                           .datamodels = (ta_datamodel[]){ ta_null_datamodel() },
+                                           .datamodel_count = 1,
                                            .allocator = test_allocator,
                                            .out = &id,
                                        }) == TA_ERR_UNSUPPORTED);
@@ -276,7 +278,8 @@ static void test_import_errors(ta_system *system) {
     CHECK(ta_definition_import(system, &(ta_definition_import_params){
                                            .codec = { .self = &codec, .v = &stub_codec_vtable },
                                            .arena = &arena,
-                                           .datamodel = ta_null_datamodel(),
+                                           .datamodels = (ta_datamodel[]){ ta_null_datamodel() },
+                                           .datamodel_count = 1,
                                            .allocator = test_allocator,
                                        }) == TA_ERR_INVALID);
     ta_arena_destroy(&arena);

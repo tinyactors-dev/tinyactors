@@ -88,7 +88,7 @@ TinyactorsTest.scenarios 'scxml codec' do
   scenario 'a malformed document is refused with its position' do
     response = ta.definition.import(system: system_handle, codec: { '$adapter' => 'codec.scxml' },
                                     input: "<scxml #{SCXMLCodecCharts::NS}>\n  <state id=\"a\" bogus=\"1\"/>\n</scxml>",
-                                    datamodel: { '$adapter' => 'datamodel.jq' },
+                                    datamodels: [{ '$adapter' => 'datamodel.jq' }],
                                     allocator: { '$adapter' => 'allocator.libc' })
     assert_equal 'err_invalid', response[:result]
     error = response.dig(:out, :error)
@@ -105,7 +105,7 @@ TinyactorsTest.scenarios 'scxml codec' do
     source = "<scxml #{SCXMLCodecCharts::NS} name=\"c\">\n  <state id=\"idle\">\n" \
              "    <transition event=\"go\" target=\"idel\"/>\n  </state>\n</scxml>"
     response = ta.definition.import(system: system_handle, codec: { '$adapter' => 'codec.scxml' }, input: source,
-                                    datamodel: { '$adapter' => 'datamodel.jq' },
+                                    datamodels: [{ '$adapter' => 'datamodel.jq' }],
                                     allocator: { '$adapter' => 'allocator.libc' })
     assert_equal 'err_invalid', response[:result]
     error = response.dig(:out, :error)
@@ -122,7 +122,7 @@ TinyactorsTest.scenarios 'scxml codec' do
     response = ta.definition.import(system: system_handle,
                                     codec: { '$adapter' => 'codec.scxml', 'config' => { 'max_depth' => 2 } },
                                     input: "<scxml #{SCXMLCodecCharts::NS}><state><final id=\"f\"/></state></scxml>",
-                                    datamodel: { '$adapter' => 'datamodel.jq' },
+                                    datamodels: [{ '$adapter' => 'datamodel.jq' }],
                                     allocator: { '$adapter' => 'allocator.libc' })
     assert_equal 'err_invalid', response[:result]
     error = response.dig(:out, :error)

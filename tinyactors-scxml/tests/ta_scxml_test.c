@@ -416,7 +416,8 @@ static ta_result import_bytes(ta_system *system, ta_arena *arena, ta_bytes input
                                             .arena = arena,
                                             .resolver = resolver,
                                             .lowering = lowering,
-                                            .datamodel = stub_datamodel,
+                                            .datamodels = &stub_datamodel,
+                                            .datamodel_count = 1,
                                             .allocator = test_allocator,
                                             .out = out,
                                             .error = error,
@@ -785,6 +786,168 @@ static void test_default_limits(void) {
     CHECK(decode_limited(NULL, deep, &error) == TA_ERR_INVALID && str_is(error.construct, "max_depth"));
 }
 
+/*
+ * The document's `datamodel` attribute picks one of the data models the host
+ * offers (core ADR 0074): by name, the first when it names none, and a
+ * located compile error at the attribute when it names one not offered.
+ */
+static const ta_datamodel_vtable other_datamodel_vtable = {
+    .name = { .ptr = "other", .len = 5 },
+    .prepare_definition = stub_prepare,
+    .destroy_definition = stub_destroy_definition,
+    .instance_size = stub_instance_size,
+    .instance_alignment = stub_instance_alignment,
+    .init_instance = stub_init_instance,
+    .destroy_instance = stub_destroy_instance,
+};
+
+/* Records the source and role of each expression prepare_definition gets. */
+typedef struct {
+    char source[16][32];
+    ta_expr_role role[16];
+    uint32_t count;
+} recorded_roles;
+
+static recorded_roles seen_roles;
+
+static ta_result recording_prepare(void *self, const ta_datamodel_prepare_definition_params *params) {
+    (void)self;
+    seen_roles.count = 0;
+    for (uint32_t index = 0; index < params->expression_count && index < 16; index += 1) {
+        ta_str source = params->expressions[index].as.source;
+        uint32_t length = source.len < 31 ? source.len : 31;
+        memcpy(seen_roles.source[index], source.ptr, length);
+        seen_roles.source[index][length] = '\0';
+        seen_roles.role[index] = params->roles[index];
+        seen_roles.count += 1u;
+    }
+    *params->shared = NULL;
+    return TA_OK;
+}
+
+static const ta_datamodel_vtable recording_datamodel_vtable = {
+    .name = { .ptr = "stub", .len = 4 },
+    .prepare_definition = recording_prepare,
+    .destroy_definition = stub_destroy_definition,
+    .instance_size = stub_instance_size,
+    .instance_alignment = stub_instance_alignment,
+    .init_instance = stub_init_instance,
+    .destroy_instance = stub_destroy_instance,
+};
+
+static ta_expr_role role_of(const char *source) {
+    for (uint32_t index = 0; index < seen_roles.count; index += 1) {
+        if (strcmp(seen_roles.source[index], source) == 0) {
+            return seen_roles.role[index];
+        }
+    }
+    return (ta_expr_role)99;
+}
+
+/* prepare_definition learns how the chart uses each expression (ADR 0074). */
+static void test_expression_roles(ta_system *system) {
+    ta_arena arena;
+    CHECK(ta_arena_init(&arena, test_allocator, 4096) == TA_OK);
+    const char *document =
+        "<scxml " NS " name=\"roles\">\n"
+        "  <script>boot()</script>\n"
+        "  <state id=\"a\">\n"
+        "    <onentry>\n"
+        "      <assign location=\"where\" expr=\"what\"/>\n"
+        "      <if cond=\"branch\"><log expr=\"said\"/></if>\n"
+        "      <foreach array=\"items\" item=\"x\"/>\n"
+        "      <send eventexpr=\"name\" targetexpr=\"to\" delayexpr=\"later\" idlocation=\"sid\"/>\n"
+        "      <script>effect()</script>\n"
+        "    </onentry>\n"
+        "    <transition event=\"go\" cond=\"guard\" target=\"a\"/>\n"
+        "  </state>\n"
+        "</scxml>";
+    ta_datamodel recording = { .self = NULL, .v = &recording_datamodel_vtable };
+    ta_definition_id id = 0;
+    ta_import_error error;
+    CHECK(ta_definition_import(system, &(ta_definition_import_params){
+                                           .codec = ta_scxml_codec_adapter(&default_codec),
+                                           .input = { .ptr = (const uint8_t *)document, .len = (uint32_t)strlen(document) },
+                                           .arena = &arena,
+                                           .datamodels = &recording,
+                                           .datamodel_count = 1,
+                                           .allocator = test_allocator,
+                                           .out = &id,
+                                           .error = &error,
+                                       }) == TA_OK);
+    CHECK(role_of("boot()") == TA_EXPR_ROLE_SCRIPT);
+    CHECK(role_of("effect()") == TA_EXPR_ROLE_SCRIPT);
+    CHECK(role_of("where") == TA_EXPR_ROLE_LOCATION);
+    CHECK(role_of("sid") == TA_EXPR_ROLE_LOCATION);
+    CHECK(role_of("what") == TA_EXPR_ROLE_VALUE);
+    CHECK(role_of("said") == TA_EXPR_ROLE_VALUE);
+    CHECK(role_of("items") == TA_EXPR_ROLE_VALUE);
+    CHECK(role_of("name") == TA_EXPR_ROLE_VALUE);
+    CHECK(role_of("to") == TA_EXPR_ROLE_VALUE);
+    CHECK(role_of("later") == TA_EXPR_ROLE_VALUE);
+    CHECK(role_of("branch") == TA_EXPR_ROLE_CONDITION);
+    CHECK(role_of("guard") == TA_EXPR_ROLE_CONDITION);
+    ta_arena_destroy(&arena);
+}
+
+static ta_result import_choosing(ta_system *system, ta_arena *arena, const char *document, ta_definition_id *out,
+                                 ta_import_error *error) {
+    static const ta_datamodel offered[] = {
+        { .self = NULL, .v = &stub_datamodel_vtable },
+        { .self = NULL, .v = &other_datamodel_vtable },
+    };
+    return ta_definition_import(system, &(ta_definition_import_params){
+                                            .codec = ta_scxml_codec_adapter(&default_codec),
+                                            .input = { .ptr = (const uint8_t *)document, .len = (uint32_t)strlen(document) },
+                                            .arena = arena,
+                                            .datamodels = offered,
+                                            .datamodel_count = 2,
+                                            .allocator = test_allocator,
+                                            .out = out,
+                                            .error = error,
+                                        });
+}
+
+static const ta_datamodel_vtable *imported_with(ta_system *system, ta_definition_id id) {
+    ta_definition_inspection view;
+    return ta_definition_inspect(system, id, &view) == TA_OK ? view.datamodel.v : NULL;
+}
+
+static void test_datamodel_by_name(ta_system *system) {
+    ta_arena arena;
+    CHECK(ta_arena_init(&arena, test_allocator, 4096) == TA_OK);
+    ta_definition_id id = 0;
+    ta_import_error error;
+
+    const char *named = "<scxml " NS " name=\"named\" datamodel=\"other\"><state id=\"a\"/></scxml>";
+    CHECK(import_choosing(system, &arena, named, &id, &error) == TA_OK);
+    CHECK(imported_with(system, id) == &other_datamodel_vtable);
+
+    const char *unnamed = "<scxml " NS " name=\"unnamed\"><state id=\"a\"/></scxml>";
+    CHECK(import_choosing(system, &arena, unnamed, &id, &error) == TA_OK);
+    CHECK(imported_with(system, id) == &stub_datamodel_vtable);
+
+    const char *unknown = "<scxml " NS " name=\"unknown\"\n       datamodel=\"xpath\"><state id=\"a\"/></scxml>";
+    ta_result result = import_choosing(system, &arena, unknown, &id, &error);
+    CHECK(result == TA_ERR_UNSUPPORTED);
+    CHECK(error.stage == TA_IMPORT_STAGE_COMPILE);
+    CHECK(error.as.compile.code == TA_COMPILE_ERROR_DATAMODEL_MISMATCH);
+    CHECK(str_is(error.as.compile.subject, "xpath"));
+    ta_chart_position attribute = position_of(unknown, "datamodel=", "xpath");
+    CHECK(attribute.line == 2);
+    CHECK(error.located && error.at.offset == attribute.offset && error.at.line == attribute.line);
+
+    /* No data model offered is misuse. */
+    CHECK(ta_definition_import(system, &(ta_definition_import_params){
+                                           .codec = ta_scxml_codec_adapter(&default_codec),
+                                           .input = { .ptr = (const uint8_t *)unnamed, .len = (uint32_t)strlen(unnamed) },
+                                           .arena = &arena,
+                                           .allocator = test_allocator,
+                                           .out = &id,
+                                       }) == TA_ERR_INVALID);
+    ta_arena_destroy(&arena);
+}
+
 int main(void) {
     if (ta_scxml_codec_init(&default_codec, NULL) != TA_OK) {
         fprintf(stderr, "cannot initialize the codec\n");
@@ -801,6 +964,8 @@ int main(void) {
     test_lowering();
     test_round_trip(system);
     test_compile_error_positions(system);
+    test_datamodel_by_name(system);
+    test_expression_roles(system);
     test_unrepresentable();
     test_limits();
     test_default_limits();

@@ -433,7 +433,8 @@ static ta_result tat_invoker_scxml_definition(tat_scxml_invoker *invoker, jv tex
                 .input = {.ptr = (const uint8_t *)jv_string_value(text), .len = (uint32_t)jv_string_length_bytes(jv_copy(text))},
                 .arena = &arena,
                 .resolver = {.self = invoker->files, .v = &TAT_MAP_RESOLVER},
-                .datamodel = model,
+                .datamodels = &model,
+                .datamodel_count = 1,
                 .allocator = tat_libc_allocator(),
                 .out = out,
             });

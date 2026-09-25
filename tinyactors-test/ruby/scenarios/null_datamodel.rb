@@ -134,7 +134,7 @@ TinyactorsTest.scenarios 'null data model', chart: :null_parallel do
     source = "<scxml xmlns=\"http://www.w3.org/2005/07/scxml\" name=\"c\" datamodel=\"null\">\n" \
              "  <state id=\"a\">\n    <transition event=\"go\" cond=\"1 + 1\" target=\"a\"/>\n  </state>\n</scxml>"
     response = ta.definition.import(system: system_handle, codec: { '$adapter' => 'codec.scxml' }, input: source,
-                                    datamodel: { '$adapter' => 'datamodel.null' },
+                                    datamodels: [{ '$adapter' => 'datamodel.null' }],
                                     allocator: { '$adapter' => 'allocator.libc' })
     assert_equal 'err_invalid', response[:result]
     error = response.dig(:out, :error)

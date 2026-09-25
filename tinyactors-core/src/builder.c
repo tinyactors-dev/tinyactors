@@ -89,6 +89,7 @@ typedef struct {
     ta_vec patterns;     /* ta_event_pattern */
     ta_vec segments;     /* ta_event_pattern_segment */
     ta_vec expressions;  /* ta_expression */
+    ta_vec roles;        /* ta_expr_role, by expression */
     ta_vec history;      /* ta_history_slot */
     ta_vec done_data;    /* ta_done_data_def */
     ta_vec invokes;      /* ta_invoke_decl */
@@ -402,8 +403,14 @@ ta_result ta_duration_parse(ta_str text, ta_time *out) {
     return TA_OK;
 }
 
-static ta_result ta_compiler_expression(ta_compiler *compiler, const ta_expression *expression,
+typedef struct {
+    const ta_expression *expression;
+    ta_expr_role role;
+} ta_compiler_expression_params;
+
+static ta_result ta_compiler_expression(ta_compiler *compiler, const ta_compiler_expression_params *params,
                                         ta_expr_id *out) {
+    const ta_expression *expression = params->expression;
     if (compiler->locate == compiler->expressions.count &&
         (expression->kind == TA_EXPRESSION_SOURCE || expression->kind == TA_EXPRESSION_HOST)) {
         /* Replay: this is the expression the data model refused. */
@@ -450,18 +457,32 @@ static ta_result ta_compiler_expression(ta_compiler *compiler, const ta_expressi
         return result;
     }
     *out = compiler->expressions.count;
-    result = ta_vec_push(&compiler->expressions, &copy);
+    /* The role first: a failed push leaves both vectors as they were. */
+    result = ta_vec_push(&compiler->roles, &params->role);
+    if (result == TA_OK) {
+        result = ta_vec_push(&compiler->expressions, &copy);
+        if (result != TA_OK) {
+            compiler->roles.count -= 1u;
+        }
+    }
     if (result != TA_OK && copy.kind == TA_EXPRESSION_HOST && copy.as.host.v->release != NULL) {
         copy.as.host.v->release(copy.as.host.self, copy.as.host.value, compiler->allocator);
     }
     return result;
 }
 
-static ta_result ta_compiler_expression_at(ta_compiler *compiler, ta_spec_member member,
-                                           const ta_expression *expression, ta_expr_id *out) {
-    ta_result result = ta_compiler_enter(compiler, member, TA_SPEC_INDEX_NONE);
+typedef struct {
+    ta_spec_member member;
+    const ta_expression *expression;
+    ta_expr_role role;
+} ta_compiler_expression_at_params;
+
+static ta_result ta_compiler_expression_at(ta_compiler *compiler, const ta_compiler_expression_at_params *params,
+                                           ta_expr_id *out) {
+    ta_result result = ta_compiler_enter(compiler, params->member, TA_SPEC_INDEX_NONE);
     if (result == TA_OK) {
-        result = ta_compiler_expression(compiler, expression, out);
+        result = ta_compiler_expression(compiler,
+                                        &(ta_compiler_expression_params){ params->expression, params->role }, out);
     }
     if (result == TA_OK) {
         ta_compiler_leave(compiler);
@@ -540,10 +561,13 @@ static ta_result ta_compiler_value(ta_compiler *compiler, const ta_scxml_value_s
             return TA_OK;
         case TA_SCXML_VALUE_EXPR:
             out->kind = TA_VALUE_SOURCE_EXPR;
-            return ta_compiler_expression(compiler, &spec->as.expr, &out->as.expr);
+            return ta_compiler_expression(compiler, &(ta_compiler_expression_params){ &spec->as.expr, TA_EXPR_ROLE_VALUE },
+                                          &out->as.expr);
         case TA_SCXML_VALUE_LOCATION:
             out->kind = TA_VALUE_SOURCE_LOCATION;
-            return ta_compiler_expression(compiler, &spec->as.location, &out->as.location);
+            return ta_compiler_expression(compiler,
+                                          &(ta_compiler_expression_params){ &spec->as.location, TA_EXPR_ROLE_LOCATION },
+                                          &out->as.location);
         case TA_SCXML_VALUE_CONTENT:
             out->kind = TA_VALUE_SOURCE_CONTENT;
             return ta_compiler_content(compiler, spec->as.content.media_type, spec->as.content.bytes,
@@ -614,7 +638,7 @@ static ta_result ta_compiler_send(ta_compiler *compiler, const ta_scxml_send_spe
             break;
         case TA_SCXML_ID_LOCATION:
             out->id.kind = TA_ID_SOURCE_LOCATION;
-            result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_ID, &spec->id.as.location,
+            result = ta_compiler_expression_at(compiler, &(ta_compiler_expression_at_params){ TA_SPEC_MEMBER_ID, &spec->id.as.location, TA_EXPR_ROLE_LOCATION },
                                                &out->id.as.location);
             break;
         default:
@@ -633,7 +657,7 @@ static ta_result ta_compiler_send(ta_compiler *compiler, const ta_scxml_send_spe
             break;
         case TA_SCXML_STRING_EXPR:
             out->type.kind = TA_TEXT_SOURCE_EXPR;
-            result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_TYPE, &spec->type.as.expr,
+            result = ta_compiler_expression_at(compiler, &(ta_compiler_expression_at_params){ TA_SPEC_MEMBER_TYPE, &spec->type.as.expr, TA_EXPR_ROLE_VALUE },
                                                &out->type.as.expr);
             break;
         default:
@@ -646,7 +670,7 @@ static ta_result ta_compiler_send(ta_compiler *compiler, const ta_scxml_send_spe
     ta_compiler_hash_u32(compiler, spec->event.kind);
     if (spec->event.kind == TA_SCXML_EVENT_EXPR) {
         out->event.kind = TA_EVENT_SOURCE_EXPR;
-        result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_EVENT, &spec->event.as.expr,
+        result = ta_compiler_expression_at(compiler, &(ta_compiler_expression_at_params){ TA_SPEC_MEMBER_EVENT, &spec->event.as.expr, TA_EXPR_ROLE_VALUE },
                                            &out->event.as.expr);
     } else if (spec->event.kind == TA_SCXML_EVENT_NAME) {
         out->event.kind = TA_EVENT_SOURCE_NAME;
@@ -674,7 +698,7 @@ static ta_result ta_compiler_send(ta_compiler *compiler, const ta_scxml_send_spe
             break;
         case TA_SCXML_STRING_EXPR:
             out->target.kind = TA_VALUE_SOURCE_EXPR;
-            result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_TARGET, &spec->target.as.expr,
+            result = ta_compiler_expression_at(compiler, &(ta_compiler_expression_at_params){ TA_SPEC_MEMBER_TARGET, &spec->target.as.expr, TA_EXPR_ROLE_VALUE },
                                                &out->target.as.expr);
             break;
         default:
@@ -705,7 +729,7 @@ static ta_result ta_compiler_send(ta_compiler *compiler, const ta_scxml_send_spe
             break;
         case TA_SCXML_STRING_EXPR:
             out->delay.kind = TA_DELAY_SOURCE_EXPR;
-            result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_DELAY, &spec->delay.as.expr,
+            result = ta_compiler_expression_at(compiler, &(ta_compiler_expression_at_params){ TA_SPEC_MEMBER_DELAY, &spec->delay.as.expr, TA_EXPR_ROLE_VALUE },
                                                &out->delay.as.expr);
             break;
         default:
@@ -731,7 +755,7 @@ static ta_result ta_compiler_send(ta_compiler *compiler, const ta_scxml_send_spe
  */
 static ta_result ta_compiler_foreach(ta_compiler *compiler, const ta_scxml_action_spec *spec,
                                      ta_foreach_action *out) {
-    ta_result result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_EXPR, &spec->as.foreach.array, &out->array);
+    ta_result result = ta_compiler_expression_at(compiler, &(ta_compiler_expression_at_params){ TA_SPEC_MEMBER_EXPR, &spec->as.foreach.array, TA_EXPR_ROLE_VALUE }, &out->array);
     if (result == TA_OK) {
         result = ta_compiler_atom_at(compiler, TA_SPEC_MEMBER_ITEM, spec->as.foreach.item, &out->item);
     }
@@ -767,7 +791,7 @@ static ta_result ta_compiler_action(ta_compiler *compiler, const ta_scxml_action
             out->kind = TA_ACTION_CANCEL;
             if (spec->as.cancel.sendid.kind == TA_SCXML_STRING_EXPR) {
                 out->as.cancel.sendid.kind = TA_TEXT_SOURCE_EXPR;
-                return ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_SENDID, &spec->as.cancel.sendid.as.expr,
+                return ta_compiler_expression_at(compiler, &(ta_compiler_expression_at_params){ TA_SPEC_MEMBER_SENDID, &spec->as.cancel.sendid.as.expr, TA_EXPR_ROLE_VALUE },
                                                  &out->as.cancel.sendid.as.expr);
             }
             if (spec->as.cancel.sendid.kind == TA_SCXML_STRING_NONE) {
@@ -788,7 +812,7 @@ static ta_result ta_compiler_action(ta_compiler *compiler, const ta_scxml_action
                                            &(ta_compiler_fault){ .code = TA_COMPILE_ERROR_MISSING_VALUE,
                                                                  .message = TA_PHRASE("an assign needs a value") });
             }
-            result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_LOCATION, &spec->as.assign.location,
+            result = ta_compiler_expression_at(compiler, &(ta_compiler_expression_at_params){ TA_SPEC_MEMBER_LOCATION, &spec->as.assign.location, TA_EXPR_ROLE_LOCATION },
                                                &out->as.assign.location);
             if (result == TA_OK) {
                 result = ta_compiler_value_at(compiler, TA_SPEC_MEMBER_DATA_VALUE, &spec->as.assign.value,
@@ -797,7 +821,7 @@ static ta_result ta_compiler_action(ta_compiler *compiler, const ta_scxml_action
             return result;
         case TA_SCXML_ACTION_SCRIPT:
             out->kind = TA_ACTION_SCRIPT;
-            return ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_EXPR, &spec->as.script.script, &out->as.script);
+            return ta_compiler_expression_at(compiler, &(ta_compiler_expression_at_params){ TA_SPEC_MEMBER_EXPR, &spec->as.script.script, TA_EXPR_ROLE_SCRIPT }, &out->as.script);
         case TA_SCXML_ACTION_LOG:
             out->kind = TA_ACTION_LOG;
             if (spec->as.log.label.ptr != NULL) {
@@ -806,13 +830,13 @@ static ta_result ta_compiler_action(ta_compiler *compiler, const ta_scxml_action
             }
             if (result == TA_OK && spec->as.log.expr.kind != TA_EXPRESSION_NONE) {
                 out->as.log.has_expr = true;
-                result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_EXPR, &spec->as.log.expr,
+                result = ta_compiler_expression_at(compiler, &(ta_compiler_expression_at_params){ TA_SPEC_MEMBER_EXPR, &spec->as.log.expr, TA_EXPR_ROLE_VALUE },
                                                    &out->as.log.expr);
             }
             return result;
         case TA_SCXML_ACTION_IF:
             out->kind = TA_ACTION_IF;
-            return ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_CONDITION, &spec->as.conditional.condition,
+            return ta_compiler_expression_at(compiler, &(ta_compiler_expression_at_params){ TA_SPEC_MEMBER_CONDITION, &spec->as.conditional.condition, TA_EXPR_ROLE_CONDITION },
                                              &out->as.conditional.condition);
         case TA_SCXML_ACTION_FOREACH:
             out->kind = TA_ACTION_FOREACH;
@@ -1346,7 +1370,7 @@ static ta_result ta_compiler_transition(ta_compiler *compiler, ta_state_id sourc
         ta_compiler_leave(compiler);
     }
     if (result == TA_OK && spec->condition.kind != TA_EXPRESSION_NONE) {
-        result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_CONDITION, &spec->condition,
+        result = ta_compiler_expression_at(compiler, &(ta_compiler_expression_at_params){ TA_SPEC_MEMBER_CONDITION, &spec->condition, TA_EXPR_ROLE_CONDITION },
                                            &transition.condition);
     }
     if (result == TA_OK) {
@@ -1487,7 +1511,8 @@ static ta_result ta_compiler_invoke_text(ta_compiler *compiler, const ta_scxml_s
                                        &out->as.content);
         case TA_SCXML_STRING_EXPR:
             out->kind = TA_VALUE_SOURCE_EXPR;
-            return ta_compiler_expression(compiler, &spec->as.expr, &out->as.expr);
+            return ta_compiler_expression(compiler, &(ta_compiler_expression_params){ &spec->as.expr, TA_EXPR_ROLE_VALUE },
+                                          &out->as.expr);
         default:
             return ta_compiler_fail(compiler, TA_COMPILE_ERROR_MALFORMED_SPEC, (ta_str){0},
                                     TA_PHRASE("unknown kind"));
@@ -1507,7 +1532,7 @@ static ta_result ta_compiler_invoke(ta_compiler *compiler, const ta_scxml_invoke
             break;
         case TA_SCXML_ID_LOCATION:
             out->id.kind = TA_ID_SOURCE_LOCATION;
-            result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_ID, &spec->id.as.location,
+            result = ta_compiler_expression_at(compiler, &(ta_compiler_expression_at_params){ TA_SPEC_MEMBER_ID, &spec->id.as.location, TA_EXPR_ROLE_LOCATION },
                                                &out->id.as.location);
             break;
         default:
@@ -1526,7 +1551,7 @@ static ta_result ta_compiler_invoke(ta_compiler *compiler, const ta_scxml_invoke
             break;
         case TA_SCXML_STRING_EXPR:
             out->type.kind = TA_TEXT_SOURCE_EXPR;
-            result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_TYPE, &spec->type.as.expr,
+            result = ta_compiler_expression_at(compiler, &(ta_compiler_expression_at_params){ TA_SPEC_MEMBER_TYPE, &spec->type.as.expr, TA_EXPR_ROLE_VALUE },
                                                &out->type.as.expr);
             break;
         default:
@@ -1752,7 +1777,7 @@ static void ta_compiler_destroy(ta_compiler *compiler) {
         &compiler->states, &compiler->state_specs, &compiler->children, &compiler->transitions,
         &compiler->initials, &compiler->targets, &compiler->actions, &compiler->handlers, &compiler->params,
         &compiler->data_decls, &compiler->initializers, &compiler->contents, &compiler->patterns,
-        &compiler->segments, &compiler->expressions, &compiler->history, &compiler->done_data,
+        &compiler->segments, &compiler->expressions, &compiler->roles, &compiler->history, &compiler->done_data,
         &compiler->invokes, &compiler->texts, &compiler->path, &compiler->names, &compiler->levels,
         &compiler->blocks,
     };
@@ -2017,7 +2042,7 @@ static ta_result ta_compiler_run(ta_compiler *compiler, ta_datamodel datamodel) 
     if (result == TA_OK && spec->script.kind != TA_EXPRESSION_NONE) {
         uint32_t base = 0;
         ta_action_def script = { .kind = TA_ACTION_SCRIPT };
-        result = ta_compiler_expression_at(compiler, TA_SPEC_MEMBER_SCRIPT, &spec->script, &script.as.script);
+        result = ta_compiler_expression_at(compiler, &(ta_compiler_expression_at_params){ TA_SPEC_MEMBER_SCRIPT, &spec->script, TA_EXPR_ROLE_SCRIPT }, &script.as.script);
         if (result == TA_OK) {
             result = ta_vec_extend(&compiler->actions, 1, &base);
         }
@@ -2100,6 +2125,7 @@ static ta_result ta_compile(ta_system *system, const ta_definition_compile_param
         { &compiler.patterns, TA_VEC_LAYOUT(ta_event_pattern) },
         { &compiler.segments, TA_VEC_LAYOUT(ta_event_pattern_segment) },
         { &compiler.expressions, TA_VEC_LAYOUT(ta_expression) },
+        { &compiler.roles, TA_VEC_LAYOUT(ta_expr_role) },
         { &compiler.history, TA_VEC_LAYOUT(ta_history_slot) },
         { &compiler.done_data, TA_VEC_LAYOUT(ta_done_data_def) },
         { &compiler.invokes, TA_VEC_LAYOUT(ta_invoke_decl) },
@@ -2126,6 +2152,12 @@ static ta_result ta_compile(ta_system *system, const ta_definition_compile_param
                                                        .out = (void **)&definition->expressions,
                                                        .count = &definition->expression_count,
                                                    });
+    if (sealed == TA_OK) {
+        sealed = ta_compiler_seal(&compiler, &(ta_compiler_seal_params){
+                                                 .vec = &compiler.roles,
+                                                 .out = (void **)&definition->expression_roles,
+                                             });
+    }
     if (sealed != TA_OK) {
         /* Could not move host expressions; release them from the vector. */
         for (uint32_t index = 0; index < compiler.expressions.count; index += 1) {
@@ -2149,6 +2181,7 @@ static ta_result ta_compile(ta_system *system, const ta_definition_compile_param
             params->datamodel.self,
             &(ta_datamodel_prepare_definition_params){
                 .expressions = definition->expressions,
+                .roles = definition->expression_roles,
                 .expression_count = definition->expression_count,
                 .allocator = params->allocator,
                 .shared = &definition->datamodel_shared,

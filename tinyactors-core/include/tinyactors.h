@@ -565,8 +565,22 @@ typedef struct {
     ta_str message;
 } ta_expression_rejection;
 
+/*
+ * How the chart uses an expression (ADR 0074): what a data model is asked
+ * to do with it at run time. A data model that compiles source text can
+ * compile each expression for its use.
+ */
+typedef enum {
+    TA_EXPR_ROLE_VALUE = 0, /* evaluated for a value: expr, eventexpr, targetexpr, delayexpr, foreach array, ... */
+    TA_EXPR_ROLE_CONDITION, /* a guard or an <if>/<elseif> cond */
+    TA_EXPR_ROLE_LOCATION,  /* read and assigned: location, idlocation, a namelist or <param> location */
+    TA_EXPR_ROLE_SCRIPT     /* a <script> body, run for its effect */
+} ta_expr_role TA_SYMBOLS("TA_EXPR_ROLE_");
+
 typedef struct {
     TA_COUNTED_BY(expression_count) TA_OPTIONAL TA_LIFETIME(definition) const ta_expression *expressions;
+    /* Each expression's role, by the same index (ADR 0074). */
+    TA_COUNTED_BY(expression_count) TA_OPTIONAL TA_LIFETIME(definition) const ta_expr_role *roles;
     uint32_t expression_count;
     ta_allocator allocator;
     void **shared;
@@ -2161,8 +2175,10 @@ typedef struct {
  * destroyed here; the caller never holds an unregistered one.
  *
  * TA_ERR_UNSUPPORTED when the codec cannot decode (its `decode` is null), or
- * when the compiler refuses the spec's data model. TA_ERR_INVALID with
- * `error` saying which stage refused the chart. TA_ERR_NOMEM.
+ * when the compiler refuses the spec's data model: no entry of `datamodels`
+ * has the document's `datamodel` name. TA_ERR_INVALID with `error` saying
+ * which stage refused the chart, or when `datamodels` is empty.
+ * TA_ERR_NOMEM.
  */
 typedef struct {
     ta_chart_codec codec;
@@ -2174,7 +2190,16 @@ typedef struct {
     ta_chart_src_resolver resolver;
     ta_chart_lowering lowering;
     TA_IN TA_OPTIONAL const ta_definition_identity *identity;
-    ta_datamodel datamodel;
+    /*
+     * The data models the document may choose from, by name (ADR 0074). A
+     * document whose `datamodel` attribute names one gets the one whose
+     * `v->name` is that name; a document without the attribute gets the
+     * first. A name none of them has is refused as a compile error at the
+     * attribute, TA_COMPILE_ERROR_DATAMODEL_MISMATCH, located in `input`.
+     * At least one.
+     */
+    TA_COUNTED_BY(datamodel_count) const ta_datamodel *datamodels;
+    uint32_t datamodel_count;
     ta_allocator allocator;
     TA_OUT ta_definition_id *out;
     TA_OUT TA_OPTIONAL TA_VALID_ON(TA_ERR_INVALID) TA_LIFETIME(arena) ta_import_error *error;

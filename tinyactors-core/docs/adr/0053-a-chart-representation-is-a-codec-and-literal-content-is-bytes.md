@@ -1,6 +1,6 @@
 # ADR 0053: A chart representation is a codec, and literal content reaches adapters as bytes
 
-**Status:** Accepted and implemented; amends ADR 0025, applies ADR 0040 and ADR 0046; §4 amended 2026-09-23 (with ADR 0058). See the implementation notes for where the code differs from the text.
+**Status:** Accepted and implemented; amends ADR 0025, applies ADR 0040 and ADR 0046; §4 amended 2026-09-23 (with ADR 0058). See the implementation notes for where the code differs from the text. Section 4 refined by ADR 0074 (`ta_definition_import` takes the data models by name).
 **Date:** 2026-09-22
 
 ## Context

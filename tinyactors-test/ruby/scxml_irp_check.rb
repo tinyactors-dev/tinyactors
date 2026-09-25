@@ -44,7 +44,7 @@ begin
     datamodel = TinyactorsTest::Context::DATAMODELS.fetch(chart.datamodel)
     response = driver.ta.definition.import(system: system, codec: { '$adapter' => 'codec.scxml' }, input: chart.source,
                                            resolver: { '$adapter' => 'resolver.map', 'config' => { 'files' => chart.files } },
-                                           datamodel: datamodel, allocator: allocator)
+                                           datamodels: [datamodel], allocator: allocator)
     next if response[:result] == 'ok'
 
     failures << "#{name}: #{response[:result]} " \

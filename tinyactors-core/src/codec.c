@@ -327,9 +327,28 @@ static bool ta_import_locate(const ta_scxml_spec *spec, const ta_compile_error *
     return false;
 }
 
+/*
+ * The data model the document names, or the first when it names none. A name
+ * no entry has also gets the first, whose compile then refuses the chart
+ * with a mismatch at the `datamodel` attribute: one error path, located in
+ * the document (ADR 0058, ADR 0074).
+ */
+static ta_datamodel ta_import_datamodel(const ta_definition_import_params *params, ta_str name) {
+    if (name.ptr != NULL && name.len != 0) {
+        for (uint32_t index = 0; index < params->datamodel_count; index += 1u) {
+            const ta_datamodel *candidate = &params->datamodels[index];
+            if (candidate->v != NULL && ta_str_equal(candidate->v->name, name)) {
+                return *candidate;
+            }
+        }
+    }
+    return params->datamodels[0];
+}
+
 ta_result ta_definition_import(ta_system *system, const ta_definition_import_params *params) {
     if (system == NULL || params == NULL || params->codec.v == NULL || params->arena == NULL ||
-        params->out == NULL || (params->input.ptr == NULL && params->input.len != 0)) {
+        params->out == NULL || (params->input.ptr == NULL && params->input.len != 0) ||
+        params->datamodels == NULL || params->datamodel_count == 0) {
         return TA_ERR_INVALID;
     }
     if (params->error != NULL) {
@@ -378,7 +397,7 @@ ta_result ta_definition_import(ta_system *system, const ta_definition_import_par
     ta_compile_error compile_error = {0};
     result = ta_definition_compile_spec(system, &(ta_definition_compile_params){
                                                     .spec = spec,
-                                                    .datamodel = params->datamodel,
+                                                    .datamodel = ta_import_datamodel(params, spec->datamodel),
                                                     .allocator = params->allocator,
                                                     .out = &definition,
                                                     .error = params->error != NULL ? &compile_error : NULL,

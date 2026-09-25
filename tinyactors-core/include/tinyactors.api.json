@@ -5314,11 +5314,26 @@
           "lifetime": "definition"
         },
         {
+          "name": "roles",
+          "type": {
+            "pointer": {
+              "type": "ta_expr_role",
+              "const": true
+            }
+          },
+          "count": "expression_count",
+          "shape": "counted",
+          "direction": "in",
+          "optional": true,
+          "lifetime": "definition",
+          "doc": "Each expression's role, by the same index (ADR 0074)."
+        },
+        {
           "name": "expression_count",
           "type": {
             "builtin": "uint32_t"
           },
-          "count_of": "expressions"
+          "count_of": "roles"
         },
         {
           "name": "allocator",
@@ -5356,25 +5371,27 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 48,
+          "size": 56,
           "align": 8,
           "offsets": {
             "expressions": 0,
-            "expression_count": 8,
-            "allocator": 16,
-            "shared": 32,
-            "rejected": 40
+            "roles": 8,
+            "expression_count": 16,
+            "allocator": 24,
+            "shared": 40,
+            "rejected": 48
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 24,
+          "size": 28,
           "align": 4,
           "offsets": {
             "expressions": 0,
-            "expression_count": 4,
-            "allocator": 8,
-            "shared": 16,
-            "rejected": 20
+            "roles": 4,
+            "expression_count": 8,
+            "allocator": 12,
+            "shared": 20,
+            "rejected": 24
           }
         }
       }
@@ -7191,7 +7208,7 @@
     },
     "ta_definition_import_params": {
       "kind": "struct",
-      "doc": "Decodes `input` with `codec`, compiles the spec, and registers the definition (ADR 0053 section 4). `out` is the new definition's ID.\n\nThe spec may point into `input` only until it is compiled, which happens inside this call, so `input` need only outlive the call, and `error` when it is read. `identity` is given to the codec and set on the spec: no chart syntax carries one. If registration fails, the compiled definition is destroyed here; the caller never holds an unregistered one.\n\nTA_ERR_UNSUPPORTED when the codec cannot decode (its `decode` is null), or when the compiler refuses the spec's data model. TA_ERR_INVALID with `error` saying which stage refused the chart. TA_ERR_NOMEM.",
+      "doc": "Decodes `input` with `codec`, compiles the spec, and registers the definition (ADR 0053 section 4). `out` is the new definition's ID.\n\nThe spec may point into `input` only until it is compiled, which happens inside this call, so `input` need only outlive the call, and `error` when it is read. `identity` is given to the codec and set on the spec: no chart syntax carries one. If registration fails, the compiled definition is destroyed here; the caller never holds an unregistered one.\n\nTA_ERR_UNSUPPORTED when the codec cannot decode (its `decode` is null), or when the compiler refuses the spec's data model: no entry of `datamodels` has the document's `datamodel` name. TA_ERR_INVALID with `error` saying which stage refused the chart, or when `datamodels` is empty. TA_ERR_NOMEM.",
       "fields": [
         {
           "name": "codec",
@@ -7241,10 +7258,24 @@
           "optional": true
         },
         {
-          "name": "datamodel",
+          "name": "datamodels",
           "type": {
-            "type": "ta_datamodel"
-          }
+            "pointer": {
+              "type": "ta_datamodel",
+              "const": true
+            }
+          },
+          "count": "datamodel_count",
+          "shape": "counted",
+          "direction": "in",
+          "doc": "The data models the document may choose from, by name (ADR 0074). A document whose `datamodel` attribute names one gets the one whose `v->name` is that name; a document without the attribute gets the first. A name none of them has is refused as a compile error at the attribute, TA_COMPILE_ERROR_DATAMODEL_MISMATCH, located in `input`. At least one."
+        },
+        {
+          "name": "datamodel_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "count_of": "datamodels"
         },
         {
           "name": "allocator",
@@ -7288,7 +7319,8 @@
             "resolver": 40,
             "lowering": 56,
             "identity": 72,
-            "datamodel": 80,
+            "datamodels": 80,
+            "datamodel_count": 88,
             "allocator": 96,
             "out": 112,
             "error": 120
@@ -7304,7 +7336,8 @@
             "resolver": 20,
             "lowering": 28,
             "identity": 36,
-            "datamodel": 40,
+            "datamodels": 40,
+            "datamodel_count": 44,
             "allocator": 48,
             "out": 56,
             "error": 60
@@ -8107,6 +8140,46 @@
       "type": {
         "builtin": "uint32_t"
       },
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
+    "ta_expr_role": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_EXPR_ROLE_VALUE",
+          "value": 0,
+          "symbol": "value",
+          "doc": "evaluated for a value: expr, eventexpr, targetexpr, delayexpr, foreach array, ..."
+        },
+        {
+          "name": "TA_EXPR_ROLE_CONDITION",
+          "value": 1,
+          "symbol": "condition",
+          "doc": "a guard or an <if >/ <elseif > cond"
+        },
+        {
+          "name": "TA_EXPR_ROLE_LOCATION",
+          "value": 2,
+          "symbol": "location",
+          "doc": "read and assigned: location, idlocation, a namelist or <param > location"
+        },
+        {
+          "name": "TA_EXPR_ROLE_SCRIPT",
+          "value": 3,
+          "symbol": "script",
+          "doc": "a <script > body, run for its effect"
+        }
+      ],
+      "doc": "How the chart uses an expression (ADR 0074): what a data model is asked to do with it at run time. A data model that compiles source text can compile each expression for its use.",
       "layout": {
         "x86_64-unknown-linux-gnu": {
           "size": 4,

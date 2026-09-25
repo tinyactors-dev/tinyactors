@@ -1391,7 +1391,7 @@ module TinyactorsTest
       response = ta.definition.import(system: system_handle, codec: { '$adapter' => 'codec.scxml' },
                                       input: chart.source,
                                       resolver: { '$adapter' => 'resolver.map', 'config' => { 'files' => chart.files } },
-                                      datamodel: datamodel_adapter(chart), allocator: allocator.adapter)
+                                      datamodels: [datamodel_adapter(chart)], allocator: allocator.adapter)
       unless response[:result] == 'ok'
         detail = "#{chart.name}: #{TinyactorsTest.describe_import_error(ta, response.dig(:out, :error))}"
         raise CoreResultError.new('ta_definition_import', response[:result], detail)
