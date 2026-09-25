@@ -1330,7 +1330,8 @@ bool tat_make_recording_trace(tat_bind *bind, jv config, void *out) {
     }
     *(ta_trace_sink *)out = (ta_trace_sink){.self = instrument, .v = &TAT_RECORDING_TRACE,
                                             .kinds = instrument->trace_kinds,
-                                            .unsampled = instrument->trace_unsampled};
+                                            .watched_kinds = instrument->trace_kinds,
+                                            .unsampled_kinds = instrument->trace_unsampled ? instrument->trace_kinds : 0u};
     return true;
 }
 

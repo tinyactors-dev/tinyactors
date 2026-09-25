@@ -444,7 +444,7 @@ static void finish(run *r) {
 static void test_null_sink(void) {
     ta_trace_sink null = ta_null_trace_sink();
     CHECK(null.self == NULL && null.v != NULL && null.v->write != NULL);
-    CHECK(null.kinds == 0 && !null.unsampled);
+    CHECK(null.kinds == 0 && null.watched_kinds == 0 && null.unsampled_kinds == 0);
     null.v->write(NULL, NULL); /* writes nothing, reads nothing */
 
     run r;
@@ -604,7 +604,7 @@ static void test_sampling(void) {
     CHECK(seen_cause.session == 0 && seen_cause.macrostep == 77);
 
     seen_records = 0;
-    sink.unsampled = true;
+    sink.unsampled_kinds = sink.kinds;
     CHECK(ta_system_set_trace_sink(r.system, sink) == TA_OK);
     deliver(&r, "stop", parent_of(5, 6, 0, 55));
     settle(&r);
@@ -819,6 +819,138 @@ static void test_lifecycle_keys(void) {
     finish(&r);
 }
 
+/* ------------------------------------------------------------------------
+ * The tracing module (ADR 0073)
+ */
+
+static ta_result parse(const char *text, ta_trace_parent *out) {
+    return ta_traceparent_parse(&(ta_traceparent_parse_params){ .text = { text, (uint32_t)strlen(text) }, .out = out });
+}
+
+/* W3C's example round trips, and malformed text is refused. */
+static void test_traceparent(void) {
+    const char *example = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+    ta_trace_parent parent;
+    CHECK(parse(example, &parent) == TA_OK);
+    CHECK(parent.context.trace_id_high == 0x4bf92f3577b34da6ull);
+    CHECK(parent.context.trace_id_low == 0xa3ce929d0e0e4736ull);
+    CHECK(parent.context.flags == TA_TRACE_FLAG_SAMPLED && parent.context.detail == 0);
+    CHECK(parent.cause.session == 0 && parent.cause.macrostep == 0x00f067aa0ba902b7ull &&
+          parent.cause.microstep == 0);
+    char text[56];
+    uint32_t needed = 0;
+    CHECK(ta_traceparent_format(&(ta_traceparent_format_params){ .parent = parent, .buffer = text,
+                                                                 .capacity = sizeof text, .needed = &needed }) ==
+          TA_OK);
+    CHECK(needed == 56 && strcmp(text, example) == 0);
+    CHECK(ta_traceparent_format(&(ta_traceparent_format_params){ .parent = parent, .buffer = text, .capacity = 10,
+                                                                 .needed = &needed }) == TA_ERR_NOMEM);
+    CHECK(needed == 56);
+    CHECK(ta_traceparent_format(&(ta_traceparent_format_params){ .parent = {0}, .buffer = text,
+                                                                 .capacity = sizeof text, .needed = &needed }) ==
+          TA_ERR_INVALID);
+
+    /* Optional whitespace, and a future version with more after a dash. */
+    CHECK(parse(" \t00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00 ", &parent) == TA_OK &&
+          parent.context.flags == 0);
+    CHECK(parse("cc-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-09-extra", &parent) == TA_OK &&
+          parent.context.flags == 9);
+
+    static const char *const invalid[] = {
+        "",
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-0",       /* short */
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-x",    /* version 00 is 55 */
+        "cc-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01x",     /* no dash after 55 */
+        "ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",      /* version ff */
+        "00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01",      /* uppercase */
+        "00-00000000000000000000000000000000-00f067aa0ba902b7-01",      /* zero trace ID */
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01",      /* zero parent ID */
+        "00_4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",      /* separator */
+        "00-4bf92f3577b34da6a3ce929d0e0e473g-00f067aa0ba902b7-01",      /* not hex */
+    };
+    for (size_t index = 0; index < sizeof invalid / sizeof invalid[0]; index += 1) {
+        CHECK(parse(invalid[index], &parent) == TA_ERR_INVALID);
+    }
+
+    char id[33];
+    CHECK(ta_trace_id_format(&(ta_trace_id_format_params){ .context = { 1, 0xabcu, 0, 0 }, .buffer = id,
+                                                           .capacity = sizeof id, .needed = &needed }) == TA_OK);
+    CHECK(needed == 33 && strcmp(id, "0000000000000001" "0000000000000abc") == 0);
+    CHECK(ta_span_id_format(&(ta_span_id_format_params){ .span_id = 0x00f067aa0ba902b7ull, .buffer = id,
+                                                         .capacity = sizeof id, .needed = &needed }) == TA_OK);
+    CHECK(needed == 17 && strcmp(id, "00f067aa0ba902b7") == 0);
+}
+
+/* A seed gives the same sequence on every host: xoshiro256** over SplitMix64. */
+static void test_generator(void) {
+    run r;
+    start_system(&r);
+    ta_trace_context first = ta_system_new_trace(r.system); /* unseeded: seed 0 */
+    CHECK(first.trace_id_high == 0x99ec5f36cb75f2b4ull && first.trace_id_low == 0xbf6e1f784956452aull);
+    CHECK(first.flags == (TA_TRACE_FLAG_RANDOM | TA_TRACE_FLAG_SAMPLED) && first.detail == 0);
+    CHECK(ta_system_new_span_id(r.system) == 0x1a5f849d4933e6e0ull);
+    ta_system_seed_trace_ids(r.system, 42);
+    ta_trace_context again = ta_system_new_trace(r.system);
+    CHECK(again.trace_id_high == 0x15780b2e0c2ec716ull && again.trace_id_low == 0x6104d9866d113a7eull);
+    CHECK(ta_system_new_span_id(r.system) == 0xae17533239e499a1ull);
+    ta_system_seed_trace_ids(r.system, 42);
+    CHECK(ta_system_new_trace(r.system).trace_id_low == 0x6104d9866d113a7eull);
+    finish(&r);
+}
+
+/* Consistent probability sampling on the trace ID's rightmost 56 bits. */
+static void test_sampler(void) {
+    const uint64_t all = (uint64_t)1u << 56;
+    CHECK(ta_trace_ratio_threshold(1, 1) == 0 && ta_trace_ratio_threshold(3, 2) == 0);
+    CHECK(ta_trace_ratio_threshold(0, 1) == all && ta_trace_ratio_threshold(1, 0) == all);
+    CHECK(ta_trace_ratio_threshold(1, 2) == all / 2u);
+    CHECK(ta_trace_ratio_threshold(250000000u, 1000000000u) == all / 4u * 3u);
+    CHECK(ta_trace_ratio_threshold(1, 3) == 48038396025285291ull); /* round(2/3 * 2^56) */
+    uint64_t half = ta_trace_ratio_threshold(1, 2);
+    /* The high byte of the low word is not randomness, and is ignored. */
+    ta_trace_context below = { .trace_id_low = 0xff00000000000000ull | (half - 1u) };
+    ta_trace_context at = { .trace_id_low = half };
+    CHECK(!ta_trace_sampled_at(&below, half) && ta_trace_sampled_at(&at, half));
+    CHECK(ta_trace_sampled_at(&below, 0) && !ta_trace_sampled_at(&at, all));
+
+    run r;
+    start_system(&r);
+    ta_system_set_trace_ratio(r.system, 1, 4);
+    int sampled = 0;
+    for (int index = 0; index < 20000; index += 1) {
+        sampled += (ta_system_new_trace(r.system).flags & TA_TRACE_FLAG_SAMPLED) != 0 ? 1 : 0;
+    }
+    CHECK(sampled > 4600 && sampled < 5400);
+    ta_system_set_trace_ratio(r.system, 0, 1);
+    CHECK((ta_system_new_trace(r.system).flags & TA_TRACE_FLAG_SAMPLED) == 0);
+    finish(&r);
+}
+
+/* A watched context builds the sink's watched kinds, and its macrostep keeps the mark. */
+static long watched_run(uint8_t detail) {
+    run r;
+    start_system(&r);
+    ta_trace_sink sink = { .v = &context_vtable, .kinds = TA_TRACE_BIT(TA_TRACE_MACROSTEP_BEGIN),
+                           .watched_kinds = ALL_KINDS };
+    CHECK(ta_system_set_trace_sink(r.system, sink) == TA_OK);
+    spawn(&r, parent_of(1, 2, TA_TRACE_FLAG_SAMPLED, 9));
+    settle(&r);
+    ta_trace_parent parent = parent_of(3, 4, TA_TRACE_FLAG_SAMPLED, 7);
+    parent.context.detail = detail;
+    seen_records = 0;
+    deliver(&r, "go", parent);
+    settle(&r);
+    CHECK(seen_context.detail == detail);
+    long seen = seen_records;
+    finish(&r);
+    return seen;
+}
+
+static void test_watched_detail(void) {
+    CHECK(watched_run(0) == 1);
+    CHECK(watched_run(TA_TRACE_DETAIL_WATCHED) > 1);
+}
+
 int main(void) {
     test_null_sink();
     test_mask_suppresses_construction();
@@ -830,6 +962,10 @@ int main(void) {
     test_counters_and_parents_survive_an_image();
     test_lifecycle_keys();
     test_records_are_written_once();
+    test_traceparent();
+    test_generator();
+    test_sampler();
+    test_watched_detail();
     CHECK(live_allocations == 0);
     if (failures != 0) {
         fprintf(stderr, "trace_test: %d failure(s)\n", failures);

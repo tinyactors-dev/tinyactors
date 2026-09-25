@@ -3148,7 +3148,7 @@ static ta_result ta_run_finish(ta_interpreter *it) {
     /* A lifecycle record: its own key, and the step that finished as cause. */
     ta_step_key step = ta_trace_key(it);
     ta_step_key key = ta_trace_lifecycle_key(actor);
-    if ((it->system->trace.kinds & TA_TRACE_BIT(TA_TRACE_FINISHED)) != 0) {
+    if (ta_trace_lifecycle_wanted(&it->system->trace, TA_TRACE_FINISHED)) {
         ta_trace_record record = ta_trace_record_now(it, TA_TRACE_FINISHED);
         record.key = key;
         record.cause = step;
@@ -3465,7 +3465,7 @@ static ta_result ta_interpreter_init(ta_interpreter *it, ta_system *system, ta_a
     it->trace_context = parent.context;
     it->trace_kinds = ta_trace_macrostep_kinds(&system->trace, &parent.context);
     it->trace_action = TA_ACTION_NONE;
-    uint32_t wanted = system->trace.kinds;
+    uint32_t wanted = ta_trace_any_kinds(&system->trace);
     if ((wanted & (TA_TRACE_BIT(TA_TRACE_MICROSTEP) | TA_TRACE_BIT(TA_TRACE_MACROSTEP_END))) != 0) {
         it->trace_states = ta_arena_alloc(&system->scratch, (3u * (size_t)definition->state_count + 1u) *
                                                                 sizeof(ta_state_id),

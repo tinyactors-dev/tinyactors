@@ -71,6 +71,9 @@ struct ta_system {
     ta_log_sink log_sink;
     /* Never null: ta_null_trace_sink() when the host installed none (ADR 0067). */
     ta_trace_sink trace;
+    /* The trace-ID generator's state and the sampler's threshold (ADR 0073). */
+    uint64_t trace_rng[4];
+    uint64_t trace_threshold;
     ta_atom scxml_io_type;
     /* The short form "scxml" also selects the built-in processor. */
     ta_atom scxml_io_alias;

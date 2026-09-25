@@ -79,9 +79,9 @@ TA_API uint64_t ta_system_new_span_id(ta_system *system);
 ### 3. A ratio sampler that agrees with other OpenTelemetry processes
 
 ```c
-TA_API uint64_t ta_trace_ratio_threshold(double ratio);
+TA_API uint64_t ta_trace_ratio_threshold(uint32_t parts, uint32_t whole);
 TA_API bool ta_trace_sampled_at(const ta_trace_context *context, uint64_t threshold);
-TA_API void ta_system_set_trace_ratio(ta_system *system, double ratio);
+TA_API void ta_system_set_trace_ratio(ta_system *system, uint32_t parts, uint32_t whole);
 ```
 
 - **The algorithm is OpenTelemetry's consistent probability sampling,**
@@ -91,7 +91,11 @@ TA_API void ta_system_set_trace_ratio(ta_system *system, double ratio);
   sampled when R ≥ T. So ratio 1 samples everything, ratio 0 nothing, and
   every process that uses the same ratio decides the same way for the same
   trace.
-- **A ratio outside 0..1 is clamped,** and NaN counts as 0.
+- **The ratio is a fraction, `parts` / `whole`,** so every host gets the
+  same threshold without floating point, computed exactly in 64-bit
+  arithmetic. `parts` above `whole` counts as 1, and a `whole` of 0 as 0.
+  A host with a floating-point ratio scales it, for example to parts per
+  10^9.
 - **The system's ratio decides only for traces it starts**
   (`ta_system_new_trace`). A parsed `traceparent` keeps its caller's
   decision (parent-based sampling). A host that wants to override that

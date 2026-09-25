@@ -194,6 +194,20 @@
       "value": 4294967295
     },
     {
+      "name": "TA_TRACE_DETAIL_WATCHED",
+      "type": {
+        "builtin": "uint8_t"
+      },
+      "value": 1
+    },
+    {
+      "name": "TA_TRACE_FLAG_RANDOM",
+      "type": {
+        "builtin": "uint8_t"
+      },
+      "value": 2
+    },
+    {
       "name": "TA_TRACE_FLAG_SAMPLED",
       "type": {
         "builtin": "uint8_t"
@@ -12444,6 +12458,72 @@
         }
       ]
     },
+    "ta_span_id_format_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "span_id",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "buffer",
+          "type": {
+            "pointer": {
+              "builtin": "char"
+            }
+          },
+          "capacity": "capacity",
+          "needed": "needed",
+          "shape": "buffer",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success"
+        },
+        {
+          "name": "capacity",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "capacity_of": "buffer"
+        },
+        {
+          "name": "needed",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "always",
+          "needed_of": "buffer"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "span_id": 0,
+            "buffer": 8,
+            "capacity": 16,
+            "needed": 24
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "span_id": 0,
+            "buffer": 8,
+            "capacity": 12,
+            "needed": 16
+          }
+        }
+      }
+    },
     "ta_spec_member": {
       "kind": "enum",
       "constants": [
@@ -13036,7 +13116,7 @@
     },
     "ta_trace_context": {
       "kind": "struct",
-      "doc": "A W3C trace context, which core copies and never creates or interprets: the trace-id is `trace_id_high` then `trace_id_low`, each big-endian, and all zero means none; `flags` are the trace-flags, of which core reads only TA_TRACE_FLAG_SAMPLED.",
+      "doc": "A W3C trace context: the trace-id is `trace_id_high` then `trace_id_low`, each big-endian, and all zero means none; `flags` are the W3C trace-flags. Core copies a context to everything a step produces, reads only its sampled flag and `detail`, and creates one only when a host asks (ta_system_new_trace, ADR 0073).\n\n`detail` is local, not W3C: it never appears in traceparent text, so it does not leave the process. TA_TRACE_DETAIL_WATCHED makes a sampled macrostep build the sink's `watched_kinds` instead of its `kinds`.",
       "fields": [
         {
           "name": "trace_id_high",
@@ -13055,6 +13135,12 @@
           "type": {
             "builtin": "uint8_t"
           }
+        },
+        {
+          "name": "detail",
+          "type": {
+            "builtin": "uint8_t"
+          }
         }
       ],
       "layout": {
@@ -13064,7 +13150,8 @@
           "offsets": {
             "trace_id_high": 0,
             "trace_id_low": 8,
-            "flags": 16
+            "flags": 16,
+            "detail": 17
           }
         },
         "wasm32-unknown-unknown": {
@@ -13073,7 +13160,74 @@
           "offsets": {
             "trace_id_high": 0,
             "trace_id_low": 8,
-            "flags": 16
+            "flags": 16,
+            "detail": 17
+          }
+        }
+      }
+    },
+    "ta_trace_id_format_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "context",
+          "type": {
+            "type": "ta_trace_context"
+          }
+        },
+        {
+          "name": "buffer",
+          "type": {
+            "pointer": {
+              "builtin": "char"
+            }
+          },
+          "capacity": "capacity",
+          "needed": "needed",
+          "shape": "buffer",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success"
+        },
+        {
+          "name": "capacity",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "capacity_of": "buffer"
+        },
+        {
+          "name": "needed",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "always",
+          "needed_of": "buffer"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "context": 0,
+            "buffer": 24,
+            "capacity": 32,
+            "needed": 40
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "context": 0,
+            "buffer": 24,
+            "capacity": 28,
+            "needed": 32
           }
         }
       }
@@ -13631,7 +13785,7 @@
     "ta_trace_sink": {
       "kind": "struct",
       "semantic": "adapter",
-      "doc": "`kinds` holds TA_TRACE_BIT(kind) for every kind the sink wants: core builds no other record. A macrostep whose context has a trace ID and a clear sampled flag builds none of its records either, unless `unsampled` is set; lifecycle records are not sampled.",
+      "doc": "Three masks of TA_TRACE_BIT(kind) (ADR 0073): core builds no record whose bit the macrostep's mask lacks. A macrostep picks its mask at MACROSTEP_BEGIN from its context: `kinds` when it has no trace ID or is sampled, `watched_kinds` when it is sampled and marked TA_TRACE_DETAIL_WATCHED, and `unsampled_kinds` when it is not sampled. Lifecycle records are outside macrosteps and are written when their bit is in `kinds` or `watched_kinds`.",
       "fields": [
         {
           "name": "self",
@@ -13661,31 +13815,39 @@
           }
         },
         {
-          "name": "unsampled",
+          "name": "watched_kinds",
           "type": {
-            "builtin": "bool"
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "unsampled_kinds",
+          "type": {
+            "builtin": "uint32_t"
           }
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 24,
+          "size": 32,
           "align": 8,
           "offsets": {
             "self": 0,
             "v": 8,
             "kinds": 16,
-            "unsampled": 20
+            "watched_kinds": 20,
+            "unsampled_kinds": 24
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 16,
+          "size": 20,
           "align": 4,
           "offsets": {
             "self": 0,
             "v": 4,
             "kinds": 8,
-            "unsampled": 12
+            "watched_kinds": 12,
+            "unsampled_kinds": 16
           }
         }
       }
@@ -13748,6 +13910,113 @@
           "align": 4,
           "offsets": {
             "write": 0
+          }
+        }
+      }
+    },
+    "ta_traceparent_format_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "parent",
+          "type": {
+            "type": "ta_trace_parent"
+          }
+        },
+        {
+          "name": "buffer",
+          "type": {
+            "pointer": {
+              "builtin": "char"
+            }
+          },
+          "capacity": "capacity",
+          "needed": "needed",
+          "shape": "buffer",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success"
+        },
+        {
+          "name": "capacity",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "capacity_of": "buffer"
+        },
+        {
+          "name": "needed",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "always",
+          "needed_of": "buffer"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 72,
+          "align": 8,
+          "offsets": {
+            "parent": 0,
+            "buffer": 48,
+            "capacity": 56,
+            "needed": 64
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "parent": 0,
+            "buffer": 48,
+            "capacity": 52,
+            "needed": 56
+          }
+        }
+      }
+    },
+    "ta_traceparent_parse_params": {
+      "kind": "struct",
+      "doc": "W3C `traceparent` text (ADR 0073): version-traceid-parentid-flags, in lowercase hex. Parsing ignores spaces and tabs around the text, rejects version ff, an all-zero trace ID or parent ID, and anything malformed (TA_ERR_INVALID), and reads a future version by its first 55 characters. The parent ID becomes a host cause: `session` 0 and `macrostep` holding the span ID (ADR 0067). `detail` is 0.",
+      "fields": [
+        {
+          "name": "text",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_trace_parent"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "text": 0,
+            "out": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 12,
+          "align": 4,
+          "offsets": {
+            "text": 0,
+            "out": 8
           }
         }
       }
@@ -14522,6 +14791,165 @@
           "name": "key",
           "type": {
             "type": "ta_step_key"
+          }
+        }
+      ]
+    },
+    {
+      "name": "ta_traceparent_parse",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_traceparent_parse_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_traceparent_format",
+      "doc": "Writes version 00, the context's trace ID, the span ID of the cause (ta_step_key_span_id) and the context's W3C flags, following the buffer convention (`*needed` is 56, NUL included; a too-small buffer yields TA_ERR_NOMEM). A parent with no trace ID or no cause is TA_ERR_INVALID.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_traceparent_format_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_trace_id_format",
+      "doc": "A trace ID as 32 lowercase hex digits (`*needed` is 33).",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_trace_id_format_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_span_id_format",
+      "doc": "A span ID as 16 lowercase hex digits (`*needed` is 17).",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_span_id_format_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_trace_ratio_threshold",
+      "doc": "OpenTelemetry's consistent probability sampling (ADR 0073): the randomness R is the trace ID's rightmost 56 bits, the threshold is T = round((1 - ratio) * 2^56), and a trace is sampled when R >= T. The ratio is `parts` / `whole`, so every host computes the same threshold without floating point; `parts` above `whole` counts as `whole`, and a `whole` of 0 as a ratio of 0.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "uint64_t"
+        }
+      },
+      "params": [
+        {
+          "name": "parts",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "whole",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        }
+      ]
+    },
+    {
+      "name": "ta_trace_sampled_at",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "bool"
+        }
+      },
+      "params": [
+        {
+          "name": "context",
+          "type": {
+            "pointer": {
+              "type": "ta_trace_context",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        },
+        {
+          "name": "threshold",
+          "type": {
+            "builtin": "uint64_t"
           }
         }
       ]
@@ -17263,6 +17691,120 @@
           "name": "sink",
           "type": {
             "type": "ta_trace_sink"
+          }
+        }
+      ]
+    },
+    {
+      "name": "ta_system_seed_trace_ids",
+      "doc": "The system's trace-ID generator (ADR 0073): xoshiro256** seeded through SplitMix64. Core never reads the OS: the host seeds each system once, from random bytes in production or a fixed value in tests, and a seed gives the same sequence on every host. An unseeded system uses seed 0.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "void"
+        }
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "seed",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        }
+      ]
+    },
+    {
+      "name": "ta_system_new_trace",
+      "doc": "A new trace: a random, never-zero trace ID with TA_TRACE_FLAG_RANDOM, and TA_TRACE_FLAG_SAMPLED when the system's ratio samples it. `detail` is 0.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_trace_context"
+        }
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_system_new_span_id",
+      "doc": "A random, never-zero span ID, for a host's own spans.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "uint64_t"
+        }
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_system_set_trace_ratio",
+      "doc": "The ratio ta_system_new_trace samples at, `parts` / `whole` (see ta_trace_ratio_threshold); 1 (every trace) by default.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "void"
+        }
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "parts",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "whole",
+          "type": {
+            "builtin": "uint32_t"
           }
         }
       ]

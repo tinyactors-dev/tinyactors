@@ -9,5 +9,6 @@ static void tna_trace_write(void *self, const ta_trace_record *record) {
 static const ta_trace_sink_vtable tna_trace_vtable = { .write = tna_trace_write };
 
 ta_trace_sink tna_trace_sink_adapter(tna_system *system, uint32_t kinds, bool unsampled) {
-    return (ta_trace_sink){ .self = system, .v = &tna_trace_vtable, .kinds = kinds, .unsampled = unsampled };
+    return (ta_trace_sink){ .self = system, .v = &tna_trace_vtable, .kinds = kinds, .watched_kinds = kinds,
+                            .unsampled_kinds = unsampled ? kinds : 0u };
 }

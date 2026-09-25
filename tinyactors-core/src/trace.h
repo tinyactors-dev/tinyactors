@@ -8,11 +8,6 @@
  * decides which ones are built at all.
  */
 
-/* The kinds written outside macrosteps, which sampling never removes. */
-#define TA_TRACE_LIFECYCLE                                                                                    \
-    (TA_TRACE_BIT(TA_TRACE_SPAWNED) | TA_TRACE_BIT(TA_TRACE_LOADED) | TA_TRACE_BIT(TA_TRACE_UNLOADED) |       \
-     TA_TRACE_BIT(TA_TRACE_FINISHED) | TA_TRACE_BIT(TA_TRACE_DESTROYED))
-
 static inline bool ta_trace_context_empty(const ta_trace_context *context) {
     return context->trace_id_high == 0 && context->trace_id_low == 0;
 }
@@ -23,11 +18,21 @@ static inline bool ta_trace_parent_empty(const ta_trace_parent *parent) {
 }
 
 /*
- * The kinds a macrostep under `context` builds: all the sink wants when the
- * context has no trace ID, is sampled, or the sink traces unsampled ones;
- * otherwise only lifecycle kinds (section 6).
+ * The kinds a macrostep under `context` builds (ADR 0073 section 4):
+ * `unsampled_kinds` when it has a trace ID that is not sampled, otherwise
+ * `watched_kinds` when it is marked watched, and `kinds` when not.
  */
 uint32_t ta_trace_macrostep_kinds(const ta_trace_sink *sink, const ta_trace_context *context);
+
+/* Whether the sink wants lifecycle record `kind` (ADR 0073 section 4). */
+static inline bool ta_trace_lifecycle_wanted(const ta_trace_sink *sink, ta_trace_kind kind) {
+    return ((sink->kinds | sink->watched_kinds) & TA_TRACE_BIT(kind)) != 0;
+}
+
+/* Every kind any macrostep may build: what scratch must be reserved for. */
+static inline uint32_t ta_trace_any_kinds(const ta_trace_sink *sink) {
+    return sink->kinds | sink->watched_kinds | sink->unsampled_kinds;
+}
 
 /* A record with every ID set to NONE and everything else zero. */
 ta_trace_record ta_trace_record_blank(ta_trace_kind kind);

@@ -332,13 +332,21 @@ typedef enum { TA_RUN_STABLE = 0, TA_RUN_PAUSED = 1, TA_RUN_DONE = 2, TA_RUN_ERR
  */
 typedef struct { uint64_t session; uint64_t macrostep; uint32_t microstep; } ta_step_key;
 /*
- * A W3C trace context, which core copies and never creates or interprets:
- * the trace-id is `trace_id_high` then `trace_id_low`, each big-endian, and
- * all zero means none; `flags` are the trace-flags, of which core reads only
- * TA_TRACE_FLAG_SAMPLED.
+ * A W3C trace context: the trace-id is `trace_id_high` then `trace_id_low`,
+ * each big-endian, and all zero means none; `flags` are the W3C
+ * trace-flags. Core copies a context to everything a step produces, reads
+ * only its sampled flag and `detail`, and creates one only when a host asks
+ * (ta_system_new_trace, ADR 0073).
+ *
+ * `detail` is local, not W3C: it never appears in traceparent text, so it
+ * does not leave the process. TA_TRACE_DETAIL_WATCHED makes a sampled
+ * macrostep build the sink's `watched_kinds` instead of its `kinds`.
  */
-typedef struct { uint64_t trace_id_high; uint64_t trace_id_low; uint8_t flags; } ta_trace_context;
-#define TA_TRACE_FLAG_SAMPLED ((uint8_t)1u)
+typedef struct { uint64_t trace_id_high; uint64_t trace_id_low; uint8_t flags; uint8_t detail; } ta_trace_context;
+#define TA_TRACE_FLAG_SAMPLED ((uint8_t)0x01u)
+/* W3C Trace Context Level 2: the trace ID's rightmost 56 bits are random. */
+#define TA_TRACE_FLAG_RANDOM ((uint8_t)0x02u)
+#define TA_TRACE_DETAIL_WATCHED ((uint8_t)0x01u)
 /*
  * What a step inherits from what caused it: the trace context, and the key
  * of the step that produced it. All zero is no parent.
@@ -350,6 +358,61 @@ typedef struct { ta_trace_context context; ta_step_key cause; } ta_trace_parent;
  * returns `macrostep`, the host's own span ID, unchanged.
  */
 TA_API uint64_t ta_step_key_span_id(ta_step_key key);
+
+/*
+ * W3C `traceparent` text (ADR 0073): version-traceid-parentid-flags, in
+ * lowercase hex. Parsing ignores spaces and tabs around the text, rejects
+ * version ff, an all-zero trace ID or parent ID, and anything malformed
+ * (TA_ERR_INVALID), and reads a future version by its first 55
+ * characters. The parent ID becomes a host cause: `session` 0 and
+ * `macrostep` holding the span ID (ADR 0067). `detail` is 0.
+ */
+typedef struct { ta_str text; TA_OUT ta_trace_parent *out; } ta_traceparent_parse_params;
+TA_API ta_result ta_traceparent_parse(TA_IN const ta_traceparent_parse_params *params);
+
+typedef struct {
+    ta_trace_parent parent;
+    TA_BUFFER(capacity, needed) TA_OPTIONAL char *buffer;
+    uint32_t capacity;
+    TA_OUT TA_ALWAYS uint32_t *needed;
+} ta_traceparent_format_params;
+
+/*
+ * Writes version 00, the context's trace ID, the span ID of the cause
+ * (ta_step_key_span_id) and the context's W3C flags, following the buffer
+ * convention (`*needed` is 56, NUL included; a too-small buffer yields
+ * TA_ERR_NOMEM). A parent with no trace ID or no cause is TA_ERR_INVALID.
+ */
+TA_API ta_result ta_traceparent_format(TA_IN const ta_traceparent_format_params *params);
+
+typedef struct {
+    ta_trace_context context;
+    TA_BUFFER(capacity, needed) TA_OPTIONAL char *buffer;
+    uint32_t capacity;
+    TA_OUT TA_ALWAYS uint32_t *needed;
+} ta_trace_id_format_params;
+/* A trace ID as 32 lowercase hex digits (`*needed` is 33). */
+TA_API ta_result ta_trace_id_format(TA_IN const ta_trace_id_format_params *params);
+
+typedef struct {
+    uint64_t span_id;
+    TA_BUFFER(capacity, needed) TA_OPTIONAL char *buffer;
+    uint32_t capacity;
+    TA_OUT TA_ALWAYS uint32_t *needed;
+} ta_span_id_format_params;
+/* A span ID as 16 lowercase hex digits (`*needed` is 17). */
+TA_API ta_result ta_span_id_format(TA_IN const ta_span_id_format_params *params);
+
+/*
+ * OpenTelemetry's consistent probability sampling (ADR 0073): the
+ * randomness R is the trace ID's rightmost 56 bits, the threshold is
+ * T = round((1 - ratio) * 2^56), and a trace is sampled when R >= T. The
+ * ratio is `parts` / `whole`, so every host computes the same threshold
+ * without floating point; `parts` above `whole` counts as `whole`, and a
+ * `whole` of 0 as a ratio of 0.
+ */
+TA_API uint64_t ta_trace_ratio_threshold(uint32_t parts, uint32_t whole);
+TA_API bool ta_trace_sampled_at(TA_IN const ta_trace_context *context, uint64_t threshold);
 
 
 typedef struct {
@@ -1032,16 +1095,20 @@ typedef struct ta_trace_sink_vtable {
 } ta_trace_sink_vtable TA_VTABLE;
 
 /*
- * `kinds` holds TA_TRACE_BIT(kind) for every kind the sink wants: core
- * builds no other record. A macrostep whose context has a trace ID and a
- * clear sampled flag builds none of its records either, unless `unsampled`
- * is set; lifecycle records are not sampled.
+ * Three masks of TA_TRACE_BIT(kind) (ADR 0073): core builds no record whose
+ * bit the macrostep's mask lacks. A macrostep picks its mask at
+ * MACROSTEP_BEGIN from its context: `kinds` when it has no trace ID or is
+ * sampled, `watched_kinds` when it is sampled and marked
+ * TA_TRACE_DETAIL_WATCHED, and `unsampled_kinds` when it is not sampled.
+ * Lifecycle records are outside macrosteps and are written when their bit
+ * is in `kinds` or `watched_kinds`.
  */
 typedef struct {
     void *self;
     const ta_trace_sink_vtable *v;
     uint32_t kinds;
-    bool unsampled;
+    uint32_t watched_kinds;
+    uint32_t unsampled_kinds;
 } ta_trace_sink TA_ADAPTER;
 
 /* The sink a system starts with: it wants nothing and writes nothing. */
@@ -2825,6 +2892,25 @@ TA_API ta_result ta_system_set_log_sink(ta_system *system, ta_log_sink sink);
  * TA_ERR_INVALID for a sink whose `v` or `v->write` is null.
  */
 TA_API ta_result ta_system_set_trace_sink(ta_system *system, ta_trace_sink sink);
+
+/*
+ * The system's trace-ID generator (ADR 0073): xoshiro256** seeded through
+ * SplitMix64. Core never reads the OS: the host seeds each system once,
+ * from random bytes in production or a fixed value in tests, and a seed
+ * gives the same sequence on every host. An unseeded system uses seed 0.
+ */
+TA_API void ta_system_seed_trace_ids(ta_system *system, uint64_t seed);
+/*
+ * A new trace: a random, never-zero trace ID with TA_TRACE_FLAG_RANDOM,
+ * and TA_TRACE_FLAG_SAMPLED when the system's ratio samples it. `detail`
+ * is 0.
+ */
+TA_API ta_trace_context ta_system_new_trace(ta_system *system);
+/* A random, never-zero span ID, for a host's own spans. */
+TA_API uint64_t ta_system_new_span_id(ta_system *system);
+/* The ratio ta_system_new_trace samples at, `parts` / `whole` (see
+ * ta_trace_ratio_threshold); 1 (every trace) by default. */
+TA_API void ta_system_set_trace_ratio(ta_system *system, uint32_t parts, uint32_t whole);
 TA_API ta_result ta_system_register_invoker(ta_system *system,
                                             ta_atom type,
                                             ta_invoker invoker);
