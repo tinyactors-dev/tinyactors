@@ -76,3 +76,4 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0070](0070-a-run-that-runs-out-of-memory-stops-where-it-stands.md) | [A run that runs out of memory stops where it stands](0070-a-run-that-runs-out-of-memory-stops-where-it-stands.md) |
 | [0071](0071-transitions-actions-and-expressions-are-inspectable-by-id.md) | [Transitions, actions and expressions are inspectable by ID](0071-transitions-actions-and-expressions-are-inspectable-by-id.md) |
 | [0072](0072-metrics-are-counters-core-keeps-logs-are-records-it-already-writes.md) | [Metrics are counters core keeps; logs are records it already writes](0072-metrics-are-counters-core-keeps-logs-are-records-it-already-writes.md) |
+| [0073](0073-core-builds-generates-and-samples-trace-contexts.md) | [Core builds, generates and samples trace contexts](0073-core-builds-generates-and-samples-trace-contexts.md) |
