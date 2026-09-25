@@ -3,7 +3,7 @@
 **Status:** Adopted → [core ADR 0069](../../tinyactors-core/docs/adr/0069-an-idle-actor-carries-no-event.md) (2026-09-24). The ADR decides the open questions below, and its implementation notes have the measurements on `main`.
 **Touches:** tinyactors-core (one ADR, refining ADR 0038, 0047, 0055, 0064 and 0067), tinyactors-napi (the result of deliver)
 **Not a plan:** nothing here is decided or scheduled. ADRs and roadmaps win.
-**Experiment:** branch `worktree-agent-ac40da141657c3d16` on `origin`,
+**Experiment:** branch `worktree-agent-ac40da141657c3d16` on `origin` (deleted 2026-09-25, after ADR 0069 was implemented),
 based on `1ff9d22`. It is not merged and is not meant to be; an ADR and
 a fresh implementation on `main` would replace it.
 

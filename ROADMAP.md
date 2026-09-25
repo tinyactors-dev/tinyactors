@@ -9,7 +9,7 @@ are in [`docs/proposals/`](docs/proposals/README.md).
   whether steps 1 and 2 land first, how the block cache is sized, and
   what `_event` is between macrosteps (keep the last event for invoked
   sessions, or declare the deviation). The experiment is on branch
-  `worktree-agent-ac40da141657c3d16`. Decide this before the tracing ADR,
+  `worktree-agent-ac40da141657c3d16` (deleted 2026-09-25). Decide this before the tracing ADR,
   because it moves where the trace parent is stored (ADR 0067 section 8).
   Done: [core ADR 0069](tinyactors-core/docs/adr/0069-an-idle-actor-carries-no-event.md).
 - [x] **Drive the tracing ADR to accepted and implemented.**
