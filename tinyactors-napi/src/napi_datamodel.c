@@ -835,6 +835,36 @@ static ta_op_status tna_dm_text_value(void *self, const ta_datamodel_text_value_
 }
 
 /* Literal content: JSON when it parses, otherwise the text (a string). */
+/*
+ * Content that is not JSON is a space-normalized string (SCXML B.2.2): runs
+ * of XML whitespace become one space, and none leads or trails.
+ * TA_OP_NOMEM when the copy cannot be allocated, which changes nothing.
+ */
+static ta_op_status tna_space_normalized(napi_env env, tna_values *values, ta_bytes content, napi_value *out) {
+    char *normal = tna_alloc(values->allocator, content.len == 0 ? 1u : content.len, 1);
+    if (normal == NULL) {
+        return TA_OP_NOMEM;
+    }
+    size_t length = 0;
+    bool space = false;
+    for (uint32_t at = 0; at < content.len; at += 1) {
+        char c = (char)content.ptr[at];
+        if (tna_space(c)) {
+            space = length != 0;
+            continue;
+        }
+        if (space) {
+            normal[length++] = ' ';
+            space = false;
+        }
+        normal[length++] = c;
+    }
+    napi_status status = napi_create_string_utf8(env, normal, length, out);
+    tna_free(values->allocator,
+             &(ta_allocator_free_params){ .ptr = normal, .size = content.len == 0 ? 1u : content.len, .alignment = 1 });
+    return status == napi_ok ? TA_OP_OK : TA_OP_ERROR;
+}
+
 static ta_op_status tna_dm_import_content(void *self, const ta_datamodel_import_content_params *params) {
     tna_frame frame;
     if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
@@ -857,9 +887,12 @@ static ta_op_status tna_dm_import_content(void *self, const ta_datamodel_import_
             if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
                 napi_get_and_clear_last_exception(env, &ignored);
             }
-            value = text;
+            status = tna_space_normalized(env, &frame.dm->wrapper->values, params->content, &value);
+            if (status == TA_OP_ERROR) {
+                status = tna_fail(&frame, "javascript: content is not text");
+            }
         }
-        if (!tna_value_make(&frame.dm->wrapper->values, value, params->out)) {
+        if (status == TA_OP_OK && !tna_value_make(&frame.dm->wrapper->values, value, params->out)) {
             status = tna_fail(&frame, "javascript: could not import content");
         }
     }

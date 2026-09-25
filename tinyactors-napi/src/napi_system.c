@@ -466,14 +466,74 @@ static napi_value tna_import_refusal(napi_env env, ta_result result, const tna_i
 }
 
 /*
- * importDefinition(bytes): decodes an SCXML document, compiles it against
- * the data model it names, and registers it (ADR 0019, core ADR 0076). The
- * definition ID as a bigint, or a refusal object { code, stage, message,
- * line, column, offset }.
+ * <data src> and <script src> fetched through JavaScript's resolve(src) (core
+ * ADR 0053): a string (UTF-8) or a Uint8Array, copied into the import's
+ * arena; undefined or null for a src it does not know. What it throws stays
+ * pending, and importDefinition rethrows it.
+ */
+typedef struct {
+    napi_env env;
+    napi_value resolve;
+} tna_src_resolver;
+
+static ta_result tna_fetch_src(void *self, ta_str src, ta_arena *arena, ta_bytes *out) {
+    tna_src_resolver *resolver = self;
+    napi_env env = resolver->env;
+    napi_value text = NULL;
+    napi_value result = NULL;
+    napi_value global = NULL;
+    if (napi_create_string_utf8(env, src.len == 0 ? "" : src.ptr, src.len, &text) != napi_ok ||
+        napi_get_global(env, &global) != napi_ok ||
+        napi_call_function(env, global, resolver->resolve, 1, &text, &result) != napi_ok) {
+        return TA_ERR_NOT_FOUND;
+    }
+    napi_valuetype type = napi_undefined;
+    bool typed = false;
+    if (napi_typeof(env, result, &type) != napi_ok || type == napi_undefined || type == napi_null) {
+        return TA_ERR_NOT_FOUND;
+    }
+    size_t length = 0;
+    if (type == napi_string) {
+        if (napi_get_value_string_utf8(env, result, NULL, 0, &length) != napi_ok || length > UINT32_MAX - 1u) {
+            return TA_ERR_NOT_FOUND;
+        }
+        char *copy = ta_arena_alloc(arena, length + 1u, 1);
+        if (copy == NULL) {
+            return TA_ERR_NOMEM;
+        }
+        napi_get_value_string_utf8(env, result, copy, length + 1u, &length);
+        *out = (ta_bytes){ .ptr = (const uint8_t *)copy, .len = (uint32_t)length };
+        return TA_OK;
+    }
+    napi_typedarray_type kind = napi_uint8_array;
+    void *data = NULL;
+    if (napi_is_typedarray(env, result, &typed) != napi_ok || !typed ||
+        napi_get_typedarray_info(env, result, &kind, &length, &data, NULL, NULL) != napi_ok ||
+        kind != napi_uint8_array || length > UINT32_MAX) {
+        napi_throw_type_error(env, NULL, "define(): resolve(src) must return a string, a Uint8Array or undefined");
+        return TA_ERR_NOT_FOUND;
+    }
+    uint8_t *copy = ta_arena_alloc(arena, length == 0 ? 1u : length, 1);
+    if (copy == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    memcpy(copy, data, length);
+    *out = (ta_bytes){ .ptr = copy, .len = (uint32_t)length };
+    return TA_OK;
+}
+
+static const ta_chart_src_resolver_vtable tna_src_resolver_vtable = { .fetch = tna_fetch_src };
+
+/*
+ * importDefinition(bytes, resolve?): decodes an SCXML document, compiles it
+ * against the data model it names, and registers it (ADR 0019, core ADR
+ * 0076); `resolve(src)` fetches <data src> and <script src>. The definition
+ * ID as a bigint, or a refusal object { code, stage, message, line, column,
+ * offset }.
  */
 static napi_value tna_import_definition_method(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value argv[1] = { NULL };
+    size_t argc = 2;
+    napi_value argv[2] = { NULL, NULL };
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
         return NULL;
     }
@@ -494,6 +554,11 @@ static napi_value tna_import_definition_method(napi_env env, napi_callback_info 
         kind != napi_uint8_array || length > UINT32_MAX) {
         return tna_throw(env, "invalid", "importDefinition: expected the document as a Uint8Array");
     }
+    tna_src_resolver fetcher = { .env = env, .resolve = NULL };
+    napi_valuetype resolve_type = napi_undefined;
+    if (argc >= 2 && napi_typeof(env, argv[1], &resolve_type) == napi_ok && resolve_type == napi_function) {
+        fetcher.resolve = argv[1];
+    }
     ta_datamodel choices[2u + TNA_DM_REGISTERED_MAX];
     uint32_t count = tna_js_datamodel_choices(&wrapper->dm, choices);
     ta_definition_id id = 0;
@@ -507,6 +572,11 @@ static napi_value tna_import_definition_method(napi_env env, napi_callback_info 
                                                     .datamodel_count = count,
                                                     .out = &id,
                                                     .failure = &failure,
+                                                    .resolver = fetcher.resolve == NULL
+                                                                    ? (ta_chart_src_resolver){ 0 }
+                                                                    : (ta_chart_src_resolver){
+                                                                          .self = &fetcher,
+                                                                          .v = &tna_src_resolver_vtable },
                                                 });
     system->inside_core = false;
     bool pending = false;

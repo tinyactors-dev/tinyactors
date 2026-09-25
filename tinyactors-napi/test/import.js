@@ -273,8 +273,56 @@ async function outOfMemory() {
   system.close();
 }
 
+// <data src> and <script src> go through define()'s resolve(src) (core ADR
+// 0053): a string or a Uint8Array is the content, undefined refuses the
+// document at the src, and what resolve throws comes out of define().
+// Content that is not JSON is a space-normalized string (SCXML B.2.2).
+async function dataSrc() {
+  const system = createSystem();
+  system.registerDatamodel('ecmascript', ecmascript);
+  const chart = (src) => `<scxml ${NS} name="sourced" datamodel="ecmascript">
+  <datamodel>
+    <data id="list" src="${src}"/>
+    <data id="text" src="text.txt"/>
+    <data id="inline">
+  this  is
+  a string
+</data>
+  </datamodel>
+  <state id="a"/>
+</scxml>`;
+  const files = { 'list.json': '[1, 2, 3]', 'text.txt': new TextEncoder().encode('\n spaced   out \n') };
+  const requested = [];
+  const definition = system.define(chart('list.json'), {
+    format: 'scxml',
+    resolve: (src) => { requested.push(src); return files[src]; },
+  });
+  assert.deepEqual(requested, ['list.json', 'text.txt'], 'each src is fetched once, when the document is defined');
+  const actor = system.spawn(definition);
+  await system.flush();
+  assert.deepEqual(actor.inspect().data.list, [1, 2, 3], 'JSON content is a value');
+  assert.equal(actor.inspect().data.text, 'spaced out', 'other content is space-normalized');
+  assert.equal(actor.inspect().data.inline, 'this is a string');
+
+  assertRefused(() => system.define(chart('missing.json'), { format: 'scxml', resolve: (src) => files[src] }),
+                'invalid', (error) => {
+                  assert.equal(error.detail.stage, 'decode');
+                  assert.ok(error.detail.line > 0, 'the refusal says where the src is');
+                });
+  assertRefused(() => system.define(chart('list.json'), { format: 'scxml' }), 'invalid',
+                (error) => assert.equal(error.detail.stage, 'decode'));
+  assert.throws(() => system.define(chart('list.json'), {
+    format: 'scxml',
+    resolve: () => { throw new Error('no disk'); },
+  }), /no disk/);
+  assert.throws(() => system.define(chart('list.json'), { format: 'scxml', resolve: () => 42 }), TypeError);
+  assertRefused(() => system.define(chart('list.json'), { format: 'scxml', resolve: 'list.json' }), 'invalid');
+  system.close();
+}
+
 (async () => {
   await roles();
+  await dataSrc();
   await sameAsBuilder();
   await refusals();
   await builtinNames();

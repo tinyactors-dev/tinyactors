@@ -707,6 +707,10 @@ class System {
    * `null`, `javascript`, or one registerDatamodel() registered; a document
    * without one gets `null`. A refusal says where in the document (ADR
    * 0058): `detail` has `stage`, `line`, `column` and `offset`.
+   * `options.resolve(src)` fetches `<data src>` and `<script src>` while the
+   * document is defined: it returns the content as a string or a
+   * Uint8Array, or undefined for a src it does not know, which refuses the
+   * document. Without it, any `src` is refused.
    */
   define(source, options = {}) {
     const limit = microstepLimitOption(options, 'define()');
@@ -715,7 +719,11 @@ class System {
       if (format !== 'scxml') {
         throw new TinyactorsError(`define(): unknown format ${JSON.stringify(format)}; expected "scxml"`, 'invalid');
       }
-      return this.#registered(this.#importSCXML(source), limit);
+      const resolve = options?.resolve;
+      if (resolve !== undefined && typeof resolve !== 'function') {
+        throw new TinyactorsError('define(): resolve must be a function of src', 'invalid');
+      }
+      return this.#registered(this.#importSCXML(source, resolve), limit);
     }
     let spec = source;
     if (source instanceof DefinitionBuilder) {
@@ -746,14 +754,14 @@ class System {
 
   // Decodes, compiles and registers an SCXML document; a refusal throws with
   // its position (core ADRs 0058 and 0076).
-  #importSCXML(source) {
+  #importSCXML(source, resolve) {
     let bytes = source;
     if (typeof source === 'string') {
       bytes = new TextEncoder().encode(source);
     } else if (!(source instanceof Uint8Array)) {
       throw new TinyactorsError('define(): an SCXML document is a string or a Uint8Array', 'invalid');
     }
-    const result = this.#native.importDefinition(bytes);
+    const result = this.#native.importDefinition(bytes, resolve);
     if (typeof result === 'bigint') {
       return result;
     }

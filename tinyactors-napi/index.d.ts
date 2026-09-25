@@ -190,7 +190,16 @@ export interface System {
    */
   define<Data extends object = Record<string, unknown>>(
     source: string | Uint8Array,
-    options: { format: "scxml" },
+    options: {
+      format: "scxml";
+      /**
+       * Fetches `<data src>` and `<script src>` while the document is
+       * defined: the content as a string or a Uint8Array, or undefined for a
+       * src it does not know, which refuses the document there.
+       */
+      resolve?: (src: string) => string | Uint8Array | undefined;
+      microstepLimit?: number;
+    },
   ): Definition<Data>;
 
   /**

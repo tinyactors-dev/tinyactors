@@ -53,6 +53,26 @@ Rules for compiled functions, as for builder functions:
   of memory (core ADR 0070), so conditions and values should have no side
   effects.
 
+## `<data src>` and `<script src>`
+
+The codec fetches nothing itself (core ADR 0053). Pass `resolve` and it is
+called, once per `src`, while the document is defined:
+
+```js
+const definition = system.define(xmlText, {
+  format: 'scxml',
+  resolve: (src) => files.get(src), // a string, a Uint8Array, or undefined
+});
+```
+
+A string or a `Uint8Array` is the content. `undefined` means the src is
+unknown, and the document is refused at the attribute; so is any `src`
+when there is no `resolve`. What `resolve` throws comes out of `define()`.
+
+Content, whether fetched or written inline, that is JSON becomes that
+value; any other content becomes a space-normalized string, as SCXML B.2.2
+says: runs of whitespace are one space, with none at either end.
+
 ## When a document is refused
 
 `define()` throws a `TinyactorsError` (`invalid`, or `unsupported` for a

@@ -30,13 +30,9 @@
   "test338": "napi has no invoker for SCXML child sessions (type http://www.w3.org/TR/scxml/)",
   "test347": "napi has no invoker for SCXML child sessions (type http://www.w3.org/TR/scxml/)",
   "test422": "napi has no invoker for SCXML child sessions (type http://www.w3.org/TR/scxml/)",
-  "test446": "define() takes no resolver for <data src> or <script src>",
   "test452": "not investigated yet: outcome fail",
   "test457": "not investigated yet: outcome fail",
   "test496": "not investigated yet: outcome fail",
   "test521": "not investigated yet: outcome fail",
-  "test530": "napi has no invoker for SCXML child sessions (type http://www.w3.org/TR/scxml/)",
-  "test552": "define() takes no resolver for <data src> or <script src>",
-  "test558": "define() takes no resolver for <data src> or <script src>",
-  "test562": "not investigated yet: outcome fail"
+  "test530": "napi has no invoker for SCXML child sessions (type http://www.w3.org/TR/scxml/)"
 }

@@ -34,6 +34,9 @@ typedef struct {
     ta_definition_id *out;
     /* Filled when the result is TA_ERR_INVALID or TA_ERR_UNSUPPORTED. */
     tna_import_failure *failure;
+    /* Fetches <data src> and <script src> (core ADR 0053); a null `v`
+     * refuses every src, as TA_CHART_ERROR_SRC_UNRESOLVED. */
+    ta_chart_src_resolver resolver;
 } tna_import_params;
 
 /*

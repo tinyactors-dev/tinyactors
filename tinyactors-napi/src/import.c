@@ -65,6 +65,7 @@ ta_result tna_import_scxml(tna_system *system, const tna_import_params *params) 
                                                     .codec = ta_scxml_codec_adapter(&codec),
                                                     .input = params->input,
                                                     .arena = &arena,
+                                                    .resolver = params->resolver,
                                                     .datamodels = params->datamodels,
                                                     .datamodel_count = params->datamodel_count,
                                                     .allocator = allocator,

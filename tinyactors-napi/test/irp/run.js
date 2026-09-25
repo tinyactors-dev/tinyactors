@@ -54,7 +54,8 @@ async function run(test) {
     system.registerDatamodel('ecmascript', ecmascript);
     let start;
     for (const chart of test.charts) {
-      const definition = system.define(chart.source, { format: 'scxml' });
+      // <data src> and <script src> resolve to the files the importer read.
+      const definition = system.define(chart.source, { format: 'scxml', resolve: (src) => chart.files?.[src] });
       if (chart.start) {
         start = definition;
       }
