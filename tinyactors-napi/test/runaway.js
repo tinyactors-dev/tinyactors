@@ -1,6 +1,6 @@
 'use strict';
 
-// Runaway macrosteps (core ADR 0074). An actor whose macrostep runs its
+// Runaway macrosteps (core ADR 0075). An actor whose macrostep runs its
 // microstep limit is quarantined with fault code `runaway`: the fault hook,
 // the faults metric and a WARN log say so. release() lets that macrostep
 // finish; the next one has the limit again. A definition can override the

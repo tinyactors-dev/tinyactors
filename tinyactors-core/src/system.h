@@ -77,7 +77,7 @@ struct ta_system {
     /* Every definition's counters, freed ones included (ADR 0072). */
     ta_counters counters;
     /* Microsteps one macrostep may run, for definitions that set none (ADR
-     * 0074); 0 for no limit. */
+     * 0075); 0 for no limit. */
     uint32_t microstep_limit;
     ta_atom scxml_io_type;
     /* The short form "scxml" also selects the built-in processor. */

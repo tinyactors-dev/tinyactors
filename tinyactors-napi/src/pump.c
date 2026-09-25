@@ -268,7 +268,7 @@ bool tna_pump_init(napi_env env, tna_napi_system *wrapper, napi_value facade, na
     tna_clock_kind clock = TNA_CLOCK_REALTIME;
     ta_time initial = 0;
     /* Microsteps one macrostep may run before its actor is quarantined as a
-     * runaway (core ADR 0074); 0 for no limit. */
+     * runaway (core ADR 0075); 0 for no limit. */
     uint32_t microstep_limit = TNA_DEFAULT_MICROSTEP_LIMIT;
     tna_turn_budgets *budgets = &wrapper->system->budgets;
     if (!tna_option(env, options, "scheduling", &scheduling) ||

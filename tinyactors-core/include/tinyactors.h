@@ -148,7 +148,7 @@ enum TA_CONSTANTS_OF(ta_result, "TA_") {
     TA_ERR_UNLOADED = -9,
     TA_ERR_STALE = -10,
     TA_ERR_DONE = -11,
-    /* The macrostep ran its microstep limit (ADR 0074); nothing changed. */
+    /* The macrostep ran its microstep limit (ADR 0075); nothing changed. */
     TA_ERR_RUNAWAY = -12
 };
 
@@ -1024,7 +1024,7 @@ typedef enum {
     TA_TRACE_IGNORED,           /* `event`: taken, and it enabled no transition */
     TA_TRACE_FORWARDED,         /* `invoke`, `event`: autoforwarded to that invocation; its cause is this record's key */
 
-    /* Runaway macrosteps (ADR 0074): `transitions` of the microstep that
+    /* Runaway macrosteps (ADR 0075): `transitions` of the microstep that
      * reached the count, and `states`, the configuration before it. */
     TA_TRACE_LONG_MACROSTEP,    /* the macrostep reached a tenth of its microstep limit */
     TA_TRACE_RUNAWAY            /* the macrostep reached its microstep limit; the run stops */
@@ -2303,7 +2303,7 @@ typedef struct {
     TA_OUT ta_run_status *status;
     uint32_t action_budget;
     /*
-     * True lifts the microstep limit (ADR 0074) for this call: a host sets
+     * True lifts the microstep limit (ADR 0075) for this call: a host sets
      * it for an actor an operator released after TA_ERR_RUNAWAY.
      */
     bool no_microstep_limit;
@@ -2957,18 +2957,18 @@ typedef struct {
     uint64_t invocations_ended;
     uint64_t runs_paused;          /* a budget ran out */
     uint64_t runs_stopped;         /* an allocation failed (ADR 0070) */
-    uint64_t macrosteps_long;      /* a macrostep reached a tenth of its microstep limit (ADR 0074) */
-    uint64_t runaways;             /* a macrostep reached its microstep limit (ADR 0074) */
+    uint64_t macrosteps_long;      /* a macrostep reached a tenth of its microstep limit (ADR 0075) */
+    uint64_t runaways;             /* a macrostep reached its microstep limit (ADR 0075) */
 } ta_counters;
 
 /*
  * The microsteps one macrostep may run before ta_actor_resume() answers
- * TA_ERR_RUNAWAY (ADR 0074), for definitions that set none of their own;
+ * TA_ERR_RUNAWAY (ADR 0075), for definitions that set none of their own;
  * 0 for no limit, the default. It applies from the next resume on.
  */
 TA_API void ta_system_set_microstep_limit(ta_system *system, uint32_t limit);
 /*
- * A definition's microstep limit (ADR 0074): 0 takes the system's,
+ * A definition's microstep limit (ADR 0075): 0 takes the system's,
  * TA_MICROSTEP_LIMIT_NONE is none. TA_ERR_NOT_FOUND for an unknown or freed
  * definition.
  */

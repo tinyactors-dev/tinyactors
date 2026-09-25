@@ -1413,7 +1413,7 @@ static bool tna_log_attributes(tna_otlp *otlp, const ta_trace_record *record) {
         ok = tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.action"), tna_action_name(otlp, record->definition, action)) &&
              tna_kv_int(buf, F_LOG_ATTRIBUTES, LIT("scxml.action.id"), (int64_t)action);
     }
-    /* A long or runaway macrostep (core ADR 0074): where the actor was, and
+    /* A long or runaway macrostep (core ADR 0075): where the actor was, and
      * the transition it was looping through. */
     if (ok && record->state_count != 0 && record->position.state == TA_STATE_NONE) {
         ok = tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.state"),
@@ -1510,7 +1510,7 @@ static bool tna_log_failure(tna_otlp *otlp, const ta_trace_record *record, uint6
         break;
     case TA_TRACE_LONG_MACROSTEP:
     case TA_TRACE_RUNAWAY: {
-        /* Core ADR 0074: how many microsteps, and through which transition. */
+        /* Core ADR 0075: how many microsteps, and through which transition. */
         bool runaway = record->kind == TA_TRACE_RUNAWAY;
         line.event_name = runaway ? LIT("tinyactors.actor.runaway") : LIT("tinyactors.macrostep.long");
         char digits[24];

@@ -313,7 +313,7 @@ struct ta_definition {
      * `occupancy` has `state_count` entries, from registration on. */
     ta_counters counters;
     uint32_t *occupancy;
-    /* The microstep limit (ADR 0074): 0 takes the system's,
+    /* The microstep limit (ADR 0075): 0 takes the system's,
      * TA_MICROSTEP_LIMIT_NONE is none. Bookkeeping, like the counters. */
     uint32_t microstep_limit;
     /* The system whose atoms and event names this definition uses. */

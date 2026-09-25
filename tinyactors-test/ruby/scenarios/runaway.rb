@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# Runaway macrosteps (ADR 0074). A macrostep that runs its microstep limit
+# Runaway macrosteps (ADR 0075). A macrostep that runs its microstep limit
 # stops between microsteps with err_runaway, and nothing about the actor
 # changes: it stays mid-macrostep and a later resume continues it. A tenth
 # of the way there it is recorded as long. The count is of microsteps, so a

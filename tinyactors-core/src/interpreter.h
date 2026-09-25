@@ -84,7 +84,7 @@ typedef struct {
     struct ta_trace_condition *conditions;
     uint32_t condition_count;
     uint32_t condition_capacity;
-    /* Microsteps the running macrostep may run (ADR 0074); 0 for no limit. */
+    /* Microsteps the running macrostep may run (ADR 0075); 0 for no limit. */
     uint32_t microstep_limit;
 } ta_interpreter;
 

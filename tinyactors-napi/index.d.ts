@@ -93,7 +93,7 @@ export interface SchedulingOptions {
   dueBudget?: number;
   /**
    * Microsteps one macrostep may run before its actor is quarantined with
-   * fault code `runaway` (core ADR 0074); 0 for no limit, default 100000. A
+   * fault code `runaway` (core ADR 0075); 0 for no limit, default 100000. A
    * tenth of it writes a `tinyactors.macrostep.long` log. `release()` lets a
    * runaway finish its macrostep; the next one has the limit again.
    */

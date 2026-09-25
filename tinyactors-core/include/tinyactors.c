@@ -1323,7 +1323,7 @@ struct ta_definition {
      * `occupancy` has `state_count` entries, from registration on. */
     ta_counters counters;
     uint32_t *occupancy;
-    /* The microstep limit (ADR 0074): 0 takes the system's,
+    /* The microstep limit (ADR 0075): 0 takes the system's,
      * TA_MICROSTEP_LIMIT_NONE is none. Bookkeeping, like the counters. */
     uint32_t microstep_limit;
     /* The system whose atoms and event names this definition uses. */
@@ -1796,7 +1796,7 @@ struct ta_system {
     /* Every definition's counters, freed ones included (ADR 0072). */
     ta_counters counters;
     /* Microsteps one macrostep may run, for definitions that set none (ADR
-     * 0074); 0 for no limit. */
+     * 0075); 0 for no limit. */
     uint32_t microstep_limit;
     ta_atom scxml_io_type;
     /* The short form "scxml" also selects the built-in processor. */
@@ -1932,7 +1932,7 @@ typedef struct {
     struct ta_trace_condition *conditions;
     uint32_t condition_count;
     uint32_t condition_capacity;
-    /* Microsteps the running macrostep may run (ADR 0074); 0 for no limit. */
+    /* Microsteps the running macrostep may run (ADR 0075); 0 for no limit. */
     uint32_t microstep_limit;
 } ta_interpreter;
 
@@ -13226,7 +13226,7 @@ static void ta_trace_microstep_record(ta_interpreter *it, const ta_event *event)
 
 /*
  * The microstep that reached a tenth of the limit, or the limit itself
- * (ADR 0074): a counter, and a record with its transitions and the
+ * (ADR 0075): a counter, and a record with its transitions and the
  * configuration before it. Counts move only here, on commit, so a retry
  * never counts twice.
  */
@@ -16540,7 +16540,7 @@ static ta_result ta_run(ta_interpreter *it, uint32_t budget, ta_run_status *stat
                                           .stage = TA_FINISH_EXIT };
         } else if (it->microstep_limit != 0 && actor->trace_begun && actor->trace_microstep >= it->microstep_limit) {
             /* Between microsteps, nothing open: the actor stays mid-macrostep
-             * and a later resume continues it (ADR 0074). */
+             * and a later resume continues it (ADR 0075). */
             *status = TA_RUN_ERROR;
             return TA_ERR_RUNAWAY;
         } else if (it->steps >= budget) {

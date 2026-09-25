@@ -2094,7 +2094,7 @@
           "type": {
             "builtin": "bool"
           },
-          "doc": "True lifts the microstep limit (ADR 0074) for this call: a host sets it for an actor an operator released after TA_ERR_RUNAWAY."
+          "doc": "True lifts the microstep limit (ADR 0075) for this call: a host sets it for an actor an operator released after TA_ERR_RUNAWAY."
         }
       ],
       "layout": {
@@ -4156,14 +4156,14 @@
           "type": {
             "builtin": "uint64_t"
           },
-          "doc": "a macrostep reached a tenth of its microstep limit (ADR 0074)"
+          "doc": "a macrostep reached a tenth of its microstep limit (ADR 0075)"
         },
         {
           "name": "runaways",
           "type": {
             "builtin": "uint64_t"
           },
-          "doc": "a macrostep reached its microstep limit (ADR 0074)"
+          "doc": "a macrostep reached its microstep limit (ADR 0075)"
         }
       ],
       "layout": {
@@ -10698,7 +10698,7 @@
           "name": "TA_ERR_RUNAWAY",
           "value": -12,
           "symbol": "err_runaway",
-          "doc": "The macrostep ran its microstep limit (ADR 0074); nothing changed."
+          "doc": "The macrostep ran its microstep limit (ADR 0075); nothing changed."
         }
       ],
       "doc": "======================================================================== Scalar handles, results, and plain data",
@@ -18067,7 +18067,7 @@
     },
     {
       "name": "ta_system_set_microstep_limit",
-      "doc": "The microsteps one macrostep may run before ta_actor_resume() answers TA_ERR_RUNAWAY (ADR 0074), for definitions that set none of their own; 0 for no limit, the default. It applies from the next resume on.",
+      "doc": "The microsteps one macrostep may run before ta_actor_resume() answers TA_ERR_RUNAWAY (ADR 0075), for definitions that set none of their own; 0 for no limit, the default. It applies from the next resume on.",
       "public": true,
       "static_inline": false,
       "implemented": true,

@@ -21,7 +21,7 @@ const { core } = native;
 // Compiles a spec in the generated shape. A refused chart throws with core's
 // compile error formatted into the message (ADR 0058), and the error itself,
 // with a readable path, as `detail`.
-/* Core's TA_MICROSTEP_LIMIT_NONE: this definition has no limit (ADR 0074). */
+/* Core's TA_MICROSTEP_LIMIT_NONE: this definition has no limit (ADR 0075). */
 const MICROSTEP_LIMIT_NONE = 0xffffffff;
 
 /* `options.microstepLimit`: undefined, or a count from 0 (none) up. */
@@ -619,7 +619,7 @@ class System {
    *
    * `options.microstepLimit` overrides the system's
    * `scheduling.microstepLimit` for this definition's actors (core ADR
-   * 0074): the microsteps one macrostep may run before its actor is
+   * 0075): the microsteps one macrostep may run before its actor is
    * quarantined as a runaway; 0 for no limit.
    */
   define(source, options = {}) {
