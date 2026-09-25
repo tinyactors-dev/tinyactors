@@ -173,6 +173,23 @@ export interface System {
     source: DefinitionSpec | DefinitionBuilder<Data>,
     options?: { microstepLimit?: number },
   ): Definition<Data>;
+  /**
+   * Import an SCXML document (napi ADR 0019): its `datamodel` attribute picks
+   * `null`, `javascript`, or a data model registerDatamodel() registered; a
+   * document without one gets `null`. A refused document throws `invalid`
+   * or `unsupported` with ImportRefusal as `detail`, which says where.
+   */
+  define<Data extends object = Record<string, unknown>>(
+    source: string | Uint8Array,
+    options: { format: "scxml" },
+  ): Definition<Data>;
+
+  /**
+   * Register a data model for imported documents (ADR 0019): `compile`
+   * turns each source expression into what a builder chart would pass, and
+   * the built-in data model runs it. `javascript` and `null` are reserved.
+   */
+  registerDatamodel(name: string, datamodel: DatamodelCompiler): void;
 
   /** The newest registered, unretired definition with this identity. */
   findDefinition(identity: DefinitionIdentity): Definition | undefined;
@@ -493,6 +510,35 @@ export interface SendResult {
 export interface DefinitionIdentity {
   readonly family: string;
   readonly revision: string | Uint8Array;
+}
+
+/** How the chart uses a source expression (core ADR 0074). */
+export type ExpressionRole = "value" | "condition" | "location" | "script";
+
+/**
+ * A data model for imported documents (napi ADR 0019). For "value",
+ * "condition" and "script", compile returns a function called with `this` =
+ * the data and one argument, the context; for "location", a data name or
+ * `{ get(context), set(value, context) }`. Throwing refuses the chart; an
+ * error with numeric `offset` and `length` points into `source`.
+ */
+export interface DatamodelCompiler {
+  compile(
+    source: string,
+    role: ExpressionRole,
+  ): ((this: any, context: any) => unknown) | string | { get(this: any, context: any): unknown; set(this: any, value: unknown, context: any): void };
+}
+
+/** Why define(xml, { format: "scxml" }) refused a document, as `detail`. */
+export interface ImportRefusal {
+  /** "decode": the document is not SCXML the codec reads; "compile": core refused the chart. */
+  readonly stage: "decode" | "compile";
+  readonly message: string;
+  /** Where in the document, 1-based, when the refusal names a place. */
+  readonly line?: number;
+  readonly column?: number;
+  /** The byte offset in the UTF-8 document. */
+  readonly offset?: number;
 }
 
 /** Core's compile error, attached as `detail` when define() refuses a chart. */

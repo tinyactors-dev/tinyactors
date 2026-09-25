@@ -27,6 +27,12 @@ module NapiCompile
   NATIVE = BUILD.join(SANITIZE ? 'native-asan' : 'native')
   CORE_DIR = ROOT.join('../tinyactors-core/include').expand_path
   CORE_SOURCE = CORE_DIR.join('tinyactors.c')
+  # The SCXML codec and the XML reader it runs on, linked into the addon so
+  # define() can import SCXML documents (napi ADR 0019). tinyxml's
+  # amalgamation is committed, like core's.
+  SCXML_DIR = ROOT.join('../tinyactors-scxml').expand_path
+  XML_DIR = ROOT.join('../tinyxml/include').expand_path
+  CODEC_SOURCES = [SCXML_DIR.join('src/ta_scxml.c'), XML_DIR.join('txml.c')].freeze
 
   module_function
 
@@ -60,6 +66,8 @@ module NapiCompile
       "-DTINYACTORS_NAPI_VERSION=\"#{version}\"",
       "-I#{node_include_dir}",
       "-I#{CORE_DIR}",
+      "-I#{SCXML_DIR.join('include')}",
+      "-I#{XML_DIR}",
       "-I#{ROOT.join('src')}"
     ]
   end
@@ -70,6 +78,7 @@ module NapiCompile
   def object_for(source)
     source = Pathname.new(source)
     return OBJECTS.join('core/tinyactors.o') if source == CORE_SOURCE
+    return OBJECTS.join('codec', source.basename.sub_ext('.o')) if CODEC_SOURCES.include?(source)
 
     OBJECTS.join(source.relative_path_from(ROOT).sub_ext('.o'))
   end
@@ -89,6 +98,8 @@ module NapiCompile
   end
 
   def core_object = objects([CORE_SOURCE]).first
+
+  def codec_objects = objects(CODEC_SOURCES)
 
   # Links `objects` into `output`, unless the same objects were linked the same
   # way last time and the output is still there.

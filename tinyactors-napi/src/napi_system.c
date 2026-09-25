@@ -5,6 +5,7 @@
 
 #include "enumerate.h"
 #include "events.h"
+#include "import.h"
 #include "napi_services.h"
 #include "napi_loads.h"
 #include "napi_trace.h"
@@ -400,6 +401,127 @@ static napi_value tna_select_datamodel_method(napi_env env, napi_callback_info i
     napi_value undefined = NULL;
     napi_get_undefined(env, &undefined);
     return undefined;
+}
+
+/*
+ * registerDatamodel(name, compile): a data model named `name` whose source
+ * expressions `compile(source, role)` turns into functions and locations
+ * (ADR 0019). lib/ checks the arguments and normalizes compile's results.
+ */
+static napi_value tna_register_datamodel_method(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2] = { NULL, NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    if (wrapper->system->inside_core) {
+        return tna_throw(env, "reentrant", "registerDatamodel: not from inside a core call (ADR 0013)");
+    }
+    char name[TNA_DM_NAME_MAX];
+    size_t length = 0;
+    napi_valuetype type = napi_undefined;
+    if (argc < 2 || napi_get_value_string_utf8(env, argv[0], name, sizeof name, &length) != napi_ok ||
+        napi_typeof(env, argv[1], &type) != napi_ok || type != napi_function) {
+        return tna_throw(env, "invalid", "registerDatamodel: expected a name and a compile function");
+    }
+    if (tna_js_datamodel_register(&wrapper->dm, (ta_str){ name, (uint32_t)length }, argv[1]) != TA_OK) {
+        return tna_throw(env, "invalid",
+                         "registerDatamodel: the name is taken, reserved (javascript, null), too long, "
+                         "or the system has no room for another data model");
+    }
+    napi_value undefined = NULL;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+}
+
+static napi_status tna_set_uint(napi_env env, napi_value object, const char *name, double value) {
+    napi_value number = NULL;
+    napi_status status = napi_create_double(env, value, &number);
+    return status == napi_ok ? napi_set_named_property(env, object, name, number) : status;
+}
+
+/* A refused import, as the plain object lib/ turns into a TinyactorsError. */
+static napi_value tna_import_refusal(napi_env env, ta_result result, const tna_import_failure *failure) {
+    napi_value refusal = NULL;
+    napi_value text = NULL;
+    napi_status status = napi_create_object(env, &refusal);
+    if (status == napi_ok) status = napi_create_string_utf8(env, result == TA_ERR_UNSUPPORTED ? "unsupported" : "invalid",
+                                                            NAPI_AUTO_LENGTH, &text);
+    if (status == napi_ok) status = napi_set_named_property(env, refusal, "code", text);
+    if (status == napi_ok) status = napi_create_string_utf8(env, failure->stage == TA_IMPORT_STAGE_DECODE ? "decode" : "compile",
+                                                            NAPI_AUTO_LENGTH, &text);
+    if (status == napi_ok) status = napi_set_named_property(env, refusal, "stage", text);
+    if (status == napi_ok) status = napi_create_string_utf8(env, failure->message, NAPI_AUTO_LENGTH, &text);
+    if (status == napi_ok) status = napi_set_named_property(env, refusal, "message", text);
+    if (status == napi_ok && failure->located) {
+        status = tna_set_uint(env, refusal, "line", failure->line);
+        if (status == napi_ok) status = tna_set_uint(env, refusal, "column", failure->column);
+        if (status == napi_ok) status = tna_set_uint(env, refusal, "offset", (double)failure->offset);
+    }
+    return status == napi_ok ? refusal : tna_throw(env, "out-of-memory", "importDefinition: cannot describe the refusal");
+}
+
+/*
+ * importDefinition(bytes): decodes an SCXML document, compiles it against
+ * the data model it names, and registers it (ADR 0019, core ADR 0074). The
+ * definition ID as a bigint, or a refusal object { code, stage, message,
+ * line, column, offset }.
+ */
+static napi_value tna_import_definition_method(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value argv[1] = { NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    tna_system *system = wrapper->system;
+    if (system->inside_core) {
+        return tna_throw(env, "reentrant", "define: not from inside a core call (ADR 0013)");
+    }
+    bool typed = false;
+    napi_typedarray_type kind = napi_uint8_array;
+    size_t length = 0;
+    void *data = NULL;
+    if (argc < 1 || napi_is_typedarray(env, argv[0], &typed) != napi_ok || !typed ||
+        napi_get_typedarray_info(env, argv[0], &kind, &length, &data, NULL, NULL) != napi_ok ||
+        kind != napi_uint8_array || length > UINT32_MAX) {
+        return tna_throw(env, "invalid", "importDefinition: expected the document as a Uint8Array");
+    }
+    ta_datamodel choices[2u + TNA_DM_REGISTERED_MAX];
+    uint32_t count = tna_js_datamodel_choices(&wrapper->dm, choices);
+    ta_definition_id id = 0;
+    tna_import_failure failure;
+    /* The compilers run inside this core call: one that calls back into the
+     * system gets `reentrant` (ADR 0019 section 3). */
+    system->inside_core = true;
+    ta_result result = tna_import_scxml(system, &(tna_import_params){
+                                                    .input = { .ptr = data, .len = (uint32_t)length },
+                                                    .datamodels = choices,
+                                                    .datamodel_count = count,
+                                                    .out = &id,
+                                                    .failure = &failure,
+                                                });
+    system->inside_core = false;
+    bool pending = false;
+    if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
+        return NULL;
+    }
+    if (result == TA_ERR_INVALID || result == TA_ERR_UNSUPPORTED) {
+        return tna_import_refusal(env, result, &failure);
+    }
+    if (result != TA_OK) {
+        return tna_throw(env, result == TA_ERR_NOMEM ? "out-of-memory" : "invalid", "importDefinition: the import failed");
+    }
+    napi_value value = NULL;
+    napi_create_bigint_uint64(env, id, &value);
+    return value;
 }
 
 /* scheduling(slot, generation): the actor's scheduling state, for tests and inspection. */
@@ -1039,6 +1161,8 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "release", NULL, tna_release_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "scheduling", NULL, tna_scheduling_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "selectDatamodel", NULL, tna_select_datamodel_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "registerDatamodel", NULL, tna_register_datamodel_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "importDefinition", NULL, tna_import_definition_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "internEvent", NULL, tna_intern_event_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "post", NULL, tna_post_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "postNamed", NULL, tna_post_named_method, NULL, NULL, NULL, napi_default_method, NULL },

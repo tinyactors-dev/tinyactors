@@ -1,0 +1,278 @@
+'use strict';
+
+// SCXML documents with a data model in JavaScript (ADR 0019, core ADR
+// 0074): registerDatamodel() compiles source text for the built-in data
+// model, and define(xml, { format: 'scxml' }) imports a document through the
+// SCXML codec. Runs on Node and Bun.
+
+const assert = require('node:assert/strict');
+const { nativeOf } = require('../lib/system');
+const { createSystem, statechart, TinyactorsError } = require('..');
+const { ecmascript } = require('../tools/ecmascript-datamodel');
+
+const NS = 'xmlns="http://www.w3.org/2005/07/scxml" version="1.0"';
+
+// A small compiler in the style of tools/ecmascript-datamodel.js, recording
+// what it was asked to compile.
+function recordingCompiler(calls) {
+  return {
+    compile(source, role) {
+      calls.push([source, role]);
+      if (role === 'location') {
+        return source.trim();
+      }
+      const body = role === 'script' ? source : `return (${source});`;
+      const run = new Function('context', `with (this) { ${body} }`);
+      return function (context) { return run.call(this, context); };
+    },
+  };
+}
+
+function assertRefused(fn, code, check) {
+  assert.throws(fn, (error) => {
+    assert.ok(error instanceof TinyactorsError, `expected TinyactorsError, got ${error}`);
+    assert.equal(error.code, code, error.message);
+    check?.(error);
+    return true;
+  });
+}
+
+// Each role, and compile called once per source expression at define time.
+async function roles() {
+  const system = createSystem();
+  const calls = [];
+  system.registerDatamodel('ecmascript', recordingCompiler(calls));
+  const xml = `<scxml ${NS} name="roles" datamodel="ecmascript">
+  <datamodel><data id="count" expr="0"/><data id="log" expr="[]"/></datamodel>
+  <state id="idle">
+    <onentry><script>log.push('entered')</script></onentry>
+    <transition event="inc" type="internal"><assign location="count" expr="count + 1"/></transition>
+    <transition event="check" cond="count &gt; 1" target="big"/>
+  </state>
+  <state id="big"/>
+</scxml>`;
+  const definition = system.define(xml, { format: 'scxml' });
+  assert.deepEqual(calls.map(([, role]) => role).sort(), ['condition', 'location', 'script', 'value', 'value', 'value'].sort());
+  assert.equal(new Set(calls.map(([source]) => source)).size, calls.length, 'compile runs once per expression');
+  assert.equal(definition.inspect().datamodel, 'ecmascript');
+  const actor = system.spawn(definition);
+  await system.flush();
+  actor.post('inc');
+  actor.post('inc');
+  actor.post('check');
+  await system.flush();
+  assert.deepEqual(actor.inspect().data, { count: 2, log: ['entered'] });
+  assert.deepEqual(actor.inspect().activeStates, ['big']);
+  assert.equal(calls.length, 6, 'nothing is compiled after define');
+  system.close();
+}
+
+// An imported chart and the same chart built with statechart() behave alike.
+async function sameAsBuilder() {
+  const system = createSystem();
+  system.registerDatamodel('ecmascript', ecmascript);
+  const imported = system.define(`<scxml ${NS} name="twin" datamodel="ecmascript">
+  <datamodel><data id="n" expr="10"/></datamodel>
+  <state id="a">
+    <transition event="add" type="internal"><assign location="n" expr="n + _event.data"/></transition>
+    <transition event="go" cond="n &gt;= 15" target="b"/>
+  </state>
+  <state id="b"/>
+</scxml>`, { format: 'scxml' });
+  const built = system.define(
+    statechart({ family: 'twin-builder', revision: 'v1' })
+      .data('n', 10)
+      .state('a', (s) => {
+        s.on('add', (t) => t.assign('n', function ({ event }) { return this.n + event.data; }));
+        s.on('go', (t) => t.when(({ data }) => data.n >= 15).target('b'));
+      })
+      .state('b'),
+  );
+  const results = [];
+  for (const definition of [imported, built]) {
+    const actor = system.spawn(definition);
+    await system.flush();
+    actor.post('go');
+    actor.post('add', 3);
+    actor.post('go');
+    actor.post('add', 4);
+    actor.post('go');
+    await system.flush();
+    results.push({ data: actor.inspect().data, states: actor.inspect().activeStates });
+  }
+  assert.deepEqual(results[0], results[1]);
+  assert.deepEqual(results[0], { data: { n: 17 }, states: ['b'] });
+  system.close();
+}
+
+// Refusals: where in the document, and why.
+async function refusals() {
+  const system = createSystem();
+  system.registerDatamodel('ecmascript', {
+    compile(source, role) {
+      const at = source.indexOf('@');
+      if (at >= 0) {
+        throw Object.assign(new SyntaxError('no @ here'), { offset: at, length: 1 });
+      }
+      return role === 'location' ? source : () => true;
+    },
+  });
+  const document = (expr) => `<scxml ${NS} name="refused" datamodel="ecmascript">
+  <datamodel><data id="x" expr="${expr}"/></datamodel>
+  <state id="a"/>
+</scxml>`;
+  const source = document('1 + @');
+  assertRefused(() => system.define(source, { format: 'scxml' }), 'invalid', (error) => {
+    assert.equal(error.detail.stage, 'compile');
+    assert.match(error.message, /no @ here/);
+    assert.equal(error.detail.line, 2, error.message);
+    const expected = source.split('\n')[1].indexOf('@') + 1;
+    assert.equal(error.detail.column, expected, 'the offset points into the attribute');
+  });
+  // A data model nobody registered: the attribute is named, with its place.
+  assertRefused(() => system.define(document('1').replace('"ecmascript"', '"xpath"'), { format: 'scxml' }), 'unsupported',
+    (error) => {
+      assert.match(error.message, /xpath/);
+      assert.equal(error.detail.line, 1);
+    });
+  // Malformed XML is a decode refusal.
+  assertRefused(() => system.define('<scxml', { format: 'scxml' }), 'invalid', (error) => {
+    assert.equal(error.detail.stage, 'decode');
+  });
+  // What compile() returns is checked for its role.
+  const strict = createSystem();
+  strict.registerDatamodel('ecmascript', { compile: () => 42 });
+  assertRefused(() => strict.define(document('1'), { format: 'scxml' }), 'invalid', (error) => {
+    assert.match(error.message, /must return a function/);
+  });
+  strict.close();
+  // Names napi owns, and a name registered twice.
+  assert.throws(() => system.registerDatamodel('javascript', { compile() {} }), /registerDatamodel/);
+  assert.throws(() => system.registerDatamodel('null', { compile() {} }), /registerDatamodel/);
+  assert.throws(() => system.registerDatamodel('ecmascript', { compile() {} }), /registerDatamodel/);
+  assert.throws(() => system.define('<scxml/>', { format: 'yaml' }), /unknown format/);
+  system.close();
+}
+
+// A document without a datamodel attribute gets core's null data model, and
+// the built-in model is available by its own name.
+async function builtinNames() {
+  const system = createSystem();
+  const plain = system.define(`<scxml ${NS} name="plain"><state id="a"/></scxml>`, { format: 'scxml' });
+  assert.equal(plain.inspect().datamodel, 'null');
+  const js = system.define(`<scxml ${NS} name="js" datamodel="javascript">
+  <datamodel><data id="n"/></datamodel>
+  <state id="a"><transition event="e" cond="In('a')" target="b"/></state><state id="b"/>
+</scxml>`, { format: 'scxml' });
+  assert.equal(js.inspect().datamodel, 'javascript');
+  const actor = system.spawn(js);
+  await system.flush();
+  actor.post('e');
+  await system.flush();
+  assert.deepEqual(actor.inspect().activeStates, ['b']);
+  system.close();
+}
+
+// Compiled functions follow the builder's rules (ADR 0013): calling core is
+// reentrant, posting works; compile() itself cannot call the system.
+async function reentrancy() {
+  const system = createSystem();
+  const probe = system.define(statechart({ family: 'probe', revision: 'v1' })
+    .state('idle', (s) => s.on('hi', (t) => t.target('greeted'))).state('greeted'));
+  const target = system.spawn(probe);
+  system.registerDatamodel('ecmascript', {
+    compile(source, role) {
+      if (source === 'defineAgain()') {
+        system.define(`<scxml ${NS} name="nested"><state id="a"/></scxml>`, { format: 'scxml' });
+      }
+      return ecmascript.compile(source, role);
+    },
+  });
+  globalThis.__tinyactorsImportProbe = { system, target, probe };
+  const actor = system.spawn(system.define(`<scxml ${NS} name="calls" datamodel="ecmascript">
+  <datamodel><data id="code" expr="null"/><data id="error" expr="null"/></datamodel>
+  <state id="a">
+    <transition event="core" type="internal"><script>
+      try { globalThis.__tinyactorsImportProbe.system.spawn(globalThis.__tinyactorsImportProbe.probe); }
+      catch (error) { code = error.code; }
+    </script></transition>
+    <transition event="post" type="internal"><script>globalThis.__tinyactorsImportProbe.target.post('hi')</script></transition>
+    <transition event="error.execution" type="internal"><assign location="error" expr="String(_event.data &amp;&amp; _event.data.message)"/></transition>
+  </state>
+</scxml>`, { format: 'scxml' }));
+  await system.flush();
+  // Interning a new event name is a core call, so it is interned before the
+  // compiled script posts it, as for builder charts (a dead letter, here).
+  system.post({ family: 'nobody', name: 'here' }, 'hi');
+  actor.post('core');
+  actor.post('post');
+  await system.flush();
+  assert.equal(actor.inspect().data.code, 'reentrant');
+  assert.deepEqual(target.inspect().activeStates, ['greeted'], 'a compiled script can post');
+  assertRefused(() => system.define(`<scxml ${NS} name="inner" datamodel="ecmascript">
+  <datamodel><data id="x" expr="defineAgain()"/></datamodel><state id="a"/>
+</scxml>`, { format: 'scxml' }), 'invalid', (error) => assert.match(error.message, /reentrant|core call/));
+  delete globalThis.__tinyactorsImportProbe;
+  system.close();
+}
+
+// When memory runs out, a compiled expression's chart behaves as the same
+// chart built with statechart(): the built-in data model decides what to
+// report, not the compiler (ADR 0019 section 3, core ADR 0070). Here a
+// <send> computes a new, very long event name; turning it into text for core
+// is an allocation the data model makes, which fails as error.execution for
+// both charts, and succeeds for both once memory is back.
+async function outOfMemory() {
+  const system = createSystem();
+  const segment = 'x'.repeat(200_000);
+  globalThis.__tinyactorsImportName = () => `long.${segment}`;
+  system.registerDatamodel('ecmascript', ecmascript);
+  const imported = system.define(`<scxml ${NS} name="memory" datamodel="ecmascript">
+  <datamodel><data id="seen" expr="0"/><data id="errors" expr="0"/></datamodel>
+  <state id="a">
+    <transition event="go" type="internal"><send eventexpr="globalThis.__tinyactorsImportName()" target="#_internal"/></transition>
+    <transition event="long" type="internal"><assign location="seen" expr="seen + 1"/></transition>
+    <transition event="error.execution" type="internal"><assign location="errors" expr="errors + 1"/></transition>
+  </state>
+</scxml>`, { format: 'scxml' });
+  const built = system.define(
+    statechart({ family: 'memory-builder', revision: 'v1' })
+      .data('seen', 0)
+      .data('errors', 0)
+      .state('a', (s) => {
+        s.on('go', (t) => t.send(() => globalThis.__tinyactorsImportName(), (m) => m.to('#_internal')));
+        s.on('long', (t) => t.assign('seen', function () { return this.seen + 1; }));
+        s.on('error.execution', (t) => t.assign('errors', function () { return this.errors + 1; }));
+      }),
+  );
+  const native = nativeOf(system);
+  const results = [];
+  for (const definition of [imported, built]) {
+    const actor = system.spawn(definition);
+    await system.flush();
+    actor.post('go');
+    native.refuseAllocationsFrom(100_000);
+    await system.flush();
+    native.refuseAllocationsFrom(0);
+    actor.post('go');
+    await system.flush();
+    results.push(actor.inspect().data);
+  }
+  assert.deepEqual(results[0], results[1]);
+  assert.deepEqual(results[0], { seen: 1, errors: 1 });
+  delete globalThis.__tinyactorsImportName;
+  system.close();
+}
+
+(async () => {
+  await roles();
+  await sameAsBuilder();
+  await refusals();
+  await builtinNames();
+  await reentrancy();
+  await outOfMemory();
+  console.log('import.js passed');
+})().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

@@ -13,7 +13,7 @@ require_relative '../lib/compile'
 # any other source that does fails this task instead of losing its tests.
 root = NapiCompile::ROOT
 plumbing, _node_api = NapiCompile.partition_node_api(NapiCompile.sources)
-shared = plumbing + [NapiCompile.core_object]
+shared = plumbing + [NapiCompile.core_object] + NapiCompile.codec_objects
 
 tests = Cache.files('test/native/*_test.c')
 abort 'tinyactors-napi: no native tests found' if tests.empty?

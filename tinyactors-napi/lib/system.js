@@ -58,6 +58,36 @@ function compile(system, spec) {
   }
 }
 
+// What a registered compiler returned, in the shape the built-in data model
+// runs (ADR 0019): a function for a value, a condition or a script, and a
+// { get, set } location for a location. A data name as a location reads and
+// assigns that name, and assigning a name the data does not have fails as
+// the built-in model's own data names do.
+function normalizeCompiled(made, role) {
+  if (role !== 'location') {
+    if (typeof made !== 'function') {
+      throw new TypeError(`compile() must return a function for a ${role}`);
+    }
+    return made;
+  }
+  if (typeof made === 'string') {
+    const name = made;
+    return {
+      get() { return this[name]; },
+      set(value) {
+        if (!Object.hasOwn(this, name)) {
+          throw new TypeError(`assignment to an undeclared data name: ${name}`);
+        }
+        this[name] = value;
+      },
+    };
+  }
+  if (made === null || typeof made !== 'object' || typeof made.get !== 'function' || typeof made.set !== 'function') {
+    throw new TypeError('compile() must return a data name or { get, set } for a location');
+  }
+  return made;
+}
+
 // `states[0].transitions[1].condition`, from core's path elements.
 function pathText(path) {
   const noIndex = 4294967295;
@@ -624,6 +654,31 @@ class System {
   }
 
   /**
+   * Register a data model for imported documents (ADR 0019): `compile(source,
+   * role)` turns each source expression of a document whose `datamodel` is
+   * `name` into what a builder chart would pass. For the roles `value`,
+   * `condition` and `script` that is a function called with `this` = the
+   * data and one argument, the context; for `location` it is a data name or
+   * `{ get(context), set(value, context) }`. Throwing refuses the chart; an
+   * error with numeric `offset` and `length` points into the source. The
+   * built-in data model runs what it returns, so storage, <foreach>,
+   * <param>, <content> and wire JSON behave as for builder charts.
+   * `javascript` and `null` are napi's own names. Register before the first
+   * define() that uses it. lib/ ships no expression compiler: running
+   * expression text is the caller's choice (tools/ecmascript-datamodel.js is
+   * an example).
+   */
+  registerDatamodel(name, { compile } = {}) {
+    if (typeof name !== 'string' || name === '') {
+      throw new TinyactorsError('registerDatamodel(): expected a data model name', 'invalid');
+    }
+    if (typeof compile !== 'function') {
+      throw new TinyactorsError('registerDatamodel(): expected { compile(source, role) }', 'invalid');
+    }
+    this.#native.registerDatamodel(name, (source, role) => normalizeCompiled(compile(source, role), role));
+  }
+
+  /**
    * Compile and register a chart: a statechart() builder, or a spec in the
    * generated shape (the shape core's definition export returns). A chart
    * with data, a script, or a JavaScript function, literal() or location
@@ -635,9 +690,22 @@ class System {
    * `scheduling.microstepLimit` for this definition's actors (core ADR
    * 0075): the microsteps one macrostep may run before its actor is
    * quarantined as a runaway; 0 for no limit.
+   *
+   * With `{ format: 'scxml' }`, `source` is an SCXML document (a string or
+   * a Uint8Array of UTF-8). Its `datamodel` attribute picks the data model:
+   * `null`, `javascript`, or one registerDatamodel() registered; a document
+   * without one gets `null`. A refusal says where in the document (ADR
+   * 0058): `detail` has `stage`, `line`, `column` and `offset`.
    */
   define(source, options = {}) {
     const limit = microstepLimitOption(options, 'define()');
+    const format = options?.format;
+    if (format !== undefined) {
+      if (format !== 'scxml') {
+        throw new TinyactorsError(`define(): unknown format ${JSON.stringify(format)}; expected "scxml"`, 'invalid');
+      }
+      return this.#registered(this.#importSCXML(source), limit);
+    }
     let spec = source;
     if (source instanceof DefinitionBuilder) {
       spec = source.build();
@@ -647,7 +715,12 @@ class System {
     const datamodel = spec.datamodel ?? (needsJavaScript(spec) ? 'javascript' : 'null');
     this.#native.selectDatamodel(datamodel === 'null' ? 'null' : 'javascript');
     const compiled = compile(this.#native, spec);
-    const id = core.system_register_definition(this.#native, compiled.out);
+    return this.#registered(core.system_register_definition(this.#native, compiled.out), limit);
+  }
+
+  // A registered definition's facade, with its microstep limit when one is
+  // given, and what the system tracks about it.
+  #registered(id, limit) {
     if (limit !== undefined) {
       core.definition_set_microstep_limit(this.#native, id, limit === 0 ? MICROSTEP_LIMIT_NONE : limit);
     }
@@ -658,6 +731,29 @@ class System {
       this.#applyWatches();
     }
     return definition;
+  }
+
+  // Decodes, compiles and registers an SCXML document; a refusal throws with
+  // its position (core ADRs 0058 and 0074).
+  #importSCXML(source) {
+    let bytes = source;
+    if (typeof source === 'string') {
+      bytes = new TextEncoder().encode(source);
+    } else if (!(source instanceof Uint8Array)) {
+      throw new TinyactorsError('define(): an SCXML document is a string or a Uint8Array', 'invalid');
+    }
+    const result = this.#native.importDefinition(bytes);
+    if (typeof result === 'bigint') {
+      return result;
+    }
+    const where = result.line === undefined ? '' : ` at line ${result.line}, column ${result.column}`;
+    throw new TinyactorsError(`chart refused${where}: ${result.message}`, result.code, {
+      stage: result.stage,
+      message: result.message,
+      line: result.line,
+      column: result.column,
+      offset: result.offset,
+    });
   }
 
   /**
@@ -1313,11 +1409,13 @@ class System {
     return options.binding !== undefined ? options.binding : image.data;
   }
 
-  // True when the definition runs the JavaScript data model; cached.
+  // True when the definition runs the JavaScript data model, under its own
+  // name or a registered one (ADR 0019): every data model napi offers but
+  // core's null one is the built-in model. Cached.
   #usesJavaScript(definitionID) {
     let javascript = this.#javascript.get(definitionID);
     if (javascript === undefined) {
-      javascript = core.definition_inspect(this.#native, definitionID).datamodel === 'javascript';
+      javascript = core.definition_inspect(this.#native, definitionID).datamodel !== 'null';
       this.#javascript.set(definitionID, javascript);
     }
     return javascript;

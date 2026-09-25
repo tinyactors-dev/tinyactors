@@ -46,7 +46,28 @@ typedef enum {
     TNA_EXPR_LOCATION      /* { get, set } */
 } tna_expr_kind;
 
-typedef struct tna_js_datamodel {
+typedef struct tna_js_datamodel tna_js_datamodel;
+
+/* At most this many data models registered per system (ADR 0019), and the
+ * longest name one may have. */
+#define TNA_DM_REGISTERED_MAX 8u
+#define TNA_DM_NAME_MAX 32u
+
+/*
+ * One data model as core sees it: the built-in operations under a name. The
+ * built-in model ("javascript") compiles nothing; a registered one (ADR 0019)
+ * holds the user's compiler, and its prepare_definition turns every source
+ * expression into a host expression by calling it. Every operation reaches
+ * the one shared tna_js_datamodel through `dm`.
+ */
+typedef struct {
+    tna_js_datamodel *dm;
+    napi_ref compile; /* NULL for the built-in model */
+    ta_datamodel_vtable vtable;
+    char name[TNA_DM_NAME_MAX];
+} tna_dm_adapter;
+
+struct tna_js_datamodel {
     tna_napi_system *wrapper;
     napi_env env;
     napi_ref context;     /* the evaluation context object */
@@ -70,12 +91,32 @@ typedef struct tna_js_datamodel {
      * against the null data model.
      */
     bool select_javascript;
-} tna_js_datamodel;
+    tna_dm_adapter builtin;
+    tna_dm_adapter registered[TNA_DM_REGISTERED_MAX];
+    uint32_t registered_count;
+    /* A compiler's refusal message, which core copies before it next calls
+     * the data model (ta_expression_rejection). */
+    char rejection[TA_COMPILE_ERROR_MESSAGE_MAX];
+};
 
 /* Builds the context object; false when it cannot be made. */
 bool tna_js_datamodel_init(tna_js_datamodel *dm, tna_napi_system *wrapper, napi_env env);
 void tna_js_datamodel_close(tna_js_datamodel *dm, bool refs_usable);
 ta_datamodel tna_js_datamodel_adapter(tna_js_datamodel *dm);
+
+/*
+ * Registers `compile` as the compiler of a data model named `name` (ADR
+ * 0019). TA_ERR_INVALID for "javascript", "null", a name already registered,
+ * a name longer than TNA_DM_NAME_MAX - 1, or a full table.
+ */
+ta_result tna_js_datamodel_register(tna_js_datamodel *dm, ta_str name, napi_value compile);
+/*
+ * The data models an imported document may choose from, in the order
+ * ta_definition_import takes them: core's null data model first (a document
+ * with no `datamodel` attribute gets it), then "javascript", then every
+ * registered one. `out` has room for 2 + TNA_DM_REGISTERED_MAX.
+ */
+uint32_t tna_js_datamodel_choices(tna_js_datamodel *dm, ta_datamodel *out);
 
 /*
  * A host expression for `value` of `kind`, with one reference the caller

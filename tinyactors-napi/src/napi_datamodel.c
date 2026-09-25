@@ -95,6 +95,12 @@ bool tna_expression_is_literal(napi_env env, napi_value value) {
     return has;
 }
 
+/* The shared data model behind an adapter (tna_dm_adapter): every
+ * operation's `self`. */
+static tna_js_datamodel *tna_dm_of(void *self) {
+    return ((tna_dm_adapter *)self)->dm;
+}
+
 /* ------------------------------------------------------------------------
  * Source text: `In(state)` and data names only.
  */
@@ -158,6 +164,12 @@ static tna_source_kind tna_source(ta_str source, ta_str *argument) {
 typedef struct {
     tna_js_datamodel *dm;
     const ta_expression *expressions;
+    /*
+     * A registered data model's compiled expressions, by expression ID: a
+     * host expression each (ADR 0019). NULL for the built-in model, which
+     * reads `expressions` as they are.
+     */
+    ta_expression *compiled;
     uint32_t count;
 } tna_dm_shared;
 
@@ -168,9 +180,170 @@ typedef struct {
 static const char tna_source_refused[] =
     "the JavaScript data model takes functions; source text is only In(state) or a data name";
 
-static ta_result tna_dm_prepare(void *self, const ta_datamodel_prepare_definition_params *params) {
-    tna_js_datamodel *dm = self;
+static const char *const tna_role_names[] = { "value", "condition", "location", "script" };
+
+static void tna_release_compiled(ta_expression *compiled, uint32_t count, ta_allocator allocator) {
+    if (compiled == NULL) {
+        return;
+    }
+    for (uint32_t index = 0; index < count; index += 1) {
+        tna_expression_release(&compiled[index]);
+    }
+    tna_free(allocator, &(ta_allocator_free_params){ .ptr = compiled,
+                                                    .size = (size_t)count * sizeof(ta_expression),
+                                                    .alignment = _Alignof(ta_expression) });
+}
+
+/* A number property of `object`, when it has one. */
+static bool tna_number_property(napi_env env, napi_value object, const char *name, uint32_t *out) {
+    napi_value value = NULL;
+    napi_valuetype type = napi_undefined;
+    double number = 0;
+    if (napi_get_named_property(env, object, name, &value) != napi_ok || napi_typeof(env, value, &type) != napi_ok ||
+        type != napi_number || napi_get_value_double(env, value, &number) != napi_ok || !(number >= 0) ||
+        number > 4294967295.0) {
+        return false;
+    }
+    *out = (uint32_t)number;
+    return true;
+}
+
+/*
+ * The refusal of expression `index`: the thrown value's message, and the
+ * span of the source it names when it has numeric `offset` and `length`
+ * (ADR 0019 section 1). The message is kept in `dm->rejection`, which core
+ * copies before it next calls the data model.
+ */
+static void tna_compile_refused(tna_js_datamodel *dm, const ta_datamodel_prepare_definition_params *params,
+                                uint32_t index, const char *fallback) {
+    napi_env env = dm->env;
+    napi_value error = NULL;
+    bool pending = false;
+    size_t length = 0;
+    uint32_t offset = 0;
+    uint32_t span = 0;
+    bool located = false;
+    dm->rejection[0] = '\0';
+    if (napi_is_exception_pending(env, &pending) == napi_ok && pending &&
+        napi_get_and_clear_last_exception(env, &error) == napi_ok && error != NULL) {
+        napi_valuetype type = napi_undefined;
+        napi_value message = NULL;
+        if (napi_typeof(env, error, &type) == napi_ok && type == napi_object) {
+            located = tna_number_property(env, error, "offset", &offset) && tna_number_property(env, error, "length", &span);
+            if (napi_get_named_property(env, error, "message", &message) != napi_ok) {
+                message = NULL;
+            }
+        } else {
+            message = error;
+        }
+        napi_value text = NULL;
+        if (message != NULL && napi_coerce_to_string(env, message, &text) == napi_ok) {
+            napi_get_value_string_utf8(env, text, dm->rejection, sizeof dm->rejection, &length);
+        } else {
+            napi_get_and_clear_last_exception(env, &error);
+        }
+    }
+    if (length == 0) {
+        length = strlen(fallback);
+        if (length >= sizeof dm->rejection) {
+            length = sizeof dm->rejection - 1u;
+        }
+        memcpy(dm->rejection, fallback, length);
+        dm->rejection[length] = '\0';
+    }
+    if (params->rejected != NULL) {
+        *params->rejected = (ta_expression_rejection){
+            .expression = index,
+            .offset = located ? offset : 0,
+            .length = located ? span : 0,
+            .message = { dm->rejection, (uint32_t)length },
+        };
+    }
+}
+
+/*
+ * A registered data model compiles every source expression with the user's
+ * compiler (ADR 0019): compile(source, role) returns a function for a value,
+ * a condition or a script, and a { get, set } location for a location. lib/
+ * normalizes a data name into a location before the result gets here.
+ */
+static ta_result tna_compile_all(tna_dm_adapter *adapter, const ta_datamodel_prepare_definition_params *params,
+                                 ta_expression **out) {
+    tna_js_datamodel *dm = adapter->dm;
+    napi_env env = dm->env;
+    *out = NULL;
+    if (params->expression_count == 0) {
+        return TA_OK;
+    }
+    if (!dm->js_usable) {
+        return TA_ERR_UNSUPPORTED;
+    }
+    ta_expression *compiled = tna_alloc(params->allocator, (size_t)params->expression_count * sizeof(ta_expression),
+                                        _Alignof(ta_expression));
+    if (compiled == NULL) {
+        return TA_ERR_NOMEM;
+    }
     for (uint32_t index = 0; index < params->expression_count; index += 1) {
+        compiled[index] = (ta_expression){ .kind = TA_EXPRESSION_NONE };
+    }
+    napi_handle_scope scope = NULL;
+    if (napi_open_handle_scope(env, &scope) != napi_ok) {
+        tna_release_compiled(compiled, params->expression_count, params->allocator);
+        return TA_ERR_NOMEM;
+    }
+    napi_value compile = NULL;
+    napi_value undefined = NULL;
+    ta_result result = napi_get_reference_value(env, adapter->compile, &compile) == napi_ok && compile != NULL &&
+                               napi_get_undefined(env, &undefined) == napi_ok
+                           ? TA_OK
+                           : TA_ERR_NOMEM;
+    for (uint32_t index = 0; result == TA_OK && index < params->expression_count; index += 1) {
+        const ta_expression *expression = &params->expressions[index];
+        if (expression->kind != TA_EXPRESSION_SOURCE) {
+            continue;
+        }
+        ta_expr_role role = params->roles != NULL ? params->roles[index] : TA_EXPR_ROLE_VALUE;
+        napi_value argv[2] = { NULL, NULL };
+        napi_value made = NULL;
+        napi_valuetype type = napi_undefined;
+        if (napi_create_string_utf8(env, expression->as.source.ptr, expression->as.source.len, &argv[0]) != napi_ok ||
+            napi_create_string_utf8(env, tna_role_names[role <= TA_EXPR_ROLE_SCRIPT ? role : 0], NAPI_AUTO_LENGTH,
+                                    &argv[1]) != napi_ok) {
+            result = TA_ERR_NOMEM;
+        } else if (napi_call_function(env, undefined, compile, 2, argv, &made) != napi_ok) {
+            tna_compile_refused(dm, params, index, "the compiler refused this expression");
+            result = TA_ERR_INVALID;
+        } else if (napi_typeof(env, made, &type) != napi_ok ||
+                   (role == TA_EXPR_ROLE_LOCATION ? type != napi_object : type != napi_function)) {
+            tna_compile_refused(dm, params, index,
+                                role == TA_EXPR_ROLE_LOCATION ? "compile() must return a { get, set } location here"
+                                                              : "compile() must return a function here");
+            result = TA_ERR_INVALID;
+        } else if (!tna_expression_make(dm, made, role == TA_EXPR_ROLE_LOCATION ? TNA_EXPR_LOCATION : TNA_EXPR_FUNCTION,
+                                        &compiled[index])) {
+            result = TA_ERR_NOMEM;
+        }
+    }
+    napi_close_handle_scope(env, scope);
+    if (result != TA_OK) {
+        tna_release_compiled(compiled, params->expression_count, params->allocator);
+        return result;
+    }
+    *out = compiled;
+    return TA_OK;
+}
+
+static ta_result tna_dm_prepare(void *self, const ta_datamodel_prepare_definition_params *params) {
+    tna_dm_adapter *adapter = self;
+    tna_js_datamodel *dm = adapter->dm;
+    ta_expression *compiled = NULL;
+    if (adapter->compile != NULL) {
+        ta_result result = tna_compile_all(adapter, params, &compiled);
+        if (result != TA_OK) {
+            return result;
+        }
+    }
+    for (uint32_t index = 0; compiled == NULL && index < params->expression_count; index += 1) {
         const ta_expression *expression = &params->expressions[index];
         ta_str argument = { NULL, 0 };
         bool refused = false;
@@ -191,9 +364,12 @@ static ta_result tna_dm_prepare(void *self, const ta_datamodel_prepare_definitio
     }
     tna_dm_shared *shared = tna_alloc(params->allocator, sizeof *shared, _Alignof(tna_dm_shared));
     if (shared == NULL) {
+        tna_release_compiled(compiled, params->expression_count, params->allocator);
         return TA_ERR_NOMEM;
     }
-    *shared = (tna_dm_shared){ .dm = dm, .expressions = params->expressions, .count = params->expression_count };
+    *shared = (tna_dm_shared){
+        .dm = dm, .expressions = params->expressions, .compiled = compiled, .count = params->expression_count
+    };
     *params->shared = shared;
     return TA_OK;
 }
@@ -201,6 +377,8 @@ static ta_result tna_dm_prepare(void *self, const ta_datamodel_prepare_definitio
 static void tna_dm_destroy_definition(void *self, void *shared, ta_allocator allocator) {
     (void)self;
     if (shared != NULL) {
+        tna_dm_shared *data = shared;
+        tna_release_compiled(data->compiled, data->count, allocator);
         tna_free(allocator,
                  &(ta_allocator_free_params){ .ptr = shared, .size = sizeof(tna_dm_shared), .alignment = _Alignof(tna_dm_shared) });
     }
@@ -321,8 +499,15 @@ static bool tna_invoke(tna_frame *frame, napi_value function, size_t argc, const
     return tna_js_call(frame, root, function, argc + 1u, argv, result);
 }
 
+/* Expression `id` as the data model runs it: compiled when it was (ADR 0019). */
 static const ta_expression *tna_expression(const tna_dm_shared *shared, ta_expr_id id) {
-    return shared == NULL || id >= shared->count ? NULL : &shared->expressions[id];
+    if (shared == NULL || id >= shared->count) {
+        return NULL;
+    }
+    if (shared->compiled != NULL && shared->compiled[id].kind == TA_EXPRESSION_HOST) {
+        return &shared->compiled[id];
+    }
+    return &shared->expressions[id];
 }
 
 static bool tna_named_property(tna_frame *frame, ta_str name, napi_value *key) {
@@ -388,7 +573,7 @@ static bool tna_evaluate(tna_frame *frame, const tna_dm_shared *shared, ta_expr_
  */
 
 static ta_result tna_dm_init_instance(void *self, const ta_datamodel_init_instance_params *params) {
-    tna_js_datamodel *dm = self;
+    tna_js_datamodel *dm = tna_dm_of(self);
     tna_dm_instance *instance = params->instance;
     *instance = (tna_dm_instance){ .root = { NULL, NULL } };
     if (params->binding != NULL && params->binding->v != NULL) {
@@ -419,7 +604,7 @@ static void tna_dm_destroy_instance(void *self, void *shared, void *instance) {
 
 static ta_op_status tna_dm_declare(void *self, const ta_datamodel_declare_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, self, params->instance, params->host, params->fault)) {
+    if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
     napi_env env = frame.dm->env;
@@ -444,7 +629,7 @@ static ta_op_status tna_dm_declare(void *self, const ta_datamodel_declare_params
 
 static ta_op_status tna_dm_set_named(void *self, const ta_datamodel_set_named_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, self, params->instance, params->host, params->fault)) {
+    if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
     napi_env env = frame.dm->env;
@@ -464,7 +649,7 @@ static ta_op_status tna_dm_set_named(void *self, const ta_datamodel_set_named_pa
 
 static ta_op_status tna_dm_eval_condition(void *self, const ta_datamodel_eval_condition_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, self, params->instance, params->host, params->fault)) {
+    if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
     napi_value value = NULL;
@@ -481,7 +666,7 @@ static ta_op_status tna_dm_eval_condition(void *self, const ta_datamodel_eval_co
 
 static ta_op_status tna_dm_eval_value(void *self, const ta_datamodel_eval_value_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, self, params->instance, params->host, params->fault)) {
+    if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
     napi_value value = NULL;
@@ -497,7 +682,7 @@ static ta_op_status tna_dm_eval_value(void *self, const ta_datamodel_eval_value_
 
 static ta_op_status tna_dm_read_location(void *self, const ta_datamodel_read_location_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, self, params->instance, params->host, params->fault)) {
+    if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
     const ta_expression *expression = tna_expression(params->shared, params->location);
@@ -521,7 +706,7 @@ static ta_op_status tna_dm_read_location(void *self, const ta_datamodel_read_loc
 
 static ta_op_status tna_dm_assign(void *self, const ta_datamodel_assign_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, self, params->instance, params->host, params->fault)) {
+    if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
     napi_env env = frame.dm->env;
@@ -561,7 +746,7 @@ static ta_op_status tna_dm_assign(void *self, const ta_datamodel_assign_params *
 
 static ta_op_status tna_dm_execute_script(void *self, const ta_datamodel_execute_script_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, self, params->instance, params->host, params->fault)) {
+    if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
     const ta_expression *expression = tna_expression(params->shared, params->script);
@@ -579,7 +764,7 @@ static ta_op_status tna_dm_execute_script(void *self, const ta_datamodel_execute
 
 static ta_op_status tna_dm_make_params(void *self, const ta_datamodel_make_params_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, self, params->instance, params->host, params->fault)) {
+    if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
     napi_env env = frame.dm->env;
@@ -614,7 +799,7 @@ static ta_result tna_dm_inspect(void *self, const ta_datamodel_inspect_params *p
 }
 
 static ta_op_status tna_dm_value_text(void *self, const ta_datamodel_value_text_params *params) {
-    tna_js_datamodel *dm = self;
+    tna_js_datamodel *dm = tna_dm_of(self);
     if (!tna_value_ours(params->value)) {
         *params->fault = (ta_fault){ .code = TA_ERR_UNSUPPORTED,
                                      .message = { "javascript: not a JavaScript value", 34 } };
@@ -633,7 +818,7 @@ static ta_op_status tna_dm_value_text(void *self, const ta_datamodel_value_text_
 
 static ta_op_status tna_dm_text_value(void *self, const ta_datamodel_text_value_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, self, params->instance, params->host, params->fault)) {
+    if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
     napi_value text = NULL;
@@ -649,7 +834,7 @@ static ta_op_status tna_dm_text_value(void *self, const ta_datamodel_text_value_
 /* Literal content: JSON when it parses, otherwise the text (a string). */
 static ta_op_status tna_dm_import_content(void *self, const ta_datamodel_import_content_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, self, params->instance, params->host, params->fault)) {
+    if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
     napi_env env = frame.dm->env;
@@ -681,7 +866,7 @@ static ta_op_status tna_dm_import_content(void *self, const ta_datamodel_import_
 
 static ta_op_status tna_dm_foreach_snapshot(void *self, const ta_datamodel_foreach_snapshot_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, self, params->instance, params->host, params->fault)) {
+    if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
     napi_env env = frame.dm->env;
@@ -712,7 +897,7 @@ static ta_op_status tna_dm_foreach_snapshot(void *self, const ta_datamodel_forea
 
 static ta_op_status tna_dm_foreach_bind(void *self, const ta_datamodel_foreach_bind_params *params) {
     tna_frame frame;
-    if (!tna_begin(&frame, self, params->instance, params->host, params->fault)) {
+    if (!tna_begin(&frame, tna_dm_of(self), params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
     napi_env env = frame.dm->env;
@@ -761,7 +946,44 @@ static const ta_datamodel_vtable tna_dm_vtable = {
 };
 
 ta_datamodel tna_js_datamodel_adapter(tna_js_datamodel *dm) {
-    return (ta_datamodel){ .self = dm, .v = &tna_dm_vtable };
+    return (ta_datamodel){ .self = &dm->builtin, .v = &dm->builtin.vtable };
+}
+
+static void tna_adapter_init(tna_dm_adapter *adapter, tna_js_datamodel *dm, ta_str name) {
+    *adapter = (tna_dm_adapter){ .dm = dm, .vtable = tna_dm_vtable };
+    memcpy(adapter->name, name.ptr, name.len);
+    adapter->name[name.len] = '\0';
+    adapter->vtable.name = (ta_str){ adapter->name, name.len };
+}
+
+ta_result tna_js_datamodel_register(tna_js_datamodel *dm, ta_str name, napi_value compile) {
+    if (name.len == 0 || name.len >= TNA_DM_NAME_MAX || dm->registered_count >= TNA_DM_REGISTERED_MAX ||
+        (name.len == 10 && memcmp(name.ptr, "javascript", 10) == 0) || (name.len == 4 && memcmp(name.ptr, "null", 4) == 0)) {
+        return TA_ERR_INVALID;
+    }
+    for (uint32_t index = 0; index < dm->registered_count; index += 1) {
+        const tna_dm_adapter *other = &dm->registered[index];
+        if (other->vtable.name.len == name.len && memcmp(other->name, name.ptr, name.len) == 0) {
+            return TA_ERR_INVALID;
+        }
+    }
+    tna_dm_adapter *adapter = &dm->registered[dm->registered_count];
+    tna_adapter_init(adapter, dm, name);
+    if (napi_create_reference(dm->env, compile, 1, &adapter->compile) != napi_ok) {
+        return TA_ERR_NOMEM;
+    }
+    dm->registered_count += 1u;
+    return TA_OK;
+}
+
+uint32_t tna_js_datamodel_choices(tna_js_datamodel *dm, ta_datamodel *out) {
+    uint32_t count = 0;
+    out[count++] = ta_null_datamodel();
+    out[count++] = tna_js_datamodel_adapter(dm);
+    for (uint32_t index = 0; index < dm->registered_count; index += 1) {
+        out[count++] = (ta_datamodel){ .self = &dm->registered[index], .v = &dm->registered[index].vtable };
+    }
+    return count;
 }
 
 /* ------------------------------------------------------------------------
@@ -953,6 +1175,7 @@ static bool tna_global_function(napi_env env, const char *object_name, const cha
 
 bool tna_js_datamodel_init(tna_js_datamodel *dm, tna_napi_system *wrapper, napi_env env) {
     *dm = (tna_js_datamodel){ .wrapper = wrapper, .env = env, .js_usable = true };
+    tna_adapter_init(&dm->builtin, dm, (ta_str){ "javascript", 10 });
     napi_value context = NULL;
     napi_property_descriptor properties[] = {
         { "data", NULL, NULL, tna_get_data, NULL, NULL, napi_enumerable, dm },
@@ -976,5 +1199,12 @@ void tna_js_datamodel_close(tna_js_datamodel *dm, bool refs_usable) {
             napi_delete_reference(dm->env, *refs[at]);
         }
         *refs[at] = NULL;
+    }
+    /* The compilers go with the system (ADR 0019 section 3). */
+    for (uint32_t index = 0; index < dm->registered_count; index += 1) {
+        if (dm->registered[index].compile != NULL && refs_usable) {
+            napi_delete_reference(dm->env, dm->registered[index].compile);
+        }
+        dm->registered[index].compile = NULL;
     }
 }

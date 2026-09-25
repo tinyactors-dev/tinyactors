@@ -8,6 +8,6 @@ require_relative '../lib/compile'
 # Every src/**/*.c, compiled together with the core amalgamation (ROADMAP
 # step 1). Objects are cached one by one; the link runs only when an object or
 # the link command changed.
-objects = NapiCompile.objects(NapiCompile.sources) + [NapiCompile.core_object]
+objects = NapiCompile.objects(NapiCompile.sources) + [NapiCompile.core_object] + NapiCompile.codec_objects
 NapiCompile.link(objects, NapiCompile::BUILD.join('tinyactors_napi.node'),
                  flags: NapiCompile.addon_link_flags)
