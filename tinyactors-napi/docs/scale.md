@@ -339,3 +339,48 @@ event. These rows replace the ones above; the others stand.
   remaining 20 to 60 ns is `ta_actor_inspect` on every delivery and the
   full-detail spans of the watched actors.
 
+## 2026-09-25: the core findings of steps 7, 10 and 13
+
+The three core findings above were measured again, with core's allocator
+calls per delivered event after warm-up (1,000 actors, five rounds), on
+Node 22.
+
+| Chart | Core allocator calls per event |
+|---|---|
+| an `<assign>` | 0 |
+| a top-level `<final>` (`plain`, with its external self-transition) | 0 |
+| a `<send>` to another actor | 0 |
+| a `<send>` to `#_internal` | 0 |
+| a `<raise>` | 0 |
+| a delayed `<send>` re-armed with `<cancel>` | 0 |
+| a timeout re-armed on entry and cancelled on exit (`ws`) | 0 |
+
+- **Steps 7 and 10 were already fixed** by other work. The top-level
+  `<final>` cost came from reserving an actor's sparse state before every
+  microstep of such a chart (`microstep_needs_sparse`), which core ADR 0070
+  removed. `test/allocations.js` now pins every row above on Node and Bun,
+  and `scale.js` asserts core's steady-state calls are zero, as it did for
+  the addon's.
+- **One way to see calls per event is an error path.** A `<send>` that
+  fails after its storage was reserved (a delayed send to `#_internal`,
+  for example) reserves the actor's sparse state and send storage, raises
+  `error.execution`, and frees both when the macrostep ends: three
+  allocations and three frees per event. That is the cost of a chart that
+  fails on every event, not of a working one, so it is left as it is.
+  `test/allocations.js` checks that its charts raise no errors, so it
+  cannot pass on such a path.
+- **Step 13: the owner heap is paged** (`84dfd0a`), in pages of 8,192
+  owners (64 KiB) found through a directory, as core ADR 0063 pages the
+  actor table. `ws` at 50,000, 200,000 and a million actors now reports a
+  largest block of 65,536 B, where it was 512 KiB, 2 MiB and 8 MiB, and
+  `scale.js` holds it flat.
+- **The long spawns were not the heap copy.** An A/B of the re-arm shape on
+  the same machine and load (about 3) gives the same cost per event in both
+  builds (636 to 645 ns against 613 to 643 at 200,000 actors; 645 against
+  692 at a million), and a longest single spawn call of 2 to 6 ms in both.
+  `ws` in `scale.js` at a million actors: longest spawn 6.8 ms on Node and
+  9.3 ms on Bun with the paged heap, against 6.1 ms (Node) recorded above.
+  The step 13 note that blamed the doubling copy for the long spawns was
+  wrong for Node; the spikes are most likely GC or page faults, as the note
+  on `plain` already suspected. Bun at 4M (40.6 ms above) was not measured
+  again.

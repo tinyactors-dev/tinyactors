@@ -753,14 +753,15 @@ Open (ADR 0017's implementation notes, follow-up of 2026-09-25, and ADR
 
 ## Open follow-ups
 
-**Core findings** (measured in `scale.js`, recorded in `docs/scale.md`; each
-needs a core change):
-- every executed `<send>` makes one allocation and one free in core
-  (step 7);
-- a chart with a top-level `<final>` makes core allocate and free once per
-  delivered message (step 10);
-- the delayed-send owner heap grows by doubling, so with one timeout per
-  actor one spawn copies up to 32 MiB at 4M actors (step 13).
+**Core findings** (measured in `scale.js`, recorded in `docs/scale.md`):
+- ~~every executed `<send>` makes one allocation and one free in core
+  (step 7)~~ and ~~a chart with a top-level `<final>` makes core allocate
+  and free once per delivered message (step 10)~~: both gone, fixed on the
+  way by core ADRs 0069 and 0070. `test/allocations.js` and `scale.js` now
+  assert zero core allocator calls per event after warm-up;
+- ~~the delayed-send owner heap grows by doubling~~: paged like the actor
+  table (`84dfd0a`), so core's largest block stays 64 KiB at every
+  population.
 
 **SCXML conformance gaps** (found while checking the spec for the
 [distributed systems proposal](../docs/proposals/distributed-systems.md)):
