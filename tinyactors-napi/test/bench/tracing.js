@@ -30,7 +30,7 @@
 // - summary 10% and summary 1%: the default detail, sampled at that ratio;
 // - full + values: every record, with event data and values as attributes;
 // - watch N: nothing sampled, and N actors watched in full (by session;
-//   watchTraces takes at most 1024), which is what turning tracing on for a
+//   watchTraces has no limit), which is what turning tracing on for a
 //   few actors at 3am costs. WATCH (default 1000) sets N;
 // - summary, no logs: the default detail with the log output switched off.
 // For comparison, napi ADR 0016 measured before it (every record): plain

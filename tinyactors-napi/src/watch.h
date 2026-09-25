@@ -14,11 +14,23 @@
 
 #include "tinyactors.h"
 
+/*
+ * One open-addressing hash set of IDs, with linear probing. Its capacity
+ * is a power of two at least twice its count, so a lookup touches one or
+ * two slots whatever the size of the watch. UINT64_MAX marks an empty
+ * slot; an ID equal to it is kept in `has_max` instead.
+ */
+typedef struct {
+    uint64_t *slots;
+    uint32_t capacity; /* 0, or a power of two */
+    uint32_t count;
+    bool has_max;
+} tna_id_set;
+
 typedef struct {
     ta_allocator allocator;
-    uint64_t *ids;           /* sessions, then definitions */
-    uint32_t session_count;
-    uint32_t definition_count;
+    tna_id_set sessions;
+    tna_id_set definitions;
 } tna_trace_watch;
 
 void tna_trace_watch_init(tna_trace_watch *watch, ta_allocator allocator);
@@ -35,8 +47,11 @@ typedef struct {
 ta_result tna_trace_watch_set(tna_trace_watch *watch, const tna_trace_watch_set_params *params);
 
 static inline bool tna_trace_watch_empty(const tna_trace_watch *watch) {
-    return watch == NULL || watch->session_count + watch->definition_count == 0;
+    return watch == NULL || watch->sessions.count + watch->definitions.count == 0;
 }
+
+/* Whether `id` is in the set: constant time, for tests and the scheduler. */
+bool tna_id_set_has(const tna_id_set *set, uint64_t id);
 
 /*
  * Marks `trace` watched when `actor` is: its session or its definition is

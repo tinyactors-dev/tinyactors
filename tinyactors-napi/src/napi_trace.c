@@ -431,23 +431,43 @@ static bool tna_uint64_of(napi_env env, napi_value value, uint64_t *out) {
     return true;
 }
 
-/* The uint64s of a JavaScript array, into `out` (capacity `capacity`). */
-static bool tna_uint64_array(napi_env env, napi_value array, uint64_t *out, uint32_t capacity, uint32_t *count) {
-    if (napi_get_array_length(env, array, count) != napi_ok || *count > capacity) {
+/*
+ * The uint64s of a JavaScript array, into `*out`, allocated for them (NULL
+ * when the array is empty); the caller frees it with tna_free_uint64s.
+ * False when an element is not a uint64 or there is no memory.
+ */
+static bool tna_uint64_array(napi_env env, ta_allocator allocator, napi_value array, uint64_t **out, uint32_t *count) {
+    *out = NULL;
+    if (napi_get_array_length(env, array, count) != napi_ok || *count > UINT32_MAX / sizeof(uint64_t)) {
+        return false;
+    }
+    if (*count == 0) {
+        return true;
+    }
+    *out = tna_alloc(allocator, *count * sizeof(uint64_t), _Alignof(uint64_t));
+    if (*out == NULL) {
         return false;
     }
     for (uint32_t at = 0; at < *count; at += 1u) {
         napi_value element = NULL;
-        if (napi_get_element(env, array, at, &element) != napi_ok || !tna_uint64_of(env, element, &out[at])) {
+        if (napi_get_element(env, array, at, &element) != napi_ok || !tna_uint64_of(env, element, &(*out)[at])) {
             return false;
         }
     }
     return true;
 }
 
-#define TNA_WATCH_MAX 1024u
+static void tna_free_uint64s(ta_allocator allocator, uint64_t *ids, uint32_t count) {
+    if (ids != NULL) {
+        tna_free(allocator, &(ta_allocator_free_params){ .ptr = ids, .size = count * sizeof(uint64_t),
+                                                         .alignment = _Alignof(uint64_t) });
+    }
+}
 
-/* setTraceWatch(sessions, definitions): what is watched, replacing the last. */
+/*
+ * setTraceWatch(sessions, definitions): what is watched, replacing the last.
+ * The watch is a hash set (watch.h), so its size has no limit of its own.
+ */
 napi_value tna_set_trace_watch_method(napi_env env, napi_callback_info info) {
     size_t argc = 2;
     napi_value argv[2] = { NULL };
@@ -458,19 +478,26 @@ napi_value tna_set_trace_watch_method(napi_env env, napi_callback_info info) {
     if (wrapper == NULL) {
         return NULL;
     }
-    static uint64_t sessions[TNA_WATCH_MAX];
-    static uint64_t definitions[TNA_WATCH_MAX];
+    ta_allocator allocator = tna_allocator_for(&wrapper->system->allocator, TNA_MEMORY_OTHER);
+    uint64_t *sessions = NULL;
+    uint64_t *definitions = NULL;
     uint32_t session_count = 0;
     uint32_t definition_count = 0;
-    if (argc < 2 || !tna_uint64_array(env, argv[0], sessions, TNA_WATCH_MAX, &session_count) ||
-        !tna_uint64_array(env, argv[1], definitions, TNA_WATCH_MAX, &definition_count)) {
-        return tna_throw(env, "invalid", "watchTraces: expected at most 1024 session and definition IDs");
+    bool read = argc >= 2 && tna_uint64_array(env, allocator, argv[0], &sessions, &session_count) &&
+                tna_uint64_array(env, allocator, argv[1], &definitions, &definition_count);
+    ta_result result = TA_ERR_INVALID;
+    if (read) {
+        result = tna_trace_watch_set(&wrapper->system->trace_watch,
+                                     &(tna_trace_watch_set_params){ .sessions = sessions,
+                                                                    .session_count = session_count,
+                                                                    .definitions = definitions,
+                                                                    .definition_count = definition_count });
     }
-    ta_result result = tna_trace_watch_set(&wrapper->system->trace_watch,
-                                           &(tna_trace_watch_set_params){ .sessions = sessions,
-                                                                          .session_count = session_count,
-                                                                          .definitions = definitions,
-                                                                          .definition_count = definition_count });
+    tna_free_uint64s(allocator, sessions, session_count);
+    tna_free_uint64s(allocator, definitions, definition_count);
+    if (!read) {
+        return tna_throw(env, "invalid", "watchTraces: expected arrays of session and definition IDs");
+    }
     if (result != TA_OK) {
         return tna_throw(env, "out-of-memory", "watchTraces: no memory for the watch");
     }
