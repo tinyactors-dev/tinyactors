@@ -1,6 +1,6 @@
 # ADR 0020: Mail for an unloaded actor waits while a loader brings it back
 
-**Status:** Accepted; not yet implemented. Refines ADR 0005 (a mailbox can belong to an address, not only to an actor), ADR 0006 point 4 (an unloaded or unknown name is no longer always a dead letter) and ADR 0012. Research: [`docs/research/loading-actors-on-demand.md`](../../../docs/research/loading-actors-on-demand.md).
+**Status:** Accepted and implemented (2026-09-25); see the implementation notes for where the code differs from the text. Answer 1 is superseded by core ADR 0074 (rewritten): session images are process-local, so a restart after a process exit rebuilds actors from the application's data (`{ spawn, binding }`) or a replayed log, not from stored images. Refines ADR 0005 (a mailbox can belong to an address, not only to an actor), ADR 0006 point 4 (an unloaded or unknown name is no longer always a dead letter) and ADR 0012. Research: [`docs/research/loading-actors-on-demand.md`](../../../docs/research/loading-actors-on-demand.md).
 **Date:** 2026-09-25
 
 ## Context
@@ -275,3 +275,110 @@ The original questions were:
 4. **The `LOADED` span in the sender's trace:** accept the small core
    change to `ta_actor_load`'s params?
 5. **Defaults:** `timeout` 5 s and `maxWaiting` 1,000 per address?
+
+## Implementation notes
+
+Implemented 2026-09-25: core `5f0aa7b` (`ta_actor_load` takes a trace
+parent) and napi `92474b9`.
+
+**Where it lives.**
+- `src/loads.{c,h}` (portable, no Node-API, so it moves to the host kernel):
+  - loader families with their `maxWaiting`;
+  - one load record per address in flight, with its waiting mailbox;
+  - the queue of loads JavaScript has not heard of;
+  - a min-heap of wake-ups.
+- The scheduler gains `tna_mailbox` and three operations on it: post into a
+  waiting mailbox, hand it to the front of an actor's mailbox, and bury it
+  as dead letters. Replacement's transfer uses the same splice.
+- The router checks for a load in flight first, then for a loader.
+- `src/napi_loads.c` hands new loads to `lib/system.js` after each turn and
+  takes back the outcome (`completeLoad`); `lib/system.js` has `setLoader`,
+  `wakeAt` and the loader runner.
+
+**Where it differs from the text.**
+1. **The directory is unchanged.** Section 1 put a third "waiting" state in
+   the directory. The directory stays core's adapter, with resident and
+   unloaded entries; the waiting state is the load record in `loads.c`,
+   keyed by the same interned address.
+2. **A load in flight holds the address's mail until it finishes**, even
+   after `load()` or the spawn made the actor resident, so mail that
+   arrives during `restore` still waits and keeps its order.
+3. **The loader runner is not a hook the system holds.** A native reference
+   to a function that closes over the `System` would keep the system from
+   ever being finalized (`test/system.js` caught it). New loads reach
+   `lib/system.js` through the environment's effect handler, as service
+   effects do, with the kind `"loads"`.
+4. **The timeout runs on JavaScript's timers,** not core's clock, so a
+   manual clock does not move it. A result that arrives after the timeout
+   is discarded and an image in it destroyed; the timeout's own WARN log
+   is the only log.
+5. **`detail` on dead letters** comes from `lib/system.js`: the last
+   failure per address (the rejection's reason, the error, or the
+   timeout), added to the letters of reasons `rejected`, `load-failed` and
+   `load-timeout`.
+6. **`{ spawn }` at an unloaded address** first releases it
+   (`removeUnloaded`): the application's data replaces the image.
+7. **A `restore` that throws** finishes the load as `load-failed`: the
+   waiting mail becomes dead letters, and the actor stays resident.
+8. **`flush()` waits for loads in flight,** so a test or a shutdown sees
+   their outcome.
+9. **`ta_actor_load` takes the trace parent** (answer 4) of the first
+   waiting message; `{ spawn }` runs under it too. A load a wake-up started
+   has none.
+
+**Restarts (section 6), after core ADR 0074 was rewritten.** Session
+images are process-local: they offload actors from memory within one
+process's lifetime, and do not cross processes. So the sequence in section
+6 holds within one process (`test/loads.js`, `gracefulRestart`: unload
+all, loaders reject into an outbox, loaders load, the outbox is replayed).
+After a process exit, the loader rebuilds each actor from the data the
+application stored, `{ spawn: definition, binding }`, or replays a log;
+the test's second round does that. Steps 4 and 6 do not store or read
+images across processes.
+
+**Costs.** Nothing per actor. One record per load in flight, reused through
+a free list, and one heap entry per registered wake-up; waiting mail uses
+ordinary envelopes. Mail to a resident named actor with no load in flight
+pays one empty-map check in the router.
+
+**Metrics and logs.** `tinyactors.loads` (a sum by
+`tinyactors.load.outcome`: `loaded`, `spawned`, `not_found`, `rejected`,
+`failed`, `timed_out`), `tinyactors.load.duration` (a histogram in seconds,
+whose exemplar is the trace of the mail that caused the load),
+`tinyactors.messages.waiting` (a gauge), and the dead-letter reasons
+`rejected`, `load-failed`, `load-timeout` and `waiting-full`. Failed and
+timed-out loads write WARN `tinyactors.load.failed` and
+`tinyactors.load.timed_out` with the address, the number of messages
+dropped and the detail, under the host logs' rate limit.
+
+**Tests.** `test/native/loads_test.c` (also under AddressSanitizer):
+- order across a load, including mail that arrives after the actor is
+  resident and mail sent to it directly;
+- the per-address cap, and waiting mail counting against
+  `maxQueuedMessages`;
+- every failure outcome, and a stale or wrong finish;
+- a virtual family;
+- wake-ups, including a replaced one and one for a resident actor.
+
+`test/loads.js`, on Node and Bun:
+- order, and `send()` resolving;
+- a second message mid-load;
+- each failure with its `detail`;
+- a slow load, and a timed-out one whose late image is destroyed;
+- `waiting-full`;
+- `{ spawn, binding }` for a virtual family;
+- a timer waking an unloaded actor, and `removeUnloaded` cancelling it;
+- the graceful restart;
+- the `LOADED` span and the macrostep in the sender's trace;
+- argument checks.
+
+Core's `session_id_test` checks that `LOADED` carries the load's parent.
+
+**Open points.**
+1. **Dead letters carry no data.** The `deadLetter` hook gives the target,
+   the event and the reason, not the message's data, so an outbox built
+   from it cannot replay a refused message as it was.
+2. **Cancelling a waiting `send()`** settles its promise but leaves the
+   message waiting; it is delivered after the load without its waiter.
+3. **Loads reach JavaScript once per turn,** each as its own loader call;
+   a loader that wants to batch storage reads has to do so itself.

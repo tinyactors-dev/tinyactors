@@ -682,7 +682,8 @@ What was built (`lib/image.js`, `test/persist.js`):
 - **Unload:** throws `busy` while the actor has mail waiting, is inside a
   macrostep or is quarantined, so it never drops accepted mail. Mail to an
   unloaded address is a dead letter with reason `unloaded`; mail is not held
-  for it, and nothing loads it on demand.
+  for it, and nothing loads it on demand. (ADR 0020 later added loaders:
+  mail waits while a family's loader brings the actor back.)
 - **Load:** the same session ID, a new runtime ID, the address resident
   again. Delayed sends travel in the image, including ones that fell due
   while the actor was out. An invocation active at capture does not come
@@ -787,10 +788,12 @@ Open (ADR 0017's implementation notes, follow-up of 2026-09-25, and ADR
   2026-09-25, keep them** (option A). Specs keep core's and SCXML's names
   (`onentry`, `history_shallow`, `{ kind, … }`), as ADR 0013 point 6 says;
   the `statechart()` builder is the camelCase API;
-- loading unloaded actors on demand when mail arrives for their address:
-  **decided 2026-09-25, a loader hook**, specified in the proposed ADR 0020
-  (the waiting mailboxes live in napi's directory and scheduler, the part
-  that becomes the host kernel; questions open);
+- ~~loading unloaded actors on demand when mail arrives for their
+  address~~: **done**, ADR 0020. `setLoader(family, loader, { timeout,
+  maxWaiting })` and `wakeAt(address, time)`; the waiting mail and the
+  loads are portable C (`src/loads.{c,h}`) that moves to the host kernel.
+  Open: dead letters carry no data, so an outbox cannot replay a refused
+  message as it was (ADR 0020 implementation notes);
 - network handoff of actors, modeled explicitly with I/O processors rather
   than by serializing session images;
 - a host-neutral `lib/` shared with a WebAssembly browser build;
