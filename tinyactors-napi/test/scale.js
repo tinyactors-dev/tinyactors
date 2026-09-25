@@ -764,6 +764,7 @@ function report(result) {
       const result = await measure(population, variant);
       report(result);
       assert.equal(result.steady.addon, 0, `after warm-up the addon made ${result.steady.addon} allocator calls`);
+      assert.equal(result.steady.core, 0, `${variant}: after warm-up core made ${result.steady.core} allocator calls`);
       results.push(result);
     }
 
