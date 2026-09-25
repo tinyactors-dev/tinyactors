@@ -1,6 +1,6 @@
 # ADR 0021: An invoked SCXML document is imported in the invoke
 
-**Status:** Accepted and implemented (2026-09-25); see the implementation notes. Refines ADR 0019 (SCXML import) and the in-system SCXML invoker of ROADMAP step 13 (`src/adapters/invoker.h`).
+**Status:** Accepted and implemented (2026-09-25); see the implementation notes. Refines ADR 0019 (SCXML import) and the in-system SCXML invoker of ROADMAP step 13 (`src/adapters/invoker.h`). Point 3 (the cache of imported children) is refined by ADR 0022: a bounded LRU keyed by a hash, whose evictions retire definitions, and resolvers released when their definition is freed.
 **Date:** 2026-09-25
 
 ## Context
