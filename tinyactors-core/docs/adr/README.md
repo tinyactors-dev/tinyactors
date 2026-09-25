@@ -78,3 +78,4 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0072](0072-metrics-are-counters-core-keeps-logs-are-records-it-already-writes.md) | [Metrics are counters core keeps; logs are records it already writes](0072-metrics-are-counters-core-keeps-logs-are-records-it-already-writes.md) |
 | [0073](0073-core-builds-generates-and-samples-trace-contexts.md) | [Core builds, generates and samples trace contexts](0073-core-builds-generates-and-samples-trace-contexts.md) |
 | [0074](0074-an-unloaded-actor-is-offloaded-to-bytes-within-its-process.md) | [An unloaded actor is offloaded to bytes within its process](0074-an-unloaded-actor-is-offloaded-to-bytes-within-its-process.md) (Proposed) |
+| [0075](0075-a-macrostep-that-runs-too-many-microsteps-stops-as-a-runaway.md) | [A macrostep that runs too many microsteps stops as a runaway](0075-a-macrostep-that-runs-too-many-microsteps-stops-as-a-runaway.md) |
