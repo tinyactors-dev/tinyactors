@@ -40,6 +40,7 @@ ta_result tna_system_create(tna_system **out) {
     tna_sched_init(&system->sched, tna_allocator_for(&system->allocator, TNA_MEMORY_SCHEDULING),
                    tna_allocator_for(&system->allocator, TNA_MEMORY_ENVELOPES));
     tna_directory_init(&system->directory, tna_allocator_for(&system->allocator, TNA_MEMORY_DIRECTORY));
+    tna_trace_watch_init(&system->trace_watch, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER));
     tna_vec_init(&system->io_processors, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER),
                  TNA_LAYOUT(tna_io_processor *));
     ta_result result = tna_scratch_init(&system->scratch, &system->allocator);
@@ -98,6 +99,7 @@ void tna_system_close(tna_system *system) {
     /* Core held the I/O processor records as adapters until now. */
     tna_io_close(system);
     tna_sched_destroy(&system->sched);
+    tna_trace_watch_destroy(&system->trace_watch);
     if (system->after_core != NULL) {
         system->after_core(system->after_core_context);
     }
@@ -290,6 +292,7 @@ void tna_system_turn(tna_system *system) {
                                        .arena = &system->scratch.turn,
                                        .inside_core = &system->inside_core,
                                        .budgets = system->budgets,
+                                       .watch = &system->trace_watch,
                                    });
     if (tna_system_due_now(system)) {
         /*

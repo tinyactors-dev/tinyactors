@@ -11,7 +11,7 @@ const { DefinitionBuilder, needsJavaScript } = require('./statechart');
 const { ActorId } = require('./actor');
 const { EventNames } = require('./events');
 const { SessionImage, handleOf } = require('./image');
-const { kindMask } = require('./tracing');
+const { traceConfig } = require('./tracing');
 
 const NO_STATE = 4294967295;
 
@@ -77,6 +77,10 @@ class System {
   #invocations = new Map();
   #logSink;
   #traceSink;
+  #traceConfig = {};
+  // Active watchTraces() handles, and every definition's family for them.
+  #watches = new Set();
+  #definitionFamilies = new Map();
   // Aborted on close(): the signal every EffectContext carries.
   #lifetime = new AbortController();
   #effectContext;
@@ -222,8 +226,15 @@ class System {
    * with decodeTraces(). Without a sink (undefined) core builds no record.
    *
    * options:
-   * - kinds: the record kinds wanted (TRACE_KINDS names; every kind by
-   *   default): core builds no other record;
+   * - detail: "summary" (default: a span per macrostep, lifecycle, and
+   *   failures), "decisions" (adds microsteps, conditions, raised events)
+   *   or "full" (every kind); see TRACE_DETAIL. Watched actors
+   *   (watchTraces) always get every kind;
+   * - kinds: the record kinds wanted (TRACE_KINDS names), overriding
+   *   `detail`: core builds no other record;
+   * - sample: the ratio of the traces this system starts that are sampled,
+   *   0 to 1 (default 1), decided as OpenTelemetry's TraceIdRatioBased
+   *   does (core ADR 0073); a traceparent keeps its caller's decision;
    * - unsampled: also trace macrosteps whose traceparent is not sampled;
    * - resource: resource attributes, { "service.name": "orders", ... },
    *   strings only;
@@ -242,9 +253,9 @@ class System {
     if (sink !== undefined && typeof sink !== 'function') {
       throw new TinyactorsError('setTraceSink(): expected a function or undefined', 'invalid');
     }
-    const { kinds, unsampled = false, resource = {}, values = false, valueLimit = 256, parent = 'cause', seed } =
+    const { unsampled = false, resource = {}, values = false, valueLimit = 256, parent = 'cause', seed } =
       options ?? {};
-    const mask = kindMask(kinds);
+    const config = traceConfig(options ?? {}, 'setTraceSink()');
     if (parent !== 'cause' && parent !== 'link') {
       throw new TinyactorsError('setTraceSink(): options.parent must be "cause" or "link"', 'invalid');
     }
@@ -262,12 +273,97 @@ class System {
       pairs.push(key, value);
     }
     const previous = this.#traceSink;
-    const remaining = this.#native.setTraceSink(sink !== undefined, mask, unsampled === true, values === true,
-                                                valueLimit, parent === 'link', pairs, seed);
+    const remaining = this.#native.setTraceSink(sink !== undefined, config.kinds, config.watchedKinds,
+                                                unsampled === true ? config.kinds : 0, config.sample,
+                                                values === true, valueLimit, parent === 'link', pairs, seed);
     this.#traceSink = sink;
+    this.#traceConfig = { detail: options?.detail, kinds: options?.kinds, sample: options?.sample,
+                          unsampled: unsampled === true };
     if (remaining !== undefined) {
       previous?.(remaining);
     }
+  }
+
+  /**
+   * Changes what the installed sink gets, without reinstalling it, so open
+   * spans are not ended (napi ADR 0017 section 3). `options` takes
+   * `detail`, `kinds` and `sample` as setTraceSink() does; what it leaves
+   * out keeps its current value.
+   */
+  configureTraces(options = {}) {
+    if (options === null || typeof options !== 'object') {
+      throw new TinyactorsError('configureTraces(): expected an options object', 'invalid');
+    }
+    const merged = { ...this.#traceConfig };
+    for (const key of ['detail', 'kinds', 'sample']) {
+      if (key in options) {
+        merged[key] = options[key];
+      }
+    }
+    if ('detail' in options && !('kinds' in options)) {
+      merged.kinds = undefined;
+    }
+    const config = traceConfig(merged, 'configureTraces()');
+    this.#native.configureTraces(config.kinds, config.watchedKinds, merged.unsampled ? config.kinds : 0,
+                                 config.sample);
+    this.#traceConfig = merged;
+  }
+
+  /**
+   * Traces what matches in full, sampled whatever the ratio, until the
+   * returned handle's stop() (napi ADR 0017 section 3): deliveries to the
+   * actors of `sessions` (session IDs or ActorIds), to the named actors of
+   * `addresses` ({ family, name }, resolved to their sessions now), and to
+   * the actors of the definitions of `families` (family names; spawns of
+   * those families are watched from their bootstrap). Everything a watched
+   * delivery causes in this system is watched too. It needs a sink.
+   */
+  watchTraces({ sessions = [], families = [], addresses = [] } = {}) {
+    const watch = { sessions: new Set(), families: new Set(families.map(String)) };
+    for (const session of sessions) {
+      watch.sessions.add(session instanceof ActorId ? BigInt(this.inspect(session).sessionId) : BigInt(session));
+    }
+    for (const address of addresses) {
+      const actor = this.findActor(address);
+      if (actor === undefined) {
+        throw new TinyactorsError('watchTraces(): no resident actor has that address', 'not-found');
+      }
+      watch.sessions.add(BigInt(this.inspect(actor).sessionId));
+    }
+    this.#watches.add(watch);
+    this.#applyWatches();
+    return Object.freeze({
+      stop: () => {
+        if (this.#watches.delete(watch) && !this.closed) {
+          this.#applyWatches();
+        }
+      },
+    });
+  }
+
+  #watchedFamily(family) {
+    for (const watch of this.#watches) {
+      if (watch.families.has(family)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  #applyWatches() {
+    const sessions = new Set();
+    const families = new Set();
+    for (const watch of this.#watches) {
+      watch.sessions.forEach((session) => sessions.add(session));
+      watch.families.forEach((family) => families.add(family));
+    }
+    const definitions = [];
+    for (const [id, family] of this.#definitionFamilies) {
+      if (families.has(family)) {
+        definitions.push(id);
+      }
+    }
+    this.#native.setTraceWatch([...sessions], definitions);
   }
 
   // One service effect, in the order core made the calls (napi_services.h).
@@ -476,7 +572,13 @@ class System {
     this.#native.selectDatamodel(datamodel === 'null' ? 'null' : 'javascript');
     const compiled = compile(this.#native, spec);
     const id = core.system_register_definition(this.#native, compiled.out);
-    return new Definition(this, this.#native, id);
+    const definition = new Definition(this, this.#native, id);
+    const family = definition.identity.family;
+    this.#definitionFamilies.set(id, family);
+    if (this.#watchedFamily(family)) {
+      this.#applyWatches();
+    }
+    return definition;
   }
 
   /**
@@ -516,7 +618,8 @@ class System {
     } else if (options.name !== undefined) {
       address = { family: { name: definition.identity.family }, name: options.name };
     }
-    const trace = this.#native.spawnTrace(options.traceparent);
+    const watched = this.#watches.size !== 0 && this.#watchedFamily(definition.identity.family);
+    const trace = this.#native.spawnTrace(options.traceparent, watched);
     const id = core.actor_spawn(this.#native, definition.id, address, options.binding, undefined, trace);
     return new ActorId(this, id.slot, id.generation);
   }

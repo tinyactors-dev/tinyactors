@@ -8,7 +8,7 @@
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const { createSystem, statechart, decodeTraces, formatTraceparent } = require('..');
-const { OtlpExporter } = require('../tools/otlp');
+const { OTLPExporter } = require('../tools/otlp');
 
 const TRACE_ID = '4bf92f3577b34da6a3ce929d0e0e4736';
 const REQUEST_SPAN = '00f067aa0ba902b7';
@@ -33,11 +33,11 @@ function receiver() {
 
 (async () => {
   const collector = await receiver();
-  const exporter = new OtlpExporter({ endpoint: collector.endpoint });
+  const exporter = new OTLPExporter({ endpoint: collector.endpoint });
   const system = createSystem();
   const sent = [];
   system.setTraceSink((bytes) => { sent.push(bytes); exporter.sink(bytes); },
-                      { resource: { 'service.name': 'otlp-test' } });
+                      { detail: 'full', resource: { 'service.name': 'otlp-test' } });
   const definition = system.define(
     statechart({ family: 'relay', revision: 'v1' })
       .state('idle', (s) => s.on('go', (t) => t.target('busy').raise('next')))

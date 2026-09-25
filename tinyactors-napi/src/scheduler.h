@@ -52,6 +52,7 @@
 
 #include "containers.h"
 #include "tinyactors.h"
+#include "watch.h"
 
 #define TNA_SCHED_PAGE_BITS 12u
 #define TNA_SCHED_PAGE_ENTRIES (1u << TNA_SCHED_PAGE_BITS) /* 4,096 entries, 64 KiB */
@@ -224,6 +225,8 @@ typedef struct {
     ta_arena *arena;   /* the turn arena: records live here */
     bool *inside_core; /* the reentrancy flag (ADR 0013 point 4) */
     tna_turn_budgets budgets;
+    /* Watched sessions and definitions (watch.h); NULL or empty: none. */
+    const tna_trace_watch *watch;
 } tna_turn_params;
 
 /* `allocator` for the table and queues, `envelopes` for the envelope store. */

@@ -935,6 +935,8 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "setLogSink", NULL, tna_set_log_sink_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "setTraceSink", NULL, tna_set_trace_sink_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "spawnTrace", NULL, tna_spawn_trace_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "configureTraces", NULL, tna_configure_traces_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "setTraceWatch", NULL, tna_set_trace_watch_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "reportInvoke", NULL, tna_report_invoke_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "closed", NULL, NULL, tna_closed_getter, NULL, NULL, napi_default_jsproperty, NULL },
     };

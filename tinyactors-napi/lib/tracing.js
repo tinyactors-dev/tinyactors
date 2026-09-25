@@ -13,19 +13,34 @@ const { TinyactorsError } = require('./errors');
 /** Record kinds, in core's order; a sink's mask is built from these names. */
 const TRACE_KINDS = Object.freeze([...native.traceKinds]);
 
+const LIFECYCLE = ['spawned', 'loaded', 'unloaded', 'finished', 'destroyed'];
+const SUMMARY = [...LIFECYCLE, 'macrostepBegin', 'macrostepEnd', 'actionFailed', 'stopped'];
+
+/**
+ * Detail presets over the kind mask (napi ADR 0017 section 3):
+ * - summary: a span per macrostep, lifecycle spans, and failures;
+ * - decisions: adds microsteps, guard conditions and raised events;
+ * - full: every kind.
+ */
+const TRACE_DETAIL = Object.freeze({
+  summary: Object.freeze(SUMMARY),
+  decisions: Object.freeze([...SUMMARY, 'microstep', 'condition', 'raised']),
+  full: TRACE_KINDS,
+});
+
 /** The mask for `kinds` (names from TRACE_KINDS); every kind when undefined. */
-function kindMask(kinds) {
+function kindMask(kinds, what = 'setTraceSink()') {
   if (kinds === undefined) {
     return 2 ** TRACE_KINDS.length - 1;
   }
   if (!Array.isArray(kinds)) {
-    throw new TinyactorsError('setTraceSink(): options.kinds must be an array of record kinds', 'invalid');
+    throw new TinyactorsError(`${what}: options.kinds must be an array of record kinds`, 'invalid');
   }
   let mask = 0;
   for (const kind of kinds) {
     const bit = TRACE_KINDS.indexOf(kind);
     if (bit < 0) {
-      throw new TinyactorsError(`setTraceSink(): unknown record kind "${kind}"`, 'invalid');
+      throw new TinyactorsError(`${what}: unknown record kind "${kind}"`, 'invalid');
     }
     mask |= 2 ** bit;
   }
@@ -92,8 +107,28 @@ function stepSpanId(session, macrostep, microstep = 0) {
   return hex16(span === 0n ? 1n : span);
 }
 
+/**
+ * The masks and sample ratio `options` asks for: { kinds, watchedKinds,
+ * sample } with `sample` in parts per 10^9. `kinds` overrides `detail`.
+ */
+function traceConfig({ detail = 'summary', kinds, sample = 1 }, what) {
+  if (kinds === undefined && !Object.hasOwn(TRACE_DETAIL, detail)) {
+    throw new TinyactorsError(`${what}: options.detail must be "summary", "decisions" or "full"`, 'invalid');
+  }
+  if (typeof sample !== 'number' || !(sample >= 0 && sample <= 1)) {
+    throw new TinyactorsError(`${what}: options.sample must be a number from 0 to 1`, 'invalid');
+  }
+  return {
+    kinds: kindMask(kinds ?? TRACE_DETAIL[detail], what),
+    watchedKinds: kindMask(undefined, what),
+    sample: Math.round(sample * 1e9),
+  };
+}
+
 module.exports = {
   TRACE_KINDS,
+  TRACE_DETAIL,
+  traceConfig,
   kindMask,
   parseTraceparent,
   formatTraceparent,

@@ -227,9 +227,17 @@ static bool tna_set_resource(napi_env env, tna_system *system, napi_value pairs)
  * ended now (marked incomplete), for the previous JavaScript sink, or
  * undefined.
  */
+/* The masks and the sample ratio (parts per 10^9) in argv[0..3]. */
+static bool tna_trace_config(napi_env env, const napi_value *argv, tna_trace_masks *masks, uint32_t *parts) {
+    return napi_get_value_uint32(env, argv[0], &masks->kinds) == napi_ok &&
+           napi_get_value_uint32(env, argv[1], &masks->watched_kinds) == napi_ok &&
+           napi_get_value_uint32(env, argv[2], &masks->unsampled_kinds) == napi_ok &&
+           napi_get_value_uint32(env, argv[3], parts) == napi_ok && *parts <= TNA_SAMPLE_WHOLE;
+}
+
 napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
-    size_t argc = 8;
-    napi_value argv[8] = { NULL };
+    size_t argc = 10;
+    napi_value argv[10] = { NULL };
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
         return NULL;
     }
@@ -242,25 +250,25 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
         return tna_throw(env, "reentrant", "setTraceSink cannot be called from inside a core call (ADR 0013)");
     }
     bool installed = false;
-    uint32_t kinds = 0;
-    bool unsampled = false;
+    tna_trace_masks masks = { 0 };
+    uint32_t parts = 0;
     bool values = false;
     uint32_t value_limit = 0;
     bool links = false;
     napi_valuetype seed_type = napi_undefined;
-    if (argc < 8 || napi_get_value_bool(env, argv[0], &installed) != napi_ok ||
-        napi_get_value_uint32(env, argv[1], &kinds) != napi_ok ||
-        napi_get_value_bool(env, argv[2], &unsampled) != napi_ok ||
-        napi_get_value_bool(env, argv[3], &values) != napi_ok ||
-        napi_get_value_uint32(env, argv[4], &value_limit) != napi_ok ||
-        napi_get_value_bool(env, argv[5], &links) != napi_ok || napi_typeof(env, argv[7], &seed_type) != napi_ok) {
+    if (argc < 10 || napi_get_value_bool(env, argv[0], &installed) != napi_ok ||
+        !tna_trace_config(env, argv + 1, &masks, &parts) ||
+        napi_get_value_bool(env, argv[5], &values) != napi_ok ||
+        napi_get_value_uint32(env, argv[6], &value_limit) != napi_ok ||
+        napi_get_value_bool(env, argv[7], &links) != napi_ok || napi_typeof(env, argv[9], &seed_type) != napi_ok) {
         return tna_throw(env, "invalid",
-                         "setTraceSink: expected (installed, kinds, unsampled, values, valueLimit, links, resource, seed)");
+                         "setTraceSink: expected (installed, kinds, watchedKinds, unsampledKinds, sample, values, "
+                         "valueLimit, links, resource, seed)");
     }
     uint64_t seed = 0;
     bool lossless = true;
     if (seed_type != napi_undefined &&
-        (seed_type != napi_bigint || napi_get_value_bigint_uint64(env, argv[7], &seed, &lossless) != napi_ok ||
+        (seed_type != napi_bigint || napi_get_value_bigint_uint64(env, argv[9], &seed, &lossless) != napi_ok ||
          !lossless)) {
         return tna_throw(env, "invalid", "setTraceSink: options.seed must be a bigint of at most 64 bits");
     }
@@ -274,7 +282,7 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
         system->tracing = false;
     }
     ta_result result = ta_system_set_trace_sink(system->core, ta_null_trace_sink());
-    if (result == TA_OK && installed && kinds != 0) {
+    if (result == TA_OK && installed && (masks.kinds | masks.watched_kinds | masks.unsampled_kinds) != 0) {
         tna_otlp_init(&system->otlp,
                       &(tna_otlp_config){
                           .core = system->core,
@@ -288,12 +296,14 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
         system->tracing = true;
         ta_system_seed_trace_ids(system->core, seed_type != napi_undefined ? seed : tna_system_os_seed(system));
         wrapper->trace_value_limit = value_limit;
-        if (!tna_set_resource(env, system, argv[6])) {
+        if (!tna_set_resource(env, system, argv[8])) {
             tna_otlp_destroy(&system->otlp);
             system->tracing = false;
             return tna_throw(env, "invalid", "setTraceSink: options.resource must map names to strings");
         }
-        result = ta_system_set_trace_sink(system->core, tna_trace_sink_adapter(system, kinds, unsampled));
+        system->trace_masks = masks;
+        ta_system_set_trace_ratio(system->core, parts, TNA_SAMPLE_WHOLE);
+        result = ta_system_set_trace_sink(system->core, tna_trace_sink_adapter(system, &masks));
         if (result != TA_OK) {
             tna_otlp_destroy(&system->otlp);
             system->tracing = false;
@@ -308,14 +318,109 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
     return remaining;
 }
 
+/* configureTraces(kinds, watchedKinds, unsampledKinds, sample): new masks
+ * and ratio for the installed sink, keeping its open spans. */
+napi_value tna_configure_traces_method(napi_env env, napi_callback_info info) {
+    size_t argc = 4;
+    napi_value argv[4] = { NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    tna_system *system = wrapper->system;
+    tna_trace_masks masks = { 0 };
+    uint32_t parts = 0;
+    if (argc < 4 || !tna_trace_config(env, argv, &masks, &parts)) {
+        return tna_throw(env, "invalid", "configureTraces: expected (kinds, watchedKinds, unsampledKinds, sample)");
+    }
+    if (system->inside_core) {
+        return tna_throw(env, "reentrant", "configureTraces cannot be called from inside a core call (ADR 0013)");
+    }
+    napi_value undefined = NULL;
+    napi_get_undefined(env, &undefined);
+    if (!system->tracing) {
+        return undefined;
+    }
+    system->trace_masks = masks;
+    ta_system_set_trace_ratio(system->core, parts, TNA_SAMPLE_WHOLE);
+    ta_system_set_trace_sink(system->core, tna_trace_sink_adapter(system, &masks));
+    return undefined;
+}
+
+/* A uint64 from a number or a bigint. */
+static bool tna_uint64_of(napi_env env, napi_value value, uint64_t *out) {
+    bool lossless = true;
+    if (napi_get_value_bigint_uint64(env, value, out, &lossless) == napi_ok) {
+        return lossless;
+    }
+    double number = 0;
+    if (napi_get_value_double(env, value, &number) != napi_ok || !(number >= 0) || number > 9007199254740991.0) {
+        return false;
+    }
+    *out = (uint64_t)number;
+    return true;
+}
+
+/* The uint64s of a JavaScript array, into `out` (capacity `capacity`). */
+static bool tna_uint64_array(napi_env env, napi_value array, uint64_t *out, uint32_t capacity, uint32_t *count) {
+    if (napi_get_array_length(env, array, count) != napi_ok || *count > capacity) {
+        return false;
+    }
+    for (uint32_t at = 0; at < *count; at += 1u) {
+        napi_value element = NULL;
+        if (napi_get_element(env, array, at, &element) != napi_ok || !tna_uint64_of(env, element, &out[at])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+#define TNA_WATCH_MAX 1024u
+
+/* setTraceWatch(sessions, definitions): what is watched, replacing the last. */
+napi_value tna_set_trace_watch_method(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2] = { NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    static uint64_t sessions[TNA_WATCH_MAX];
+    static uint64_t definitions[TNA_WATCH_MAX];
+    uint32_t session_count = 0;
+    uint32_t definition_count = 0;
+    if (argc < 2 || !tna_uint64_array(env, argv[0], sessions, TNA_WATCH_MAX, &session_count) ||
+        !tna_uint64_array(env, argv[1], definitions, TNA_WATCH_MAX, &definition_count)) {
+        return tna_throw(env, "invalid", "watchTraces: expected at most 1024 session and definition IDs");
+    }
+    ta_result result = tna_trace_watch_set(&wrapper->system->trace_watch,
+                                           &(tna_trace_watch_set_params){ .sessions = sessions,
+                                                                          .session_count = session_count,
+                                                                          .definitions = definitions,
+                                                                          .definition_count = definition_count });
+    if (result != TA_OK) {
+        return tna_throw(env, "out-of-memory", "watchTraces: no memory for the watch");
+    }
+    napi_value undefined = NULL;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+}
+
 /*
- * spawnTrace(traceparent): the trace parent generated spawn takes, as the
- * object its codec reads: the parsed traceparent, a new trace when there is
- * none and tracing is on, or undefined.
+ * spawnTrace(traceparent, watched): the trace parent generated spawn takes,
+ * as the object its codec reads: the parsed traceparent, a new trace when
+ * there is none and tracing is on, or undefined. `watched` marks it watched
+ * (the definition's family is watched).
  */
 napi_value tna_spawn_trace_method(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value argv[1] = { NULL };
+    size_t argc = 2;
+    napi_value argv[2] = { NULL };
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
         return NULL;
     }
@@ -323,6 +428,12 @@ napi_value tna_spawn_trace_method(napi_env env, napi_callback_info info) {
     ta_trace_parent parent;
     if (wrapper == NULL || !tna_trace_argument(env, argc < 1 ? NULL : argv[0], &parent)) {
         return NULL;
+    }
+    bool watched = false;
+    if (argc >= 2 && napi_get_value_bool(env, argv[1], &watched) == napi_ok && watched && wrapper->system->tracing) {
+        tna_system_start_trace(wrapper->system, &parent.context);
+        parent.context.flags |= TA_TRACE_FLAG_SAMPLED;
+        parent.context.detail |= TA_TRACE_DETAIL_WATCHED;
     }
     tna_system_start_trace(wrapper->system, &parent.context);
     napi_value out = NULL;

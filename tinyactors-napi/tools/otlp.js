@@ -6,7 +6,7 @@
 // ExportTraceServiceRequest, so exporting is one POST each; this queues
 // them and posts in order. It uses only fetch, which Node and Bun both have.
 
-class OtlpExporter {
+class OTLPExporter {
   #endpoint;
   #pending = [];
 
@@ -37,4 +37,4 @@ class OtlpExporter {
   }
 }
 
-module.exports = { OtlpExporter };
+module.exports = { OTLPExporter };

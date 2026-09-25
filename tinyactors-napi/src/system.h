@@ -54,6 +54,7 @@
 #include "allocator.h"
 #include "directory.h"
 #include "effects.h"
+#include "adapters/trace.h"
 #include "otlp.h"
 #include "scheduler.h"
 #include "tinyactors.h"
@@ -128,6 +129,9 @@ struct tna_system {
      * hands the spans that ended to JavaScript as bytes, once per turn. */
     tna_otlp otlp;
     bool tracing;
+    /* What the sink asks core for, and what is watched (napi ADR 0017). */
+    tna_trace_masks trace_masks;
+    tna_trace_watch trace_watch;
     /* The last service handle a JavaScript invoker's start was given. */
     uint64_t next_service;
     /*

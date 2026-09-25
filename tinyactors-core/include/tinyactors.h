@@ -1100,8 +1100,9 @@ typedef struct ta_trace_sink_vtable {
  * MACROSTEP_BEGIN from its context: `kinds` when it has no trace ID or is
  * sampled, `watched_kinds` when it is sampled and marked
  * TA_TRACE_DETAIL_WATCHED, and `unsampled_kinds` when it is not sampled.
- * Lifecycle records are outside macrosteps and are written when their bit
- * is in `kinds` or `watched_kinds`.
+ * Lifecycle records are outside macrosteps and never sampled: their bit is
+ * looked up in `watched_kinds` when their context is watched, else in
+ * `kinds`.
  */
 typedef struct {
     void *self;

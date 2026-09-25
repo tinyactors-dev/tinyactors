@@ -24,9 +24,13 @@ static inline bool ta_trace_parent_empty(const ta_trace_parent *parent) {
  */
 uint32_t ta_trace_macrostep_kinds(const ta_trace_sink *sink, const ta_trace_context *context);
 
-/* Whether the sink wants lifecycle record `kind` (ADR 0073 section 4). */
-static inline bool ta_trace_lifecycle_wanted(const ta_trace_sink *sink, ta_trace_kind kind) {
-    return ((sink->kinds | sink->watched_kinds) & TA_TRACE_BIT(kind)) != 0;
+/* Whether the sink wants lifecycle record `kind` under `context`: from
+ * `watched_kinds` when the context is watched, else from `kinds`. Lifecycle
+ * records are not sampled (ADR 0073 section 4). */
+static inline bool ta_trace_lifecycle_wanted(const ta_trace_sink *sink, ta_trace_kind kind,
+                                             const ta_trace_context *context) {
+    uint32_t kinds = (context->detail & TA_TRACE_DETAIL_WATCHED) != 0 ? sink->watched_kinds : sink->kinds;
+    return (kinds & TA_TRACE_BIT(kind)) != 0;
 }
 
 /* Every kind any macrostep may build: what scratch must be reserved for. */

@@ -38,7 +38,7 @@ const exported = (exporter, spans) => new Promise((resolve) => exporter.export(s
 (async () => {
   const batches = [];
   const system = createSystem();
-  system.setTraceSink((bytes) => batches.push(bytes), { resource: { 'service.name': 'sdk-example' } });
+  system.setTraceSink((bytes) => batches.push(bytes), { detail: 'full', resource: { 'service.name': 'sdk-example' } });
   const definition = system.define(
     statechart({ family: 'relay', revision: 'v1' })
       .state('idle', (s) => s.on('go', (t) => t.target('busy').raise('next')))

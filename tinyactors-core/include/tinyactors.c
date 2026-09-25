@@ -471,9 +471,13 @@ TA_PRIVATE inline bool ta_trace_parent_empty(const ta_trace_parent *parent) {
  */
 TA_PRIVATE uint32_t ta_trace_macrostep_kinds(const ta_trace_sink *sink, const ta_trace_context *context);
 
-/* Whether the sink wants lifecycle record `kind` (ADR 0073 section 4). */
-TA_PRIVATE inline bool ta_trace_lifecycle_wanted(const ta_trace_sink *sink, ta_trace_kind kind) {
-    return ((sink->kinds | sink->watched_kinds) & TA_TRACE_BIT(kind)) != 0;
+/* Whether the sink wants lifecycle record `kind` under `context`: from
+ * `watched_kinds` when the context is watched, else from `kinds`. Lifecycle
+ * records are not sampled (ADR 0073 section 4). */
+TA_PRIVATE inline bool ta_trace_lifecycle_wanted(const ta_trace_sink *sink, ta_trace_kind kind,
+                                             const ta_trace_context *context) {
+    uint32_t kinds = (context->detail & TA_TRACE_DETAIL_WATCHED) != 0 ? sink->watched_kinds : sink->kinds;
+    return (kinds & TA_TRACE_BIT(kind)) != 0;
 }
 
 /* Every kind any macrostep may build: what scratch must be reserved for. */
@@ -3555,7 +3559,8 @@ TA_PRIVATE ta_step_key ta_trace_lifecycle_key(ta_actor *actor) {
 TA_PRIVATE void ta_trace_lifecycle(ta_system *system, ta_actor *actor, ta_trace_kind kind,
                         const ta_trace_parent *parent) {
     ta_step_key key = ta_trace_lifecycle_key(actor);
-    if (!ta_trace_lifecycle_wanted(&system->trace, kind)) {
+    ta_trace_context none = { 0 };
+    if (!ta_trace_lifecycle_wanted(&system->trace, kind, parent != NULL ? &parent->context : &none)) {
         return;
     }
     ta_trace_record record = ta_trace_record_blank(kind);
@@ -15770,7 +15775,7 @@ static ta_result ta_run_finish(ta_interpreter *it) {
     /* A lifecycle record: its own key, and the step that finished as cause. */
     ta_step_key step = ta_trace_key(it);
     ta_step_key key = ta_trace_lifecycle_key(actor);
-    if (ta_trace_lifecycle_wanted(&it->system->trace, TA_TRACE_FINISHED)) {
+    if (ta_trace_lifecycle_wanted(&it->system->trace, TA_TRACE_FINISHED, &it->trace_context)) {
         ta_trace_record record = ta_trace_record_now(it, TA_TRACE_FINISHED);
         record.key = key;
         record.cause = step;

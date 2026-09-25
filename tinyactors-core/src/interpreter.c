@@ -3148,7 +3148,7 @@ static ta_result ta_run_finish(ta_interpreter *it) {
     /* A lifecycle record: its own key, and the step that finished as cause. */
     ta_step_key step = ta_trace_key(it);
     ta_step_key key = ta_trace_lifecycle_key(actor);
-    if (ta_trace_lifecycle_wanted(&it->system->trace, TA_TRACE_FINISHED)) {
+    if (ta_trace_lifecycle_wanted(&it->system->trace, TA_TRACE_FINISHED, &it->trace_context)) {
         ta_trace_record record = ta_trace_record_now(it, TA_TRACE_FINISHED);
         record.key = key;
         record.cause = step;

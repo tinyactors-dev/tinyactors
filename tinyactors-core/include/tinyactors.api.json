@@ -13785,7 +13785,7 @@
     "ta_trace_sink": {
       "kind": "struct",
       "semantic": "adapter",
-      "doc": "Three masks of TA_TRACE_BIT(kind) (ADR 0073): core builds no record whose bit the macrostep's mask lacks. A macrostep picks its mask at MACROSTEP_BEGIN from its context: `kinds` when it has no trace ID or is sampled, `watched_kinds` when it is sampled and marked TA_TRACE_DETAIL_WATCHED, and `unsampled_kinds` when it is not sampled. Lifecycle records are outside macrosteps and are written when their bit is in `kinds` or `watched_kinds`.",
+      "doc": "Three masks of TA_TRACE_BIT(kind) (ADR 0073): core builds no record whose bit the macrostep's mask lacks. A macrostep picks its mask at MACROSTEP_BEGIN from its context: `kinds` when it has no trace ID or is sampled, `watched_kinds` when it is sampled and marked TA_TRACE_DETAIL_WATCHED, and `unsampled_kinds` when it is not sampled. Lifecycle records are outside macrosteps and never sampled: their bit is looked up in `watched_kinds` when their context is watched, else in `kinds`.",
       "fields": [
         {
           "name": "self",

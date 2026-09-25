@@ -20,8 +20,14 @@
 void tna_trace_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *first_error);
 /* setTraceSink(installed, kinds, unsampled, values, valueLimit, links, resource, seed). */
 napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info);
-/* spawnTrace(traceparent): the trace parent for generated spawn, or undefined. */
+/* The sample ratio crosses as parts of this whole. */
+#define TNA_SAMPLE_WHOLE 1000000000u
+/* spawnTrace(traceparent, watched): the trace parent for generated spawn, or undefined. */
 napi_value tna_spawn_trace_method(napi_env env, napi_callback_info info);
+/* configureTraces(kinds, watchedKinds, unsampledKinds, sample). */
+napi_value tna_configure_traces_method(napi_env env, napi_callback_info info);
+/* setTraceWatch(sessions, definitions). */
+napi_value tna_set_trace_watch_method(napi_env env, napi_callback_info info);
 /*
  * options.traceparent of post()/send()/spawn(): undefined for none, or W3C
  * traceparent text, which core parses (core ADR 0073). Throws and answers

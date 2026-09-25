@@ -12,7 +12,7 @@
 
 const { randomBytes } = require('node:crypto');
 const { createSystem, statechart, formatTraceparent } = require('..');
-const { OtlpExporter } = require('./otlp');
+const { OTLPExporter } = require('./otlp');
 
 function charts(system) {
   const gateway = system.define(
@@ -80,9 +80,9 @@ async function postRequestSpan(endpoint, { traceId, spanId, start, end }) {
 
 async function main() {
   const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? 'http://127.0.0.1:4318';
-  const exporter = new OtlpExporter({ endpoint });
+  const exporter = new OTLPExporter({ endpoint });
   const system = createSystem();
-  system.setTraceSink(exporter.sink, { values: true, resource: { 'service.name': 'tinyactors-demo' } });
+  system.setTraceSink(exporter.sink, { detail: 'full', values: true, resource: { 'service.name': 'tinyactors-demo' } });
   const { gateway, inventory, payments } = charts(system);
   system.spawn(inventory, { name: 'main' });
   system.spawn(payments, { name: 'main' });

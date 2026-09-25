@@ -33,7 +33,7 @@ function counter(system) {
 
 function recorder(system, options) {
   const batches = [];
-  system.setTraceSink((bytes) => batches.push(bytes), options);
+  system.setTraceSink((bytes) => batches.push(bytes), { detail: 'full', ...options });
   return {
     batches,
     get spans() {
@@ -303,8 +303,76 @@ async function lifecycle() {
   system.close();
 }
 
+// napi ADR 0017 section 3: summary by default, full for watched actors,
+// sampling for the traces the system starts, and changes in place.
+async function watchAndSample() {
+  const system = createSystem();
+  const batches = [];
+  system.setTraceSink((bytes) => batches.push(bytes), { seed: 7n });
+  const spans = () => batches.splice(0).flatMap((bytes) => decodeTraces(bytes));
+  const counter = system.define(
+    statechart({ family: 'watched', revision: 'v1' })
+      .data('count', 0)
+      .state('idle', (s) => s.on('go', (t) => t.assign('count', function () { return this.count + 1; }))),
+  );
+  const a = system.spawn(counter);
+  const b = system.spawn(counter);
+  await system.flush();
+  spans();
+
+  a.post('go');
+  b.post('go');
+  await system.flush();
+  let seen = spans();
+  assert.deepEqual(seen.map((span) => span.name).sort(), ['scxml.macrostep go', 'scxml.macrostep go'],
+                   'summary: one span per macrostep, no microsteps');
+  assert.ok(seen.every((span) => span.events.length === 0), 'summary: no data events');
+
+  const watch = system.watchTraces({ sessions: [a] });
+  a.post('go');
+  b.post('go');
+  await system.flush();
+  seen = spans();
+  assert.equal(seen.filter((span) => span.name === 'scxml.microstep go').length, 1, 'only the watched actor in full');
+  const watchedMacro = seen.find((span) => span.name === 'scxml.macrostep go' &&
+                                          seen.some((other) => other.parentSpanId === span.spanId));
+  assert.ok(watchedMacro !== undefined, 'the watched microstep is a child of its macrostep');
+  watch.stop();
+  a.post('go');
+  await system.flush();
+  assert.deepEqual(spans().map((span) => span.name), ['scxml.macrostep go'], 'stop() ends the watch');
+
+  // A watched family: spawns of it are watched from their bootstrap.
+  const family = system.watchTraces({ families: ['watched'] });
+  const c = system.spawn(counter);
+  await system.flush();
+  const boot = spans();
+  assert.ok(boot.some((span) => span.name.startsWith('scxml.microstep')), `the bootstrap of a watched family is full: ${boot.map((span) => span.name)}`);
+  family.stop();
+
+  // sample: 0 starts unsampled traces; a caller's sampled traceparent still wins.
+  system.configureTraces({ sample: 0 });
+  c.post('go');
+  await system.flush();
+  assert.equal(spans().length, 0, 'sample 0: nothing');
+  c.post('go', undefined, { traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01' });
+  await system.flush();
+  assert.equal(spans().length, 1, "a sampled traceparent keeps its caller's decision");
+
+  // detail in place, and invalid options.
+  system.configureTraces({ sample: 1, detail: 'decisions' });
+  c.post('go');
+  await system.flush();
+  assert.ok(spans().some((span) => span.name === 'scxml.microstep go'), 'decisions adds microsteps');
+  assert.throws(() => system.configureTraces({ detail: 'all' }), /detail/);
+  assert.throws(() => system.configureTraces({ sample: 2 }), /sample/);
+  assert.throws(() => c.post('go', undefined, { traceparent: 'nope' }), /traceparent/);
+  system.close();
+}
+
 (async () => {
   await untraced();
+  await watchAndSample();
   await batches();
   await kinds();
   await traceparentIn();
