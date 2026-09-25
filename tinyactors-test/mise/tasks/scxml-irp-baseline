@@ -23,7 +23,7 @@ failures = results.reject(&:ok?).to_h { |result| [result.scenario.name, result.e
 empty = failures.select { |_, message| message.empty? }.keys
 abort "scenarios failed without an error message (shutdown failures?): #{empty.join(', ')}" unless empty.empty?
 
-SCXMLIRP::BASELINE.write("#{JSON.pretty_generate(failures.sort_by { |name, _| [name[/\d+/].to_i, name] }.to_h)}\n")
+SCXML::IRP::BASELINE.write("#{JSON.pretty_generate(failures.sort_by { |name, _| [name[/\d+/].to_i, name] }.to_h)}\n")
 passed = results.size - failures.size
 puts "scxml-irp baseline: #{passed} of #{results.size} scenarios pass; " \
-     "recorded #{failures.size} failures in #{SCXMLIRP::BASELINE.relative_path_from(root)}"
+     "recorded #{failures.size} failures in #{SCXML::IRP::BASELINE.relative_path_from(root)}"

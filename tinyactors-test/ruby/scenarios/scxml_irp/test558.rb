@@ -40,7 +40,7 @@ a string
 SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
-  SCXMLIRP.expect_failure(self, 'test558')
+  SCXML::IRP.expect_failure(self, 'test558')
   scenario 'test558' do
     machine = spawn :irp_test558
     run_to_completion machine
