@@ -1,6 +1,6 @@
 # ADR 0073: Core builds, generates and samples trace contexts
 
-**Status:** Accepted and implemented (2026-09-25); see the implementation notes for where the code differs from the text. Refines ADR 0067 (section 6: core now creates trace IDs when a host asks, and the sink's sampling flag becomes masks). Serves napi ADR 0017 and core ADR 0072.
+**Status:** Accepted and implemented (2026-09-25); see the implementation notes for where the code differs from the text. Refines ADR 0067 (section 6: core now creates trace IDs when a host asks, and the sink's sampling flag becomes masks). Serves napi ADR 0017 and core ADR 0072. `b9ba91c` reads a traceparent's IDs eight digits at a time (33 to 12.5 ns per parse).
 **Date:** 2026-09-25
 
 ## Context

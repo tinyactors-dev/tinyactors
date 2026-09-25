@@ -311,3 +311,31 @@ What the numbers say:
   gate.
 - **Decoding in JavaScript** (`decodeTraces`) costs about 11 µs per event
   with every record: for tests and in-process consumers, not for export.
+
+### Changes to the baseline, 2026-09-25 (later)
+
+Same bench and machine (load 2.6 to 4.3), 1M actors, best of 5, ns per
+event. These rows replace the ones above; the others stand.
+
+| Configuration | Node | Bun | Change |
+|---|---|---|---|
+| untraced | 614 to 629 | 530 to 543 | unchanged |
+| untraced, `traceparent` passed | 640 to 648 | 580 to 590 | core parses the IDs eight digits at a time (`b9ba91c`): 33 to 12.5 ns per parse |
+| sink installed, sampled out | 647 to 652 | 603 to 607 | same parser |
+| nothing sampled, 10 actors watched | 635 | 585 | `watchTraces` checks a hash set (`e9d194e`) |
+| nothing sampled, 100 actors watched | 637 | 589 | same |
+| nothing sampled, 1,000 actors watched | 656 (was 1,017) | 597 (was 965) | same |
+| nothing sampled, 10,000 actors watched | 662 | 604 | new: `watchTraces` has no limit now |
+
+- **Budgets:** a `traceparent` and sampled-out now cost 11 to 23 ns over
+  untraced on Node (were 25 to 49). On Bun, a `traceparent` costs 24 to
+  47 ns and sampled-out 29 to 65 ns, at or near the 40 ns budget, with
+  run-to-run noise of about 15 ns.
+- **Where Bun's remaining cost is** (macOS `sample` of the `post` path):
+  about 10 ns in the string crossing (`napi_get_value_string_latin1`),
+  the rest spread through Bun's runtime. A trace-context handle would
+  save at most the crossing, so it was not built.
+- **Watching** now costs the same whatever the list's size: the
+  remaining 20 to 60 ns is `ta_actor_inspect` on every delivery and the
+  full-detail spans of the watched actors.
+

@@ -798,21 +798,19 @@ needs a core change):
 
 **Tracing** (baseline accepted 2026-09-25, `docs/scale.md`; ADR 0016's
 open points on replies, open spans and the name cache are done in
-`17b0ca5`):
-- `watchTraces` costs by the size of its list, not by what it traces:
-  1,000 watched actors add about 400 ns to every delivery, even at a
-  million actors. A hash set of watched sessions and definitions would
-  make the check constant;
-- Bun is over the 40 ns budgets for a `traceparent` and for sampled-out
-  (38 to 62 ns). Profile Bun's `post` path first; if the string crossing
-  is the cost, a trace-context handle
-  (`system.traceContext(header)`, passed to each `post`) would cross once
-  per request instead of once per event;
-- two events core queues outside a run write no RAISED record: an
-  invocation lost when an actor is saved and restored, and an invoker's
-  UNAVAILABLE;
-- `mise exec` at the repository root runs Node 26, not the Node 22 this
-  package pins; pin Node at the root so every bench runs the same one.
+`17b0ca5`; `watchTraces` is a hash set with no limit (`e9d194e`); core
+parses a traceparent eight digits at a time (`b9ba91c`); autoforwarding,
+UNAVAILABLE and lost invocations are recorded (`74ebe18`); Node is pinned
+at the repository root (`abee06b`)):
+- Bun stays at or near the 40 ns budgets: a `traceparent` costs 24 to 47
+  ns over untraced, sampled-out 29 to 65. The string crossing is about
+  10 ns of it and the rest is spread through Bun's runtime, so a
+  trace-context handle (`system.traceContext(header)`) would not close
+  the gap; revisit only if Bun's Node-API gets faster or a profile shows
+  a single cause.
+- A watched delivery calls `ta_actor_inspect` to find the session and
+  definition; a watch that keyed on runtime IDs would avoid it, at the
+  cost of re-keying on unload and load.
 
 **Later:**
 - port the tinyactors-test scenario suite to run against the addon;
