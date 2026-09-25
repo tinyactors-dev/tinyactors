@@ -77,3 +77,4 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0071](0071-transitions-actions-and-expressions-are-inspectable-by-id.md) | [Transitions, actions and expressions are inspectable by ID](0071-transitions-actions-and-expressions-are-inspectable-by-id.md) |
 | [0072](0072-metrics-are-counters-core-keeps-logs-are-records-it-already-writes.md) | [Metrics are counters core keeps; logs are records it already writes](0072-metrics-are-counters-core-keeps-logs-are-records-it-already-writes.md) |
 | [0073](0073-core-builds-generates-and-samples-trace-contexts.md) | [Core builds, generates and samples trace contexts](0073-core-builds-generates-and-samples-trace-contexts.md) |
+| [0074](0074-a-session-image-crosses-a-process-through-a-codec.md) | [A session image crosses a process through a codec](0074-a-session-image-crosses-a-process-through-a-codec.md) (Proposed) |
