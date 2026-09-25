@@ -1,6 +1,6 @@
 # ADR 0074: An unloaded actor is offloaded to bytes within its process
 
-**Status:** Accepted; not yet implemented. Refines ADR 0038 (an image gains a byte form, valid only in the process that wrote it), ADR 0051 (`ta_actor_load` also takes that byte form) and ADR 0054 (a host captures an actor's pending delayed sends and re-arms them at spawn); extends the data-model contract (ADR 0038 kept values off it; this ADR adds a value encode and decode pair); serves napi ADR 0020. Revised in place while Proposed, 2026-09-25: the first version made images cross processes through a codec; the user narrowed the purpose to offloading within one process. Accepted 2026-09-25 with the user's answers (see "Answers"): core owns the encoding; values go through a pair of data-model operations, so each host decides what a value's bytes are; the 208 bytes left per unloaded address are a later, measured follow-up; pending delayed sends are captured as data and re-armed at spawn.
+**Status:** Accepted and implemented (2026-09-25); see the implementation notes. Refines ADR 0038 (an image gains a byte form, valid only in the process that wrote it), ADR 0051 (`ta_actor_load` also takes that byte form) and ADR 0054 (a host captures an actor's pending delayed sends and re-arms them at spawn); extends the data-model contract (ADR 0038 kept values off it; this ADR adds a value encode and decode pair); serves napi ADR 0020. Revised in place while Proposed, 2026-09-25: the first version made images cross processes through a codec; the user narrowed the purpose to offloading within one process. Accepted 2026-09-25 with the user's answers (see "Answers"): core owns the encoding; values go through a pair of data-model operations, so each host decides what a value's bytes are; the 208 bytes left per unloaded address are a later, measured follow-up; pending delayed sends are captured as data and re-armed at spawn.
 **Date:** 2026-09-25
 
 ## Context
@@ -376,3 +376,67 @@ The questions of the Proposed version, answered by the user on
    need to learn more".
 4. **Timers across restarts:** "we need to capture pending sends somehow,
    otherwise you never know when you can unload an actor." Section 8.
+
+## Implementation notes
+
+Implemented 2026-09-25. Where the code differs from the text, and what it
+measured:
+
+- **Offload goes through an image.** `ta_actor_offload` captures an
+  in-memory image, encodes it and unloads with it, then destroys it; a load
+  from bytes decodes into an image and runs the image load. Section 2 said
+  no image is made on the way. Going through it keeps one definition of
+  what an unloaded actor is (capture, `ta_actor_unload` and reconstruction
+  already agree on it), at the cost of a short-lived copy during the call.
+- **The bytes** (`session_image.c`): a fixed header (magic, the writing
+  system's address and a token drawn once from its ID generator, the
+  session's counters and flags), the session storage, the definition
+  identity's text, the self address as its detached record, the invocation
+  records and pending invokes raw, the delayed sends raw with their
+  destination and origin, then each value through `value_encode` (the root,
+  the completion data, each send's target and data), length-prefixed.
+- **Refusals:** `TA_ERR_BUSY` for a macrostep in progress (including an
+  actor not yet bootstrapped), a paused or stopped run, queued internal
+  events, a pending completion, held event slots or a parent;
+  `TA_ERR_INVALID` for an anonymous actor; `TA_ERR_STALE` for another
+  system's bytes; `TA_ERR_INVALID` for bytes that do not parse.
+- **The data-model pair is optional** in the vtable: a null operation means
+  no byte form, so test data models need not implement it. The null data
+  model implements it anyway, answering `TA_OP_ERROR`. The test host's jq
+  model writes JSON text; its ECMAScript model writes QuickJS's structured
+  serialization (`JS_WriteObject`) after a byte for its wire flag.
+- **napi's choice** (napi ADR 0020's notes, `docs/scale.md`): `unload()`
+  offloads into a native store keyed by address. `unloadValues: 'serialize'`
+  (the default) writes `v8.serialize` bytes and falls back to a handle for a
+  value serialization refuses (a function); `'handles'` keeps every value
+  by handle. Measured, 50,000 actors, bytes per actor, resident against
+  offloaded (native plus heap): `{ count }` 553 against 519 with
+  `serialize`, 552 against 589 with `handles`; a small entity 895 against
+  682 with `serialize`, 896 against 933 with `handles`. So `serialize`
+  frees the data, and `handles` frees only core's part.
+- **Core's part is larger than section 7 estimated:** about 250 bytes for a
+  stable actor with no pending sends, not about 60, because of the fixed
+  header, the identity's text and the raw address record. Compacting them
+  is an open point.
+- **Re-arm** (`actor.c`): the records are checked and the timer list
+  reserved before any is scheduled, so a spawn either arms all of them or
+  creates nothing. A generated send ID exists only for a `<send>` with
+  `idlocation` (a send without an ID has send ID 0, which `<cancel>`
+  cannot name), so only those move the counter.
+- **Tests:** `tinyactors-core/tests/offload_test.c` (round trip, history,
+  refusals, another system's bytes, a failing allocation at each step of
+  offload and of load, re-arm with IDs and `<cancel>`, also under
+  AddressSanitizer); the test host's data-model tests (the pair on jq and
+  ECMAScript values); napi `test/offload.js` and `test/native/offloads_test.c`
+  on Node and Bun. The test host's scenarios do not offload: its RPC
+  carries `ta_bytes` as a JSON string, which is not binary-safe.
+
+Open points:
+
+1. **Compact the bytes** (varints, the definition ID in place of its text,
+   the address left to the caller that loads by address).
+2. **The 208 bytes kept per unloaded address** (the user's answer 3).
+3. **A load from the store carries no trace parent** in napi: the mail that
+   caused it is not the `LOADED` record's parent yet.
+4. **The test host's RPC cannot carry offloaded bytes**, so no scenario
+   covers offloading with its invariants.

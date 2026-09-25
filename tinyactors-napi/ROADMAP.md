@@ -836,6 +836,17 @@ at the repository root (`abee06b`)):
   definition; a watch that keyed on runtime IDs would avoid it, at the
   cost of re-keying on unload and load.
 
+**Offloading** (core ADR 0074, 2026-09-25; `docs/scale.md`):
+- the 208 bytes kept per unloaded address (core 114, directory 45, value
+  box 32, scheduling 17) cap what offloading saves: we need to learn more,
+  then shrink them with a measurement;
+- core's offloaded bytes are about 250 per stable actor, not the 60 the
+  ADR estimated: compact the layout;
+- a load from the offload store does not run under the trace parent of the
+  mail that caused it;
+- the test host's RPC carries `ta_bytes` as a JSON string, so its scenarios
+  cannot offload; a binary-safe encoding would let them.
+
 **Later:**
 - port the tinyactors-test scenario suite to run against the addon;
 - consider publishing a filtered raw core module (it would need an ADR,

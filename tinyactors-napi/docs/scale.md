@@ -384,3 +384,40 @@ Node 22.
   wrong for Node; the spikes are most likely GC or page faults, as the note
   on `plain` already suspected. Bun at 4M (40.6 ms above) was not measured
   again.
+
+## 2026-09-25: offloading unloaded actors (core ADR 0074)
+
+`unload()` now offloads a stable named actor to bytes the system keeps
+(core ADR 0074), instead of holding an in-memory `SessionImage`. Measured
+with a throwaway script: 50,000 named actors of a one-state chart whose
+data is `{ count }` or a small entity (customer, email, a two-line cart,
+flags), Node 22.23.2 through `mise exec`, `--expose-gc` and two forced GCs
+before each reading; native bytes from `system.stats()`, heap from
+`process.memoryUsage().heapUsed`. Bytes per actor:
+
+| Data, `unloadValues` | Resident (native + heap) | Offloaded (native + heap) | Of which offload store |
+|---|---|---|---|
+| `{ count }`, `serialize` | 432 + 121 = 553 | 517 + 2 = 519 | 309 |
+| small entity, `serialize` | 432 + 463 = 895 | 682 + 0 = 682 | 475 |
+| `{ count }`, `handles` | 432 + 120 = 552 | 525 + 64 = 589 | 317 |
+| small entity, `handles` | 432 + 464 = 896 | 525 + 408 = 933 | 317 |
+
+Before this change, an unloaded actor holding its image cost 870 native
+bytes plus about 430 more heap than resident (core ADR 0074, Context):
+about twice a resident actor. Now:
+
+- **`serialize` (the default) frees the data:** the heap part goes to
+  zero, and the actor costs 6% (`{ count }`) to 24% (small entity) less
+  than resident.
+- **`handles` keeps the objects alive** and frees only core's part, so an
+  offloaded actor costs slightly more than a resident one. It exists for
+  values `v8.serialize` refuses; `serialize` falls back to a handle for
+  those values alone.
+- **The floor is 208 bytes per unloaded address** (core 114, directory 45,
+  value box 32, scheduling 17), kept whatever the bytes: a later, measured
+  follow-up (napi roadmap).
+- **Core's bytes are larger than core ADR 0074 estimated:** about 250 per
+  stable actor with no pending sends, against about 60. The layout writes a
+  fixed header, the definition identity's text and a raw address record;
+  compacting it (varints, the definition's ID in place of its text, the
+  address left to the caller) is a follow-up.
