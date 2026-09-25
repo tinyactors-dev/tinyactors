@@ -254,3 +254,60 @@ move beyond run-to-run noise.
   most about 745 KB;
 - delivery throughput: 2.9 M events/s on Node and 3.4 M on Bun, before
   and after.
+
+## 2026-09-25: tracing throughput, the accepted baseline (napi ADRs 0016 to 0018)
+
+**This is the baseline tracing is held to from now on.** The traced-path
+targets of napi ADR 0017 section 4 (about 280 ns per event over untraced
+for macrostep spans, 780 for every record) are withdrawn: two rounds of
+work (ADR 0017's follow-up and ADR 0018) did not move the traced path
+measurably, and the numbers below are accepted as good enough. A change
+that makes any row worse by more than the run-to-run spread (about 5%)
+needs a reason in its commit.
+
+`test/bench/tracing.js`, Apple M4 Max (16 cores), load 1.3 to 3.0, Node
+22.23.2 and Bun 1.4.1 through `mise exec`, best of 5 rounds, ns per event.
+One `ping` per actor per round; the transition assigns, so a fully traced
+macrostep writes BEGIN, MICROSTEP, ASSIGN and END. Without a
+`traceparent`, the system starts every trace itself.
+
+| Configuration | Node 10k | Node 100k | Node 1M | Bun 10k | Bun 100k | Bun 1M | OTLP bytes/event |
+|---|---|---|---|---|---|---|---|
+| untraced | 621 | 622 | 622 | 522 | 540 | 531 | |
+| untraced, `traceparent` passed | 655 | 671 | 654 | 575 | 599 | 590 | |
+| sink installed, sampled out | 658 | 669 | 640 | 573 | 601 | 603 | |
+| `summary` (the default) | 1,128 | 1,208 | 1,155 | 1,066 | 1,123 | 1,221 | 362 |
+| `summary`, 10% sampled | 726 | 709 | 688 | 592 | 641 | 687 | 64 |
+| `summary`, 1% sampled | 635 | 652 | 626 | 537 | 581 | 592 | 36 |
+| `decisions` | 1,716 | 1,838 | 1,772 | 1,709 | 1,807 | 1,917 | 828 |
+| macrostep records only | 1,163 | 1,268 | 1,145 | 1,066 | 1,115 | 1,200 | |
+| `full` (every record) | 2,062 | 2,134 | 2,034 | 2,000 | 2,166 | 2,246 | 1,110 |
+| `full` + values | 2,427 | 2,510 | 2,404 | 2,245 | 2,408 | 2,595 | 1,130 |
+| `full`, then `decodeTraces` | 13,333 | 13,642 | 13,897 | 14,426 | 14,232 | 13,042 | |
+| nothing sampled, 10 actors watched | 649 | 652 | 655 | 579 | 582 | 592 | |
+| nothing sampled, 100 actors watched | 686 | 679 | 654 | 606 | 607 | 609 | |
+| nothing sampled, 1,000 actors watched | 1,141 | 1,031 | 1,017 | 1,118 | 956 | 965 | |
+
+Core bytes per idle actor: 280 to 286 untraced, 280 to 307 with a sink
+(the difference shrinks with the population: per-system state).
+
+What the numbers say:
+
+- **Sampling is the lever.** `summary` at 10% costs 70 to 150 ns per event
+  over untraced, at 1% within 60. Everything traced costs about 1.9 times
+  untraced for `summary` and 3.3 times for `full`.
+- **Logs off changes nothing measurable** for this chart (no failures, no
+  `<log>`): 1,138 and 1,188 ns against 1,128 and 1,208 for `summary`.
+- **Population does not change the cost per event** between 10,000 and a
+  million actors, on either runtime.
+- **Watching costs by the size of the watch list, not by what it traces.**
+  10 or 100 watched actors cost 10 to 60 ns; 1,000 watched cost about 400,
+  even at a million actors where that is 0.1% of the traffic. The watch
+  check apparently walks the list on every delivery. `watchTraces` takes at
+  most 1,024 sessions and definitions.
+- **Budgets (napi ADR 0017 section 2, 40 ns):** on Node, `traceparent` and
+  sampled-out came in at 25 to 49 ns over untraced across runs; on Bun at
+  38 to 62. They stay a guide, checked by `mise run bench-check`, not a
+  gate.
+- **Decoding in JavaScript** (`decodeTraces`) costs about 11 µs per event
+  with every record: for tests and in-process consumers, not for export.

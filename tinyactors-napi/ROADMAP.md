@@ -796,13 +796,23 @@ needs a core change):
 - ~~an xstate baseline next to the plain-object one in `scale.js`~~: done.
   `SCALE_BASELINES=xstate,object` runs it; `docs/scale.md` has the numbers.
 
-**Tracing** (ADR 0016 open points):
-- events handed back by services start no trace; carrying
-  `request.traceparent` back on the reply would join them;
-- the encoder runs slower than the prototype (see the traced-path
-  targets above); pre-encoded keys and optional attribute sets would
-  narrow it;
-- open spans are a linear array, and the name cache never evicts.
+**Tracing** (baseline accepted 2026-09-25, `docs/scale.md`; ADR 0016's
+open points on replies, open spans and the name cache are done in
+`17b0ca5`):
+- `watchTraces` costs by the size of its list, not by what it traces:
+  1,000 watched actors add about 400 ns to every delivery, even at a
+  million actors. A hash set of watched sessions and definitions would
+  make the check constant;
+- Bun is over the 40 ns budgets for a `traceparent` and for sampled-out
+  (38 to 62 ns). Profile Bun's `post` path first; if the string crossing
+  is the cost, a trace-context handle
+  (`system.traceContext(header)`, passed to each `post`) would cross once
+  per request instead of once per event;
+- two events core queues outside a run write no RAISED record: an
+  invocation lost when an actor is saved and restored, and an invoker's
+  UNAVAILABLE;
+- `mise exec` at the repository root runs Node 26, not the Node 22 this
+  package pins; pin Node at the root so every bench runs the same one.
 
 **Later:**
 - port the tinyactors-test scenario suite to run against the addon;
