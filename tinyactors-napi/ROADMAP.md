@@ -779,20 +779,33 @@ Open (ADR 0017's implementation notes, follow-up of 2026-09-25, and ADR
   `originType`.
 
 **Open decisions:**
-- importing XML charts whose expressions are ECMAScript source text
-  (`ta_definition_import` stays skipped);
-- the public spec shape uses core's C field names (`onentry`,
-  `history_shallow`, `{ kind, … }`), per ADR 0013 point 6; a camelCase
-  surface would need a mapping in `lib/` and an ADR change;
-- loading unloaded actors on demand when mail arrives for their address
-  (a loader hook the router calls), instead of dead-lettering it;
+- importing XML charts whose expressions are ECMAScript source text:
+  proposed as ADR 0019, a data model in JavaScript compiles source for the
+  built-in one (the user asked to explore exposing the data-model vtable;
+  the ADR recommends a compiler hook instead, with questions open);
+- ~~the public spec shape uses core's C field names~~: **decided
+  2026-09-25, keep them** (option A). Specs keep core's and SCXML's names
+  (`onentry`, `history_shallow`, `{ kind, … }`), as ADR 0013 point 6 says;
+  the `statechart()` builder is the camelCase API;
+- loading unloaded actors on demand when mail arrives for their address:
+  **decided 2026-09-25, a loader hook**, specified in the proposed ADR 0020
+  (the waiting mailboxes live in napi's directory and scheduler, the part
+  that becomes the host kernel; questions open);
 - network handoff of actors, modeled explicitly with I/O processors rather
   than by serializing session images;
 - a host-neutral `lib/` shared with a WebAssembly browser build;
 - size-class pools behind the allocator, if the steady-state measurement
   asks for them (ADR 0014);
-- a limit on turns per macrostep that quarantines runaway actors (ADR 0008);
-- holding and releasing an actor's mailbox for flow control;
+- a limit that quarantines runaway actors (ADR 0008): **leaning towards a
+  limit, then quarantine**. Proposed refinement, awaiting the user: count
+  microsteps per macrostep rather than turns, so a long `<foreach>` (one
+  microstep, however many turns it pauses across) never trips it while an
+  endless eventless or raise loop does;
+- ~~holding and releasing an actor's mailbox for flow control~~:
+  **decided 2026-09-25, nothing new** (option D). Hosts pause an actor by
+  unloading it, which keeps graceful restarts easy to reason about. With
+  ADR 0020's loader, a loader answers "not now" during shutdown so mail
+  does not load the actor straight back;
 - a helper for naming effects that expands to `send(...).via(...)`;
 - ~~an xstate baseline next to the plain-object one in `scale.js`~~: done.
   `SCALE_BASELINES=xstate,object` runs it; `docs/scale.md` has the numbers.
