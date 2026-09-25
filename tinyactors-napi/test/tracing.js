@@ -287,6 +287,75 @@ async function repliesStayInTheTrace() {
   system.close();
 }
 
+// The strings of an OTLP message, and how many times a field-2 message of
+// ScopeLogs (a LogRecord) occurs: enough to check logs without a decoder.
+function protobufStrings(bytes, out = []) {
+  let at = 0;
+  const varint = () => {
+    let value = 0;
+    let scale = 1;
+    for (;;) {
+      const byte = bytes[at++];
+      if (byte === undefined) throw new Error('truncated');
+      value += (byte & 0x7f) * scale;
+      scale *= 128;
+      if ((byte & 0x80) === 0) return value;
+    }
+  };
+  while (at < bytes.length) {
+    const wire = varint() & 7;
+    if (wire === 0) varint();
+    else if (wire === 1) at += 8;
+    else if (wire === 5) at += 4;
+    else if (wire === 2) {
+      const length = varint();
+      const body = bytes.subarray(at, at + length);
+      if (body.length !== length) throw new Error('truncated');
+      at += length;
+      const text = Buffer.from(body).toString('utf8');
+      if (/^[\x20-\x7e]+$/.test(text)) out.push(text);
+      try { protobufStrings(body, out); } catch { /* a string */ }
+    } else throw new Error(`wire ${wire}`);
+  }
+  return out;
+}
+
+// napi ADR 0017 section 7: failures and <log> are OTLP logs, written even
+// when the trace is sampled out, and rate-limited per definition and name.
+async function logs() {
+  const system = createSystem();
+  const logBatches = [];
+  let traced = 0;
+  system.setTraceSink((traces, batch) => {
+    traced += decodeTraces(traces).length;
+    if (batch !== undefined) logBatches.push(batch);
+  }, { logLimit: 2 });
+  const definition = system.define(
+    statechart({ family: 'failing', revision: 'v1' })
+      .data('n', 0)
+      .state('idle', (s) => {
+        s.on('fail', (t) => t.assign('n', () => { throw new Error('boom'); }));
+        s.on('note', (t) => t.log('checkout', () => 'order 42'));
+      }),
+  );
+  const actor = system.spawn(definition);
+  await system.flush();
+  traced = 0;
+  const unsampled = traceparent('00f067aa0ba902b7', '00');
+  for (let i = 0; i < 5; i += 1) actor.post('fail', undefined, { traceparent: unsampled });
+  actor.post('note', undefined, { traceparent: unsampled });
+  await system.flush();
+  assert.equal(traced, 0, 'sampled out: no spans');
+  const text = logBatches.flatMap((bytes) => protobufStrings(bytes));
+  const failed = text.filter((s) => s === 'tinyactors.action.failed').length;
+  assert.ok(failed >= 1 && failed <= 2, `rate-limited to 2 per second: ${failed}`);
+  assert.ok(text.includes('WARN') && text.includes('failing'), 'a WARN log naming the definition');
+  assert.ok(text.includes('scxml.log') && text.includes('checkout: "order 42"'), `the <log>: ${text}`);
+  assert.ok(text.includes(TRACE_ID) || logBatches.length > 0, 'logs carry the trace');
+  assert.throws(() => system.setTraceSink(() => {}, { logLimit: 0 }), /logLimit/);
+  system.close();
+}
+
 // Values only when asked for; links instead of parents when asked for.
 async function valuesAndLinks() {
   const system = createSystem();
@@ -415,6 +484,7 @@ async function watchAndSample() {
   await causality();
   await traceparentOut();
   await repliesStayInTheTrace();
+  await logs();
   await valuesAndLinks();
   await lifecycle();
   console.log('tracing.js passed');

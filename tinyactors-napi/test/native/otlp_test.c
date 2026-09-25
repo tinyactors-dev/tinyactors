@@ -252,6 +252,7 @@ static void start(fixture *f, bool install) {
                                 .version = S("0.0.0"),
                                 .wanted_kinds = UINT32_MAX,
                                 .wanted_watched_kinds = UINT32_MAX,
+                                .wanted_unsampled_kinds = UINT32_MAX,
                             });
     if (install) {
         CHECK(ta_system_set_trace_sink(f->core, (ta_trace_sink){ .self = &f->otlp, .v = &sink_vtable,

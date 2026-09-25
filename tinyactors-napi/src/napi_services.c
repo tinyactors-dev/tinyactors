@@ -588,8 +588,8 @@ napi_value tna_set_log_sink_method(napi_env env, napi_callback_info info) {
         return tna_throw(env, "invalid", "setLogSink: expected a boolean");
     }
     tna_system *system = wrapper->system;
-    ta_result result =
-        ta_system_set_log_sink(system->core, installed ? tna_log_sink_adapter(system) : (ta_log_sink){ 0 });
+    system->log_to_js = installed;
+    ta_result result = tna_system_refresh_log_sink(system);
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result), "setLogSink: core refused the sink");
     }

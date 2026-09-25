@@ -209,7 +209,22 @@ export interface System {
    * spans that ended. Post it to an OTLP/HTTP `/v1/traces` endpoint as it
    * is, or read it with decodeTraces(). Without a sink core builds no record.
    */
-  setTraceSink(sink?: (bytes: Uint8Array) => void, options?: TraceSinkOptions): void;
+  setTraceSink(sink?: (traces: Uint8Array, logs?: Uint8Array) => void, options?: TraceSinkOptions): void;
+  /** Changes `detail`, `kinds` and `sample` of the installed sink in place; open spans are kept. */
+  configureTraces(options: TraceConfiguration): void;
+  /**
+   * Traces matching deliveries in full, sampled whatever the ratio, until
+   * stop(): to these sessions (IDs or actors), to the actors at these
+   * addresses, and to the actors of these definition families. What a
+   * watched delivery causes is watched too.
+   */
+  watchTraces(watch: {
+    sessions?: (bigint | number | ActorId)[];
+    families?: string[];
+    addresses?: { family: string; name: string }[];
+  }): { stop(): void };
+  /** Metrics as plain data: core's counters and occupancy, and napi's messages and memory. */
+  metrics(): MetricsSnapshot;
 
   /**
    * Queue a message and return; a later pump turn delivers it (ADR 0005).
@@ -1135,9 +1150,28 @@ export type TraceKind =
 
 export declare const TRACE_KINDS: readonly TraceKind[];
 
-export interface TraceSinkOptions {
-  /** The record kinds wanted; every kind by default. Core builds no other record. */
+export interface TraceConfiguration {
+  /**
+   * "summary" (default): a span per macrostep, lifecycle spans and failures;
+   * "decisions": adds microsteps, conditions and raised events; "full":
+   * every kind. Watched actors (watchTraces) always get every kind.
+   */
+  detail?: 'summary' | 'decisions' | 'full';
+  /** The record kinds wanted, overriding `detail`. Core builds no other record. */
   kinds?: TraceKind[];
+  /**
+   * The ratio (0 to 1, default 1) of the traces this system starts that are
+   * sampled, decided as OpenTelemetry's TraceIdRatioBased does. A
+   * traceparent keeps its caller's decision.
+   */
+  sample?: number;
+}
+
+export interface TraceSinkOptions extends TraceConfiguration {
+  /** Failures and <log> as OTLP log records, the sink's second argument (default true). */
+  logs?: boolean;
+  /** At most this many logs per definition and name per second (default 20). */
+  logLimit?: number;
   /** Also trace macrosteps whose traceparent is not sampled. */
   unsampled?: boolean;
   /** Resource attributes every request carries, such as `service.name`. */
@@ -1150,6 +1184,34 @@ export interface TraceSinkOptions {
   /** Trace IDs the system starts become a fixed sequence (tests). */
   seed?: bigint;
 }
+
+export interface MetricPoint {
+  attributes: Record<string, string>;
+  value: number;
+}
+
+/** One metric: a cumulative monotonic sum, or a gauge. */
+export interface Metric {
+  name: string;
+  unit: string;
+  kind: 'sum' | 'gauge';
+  points: MetricPoint[];
+}
+
+export interface MetricsSnapshot {
+  /** Milliseconds since the epoch: when the system started counting, and now. */
+  startTime: number;
+  time: number;
+  /** Core's totals, freed definitions included (core ADR 0072). */
+  system: Record<string, number>;
+  metrics: Metric[];
+}
+
+/** One OTLP ExportMetricsServiceRequest, to post to `/v1/metrics`. */
+export declare function metricsToOTLP(
+  snapshot: MetricsSnapshot,
+  options?: { resource?: Record<string, string>; version?: string },
+): Uint8Array;
 
 /** A span as decodeTraces() reads it. IDs are lowercase hex. */
 export interface DecodedSpan {

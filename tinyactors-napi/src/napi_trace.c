@@ -132,30 +132,52 @@ static bool tna_host_value_text(void *self, const ta_value *value, ta_str *out) 
  */
 
 /* The spans that ended, as a Uint8Array holding one ExportTraceServiceRequest, or NULL. */
-static napi_value tna_trace_bytes(napi_env env, tna_system *system) {
-    if (!system->tracing) {
-        return NULL;
-    }
-    ta_str bytes = tna_otlp_take(&system->otlp);
-    if (bytes.len == 0) {
-        return NULL;
-    }
+static napi_value tna_bytes_value(napi_env env, ta_str bytes) {
     void *data = NULL;
     napi_value buffer = NULL;
     napi_value array = NULL;
     if (napi_create_arraybuffer(env, bytes.len, &data, &buffer) != napi_ok) {
         return NULL;
     }
-    memcpy(data, bytes.ptr, bytes.len);
+    if (bytes.len != 0) {
+        memcpy(data, bytes.ptr, bytes.len);
+    }
     if (napi_create_typedarray(env, napi_uint8_array, bytes.len, buffer, 0, &array) != napi_ok) {
         return NULL;
     }
     return array;
 }
 
+/*
+ * The turn's batch, { traces, logs }: the spans that ended, as one OTLP
+ * trace request (empty when none ended), and the log records, as one OTLP
+ * logs request, or undefined when there are none. NULL when there is
+ * neither.
+ */
+static napi_value tna_trace_bytes(napi_env env, tna_system *system) {
+    if (!system->tracing || (system->otlp.span_count == 0 && system->otlp.log_count == 0)) {
+        return NULL;
+    }
+    ta_str traces = tna_otlp_take(&system->otlp);
+    ta_str logs = tna_otlp_take_logs(&system->otlp);
+    napi_value batch = NULL;
+    napi_value logs_value = NULL;
+    if (napi_create_object(env, &batch) != napi_ok) {
+        return NULL;
+    }
+    if (logs.len != 0) {
+        logs_value = tna_bytes_value(env, logs);
+    } else {
+        napi_get_undefined(env, &logs_value);
+    }
+    tna_js_put(env, batch, "traces", tna_bytes_value(env, traces));
+    tna_js_put(env, batch, "logs", logs_value);
+    return batch;
+}
+
 void tna_trace_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *first_error) {
     tna_system *system = wrapper->system;
-    if (!system->tracing || system->otlp.span_count == 0) {
+    if (!system->tracing || (system->otlp.span_count == 0 && system->otlp.log_count == 0)) {
         return;
     }
     napi_handle_scope scope = NULL;
@@ -230,10 +252,17 @@ static bool tna_set_resource(napi_env env, tna_system *system, napi_value pairs)
 /* What core is asked for: the user's masks, plus UNLOADED and DESTROYED,
  * which end a session's open span (the encoder writes their spans only
  * when they were asked for). */
-static tna_trace_masks tna_trace_masks_asked(const tna_trace_masks *masks) {
+static tna_trace_masks tna_trace_masks_asked(const tna_trace_masks *masks, bool logs) {
     uint32_t ending = TA_TRACE_BIT(TA_TRACE_UNLOADED) | TA_TRACE_BIT(TA_TRACE_DESTROYED);
-    return (tna_trace_masks){ .kinds = masks->kinds | ending, .watched_kinds = masks->watched_kinds | ending,
-                              .unsampled_kinds = masks->unsampled_kinds };
+    /* Logs need the failure records whatever the detail and the sampling
+     * (core ADR 0072 section 2); the encoder turns them into spans only
+     * when they were asked for. */
+    uint32_t failures = logs ? TA_TRACE_BIT(TA_TRACE_ACTION_FAILED) | TA_TRACE_BIT(TA_TRACE_RAISED) |
+                                   TA_TRACE_BIT(TA_TRACE_STOPPED)
+                             : 0u;
+    return (tna_trace_masks){ .kinds = masks->kinds | ending | failures,
+                              .watched_kinds = masks->watched_kinds | ending | failures,
+                              .unsampled_kinds = masks->unsampled_kinds | failures };
 }
 
 /* The masks and the sample ratio (parts per 10^9) in argv[0..3]. */
@@ -245,8 +274,8 @@ static bool tna_trace_config(napi_env env, const napi_value *argv, tna_trace_mas
 }
 
 napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
-    size_t argc = 10;
-    napi_value argv[10] = { NULL };
+    size_t argc = 11;
+    napi_value argv[11] = { NULL };
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
         return NULL;
     }
@@ -265,14 +294,16 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
     uint32_t value_limit = 0;
     bool links = false;
     napi_valuetype seed_type = napi_undefined;
-    if (argc < 10 || napi_get_value_bool(env, argv[0], &installed) != napi_ok ||
+    uint32_t log_limit = 0;
+    if (argc < 11 || napi_get_value_bool(env, argv[0], &installed) != napi_ok ||
+        napi_get_value_uint32(env, argv[10], &log_limit) != napi_ok ||
         !tna_trace_config(env, argv + 1, &masks, &parts) ||
         napi_get_value_bool(env, argv[5], &values) != napi_ok ||
         napi_get_value_uint32(env, argv[6], &value_limit) != napi_ok ||
         napi_get_value_bool(env, argv[7], &links) != napi_ok || napi_typeof(env, argv[9], &seed_type) != napi_ok) {
         return tna_throw(env, "invalid",
                          "setTraceSink: expected (installed, kinds, watchedKinds, unsampledKinds, sample, values, "
-                         "valueLimit, links, resource, seed)");
+                         "valueLimit, links, resource, seed, logLimit)");
     }
     uint64_t seed = 0;
     bool lossless = true;
@@ -297,7 +328,8 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
                           .core = system->core,
                           .allocator = tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER),
                           .host = { .self = wrapper, .now = tna_host_now, .trace_id = tna_host_trace_id,
-                                    .value_text = values ? tna_host_value_text : NULL },
+                                    .value_text = tna_host_value_text },
+                          .log_limit = log_limit,
                           .link_parents = links,
                           .values = values,
                           .version = { TINYACTORS_NAPI_VERSION, (uint32_t)(sizeof TINYACTORS_NAPI_VERSION - 1u) },
@@ -311,14 +343,17 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
             return tna_throw(env, "invalid", "setTraceSink: options.resource must map names to strings");
         }
         system->trace_masks = masks;
-        tna_otlp_set_wanted(&system->otlp, masks.kinds, masks.watched_kinds);
+        tna_otlp_set_wanted(&system->otlp, masks.kinds, masks.watched_kinds, masks.unsampled_kinds);
         ta_system_set_trace_ratio(system->core, parts, TNA_SAMPLE_WHOLE);
-        tna_trace_masks asked = tna_trace_masks_asked(&masks);
+        tna_trace_masks asked = tna_trace_masks_asked(&masks, system->otlp.config.log_limit != 0);
         result = ta_system_set_trace_sink(system->core, tna_trace_sink_adapter(system, &asked));
         if (result != TA_OK) {
             tna_otlp_destroy(&system->otlp);
             system->tracing = false;
         }
+    }
+    if (result == TA_OK) {
+        result = tna_system_refresh_log_sink(system);
     }
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result), "setTraceSink: core refused the sink");
@@ -356,9 +391,9 @@ napi_value tna_configure_traces_method(napi_env env, napi_callback_info info) {
         return undefined;
     }
     system->trace_masks = masks;
-    tna_otlp_set_wanted(&system->otlp, masks.kinds, masks.watched_kinds);
+    tna_otlp_set_wanted(&system->otlp, masks.kinds, masks.watched_kinds, masks.unsampled_kinds);
     ta_system_set_trace_ratio(system->core, parts, TNA_SAMPLE_WHOLE);
-    tna_trace_masks asked = tna_trace_masks_asked(&masks);
+    tna_trace_masks asked = tna_trace_masks_asked(&masks, system->otlp.config.log_limit != 0);
     ta_system_set_trace_sink(system->core, tna_trace_sink_adapter(system, &asked));
     return undefined;
 }

@@ -63,6 +63,11 @@ typedef struct {
      * spans only when they are wanted. */
     uint32_t wanted_kinds;
     uint32_t wanted_watched_kinds; /* the same, for watched contexts */
+    uint32_t wanted_unsampled_kinds; /* the same, for unsampled ones */
+    /* Logs (napi ADR 0017 section 7): failures and <log> become OTLP log
+     * records, at most `log_limit` per definition and name per second;
+     * 0 writes no logs. */
+    uint32_t log_limit;
 } tna_otlp_config;
 
 /* A growable byte buffer over an allocator. */
@@ -112,6 +117,17 @@ typedef struct {
     uint32_t open_index_capacity; /* a power of two, at least twice `open_capacity` */
     uint64_t last_now;         /* the clock at the last span boundary: span events use it */
     tna_otlp_span lifecycle;   /* a lifecycle span while it is built */
+    tna_otlp_buf logs;         /* encoded ScopeLogs.log_records entries */
+    tna_otlp_buf log_body;     /* a log's body while its attributes are built */
+    tna_otlp_buf log_request;  /* the last request tna_otlp_take_logs() built */
+    uint32_t log_count;
+    /* Rate limits, one slot per (definition, name) hash; a collision shares one. */
+    struct {
+        uint64_t key;
+        uint64_t window; /* the second the count is for */
+        uint32_t count;
+        uint32_t suppressed;
+    } log_rates[256];
     tna_otlp_name *name_slots; /* open addressing, a power of two */
     uint32_t name_capacity;
     uint32_t name_count;
@@ -147,14 +163,26 @@ void tna_otlp_write(tna_otlp *otlp, const ta_trace_record *record);
  */
 ta_str tna_otlp_take(tna_otlp *otlp);
 
+/* A <log> as an INFO log record; its value's text comes from the host. */
+void tna_otlp_log(tna_otlp *otlp, const ta_log_record *record);
+
+/*
+ * The log records written since the last take, as one encoded
+ * ExportLogsServiceRequest for `/v1/logs`, and forgets them. Empty when
+ * there are none. Valid until the next write or take.
+ */
+ta_str tna_otlp_take_logs(tna_otlp *otlp);
+
 /* Ends every open span now, marked `scxml.incomplete`, so the next take
  * carries them: the sink is going away. */
 void tna_otlp_end_all(tna_otlp *otlp);
 
 /* Changes the kinds the user asked for (configureTraces). */
-static inline void tna_otlp_set_wanted(tna_otlp *otlp, uint32_t kinds, uint32_t watched_kinds) {
+static inline void tna_otlp_set_wanted(tna_otlp *otlp, uint32_t kinds, uint32_t watched_kinds,
+                                       uint32_t unsampled_kinds) {
     otlp->config.wanted_kinds = kinds;
     otlp->config.wanted_watched_kinds = watched_kinds;
+    otlp->config.wanted_unsampled_kinds = unsampled_kinds;
 }
 
 /* Spans still open (for tests). */

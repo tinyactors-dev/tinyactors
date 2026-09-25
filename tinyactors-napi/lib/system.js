@@ -12,6 +12,7 @@ const { ActorId } = require('./actor');
 const { EventNames } = require('./events');
 const { SessionImage, handleOf } = require('./image');
 const { traceConfig } = require('./tracing');
+const { buildSnapshot } = require('./metrics');
 
 const NO_STATE = 4294967295;
 
@@ -63,6 +64,18 @@ let effectHandler;
 const SCXML_INVOKER = 'http://www.w3.org/TR/scxml/';
 const SCXML_ALIASES = new Set(['scxml', 'http://www.w3.org/TR/scxml', SCXML_INVOKER]);
 
+// Systems created in this process, to tell their metric streams apart.
+let systemCount = 0;
+
+// core's counters are uint64 (bigints across the binding); as numbers.
+function numbers(counters) {
+  const out = {};
+  for (const [key, value] of Object.entries(counters)) {
+    out[key] = Number(value);
+  }
+  return out;
+}
+
 class System {
   #native;
   #events;
@@ -78,9 +91,12 @@ class System {
   #logSink;
   #traceSink;
   #traceConfig = {};
-  // Active watchTraces() handles, and every definition's family for them.
+  // Active watchTraces() handles, and every definition's identity, for the
+  // watches and for metrics().
   #watches = new Set();
-  #definitionFamilies = new Map();
+  #definitionIdentities = new Map();
+  #startTime = Date.now();
+  #metricsName = String((systemCount += 1));
   // Aborted on close(): the signal every EffectContext carries.
   #lifetime = new AbortController();
   #effectContext;
@@ -219,11 +235,18 @@ class System {
   }
 
   /**
-   * Hand traces to `sink` as OTLP protobuf (napi ADR 0016): once per pump
-   * turn, one Uint8Array holding one ExportTraceServiceRequest with the
-   * spans that ended in that turn. Post it to any OTLP/HTTP `/v1/traces`
-   * endpoint as it is (Content-Type: application/x-protobuf), or decode it
-   * with decodeTraces(). Without a sink (undefined) core builds no record.
+   * Hand traces and logs to `sink(traces, logs)` as OTLP protobuf (napi
+   * ADRs 0016 and 0017): once per pump turn, `traces` is one Uint8Array
+   * holding one ExportTraceServiceRequest with the spans that ended in that
+   * turn (empty when none ended), and `logs` one ExportLogsServiceRequest
+   * with the turn's log records, or undefined. Post them to an OTLP/HTTP
+   * endpoint's `/v1/traces` and `/v1/logs` as they are (Content-Type:
+   * application/x-protobuf), or decode traces with decodeTraces(). Logs are
+   * failures (an action that failed, an error.* raised, a run stopped for
+   * lack of memory) and <log>, written whatever the sampling, at most
+   * `logLimit` (default 20) per definition and name per second; the next
+   * log that passes carries `tinyactors.suppressed`. `logs: false` writes
+   * none. Without a sink (undefined) core builds no record.
    *
    * options:
    * - detail: "summary" (default: a span per macrostep, lifecycle, and
@@ -253,8 +276,11 @@ class System {
     if (sink !== undefined && typeof sink !== 'function') {
       throw new TinyactorsError('setTraceSink(): expected a function or undefined', 'invalid');
     }
-    const { unsampled = false, resource = {}, values = false, valueLimit = 256, parent = 'cause', seed } =
-      options ?? {};
+    const { unsampled = false, resource = {}, values = false, valueLimit = 256, parent = 'cause', seed,
+            logs = true, logLimit = 20 } = options ?? {};
+    if (!Number.isInteger(logLimit) || logLimit < 1 || logLimit > 1e6) {
+      throw new TinyactorsError('setTraceSink(): options.logLimit must be an integer from 1 to 1000000', 'invalid');
+    }
     const config = traceConfig(options ?? {}, 'setTraceSink()');
     if (parent !== 'cause' && parent !== 'link') {
       throw new TinyactorsError('setTraceSink(): options.parent must be "cause" or "link"', 'invalid');
@@ -275,12 +301,13 @@ class System {
     const previous = this.#traceSink;
     const remaining = this.#native.setTraceSink(sink !== undefined, config.kinds, config.watchedKinds,
                                                 unsampled === true ? config.kinds : 0, config.sample,
-                                                values === true, valueLimit, parent === 'link', pairs, seed);
+                                                values === true, valueLimit, parent === 'link', pairs, seed,
+                                                logs === false ? 0 : logLimit);
     this.#traceSink = sink;
     this.#traceConfig = { detail: options?.detail, kinds: options?.kinds, sample: options?.sample,
                           unsampled: unsampled === true };
     if (remaining !== undefined) {
-      previous?.(remaining);
+      previous?.(remaining.traces, remaining.logs);
     }
   }
 
@@ -358,7 +385,7 @@ class System {
       watch.families.forEach((family) => families.add(family));
     }
     const definitions = [];
-    for (const [id, family] of this.#definitionFamilies) {
+    for (const [id, { family }] of this.#definitionIdentities) {
       if (families.has(family)) {
         definitions.push(id);
       }
@@ -373,7 +400,7 @@ class System {
         this.#logSink?.(payload);
         return;
       case 'trace':
-        this.#traceSink?.(payload);
+        this.#traceSink?.(payload.traces, payload.logs);
         return;
       case 'io':
         this.#runIO(payload);
@@ -587,9 +614,9 @@ class System {
     const compiled = compile(this.#native, spec);
     const id = core.system_register_definition(this.#native, compiled.out);
     const definition = new Definition(this, this.#native, id);
-    const family = definition.identity.family;
-    this.#definitionFamilies.set(id, family);
-    if (this.#watchedFamily(family)) {
+    const identity = definition.identity;
+    this.#definitionIdentities.set(id, identity);
+    if (this.#watchedFamily(identity.family)) {
       this.#applyWatches();
     }
     return definition;
@@ -1071,6 +1098,60 @@ class System {
    */
   stats() {
     return this.#native.stats();
+  }
+
+  /**
+   * A metrics snapshot as plain data (napi ADR 0017 section 7, core ADR
+   * 0072): core's counters per definition, state occupancy, and napi's
+   * messages and memory, as { startTime, time, system, metrics }, where
+   * each metric is { name, unit, kind: "sum" | "gauge", points:
+   * [{ attributes, value }] }. Read it from an OpenTelemetry observable
+   * instrument, or encode it with metricsToOTLP(). Cheap enough to call at
+   * every export interval: it walks definitions, not actors.
+   */
+  metrics() {
+    const native = this.#native;
+    const definitions = [];
+    for (const [id, identity] of this.#definitionIdentities) {
+      let counters;
+      try {
+        counters = core.definition_counters(native, id);
+      } catch (error) {
+        if (error instanceof TinyactorsError && error.code === 'not-found') {
+          this.#definitionIdentities.delete(id); // freed: its counts live on in the system's totals
+          continue;
+        }
+        throw error;
+      }
+      const occupancy = [];
+      core.definition_occupancy(native, id).forEach((actors, state) => {
+        if (actors !== 0) {
+          occupancy.push({ state: core.definition_state(native, id, state).id, actors });
+        }
+      });
+      definitions.push({
+        attributes: { 'tinyactors.definition.family': identity.family,
+                      'tinyactors.definition.revision': identity.revision },
+        counters: numbers(counters),
+        occupancy,
+      });
+    }
+    const stats = native.stats();
+    const memory = {};
+    for (const [category, counters] of Object.entries(stats.memory)) {
+      if (category !== 'total') {
+        memory[category] = counters.bytesInUse;
+      }
+    }
+    return buildSnapshot({
+      startTime: this.#startTime,
+      time: Date.now(),
+      systemName: this.#metricsName,
+      system: numbers(core.system_counters(native)),
+      definitions,
+      host: { queued: stats.messages.queued, delivered: stats.messages.delivered,
+              deadLetters: stats.messages.deadLetters, memory },
+    });
   }
 
   /**

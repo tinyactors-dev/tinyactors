@@ -6,6 +6,7 @@ const { createSystem } = require('./lib/system');
 const { statechart, literal } = require('./lib/statechart');
 const { TRACE_KINDS, parseTraceparent, formatTraceparent, stepSpanId } = require('./lib/tracing');
 const { decodeTraces } = require('./lib/otlp');
+const { metricsToOTLP } = require('./lib/metrics');
 
 module.exports = {
   version: native.version,
@@ -20,4 +21,6 @@ module.exports = {
   parseTraceparent,
   formatTraceparent,
   stepSpanId,
+  // Metrics (core ADR 0072, napi ADR 0017): system.metrics() and its OTLP bytes.
+  metricsToOTLP,
 };

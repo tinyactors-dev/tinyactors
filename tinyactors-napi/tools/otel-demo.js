@@ -11,7 +11,7 @@
 // macrostep it causes lands in one trace under the request's span.
 
 const { randomBytes } = require('node:crypto');
-const { createSystem, statechart, formatTraceparent } = require('..');
+const { createSystem, statechart, formatTraceparent, metricsToOTLP } = require('..');
 const { OTLPExporter } = require('./otlp');
 
 function charts(system) {
@@ -101,6 +101,7 @@ async function main() {
     await system.flush();
   }
   const end = Date.now();
+  exporter.metrics(metricsToOTLP(system.metrics(), { resource: { 'service.name': 'tinyactors-demo' } }));
   system.close();
   const sent = await exporter.flush();
   await postRequestSpan(endpoint, { traceId, spanId: requestSpan, start, end });

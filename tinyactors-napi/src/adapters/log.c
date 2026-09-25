@@ -4,6 +4,12 @@
 
 static void tna_log_write(void *self, const ta_log_record *record) {
     tna_system *system = self;
+    if (system->tracing) {
+        tna_otlp_log(&system->otlp, record); /* an OTLP log record (napi ADR 0017 section 7) */
+    }
+    if (!system->log_to_js) {
+        return;
+    }
     tna_effect effect = {
         .kind = TNA_EFFECT_LOG,
         .source = record->source,

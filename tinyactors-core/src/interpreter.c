@@ -1714,6 +1714,12 @@ static ta_result ta_exec_send(ta_interpreter *it, const ta_send_action *send) {
             ta_value_retain(&data);
         }
         result = ta_send_commit(it, &state);
+        if (result == TA_OK) {
+            TA_COUNT(it->system, it->actor->definition, sends);
+            if (state.delay != 0) {
+                TA_COUNT(it->system, it->actor->definition, sends_delayed);
+            }
+        }
         if (traced && result == TA_OK && state.sent) {
             ta_trace_sent(it, &state, &data);
         }
@@ -1851,7 +1857,9 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
             }
             if (status == TA_OP_OK && send_id != 0) {
                 (void)ta_actor_cancel_held_send(it->actor, send_id);
-                (void)ta_timer_cancel(&it->system->timers, ta_actor_timers(it->actor), send_id);
+                if (ta_timer_cancel(&it->system->timers, ta_actor_timers(it->actor), send_id) == TA_OK) {
+                    TA_COUNT(it->system, it->actor->definition, sends_cancelled);
+                }
                 if (ta_tracing(it, TA_TRACE_CANCELLED)) {
                     ta_trace_record record = ta_trace_record_now(it, TA_TRACE_CANCELLED);
                     record.send = send_id;

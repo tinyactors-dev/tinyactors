@@ -14,6 +14,7 @@
 
 #include "adapters/invoker.h"
 #include "adapters/io.h"
+#include "adapters/log.h"
 #include "router.h"
 
 ta_result tna_system_create(tna_system **out) {
@@ -153,6 +154,11 @@ uint64_t tna_system_wall_ns(void) {
         return 0;
     }
     return (uint64_t)now.tv_sec * 1000000000u + (uint64_t)now.tv_nsec;
+}
+
+ta_result tna_system_refresh_log_sink(tna_system *system) {
+    bool wanted = system->log_to_js || (system->tracing && system->otlp.config.log_limit != 0);
+    return ta_system_set_log_sink(system->core, wanted ? tna_log_sink_adapter(system) : (ta_log_sink){ 0 });
 }
 
 uint64_t tna_system_os_seed(tna_system *system) {

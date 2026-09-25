@@ -129,6 +129,8 @@ struct tna_system {
      * hands the spans that ended to JavaScript as bytes, once per turn. */
     tna_otlp otlp;
     bool tracing;
+    /* <log> records go to JavaScript's log sink (setLogSink). */
+    bool log_to_js;
     /* What the sink asks core for, and what is watched (napi ADR 0017). */
     tna_trace_masks trace_masks;
     tna_trace_watch trace_watch;
@@ -169,6 +171,9 @@ bool tna_system_effect(tna_system *system, const tna_effect *effect);
 void tna_system_trace(tna_system *system, const ta_trace_record *record);
 /* Wall-clock time in nanoseconds since the Unix epoch. */
 uint64_t tna_system_wall_ns(void);
+/* Installs core's log sink when JavaScript or the trace encoder wants
+ * <log> records (napi ADR 0017 section 7), and the null sink otherwise. */
+ta_result tna_system_refresh_log_sink(tna_system *system);
 /* 64 random bits from the OS, to seed core's trace-ID generator once per
  * sink (core ADR 0073: core never reads the OS). */
 uint64_t tna_system_os_seed(tna_system *system);

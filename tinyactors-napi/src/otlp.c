@@ -51,7 +51,26 @@ enum {
     F_ANY_ARRAY = 5,
     /* ArrayValue */
     F_ARRAY_VALUES = 1,
+    /* ExportLogsServiceRequest, ResourceLogs, ScopeLogs */
+    F_REQUEST_RESOURCE_LOGS = 1,
+    F_RL_RESOURCE = 1,
+    F_RL_SCOPE_LOGS = 2,
+    F_SL_SCOPE = 1,
+    F_SL_LOG_RECORDS = 2,
+    /* LogRecord */
+    F_LOG_TIME = 1,
+    F_LOG_SEVERITY_NUMBER = 2,
+    F_LOG_SEVERITY_TEXT = 3,
+    F_LOG_BODY = 5,
+    F_LOG_ATTRIBUTES = 6,
+    F_LOG_FLAGS = 8,
+    F_LOG_TRACE_ID = 9,
+    F_LOG_SPAN_ID = 10,
+    F_LOG_OBSERVED_TIME = 11,
+    F_LOG_EVENT_NAME = 12,
 };
+
+enum { SEVERITY_INFO = 9, SEVERITY_WARN = 13 };
 
 enum { WIRE_VARINT = 0, WIRE_I64 = 1, WIRE_LEN = 2 };
 enum { SPAN_KIND_INTERNAL = 1, STATUS_CODE_ERROR = 2 };
@@ -601,6 +620,9 @@ void tna_otlp_init(tna_otlp *otlp, const tna_otlp_config *config) {
     tna_buf_init(&otlp->label, allocator);
     tna_buf_init(&otlp->text, allocator);
     tna_span_init(&otlp->lifecycle, allocator);
+    tna_buf_init(&otlp->logs, allocator);
+    tna_buf_init(&otlp->log_body, allocator);
+    tna_buf_init(&otlp->log_request, allocator);
 }
 
 ta_result tna_otlp_set_resource(tna_otlp *otlp, const tna_otlp_attribute *attributes, uint32_t count) {
@@ -1226,6 +1248,256 @@ static bool tna_lifecycle(tna_otlp *otlp, const ta_trace_record *record, uint64_
     return ok;
 }
 
+
+/* ------------------------------------------------------------------------
+ * Logs (napi ADR 0017 section 7, core ADR 0072 section 2)
+ */
+
+typedef struct {
+    uint64_t now;
+    uint32_t severity;
+    ta_str severity_text;
+    ta_str event_name;          /* LogRecord.event_name: what happened */
+    ta_str body;
+    const ta_trace_context *context;
+    ta_step_key key;             /* the step the log belongs to */
+    uint64_t definition;
+    ta_str key_name;             /* what the rate limit counts by, with the definition */
+} tna_log_line;
+
+static uint64_t tna_log_key(uint64_t definition, ta_str name) {
+    uint64_t hash = definition * 0x9e3779b97f4a7c15ull;
+    for (uint32_t at = 0; at < name.len; at += 1u) {
+        hash = (hash ^ (uint8_t)name.ptr[at]) * 0x100000001b3ull;
+    }
+    return hash == 0 ? 1u : hash;
+}
+
+/* Whether a log passes the rate limit; `*suppressed` is how many were dropped before it. */
+static bool tna_log_allowed(tna_otlp *otlp, const tna_log_line *line, uint32_t *suppressed) {
+    uint64_t key = tna_log_key(line->definition, line->key_name);
+    uint64_t second = line->now / 1000000000ull;
+    uint32_t slot = (uint32_t)(key & 255u);
+    if (otlp->log_rates[slot].key != key || otlp->log_rates[slot].window != second) {
+        uint32_t carried = otlp->log_rates[slot].key == key ? otlp->log_rates[slot].suppressed : 0u;
+        otlp->log_rates[slot].key = key;
+        otlp->log_rates[slot].window = second;
+        otlp->log_rates[slot].count = 0;
+        otlp->log_rates[slot].suppressed = carried;
+    }
+    if (otlp->log_rates[slot].count >= otlp->config.log_limit) {
+        otlp->log_rates[slot].suppressed += 1u;
+        return false;
+    }
+    otlp->log_rates[slot].count += 1u;
+    *suppressed = otlp->log_rates[slot].suppressed;
+    otlp->log_rates[slot].suppressed = 0;
+    return true;
+}
+
+/* Appends one LogRecord whose attributes are already in `otlp->scratch`. */
+static bool tna_log_append(tna_otlp *otlp, const tna_log_line *line) {
+    uint32_t suppressed = 0;
+    if (!tna_log_allowed(otlp, line, &suppressed)) {
+        return true;
+    }
+    tna_otlp_buf *attributes = &otlp->scratch;
+    if (suppressed != 0 &&
+        !tna_kv_int(attributes, F_LOG_ATTRIBUTES, LIT("tinyactors.suppressed"), (int64_t)suppressed)) {
+        return false;
+    }
+    bool traced = !tna_context_empty(line->context);
+    size_t body = tna_len_field_size(F_ANY_STRING, line->body.len);
+    size_t size = 9u + 9u /* time, observed time */ + 2u + tna_len_field_size(F_LOG_SEVERITY_TEXT, line->severity_text.len) +
+                  tna_len_field_size(F_LOG_BODY, body) + attributes->len +
+                  tna_len_field_size(F_LOG_EVENT_NAME, line->event_name.len) +
+                  (traced ? 5u + tna_len_field_size(F_LOG_TRACE_ID, 16) + tna_len_field_size(F_LOG_SPAN_ID, 8) : 0u);
+    if (!tna_buf_room(&otlp->logs, tna_len_field_size(F_SL_LOG_RECORDS, size))) {
+        return false;
+    }
+    tna_otlp_buf *out = &otlp->logs;
+    tna_put_len_header(out, F_SL_LOG_RECORDS, size);
+    tna_put_tag(out, F_LOG_TIME, WIRE_I64);
+    tna_put_fixed64(out, line->now);
+    tna_put_tag(out, F_LOG_OBSERVED_TIME, WIRE_I64);
+    tna_put_fixed64(out, line->now);
+    tna_put_tag(out, F_LOG_SEVERITY_NUMBER, WIRE_VARINT);
+    tna_put_varint(out, line->severity);
+    tna_put_len_header(out, F_LOG_SEVERITY_TEXT, line->severity_text.len);
+    tna_put_bytes(out, line->severity_text.ptr, line->severity_text.len);
+    tna_put_len_header(out, F_LOG_BODY, body);
+    tna_put_len_header(out, F_ANY_STRING, line->body.len);
+    tna_put_bytes(out, line->body.ptr, line->body.len);
+    tna_put_bytes(out, attributes->data, attributes->len);
+    tna_put_len_header(out, F_LOG_EVENT_NAME, line->event_name.len);
+    tna_put_bytes(out, line->event_name.ptr, line->event_name.len);
+    if (traced) {
+        uint8_t trace_id[16];
+        tna_trace_id_of(otlp, line->context, trace_id);
+        tna_put_tag(out, F_LOG_FLAGS, 5u /* I32 */);
+        uint32_t flags = line->context->flags & TA_TRACE_FLAG_SAMPLED;
+        uint8_t le[4] = { (uint8_t)flags, 0, 0, 0 };
+        tna_put_bytes(out, le, 4);
+        tna_put_len_header(out, F_LOG_TRACE_ID, 16);
+        tna_put_bytes(out, trace_id, 16);
+        tna_put_len_header(out, F_LOG_SPAN_ID, 8);
+        tna_put_id64(out, ta_step_key_span_id(line->key));
+    }
+    otlp->log_count += 1u;
+    return true;
+}
+
+/* The attributes every log of a record carries, into `otlp->scratch`. */
+static bool tna_log_attributes(tna_otlp *otlp, const ta_trace_record *record) {
+    tna_otlp_buf *buf = &otlp->scratch;
+    buf->len = 0;
+    char decimal[24];
+    bool ok = tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.session_id"),
+                            tna_decimal(record->key.session, decimal)) &&
+              tna_kv_int(buf, F_LOG_ATTRIBUTES, LIT("scxml.macrostep"), (int64_t)record->key.macrostep) &&
+              tna_kv_int(buf, F_LOG_ATTRIBUTES, LIT("scxml.microstep"), record->key.microstep);
+    ta_definition_inspection view;
+    if (ok && ta_definition_inspect(otlp->config.core, record->definition, &view) == TA_OK) {
+        ok = tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("tinyactors.definition.family"), view.identity.family.name) &&
+             tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("tinyactors.definition.revision"),
+                           (ta_str){ (const char *)view.identity.revision.ptr, view.identity.revision.len });
+    }
+    if (ok && record->position.state != TA_STATE_NONE) {
+        ok = tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.state"),
+                           tna_state_name(otlp, record->definition, record->position.state));
+    }
+    if (ok && record->action != TA_ACTION_NONE) {
+        ok = tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.action"),
+                           tna_action_name(otlp, record->definition, record->action));
+    }
+    if (ok && record->has_fault) {
+        ok = tna_kv_int(buf, F_LOG_ATTRIBUTES, LIT("scxml.fault.code"), (int64_t)record->fault.code);
+    }
+    return ok;
+}
+
+static bool tna_starts_with(ta_str text, ta_str prefix) {
+    return text.len >= prefix.len && memcmp(text.ptr, prefix.ptr, prefix.len) == 0;
+}
+
+/* A failure record as a WARN log (core ADR 0072 section 5). Other records log nothing. */
+static bool tna_log_failure(tna_otlp *otlp, const ta_trace_record *record, uint64_t now) {
+    tna_log_line line = { .now = now, .severity = SEVERITY_WARN, .severity_text = LIT("WARN"),
+                          .context = &record->context, .key = record->key, .definition = record->definition };
+    switch (record->kind) {
+    case TA_TRACE_ACTION_FAILED:
+        line.event_name = LIT("tinyactors.action.failed");
+        /* The body names the error the failure raised, error.execution or a detail below it. */
+        line.body = record->has_fault && record->fault.detail != 0 ? tna_event_name(otlp, record->fault.detail)
+                                                                    : LIT("an action failed");
+        break;
+    case TA_TRACE_STOPPED:
+        line.event_name = LIT("tinyactors.run.stopped");
+        line.body = LIT("the run stopped: an allocation failed (ADR 0070)");
+        break;
+    case TA_TRACE_RAISED: {
+        if (record->event == NULL) {
+            return true;
+        }
+        ta_str name = tna_event_name(otlp, record->event->name);
+        if (!tna_starts_with(name, LIT("error."))) {
+            return true;
+        }
+        line.event_name = LIT("tinyactors.error.raised");
+        line.body = name;
+        break;
+    }
+    default:
+        return true;
+    }
+    line.key_name = line.event_name;
+    /* The body may live in `text`, which the attributes reuse: copy it first. */
+    otlp->log_body.len = 0;
+    if (!tna_buf_room(&otlp->log_body, line.body.len)) {
+        return false;
+    }
+    tna_put_bytes(&otlp->log_body, line.body.ptr, line.body.len);
+    line.body = (ta_str){ (const char *)otlp->log_body.data, line.body.len };
+    return tna_log_attributes(otlp, record) &&
+           (record->kind != TA_TRACE_RAISED ||
+            tna_kv_string(&otlp->scratch, F_LOG_ATTRIBUTES, LIT("scxml.event.name"), line.body)) &&
+           tna_log_append(otlp, &line);
+}
+
+void tna_otlp_log(tna_otlp *otlp, const ta_log_record *record) {
+    if (otlp->config.log_limit == 0) {
+        return;
+    }
+    ta_str text = { 0 };
+    if (record->has_value && otlp->config.host.value_text != NULL &&
+        !otlp->config.host.value_text(otlp->config.host.self, &record->value, &text)) {
+        text = (ta_str){ 0 };
+    }
+    uint64_t now = otlp->config.host.now(otlp->config.host.self);
+    /* The body: "label: value", the label, or the value. */
+    otlp->log_body.len = 0;
+    bool ok = tna_buf_room(&otlp->log_body, record->label.len + 2u + text.len);
+    if (ok) {
+        tna_put_bytes(&otlp->log_body, record->label.ptr, record->label.len);
+        if (record->label.len != 0 && text.len != 0) {
+            tna_put_bytes(&otlp->log_body, ": ", 2);
+        }
+        tna_put_bytes(&otlp->log_body, text.ptr, text.len);
+    }
+    tna_otlp_buf *buf = &otlp->scratch;
+    buf->len = 0;
+    char decimal[24];
+    ok = ok && tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.session_id"), tna_decimal(record->key.session, decimal));
+    if (ok && record->label.len != 0) {
+        ok = tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.log.label"), record->label);
+    }
+    tna_log_line line = { .now = now, .severity = SEVERITY_INFO, .severity_text = LIT("INFO"),
+                          .event_name = LIT("scxml.log"), .context = &record->context, .key = record->key,
+                          .key_name = record->label.len != 0 ? record->label : LIT("scxml.log"),
+                          .body = { (const char *)otlp->log_body.data, (uint32_t)otlp->log_body.len } };
+    ta_actor_inspection view;
+    if (record->source.kind == TA_ACTOR_REF_RUNTIME &&
+        ta_actor_inspect((ta_system *)otlp->config.core, record->source.as.runtime, &view) == TA_OK) {
+        line.definition = view.definition_id;
+    }
+    if (!ok || !tna_log_append(otlp, &line)) {
+        otlp->dropped += 1u;
+    }
+}
+
+ta_str tna_otlp_take_logs(tna_otlp *otlp) {
+    otlp->log_request.len = 0;
+    if (otlp->log_count == 0) {
+        return (ta_str){ NULL, 0 };
+    }
+    ta_str name = LIT("tinyactors");
+    ta_str version = otlp->config.version;
+    size_t scope = tna_len_field_size(F_SCOPE_NAME, name.len) +
+                   (version.len != 0 ? tna_len_field_size(F_SCOPE_VERSION, version.len) : 0);
+    size_t scope_logs = tna_len_field_size(F_SL_SCOPE, scope) + otlp->logs.len;
+    size_t resource_logs = tna_len_field_size(F_RL_RESOURCE, otlp->resource.len) +
+                           tna_len_field_size(F_RL_SCOPE_LOGS, scope_logs);
+    if (!tna_buf_room(&otlp->log_request, tna_len_field_size(F_REQUEST_RESOURCE_LOGS, resource_logs))) {
+        return (ta_str){ NULL, 0 };
+    }
+    tna_otlp_buf *out = &otlp->log_request;
+    tna_put_len_header(out, F_REQUEST_RESOURCE_LOGS, resource_logs);
+    tna_put_len_header(out, F_RL_RESOURCE, otlp->resource.len);
+    tna_put_bytes(out, otlp->resource.data, otlp->resource.len);
+    tna_put_len_header(out, F_RL_SCOPE_LOGS, scope_logs);
+    tna_put_len_header(out, F_SL_SCOPE, scope);
+    tna_put_len_header(out, F_SCOPE_NAME, name.len);
+    tna_put_bytes(out, name.ptr, name.len);
+    if (version.len != 0) {
+        tna_put_len_header(out, F_SCOPE_VERSION, version.len);
+        tna_put_bytes(out, version.ptr, version.len);
+    }
+    tna_put_bytes(out, otlp->logs.data, otlp->logs.len);
+    otlp->logs.len = 0;
+    otlp->log_count = 0;
+    return (ta_str){ (const char *)out->data, (uint32_t)out->len };
+}
+
 void tna_otlp_write(tna_otlp *otlp, const ta_trace_record *record) {
     if ((uint32_t)record->kind > (uint32_t)TA_TRACE_IGNORED) {
         otlp->dropped += 1u;
@@ -1236,6 +1508,19 @@ void tna_otlp_write(tna_otlp *otlp, const ta_trace_record *record) {
     if (record->kind <= TA_TRACE_MICROSTEP && record->kind != TA_TRACE_CONDITION) {
         now = otlp->config.host.now(otlp->config.host.self);
         otlp->last_now = now;
+    }
+    if (otlp->config.log_limit != 0 && !tna_log_failure(otlp, record, now)) {
+        otlp->dropped += 1u;
+    }
+    /* A record of an unsampled trace came for its log only, and a kind the
+     * user did not ask for was asked of core for logs or for ending spans. */
+    bool sampled = tna_context_empty(&record->context) || (record->context.flags & TA_TRACE_FLAG_SAMPLED) != 0;
+    uint32_t wanted = !sampled ? otlp->config.wanted_unsampled_kinds
+                      : (record->context.detail & TA_TRACE_DETAIL_WATCHED) != 0 ? otlp->config.wanted_watched_kinds
+                                                                               : otlp->config.wanted_kinds;
+    bool lifecycle = record->kind <= TA_TRACE_DESTROYED;
+    if (!lifecycle && (wanted & TA_TRACE_BIT(record->kind)) == 0) {
+        return;
     }
     size_t spans_before = otlp->spans.len;
     uint32_t count_before = otlp->span_count;
@@ -1333,6 +1618,9 @@ void tna_otlp_destroy(tna_otlp *otlp) {
     }
     tna_open_index_free(otlp);
     tna_span_free(&otlp->lifecycle);
+    tna_buf_free(&otlp->logs);
+    tna_buf_free(&otlp->log_body);
+    tna_buf_free(&otlp->log_request);
     tna_buf_free(&otlp->names);
     tna_buf_free(&otlp->resource);
     tna_buf_free(&otlp->spans);
