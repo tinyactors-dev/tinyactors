@@ -62,46 +62,6 @@ function formatTraceparent({ traceId, spanId, sampled = true, flags }) {
   return `00-${traceId}-${spanId}-${bits.toString(16).padStart(2, '0')}`;
 }
 
-// What post(), send() and spawn() pass to the addon for options.traceparent.
-function nativeTrace(traceparent, what) {
-  if (traceparent === undefined) {
-    return undefined;
-  }
-  const parsed = parseTraceparent(traceparent);
-  if (parsed === undefined) {
-    throw new TinyactorsError(`${what}: options.traceparent is not a W3C traceparent`, 'invalid');
-  }
-  return {
-    high: BigInt(`0x${parsed.traceId.slice(0, 16)}`),
-    low: BigInt(`0x${parsed.traceId.slice(16)}`),
-    flags: parsed.flags,
-    span: BigInt(`0x${parsed.parentSpanId}`),
-  };
-}
-
-// The same, as ta_actor_spawn_params.trace for the generated binding. With
-// no traceparent, `started` is a new trace ([high, low] bigints) the system
-// started because a sink is installed (napi ADR 0016 point 4), or undefined.
-function spawnTrace(traceparent, started) {
-  const trace = nativeTrace(traceparent, 'spawn()');
-  if (trace === undefined) {
-    if (started === undefined) {
-      return undefined;
-    }
-    return {
-      context: { trace_id_high: started[0], trace_id_low: started[1], flags: 1 },
-      cause: { session: 0n, macrostep: 0n, microstep: 0 },
-    };
-  }
-  return {
-    context: { trace_id_high: trace.high, trace_id_low: trace.low, flags: trace.flags },
-    cause: { session: 0n, macrostep: trace.span, microstep: 0 },
-  };
-}
-
-// ------------------------------------------------------------------------
-// Span IDs, derived from step keys exactly as core's ta_step_key_span_id()
-
 const MASK64 = (1n << 64n) - 1n;
 
 function mix(value) {
@@ -132,26 +92,10 @@ function stepSpanId(session, macrostep, microstep = 0) {
   return hex16(span === 0n ? 1n : span);
 }
 
-/** A traceparent naming the step a send or an invocation came from (the "trace" of an I/O request). */
-function traceparentOf(trace) {
-  if (trace === undefined) {
-    return undefined;
-  }
-  const traceId = hex16(trace.traceIdHigh) + hex16(trace.traceIdLow);
-  if (traceId === ZERO_TRACE) {
-    return undefined;
-  }
-  const { session, macrostep, microstep } = trace.cause;
-  return formatTraceparent({ traceId, spanId: stepSpanId(session, macrostep, microstep), flags: trace.flags });
-}
-
 module.exports = {
   TRACE_KINDS,
   kindMask,
   parseTraceparent,
   formatTraceparent,
-  traceparentOf,
   stepSpanId,
-  nativeTrace,
-  spawnTrace,
 };

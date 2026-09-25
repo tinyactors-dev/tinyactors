@@ -11,7 +11,7 @@ const { DefinitionBuilder, needsJavaScript } = require('./statechart');
 const { ActorId } = require('./actor');
 const { EventNames } = require('./events');
 const { SessionImage, handleOf } = require('./image');
-const { kindMask, nativeTrace, spawnTrace, traceparentOf } = require('./tracing');
+const { kindMask } = require('./tracing');
 
 const NO_STATE = 4294967295;
 
@@ -307,12 +307,8 @@ class System {
   }
 
   #runIO(payload) {
-    // The sending step, as the traceparent a processor carries along (ADR 0015).
-    const { trace, ...request } = payload;
-    const traceparent = traceparentOf(trace);
-    if (traceparent !== undefined) {
-      request.traceparent = traceparent;
-    }
+    // payload.traceparent names the sending step, for the processor to carry along (ADR 0015).
+    const request = payload;
     const processor = this.#io.get(request.type);
     if (processor === undefined) {
       this.#communicationError(request, new TinyactorsError(`no I/O processor for "${request.type}"`, 'not-found'));
@@ -380,7 +376,7 @@ class System {
       params: payload.params,
       autoforward: payload.autoforward,
       // The invoking step, for a service that starts work elsewhere (ADR 0015).
-      traceparent: traceparentOf(payload.trace),
+      traceparent: payload.traceparent,
     });
     try {
       invocation.service = invoker.start(request, reporter);
@@ -520,10 +516,7 @@ class System {
     } else if (options.name !== undefined) {
       address = { family: { name: definition.identity.family }, name: options.name };
     }
-    const trace = spawnTrace(options.traceparent,
-                             options.traceparent === undefined && this.#traceSink !== undefined
-                               ? this.#native.newTrace()
-                               : undefined);
+    const trace = this.#native.spawnTrace(options.traceparent);
     const id = core.actor_spawn(this.#native, definition.id, address, options.binding, undefined, trace);
     return new ActorId(this, id.slot, id.generation);
   }
@@ -781,7 +774,7 @@ class System {
   #accept(target, event, data, options, completion, what) {
     const bytes = retainedBytes(data, options, what);
     const origin = originOf(options?.origin, what);
-    const trace = nativeTrace(options?.traceparent, what);
+    const trace = options?.traceparent;
     if (!(target instanceof ActorId)) {
       if (target !== null && typeof target === 'object' && 'name' in target) {
         const { family, name } = addressOf(target, what);

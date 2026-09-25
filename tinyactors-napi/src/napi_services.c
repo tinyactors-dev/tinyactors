@@ -134,7 +134,7 @@ static napi_value tna_io_payload(napi_env env, tna_napi_system *wrapper, const t
             effect->target_text.ptr != NULL ? tna_text(env, effect->target_text.ptr, effect->target_text.len)
                                             : tna_value_of(env, &effect->target));
     tna_put(env, payload, "data", tna_value_of(env, &effect->value));
-    tna_put(env, payload, "trace", tna_trace_parent_object(env, &effect->trace));
+    tna_put(env, payload, "traceparent", tna_traceparent_value(env, &effect->trace));
     tna_content(env, payload, effect);
     return payload;
 }
@@ -160,7 +160,7 @@ static napi_value tna_start_payload(napi_env env, tna_napi_system *wrapper, cons
     tna_put(env, payload, "type", tna_atom_text(env, system, effect->type));
     tna_put(env, payload, "source", tna_value_of(env, &effect->target));
     tna_put(env, payload, "params", tna_value_of(env, &effect->params));
-    tna_put(env, payload, "trace", tna_trace_parent_object(env, &effect->trace));
+    tna_put(env, payload, "traceparent", tna_traceparent_value(env, &effect->trace));
     tna_put(env, payload, "autoforward", autoforward);
     if (effect->content.ptr != NULL) {
         tna_content(env, payload, effect);

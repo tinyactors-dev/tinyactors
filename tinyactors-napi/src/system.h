@@ -128,10 +128,6 @@ struct tna_system {
      * hands the spans that ended to JavaScript as bytes, once per turn. */
     tna_otlp otlp;
     bool tracing;
-    /* Trace IDs for deliveries and spawns that bring none: a fixed sequence
-     * from `trace_seed` when seeded (tests), else the OS's random bytes. */
-    bool trace_seeded;
-    uint64_t trace_seed;
     /* The last service handle a JavaScript invoker's start was given. */
     uint64_t next_service;
     /*
@@ -169,12 +165,14 @@ bool tna_system_effect(tna_system *system, const tna_effect *effect);
 void tna_system_trace(tna_system *system, const ta_trace_record *record);
 /* Wall-clock time in nanoseconds since the Unix epoch. */
 uint64_t tna_system_wall_ns(void);
-/* A new trace ID: the next of the seeded sequence, or 16 random bytes. */
-void tna_system_trace_id(tna_system *system, uint8_t out[16]);
+/* 64 random bits from the OS, to seed core's trace-ID generator once per
+ * sink (core ADR 0073: core never reads the OS). */
+uint64_t tna_system_os_seed(tna_system *system);
 /*
- * Gives `context` a new, sampled trace ID when tracing is on and it has
- * none, so a delivery or spawn that brings no traceparent starts a trace
- * (napi ADR 0016 point 4). Core never generates IDs; the host does.
+ * Gives `context` a new trace from core's generator (core ADR 0073) when
+ * tracing is on and it has none, so a delivery or spawn that brings no
+ * traceparent starts a trace (napi ADR 0016 point 4). Core's sampler sets
+ * the sampled flag. `detail` is kept.
  */
 void tna_system_start_trace(tna_system *system, ta_trace_context *context);
 /* Asks for a turn unless one is pending or the system is quiet or closed. */

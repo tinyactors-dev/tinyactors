@@ -43,10 +43,6 @@ static napi_value tna_js_bigint(napi_env env, uint64_t value) {
     return out;
 }
 
-static bool tna_js_key_empty(const ta_step_key *key) {
-    return key->session == 0 && key->macrostep == 0 && key->microstep == 0;
-}
-
 static napi_value tna_js_key_object(napi_env env, const ta_step_key *key) {
     napi_value out = NULL;
     napi_create_object(env, &out);
@@ -56,18 +52,17 @@ static napi_value tna_js_key_object(napi_env env, const ta_step_key *key) {
     return out;
 }
 
-napi_value tna_trace_parent_object(napi_env env, const ta_trace_parent *parent) {
-    if (parent->context.trace_id_high == 0 && parent->context.trace_id_low == 0 && tna_js_key_empty(&parent->cause)) {
-        napi_value undefined = NULL;
-        napi_get_undefined(env, &undefined);
-        return undefined;
-    }
+napi_value tna_traceparent_value(napi_env env, const ta_trace_parent *parent) {
+    char text[56];
+    uint32_t needed = 0;
     napi_value out = NULL;
-    napi_create_object(env, &out);
-    tna_js_put(env, out, "traceIdHigh", tna_js_bigint(env, parent->context.trace_id_high));
-    tna_js_put(env, out, "traceIdLow", tna_js_bigint(env, parent->context.trace_id_low));
-    tna_js_put(env, out, "flags", tna_js_number(env, parent->context.flags));
-    tna_js_put(env, out, "cause", tna_js_key_object(env, &parent->cause));
+    if (ta_traceparent_format(&(ta_traceparent_format_params){ .parent = *parent, .buffer = text,
+                                                                .capacity = sizeof text, .needed = &needed }) ==
+        TA_OK) {
+        napi_create_string_latin1(env, text, needed - 1u, &out);
+    } else {
+        napi_get_undefined(env, &out);
+    }
     return out;
 }
 
@@ -82,7 +77,11 @@ static uint64_t tna_host_now(void *self) {
 
 static void tna_host_trace_id(void *self, uint8_t out[16]) {
     tna_napi_system *wrapper = self;
-    tna_system_trace_id(wrapper->system, out);
+    ta_trace_context context = ta_system_new_trace(wrapper->system->core);
+    for (int at = 0; at < 8; at += 1) {
+        out[at] = (uint8_t)(context.trace_id_high >> (56 - 8 * at));
+        out[8 + at] = (uint8_t)(context.trace_id_low >> (56 - 8 * at));
+    }
 }
 
 /*
@@ -287,8 +286,7 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
                           .version = { TINYACTORS_NAPI_VERSION, (uint32_t)(sizeof TINYACTORS_NAPI_VERSION - 1u) },
                       });
         system->tracing = true;
-        system->trace_seeded = seed_type != napi_undefined;
-        system->trace_seed = seed;
+        ta_system_seed_trace_ids(system->core, seed_type != napi_undefined ? seed : tna_system_os_seed(system));
         wrapper->trace_value_limit = value_limit;
         if (!tna_set_resource(env, system, argv[6])) {
             tna_otlp_destroy(&system->otlp);
@@ -310,55 +308,65 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
     return remaining;
 }
 
-/* newTrace(): a new trace ID as [high, low] bigints, from the system's
- * source (seeded or random), for a spawn that brings no traceparent. */
-napi_value tna_new_trace_method(napi_env env, napi_callback_info info) {
-    tna_napi_system *wrapper = tna_open_this(env, info);
-    if (wrapper == NULL) {
+/*
+ * spawnTrace(traceparent): the trace parent generated spawn takes, as the
+ * object its codec reads: the parsed traceparent, a new trace when there is
+ * none and tracing is on, or undefined.
+ */
+napi_value tna_spawn_trace_method(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value argv[1] = { NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
         return NULL;
     }
-    ta_trace_context context = { 0 };
-    tna_system_start_trace(wrapper->system, &context);
-    if (context.trace_id_high == 0 && context.trace_id_low == 0) {
-        napi_value undefined = NULL;
-        napi_get_undefined(env, &undefined);
-        return undefined;
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    ta_trace_parent parent;
+    if (wrapper == NULL || !tna_trace_argument(env, argc < 1 ? NULL : argv[0], &parent)) {
+        return NULL;
     }
+    tna_system_start_trace(wrapper->system, &parent.context);
     napi_value out = NULL;
-    napi_create_array_with_length(env, 2, &out);
-    napi_set_element(env, out, 0, tna_js_bigint(env, context.trace_id_high));
-    napi_set_element(env, out, 1, tna_js_bigint(env, context.trace_id_low));
+    if (parent.context.trace_id_high == 0 && parent.context.trace_id_low == 0) {
+        napi_get_undefined(env, &out);
+        return out;
+    }
+    napi_value context = NULL;
+    napi_create_object(env, &out);
+    napi_create_object(env, &context);
+    tna_js_put(env, context, "trace_id_high", tna_js_bigint(env, parent.context.trace_id_high));
+    tna_js_put(env, context, "trace_id_low", tna_js_bigint(env, parent.context.trace_id_low));
+    tna_js_put(env, context, "flags", tna_js_number(env, parent.context.flags));
+    tna_js_put(env, context, "detail", tna_js_number(env, parent.context.detail));
+    tna_js_put(env, out, "context", context);
+    tna_js_put(env, out, "cause", tna_js_key_object(env, &parent.cause));
     return out;
 }
 
 /* ------------------------------------------------------------------------
- * Trace parents from JavaScript
+ * Trace parents from JavaScript: traceparent text, parsed by core (ADR 0073)
  */
-
-static bool tna_bigint_member(napi_env env, napi_value object, const char *name, uint64_t *out) {
-    napi_value value = NULL;
-    bool lossless = false;
-    return napi_get_named_property(env, object, name, &value) == napi_ok &&
-           napi_get_value_bigint_uint64(env, value, out, &lossless) == napi_ok && lossless;
-}
 
 bool tna_trace_argument(napi_env env, napi_value value, ta_trace_parent *out) {
     *out = (ta_trace_parent){ 0 };
-    napi_valuetype type = napi_undefined;
-    if (value == NULL || napi_typeof(env, value, &type) != napi_ok || type == napi_undefined) {
+    if (value == NULL) {
         return true;
     }
-    uint32_t flags = 0;
-    napi_value member = NULL;
-    if (type != napi_object || !tna_bigint_member(env, value, "high", &out->context.trace_id_high) ||
-        !tna_bigint_member(env, value, "low", &out->context.trace_id_low) ||
-        !tna_bigint_member(env, value, "span", &out->cause.macrostep) ||
-        napi_get_named_property(env, value, "flags", &member) != napi_ok ||
-        napi_get_value_uint32(env, member, &flags) != napi_ok || flags > 0xffu) {
-        tna_throw(env, "invalid", "post: the trace must come from a traceparent (lib/tracing.js)");
+    /* The common cases first, one Node-API call each: text, or undefined. */
+    char text[128];
+    size_t len = 0;
+    if (napi_get_value_string_latin1(env, value, text, sizeof text, &len) != napi_ok) {
+        napi_valuetype type = napi_undefined;
+        if (napi_typeof(env, value, &type) == napi_ok && type == napi_undefined) {
+            return true;
+        }
+        len = sizeof text; /* not text: refused below */
+    }
+    if (len >= sizeof text - 1u ||
+        ta_traceparent_parse(&(ta_traceparent_parse_params){ .text = { text, (uint32_t)len }, .out = out }) !=
+            TA_OK) {
+        tna_throw(env, "invalid", "options.traceparent is not a W3C traceparent");
         return false;
     }
-    out->context.flags = (uint8_t)flags;
     return true;
 }
 

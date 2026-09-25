@@ -20,16 +20,16 @@
 void tna_trace_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *first_error);
 /* setTraceSink(installed, kinds, unsampled, values, valueLimit, links, resource, seed). */
 napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info);
-/* newTrace(): a new trace ID as [high, low] bigints, or undefined when not tracing. */
-napi_value tna_new_trace_method(napi_env env, napi_callback_info info);
+/* spawnTrace(traceparent): the trace parent for generated spawn, or undefined. */
+napi_value tna_spawn_trace_method(napi_env env, napi_callback_info info);
 /*
- * The trace option of post()/send(): undefined for none, or
- * { high, low, flags, span } (bigints but flags), a W3C trace context and
- * the host's parent span ID. Throws and answers false otherwise.
+ * options.traceparent of post()/send()/spawn(): undefined for none, or W3C
+ * traceparent text, which core parses (core ADR 0073). Throws and answers
+ * false otherwise.
  */
 bool tna_trace_argument(napi_env env, napi_value value, ta_trace_parent *out);
-/* A ta_trace_parent as JavaScript { traceIdHigh, traceIdLow, flags, cause },
- * or undefined when it is all zero. */
-napi_value tna_trace_parent_object(napi_env env, const ta_trace_parent *parent);
+/* A ta_trace_parent as traceparent text (core ADR 0073), or undefined when
+ * it has no trace ID or no cause. */
+napi_value tna_traceparent_value(napi_env env, const ta_trace_parent *parent);
 /* The kind names, in ta_trace_kind order, for lib/tracing.js. */
 napi_value tna_trace_kind_names(napi_env env);

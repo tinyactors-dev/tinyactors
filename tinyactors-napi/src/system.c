@@ -153,51 +153,27 @@ uint64_t tna_system_wall_ns(void) {
     return (uint64_t)now.tv_sec * 1000000000u + (uint64_t)now.tv_nsec;
 }
 
-/* SplitMix64: the seeded sequence is the same on every platform. */
-static uint64_t tna_splitmix(uint64_t *state) {
-    uint64_t value = (*state += 0x9e3779b97f4a7c15ull);
-    value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ull;
-    value = (value ^ (value >> 27)) * 0x94d049bb133111ebull;
-    return value ^ (value >> 31);
-}
-
-void tna_system_trace_id(tna_system *system, uint8_t out[16]) {
-    if (system->trace_seeded) {
-        uint64_t high = tna_splitmix(&system->trace_seed);
-        uint64_t low = tna_splitmix(&system->trace_seed);
-        for (int at = 0; at < 8; at += 1) {
-            out[at] = (uint8_t)(high >> (56 - 8 * at));
-            out[8 + at] = (uint8_t)(low >> (56 - 8 * at));
-        }
-        return;
-    }
+uint64_t tna_system_os_seed(tna_system *system) {
+    uint64_t seed = 0;
+    (void)system;
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
-    arc4random_buf(out, 16);
+    arc4random_buf(&seed, sizeof seed);
 #else
-    if (getrandom(out, 16, 0) != 16) {
-        /* No entropy: a trace ID only has to be unlikely to collide. */
-        uint64_t state = tna_system_wall_ns() ^ (uint64_t)(uintptr_t)system;
-        uint64_t high = tna_splitmix(&state);
-        uint64_t low = tna_splitmix(&state);
-        memcpy(out, &high, 8);
-        memcpy(out + 8, &low, 8);
+    if (getrandom(&seed, sizeof seed, 0) != (ssize_t)sizeof seed) {
+        /* No entropy: trace IDs only have to be unlikely to collide. */
+        seed = tna_system_wall_ns() ^ (uint64_t)(uintptr_t)system;
     }
 #endif
-    /* W3C: an all-zero trace ID is invalid. */
-    out[15] |= (uint8_t)(out[0] == 0 && out[15] == 0);
+    return seed;
 }
 
 void tna_system_start_trace(tna_system *system, ta_trace_context *context) {
     if (!system->tracing || context->trace_id_high != 0 || context->trace_id_low != 0) {
         return;
     }
-    uint8_t id[16];
-    tna_system_trace_id(system, id);
-    for (int at = 0; at < 8; at += 1) {
-        context->trace_id_high = (context->trace_id_high << 8) | id[at];
-        context->trace_id_low = (context->trace_id_low << 8) | id[8 + at];
-    }
-    context->flags |= TA_TRACE_FLAG_SAMPLED;
+    uint8_t detail = context->detail;
+    *context = ta_system_new_trace(system->core);
+    context->detail = detail;
 }
 
 bool tna_system_effect(tna_system *system, const tna_effect *effect) {
