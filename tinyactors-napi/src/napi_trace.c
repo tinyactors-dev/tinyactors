@@ -164,7 +164,9 @@ static napi_value tna_trace_bytes(napi_env env, tna_system *system) {
     if (!system->tracing || (system->otlp.span_count == 0 && system->otlp.log_count == 0)) {
         return NULL;
     }
-    ta_str traces = tna_otlp_take(&system->otlp);
+    /* The traces are the span buffer itself (tna_otlp_take): copy them into
+     * JavaScript before anything else can end a span. */
+    napi_value traces_value = tna_bytes_value(env, tna_otlp_take(&system->otlp));
     ta_str logs = tna_otlp_take_logs(&system->otlp);
     napi_value batch = NULL;
     napi_value logs_value = NULL;
@@ -176,7 +178,7 @@ static napi_value tna_trace_bytes(napi_env env, tna_system *system) {
     } else {
         napi_get_undefined(env, &logs_value);
     }
-    tna_js_put(env, batch, "traces", tna_bytes_value(env, traces));
+    tna_js_put(env, batch, "traces", traces_value);
     tna_js_put(env, batch, "logs", logs_value);
     return batch;
 }

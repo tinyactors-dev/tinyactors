@@ -134,8 +134,13 @@ typedef struct {
     uint32_t name_count;
     tna_otlp_buf names;        /* the cached labels' text */
     tna_otlp_buf resource;     /* encoded Resource.attributes entries */
-    tna_otlp_buf spans;        /* encoded ScopeSpans.spans entries that ended */
-    tna_otlp_buf request;      /* the last request tna_otlp_take() built */
+    /* Encoded ScopeSpans.spans entries that ended, from `spans_at` on. The
+     * first `spans_at` bytes are a gap the request's header is written into
+     * when it is taken, so the spans are not copied again (napi ADR 0017
+     * section 4). */
+    tna_otlp_buf spans;
+    size_t spans_at;
+    tna_otlp_buf request;      /* a request that did not fit the gap (the resource grew) */
     tna_otlp_buf scratch;      /* an event's attributes while it is built */
     tna_otlp_buf label;        /* a label while it is built */
     tna_otlp_buf text;         /* an event name or ID while it is formatted */

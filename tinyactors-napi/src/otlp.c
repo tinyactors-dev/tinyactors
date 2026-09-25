@@ -141,11 +141,37 @@ static void tna_put_tag(tna_otlp_buf *buf, uint32_t field, uint32_t wire) {
     tna_put_varint(buf, ((uint64_t)field << 3) | wire);
 }
 
+/*
+ * Most copies here are short: keys, names, small values. A copy of up to 16
+ * bytes is two overlapping fixed-size moves, which the compiler inlines; a
+ * call to memcpy through the dynamic-library stub costs more than the copy
+ * (napi ADR 0017 section 4).
+ */
 static void tna_put_bytes(tna_otlp_buf *buf, const void *bytes, size_t len) {
-    if (len != 0) {
-        memcpy(buf->data + buf->len, bytes, len);
-        buf->len += len;
+    uint8_t *to = buf->data + buf->len;
+    const uint8_t *from = bytes;
+    if (len >= 8u && len <= 16u) {
+        uint64_t head;
+        uint64_t tail;
+        memcpy(&head, from, 8);
+        memcpy(&tail, from + len - 8u, 8);
+        memcpy(to, &head, 8);
+        memcpy(to + len - 8u, &tail, 8);
+    } else if (len >= 4u && len < 8u) {
+        uint32_t head;
+        uint32_t tail;
+        memcpy(&head, from, 4);
+        memcpy(&tail, from + len - 4u, 4);
+        memcpy(to, &head, 4);
+        memcpy(to + len - 4u, &tail, 4);
+    } else if (len < 4u) {
+        for (size_t at = 0; at < len; at += 1u) {
+            to[at] = from[at];
+        }
+    } else {
+        memcpy(to, from, len);
     }
+    buf->len += len;
 }
 
 static void tna_put_fixed64(tna_otlp_buf *buf, uint64_t value) {
@@ -246,7 +272,9 @@ static bool tna_kv_int_array(tna_otlp_buf *buf, uint32_t field, ta_str key, cons
  * Names (core ADR 0071), cached per definition
  */
 
-enum { NAME_STATE = 0u, NAME_TRANSITION = 1u, NAME_ACTION = 2u };
+/* Event names are system-wide: they are cached under definition 0, which
+ * the sweep keeps, since core never frees an interned event name. */
+enum { NAME_STATE = 0u, NAME_TRANSITION = 1u, NAME_ACTION = 2u, NAME_EVENT = 3u };
 #define NAME_TAG(kind, id) (((uint32_t)(kind) << 30) | ((uint32_t)(id) & 0x3fffffffu))
 
 static uint64_t tna_name_hash(uint64_t definition, uint32_t tag) {
@@ -310,7 +338,8 @@ static void tna_names_sweep(tna_otlp *otlp) {
     for (uint32_t at = 0; at < capacity; at += 1u) {
         tna_otlp_name *slot = &otlp->name_slots[at];
         ta_definition_inspection view;
-        if (slot->used && ta_definition_inspect(otlp->config.core, slot->definition, &view) != TA_OK) {
+        if (slot->used && slot->definition != 0 &&
+            ta_definition_inspect(otlp->config.core, slot->definition, &view) != TA_OK) {
             slot->used = false;
             otlp->name_count -= 1u;
         } else if (slot->used) {
@@ -537,7 +566,16 @@ static ta_str tna_action_name(tna_otlp *otlp, uint64_t definition, ta_action_id 
  * Text core formats: event names, send IDs, invoke IDs
  */
 
+static bool tna_label_add(tna_otlp *otlp, ta_str text);
+
+/* An event name's dotted text, formatted once and then cached. The text is
+ * valid until the next name is cached: use it before naming anything else. */
 static ta_str tna_event_name(tna_otlp *otlp, ta_event_name_id name) {
+    uint32_t tag = NAME_TAG(NAME_EVENT, name);
+    const tna_otlp_name *cached = tna_name_find(otlp, 0, tag);
+    if (cached != NULL) {
+        return tna_name_text(otlp, cached);
+    }
     uint32_t needed = 0;
     ta_event_name_format_params params = { .name = name, .buffer = (char *)otlp->text.data,
                                            .capacity = (uint32_t)otlp->text.cap, .needed = &needed };
@@ -554,7 +592,9 @@ static ta_str tna_event_name(tna_otlp *otlp, ta_event_name_id name) {
     if (result != TA_OK) {
         return LIT("?");
     }
-    return (ta_str){ (const char *)otlp->text.data, needed > 0 ? needed - 1u : 0u };
+    ta_str text = { (const char *)otlp->text.data, needed > 0 ? needed - 1u : 0u };
+    otlp->label.len = 0;
+    return tna_label_add(otlp, text) ? tna_name_keep(otlp, 0, tag) : text;
 }
 
 /* A send ID's text into `out` (at most 128 bytes), or empty for none. */
@@ -608,6 +648,7 @@ static const char *const tna_event_types[] = { "external", "internal", "platform
 static ta_str tna_cstr(const char *text) { return (ta_str){ text, (uint32_t)strlen(text) }; }
 
 static void tna_span_init(tna_otlp_span *span, ta_allocator allocator);
+static void tna_spans_reset(tna_otlp *otlp);
 
 void tna_otlp_init(tna_otlp *otlp, const tna_otlp_config *config) {
     *otlp = (tna_otlp){ .config = *config };
@@ -623,6 +664,7 @@ void tna_otlp_init(tna_otlp *otlp, const tna_otlp_config *config) {
     tna_buf_init(&otlp->logs, allocator);
     tna_buf_init(&otlp->log_body, allocator);
     tna_buf_init(&otlp->log_request, allocator);
+    tna_spans_reset(otlp);
 }
 
 ta_result tna_otlp_set_resource(tna_otlp *otlp, const tna_otlp_attribute *attributes, uint32_t count) {
@@ -632,6 +674,9 @@ ta_result tna_otlp_set_resource(tna_otlp *otlp, const tna_otlp_attribute *attrib
             otlp->resource.len = 0;
             return TA_ERR_NOMEM;
         }
+    }
+    if (otlp->span_count == 0) {
+        tna_spans_reset(otlp); /* the header grew with the resource */
     }
     return TA_OK;
 }
@@ -1672,24 +1717,26 @@ void tna_otlp_write(tna_otlp *otlp, const ta_trace_record *record) {
     }
 }
 
-ta_str tna_otlp_take(tna_otlp *otlp) {
-    otlp->request.len = 0;
-    if (otlp->span_count == 0) {
-        return (ta_str){ NULL, 0 };
-    }
+/* The size of a whole trace request whose spans take `spans` bytes. */
+static size_t tna_request_size(const tna_otlp *otlp, size_t spans) {
+    ta_str version = otlp->config.version;
+    size_t scope = tna_len_field_size(F_SCOPE_NAME, sizeof "tinyactors" - 1u) +
+                   (version.len != 0 ? tna_len_field_size(F_SCOPE_VERSION, version.len) : 0);
+    size_t scope_spans = tna_len_field_size(F_SS_SCOPE, scope) + spans;
+    size_t resource_spans = tna_len_field_size(F_RS_RESOURCE, otlp->resource.len) +
+                            tna_len_field_size(F_RS_SCOPE_SPANS, scope_spans);
+    return tna_len_field_size(F_REQUEST_RESOURCE_SPANS, resource_spans);
+}
+
+/* Writes a trace request's header: everything before its `spans` bytes of spans. */
+static void tna_put_request_header(const tna_otlp *otlp, tna_otlp_buf *out, size_t spans) {
     ta_str name = LIT("tinyactors");
     ta_str version = otlp->config.version;
     size_t scope = tna_len_field_size(F_SCOPE_NAME, name.len) +
                    (version.len != 0 ? tna_len_field_size(F_SCOPE_VERSION, version.len) : 0);
-    size_t scope_spans = tna_len_field_size(F_SS_SCOPE, scope) + otlp->spans.len;
+    size_t scope_spans = tna_len_field_size(F_SS_SCOPE, scope) + spans;
     size_t resource_spans = tna_len_field_size(F_RS_RESOURCE, otlp->resource.len) +
                             tna_len_field_size(F_RS_SCOPE_SPANS, scope_spans);
-    size_t total = tna_len_field_size(F_REQUEST_RESOURCE_SPANS, resource_spans);
-    if (!tna_buf_room(&otlp->request, total)) {
-        /* The spans stay, and the next take tries again. */
-        return (ta_str){ NULL, 0 };
-    }
-    tna_otlp_buf *out = &otlp->request;
     tna_put_len_header(out, F_REQUEST_RESOURCE_SPANS, resource_spans);
     tna_put_len_header(out, F_RS_RESOURCE, otlp->resource.len);
     tna_put_bytes(out, otlp->resource.data, otlp->resource.len);
@@ -1701,10 +1748,48 @@ ta_str tna_otlp_take(tna_otlp *otlp) {
         tna_put_len_header(out, F_SCOPE_VERSION, version.len);
         tna_put_bytes(out, version.ptr, version.len);
     }
-    tna_put_bytes(out, otlp->spans.data, otlp->spans.len);
+}
+
+/* Empties `spans` and reserves the gap for the largest header its spans can
+ * need (lengths up to 4 GiB). Without memory for it, there is no gap, and
+ * tna_otlp_take() copies. */
+static void tna_spans_reset(tna_otlp *otlp) {
+    size_t most = 0xffffffffu;
+    size_t gap = tna_request_size(otlp, most) - most;
     otlp->spans.len = 0;
+    otlp->spans_at = tna_buf_room(&otlp->spans, gap) ? gap : 0;
+    otlp->spans.len = otlp->spans_at;
     otlp->span_count = 0;
-    return (ta_str){ (const char *)out->data, (uint32_t)out->len };
+}
+
+/*
+ * The spans that ended, as one ExportTraceServiceRequest. The header is
+ * written into the gap before the spans, so the request is the span buffer
+ * itself: the bytes stay valid until the next span ends, and the caller
+ * copies them before anything can write one.
+ */
+ta_str tna_otlp_take(tna_otlp *otlp) {
+    if (otlp->span_count == 0) {
+        return (ta_str){ NULL, 0 };
+    }
+    size_t spans = otlp->spans.len - otlp->spans_at;
+    size_t header = tna_request_size(otlp, spans) - spans;
+    if (header <= otlp->spans_at) {
+        tna_otlp_buf view = { .data = otlp->spans.data + (otlp->spans_at - header), .cap = header };
+        tna_put_request_header(otlp, &view, spans);
+        otlp->spans.len = otlp->spans_at;
+        otlp->span_count = 0;
+        return (ta_str){ (const char *)view.data, (uint32_t)(header + spans) };
+    }
+    /* No gap, or the resource grew since it was reserved: copy, once. */
+    otlp->request.len = 0;
+    if (!tna_buf_room(&otlp->request, header + spans)) {
+        return (ta_str){ NULL, 0 }; /* the spans stay, and the next take tries again */
+    }
+    tna_put_request_header(otlp, &otlp->request, spans);
+    tna_put_bytes(&otlp->request, otlp->spans.data + otlp->spans_at, spans);
+    tna_spans_reset(otlp);
+    return (ta_str){ (const char *)otlp->request.data, (uint32_t)otlp->request.len };
 }
 
 void tna_otlp_end_all(tna_otlp *otlp) {
