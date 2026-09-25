@@ -61,6 +61,16 @@ and UBSan, because the step forks kept it free of Node-API on purpose.
 | Threading | GIL; a system stays on one thread | GVL; the same rule | one thread |
 | Facade | builder, `ActorID`, `System` | the same | a host-neutral `lib/` shared with napi (a napi roadmap follow-up) |
 
+## The OTLP encoder
+
+The encoder (`tinyactors-napi/src/otlp.{c,h}`, napi ADRs 0016 to 0018)
+moves with the kernel, or into a small library of its own if a database
+host needs it first. Its contract is host-neutral: it uses only core's
+public header and a small host interface (clock, names, trace IDs, value
+text), and it never owns its output. It reports a request's size, and
+the host writes the request into memory its own language owns (a Node
+`Buffer`, WASM linear memory, a Python `bytes`, a Ruby `String`).
+
 ## When to do it
 
 Just before the second language host starts, not before. The extraction is
