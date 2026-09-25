@@ -14,15 +14,15 @@
  * handler(system, kind, payload), in the order core made the calls:
  *
  * - "log":    { source, label, hasValue, value }
- * - "io":     { source, sendId, event, type, target, data } plus
+ * - "io":     { source, sendID, event, type, target, data } plus
  *             { content, contentType } for a literal <content>
- * - "invoke-start":   { handle, parent, invocationId, invokeId, type, source,
+ * - "invoke-start":   { handle, parent, invocationID, invokeID, type, source,
  *                       content, contentType, params, autoforward }
  * - "invoke-cancel":  { handle }
  * - "invoke-forward": { handle, event: { name, data } }
  *
- * `source` is an ActorId view, or { family, name } for a named actor.
- * `sendId` is the send ID text core gives the send (core ADR 0048), or null.
+ * `source` is an ActorID view, or { family, name } for a named actor.
+ * `sendID` is the send ID text core gives the send (core ADR 0048), or null.
  *
  * Reporting (reportInvoke): an event or done report from a JavaScript
  * invocation goes to the parent's mailbox as an external event whose

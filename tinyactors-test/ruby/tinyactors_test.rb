@@ -26,12 +26,12 @@ module TinyactorsTest
     end
 
     # A chart written as an SCXML document, which the host imports through
-    # the SCXML codec (ADR 0053). See ScxmlChart.
+    # the SCXML codec (ADR 0053). See SCXMLChart.
     def scxml_chart(name, source, **options)
       name = name.to_sym
       raise ChartError, "chart #{name} is defined twice" if @charts.key?(name)
 
-      @charts[name] = ScxmlChart.new(name, source, **options)
+      @charts[name] = SCXMLChart.new(name, source, **options)
     end
 
     def scenarios(name, chart: nil, &block)

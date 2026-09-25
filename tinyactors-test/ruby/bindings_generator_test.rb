@@ -28,14 +28,14 @@ def policy(**changes)
 end
 
 def refuses(label, expected, description: DESCRIPTION, **changes)
-  Rpc.generate(description, policy(**changes))
+  RPC.generate(description, policy(**changes))
   raise "bindings generator test failed: #{label} was accepted"
-rescue Rpc::Error => e
+rescue RPC::Error => e
   check(e.message.include?(expected), "#{label}: expected #{expected.inspect} in:\n#{e.message}")
 end
 
 # The real policy generates.
-output = Rpc.generate(DESCRIPTION, TinyactorsBindings)
+output = RPC.generate(DESCRIPTION, TinyactorsBindings)
 check(output.source.include?('TAT_VALUE_RECEIVERS[]'), 'value receivers are generated from the value models')
 check(output.source.include?('{"ta.actor.spawn", "definition", TAT_VALUE_MODEL_DEFINITION}'), 'spawn values follow the definition')
 check(output.source.include?('{"ta.actor.load", "image", TAT_VALUE_MODEL_SESSION_IMAGE}'),

@@ -42,7 +42,7 @@ TinyactorsTest.scxml_chart :irp_test372, <<'SCXML', datamodel: 'jq'
 SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
-  ScxmlIrp.expect_failure(self, 'test372')
+  SCXMLIRP.expect_failure(self, 'test372')
   scenario 'test372' do
     machine = spawn :irp_test372
     run_to_completion machine

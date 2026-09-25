@@ -96,7 +96,7 @@ module Workbench
 
   # Pretty-prints JSON as lines tagged with the path they render, so a
   # renderer can tell which lines carry a value that changed.
-  module JsonView
+  module JSONView
     module_function
 
     # => [[path, text], ...]

@@ -317,7 +317,7 @@ bool tna_pump_init(napi_env env, tna_napi_system *wrapper, napi_value facade, na
  * Hooks
  */
 
-/* The ActorId view of `actor` (ADR 0002), or NULL without a class or facade. */
+/* The ActorID view of `actor` (ADR 0002), or NULL without a class or facade. */
 napi_value tna_actor_view(napi_env env, tna_napi_system *wrapper, ta_actor_id actor) {
     tna_env *data = wrapper->env_data;
     napi_value actor_class = NULL;
@@ -495,7 +495,7 @@ napi_value tna_event_text(napi_env env, tna_system *system, ta_event_name_id nam
 
 /*
  * deadLetter({ target, event, reason }) (ADR 0008); counted in stats either
- * way. `target` is an ActorId, or { family, name } for a named target that
+ * way. `target` is an ActorID, or { family, name } for a named target that
  * had no resident actor.
  */
 static void tna_dead_letter_record(napi_env env, tna_napi_system *wrapper, const tna_turn_record *record,

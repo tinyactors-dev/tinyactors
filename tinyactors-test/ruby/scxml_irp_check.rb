@@ -23,7 +23,7 @@ scenarios_dir = root.join('ruby/scenarios/scxml_irp')
 Dir.mktmpdir do |tmp|
   tmp = Pathname.new(tmp)
   fresh = tmp.join('scenarios')
-  ScxmlIrp::Importer.new(suite: root.join('vendor/scxml-irp'), scenarios_dir: fresh, root: root).write_all
+  SCXMLIRP::Importer.new(suite: root.join('vendor/scxml-irp'), scenarios_dir: fresh, root: root).write_all
   names = (Dir.children(scenarios_dir) + Dir.children(fresh)).uniq.sort
   stale = names.reject do |name|
     scenarios_dir.join(name).file? && fresh.join(name).file? && scenarios_dir.join(name).read == fresh.join(name).read
@@ -49,7 +49,7 @@ begin
 
     failures << "#{name}: #{response[:result]} " \
                 "#{TinyactorsTest.describe_import_error(driver.ta, response.dig(:out, :error))}"
-  rescue TinyactorsTest::RpcError => e
+  rescue TinyactorsTest::RPCError => e
     failures << "#{name}: #{e.message} #{e.data.inspect}"
   end
 ensure

@@ -246,7 +246,7 @@ class Check
   def compile(spec, datamodel)
     response = begin
       @ta.definition.compile_spec(system: @system, spec: spec, datamodel: datamodel, allocator: ALLOCATOR)
-    rescue TinyactorsTest::RpcError => e
+    rescue TinyactorsTest::RPCError => e
       return [nil, e.data]
     end
     return [nil, response[:result]] unless response[:result] == 'ok'
@@ -288,7 +288,7 @@ class Check
   # Returns :skipped, or a list of failures.
   def run(chart)
     datamodel = Context::DATAMODELS.fetch(chart.datamodel || Context::DEFAULT_DATAMODEL)
-    return run_scxml(chart, datamodel) if chart.is_a?(TinyactorsTest::ScxmlChart)
+    return run_scxml(chart, datamodel) if chart.is_a?(TinyactorsTest::SCXMLChart)
 
     spec = json(chart.to_spec)
     original, result = compile(spec, datamodel)
@@ -386,7 +386,7 @@ begin
     elsif !outcome.empty?
       failures[name] = outcome
     end
-  rescue TinyactorsTest::RpcError, RuntimeError => e
+  rescue TinyactorsTest::RPCError, RuntimeError => e
     failures[name] = ["#{e.class.name.split('::').last}: #{e.message} #{e.respond_to?(:data) ? e.data.inspect : ''}"]
   end
 ensure

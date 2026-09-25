@@ -195,19 +195,19 @@ const KINDS = ['unspecified', 'internal', 'server', 'client', 'producer', 'consu
 
 function span(reader, resource, scope) {
   const out = {
-    traceId: '', spanId: '', parentSpanId: undefined, name: '', kind: 'unspecified',
+    traceID: '', spanID: '', parentSpanID: undefined, name: '', kind: 'unspecified',
     startTimeUnixNano: 0n, endTimeUnixNano: 0n, startTime: 0, endTime: 0,
     attributes: {}, events: [], links: [], status: { code: 'unset' }, resource, scope,
   };
   while (!reader.done) {
     const [field, wire] = reader.tag();
     switch (field) {
-      case 1: expect(wire, 2, 'trace_id'); out.traceId = reader.hex(); break;
-      case 2: expect(wire, 2, 'span_id'); out.spanId = reader.hex(); break;
+      case 1: expect(wire, 2, 'trace_id'); out.traceID = reader.hex(); break;
+      case 2: expect(wire, 2, 'span_id'); out.spanID = reader.hex(); break;
       case 4: {
         expect(wire, 2, 'parent_span_id');
         const parent = reader.hex();
-        if (parent !== '') out.parentSpanId = parent;
+        if (parent !== '') out.parentSpanID = parent;
         break;
       }
       case 5: expect(wire, 2, 'name'); out.name = reader.string(); break;
@@ -233,11 +233,11 @@ function span(reader, resource, scope) {
       case 13: {
         expect(wire, 2, 'links');
         const link = reader.body();
-        const item = { traceId: '', spanId: '', attributes: {} };
+        const item = { traceID: '', spanID: '', attributes: {} };
         while (!link.done) {
           const [number, linkWire] = link.tag();
-          if (number === 1) { expect(linkWire, 2, 'Link.trace_id'); item.traceId = link.hex(); }
-          else if (number === 2) { expect(linkWire, 2, 'Link.span_id'); item.spanId = link.hex(); }
+          if (number === 1) { expect(linkWire, 2, 'Link.trace_id'); item.traceID = link.hex(); }
+          else if (number === 2) { expect(linkWire, 2, 'Link.span_id'); item.spanID = link.hex(); }
           else if (number === 4) { expect(linkWire, 2, 'Link.attributes'); keyValue(link.body(), item.attributes); }
           else link.skip(linkWire);
         }
@@ -258,8 +258,8 @@ function span(reader, resource, scope) {
       default: reader.skip(wire);
     }
   }
-  if (out.traceId.length !== 32) throw malformed('a span has no 16-byte trace_id');
-  if (out.spanId.length !== 16) throw malformed('a span has no 8-byte span_id');
+  if (out.traceID.length !== 32) throw malformed('a span has no 16-byte trace_id');
+  if (out.spanID.length !== 16) throw malformed('a span has no 8-byte span_id');
   out.startTime = nanosToMillis(out.startTimeUnixNano);
   out.endTime = nanosToMillis(out.endTimeUnixNano);
   return out;
@@ -267,10 +267,10 @@ function span(reader, resource, scope) {
 
 /**
  * Decodes OTLP trace bytes (the Uint8Array a trace sink receives) into
- * spans: { traceId, spanId, parentSpanId?, name, kind, startTime, endTime
+ * spans: { traceID, spanID, parentSpanID?, name, kind, startTime, endTime
  * (milliseconds since the epoch), startTimeUnixNano, endTimeUnixNano
  * (bigints), attributes, events: [{ name, time, timeUnixNano, attributes }],
- * links: [{ traceId, spanId, attributes }], status: { code, message? },
+ * links: [{ traceID, spanID, attributes }], status: { code, message? },
  * resource: { attributes }, scope: { name, version } }. IDs are lowercase
  * hex. Spans sharing a resource or scope share that object.
  */

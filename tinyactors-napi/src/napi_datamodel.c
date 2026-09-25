@@ -855,10 +855,10 @@ static napi_value tna_get_event(napi_env env, napi_callback_info info) {
         napi_create_string_utf8(env, tna_event_types[event->type <= TA_EVENT_PLATFORM ? event->type : 0], NAPI_AUTO_LENGTH,
                                 &type) != napi_ok ||
         napi_set_named_property(env, object, "type", type) != napi_ok ||
-        !tna_set_text(env, dm, object, "sendId", TA_DM_TEXT_EVENT_SENDID) ||
+        !tna_set_text(env, dm, object, "sendID", TA_DM_TEXT_EVENT_SENDID) ||
         !tna_set_text(env, dm, object, "origin", TA_DM_TEXT_EVENT_ORIGIN) ||
         !tna_set_text(env, dm, object, "originType", TA_DM_TEXT_EVENT_ORIGINTYPE) ||
-        !tna_set_text(env, dm, object, "invocationId", TA_DM_TEXT_EVENT_INVOKEID) ||
+        !tna_set_text(env, dm, object, "invocationID", TA_DM_TEXT_EVENT_INVOKEID) ||
         !tna_value_get(env, &event->data, &data) || napi_set_named_property(env, object, "data", data) != napi_ok) {
         return NULL;
     }
@@ -957,7 +957,7 @@ bool tna_js_datamodel_init(tna_js_datamodel *dm, tna_napi_system *wrapper, napi_
     napi_property_descriptor properties[] = {
         { "data", NULL, NULL, tna_get_data, NULL, NULL, napi_enumerable, dm },
         { "event", NULL, NULL, tna_get_event, NULL, NULL, napi_enumerable, dm },
-        { "sessionId", NULL, NULL, tna_get_session_id, NULL, NULL, napi_enumerable, dm },
+        { "sessionID", NULL, NULL, tna_get_session_id, NULL, NULL, napi_enumerable, dm },
         { "name", NULL, NULL, tna_get_name, NULL, NULL, napi_enumerable, dm },
         { "ioProcessors", NULL, NULL, tna_get_io_processors, NULL, NULL, napi_enumerable, dm },
         { "inState", NULL, tna_in_state_method, NULL, NULL, NULL, napi_enumerable, dm },

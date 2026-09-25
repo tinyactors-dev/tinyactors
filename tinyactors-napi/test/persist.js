@@ -33,7 +33,7 @@ async function roundTrip() {
   assert.equal(before.delayedSends.length, 1);
 
   const image = actor.capture();
-  assert.equal(image.sessionId, before.sessionId);
+  assert.equal(image.sessionID, before.sessionID);
   assert.deepEqual(image.address, { family: 'ticker', name: 'one' });
   assert.equal(image.nextDeadline, 100);
   assert.equal(image.definition.family, 'ticker');
@@ -52,7 +52,7 @@ async function roundTrip() {
   const loaded = system.load(image);
   assert.ok(!loaded.equals(actor), 'a new runtime ID');
   await system.flush();
-  assert.equal(loaded.inspect().sessionId, before.sessionId, 'the session ID outlives residency');
+  assert.equal(loaded.inspect().sessionID, before.sessionID, 'the session ID outlives residency');
   assert.equal(stateOf(loaded), 'b', 'the delayed send fired after load');
   assert.ok(system.findActor({ family: 'ticker', name: 'one' }).equals(loaded));
 
@@ -112,7 +112,7 @@ async function dataTravels() {
   system.close();
 }
 
-// A delayed send to `#_scxml_<sessionId>`, armed before the receiver is
+// A delayed send to `#_scxml_<sessionID>`, armed before the receiver is
 // unloaded, reaches it after it is loaded again (core ADR 0066).
 async function sessionTargetAcrossUnload() {
   const system = createSystem({ clock: 'manual', initialTime: 0, finished: 'retain' });
@@ -121,7 +121,7 @@ async function sessionTargetAcrossUnload() {
     { name: 'r' },
   );
   await system.flush();
-  const session = receiver.inspect().sessionId;
+  const session = receiver.inspect().sessionID;
   const sender = system.spawn(system.define(
     statechart({ family: 'tx', revision: 'v1' })
       .state('armed', (s) => s.entry((x) => x.send('ping', (m) => m.to(`#_scxml_${session}`).after(100)))),

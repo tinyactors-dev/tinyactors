@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Source conventions of the amalgamation task.
-module CApi
+module CAPI
   # A top-level function declaration or definition: return type at column 0,
   # followed by the ta_ name and its parameter list.
   RETURN_TYPE = /(?!typedef\b|static\b|struct\b|return\b|TA_API\b|TA_PRIVATE\b)(?:const\s+)?[A-Za-z_]\w*(?:\s*\*+\s*|\s+)/

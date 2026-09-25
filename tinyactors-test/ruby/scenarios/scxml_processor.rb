@@ -14,7 +14,7 @@
 # "http://www.w3.org/TR/scxml/" is a different name: it is the *invoker*
 # type of SCXML 6.4, and core interns it separately. A send addressed to it
 # is a send to a processor nobody registered.
-module ScxmlProcessor
+module SCXMLProcessor
   URI = 'http://www.w3.org/TR/scxml/#SCXMLEventProcessor'
   SHORT = 'scxml'
   INVOKER_URI = 'http://www.w3.org/TR/scxml/'
@@ -43,10 +43,10 @@ TinyactorsTest.scenarios 'scxml processor' do
   # one - a send that is delivered when the author writes nothing but
   # refused when they name the processor SCXML tells them to name.
   scenario 'naming the processor means the same as omitting it' do
-    outcomes = [nil, ScxmlProcessor::URI, ScxmlProcessor::SHORT].to_h do |type|
-      [type, spawn(ScxmlProcessor.chart(type)).data('.outcome')]
+    outcomes = [nil, SCXMLProcessor::URI, SCXMLProcessor::SHORT].to_h do |type|
+      [type, spawn(SCXMLProcessor.chart(type)).data('.outcome')]
     end
-    assert_equal({ nil => 'hit', ScxmlProcessor::URI => 'hit', ScxmlProcessor::SHORT => 'hit' }, outcomes)
+    assert_equal({ nil => 'hit', SCXMLProcessor::URI => 'hit', SCXMLProcessor::SHORT => 'hit' }, outcomes)
   end
 
   # Catches: the invoker's type quietly doubling as an I/O processor. SCXML
@@ -54,7 +54,7 @@ TinyactorsTest.scenarios 'scxml processor' do
   # it names a processor nobody registered (test199: an unsupported type is
   # error.execution).
   scenario 'the invoke type is not an event processor' do
-    assert_equal 'error.execution', spawn(ScxmlProcessor.chart(ScxmlProcessor::INVOKER_URI)).data('.outcome')
+    assert_equal 'error.execution', spawn(SCXMLProcessor.chart(SCXMLProcessor::INVOKER_URI)).data('.outcome')
   end
 
   # Catches: a reserved type a host can take over, which would let an
@@ -65,7 +65,7 @@ TinyactorsTest.scenarios 'scxml processor' do
     # below are about the type and not about the adapter.
     io = recording_io('urn:example:other')
 
-    [scxml_io_type, atom(ScxmlProcessor::URI), atom(ScxmlProcessor::SHORT)].uniq.each do |type|
+    [scxml_io_type, atom(SCXMLProcessor::URI), atom(SCXMLProcessor::SHORT)].uniq.each do |type|
       assert_equal 'err_invalid',
                    ta.system.register_io(system: system_handle, type: type, io: io.adapter)[:result],
                    "registering an I/O processor for atom #{type} is refused"
@@ -74,11 +74,11 @@ TinyactorsTest.scenarios 'scxml processor' do
     # Both spellings name the one reserved processor, and the atom it
     # returns reads back as that URI (ADR 0049), so a host can say which
     # processor a send selected instead of comparing handles.
-    assert_equal atom(ScxmlProcessor::URI), scxml_io_type
-    assert_equal ScxmlProcessor::URI,
+    assert_equal atom(SCXMLProcessor::URI), scxml_io_type
+    assert_equal SCXMLProcessor::URI,
                  core('ta_system_atom_text',
                       ta.system.atom_text(system: system_handle, atom: scxml_io_type)).fetch(:out)
-    assert_equal 'hit', spawn(ScxmlProcessor.chart(ScxmlProcessor::SHORT)).data('.outcome'),
+    assert_equal 'hit', spawn(SCXMLProcessor.chart(SCXMLProcessor::SHORT)).data('.outcome'),
                  'the short name still reaches the built-in processor'
   end
 
@@ -95,7 +95,7 @@ TinyactorsTest.scenarios 'scxml processor' do
 
     actor = spawn(reader)
     location = { location: "#_scxml_#{actor.handle}" }
-    assert_equal({ ScxmlProcessor::URI.to_sym => location, ScxmlProcessor::SHORT.to_sym => location },
+    assert_equal({ SCXMLProcessor::URI.to_sym => location, SCXMLProcessor::SHORT.to_sym => location },
                  actor.data('.seen'))
   end
 end

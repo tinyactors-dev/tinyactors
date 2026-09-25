@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module ScxmlIrp
+module SCXMLIRP
   # A construct the importer cannot express for the jq data model. The test
   # that uses it is skipped with this message as the reason.
   class Unsupported < StandardError; end

@@ -15,7 +15,7 @@ require_relative 'api/schema'
 #
 #   header --clang--> AST --Builder--> model --Layout--> + layouts, constants
 #          --Schema--> validated --Check--> compiled against the header
-module Api
+module API
   FORMAT = 'tinyactors-api/2'
 
   module_function

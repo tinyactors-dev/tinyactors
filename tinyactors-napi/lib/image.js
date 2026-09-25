@@ -34,7 +34,7 @@ class SessionImage {
     /** The actor at capture; its ID goes stale once it is unloaded (core ADR 0066). */
     this.actor = info.actor;
     /** Stable across unload and load (core ADR 0066). */
-    this.sessionId = info.sessionId;
+    this.sessionID = info.sessionID;
     this.definition = info.definition;
     if (info.address !== undefined) {
       this.address = info.address;

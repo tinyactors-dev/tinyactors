@@ -15,7 +15,7 @@ require_relative 'api/schema'
 #
 #   header --clang--> AST --Builder--> model --Layout--> + layouts, constants
 #          --Schema--> validated --Check--> compiled against the header
-module Api
+module API
   FORMAT = 'txml-api/1'
 
   module_function

@@ -47,7 +47,7 @@ tinyactors-napi/
 ├── index.d.ts                   public types
 ├── lib/                         JavaScript layer
 │   ├── system.js                System facade over the native System and the generated core module
-│   ├── actor.js                 ActorId/Actor view: { system, slot, generation } (ADR 0002)
+│   ├── actor.js                 ActorID/Actor view: { system, slot, generation } (ADR 0002)
 │   ├── definition.js            Definition facade; identity read from core
 │   ├── statechart.js            fluent builder; emits the generated spec shape (ADR 0013)
 │   ├── events.js                event-name cache: text <-> ta_event_name_id (ADR 0004)
@@ -148,10 +148,10 @@ All of them are implemented. Two notes on what they mean for the addon:
   references with `ta_event_retain()`, and the directory receives
   `ta_address` handles.
 - **Core ADR 0066:** a session keeps its ID across unload and load, but its
-  runtime ID changes. An `ActorId` (slot and generation, ADR 0002) is a
+  runtime ID changes. An `ActorID` (slot and generation, ADR 0002) is a
   runtime ID, so it goes stale when a virtual actor pages out and back in.
-  Inspection reports `sessionId` (step 5). Step 14 names virtual actors by
-  address or session ID, not by `ActorId`.
+  Inspection reports `sessionID` (step 5). Step 14 names virtual actors by
+  address or session ID, not by `ActorID`.
 
 Core now measures about 532 bytes per actor without data.
 
@@ -171,7 +171,7 @@ both Node and Bun.
 - Delete `src/addon.c`, `src/binding.h`, `src/null_datamodel.{c,h}` and the
   tests that exercise them.
 - `index.d.ts` describes the public API, but parts of it predate the ADRs.
-  For example, it still types `ActorId` as a branded `bigint`, against
+  For example, it still types `ActorID` as a branded `bigint`, against
   ADR 0002. Each step brings the types it touches in line with the ADRs.
 - Create the tree above with empty modules. `addon.c` exports only
   `version`.
@@ -278,7 +278,7 @@ Exit criterion:
 
 Needs core ADRs 0056 and 0061.
 
-- `lib/actor.js`: the `ActorId` view.
+- `lib/actor.js`: the `ActorID` view.
 - Spawn, run and destroy:
   - the scheduling table (ADR 0005), in fixed pages that are never copied;
   - the spawn hook fills the actor's entry and puts it on the runnable
@@ -299,7 +299,7 @@ Needs core ADRs 0056 and 0061.
   - hook records go into the turn arena;
   - the destroy hook clears the actor's entry.
 - `inspect()` goes through the generated `ta_actor_inspect`, and reports
-  `sessionId` (core ADR 0066) beside the actor's ID. `finalState`
+  `sessionID` (core ADR 0066) beside the actor's ID. `finalState`
   comes from the inspection's `final_state` (core ADR 0056), named through
   `ta_definition_state()`. It is `null` while the actor runs, while it is
   paused inside a microstep, and for a cancelled invoked child. The addon
@@ -343,7 +343,7 @@ Needs core ADR 0055.
     `refused`, so `release()` does not fault again on it.
 - `maxQueuedMessages` backpressure.
 - Posts carry no data until step 11 (value boxes), and targets are
-  `ActorId`s until step 7 (the directory).
+  `ActorID`s until step 7 (the directory).
 
 Built: the envelope store, mailboxes, the ready queue and dead letters are
 in `scheduler.{c,h}`, which has no Node-API and is covered by
@@ -440,7 +440,7 @@ custom processor; checking that waits for registered processors (step 13).
 
 Needs core ADR 0062.
 
-- `enumerate.{c,h}`: `system.actors()` and `system.actorIds()` as pages
+- `enumerate.{c,h}`: `system.actors()` and `system.actorIDs()` as pages
   (ADR 0003). Core's visitor writes each page's IDs straight into the
   page's `ArrayBuffer`, and `actors()` inspects each actor when it reaches
   it. Each page is one call of
@@ -559,7 +559,7 @@ ADRs left open:
   or a new object. A bound name skips its initializer, and assigning to a
   name the object does not have is `error.execution`.
 - **The evaluation context is one frozen object per system.** Its getters
-  (`data`, `event`, `sessionId`, `name`, `ioProcessors`, `inState()`) read
+  (`data`, `event`, `sessionID`, `name`, `ioProcessors`, `inState()`) read
   the core call in progress and throw after it. `event.origin` is the URI a
   reply can target.
 - **Expressions cannot call core** (the reentrancy guard), but can `post()`
@@ -622,12 +622,12 @@ Done (ADR 0001 rule 3, ADR 0007 point 5, core ADRs 0015, 0016, 0045, 0046):
   core made the calls. Waiting effects keep the system from being quiet,
   and close releases them while core is alive.
 - **I/O processors:** `processor.send(request, context)` with request
-  `{ source, sendId, event, type, target, data }` (plus `content`,
+  `{ source, sendID, event, type, target, data }` (plus `content`,
   `contentType`) and one frozen context per system `{ system, signal, post }`,
-  whose signal aborts on `close()`. `sendId` is the send's ID text, or
+  whose signal aborts on `close()`. `sendID` is the send's ID text, or
   `null` for a send without one. A reply is an event the processor posts.
   A processor that throws or rejects fails the send, and the sender gets an
-  external `error.communication` event with `{ sendId, type, error }`
+  external `error.communication` event with `{ sendID, type, error }`
   (it cannot be an internal event: the send already returned).
 - **JavaScript invokers:** `start(request, reporter)` runs after the turn;
   `cancel()` when the invoking state exits; `forward(event)` for
@@ -662,7 +662,7 @@ Done (ADR 0001 rule 3, ADR 0007 point 5, core ADRs 0015, 0016, 0045, 0046):
 - `prepareReplacement()` and `activate()`.
 - A virtual actor keeps its session ID across unload and load, but gets a
   new runtime ID (core ADR 0066). The JavaScript API names it by address
-  or session ID. An `ActorId` held from before the unload fails with
+  or session ID. An `ActorID` held from before the unload fails with
   `not-found`.
 
 Exit criterion:
@@ -705,7 +705,7 @@ by the portable `src/otlp.c`; core's null sink runs without one.
 `options.traceparent` on `post()`, `send()` and `spawn()`, and a started
 trace when there is none; `request.traceparent` for I/O processors and
 invokers. `lib/otlp.js`: `decodeTraces`; `lib/tracing.js`:
-`parseTraceparent`, `formatTraceparent`, `stepSpanId`; no telemetry
+`parseTraceparent`, `formatTraceparent`, `stepSpanID`; no telemetry
 dependency. `tools/otlp.js` (tests and `mise run otel-demo` only) posts
 the bytes. Tests: `test/tracing.js`, `test/otlp.js`, `test/otel-sdk.js`
 (the official SDK, a pinned dev dependency), `test/native/otlp_test.c`;

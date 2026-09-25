@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module ScxmlIrp
+module SCXMLIRP
   # Writes indented Ruby source.
   class Emitter
     def initialize

@@ -16,7 +16,7 @@
 //   - post plus delivery, per message (CPU time, a fixed sample of actors
 //     spread over the table, so the ratio measures work, not cache misses);
 //   - inspect, per call (CPU time, the same sample);
-//   - one page of actorIds(), per page (median wall time over a warm pass;
+//   - one page of actorIDs(), per page (median wall time over a warm pass;
 //     bound three, as in scale_test.c);
 //   - the end-to-end run (post `work` to every actor, flush once), per actor;
 //   - native bytes per actor (bound 1.25), and the largest single block the
@@ -60,7 +60,7 @@ const assert = require('node:assert/strict');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 const { createSystem, statechart } = require('..');
-const { ActorId } = require('../lib/actor');
+const { ActorID } = require('../lib/actor');
 
 const IS_BUN = typeof Bun !== 'undefined';
 const POPULATIONS = [50_000, 200_000, 1_000_000, 4_000_000];
@@ -148,7 +148,7 @@ function populationCap() {
   return Number(process.env.TAT_SCALE_MAX_POPULATION ?? DEFAULT_CAP);
 }
 
-function shouldRun(population, previous, peakRss, cap = populationCap()) {
+function shouldRun(population, previous, peakRSS, cap = populationCap()) {
   if (population > cap) {
     return false;
   }
@@ -160,7 +160,7 @@ function shouldRun(population, previous, peakRss, cap = populationCap()) {
     console.log(`scale.js: stopping at ${previous}: this platform does not report available memory`);
     return false;
   }
-  const needed = (peakRss * population) / previous;
+  const needed = (peakRSS * population) / previous;
   if (needed > available * 0.75) {
     console.log(`scale.js: stopping at ${previous}: ${population} would need about ${gb(needed)} GB, ` +
       `${gb(available)} GB is available (three quarters of it may be used)`);
@@ -347,13 +347,13 @@ async function measure(population, variant) {
     inspectCosts.push((cpuMicros() - started) / (sample.length * REPEAT));
   }
 
-  // Pages of actorIds(): walk twice, time the second walk.
+  // Pages of actorIDs(): walk twice, time the second walk.
   let pageCosts = [];
   let visited = 0;
   for (let pass = 0; pass < 2; pass += 1) {
     pageCosts = [];
     visited = 0;
-    const iterator = system.actorIds({ pageSize: PAGE_SIZE });
+    const iterator = system.actorIDs({ pageSize: PAGE_SIZE });
     for (;;) {
       const started = process.hrtime.bigint();
       const step = iterator.next();
@@ -374,9 +374,9 @@ async function measure(population, variant) {
   // maximum is the longest pump turn (plus the hooks it calls), not the
   // test's own synchronous post loop.
   const e2eStarted = cpuMicros();
-  for (const page of system.actorIds({ pageSize: PAGE_SIZE })) {
+  for (const page of system.actorIDs({ pageSize: PAGE_SIZE })) {
     for (let at = 0; at < page.length; at += 2) {
-      system.post(new ActorId(system, page[at], page[at + 1]), 'work');
+      system.post(new ActorID(system, page[at], page[at + 1]), 'work');
     }
   }
   const loop = loopDelayMonitor();
@@ -391,7 +391,7 @@ async function measure(population, variant) {
   if (options !== undefined) {
     assert.equal(counters.outbound, sequence, 'every inbound message sent one outbound write');
   }
-  assert.equal([...system.actorIds()].length, 0, 'finished actors were destroyed');
+  assert.equal([...system.actorIDs()].length, 0, 'finished actors were destroyed');
 
   await new Promise((resolve) => setTimeout(resolve, 20)); // GC entries arrive after a timer tick
   const gcPauseMs = gc.total();
@@ -418,7 +418,7 @@ async function measure(population, variant) {
     nativePerActor: nativeBytes / population,
     jsPerActor: (jsAfter - jsBefore) / population,
     rssPerActor: (rssAfter - PROCESS_RSS) / population,
-    peakRss: process.memoryUsage().rss,
+    peakRSS: process.memoryUsage().rss,
     steady: { addon: callsAfter.addon - callsBefore.addon, core: callsAfter.core - callsBefore.core },
     loopDelayMs,
     loopDelayP99Ms,
@@ -582,7 +582,7 @@ const BASELINES = {
 // BASELINE_CAP, and on Node within the V8 heap limit.
 function shouldRunBaseline(population, previous) {
   const cap = Math.min(populationCap(), BASELINE_CAP);
-  if (!shouldRun(population, previous.population, previous.peakRss, cap)) {
+  if (!shouldRun(population, previous.population, previous.peakRSS, cap)) {
     return false;
   }
   if (!IS_BUN) {
@@ -667,7 +667,7 @@ async function measureBaseline(kind, variant, population) {
     blockingMs,
     jsPerActor: (jsAfter - jsBefore) / population,
     rssPerActor: (rssAfter - PROCESS_RSS) / population,
-    peakRss: process.memoryUsage().rss,
+    peakRSS: process.memoryUsage().rss,
     gcPauseMs: gc.total(),
     gcMinorMs: gc.minor(),
     gcMajorMs: gc.major(),
@@ -757,7 +757,7 @@ function report(result) {
     const results = [];
     for (const population of POPULATIONS) {
       const previous = results.at(-1);
-      if (previous && !shouldRun(population, previous.population, previous.peakRss)) {
+      if (previous && !shouldRun(population, previous.population, previous.peakRSS)) {
         break;
       }
       current = `${variant} with ${population} actors`;

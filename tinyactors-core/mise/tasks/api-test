@@ -42,7 +42,7 @@ Dir.mktmpdir('tinyactors-api-test') do |directory|
     path = File.join(directory, name)
     File.write(path, "#pragma once\n#{macros}\n#{source}")
     begin
-      description = Api.describe(path, library: nil, schema: SCHEMA)
+      description = API.describe(path, library: nil, schema: SCHEMA)
       failures << "#{name}: expected errors, but it was described" unless errors.empty?
       facts.each do |key, json|
         actual = lookup(description, key)
@@ -51,7 +51,7 @@ Dir.mktmpdir('tinyactors-api-test') do |directory|
       rescue KeyError => e
         failures << "#{name}: #{key}: #{e.message}"
       end
-    rescue Api::Error, Api::Clang::Error => e
+    rescue API::Error, API::Clang::Error => e
       failures << "#{name}: unexpected failure:\n#{e.message}" if errors.empty?
       errors.each do |text|
         failures << "#{name}: expected an error containing #{text.inspect}; got:\n#{e.message}" unless e.message.include?(text)

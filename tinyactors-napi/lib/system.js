@@ -8,7 +8,7 @@ const native = require('./native');
 const { TinyactorsError } = require('./errors');
 const { Definition, identityOf } = require('./definition');
 const { DefinitionBuilder, needsJavaScript } = require('./statechart');
-const { ActorId } = require('./actor');
+const { ActorID } = require('./actor');
 const { EventNames } = require('./events');
 const { SessionImage, handleOf } = require('./image');
 const { traceConfig } = require('./tracing');
@@ -139,13 +139,13 @@ class System {
    * Make `processor` the I/O processor for `<send type>` (core ADRs 0015,
    * 0046). Core calls it while an actor runs, so the call is queued and
    * processor.send(request, context) runs at the end of that pump turn,
-   * never inside core (ADR 0001 rule 3). `request` is { source, sendId,
+   * never inside core (ADR 0001 rule 3). `request` is { source, sendID,
    * event, type, target, data } (and { content, contentType } for a literal
    * <content>); `context` is { system, signal, post }, where `signal` aborts
    * on close(). A reply is an event the processor posts, now or later. A
    * processor that throws or whose promise rejects has failed the send: the
    * sender gets an external `error.communication` event whose data is
-   * { sendId, type, error }.
+   * { sendID, type, error }.
    *
    * `options` says how core renders the processor's text without running
    * JavaScript (core ADR 0068):
@@ -256,7 +256,7 @@ class System {
    * - kinds: the record kinds wanted (TRACE_KINDS names), overriding
    *   `detail`: core builds no other record;
    * - sample: the ratio of the traces this system starts that are sampled,
-   *   0 to 1 (default 1), decided as OpenTelemetry's TraceIdRatioBased
+   *   0 to 1 (default 1), decided as OpenTelemetry's TraceIDRatioBased
    *   does (core ADR 0073); a traceparent keeps its caller's decision;
    * - unsampled: also trace macrosteps whose traceparent is not sampled;
    * - resource: resource attributes, { "service.name": "orders", ... },
@@ -339,7 +339,7 @@ class System {
   /**
    * Traces what matches in full, sampled whatever the ratio, until the
    * returned handle's stop() (napi ADR 0017 section 3): deliveries to the
-   * actors of `sessions` (session IDs or ActorIds), to the named actors of
+   * actors of `sessions` (session IDs or ActorIDs), to the named actors of
    * `addresses` ({ family, name }, resolved to their sessions now), and to
    * the actors of the definitions of `families` (family names; spawns of
    * those families are watched from their bootstrap). Everything a watched
@@ -348,14 +348,14 @@ class System {
   watchTraces({ sessions = [], families = [], addresses = [] } = {}) {
     const watch = { sessions: new Set(), families: new Set(families.map(String)) };
     for (const session of sessions) {
-      watch.sessions.add(session instanceof ActorId ? BigInt(this.inspect(session).sessionId) : BigInt(session));
+      watch.sessions.add(session instanceof ActorID ? BigInt(this.inspect(session).sessionID) : BigInt(session));
     }
     for (const address of addresses) {
       const actor = this.findActor(address);
       if (actor === undefined) {
         throw new TinyactorsError('watchTraces(): no resident actor has that address', 'not-found');
       }
-      watch.sessions.add(BigInt(this.inspect(actor).sessionId));
+      watch.sessions.add(BigInt(this.inspect(actor).sessionID));
     }
     this.#watches.add(watch);
     this.#applyWatches();
@@ -469,14 +469,14 @@ class System {
       return;
     }
     try {
-      this.post(request.source, 'error.communication', { sendId: request.sendId, type: request.type, error });
+      this.post(request.source, 'error.communication', { sendID: request.sendID, type: request.type, error });
     } catch {
       // The sender is gone or its mailbox is full: nobody is left to tell.
     }
   }
 
   #startInvocation(payload) {
-    const { handle, parent, invocationId } = payload;
+    const { handle, parent, invocationID } = payload;
     const controller = new AbortController();
     const invocation = { controller, service: undefined, live: true };
     this.#invocations.set(handle, invocation);
@@ -487,7 +487,7 @@ class System {
       if (kind !== 'event') {
         this.#endInvocation(handle, invocation);
       }
-      return this.#native.reportInvoke(parent.slot, parent.generation, invocationId, kind, name, data,
+      return this.#native.reportInvoke(parent.slot, parent.generation, invocationID, kind, name, data,
                                        payload.traceparent);
     };
     const reporter = Object.freeze({
@@ -504,8 +504,8 @@ class System {
     const request = Object.freeze({
       system: this,
       parent,
-      invocationId,
-      invokeId: payload.invokeId,
+      invocationID,
+      invokeID: payload.invokeID,
       type: payload.type,
       source: payload.source,
       content: payload.content,
@@ -662,7 +662,7 @@ class System {
     const watched = this.#watches.size !== 0 && this.#watchedFamily(definition.identity.family);
     const trace = this.#native.spawnTrace(options.traceparent, watched);
     const id = core.actor_spawn(this.#native, definition.id, address, options.binding, undefined, trace);
-    return new ActorId(this, id.slot, id.generation);
+    return new ActorID(this, id.slot, id.generation);
   }
 
   /**
@@ -673,7 +673,7 @@ class System {
     const { family, name } = addressOf(address, 'findActor()');
     try {
       const id = core.actor_find(this.#native, { family: { name: family }, name });
-      return new ActorId(this, id.slot, id.generation);
+      return new ActorID(this, id.slot, id.generation);
     } catch (error) {
       if (error instanceof TinyactorsError && (error.code === 'not-found' || error.code === 'unloaded')) {
         return undefined;
@@ -688,8 +688,8 @@ class System {
     const view = core.actor_inspect(this.#native, slot, generation);
     const stateName = (state) => core.definition_state(this.#native, view.definition_id, state).id;
     const inspection = {
-      actor: new ActorId(this, view.actor.slot, view.actor.generation),
-      sessionId: view.session_id,
+      actor: new ActorID(this, view.actor.slot, view.actor.generation),
+      sessionID: view.session_id,
       definition: identityOf(view.definition),
       residency: view.residency,
       published: view.published,
@@ -711,13 +711,13 @@ class System {
   }
 
   // The actor's data root, or undefined under the null data model.
-  #dataRoot(definitionId, slot, generation) {
-    return this.#usesJavaScript(definitionId) ? core.actor_datamodel_root(this.#native, slot, generation) : undefined;
+  #dataRoot(definitionID, slot, generation) {
+    return this.#usesJavaScript(definitionID) ? core.actor_datamodel_root(this.#native, slot, generation) : undefined;
   }
 
   // One pending delayed send, from core's ta_delayed_send_info (core ADR 0054).
   // A literal target is text in the owner's definition, named by content ID.
-  #delayedSend(definitionId, send) {
+  #delayedSend(definitionID, send) {
     let id = null;
     try {
       id = core.send_id_format(this.#native, send.send_id);
@@ -733,14 +733,14 @@ class System {
       ioType: core.system_atom_text(this.#native, send.io_type),
       destination: this.#destination(send.destination),
       target: send.has_target_text
-        ? new TextDecoder().decode(core.definition_content(this.#native, definitionId, send.target_text).bytes)
+        ? new TextDecoder().decode(core.definition_content(this.#native, definitionID, send.target_text).bytes)
         : send.target,
       data: send.data,
       submitted: send.submitted,
     };
   }
 
-  // A resolved destination: an ActorId, an address, or null for a custom
+  // A resolved destination: an ActorID, an address, or null for a custom
   // I/O processor, whose destination core leaves as runtime ID 0.
   #destination(ref) {
     if (ref === undefined || ref === null) {
@@ -750,7 +750,7 @@ class System {
       return ref.named === undefined ? null : { family: ref.named.family.name, name: ref.named.name };
     }
     const { slot, generation } = ref.runtime;
-    return generation === 0 ? null : new ActorId(this, slot, generation);
+    return generation === 0 ? null : new ActorID(this, slot, generation);
   }
 
   /**
@@ -763,8 +763,8 @@ class System {
    * and one spawned meanwhile appears when its slot is ahead of the cursor
    * (core ADR 0062). Options: { pageSize } (default 1024, at most 65536).
    */
-  *actorIds(options = {}) {
-    const pageSize = pageSizeOf(options, 'actorIds()');
+  *actorIDs(options = {}) {
+    const pageSize = pageSizeOf(options, 'actorIDs()');
     let from = 0;
     while (from !== null) {
       const page = this.#native.idPage(from, pageSize);
@@ -783,11 +783,11 @@ class System {
    * skipped. Options: { pageSize } (default 1024, at most 65536).
    */
   *actors(options = {}) {
-    for (const ids of this.actorIds(options)) {
+    for (const ids of this.actorIDs(options)) {
       for (let at = 0; at < ids.length; at += 2) {
         let inspection;
         try {
-          inspection = this.inspect(new ActorId(this, ids[at], ids[at + 1]));
+          inspection = this.inspect(new ActorID(this, ids[at], ids[at + 1]));
         } catch (error) {
           if (error instanceof TinyactorsError && error.code === 'not-found') {
             continue;
@@ -824,7 +824,7 @@ class System {
    * this call: a later pump turn delivers it, in the order posts to that
    * target were accepted. Mail for an actor that is gone or finished is a
    * dead letter (the `deadLetter` hook), not an error. `target` is an
-   * ActorId or an address { family, name }, resolved through the directory
+   * ActorID or an address { family, name }, resolved through the directory
    * when the post is accepted (ADR 0006); a name with no resident actor is a
    * dead letter too. `data` is any JavaScript value, shared with the
    * receiver, not copied (ADR 0011); it is `_event.data`
@@ -866,7 +866,7 @@ class System {
     const signal = options.signal;
     if (signal?.aborted) {
       // Validate the call first: misuse throws even with an aborted signal.
-      if (!(target instanceof ActorId)) addressOf(target, 'send()');
+      if (!(target instanceof ActorID)) addressOf(target, 'send()');
       else actorOf(this, target);
       return Promise.reject(new TinyactorsError('send(): the signal is already aborted', 'aborted'));
     }
@@ -880,7 +880,7 @@ class System {
       throw error;
     }
     if (until === 'accepted') {
-      return Promise.resolve({ actor: target instanceof ActorId ? target : undefined, status: 'accepted' });
+      return Promise.resolve({ actor: target instanceof ActorID ? target : undefined, status: 'accepted' });
     }
     if (signal === undefined && timeout === undefined) {
       return promise;
@@ -919,7 +919,7 @@ class System {
     const bytes = retainedBytes(data, options, what);
     const origin = originOf(options?.origin, what);
     const trace = options?.traceparent;
-    if (!(target instanceof ActorId)) {
+    if (!(target instanceof ActorID)) {
       if (target !== null && typeof target === 'object' && 'name' in target) {
         const { family, name } = addressOf(target, what);
         const id = this.#events.id(event);
@@ -953,10 +953,10 @@ class System {
     const handle = core.actor_capture(this.#native, slot, generation);
     const self = this.#destination(view.self);
     return new SessionImage(this, handle, {
-      actor: new ActorId(this, slot, generation),
-      sessionId: view.session_id,
+      actor: new ActorID(this, slot, generation),
+      sessionID: view.session_id,
       definition: identityOf(view.definition),
-      address: self instanceof ActorId || self === null ? undefined : self,
+      address: self instanceof ActorID || self === null ? undefined : self,
       data: this.#dataRoot(view.definition_id, slot, generation),
     });
   }
@@ -968,7 +968,7 @@ class System {
    * reason `unloaded` until load() brings it back; its delayed sends travel
    * in the image. Throws `busy` while the actor has mail waiting, is inside
    * a macrostep, or is quarantined, so unloading never drops accepted mail.
-   * Its ActorId is stale afterwards.
+   * Its ActorID is stale afterwards.
    */
   unload(actor, image) {
     const { slot, generation } = actorOf(this, actor);
@@ -991,7 +991,7 @@ class System {
   load(image, options = {}) {
     const handle = handleOf(image, this, 'load()');
     const id = core.actor_load(this.#native, handle, this.#bindingFor(image, options));
-    return new ActorId(this, id.slot, id.generation);
+    return new ActorID(this, id.slot, id.generation);
   }
 
   /**
@@ -1004,7 +1004,7 @@ class System {
   reconstruct(image, options = {}) {
     const handle = handleOf(image, this, 'reconstruct()');
     const id = core.actor_reconstruct(this.#native, handle, this.#bindingFor(image, options));
-    return new ActorId(this, id.slot, id.generation);
+    return new ActorID(this, id.slot, id.generation);
   }
 
   /** Release the address of an actor that stays unloaded; its image is the caller's to destroy. */
@@ -1054,7 +1054,7 @@ class System {
     core.actor_activate_replacement(this.#native, incumbent.slot, incumbent.generation,
       prepared.slot, prepared.generation);
     core.actor_destroy(this.#native, incumbent.slot, incumbent.generation);
-    return new ActorId(this, prepared.slot, prepared.generation);
+    return new ActorID(this, prepared.slot, prepared.generation);
   }
 
   // The binding load() and reconstruct() pass: the option, or the image's root.
@@ -1066,11 +1066,11 @@ class System {
   }
 
   // True when the definition runs the JavaScript data model; cached.
-  #usesJavaScript(definitionId) {
-    let javascript = this.#javascript.get(definitionId);
+  #usesJavaScript(definitionID) {
+    let javascript = this.#javascript.get(definitionID);
     if (javascript === undefined) {
-      javascript = core.definition_inspect(this.#native, definitionId).datamodel === 'javascript';
-      this.#javascript.set(definitionId, javascript);
+      javascript = core.definition_inspect(this.#native, definitionID).datamodel === 'javascript';
+      this.#javascript.set(definitionID, javascript);
     }
     return javascript;
   }
@@ -1228,7 +1228,7 @@ function retainedBytes(data, options, what) {
 const DEFAULT_PAGE_SIZE = 1024;
 const MAX_PAGE_SIZE = 65536;
 
-// The page size of actors() and actorIds().
+// The page size of actors() and actorIDs().
 function pageSizeOf(options, method) {
   if (options === null || typeof options !== 'object') {
     throw new TinyactorsError(`${method}: options must be an object`, 'invalid');
@@ -1240,9 +1240,9 @@ function pageSizeOf(options, method) {
   return pageSize;
 }
 
-// The (slot, generation) of an ActorId of `system` (ADR 0002).
+// The (slot, generation) of an ActorID of `system` (ADR 0002).
 function actorOf(system, actor) {
-  if (!(actor instanceof ActorId) || actor.system !== system) {
+  if (!(actor instanceof ActorID) || actor.system !== system) {
     throw new TinyactorsError('expected an actor of this system', 'invalid');
   }
   return actor;
@@ -1272,7 +1272,7 @@ function servicesOf(value, what) {
 native.setupEffects(effectHandler);
 
 // A fresh unpublished actor that replaces `incumbent` once activated (step 14).
-class PreparedActor extends ActorId {
+class PreparedActor extends ActorID {
   constructor(system, slot, generation, incumbent) {
     super(system, slot, generation);
     this.incumbent = incumbent;
@@ -1293,4 +1293,4 @@ function createSystem(options) {
   return new System(options);
 }
 
-module.exports = { System, createSystem, nativeOf, ActorId, PreparedActor, SessionImage };
+module.exports = { System, createSystem, nativeOf, ActorID, PreparedActor, SessionImage };

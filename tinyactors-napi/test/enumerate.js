@@ -56,7 +56,7 @@ async function pagesCoverThePopulation() {
   }
   await system.flush();
 
-  const pages = [...system.actorIds({ pageSize: 1000 })];
+  const pages = [...system.actorIDs({ pageSize: 1000 })];
   assert.equal(pages.length, 3);
   assert.deepEqual(pages.map((page) => page.length), [2000, 2000, 1000]);
   for (const page of pages) {
@@ -71,7 +71,7 @@ async function pagesCoverThePopulation() {
   });
   assert.deepEqual(seen, spawned, 'every actor once, in slot order');
 
-  assert.equal([...system.actorIds()].length, 3, 'default pages of 1024');
+  assert.equal([...system.actorIDs()].length, 3, 'default pages of 1024');
 
   // actors() gives inspections of the same actors.
   let count = 0;
@@ -84,7 +84,7 @@ async function pagesCoverThePopulation() {
 
   // An empty system has no pages.
   const empty = createSystem();
-  assert.deepEqual([...empty.actorIds()], []);
+  assert.deepEqual([...empty.actorIDs()], []);
   assert.deepEqual([...empty.actors()], []);
   empty.close();
   system.close();
@@ -95,17 +95,17 @@ async function optionsAndClose() {
   const system = createSystem();
   await populate(system, 3);
   for (const pageSize of [0, -1, 1.5, 65537, '10']) {
-    assertCode(() => system.actorIds({ pageSize }).next(), 'invalid');
+    assertCode(() => system.actorIDs({ pageSize }).next(), 'invalid');
     assertCode(() => system.actors({ pageSize }).next(), 'invalid');
   }
-  assertCode(() => system.actorIds(null).next(), 'invalid');
-  assert.equal([...system.actorIds({ pageSize: 65536 })].length, 1);
+  assertCode(() => system.actorIDs(null).next(), 'invalid');
+  assert.equal([...system.actorIDs({ pageSize: 65536 })].length, 1);
 
-  const iterator = system.actorIds({ pageSize: 1 });
+  const iterator = system.actorIDs({ pageSize: 1 });
   assert.equal(iterator.next().value.length, 2);
   system.close();
   assertCode(() => iterator.next(), 'closed');
-  assertCode(() => system.actorIds().next(), 'closed');
+  assertCode(() => system.actorIDs().next(), 'closed');
 }
 
 // Core ADR 0062 §4: changes between pages.
@@ -118,7 +118,7 @@ async function changesBetweenPages() {
   }
   await system.flush();
 
-  const iterator = system.actorIds({ pageSize: 10 });
+  const iterator = system.actorIDs({ pageSize: 10 });
   const seen = [];
   const take = (page) => {
     for (let at = 0; at < page.length; at += 2) {
@@ -171,16 +171,16 @@ async function heapIsBoundedByThePage() {
     await populate(system, population);
     const before = retained();
     // Two iterations held open midway through the population.
-    const openIds = system.actorIds({ pageSize: 1024 });
+    const openIDs = system.actorIDs({ pageSize: 1024 });
     const openInspections = system.actors({ pageSize: 1024 });
     for (let at = 0; at < population / 2048; at += 1) {
-      openIds.next();
+      openIDs.next();
     }
     for (let at = 0; at < population / 2; at += 1) {
       openInspections.next();
     }
     const held = retained() - before;
-    openIds.return();
+    openIDs.return();
     openInspections.return();
     system.close();
     return held;
@@ -203,7 +203,7 @@ async function lastPageCostsLikeTheFirst() {
   for (let run = 0; run < 7; run += 1) {
     const times = [];
     let from = process.hrtime.bigint();
-    for (const page of system.actorIds({ pageSize })) {
+    for (const page of system.actorIDs({ pageSize })) {
       const now = process.hrtime.bigint();
       times.push(Number(now - from));
       void page;

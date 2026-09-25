@@ -75,7 +75,7 @@ async function listsEveryProcessor() {
   plain.post('probe');
   named.post('probe');
   await system.flush();
-  const sessionOf = (actor) => actor.inspect().sessionId;
+  const sessionOf = (actor) => actor.inspect().sessionID;
   const scxml = 'http://www.w3.org/TR/scxml/#SCXMLEventProcessor';
   assert.deepEqual(plain.inspect().data.processors, {
     scxml: { location: `#_scxml_${sessionOf(plain)}` },

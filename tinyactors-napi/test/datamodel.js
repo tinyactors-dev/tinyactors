@@ -82,7 +82,7 @@ async function context() {
             seen.event = { name: context.event.name, type: context.event.type, data: context.event.data };
             seen.inIdle = context.inState('idle');
             seen.inMissing = context.inState('missing');
-            seen.sessionId = context.sessionId;
+            seen.sessionID = context.sessionID;
             seen.name = context.name;
             seen.processors = Object.keys(context.ioProcessors);
           }),
@@ -100,7 +100,7 @@ async function context() {
   assert.deepEqual(seen.event, { name: 'look', type: 'external', data: { payload: 1 } });
   assert.equal(seen.inIdle, true);
   assert.equal(seen.inMissing, false, 'In() of a state the chart does not have is false');
-  assert.equal(seen.sessionId, String(actor.inspect().sessionId));
+  assert.equal(seen.sessionID, String(actor.inspect().sessionID));
   assert.equal(seen.name, 'ctx');
   assert.ok(seen.processors.includes('scxml'));
   assertCode(() => kept.data, 'invalid', /only while its expression runs/);

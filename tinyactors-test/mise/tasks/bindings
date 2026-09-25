@@ -22,8 +22,8 @@ require ROOT.join('bindings').to_s
 require ROOT.join('mise/lib/rpc').to_s
 
 begin
-  output = Rpc.generate(DESCRIPTION, TinyactorsBindings)
-rescue Rpc::Error => e
+  output = RPC.generate(DESCRIPTION, TinyactorsBindings)
+rescue RPC::Error => e
   abort "bindings: #{e.message}"
 end
 

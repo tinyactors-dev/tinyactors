@@ -51,7 +51,7 @@ napi_value tna_pump_flush(napi_env env, tna_napi_system *wrapper);
 napi_value tna_pump_advance_to(napi_env env, tna_napi_system *wrapper, napi_value time);
 
 /* Helpers the pump and the services layer (napi_services.h) share. */
-/* The ActorId view of `actor` (ADR 0002), or NULL without a class or facade. */
+/* The ActorID view of `actor` (ADR 0002), or NULL without a class or facade. */
 napi_value tna_actor_view(napi_env env, tna_napi_system *wrapper, ta_actor_id actor);
 /* { family, name } for an address. */
 napi_value tna_address_object(napi_env env, const ta_actor_address *address);

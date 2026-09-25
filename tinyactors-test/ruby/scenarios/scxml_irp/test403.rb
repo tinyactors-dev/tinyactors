@@ -154,21 +154,21 @@ TinyactorsTest.scxml_chart :irp_test403c, <<'SCXML', datamodel: 'jq'
 SCXML
 
 TinyactorsTest.scenarios 'scxml-irp' do
-  ScxmlIrp.expect_failure(self, 'test403a')
+  SCXMLIRP.expect_failure(self, 'test403a')
   scenario 'test403a' do
     machine = spawn :irp_test403a
     run_to_completion machine
     assert_equal 'pass', machine.data('._irp_outcome')
   end
 
-  ScxmlIrp.expect_failure(self, 'test403b')
+  SCXMLIRP.expect_failure(self, 'test403b')
   scenario 'test403b' do
     machine = spawn :irp_test403b
     run_to_completion machine
     assert_equal 'pass', machine.data('._irp_outcome')
   end
 
-  ScxmlIrp.expect_failure(self, 'test403c')
+  SCXMLIRP.expect_failure(self, 'test403c')
   scenario 'test403c' do
     machine = spawn :irp_test403c
     run_to_completion machine

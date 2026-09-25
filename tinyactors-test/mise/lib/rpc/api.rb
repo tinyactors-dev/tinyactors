@@ -2,11 +2,11 @@
 
 require 'json'
 
-module Rpc
+module RPC
   Error = Class.new(StandardError)
 
   # Read access to tinyactors.api.json, the only input about the C API.
-  class Api
+  class API
     FORMAT = 'tinyactors-api/2'
 
     attr_reader :types, :functions, :flag_sets

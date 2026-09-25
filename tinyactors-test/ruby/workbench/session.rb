@@ -129,7 +129,7 @@ module Workbench
                     "#{carried.nil? ? '' : ', data carried'}#{children.empty? ? '' : ", #{children.size} child(ren) reaped"})")
       report_lost_progress(name, was_active, active_states(replacement), dropped)
       true
-    rescue TinyactorsTest::CoreResultError, TinyactorsTest::RpcError, TinyactorsTest::ScenarioError => error
+    rescue TinyactorsTest::CoreResultError, TinyactorsTest::RPCError, TinyactorsTest::ScenarioError => error
       @journal.exception("#{name}: replacement failed", error)
       false
     end
@@ -163,7 +163,7 @@ module Workbench
       @actors[name] = @context.spawn(spec.chart, name: name.to_s, binding: carried || spec.binding)
       @journal.warn("#{name}: respawned rather than replaced, because #{why}")
       true
-    rescue TinyactorsTest::CoreResultError, TinyactorsTest::RpcError, TinyactorsTest::ScenarioError => error
+    rescue TinyactorsTest::CoreResultError, TinyactorsTest::RPCError, TinyactorsTest::ScenarioError => error
       @journal.exception("#{name}: respawn failed", error)
       false
     end
@@ -195,7 +195,7 @@ module Workbench
       @journal.info("#{name}: spawned #{spec.chart} at #{address_text(actor)}")
       drain_chart_logs
       actor
-    rescue TinyactorsTest::CoreResultError, TinyactorsTest::RpcError, TinyactorsTest::ScenarioError => error
+    rescue TinyactorsTest::CoreResultError, TinyactorsTest::RPCError, TinyactorsTest::ScenarioError => error
       @journal.exception("#{name}: spawn failed", error)
       nil
     end
@@ -210,7 +210,7 @@ module Workbench
       destroy_tree(actor.handle)
       @context.forget(actor)
       @context.run_system("destroy #{name}")
-    rescue TinyactorsTest::CoreResultError, TinyactorsTest::RpcError => error
+    rescue TinyactorsTest::CoreResultError, TinyactorsTest::RPCError => error
       @journal.exception("#{name}: destroy failed", error)
     end
 
@@ -271,7 +271,7 @@ module Workbench
 
     def next_deadline
       @context.next_deadline
-    rescue TinyactorsTest::CoreResultError, TinyactorsTest::RpcError
+    rescue TinyactorsTest::CoreResultError, TinyactorsTest::RPCError
       nil
     end
 
@@ -347,7 +347,7 @@ module Workbench
         @journal.chart("#{who ? "#{who} " : ''}<log> #{entry[:label]}#{value}")
       end
       touch!
-    rescue TinyactorsTest::RpcError
+    rescue TinyactorsTest::RPCError
       nil
     end
 
@@ -382,7 +382,7 @@ module Workbench
       outputs = @context.rpc('json.transform', filter: condition, input: root)
       value = outputs.first
       !(value.nil? || value == false)
-    rescue TinyactorsTest::RpcError, TinyactorsTest::ProtocolError
+    rescue TinyactorsTest::RPCError, TinyactorsTest::ProtocolError
       nil
     end
 
@@ -405,7 +405,7 @@ module Workbench
       invoker = { '$adapter' => 'invoker.scxml', 'config' => { 'system' => system, 'charts' => charts } }
       @context.core('ta_system_register_invoker',
                     @context.ta.system.register_invoker(system: system, type: type, invoker: invoker))
-    rescue TinyactorsTest::CoreResultError, TinyactorsTest::RpcError => error
+    rescue TinyactorsTest::CoreResultError, TinyactorsTest::RPCError => error
       @journal.exception('could not refresh the SCXML invoker', error)
     end
 
@@ -451,13 +451,13 @@ module Workbench
     def inspect_actor(handle)
       response = @context.ta.actor.inspect(system: @context.system_handle, actor: handle)
       response[:result] == 'ok' ? response.dig(:out, :out) : nil
-    rescue TinyactorsTest::RpcError
+    rescue TinyactorsTest::RPCError
       nil
     end
 
     def active_states(actor)
       actor.active
-    rescue TinyactorsTest::CoreResultError, TinyactorsTest::ScenarioError, TinyactorsTest::RpcError
+    rescue TinyactorsTest::CoreResultError, TinyactorsTest::ScenarioError, TinyactorsTest::RPCError
       []
     end
 
@@ -474,13 +474,13 @@ module Workbench
         family: view.dig(:definition, :family, :name),
         residency: view[:residency],
         active: Array(states[:states]).map { |state| @context.state_name(definition, state) } }
-    rescue TinyactorsTest::CoreResultError, TinyactorsTest::ScenarioError, TinyactorsTest::RpcError
+    rescue TinyactorsTest::CoreResultError, TinyactorsTest::ScenarioError, TinyactorsTest::RPCError
       { handle: handle, active: [], residency: 'unknown' }
     end
 
     def data_of(actor)
       actor.data
-    rescue TinyactorsTest::ScenarioError, TinyactorsTest::RpcError
+    rescue TinyactorsTest::ScenarioError, TinyactorsTest::RPCError
       # A chart on the null data model has no root to carry.
       nil
     end

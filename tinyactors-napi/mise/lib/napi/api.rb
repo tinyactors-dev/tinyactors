@@ -9,7 +9,7 @@ module NapiGen
   # Read access to tinyactors.api.json, the only input about the C API
   # (ADR 0013). The description is validated against core's schema with
   # core's own validator before anything reads it.
-  class Api
+  class API
     FORMAT = 'tinyactors-api/2'
     CORE = Pathname.new(__dir__).join('../../../../tinyactors-core').expand_path
     DESCRIPTION = CORE.join('include/tinyactors.api.json')
@@ -29,15 +29,15 @@ module NapiGen
       new(description)
     end
 
-    # Core's schema validator raises Api::Error; define it when only the
+    # Core's schema validator raises API::Error; define it when only the
     # validator is loaded.
     def self.schema_errors(description, schema)
-      unless defined?(::Api::Schema)
-        Object.const_set(:Api, Module.new) unless defined?(::Api)
-        ::Api.const_set(:Error, Class.new(StandardError)) unless ::Api.const_defined?(:Error)
+      unless defined?(::API::Schema)
+        Object.const_set(:API, Module.new) unless defined?(::API)
+        ::API.const_set(:Error, Class.new(StandardError)) unless ::API.const_defined?(:Error)
         require CORE.join('mise/lib/api/schema').to_s
       end
-      ::Api::Schema.load(schema.to_s).errors(description)
+      ::API::Schema.load(schema.to_s).errors(description)
     end
 
     def initialize(description)

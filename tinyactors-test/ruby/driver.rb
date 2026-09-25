@@ -7,7 +7,7 @@ module TinyactorsTest
   class ProtocolError < StandardError; end
 
   # The host answered a request with a JSON-RPC error object.
-  class RpcError < ProtocolError
+  class RPCError < ProtocolError
     attr_reader :rpc_method, :code, :rpc_message, :data
 
     def initialize(rpc_method, error)
@@ -102,7 +102,7 @@ module TinyactorsTest
       request[:params] = params unless params.nil?
       write(request)
       response = read_response(method)
-      raise RpcError.new(method, response[:error]) if response[:error]
+      raise RPCError.new(method, response[:error]) if response[:error]
       raise ProtocolError, "response ID mismatch: #{response.inspect}" unless response[:id] == @next_id
 
       response[:result]

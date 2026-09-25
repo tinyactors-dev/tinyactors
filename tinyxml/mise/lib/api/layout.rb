@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module Api
+module API
   # Sizes, alignments, and field offsets for each pinned target, computed by
   # clang itself (see Clang.evaluate), plus the values and types of the
   # header's integer macros.

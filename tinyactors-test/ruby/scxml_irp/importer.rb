@@ -7,7 +7,7 @@ require_relative 'conf_transform'
 require_relative 'emitter'
 require_relative 'manual_tests'
 
-module ScxmlIrp
+module SCXMLIRP
   # One <assert> of vendor/scxml-irp/manifest.xml and its test.
   Test = Data.define(:id, :section, :conformance, :manual, :assertion, :starts, :deps) do
     def label = "test#{id}"
@@ -159,7 +159,7 @@ module ScxmlIrp
       emitter.block("TinyactorsTest.scenarios 'scxml-irp'") do
         starts.each_with_index do |(label, chart_name), index|
           emitter.line if index.positive?
-          emitter.line("ScxmlIrp.expect_failure(self, #{Ruby.str(label)})")
+          emitter.line("SCXMLIRP.expect_failure(self, #{Ruby.str(label)})")
           emitter.block("scenario #{Ruby.str(label)}") do
             body = ManualTests.body(test.id)
             if body

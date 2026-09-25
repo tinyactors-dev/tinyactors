@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module Api
+module API
   # Parses C type spellings into API type references with the C declarator
   # grammar. Two inputs use it: clang's printed types (`qualType`, abstract
   # declarators without names) and declarations read from the header's source

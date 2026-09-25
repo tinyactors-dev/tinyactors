@@ -64,7 +64,7 @@ async function mailBeforeBootstrap() {
 }
 
 // A stale ID's mail is a dead letter and never reaches the slot's next actor.
-async function staleIds() {
+async function staleIDs() {
   const dead = [];
   const system = createSystem({ deadLetter: (record) => dead.push(record) });
   const definition = system.define(steps());
@@ -283,7 +283,7 @@ async function refusals() {
   await fifoAcrossTheBudget();
   await mailBeforeBootstrap();
   await dataIsReleased();
-  await staleIds();
+  await staleIDs();
   await faultsQuarantineAndRelease();
   await finishedAndDestroyedTargets();
   await backpressure();

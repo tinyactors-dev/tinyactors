@@ -90,7 +90,7 @@ async function ioCompletes() {
   assert.equal(request.target, 'client-7');
   assert.deepEqual(request.data, { text: 'hello' });
   assert.equal(request.source.slot, actor.slot);
-  assert.equal(request.sendId, null, 'an unnamed send has no send ID');
+  assert.equal(request.sendID, null, 'an unnamed send has no send ID');
   await until(system, () => actor.inspect().activeStates.includes('done'), 'the ack');
   assert.equal(actor.inspect().data.reply, 'hello');
   system.close();
@@ -152,7 +152,7 @@ async function ioLiteralTarget() {
 }
 
 // A processor that throws, or rejects, fails the send: the sender gets
-// error.communication with { sendId, type, error }.
+// error.communication with { sendID, type, error }.
 async function ioFails() {
   const system = createSystem({
     io: {
@@ -197,7 +197,7 @@ async function delayedCustomSend() {
   assert.equal(seen.length, 0);
   await system.advanceBy(1000);
   assert.equal(seen.length, 1);
-  assert.equal(seen[0].sendId, 'p');
+  assert.equal(seen[0].sendID, 'p');
   system.close();
 }
 
@@ -210,7 +210,7 @@ async function javascriptInvoker() {
     invokers: {
       ticker: {
         start(request, report) {
-          log.push(['start', request.invokeId, request.params]);
+          log.push(['start', request.invokeID, request.params]);
           reporter = report;
           return {
             cancel(reason) { log.push(['cancel', reason, report.signal.aborted]); },

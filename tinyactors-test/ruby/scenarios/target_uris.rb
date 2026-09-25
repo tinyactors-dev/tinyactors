@@ -7,7 +7,7 @@
 # ta_scxml_target_format. `send_targets.rb` proves the two spellings of a
 # target agree when a chart sends; this file proves the two functions are
 # inverses, which is what makes that agreement possible.
-module TargetUris
+module TargetURIs
   # [URI, the parsed target, the URI it formats back to, what the row proves]
   #
   # The parsed shape is the ta_scxml_target the codec encodes: `kind` and
@@ -43,7 +43,7 @@ TinyactorsTest.scenarios 'target URIs' do
   # chart as `$_event.origin` would then not parse back to the address it
   # came from, and a reply to that origin would go somewhere else.
   scenario 'every URI parses to its target and formats back to itself' do
-    TargetUris::TABLE.each do |text, expected, formatted, claim|
+    TargetURIs::TABLE.each do |text, expected, formatted, claim|
       result, target = parse_target(text)
       assert_equal 'ok', result, "#{text}: #{claim}"
       assert_equal expected, target, "#{text}: #{claim}"
@@ -57,7 +57,7 @@ TinyactorsTest.scenarios 'target URIs' do
   # Catches: an invalid target core accepts, which a chart would then send
   # to with no error at all (test194 requires error.execution).
   scenario 'a target no rule accepts is invalid' do
-    TargetUris::INVALID.each do |text|
+    TargetURIs::INVALID.each do |text|
       assert_equal ['err_invalid', nil], parse_target(text), "#{text.inspect} is not a target"
     end
   end

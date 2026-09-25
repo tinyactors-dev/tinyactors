@@ -70,7 +70,7 @@ export interface FaultRecord {
  * (ADR 0006).
  */
 export interface DeadLetterRecord {
-  readonly target: ActorId | ActorAddress;
+  readonly target: ActorID | ActorAddress;
   readonly event: EventName;
   /**
    * `unloaded`: a name whose actor is unloaded (load() brings it back; mail is
@@ -140,27 +140,27 @@ export interface System {
   findActor(address: ActorAddress): Actor | undefined;
 
   /** A snapshot of core's view of `actor`. Throws `not-found` once it is gone. */
-  inspect<Data extends object>(actor: ActorId): ActorInspection<Data>;
+  inspect<Data extends object>(actor: ActorID): ActorInspection<Data>;
   /** True while a resident actor has this ID. */
-  exists(actor: ActorId): boolean;
+  exists(actor: ActorID): boolean;
   /** Terminate `actor`. Throws `not-found` once it is gone. */
-  destroy(actor: ActorId): void;
+  destroy(actor: ActorID): void;
   /** Put an actor that faulted back into scheduling (ADR 0008). */
-  release(actor: ActorId): void;
+  release(actor: ActorID): void;
 
   /**
    * Capture `actor` in memory (core ADR 0013), with the data-model root it
    * has now. `busy` for an unpublished (prepared) actor.
    */
-  capture<Data extends object>(actor: ActorId): SessionImage<Data>;
+  capture<Data extends object>(actor: ActorID): SessionImage<Data>;
 
   /**
    * Evict a named actor with a capture taken since its last change (`stale`
    * otherwise). Throws `busy` while it has mail waiting, is inside a
    * macrostep, or is quarantined. Mail to its address is then a dead letter
-   * with reason `unloaded` until load(); its ActorId is stale.
+   * with reason `unloaded` until load(); its ActorID is stale.
    */
-  unload(actor: ActorId, image: SessionImage): void;
+  unload(actor: ActorID, image: SessionImage): void;
 
   /**
    * Bring an unloaded named actor back: the same session ID, a new runtime
@@ -188,7 +188,7 @@ export interface System {
 
   /** Create an unpublished replacement for the named actor `incumbent` (Actor.prepareReplacement). */
   prepareReplacement<Data extends object>(
-    incumbent: ActorId,
+    incumbent: ActorID,
     definition: Definition<Data>,
     options?: ReplacementOptions<Data>,
   ): PreparedActor<Data>;
@@ -219,7 +219,7 @@ export interface System {
    * watched delivery causes is watched too.
    */
   watchTraces(watch: {
-    sessions?: (bigint | number | ActorId)[];
+    sessions?: (bigint | number | ActorID)[];
     families?: string[];
     addresses?: { family: string; name: string }[];
   }): { stop(): void };
@@ -272,7 +272,7 @@ export interface System {
    * core's cursor, in slot order; a page is a snapshot (core ADR 0062).
    * Throws `reentrant` inside a core call.
    */
-  actorIds(options?: PageOptions): IterableIterator<Uint32Array>;
+  actorIDs(options?: PageOptions): IterableIterator<Uint32Array>;
   /**
    * Resident actors' inspections, taken when the iterator reaches each
    * actor. Holds one page of IDs at a time; an actor destroyed after its
@@ -336,30 +336,30 @@ export interface SystemStats {
 }
 
 export type EventName = string;
-export type ActorTarget = Actor | ActorId | ActorAddress;
+export type ActorTarget = Actor | ActorID | ActorAddress;
 
 export interface ActorAddress {
   readonly family: string;
   readonly name: string;
 }
 
-declare const definitionIdBrand: unique symbol;
-declare const invocationIdBrand: unique symbol;
-declare const sendIdBrand: unique symbol;
+declare const definitionIDBrand: unique symbol;
+declare const invocationIDBrand: unique symbol;
+declare const sendIDBrand: unique symbol;
 
 /**
  * An actor's ID: its slot and generation in the actor table, two small
  * integers (ADR 0002). Equality is by value; among live actors the slot alone
  * is unique.
  */
-export interface ActorId {
+export interface ActorID {
   readonly system: System;
   readonly slot: number;
   readonly generation: number;
 }
-export type DefinitionId = bigint & { readonly [definitionIdBrand]: true };
-export type InvocationId = bigint & { readonly [invocationIdBrand]: true };
-export type SendId = bigint & { readonly [sendIdBrand]: true };
+export type DefinitionID = bigint & { readonly [definitionIDBrand]: true };
+export type InvocationID = bigint & { readonly [invocationIDBrand]: true };
+export type SendID = bigint & { readonly [sendIDBrand]: true };
 
 export interface PostOptions {
   /** A W3C traceparent: the macrostep this message starts runs under it (ADR 0015). */
@@ -407,7 +407,7 @@ export interface SendOptions extends PostOptions {
 }
 
 export interface SendResult {
-  /** The actor that ran the macrostep; for "accepted", the target when it was an ActorId. */
+  /** The actor that ran the macrostep; for "accepted", the target when it was an ActorID. */
   readonly actor?: Actor;
   readonly status: "accepted" | "stable" | "done";
   /** "done": the actor's done data. */
@@ -445,7 +445,7 @@ export interface ChartRefusal {
 
 export interface Definition<Data extends object = Record<string, unknown>> {
   readonly system: System;
-  readonly id: DefinitionId;
+  readonly id: DefinitionID;
   readonly identity: DefinitionIdentity;
   /**
    * True once retire() has run. Core frees a retired definition when no
@@ -461,7 +461,7 @@ export interface Definition<Data extends object = Record<string, unknown>> {
 }
 
 export interface DefinitionInspection {
-  readonly id: DefinitionId;
+  readonly id: DefinitionID;
   readonly identity: DefinitionIdentity;
   readonly name?: string;
   /** The data model the chart was compiled against, e.g. "null". */
@@ -582,7 +582,7 @@ export interface ActionSequenceBuilder<Data extends object, Self> {
   raise(event: EventName, data?: ValueInput<Data>): Self;
 
   send(event: StringSpec<Data>, build?: SendBlock<Data>): Self;
-  cancel(sendId: StringSpec<Data>): Self;
+  cancel(sendID: StringSpec<Data>): Self;
 
   /** Assign a declared top-level data property. */
   assign<Key extends keyof Data & string>(
@@ -662,12 +662,12 @@ export interface SpawnOptions<Data extends object> {
 }
 
 /**
- * The view spawn() returns (ADR 0002): an ActorId with methods that ask the
+ * The view spawn() returns (ADR 0002): an ActorID with methods that ask the
  * system. It holds no native resource and no finalizer.
  */
-export interface Actor<Data extends object = Record<string, unknown>> extends ActorId {
+export interface Actor<Data extends object = Record<string, unknown>> extends ActorID {
   readonly destroyed: boolean;
-  equals(other: ActorId): boolean;
+  equals(other: ActorID): boolean;
 
   post(event: EventName, data?: unknown, options?: PostOptions): void;
   send(event: EventName, data?: unknown, options?: SendOptions): Promise<SendResult>;
@@ -701,7 +701,7 @@ export interface Actor<Data extends object = Record<string, unknown>> extends Ac
 export interface PreparedActor<Data extends object> extends Actor<Data> {
   /** False until activate() publishes it. */
   readonly published: boolean;
-  readonly incumbent: ActorId;
+  readonly incumbent: ActorID;
 
   /**
    * Publish this actor at the incumbent's address, then destroy the
@@ -730,7 +730,7 @@ export type ActorResidency = "idle" | "running" | "done" | "unloaded";
 export interface ActorInspection<Data = unknown> {
   readonly actor: Actor;
   /** Stable across unload and load; the runtime ID is not (core ADR 0066). */
-  readonly sessionId: bigint;
+  readonly sessionID: bigint;
   readonly definition: DefinitionIdentity;
   readonly residency: ActorResidency;
   readonly published: boolean;
@@ -752,7 +752,7 @@ export interface ActorInspection<Data = unknown> {
 }
 
 export interface InvocationInspection {
-  readonly id: InvocationId;
+  readonly id: InvocationID;
   readonly type: string;
   readonly active: boolean;
   readonly autoforward: boolean;
@@ -766,7 +766,7 @@ export interface DelayedSendInspection {
   readonly event: EventName;
   readonly ioType: string;
   /** The resolved receiver for the built-in SCXML processor; null for custom processors, which use `target`. */
-  readonly destination: ActorId | ActorAddress | null;
+  readonly destination: ActorID | ActorAddress | null;
   readonly target: unknown;
   readonly data: unknown;
   /** The router refused this send once; it is waiting to be offered again. */
@@ -786,9 +786,9 @@ export interface DelayedSendInspection {
 export interface SessionImage<Data extends object = Record<string, unknown>> {
   readonly origin: System;
   /** The actor at capture; its ID is stale once the actor is unloaded. */
-  readonly actor: ActorId;
+  readonly actor: ActorID;
   /** Stable across unload and load (core ADR 0066). */
-  readonly sessionId: bigint;
+  readonly sessionID: bigint;
   readonly definition: DefinitionIdentity;
   readonly address?: ActorAddress;
   /** The data-model root at capture (shared, not copied), or undefined under the null data model. */
@@ -809,7 +809,7 @@ export interface SessionImage<Data extends object = Record<string, unknown>> {
 export interface EvaluationContext<Data extends object> {
   readonly data: Data;
   readonly event?: ActorEvent;
-  readonly sessionId: string;
+  readonly sessionID: string;
   readonly name?: string;
   readonly ioProcessors: Readonly<Record<string, { readonly location: string }>>;
   inState(state: string): boolean;
@@ -848,23 +848,23 @@ export type DelaySpec<Data extends object> =
 
 /**
  * The event an expression sees as `context.event` (SCXML _event). `origin`
- * is a URI a send can target: `#_scxml_<sessionId>` or
+ * is a URI a send can target: `#_scxml_<sessionID>` or
  * `#_actor_<family>/<name>` (core ADR 0044), so replying is
  * `send("reply").to(({ event }) => event.origin)`.
  */
 export interface ActorEvent<Data = unknown> {
   readonly name: EventName;
   readonly type: "external" | "internal" | "platform";
-  readonly sendId?: string;
+  readonly sendID?: string;
   readonly origin?: string;
   readonly originType?: string;
-  readonly invocationId?: string;
+  readonly invocationID?: string;
   readonly data: Data;
 }
 
 export type EventOrigin =
-  | { readonly kind: "actor"; readonly actor: ActorId | ActorAddress }
-  | { readonly kind: "invocation"; readonly invocation: InvocationId }
+  | { readonly kind: "actor"; readonly actor: ActorID | ActorAddress }
+  | { readonly kind: "invocation"; readonly invocation: InvocationID }
   | { readonly kind: "io"; readonly value: bigint };
 
 /* --------------------------------------------------------------------------
@@ -1030,17 +1030,17 @@ export interface DoneDataSpec {
  * turn, never inside core. A reply is an event the processor posts, now or
  * later. Throwing, or returning a promise that rejects, fails the send: the
  * sender gets an external `error.communication` event with data
- * { sendId, type, error }.
+ * { sendID, type, error }.
  */
 export interface IOProcessor extends IOProcessorOptions {
   send(request: IORequest, context: EffectContext): void | Promise<void>;
 }
 
 export interface IORequest {
-  /** The sending actor: an ActorId, or its address when it is named. */
-  readonly source: ActorId | ActorAddress;
+  /** The sending actor: an ActorID, or its address when it is named. */
+  readonly source: ActorID | ActorAddress;
   /** The send's ID text (`<send id>` or core's generated one), or null for a send without one. */
-  readonly sendId: string | null;
+  readonly sendID: string | null;
   readonly event: EventName;
   readonly type: string;
   readonly target: unknown;
@@ -1070,9 +1070,9 @@ export interface Invoker {
 export interface InvokeRequest {
   readonly system: System;
   readonly parent: Actor;
-  readonly invocationId: InvocationId;
+  readonly invocationID: InvocationID;
   /** The invoke ID's text: `<invoke id>` or the one core generated. */
-  readonly invokeId?: string;
+  readonly invokeID?: string;
   readonly type: string;
   readonly source?: unknown;
   /** `<content expr>`'s value, or a literal <content> as text (then `contentType` is set). */
@@ -1102,7 +1102,7 @@ export interface InvocationReporter {
 }
 
 export interface LogRecord {
-  readonly source: ActorId | ActorAddress;
+  readonly source: ActorID | ActorAddress;
   readonly label?: string;
   readonly hasValue: boolean;
   readonly value?: unknown;
@@ -1161,7 +1161,7 @@ export interface TraceConfiguration {
   kinds?: TraceKind[];
   /**
    * The ratio (0 to 1, default 1) of the traces this system starts that are
-   * sampled, decided as OpenTelemetry's TraceIdRatioBased does. A
+   * sampled, decided as OpenTelemetry's TraceIDRatioBased does. A
    * traceparent keeps its caller's decision.
    */
   sample?: number;
@@ -1215,9 +1215,9 @@ export declare function metricsToOTLP(
 
 /** A span as decodeTraces() reads it. IDs are lowercase hex. */
 export interface DecodedSpan {
-  traceId: string;
-  spanId: string;
-  parentSpanId?: string;
+  traceID: string;
+  spanID: string;
+  parentSpanID?: string;
   name: string;
   kind: 'unspecified' | 'internal' | 'server' | 'client' | 'producer' | 'consumer';
   /** Milliseconds since the epoch. */
@@ -1227,7 +1227,7 @@ export interface DecodedSpan {
   endTimeUnixNano: bigint;
   attributes: Record<string, unknown>;
   events: { name: string; time: number; timeUnixNano: bigint; attributes: Record<string, unknown> }[];
-  links: { traceId: string; spanId: string; attributes: Record<string, unknown> }[];
+  links: { traceID: string; spanID: string; attributes: Record<string, unknown> }[];
   status: { code: 'unset' | 'ok' | 'error'; message?: string };
   /** Shared by the spans of one resource. */
   resource: { attributes: Record<string, unknown> };
@@ -1238,6 +1238,6 @@ export interface DecodedSpan {
 export declare function decodeTraces(bytes: Uint8Array): DecodedSpan[];
 
 export declare function parseTraceparent(header: string | undefined):
-  { traceId: string; parentSpanId: string; flags: number; sampled: boolean } | undefined;
-export declare function formatTraceparent(span: { traceId: string; spanId: string; sampled?: boolean; flags?: number }): string;
-export declare function stepSpanId(session: bigint | number, macrostep: bigint | number, microstep?: number): string;
+  { traceID: string; parentSpanID: string; flags: number; sampled: boolean } | undefined;
+export declare function formatTraceparent(span: { traceID: string; spanID: string; sampled?: boolean; flags?: number }): string;
+export declare function stepSpanID(session: bigint | number, macrostep: bigint | number, microstep?: number): string;

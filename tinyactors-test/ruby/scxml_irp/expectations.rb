@@ -4,14 +4,14 @@ require 'json'
 require 'pathname'
 
 # Expected outcomes of the imported W3C SCXML IRP scenarios. The generated
-# scenario files call ScxmlIrp.expect_failure before each scenario.
+# scenario files call SCXMLIRP.expect_failure before each scenario.
 #
 # Every scenario is expected to pass unless baseline.json lists it. The
 # baseline records each known failure with its exact error message, so a
 # scenario that starts failing differently is a FAIL, and one that starts
 # passing is an XPASS until `mise run scxml-irp-baseline` records the
 # progress.
-module ScxmlIrp
+module SCXMLIRP
   BASELINE = Pathname.new(__dir__).join('baseline.json')
   BASELINE_REASON = 'known failure recorded in ruby/scxml_irp/baseline.json'
 

@@ -181,8 +181,8 @@ class ActionSequenceBuilder {
     return this.#push({ kind: 'send', send });
   }
 
-  cancel(sendId) {
-    return this.#push({ kind: 'cancel', cancel: { sendid: stringSpec(sendId, 'cancel send ID') } });
+  cancel(sendID) {
+    return this.#push({ kind: 'cancel', cancel: { sendid: stringSpec(sendID, 'cancel send ID') } });
   }
 
   log(label, value) {

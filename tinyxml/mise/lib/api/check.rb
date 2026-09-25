@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module Api
+module API
   # Proves the description against the header: it renders every type,
   # field, constant, and function back into C declarations and static
   # assertions and compiles them with the real header for each target. A

@@ -14,7 +14,7 @@ const {
   TRACE_KINDS,
   parseTraceparent,
   formatTraceparent,
-  stepSpanId,
+  stepSpanID,
   TinyactorsError,
 } = require('..');
 
@@ -81,11 +81,11 @@ async function batches() {
   const goStep = named(spans, 'scxml.microstep go');
   assert.ok(spawned && boot && bootStep && go && goStep, `the spans: ${sink.names()}`);
   const session = BigInt(boot.attributes['scxml.session_id']);
-  assert.equal(boot.spanId, stepSpanId(session, 1n, 0), 'span IDs are step keys');
-  assert.equal(goStep.spanId, stepSpanId(session, 2n, 1));
-  assert.equal(bootStep.parentSpanId, boot.spanId);
-  assert.equal(goStep.parentSpanId, go.spanId);
-  assert.equal(go.traceId, goStep.traceId);
+  assert.equal(boot.spanID, stepSpanID(session, 1n, 0), 'span IDs are step keys');
+  assert.equal(goStep.spanID, stepSpanID(session, 2n, 1));
+  assert.equal(bootStep.parentSpanID, boot.spanID);
+  assert.equal(goStep.parentSpanID, go.spanID);
+  assert.equal(go.traceID, goStep.traceID);
   assert.equal(spawned.resource.attributes['service.name'], 'orders');
   assert.equal(spawned.scope.name, 'tinyactors');
   assert.ok(boot.events.some((event) => event.name === 'scxml.data' && event.attributes['scxml.data.name'] === 'count'),
@@ -134,8 +134,8 @@ async function traceparentIn() {
   actor.post('go', undefined, { traceparent: traceparent('00f067aa0ba902b7') });
   await system.flush();
   const go = named(sink.spans, 'scxml.macrostep go');
-  assert.equal(go.traceId, TRACE_ID);
-  assert.equal(go.parentSpanId, '00f067aa0ba902b7');
+  assert.equal(go.traceID, TRACE_ID);
+  assert.equal(go.parentSpanID, '00f067aa0ba902b7');
 
   const unsampled = createSystem();
   const quiet = recorder(unsampled, { kinds: ['macrostepBegin', 'macrostepEnd'] });
@@ -163,7 +163,7 @@ async function startedTraces() {
     await system.flush();
     actor.post('go');
     await system.flush();
-    const traces = sink.spans.map((span) => span.traceId);
+    const traces = sink.spans.map((span) => span.traceID);
     system.close();
     return traces;
   };
@@ -179,20 +179,20 @@ async function startedTraces() {
 
 function helpers() {
   assert.deepEqual(parseTraceparent(traceparent('00f067aa0ba902b7')),
-                   { traceId: TRACE_ID, parentSpanId: '00f067aa0ba902b7', flags: 1, sampled: true });
+                   { traceID: TRACE_ID, parentSpanID: '00f067aa0ba902b7', flags: 1, sampled: true });
   assert.equal(parseTraceparent(`00-${'0'.repeat(32)}-00f067aa0ba902b7-01`), undefined, 'an all-zero trace ID');
   assert.equal(parseTraceparent('ff-' + TRACE_ID + '-00f067aa0ba902b7-01'), undefined, 'version ff');
   assert.equal(parseTraceparent(undefined), undefined);
-  assert.equal(formatTraceparent({ traceId: TRACE_ID, spanId: '00f067aa0ba902b7' }), traceparent('00f067aa0ba902b7'));
-  assert.equal(formatTraceparent({ traceId: TRACE_ID, spanId: '00f067aa0ba902b7', sampled: false }),
+  assert.equal(formatTraceparent({ traceID: TRACE_ID, spanID: '00f067aa0ba902b7' }), traceparent('00f067aa0ba902b7'));
+  assert.equal(formatTraceparent({ traceID: TRACE_ID, spanID: '00f067aa0ba902b7', sampled: false }),
                traceparent('00f067aa0ba902b7', '00'));
   // Core's golden values (tinyactors-core/tests/trace_test.c).
-  assert.equal(stepSpanId(1n, 1n, 0), '049e7f1d71e53363');
-  assert.equal(stepSpanId(1n, 1n, 1), '304917c348f35bf4');
-  assert.equal(stepSpanId(1n, 2n, 0), '79368ebf22c90f5b');
-  assert.equal(stepSpanId(2n, 1n, 0), '6412a7d0f1c7345a');
-  assert.equal(stepSpanId(1n, 0n, 1), '65c672b9ddbfb556', 'a lifecycle key');
-  assert.equal(stepSpanId(0n, 0x1234n, 0), '0000000000001234', 'a host cause is its own span ID');
+  assert.equal(stepSpanID(1n, 1n, 0), '049e7f1d71e53363');
+  assert.equal(stepSpanID(1n, 1n, 1), '304917c348f35bf4');
+  assert.equal(stepSpanID(1n, 2n, 0), '79368ebf22c90f5b');
+  assert.equal(stepSpanID(2n, 1n, 0), '6412a7d0f1c7345a');
+  assert.equal(stepSpanID(1n, 0n, 1), '65c672b9ddbfb556', 'a lifecycle key');
+  assert.equal(stepSpanID(0n, 0x1234n, 0), '0000000000001234', 'a host cause is its own span ID');
   assert.throws(() => decodeTraces(new Uint8Array([0x0a, 0x05, 0x01])), /malformed/);
   assert.throws(() => decodeTraces([]), /Uint8Array/);
 }
@@ -222,10 +222,10 @@ async function causality() {
   const goStep = named(all, 'scxml.microstep go');
   const pinged = named(all, 'scxml.macrostep ping');
   assert.ok(go && goStep && pinged, `the spans: ${sink.names()}`);
-  assert.equal(go.parentSpanId, '00f067aa0ba902b7', 'a delivery with a traceparent sits under the host\'s span');
-  assert.equal(goStep.parentSpanId, go.spanId);
-  assert.equal(pinged.parentSpanId, goStep.spanId, 'the receiver\'s macrostep sits under the step that sent');
-  assert.equal(pinged.traceId, TRACE_ID);
+  assert.equal(go.parentSpanID, '00f067aa0ba902b7', 'a delivery with a traceparent sits under the host\'s span');
+  assert.equal(goStep.parentSpanID, go.spanID);
+  assert.equal(pinged.parentSpanID, goStep.spanID, 'the receiver\'s macrostep sits under the step that sent');
+  assert.equal(pinged.traceID, TRACE_ID);
   assert.equal(pinged.attributes['scxml.cause.session_id'], goStep.attributes['scxml.session_id']);
   assert.ok(goStep.events.some((event) => event.name === 'scxml.send'), 'the send is an event of its step');
   system.close();
@@ -247,8 +247,8 @@ async function traceparentOut() {
   assert.equal(requests.length, 1);
   const goStep = named(sink.spans, 'scxml.microstep go');
   const parsed = parseTraceparent(requests[0].traceparent);
-  assert.equal(parsed.traceId, TRACE_ID);
-  assert.equal(parsed.parentSpanId, goStep.spanId, 'the processor\'s parent span is the step that sent');
+  assert.equal(parsed.traceID, TRACE_ID);
+  assert.equal(parsed.parentSpanID, goStep.spanID, 'the processor\'s parent span is the step that sent');
   assert.equal(requests[0].trace, undefined, 'the raw trace parent does not leak into the request');
   system.close();
 }
@@ -282,8 +282,8 @@ async function repliesStayInTheTrace() {
   await system.flush();
   const goStep = named(sink.spans, 'scxml.microstep go');
   const answer = named(sink.spans, 'scxml.macrostep answer');
-  assert.equal(answer.traceId, TRACE_ID, 'the reply is in the request\'s trace');
-  assert.equal(answer.parentSpanId, goStep.spanId, 'the reply is a child of the step that sent the request');
+  assert.equal(answer.traceID, TRACE_ID, 'the reply is in the request\'s trace');
+  assert.equal(answer.parentSpanID, goStep.spanID, 'the reply is a child of the step that sent the request');
   system.close();
 }
 
@@ -376,8 +376,8 @@ async function valuesAndLinks() {
   other.post('go', undefined, { traceparent: traceparent('00f067aa0ba902b7') });
   await linked.flush();
   const go = named(links.spans, 'scxml.macrostep go');
-  assert.equal(go.parentSpanId, undefined, 'a root');
-  assert.deepEqual(go.links.map((link) => link.spanId), ['00f067aa0ba902b7'], 'linked to its cause');
+  assert.equal(go.parentSpanID, undefined, 'a root');
+  assert.deepEqual(go.links.map((link) => link.spanID), ['00f067aa0ba902b7'], 'linked to its cause');
   assert.throws(() => linked.setTraceSink(() => {}, { parent: 'sideways' }), /parent/);
   assert.throws(() => linked.setTraceSink(() => {}, { resource: { n: 1 } }), /string/);
   system.close();
@@ -400,7 +400,7 @@ async function lifecycle() {
   const spans = sink.spans;
   const names = spans.map((span) => span.name).sort();
   assert.ok(names.includes('scxml.spawned') && names.includes('scxml.finished'), `lifecycle spans: ${names}`);
-  assert.equal(new Set(spans.map((span) => span.spanId)).size, spans.length, 'every span ID is distinct');
+  assert.equal(new Set(spans.map((span) => span.spanID)).size, spans.length, 'every span ID is distinct');
   const finished = named(spans, 'scxml.finished');
   assert.equal(finished.attributes['scxml.final_state'], 'end');
   system.close();
@@ -438,7 +438,7 @@ async function watchAndSample() {
   seen = spans();
   assert.equal(seen.filter((span) => span.name === 'scxml.microstep go').length, 1, 'only the watched actor in full');
   const watchedMacro = seen.find((span) => span.name === 'scxml.macrostep go' &&
-                                          seen.some((other) => other.parentSpanId === span.spanId));
+                                          seen.some((other) => other.parentSpanID === span.spanID));
   assert.ok(watchedMacro !== undefined, 'the watched microstep is a child of its macrostep');
   watch.stop();
   a.post('go');

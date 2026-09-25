@@ -15,6 +15,6 @@ assert.deepEqual(Object.keys(addon).sort(), [
   'metricsToOTLP',
   'parseTraceparent',
   'statechart',
-  'stepSpanId',
+  'stepSpanID',
   'version',
 ]);

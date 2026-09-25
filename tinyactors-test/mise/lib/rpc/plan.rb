@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module Rpc
+module RPC
   # Every decision the RPC bindings make, taken from the API description and
   # the policy before any C is written: which JSON member each field becomes,
   # with which codec, whether it is required, how union members are laid out,

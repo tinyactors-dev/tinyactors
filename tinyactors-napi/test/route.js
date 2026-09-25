@@ -78,14 +78,14 @@ async function namedPingPong() {
   system.close();
 }
 
-// A send to `#_scxml_<sessionId>` reaches that session (core ADR 0066).
+// A send to `#_scxml_<sessionID>` reaches that session (core ADR 0066).
 async function runtimeTargets() {
   const system = createSystem({ fault: (record) => assert.fail(`fault: ${record.code}`) });
   const receiver = system.spawn(system.define(
     statechart({ family: 'rx', revision: 'v1' })
       .state('wait', (s) => s.on('hit', (t) => t.target('got')))
       .state('got')));
-  const session = receiver.inspect().sessionId;
+  const session = receiver.inspect().sessionID;
   const sender = system.spawn(system.define(
     statechart({ family: 'tx', revision: 'v1' })
       .state('a', (s) => s.on('go', (t) => t.target('b').send('hit', (m) => m.to(`#_scxml_${session}`))))
@@ -203,7 +203,7 @@ async function namesCopyNothing() {
     return calls;
   };
   const named = await perSend(() => '#_actor_rx/r');
-  const session = await perSend((receiver) => `#_scxml_${receiver.inspect().sessionId}`);
+  const session = await perSend((receiver) => `#_scxml_${receiver.inspect().sessionID}`);
   assert.equal(named, session, 'a named target costs core no more than a session target');
 }
 

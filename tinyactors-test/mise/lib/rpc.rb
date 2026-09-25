@@ -11,13 +11,13 @@ require_relative 'rpc/emit'
 # All stages run in memory:
 #
 #   API description + policy --Plan--> decisions --Emit--> ta_rpc.{c,h}
-module Rpc
+module RPC
   Output = Struct.new(:header, :source, :coverage, keyword_init: true)
 
   module_function
 
   def generate(description, policy)
-    api = Api.load(description)
+    api = API.load(description)
     plan = Plan.new(api, Policy.new(policy))
     emit = Emit.new(api, plan)
     Output.new(header: emit.header, source: emit.source, coverage: coverage(plan))

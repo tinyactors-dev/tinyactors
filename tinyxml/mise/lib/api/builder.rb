@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module Api
+module API
   Error = Class.new(StandardError)
 
   # Builds the API model from the header's AST. Structural rules decide what

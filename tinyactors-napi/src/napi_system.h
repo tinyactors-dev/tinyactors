@@ -39,7 +39,7 @@ struct tna_napi_system {
     napi_ref timer_function;      /* the native setTimeout callback (ADR 0007 point 3) */
     napi_ref timeout;             /* the pending Timeout, for clearTimeout, or NULL */
     bool timer_held;              /* a pending timer holds the wrapper */
-    napi_ref facade;              /* weak: the public System, for ActorId views */
+    napi_ref facade;              /* weak: the public System, for ActorID views */
     napi_ref done_hook;           /* ADR 0012 */
     napi_ref fault_hook;          /* ADR 0008 */
     napi_ref dead_letter_hook;    /* ADR 0008 */

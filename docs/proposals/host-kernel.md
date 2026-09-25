@@ -59,7 +59,7 @@ and UBSan, because the step forks kept it free of Node-API on purpose.
 | Data model | callables | procs | JS functions (the napi data model, reused) |
 | Pump driver | asyncio `call_soon` / `call_later`, or a synchronous `run()` | a Fiber scheduler, a thread, or an explicit `run()` | `MessageChannel` or `scheduler.postTask`; `setTimeout` |
 | Threading | GIL; a system stays on one thread | GVL; the same rule | one thread |
-| Facade | builder, `ActorId`, `System` | the same | a host-neutral `lib/` shared with napi (a napi roadmap follow-up) |
+| Facade | builder, `ActorID`, `System` | the same | a host-neutral `lib/` shared with napi (a napi roadmap follow-up) |
 
 ## When to do it
 

@@ -28,16 +28,16 @@ include_dir = root.join('include')
 public_header = include_dir.join('tinyactors.h')
 umbrella = root.join('src/internal.h')
 
-modules = CApi.modules(root)
+modules = CAPI.modules(root)
 abort "#{umbrella} does not list any source modules" if modules.empty?
 
-PROTOTYPE = CApi::PROTOTYPE
-DEFINITION = CApi::DEFINITION
+PROTOTYPE = CAPI::PROTOTYPE
+DEFINITION = CAPI::DEFINITION
 
 errors = []
 
 api = public_header.read
-public_functions = CApi.public_functions(api)
+public_functions = CAPI.public_functions(api)
 api.scan(PROTOTYPE) { errors << "#{public_header.relative_path_from(root)}: #{$2} is declared without TA_API" }
 
 def strip(text)

@@ -2,7 +2,7 @@
 
 require 'json'
 
-module Rpc
+module RPC
   # Formats a Plan as C. It makes no decisions: every name, key, codec, and
   # condition comes from the plan. Decoders return false after recording an
   # error with its path; encoders return an owned jv.

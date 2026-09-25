@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module Rpc
+module RPC
   # The binding decisions in bindings.rb that the API description cannot
   # make: what the RPC host leaves out, what it implements by hand, and how
   # its JSON is laid out. Every pattern must match something, so the policy

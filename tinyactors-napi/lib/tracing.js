@@ -55,7 +55,7 @@ const ZERO_TRACE = '0'.repeat(32);
 const ZERO_SPAN = '0'.repeat(16);
 
 /**
- * Parses a `traceparent` header: { traceId, parentSpanId, flags, sampled },
+ * Parses a `traceparent` header: { traceID, parentSpanID, flags, sampled },
  * or undefined when it is not a valid one (the W3C rule: a receiver that
  * cannot parse it starts a new trace).
  */
@@ -68,13 +68,13 @@ function parseTraceparent(header) {
     return undefined;
   }
   const flags = Number.parseInt(match[4], 16);
-  return { traceId: match[2], parentSpanId: match[3], flags, sampled: (flags & 1) === 1 };
+  return { traceID: match[2], parentSpanID: match[3], flags, sampled: (flags & 1) === 1 };
 }
 
-/** A `traceparent` header for a span: { traceId, spanId, sampled | flags }. */
-function formatTraceparent({ traceId, spanId, sampled = true, flags }) {
+/** A `traceparent` header for a span: { traceID, spanID, sampled | flags }. */
+function formatTraceparent({ traceID, spanID, sampled = true, flags }) {
   const bits = flags ?? (sampled ? 1 : 0);
-  return `00-${traceId}-${spanId}-${bits.toString(16).padStart(2, '0')}`;
+  return `00-${traceID}-${spanID}-${bits.toString(16).padStart(2, '0')}`;
 }
 
 const MASK64 = (1n << 64n) - 1n;
@@ -95,7 +95,7 @@ const hex16 = (value) => value.toString(16).padStart(16, '0');
  * The 16-hex-digit span ID of step (session, macrostep, microstep). A host
  * cause (session 0) is the host's own span ID, `macrostep`.
  */
-function stepSpanId(session, macrostep, microstep = 0) {
+function stepSpanID(session, macrostep, microstep = 0) {
   const s = BigInt(session);
   const m = BigInt(macrostep);
   if (s === 0n) {
@@ -132,5 +132,5 @@ module.exports = {
   kindMask,
   parseTraceparent,
   formatTraceparent,
-  stepSpanId,
+  stepSpanID,
 };

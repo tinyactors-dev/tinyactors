@@ -10,7 +10,7 @@ module TinyactorsTest
   # document's own `datamodel` attribute, when it has one, must name the same.
   # `files:` are the resources a `<data src>` or `<script src>` may name: the
   # host's resolver.map serves them, since the core performs no I/O.
-  class ScxmlChart
+  class SCXMLChart
     attr_reader :name, :datamodel, :source, :files
 
     MEDIA_TYPE = 'application/scxml+xml'

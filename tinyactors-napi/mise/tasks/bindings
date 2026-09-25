@@ -16,12 +16,12 @@ check = ENV['usage_check'] == 'true' || ARGV.include?('--check')
 report = ENV['usage_report'] == 'true' || ARGV.include?('--report')
 
 begin
-  plan = NapiGen::Plan.new(NapiGen::Api.load, NapiGen::Policy.load(ROOT.join('bindings.rb')))
+  plan = NapiGen::Plan.new(NapiGen::API.load, NapiGen::Policy.load(ROOT.join('bindings.rb')))
 rescue NapiGen::Error => e
   abort "tinyactors-napi bindings: #{e.message}"
 end
 inputs = {
-  'tinyactors-core/include/tinyactors.api.json' => Digest::SHA256.file(NapiGen::Api::DESCRIPTION).hexdigest,
+  'tinyactors-core/include/tinyactors.api.json' => Digest::SHA256.file(NapiGen::API::DESCRIPTION).hexdigest,
   'tinyactors-napi/bindings.rb' => Digest::SHA256.file(ROOT.join('bindings.rb')).hexdigest
 }
 emit = NapiGen::Emit.new(plan, inputs)

@@ -46,7 +46,7 @@ const exported = (exporter, spans) => new Promise((resolve) => exporter.export(s
   );
   const actor = system.spawn(definition);
   await system.flush();
-  system.post(actor, 'go', undefined, { traceparent: formatTraceparent({ traceId: TRACE_ID, spanId: REQUEST_SPAN }) });
+  system.post(actor, 'go', undefined, { traceparent: formatTraceparent({ traceID: TRACE_ID, spanID: REQUEST_SPAN }) });
   await system.flush();
   system.close();
   const spans = batches.flatMap((bytes) => toReadableSpans(bytes));

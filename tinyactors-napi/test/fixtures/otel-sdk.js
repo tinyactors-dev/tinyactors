@@ -32,18 +32,18 @@ function toReadableSpans(bytes) {
     }
     const start = hrTime(span.startTimeUnixNano);
     const end = hrTime(span.endTimeUnixNano);
-    const own = context(span.traceId, span.spanId);
+    const own = context(span.traceID, span.spanID);
     return {
       name: span.name,
       kind: KIND[span.kind] ?? SpanKind.INTERNAL,
       spanContext: () => own,
-      parentSpanContext: span.parentSpanId === undefined ? undefined : context(span.traceId, span.parentSpanId),
+      parentSpanContext: span.parentSpanID === undefined ? undefined : context(span.traceID, span.parentSpanID),
       startTime: start,
       endTime: end,
       duration: hrTime(span.endTimeUnixNano - span.startTimeUnixNano),
       status: { code: STATUS[span.status.code], message: span.status.message },
       attributes: span.attributes,
-      links: span.links.map((link) => ({ context: context(link.traceId, link.spanId), attributes: link.attributes })),
+      links: span.links.map((link) => ({ context: context(link.traceID, link.spanID), attributes: link.attributes })),
       events: span.events.map((event) => ({ name: event.name, time: hrTime(event.timeUnixNano),
                                             attributes: event.attributes })),
       ended: true,

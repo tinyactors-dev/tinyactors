@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module ScxmlIrp
+module SCXMLIRP
   # The W3C manifest marks a test `manual` when its pass criterion is a
   # person reading the log output. With a log sink (ADR 0045) most of them
   # have an objective criterion after all, stated here: `body` replaces the

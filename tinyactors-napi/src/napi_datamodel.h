@@ -24,7 +24,7 @@
  * is `error.execution`.
  *
  * The evaluation context is one object per system, built once. Its getters
- * read the core call in progress (data, event, sessionId, name,
+ * read the core call in progress (data, event, sessionID, name,
  * ioProcessors, inState), and throw once that call has returned, so a
  * closure that keeps the context cannot read stale state.
  *

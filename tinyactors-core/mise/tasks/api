@@ -35,11 +35,11 @@ check = ARGV == ['--check']
 abort 'usage: mise run api [--check]' unless ARGV.empty? || check
 
 begin
-  description = Api.describe(HEADER, library: LIBRARY, schema: SCHEMA)
-rescue Api::Error, Api::Clang::Error => e
+  description = API.describe(HEADER, library: LIBRARY, schema: SCHEMA)
+rescue API::Error, API::Clang::Error => e
   abort "api: #{HEADER.relative_path_from(ROOT)} cannot be described:\n#{e.message}"
 end
-text = Api.render(description)
+text = API.render(description)
 current = OUTPUT.file? && OUTPUT.read == text
 
 if check

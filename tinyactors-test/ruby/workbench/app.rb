@@ -93,7 +93,7 @@ module Workbench
       panes = open_panes(session)
       clock = Clock.new { |milliseconds| tick(session, panes, milliseconds) }
       session.clock = clock
-      repl = Repl.new(session: session, journal: @journal, clock: clock, lock: @lock)
+      repl = REPL.new(session: session, journal: @journal, clock: clock, lock: @lock)
       watcher = Watcher.new(@dir).start do
         synchronize do
           guard('reload') { session.reload! }

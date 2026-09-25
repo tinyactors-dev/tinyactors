@@ -110,7 +110,7 @@ points from OpenTelemetry observable instruments.
 - **Lifecycle** records (`scxml.spawned`, `scxml.finished`, ...) are spans
   of no duration.
 - Span IDs are derived from step keys, the same way in every host
-  (`stepSpanId`). Transitions and actions are named through the
+  (`stepSpanID`). Transitions and actions are named through the
   definitions: `scxml.transition` reads like
   `idle → busy on order.placed [guarded]`, `scxml.action` like
   `<assign> in onentry of busy`; `scxml.transition.id` and
@@ -122,8 +122,8 @@ The full attribute table is in napi ADR 0016's implementation notes.
 
 ## Objects instead of bytes
 
-`decodeTraces(bytes)` reads the bytes back into span objects (`traceId`,
-`spanId`, `parentSpanId`, `name`, times, `attributes`, `events`, `links`,
+`decodeTraces(bytes)` reads the bytes back into span objects (`traceID`,
+`spanID`, `parentSpanID`, `name`, times, `attributes`, `events`, `links`,
 `status`, `resource`, `scope`), with no dependency. Use it to check
 properties in JavaScript, or to feed a pipeline that wants objects.
 
@@ -143,7 +143,7 @@ const { formatTraceparent } = require('tinyactors-napi');
 
 const active = trace.getSpanContext(context.active());
 system.post(actor, 'order', body, {
-  traceparent: formatTraceparent({ traceId: active.traceId, spanId: active.spanId,
+  traceparent: formatTraceparent({ traceID: active.traceId, spanID: active.spanId,
                                    flags: active.traceFlags }),
 });
 ```
@@ -182,18 +182,18 @@ function toReadableSpans(bytes) {
       resource = resourceFromAttributes(span.resource.attributes);
       resources.set(span.resource, resource);
     }
-    const own = context(span.traceId, span.spanId);
+    const own = context(span.traceID, span.spanID);
     return {
       name: span.name,
       kind: KIND[span.kind] ?? SpanKind.INTERNAL,
       spanContext: () => own,
-      parentSpanContext: span.parentSpanId === undefined ? undefined : context(span.traceId, span.parentSpanId),
+      parentSpanContext: span.parentSpanID === undefined ? undefined : context(span.traceID, span.parentSpanID),
       startTime: hrTime(span.startTimeUnixNano),
       endTime: hrTime(span.endTimeUnixNano),
       duration: hrTime(span.endTimeUnixNano - span.startTimeUnixNano),
       status: { code: STATUS[span.status.code], message: span.status.message },
       attributes: span.attributes,
-      links: span.links.map((link) => ({ context: context(link.traceId, link.spanId), attributes: link.attributes })),
+      links: span.links.map((link) => ({ context: context(link.traceID, link.spanID), attributes: link.attributes })),
       events: span.events.map((event) => ({ name: event.name, time: hrTime(event.timeUnixNano),
                                             attributes: event.attributes })),
       ended: true,

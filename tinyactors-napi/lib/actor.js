@@ -1,6 +1,6 @@
 'use strict';
 
-// ActorId/Actor view (ADR 0002). An actor is named by its slot and
+// ActorID/Actor view (ADR 0002). An actor is named by its slot and
 // generation, two small integers. A view holds its system and those two
 // numbers and nothing else: it has no native resource and no finalizer, and
 // every question about the actor is asked of core through the system. A view
@@ -11,7 +11,7 @@
 
 const native = require('./native');
 
-class ActorId {
+class ActorID {
   constructor(system, slot, generation) {
     this.system = system;
     this.slot = slot;
@@ -21,7 +21,7 @@ class ActorId {
   /** Equality is by value (ADR 0002 point 5). */
   equals(other) {
     return (
-      other instanceof ActorId &&
+      other instanceof ActorID &&
       other.system === this.system &&
       other.slot === this.slot &&
       other.generation === this.generation
@@ -80,6 +80,6 @@ class ActorId {
   }
 }
 
-native.setupActor(ActorId);
+native.setupActor(ActorID);
 
-module.exports = { ActorId };
+module.exports = { ActorID };

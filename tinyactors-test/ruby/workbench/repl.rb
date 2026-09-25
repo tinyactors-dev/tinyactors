@@ -11,7 +11,7 @@ module Workbench
   # editing, history, and completion over command and actor names. When stdin
   # is not a terminal the loop falls back to `gets`, so a scripted run and the
   # self-test behave the same as a person typing.
-  class Repl
+  class REPL
     DURATION = /\A(\d+(?:\.\d+)?)(ms|s|m)?\z/
     RATE = /\A(\d+(?:\.\d+)?)x?\z/
 
@@ -60,7 +60,7 @@ module Workbench
       say("\e[31m#{error.function} answered #{error.result}\e[0m")
       @journal.error("#{error.function} answered #{error.result}")
       nil
-    rescue TinyactorsTest::RpcError => error
+    rescue TinyactorsTest::RPCError => error
       say("\e[31m#{error.message}\e[0m")
       @journal.exception('rpc', error)
       nil

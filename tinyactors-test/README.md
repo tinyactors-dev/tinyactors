@@ -32,10 +32,10 @@ tinyactors-core/include/tinyactors.h           (annotated with TA_* macros)
 except `tinyactors.api.json` (see `tinyactors-core/docs/internal/api-ir.md`):
 pointer shapes, nullability, output validity, releases, handles, enum symbols,
 and the data model of `ta_value` inputs all come from it. `mise/lib/rpc` works
-in three stages. `Rpc::Api` reads the description and checks its format.
-`Rpc::Plan` makes every binding decision: members, codecs, required
+in three stages. `RPC::API` reads the description and checks its format.
+`RPC::Plan` makes every binding decision: members, codecs, required
 parameters, union layouts, outputs, releases, and value receivers.
-`Rpc::Emit` formats the plan as C without deciding anything.
+`RPC::Emit` formats the plan as C without deciding anything.
 
 The generator emits a JSON decoder and encoder for every bound type, a
 `codec.roundtrip.<type>` method per struct, and one `ta.<domain>.<rest>`

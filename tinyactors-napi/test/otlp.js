@@ -45,7 +45,7 @@ function receiver() {
   );
   const actor = system.spawn(definition);
   await system.flush();
-  system.post(actor, 'go', undefined, { traceparent: formatTraceparent({ traceId: TRACE_ID, spanId: REQUEST_SPAN }) });
+  system.post(actor, 'go', undefined, { traceparent: formatTraceparent({ traceID: TRACE_ID, spanID: REQUEST_SPAN }) });
   await system.flush();
   system.close();
   const posted = await exporter.flush();
@@ -59,10 +59,10 @@ function receiver() {
   }
   const received = collector.exports.flatMap(({ body }) => decodeTraces(body));
   assert.equal(received[0].resource.attributes['service.name'], 'otlp-test');
-  const traced = received.filter((span) => span.traceId === TRACE_ID);
+  const traced = received.filter((span) => span.traceID === TRACE_ID);
   const macrostep = traced.find((span) => span.name === 'scxml.macrostep go');
-  const micro = traced.filter((span) => span.parentSpanId === macrostep.spanId);
-  assert.equal(macrostep.parentSpanId, REQUEST_SPAN, 'the macrostep sits under the request span');
+  const micro = traced.filter((span) => span.parentSpanID === macrostep.spanID);
+  assert.equal(macrostep.parentSpanID, REQUEST_SPAN, 'the macrostep sits under the request span');
   assert.deepEqual(micro.map((span) => span.name).sort(), ['scxml.microstep go', 'scxml.microstep next']);
   assert.equal(macrostep.kind, 'internal');
   assert.ok(macrostep.endTimeUnixNano >= macrostep.startTimeUnixNano);

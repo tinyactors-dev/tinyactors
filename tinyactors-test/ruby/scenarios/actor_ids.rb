@@ -11,7 +11,7 @@ TinyactorsTest.chart :actor_ids do
 end
 
 # The three pure functions over the protocol, and a check of a raw ID.
-module ActorIds
+module ActorIDs
   def self.slot(context, id)
     context.ta.actor.id_slot(id: id)[:value]
   end
@@ -37,15 +37,15 @@ TinyactorsTest.scenarios 'actor IDs', chart: :actor_ids do
     actors = Array.new(3) { spawn }
     actors.each do |actor|
       id = actor.handle
-      slot = ActorIds.slot(self, id)
-      generation = ActorIds.generation(self, id)
+      slot = ActorIDs.slot(self, id)
+      generation = ActorIDs.generation(self, id)
       assert_equal id & 0xffff_ffff, slot, 'the slot is the low 32 bits'
       assert_equal id >> 32, generation, 'the generation is the high 32 bits'
       assert generation.positive?, 'no ID has generation 0'
-      assert_equal id, ActorIds.make(self, slot, generation), 'make joins the halves back into the ID'
-      assert_equal 'ok', ActorIds.inspect(self, ActorIds.make(self, slot, generation))
+      assert_equal id, ActorIDs.make(self, slot, generation), 'make joins the halves back into the ID'
+      assert_equal 'ok', ActorIDs.inspect(self, ActorIDs.make(self, slot, generation))
     end
-    slots = actors.map { |actor| ActorIds.slot(self, actor.handle) }
+    slots = actors.map { |actor| ActorIDs.slot(self, actor.handle) }
     assert_equal slots.uniq.size, slots.size, 'resident actors have distinct slots'
   end
 
@@ -53,27 +53,27 @@ TinyactorsTest.scenarios 'actor IDs', chart: :actor_ids do
   # host that kept a stale pair reach whatever actor now holds the slot.
   scenario 'a made ID with the wrong generation is not found' do
     actor = spawn
-    slot = ActorIds.slot(self, actor.handle)
-    generation = ActorIds.generation(self, actor.handle)
-    assert_equal 'err_not_found', ActorIds.inspect(self, ActorIds.make(self, slot, generation + 1))
-    assert_equal 'err_not_found', ActorIds.inspect(self, ActorIds.make(self, slot, 0)),
+    slot = ActorIDs.slot(self, actor.handle)
+    generation = ActorIDs.generation(self, actor.handle)
+    assert_equal 'err_not_found', ActorIDs.inspect(self, ActorIDs.make(self, slot, generation + 1))
+    assert_equal 'err_not_found', ActorIDs.inspect(self, ActorIDs.make(self, slot, 0)),
                  'generation 0 is never valid'
-    assert_equal 'err_not_found', ActorIds.inspect(self, ActorIds.make(self, 0, 0)), 'the zero ID is never valid'
-    assert_equal 'ok', ActorIds.inspect(self, actor.handle), 'the right pair still names the actor'
+    assert_equal 'err_not_found', ActorIDs.inspect(self, ActorIDs.make(self, 0, 0)), 'the zero ID is never valid'
+    assert_equal 'ok', ActorIDs.inspect(self, actor.handle), 'the right pair still names the actor'
   end
 
   # Catches: a slot reused without a new generation, so a destroyed actor's
   # ID names its successor.
   scenario "a destroyed actor's ID goes stale, and the slot's next occupant is newer" do
     first = spawn
-    slot = ActorIds.slot(self, first.handle)
-    generation = ActorIds.generation(self, first.handle)
+    slot = ActorIDs.slot(self, first.handle)
+    generation = ActorIDs.generation(self, first.handle)
     first.destroy
-    assert_equal 'err_not_found', ActorIds.inspect(self, first.handle), 'the old ID is stale'
+    assert_equal 'err_not_found', ActorIDs.inspect(self, first.handle), 'the old ID is stale'
     second = spawn
-    assert_equal slot, ActorIds.slot(self, second.handle), 'the free slot is reused'
-    assert ActorIds.generation(self, second.handle) > generation, 'with a newer generation'
-    assert_equal 'err_not_found', ActorIds.inspect(self, first.handle), 'the old ID still names nothing'
-    assert_equal 'ok', ActorIds.inspect(self, second.handle)
+    assert_equal slot, ActorIDs.slot(self, second.handle), 'the free slot is reused'
+    assert ActorIDs.generation(self, second.handle) > generation, 'with a newer generation'
+    assert_equal 'err_not_found', ActorIDs.inspect(self, first.handle), 'the old ID still names nothing'
+    assert_equal 'ok', ActorIDs.inspect(self, second.handle)
   end
 end

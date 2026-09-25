@@ -17,7 +17,7 @@ end
 def rpc_error(code)
   yield
   raise 'bindings test failed: expected an RPC error'
-rescue TinyactorsTest::RpcError => error
+rescue TinyactorsTest::RPCError => error
   check(error.code == code, "expected RPC error #{code}, got #{error.code}: #{error.data}")
   error
 end

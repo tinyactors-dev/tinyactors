@@ -3,7 +3,7 @@
 # Charts written as SCXML documents and imported through the codec that
 # ships (tinyactors-scxml, ADR 0053): ta_definition_import decodes, compiles
 # and registers them in the host.
-module ScxmlCodecCharts
+module SCXMLCodecCharts
   NS = 'xmlns="http://www.w3.org/2005/07/scxml"'
 
   TinyactorsTest.scxml_chart :scxml_counter, <<~SCXML, files: { 'file:limits.json' => '{"max": 2}' }
@@ -87,7 +87,7 @@ TinyactorsTest.scenarios 'scxml codec' do
   # Catches: a decode error that loses where it happened.
   scenario 'a malformed document is refused with its position' do
     response = ta.definition.import(system: system_handle, codec: { '$adapter' => 'codec.scxml' },
-                                    input: "<scxml #{ScxmlCodecCharts::NS}>\n  <state id=\"a\" bogus=\"1\"/>\n</scxml>",
+                                    input: "<scxml #{SCXMLCodecCharts::NS}>\n  <state id=\"a\" bogus=\"1\"/>\n</scxml>",
                                     datamodel: { '$adapter' => 'datamodel.jq' },
                                     allocator: { '$adapter' => 'allocator.libc' })
     assert_equal 'err_invalid', response[:result]
@@ -102,7 +102,7 @@ TinyactorsTest.scenarios 'scxml codec' do
   # Catches: a semantic error in a document that says neither where nor what
   # (ADR 0058) — the compile error is located in the document and formatted.
   scenario 'a document with an unknown target is refused with its line, column and nearest state' do
-    source = "<scxml #{ScxmlCodecCharts::NS} name=\"c\">\n  <state id=\"idle\">\n" \
+    source = "<scxml #{SCXMLCodecCharts::NS} name=\"c\">\n  <state id=\"idle\">\n" \
              "    <transition event=\"go\" target=\"idel\"/>\n  </state>\n</scxml>"
     response = ta.definition.import(system: system_handle, codec: { '$adapter' => 'codec.scxml' }, input: source,
                                     datamodel: { '$adapter' => 'datamodel.jq' },
@@ -121,7 +121,7 @@ TinyactorsTest.scenarios 'scxml codec' do
   scenario 'a codec configured with limits refuses what exceeds them' do
     response = ta.definition.import(system: system_handle,
                                     codec: { '$adapter' => 'codec.scxml', 'config' => { 'max_depth' => 2 } },
-                                    input: "<scxml #{ScxmlCodecCharts::NS}><state><final id=\"f\"/></state></scxml>",
+                                    input: "<scxml #{SCXMLCodecCharts::NS}><state><final id=\"f\"/></state></scxml>",
                                     datamodel: { '$adapter' => 'datamodel.jq' },
                                     allocator: { '$adapter' => 'allocator.libc' })
     assert_equal 'err_invalid', response[:result]

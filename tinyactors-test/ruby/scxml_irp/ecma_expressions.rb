@@ -2,7 +2,7 @@
 
 require_relative 'jq_expressions'
 
-module ScxmlIrp
+module SCXMLIRP
   # Translates the IRP's datamodel-neutral `conf:` markup into ECMAScript for
   # the `datamodel.ecmascript` adapter, for documents that declare
   # `datamodel="ecmascript"`.

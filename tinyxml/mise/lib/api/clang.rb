@@ -5,7 +5,7 @@ require 'open3'
 require 'shellwords'
 require 'tmpdir'
 
-module Api
+module API
   # Runs clang on the public header and answers questions about its AST.
   # Extraction is pinned to explicit targets in freestanding mode, so the
   # result never depends on the machine that runs it.
@@ -36,7 +36,7 @@ module Api
     def ast(header, target: TARGETS.first)
       json = run(*flags(target), '-fparse-all-comments', '-Wno-pragma-once-outside-header',
                  '-Xclang', '-ast-dump=json', '-fsyntax-only', header.to_s)
-      Ast.new(JSON.parse(json), header)
+      AST.new(JSON.parse(json), header)
     end
 
     # Object-like macros the header defines, as {name => body}.
@@ -114,7 +114,7 @@ module Api
     end
 
     # The JSON AST of one translation unit.
-    class Ast
+    class AST
       attr_reader :header, :source
 
       def initialize(json, header)

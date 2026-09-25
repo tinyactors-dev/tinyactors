@@ -6,7 +6,7 @@ require_relative 'jq_expressions'
 require_relative 'ecma_expressions'
 require_relative 'null_expressions'
 
-module ScxmlIrp
+module SCXMLIRP
   SCXML_NS = 'http://www.w3.org/2005/07/scxml'
   CONF_NS = 'http://www.w3.org/2005/scxml-conformance'
 

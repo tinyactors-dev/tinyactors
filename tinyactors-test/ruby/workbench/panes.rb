@@ -94,13 +94,13 @@ module Workbench
           return out
         end
 
-        leaves = JsonView.leaves(root)
+        leaves = JSONView.leaves(root)
         changed = leaves.reject { |path, value| @previous.key?(path) && @previous[path] == value }.keys
         gone = @previous.keys - leaves.keys
         @previous = leaves
 
         out << ''
-        JsonView.lines(root).each do |path, text|
+        JSONView.lines(root).each do |path, text|
           marker = path && changed.include?(path) ? Ansi.paint('>', :yellow) : ' '
           out << "#{marker} #{text}"
         end

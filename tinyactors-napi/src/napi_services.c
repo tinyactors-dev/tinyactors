@@ -40,7 +40,7 @@ static napi_value tna_js_null(napi_env env) {
     return out;
 }
 
-/* An ActorId view, or { family, name } for a named actor. */
+/* An ActorID view, or { family, name } for a named actor. */
 static napi_value tna_source(napi_env env, tna_napi_system *wrapper, const ta_actor_ref *source) {
     if (source->kind == TA_ACTOR_REF_NAMED) {
         ta_actor_address address = ta_address_view(source->as.named);
@@ -127,7 +127,7 @@ static napi_value tna_io_payload(napi_env env, tna_napi_system *wrapper, const t
         return NULL;
     }
     tna_put(env, payload, "source", tna_source(env, wrapper, &effect->source));
-    tna_put(env, payload, "sendId", tna_send_id_text(env, system, effect->send_id));
+    tna_put(env, payload, "sendID", tna_send_id_text(env, system, effect->send_id));
     tna_put(env, payload, "event", effect->event == 0 ? tna_js_undefined(env) : tna_event_text(env, system, effect->event));
     tna_put(env, payload, "type", tna_atom_text(env, system, effect->type));
     tna_put(env, payload, "target",
@@ -155,8 +155,8 @@ static napi_value tna_start_payload(napi_env env, tna_napi_system *wrapper, cons
                                : tna_js_undefined(env);
     tna_put(env, payload, "handle", tna_handle(env, effect->service));
     tna_put(env, payload, "parent", tna_actor_view(env, wrapper, effect->parent));
-    tna_put(env, payload, "invocationId", invocation);
-    tna_put(env, payload, "invokeId", invoke_id);
+    tna_put(env, payload, "invocationID", invocation);
+    tna_put(env, payload, "invokeID", invoke_id);
     tna_put(env, payload, "type", tna_atom_text(env, system, effect->type));
     tna_put(env, payload, "source", tna_value_of(env, &effect->target));
     tna_put(env, payload, "params", tna_value_of(env, &effect->params));
@@ -621,7 +621,7 @@ static ta_result tna_done_name(tna_system *system, ta_invoke_id invoke, ta_event
 }
 
 /*
- * reportInvoke(slot, generation, invocationId, kind, name, data, traceparent): a
+ * reportInvoke(slot, generation, invocationID, kind, name, data, traceparent): a
  * JavaScript invocation reports to its parent. `kind` is "event" (with the
  * interned `name`), "done" or "unavailable"; `data` is the event data, the
  * done data, or the error. Returns true when the report was taken, false
@@ -646,7 +646,7 @@ napi_value tna_report_invoke_method(napi_env env, napi_callback_info info) {
         napi_get_value_uint32(env, argv[1], &generation) != napi_ok ||
         napi_get_value_bigint_uint64(env, argv[2], &invoke, &lossless) != napi_ok || !lossless ||
         napi_get_value_string_utf8(env, argv[3], kind, sizeof kind, &kind_length) != napi_ok) {
-        return tna_throw(env, "invalid", "reportInvoke: expected (slot, generation, invocationId, kind, name, data)");
+        return tna_throw(env, "invalid", "reportInvoke: expected (slot, generation, invocationID, kind, name, data)");
     }
     ta_actor_id parent = ta_actor_id_make(slot, generation);
     napi_value taken = NULL;

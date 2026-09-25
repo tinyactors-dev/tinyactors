@@ -2,7 +2,7 @@
 
 require 'json'
 
-module Api
+module API
   # Validates JSON against a JSON Schema (draft 2020-12), limited to the
   # keywords include/tinyactors.api.schema.json uses: type, const, enum,
   # properties, required, additionalProperties, items, $ref to $defs, and

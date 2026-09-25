@@ -36,7 +36,8 @@ module AcronymCase
     %r{\Atinyactors-core/include/tinyactors\.c\z}, # generated from src/ (amalgamation)
     %r{(\A|/)docs/adr/},                   # ADRs are an append-only record
     %r{(\A|/)docs/research/},              # quotes other projects' names
-    %r{\Amise/tasks/check-acronyms-test\z} # the checker's own cases, wrong on purpose
+    %r{\Amise/tasks/check-acronyms-test\z}, # the checker's own cases, wrong on purpose
+    %r{\Amise/lib/acronym_case\.rb\z}     # the checker, whose comments show wrong spellings
   ].freeze
 
   Finding = Struct.new(:path, :line, :word, :spelling, :acronym, :fixed) do

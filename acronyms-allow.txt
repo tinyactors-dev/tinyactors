@@ -5,10 +5,13 @@
 # is allowed only in matching paths (File.fnmatch, `**` spans directories).
 # Keep this list short: a name we own is renamed, not allowed.
 
-# The OpenTelemetry JS SDK's SpanContext and ReadableSpan fields. Only the
-# code that builds SDK objects may use them; our own API spells them traceID.
-traceId        tinyactors-napi/test/{otel-sdk.js,fixtures/otel-sdk.js}   # SDK SpanContext field
-spanId         tinyactors-napi/test/{otel-sdk.js,fixtures/otel-sdk.js}   # SDK SpanContext field
+# The OpenTelemetry JS SDK's SpanContext fields, and OTLP/JSON's span
+# fields (which the SDK example reads back from the SDK's exporter). Only
+# the code that builds or reads SDK objects may use them; our own API spells
+# them traceID, spanID and parentSpanID.
+traceId        tinyactors-napi/test/{otel-sdk.js,fixtures/otel-sdk.js}   # SDK SpanContext and OTLP/JSON field
+spanId         tinyactors-napi/test/{otel-sdk.js,fixtures/otel-sdk.js}   # SDK SpanContext and OTLP/JSON field
+parentSpanId   tinyactors-napi/test/otel-sdk.js                          # OTLP/JSON field
 traceId        tinyactors-napi/docs/tracing.md                           # SDK example: SpanContext field
 spanId         tinyactors-napi/docs/tracing.md                           # SDK example: SpanContext field
 
@@ -17,7 +20,7 @@ CData          tinyactors-test/ruby/**/*.rb                              # REXML
 
 # `-Os`, the C compiler's optimize-for-size flag, not OS; tinyxml names
 # its freestanding tiers after the flags.
-Os             tinyxml/**                                                # compiler flag -Os
+Os             tinyxml/**/*                                                # compiler flag -Os
 
 # Attribute names from the W3C SCXML IRP suite's conf: namespace, which the
 # importer matches as they are written in the vendored test documents.
@@ -29,3 +32,8 @@ AeventIdParam  tinyactors-test/ruby/scxml_irp/*.rb                       # regex
 metricsToOtlp  AGENTS.md                                                 # example of a violation
 traceId        AGENTS.md                                                 # example of an allowed SDK name
 CData          AGENTS.md                                                 # example of an allowed REXML name
+
+# OTLP/JSON field names (the protobuf JSON mapping of trace_id, span_id),
+# which the demo writes for the host's own request span.
+traceId        tinyactors-napi/tools/otel-demo.js                        # OTLP/JSON field
+spanId         tinyactors-napi/tools/otel-demo.js                        # OTLP/JSON field

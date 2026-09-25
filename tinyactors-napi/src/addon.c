@@ -6,7 +6,7 @@
  * - version: the package version;
  * - setup(TinyactorsError): registers the JavaScript error class that native
  *   code throws (ADR 0008); lib/errors.js calls it once per environment;
- * - setupActor(ActorId): registers the ActorId view class (ADR 0002) that the
+ * - setupActor(ActorID): registers the ActorID view class (ADR 0002) that the
  *   pump uses for the actors it passes to hooks; lib/actor.js calls it;
  * - setupLiteral(brand): registers the symbol that marks literal() objects,
  *   so the JavaScript data model can tell a constant from an expression
@@ -67,7 +67,7 @@ static napi_value tna_setup_actor(napi_env env, napi_callback_info info) {
     }
     napi_valuetype type = napi_undefined;
     if (argc < 1 || napi_typeof(env, argv[0], &type) != napi_ok || type != napi_function) {
-        return tna_throw(env, "invalid", "setupActor expects the ActorId class");
+        return tna_throw(env, "invalid", "setupActor expects the ActorID class");
     }
     tna_env *data = tna_env_get(env);
     if (data == NULL) {
@@ -78,7 +78,7 @@ static napi_value tna_setup_actor(napi_env env, napi_callback_info info) {
         data->actor_class = NULL;
     }
     if (napi_create_reference(env, argv[0], 1, &data->actor_class) != napi_ok) {
-        return tna_throw(env, "out-of-memory", "cannot keep the ActorId class");
+        return tna_throw(env, "out-of-memory", "cannot keep the ActorID class");
     }
     napi_value undefined = NULL;
     napi_get_undefined(env, &undefined);

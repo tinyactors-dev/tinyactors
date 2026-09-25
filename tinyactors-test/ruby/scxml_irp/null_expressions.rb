@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module ScxmlIrp
+module SCXMLIRP
   # The dialect of a `datamodel="null"` document (SCXML B.1). The profile's
   # whole expression language is the `In(state)` predicate in a condition, so
   # this dialect writes that and refuses everything else: a test needing any
