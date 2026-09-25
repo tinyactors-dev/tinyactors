@@ -104,7 +104,12 @@ export type LoadReason = "mail" | "timer";
 export type LoadResult<Data extends object = object> =
   | SessionImage<Data>
   | { readonly image: SessionImage<Data>; readonly restore?: (actor: ActorID) => unknown }
-  | { readonly spawn: Definition<Data>; readonly binding?: Partial<Data> | Data }
+  | "offloaded"
+  | {
+      readonly spawn: Definition<Data>;
+      readonly binding?: Partial<Data> | Data;
+      readonly pendingSends?: readonly DelayedSendInspection[];
+    }
   | "not-found"
   | "reject"
   | { readonly reject: unknown };
@@ -218,23 +223,26 @@ export interface System {
   capture<Data extends object>(actor: ActorID): SessionImage<Data>;
 
   /**
-   * Evict a named actor with a capture taken since its last change (`stale`
-   * otherwise). Throws `busy` while it has mail waiting, is inside a
-   * macrostep, or is quarantined. Mail to its address then waits for its
-   * family's loader (setLoader), or is a dead letter with reason `unloaded`
-   * when there is none; its ActorID is stale. The image's next deadline is
-   * registered with wakeAt(), so its own timers wake it through the loader.
+   * Offload a stable named actor from memory (core ADR 0074): its data,
+   * history and pending delayed sends go to bytes this system keeps, and
+   * mail to its address or its own next delayed send loads it back (the
+   * family's loader decides when it has one; see setLoader). Throws `busy`
+   * while it has mail waiting, is inside a macrostep or is quarantined. The
+   * bytes are for this process only: to survive a restart, store its data
+   * and inspect().delayedSends, and spawn it again with
+   * { binding, pendingSends }.
    */
-  unload(actor: ActorID, image: SessionImage): void;
+  unload(actor: ActorID): void;
 
   /**
-   * Bring an unloaded named actor back: the same session ID, a new runtime
-   * ID (core ADR 0066). `binding` defaults to the root the image kept. An
+   * Bring an unloaded named actor back: from the bytes unload() kept for an
+   * address, or from a SessionImage; the same session ID, a new runtime ID
+   * (core ADR 0066). From an image, `binding` defaults to its root. An
    * invocation active at capture is reported to the actor as
    * `error.communication.invoke.<id>.unavailable` (core ADR 0038).
    */
   load<Data extends object>(
-    image: SessionImage<Data>,
+    target: SessionImage<Data> | ActorAddress,
     options?: { readonly binding?: Partial<Data> | Data },
   ): Actor<Data>;
 
@@ -261,7 +269,13 @@ export interface System {
    */
   setLoader(
     family: string,
-    loader: ((address: ActorAddress, why: LoadReason) => LoadResult | Promise<LoadResult>) | null,
+    loader:
+      | ((
+          address: ActorAddress,
+          why: LoadReason,
+          load: { readonly offloaded: boolean },
+        ) => LoadResult | Promise<LoadResult>)
+      | null,
     options?: LoaderOptions,
   ): void;
 
@@ -773,6 +787,13 @@ export interface SpawnOptions<Data extends object> {
   readonly name?: string;
   readonly address?: ActorAddress;
   readonly binding?: Partial<Data>;
+  /**
+   * Delayed sends to re-arm before the actor bootstraps (core ADR 0074
+   * section 8): entries of inspect().delayedSends from an earlier session
+   * of this actor, stored with its data. They keep their IDs, due times and
+   * traces; a due time already past fires on the next dispatch.
+   */
+  readonly pendingSends?: readonly DelayedSendInspection[];
 }
 
 /**
@@ -793,8 +814,8 @@ export interface Actor<Data extends object = Record<string, unknown>> extends Ac
   /** Capture Tinyactors-owned state and the data-model root in memory (System.capture). */
   capture(): SessionImage<Data>;
 
-  /** Evict this named actor using a capture taken since its last change (System.unload). */
-  unload(image: SessionImage<Data>): void;
+  /** Offload this stable named actor from memory (System.unload, core ADR 0074). */
+  unload(): void;
 
   /**
    * Prepare a fresh unpublished actor of `definition` to replace this named
@@ -885,6 +906,12 @@ export interface DelayedSendInspection {
   readonly data: unknown;
   /** The router refused this send once; it is waiting to be offered again. */
   readonly submitted: boolean;
+  /** A literal target's content ID in the definition, or null (core ADR 0074 section 8). */
+  readonly targetContent: number | null;
+  /** A literal <content>'s ID in the definition, or null. */
+  readonly content: number | null;
+  /** The sending step's trace, or null. */
+  readonly traceparent: string | null;
 }
 
 /* --------------------------------------------------------------------------

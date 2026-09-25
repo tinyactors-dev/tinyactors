@@ -42,6 +42,7 @@ ta_result tna_system_create(tna_system **out) {
                    tna_allocator_for(&system->allocator, TNA_MEMORY_ENVELOPES));
     tna_directory_init(&system->directory, tna_allocator_for(&system->allocator, TNA_MEMORY_DIRECTORY));
     tna_loads_init(&system->loads, tna_allocator_for(&system->allocator, TNA_MEMORY_DIRECTORY));
+    tna_offloads_init(&system->offloads, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER));
     tna_trace_watch_init(&system->trace_watch, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER));
     tna_vec_init(&system->io_processors, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER),
                  TNA_LAYOUT(tna_io_processor *));
@@ -89,6 +90,8 @@ void tna_system_close(tna_system *system) {
     (void)ta_system_set_external_event_router(system->core, (ta_external_event_router){0});
     (void)ta_system_set_actor_directory(system->core, (ta_actor_directory){0});
     tna_sched_discard_mail(&system->sched);
+    /* Offloaded bytes may hold value handles; they go while the directory still keys them. */
+    tna_offloads_destroy(&system->offloads);
     tna_directory_clear(&system->directory);
     tna_loads_close(&system->loads);
     /* Waiting effects hold values and addresses; what core's teardown asks

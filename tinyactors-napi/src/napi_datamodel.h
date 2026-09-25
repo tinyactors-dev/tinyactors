@@ -97,7 +97,43 @@ struct tna_js_datamodel {
     /* A compiler's refusal message, which core copies before it next calls
      * the data model (ta_expression_rejection). */
     char rejection[TA_COMPILE_ERROR_MESSAGE_MAX];
+    /*
+     * Offloading an unloaded actor (core ADR 0074): a value's bytes are its
+     * serialization (`serialize`, v8.serialize) when it has one, or else a
+     * handle to its value box, which stays alive with the offloaded actor.
+     * `by_handle` keeps every value by handle. Handles are only taken while
+     * an offload runs (`offloading`), into `handles`, which the offload
+     * store then owns.
+     */
+    napi_ref serialize;
+    napi_ref deserialize;
+    bool by_handle;
+    bool offloading;
+    ta_value *handles;
+    uint32_t handle_count;
+    uint32_t handle_capacity;
 };
+
+/*
+ * How values leave with an offloaded actor: `serialize` and `deserialize`
+ * are v8.serialize and v8.deserialize (or the runtime's equivalent), and
+ * `by_handle` keeps every value by handle instead.
+ */
+typedef struct {
+    napi_value serialize;
+    napi_value deserialize;
+    bool by_handle;
+} tna_offload_values;
+bool tna_js_datamodel_set_offload(tna_js_datamodel *dm, const tna_offload_values *values);
+/* Starts collecting the handles an offload keeps, and hands them over after. */
+void tna_js_datamodel_offload_begin(tna_js_datamodel *dm);
+typedef struct {
+    ta_value *handles;
+    uint32_t count;
+} tna_offload_handles;
+tna_offload_handles tna_js_datamodel_offload_end(tna_js_datamodel *dm);
+/* Releases handles an offload collected and nobody took. */
+void tna_js_datamodel_release_handles(tna_js_datamodel *dm, tna_offload_handles handles);
 
 /* Builds the context object; false when it cannot be made. */
 bool tna_js_datamodel_init(tna_js_datamodel *dm, tna_napi_system *wrapper, napi_env env);

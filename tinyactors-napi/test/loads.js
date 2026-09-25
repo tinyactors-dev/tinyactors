@@ -25,7 +25,7 @@ async function unloaded(system, definition = system.define(counterChart())) {
   const actor = system.spawn(definition, { name: 'one' });
   await system.flush();
   const image = actor.capture();
-  actor.unload(image);
+  actor.unload();
   return image;
 }
 
@@ -205,7 +205,7 @@ async function timerWakesAnUnloadedActor() {
   const actor = system.spawn(system.define(tickChart()), { name: 'one' });
   await system.flush();
   const image = actor.capture();
-  actor.unload(image);
+  actor.unload();
   const whys = [];
   system.setLoader('ticker', (address, why) => { whys.push(why); return image; });
   await system.advanceTo(50);
@@ -218,7 +218,7 @@ async function timerWakesAnUnloadedActor() {
   assert.equal(loaded.inspect().activeStates.at(-1), 'b', 'the timer fired after the load');
   // removeUnloaded() forgets the wake-up.
   const again = loaded.capture();
-  loaded.unload(again);
+  loaded.unload();
   system.removeUnloaded({ family: 'ticker', name: 'one' });
   await system.advanceTo(1000);
   await system.flush();
@@ -254,7 +254,7 @@ async function gracefulRestart() {
     const actor = system.findActor({ family: 'counter', name });
     const image = actor.capture();
     data.set(name, structuredClone(actor.inspect().data));
-    actor.unload(image);
+    actor.unload();
     images.set(name, image);
   }
   // Mail during the restart is refused into the outbox.
@@ -333,7 +333,8 @@ async function arguments_() {
   system.setLoader('counter', null);
   system.post(ONE, 'hit', 1);
   await system.flush();
-  assert.deepEqual(dead.map((letter) => letter.reason), ['unloaded'], 'no loader: as before');
+  assert.deepEqual(dead, [], 'no loader: the offloaded actor comes back from its bytes (core ADR 0074)');
+  assert.deepEqual(logOf(system, ONE), [1]);
   image.destroy();
   system.close();
 }

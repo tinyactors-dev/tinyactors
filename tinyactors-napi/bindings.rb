@@ -43,6 +43,7 @@ module TinyactorsNapiBindings
 
   PLUMBING_FUNCTIONS = {
     'ta_actor_{deliver,resume,publish_completion}' => 'the pump delivers and resumes (ADRs 0005, 0007)',
+    'ta_actor_offload' => 'unload() offloads into the native offload store, which owns the bytes (core ADR 0074)',
     'ta_system_{dispatch_due,set_time}' => 'the clock belongs to the pump (ADR 0007)',
     'ta_system_set_{external_event_router,actor_directory}' => 'installed at system creation (ADR 0006)',
     'ta_system_set_event_block_cache' => 'sized from scheduling.messageBudget at system creation (core ADR 0069)',

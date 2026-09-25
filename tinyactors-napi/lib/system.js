@@ -4,6 +4,8 @@
 // module (ADR 0013). Scheduling is native (ADR 0007): nothing here takes part
 // in it; spawn() and destroy() only reach core, whose hooks tell the pump.
 
+const v8 = require('node:v8');
+
 const native = require('./native');
 const { TinyactorsError } = require('./errors');
 const { Definition, identityOf } = require('./definition');
@@ -144,6 +146,8 @@ class System {
   // failed, for the deadLetter hook's `detail`.
   #loaders = new Map();
   #loadDetails = new Map();
+  // Families whose actors unload() offloaded, with no loader of their own.
+  #offloadFamilies = new Set();
   #startTime = Date.now();
   #metricsName = String((systemCount += 1));
   // Aborted on close(): the signal every EffectContext carries.
@@ -176,6 +180,11 @@ class System {
       : { ...options, deadLetter: (letter) => deadLetter(this.#withLoadDetail(letter)) };
     this.#native = new native.System(this, nativeOptions);
     this.#events = new EventNames(this.#native);
+    const unloadValues = options?.unloadValues ?? 'serialize';
+    if (unloadValues !== 'serialize' && unloadValues !== 'handles') {
+      throw new TinyactorsError('createSystem(): unloadValues must be "serialize" or "handles"', 'invalid');
+    }
+    this.#native.setOffloadValues(v8.serialize, v8.deserialize, unloadValues === 'handles');
     const { io, invokers, log } = options ?? {};
     for (const [type, processor] of Object.entries(servicesOf(io, 'createSystem(): io'))) {
       this.registerIO(type, processor, { location: processor?.location, origin: processor?.origin });
@@ -795,7 +804,8 @@ class System {
     }
     const watched = this.#watches.size !== 0 && this.#watchedFamily(definition.identity.family);
     const trace = this.#native.spawnTrace(options.traceparent, watched);
-    const id = core.actor_spawn(this.#native, definition.id, address, options.binding, undefined, trace);
+    const pending = options.pendingSends === undefined ? undefined : this.#pendingSends(options.pendingSends);
+    const id = core.actor_spawn(this.#native, definition.id, address, options.binding, undefined, trace, pending);
     return new ActorID(this, id.slot, id.generation);
   }
 
@@ -871,7 +881,40 @@ class System {
         : send.target,
       data: send.data,
       submitted: send.submitted,
+      // What a re-arm needs (core ADR 0074 section 8): the literal target's
+      // and <content>'s IDs in the definition, and the sending step's trace.
+      targetContent: send.has_target_text ? send.target_text : null,
+      content: send.has_content ? send.content : null,
+      traceparent: traceparentOf(send.trace),
     };
+  }
+
+  // Records core can re-arm from pendingSends, the shape inspect() returns
+  // (core ADR 0074 section 8). Text becomes this system's IDs again.
+  #pendingSends(sends) {
+    if (!Array.isArray(sends)) {
+      throw new TinyactorsError('spawn(): pendingSends must be an array of inspect().delayedSends entries', 'invalid');
+    }
+    return sends.map((send) => {
+      if (send === null || typeof send !== 'object' || !Number.isSafeInteger(send.due) || typeof send.event !== 'string') {
+        throw new TinyactorsError('spawn(): a pending send needs { due, event, ... } as inspect() gives it', 'invalid');
+      }
+      return {
+        send_id: send.id === null || send.id === undefined ? 0 : core.send_id_parse(this.#native, send.id),
+        due: send.due,
+        event: this.#events.id(send.event),
+        io_type: send.ioType ? core.system_intern_atom(this.#native, send.ioType) : 0,
+        destination: destinationRef(send.destination),
+        target: send.targetContent === null || send.targetContent === undefined ? send.target : undefined,
+        data: send.data,
+        submitted: false,
+        has_target_text: send.targetContent !== null && send.targetContent !== undefined,
+        target_text: send.targetContent ?? 0,
+        has_content: send.content !== null && send.content !== undefined,
+        content: send.content ?? 0,
+        trace: send.traceparent ? this.#native.spawnTrace(send.traceparent, false) : NO_TRACE,
+      };
+    });
   }
 
   // A resolved destination: an ActorID, an address, or null for a custom
@@ -1096,41 +1139,68 @@ class System {
   }
 
   /**
-   * Evict a named actor (core ADR 0014): `image` must be a capture of it
-   * taken since its last change (`stale` otherwise). The directory keeps its
-   * address as unloaded, so mail to the address waits for its family's
-   * loader (setLoader, napi ADR 0020), or becomes a dead letter with reason
-   * `unloaded` when there is none, until load() brings it back. Its delayed
-   * sends travel in the image, and their next deadline is registered with
-   * wakeAt(), so they wake it through the loader. Throws `busy` while the actor has mail waiting, is inside
-   * a macrostep, or is quarantined, so unloading never drops accepted mail.
-   * Its ActorID is stale afterwards.
+   * Evict a stable named actor from memory (core ADR 0074): it is offloaded
+   * to bytes the system keeps, with its data (serialized with v8.serialize,
+   * or kept by handle; see the `unloadValues` option of createSystem), its
+   * history and its pending delayed sends. The directory keeps its address
+   * as unloaded, and mail to the address, or its own next delayed send,
+   * loads it back from those bytes first (napi ADR 0020), with no loader
+   * needed; load() brings it back at once. Throws `busy` while the actor has
+   * mail waiting, is inside a macrostep, or is quarantined, so unloading
+   * never drops accepted mail, and `unsupported` when a value it holds can
+   * be neither serialized nor kept. Its ActorID is stale afterwards. The
+   * bytes are for this process only: to survive a restart, store the
+   * actor's data and inspect().delayedSends, and spawn it again with
+   * { binding, pendingSends }.
    */
-  unload(actor, image) {
+  unload(actor) {
     const { slot, generation } = actorOf(this, actor);
-    const handle = handleOf(image, this, 'unload()');
     const scheduling = this.#native.scheduling(slot, generation);
     if (scheduling !== 'idle' && scheduling !== 'none') {
       throw new TinyactorsError(`unload(): the actor is ${scheduling}; unload it once it is idle`, 'busy');
     }
-    core.actor_unload(this.#native, slot, generation, handle);
-    // Its own timers wake it through its family's loader (napi ADR 0020).
-    const due = image.nextDeadline;
-    if (due !== undefined && image.address !== undefined) {
-      this.#native.wakeAt(image.address.family, image.address.name, due);
+    const view = core.actor_inspect(this.#native, slot, generation);
+    const self = this.#destination(view.self);
+    if (self === null || self instanceof ActorID) {
+      throw new TinyactorsError('unload(): only a named actor can be unloaded', 'invalid');
+    }
+    let due;
+    for (const send of view.delayed_sends) {
+      due = due === undefined || send.due < due ? send.due : due;
+    }
+    // Mail or a timer for an offloaded actor starts a load, loader or not.
+    if (!this.#loaders.has(self.family)) {
+      this.#offloadFamilies.add(self.family);
+      this.#native.setLoaderFamily(self.family, DEFAULT_MAX_WAITING);
+    }
+    this.#native.offload(slot, generation);
+    if (due !== undefined) {
+      this.#native.wakeAt(self.family, self.name, due);
     }
   }
 
   /**
-   * Bring an unloaded named actor back from its image (core ADR 0051): the
-   * same session ID, a new runtime ID (core ADR 0066), and the address
-   * resident again. `binding` defaults to the data root the image kept. An
-   * invocation that was active when it was captured does not come back: the
-   * actor gets `error.communication.invoke.<id>.unavailable` for it (core
-   * ADR 0038). The image stays the caller's to destroy.
+   * Bring an unloaded named actor back (core ADRs 0051 and 0074): from the
+   * bytes unload() kept for `target`, an address { family, name }, or from
+   * a SessionImage. It keeps its session ID, gets a new runtime ID (core
+   * ADR 0066), and its address is resident again. From an image, `binding`
+   * defaults to the data root the image kept, and the image stays the
+   * caller's to destroy. An invocation that was active when it was captured
+   * does not come back: the actor gets
+   * `error.communication.invoke.<id>.unavailable` for it (core ADR 0038).
    */
-  load(image, options = {}) {
+  load(target, options = {}) {
+    if (!(target instanceof SessionImage)) {
+      const { family, name } = addressOf(target, 'load()');
+      const id = this.#native.loadOffloaded(family, name);
+      return new ActorID(this, id.slot, id.generation);
+    }
+    const image = target;
     const handle = handleOf(image, this, 'load()');
+    if (image.address !== undefined) {
+      // The image replaces whatever unload() offloaded to its address.
+      this.#native.dropOffloaded(image.address.family, image.address.name);
+    }
     const id = core.actor_load(this.#native, handle, undefined, this.#bindingFor(image, options), undefined).out;
     return new ActorID(this, id.slot, id.generation);
   }
@@ -1151,6 +1221,7 @@ class System {
   /** Release the address of an actor that stays unloaded; its image is the caller's to destroy. */
   removeUnloaded(address) {
     const { family, name } = addressOf(address, 'removeUnloaded()');
+    this.#native.dropOffloaded(family, name);
     core.actor_remove_unloaded(this.#native, { family: { name: family }, name });
     this.#native.cancelWake(family, name);
   }
@@ -1159,16 +1230,22 @@ class System {
    * Bring actors of `family` back when mail arrives for them (napi ADR
    * 0020). Mail for a name in `family` that has no resident actor (it is
    * unloaded, or there has never been one here: the family is virtual)
-   * waits while `loader(address, why)` runs; `why` is "mail", or "timer"
-   * when an unloaded actor's own delayed send is due. The loader returns,
-   * or resolves to:
+   * waits while `loader(address, why, { offloaded })` runs; `why` is
+   * "mail", or "timer" when an unloaded actor's own delayed send is due, and
+   * `offloaded` is true when unload() kept the actor's bytes here (core ADR
+   * 0074). The loader returns, or resolves to:
+   * - "offloaded": the actor comes back from those bytes, and the waiting
+   *   mail is delivered first, in order. A family with no loader does this
+   *   for an offloaded actor on its own;
    * - a SessionImage of this system: it is loaded (as load() does), and
    *   the waiting mail is delivered first, in order;
    * - { image, restore }: the image is loaded, and `await restore(actor)`
    *   runs before the waiting mail is delivered (for replaying a log);
-   * - { spawn: definition, binding? }: a new actor of `definition` (of this
-   *   family) at the address, for example from data the application
-   *   stored; the waiting mail is delivered first;
+   * - { spawn: definition, binding?, pendingSends? }: a new actor of
+   *   `definition` (of this family) at the address, from data the
+   *   application stored, with the delayed sends it stored from
+   *   inspect().delayedSends re-armed (core ADR 0074 section 8); the waiting
+   *   mail is delivered first;
    * - "not-found": dead letters with reason `not-found`;
    * - "reject" or { reject: reason }: "not now", as during a shutdown: dead
    *   letters with reason `rejected`.
@@ -1185,7 +1262,8 @@ class System {
     }
     if (loader === null || loader === undefined) {
       this.#loaders.delete(family);
-      this.#native.setLoaderFamily(family, 0);
+      // Offloaded actors still load back from their bytes.
+      this.#native.setLoaderFamily(family, this.#offloadFamilies.has(family) ? DEFAULT_MAX_WAITING : 0);
       return;
     }
     if (typeof loader !== 'function') {
@@ -1218,9 +1296,15 @@ class System {
   async #runLoad({ index, generation, family, name, why }) {
     const key = `${family}\u0000${name}`;
     this.#loadDetails.delete(key);
+    const offloaded = this.#native.hasOffloaded(family, name);
     const entry = this.#loaders.get(family);
     if (entry === undefined) {
-      this.#completeLoad(index, generation, 'not-found');
+      // With no loader, an actor unload() offloaded comes back from its bytes.
+      if (offloaded) {
+        this.#loadOffloaded({ index, generation, key, address: { family, name } });
+      } else {
+        this.#completeLoad(index, generation, 'not-found');
+      }
       return;
     }
     const address = { family, name };
@@ -1234,7 +1318,7 @@ class System {
     timer.unref?.();
     let result;
     try {
-      result = await entry.loader(address, why);
+      result = await entry.loader(address, why, { offloaded });
     } catch (error) {
       if (!settled) {
         settled = true;
@@ -1263,7 +1347,9 @@ class System {
       return;
     }
     const { index, generation, key } = load;
-    if (result === 'not-found') {
+    if (result === 'offloaded') {
+      this.#loadOffloaded(load);
+    } else if (result === 'not-found') {
       this.#completeLoad(index, generation, 'not-found');
     } else if (result === 'reject') {
       this.#failLoad(key, load, 'rejected', '');
@@ -1280,10 +1366,20 @@ class System {
         this.#completeLoad(index, generation, 'loaded', actor);
       }
     } else if (result !== null && typeof result === 'object' && result.spawn instanceof Definition) {
-      this.#completeLoad(index, generation, 'spawned', this.#spawnAt(result.spawn, result.binding, load));
+      this.#completeLoad(index, generation, 'spawned', this.#spawnAt(result, load));
     } else {
-      this.#failLoad(key, load, 'failed', 'the loader returned something it cannot: expected a SessionImage, ' +
-        '{ image, restore }, { spawn, binding }, "not-found", "reject" or { reject }');
+      this.#failLoad(key, load, 'failed', 'the loader returned something it cannot: expected "offloaded", ' +
+        'a SessionImage, { image, restore }, { spawn, binding, pendingSends }, "not-found", "reject" or { reject }');
+    }
+  }
+
+  // Loads the actor unload() offloaded to the load's address (core ADR 0074).
+  #loadOffloaded({ index, generation, key, address }) {
+    try {
+      const id = this.#native.loadOffloaded(address.family, address.name);
+      this.#completeLoad(index, generation, 'loaded', new ActorID(this, id.slot, id.generation));
+    } catch (error) {
+      this.#failLoad(key, { index, generation }, 'failed', describe(error));
     }
   }
 
@@ -1297,19 +1393,22 @@ class System {
     }
     const id = core.actor_load(this.#native, handle, undefined, this.#bindingFor(image, {}),
       this.#native.loadTrace(index, generation)).out;
+    // The image replaces whatever unload() offloaded to this address.
+    this.#native.dropOffloaded(address.family, address.name);
     return new ActorID(this, id.slot, id.generation);
   }
 
-  // Spawns a loader's { spawn, binding } at the load's address.
-  #spawnAt(definition, binding, { index, generation, address }) {
+  // Spawns a loader's { spawn, binding, pendingSends } at the load's address.
+  #spawnAt({ spawn: definition, binding, pendingSends }, { index, generation, address }) {
     if (definition.system !== this || definition.identity.family !== address.family) {
       throw new TinyactorsError(`{ spawn } needs a definition of family ${address.family} of this system`, 'invalid');
     }
     if (this.#unloadedAt(address)) {
       this.removeUnloaded(address); // the application's data replaces the image
     }
+    const pending = pendingSends === undefined ? undefined : this.#pendingSends(pendingSends);
     const id = core.actor_spawn(this.#native, definition.id, { family: { name: address.family }, name: address.name },
-      binding, undefined, this.#native.loadTrace(index, generation));
+      binding, undefined, this.#native.loadTrace(index, generation), pending);
     return new ActorID(this, id.slot, id.generation);
   }
 
@@ -1592,6 +1691,43 @@ function actorOf(system, actor) {
     throw new TinyactorsError('expected an actor of this system', 'invalid');
   }
   return actor;
+}
+
+// How many messages wait for an offloaded actor's load with no loader
+// (setLoader's maxWaiting default, napi ADR 0020).
+const DEFAULT_MAX_WAITING = 1000;
+
+// A trace parent that names no trace (core ADR 0067).
+const NO_TRACE = Object.freeze({
+  context: Object.freeze({ trace_id_high: 0, trace_id_low: 0, flags: 0, detail: 0 }),
+  cause: Object.freeze({ session: 0, macrostep: 0, microstep: 0 }),
+});
+
+// A delayed send's trace parent as traceparent text, or null for none.
+function traceparentOf(trace) {
+  if (trace === undefined || trace === null || (!trace.context?.trace_id_high && !trace.context?.trace_id_low)) {
+    return null;
+  }
+  try {
+    return core.traceparent_format(trace);
+  } catch (error) {
+    if (error instanceof TinyactorsError) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+// A pending send's destination as core's actor ref: an ActorID, an address,
+// or null for a custom I/O processor's send, which has none (runtime 0).
+function destinationRef(destination) {
+  if (destination instanceof ActorID) {
+    return { kind: 'runtime', runtime: { slot: destination.slot, generation: destination.generation } };
+  }
+  if (destination !== null && destination !== undefined && typeof destination === 'object') {
+    return { kind: 'named', named: { family: { name: destination.family }, name: destination.name } };
+  }
+  return { kind: 'runtime', runtime: { slot: 0, generation: 0 } };
 }
 
 // A named address { family, name } with non-empty text (ADR 0006).

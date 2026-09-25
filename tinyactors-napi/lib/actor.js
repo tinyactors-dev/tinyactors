@@ -58,9 +58,9 @@ class ActorID {
     return this.system.capture(this);
   }
 
-  /** Evict this named actor using a capture taken since its last change (System.unload). */
-  unload(image) {
-    this.system.unload(this, image);
+  /** Offload this stable named actor from memory (System.unload, core ADR 0074). */
+  unload() {
+    this.system.unload(this);
   }
 
   /** Prepare a fresh unpublished actor of `definition` to replace this one (System.prepareReplacement). */

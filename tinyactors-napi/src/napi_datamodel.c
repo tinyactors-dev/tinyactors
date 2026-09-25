@@ -921,6 +921,9 @@ static ta_op_status tna_dm_foreach_bind(void *self, const ta_datamodel_foreach_b
     return status;
 }
 
+static ta_op_status tna_dm_value_encode(void *self, const ta_datamodel_value_encode_params *params);
+static ta_op_status tna_dm_value_decode(void *self, const ta_datamodel_value_decode_params *params);
+
 static const ta_datamodel_vtable tna_dm_vtable = {
     .name = { "javascript", 10 },
     .prepare_definition = tna_dm_prepare,
@@ -943,7 +946,200 @@ static const ta_datamodel_vtable tna_dm_vtable = {
     .import_content = tna_dm_import_content,
     .foreach_snapshot = tna_dm_foreach_snapshot,
     .foreach_bind = tna_dm_foreach_bind,
+    .value_encode = tna_dm_value_encode,
+    .value_decode = tna_dm_value_decode,
 };
+
+/* ------------------------------------------------------------------------
+ * Offloading (core ADR 0074)
+ *
+ * A value's bytes start with a tag: 'S' and v8.serialize's bytes, which
+ * v8.deserialize reads back as a new object, so the value leaves the
+ * JavaScript heap; or 'H' and the value box itself, retained, for a value
+ * serialization refuses (a function, a class instance with private state)
+ * or when the system keeps every value by handle. A handle keeps the object
+ * alive: it frees only core's part of the actor.
+ */
+
+#define TNA_OFFLOAD_SERIALIZED 'S'
+#define TNA_OFFLOAD_HANDLE 'H'
+
+static ta_allocator tna_offload_allocator(tna_js_datamodel *dm) {
+    return tna_allocator_for(&dm->wrapper->system->allocator, TNA_MEMORY_OTHER);
+}
+
+static void tna_clear_exception(napi_env env) {
+    bool pending = false;
+    napi_value ignored = NULL;
+    if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
+        napi_get_and_clear_last_exception(env, &ignored);
+    }
+}
+
+/* TA_OP_ERROR when serialization refuses the value, so the caller keeps it by handle. */
+static ta_op_status tna_offload_serialize(tna_js_datamodel *dm, const ta_datamodel_value_encode_params *params) {
+    napi_env env = dm->env;
+    napi_value value = NULL;
+    napi_value serialize = NULL;
+    napi_value global = NULL;
+    napi_value buffer = NULL;
+    void *data = NULL;
+    size_t length = 0;
+    if (!tna_value_get(env, params->value, &value) ||
+        napi_get_reference_value(env, dm->serialize, &serialize) != napi_ok || serialize == NULL ||
+        napi_get_global(env, &global) != napi_ok ||
+        napi_call_function(env, global, serialize, 1, &value, &buffer) != napi_ok ||
+        napi_get_buffer_info(env, buffer, &data, &length) != napi_ok) {
+        tna_clear_exception(env);
+        return TA_OP_ERROR;
+    }
+    uint8_t *copy = ta_arena_alloc(params->arena, length + 1u, 1);
+    if (copy == NULL) {
+        return TA_OP_NOMEM;
+    }
+    copy[0] = TNA_OFFLOAD_SERIALIZED;
+    if (length != 0) {
+        memcpy(copy + 1, data, length);
+    }
+    *params->out = (ta_bytes){ .ptr = copy, .len = length + 1u };
+    return TA_OP_OK;
+}
+
+static ta_op_status tna_offload_handle(tna_js_datamodel *dm, const ta_datamodel_value_encode_params *params) {
+    if (!dm->offloading) {
+        return TA_OP_ERROR;
+    }
+    uint8_t *copy = ta_arena_alloc(params->arena, 1u + sizeof(ta_value), _Alignof(ta_value));
+    if (copy == NULL) {
+        return TA_OP_NOMEM;
+    }
+    /* One slot at a time: an actor holds few values, and the store frees the
+     * array at exactly its count. */
+    if (dm->handle_count == dm->handle_capacity) {
+        uint32_t capacity = dm->handle_capacity + 1u;
+        ta_allocator allocator = tna_offload_allocator(dm);
+        ta_value *grown = tna_alloc(allocator, (size_t)capacity * sizeof(ta_value), _Alignof(ta_value));
+        if (grown == NULL) {
+            return TA_OP_NOMEM;
+        }
+        if (dm->handle_count != 0) {
+            memcpy(grown, dm->handles, (size_t)dm->handle_count * sizeof(ta_value));
+        }
+        if (dm->handles != NULL) {
+            tna_free(allocator, &(ta_allocator_free_params){ .ptr = dm->handles,
+                                                             .size = (size_t)dm->handle_capacity * sizeof(ta_value),
+                                                             .alignment = _Alignof(ta_value) });
+        }
+        dm->handles = grown;
+        dm->handle_capacity = capacity;
+    }
+    ta_value kept = *params->value;
+    ta_value_retain(&kept);
+    dm->handles[dm->handle_count++] = kept;
+    copy[0] = TNA_OFFLOAD_HANDLE;
+    memcpy(copy + 1, &kept, sizeof kept);
+    *params->out = (ta_bytes){ .ptr = copy, .len = 1u + sizeof kept };
+    return TA_OP_OK;
+}
+
+static ta_op_status tna_dm_value_encode(void *self, const ta_datamodel_value_encode_params *params) {
+    tna_js_datamodel *dm = ((tna_dm_adapter *)self)->dm;
+    if (!tna_value_ours(params->value)) {
+        return TA_OP_ERROR;
+    }
+    if (!dm->by_handle && dm->serialize != NULL && dm->js_usable) {
+        ta_op_status status = tna_offload_serialize(dm, params);
+        if (status != TA_OP_ERROR) {
+            return status;
+        }
+    }
+    return tna_offload_handle(dm, params);
+}
+
+static ta_op_status tna_dm_value_decode(void *self, const ta_datamodel_value_decode_params *params) {
+    tna_js_datamodel *dm = ((tna_dm_adapter *)self)->dm;
+    if (params->bytes.len < 1u) {
+        return TA_OP_ERROR;
+    }
+    if (params->bytes.ptr[0] == TNA_OFFLOAD_HANDLE && params->bytes.len == 1u + sizeof(ta_value)) {
+        ta_value kept;
+        memcpy(&kept, params->bytes.ptr + 1, sizeof kept);
+        if (!tna_value_ours(&kept)) {
+            return TA_OP_ERROR;
+        }
+        ta_value_retain(&kept);
+        *params->out = kept;
+        return TA_OP_OK;
+    }
+    napi_env env = dm->env;
+    napi_value buffer = NULL;
+    napi_value deserialize = NULL;
+    napi_value global = NULL;
+    napi_value value = NULL;
+    if (params->bytes.ptr[0] != TNA_OFFLOAD_SERIALIZED || dm->deserialize == NULL || !dm->js_usable) {
+        return TA_OP_ERROR;
+    }
+    void *copied = NULL;
+    if (napi_create_buffer_copy(env, params->bytes.len - 1u, params->bytes.ptr + 1, &copied, &buffer) != napi_ok ||
+        napi_get_reference_value(env, dm->deserialize, &deserialize) != napi_ok || deserialize == NULL ||
+        napi_get_global(env, &global) != napi_ok ||
+        napi_call_function(env, global, deserialize, 1, &buffer, &value) != napi_ok) {
+        tna_clear_exception(env);
+        return TA_OP_ERROR;
+    }
+    return tna_value_make(&dm->wrapper->values, value, params->out) ? TA_OP_OK : TA_OP_NOMEM;
+}
+
+bool tna_js_datamodel_set_offload(tna_js_datamodel *dm, const tna_offload_values *values) {
+    napi_ref serialize = NULL;
+    napi_ref deserialize = NULL;
+    if (values->serialize != NULL && values->deserialize != NULL &&
+        (napi_create_reference(dm->env, values->serialize, 1, &serialize) != napi_ok ||
+         napi_create_reference(dm->env, values->deserialize, 1, &deserialize) != napi_ok)) {
+        if (serialize != NULL) {
+            napi_delete_reference(dm->env, serialize);
+        }
+        return false;
+    }
+    if (dm->serialize != NULL) {
+        napi_delete_reference(dm->env, dm->serialize);
+    }
+    if (dm->deserialize != NULL) {
+        napi_delete_reference(dm->env, dm->deserialize);
+    }
+    dm->serialize = serialize;
+    dm->deserialize = deserialize;
+    dm->by_handle = values->by_handle;
+    return true;
+}
+
+void tna_js_datamodel_offload_begin(tna_js_datamodel *dm) {
+    dm->offloading = true;
+    dm->handles = NULL;
+    dm->handle_count = 0;
+    dm->handle_capacity = 0;
+}
+
+/* The array's capacity is its count, as the offload store frees it. */
+tna_offload_handles tna_js_datamodel_offload_end(tna_js_datamodel *dm) {
+    tna_offload_handles taken = { .handles = dm->handles, .count = dm->handle_count };
+    dm->offloading = false;
+    dm->handles = NULL;
+    dm->handle_count = 0;
+    dm->handle_capacity = 0;
+    return taken;
+}
+
+void tna_js_datamodel_release_handles(tna_js_datamodel *dm, tna_offload_handles handles) {
+    for (uint32_t index = 0; index < handles.count; index += 1) {
+        ta_value_release(&handles.handles[index]);
+    }
+    if (handles.handles != NULL) {
+        tna_free(tna_offload_allocator(dm),
+                 &(ta_allocator_free_params){ .ptr = handles.handles, .size = (size_t)handles.count * sizeof(ta_value),
+                                              .alignment = _Alignof(ta_value) });
+    }
+}
 
 ta_datamodel tna_js_datamodel_adapter(tna_js_datamodel *dm) {
     return (ta_datamodel){ .self = &dm->builtin, .v = &dm->builtin.vtable };
@@ -1193,7 +1389,7 @@ bool tna_js_datamodel_init(tna_js_datamodel *dm, tna_napi_system *wrapper, napi_
 }
 
 void tna_js_datamodel_close(tna_js_datamodel *dm, bool refs_usable) {
-    napi_ref *refs[] = { &dm->context, &dm->json_parse, &dm->array_from };
+    napi_ref *refs[] = { &dm->context, &dm->json_parse, &dm->array_from, &dm->serialize, &dm->deserialize };
     for (size_t at = 0; at < sizeof refs / sizeof refs[0]; at += 1) {
         if (*refs[at] != NULL && refs_usable) {
             napi_delete_reference(dm->env, *refs[at]);

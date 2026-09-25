@@ -55,6 +55,7 @@
 #include "directory.h"
 #include "effects.h"
 #include "loads.h"
+#include "offloads.h"
 #include "adapters/trace.h"
 #include "otlp.h"
 #include "scheduler.h"
@@ -106,6 +107,8 @@ struct tna_system {
     tna_directory directory; /* installed on core at creation (ADR 0006) */
     /* Loads of unloaded actors, and their wake-ups (loads.h, napi ADR 0020). */
     tna_loads loads;
+    /* Actors offloaded to bytes while unloaded (core ADR 0074). */
+    tna_offloads offloads;
     tna_turn_budgets budgets;
     uint32_t due_budget;   /* due sends dispatched in one turn, at least 1 */
     tna_clock clock;

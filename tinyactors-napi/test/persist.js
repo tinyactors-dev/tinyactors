@@ -39,22 +39,27 @@ async function roundTrip() {
   assert.equal(image.definition.family, 'ticker');
   assert.ok(image.actor.equals(actor));
 
-  actor.unload(image);
+  actor.unload();
   assert.equal(actor.destroyed, true, 'the runtime ID is stale once unloaded');
   assertCode(() => actor.inspect(), 'not-found');
   assert.equal(system.findActor({ family: 'ticker', name: 'one' }), undefined);
-  system.post({ family: 'ticker', name: 'one' }, 'hello');
-  await system.flush();
-  assert.equal(dead.length, 1);
-  assert.equal(dead[0].reason, 'unloaded');
 
-  await system.advanceTo(150); // due while unloaded: it travels in the image
-  const loaded = system.load(image);
-  assert.ok(!loaded.equals(actor), 'a new runtime ID');
+  // Its own delayed send, due while it is offloaded, loads it back from its
+  // bytes (core ADR 0074), with no loader, and fires.
+  await system.advanceTo(150);
   await system.flush();
+  assert.equal(dead.length, 0);
+  const loaded = system.findActor({ family: 'ticker', name: 'one' });
+  assert.ok(loaded !== undefined && !loaded.equals(actor), 'a new runtime ID');
   assert.equal(loaded.inspect().sessionID, before.sessionID, 'the session ID outlives residency');
   assert.equal(stateOf(loaded), 'b', 'the delayed send fired after load');
-  assert.ok(system.findActor({ family: 'ticker', name: 'one' }).equals(loaded));
+
+  // Mail loads an offloaded actor back, too.
+  loaded.unload();
+  system.post({ family: 'ticker', name: 'one' }, 'hello');
+  await system.flush();
+  assert.equal(dead.length, 0);
+  assert.equal(stateOf(system.findActor({ family: 'ticker', name: 'one' })), 'b');
 
   image.destroy();
   image.destroy(); // idempotent
@@ -64,22 +69,26 @@ async function roundTrip() {
 }
 
 // unload() refuses an actor with mail waiting, so it never drops accepted
-// mail; a stale capture is refused by core.
+// mail, and an anonymous actor, which has no address to come back to.
+// removeUnloaded() drops the offloaded bytes and the address.
 async function unloadGuards() {
   const system = createSystem({ clock: 'manual' });
-  const actor = system.spawn(system.define(tickChart()), { name: 'guarded' });
+  const definition = system.define(tickChart());
+  const actor = system.spawn(definition, { name: 'guarded' });
   await system.flush();
-  const image = actor.capture();
   actor.post('nothing');
-  assertCode(() => actor.unload(image), 'busy');
+  assertCode(() => actor.unload(), 'busy');
   await system.flush();
-  assertCode(() => actor.unload(image), 'stale'); // it changed after the capture
-  const fresh = actor.capture();
-  actor.unload(fresh);
-  system.removeUnloaded({ family: 'ticker', name: 'guarded' });
-  assertCode(() => system.load(fresh), 'stale'); // its address was released, so the claim no longer matches
+  const anonymous = system.spawn(definition);
+  await system.flush();
+  assertCode(() => anonymous.unload(), 'invalid');
+  const image = actor.capture();
+  actor.unload();
+  const address = { family: 'ticker', name: 'guarded' };
+  system.removeUnloaded(address);
+  assertCode(() => system.load(address), 'not-found'); // the bytes went with the address
+  assertCode(() => system.load(image), 'stale'); // its address was released, so the claim no longer matches
   image.destroy();
-  fresh.destroy();
   system.close();
 }
 
@@ -98,7 +107,7 @@ async function dataTravels() {
   await system.flush();
   const image = actor.capture();
   assert.equal(image.data.count, 2);
-  actor.unload(image);
+  actor.unload();
   const loaded = system.load(image);
   loaded.post('inc');
   await system.flush();
@@ -131,7 +140,7 @@ async function sessionTargetAcrossUnload() {
 
   await system.advanceTo(10);
   const image = receiver.capture();
-  receiver.unload(image);
+  receiver.unload();
   await system.advanceTo(50);
   const loaded = system.load(image);
   await system.flush();
@@ -231,7 +240,7 @@ async function invocationsAcrossLoad() {
   await system.flush();
   assert.equal(started, 1);
   const image = actor.capture();
-  actor.unload(image);
+  actor.unload();
   const loaded = system.load(image);
   await system.flush();
   assert.equal(stateOf(loaded), 'lost');
