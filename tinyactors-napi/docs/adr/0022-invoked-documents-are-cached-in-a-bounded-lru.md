@@ -1,6 +1,6 @@
 # ADR 0022: Invoked documents are cached in a bounded LRU
 
-**Status:** Accepted; not yet implemented. Refines ADR 0021 point 3.
+**Status:** Accepted and implemented (2026-09-25); see the implementation notes. Refines ADR 0021 point 3.
 **Date:** 2026-09-25
 
 ## Context
@@ -130,3 +130,39 @@ with nothing on a dashboard to show it.
   surviving it and the next invoke importing again; a `<content expr>`
   that changes on every invoke staying within the bound; the metrics and
   the WARN log; a resolver released after its definition is freed.
+
+## Implementation notes
+
+- **Where it lives.** The cache is `src/documents.{c,h}`, portable (no
+  Node-API, so `test-native` covers it, and it moves with the host kernel).
+  It stores definition IDs and bytes only; `src/napi_children.c` retires
+  what it evicts, writes the log and counts hits and misses. The hash is a
+  field (`documents.hash`, FNV-1a by default) so the native test can make
+  every document collide and exercise the chains.
+- **Reserve, then commit.** `tna_documents_reserve` copies the bytes and
+  takes an entry, and adds it to its hash chain, before the import; a
+  reserved entry is never found. A failed import calls
+  `tna_documents_cancel`, a successful one `tna_documents_commit`, then
+  eviction runs. A refused document is therefore never cached, and every
+  imported definition is cached until it is evicted or the system closes.
+- **A hit is checked.** `ta_definition_inspect` confirms the cached
+  definition is registered and not retired; otherwise the entry is
+  dropped (`tna_documents_forget`) and the invoke is a miss.
+- **The log** is written per eviction under the invoking parent's
+  definition, so the rate limit (napi ADR 0017) is per parent chart.
+  Lowering the bounds (`setChildDocuments`) evicts at once, with no
+  parent to name.
+- **Resolvers** are swept as decided; `hostMetrics().childDocuments`
+  also reports how many are kept (`resolvers`), for tests. It is not a
+  metric.
+- **Options:** `createSystem({ childDocuments: { maxCount, maxBytes } })`,
+  checked in `lib/`, passed to the native `setChildDocuments`.
+- **Tests:** `test/native/documents_test.c` (hits and misses, chains of
+  one hash, LRU order, both bounds, one oversized document kept alone,
+  reserve and cancel, forget, entry reuse, the allocator balancing), and
+  `test/documents.js` on Node and Bun (a hit, eviction at `maxCount` with
+  the running child still answering, re-import, a changing `<content
+  expr>` bounded at 3 with 10 misses and 7 evictions and the WARN log, a
+  child definition retired by the user becoming a miss, and resolvers of
+  retired definitions swept while a live one keeps working).
+

@@ -89,7 +89,16 @@ document is:
   `src` raises `error.execution` in the parent.
 
 The child picks its data model with its own `datamodel` attribute. Each
-distinct document is imported once per system and reused. Only the
+distinct document is imported once and cached (napi ADR 0022): at most
+256 documents and 16 MiB of them by default, set with
+`createSystem({ childDocuments: { maxCount, maxBytes } })`. Past a bound
+the least recently used document is evicted and its definition retired;
+children still running keep it, and the next invoke of that document
+imports it again. A `<content expr>` that builds a new document on every
+invoke therefore stays bounded, and shows up as misses in
+`tinyactors.invoke.document.lookups`, as `tinyactors.invoke.document.evictions`,
+and as a WARN log `tinyactors.invoke.document.evicted` naming the parent.
+Only the
 `<param>` and `namelist` names the child declares as top-level `<data>`
 enter its data (SCXML 6.4). A child document that cannot be imported
 raises `error.execution` in the parent, whose data is the reason.
