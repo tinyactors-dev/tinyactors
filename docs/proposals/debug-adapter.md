@@ -1,7 +1,7 @@
 # A debug adapter: attach to an actor, poke it, unwedge it
 
 **Status:** Sketch (2026-09-25)
-**Touches:** tinyactors-core (source spans, operator transitions, inspection), tinyactors-scxml, tinyactors-test, tinyactors-napi, a new VS Code extension
+**Touches:** tinyactors-core (source spans, operator transitions, images across systems, inspection), tinyactors-scxml, tinyactors-test (a Ruby adapter), tinyactors-napi (a JavaScript adapter and scheduler changes), a new VS Code extension
 **Not a plan:** nothing here is decided or scheduled. ADRs and roadmaps win.
 
 ## Goal
@@ -40,8 +40,10 @@ asks for.
   adapter. Breakpoints act as logpoints and report "would have stopped".
   For a low-traffic actor this costs almost nothing. It works today.
 - **fork.** The adapter captures the actor and rebuilds a copy with
-  `ta_actor_reconstruct`, which does not touch the directory (core ADR 0052),
-  so the copy is never routable. Everything is allowed on the copy.
+  `ta_actor_reconstruct` in a system of its own, where it is never routable
+  (core ADR 0052). Everything is allowed on the copy. Today an image can be
+  restored only into the system that captured it; see "A fork needs its
+  own system" below.
 - **live.** The attached actor itself. `send`, `set` and `goto` as `allow`
   permits. Stopping the live actor needs `hold`, and stops only between
   macrosteps (see "Holding a live actor" below).
@@ -78,6 +80,50 @@ asks for.
   says so on attach.
 - **Register the exact revision.** An image restores only against the
   revision it was captured under (`ta_session_image_definition`).
+
+### A fork needs its own system
+
+Logical time belongs to a system (core ADR 0012): `ta_system_set_time`
+moves every actor in it. A fork in the production system would share
+production's clock, so `clock +3d` would move time for every actor, and its
+sends would go through production's I/O processors. A fork therefore lives
+in a debug system of its own, with its own clock, stub I/O processors and
+stub invokers, created by the adapter in the same process.
+
+Neither core nor napi can do that today:
+
+- **Core.** An image is only partly independent of the system that
+  captured it. It copies addresses (core ADR 0065) and I/O origins (core
+  ADR 0068) as text, and `ta_image_localize_io_origin` re-interns an origin
+  in the system that restores it (`src/session_image.c`). But events keep
+  their `ta_event_name_id`, and delayed sends their event name and their
+  I/O type atom, and both are interned per system (`event_names` and
+  `atoms` in `src/system.h`). Another system that registers the same
+  revision interns names in its own order, so the IDs would name other
+  events. Runtime references to *other* actors (an event's origin, a
+  parent) name slots of the capturing system.
+- **napi.** `handleOf` in `lib/image.js` refuses an image whose `origin` is
+  not the system it is restored into.
+
+The core half is one more core ADR: **an image restores into any system
+that registers its revision.** Names and I/O types go into the image as
+text, as addresses and I/O origins already do, and are interned on
+restore (core ADR 0049 makes every interned identity readable back). A
+runtime reference to another actor becomes unreachable in another system:
+a send to it fails as one to a destroyed actor does, which in a fork is
+what should happen. The napi half is dropping the `origin` check, with a
+test that restores across systems. Host values need care there too.
+napi's value boxes belong to a system (`tna_values` in the system wrapper,
+`src/napi_system.h`), though each box points at the `tna_values` it came
+from (`src/values.c`). The fork's data root is a fresh `structuredClone`
+bound on restore, so what still crosses are the boxes an image retains:
+queued event data and delayed-send data. napi's half has to show that a
+debug system can hold and release another system's boxes, or copy them
+into its own on restore; the test host's values need the same check.
+
+Until then, a fork can live in the capturing system: stepping, `send`,
+`goto` and `set` work, but `clock` does not, and its effects must be
+intercepted by the host instead of going to separate stubs.
 
 A session image is not a wire format: it holds references to live host
 values (core ADR 0038). So the debug adapter for production runs inside
@@ -185,6 +231,10 @@ discarded, and the actor keeps the configuration after its last completed
 microstep, which core ADR 0061 section 2 already makes a legal one.
 Effects already released stay released. A trace record lists the internal
 events that were dropped. A jump then works as usual.
+
+On a live actor this is the one case where the host takes an actor out of
+scheduling inside a macrostep: the macrostep never ends, so no waiting
+caller would ever have seen it finish.
 
 ### The other tools
 
@@ -331,25 +381,106 @@ Left out: `disassemble`, `readMemory` and `writeMemory`, `stepInTargets`,
 `terminateThreads`. A chart has no memory or instructions to show, and
 ending a thread would destroy an actor.
 
-## Where the pieces go
+## Two adapters: tinyactors-test and napi
+
+The adapter is built twice, on purpose. The one in **tinyactors-test** is
+Ruby, in the workbench: it debugs the conformance suite, shrunk scenarios
+and charts under development, and it drives core through the same
+generated JSON-RPC bindings as every test, so it exercises core's side of
+the debugger directly. The one in **napi** is JavaScript: it is the one
+production attaches to. Each is written in its host's language and owns
+its host's policy; they share the protocol mapping in this document and a
+transcript suite that keeps them in step.
+
+### tinyactors-test: Ruby over the JSON-RPC host
+
+Everything the adapter needs is already bound, so it is Ruby only. No C
+changes to the host.
+
+| Piece | Built from |
+|---|---|
+| DAP session, framing, console, completions | Ruby in `ruby/workbench/`, next to the REPL, which already completes event names |
+| Holding and stepping | The Ruby driver owns scheduling (the scenario runner's run-to-quiescence loop), so holding an actor is leaving it out of that loop, and stepping is `ta.actor.resume` with `action_budget: 1` |
+| Trace records | A `trace.recording` instrument; the adapter reads its journal after each step (`ruby/tinyactors_test/trace.rb`) |
+| Evaluate, hover, conditions | The jq data model: `json.transform` against the data root, as the workbench's guard display does (`session.rb`) |
+| Scopes | `ta.actor.inspect`, `ta.actor.datamodel_root`, `ta.actor.active_states` |
+| The `debug` I/O processor | An `io.recording` instrument registered for the `debug` type; replies are its journal |
+| Forks | `ta.actor.capture` and `ta.actor.reconstruct` into a second system handle, once core restores images across systems |
+| `replace` | The workbench's existing replacement (`Session#replace_actor`) |
+| Source spans | The Ruby DSL records `caller_locations` for each element; today it records none |
+| Transport | stdio, launched by the client; `mise run dap` in `tinyactors-test` |
+
+### napi: JavaScript in `lib/`, C only in the scheduler
+
+The split follows the one napi already has. Hand-written C is plumbing:
+"mailboxes, ready and runnable queues, router, directory, pump, clock"
+(napi ADR 0013 point 8), and the post, mailbox, deliver and resume path
+never goes through generated code. Policy over data that C hands over once
+per turn is JavaScript, as for traces (napi ADRs 0015 and 0016); C does
+more only where volume demands it (napi ADR 0017). A debugger runs at
+human speed, and the host-kernel proposal wants a host-neutral `lib/` the
+browser build can share, so the adapter is JavaScript.
+
+**`lib/debug.js`**
+
+| Piece | Built from |
+|---|---|
+| The DAP session object, framing, modes and `allow`, the audit hook | JSON and policy; the application supplies transport and authentication |
+| Console, `evaluate`, `setVariable`, `completions` | The data model is JavaScript objects (napi ADR 0001), so evaluating and setting is plain JavaScript |
+| Scopes and variables | `inspect()` and the data root |
+| Stack frames and output | Spans read with `decodeTraces()`, named with the definitions' `inspect()` |
+| Sharing the trace sink | A wrapper around `setTraceSink`, so the application's sink and the adapter both get each turn's bytes, and `watchTraces({ sessions })` while attached |
+| The `debug` I/O processor | `registerIO('debug', …)` and `openScope()` |
+| Forks | `capture`, `structuredClone` of the root, `reconstruct` into a debug `System` with stub processors registered through `registerIO` |
+| Stepping and breakpoints, first version | One resume with `action_budget: 1` per turn; the turn's `PAUSED` record reaches JavaScript at the end of the turn, which decides whether to go on |
+| Source-map lookup, virtual sources | Tables read from definitions |
+
+**C in the scheduler** (and later in the host kernel)
+
+| Piece | Why C |
+|---|---|
+| A `held` scheduling state | Modelled on `quarantined` (napi ADR 0008, `TNA_SCHED_QUARANTINED` in `src/scheduler.h`): out of the scheduling queues, mail kept but not delivered, released on request. A separate state, because a fault while held must still quarantine and report. Plus "deliver exactly one held message", for `next` |
+| Budgets for one actor | The debugged actor resumes with `action_budget: 1` while the rest keep `resumeBudget` and `actionBudget`; the pump chooses budgets per resume |
+| Operator transitions in mail | A `goto` queues behind real mail, so the envelope carries it to `ta_actor_deliver` on the hot path |
+| `abandon` | Settles napi's own state for the actor: its `send()` waiter rejects and its runnable entry is cleared |
+| Breakpoints in the trace sink, later | Only if one turn per unit is too slow: a per-actor set of IDs checked where napi's C sink receives `PAUSED` |
+
+The new core functions (operator transition, `abandon`, withdrawal) get
+their bindings from the generator once `bindings.rb` classifies them (napi
+ADR 0013); the facade methods on them are a few lines of `lib/`.
+
+### Keeping the two in step
+
+A shared suite of DAP transcripts: a chart, then the requests a client
+sends and the responses and events the adapter must answer with. Each
+host runs every transcript. napi builds charts in JavaScript and does not
+import SCXML documents, so a transcript names its chart, and each host
+has a fixture of that chart in its own authoring form, with the same
+state IDs and events. Transcripts name places by state, transition and
+action names, not by line, because the two fixtures' lines differ. Where
+an expression is needed, a transcript carries a jq and a JavaScript form.
+
+### All the pieces
 
 | Piece | Where | Needed for |
 |---|---|---|
-| Source spans on decode and encode | a core ADR extending 0053 and 0058; tinyactors-scxml; the Ruby DSL | line breakpoints, frame locations, `gotoTargets`, virtual sources |
+| Source spans on decode and encode | a core ADR extending 0053 and 0058; tinyactors-scxml; the Ruby DSL and napi's builder | line breakpoints, frame locations, `gotoTargets`, virtual sources |
 | Operator transition and abandoning a macrostep | a core ADR narrowing 0030 | `goto`, `abandon` |
-| The paused position in `ta_actor_inspection` | core | attaching to an actor that is already paused |
-| A breakpoint set over compiled IDs | core, later | only if host single-stepping is too slow |
-| Recording operator jumps | [replay-based persistence](replay-persistence.md) | debugging past events; replay keeping manual fixes |
+| An image restores into any system that registers its revision | a core ADR refining 0038 and 0051 | forks with their own clock and stubs |
 | Withdrawing one delayed send by owner and send ID | the core ADR that adds replay's withdrawal by time | `cancel` |
-| A DAP session object, `debug` I/O processor, forks, modes, audit hook | tinyactors-napi | production attach |
-| A DAP adapter over the existing JSON-RPC | tinyactors-test | the first version: the workbench and failing scenarios |
+| The paused position in `ta_actor_inspection` | core | attaching to an actor that is already paused |
+| A breakpoint set over compiled IDs | core or napi's sink, later | only if single-stepping through the host is too slow |
+| Recording operator jumps | [replay-based persistence](replay-persistence.md) | debugging past events; replay keeping manual fixes |
+| The Ruby adapter | tinyactors-test | the workbench, the conformance suite, scenarios |
+| `lib/debug.js` and the scheduler changes | tinyactors-napi | production attach |
+| The transcript suite | shared by both hosts | keeping the two adapters in step |
 | An extension that registers the debug type | new, about 50 lines | VS Code; the other clients need only configuration |
 
-The first version fits the test host: the Ruby driver already owns
-scheduling, the JSON-RPC host binds every core function, and the
-`trace.recording` instrument exists. It would let a failing W3C IRP chart
-or a shrunk scenario be stepped through in an editor. napi follows, for
-production attach, once the core pieces exist.
+Neither adapter waits for the other. Watch mode, `send`, stepping on
+`action_budget`, scopes, evaluate and completions need no new core API
+and can be built in both hosts first. Forks with their own clock wait for
+the image ADR, `goto` and `abandon` for the operator ADR, and line
+breakpoints for source spans.
 
 ## Debugging the past
 
