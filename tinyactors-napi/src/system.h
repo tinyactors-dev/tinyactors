@@ -99,6 +99,17 @@ typedef struct {
 
 typedef struct tna_io_processor tna_io_processor;
 
+/* What the in-system SCXML invoker asks: which definition this invoke starts. */
+typedef struct {
+    const ta_invoke_request *request;
+    ta_definition_id *out;
+    /* The child's data-model binding: the invoke's <param> and namelist
+     * values the child declares as top-level <data> (SCXML 6.4), or empty.
+     * The invoker releases it after the spawn. */
+    ta_value *binding;
+    ta_fault *fault;
+} tna_child_params;
+
 struct tna_system {
     tna_allocator allocator;
     tna_scratch scratch;
@@ -147,11 +158,12 @@ struct tna_system {
     uint64_t next_service;
     /*
      * The in-system SCXML invoker (adapters/invoker.c) asks the Node-API
-     * layer which registered definition an invoke's content or src names.
-     * TA_ERR_NOT_FOUND when the value names none.
+     * layer which registered definition an invoke starts: the one its
+     * content or src names, or an SCXML document it imports (napi ADR 0021,
+     * napi_children.h). TA_OP_ERROR with `fault` saying why, TA_OP_NOMEM.
      */
-    ta_result (*resolve_child)(void *context, const ta_value *value, ta_definition_id *out);
-    void *resolve_context;
+    ta_op_status (*child_definition)(void *context, const tna_child_params *params);
+    void *child_context;
     /* One record per registered I/O processor type (adapters/io.h, core ADR 0068). */
     tna_vec io_processors; /* tna_io_processor * */
     /* Turn duration and timer lateness (host_metrics.h, napi ADR 0017 section 7). */

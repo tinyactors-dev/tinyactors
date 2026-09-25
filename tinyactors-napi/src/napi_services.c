@@ -1,5 +1,7 @@
 #include "napi_services.h"
 
+#include "napi_children.h"
+
 #include <string.h>
 
 #include "adapters/invoker.h"
@@ -253,46 +255,8 @@ void tna_services_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *f
     }
 }
 
-/*
- * The in-system SCXML invoker's child (adapters/invoker.h): the invoke's
- * content or src is a definition ID, a bigint (or a safe integer number).
- * It only reads the value; no JavaScript runs.
- */
-static ta_result tna_resolve_child(void *context, const ta_value *value, ta_definition_id *out) {
-    tna_napi_system *wrapper = context;
-    napi_env env = wrapper->env;
-    if (env == NULL || wrapper->env_data->torn_down) {
-        return TA_ERR_NOT_FOUND;
-    }
-    napi_value js = NULL;
-    napi_valuetype type = napi_undefined;
-    if (!tna_value_get(env, value, &js) || napi_typeof(env, js, &type) != napi_ok) {
-        return TA_ERR_NOT_FOUND;
-    }
-    if (type == napi_bigint) {
-        uint64_t id = 0;
-        bool lossless = false;
-        if (napi_get_value_bigint_uint64(env, js, &id, &lossless) != napi_ok || !lossless || id == 0) {
-            return TA_ERR_NOT_FOUND;
-        }
-        *out = id;
-        return TA_OK;
-    }
-    if (type == napi_number) {
-        double number = 0;
-        if (napi_get_value_double(env, js, &number) != napi_ok || !(number >= 1) || number > 9007199254740991.0 ||
-            number != (double)(uint64_t)number) {
-            return TA_ERR_NOT_FOUND;
-        }
-        *out = (uint64_t)number;
-        return TA_OK;
-    }
-    return TA_ERR_NOT_FOUND;
-}
-
 void tna_services_init(tna_napi_system *wrapper) {
-    wrapper->system->resolve_child = tna_resolve_child;
-    wrapper->system->resolve_context = wrapper;
+    tna_children_init(wrapper);
 }
 
 /* ------------------------------------------------------------------------

@@ -38,7 +38,7 @@
 
 /* Hands every queued effect to JavaScript. An exception becomes the turn's first error. */
 void tna_services_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *first_error);
-/* Sets system->resolve_child for the in-system SCXML invoker. */
+/* Sets up the in-system SCXML invoker's children (napi_children.h). */
 void tna_services_init(tna_napi_system *wrapper);
 
 /* System methods (napi_system.c's property table). */

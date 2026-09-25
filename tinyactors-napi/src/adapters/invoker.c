@@ -80,23 +80,30 @@ static ta_op_status tna_scxml_start(void *self, const ta_invoker_start_params *p
     if (system->effects.closed) {
         return TNA_FAULT(params->fault, TA_ERR_INVALID, "invoker.scxml: the system is closing");
     }
-    const ta_value *named = request->data.v != NULL ? &request->data : &request->src;
     ta_definition_id definition = 0;
-    if (named->v == NULL || system->resolve_child == NULL ||
-        system->resolve_child(system->resolve_context, named, &definition) != TA_OK) {
-        return TNA_FAULT(params->fault, TA_ERR_INVALID,
-                         "invoker.scxml: the invoke's content or src names no registered definition");
+    ta_value binding = { NULL, NULL };
+    if (system->child_definition == NULL) {
+        return TNA_FAULT(params->fault, TA_ERR_INVALID, "invoker.scxml: the system is closing");
+    }
+    ta_op_status status = system->child_definition(system->child_context,
+                                                   &(tna_child_params){ .request = request,
+                                                                        .out = &definition,
+                                                                        .binding = &binding,
+                                                                        .fault = params->fault });
+    if (status != TA_OP_OK) {
+        return status;
     }
     ta_actor_id child = 0;
     ta_result result = ta_actor_spawn(system->core, &(ta_actor_spawn_params){
                                                         .definition = definition,
-                                                        .datamodel_binding = request->params.v != NULL ? &request->params : NULL,
+                                                        .datamodel_binding = binding.v != NULL ? &binding : NULL,
                                                         .parent = &(ta_actor_parent){ .actor = request->parent,
                                                                                       .invoke_id = request->invoke_id },
                                                         .out = &child,
                                                         /* The child's bootstrap runs under the invoking step. */
                                                         .trace = request->trace,
                                                     });
+    ta_value_release(&binding);
     if (result != TA_OK) {
         return TNA_FAULT(params->fault, result, "invoker.scxml: could not spawn the child");
     }

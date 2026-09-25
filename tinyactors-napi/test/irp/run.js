@@ -53,9 +53,16 @@ async function run(test) {
   try {
     system.registerDatamodel('ecmascript', ecmascript);
     let start;
+    // An invoke's src="file:test239sub1.scxml" names a sibling document of
+    // the test (napi ADR 0021); <data src> and <script src> name the files
+    // the importer read.
+    const siblings = {};
     for (const chart of test.charts) {
-      // <data src> and <script src> resolve to the files the importer read.
-      const definition = system.define(chart.source, { format: 'scxml', resolve: (src) => chart.files?.[src] });
+      siblings[`file:${chart.name.replace(/^irp_/, '')}.scxml`] = chart.source;
+    }
+    for (const chart of test.charts) {
+      const resolve = (src) => chart.files?.[src] ?? siblings[src];
+      const definition = system.define(chart.source, { format: 'scxml', resolve });
       if (chart.start) {
         start = definition;
       }

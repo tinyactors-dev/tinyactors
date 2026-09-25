@@ -12,6 +12,7 @@
 #include <node_api.h>
 
 #include "runtime.h"
+#include "napi_children.h"
 #include "napi_datamodel.h"
 #include "system.h"
 #include "values.h"
@@ -46,6 +47,7 @@ struct tna_napi_system {
     bool destroy_finished;        /* finished: "destroy" (the default) */
     tna_values values;            /* value boxes (ADR 0011) */
     tna_js_datamodel dm;          /* the JavaScript data model (ADR 0011) */
+    tna_children children;        /* the SCXML invoker's children (napi ADR 0021) */
     double last_send_token;       /* the token of the last send(), for cancelSend() */
     /* Tracing with values (napi ADR 0016): a value's JSON text, cut. */
     uint32_t trace_value_limit;

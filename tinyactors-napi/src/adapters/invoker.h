@@ -13,8 +13,9 @@
  *   core also gives "scxml"): start spawns the child in the same system with
  *   core's parent link, so core routes #_<invokeid>, #_parent and
  *   done.invoke itself, and tells the scheduler about the child. The child
- *   is the registered definition the invoke's content (or src) names; the
- *   Node-API layer reads that value (system->resolve_child). The invoke's
+ *   is the registered definition the invoke's content or src names, or an
+ *   SCXML document the Node-API layer imports for it (system->child_definition,
+ *   napi ADR 0021). The invoke's
  *   params become the child's data-model binding. cancel destroys the child;
  *   forward posts the event to the child's mailbox.
  */
