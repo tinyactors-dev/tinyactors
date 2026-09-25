@@ -1,6 +1,6 @@
 # ADR 0021: An invoked SCXML document is imported in the invoke
 
-**Status:** Accepted; not yet implemented. Refines ADR 0019 (SCXML import) and the in-system SCXML invoker of ROADMAP step 13 (`src/adapters/invoker.h`).
+**Status:** Accepted and implemented (2026-09-25); see the implementation notes. Refines ADR 0019 (SCXML import) and the in-system SCXML invoker of ROADMAP step 13 (`src/adapters/invoker.h`).
 **Date:** 2026-09-25
 
 ## Context
@@ -134,3 +134,36 @@ Two constraints shape the design:
   refused child document raises `error.execution` in the parent.
 - **IRP:** every invoke test that passes leaves
   `test/irp/expected-failures.json`.
+
+## Implementation notes
+
+- **Where it lives.** `src/napi_children.{c,h}` (Node-API, listed in
+  `NODE_API_SOURCES`) answers the invoker's question through
+  `system->child_definition`, which replaces the old `resolve_child`. It
+  keeps `define()`'s `resolve` per definition (a `napi_ref`, released at
+  close) and the cache of imported children (the document bytes, compared
+  exactly). The portable invoker (`src/adapters/invoker.c`) is unchanged
+  apart from asking through the new hook and passing the binding it gets.
+  The shared `resolve(src)` adapter moved from `napi_system.c` to
+  `napi_children.c`.
+- **Where a document comes from, in order:** a definition ID in
+  `<content expr>` or `src`; a string from `<content expr>` (the document
+  text); a literal `<content>` (bytes); a `src` string through the parent's
+  resolver. The parent's definition is read with `ta_actor_inspect`.
+- **The binding is filtered (SCXML 6.4).** `<param>` and `namelist` values
+  reach the child only for names it declares as top-level `<data>`, read
+  from `ta_definition_export`, as the test host does. Builder charts that
+  invoke a registered definition get the same rule.
+- **What JavaScript throws** inside the invoke (`resolve` or a registered
+  data model's `compile`) is cleared and becomes the invoke's fault
+  message; a child definition imported just before the throw is retired.
+- **Tests:** `test/invoke.js` (Node and Bun) covers the exchange both
+  ways, cancellation on exit, `<donedata>`, `<finalize>`, autoforward, a
+  grandchild, destroying the root, a runaway child, `src` inherited by the
+  child, the cache (no compile on a second parent), the binding filter,
+  and refused documents. `test/irp/run.js` resolves an invoke's
+  `src="file:<name>.scxml"` to the test's sibling document.
+- **IRP:** 147 passed before, 174 after, of 176 run (24 skipped), on Node
+  and Bun. The 2 left are tests 496 and 521, which need the routing
+  decision this ADR leaves out.
+
