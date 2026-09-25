@@ -12274,7 +12274,7 @@ TA_API ta_result ta_actor_load(ta_system *system, const ta_actor_load_params *pa
         ta_session_remove(&system->sessions, parked);
         ta_session_node_free(&system->sessions, parked);
     }
-    ta_trace_lifecycle(system, loaded, TA_TRACE_LOADED, NULL);
+    ta_trace_lifecycle(system, loaded, TA_TRACE_LOADED, &params->trace);
     *params->out = id;
     return TA_OK;
 }

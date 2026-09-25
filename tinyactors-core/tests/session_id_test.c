@@ -195,6 +195,49 @@ static void test_load_keeps_the_session(void) {
     finish(&f);
 }
 
+/* A load runs under the trace parent it is given (napi ADR 0020): the
+ * LOADED record carries it, so the load is in the trace of the message
+ * that found the actor unloaded. */
+static ta_trace_record loaded_record;
+static int loaded_records = 0;
+static void loaded_write(void *self, const ta_trace_record *record) {
+    (void)self;
+    if (record->kind == TA_TRACE_LOADED) {
+        loaded_record = *record;
+        loaded_records += 1;
+    }
+}
+static const ta_trace_sink_vtable loaded_vtable = { .write = loaded_write };
+
+static void test_load_runs_under_its_trace_parent(void) {
+    fixture f;
+    start(&f);
+    CHECK(ta_system_set_trace_sink(f.system, (ta_trace_sink){ .v = &loaded_vtable,
+                                                             .kinds = TA_TRACE_BIT(TA_TRACE_LOADED) }) == TA_OK);
+    ta_actor_id first = spawn(&f, &the_address);
+    ta_session_image *image = unload(&f, first);
+    ta_trace_parent parent = {
+        .context = { .trace_id_high = 0x4bf92f3577b34da6ull, .trace_id_low = 0xa3ce929d0e0e4736ull,
+                     .flags = TA_TRACE_FLAG_SAMPLED },
+        .cause = { .macrostep = 0x00f067aa0ba902b7ull },
+    };
+    ta_actor_id id = 0;
+    loaded_records = 0;
+    CHECK(ta_actor_load(f.system, &(ta_actor_load_params){ .image = image, .out = &id, .trace = parent }) == TA_OK);
+    ta_session_image_destroy(image);
+    CHECK(loaded_records == 1);
+    CHECK(loaded_record.context.trace_id_high == parent.context.trace_id_high &&
+          loaded_record.context.trace_id_low == parent.context.trace_id_low);
+    CHECK(loaded_record.cause.session == 0 && loaded_record.cause.macrostep == parent.cause.macrostep);
+    /* No parent: the record has none either. */
+    image = unload(&f, id);
+    loaded_records = 0;
+    CHECK(ta_actor_load(f.system, &(ta_actor_load_params){ .image = image, .out = &id }) == TA_OK);
+    ta_session_image_destroy(image);
+    CHECK(loaded_records == 1 && loaded_record.context.trace_id_high == 0 && loaded_record.cause.macrostep == 0);
+    finish(&f);
+}
+
 /* A runtime ID is never issued twice, so no new session takes an old ID. */
 static void test_session_ids_are_unique(void) {
     fixture f;
@@ -309,6 +352,7 @@ static void test_the_table_grows_without_copying(void) {
 
 int main(void) {
     test_load_keeps_the_session();
+    test_load_runs_under_its_trace_parent();
     test_session_ids_are_unique();
     test_reconstruct_keeps_a_free_session();
     test_remove_unloaded_ends_the_session();

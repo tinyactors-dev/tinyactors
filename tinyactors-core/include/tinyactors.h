@@ -2317,6 +2317,12 @@ typedef struct {
     const ta_session_image *image;
     TA_IN TA_OPTIONAL const ta_value *datamodel_binding;
     TA_OUT ta_actor_id *out;
+    /*
+     * The trace parent of what caused the load (ADR 0067), such as the
+     * message that found the actor unloaded: the LOADED record is written
+     * under it, so the load is in that message's trace. All zero: none.
+     */
+    ta_trace_parent trace;
 } ta_actor_load_params;
 typedef struct {
     const ta_session_image *image;
