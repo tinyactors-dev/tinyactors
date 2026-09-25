@@ -738,9 +738,17 @@ Done (ADR 0017; core ADRs 0072 and 0073):
 - **Tests:** `test/tracing.js`, `test/metrics.js`, `test/otel-metrics.js`,
   `test/native/otlp_test.c` and `test/native/host_metrics_test.c`.
 
-Open (ADR 0017's implementation notes, follow-up of 2026-09-25):
-- the traced-path targets: structural work (no copy into JavaScript, or
-  smaller hand-offs during a turn, or slimmer summary spans);
+Done (ADR 0018): the encoder reports a request's size and writes it into
+memory the host provides; napi writes each request straight into a
+`napi_create_buffer` block, with no zero-fill and no second copy.
+
+Open (ADR 0017's implementation notes, follow-up of 2026-09-25, and ADR
+0018's notes):
+- the traced-path targets, unchanged by ADR 0018: about 530 ns per event
+  over untraced for macrostep spans against about 280, and 1,470 for every
+  record against 780. Next: build each span once in the staging buffer
+  instead of assembling and appending it, encode constant keys in
+  advance, slimmer summary spans; profile per span phase first;
 - Bun's budgets for `traceparent` and sampled out.
 
 ## Open follow-ups
@@ -791,8 +799,9 @@ needs a core change):
 **Tracing** (ADR 0016 open points):
 - events handed back by services start no trace; carrying
   `request.traceparent` back on the reply would join them;
-- the encoder runs at 0.62M events/s against the prototype's 0.83M;
-  pre-encoded keys and optional attribute sets would narrow it;
+- the encoder runs slower than the prototype (see the traced-path
+  targets above); pre-encoded keys and optional attribute sets would
+  narrow it;
 - open spans are a linear array, and the name cache never evicts.
 
 **Later:**

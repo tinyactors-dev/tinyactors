@@ -1,6 +1,6 @@
 # ADR 0018: The encoder writes into memory the host provides
 
-**Status:** Accepted; not yet implemented. Refines ADR 0016 point 3 and ADR 0017 section 4.
+**Status:** Accepted and implemented; see the implementation notes. It removed a copy and a zero-fill but did not measurably speed up the traced path. Refines ADR 0016 point 3 and ADR 0017 section 4.
 **Date:** 2026-09-25
 
 ## Context
@@ -103,3 +103,76 @@ it may keep them across an `await`, as `tools/otlp.js` does.
   Bun, on a quiet machine, against the figures in ADR 0017's notes. If the
   gain is small, measure encoding compact span records only at the end of
   the turn, which would remove the staging copy, and record both.
+
+## Implementation notes
+
+Implemented 2026-09-25 (`ec6288d`).
+
+- **The interface** (`src/otlp.h`):
+  `tna_otlp_traces_size()` and `tna_otlp_logs_size()` report a request's
+  size, and `tna_otlp_put_traces()` and `tna_otlp_put_logs()` write it
+  into `out`. The spans' and log records' byte counts are the running
+  totals, so asking for a size is a few varint sizes and walks nothing.
+  A put with any size other than the current one writes and forgets
+  nothing and returns 0. After a put, the staging buffers are reset, not
+  freed. They replace `tna_otlp_take()` and `tna_otlp_take_logs()`, with
+  the header gap ADR 0017's follow-up added, the fallback request buffer,
+  and the logs request buffer.
+- **napi** allocates each request with `napi_create_buffer`, which does not
+  zero-fill, and writes into it. **Where it differs from the text:** the
+  sink gets a plain `Uint8Array` over the `Buffer`'s memory
+  (`napi_get_typedarray_info`, then `napi_create_typedarray`), not the
+  `Buffer` itself. The sink received a plain `Uint8Array` before, and a
+  `Buffer` is a different class to strict comparisons such as
+  `assert.deepStrictEqual`, so handing it over would have changed what
+  users see. It costs one small object per turn.
+- **Tests:**
+  - `test/native/otlp_test.c` puts every request into a heap block of
+    exactly the reported size, so AddressSanitizer
+    (`mise run test-native-asan`) catches a write past it. It also checks
+    that a wrong size writes nothing and forgets nothing, and covers logs
+    across several puts. The golden bytes are unchanged.
+  - `test/tracing.js` checks, on Node and Bun, that the bytes a sink keeps
+    are unchanged after later turns and still decode the same, and that
+    they are a plain `Uint8Array`.
+
+**Measured.** `test/bench/tracing.js`, 100,000 actors, the build before
+this change (`fcfad84`) and after it, run alternately three times each.
+Node 22.23.2 (mise's, from `tinyactors-napi/`; `mise exec` from the
+repository root gives the Node 26 on PATH) and Bun 1.4.1, load average
+3.6 to 4.2 on 16 cores. ns per event, the three runs:
+
+| | Untraced | Macrostep spans | Every record |
+|---|---|---|---|
+| Node, before | 615, 626, 671 | 1,162, 1,183, 1,194 | 2,018, 2,034, 2,144 |
+| Node, after | 627, 637, 638 | 1,158, 1,168, 1,198 | 2,096, 2,107, 2,118 |
+| Bun, before | 538, 541, 547 | 1,114, 1,115, 1,117 | 2,108, 2,133, 2,137 |
+| Bun, after | 539, 544, 547 | 1,116, 1,122, 1,144 | 2,096, 2,107, 2,120 |
+
+The difference is within the noise on both runtimes. Over untraced,
+macrostep spans still cost about 530 ns (Node) and 575 ns (Bun), and
+every record about 1,470 ns.
+
+**Why so little.** Copying a turn's spans (about 1,000 macrostep spans of
+338 bytes) costs a median of 6 ns per span with `memcpy`, and 8 ns when
+the destination is zero-filled first (a C micro-benchmark on the same
+machine). This ADR removed one such copy and a zero-fill, a few ns per
+event, below the noise. ADR 0017's follow-up profile put about 80 ns per
+event in "copying". That cannot have been these request copies; it is
+more likely the per-span assembly, where each span's name, attributes and
+events are built in buffers of their own and then appended into the
+staging buffer.
+
+**The compact-records variant was not built.** It would remove only the
+remaining write from staging into host memory, bounded by the same
+6 ns per span, against a gap of about 250 ns to ADR 0017's target. The
+contract (size, then write into host memory) stays, because it is what
+the host kernel and the other hosts need (`docs/proposals/host-kernel.md`),
+whatever it saves in napi.
+
+**Open point.** The traced path is not closer to ADR 0017's targets. The
+next candidates, from the profile: build each span once in the staging
+buffer instead of assembling it from its own buffers and appending it,
+encode constant keys in advance, and write slimmer spans for `summary`.
+Profile per span phase before choosing.
+
