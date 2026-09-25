@@ -26,4 +26,4 @@ particular on core ADRs 0011, 0029, 0040, 0047, 0050, 0053–0059, 0061,
 | [0014](0014-memory-is-pooled-by-lifetime.md) | [Memory is pooled by lifetime](0014-memory-is-pooled-by-lifetime.md) |
 | [0015](0015-tracing-is-a-hook-that-hands-javascript-plain-records.md) | [Tracing is a hook that hands JavaScript plain records](0015-tracing-is-a-hook-that-hands-javascript-plain-records.md) |
 | [0016](0016-traces-leave-the-addon-as-otlp-protobuf.md) | [Traces leave the addon as OTLP protobuf](0016-traces-leave-the-addon-as-otlp-protobuf.md) |
-| [0017](0017-observability-owns-its-encoder-and-makes-off-and-sampled-out-free.md) | [Observability owns its encoder, and makes off and sampled-out free](0017-observability-owns-its-encoder-and-makes-off-and-sampled-out-free.md) (Proposed) |
+| [0017](0017-observability-owns-its-encoder-and-makes-off-and-sampled-out-free.md) | [Observability owns its encoder, and makes off and sampled-out free](0017-observability-owns-its-encoder-and-makes-off-and-sampled-out-free.md) |

@@ -1,6 +1,6 @@
 # ADR 0017: Observability owns its encoder, and makes off and sampled-out free
 
-**Status:** Proposed. It would revise ADR 0016 (points 1 and 4, and its performance), move `traceparent` parsing from ADR 0015 point 4 into C, and take the napi slot core ADR 0072 names for metrics and logs, revising that ADR's section 7 for metrics. Research: [`docs/research/observability-build-vs-reuse.md`](../../../docs/research/observability-build-vs-reuse.md).
+**Status:** Accepted; not yet implemented. Revises ADR 0016 (points 1 and 4, and its performance), move `traceparent` parsing from ADR 0015 point 4 into C, and take the napi slot core ADR 0072 names for metrics and logs, revising that ADR's section 7 for metrics. Research: [`docs/research/observability-build-vs-reuse.md`](../../../docs/research/observability-build-vs-reuse.md).
 **Date:** 2026-09-24
 
 ## Context
@@ -183,7 +183,7 @@ This revises core ADR 0072 section 7.
   - `docs/tracing.md` shows the snapshot read by the SDK's observable
     instruments, tested like ADR 0016's SDK example against the pinned
     dev dependencies.
-  - Users with no SDK get `metricsToOtlp(snapshot)` in `lib/`, a small
+  - Users with no SDK get `metricsToOTLP(snapshot)` in `lib/`, a small
     JavaScript OTLP metrics writer with no dependency, if the user wants
     it in `lib/` (question 2).
   - **No metrics encoder in C.**
@@ -262,7 +262,7 @@ depends only on `@opentelemetry/api`, if the user wants one (question 3).
   remaining cost is the encoder and the bytes, and that is the price of
   lossless OTLP.
 - napi's API grows by `sample`, `detail`, `configureTraces`,
-  `watchTraces`, `metrics`, and possibly `metricsToOtlp`. `setTraceSink`'s
+  `watchTraces`, `metrics`, and possibly `metricsToOTLP`. `setTraceSink`'s
   callback receives `{ traces, logs }`.
 - We keep owning the C encoder (about 1200 lines) and the decoder. The
   measurements are the reason: nothing in the ecosystem produces these
@@ -289,9 +289,43 @@ depends only on `@opentelemetry/api`, if the user wants one (question 3).
 
 ## Questions for the user
 
+**Answered 2026-09-25:**
+
+1. **Default detail:** `summary`.
+2. **`metricsToOTLP` ships in `lib/`.** It is plain JavaScript with no
+   dependency, and it gives users without an SDK a metrics path, as the
+   hook's bytes do for traces.
+3. **No adapter package** for now.
+4. **Seeded fast generator: yes, implemented in core.** See "A tracing
+   module in core" below.
+5. **Summary for everyone, full detail for watched actors: yes.** Core
+   carries a detail bit on the trace context.
+
+**A tracing module in core.** The user expects a proper tracing module in
+core to come out of this work. It builds, generates and inspects W3C
+`traceparent` headers and trace IDs, so every host shares one
+implementation instead of writing its own:
+
+- parse and format `traceparent` (version, trace ID, parent ID, flags),
+  with validation, as `ta_trace_context` and `ta_trace_parent` values;
+- trace-ID and span-ID generation from a fast generator that core keeps,
+  seeded by the host from its OS's random bytes. Core stays freestanding
+  and deterministic: it never reads the OS, and a given seed gives a
+  given sequence;
+- the sampling decision (ratio, compatible with OpenTelemetry's
+  `TraceIdRatioBased`) and the detail bit of question 5;
+- inspection helpers: text for a trace ID or span ID, and the step key a
+  span ID came from where that can be answered.
+
+That module is a core decision, so it gets a core ADR of its own before
+it is built. napi then parses nothing itself: `traceparent` crosses as
+text and core parses it.
+
+The original questions were:
+
 1. **Default detail** when a sink is installed: `summary` (macrostep spans
    plus failures) or `full` (lossless, as today)?
-2. **Metrics without an SDK:** ship `metricsToOtlp` in `lib/`, or only a
+2. **Metrics without an SDK:** ship `metricsToOTLP` in `lib/`, or only a
    writer in `tools/` for the demo?
 3. **An optional adapter package** depending only on `@opentelemetry/api`,
    for automatic context propagation: wanted, or not now?

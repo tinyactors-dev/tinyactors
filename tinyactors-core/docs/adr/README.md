@@ -75,4 +75,4 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0069](0069-an-idle-actor-carries-no-event.md) | [An idle actor carries no event](0069-an-idle-actor-carries-no-event.md) |
 | [0070](0070-a-run-that-runs-out-of-memory-stops-where-it-stands.md) | [A run that runs out of memory stops where it stands](0070-a-run-that-runs-out-of-memory-stops-where-it-stands.md) |
 | [0071](0071-transitions-actions-and-expressions-are-inspectable-by-id.md) | [Transitions, actions and expressions are inspectable by ID](0071-transitions-actions-and-expressions-are-inspectable-by-id.md) |
-| [0072](0072-metrics-are-counters-core-keeps-logs-are-records-it-already-writes.md) | [Metrics are counters core keeps; logs are records it already writes](0072-metrics-are-counters-core-keeps-logs-are-records-it-already-writes.md) (Proposed) |
+| [0072](0072-metrics-are-counters-core-keeps-logs-are-records-it-already-writes.md) | [Metrics are counters core keeps; logs are records it already writes](0072-metrics-are-counters-core-keeps-logs-are-records-it-already-writes.md) |
