@@ -30,12 +30,14 @@ static int failures;
  */
 
 static long live_blocks;
+static size_t largest_block;
 
 static void *count_alloc(void *self, size_t size, size_t alignment) {
     (void)self;
     (void)alignment;
     void *block = malloc(size);
     live_blocks += block != NULL ? 1 : 0;
+    largest_block = size > largest_block ? size : largest_block;
     return block;
 }
 
@@ -176,6 +178,22 @@ static const ta_scxml_state_spec one_timer[] = {
     {0},
 };
 
+/* One send each, at four delays, so due order differs from spawn order. */
+#define ONE_SEND(name, delay_text)                                                                 \
+    static const ta_scxml_state_spec name[] = {                                                    \
+        { .kind = TA_SCXML_STATE_ATOMIC,                                                           \
+          .id = STR("waiting"),                                                                    \
+          .onentry = (const ta_scxml_handler_spec[]){                                              \
+              { .actions = (const ta_scxml_action_spec[]){ SEND("t", "t", delay_text), {0} } },    \
+              {0},                                                                                 \
+          } },                                                                                     \
+        {0},                                                                                       \
+    }
+ONE_SEND(timer_7s, "7s");
+ONE_SEND(timer_3s, "3s");
+ONE_SEND(timer_5s, "5s");
+ONE_SEND(timer_1s, "1s");
+
 /* An immediate send: refused by the router, it becomes a submitted send. */
 static const ta_scxml_state_spec immediate[] = {
     {
@@ -293,6 +311,59 @@ static void test_inspection_lists_only_the_actors_sends(void) {
 
     ta_time next = 0;
     CHECK(ta_system_next_deadline(system, &next) == TA_OK && next == 1000);
+    ta_system_destroy(system);
+}
+
+/*
+ * The owner heap spans pages (TA_TIMER_PAGE_OWNERS each, as the actor table
+ * does, ADR 0063): with owners spawned out of due order, some destroyed from
+ * the middle, every remaining send is dispatched in due order, and no
+ * allocation is larger than one 64 KiB page, whatever the population.
+ */
+static void test_owner_heap_spans_pages(void) {
+    router_state router = { .answer = TA_EXTERNAL_EVENT_ACCEPTED };
+    ta_system *system = create_system(&router);
+    const ta_scxml_state_spec *const charts[] = { timer_7s, timer_3s, timer_5s, timer_1s };
+    ta_definition_id definitions[4];
+    for (uint32_t index = 0; index < 4u; index += 1u) {
+        definitions[index] = define(system, index == 0 ? "t7" : index == 1 ? "t3" : index == 2 ? "t5" : "t1",
+                                    charts[index]);
+    }
+    enum { OWNERS = 3 * 8192 + 5 };
+    static ta_actor_id actors[OWNERS];
+    largest_block = 0;
+    for (uint32_t index = 0; index < OWNERS; index += 1u) {
+        CHECK(ta_system_set_time(system, index) == TA_OK);
+        actors[index] = spawn(system, definitions[index % 4u], NULL);
+    }
+    uint32_t live = OWNERS;
+    for (uint32_t index = 0; index < OWNERS; index += 3u) {
+        CHECK(ta_actor_destroy(system, actors[index]) == TA_OK);
+        live -= 1u;
+    }
+    CHECK(largest_block <= 65536u);
+
+    ta_time previous = 0;
+    uint32_t total = 0;
+    ta_time next = 0;
+    while (ta_system_next_deadline(system, &next) == TA_OK) {
+        CHECK(next >= previous);
+        previous = next;
+        if (next > ta_system_time(system)) {
+            CHECK(ta_system_set_time(system, next) == TA_OK);
+        }
+        uint32_t dispatched = 0;
+        bool more = false;
+        CHECK(ta_system_dispatch_due(system, &(ta_due_dispatch_params){ .budget = 1, .dispatched = &dispatched,
+                                                                        .more_due = &more }) == TA_OK);
+        CHECK(dispatched == 1);
+        total += dispatched;
+        if (dispatched != 1) {
+            break;
+        }
+    }
+    CHECK(total == live);
+    CHECK(router.accepted == (int)live);
     ta_system_destroy(system);
 }
 
@@ -473,6 +544,7 @@ static void test_refused_self_send_to_an_unloaded_owner_goes_by_address(void) {
 int main(void) {
     test_inspection_lists_only_the_actors_sends();
     test_cancelling_the_front_send();
+    test_owner_heap_spans_pages();
     test_submitted_send_outlives_its_sender();
     test_teardown_releases_orphans();
     test_capture_and_load_keep_the_sends();

@@ -22,42 +22,52 @@ static bool ta_timer_list_before(const ta_timer_list *left, const ta_timer_list 
     return ta_timer_key_before(ta_timer_key_at(left, 0), ta_timer_key_at(right, 0));
 }
 
+/* The heap slot at `index`, which must be below the reserved capacity. */
+static ta_timer_list **ta_timer_slot(const ta_timer_heap *heap, uint32_t index) {
+    ta_timer_list **const *pages = heap->pages.items;
+    return &pages[index / TA_TIMER_PAGE_OWNERS][index % TA_TIMER_PAGE_OWNERS];
+}
+
+static ta_timer_list *ta_timer_owner(const ta_timer_heap *heap, uint32_t index) {
+    return *ta_timer_slot(heap, index);
+}
+
 static void ta_timer_place(ta_timer_heap *heap, uint32_t index, ta_timer_list *list) {
-    heap->owners[index] = list;
+    *ta_timer_slot(heap, index) = list;
     list->heap_index = index;
 }
 
 static void ta_timer_sift_up(ta_timer_heap *heap, uint32_t index) {
-    ta_timer_list *list = heap->owners[index];
+    ta_timer_list *list = ta_timer_owner(heap, index);
     while (index > 0) {
         uint32_t parent = (index - 1u) / 2u;
-        if (!ta_timer_list_before(list, heap->owners[parent])) {
+        if (!ta_timer_list_before(list, ta_timer_owner(heap, parent))) {
             break;
         }
-        ta_timer_place(heap, index, heap->owners[parent]);
+        ta_timer_place(heap, index, ta_timer_owner(heap, parent));
         index = parent;
     }
     ta_timer_place(heap, index, list);
 }
 
 static void ta_timer_sift_down(ta_timer_heap *heap, uint32_t index) {
-    ta_timer_list *list = heap->owners[index];
+    ta_timer_list *list = ta_timer_owner(heap, index);
     for (;;) {
         uint32_t smallest = index;
         const ta_timer_list *best = list;
         uint32_t left = index * 2u + 1u;
         uint32_t right = left + 1u;
-        if (left < heap->count && ta_timer_list_before(heap->owners[left], best)) {
+        if (left < heap->count && ta_timer_list_before(ta_timer_owner(heap, left), best)) {
             smallest = left;
-            best = heap->owners[left];
+            best = ta_timer_owner(heap, left);
         }
-        if (right < heap->count && ta_timer_list_before(heap->owners[right], best)) {
+        if (right < heap->count && ta_timer_list_before(ta_timer_owner(heap, right), best)) {
             smallest = right;
         }
         if (smallest == index) {
             break;
         }
-        ta_timer_place(heap, index, heap->owners[smallest]);
+        ta_timer_place(heap, index, ta_timer_owner(heap, smallest));
         index = smallest;
     }
     ta_timer_place(heap, index, list);
@@ -73,7 +83,7 @@ static void ta_timer_unindex(ta_timer_heap *heap, ta_timer_list *list) {
     if (index == heap->count) {
         return;
     }
-    ta_timer_place(heap, index, heap->owners[heap->count]);
+    ta_timer_place(heap, index, ta_timer_owner(heap, heap->count));
     ta_timer_sift_down(heap, index);
     ta_timer_sift_up(heap, index);
 }
@@ -99,6 +109,17 @@ static void ta_timer_reindex(ta_timer_heap *heap, ta_timer_list *list) {
     ta_timer_sift_up(heap, list->heap_index);
 }
 
+static uint32_t ta_timer_heap_capacity(const ta_timer_heap *heap) {
+    uint64_t capacity = (uint64_t)heap->pages.count * TA_TIMER_PAGE_OWNERS;
+    return capacity > UINT32_MAX ? UINT32_MAX : (uint32_t)capacity;
+}
+
+static void ta_timer_free_page(ta_allocator allocator, ta_timer_list **page) {
+    ta_mem_free(allocator, page,
+                &(ta_allocator_free_params){ .size = (size_t)TA_TIMER_PAGE_OWNERS * sizeof(ta_timer_list *),
+                                             .alignment = _Alignof(ta_timer_list *) });
+}
+
 static uint32_t ta_timer_grow_capacity(uint32_t current, uint32_t needed) {
     uint32_t capacity = current == 0 ? 4u : current;
     while (capacity < needed) {
@@ -110,27 +131,28 @@ static uint32_t ta_timer_grow_capacity(uint32_t current, uint32_t needed) {
     return capacity;
 }
 
+/*
+ * Makes room for `additional` more owners by adding pages; the heap itself
+ * never moves, so no spawn or schedule copies it (as ADR 0063 did for the
+ * actor table). TA_ERR_NOMEM changes nothing visible: pages already added
+ * stay as spare capacity.
+ */
 static ta_result ta_timer_reserve_heap(ta_timer_heap *heap, uint32_t additional) {
     if (additional > UINT32_MAX - heap->count) {
         return TA_ERR_NOMEM;
     }
-    if (additional <= heap->capacity - heap->count) {
-        return TA_OK;
+    while (heap->count + additional > ta_timer_heap_capacity(heap)) {
+        ta_timer_list **page = ta_mem_alloc(heap->allocator, (size_t)TA_TIMER_PAGE_OWNERS * sizeof(ta_timer_list *),
+                                            _Alignof(ta_timer_list *));
+        if (page == NULL) {
+            return TA_ERR_NOMEM;
+        }
+        ta_result result = ta_vec_push(&heap->pages, &page);
+        if (result != TA_OK) {
+            ta_timer_free_page(heap->allocator, page);
+            return result;
+        }
     }
-    uint32_t capacity = ta_timer_grow_capacity(heap->capacity, heap->count + additional);
-    ta_timer_list **owners = ta_mem_alloc(heap->allocator, (size_t)capacity * sizeof(ta_timer_list *),
-                                          _Alignof(ta_timer_list *));
-    if (owners == NULL) {
-        return TA_ERR_NOMEM;
-    }
-    if (heap->owners != NULL) {
-        ta_mem_copy(owners, heap->owners, (size_t)heap->count * sizeof(ta_timer_list *));
-        ta_mem_free(heap->allocator, heap->owners,
-                    &(ta_allocator_free_params){ .size = (size_t)heap->capacity * sizeof(ta_timer_list *),
-                                                 .alignment = _Alignof(ta_timer_list *) });
-    }
-    heap->owners = owners;
-    heap->capacity = capacity;
     return TA_OK;
 }
 
@@ -307,22 +329,23 @@ static bool ta_timer_remove_selected(ta_timer_heap *heap, ta_timer_list *list, c
 
 ta_result ta_timer_heap_init(ta_timer_heap *heap, ta_allocator allocator) {
     *heap = (ta_timer_heap){ .allocator = allocator, .next_id = 1 };
+    ta_vec_init(&heap->pages, allocator, TA_VEC_LAYOUT(ta_timer_list **));
     return TA_OK;
 }
 
 void ta_timer_heap_destroy(ta_timer_heap *heap) {
     /* Lists still indexed belong to actors that outlived the system's teardown. */
     while (heap->count != 0) {
-        ta_timer_list *list = heap->owners[0];
+        ta_timer_list *list = ta_timer_owner(heap, 0);
         (void)ta_timer_remove_selected(heap, list,
                                        &(ta_timer_selection){ .any_send_id = true, .include_submitted = true });
     }
     ta_timer_free_storage(heap->allocator, &heap->orphans);
-    if (heap->owners != NULL) {
-        ta_mem_free(heap->allocator, heap->owners,
-                    &(ta_allocator_free_params){ .size = (size_t)heap->capacity * sizeof(ta_timer_list *),
-                                                 .alignment = _Alignof(ta_timer_list *) });
+    ta_timer_list ***pages = heap->pages.items;
+    for (uint32_t page = 0; page < heap->pages.count; page += 1u) {
+        ta_timer_free_page(heap->allocator, pages[page]);
     }
+    ta_vec_destroy(&heap->pages);
     *heap = (ta_timer_heap){0};
 }
 
@@ -449,7 +472,7 @@ bool ta_timer_next_due(const ta_timer_heap *heap, ta_time *out) {
     if (heap->count == 0) {
         return false;
     }
-    *out = heap->owners[0]->sends[0].due;
+    *out = ta_timer_owner(heap, 0)->sends[0].due;
     return true;
 }
 
@@ -457,7 +480,7 @@ ta_result ta_timer_pop(ta_timer_heap *heap, ta_delayed_send *out) {
     if (heap->count == 0) {
         return TA_ERR_NOT_FOUND;
     }
-    ta_timer_list *list = heap->owners[0];
+    ta_timer_list *list = ta_timer_owner(heap, 0);
     *out = ta_timer_join(list, 0);
     for (uint32_t index = 1; index < list->count; index += 1u) {
         list->sends[index - 1u] = list->sends[index];

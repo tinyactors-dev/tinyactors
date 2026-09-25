@@ -84,12 +84,19 @@ typedef struct {
     bool indexed;
 } ta_timer_list;
 
+/*
+ * The owner heap's slots live in fixed pages of TA_TIMER_PAGE_OWNERS, found
+ * through a page directory, as the actor table's do (ADR 0063). Growing adds
+ * a page and never copies the heap; only the directory of page pointers
+ * doubles. Pages live as long as the system.
+ */
+#define TA_TIMER_PAGE_OWNERS 8192u
+
 typedef struct {
     ta_allocator allocator;
     /* A binary min-heap of non-empty lists, keyed by each list's front. */
-    ta_timer_list **owners;
+    ta_vec pages; /* ta_timer_list **, one per page of owner slots */
     uint32_t count;
-    uint32_t capacity;
     ta_timer_id next_id;
     /* Submitted sends whose sending session is gone (ADR 0054). */
     ta_timer_list orphans;

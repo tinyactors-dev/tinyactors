@@ -219,14 +219,6 @@ const VARIANTS = {
     payload: (sequence) => ({ sequence, text: 'hello' }),
     // The outbound socket: counts the writes it is handed.
     options: (counters) => ({ io: { ws: { send() { counters.outbound += 1; } } } }),
-    // A core finding, reported rather than hidden: core keeps one heap entry
-    // per actor with a pending delayed send (core ADR 0054), in one array
-    // that grows by doubling and copying (ta_timer_reserve_heap in
-    // tinyactors-core/src/timer.c). Every ws actor holds its idle timeout,
-    // so core's largest block grows with the population, as the actor table
-    // did before core ADR 0063. The addon's own largest block must still
-    // stay flat.
-    coreGrowth: 'the delayed-send owner heap (tinyactors-core src/timer.c) grows by doubling',
   },
 };
 
@@ -304,11 +296,6 @@ async function measure(population, variant) {
   await system.flush();
   const bootstrapped = cpuMicros();
   const largestBlock = system.stats().memory.total.largestBlock;
-  const largestAddonBlock = Math.max(
-    ...Object.entries(system.stats().memory)
-      .filter(([name]) => name !== 'total' && name !== 'core')
-      .map(([, counters]) => counters.largestBlock),
-  );
 
   const nativeBytes = system.stats().memory.total.bytesInUse;
   const jsAfter = jsRetained();
@@ -409,7 +396,6 @@ async function measure(population, variant) {
     spawnAndBootstrap: (bootstrapped - spawnStarted) / population,
     longestSpawnUs: Number(longestSpawn) / 1e3,
     largestBlock,
-    largestAddonBlock,
     largestBefore,
     post: median(postCosts),
     inspect: median(inspectCosts),
@@ -782,23 +768,11 @@ function report(result) {
       requireFlat(what(`a page of ${PAGE_SIZE} actor IDs (us)`), ...pair('page'), PAGE_RATIO_BOUND);
       requireFlat(what('end to end (us per actor)'), ...pair('e2e'), COST_RATIO_BOUND);
       requireFlat(what('native bytes per actor'), ...pair('nativePerActor'), BYTES_RATIO_BOUND);
-      const coreGrowth = VARIANTS[variant].coreGrowth;
-      if (coreGrowth !== undefined && large.largestBlock > small.largestBlock) {
-        assert.ok(
-          large.largestAddonBlock <= small.largestAddonBlock,
-          `${variant}: the addon's largest block grew from ${small.largestAddonBlock} B to ${large.largestAddonBlock} B`,
-        );
-        console.log(
-          `scale.js: known core finding (${variant}): core's largest block grew from ${small.largestBlock} B at ` +
-            `${small.population} actors to ${large.largestBlock} B at ${large.population}: ${coreGrowth}`,
-        );
-      } else {
-        assert.ok(
-          large.largestBlock <= small.largestBlock,
-          `${variant}: the largest block grew from ${small.largestBlock} B at ${small.population} actors ` +
-            `to ${large.largestBlock} B at ${large.population}`,
-        );
-      }
+      assert.ok(
+        large.largestBlock <= small.largestBlock,
+        `${variant}: the largest block grew from ${small.largestBlock} B at ${small.population} actors ` +
+          `to ${large.largestBlock} B at ${large.population}`,
+      );
     }
     largest = results.at(-1);
   }
