@@ -170,31 +170,38 @@ static void named_origin_outlives_its_sender(void) {
     finish_system(system);
 }
 
+/* Family "snd": `a` sends hit to `target` on entry, and goes to `failed` on error.communication. */
+static ta_definition_id define_failing_sender(tna_system *system, ta_str target) {
+    ta_scxml_action_spec actions[] = {
+        { .kind = TA_SCXML_ACTION_SEND,
+          .as.send = { .event = { .kind = TA_SCXML_EVENT_NAME, .as.name = S("hit") },
+                       .target = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = target } } },
+        { 0 },
+    };
+    ta_scxml_handler_spec onentry[] = { { .actions = actions }, { 0 } };
+    ta_str to_failed[] = { S("failed"), { 0 } };
+    ta_scxml_transition_spec on_error[] = {
+        { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = S("error.communication"), .targets = to_failed }, { 0 } };
+    ta_scxml_state_spec states[] = {
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = S("a"), .onentry = onentry, .transitions = on_error },
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = S("failed") },
+        { 0 },
+    };
+    ta_scxml_spec spec = { .name = S("snd"), .states = states };
+    return define(system, &spec);
+}
+
 /*
- * A send to a name the directory has no actor for is accepted as a dead
- * letter; its record keeps the name's text after the envelope is gone.
+ * A chart's send to a name the directory has no actor for, in a family with
+ * no loader, is refused: the sender gets error.communication (napi ADR
+ * 0022, SCXML 6.2.4), and nothing becomes a dead letter.
  */
-static void unknown_name_is_a_dead_letter(void) {
+static void unknown_name_raises_error_communication(void) {
     tna_system *system = make_system();
     ta_actor_address sender_name = { .family = { .name = S("snd") }, .name = S("s2") };
-    (void)spawn(system, define_sender(system, S("#_actor_r/nobody")), &sender_name);
-    uint32_t dead = 0;
-    for (int guard = 0; !tna_system_quiet(system); guard += 1) {
-        CHECK(guard < 10);
-        tna_system_turn(system); /* the bootstrap's send is accepted as a dead letter */
-        for (const tna_turn_record *record = system->sched.records; record != NULL; record = record->next) {
-            CHECK(record->kind != TNA_RECORD_FAULT);
-            if (record->kind == TNA_RECORD_DEAD_LETTER) {
-                dead += 1u;
-                CHECK(record->has_address && record->actor == 0);
-                CHECK(text_is(record->address.family.name, "r"));
-                CHECK(text_is(record->address.name, "nobody"));
-                CHECK(record->reason == TNA_DEAD_NOT_FOUND);
-            }
-        }
-        tna_system_end_turn(system);
-    }
-    CHECK(dead == 1u);
+    ta_actor_id sender = spawn(system, define_failing_sender(system, S("#_actor_r/nobody")), &sender_name);
+    CHECK(settle(system) == 0u);
+    CHECK(in_state(system, sender, "failed"));
     finish_system(system);
 }
 
@@ -216,7 +223,7 @@ static void named_target_follows_the_directory(void) {
 
 int main(void) {
     named_origin_outlives_its_sender();
-    unknown_name_is_a_dead_letter();
+    unknown_name_raises_error_communication();
     named_target_follows_the_directory();
     puts("router_test passed");
     return 0;

@@ -128,6 +128,9 @@ ta_result tna_loads_route(tna_loads *loads, const tna_load_route *route);
 
 /* True when a load for `address` is in flight. */
 bool tna_loads_waiting(const tna_loads *loads, const ta_address *address);
+/* Whether mail for `address` would start a load: its family has a loader,
+ * or actors of it were offloaded (napi ADR 0020, core ADR 0074). */
+bool tna_loads_would_load(const tna_loads *loads, const ta_address *address);
 
 /* A load JavaScript has not been told about, oldest first. */
 typedef struct {

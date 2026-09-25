@@ -1,4 +1,1 @@
-{
-  "test496": "napi dead-letters mail between actors to an unreachable session (reason not-found, napi ADRs 0006 and 0008), where SCXML 6.2.4 requires error.communication in the sender; a routing decision, not a small fix",
-  "test521": "napi dead-letters mail between actors to an unreachable session (reason not-found, napi ADRs 0006 and 0008), where SCXML 6.2.4 requires error.communication in the sender; a routing decision, not a small fix"
-}
+{}

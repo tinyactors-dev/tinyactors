@@ -206,6 +206,23 @@ void tna_system_record_turn(tna_system *system, uint64_t started_ns) {
     tna_histogram_record(&system->metrics.turn_seconds, seconds, &exemplar);
 }
 
+void tna_system_wake_sender(tna_system *system, const ta_actor_ref *sender) {
+    if (!system->dispatching_due) {
+        return;
+    }
+    ta_actor_id actor = sender->as.runtime;
+    if (sender->kind == TA_ACTOR_REF_NAMED) {
+        ta_actor_directory_entry entry = tna_directory_find(&system->directory, sender->as.named);
+        if (entry.kind != TA_ACTOR_DIRECTORY_RESIDENT) {
+            return;
+        }
+        actor = entry.actor;
+    }
+    if (tna_sched_wake(&system->sched, actor) == TA_OK) {
+        tna_system_want_turn(system);
+    }
+}
+
 void tna_system_record_lateness(tna_system *system, ta_time due, const ta_trace_parent *trace) {
     ta_time now = ta_system_time(system->core);
     double seconds = now > due ? (double)(now - due) / 1000.0 : 0.0;

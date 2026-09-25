@@ -110,6 +110,15 @@ typedef struct {
     ta_fault *fault;
 } tna_child_params;
 
+/*
+ * Mail a chart sent to a target that does not exist when it is sent (napi
+ * ADR 0022): the sender gets error.communication instead of a dead letter.
+ */
+typedef struct {
+    tna_dead_reason reason; /* TNA_DEAD_NOT_FOUND, TNA_DEAD_DONE or TNA_DEAD_UNLOADED */
+    const ta_actor_ref *destination;
+} tna_unreachable;
+
 struct tna_system {
     tna_allocator allocator;
     tna_scratch scratch;
@@ -164,6 +173,13 @@ struct tna_system {
      */
     ta_op_status (*child_definition)(void *context, const tna_child_params *params);
     void *child_context;
+    /*
+     * The data of the error.communication a chart gets for mail to a target
+     * that does not exist (napi ADR 0022): the Node-API layer makes
+     * { reason, target }. False leaves the event without data.
+     */
+    bool (*unreachable_data)(void *context, const tna_unreachable *unreachable, ta_value *out);
+    void *unreachable_context;
     /* One record per registered I/O processor type (adapters/io.h, core ADR 0068). */
     tna_vec io_processors; /* tna_io_processor * */
     /* Turn duration and timer lateness (host_metrics.h, napi ADR 0017 section 7). */
@@ -206,6 +222,14 @@ double tna_system_overdue_seconds(const tna_system *system);
 void tna_system_record_turn(tna_system *system, uint64_t started_ns);
 /* A delayed send due at `due` fired now: records how late (host_metrics.h). */
 void tna_system_record_lateness(tna_system *system, ta_time due, const ta_trace_parent *trace);
+/*
+ * A send core dispatches outside its sender's run (a timer) failed: core
+ * raises error.communication in the sender and starts a macrostep for it,
+ * which the scheduler cannot see (napi ADR 0022). This makes the sender
+ * runnable, and asks for a turn. Nothing happens inside a run, or for a
+ * sender the table does not know.
+ */
+void tna_system_wake_sender(tna_system *system, const ta_actor_ref *sender);
 /* Installs core's log sink when JavaScript or the trace encoder wants
  * <log> records (napi ADR 0017 section 7), and the null sink otherwise. */
 ta_result tna_system_refresh_log_sink(tna_system *system);

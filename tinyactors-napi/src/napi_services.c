@@ -255,8 +255,45 @@ void tna_services_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *f
     }
 }
 
+/*
+ * The data of the error.communication a chart gets for mail to a target
+ * that does not exist (napi ADR 0022): { reason, target }, the target named
+ * as a deadLetter hook names it (an ActorID, or { family, name }).
+ */
+static bool tna_unreachable_data(void *context, const tna_unreachable *unreachable, ta_value *out) {
+    tna_napi_system *wrapper = context;
+    if (!wrapper->dm.js_usable) {
+        return false;
+    }
+    napi_env env = wrapper->env;
+    napi_handle_scope scope = NULL;
+    if (napi_open_handle_scope(env, &scope) != napi_ok) {
+        return false;
+    }
+    const ta_actor_ref *destination = unreachable->destination;
+    ta_actor_address address = { 0 };
+    if (destination->kind == TA_ACTOR_REF_NAMED) {
+        address = ta_address_view(destination->as.named);
+    }
+    napi_value target = destination->kind == TA_ACTOR_REF_NAMED
+                            ? tna_address_object(env, &address)
+                            : tna_actor_view(env, wrapper, destination->as.runtime);
+    napi_value data = NULL;
+    napi_value reason = NULL;
+    bool made = target != NULL && napi_create_object(env, &data) == napi_ok &&
+                napi_create_string_utf8(env, tna_dead_reason_name(unreachable->reason), NAPI_AUTO_LENGTH, &reason) ==
+                    napi_ok &&
+                napi_set_named_property(env, data, "reason", reason) == napi_ok &&
+                napi_set_named_property(env, data, "target", target) == napi_ok &&
+                tna_value_make(&wrapper->values, data, out);
+    napi_close_handle_scope(env, scope);
+    return made;
+}
+
 void tna_services_init(tna_napi_system *wrapper) {
     tna_children_init(wrapper);
+    wrapper->system->unreachable_data = tna_unreachable_data;
+    wrapper->system->unreachable_context = wrapper;
 }
 
 /* ------------------------------------------------------------------------

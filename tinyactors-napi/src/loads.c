@@ -121,6 +121,10 @@ tna_load *tna_loads_find(const tna_loads *loads, uint32_t index, uint32_t genera
     return load->address != NULL && load->generation == generation ? load : NULL;
 }
 
+bool tna_loads_would_load(const tna_loads *loads, const ta_address *address) {
+    return tna_loads_limit(loads, address) != 0;
+}
+
 bool tna_loads_waiting(const tna_loads *loads, const ta_address *address) {
     uint64_t index = 0;
     return tna_map_count(&loads->by_address) != 0 &&

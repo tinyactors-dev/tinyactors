@@ -46,7 +46,8 @@ function pingPong(n, { family = 'pp', last = 'end', ping = `#_actor_${family}/pi
 
 // A named ping-pong pair exchanges its messages with no JavaScript between
 // post and flush. When ping finishes (and is destroyed), pong's last ball to
-// the name is a dead letter that keeps the name.
+// the name has nowhere to go: pong gets error.communication (napi ADR 0022),
+// which it ignores, and nothing becomes a dead letter.
 async function namedPingPong() {
   const n = 100;
   const hooks = [];
@@ -69,11 +70,8 @@ async function namedPingPong() {
   assert.equal(system.stats().messages.delivered, 2 * n);
   assert.equal(system.exists(ping), false, 'ping finished and was destroyed');
   assert.equal(system.findActor({ family: 'pp', name: 'ping' }), undefined);
-  assert.deepEqual(hooks.map(([kind]) => kind), ['done', 'deadLetter']);
-  const [, dead] = hooks[1];
-  assert.deepEqual(dead.target, { family: 'pp', name: 'ping' });
-  assert.equal(dead.event, 'ball');
-  assert.equal(dead.reason, 'not-found');
+  assert.deepEqual(hooks.map(([kind]) => kind), ['done']);
+  assert.equal(system.metrics().system.errors_communication, 1, "pong's last ball raised error.communication");
   assert.equal(stateOf(pong), 'loop');
   system.close();
 }
@@ -207,7 +205,9 @@ async function namesCopyNothing() {
   assert.equal(named, session, 'a named target costs core no more than a session target');
 }
 
-// A send to a name with no actor is a dead letter that keeps the name.
+// Mail JavaScript posts to a name with no actor is a dead letter that keeps
+// the name; a chart's send to one raises error.communication in the chart
+// instead (napi ADR 0022).
 async function unknownNames() {
   const dead = [];
   const system = createSystem({ deadLetter: (record) => dead.push(record) });
@@ -218,10 +218,8 @@ async function unknownNames() {
   sender.post('go');
   system.post({ family: 'rx', name: 'ghost' }, 'boo');
   await system.flush();
-  assert.deepEqual(dead, [
-    { target: { family: 'rx', name: 'ghost' }, event: 'boo', reason: 'not-found' },
-    { target: { family: 'rx', name: 'nobody' }, event: 'hit', reason: 'not-found' },
-  ]);
+  assert.deepEqual(dead, [{ target: { family: 'rx', name: 'ghost' }, event: 'boo', reason: 'not-found' }]);
+  assert.equal(system.metrics().system.errors_communication, 1);
   system.close();
 }
 
