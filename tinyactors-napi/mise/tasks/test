@@ -18,6 +18,9 @@ run('mise', 'run', 'build')
 run('mise', 'run', 'test-native')
 run('mise', 'run', 'test-native-asan')
 run('mise', 'run', 'pack-check')
+# The W3C IRP suite against the addon, with the tools/ ECMAScript data model
+# (ADR 0019); known failures are listed in test/irp/expected-failures.json.
+run('mise', 'run', 'irp')
 
 Dir[ROOT.join('test/*.js').to_s].sort.each do |suite|
   relative = Pathname.new(suite).relative_path_from(ROOT).to_s

@@ -60,10 +60,29 @@ function scoped(body, ...names) {
   return new Function('__scope', ...names, `with (__scope) { with (this) { ${body} } }`);
 }
 
+// SCXML makes an expression that cannot be evaluated an error.execution
+// when it runs (SCXML 5.9.2), not a refused document, so a syntax error is
+// deferred to the call: the compiled function throws it.
+function deferred(error, role) {
+  const fail = () => { throw error; };
+  return role === 'location' ? { get: fail, set: fail } : fail;
+}
+
 function compile(source, role) {
   if (!ROLES.has(role)) {
     throw new TypeError(`unknown role ${role}`);
   }
+  try {
+    return compileNow(source, role);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      return deferred(error, role);
+    }
+    throw error;
+  }
+}
+
+function compileNow(source, role) {
   if (role === 'script') {
     const run = scoped(`${source}\n`);
     return function script(context) { run.call(this, scope(context)); };
