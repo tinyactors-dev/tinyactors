@@ -66,6 +66,8 @@ tna_napi_system *tna_open_this(napi_env env, napi_callback_info info);
 /* The native System of a JavaScript System object, or NULL. */
 tna_napi_system *tna_napi_system_unwrap(napi_env env, napi_value value);
 
+/* A string argument read into the call arena; false when it is not a string. */
+bool tna_text_argument(napi_env env, tna_system *system, napi_value value, ta_str *out);
 /* Adds a handle to the system's list; the handle holds the system. */
 void tna_napi_system_adopt(tna_napi_system *wrapper, tna_napi_handle *handle);
 /* Removes a handle from its system's list and frees it. */

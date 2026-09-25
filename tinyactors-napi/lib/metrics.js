@@ -50,7 +50,8 @@ const COUNTERS = [
  * definitions; `system` is core's totals (freed definitions included);
  * `host` is napi's own view: messages, memory, and what native
  * hostMetrics() reports (turn duration, timer lateness and overdue time,
- * the run queues, quarantine, faults by code, dead letters by reason).
+ * the run queues, quarantine, faults by code, dead letters by reason, and
+ * loads of unloaded actors: outcomes, duration and waiting mail).
  */
 function buildSnapshot({ startTime, time, systemName, system, definitions, host }) {
   const metrics = new Map();
@@ -99,6 +100,15 @@ function buildSnapshot({ startTime, time, systemName, system, definitions, host 
   metric('tinyactors.timers.lateness', 's', 'histogram')
     .points.push({ attributes: base, ...histogramPoint(host.native.lateness) });
   metric('tinyactors.timers.overdue', 's', 'gauge').points.push({ attributes: base, value: host.native.overdue });
+  // Loads of unloaded actors (napi ADR 0020): outcomes, how long the loader
+  // took, and the mail waiting for it.
+  const loads = metric('tinyactors.loads', '{load}', 'sum');
+  for (const [outcome, count] of Object.entries(host.native.loads)) {
+    loads.points.push({ attributes: { ...base, 'tinyactors.load.outcome': outcome }, value: count });
+  }
+  metric('tinyactors.load.duration', 's', 'histogram')
+    .points.push({ attributes: base, ...histogramPoint(host.native.load) });
+  metric('tinyactors.messages.waiting', '{message}', 'gauge').points.push({ attributes: base, value: host.native.waiting });
   const memory = metric('tinyactors.memory.usage', 'By', 'gauge');
   for (const [category, bytes] of Object.entries(host.memory)) {
     memory.points.push({ attributes: { ...base, 'tinyactors.memory.category': category }, value: bytes });

@@ -6,6 +6,7 @@
 #include "enumerate.h"
 #include "events.h"
 #include "napi_services.h"
+#include "napi_loads.h"
 #include "napi_trace.h"
 #include "pump.h"
 #include "router.h"
@@ -633,8 +634,7 @@ static napi_value tna_last_send_token_getter(napi_env env, napi_callback_info in
     return out;
 }
 
-/* A string argument read into the call arena; false when it is not a string. */
-static bool tna_text_argument(napi_env env, tna_system *system, napi_value value, ta_str *out) {
+bool tna_text_argument(napi_env env, tna_system *system, napi_value value, ta_str *out) {
     napi_valuetype type = napi_undefined;
     size_t length = 0;
     if (napi_typeof(env, value, &type) != napi_ok || type != napi_string ||
@@ -926,17 +926,13 @@ static napi_status tna_histogram_object(napi_env env, const tna_histogram *histo
     return status;
 }
 
-static const char *const tna_dead_reason_names[TNA_DEAD_REASONS] = {
-    [TNA_DEAD_NOT_FOUND] = "not-found", [TNA_DEAD_DONE] = "done", [TNA_DEAD_DESTROYED] = "destroyed",
-    [TNA_DEAD_REFUSED] = "refused",     [TNA_DEAD_UNLOADED] = "unloaded",
-};
-
 /*
  * hostMetrics(): what only the host knows, for system.metrics() (napi ADR
  * 0017 section 7): { turn, lateness (histograms, in seconds), runnable,
  * ready (queue lengths, including entries a later turn skips),
  * quarantined, overdue (seconds), faults: { code: count }, deadLetters:
- * { reason: count } }.
+ * { reason: count }, and for loads of unloaded actors (napi ADR 0020)
+ * load (a histogram, in seconds), loads: { outcome: count } and waiting }.
  */
 static napi_value tna_host_metrics_method(napi_env env, napi_callback_info info) {
     tna_napi_system *wrapper = tna_open_this(env, info);
@@ -950,6 +946,8 @@ static napi_value tna_host_metrics_method(napi_env env, napi_callback_info info)
     napi_value lateness = NULL;
     napi_value faults = NULL;
     napi_value dead = NULL;
+    napi_value load = NULL;
+    napi_value loads = NULL;
     napi_status status = napi_create_object(env, &out);
     if (status == napi_ok) status = tna_histogram_object(env, &system->metrics.turn_seconds, &turn);
     if (status == napi_ok) status = napi_set_named_property(env, out, "turn", turn);
@@ -968,9 +966,18 @@ static napi_value tna_host_metrics_method(napi_env env, napi_callback_info info)
     if (status == napi_ok) status = napi_set_named_property(env, out, "faults", faults);
     if (status == napi_ok) status = napi_create_object(env, &dead);
     for (uint32_t reason = 0; status == napi_ok && reason < TNA_DEAD_REASONS; reason += 1u) {
-        status = tna_set_number(env, dead, tna_dead_reason_names[reason], (double)sched->dead_by_reason[reason]);
+        status = tna_set_number(env, dead, tna_dead_reason_name(reason), (double)sched->dead_by_reason[reason]);
     }
     if (status == napi_ok) status = napi_set_named_property(env, out, "deadLetters", dead);
+    /* Loads of unloaded actors (napi ADR 0020): outcomes, duration, waiting mail. */
+    if (status == napi_ok) status = tna_histogram_object(env, &system->metrics.load_seconds, &load);
+    if (status == napi_ok) status = napi_set_named_property(env, out, "load", load);
+    if (status == napi_ok) status = napi_create_object(env, &loads);
+    for (uint32_t outcome = 0; status == napi_ok && outcome < TNA_LOAD_OUTCOMES; outcome += 1u) {
+        status = tna_set_number(env, loads, tna_load_outcome_name(outcome), (double)system->loads.outcomes[outcome]);
+    }
+    if (status == napi_ok) status = napi_set_named_property(env, out, "loads", loads);
+    if (status == napi_ok) status = tna_set_number(env, out, "waiting", (double)system->loads.waiting);
     if (status != napi_ok) {
         return tna_throw(env, "out-of-memory", "cannot build the host metrics object");
     }
@@ -1047,6 +1054,11 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "setLogSink", NULL, tna_set_log_sink_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "setTraceSink", NULL, tna_set_trace_sink_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "spawnTrace", NULL, tna_spawn_trace_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "setLoaderFamily", NULL, tna_set_loader_family_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "completeLoad", NULL, tna_complete_load_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "loadTrace", NULL, tna_load_trace_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "wakeAt", NULL, tna_wake_at_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "cancelWake", NULL, tna_cancel_wake_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "configureTraces", NULL, tna_configure_traces_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "setTraceWatch", NULL, tna_set_trace_watch_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "reportInvoke", NULL, tna_report_invoke_method, NULL, NULL, NULL, napi_default_method, NULL },

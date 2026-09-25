@@ -532,20 +532,24 @@ napi_value tna_spawn_trace_method(napi_env env, napi_callback_info info) {
         parent.context.detail |= TA_TRACE_DETAIL_WATCHED;
     }
     tna_system_start_trace(wrapper->system, &parent.context);
+    return tna_trace_parent_object(env, &parent);
+}
+
+napi_value tna_trace_parent_object(napi_env env, const ta_trace_parent *parent) {
     napi_value out = NULL;
-    if (parent.context.trace_id_high == 0 && parent.context.trace_id_low == 0) {
+    if (parent->context.trace_id_high == 0 && parent->context.trace_id_low == 0) {
         napi_get_undefined(env, &out);
         return out;
     }
     napi_value context = NULL;
     napi_create_object(env, &out);
     napi_create_object(env, &context);
-    tna_js_put(env, context, "trace_id_high", tna_js_bigint(env, parent.context.trace_id_high));
-    tna_js_put(env, context, "trace_id_low", tna_js_bigint(env, parent.context.trace_id_low));
-    tna_js_put(env, context, "flags", tna_js_number(env, parent.context.flags));
-    tna_js_put(env, context, "detail", tna_js_number(env, parent.context.detail));
+    tna_js_put(env, context, "trace_id_high", tna_js_bigint(env, parent->context.trace_id_high));
+    tna_js_put(env, context, "trace_id_low", tna_js_bigint(env, parent->context.trace_id_low));
+    tna_js_put(env, context, "flags", tna_js_number(env, parent->context.flags));
+    tna_js_put(env, context, "detail", tna_js_number(env, parent->context.detail));
     tna_js_put(env, out, "context", context);
-    tna_js_put(env, out, "cause", tna_js_key_object(env, &parent.cause));
+    tna_js_put(env, out, "cause", tna_js_key_object(env, &parent->cause));
     return out;
 }
 

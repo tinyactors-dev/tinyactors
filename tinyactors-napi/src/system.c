@@ -41,6 +41,7 @@ ta_result tna_system_create(tna_system **out) {
     tna_sched_init(&system->sched, tna_allocator_for(&system->allocator, TNA_MEMORY_SCHEDULING),
                    tna_allocator_for(&system->allocator, TNA_MEMORY_ENVELOPES));
     tna_directory_init(&system->directory, tna_allocator_for(&system->allocator, TNA_MEMORY_DIRECTORY));
+    tna_loads_init(&system->loads, tna_allocator_for(&system->allocator, TNA_MEMORY_DIRECTORY));
     tna_trace_watch_init(&system->trace_watch, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER));
     tna_vec_init(&system->io_processors, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER),
                  TNA_LAYOUT(tna_io_processor *));
@@ -89,6 +90,7 @@ void tna_system_close(tna_system *system) {
     (void)ta_system_set_actor_directory(system->core, (ta_actor_directory){0});
     tna_sched_discard_mail(&system->sched);
     tna_directory_clear(&system->directory);
+    tna_loads_close(&system->loads);
     /* Waiting effects hold values and addresses; what core's teardown asks
      * of a service from here on is dropped (the adapters in adapters/). */
     tna_effects_close(&system->effects);
@@ -125,15 +127,30 @@ void tna_system_free(tna_system *system) {
     free(system);
 }
 
+/* The earliest of core's next deadline and the next wake-up of an unloaded
+ * actor (napi ADR 0020); false when there is neither. */
+static bool tna_system_next_deadline(const tna_system *system, ta_time *out) {
+    ta_time deadline = 0;
+    ta_time wake = 0;
+    bool core_due = system->core != NULL && ta_system_next_deadline(system->core, &deadline) == TA_OK;
+    bool wake_due = tna_loads_next_wake(&system->loads, &wake);
+    if (!core_due && !wake_due) {
+        return false;
+    }
+    *out = !core_due ? wake : !wake_due ? deadline : (wake < deadline ? wake : deadline);
+    return true;
+}
+
 /* Something is due at core's current time. */
 static bool tna_system_due_now(const tna_system *system) {
     ta_time deadline = 0;
-    return system->core != NULL && ta_system_next_deadline(system->core, &deadline) == TA_OK &&
+    return system->core != NULL && tna_system_next_deadline(system, &deadline) &&
            deadline <= ta_system_time(system->core);
 }
 
 bool tna_system_quiet(const tna_system *system) {
     return tna_sched_quiet(&system->sched) && system->effects.count == 0 &&
+           tna_loads_pending_requests(&system->loads) == 0 &&
            (!system->tracing || system->otlp.span_count == 0) &&
            !tna_system_due_now(system);
 }
@@ -283,11 +300,21 @@ ta_result tna_system_advance_to(tna_system *system, ta_time time) {
  * the future that is earlier than the armed one (ADR 0007 point 3). A
  * deadline that is due already needs a turn, not a timer.
  */
+static void tna_system_arm(tna_system *system);
+
+void tna_system_arm_timer(tna_system *system) {
+    if (system == NULL || system->closed) {
+        return;
+    }
+    tna_system_want_turn(system);
+    tna_system_arm(system);
+}
+
 static void tna_system_arm(tna_system *system) {
     tna_clock *clock = &system->clock;
     ta_time deadline = 0;
     if (system->closed || clock->kind != TNA_CLOCK_REALTIME || clock->arm == NULL ||
-        ta_system_next_deadline(system->core, &deadline) != TA_OK) {
+        !tna_system_next_deadline(system, &deadline)) {
         return;
     }
     tna_system_sync_time(system);
@@ -337,7 +364,14 @@ void tna_system_turn(tna_system *system) {
                                        .budgets = system->budgets,
                                        .watch = &system->trace_watch,
                                    });
-    if (tna_system_due_now(system)) {
+    /* Unloaded actors whose own timers are due wake through their loader
+     * (napi ADR 0020): the request goes to JavaScript after this turn. */
+    tna_loads_fire_wakes(&system->loads, &(tna_wake_fire){ .directory = &system->directory,
+                                                           .now = ta_system_time(system->core),
+                                                           .now_ns = tna_monotonic_ns(NULL) });
+    ta_time core_deadline = 0;
+    if (ta_system_next_deadline(system->core, &core_deadline) == TA_OK &&
+        core_deadline <= ta_system_time(system->core)) {
         /*
          * Due sends go through the router into mailboxes (ADR 0006), so what
          * they deliver runs in a later turn. A refusal (a full queue) or

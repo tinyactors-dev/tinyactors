@@ -89,8 +89,27 @@ typedef enum {
     TNA_DEAD_DONE,          /* the target reached a top-level final state */
     TNA_DEAD_DESTROYED,     /* the target was destroyed or unloaded with mail waiting */
     TNA_DEAD_REFUSED,       /* core refused the message itself (for example a malformed event) */
-    TNA_DEAD_UNLOADED       /* the target is unloaded (a named address, or an actor unloaded with mail waiting) */
+    TNA_DEAD_UNLOADED,      /* the target is unloaded (a named address, or an actor unloaded with mail waiting) */
+    /* Mail that waited for a loader (napi ADR 0020): */
+    TNA_DEAD_REJECTED,      /* the loader answered "not now" */
+    TNA_DEAD_LOAD_FAILED,   /* the loader threw, or its result could not be used */
+    TNA_DEAD_LOAD_TIMEOUT,  /* the loader did not settle in time */
+    TNA_DEAD_WAITING_FULL   /* the address already had maxWaiting messages waiting */
 } tna_dead_reason;
+
+/* The reason's name as JavaScript sees it ("not-found", "load-timeout", ...). */
+const char *tna_dead_reason_name(tna_dead_reason reason);
+
+/*
+ * A mailbox that belongs to an address, not an actor: mail waiting while a
+ * loader brings the actor back (napi ADR 0020). Its envelopes have no
+ * target yet; each holds a reference to the address.
+ */
+typedef struct {
+    uint32_t first;
+    uint32_t last;
+    uint32_t count;
+} tna_mailbox;
 
 /*
  * One queued message. `event` holds its own references (data, named origin).
@@ -298,6 +317,30 @@ typedef struct {
     tna_dead_reason reason;
 } tna_dead_post;
 ta_result tna_sched_post_dead(tna_sched *sched, const tna_dead_post *post);
+/*
+ * Accepts a message into the waiting mailbox `box` of `address` (napi ADR
+ * 0020). The envelope takes its own reference to `address`. On TA_OK it
+ * owns the event's references and the waiter follows the message, as for
+ * tna_sched_post(); the limits of ADR 0005 point 9 count it. TA_ERR_BUSY
+ * and TA_ERR_NOMEM as for tna_sched_post().
+ */
+typedef struct {
+    tna_mailbox *box;
+    ta_address *address;
+    const tna_message *message;
+} tna_waiting_post;
+ta_result tna_sched_post_waiting(tna_sched *sched, const tna_waiting_post *post);
+/*
+ * The actor for the address was loaded: the waiting mail moves, in order,
+ * to the front of `to`'s mailbox, with its send() waiters, as replacement
+ * moves an incumbent's mail. It is older than anything posted to `to`
+ * directly. An idle `to` becomes ready. TA_ERR_NOT_FOUND when the table
+ * does not know `to`; TA_ERR_NOMEM (nothing moved) when `to` cannot join
+ * the ready queue. `box` is empty afterwards on TA_OK.
+ */
+ta_result tna_sched_hand_over(tna_sched *sched, tna_mailbox *box, ta_actor_id to);
+/* The load failed: every waiting message becomes a dead letter with `reason`. */
+void tna_sched_bury_waiting(tna_sched *sched, tna_mailbox *box, tna_dead_reason reason);
 /* The envelope at `index` (for tests and the router), or NULL. */
 tna_envelope *tna_sched_envelope(const tna_sched *sched, uint32_t index);
 /* Messages waiting in `actor`'s mailbox. */

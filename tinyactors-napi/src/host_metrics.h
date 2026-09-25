@@ -43,11 +43,12 @@ typedef struct {
 /* ta_result codes are small negative numbers; faults are counted by -code. */
 #define TNA_FAULT_CODES 32u
 /* tna_dead_reason, in scheduler.h. */
-#define TNA_DEAD_REASONS 5u
+#define TNA_DEAD_REASONS 9u
 
 typedef struct {
     tna_histogram turn_seconds;     /* one pump turn, wall time, hooks and services included */
     tna_histogram lateness_seconds; /* a delayed send's dispatch time minus its due time */
+    tna_histogram load_seconds;     /* a loader call, from the first message to its result (napi ADR 0020) */
     /* The trace and span of the latest sampled macrostep that began in the
      * running turn: that turn's exemplar. The trace encoder sets it. */
     tna_exemplar turn_exemplar;

@@ -54,6 +54,7 @@
 #include "allocator.h"
 #include "directory.h"
 #include "effects.h"
+#include "loads.h"
 #include "adapters/trace.h"
 #include "otlp.h"
 #include "scheduler.h"
@@ -103,6 +104,8 @@ struct tna_system {
     ta_system *core;
     tna_sched sched;
     tna_directory directory; /* installed on core at creation (ADR 0006) */
+    /* Loads of unloaded actors, and their wake-ups (loads.h, napi ADR 0020). */
+    tna_loads loads;
     tna_turn_budgets budgets;
     uint32_t due_budget;   /* due sends dispatched in one turn, at least 1 */
     tna_clock clock;
@@ -211,8 +214,10 @@ void tna_system_want_turn(tna_system *system);
 void tna_system_turn(tna_system *system);
 void tna_system_end_turn(tna_system *system);
 /*
- * No runnable or ready actors, no dead letters to report, no effects waiting
- * for JavaScript, and nothing due at core's current time (ADR 0007 point 4).
+ * No runnable or ready actors, no dead letters to report, no effects or load
+ * requests waiting for JavaScript, and nothing due at core's current time
+ * (ADR 0007 point 4). A load JavaScript is running does not count: flush()
+ * waits for it separately (pump.c).
  */
 bool tna_system_quiet(const tna_system *system);
 
@@ -232,6 +237,9 @@ void tna_system_sync_time(tna_system *system);
  * earlier than core's time; TA_ERR_BUSY inside a core call.
  */
 ta_result tna_system_advance_to(tna_system *system, ta_time time);
+/* A deadline may have moved earlier (a wake-up was added, napi ADR 0020):
+ * ask for a turn if something is due, and arm the host timer for the rest. */
+void tna_system_arm_timer(tna_system *system);
 /* The host timer fired: move time, ask for a turn, and arm for what is left. */
 void tna_system_timer_fired(tna_system *system);
 /* The default monotonic clock (CLOCK_MONOTONIC), in nanoseconds. */

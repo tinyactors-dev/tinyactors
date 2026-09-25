@@ -37,5 +37,8 @@ bool tna_trace_argument(napi_env env, napi_value value, ta_trace_parent *out);
 /* A ta_trace_parent as traceparent text (core ADR 0073), or undefined when
  * it has no trace ID or no cause. */
 napi_value tna_traceparent_value(napi_env env, const ta_trace_parent *parent);
+/* The object generated bindings read as a ta_trace_parent (spawn, load), or
+ * undefined for a parent with no trace. */
+napi_value tna_trace_parent_object(napi_env env, const ta_trace_parent *parent);
 /* The kind names, in ta_trace_kind order, for lib/tracing.js. */
 napi_value tna_trace_kind_names(napi_env env);

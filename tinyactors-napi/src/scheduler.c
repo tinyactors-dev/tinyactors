@@ -85,6 +85,17 @@ static void tna_envelopes_destroy(tna_envelopes *store) {
     store->live = 0;
 }
 
+const char *tna_dead_reason_name(tna_dead_reason reason) {
+    static const char *const names[TNA_DEAD_REASONS] = {
+        [TNA_DEAD_NOT_FOUND] = "not-found",       [TNA_DEAD_DONE] = "done",
+        [TNA_DEAD_DESTROYED] = "destroyed",       [TNA_DEAD_REFUSED] = "refused",
+        [TNA_DEAD_UNLOADED] = "unloaded",         [TNA_DEAD_REJECTED] = "rejected",
+        [TNA_DEAD_LOAD_FAILED] = "load-failed",   [TNA_DEAD_LOAD_TIMEOUT] = "load-timeout",
+        [TNA_DEAD_WAITING_FULL] = "waiting-full",
+    };
+    return (uint32_t)reason < TNA_DEAD_REASONS ? names[reason] : "not-found";
+}
+
 /* ------------------------------------------------------------------------
  * The table
  */
@@ -382,6 +393,46 @@ void tna_sched_remove(tna_sched *sched, ta_actor_id actor, tna_dead_reason reaso
     sched->known -= 1u;
 }
 
+/*
+ * Moves the list `first`..`last`, in order, to the front of `to`'s mailbox,
+ * with its send() waiters; an idle `to` becomes ready. TA_ERR_NOMEM, with
+ * nothing moved, when `to` cannot join the ready queue.
+ */
+typedef struct {
+    uint32_t first;
+    uint32_t last;
+    ta_actor_id to;
+    tna_sched_entry *entry; /* `to`'s */
+} tna_splice;
+
+static ta_result tna_sched_splice_front(tna_sched *sched, const tna_splice *splice) {
+    tna_sched_entry *to = splice->entry;
+    if (splice->first == 0) {
+        return TA_OK;
+    }
+    if (to->state == TNA_SCHED_IDLE && tna_ring_push(&sched->ready, &splice->to) != TA_OK) {
+        return TA_ERR_NOMEM;
+    }
+    for (uint32_t index = splice->first; index != 0;) {
+        tna_envelope *envelope = tna_sched_envelope(sched, index);
+        envelope->target = splice->to;
+        tna_waiter *waiter = tna_sched_waiter(sched, envelope->waiter);
+        if (waiter != NULL && waiter->state == TNA_WAITER_QUEUED) {
+            waiter->actor = splice->to;
+        }
+        index = envelope->next;
+    }
+    tna_sched_envelope(sched, splice->last)->next = to->first;
+    if (to->last == 0) {
+        to->last = splice->last;
+    }
+    to->first = splice->first;
+    if (to->state == TNA_SCHED_IDLE) {
+        to->state = TNA_SCHED_READY;
+    }
+    return TA_OK;
+}
+
 ta_result tna_sched_transfer(tna_sched *sched, const tna_sched_transfer_params *params) {
     tna_sched_entry *from = tna_sched_lookup(sched, params->from);
     tna_sched_entry *to = tna_sched_lookup(sched, params->to);
@@ -391,32 +442,40 @@ ta_result tna_sched_transfer(tna_sched *sched, const tna_sched_transfer_params *
     if (from == to || from->first == 0) {
         return TA_OK;
     }
-    if (to->state == TNA_SCHED_IDLE && tna_ring_push(&sched->ready, &params->to) != TA_OK) {
-        return TA_ERR_NOMEM;
+    ta_result result = tna_sched_splice_front(
+        sched, &(tna_splice){ .first = from->first, .last = from->last, .to = params->to, .entry = to });
+    if (result != TA_OK) {
+        return result;
     }
-    for (uint32_t index = from->first; index != 0;) {
-        tna_envelope *envelope = tna_sched_envelope(sched, index);
-        envelope->target = params->to;
-        tna_waiter *waiter = tna_sched_waiter(sched, envelope->waiter);
-        if (waiter != NULL && waiter->state == TNA_WAITER_QUEUED) {
-            waiter->actor = params->to;
-        }
-        index = envelope->next;
-    }
-    tna_sched_envelope(sched, from->last)->next = to->first;
-    if (to->last == 0) {
-        to->last = from->last;
-    }
-    to->first = from->first;
     from->first = 0;
     from->last = 0;
     if (from->state == TNA_SCHED_READY) {
         from->state = TNA_SCHED_IDLE; /* its ready-queue entry is skipped */
     }
-    if (to->state == TNA_SCHED_IDLE) {
-        to->state = TNA_SCHED_READY;
-    }
     return TA_OK;
+}
+
+ta_result tna_sched_hand_over(tna_sched *sched, tna_mailbox *box, ta_actor_id to) {
+    tna_sched_entry *entry = tna_sched_lookup(sched, to);
+    if (entry == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    ta_result result = tna_sched_splice_front(
+        sched, &(tna_splice){ .first = box->first, .last = box->last, .to = to, .entry = entry });
+    if (result == TA_OK) {
+        *box = (tna_mailbox){ 0 };
+    }
+    return result;
+}
+
+void tna_sched_bury_waiting(tna_sched *sched, tna_mailbox *box, tna_dead_reason reason) {
+    uint32_t index = box->first;
+    while (index != 0) {
+        uint32_t next = tna_sched_envelope(sched, index)->next;
+        tna_sched_dead_append(sched, index, reason);
+        index = next;
+    }
+    *box = (tna_mailbox){ 0 };
 }
 
 ta_result tna_sched_wake(tna_sched *sched, ta_actor_id actor) {
@@ -549,6 +608,38 @@ ta_result tna_sched_post(tna_sched *sched, const tna_message *message) {
     if (entry->state == TNA_SCHED_IDLE) {
         entry->state = TNA_SCHED_READY;
     }
+    return TA_OK;
+}
+
+ta_result tna_sched_post_waiting(tna_sched *sched, const tna_waiting_post *post) {
+    if (tna_sched_full(sched, post->message->bytes)) {
+        return TA_ERR_BUSY;
+    }
+    ta_trace_parent *trace = NULL;
+    if (!tna_sched_take_trace(sched, post->message, &trace)) {
+        return TA_ERR_NOMEM;
+    }
+    uint32_t index = tna_envelope_take(sched);
+    if (index == 0) {
+        if (trace != NULL) {
+            tna_free_list_give(&sched->traces, trace);
+        }
+        return TA_ERR_NOMEM;
+    }
+    tna_message message = *post->message;
+    message.target = 0; /* no actor yet: the hand-over names it */
+    tna_sched_fill(sched, index, &message, trace);
+    ta_address_retain(post->address);
+    tna_envelope *envelope = tna_sched_envelope(sched, index);
+    envelope->address = post->address; /* a dead letter names it if the load fails */
+    tna_mailbox *box = post->box;
+    if (box->last != 0) {
+        tna_sched_envelope(sched, box->last)->next = index;
+    } else {
+        box->first = index;
+    }
+    box->last = index;
+    box->count += 1u;
     return TA_OK;
 }
 

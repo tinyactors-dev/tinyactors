@@ -59,3 +59,8 @@ napi_value tna_address_object(napi_env env, const ta_actor_address *address);
 napi_value tna_event_text(napi_env env, tna_system *system, ta_event_name_id name);
 /* Calls `hook` with `argument`; the turn's first exception is kept, not thrown. */
 void tna_call_hook(napi_env env, napi_ref hook, napi_value argument, napi_value *first_error);
+/* A WARN log about `actor` (0: none) through the trace sink, when one wants
+ * logs (napi ADR 0017 section 7). */
+void tna_pump_host_log(tna_system *system, ta_actor_id actor, tna_otlp_host_log_params log);
+/* Resolves the flush() promises when the system has settled. */
+void tna_pump_settle_waiters(napi_env env, tna_napi_system *wrapper);

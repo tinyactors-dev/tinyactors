@@ -1,5 +1,6 @@
 #include "pump.h"
 
+#include "napi_loads.h"
 #include "napi_services.h"
 #include "napi_trace.h"
 
@@ -433,7 +434,7 @@ static void tna_done_record(napi_env env, tna_napi_system *wrapper, const tna_tu
 /* A WARN log about `actor` through the trace sink, when one wants logs
  * (napi ADR 0017 section 7): the actor's session and definition, if it is
  * still resident, name it. */
-static void tna_host_log(tna_system *system, ta_actor_id actor, tna_otlp_host_log_params log) {
+void tna_pump_host_log(tna_system *system, ta_actor_id actor, tna_otlp_host_log_params log) {
     if (!system->tracing) {
         return;
     }
@@ -451,7 +452,7 @@ static void tna_fault_record(napi_env env, tna_napi_system *wrapper, const tna_t
     snprintf(message, sizeof message, "%s failed: %s", record->operation, code);
     char body[200];
     int length = snprintf(body, sizeof body, "actor quarantined: %s", message);
-    tna_host_log(wrapper->system, record->actor,
+    tna_pump_host_log(wrapper->system, record->actor,
                  (tna_otlp_host_log_params){ .event_name = { "tinyactors.actor.quarantined", 28 },
                                       .body = { body, length > 0 ? (uint32_t)length : 0u },
                                       .key = { "tinyactors.fault.code", 21 },
@@ -474,14 +475,6 @@ static void tna_fault_record(napi_env env, tna_napi_system *wrapper, const tna_t
         tna_call_hook(env, wrapper->fault_hook, argument, first_error);
     }
 }
-
-static const char *const tna_dead_reasons[] = {
-    [TNA_DEAD_NOT_FOUND] = "not-found",
-    [TNA_DEAD_DONE] = "done",
-    [TNA_DEAD_DESTROYED] = "destroyed",
-    [TNA_DEAD_REFUSED] = "refused",
-    [TNA_DEAD_UNLOADED] = "unloaded",
-};
 
 /* { family, name }: a named target that had no resident actor (ADR 0006). */
 napi_value tna_address_object(napi_env env, const ta_actor_address *address) {
@@ -527,10 +520,10 @@ napi_value tna_event_text(napi_env env, tna_system *system, ta_event_name_id nam
  */
 static void tna_dead_letter_record(napi_env env, tna_napi_system *wrapper, const tna_turn_record *record,
                                    napi_value *first_error) {
-    const char *reason_text = tna_dead_reasons[record->reason];
+    const char *reason_text = tna_dead_reason_name(record->reason);
     char body[64];
     int length = snprintf(body, sizeof body, "dead-lettered: %s", reason_text);
-    tna_host_log(wrapper->system, record->actor,
+    tna_pump_host_log(wrapper->system, record->actor,
                  (tna_otlp_host_log_params){ .event_name = { "tinyactors.message.dead_lettered", 32 },
                                       .body = { body, length > 0 ? (uint32_t)length : 0u },
                                       .has_event = true,
@@ -546,7 +539,7 @@ static void tna_dead_letter_record(napi_env env, tna_napi_system *wrapper, const
                                           : tna_actor_view(env, wrapper, record->actor);
     napi_value event = tna_event_text(env, wrapper->system, record->event);
     if (view != NULL && napi_create_object(env, &argument) == napi_ok &&
-        napi_create_string_utf8(env, tna_dead_reasons[record->reason], NAPI_AUTO_LENGTH, &reason) == napi_ok &&
+        napi_create_string_utf8(env, reason_text, NAPI_AUTO_LENGTH, &reason) == napi_ok &&
         tna_set(env, argument, "target", view) == napi_ok && tna_set(env, argument, "event", event) == napi_ok &&
         tna_set(env, argument, "reason", reason) == napi_ok) {
         tna_call_hook(env, wrapper->dead_letter_hook, argument, first_error);
@@ -558,24 +551,29 @@ static void tna_dead_letter_record(napi_env env, tna_napi_system *wrapper, const
  */
 
 /* The error code a dead letter's reason gives a send() (ADR 0008). */
-static const char *const tna_dead_codes[] = {
+static const char *const tna_dead_codes[TNA_DEAD_REASONS] = {
     [TNA_DEAD_NOT_FOUND] = "not-found",
     [TNA_DEAD_DONE] = "done",
     [TNA_DEAD_DESTROYED] = "not-found",
     [TNA_DEAD_REFUSED] = "invalid",
     [TNA_DEAD_UNLOADED] = "unloaded",
+    [TNA_DEAD_REJECTED] = "rejected",
+    [TNA_DEAD_LOAD_FAILED] = "load-failed",
+    [TNA_DEAD_LOAD_TIMEOUT] = "load-timeout",
+    [TNA_DEAD_WAITING_FULL] = "waiting-full",
 };
 
 static napi_value tna_settlement_error(napi_env env, const tna_settlement *settlement) {
     char message[160];
     napi_value error = NULL;
     if (settlement->kind == TNA_SETTLE_DEAD) {
-        snprintf(message, sizeof message, "send: the message became a dead letter (%s)", tna_dead_reasons[settlement->reason]);
+        const char *reason_text = tna_dead_reason_name(settlement->reason);
+        snprintf(message, sizeof message, "send: the message became a dead letter (%s)", reason_text);
         error = tna_error(env, tna_dead_codes[settlement->reason], message);
         napi_value detail = NULL;
         napi_value reason = NULL;
         if (error != NULL && napi_create_object(env, &detail) == napi_ok &&
-            napi_create_string_utf8(env, tna_dead_reasons[settlement->reason], NAPI_AUTO_LENGTH, &reason) == napi_ok &&
+            napi_create_string_utf8(env, reason_text, NAPI_AUTO_LENGTH, &reason) == napi_ok &&
             tna_set(env, detail, "reason", reason) == napi_ok) {
             napi_set_named_property(env, error, "detail", detail);
         }
@@ -667,8 +665,16 @@ static void tna_resolve_waiters(napi_env env, tna_napi_system *wrapper) {
     }
 }
 
+/* Quiet, with no turn pending and no load waiting for its loader (napi ADR 0020). */
 static bool tna_settled(const tna_system *system) {
-    return tna_system_closed(system) || (tna_system_quiet(system) && !system->turn_pending);
+    return tna_system_closed(system) ||
+           (tna_system_quiet(system) && !system->turn_pending && system->loads.in_flight == 0);
+}
+
+void tna_pump_settle_waiters(napi_env env, tna_napi_system *wrapper) {
+    if (tna_settled(wrapper->system)) {
+        tna_resolve_waiters(env, wrapper);
+    }
 }
 
 napi_value tna_pump_flush(napi_env env, tna_napi_system *wrapper) {
@@ -716,6 +722,10 @@ static napi_value tna_turn_callback(napi_env env, napi_callback_info info) {
             } else {
                 tna_dead_letter_record(env, wrapper, record, &first_error);
             }
+        }
+        /* Loads the turn started go to lib/system.js's loader runner (napi ADR 0020). */
+        if (!tna_system_closed(system)) {
+            tna_loads_dispatch(env, wrapper, &first_error);
         }
         /* Services run after the hooks, in the order core called them (step 13). */
         tna_services_dispatch(env, wrapper, &first_error);

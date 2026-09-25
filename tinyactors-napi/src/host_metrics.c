@@ -12,6 +12,12 @@ static const double tna_lateness_bounds[] = {
     0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
 };
 
+/* Seconds. A loader reads storage: milliseconds are normal; seconds mean
+ * the store is slow, and the default timeout is five. */
+static const double tna_load_bounds[] = {
+    0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0,
+};
+
 static void tna_histogram_init(tna_histogram *histogram, const double *bounds, uint32_t count) {
     *histogram = (tna_histogram){ .bounds = bounds, .bound_count = count };
 }
@@ -22,6 +28,8 @@ void tna_host_metrics_init(tna_host_metrics *metrics) {
                        (uint32_t)(sizeof tna_turn_bounds / sizeof tna_turn_bounds[0]));
     tna_histogram_init(&metrics->lateness_seconds, tna_lateness_bounds,
                        (uint32_t)(sizeof tna_lateness_bounds / sizeof tna_lateness_bounds[0]));
+    tna_histogram_init(&metrics->load_seconds, tna_load_bounds,
+                       (uint32_t)(sizeof tna_load_bounds / sizeof tna_load_bounds[0]));
 }
 
 tna_exemplar tna_exemplar_of(const ta_trace_context *context, uint64_t span_id, uint64_t time_ns) {

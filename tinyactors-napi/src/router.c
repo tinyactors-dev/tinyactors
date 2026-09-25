@@ -4,7 +4,20 @@
 
 ta_result tna_router_post_named(tna_system *system, ta_address *address, const tna_message *message) {
     ta_actor_directory_entry entry = tna_directory_find(&system->directory, address);
-    if (entry.kind == TA_ACTOR_DIRECTORY_RESIDENT) {
+    bool resident = entry.kind == TA_ACTOR_DIRECTORY_RESIDENT;
+    if (!resident || tna_loads_waiting(&system->loads, address)) {
+        /* A load in flight holds the address's mail, or a loader starts one
+         * (napi ADR 0020); otherwise the mail goes where it went before. */
+        ta_result result = tna_loads_route(&system->loads, &(tna_load_route){ .sched = &system->sched,
+                                                                               .address = address,
+                                                                               .message = message,
+                                                                               .resident = resident,
+                                                                               .now_ns = tna_monotonic_ns(NULL) });
+        if (result != TA_ERR_NOT_FOUND) {
+            return result;
+        }
+    }
+    if (resident) {
         tna_message resolved = *message;
         resolved.target = entry.actor;
         return tna_sched_post(&system->sched, &resolved);

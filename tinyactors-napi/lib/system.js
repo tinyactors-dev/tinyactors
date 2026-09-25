@@ -110,6 +110,10 @@ class System {
   // watches and for metrics().
   #watches = new Set();
   #definitionIdentities = new Map();
+  // Loaders by family (napi ADR 0020), and why the last load of an address
+  // failed, for the deadLetter hook's `detail`.
+  #loaders = new Map();
+  #loadDetails = new Map();
   #startTime = Date.now();
   #metricsName = String((systemCount += 1));
   // Aborted on close(): the signal every EffectContext carries.
@@ -129,14 +133,18 @@ class System {
    *   reported per turn; scheduling.maxQueuedMessages: post() throws
    *   `queue-full` beyond it (ADR 0005);
    * - done({ actor, finalState, data }), fault({ actor, operation, code,
-   *   message }) and deadLetter({ target, event, reason }): hooks the pump
-   *   calls at the end of a turn (ADRs 0008, 0012).
+   *   message }) and deadLetter({ target, event, reason, detail? }): hooks
+   *   the pump calls at the end of a turn (ADRs 0008, 0012). `detail` says
+   *   why a load failed, for mail that waited for a loader (napi ADR 0020).
    */
   constructor(options) {
     if (options !== undefined && (options === null || typeof options !== 'object')) {
       throw new TinyactorsError('createSystem options must be an object', 'invalid');
     }
-    this.#native = new native.System(this, options);
+    const deadLetter = options?.deadLetter;
+    const nativeOptions = typeof deadLetter !== 'function' ? options
+      : { ...options, deadLetter: (letter) => deadLetter(this.#withLoadDetail(letter)) };
+    this.#native = new native.System(this, nativeOptions);
     this.#events = new EventNames(this.#native);
     const { io, invokers, log } = options ?? {};
     for (const [type, processor] of Object.entries(servicesOf(io, 'createSystem(): io'))) {
@@ -411,6 +419,12 @@ class System {
   // One service effect, in the order core made the calls (napi_services.h).
   #effect(kind, payload) {
     switch (kind) {
+      case 'loads':
+        // Loads the turn started (napi ADR 0020); each finishes itself.
+        for (const request of payload) {
+          this.#runLoad(request).catch(() => {});
+        }
+        return;
       case 'log':
         this.#logSink?.(payload);
         return;
@@ -988,9 +1002,11 @@ class System {
   /**
    * Evict a named actor (core ADR 0014): `image` must be a capture of it
    * taken since its last change (`stale` otherwise). The directory keeps its
-   * address as unloaded, so mail to the address becomes a dead letter with
-   * reason `unloaded` until load() brings it back; its delayed sends travel
-   * in the image. Throws `busy` while the actor has mail waiting, is inside
+   * address as unloaded, so mail to the address waits for its family's
+   * loader (setLoader, napi ADR 0020), or becomes a dead letter with reason
+   * `unloaded` when there is none, until load() brings it back. Its delayed
+   * sends travel in the image, and their next deadline is registered with
+   * wakeAt(), so they wake it through the loader. Throws `busy` while the actor has mail waiting, is inside
    * a macrostep, or is quarantined, so unloading never drops accepted mail.
    * Its ActorID is stale afterwards.
    */
@@ -1002,6 +1018,11 @@ class System {
       throw new TinyactorsError(`unload(): the actor is ${scheduling}; unload it once it is idle`, 'busy');
     }
     core.actor_unload(this.#native, slot, generation, handle);
+    // Its own timers wake it through its family's loader (napi ADR 0020).
+    const due = image.nextDeadline;
+    if (due !== undefined && image.address !== undefined) {
+      this.#native.wakeAt(image.address.family, image.address.name, due);
+    }
   }
 
   /**
@@ -1014,7 +1035,7 @@ class System {
    */
   load(image, options = {}) {
     const handle = handleOf(image, this, 'load()');
-    const id = core.actor_load(this.#native, handle, this.#bindingFor(image, options));
+    const id = core.actor_load(this.#native, handle, this.#bindingFor(image, options), undefined);
     return new ActorID(this, id.slot, id.generation);
   }
 
@@ -1035,6 +1056,209 @@ class System {
   removeUnloaded(address) {
     const { family, name } = addressOf(address, 'removeUnloaded()');
     core.actor_remove_unloaded(this.#native, { family: { name: family }, name });
+    this.#native.cancelWake(family, name);
+  }
+
+  /**
+   * Bring actors of `family` back when mail arrives for them (napi ADR
+   * 0020). Mail for a name in `family` that has no resident actor (it is
+   * unloaded, or there has never been one here: the family is virtual)
+   * waits while `loader(address, why)` runs; `why` is "mail", or "timer"
+   * when an unloaded actor's own delayed send is due. The loader returns,
+   * or resolves to:
+   * - a SessionImage of this system: it is loaded (as load() does), and
+   *   the waiting mail is delivered first, in order;
+   * - { image, restore }: the image is loaded, and `await restore(actor)`
+   *   runs before the waiting mail is delivered (for replaying a log);
+   * - { spawn: definition, binding? }: a new actor of `definition` (of this
+   *   family) at the address, for example from data the application
+   *   stored; the waiting mail is delivered first;
+   * - "not-found": dead letters with reason `not-found`;
+   * - "reject" or { reject: reason }: "not now", as during a shutdown: dead
+   *   letters with reason `rejected`.
+   * A thrown error is `load-failed`; a loader that has not settled after
+   * `timeout` ms (default 5000) is `load-timeout`, and a result that comes
+   * later is discarded (an image in it is destroyed). One load runs per
+   * address; at most `maxWaiting` messages (default 1000) wait, and the rest
+   * are dead letters with reason `waiting-full`. Pass `null` as the loader
+   * to remove it.
+   */
+  setLoader(family, loader, options = {}) {
+    if (typeof family !== 'string' || family === '') {
+      throw new TinyactorsError('setLoader(): expected a family name', 'invalid');
+    }
+    if (loader === null || loader === undefined) {
+      this.#loaders.delete(family);
+      this.#native.setLoaderFamily(family, 0);
+      return;
+    }
+    if (typeof loader !== 'function') {
+      throw new TinyactorsError('setLoader(): expected a loader function or null', 'invalid');
+    }
+    if (options === null || typeof options !== 'object') {
+      throw new TinyactorsError('setLoader(): expected options { timeout, maxWaiting }', 'invalid');
+    }
+    const { timeout = 5000, maxWaiting = 1000 } = options;
+    for (const [what, value] of [['timeout', timeout], ['maxWaiting', maxWaiting]]) {
+      if (!Number.isSafeInteger(value) || value < 1 || value > 0xffffffff) {
+        throw new TinyactorsError(`setLoader(): ${what} must be a positive integer`, 'invalid');
+      }
+    }
+    this.#loaders.set(family, { loader, timeout, maxWaiting });
+    this.#native.setLoaderFamily(family, maxWaiting);
+  }
+
+  /**
+   * Wake the unloaded actor at `address` ({ family, name }) at `time`
+   * (core's clock) through its family's loader, with `why` "timer" (napi
+   * ADR 0020). unload() does this for the image's next deadline.
+   */
+  wakeAt(address, time) {
+    const { family, name } = addressOf(address, 'wakeAt()');
+    this.#native.wakeAt(family, name, time);
+  }
+
+  // Runs one load the pump started (napi ADR 0020) and finishes it.
+  async #runLoad({ index, generation, family, name, why }) {
+    const key = `${family}\u0000${name}`;
+    this.#loadDetails.delete(key);
+    const entry = this.#loaders.get(family);
+    if (entry === undefined) {
+      this.#completeLoad(index, generation, 'not-found');
+      return;
+    }
+    const address = { family, name };
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        this.#failLoad(key, { index, generation }, 'timed-out', `the loader did not settle within ${entry.timeout} ms`);
+      }
+    }, entry.timeout);
+    timer.unref?.();
+    let result;
+    try {
+      result = await entry.loader(address, why);
+    } catch (error) {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        this.#failLoad(key, { index, generation }, 'failed', describe(error));
+      }
+      return;
+    }
+    if (settled) {
+      discardLoad(result); // the load timed out: nothing may use this result
+      return;
+    }
+    settled = true;
+    clearTimeout(timer);
+    try {
+      await this.#applyLoad({ index, generation, key, address }, result);
+    } catch (error) {
+      this.#failLoad(key, { index, generation }, 'failed', describe(error));
+    }
+  }
+
+  // Acts on a loader's result (setLoader()).
+  async #applyLoad(load, result) {
+    if (this.closed) {
+      discardLoad(result);
+      return;
+    }
+    const { index, generation, key } = load;
+    if (result === 'not-found') {
+      this.#completeLoad(index, generation, 'not-found');
+    } else if (result === 'reject') {
+      this.#failLoad(key, load, 'rejected', '');
+    } else if (result !== null && typeof result === 'object' && 'reject' in result) {
+      this.#failLoad(key, load, 'rejected', String(result.reject));
+    } else if (result instanceof SessionImage) {
+      this.#completeLoad(index, generation, 'loaded', this.#loadImage(result, load));
+    } else if (result !== null && typeof result === 'object' && result.image instanceof SessionImage) {
+      const actor = this.#loadImage(result.image, load);
+      if (typeof result.restore === 'function') {
+        await result.restore(actor);
+      }
+      if (!this.closed) {
+        this.#completeLoad(index, generation, 'loaded', actor);
+      }
+    } else if (result !== null && typeof result === 'object' && result.spawn instanceof Definition) {
+      this.#completeLoad(index, generation, 'spawned', this.#spawnAt(result.spawn, result.binding, load));
+    } else {
+      this.#failLoad(key, load, 'failed', 'the loader returned something it cannot: expected a SessionImage, ' +
+        '{ image, restore }, { spawn, binding }, "not-found", "reject" or { reject }');
+    }
+  }
+
+  // Loads a loader's image under the trace of the mail that caused the load.
+  #loadImage(image, { index, generation, address }) {
+    const handle = handleOf(image, this, "setLoader(): the loader's image");
+    if (image.address === undefined || image.address.family !== address.family ||
+        image.address.name !== address.name) {
+      throw new TinyactorsError(`the loader returned an image of another address than ${address.family}/${address.name}`,
+        'invalid');
+    }
+    const id = core.actor_load(this.#native, handle, this.#bindingFor(image, {}),
+      this.#native.loadTrace(index, generation));
+    return new ActorID(this, id.slot, id.generation);
+  }
+
+  // Spawns a loader's { spawn, binding } at the load's address.
+  #spawnAt(definition, binding, { index, generation, address }) {
+    if (definition.system !== this || definition.identity.family !== address.family) {
+      throw new TinyactorsError(`{ spawn } needs a definition of family ${address.family} of this system`, 'invalid');
+    }
+    if (this.#unloadedAt(address)) {
+      this.removeUnloaded(address); // the application's data replaces the image
+    }
+    const id = core.actor_spawn(this.#native, definition.id, { family: { name: address.family }, name: address.name },
+      binding, undefined, this.#native.loadTrace(index, generation));
+    return new ActorID(this, id.slot, id.generation);
+  }
+
+  // True when the directory keeps `address` as unloaded.
+  #unloadedAt({ family, name }) {
+    try {
+      core.actor_find(this.#native, { family: { name: family }, name });
+      return false;
+    } catch (error) {
+      if (error instanceof TinyactorsError && error.code === 'unloaded') {
+        return true;
+      }
+      if (error instanceof TinyactorsError && error.code === 'not-found') {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  #completeLoad(index, generation, outcome, actor) {
+    if (!this.closed) {
+      this.#native.completeLoad(index, generation, outcome, actor?.slot, actor?.generation);
+    }
+  }
+
+  #failLoad(key, { index, generation }, outcome, detail) {
+    if (this.closed) {
+      return;
+    }
+    if (detail !== '') {
+      this.#loadDetails.set(key, detail);
+    }
+    this.#native.completeLoad(index, generation, outcome, undefined, undefined, detail);
+  }
+
+  // A dead letter of mail that waited for a failed load carries why it failed.
+  #withLoadDetail(letter) {
+    if ((letter.reason === 'rejected' || letter.reason === 'load-failed' || letter.reason === 'load-timeout') &&
+        !(letter.target instanceof ActorID)) {
+      const detail = this.#loadDetails.get(`${letter.target.family}\u0000${letter.target.name}`);
+      if (detail !== undefined) {
+        return { ...letter, detail };
+      }
+    }
+    return letter;
   }
 
   /**
@@ -1315,6 +1539,20 @@ class PreparedActor extends ActorID {
 
 function createSystem(options) {
   return new System(options);
+}
+
+// The text of what a loader threw, for a log and a dead letter's `detail`.
+function describe(error) {
+  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+}
+
+// A loader's result that came too late or cannot be used: its image goes.
+function discardLoad(result) {
+  if (result instanceof SessionImage) {
+    result.destroy();
+  } else if (result !== null && typeof result === 'object' && result.image instanceof SessionImage) {
+    result.image.destroy();
+  }
 }
 
 module.exports = { System, createSystem, nativeOf, ActorID, PreparedActor, SessionImage };

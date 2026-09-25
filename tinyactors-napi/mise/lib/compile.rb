@@ -122,6 +122,7 @@ module NapiCompile
     src/addon.c
     src/gen/ta_napi.c
     src/napi_datamodel.c
+    src/napi_loads.c
     src/napi_services.c
     src/napi_system.c
     src/napi_trace.c

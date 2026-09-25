@@ -12,9 +12,10 @@
  * - a runtime ID is used as it is (core already turned a session ID into the
  *   current runtime ID, core ADR 0066);
  * - a named address is resolved through the system's directory (ADR 0006
- *   point 1). A name with no resident actor is not a router error: the event
- *   is accepted as a dead letter with reason `not-found`, or `unloaded` for
- *   an unloaded entry (loading one is ROADMAP step 14).
+ *   point 1). A name with no resident actor is not a router error: when its
+ *   family has a loader, the event waits while the loader brings the actor
+ *   back (loads.h, napi ADR 0020); otherwise it is accepted as a dead letter
+ *   with reason `not-found`, or `unloaded` for an unloaded entry.
  *
  * The envelope keeps the event by retaining it (tinyactors-core ADRs 0050
  * and 0065): the data, and a named origin's address, are shared, never
@@ -29,8 +30,10 @@ typedef struct tna_system tna_system;
 ta_external_event_router tna_router_adapter(tna_system *system);
 
 /*
- * Accepts a message for a named destination, as submit() does: the resident
- * actor's mailbox, or a dead letter when the name has none. `message->target`
+ * Accepts a message for a named destination, as submit() does: the waiting
+ * mailbox of a load in flight for it, or of a new load when its family has
+ * a loader and it has no resident actor (napi ADR 0020); otherwise the
+ * resident actor's mailbox, or a dead letter when the name has none. `message->target`
  * is ignored. On TA_OK the system owns the event's references and the waiter;
  * `address` stays the caller's. TA_ERR_BUSY: the queue is full;
  * TA_ERR_NOMEM: nothing accepted.

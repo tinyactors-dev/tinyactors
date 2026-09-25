@@ -73,10 +73,47 @@ export interface DeadLetterRecord {
   readonly target: ActorID | ActorAddress;
   readonly event: EventName;
   /**
-   * `unloaded`: a name whose actor is unloaded (load() brings it back; mail is
-   * not held for it), or mail left for an actor unloaded through the raw layer.
+   * `unloaded`: a name whose actor is unloaded and whose family has no
+   * loader (setLoader), or mail left for an actor unloaded through the raw
+   * layer. Mail that waited for a loader (napi ADR 0020) ends as `rejected`
+   * (the loader said "not now"), `load-failed`, `load-timeout`, or
+   * `waiting-full` (the address already had maxWaiting messages waiting).
    */
-  readonly reason: "not-found" | "done" | "destroyed" | "refused" | "unloaded";
+  readonly reason:
+    | "not-found"
+    | "done"
+    | "destroyed"
+    | "refused"
+    | "unloaded"
+    | "rejected"
+    | "load-failed"
+    | "load-timeout"
+    | "waiting-full";
+  /** Why the load failed: the rejection's reason, the loader's error, or the timeout. */
+  readonly detail?: string;
+}
+
+/** Why a loader is called (setLoader). */
+export type LoadReason = "mail" | "timer";
+
+/**
+ * What a loader returns (setLoader, napi ADR 0020). Session images are
+ * process-local: after a process exit, rebuild an actor from the data the
+ * application stored ({ spawn, binding }), or replay a log.
+ */
+export type LoadResult<Data extends object = object> =
+  | SessionImage<Data>
+  | { readonly image: SessionImage<Data>; readonly restore?: (actor: ActorID) => unknown }
+  | { readonly spawn: Definition<Data>; readonly binding?: Partial<Data> | Data }
+  | "not-found"
+  | "reject"
+  | { readonly reject: unknown };
+
+export interface LoaderOptions {
+  /** Milliseconds the loader may take; after that its mail is `load-timeout` (default 5000). */
+  readonly timeout?: number;
+  /** Messages that may wait for one address; the rest are `waiting-full` (default 1000). */
+  readonly maxWaiting?: number;
 }
 
 export interface SchedulingOptions {
@@ -166,8 +203,10 @@ export interface System {
   /**
    * Evict a named actor with a capture taken since its last change (`stale`
    * otherwise). Throws `busy` while it has mail waiting, is inside a
-   * macrostep, or is quarantined. Mail to its address is then a dead letter
-   * with reason `unloaded` until load(); its ActorID is stale.
+   * macrostep, or is quarantined. Mail to its address then waits for its
+   * family's loader (setLoader), or is a dead letter with reason `unloaded`
+   * when there is none; its ActorID is stale. The image's next deadline is
+   * registered with wakeAt(), so its own timers wake it through the loader.
    */
   unload(actor: ActorID, image: SessionImage): void;
 
@@ -194,6 +233,26 @@ export interface System {
 
   /** Release the address of an actor that stays unloaded; load() of its image then fails with `stale`. */
   removeUnloaded(address: ActorAddress): void;
+
+  /**
+   * Bring actors of `family` back when mail arrives for them (napi ADR
+   * 0020). Mail for a name in `family` with no resident actor (unloaded, or
+   * never seen here: the family is virtual) waits while the loader runs,
+   * and is delivered first, in order, once it has loaded or spawned the
+   * actor. One load runs per address. `why` is "timer" when an unloaded
+   * actor's own delayed send is due. `null` removes the loader.
+   */
+  setLoader(
+    family: string,
+    loader: ((address: ActorAddress, why: LoadReason) => LoadResult | Promise<LoadResult>) | null,
+    options?: LoaderOptions,
+  ): void;
+
+  /**
+   * Wake the unloaded actor at `address` through its family's loader at
+   * `time` (core's clock). unload() does this for the image's next deadline.
+   */
+  wakeAt(address: ActorAddress, time: number): void;
 
   /** Create an unpublished replacement for the named actor `incumbent` (Actor.prepareReplacement). */
   prepareReplacement<Data extends object>(
