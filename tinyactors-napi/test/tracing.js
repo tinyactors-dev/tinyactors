@@ -253,6 +253,40 @@ async function traceparentOut() {
   system.close();
 }
 
+// napi ADR 0017 section 6: a processor's asynchronous reply stays in the
+// trace of the step that sent the request, as a child of that step.
+async function repliesStayInTheTrace() {
+  const system = createSystem({
+    io: {
+      webhook: {
+        send: (request, context) => {
+          setImmediate(() => context.post(request.source, 'answer'));
+        },
+      },
+    },
+  });
+  const sink = recorder(system);
+  const definition = system.define(
+    statechart({ family: 'asker', revision: 'v1' })
+      .state('idle', (s) => {
+        s.on('go', (t) => t.send('call', (m) => m.via('webhook').to('client-7')));
+        s.on('answer', (t) => t.target('answered'));
+      })
+      .state('answered'),
+  );
+  const actor = system.spawn(definition);
+  await system.flush();
+  system.post(actor, 'go', undefined, { traceparent: traceparent('00f067aa0ba902b7') });
+  await system.flush();
+  await new Promise((resolve) => setImmediate(resolve));
+  await system.flush();
+  const goStep = named(sink.spans, 'scxml.microstep go');
+  const answer = named(sink.spans, 'scxml.macrostep answer');
+  assert.equal(answer.traceId, TRACE_ID, 'the reply is in the request\'s trace');
+  assert.equal(answer.parentSpanId, goStep.spanId, 'the reply is a child of the step that sent the request');
+  system.close();
+}
+
 // Values only when asked for; links instead of parents when asked for.
 async function valuesAndLinks() {
   const system = createSystem();
@@ -380,6 +414,7 @@ async function watchAndSample() {
   helpers();
   await causality();
   await traceparentOut();
+  await repliesStayInTheTrace();
   await valuesAndLinks();
   await lifecycle();
   console.log('tracing.js passed');

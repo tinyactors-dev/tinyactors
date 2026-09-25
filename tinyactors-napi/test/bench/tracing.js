@@ -73,8 +73,8 @@ const variants = {
   traceparent: { traceparent: SAMPLED },
   'sampled out': { install: (system) => system.setTraceSink(() => {}), traceparent: UNSAMPLED },
   macrosteps: { install: (system) => system.setTraceSink(() => {}, { kinds: ['macrostepBegin', 'macrostepEnd'] }) },
-  'every record': { install: (system) => system.setTraceSink((bytes) => { bytesOut += bytes.length; }) },
-  decoded: { install: (system) => system.setTraceSink((bytes) => { decodeTraces(bytes); }) },
+  'every record': { install: (system) => system.setTraceSink((bytes) => { bytesOut += bytes.length; }, { detail: 'full' }) },
+  decoded: { install: (system) => system.setTraceSink((bytes) => { decodeTraces(bytes); }, { detail: 'full' }) },
 };
 const budgeted = ['traceparent', 'sampled out'];
 

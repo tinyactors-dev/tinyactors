@@ -279,9 +279,58 @@ static ta_str tna_name_text(const tna_otlp *otlp, const tna_otlp_name *slot) {
     return (ta_str){ (const char *)otlp->names.data + slot->at, slot->len };
 }
 
+/*
+ * Drops the names of definitions core has freed (napi ADR 0017 section 5).
+ * Keys hold the definition's generation, so a stale entry never matches;
+ * this only reclaims its room. The table is rebuilt in place, and the
+ * labels still used move to the front of `names`.
+ */
+static void tna_names_sweep(tna_otlp *otlp) {
+    uint32_t capacity = otlp->name_capacity;
+    size_t text = 0;
+    for (uint32_t at = 0; at < capacity; at += 1u) {
+        tna_otlp_name *slot = &otlp->name_slots[at];
+        ta_definition_inspection view;
+        if (slot->used && ta_definition_inspect(otlp->config.core, slot->definition, &view) != TA_OK) {
+            slot->used = false;
+            otlp->name_count -= 1u;
+        } else if (slot->used) {
+            text += slot->len;
+        }
+    }
+    /* The labels still used, copied to a fresh buffer; without memory for
+     * it, their text stays where it is and only the slots are reclaimed. */
+    tna_otlp_buf names;
+    tna_buf_init(&names, otlp->config.allocator);
+    bool compact = text == 0 || tna_buf_room(&names, text);
+    for (uint32_t at = 0; compact && at < capacity; at += 1u) {
+        tna_otlp_name *slot = &otlp->name_slots[at];
+        if (slot->used) {
+            size_t from = slot->at;
+            slot->at = names.len;
+            tna_put_bytes(&names, otlp->names.data + from, slot->len);
+        }
+    }
+    if (compact) {
+        tna_buf_free(&otlp->names);
+        otlp->names = names;
+    }
+    /* Reinsert what is left, so no probe run has a hole in it. */
+    for (uint32_t at = 0; at < capacity; at += 1u) {
+        tna_otlp_name entry = otlp->name_slots[at];
+        if (entry.used) {
+            otlp->name_slots[at].used = false;
+            *tna_name_slot(otlp, entry.definition, entry.tag) = entry;
+        }
+    }
+}
+
 /* Caches `otlp->label` under (definition, tag); the label as cached, or empty. */
 static ta_str tna_name_keep(tna_otlp *otlp, uint64_t definition, uint32_t tag) {
     ta_str label = { (const char *)otlp->label.data, (uint32_t)otlp->label.len };
+    if ((otlp->name_count + 1u) * 10u > otlp->name_capacity * 7u && otlp->name_capacity != 0) {
+        tna_names_sweep(otlp);
+    }
     if ((otlp->name_count + 1u) * 10u > otlp->name_capacity * 7u && !tna_names_grow(otlp)) {
         return label;
     }
@@ -539,6 +588,8 @@ static const char *const tna_event_types[] = { "external", "internal", "platform
 
 static ta_str tna_cstr(const char *text) { return (ta_str){ text, (uint32_t)strlen(text) }; }
 
+static void tna_span_init(tna_otlp_span *span, ta_allocator allocator);
+
 void tna_otlp_init(tna_otlp *otlp, const tna_otlp_config *config) {
     *otlp = (tna_otlp){ .config = *config };
     ta_allocator allocator = config->allocator;
@@ -549,6 +600,7 @@ void tna_otlp_init(tna_otlp *otlp, const tna_otlp_config *config) {
     tna_buf_init(&otlp->scratch, allocator);
     tna_buf_init(&otlp->label, allocator);
     tna_buf_init(&otlp->text, allocator);
+    tna_span_init(&otlp->lifecycle, allocator);
 }
 
 ta_result tna_otlp_set_resource(tna_otlp *otlp, const tna_otlp_attribute *attributes, uint32_t count) {
@@ -587,13 +639,75 @@ static void tna_span_reset(tna_otlp_span *span) {
     span->events.len = 0;
 }
 
+static uint32_t tna_open_hash(uint64_t session) {
+    session ^= session >> 33;
+    session *= 0xff51afd7ed558ccdull;
+    session ^= session >> 33;
+    return (uint32_t)session;
+}
+
+/* The index slot holding `session`, or the empty slot where it would go. */
+static uint32_t tna_open_slot(const tna_otlp *otlp, uint64_t session) {
+    uint32_t mask = otlp->open_index_capacity - 1u;
+    uint32_t at = tna_open_hash(session) & mask;
+    while (otlp->open_index[at] != 0 && otlp->open[otlp->open_index[at] - 1u].session != session) {
+        at = (at + 1u) & mask;
+    }
+    return at;
+}
+
 static tna_otlp_open *tna_open_find(tna_otlp *otlp, uint64_t session) {
-    for (uint32_t at = otlp->open_count; at > 0; at -= 1u) {
-        if (otlp->open[at - 1u].session == session) {
-            return &otlp->open[at - 1u];
+    if (otlp->open_count == 0) {
+        return NULL;
+    }
+    uint32_t entry = otlp->open_index[tna_open_slot(otlp, session)];
+    return entry == 0 ? NULL : &otlp->open[entry - 1u];
+}
+
+static void tna_open_index_free(tna_otlp *otlp) {
+    if (otlp->open_index != NULL) {
+        ta_allocator allocator = otlp->config.allocator;
+        allocator.v->free(allocator.self,
+                          &(ta_allocator_free_params){ .ptr = otlp->open_index,
+                                                       .size = (size_t)otlp->open_index_capacity * sizeof(uint32_t),
+                                                       .alignment = _Alignof(uint32_t) });
+    }
+    otlp->open_index = NULL;
+    otlp->open_index_capacity = 0;
+}
+
+/* An index twice the size of the open array, rebuilt from the open entries. */
+static bool tna_open_index_build(tna_otlp *otlp, uint32_t capacity) {
+    ta_allocator allocator = otlp->config.allocator;
+    uint32_t *index = allocator.v->alloc(allocator.self, (size_t)capacity * sizeof(uint32_t), _Alignof(uint32_t));
+    if (index == NULL) {
+        return false;
+    }
+    memset(index, 0, (size_t)capacity * sizeof(uint32_t));
+    tna_open_index_free(otlp);
+    otlp->open_index = index;
+    otlp->open_index_capacity = capacity;
+    for (uint32_t at = 0; at < otlp->open_count; at += 1u) {
+        otlp->open_index[tna_open_slot(otlp, otlp->open[at].session)] = at + 1u;
+    }
+    return true;
+}
+
+/* Removes `session` from the index, shifting the probe run back over the gap. */
+static void tna_open_unindex(tna_otlp *otlp, uint64_t session) {
+    uint32_t mask = otlp->open_index_capacity - 1u;
+    uint32_t hole = tna_open_slot(otlp, session);
+    otlp->open_index[hole] = 0;
+    for (uint32_t at = (hole + 1u) & mask; otlp->open_index[at] != 0; at = (at + 1u) & mask) {
+        uint32_t home = tna_open_hash(otlp->open[otlp->open_index[at] - 1u].session) & mask;
+        /* Move it into the hole unless its home lies cyclically in (hole, at]. */
+        bool stays = hole <= at ? (home > hole && home <= at) : (home > hole || home <= at);
+        if (!stays) {
+            otlp->open_index[hole] = otlp->open_index[at];
+            otlp->open_index[at] = 0;
+            hole = at;
         }
     }
-    return NULL;
 }
 
 /* A fresh open entry for `session`, reusing a spare one when there is one. */
@@ -624,21 +738,29 @@ static tna_otlp_open *tna_open_add(tna_otlp *otlp, uint64_t session) {
         otlp->open = open;
         otlp->open_capacity = capacity;
     }
+    if (otlp->open_index_capacity < otlp->open_capacity * 2u &&
+        !tna_open_index_build(otlp, otlp->open_capacity * 2u)) {
+        return NULL;
+    }
     tna_otlp_open *entry = &otlp->open[otlp->open_count++];
     entry->session = session;
     entry->has_micro = false;
     tna_span_reset(&entry->macro);
     tna_span_reset(&entry->micro);
+    otlp->open_index[tna_open_slot(otlp, session)] = otlp->open_count;
     return entry;
 }
 
 /* Removes an open entry, keeping its buffers as the spare past the end. */
 static void tna_open_remove(tna_otlp *otlp, tna_otlp_open *entry) {
+    tna_open_unindex(otlp, entry->session);
     tna_otlp_open *last = &otlp->open[otlp->open_count - 1u];
     if (entry != last) {
+        uint32_t moved = tna_open_slot(otlp, last->session);
         tna_otlp_open spare = *entry;
         *entry = *last;
         *last = spare;
+        otlp->open_index[moved] = (uint32_t)(entry - otlp->open) + 1u;
     }
     otlp->open_count -= 1u;
 }
@@ -1084,12 +1206,13 @@ static bool tna_lifecycle(tna_otlp *otlp, const ta_trace_record *record, uint64_
             return false;
         }
     }
-    /* Built in the spare past the open entries, which nothing else uses now. */
-    tna_otlp_open *spare = tna_open_add(otlp, record->key.session);
-    if (spare == NULL) {
-        return false;
+    uint32_t wanted = (record->context.detail & TA_TRACE_DETAIL_WATCHED) != 0 ? otlp->config.wanted_watched_kinds
+                                                                              : otlp->config.wanted_kinds;
+    if ((wanted & TA_TRACE_BIT(record->kind)) == 0) {
+        return true;
     }
-    tna_otlp_span *span = &spare->macro;
+    tna_otlp_span *span = &otlp->lifecycle;
+    tna_span_reset(span);
     bool ok = tna_span_open(otlp, span, record, now) &&
               tna_span_name(span, LIT("scxml."), tna_cstr(tna_kind_names[record->kind])) &&
               tna_cause_attributes(&span->attributes, F_SPAN_ATTRIBUTES, &record->cause) &&
@@ -1100,7 +1223,6 @@ static bool tna_lifecycle(tna_otlp *otlp, const ta_trace_record *record, uint64_
         tna_span_parent(otlp, span, &record->cause);
         ok = tna_span_end(otlp, span, now);
     }
-    tna_open_remove(otlp, spare);
     return ok;
 }
 
@@ -1109,7 +1231,12 @@ void tna_otlp_write(tna_otlp *otlp, const ta_trace_record *record) {
         otlp->dropped += 1u;
         return;
     }
-    uint64_t now = otlp->config.host.now(otlp->config.host.self);
+    /* The clock is read at span boundaries only; span events use that reading. */
+    uint64_t now = otlp->last_now;
+    if (record->kind <= TA_TRACE_MICROSTEP && record->kind != TA_TRACE_CONDITION) {
+        now = otlp->config.host.now(otlp->config.host.self);
+        otlp->last_now = now;
+    }
     size_t spans_before = otlp->spans.len;
     uint32_t count_before = otlp->span_count;
     bool ok;
@@ -1204,6 +1331,8 @@ void tna_otlp_destroy(tna_otlp *otlp) {
                                                        .size = (size_t)otlp->name_capacity * sizeof *otlp->name_slots,
                                                        .alignment = _Alignof(tna_otlp_name) });
     }
+    tna_open_index_free(otlp);
+    tna_span_free(&otlp->lifecycle);
     tna_buf_free(&otlp->names);
     tna_buf_free(&otlp->resource);
     tna_buf_free(&otlp->spans);

@@ -58,6 +58,11 @@ typedef struct {
     bool values;
     /* The instrumentation scope's version. */
     ta_str version;
+    /* The kinds the user asked for (TA_TRACE_BIT). The sink also asks core
+     * for UNLOADED and DESTROYED, which end open spans, and writes their
+     * spans only when they are wanted. */
+    uint32_t wanted_kinds;
+    uint32_t wanted_watched_kinds; /* the same, for watched contexts */
 } tna_otlp_config;
 
 /* A growable byte buffer over an allocator. */
@@ -103,6 +108,10 @@ typedef struct {
     tna_otlp_open *open;       /* the first `open_count` are open; the rest are spare */
     uint32_t open_count;
     uint32_t open_capacity;
+    uint32_t *open_index;      /* open addressing by session: index + 1 into `open`, 0 empty */
+    uint32_t open_index_capacity; /* a power of two, at least twice `open_capacity` */
+    uint64_t last_now;         /* the clock at the last span boundary: span events use it */
+    tna_otlp_span lifecycle;   /* a lifecycle span while it is built */
     tna_otlp_name *name_slots; /* open addressing, a power of two */
     uint32_t name_capacity;
     uint32_t name_count;
@@ -141,6 +150,12 @@ ta_str tna_otlp_take(tna_otlp *otlp);
 /* Ends every open span now, marked `scxml.incomplete`, so the next take
  * carries them: the sink is going away. */
 void tna_otlp_end_all(tna_otlp *otlp);
+
+/* Changes the kinds the user asked for (configureTraces). */
+static inline void tna_otlp_set_wanted(tna_otlp *otlp, uint32_t kinds, uint32_t watched_kinds) {
+    otlp->config.wanted_kinds = kinds;
+    otlp->config.wanted_watched_kinds = watched_kinds;
+}
 
 /* Spans still open (for tests). */
 static inline uint32_t tna_otlp_open_count(const tna_otlp *otlp) { return otlp->open_count; }

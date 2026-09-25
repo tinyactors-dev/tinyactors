@@ -621,7 +621,7 @@ static ta_result tna_done_name(tna_system *system, ta_invoke_id invoke, ta_event
 }
 
 /*
- * reportInvoke(slot, generation, invocationId, kind, name, data): a
+ * reportInvoke(slot, generation, invocationId, kind, name, data, traceparent): a
  * JavaScript invocation reports to its parent. `kind` is "event" (with the
  * interned `name`), "done" or "unavailable"; `data` is the event data, the
  * done data, or the error. Returns true when the report was taken, false
@@ -629,8 +629,8 @@ static ta_result tna_done_name(tna_system *system, ta_invoke_id invoke, ta_event
  * parent's mailbox is at its limits.
  */
 napi_value tna_report_invoke_method(napi_env env, napi_callback_info info) {
-    size_t argc = 6;
-    napi_value argv[6] = { NULL, NULL, NULL, NULL, NULL, NULL };
+    size_t argc = 7;
+    napi_value argv[7] = { NULL, NULL, NULL, NULL, NULL, NULL, NULL };
     tna_napi_system *wrapper = tna_services_this(env, info, &argc, argv);
     if (wrapper == NULL) {
         return NULL;
@@ -698,7 +698,13 @@ napi_value tna_report_invoke_method(napi_env env, napi_callback_info info) {
         !tna_value_make(&wrapper->values, argv[5], &event.data)) {
         return tna_throw(env, "out-of-memory", "reportInvoke: cannot keep the data");
     }
-    ta_result result = tna_system_post(system, &(tna_message){ .target = parent, .event = &event });
+    /* The service's events stay in the trace of the step that invoked it (napi ADR 0017 section 6). */
+    ta_trace_parent trace;
+    if (!tna_trace_argument(env, argc >= 7 ? argv[6] : NULL, &trace)) {
+        ta_value_release(&event.data);
+        return NULL;
+    }
+    ta_result result = tna_system_post(system, &(tna_message){ .target = parent, .event = &event, .trace = &trace });
     if (result != TA_OK) {
         ta_value_release(&event.data);
         if (result == TA_ERR_BUSY) {

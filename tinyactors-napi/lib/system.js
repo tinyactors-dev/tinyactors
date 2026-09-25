@@ -402,6 +402,16 @@ class System {
     return this.#effectContext;
   }
 
+  #replyContext(traceparent) {
+    const base = this.#context();
+    return Object.freeze({
+      system: base.system,
+      signal: base.signal,
+      post: (target, event, data, options) =>
+        this.post(target, event, data, options?.traceparent === undefined ? { ...options, traceparent } : options),
+    });
+  }
+
   #runIO(payload) {
     // payload.traceparent names the sending step, for the processor to carry along (ADR 0015).
     const request = payload;
@@ -410,9 +420,12 @@ class System {
       this.#communicationError(request, new TinyactorsError(`no I/O processor for "${request.type}"`, 'not-found'));
       return;
     }
+    // A reply the processor posts stays in the trace of the sending step
+    // unless it names another (napi ADR 0017 section 6).
+    const context = request.traceparent === undefined ? this.#context() : this.#replyContext(request.traceparent);
     let outcome;
     try {
-      outcome = processor.send(request, this.#context());
+      outcome = processor.send(request, context);
     } catch (error) {
       this.#communicationError(request, error);
       return;
@@ -447,7 +460,8 @@ class System {
       if (kind !== 'event') {
         this.#endInvocation(handle, invocation);
       }
-      return this.#native.reportInvoke(parent.slot, parent.generation, invocationId, kind, name, data);
+      return this.#native.reportInvoke(parent.slot, parent.generation, invocationId, kind, name, data,
+                                       payload.traceparent);
     };
     const reporter = Object.freeze({
       signal: controller.signal,

@@ -8681,6 +8681,7 @@
     },
     "ta_invoke_report_params": {
       "kind": "struct",
+      "doc": "`trace` is what an EVENT or DONE runs under (ADR 0067): normally the trace parent of the invoke request, so the service's events stay in the trace of the step that invoked it (napi ADR 0017 section 6). All zero is none.",
       "fields": [
         {
           "name": "actor",
@@ -8698,6 +8699,12 @@
           "name": "kind",
           "type": {
             "type": "ta_invoke_report_kind"
+          }
+        },
+        {
+          "name": "trace",
+          "type": {
+            "type": "ta_trace_parent"
           }
         },
         {
@@ -8761,29 +8768,31 @@
       },
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 32,
+          "size": 80,
           "align": 8,
           "offsets": {
             "actor": 0,
             "invoke_id": 8,
             "kind": 16,
-            "as": 24,
-            "as.event": 24,
-            "as.done_data": 24,
-            "as.fault": 24
+            "trace": 24,
+            "as": 72,
+            "as.event": 72,
+            "as.done_data": 72,
+            "as.fault": 72
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 24,
+          "size": 80,
           "align": 8,
           "offsets": {
             "actor": 0,
             "invoke_id": 8,
             "kind": 16,
-            "as": 20,
-            "as.event": 20,
-            "as.done_data": 20,
-            "as.fault": 20
+            "trace": 24,
+            "as": 72,
+            "as.event": 72,
+            "as.done_data": 72,
+            "as.fault": 72
           }
         }
       }

@@ -1153,10 +1153,17 @@ typedef enum {
     TA_INVOKE_REPORT_UNAVAILABLE
 } ta_invoke_report_kind TA_SYMBOLS("TA_INVOKE_REPORT_");
 
+/*
+ * `trace` is what an EVENT or DONE runs under (ADR 0067): normally the
+ * trace parent of the invoke request, so the service's events stay in the
+ * trace of the step that invoked it (napi ADR 0017 section 6). All zero is
+ * none.
+ */
 typedef struct {
     ta_actor_id actor;
     ta_invoke_id invoke_id;
     ta_invoke_report_kind kind;
+    ta_trace_parent trace;
     union {
         TA_WHEN(TA_INVOKE_REPORT_EVENT) TA_IN const ta_event *event;
         TA_WHEN(TA_INVOKE_REPORT_DONE) TA_IN TA_OPTIONAL const ta_value *done_data;

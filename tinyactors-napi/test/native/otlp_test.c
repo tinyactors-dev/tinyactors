@@ -250,6 +250,8 @@ static void start(fixture *f, bool install) {
                                 .allocator = tna_allocator_for(&f->allocator, TNA_MEMORY_OTHER),
                                 .host = { .self = &f->host, .now = stub_now, .trace_id = stub_trace_id },
                                 .version = S("0.0.0"),
+                                .wanted_kinds = UINT32_MAX,
+                                .wanted_watched_kinds = UINT32_MAX,
                             });
     if (install) {
         CHECK(ta_system_set_trace_sink(f->core, (ta_trace_sink){ .self = &f->otlp, .v = &sink_vtable,
@@ -366,7 +368,52 @@ static void golden(void) {
     stop(&f);
 }
 
+/*
+ * Many sessions open at once, their macrosteps ended in an order that
+ * shifts entries in the open-span index (napi ADR 0017 section 5), and
+ * unloading one ends its open span.
+ */
+static void many_open(void) {
+    enum { COUNT = 200 };
+    fixture f;
+    start(&f, true);
+    static ta_actor_id actors[COUNT];
+    for (uint32_t at = 0; at < COUNT; at += 1u) {
+        CHECK(ta_actor_spawn(f.core, &(ta_actor_spawn_params){ .definition = f.definition, .out = &actors[at] }) ==
+              TA_OK);
+        f.actor = actors[at];
+        CHECK(resume(&f, 1) == TA_RUN_PAUSED);
+    }
+    CHECK(tna_otlp_open_count(&f.otlp) == COUNT);
+    (void)tna_otlp_take(&f.otlp);
+    /* Every third, then the rest, from the back. */
+    for (uint32_t pass = 0; pass < 2; pass += 1u) {
+        for (uint32_t at = COUNT; at > 0; at -= 1u) {
+            if (((at - 1u) % 3u == 0) == (pass == 0)) {
+                f.actor = actors[at - 1u];
+                CHECK(resume(&f, 1000) == TA_RUN_STABLE);
+            }
+        }
+    }
+    CHECK(tna_otlp_open_count(&f.otlp) == 0);
+    (void)tna_otlp_take(&f.otlp);
+
+    /* An actor unloaded mid-macrostep ends its span as incomplete. */
+    CHECK(ta_actor_spawn(f.core, &(ta_actor_spawn_params){ .definition = f.definition, .out = &f.actor }) == TA_OK);
+    CHECK(resume(&f, 1) == TA_RUN_PAUSED);
+    CHECK(tna_otlp_open_count(&f.otlp) == 1);
+    ta_actor_destroy(f.core, f.actor);
+    CHECK(tna_otlp_open_count(&f.otlp) == 0);
+    span_view spans[8];
+    uint32_t count = read_spans(tna_otlp_take(&f.otlp), spans, 8);
+    const span_view *boot = named(spans, count, "scxml.macrostep bootstrap");
+    CHECK(boot != NULL && boot->incomplete);
+    CHECK(named(spans, count, "scxml.destroyed") != NULL);
+    stop(&f);
+}
+
 int main(void) {
+    many_open();
     open_across_turns();
     end_all();
     golden();

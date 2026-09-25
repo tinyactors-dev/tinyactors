@@ -227,6 +227,15 @@ static bool tna_set_resource(napi_env env, tna_system *system, napi_value pairs)
  * ended now (marked incomplete), for the previous JavaScript sink, or
  * undefined.
  */
+/* What core is asked for: the user's masks, plus UNLOADED and DESTROYED,
+ * which end a session's open span (the encoder writes their spans only
+ * when they were asked for). */
+static tna_trace_masks tna_trace_masks_asked(const tna_trace_masks *masks) {
+    uint32_t ending = TA_TRACE_BIT(TA_TRACE_UNLOADED) | TA_TRACE_BIT(TA_TRACE_DESTROYED);
+    return (tna_trace_masks){ .kinds = masks->kinds | ending, .watched_kinds = masks->watched_kinds | ending,
+                              .unsampled_kinds = masks->unsampled_kinds };
+}
+
 /* The masks and the sample ratio (parts per 10^9) in argv[0..3]. */
 static bool tna_trace_config(napi_env env, const napi_value *argv, tna_trace_masks *masks, uint32_t *parts) {
     return napi_get_value_uint32(env, argv[0], &masks->kinds) == napi_ok &&
@@ -302,8 +311,10 @@ napi_value tna_set_trace_sink_method(napi_env env, napi_callback_info info) {
             return tna_throw(env, "invalid", "setTraceSink: options.resource must map names to strings");
         }
         system->trace_masks = masks;
+        tna_otlp_set_wanted(&system->otlp, masks.kinds, masks.watched_kinds);
         ta_system_set_trace_ratio(system->core, parts, TNA_SAMPLE_WHOLE);
-        result = ta_system_set_trace_sink(system->core, tna_trace_sink_adapter(system, &masks));
+        tna_trace_masks asked = tna_trace_masks_asked(&masks);
+        result = ta_system_set_trace_sink(system->core, tna_trace_sink_adapter(system, &asked));
         if (result != TA_OK) {
             tna_otlp_destroy(&system->otlp);
             system->tracing = false;
@@ -345,8 +356,10 @@ napi_value tna_configure_traces_method(napi_env env, napi_callback_info info) {
         return undefined;
     }
     system->trace_masks = masks;
+    tna_otlp_set_wanted(&system->otlp, masks.kinds, masks.watched_kinds);
     ta_system_set_trace_ratio(system->core, parts, TNA_SAMPLE_WHOLE);
-    ta_system_set_trace_sink(system->core, tna_trace_sink_adapter(system, &masks));
+    tna_trace_masks asked = tna_trace_masks_asked(&masks);
+    ta_system_set_trace_sink(system->core, tna_trace_sink_adapter(system, &asked));
     return undefined;
 }
 
