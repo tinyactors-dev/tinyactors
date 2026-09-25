@@ -199,6 +199,13 @@ typedef struct tna_turn_record {
     ta_result code;        /* FAULT: core's result */
     ta_event_name_id event; /* DEAD_LETTER */
     tna_dead_reason reason; /* DEAD_LETTER */
+    /* DEAD_LETTER: the message's data, owned by the record until
+     * tna_sched_release_records(), so a host can post it again (napi ADR
+     * 0020's restart outbox). Absent when the message had none. */
+    ta_value data;
+    /* DEAD_LETTER: the message's trace parent, when it had one. */
+    bool has_trace;
+    ta_trace_parent trace;
     struct tna_turn_record *next;
 } tna_turn_record;
 
@@ -383,3 +390,10 @@ bool tna_sched_quiet(const tna_sched *sched);
  * actor's, and becomes a record.
  */
 void tna_sched_turn(tna_sched *sched, const tna_turn_params *params);
+/*
+ * Releases what the turn's records own (a dead letter's data) and forgets
+ * the records. The turn calls it first, so a caller that runs turns back to
+ * back leaks nothing; the host calls it once it has reported them, and
+ * close calls it before core goes, since values outlive nothing.
+ */
+void tna_sched_release_records(tna_sched *sched);

@@ -89,6 +89,8 @@ void tna_system_close(tna_system *system) {
      */
     (void)ta_system_set_external_event_router(system->core, (ta_external_event_router){0});
     (void)ta_system_set_actor_directory(system->core, (ta_actor_directory){0});
+    /* A hook may close the system while the turn's records still own data. */
+    tna_sched_release_records(&system->sched);
     tna_sched_discard_mail(&system->sched);
     /* Offloaded bytes may hold value handles; they go while the directory still keys them. */
     tna_offloads_destroy(&system->offloads);
@@ -399,9 +401,7 @@ void tna_system_end_turn(tna_system *system) {
     if (system->closed) {
         return;
     }
-    system->sched.records = NULL;
-    system->sched.last_record = NULL;
-    system->sched.record_count = 0;
+    tna_sched_release_records(&system->sched);
     tna_scratch_reset_turn(&system->scratch);
     tna_system_want_turn(system);
     tna_system_arm(system);

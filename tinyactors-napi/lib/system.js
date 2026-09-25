@@ -167,9 +167,11 @@ class System {
    *   reported per turn; scheduling.maxQueuedMessages: post() throws
    *   `queue-full` beyond it (ADR 0005);
    * - done({ actor, finalState, data }), fault({ actor, operation, code,
-   *   message }) and deadLetter({ target, event, reason, detail? }): hooks
-   *   the pump calls at the end of a turn (ADRs 0008, 0012). `detail` says
-   *   why a load failed, for mail that waited for a loader (napi ADR 0020).
+   *   message }) and deadLetter({ target, event, reason, detail?, data?,
+   *   traceparent? }): hooks the pump calls at the end of a turn (ADRs
+   *   0008, 0012). `detail` says why a load failed, for mail that waited
+   *   for a loader (napi ADR 0020); `data` and `traceparent` are what
+   *   posting the message again needs, absent when it had none.
    */
   constructor(options) {
     if (options !== undefined && (options === null || typeof options !== 'object')) {

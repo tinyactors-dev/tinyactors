@@ -257,24 +257,25 @@ async function gracefulRestart() {
     actor.unload();
     images.set(name, image);
   }
-  // Mail during the restart is refused into the outbox.
+  // Mail during the restart is refused into the outbox, each letter with
+  // its data and, when it had one, its traceparent.
+  const traceparent = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
   for (const name of names) {
     system.post({ family: 'counter', name }, 'hit', `${name}1`);
-    system.post({ family: 'counter', name }, 'hit', `${name}2`);
+    system.post({ family: 'counter', name }, 'hit', `${name}2`, { traceparent });
   }
   await system.flush();
   assert.equal(outbox.length, 6);
   assert.ok(outbox.every((letter) => letter.detail === 'restarting'));
+  assert.deepEqual(outbox.map((letter) => letter.data), ['a1', 'a2', 'b1', 'b2', 'c1', 'c2']);
+  assert.deepEqual(outbox.map((letter) => letter.traceparent),
+                   [undefined, traceparent, undefined, traceparent, undefined, traceparent]);
 
-  // Load again, and replay the outbox in its order. A dead letter names
-  // its target and event but not its data, so the outbox numbers each
-  // target's refused hits as they were sent (1, then 2).
+  // Load again, and replay the outbox in its order, as it was posted.
   system.setLoader('counter', (address) => images.get(address.name));
-  const replayed = new Map();
-  for (const { target, event } of outbox.splice(0)) {
-    const n = (replayed.get(target.name) ?? 0) + 1;
-    replayed.set(target.name, n);
-    system.post(target, event, `${target.name}${n}`);
+  for (const letter of outbox.splice(0)) {
+    system.post(letter.target, letter.event, letter.data,
+                letter.traceparent === undefined ? undefined : { traceparent: letter.traceparent });
   }
   await system.flush();
   for (const name of names) {

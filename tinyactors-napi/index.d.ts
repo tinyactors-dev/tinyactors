@@ -72,6 +72,10 @@ export interface FaultRecord {
 export interface DeadLetterRecord {
   readonly target: ActorID | ActorAddress;
   readonly event: EventName;
+  /** The message's data, absent when it had none: post it again with it. */
+  readonly data?: unknown;
+  /** The message's traceparent, absent when it was not traced. */
+  readonly traceparent?: string;
   /**
    * `unloaded`: a name whose actor is unloaded and whose family has no
    * loader (setLoader), or mail left for an actor unloaded through the raw

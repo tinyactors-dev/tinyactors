@@ -673,7 +673,10 @@ ta_result tna_sched_post_dead(tna_sched *sched, const tna_dead_post *post) {
 static void tna_sched_record(tna_sched *sched, const tna_turn_params *params, tna_turn_record record) {
     tna_turn_record *copy = ta_arena_alloc(params->arena, sizeof *copy, _Alignof(tna_turn_record));
     if (copy == NULL) {
-        return; /* the turn arena is out of memory: the hook is not called */
+        /* The turn arena is out of memory: the hook is not called, and what
+         * the record owned goes back now. */
+        ta_value_release(&record.data);
+        return;
     }
     *copy = record;
     copy->next = NULL;
@@ -898,7 +901,12 @@ static void tna_sched_report_dead(tna_sched *sched, const tna_turn_params *param
             .actor = envelope->target,
             .event = envelope->event.name,
             .reason = (tna_dead_reason)envelope->reason,
+            /* The data moves to the record; the envelope gives back the rest. */
+            .data = envelope->event.data,
+            .has_trace = envelope->trace != NULL,
+            .trace = envelope->trace != NULL ? *envelope->trace : (ta_trace_parent){0},
         };
+        envelope->event.data = (ta_value){0};
         if (envelope->address != NULL) {
             /* The envelope's reference goes below; the record keeps the text. */
             record.has_address = tna_copy_address(params->arena, envelope->address, &record.address);
@@ -912,10 +920,18 @@ static void tna_sched_report_dead(tna_sched *sched, const tna_turn_params *param
     }
 }
 
-void tna_sched_turn(tna_sched *sched, const tna_turn_params *params) {
+void tna_sched_release_records(tna_sched *sched) {
+    for (tna_turn_record *record = sched->records; record != NULL; record = record->next) {
+        ta_value_release(&record->data);
+        record->data = (ta_value){0};
+    }
     sched->records = NULL;
     sched->last_record = NULL;
     sched->record_count = 0;
+}
+
+void tna_sched_turn(tna_sched *sched, const tna_turn_params *params) {
+    tna_sched_release_records(sched);
     /* Only actors queued before each phase began: a requeued actor waits for the next turn. */
     uint32_t pending = tna_ring_count(&sched->runnable);
     uint32_t limit = params->budgets.resumes < pending ? params->budgets.resumes : pending;

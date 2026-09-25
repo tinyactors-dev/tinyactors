@@ -514,9 +514,11 @@ napi_value tna_event_text(napi_env env, tna_system *system, ta_event_name_id nam
 }
 
 /*
- * deadLetter({ target, event, reason }) (ADR 0008); counted in stats either
- * way. `target` is an ActorID, or { family, name } for a named target that
- * had no resident actor.
+ * deadLetter({ target, event, reason, data?, traceparent? }) (ADR 0008);
+ * counted in stats either way. `target` is an ActorID, or { family, name }
+ * for a named target that had no resident actor. `data` and `traceparent`
+ * are what posting it again needs (napi ADR 0020's restart outbox); each is
+ * absent when the message had none.
  */
 static void tna_dead_letter_record(napi_env env, tna_napi_system *wrapper, const tna_turn_record *record,
                                    napi_value *first_error) {
@@ -538,12 +540,29 @@ static void tna_dead_letter_record(napi_env env, tna_napi_system *wrapper, const
     napi_value view = record->has_address ? tna_address_object(env, &record->address)
                                           : tna_actor_view(env, wrapper, record->actor);
     napi_value event = tna_event_text(env, wrapper->system, record->event);
-    if (view != NULL && napi_create_object(env, &argument) == napi_ok &&
-        napi_create_string_utf8(env, reason_text, NAPI_AUTO_LENGTH, &reason) == napi_ok &&
-        tna_set(env, argument, "target", view) == napi_ok && tna_set(env, argument, "event", event) == napi_ok &&
-        tna_set(env, argument, "reason", reason) == napi_ok) {
-        tna_call_hook(env, wrapper->dead_letter_hook, argument, first_error);
+    if (view == NULL || napi_create_object(env, &argument) != napi_ok ||
+        napi_create_string_utf8(env, reason_text, NAPI_AUTO_LENGTH, &reason) != napi_ok ||
+        tna_set(env, argument, "target", view) != napi_ok || tna_set(env, argument, "event", event) != napi_ok ||
+        tna_set(env, argument, "reason", reason) != napi_ok) {
+        return;
     }
+    napi_value data = NULL;
+    if (record->data.v != NULL &&
+        (!tna_value_get(env, &record->data, &data) || tna_set(env, argument, "data", data) != napi_ok)) {
+        return;
+    }
+    if (record->has_trace) {
+        char text[64];
+        uint32_t needed = 0;
+        napi_value traceparent = NULL;
+        if (ta_traceparent_format(&(ta_traceparent_format_params){
+                .parent = record->trace, .buffer = text, .capacity = sizeof text, .needed = &needed }) == TA_OK &&
+            needed > 0u && needed <= sizeof text &&
+            napi_create_string_utf8(env, text, needed - 1u, &traceparent) == napi_ok) {
+            tna_set(env, argument, "traceparent", traceparent);
+        }
+    }
+    tna_call_hook(env, wrapper->dead_letter_hook, argument, first_error);
 }
 
 /* ------------------------------------------------------------------------
