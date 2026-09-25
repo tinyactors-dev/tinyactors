@@ -780,10 +780,15 @@ Open (ADR 0017's implementation notes, follow-up of 2026-09-25, and ADR
   `originType`.
 
 **Open decisions:**
-- importing XML charts whose expressions are ECMAScript source text:
-  proposed as ADR 0019, a data model in JavaScript compiles source for the
-  built-in one (the user asked to explore exposing the data-model vtable;
-  the ADR recommends a compiler hook instead, with questions open);
+- ~~importing XML charts whose expressions are ECMAScript source text~~:
+  **done, ADR 0019.** `registerDatamodel(name, { compile })` and
+  `define(xml, { format: 'scxml' })`, with the SCXML codec linked in and
+  `tools/ecmascript-datamodel.js` as the example compiler. The W3C IRP
+  suite runs against the addon (`mise run irp`): 136 of 176 pass, with the
+  known failures listed in `test/irp/expected-failures.json`. Open: an
+  invoker for SCXML child sessions (27 of those failures), a resolver for
+  `<data src>`, and `value_text` reporting running out of memory as
+  `error.execution` instead of `TA_OP_NOMEM`;
 - ~~the public spec shape uses core's C field names~~: **decided
   2026-09-25, keep them** (option A). Specs keep core's and SCXML's names
   (`onentry`, `history_shallow`, `{ kind, … }`), as ADR 0013 point 6 says;

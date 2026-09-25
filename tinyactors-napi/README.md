@@ -41,3 +41,7 @@ they are; `decodeTraces()` reads them back into objects. There is no
 telemetry dependency. See
 [`docs/tracing.md`](docs/tracing.md), and `mise run otel-demo` to look at
 a trace in otel-tui.
+
+SCXML documents import with `define(xml, { format: 'scxml' })`, and
+`registerDatamodel()` plugs in a compiler for their expression text. See
+[`docs/scxml.md`](docs/scxml.md).

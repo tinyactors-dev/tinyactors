@@ -1,6 +1,6 @@
 # ADR 0019: A data model in JavaScript compiles source for the built-in one
 
-**Status:** Accepted; not yet implemented. Refines ADR 0011 (the JavaScript data model) and ADR 0013 point 6 (specs, and turning on `ta_definition_import`). Research: [`docs/research/pluggable-datamodels.md`](../../../docs/research/pluggable-datamodels.md).
+**Status:** Accepted and implemented (2026-09-25); see the implementation notes. Refines ADR 0011 (the JavaScript data model) and ADR 0013 point 6 (specs, and turning on `ta_definition_import`). Research: [`docs/research/pluggable-datamodels.md`](../../../docs/research/pluggable-datamodels.md).
 **Date:** 2026-09-25
 
 ## Context
@@ -258,3 +258,60 @@ The original questions were:
    once it passes, as the test host's does?
 5. **The addon's size:** is linking the SCXML codec and `tinyxml` into
    the addon acceptable, or should import be an optional build?
+
+## Implementation notes
+
+- **Core:** core ADR 0074. `ta_definition_import` takes the data models by
+  name, and `prepare_definition` gets each expression's role, which is how
+  `compile` learns it.
+- **`compile(source, role)` takes no `info`.** `prepare_definition` does not
+  know the document's `<data>` IDs, and a compiler that scopes names with
+  `with` does not need them. Add it when a compiler needs it.
+- **Every source expression of a registered model goes to `compile`,** not
+  only the ones the built-in model does not recognize (section 5 said the
+  latter). An SCXML `_event` or `_sessionid` is a bare name the built-in
+  model would read as a data name, so only the compiler can say what it
+  means.
+- **Each data model is the built-in operations under a name**
+  (`tna_dm_adapter` in `src/napi_datamodel.h`): the built-in one, and up to
+  8 registered ones per system, with names of at most 31 bytes. A compiled
+  expression is an ordinary host expression, kept with the definition and
+  released with it.
+- **`lib/` normalizes what `compile` returns** before it reaches C: a data
+  name for a location becomes a `{ get, set }` that assigns only a name the
+  data has, as the built-in model's own data names do.
+- **Importing** is `src/import.c`, which has no Node-API in it. A document
+  without a `datamodel` attribute gets core's null data model. A refusal
+  throws `invalid` or `unsupported` with `detail` `{ stage, message, line,
+  column, offset }` (`ImportRefusal` in `index.d.ts`); `line` and `column`
+  are there when the refusal names a place, which a compile error does
+  through core ADR 0058 and an `offset`/`length` from the compiler narrows.
+- **Size:** the addon grows from 475,784 to 617,224 bytes (+141,440, +30%)
+  on macOS arm64 with the SCXML codec and tinyxml linked in.
+- **Inspection** reads the data of every data model but `null`, since each
+  of the others is the built-in model.
+- **The example compiler** (`tools/ecmascript-datamodel.js`) defers a
+  syntax error to run time, where SCXML makes it `error.execution`
+  (SCXML 5.9.2), instead of refusing the document.
+- **The W3C IRP suite** runs against the addon in napi's test task
+  (`mise run irp`, `test/irp/run.js`), on Node and Bun: 176 run, 136 pass,
+  24 skipped as the test host skips them or as manual tests. The 40 known
+  failures are listed with their reasons in
+  `test/irp/expected-failures.json`, so a new failure or a new pass fails
+  the run.
+
+Open points:
+
+1. **No invoker for SCXML child sessions** (`type
+   http://www.w3.org/TR/scxml/`): 27 IRP tests need one, plus 4 more that
+   end with no outcome for the same reason.
+2. **No resolver** for `<data src>` and `<script src>` on import (3 tests).
+3. **Running out of memory while turning a value into text** (napi's
+   `value_text`, for example a computed event name) is reported as
+   `error.execution`, not as `TA_OP_NOMEM`, so the unit does not retry
+   (core ADR 0070). It changes nothing, so it could report `TA_OP_NOMEM`.
+   Builder and imported charts behave the same (`test/import.js`).
+4. **The example compiler's limits** (IRP tests 302, 304, 326, 329, likely
+   `<script>` variables and assignments to system variables) and six
+   failures not investigated yet (152, 452, 457, 496, 521, 562).
+
