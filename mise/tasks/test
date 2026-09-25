@@ -10,7 +10,7 @@ Dir[root.join('{,*/}mise/tasks/*')].each { |task| FileUtils.chmod('+x', task) }
 # Acronyms are ALL CAPS or all lowercase in code (AGENTS.md, acronyms.txt).
 # It reads source text only, so it runs first and fails fast.
 %w[check-acronyms-test check-acronyms].each do |task|
-  pid = Process.spawn({ 'ACRONYMS_REPORT_ONLY' => '1' }, 'mise', 'run', task, chdir: root.to_s)
+  pid = Process.spawn('mise', 'run', task, chdir: root.to_s)
   _pid, status = Process.wait2(pid)
   exit(status.exitstatus || 1) unless status.success?
 end
