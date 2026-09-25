@@ -816,6 +816,26 @@ static ta_result ta_core_result(ta_result result) {
     return result == TA_OK || result == TA_ERR_NOMEM ? result : TA_EXEC_FAILED;
 }
 
+typedef struct {
+    ta_result result; /* the step's result */
+    int32_t code;     /* the fault's code when core itself failed the step */
+    const char *message;
+} ta_core_fault_params;
+
+/*
+ * A step core failed itself, not a data model: give the fault a code and a
+ * static message, so the error event and the ACTION_FAILED record say why
+ * (ADR 0072's failure logs). A fault a data model already filled stays as it
+ * is, and a result that is not TA_EXEC_FAILED passes through.
+ */
+static ta_result ta_core_fault(ta_fault *fault, const ta_core_fault_params *params) {
+    if (params->result == TA_EXEC_FAILED && fault != NULL && fault->code == 0 && fault->message.len == 0) {
+        fault->code = params->code;
+        fault->message = ta_str_from_cstr(params->message);
+    }
+    return params->result;
+}
+
 /* ------------------------------------------------------------------------
  * Data-model calls
  */
@@ -1435,7 +1455,9 @@ static ta_result ta_send_target(ta_interpreter *it, const ta_send_action *send, 
             return ta_op_result(status);
         }
         if (v->value_text == NULL) {
-            return TA_EXEC_FAILED;
+            return ta_core_fault(fault, &(ta_core_fault_params){
+                                            .result = TA_EXEC_FAILED, .code = TA_ERR_UNSUPPORTED,
+                                            .message = "the data model cannot turn the <send> target into text" });
         }
         status = v->value_text(definition->datamodel.self,
                                &(ta_datamodel_value_text_params){
@@ -1451,7 +1473,10 @@ static ta_result ta_send_target(ta_interpreter *it, const ta_send_action *send, 
         }
     }
     /* Interning a named address may run out of memory. */
-    return ta_core_result(ta_scxml_target_parse(it->system, text, &state->scxml));
+    return ta_core_fault(fault, &(ta_core_fault_params){
+                                    .result = ta_core_result(ta_scxml_target_parse(it->system, text, &state->scxml)),
+                                    .code = TA_ERR_INVALID,
+                                    .message = "the <send> target is not a target SCXML can send to" });
 }
 
 /* Resolves an SCXML target to an external destination; false means inaccessible. */
@@ -1499,7 +1524,10 @@ static ta_result ta_send_io_type(ta_interpreter *it, const ta_send_action *send,
                                                              .text = &text, .fault = fault,
                                                          }));
         if (result == TA_OK) {
-            result = text.len == 0 ? TA_EXEC_FAILED : ta_core_result(ta_atom_intern(&system->atoms, text, &type));
+            result = text.len == 0 ? ta_core_fault(fault, &(ta_core_fault_params){
+                                                              .result = TA_EXEC_FAILED, .code = TA_ERR_INVALID,
+                                                              .message = "the <send> typeexpr gave empty text" })
+                                   : ta_core_result(ta_atom_intern(&system->atoms, text, &type));
         }
         ta_value_release(&holder);
         if (result != TA_OK) {
@@ -1508,7 +1536,11 @@ static ta_result ta_send_io_type(ta_interpreter *it, const ta_send_action *send,
     }
     state->scxml_io = ta_system_is_scxml_io(system, type);
     state->io_type = state->scxml_io ? system->scxml_io_type : type;
-    return state->scxml_io || ta_system_io_of(system, type) != NULL ? TA_OK : TA_EXEC_FAILED;
+    return state->scxml_io || ta_system_io_of(system, type) != NULL
+               ? TA_OK
+               : ta_core_fault(fault, &(ta_core_fault_params){
+                                          .result = TA_EXEC_FAILED, .code = TA_ERR_NOT_FOUND,
+                                          .message = "the <send> type names no I/O processor this system has" });
 }
 
 /* Resolves `event` / `eventexpr`; the expression's text is a dotted event name. */
@@ -1525,7 +1557,11 @@ static ta_result ta_send_event_name(ta_interpreter *it, const ta_send_action *se
                                                          .text = &text, .fault = fault,
                                                      }));
     if (result == TA_OK) {
-        result = ta_core_result(ta_event_name_intern_dotted(&it->system->event_names, text, out));
+        result = ta_core_fault(fault, &(ta_core_fault_params){
+                                          .result = ta_core_result(ta_event_name_intern_dotted(&it->system->event_names,
+                                                                                               text, out)),
+                                          .code = TA_ERR_INVALID,
+                                          .message = "the <send> eventexpr is not a dotted event name" });
     }
     ta_value_release(&holder);
     return result;
@@ -1547,10 +1583,13 @@ static ta_result ta_send_delay(ta_interpreter *it, const ta_send_action *send, t
                                                .expr = send->delay.as.expr, .holder = &holder,
                                                .text = &text, .fault = fault,
                                            });
-    if (status == TA_OP_OK && ta_duration_parse(text, out) != TA_OK) {
-        status = TA_OP_ERROR;
-    }
+    bool unparsed = status == TA_OP_OK && ta_duration_parse(text, out) != TA_OK;
     ta_value_release(&holder);
+    if (unparsed) {
+        return ta_core_fault(fault, &(ta_core_fault_params){
+                                        .result = TA_EXEC_FAILED, .code = TA_ERR_INVALID,
+                                        .message = "the <send> delayexpr is not an SCXML duration" });
+    }
     return ta_op_result(status);
 }
 
@@ -1649,7 +1688,10 @@ static ta_result ta_send_evaluate(ta_interpreter *it, const ta_send_action *send
         result = ta_send_target(it, send, state, fault);
     }
     if (result == TA_OK && state->scxml_io && state->scxml.kind == TA_SCXML_TARGET_INTERNAL && state->delay != 0) {
-        result = TA_EXEC_FAILED; /* a delayed send cannot target the internal queue */
+        /* A delayed send cannot target the internal queue. */
+        result = ta_core_fault(fault, &(ta_core_fault_params){
+                                          .result = TA_EXEC_FAILED, .code = TA_ERR_UNSUPPORTED,
+                                          .message = "a <send> with a delay cannot target #_internal" });
     }
     return result;
 }

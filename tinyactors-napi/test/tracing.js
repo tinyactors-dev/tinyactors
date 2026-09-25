@@ -468,6 +468,29 @@ async function failureLogsSayWhy() {
               `${element}: the failing action, labelled and by ID`);
     system.close();
   }
+  // A <send> that core itself refuses says why too, with no data model
+  // involved: a delayed send to the internal queue, and an unknown type.
+  for (const [build, reason] of [
+    [(t) => t.send('later', (m) => m.to('#_internal').after(10)), 'a <send> with a delay cannot target #_internal'],
+    [(t) => t.send('x', (m) => m.to('elsewhere').via('http://example.com/none')),
+     'the <send> type names no I/O processor this system has'],
+  ]) {
+    const system = createSystem();
+    const text = [];
+    system.setTraceSink((traces, batch) => {
+      if (batch !== undefined) text.push(...protobufStrings(batch));
+    });
+    const actor = system.spawn(system.define(
+      statechart({ family: 'sender', revision: 'v1' }).state('ready', (s) => s.on('go', build)),
+    ));
+    await system.flush();
+    actor.post('go');
+    await system.flush();
+    assert.ok(text.includes(`<send> in ready on go failed: ${reason}`), `the body says why: ${text}`);
+    assert.ok(text.includes('scxml.fault.message') && text.includes('exception.message') && text.includes(reason),
+              `the reason is an attribute: ${text}`);
+    system.close();
+  }
 }
 
 // Values only when asked for; links instead of parents when asked for.
