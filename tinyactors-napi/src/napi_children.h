@@ -9,30 +9,42 @@
  *   invoke, with the system's data models (ADR 0019);
  * - a `src` string is fetched with the parent definition's resolve(src)
  *   and imported the same way.
- * Imported children are cached by document bytes, and inherit their
- * parent's resolver. JavaScript runs only in resolve(src) and a registered
- * data model's compile; neither may call core (ADR 0013).
+ * Imported children are cached by document bytes in a bounded LRU
+ * (documents.h, ADR 0022); evicting one retires its definition. They
+ * inherit their parent's resolver. JavaScript runs only in resolve(src)
+ * and a registered data model's compile; neither may call core (ADR 0013).
  */
 #include <node_api.h>
 #include <stdint.h>
 
 #include "containers.h"
+#include "documents.h"
 #include "tinyactors.h"
 
 typedef struct tna_napi_system tna_napi_system;
 
 typedef struct {
-    tna_vec resolvers; /* tna_child_resolver: define()'s resolve, per definition */
-    tna_vec documents; /* tna_child_document: imported children, by bytes */
+    tna_vec resolvers;       /* tna_child_resolver: define()'s resolve, per definition */
+    uint32_t resolvers_mark; /* sweep the resolvers once there are this many (ADR 0022) */
+    tna_documents documents; /* imported children, by bytes (ADR 0022) */
+    uint64_t hits;           /* invokes of an imported child found in the cache */
+    uint64_t misses;         /* ... and imported */
+    uint64_t evictions;      /* entries evicted, their definitions retired */
     /* The message of the last refused child document, for the invoke's fault. */
     char failure[1024];
 } tna_children;
 
 void tna_children_init(tna_napi_system *wrapper);
+/* The cache's bounds (createSystem's childDocuments); evicts down to them. */
+void tna_children_set_limits(tna_napi_system *wrapper, tna_documents_limits limits);
 /* Keeps `resolve` (a function) with `definition`, for its children's src. */
 ta_result tna_children_keep_resolver(tna_napi_system *wrapper, ta_definition_id definition, napi_value resolve);
 /* Releases the resolvers (when the environment is usable) and the cache. */
 void tna_children_close(tna_napi_system *wrapper, bool env_usable);
+/* setChildDocuments(maxCount, maxBytes): the cache's bounds; lib/ checks them. */
+napi_value tna_set_child_documents_method(napi_env env, napi_callback_info info);
+/* The cache's numbers for hostMetrics(): count, bytes, hits, misses, evictions, resolvers. */
+napi_status tna_children_metrics(napi_env env, const tna_napi_system *wrapper, napi_value *out);
 
 /*
  * A ta_chart_src_resolver over a JavaScript resolve(src) function (core ADR

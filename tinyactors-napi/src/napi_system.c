@@ -1117,6 +1117,10 @@ static napi_value tna_host_metrics_method(napi_env env, napi_callback_info info)
     }
     if (status == napi_ok) status = napi_set_named_property(env, out, "loads", loads);
     if (status == napi_ok) status = tna_set_number(env, out, "waiting", (double)system->loads.waiting);
+    /* The cache of invoked child documents (napi ADR 0022). */
+    napi_value children = NULL;
+    if (status == napi_ok) status = tna_children_metrics(env, wrapper, &children);
+    if (status == napi_ok) status = napi_set_named_property(env, out, "childDocuments", children);
     if (status != napi_ok) {
         return tna_throw(env, "out-of-memory", "cannot build the host metrics object");
     }
@@ -1201,6 +1205,7 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "wakeAt", NULL, tna_wake_at_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "cancelWake", NULL, tna_cancel_wake_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "setOffloadValues", NULL, tna_set_offload_values_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "setChildDocuments", NULL, tna_set_child_documents_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "offload", NULL, tna_offload_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "hasOffloaded", NULL, tna_has_offloaded_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "dropOffloaded", NULL, tna_drop_offloaded_method, NULL, NULL, NULL, napi_default_method, NULL },

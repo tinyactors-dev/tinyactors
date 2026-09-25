@@ -172,6 +172,9 @@ class System {
    *   0008, 0012). `detail` says why a load failed, for mail that waited
    *   for a loader (napi ADR 0020); `data` and `traceparent` are what
    *   posting the message again needs, absent when it had none.
+   * - childDocuments: { maxCount = 256, maxBytes = 16 MiB }, the bounds of
+   *   the cache of SCXML documents the invoker imports (napi ADR 0022);
+   *   evicting one retires its definition.
    */
   constructor(options) {
     if (options !== undefined && (options === null || typeof options !== 'object')) {
@@ -187,6 +190,16 @@ class System {
       throw new TinyactorsError('createSystem(): unloadValues must be "serialize" or "handles"', 'invalid');
     }
     this.#native.setOffloadValues(v8.serialize, v8.deserialize, unloadValues === 'handles');
+    const childDocuments = options?.childDocuments;
+    if (childDocuments !== undefined) {
+      const { maxCount = 256, maxBytes = 16 * 1024 * 1024 } = childDocuments ?? {};
+      if (!Number.isSafeInteger(maxCount) || maxCount < 1 || maxCount > 0xffffffff ||
+          !Number.isSafeInteger(maxBytes) || maxBytes < 1) {
+        throw new TinyactorsError('createSystem(): childDocuments.maxCount and maxBytes must be whole numbers from 1',
+                                  'invalid');
+      }
+      this.#native.setChildDocuments(maxCount, maxBytes);
+    }
     const { io, invokers, log } = options ?? {};
     for (const [type, processor] of Object.entries(servicesOf(io, 'createSystem(): io'))) {
       this.registerIO(type, processor, { location: processor?.location, origin: processor?.origin });

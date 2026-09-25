@@ -45,6 +45,13 @@ export interface SystemOptions {
   io?: Readonly<Record<string, IOProcessor>>;
   invokers?: Readonly<Record<string, Invoker>>;
   log?: LogSink;
+  /**
+   * Bounds of the cache of SCXML documents the invoker imports (napi ADR
+   * 0022): at most `maxCount` documents (default 256) and `maxBytes` bytes
+   * of them (default 16 MiB). Past a bound the least recently used document
+   * is evicted and its definition retired; the next invoke imports it again.
+   */
+  childDocuments?: { maxCount?: number; maxBytes?: number };
 }
 
 /** An actor finished (ADR 0012). The actor is still resident while the hook runs. */
