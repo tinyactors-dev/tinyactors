@@ -83,6 +83,8 @@ bool tna_value_absent(const ta_value *value);
  * primitive's text is static, except a number's, which lives in a small
  * ring of buffers in `values`: it stays valid for the next
  * TNA_NUMBER_TEXTS - 1 calls, which covers core's use of it inside one
- * operation. False on failure.
+ * operation. TA_ERR_NOMEM when the text could not be copied, which changes
+ * nothing but a box's cache, so the caller may answer TA_OP_NOMEM (core ADR
+ * 0070); TA_ERR_INVALID when the value has no text (String() threw).
  */
-bool tna_value_text(tna_values *values, const ta_value *value, ta_str *out);
+ta_result tna_value_text(tna_values *values, const ta_value *value, ta_str *out);

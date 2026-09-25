@@ -249,16 +249,16 @@ static void tna_number_text(double number, char *buffer, size_t size) {
     }
 }
 
-bool tna_value_text(tna_values *values, const ta_value *value, ta_str *out) {
+ta_result tna_value_text(tna_values *values, const ta_value *value, ta_str *out) {
     const ta_value_vtable *v = value == NULL ? NULL : value->v;
     if (v == NULL || v == &tna_undefined_vtable) {
-        return tna_static_text("undefined", out);
+        return tna_static_text("undefined", out) ? TA_OK : TA_ERR_INVALID;
     }
     if (v == &tna_null_vtable) {
-        return tna_static_text("null", out);
+        return tna_static_text("null", out) ? TA_OK : TA_ERR_INVALID;
     }
     if (v == &tna_true_vtable || v == &tna_false_vtable) {
-        return tna_static_text(v == &tna_true_vtable ? "true" : "false", out);
+        return tna_static_text(v == &tna_true_vtable ? "true" : "false", out) ? TA_OK : TA_ERR_INVALID;
     }
     if (v == &tna_number_vtable) {
         uint64_t bits = (uint64_t)(uintptr_t)value->self;
@@ -267,10 +267,10 @@ bool tna_value_text(tna_values *values, const ta_value *value, ta_str *out) {
         char *buffer = values->number_texts[values->number_next];
         values->number_next = (values->number_next + 1u) % TNA_NUMBER_TEXTS;
         tna_number_text(number, buffer, sizeof values->number_texts[0]);
-        return tna_static_text(buffer, out);
+        return tna_static_text(buffer, out) ? TA_OK : TA_ERR_INVALID;
     }
     if (v != &tna_box_vtable) {
-        return false;
+        return TA_ERR_INVALID;
     }
     tna_box *box = value->self;
     if (box->text == NULL) {
@@ -285,16 +285,16 @@ bool tna_value_text(tna_values *values, const ta_value *value, ta_str *out) {
             if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
                 napi_get_and_clear_last_exception(env, &ignored);
             }
-            return false;
+            return TA_ERR_INVALID;
         }
         char *copy = tna_alloc(values->allocator, length + 1u, 1);
         if (copy == NULL) {
-            return false;
+            return TA_ERR_NOMEM;
         }
         napi_get_value_string_utf8(env, text, copy, length + 1u, &length);
         box->text = copy;
         box->text_length = (uint32_t)length;
     }
     *out = (ta_str){ box->text, box->text_length };
-    return true;
+    return TA_OK;
 }

@@ -809,9 +809,12 @@ static ta_op_status tna_dm_value_text(void *self, const ta_datamodel_value_text_
     if (!tna_begin(&frame, dm, params->instance, params->host, params->fault)) {
         return TA_OP_ERROR;
     }
-    ta_op_status status = tna_value_text(&dm->wrapper->values, params->value, params->out)
-                              ? TA_OP_OK
-                              : tna_fail(&frame, "javascript: value has no text");
+    /* Only copying the text can run out of memory, and that changes nothing
+     * the chart can see: core stops and asks again (core ADR 0070). */
+    ta_result result = tna_value_text(&dm->wrapper->values, params->value, params->out);
+    ta_op_status status = result == TA_OK      ? TA_OP_OK
+                          : result == TA_ERR_NOMEM ? TA_OP_NOMEM
+                                                   : tna_fail(&frame, "javascript: value has no text");
     tna_end(&frame);
     return status;
 }

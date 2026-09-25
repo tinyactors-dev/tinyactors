@@ -220,8 +220,10 @@ async function reentrancy() {
 // chart built with statechart(): the built-in data model decides what to
 // report, not the compiler (ADR 0019 section 3, core ADR 0070). Here a
 // <send> computes a new, very long event name; turning it into text for core
-// is an allocation the data model makes, which fails as error.execution for
-// both charts, and succeeds for both once memory is back.
+// is an allocation the data model makes. It changes nothing, so the data
+// model answers TA_OP_NOMEM: the run stops where it stands, napi retries it
+// (ADR 0008), and once memory is back the send completes, once, with no
+// error.execution the chart could see.
 async function outOfMemory() {
   const system = createSystem();
   const segment = 'x'.repeat(200_000);
@@ -247,19 +249,26 @@ async function outOfMemory() {
   );
   const native = nativeOf(system);
   const results = [];
+  const turns = (count) => new Promise((resolve) => {
+    const step = (left) => (left === 0 ? resolve() : setImmediate(() => step(left - 1)));
+    step(count);
+  });
   for (const definition of [imported, built]) {
     const actor = system.spawn(definition);
     await system.flush();
     actor.post('go');
     native.refuseAllocationsFrom(100_000);
-    await system.flush();
+    // Not flush(): the run keeps stopping until memory is back.
+    await turns(20);
+    assert.deepEqual(actor.inspect().data, { seen: 0, errors: 0 }, 'stopped, with nothing done twice or lost');
     native.refuseAllocationsFrom(0);
+    await system.flush();
     actor.post('go');
     await system.flush();
     results.push(actor.inspect().data);
   }
   assert.deepEqual(results[0], results[1]);
-  assert.deepEqual(results[0], { seen: 1, errors: 1 });
+  assert.deepEqual(results[0], { seen: 2, errors: 0 });
   delete globalThis.__tinyactorsImportName;
   system.close();
 }
