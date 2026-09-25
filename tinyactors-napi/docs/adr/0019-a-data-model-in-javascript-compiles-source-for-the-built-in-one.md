@@ -1,6 +1,6 @@
 # ADR 0019: A data model in JavaScript compiles source for the built-in one
 
-**Status:** Proposed. Would refine ADR 0011 (the JavaScript data model) and ADR 0013 point 6 (specs, and turning on `ta_definition_import`). Research: [`docs/research/pluggable-datamodels.md`](../../../docs/research/pluggable-datamodels.md).
+**Status:** Accepted; not yet implemented. Refines ADR 0011 (the JavaScript data model) and ADR 0013 point 6 (specs, and turning on `ta_definition_import`). Research: [`docs/research/pluggable-datamodels.md`](../../../docs/research/pluggable-datamodels.md).
 **Date:** 2026-09-25
 
 ## Context
@@ -51,7 +51,7 @@ params object adds 2 to 5 ns. Compiled SCXML source that reads data as
 variables through `with (this)` adds 27 to 58 ns per call, and through a
 `Proxy` 115 to 226 ns.
 
-## Decision (proposed)
+## Decision
 
 **Users do not implement the vtable. They register a compiler for source
 text, and napi's built-in data model runs what it returns.** The vtable
@@ -231,6 +231,21 @@ host, with the same semantics to repeat each time.
   and one that posts works.
 
 ## Questions for the user
+
+**Answered 2026-09-25; every suggestion accepted:**
+
+1. **A compiler hook** over the built-in data model (option B), not the
+   full vtable.
+2. **Registration per system,** like `registerIO`.
+3. **Core's `ta_definition_import` takes data models by name,** so compile
+   errors keep their position in the document (core ADR 0058).
+4. **The W3C IRP suite joins `mise run test`** against the addon once it
+   passes.
+5. **The SCXML codec and `tinyxml` are linked into the addon,** not an
+   optional build: they are useful for debugging ("HTML for state
+   machines").
+
+The original questions were:
 
 1. **B over A?** A compiler over the built-in data model, with the vtable
    itself kept internal.

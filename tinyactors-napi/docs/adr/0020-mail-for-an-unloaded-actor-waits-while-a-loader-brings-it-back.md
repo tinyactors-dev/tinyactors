@@ -1,6 +1,6 @@
 # ADR 0020: Mail for an unloaded actor waits while a loader brings it back
 
-**Status:** Proposed. It would refine ADR 0005 (a mailbox can belong to an address, not only to an actor), ADR 0006 point 4 (an unloaded or unknown name is no longer always a dead letter) and ADR 0012. Research: [`docs/research/loading-actors-on-demand.md`](../../../docs/research/loading-actors-on-demand.md).
+**Status:** Accepted; not yet implemented. Refines ADR 0005 (a mailbox can belong to an address, not only to an actor), ADR 0006 point 4 (an unloaded or unknown name is no longer always a dead letter) and ADR 0012. Research: [`docs/research/loading-actors-on-demand.md`](../../../docs/research/loading-actors-on-demand.md).
 **Date:** 2026-09-25
 
 ## Context
@@ -247,6 +247,21 @@ unloading idle actors to save memory, not for restarts.
   - traces: a loaded actor's first macrostep is in its sender's trace.
 
 ## Questions for the user
+
+**Answered 2026-09-25; every suggestion accepted:**
+
+1. **Serialized session images come first,** as a core ADR. Core does not
+   prescribe the format: it defines a codec interface, as it does for
+   chart definitions (core ADR 0053), and hosts plug codecs in. Replay
+   persistence uses the same interface.
+2. **A loader's family is virtual:** unknown names call the loader too.
+3. **Unloaded actors wake for their own timers** by default.
+4. **`ta_actor_load` takes the triggering message's trace parent,** so the
+   `LOADED` span stays in the sender's trace.
+5. **The defaults stand:** a 5-second `timeout` and `maxWaiting` of 1,000
+   per address, both configurable.
+
+The original questions were:
 
 1. **A serialized session image** is needed for restarts across
    processes (section 6). Should that core ADR (a byte format for images,

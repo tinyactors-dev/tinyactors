@@ -28,5 +28,5 @@ particular on core ADRs 0011, 0029, 0040, 0047, 0050, 0053–0059, 0061,
 | [0016](0016-traces-leave-the-addon-as-otlp-protobuf.md) | [Traces leave the addon as OTLP protobuf](0016-traces-leave-the-addon-as-otlp-protobuf.md) |
 | [0017](0017-observability-owns-its-encoder-and-makes-off-and-sampled-out-free.md) | [Observability owns its encoder, and makes off and sampled-out free](0017-observability-owns-its-encoder-and-makes-off-and-sampled-out-free.md) |
 | [0018](0018-the-encoder-writes-into-memory-the-host-provides.md) | [The encoder writes into memory the host provides](0018-the-encoder-writes-into-memory-the-host-provides.md) |
-| [0019](0019-a-data-model-in-javascript-compiles-source-for-the-built-in-one.md) | [A data model in JavaScript compiles source for the built-in one](0019-a-data-model-in-javascript-compiles-source-for-the-built-in-one.md) (Proposed) |
-| [0020](0020-mail-for-an-unloaded-actor-waits-while-a-loader-brings-it-back.md) | [Mail for an unloaded actor waits while a loader brings it back](0020-mail-for-an-unloaded-actor-waits-while-a-loader-brings-it-back.md) (Proposed) |
+| [0019](0019-a-data-model-in-javascript-compiles-source-for-the-built-in-one.md) | [A data model in JavaScript compiles source for the built-in one](0019-a-data-model-in-javascript-compiles-source-for-the-built-in-one.md) |
+| [0020](0020-mail-for-an-unloaded-actor-waits-while-a-loader-brings-it-back.md) | [Mail for an unloaded actor waits while a loader brings it back](0020-mail-for-an-unloaded-actor-waits-while-a-loader-brings-it-back.md) |
