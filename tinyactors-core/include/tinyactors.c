@@ -3635,29 +3635,71 @@ TA_PRIVATE ta_trace_record ta_trace_record_blank(ta_trace_kind kind) {
 
 #define TA_TRACEPARENT_LEN 55u
 
-/* The value of a lowercase hex digit, or -1. */
-static int ta_hex_digit(char c) {
-    if (c >= '0' && c <= '9') {
-        return c - '0';
-    }
-    if (c >= 'a' && c <= 'f') {
-        return c - 'a' + 10;
-    }
-    return -1;
-}
+/*
+ * A lowercase hex digit's value plus one, and 0 for anything else, so the
+ * table's default (zero) is "not a digit". A traceparent has 52 digits,
+ * read on every post that carries one: a lookup and an AND per digit, and
+ * one test per field, keep that cheap (ADR 0073, napi ADR 0017 section 2).
+ */
+static const uint8_t ta_hex_value[256] = {
+    ['0'] = 1, ['1'] = 2, ['2'] = 3, ['3'] = 4, ['4'] = 5, ['5'] = 6, ['6'] = 7, ['7'] = 8, ['8'] = 9, ['9'] = 10,
+    ['a'] = 11, ['b'] = 12, ['c'] = 13, ['d'] = 14, ['e'] = 15, ['f'] = 16,
+};
 
-/* Reads `count` lowercase hex digits (at most 16) into `*out`. */
+/* Reads `count` lowercase hex digits (at most 16) into `*out`, one at a time: the 2-digit fields. */
 static bool ta_hex_read(const char *text, uint32_t count, uint64_t *out) {
     uint64_t value = 0;
+    uint32_t valid = 1;
     for (uint32_t index = 0; index < count; index += 1) {
-        int digit = ta_hex_digit(text[index]);
-        if (digit < 0) {
-            return false;
-        }
-        value = (value << 4) | (uint64_t)digit;
+        uint32_t digit = ta_hex_value[(uint8_t)text[index]];
+        valid &= digit != 0;
+        value = (value << 4) | (uint64_t)((digit - 1u) & 0xfu);
     }
     *out = value;
+    return valid != 0;
+}
+
+/*
+ * Eight lowercase hex digits at once (SWAR): loaded with shifts, so the
+ * result does not depend on byte order, validated with byte-wise range
+ * tests, and packed into 32 bits. On 16-digit fields this is several times
+ * faster than a digit at a time.
+ */
+static bool ta_hex_read8(const char *text, uint32_t *out) {
+    const unsigned char *bytes = (const unsigned char *)text;
+    uint64_t x = 0;
+    for (uint32_t index = 0; index < 8u; index += 1u) {
+        x |= (uint64_t)bytes[index] << (8u * index);
+    }
+    const uint64_t ones = 0x0101010101010101u;
+    const uint64_t highs = 0x8080808080808080u;
+    if ((x & highs) != 0) {
+        return false; /* not ASCII; also keeps the additions below inside each byte */
+    }
+    /* Bit 7 of each byte: b >= lo is (b + 0x80 - lo), b > hi is (b + 0x7f - hi). */
+    uint64_t digit = (x + ones * 0x50u) & ~(x + ones * 0x46u);  /* '0'..'9' */
+    uint64_t alpha = (x + ones * 0x1fu) & ~(x + ones * 0x19u);  /* 'a'..'f' */
+    if (((digit | alpha) & highs) != highs) {
+        return false;
+    }
+    /* A digit's value is its low nibble, plus 9 for a letter (bit 6 set). */
+    uint64_t v = (x & (ones * 0x0fu)) + ((x >> 6) & ones) * 9u;
+    /* The first character is in the lowest byte and is the most significant nibble. */
+    v = ((v << 4) | (v >> 8)) & 0x00ff00ff00ff00ffu;
+    v = ((v << 8) | (v >> 16)) & 0x0000ffff0000ffffu;
+    v = ((v << 16) | (v >> 32)) & 0x00000000ffffffffu;
+    *out = (uint32_t)v;
     return true;
+}
+
+/* Reads 16 lowercase hex digits into `*out`. */
+static bool ta_hex_read16(const char *text, uint64_t *out) {
+    uint32_t high = 0;
+    uint32_t low = 0;
+    bool high_valid = ta_hex_read8(text, &high);
+    bool low_valid = ta_hex_read8(text + 8, &low);
+    *out = ((uint64_t)high << 32) | low;
+    return high_valid && low_valid;
 }
 
 static const char ta_hex_digits[] = "0123456789abcdef";
@@ -3693,8 +3735,8 @@ TA_API ta_result ta_traceparent_parse(const ta_traceparent_parse_params *params)
     uint64_t span = 0;
     uint64_t flags = 0;
     if (len < TA_TRACEPARENT_LEN || !ta_hex_read(text, 2u, &version) || version == 0xffu || text[2] != '-' ||
-        text[35] != '-' || text[52] != '-' || !ta_hex_read(text + 3, 16u, &high) ||
-        !ta_hex_read(text + 19, 16u, &low) || !ta_hex_read(text + 36, 16u, &span) ||
+        text[35] != '-' || text[52] != '-' || !ta_hex_read16(text + 3, &high) ||
+        !ta_hex_read16(text + 19, &low) || !ta_hex_read16(text + 36, &span) ||
         !ta_hex_read(text + 53, 2u, &flags)) {
         return TA_ERR_INVALID;
     }

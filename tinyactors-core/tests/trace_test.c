@@ -872,6 +872,31 @@ static void test_traceparent(void) {
         CHECK(parse(invalid[index], &parent) == TA_ERR_INVALID);
     }
 
+    /* The IDs are read eight digits at a time: every byte value, at every
+     * position of both IDs, is taken exactly when it is a lowercase hex
+     * digit, and lands in the right nibble. */
+    for (uint32_t at = 3; at < 52; at += 1u) {
+        if (at == 35) {
+            continue; /* the dash between the IDs */
+        }
+        for (int byte = 1; byte < 256; byte += 1) {
+            char changed[56];
+            memcpy(changed, example, sizeof changed);
+            changed[at] = (char)byte;
+            int value = byte >= '0' && byte <= '9' ? byte - '0' : byte >= 'a' && byte <= 'f' ? byte - 'a' + 10 : -1;
+            ta_result result = ta_traceparent_parse(
+                &(ta_traceparent_parse_params){ .text = { changed, 55 }, .out = &parent });
+            CHECK(value < 0 ? result == TA_ERR_INVALID : result == TA_OK);
+            if (value >= 0) {
+                uint32_t field = at < 19 ? 0 : at < 35 ? 1 : 2;
+                uint32_t start = field == 0 ? 3 : field == 1 ? 19 : 36;
+                uint64_t read = field == 0 ? parent.context.trace_id_high
+                                : field == 1 ? parent.context.trace_id_low : parent.cause.macrostep;
+                CHECK(((read >> (4u * (15u - (at - start)))) & 0xfu) == (uint64_t)value);
+            }
+        }
+    }
+
     char id[33];
     CHECK(ta_trace_id_format(&(ta_trace_id_format_params){ .context = { 1, 0xabcu, 0, 0 }, .buffer = id,
                                                            .capacity = sizeof id, .needed = &needed }) == TA_OK);
