@@ -1,6 +1,6 @@
 # ADR 0073: Core builds, generates and samples trace contexts
 
-**Status:** Accepted; not yet implemented. Refines ADR 0067 (section 6: core now creates trace IDs when a host asks, and the sink's sampling flag becomes masks). Serves napi ADR 0017 and core ADR 0072.
+**Status:** Accepted and implemented (2026-09-25); see the implementation notes for where the code differs from the text. Refines ADR 0067 (section 6: core now creates trace IDs when a host asks, and the sink's sampling flag becomes masks). Serves napi ADR 0017 and core ADR 0072.
 **Date:** 2026-09-25
 
 ## Context
@@ -186,3 +186,25 @@ typedef struct {
   (an internal event, a send to another actor, a delayed send) is watched
   too, while an unwatched delivery in the same system gets `kinds`.
 - An unsampled macrostep writes exactly `unsampled_kinds`.
+
+## Implementation notes
+
+- **The ratio is an integer fraction, not a `double`.** The API extractor
+  and both binding generators have no floating-point type, and adding one
+  was out of scope. `ta_trace_ratio_threshold(parts, whole)` and
+  `ta_system_set_trace_ratio(system, parts, whole)` compute T exactly, as
+  round((whole − parts) × 2^56 / whole), in 64-bit arithmetic. napi passes
+  parts per 10^9. Section 3's text was revised while this ADR was being
+  implemented, before it was built.
+- **Lifecycle records follow the watch mark.** A lifecycle record's kind is
+  looked up in `watched_kinds` when its context is marked watched and in
+  `kinds` otherwise, not in both. Otherwise an unwatched spawn would write
+  its lifecycle record whenever `watched_kinds` asked for every kind.
+- **Golden values** are pinned in `tests/trace_test.c`. For seed 0, the
+  first trace ID is `99ec5f36cb75f2b4bf6e1f784956452a` and the next span
+  ID is `1a5f849d4933e6e0`. They were checked against an independent
+  implementation of xoshiro256** over SplitMix64.
+- **Cost:** `ta_system` grows by 40 bytes (the generator's 32 and the
+  threshold's 8). Nothing is added per actor or per event. On napi (Node 22), a
+  `post` with a `traceparent` costs 19 ns more than one without, down from
+  494 ns when JavaScript parsed it (napi ADR 0017 section 2).

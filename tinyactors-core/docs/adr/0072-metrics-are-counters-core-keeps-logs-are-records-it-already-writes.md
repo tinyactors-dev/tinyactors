@@ -1,6 +1,6 @@
 # ADR 0072: Metrics are counters core keeps; logs are records it already writes
 
-**Status:** Accepted; not yet implemented. Refines ADR 0045 (a log record carries its step key and trace context) and ADR 0067 (sampling becomes a per-kind mask; two of its open points close); it builds on ADR 0070 and ADR 0071, and on napi ADR 0016's encoder. Research: [`docs/research/otel-metrics-and-logs-for-actors.md`](../../../docs/research/otel-metrics-and-logs-for-actors.md).
+**Status:** Accepted and implemented in core (2026-09-25); the host parts are partly implemented in napi (napi ADR 0017). See the implementation notes. Refines ADR 0045 (a log record carries its step key and trace context) and ADR 0067 (sampling becomes a per-kind mask; two of its open points close); it builds on ADR 0070 and ADR 0071, and on napi ADR 0016's encoder. Research: [`docs/research/otel-metrics-and-logs-for-actors.md`](../../../docs/research/otel-metrics-and-logs-for-actors.md).
 **Date:** 2026-09-24
 
 ## Context
@@ -359,3 +359,59 @@ included) against what the OpenTelemetry ecosystem already provides.
   fail an action and dead-letter a message, where the metrics view charts
   occupancy, errors and turn duration; the logs view shows the failures;
   and "logs related to this trace" opens them from a sampled trace.
+
+## Implementation notes
+
+- **Counters.** `ta_counters` holds each field as its own `uint64_t`, as
+  the API extractor needs. Most counters move at the trace points that
+  already mark a commit:
+  - lifecycle in `ta_trace_lifecycle` and at FINISHED;
+  - macrosteps at `MACROSTEP_BEGIN` and microsteps at `MICROSTEP`;
+  - errors when the unit that queued them commits, or in selection when
+    it completes;
+  - `events_taken`, `events_ignored` and `internal_ignored` when selection
+    for a taken event completes;
+  - paused and stopped runs where PAUSED and STOPPED are written;
+  - invocations at INVOKED and INVOKE_CANCELLED.
+
+  The rest: sends and delayed sends count when `<send>` commits, cancels
+  when `ta_timer_cancel` removed a send, and fired timers in the deadline
+  loop, when the send was not answered RETRY. They live in the definition
+  (`ta_definition.counters`) and in the system. A definition's counters are
+  the only fields of a definition that change after registration.
+- **Occupancy** is one `uint32_t` per state, so 4 bytes per state rather
+  than per atomic state. It is allocated in the definition's arena at
+  registration. It changes when a microstep stores its configuration
+  (`ta_store_active`), and in `ta_trace_lifecycle` for load, unload and
+  destroy, the one place every residency change passes. A spawned actor
+  arrives at its bootstrap's first store.
+- **`IGNORED`** is written in `ta_after_selection` when a taken event
+  enabled nothing. Its key is the step the event was taken in, so an
+  internal event that nothing handles shows up next to the microstep that
+  raised it.
+- **Events queued outside a run.** Only the error.communication of a
+  delayed send that failed at dispatch gets a counter and a RAISED record
+  (`ta_interpreter_raised_outside`), with the send's trace parent as
+  cause. An invocation lost across an image (`ta_invoke_report_lost`) and
+  an invoker's UNAVAILABLE are not recorded yet: open point.
+- **Due time.** It is carried by `ta_send.due` and
+  `ta_external_delivery.due`. napi does not measure timer lateness with it
+  yet: open point.
+- **Costs:**
+  - per definition: 168 bytes of counters, plus 4 bytes per state;
+  - per system: 168 bytes;
+  - per actor: nothing. `ta_actor` stays 232 bytes;
+  - per event: one increment per counted occurrence. Occupancy also walks
+    the definition's states twice per microstep store, next to the walk
+    `ta_store_active` already does.
+
+  Throughput could not be measured on a quiet machine during this change.
+  The bench machine was loaded, and untraced deliveries measured 640 ns
+  instead of the usual 437 ns.
+- **Open points left by this change:**
+  - napi's host metrics other than messages and memory: turn duration,
+    timer lateness, the overdue gauge, quarantine, dead letters by reason,
+    and exemplars;
+  - the `tinyactors.actor.quarantined` and
+    `tinyactors.message.dead_lettered` logs;
+  - RAISED records for the other events queued outside a run.

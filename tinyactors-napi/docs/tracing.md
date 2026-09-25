@@ -28,10 +28,29 @@ of several turns are separate requests.
 
 ## Options
 
-`setTraceSink(sink, options)`:
+`setTraceSink(sink, options)` calls `sink(traces, logs)` once per pump
+turn:
+- `traces` is an OTLP trace request. It is empty when no span ended in the
+  turn.
+- `logs` is an OTLP logs request, or `undefined` when there are no logs.
 
-- `kinds`: the record kinds wanted (`TRACE_KINDS`), every kind by default.
+Post each to the collector's `/v1/traces` and `/v1/logs`.
+
+- `detail`: `"summary"` (default) gives a span per macrostep, lifecycle
+  spans, and failures. `"decisions"` adds microsteps, guard conditions and
+  raised events. `"full"` gives every kind.
+- `kinds`: the record kinds wanted (`TRACE_KINDS`), overriding `detail`.
   Core builds no other record. Without a sink core builds nothing.
+- `sample`: the ratio, 0 to 1 (default 1), of the traces this system
+  starts that are sampled. It uses OpenTelemetry's consistent probability
+  sampling, so other services agree on the decision. A `traceparent` from
+  a caller keeps the caller's decision.
+- `logs`: failures (an action that failed, an `error.*` raised, a run
+  stopped for lack of memory) as WARN logs, and `<log>` as INFO. They are
+  written whatever the sampling and the detail. On by default.
+- `logLimit`: at most this many logs per definition and name per second
+  (default 20). The next log that passes carries `tinyactors.suppressed`,
+  the number dropped.
 - `unsampled`: also trace macrosteps whose traceparent is not sampled.
 - `resource`: resource attributes every request carries, strings only.
 - `values`: event data and assigned values as JSON attributes, cut at
@@ -48,6 +67,38 @@ of several turns are separate requests.
 Replacing or removing a sink ends the spans still open (a macrostep that
 paused between turns, say), marked `scxml.incomplete`, and hands them to
 the previous sink first.
+
+## At 3am: turning it up without a restart
+
+- `system.configureTraces({ detail, kinds, sample })` changes the installed
+  sink in place. Open spans are kept.
+- `system.watchTraces({ sessions, families, addresses })` traces what
+  matches in full and sampled, whatever `sample` says, until its handle's
+  `stop()`. It matches the actors of these sessions or addresses, and
+  every actor of these definition families; a watched family's spawns are
+  watched from their bootstrap. What a watched delivery causes, such as
+  internal events, sends to other actors and delayed sends, is watched
+  too.
+
+A production system can run with `sample: 0`: failures still arrive as
+logs, and `watchTraces` shows the actor someone is asking about.
+
+## Metrics
+
+`system.metrics()` returns plain data: `{ startTime, time, system,
+metrics }`, where each metric is `{ name, unit, kind: "sum" | "gauge",
+points: [{ attributes, value }] }`. It holds:
+- core's counters per definition (core ADR 0072), for example
+  `tinyactors.actors.spawned`, `tinyactors.events.ignored` and
+  `tinyactors.errors` (by `scxml.error.type`);
+- `tinyactors.actors.occupancy`: how many actors are in each state (by
+  `scxml.state`);
+- napi's `tinyactors.messages.*` and `tinyactors.memory.usage`.
+
+No metric attribute names one actor; which actors, is what `inspect()`
+and a walk over actors answer. Post `metricsToOTLP(system.metrics(), {
+resource })` to `/v1/metrics` at your export interval, or report the
+points from OpenTelemetry observable instruments.
 
 ## What the spans say
 

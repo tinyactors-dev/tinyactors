@@ -1,6 +1,6 @@
 # ADR 0017: Observability owns its encoder, and makes off and sampled-out free
 
-**Status:** Accepted; not yet implemented. Revises ADR 0016 (points 1 and 4, and its performance), move `traceparent` parsing from ADR 0015 point 4 into C, and take the napi slot core ADR 0072 names for metrics and logs, revising that ADR's section 7 for metrics. Research: [`docs/research/observability-build-vs-reuse.md`](../../../docs/research/observability-build-vs-reuse.md).
+**Status:** Accepted and implemented, except where the implementation notes say otherwise. Revises ADR 0016 (points 1 and 4, and its performance), move `traceparent` parsing from ADR 0015 point 4 into C, and take the napi slot core ADR 0072 names for metrics and logs, revising that ADR's section 7 for metrics. Research: [`docs/research/observability-build-vs-reuse.md`](../../../docs/research/observability-build-vs-reuse.md).
 **Date:** 2026-09-24
 
 ## Context
@@ -335,3 +335,55 @@ The original questions were:
    core to carry a detail bit on the trace context, because the kind mask
    is per system. Worth a core change, or is "watched actors fully,
    everyone else sampled out" enough?
+
+## Implementation notes
+
+- **Section 2.**
+  - `post`, `send` and `spawn` hand `traceparent` to the addon as text, and
+    core parses it (core ADR 0073).
+  - Core's generator is seeded once per sink, from the OS or from `seed`.
+  - `mise run bench-check` runs the budgets on Node and Bun. It is not part
+    of `mise run test`, because 40 ns is within a shared machine's noise.
+    On a quiet machine with Node 22, a `traceparent` cost 19 ns over
+    untraced and a sampled-out macrostep 26 ns, both within budget.
+  - Bun measured a sampled-out macrostep at 46–53 ns, over the budget: open
+    point.
+- **Section 3.** `detail` (`summary` by default), `sample`,
+  `configureTraces()` and `watchTraces()` are built as written.
+  - The scheduler checks the watch at its one delivery point, with
+    `ta_actor_inspect` only when a watch is active.
+  - A watched family's spawns are watched from their bootstrap.
+- **Section 4.** The clock is read at span boundaries only. The encoder
+  still copies each span once more, from its own buffers into the request;
+  writing spans straight into the request was not done.
+  - Measured with every record kind, 100,000 actors, Node 26, before the
+    machine was loaded: 886 ns per event for macrostep spans, against a
+    437 ns untraced baseline, and 1,543 ns for every record.
+  - The targets of 700 ns and 1.2 µs are not met: open point.
+- **Section 5.** Open spans are in an open-addressing index by session.
+  They end, marked incomplete, on unload and destroy: the sink always asks
+  core for those two kinds, and writes their spans only when they were
+  asked for. The name cache sweeps freed definitions and compacts its text
+  before it grows.
+- **Section 6.** An I/O processor's context is per request, and a reply it
+  posts defaults to the request's `traceparent`. An invoker's events carry
+  the invoke request's `traceparent`. Core's `ta_invoke_report_params`
+  gained `trace`.
+- **Section 7.**
+  - **The sink's signature differs from the text.** It is called as
+    `sink(traces, logs)`, not with `{ traces, logs }`, so a sink written
+    for traces alone keeps working. `traces` is empty when only logs were
+    written.
+  - **Logs are the failures and `<log>`.** Failures (ACTION_FAILED, a
+    RAISED `error.*`, STOPPED) are WARN, and `<log>` is INFO. The limit is
+    `logLimit` per definition and name per second, and `logs: false`
+    writes none.
+  - **Metrics.** `system.metrics()` and `metricsToOTLP()` are built. The
+    snapshot holds core's counters and occupancy, and napi's messages and
+    memory.
+  - **Not done:** the tested SDK example with observable instruments, and
+    the host metrics listed in core ADR 0072's implementation notes.
+- **otel-tui.** In a check in tmux, `mise run otel-demo` showed the
+  request's trace, with `POST /orders` and the actors' spans, and the
+  metrics (`tinyactors.actors.spawned` and the rest). The demo chart has
+  no failure and no `<log>`, so it sends no logs.

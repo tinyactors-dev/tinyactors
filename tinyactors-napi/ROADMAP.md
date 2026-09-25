@@ -711,6 +711,33 @@ the bytes. Tests: `test/tracing.js`, `test/otlp.js`, `test/otel-sdk.js`
 (the official SDK, a pinned dev dependency), `test/native/otlp_test.c`;
 bench: `test/bench/tracing.js`. See `docs/tracing.md`.
 
+### 16. Observability at 3am
+
+Done (ADR 0017; core ADRs 0072 and 0073):
+- **Off and sampled out cost next to nothing.** Core parses `traceparent`
+  and makes trace IDs, and `mise run bench-check` holds both paths to a
+  40 ns budget.
+- **Detail.** `detail` presets default to `summary`, `sample` sets the
+  ratio of traces sampled, and `configureTraces()` changes both in place.
+  `watchTraces({ sessions, families, addresses })` traces one actor,
+  definition or request in full.
+- **Replies** from I/O processors and invokers stay in the request's
+  trace.
+- **Logs.** Failures and `<log>` reach the sink as OTLP logs,
+  `sink(traces, logs)`, rate-limited.
+- **Metrics.** `system.metrics()` returns core's counters, occupancy,
+  messages and memory as plain data, and `metricsToOTLP()` writes them as
+  OTLP.
+- **Tests:** `test/tracing.js`, `test/metrics.js` and
+  `test/native/otlp_test.c`.
+
+Open (ADR 0017's implementation notes):
+- the traced-path targets;
+- Bun's sampled-out budget;
+- the SDK example with observable instruments;
+- host metrics for turn duration, timer lateness, quarantine and dead
+  letters.
+
 ## Open follow-ups
 
 **Core findings** (measured in `scale.js`, recorded in `docs/scale.md`; each
