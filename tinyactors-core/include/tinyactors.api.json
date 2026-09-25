@@ -5326,7 +5326,7 @@
           "direction": "in",
           "optional": true,
           "lifetime": "definition",
-          "doc": "Each expression's role, by the same index (ADR 0074)."
+          "doc": "Each expression's role, by the same index (ADR 0076)."
         },
         {
           "name": "expression_count",
@@ -7268,7 +7268,7 @@
           "count": "datamodel_count",
           "shape": "counted",
           "direction": "in",
-          "doc": "The data models the document may choose from, by name (ADR 0074). A document whose `datamodel` attribute names one gets the one whose `v->name` is that name; a document without the attribute gets the first. A name none of them has is refused as a compile error at the attribute, TA_COMPILE_ERROR_DATAMODEL_MISMATCH, located in `input`. At least one."
+          "doc": "The data models the document may choose from, by name (ADR 0076). A document whose `datamodel` attribute names one gets the one whose `v->name` is that name; a document without the attribute gets the first. A name none of them has is refused as a compile error at the attribute, TA_COMPILE_ERROR_DATAMODEL_MISMATCH, located in `input`. At least one."
         },
         {
           "name": "datamodel_count",
@@ -8179,7 +8179,7 @@
           "doc": "a <script > body, run for its effect"
         }
       ],
-      "doc": "How the chart uses an expression (ADR 0074): what a data model is asked to do with it at run time. A data model that compiles source text can compile each expression for its use.",
+      "doc": "How the chart uses an expression (ADR 0076): what a data model is asked to do with it at run time. A data model that compiles source text can compile each expression for its use.",
       "layout": {
         "x86_64-unknown-linux-gnu": {
           "size": 4,

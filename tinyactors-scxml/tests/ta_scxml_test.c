@@ -788,7 +788,7 @@ static void test_default_limits(void) {
 
 /*
  * The document's `datamodel` attribute picks one of the data models the host
- * offers (core ADR 0074): by name, the first when it names none, and a
+ * offers (core ADR 0076): by name, the first when it names none, and a
  * located compile error at the attribute when it names one not offered.
  */
 static const ta_datamodel_vtable other_datamodel_vtable = {
@@ -844,7 +844,7 @@ static ta_expr_role role_of(const char *source) {
     return (ta_expr_role)99;
 }
 
-/* prepare_definition learns how the chart uses each expression (ADR 0074). */
+/* prepare_definition learns how the chart uses each expression (ADR 0076). */
 static void test_expression_roles(ta_system *system) {
     ta_arena arena;
     CHECK(ta_arena_init(&arena, test_allocator, 4096) == TA_OK);

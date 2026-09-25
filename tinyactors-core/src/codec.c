@@ -331,7 +331,7 @@ static bool ta_import_locate(const ta_scxml_spec *spec, const ta_compile_error *
  * The data model the document names, or the first when it names none. A name
  * no entry has also gets the first, whose compile then refuses the chart
  * with a mismatch at the `datamodel` attribute: one error path, located in
- * the document (ADR 0058, ADR 0074).
+ * the document (ADR 0058, ADR 0076).
  */
 static ta_datamodel ta_import_datamodel(const ta_definition_import_params *params, ta_str name) {
     if (name.ptr != NULL && name.len != 0) {

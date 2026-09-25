@@ -1,4 +1,4 @@
-# ADR 0074: An imported document chooses its data model by name, and a data model learns how each expression is used
+# ADR 0076: An imported document chooses its data model by name, and a data model learns how each expression is used
 
 **Status:** Accepted and implemented (2026-09-25). Refines ADR 0053 (section 4, `ta_definition_import`); applies ADR 0058. Serves napi ADR 0019.
 **Date:** 2026-09-25

@@ -1,7 +1,7 @@
 # SCXML documents
 
 `define()` imports an SCXML document as well as a `statechart()` builder
-(napi ADR 0019, core ADRs 0053 and 0074):
+(napi ADR 0019, core ADRs 0053 and 0076):
 
 ```js
 const { createSystem } = require('tinyactors-napi');

@@ -261,7 +261,7 @@ The original questions were:
 
 ## Implementation notes
 
-- **Core:** core ADR 0074. `ta_definition_import` takes the data models by
+- **Core:** core ADR 0076. `ta_definition_import` takes the data models by
   name, and `prepare_definition` gets each expression's role, which is how
   `compile` learns it.
 - **`compile(source, role)` takes no `info`.** `prepare_definition` does not

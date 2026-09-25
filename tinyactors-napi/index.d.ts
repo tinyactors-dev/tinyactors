@@ -512,7 +512,7 @@ export interface DefinitionIdentity {
   readonly revision: string | Uint8Array;
 }
 
-/** How the chart uses a source expression (core ADR 0074). */
+/** How the chart uses a source expression (core ADR 0076). */
 export type ExpressionRole = "value" | "condition" | "location" | "script";
 
 /**

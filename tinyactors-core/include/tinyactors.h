@@ -566,7 +566,7 @@ typedef struct {
 } ta_expression_rejection;
 
 /*
- * How the chart uses an expression (ADR 0074): what a data model is asked
+ * How the chart uses an expression (ADR 0076): what a data model is asked
  * to do with it at run time. A data model that compiles source text can
  * compile each expression for its use.
  */
@@ -579,7 +579,7 @@ typedef enum {
 
 typedef struct {
     TA_COUNTED_BY(expression_count) TA_OPTIONAL TA_LIFETIME(definition) const ta_expression *expressions;
-    /* Each expression's role, by the same index (ADR 0074). */
+    /* Each expression's role, by the same index (ADR 0076). */
     TA_COUNTED_BY(expression_count) TA_OPTIONAL TA_LIFETIME(definition) const ta_expr_role *roles;
     uint32_t expression_count;
     ta_allocator allocator;
@@ -2191,7 +2191,7 @@ typedef struct {
     ta_chart_lowering lowering;
     TA_IN TA_OPTIONAL const ta_definition_identity *identity;
     /*
-     * The data models the document may choose from, by name (ADR 0074). A
+     * The data models the document may choose from, by name (ADR 0076). A
      * document whose `datamodel` attribute names one gets the one whose
      * `v->name` is that name; a document without the attribute gets the
      * first. A name none of them has is refused as a compile error at the

@@ -1397,7 +1397,7 @@ struct ta_definition {
     ta_extension_def *extensions;
     uint32_t extension_count;
     ta_expression *expressions;
-    ta_expr_role *expression_roles; /* by expression, for prepare_definition (ADR 0074) */
+    ta_expr_role *expression_roles; /* by expression, for prepare_definition (ADR 0076) */
     uint32_t expression_count;
     /*
      * Authored input the compiler normalizes, kept so ta_definition_export()
@@ -10244,7 +10244,7 @@ static bool ta_import_locate(const ta_scxml_spec *spec, const ta_compile_error *
  * The data model the document names, or the first when it names none. A name
  * no entry has also gets the first, whose compile then refuses the chart
  * with a mismatch at the `datamodel` attribute: one error path, located in
- * the document (ADR 0058, ADR 0074).
+ * the document (ADR 0058, ADR 0076).
  */
 static ta_datamodel ta_import_datamodel(const ta_definition_import_params *params, ta_str name) {
     if (name.ptr != NULL && name.len != 0) {

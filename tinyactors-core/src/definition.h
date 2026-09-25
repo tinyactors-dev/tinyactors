@@ -387,7 +387,7 @@ struct ta_definition {
     ta_extension_def *extensions;
     uint32_t extension_count;
     ta_expression *expressions;
-    ta_expr_role *expression_roles; /* by expression, for prepare_definition (ADR 0074) */
+    ta_expr_role *expression_roles; /* by expression, for prepare_definition (ADR 0076) */
     uint32_t expression_count;
     /*
      * Authored input the compiler normalizes, kept so ta_definition_export()

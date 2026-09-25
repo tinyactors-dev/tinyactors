@@ -734,7 +734,7 @@ class System {
   }
 
   // Decodes, compiles and registers an SCXML document; a refusal throws with
-  // its position (core ADRs 0058 and 0074).
+  // its position (core ADRs 0058 and 0076).
   #importSCXML(source) {
     let bytes = source;
     if (typeof source === 'string') {

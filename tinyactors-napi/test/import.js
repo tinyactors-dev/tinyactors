@@ -1,7 +1,7 @@
 'use strict';
 
 // SCXML documents with a data model in JavaScript (ADR 0019, core ADR
-// 0074): registerDatamodel() compiles source text for the built-in data
+// 0076): registerDatamodel() compiles source text for the built-in data
 // model, and define(xml, { format: 'scxml' }) imports a document through the
 // SCXML codec. Runs on Node and Bun.
 

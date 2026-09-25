@@ -467,7 +467,7 @@ static napi_value tna_import_refusal(napi_env env, ta_result result, const tna_i
 
 /*
  * importDefinition(bytes): decodes an SCXML document, compiles it against
- * the data model it names, and registers it (ADR 0019, core ADR 0074). The
+ * the data model it names, and registers it (ADR 0019, core ADR 0076). The
  * definition ID as a bigint, or a refusal object { code, stage, message,
  * line, column, offset }.
  */

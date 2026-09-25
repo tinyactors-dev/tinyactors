@@ -1,6 +1,6 @@
 #pragma once
 /*
- * Importing SCXML documents (napi ADR 0019, core ADRs 0053 and 0074).
+ * Importing SCXML documents (napi ADR 0019, core ADRs 0053 and 0076).
  *
  * define(xml, { format: 'scxml' }) decodes the document with the SCXML codec
  * (tinyactors-scxml, over tinyxml), compiles it against the data model its
@@ -28,7 +28,7 @@ typedef struct {
 
 typedef struct {
     ta_bytes input;
-    /* The data models the document may choose from (core ADR 0074). */
+    /* The data models the document may choose from (core ADR 0076). */
     const ta_datamodel *datamodels;
     uint32_t datamodel_count;
     ta_definition_id *out;
