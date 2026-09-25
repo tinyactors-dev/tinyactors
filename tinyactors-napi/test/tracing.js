@@ -103,6 +103,40 @@ async function batches() {
   system.close();
 }
 
+// The bytes belong to the sink (napi ADR 0018): each turn's request is a
+// Buffer of its own, written in place, so bytes kept across an await read
+// the same after later turns have written theirs.
+async function bytesOutliveTheTurn() {
+  const system = createSystem();
+  const kept = [];
+  system.setTraceSink((traces, logs) => {
+    kept.push({ traces, copy: Uint8Array.from(traces), logs, logsCopy: logs && Uint8Array.from(logs) });
+  }, { detail: 'full' });
+  const failing = system.define(
+    statechart({ family: 'failing', revision: 'v1' })
+      .state('idle', (s) => s.on('go', (t) => t.log('going').script(() => { throw new Error('no'); }))),
+  );
+  const actors = [system.spawn(counter(system)), system.spawn(failing)];
+  await system.flush();
+  for (let round = 0; round < 5; round += 1) {
+    for (const actor of actors) actor.post('go');
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    await system.flush();
+  }
+  assert.ok(kept.length >= 3, 'several turns wrote requests');
+  assert.ok(kept.some((batch) => batch.logs !== undefined), 'some turns wrote logs');
+  for (const batch of kept) {
+    assert.equal(Object.getPrototypeOf(batch.traces), Uint8Array.prototype, 'a plain Uint8Array, not a Buffer');
+    assert.deepEqual(batch.traces, batch.copy, 'a kept request is unchanged by later turns');
+    if (batch.logs !== undefined) {
+      assert.ok(batch.logs instanceof Uint8Array && batch.logs.length > 0);
+      assert.deepEqual(batch.logs, batch.logsCopy, 'kept logs are unchanged by later turns');
+    }
+    assert.deepEqual(decodeTraces(batch.traces), decodeTraces(batch.copy));
+  }
+  system.close();
+}
+
 // The mask decides what core builds, and so which spans there are.
 async function kinds() {
   const system = createSystem();
@@ -515,6 +549,7 @@ async function watchAndSample() {
   await untraced();
   await watchAndSample();
   await batches();
+  await bytesOutliveTheTurn();
   await kinds();
   await traceparentIn();
   await startedTraces();

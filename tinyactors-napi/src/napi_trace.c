@@ -137,18 +137,29 @@ static bool tna_host_value_text(void *self, const ta_value *value, ta_str *out) 
  * Dispatch: the turn's spans, as one OTLP request
  */
 
-/* The spans that ended, as a Uint8Array holding one ExportTraceServiceRequest, or NULL. */
-static napi_value tna_bytes_value(napi_env env, ta_str bytes) {
+/*
+ * One request, written straight into memory of exactly its size (napi ADR
+ * 0018). napi_create_buffer does not zero-fill, and the encoder writes every
+ * byte, so nothing is copied or cleared. The sink gets a plain Uint8Array
+ * over that memory, as before, not the Buffer itself. The bytes belong to
+ * JavaScript: a sink may keep them across an await.
+ */
+typedef size_t (*tna_put_request)(tna_otlp *otlp, uint8_t *out, size_t size);
+
+static napi_value tna_request_value(napi_env env, tna_otlp *otlp, size_t size, tna_put_request put) {
     void *data = NULL;
     napi_value buffer = NULL;
+    napi_value memory = NULL;
+    size_t offset = 0;
     napi_value array = NULL;
-    if (napi_create_arraybuffer(env, bytes.len, &data, &buffer) != napi_ok) {
+    if (napi_create_buffer(env, size, &data, &buffer) != napi_ok ||
+        napi_get_typedarray_info(env, buffer, NULL, NULL, NULL, &memory, &offset) != napi_ok) {
         return NULL;
     }
-    if (bytes.len != 0) {
-        memcpy(data, bytes.ptr, bytes.len);
+    if (size != 0 && put(otlp, data, size) != size) {
+        return NULL;
     }
-    if (napi_create_typedarray(env, napi_uint8_array, bytes.len, buffer, 0, &array) != napi_ok) {
+    if (napi_create_typedarray(env, napi_uint8_array, size, memory, offset, &array) != napi_ok) {
         return NULL;
     }
     return array;
@@ -161,22 +172,22 @@ static napi_value tna_bytes_value(napi_env env, ta_str bytes) {
  * neither.
  */
 static napi_value tna_trace_bytes(napi_env env, tna_system *system) {
-    if (!system->tracing || (system->otlp.span_count == 0 && system->otlp.log_count == 0)) {
+    tna_otlp *otlp = &system->otlp;
+    size_t traces = tna_otlp_traces_size(otlp);
+    size_t logs = tna_otlp_logs_size(otlp);
+    if (!system->tracing || (traces == 0 && logs == 0)) {
         return NULL;
     }
-    /* The traces are the span buffer itself (tna_otlp_take): copy them into
-     * JavaScript before anything else can end a span. */
-    napi_value traces_value = tna_bytes_value(env, tna_otlp_take(&system->otlp));
-    ta_str logs = tna_otlp_take_logs(&system->otlp);
     napi_value batch = NULL;
+    napi_value traces_value = tna_request_value(env, otlp, traces, tna_otlp_put_traces);
     napi_value logs_value = NULL;
-    if (napi_create_object(env, &batch) != napi_ok) {
-        return NULL;
-    }
-    if (logs.len != 0) {
-        logs_value = tna_bytes_value(env, logs);
+    if (logs != 0) {
+        logs_value = tna_request_value(env, otlp, logs, tna_otlp_put_logs);
     } else {
         napi_get_undefined(env, &logs_value);
+    }
+    if (traces_value == NULL || logs_value == NULL || napi_create_object(env, &batch) != napi_ok) {
+        return NULL;
     }
     tna_js_put(env, batch, "traces", traces_value);
     tna_js_put(env, batch, "logs", logs_value);

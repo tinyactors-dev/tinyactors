@@ -3,8 +3,11 @@
  * Node-API: a request is well-formed protobuf of the right shape, a
  * macrostep that pauses between turns stays open across takes, lifecycle
  * records are spans of their own, open spans end when the sink goes, and
- * the bytes of a small request are fixed (golden).
+ * the bytes of a small request are fixed (golden). Every request is put
+ * into a heap block of exactly the size the encoder reported, so a write
+ * past it fails under AddressSanitizer (napi ADR 0018).
  */
+#include <stdlib.h>
 #include <string.h>
 
 #include "allocator.h"
@@ -13,6 +16,36 @@
 
 #define S(literal) ((ta_str){ .ptr = (literal), .len = (uint32_t)(sizeof(literal) - 1u) })
 #define END {0}
+
+/* ------------------------------------------------------------------------
+ * Taking a request: size, then put into memory of exactly that size
+ */
+
+typedef size_t (*request_size)(const tna_otlp *otlp);
+typedef size_t (*request_put)(tna_otlp *otlp, uint8_t *out, size_t size);
+
+/* The last request taken; freed by the next take and at exit. */
+static uint8_t *taken;
+
+static ta_str take_with(tna_otlp *otlp, request_size size_of, request_put put) {
+    free(taken);
+    taken = NULL;
+    size_t size = size_of(otlp);
+    if (size == 0) {
+        return (ta_str){ 0 };
+    }
+    taken = malloc(size);
+    CHECK(taken != NULL);
+    /* A size that is not the current one writes and forgets nothing. */
+    CHECK(put(otlp, taken, size - 1u) == 0);
+    CHECK(size_of(otlp) == size);
+    CHECK(put(otlp, taken, size) == size);
+    CHECK(size_of(otlp) == 0);
+    return (ta_str){ (const char *)taken, (uint32_t)size };
+}
+
+static ta_str take(tna_otlp *otlp) { return take_with(otlp, tna_otlp_traces_size, tna_otlp_put_traces); }
+static ta_str take_logs(tna_otlp *otlp) { return take_with(otlp, tna_otlp_logs_size, tna_otlp_put_logs); }
 
 /* ------------------------------------------------------------------------
  * A host with a fixed clock and fixed trace IDs
@@ -282,13 +315,13 @@ static void open_across_turns(void) {
     CHECK(resume(&f, 1) == TA_RUN_PAUSED);
 
     span_view spans[16];
-    uint32_t count = read_spans(tna_otlp_take(&f.otlp), spans, 16);
+    uint32_t count = read_spans(take(&f.otlp), spans, 16);
     CHECK(count == 1); /* spawned: the macrostep and its microstep are still open */
     CHECK(named(spans, count, "scxml.spawned") != NULL);
     CHECK(tna_otlp_open_count(&f.otlp) == 1);
 
     CHECK(resume(&f, 100) == TA_RUN_STABLE);
-    uint32_t more = read_spans(tna_otlp_take(&f.otlp), spans, 16);
+    uint32_t more = read_spans(take(&f.otlp), spans, 16);
     const span_view *macro = named(spans, more, "scxml.macrostep bootstrap");
     CHECK(macro != NULL);
     ta_actor_inspection view;
@@ -303,7 +336,7 @@ static void open_across_turns(void) {
     }
     CHECK(micro == 3u); /* bootstrap, a → b, b → c */
     CHECK(tna_otlp_open_count(&f.otlp) == 0);
-    CHECK(tna_otlp_take(&f.otlp).len == 0);
+    CHECK(take(&f.otlp).len == 0);
 
     /* A delivered event: a macrostep, its microstep, and a raise event on it. */
     ta_atom go = 0;
@@ -313,7 +346,7 @@ static void open_across_turns(void) {
     CHECK(ta_actor_deliver(f.core, &(ta_actor_deliver_params){ .actor = f.actor,
                                                                .event = &(ta_event){ .name = name } }) == TA_OK);
     CHECK(resume(&f, 100) == TA_RUN_STABLE);
-    count = read_spans(tna_otlp_take(&f.otlp), spans, 16);
+    count = read_spans(take(&f.otlp), spans, 16);
     const span_view *go_macro = named(spans, count, "scxml.macrostep go");
     const span_view *go_micro = named(spans, count, "scxml.microstep go");
     CHECK(go_macro != NULL && go_micro != NULL);
@@ -322,7 +355,7 @@ static void open_across_turns(void) {
 
     /* Destroying is a lifecycle span of its own. */
     CHECK(ta_actor_destroy(f.core, f.actor) == TA_OK);
-    count = read_spans(tna_otlp_take(&f.otlp), spans, 16);
+    count = read_spans(take(&f.otlp), spans, 16);
     CHECK(count == 1 && named(spans, count, "scxml.destroyed") != NULL);
     CHECK(f.otlp.dropped == 0);
     stop(&f);
@@ -334,10 +367,10 @@ static void end_all(void) {
     start(&f, true);
     CHECK(ta_actor_spawn(f.core, &(ta_actor_spawn_params){ .definition = f.definition, .out = &f.actor }) == TA_OK);
     CHECK(resume(&f, 1) == TA_RUN_PAUSED);
-    (void)tna_otlp_take(&f.otlp);
+    (void)take(&f.otlp);
     tna_otlp_end_all(&f.otlp);
     span_view spans[4];
-    uint32_t count = read_spans(tna_otlp_take(&f.otlp), spans, 4);
+    uint32_t count = read_spans(take(&f.otlp), spans, 4);
     CHECK(count == 2); /* the bootstrap macrostep, and its first microstep */
     CHECK(spans[0].incomplete && spans[1].incomplete);
     CHECK(named(spans, count, "scxml.macrostep bootstrap") != NULL);
@@ -352,7 +385,7 @@ static void golden(void) {
     CHECK(tna_otlp_set_resource(&f.otlp, &(tna_otlp_attribute){ .key = S("service.name"), .value = S("test") }, 1) ==
           TA_OK);
     CHECK(ta_actor_spawn(f.core, &(ta_actor_spawn_params){ .definition = f.definition, .out = &f.actor }) == TA_OK);
-    ta_str bytes = tna_otlp_take(&f.otlp);
+    ta_str bytes = take(&f.otlp);
     static const char expected[] = "0af1010a180a160a0c736572766963652e6e616d6512060a047465737412d4010a130a0a74696e796163746f72731205302e302e3012bc010a100101010101010101010101010101010112088b7d46327ff76c852a0d7363786d6c2e737061776e6564300139e80300000000000041e8030000000000004a200a107363786d6c2e73657373696f6e5f6964120c0a0a343239343936373239364a150a0f7363786d6c2e6d6163726f73746570120218004a140a0b7363786d6c2e6163746f7212050a03303a314a1a0a107363786d6c2e646566696e6974696f6e12061880808080104a100a0a7363786d6c2e74696d6512021800";
     char hex[2048];
     CHECK(bytes.len * 2u < sizeof hex);
@@ -386,7 +419,7 @@ static void many_open(void) {
         CHECK(resume(&f, 1) == TA_RUN_PAUSED);
     }
     CHECK(tna_otlp_open_count(&f.otlp) == COUNT);
-    (void)tna_otlp_take(&f.otlp);
+    (void)take(&f.otlp);
     /* Every third, then the rest, from the back. */
     for (uint32_t pass = 0; pass < 2; pass += 1u) {
         for (uint32_t at = COUNT; at > 0; at -= 1u) {
@@ -397,7 +430,7 @@ static void many_open(void) {
         }
     }
     CHECK(tna_otlp_open_count(&f.otlp) == 0);
-    (void)tna_otlp_take(&f.otlp);
+    (void)take(&f.otlp);
 
     /* An actor unloaded mid-macrostep ends its span as incomplete. */
     CHECK(ta_actor_spawn(f.core, &(ta_actor_spawn_params){ .definition = f.definition, .out = &f.actor }) == TA_OK);
@@ -406,18 +439,46 @@ static void many_open(void) {
     ta_actor_destroy(f.core, f.actor);
     CHECK(tna_otlp_open_count(&f.otlp) == 0);
     span_view spans[8];
-    uint32_t count = read_spans(tna_otlp_take(&f.otlp), spans, 8);
+    uint32_t count = read_spans(take(&f.otlp), spans, 8);
     const span_view *boot = named(spans, count, "scxml.macrostep bootstrap");
     CHECK(boot != NULL && boot->incomplete);
     CHECK(named(spans, count, "scxml.destroyed") != NULL);
     stop(&f);
 }
 
+/*
+ * Logs take the same way. Their size is the running total, and it is right
+ * across several puts, with records added between them.
+ */
+static void logs(void) {
+    fixture f;
+    start(&f, true);
+    f.otlp.config.log_limit = 1000; /* the fixture writes no logs by default */
+    CHECK(tna_otlp_set_resource(&f.otlp, &(tna_otlp_attribute){ .key = S("service.name"), .value = S("test") }, 1) ==
+          TA_OK);
+    CHECK(take_logs(&f.otlp).len == 0);
+    for (uint32_t round = 0; round < 3; round += 1u) {
+        for (uint32_t at = 0; at <= round; at += 1u) {
+            tna_otlp_host_log(&f.otlp, &(tna_otlp_host_log_params){ .event_name = S("tinyactors.message.dead_lettered"),
+                                                                   .body = S("no such address"),
+                                                                   .key = S("tinyactors.dead_letter.reason"),
+                                                                   .value = S("no-route") });
+        }
+        ta_str bytes = take_logs(&f.otlp);
+        CHECK(bytes.len != 0);
+        reader r = { .at = (const uint8_t *)bytes.ptr, .end = (const uint8_t *)bytes.ptr + bytes.len };
+        CHECK(well_formed(r));
+    }
+    stop(&f);
+}
+
 int main(void) {
+    logs();
     many_open();
     open_across_turns();
     end_all();
     golden();
+    free(taken);
     puts("otlp_test passed");
     return 0;
 }

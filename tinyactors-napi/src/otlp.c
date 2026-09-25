@@ -648,7 +648,6 @@ static const char *const tna_event_types[] = { "external", "internal", "platform
 static ta_str tna_cstr(const char *text) { return (ta_str){ text, (uint32_t)strlen(text) }; }
 
 static void tna_span_init(tna_otlp_span *span, ta_allocator allocator);
-static void tna_spans_reset(tna_otlp *otlp);
 
 void tna_otlp_init(tna_otlp *otlp, const tna_otlp_config *config) {
     *otlp = (tna_otlp){ .config = *config };
@@ -656,15 +655,12 @@ void tna_otlp_init(tna_otlp *otlp, const tna_otlp_config *config) {
     tna_buf_init(&otlp->names, allocator);
     tna_buf_init(&otlp->resource, allocator);
     tna_buf_init(&otlp->spans, allocator);
-    tna_buf_init(&otlp->request, allocator);
     tna_buf_init(&otlp->scratch, allocator);
     tna_buf_init(&otlp->label, allocator);
     tna_buf_init(&otlp->text, allocator);
     tna_span_init(&otlp->lifecycle, allocator);
     tna_buf_init(&otlp->logs, allocator);
     tna_buf_init(&otlp->log_body, allocator);
-    tna_buf_init(&otlp->log_request, allocator);
-    tna_spans_reset(otlp);
 }
 
 ta_result tna_otlp_set_resource(tna_otlp *otlp, const tna_otlp_attribute *attributes, uint32_t count) {
@@ -674,9 +670,6 @@ ta_result tna_otlp_set_resource(tna_otlp *otlp, const tna_otlp_attribute *attrib
             otlp->resource.len = 0;
             return TA_ERR_NOMEM;
         }
-    }
-    if (otlp->span_count == 0) {
-        tna_spans_reset(otlp); /* the header grew with the resource */
     }
     return TA_OK;
 }
@@ -1628,37 +1621,54 @@ void tna_otlp_log(tna_otlp *otlp, const ta_log_record *record) {
     }
 }
 
-ta_str tna_otlp_take_logs(tna_otlp *otlp) {
-    otlp->log_request.len = 0;
+/* The sizes a logs request's header is made of; its records take `records` bytes. */
+typedef struct {
+    size_t scope;
+    size_t scope_logs;
+    size_t resource_logs;
+} tna_logs_layout;
+
+static tna_logs_layout tna_logs_layout_for(const tna_otlp *otlp, size_t records) {
+    ta_str version = otlp->config.version;
+    tna_logs_layout layout;
+    layout.scope = tna_len_field_size(F_SCOPE_NAME, sizeof "tinyactors" - 1u) +
+                   (version.len != 0 ? tna_len_field_size(F_SCOPE_VERSION, version.len) : 0);
+    layout.scope_logs = tna_len_field_size(F_SL_SCOPE, layout.scope) + records;
+    layout.resource_logs = tna_len_field_size(F_RL_RESOURCE, otlp->resource.len) +
+                           tna_len_field_size(F_RL_SCOPE_LOGS, layout.scope_logs);
+    return layout;
+}
+
+size_t tna_otlp_logs_size(const tna_otlp *otlp) {
     if (otlp->log_count == 0) {
-        return (ta_str){ NULL, 0 };
+        return 0;
+    }
+    return tna_len_field_size(F_REQUEST_RESOURCE_LOGS, tna_logs_layout_for(otlp, otlp->logs.len).resource_logs);
+}
+
+size_t tna_otlp_put_logs(tna_otlp *otlp, uint8_t *out, size_t size) {
+    if (size == 0 || size != tna_otlp_logs_size(otlp)) {
+        return 0;
     }
     ta_str name = LIT("tinyactors");
     ta_str version = otlp->config.version;
-    size_t scope = tna_len_field_size(F_SCOPE_NAME, name.len) +
-                   (version.len != 0 ? tna_len_field_size(F_SCOPE_VERSION, version.len) : 0);
-    size_t scope_logs = tna_len_field_size(F_SL_SCOPE, scope) + otlp->logs.len;
-    size_t resource_logs = tna_len_field_size(F_RL_RESOURCE, otlp->resource.len) +
-                           tna_len_field_size(F_RL_SCOPE_LOGS, scope_logs);
-    if (!tna_buf_room(&otlp->log_request, tna_len_field_size(F_REQUEST_RESOURCE_LOGS, resource_logs))) {
-        return (ta_str){ NULL, 0 };
-    }
-    tna_otlp_buf *out = &otlp->log_request;
-    tna_put_len_header(out, F_REQUEST_RESOURCE_LOGS, resource_logs);
-    tna_put_len_header(out, F_RL_RESOURCE, otlp->resource.len);
-    tna_put_bytes(out, otlp->resource.data, otlp->resource.len);
-    tna_put_len_header(out, F_RL_SCOPE_LOGS, scope_logs);
-    tna_put_len_header(out, F_SL_SCOPE, scope);
-    tna_put_len_header(out, F_SCOPE_NAME, name.len);
-    tna_put_bytes(out, name.ptr, name.len);
+    tna_logs_layout layout = tna_logs_layout_for(otlp, otlp->logs.len);
+    tna_otlp_buf view = { .data = out, .cap = size };
+    tna_put_len_header(&view, F_REQUEST_RESOURCE_LOGS, layout.resource_logs);
+    tna_put_len_header(&view, F_RL_RESOURCE, otlp->resource.len);
+    tna_put_bytes(&view, otlp->resource.data, otlp->resource.len);
+    tna_put_len_header(&view, F_RL_SCOPE_LOGS, layout.scope_logs);
+    tna_put_len_header(&view, F_SL_SCOPE, layout.scope);
+    tna_put_len_header(&view, F_SCOPE_NAME, name.len);
+    tna_put_bytes(&view, name.ptr, name.len);
     if (version.len != 0) {
-        tna_put_len_header(out, F_SCOPE_VERSION, version.len);
-        tna_put_bytes(out, version.ptr, version.len);
+        tna_put_len_header(&view, F_SCOPE_VERSION, version.len);
+        tna_put_bytes(&view, version.ptr, version.len);
     }
-    tna_put_bytes(out, otlp->logs.data, otlp->logs.len);
+    tna_put_bytes(&view, otlp->logs.data, otlp->logs.len);
     otlp->logs.len = 0;
     otlp->log_count = 0;
-    return (ta_str){ (const char *)out->data, (uint32_t)out->len };
+    return view.len;
 }
 
 void tna_otlp_write(tna_otlp *otlp, const ta_trace_record *record) {
@@ -1750,46 +1760,20 @@ static void tna_put_request_header(const tna_otlp *otlp, tna_otlp_buf *out, size
     }
 }
 
-/* Empties `spans` and reserves the gap for the largest header its spans can
- * need (lengths up to 4 GiB). Without memory for it, there is no gap, and
- * tna_otlp_take() copies. */
-static void tna_spans_reset(tna_otlp *otlp) {
-    size_t most = 0xffffffffu;
-    size_t gap = tna_request_size(otlp, most) - most;
-    otlp->spans.len = 0;
-    otlp->spans_at = tna_buf_room(&otlp->spans, gap) ? gap : 0;
-    otlp->spans.len = otlp->spans_at;
-    otlp->span_count = 0;
+size_t tna_otlp_traces_size(const tna_otlp *otlp) {
+    return otlp->span_count == 0 ? 0 : tna_request_size(otlp, otlp->spans.len);
 }
 
-/*
- * The spans that ended, as one ExportTraceServiceRequest. The header is
- * written into the gap before the spans, so the request is the span buffer
- * itself: the bytes stay valid until the next span ends, and the caller
- * copies them before anything can write one.
- */
-ta_str tna_otlp_take(tna_otlp *otlp) {
-    if (otlp->span_count == 0) {
-        return (ta_str){ NULL, 0 };
+size_t tna_otlp_put_traces(tna_otlp *otlp, uint8_t *out, size_t size) {
+    if (size == 0 || size != tna_otlp_traces_size(otlp)) {
+        return 0;
     }
-    size_t spans = otlp->spans.len - otlp->spans_at;
-    size_t header = tna_request_size(otlp, spans) - spans;
-    if (header <= otlp->spans_at) {
-        tna_otlp_buf view = { .data = otlp->spans.data + (otlp->spans_at - header), .cap = header };
-        tna_put_request_header(otlp, &view, spans);
-        otlp->spans.len = otlp->spans_at;
-        otlp->span_count = 0;
-        return (ta_str){ (const char *)view.data, (uint32_t)(header + spans) };
-    }
-    /* No gap, or the resource grew since it was reserved: copy, once. */
-    otlp->request.len = 0;
-    if (!tna_buf_room(&otlp->request, header + spans)) {
-        return (ta_str){ NULL, 0 }; /* the spans stay, and the next take tries again */
-    }
-    tna_put_request_header(otlp, &otlp->request, spans);
-    tna_put_bytes(&otlp->request, otlp->spans.data + otlp->spans_at, spans);
-    tna_spans_reset(otlp);
-    return (ta_str){ (const char *)otlp->request.data, (uint32_t)otlp->request.len };
+    tna_otlp_buf view = { .data = out, .cap = size };
+    tna_put_request_header(otlp, &view, otlp->spans.len);
+    tna_put_bytes(&view, otlp->spans.data, otlp->spans.len);
+    otlp->spans.len = 0; /* reset, not freed: its capacity serves the next turn */
+    otlp->span_count = 0;
+    return view.len;
 }
 
 void tna_otlp_end_all(tna_otlp *otlp) {
@@ -1823,11 +1807,9 @@ void tna_otlp_destroy(tna_otlp *otlp) {
     tna_span_free(&otlp->lifecycle);
     tna_buf_free(&otlp->logs);
     tna_buf_free(&otlp->log_body);
-    tna_buf_free(&otlp->log_request);
     tna_buf_free(&otlp->names);
     tna_buf_free(&otlp->resource);
     tna_buf_free(&otlp->spans);
-    tna_buf_free(&otlp->request);
     tna_buf_free(&otlp->scratch);
     tna_buf_free(&otlp->label);
     tna_buf_free(&otlp->text);

@@ -25,6 +25,11 @@
  * Memory: every buffer keeps its capacity, so once the busiest turn has been
  * seen, encoding allocates nothing. Writing cannot fail: a record that does
  * not fit because an allocation failed is counted in `dropped`.
+ *
+ * Output (napi ADR 0018): the encoder never owns a request. A host asks for
+ * a request's size, which is free (the spans and log records keep a running
+ * total), allocates exactly that many bytes in memory its own language owns,
+ * and has the encoder write the request into them in one pass.
  */
 #include <stdbool.h>
 #include <stddef.h>
@@ -120,7 +125,6 @@ typedef struct {
     tna_otlp_span lifecycle;   /* a lifecycle span while it is built */
     tna_otlp_buf logs;         /* encoded ScopeLogs.log_records entries */
     tna_otlp_buf log_body;     /* a log's body while its attributes are built */
-    tna_otlp_buf log_request;  /* the last request tna_otlp_take_logs() built */
     uint32_t log_count;
     /* Rate limits, one slot per (definition, name) hash; a collision shares one. */
     struct {
@@ -134,13 +138,9 @@ typedef struct {
     uint32_t name_count;
     tna_otlp_buf names;        /* the cached labels' text */
     tna_otlp_buf resource;     /* encoded Resource.attributes entries */
-    /* Encoded ScopeSpans.spans entries that ended, from `spans_at` on. The
-     * first `spans_at` bytes are a gap the request's header is written into
-     * when it is taken, so the spans are not copied again (napi ADR 0017
-     * section 4). */
+    /* Encoded ScopeSpans.spans entries that ended since the last put; `len`
+     * is the running total a request's size is computed from. */
     tna_otlp_buf spans;
-    size_t spans_at;
-    tna_otlp_buf request;      /* a request that did not fit the gap (the resource grew) */
     tna_otlp_buf scratch;      /* an event's attributes while it is built */
     tna_otlp_buf label;        /* a label while it is built */
     tna_otlp_buf text;         /* an event name or ID while it is formatted */
@@ -166,11 +166,18 @@ ta_result tna_otlp_set_resource(tna_otlp *otlp, const tna_otlp_attribute *attrib
 void tna_otlp_write(tna_otlp *otlp, const ta_trace_record *record);
 
 /*
- * The spans that ended since the last take, as one encoded
- * ExportTraceServiceRequest, and forgets them. Empty (len 0) when none
- * ended. The bytes stay valid until the next write or take.
+ * The size in bytes of the ExportTraceServiceRequest the spans that ended
+ * since the last put make; 0 when none ended. It walks nothing.
  */
-ta_str tna_otlp_take(tna_otlp *otlp);
+size_t tna_otlp_traces_size(const tna_otlp *otlp);
+
+/*
+ * Writes that request into `out`, which holds `size` bytes, and forgets the
+ * spans. `size` must be what tna_otlp_traces_size() reports now: otherwise
+ * nothing is written or forgotten and the result is 0. Returns the bytes
+ * written, which is `size`: the write never goes past it.
+ */
+size_t tna_otlp_put_traces(tna_otlp *otlp, uint8_t *out, size_t size);
 
 /* A <log> as an INFO log record; its value's text comes from the host. */
 /*
@@ -192,14 +199,12 @@ typedef struct {
 void tna_otlp_host_log(tna_otlp *otlp, const tna_otlp_host_log_params *log);
 void tna_otlp_log(tna_otlp *otlp, const ta_log_record *record);
 
-/*
- * The log records written since the last take, as one encoded
- * ExportLogsServiceRequest for `/v1/logs`, and forgets them. Empty when
- * there are none. Valid until the next write or take.
- */
-ta_str tna_otlp_take_logs(tna_otlp *otlp);
+/* The same pair for the log records written since the last put, as one
+ * ExportLogsServiceRequest for `/v1/logs`. */
+size_t tna_otlp_logs_size(const tna_otlp *otlp);
+size_t tna_otlp_put_logs(tna_otlp *otlp, uint8_t *out, size_t size);
 
-/* Ends every open span now, marked `scxml.incomplete`, so the next take
+/* Ends every open span now, marked `scxml.incomplete`, so the next put
  * carries them: the sink is going away. */
 void tna_otlp_end_all(tna_otlp *otlp);
 
