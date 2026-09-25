@@ -1190,13 +1190,35 @@ export interface MetricPoint {
   value: number;
 }
 
-/** One metric: a cumulative monotonic sum, or a gauge. */
-export interface Metric {
-  name: string;
-  unit: string;
-  kind: 'sum' | 'gauge';
-  points: MetricPoint[];
+/** A bucket's latest sample, with the sampled trace step it happened in. */
+export interface Exemplar {
+  /** The bucket's index in `buckets`. */
+  bucket: number;
+  value: number;
+  /** Milliseconds since the epoch. */
+  time: number;
+  traceID: string;
+  spanID: string;
 }
+
+/** A distribution with explicit bucket bounds (OTLP Histogram). */
+export interface HistogramPoint {
+  attributes: Record<string, string>;
+  count: number;
+  sum: number;
+  /** Present once something was recorded. */
+  min?: number;
+  max?: number;
+  /** Inclusive upper bounds; `buckets` has one more entry, for the rest. */
+  bounds: number[];
+  buckets: number[];
+  exemplars: Exemplar[];
+}
+
+/** One metric: a cumulative monotonic sum, a gauge, or a histogram. */
+export type Metric =
+  | { name: string; unit: string; kind: 'sum' | 'gauge'; points: MetricPoint[] }
+  | { name: string; unit: string; kind: 'histogram'; points: HistogramPoint[] };
 
 export interface MetricsSnapshot {
   /** Milliseconds since the epoch: when the system started counting, and now. */

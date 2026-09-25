@@ -39,6 +39,9 @@ static ta_external_event_submit_status tna_router_submit(void *self, const ta_ex
         ta_event_release(&event);
         return TA_EXTERNAL_EVENT_RETRY; /* full, or out of memory: core offers it again */
     }
+    if (system->dispatching_due) {
+        tna_system_record_lateness(system, delivery->due, &delivery->trace);
+    }
     tna_system_want_turn(system);
     return TA_EXTERNAL_EVENT_ACCEPTED;
 }

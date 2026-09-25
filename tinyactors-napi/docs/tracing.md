@@ -86,19 +86,82 @@ logs, and `watchTraces` shows the actor someone is asking about.
 ## Metrics
 
 `system.metrics()` returns plain data: `{ startTime, time, system,
-metrics }`, where each metric is `{ name, unit, kind: "sum" | "gauge",
-points: [{ attributes, value }] }`. It holds:
-- core's counters per definition (core ADR 0072), for example
-  `tinyactors.actors.spawned`, `tinyactors.events.ignored` and
-  `tinyactors.errors` (by `scxml.error.type`);
-- `tinyactors.actors.occupancy`: how many actors are in each state (by
-  `scxml.state`);
-- napi's `tinyactors.messages.*` and `tinyactors.memory.usage`.
+metrics }`, where each metric is `{ name, unit, kind, points }`. A `sum`
+or `gauge` point is `{ attributes, value }`; a `histogram` point is
+`{ attributes, count, sum, min, max, bounds, buckets, exemplars }`, with
+explicit bucket bounds. Every metric is listed from the first snapshot on,
+so a reader can register its instruments once.
+
+**Core's counters** (core ADR 0072), per definition family and revision:
+`tinyactors.actors.spawned` and the rest of the lifecycle,
+`tinyactors.events.taken` and `.ignored` (by `scxml.event.type`),
+`tinyactors.errors` (by `scxml.error.type`), sends, timers, invocations,
+and `tinyactors.actors.occupancy`: how many actors are in each state (by
+`scxml.state`).
+
+**What only the host knows** (napi ADR 0017 section 7):
+
+| Metric | Kind | What it answers |
+|---|---|---|
+| `tinyactors.pump.turn.duration` (s) | histogram | Is the host keeping up? A turn that takes long blocked the event loop. Exemplars link a bucket to the trace of a sampled macrostep that ran in such a turn. |
+| `tinyactors.scheduler.runnable`, `.ready` | gauge | How many actors wait for a turn (queue lengths, counting entries a later turn skips). |
+| `tinyactors.timers.lateness` (s) | histogram | How late each delayed send fired, to an actor or an I/O processor. Exemplars link to the trace that set the timer. |
+| `tinyactors.timers.overdue` (s) | gauge | How far behind the earliest pending timer is now; one that keeps growing is not being served. |
+| `tinyactors.actors.quarantined` | gauge | Actors taken out of scheduling after a fault (ADR 0008). |
+| `tinyactors.faults` | sum | Faults by `tinyactors.fault.code`. |
+| `tinyactors.messages.dead_lettered` | sum | Dead letters by `tinyactors.dead_letter.reason`. |
+| `tinyactors.messages.queued`, `.delivered`, `tinyactors.memory.usage` | gauge, sum, gauge | Mail and memory. |
 
 No metric attribute names one actor; which actors, is what `inspect()`
 and a walk over actors answer. Post `metricsToOTLP(system.metrics(), {
-resource })` to `/v1/metrics` at your export interval, or report the
-points from OpenTelemetry observable instruments.
+resource })` to `/v1/metrics` at your export interval.
+
+With the official OpenTelemetry metrics SDK, report the sums and gauges
+from observable instruments, one snapshot per collection. The SDK has no
+asynchronous histogram, so send the two histograms with `metricsToOTLP`
+(tested in `test/otel-metrics.js`, from `test/fixtures/otel-metrics.js`):
+
+```js
+function observeMetrics(meter, system) {
+  const instruments = new Map();
+  for (const metric of system.metrics().metrics) {
+    if (metric.kind === 'histogram') continue;
+    const options = { unit: metric.unit };
+    instruments.set(metric.name, metric.kind === 'sum'
+      ? meter.createObservableCounter(metric.name, options)
+      : meter.createObservableGauge(metric.name, options));
+  }
+  meter.addBatchObservableCallback((result) => {
+    for (const metric of system.metrics().metrics) {
+      const instrument = instruments.get(metric.name);
+      if (instrument === undefined) continue;
+      for (const point of metric.points) result.observe(instrument, point.value, point.attributes);
+    }
+  }, [...instruments.values()]);
+}
+```
+
+## Logs
+
+The sink's second argument holds OTLP logs, each tied to its trace and
+span where it has one, and rate-limited per definition and name (`logLimit`
+per second, then one log that says how many were suppressed):
+
+| Log | Severity | Body, for example |
+|---|---|---|
+| `scxml.log` | INFO | `order received: "3 items, 42 EUR"` (a `<log>`) |
+| `tinyactors.action.failed` | WARN | `<script> in ready on reserve failed: Error: cannot reserve 50 items` |
+| `tinyactors.error.raised` | WARN | `error.execution: Error: cannot reserve 50 items` |
+| `tinyactors.run.stopped` | WARN | `the run stopped: an allocation failed (ADR 0070)` |
+| `tinyactors.actor.quarantined` | WARN | `actor quarantined: deliver failed: invalid` |
+| `tinyactors.message.dead_lettered` | WARN | `arm dead-lettered: not-found` |
+
+A failure says what failed and why in its body, and in attributes for
+filtering: `exception.message` (the thrown value, an `Error` as
+`Error: message`), `scxml.action` and `scxml.action.id`, `scxml.fault.code`
+and `scxml.fault.message`, `scxml.state`, the step key and the
+definition. The reason is written whatever `values` says: at 3am it is
+the one value you cannot do without.
 
 ## What the spans say
 

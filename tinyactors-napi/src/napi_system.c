@@ -866,6 +866,117 @@ static const char *const tna_category_names[TNA_MEMORY_CATEGORY_COUNT] = {
     [TNA_MEMORY_OTHER] = "other",
 };
 
+/* Lowercase hex of `bytes` into `out` (2 * count + 1 bytes). */
+static void tna_hex(const uint8_t *bytes, size_t count, char *out) {
+    static const char digits[] = "0123456789abcdef";
+    for (size_t at = 0; at < count; at += 1u) {
+        out[2u * at] = digits[bytes[at] >> 4];
+        out[2u * at + 1u] = digits[bytes[at] & 15u];
+    }
+    out[2u * count] = '\0';
+}
+
+static napi_status tna_set_text(napi_env env, napi_value object, const char *name, const char *text) {
+    napi_value value = NULL;
+    napi_status status = napi_create_string_utf8(env, text, NAPI_AUTO_LENGTH, &value);
+    return status == napi_ok ? napi_set_named_property(env, object, name, value) : status;
+}
+
+/* { count, sum, min, max, bounds, buckets, exemplars: [{ bucket, value, time, traceID, spanID }] } */
+static napi_status tna_histogram_object(napi_env env, const tna_histogram *histogram, napi_value *out) {
+    napi_value bounds = NULL;
+    napi_value buckets = NULL;
+    napi_value exemplars = NULL;
+    napi_status status = napi_create_object(env, out);
+    if (status == napi_ok) status = tna_set_number(env, *out, "count", (double)histogram->count);
+    if (status == napi_ok) status = tna_set_number(env, *out, "sum", histogram->sum);
+    if (status == napi_ok) status = tna_set_number(env, *out, "min", histogram->min);
+    if (status == napi_ok) status = tna_set_number(env, *out, "max", histogram->max);
+    if (status == napi_ok) status = napi_create_array_with_length(env, histogram->bound_count, &bounds);
+    if (status == napi_ok) status = napi_create_array_with_length(env, histogram->bound_count + 1u, &buckets);
+    if (status == napi_ok) status = napi_create_array(env, &exemplars);
+    uint32_t exemplar_count = 0;
+    for (uint32_t at = 0; status == napi_ok && at <= histogram->bound_count; at += 1u) {
+        napi_value number = NULL;
+        if (at < histogram->bound_count) {
+            status = napi_create_double(env, histogram->bounds[at], &number);
+            if (status == napi_ok) status = napi_set_element(env, bounds, at, number);
+        }
+        if (status == napi_ok) status = napi_create_double(env, (double)histogram->buckets[at], &number);
+        if (status == napi_ok) status = napi_set_element(env, buckets, at, number);
+        const tna_exemplar *exemplar = &histogram->exemplars[at];
+        if (status == napi_ok && exemplar->set) {
+            char trace[33];
+            char span[17];
+            tna_hex(exemplar->trace_id, 16, trace);
+            tna_hex(exemplar->span_id, 8, span);
+            napi_value entry = NULL;
+            status = napi_create_object(env, &entry);
+            if (status == napi_ok) status = tna_set_number(env, entry, "bucket", (double)at);
+            if (status == napi_ok) status = tna_set_number(env, entry, "value", exemplar->value);
+            if (status == napi_ok) status = tna_set_number(env, entry, "time", (double)exemplar->time_ns / 1e6);
+            if (status == napi_ok) status = tna_set_text(env, entry, "traceID", trace);
+            if (status == napi_ok) status = tna_set_text(env, entry, "spanID", span);
+            if (status == napi_ok) status = napi_set_element(env, exemplars, exemplar_count++, entry);
+        }
+    }
+    if (status == napi_ok) status = napi_set_named_property(env, *out, "bounds", bounds);
+    if (status == napi_ok) status = napi_set_named_property(env, *out, "buckets", buckets);
+    if (status == napi_ok) status = napi_set_named_property(env, *out, "exemplars", exemplars);
+    return status;
+}
+
+static const char *const tna_dead_reason_names[TNA_DEAD_REASONS] = {
+    [TNA_DEAD_NOT_FOUND] = "not-found", [TNA_DEAD_DONE] = "done", [TNA_DEAD_DESTROYED] = "destroyed",
+    [TNA_DEAD_REFUSED] = "refused",     [TNA_DEAD_UNLOADED] = "unloaded",
+};
+
+/*
+ * hostMetrics(): what only the host knows, for system.metrics() (napi ADR
+ * 0017 section 7): { turn, lateness (histograms, in seconds), runnable,
+ * ready (queue lengths, including entries a later turn skips),
+ * quarantined, overdue (seconds), faults: { code: count }, deadLetters:
+ * { reason: count } }.
+ */
+static napi_value tna_host_metrics_method(napi_env env, napi_callback_info info) {
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    const tna_system *system = wrapper->system;
+    const tna_sched *sched = &system->sched;
+    napi_value out = NULL;
+    napi_value turn = NULL;
+    napi_value lateness = NULL;
+    napi_value faults = NULL;
+    napi_value dead = NULL;
+    napi_status status = napi_create_object(env, &out);
+    if (status == napi_ok) status = tna_histogram_object(env, &system->metrics.turn_seconds, &turn);
+    if (status == napi_ok) status = napi_set_named_property(env, out, "turn", turn);
+    if (status == napi_ok) status = tna_histogram_object(env, &system->metrics.lateness_seconds, &lateness);
+    if (status == napi_ok) status = napi_set_named_property(env, out, "lateness", lateness);
+    if (status == napi_ok) status = tna_set_number(env, out, "runnable", (double)tna_ring_count(&sched->runnable));
+    if (status == napi_ok) status = tna_set_number(env, out, "ready", (double)tna_ring_count(&sched->ready));
+    if (status == napi_ok) status = tna_set_number(env, out, "quarantined", (double)sched->quarantined);
+    if (status == napi_ok) status = tna_set_number(env, out, "overdue", tna_system_overdue_seconds(system));
+    if (status == napi_ok) status = napi_create_object(env, &faults);
+    for (uint32_t code = 0; status == napi_ok && code < TNA_FAULT_CODES; code += 1u) {
+        if (sched->faults[code] != 0) {
+            status = tna_set_number(env, faults, tna_result_code(-(ta_result)code), (double)sched->faults[code]);
+        }
+    }
+    if (status == napi_ok) status = napi_set_named_property(env, out, "faults", faults);
+    if (status == napi_ok) status = napi_create_object(env, &dead);
+    for (uint32_t reason = 0; status == napi_ok && reason < TNA_DEAD_REASONS; reason += 1u) {
+        status = tna_set_number(env, dead, tna_dead_reason_names[reason], (double)sched->dead_by_reason[reason]);
+    }
+    if (status == napi_ok) status = napi_set_named_property(env, out, "deadLetters", dead);
+    if (status != napi_ok) {
+        return tna_throw(env, "out-of-memory", "cannot build the host metrics object");
+    }
+    return out;
+}
+
 /*
  * stats(): { memory: { total, core, envelopes, ... }, allocatorCalls,
  * messages: { queued, delivered, deadLetters }, values: { live, made } }
@@ -912,6 +1023,7 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
     napi_property_descriptor properties[] = {
         { "close", NULL, tna_close_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "stats", NULL, tna_stats_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "hostMetrics", NULL, tna_host_metrics_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "refuseAllocationsFrom", NULL, tna_refuse_allocations_from_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "flush", NULL, tna_flush_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "advanceTo", NULL, tna_advance_to_method, NULL, NULL, NULL, napi_default_method, NULL },

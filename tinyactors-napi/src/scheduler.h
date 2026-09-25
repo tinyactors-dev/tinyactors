@@ -51,6 +51,7 @@
 #include <stdint.h>
 
 #include "containers.h"
+#include "host_metrics.h"
 #include "tinyactors.h"
 #include "watch.h"
 
@@ -207,6 +208,11 @@ typedef struct {
     uint32_t dead_count;
     uint64_t dead_letters;  /* reported so far, with or without a hook */
     uint64_t delivered;     /* messages core accepted */
+    /* For metrics (napi ADR 0017 section 7): dead letters by tna_dead_reason,
+     * faults by -ta_result, and the actors in quarantine now. */
+    uint64_t dead_by_reason[TNA_DEAD_REASONS];
+    uint64_t faults[TNA_FAULT_CODES];
+    uint32_t quarantined;
     /* The records of the current turn, in the turn arena. */
     tna_turn_record *records;
     tna_turn_record *last_record;

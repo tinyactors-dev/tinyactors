@@ -39,6 +39,9 @@ static ta_op_status tna_io_send(void *self, const ta_send *send, ta_fault *fault
         *fault = (ta_fault){ .code = TA_ERR_NOMEM, .message = { .ptr = message, .len = sizeof message - 1u } };
         return TA_OP_ERROR;
     }
+    if (system->dispatching_due) {
+        tna_system_record_lateness(system, send->due, &send->trace); /* a timer to a processor fired */
+    }
     return TA_OP_OK;
 }
 

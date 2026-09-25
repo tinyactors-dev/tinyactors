@@ -145,6 +145,11 @@ struct tna_system {
     void *resolve_context;
     /* One record per registered I/O processor type (adapters/io.h, core ADR 0068). */
     tna_vec io_processors; /* tna_io_processor * */
+    /* Turn duration and timer lateness (host_metrics.h, napi ADR 0017 section 7). */
+    tna_host_metrics metrics;
+    /* Set while core dispatches due delayed sends: what the router is handed
+     * then is a timer firing, and its lateness is recorded. */
+    bool dispatching_due;
 };
 
 /* TA_ERR_NOMEM when the record or core cannot be allocated. */
@@ -171,6 +176,15 @@ bool tna_system_effect(tna_system *system, const tna_effect *effect);
 void tna_system_trace(tna_system *system, const ta_trace_record *record);
 /* Wall-clock time in nanoseconds since the Unix epoch. */
 uint64_t tna_system_wall_ns(void);
+/* How far behind the earliest pending delayed send is, in seconds: 0 when
+ * nothing is overdue. A value that keeps growing means timers are not
+ * being served. */
+double tna_system_overdue_seconds(const tna_system *system);
+/* A turn that began at `started_ns` (tna_monotonic_ns) ended: records how
+ * long it took, with the turn's sampled macrostep as its exemplar. */
+void tna_system_record_turn(tna_system *system, uint64_t started_ns);
+/* A delayed send due at `due` fired now: records how late (host_metrics.h). */
+void tna_system_record_lateness(tna_system *system, ta_time due, const ta_trace_parent *trace);
 /* Installs core's log sink when JavaScript or the trace encoder wants
  * <log> records (napi ADR 0017 section 7), and the null sink otherwise. */
 ta_result tna_system_refresh_log_sink(tna_system *system);

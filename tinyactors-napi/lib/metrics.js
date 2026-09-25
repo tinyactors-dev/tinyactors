@@ -4,8 +4,10 @@
 //
 // system.metrics() returns a snapshot: a list of metrics, each with a
 // name, a unit, a kind ("sum" for cumulative monotonic counters, "gauge"
-// for values that go up and down) and data points of attributes and a
-// value. That is the shape OpenTelemetry's observable instruments read, so
+// for values that go up and down, "histogram" for distributions) and data
+// points of attributes and a value. A histogram point instead has count,
+// sum, min, max, explicit bucket bounds and counts, and exemplars that link
+// a bucket to the trace of a sampled step. That is the shape OpenTelemetry's observable instruments read, so
 // an SDK user registers one observable per metric and reports its points;
 // a user without an SDK hands the snapshot to metricsToOTLP() and posts the
 // bytes to /v1/metrics. No telemetry dependency either way.
@@ -44,7 +46,9 @@ const COUNTERS = [
  * The snapshot system.metrics() returns. `definitions` is a list of
  * { attributes, counters, occupancy: [{ state, actors }] } for the live
  * definitions; `system` is core's totals (freed definitions included);
- * `host` is napi's own view: messages and memory.
+ * `host` is napi's own view: messages, memory, and what native
+ * hostMetrics() reports (turn duration, timer lateness and overdue time,
+ * the run queues, quarantine, faults by code, dead letters by reason).
  */
 function buildSnapshot({ startTime, time, systemName, system, definitions, host }) {
   const metrics = new Map();
@@ -56,6 +60,11 @@ function buildSnapshot({ startTime, time, systemName, system, definitions, host 
     }
     return entry;
   };
+  // Every metric is listed from the first snapshot on, with no points until
+  // there is something to count, so a reader can register its instruments
+  // once.
+  for (const [, name, unit] of COUNTERS) metric(name, unit, 'sum');
+  metric('tinyactors.actors.occupancy', '{actor}', 'gauge');
   const base = { 'tinyactors.system': systemName };
   for (const definition of definitions) {
     const attributes = { ...base, ...definition.attributes };
@@ -69,13 +78,41 @@ function buildSnapshot({ startTime, time, systemName, system, definitions, host 
   }
   metric('tinyactors.messages.queued', '{message}', 'gauge').points.push({ attributes: base, value: host.queued });
   metric('tinyactors.messages.delivered', '{message}', 'sum').points.push({ attributes: base, value: host.delivered });
-  metric('tinyactors.messages.dead_lettered', '{message}', 'sum')
-    .points.push({ attributes: base, value: host.deadLetters });
+  const dead = metric('tinyactors.messages.dead_lettered', '{message}', 'sum');
+  for (const [reason, count] of Object.entries(host.native.deadLetters)) {
+    dead.points.push({ attributes: { ...base, 'tinyactors.dead_letter.reason': reason }, value: count });
+  }
+  // Is the host keeping up? Turn duration, the run queues, quarantine.
+  metric('tinyactors.pump.turn.duration', 's', 'histogram')
+    .points.push({ attributes: base, ...histogramPoint(host.native.turn) });
+  metric('tinyactors.scheduler.runnable', '{actor}', 'gauge').points.push({ attributes: base, value: host.native.runnable });
+  metric('tinyactors.scheduler.ready', '{actor}', 'gauge').points.push({ attributes: base, value: host.native.ready });
+  metric('tinyactors.actors.quarantined', '{actor}', 'gauge')
+    .points.push({ attributes: base, value: host.native.quarantined });
+  const faults = metric('tinyactors.faults', '{fault}', 'sum');
+  for (const [code, count] of Object.entries(host.native.faults)) {
+    faults.points.push({ attributes: { ...base, 'tinyactors.fault.code': code }, value: count });
+  }
+  // Are timers late? How late each fired, and how far behind the next is.
+  metric('tinyactors.timers.lateness', 's', 'histogram')
+    .points.push({ attributes: base, ...histogramPoint(host.native.lateness) });
+  metric('tinyactors.timers.overdue', 's', 'gauge').points.push({ attributes: base, value: host.native.overdue });
   const memory = metric('tinyactors.memory.usage', 'By', 'gauge');
   for (const [category, bytes] of Object.entries(host.memory)) {
     memory.points.push({ attributes: { ...base, 'tinyactors.memory.category': category }, value: bytes });
   }
   return { startTime, time, system, metrics: [...metrics.values()] };
+}
+
+// A native histogram as a data point: min and max only once something was recorded.
+function histogramPoint(native) {
+  const point = { count: native.count, sum: native.sum, bounds: native.bounds, buckets: native.buckets,
+                  exemplars: native.exemplars };
+  if (native.count !== 0) {
+    point.min = native.min;
+    point.max = native.max;
+  }
+  return point;
 }
 
 // ------------------------------------------------------------------------
@@ -127,6 +164,27 @@ class Writer {
     this.bytes(field, inner.finish());
   }
 
+  double(field, value) {
+    this.tag(field, 1);
+    const out = new Uint8Array(8);
+    new DataView(out.buffer).setFloat64(0, value, true);
+    this.push(out);
+  }
+
+  // A packed repeated fixed64 or double field.
+  packed(field, values, write) {
+    const out = new Uint8Array(values.length * 8);
+    const view = new DataView(out.buffer);
+    values.forEach((value, at) => write(view, at * 8, value));
+    this.bytes(field, out);
+  }
+
+  hex(field, text) {
+    const out = new Uint8Array(text.length / 2);
+    for (let at = 0; at < out.length; at += 1) out[at] = Number.parseInt(text.slice(at * 2, at * 2 + 2), 16);
+    this.bytes(field, out);
+  }
+
   fixed64(field, value) {
     this.tag(field, 1);
     const out = new Uint8Array(8);
@@ -161,8 +219,37 @@ function dataPoints(writer, field, metric, startTime, time) {
     writer.message(field, (p) => {
       if (metric.kind === 'sum') p.fixed64(2, nanos(startTime));
       p.fixed64(3, nanos(time));
-      p.fixed64(6, point.value); // as_int (sfixed64)
+      if (Number.isInteger(point.value)) {
+        p.fixed64(6, point.value); // as_int (sfixed64)
+      } else {
+        p.double(4, point.value); // as_double
+      }
       keyValues(p, 7, point.attributes);
+    });
+  }
+}
+
+// HistogramDataPoint (opentelemetry-proto metrics/v1), with its exemplars.
+function histogramPoints(writer, metric, startTime, time) {
+  for (const point of metric.points) {
+    writer.message(1, (p) => {
+      p.fixed64(2, nanos(startTime));
+      p.fixed64(3, nanos(time));
+      p.fixed64(4, point.count);
+      p.double(5, point.sum);
+      p.packed(6, point.buckets, (view, at, value) => view.setBigUint64(at, BigInt(value), true));
+      p.packed(7, point.bounds, (view, at, value) => view.setFloat64(at, value, true));
+      for (const exemplar of point.exemplars) {
+        p.message(8, (e) => {
+          e.fixed64(2, BigInt(Math.round(exemplar.time * 1000)) * 1000n);
+          e.double(3, exemplar.value);
+          e.hex(4, exemplar.spanID);
+          e.hex(5, exemplar.traceID);
+        });
+      }
+      keyValues(p, 9, point.attributes);
+      if (point.min !== undefined) p.double(11, point.min);
+      if (point.max !== undefined) p.double(12, point.max);
     });
   }
 }
@@ -190,7 +277,13 @@ function metricsToOTLP(snapshot, options = {}) {
         scopeMetrics.message(2, (m) => {
           m.string(1, metric.name);
           m.string(3, metric.unit);
-          if (metric.kind === 'sum') {
+          if (metric.kind === 'histogram') {
+            m.message(9, (histogram) => {
+              histogramPoints(histogram, metric, snapshot.startTime, snapshot.time);
+              histogram.tag(2, 0);
+              histogram.varint(2); // AGGREGATION_TEMPORALITY_CUMULATIVE
+            });
+          } else if (metric.kind === 'sum') {
             m.message(7, (sum) => {
               dataPoints(sum, 1, metric, snapshot.startTime, snapshot.time);
               sum.tag(2, 0);

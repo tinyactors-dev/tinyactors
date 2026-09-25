@@ -30,6 +30,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "host_metrics.h"
 #include "tinyactors.h"
 
 /* What the encoder asks of its host. */
@@ -139,6 +140,9 @@ typedef struct {
     tna_otlp_buf label;        /* a label while it is built */
     tna_otlp_buf text;         /* an event name or ID while it is formatted */
     uint32_t span_count;       /* spans in `spans` */
+    /* The latest sampled macrostep span opened, for the host's exemplars
+     * (host_metrics.h); the host clears `set` when it takes it. */
+    tna_exemplar last_macrostep;
     uint64_t dropped;          /* records lost to a failed allocation */
 } tna_otlp;
 
@@ -164,6 +168,23 @@ void tna_otlp_write(tna_otlp *otlp, const ta_trace_record *record);
 ta_str tna_otlp_take(tna_otlp *otlp);
 
 /* A <log> as an INFO log record; its value's text comes from the host. */
+/*
+ * A WARN log the host writes about an actor or a message, not a record core
+ * wrote: a quarantine or a dead letter (napi ADR 0017 section 7). It goes
+ * through the same rate limit, per definition and event name. The body is
+ * "<event name> <body>" when `has_event`, else `body`.
+ */
+typedef struct {
+    ta_str event_name;          /* LogRecord.event_name */
+    ta_str body;
+    bool has_event;
+    ta_event_name_id event;     /* scxml.event.name, when has_event */
+    ta_definition_id definition; /* 0 when unknown */
+    uint64_t session;            /* 0 when unknown */
+    ta_str key;                  /* one more attribute: the reason or code */
+    ta_str value;
+} tna_otlp_host_log_params;
+void tna_otlp_host_log(tna_otlp *otlp, const tna_otlp_host_log_params *log);
 void tna_otlp_log(tna_otlp *otlp, const ta_log_record *record);
 
 /*

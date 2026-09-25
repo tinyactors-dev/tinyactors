@@ -361,6 +361,7 @@ ta_result tna_sched_add(tna_sched *sched, ta_actor_id actor) {
         sched->known += 1u;
     } else {
         /* A previous actor of this slot the addon never saw go: its mail is dead. */
+        sched->quarantined -= entry->state == TNA_SCHED_QUARANTINED ? 1u : 0u;
         tna_sched_bury(sched, entry, TNA_DEAD_NOT_FOUND);
         tna_sched_complete(sched, ta_actor_id_make(ta_actor_id_slot(actor), entry->generation),
                            (tna_settlement){ .kind = TNA_SETTLE_DEAD, .reason = TNA_DEAD_NOT_FOUND });
@@ -376,6 +377,7 @@ void tna_sched_remove(tna_sched *sched, ta_actor_id actor, tna_dead_reason reaso
     }
     tna_sched_bury(sched, entry, reason);
     tna_sched_complete(sched, actor, (tna_settlement){ .kind = TNA_SETTLE_DEAD, .reason = (uint8_t)reason });
+    sched->quarantined -= entry->state == TNA_SCHED_QUARANTINED ? 1u : 0u;
     *entry = (tna_sched_entry){0};
     sched->known -= 1u;
 }
@@ -446,6 +448,7 @@ ta_result tna_sched_release(tna_sched *sched, ta_actor_id actor) {
     }
     entry->state = TNA_SCHED_RUNNABLE;
     entry->flags &= (uint8_t)~TNA_SCHED_BACKOFF;
+    sched->quarantined -= 1u;
     return TA_OK;
 }
 
@@ -595,7 +598,10 @@ static void tna_sched_record(tna_sched *sched, const tna_turn_params *params, tn
 /* Quarantines the record's actor (ADR 0008) and records the fault. */
 static void tna_sched_fault(tna_sched *sched, const tna_turn_params *params, tna_turn_record record) {
     tna_sched_entry *entry = tna_sched_lookup(sched, record.actor);
+    uint32_t code = record.code < 0 ? (uint32_t)(-(int64_t)record.code) : 0u;
+    sched->faults[code < TNA_FAULT_CODES ? code : 0u] += 1u;
     if (entry != NULL) {
+        sched->quarantined += entry->state == TNA_SCHED_QUARANTINED ? 0u : 1u;
         entry->state = TNA_SCHED_QUARANTINED;
         entry->flags &= (uint8_t)~TNA_SCHED_BACKOFF;
     }
@@ -787,6 +793,7 @@ static void tna_sched_report_dead(tna_sched *sched, const tna_turn_params *param
         }
         sched->dead_count -= 1u;
         sched->dead_letters += 1u;
+        sched->dead_by_reason[envelope->reason < TNA_DEAD_REASONS ? envelope->reason : 0u] += 1u;
         tna_turn_record record = {
             .kind = TNA_RECORD_DEAD_LETTER,
             .actor = envelope->target,

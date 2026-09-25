@@ -425,13 +425,35 @@ static void tna_done_record(napi_env env, tna_napi_system *wrapper, const tna_tu
     }
 }
 
-static void tna_fault_record(napi_env env, tna_napi_system *wrapper, const tna_turn_record *record, napi_value *first_error) {
-    if (wrapper->fault_hook == NULL) {
+/* A WARN log about `actor` through the trace sink, when one wants logs
+ * (napi ADR 0017 section 7): the actor's session and definition, if it is
+ * still resident, name it. */
+static void tna_host_log(tna_system *system, ta_actor_id actor, tna_otlp_host_log_params log) {
+    if (!system->tracing) {
         return;
     }
+    ta_actor_inspection view;
+    if (actor != 0 && ta_actor_inspect(system->core, actor, &view) == TA_OK) {
+        log.session = view.session_id;
+        log.definition = view.definition_id;
+    }
+    tna_otlp_host_log(&system->otlp, &log);
+}
+
+static void tna_fault_record(napi_env env, tna_napi_system *wrapper, const tna_turn_record *record, napi_value *first_error) {
     const char *code = tna_result_code(record->code);
     char message[160];
     snprintf(message, sizeof message, "%s failed: %s", record->operation, code);
+    char body[200];
+    int length = snprintf(body, sizeof body, "actor quarantined: %s", message);
+    tna_host_log(wrapper->system, record->actor,
+                 (tna_otlp_host_log_params){ .event_name = { "tinyactors.actor.quarantined", 28 },
+                                      .body = { body, length > 0 ? (uint32_t)length : 0u },
+                                      .key = { "tinyactors.fault.code", 21 },
+                                      .value = { code, (uint32_t)strlen(code) } });
+    if (wrapper->fault_hook == NULL) {
+        return;
+    }
     napi_value argument = NULL;
     napi_value operation = NULL;
     napi_value code_value = NULL;
@@ -500,6 +522,16 @@ napi_value tna_event_text(napi_env env, tna_system *system, ta_event_name_id nam
  */
 static void tna_dead_letter_record(napi_env env, tna_napi_system *wrapper, const tna_turn_record *record,
                                    napi_value *first_error) {
+    const char *reason_text = tna_dead_reasons[record->reason];
+    char body[64];
+    int length = snprintf(body, sizeof body, "dead-lettered: %s", reason_text);
+    tna_host_log(wrapper->system, record->actor,
+                 (tna_otlp_host_log_params){ .event_name = { "tinyactors.message.dead_lettered", 32 },
+                                      .body = { body, length > 0 ? (uint32_t)length : 0u },
+                                      .has_event = true,
+                                      .event = record->event,
+                                      .key = { "tinyactors.dead_letter.reason", 29 },
+                                      .value = { reason_text, (uint32_t)strlen(reason_text) } });
     if (wrapper->dead_letter_hook == NULL) {
         return;
     }
@@ -664,6 +696,7 @@ static napi_value tna_turn_callback(napi_env env, napi_callback_info info) {
     tna_napi_system *wrapper = data;
     tna_system *system = wrapper->system;
     napi_value first_error = NULL;
+    uint64_t started = tna_monotonic_ns(NULL);
     if (!tna_system_closed(system)) {
         tna_system_turn(system);
         tna_settle_sends(env, wrapper);
@@ -691,6 +724,9 @@ static napi_value tna_turn_callback(napi_env env, napi_callback_info info) {
         tna_system_end_turn(system);
         if (tna_settled(system)) {
             tna_resolve_waiters(env, wrapper);
+        }
+        if (!tna_system_closed(system)) {
+            tna_system_record_turn(system, started);
         }
     }
     tna_pump_unhold(wrapper);

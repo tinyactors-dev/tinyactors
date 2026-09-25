@@ -44,6 +44,7 @@ ta_result tna_system_create(tna_system **out) {
     tna_trace_watch_init(&system->trace_watch, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER));
     tna_vec_init(&system->io_processors, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER),
                  TNA_LAYOUT(tna_io_processor *));
+    tna_host_metrics_init(&system->metrics);
     ta_result result = tna_scratch_init(&system->scratch, &system->allocator);
     if (result != TA_OK) {
         free(system);
@@ -154,6 +155,42 @@ uint64_t tna_system_wall_ns(void) {
         return 0;
     }
     return (uint64_t)now.tv_sec * 1000000000u + (uint64_t)now.tv_nsec;
+}
+
+double tna_system_overdue_seconds(const tna_system *system) {
+    ta_time deadline = 0;
+    if (system == NULL || system->closed || ta_system_next_deadline(system->core, &deadline) != TA_OK) {
+        return 0.0;
+    }
+    /* The host's time in core's units, without moving core's clock. */
+    ta_time now = ta_system_time(system->core);
+    if (system->clock.kind == TNA_CLOCK_REALTIME) {
+        uint64_t wall = system->clock.now(system->clock.now_context);
+        ta_time host = system->clock.initial +
+                       (ta_time)(wall > system->clock.origin ? (wall - system->clock.origin) / 1000000u : 0u);
+        now = host > now ? host : now;
+    }
+    return now > deadline ? (double)(now - deadline) / 1000.0 : 0.0;
+}
+
+void tna_system_record_turn(tna_system *system, uint64_t started_ns) {
+    uint64_t now = tna_monotonic_ns(NULL);
+    double seconds = now > started_ns ? (double)(now - started_ns) / 1e9 : 0.0;
+    tna_exemplar exemplar = { 0 };
+    if (system->tracing && system->otlp.last_macrostep.set) {
+        exemplar = system->otlp.last_macrostep;
+        system->otlp.last_macrostep.set = false;
+    }
+    tna_histogram_record(&system->metrics.turn_seconds, seconds, &exemplar);
+}
+
+void tna_system_record_lateness(tna_system *system, ta_time due, const ta_trace_parent *trace) {
+    ta_time now = ta_system_time(system->core);
+    double seconds = now > due ? (double)(now - due) / 1000.0 : 0.0;
+    tna_exemplar exemplar = trace == NULL ? (tna_exemplar){ 0 }
+                                          : tna_exemplar_of(&trace->context, ta_step_key_span_id(trace->cause),
+                                                            tna_system_wall_ns());
+    tna_histogram_record(&system->metrics.lateness_seconds, seconds, &exemplar);
 }
 
 ta_result tna_system_refresh_log_sink(tna_system *system) {
@@ -310,11 +347,13 @@ void tna_system_turn(tna_system *system) {
         uint32_t dispatched = 0;
         bool more_due = false;
         system->inside_core = true;
+        system->dispatching_due = true;
         (void)ta_system_dispatch_due(system->core, &(ta_due_dispatch_params){
                                                        .budget = system->due_budget,
                                                        .dispatched = &dispatched,
                                                        .more_due = &more_due,
                                                    });
+        system->dispatching_due = false;
         system->inside_core = false;
     }
 }

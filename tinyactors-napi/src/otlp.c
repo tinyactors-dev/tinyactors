@@ -973,6 +973,9 @@ static bool tna_span_open(tna_otlp *otlp, tna_otlp_span *span, const ta_trace_re
     tna_trace_id_of(otlp, &record->context, span->trace_id);
     span->span_id = ta_step_key_span_id(record->key);
     span->start = now;
+    if (record->kind == TA_TRACE_MACROSTEP_BEGIN) {
+        otlp->last_macrostep = tna_exemplar_of(&record->context, span->span_id, now);
+    }
     span->microstep = record->key.microstep;
     return tna_step_attributes(otlp, &span->attributes, record);
 }
@@ -1495,6 +1498,48 @@ static bool tna_log_failure(tna_otlp *otlp, const ta_trace_record *record, uint6
             tna_kv_string(&otlp->scratch, F_LOG_ATTRIBUTES, LIT("scxml.event.name"),
                           (ta_str){ line.body.ptr, (uint32_t)name_len })) &&
            tna_log_append(otlp, &line);
+}
+
+void tna_otlp_host_log(tna_otlp *otlp, const tna_otlp_host_log_params *log) {
+    if (otlp->config.log_limit == 0) {
+        return;
+    }
+    static const ta_trace_context untraced = { 0 };
+    tna_log_line line = { .now = otlp->config.host.now(otlp->config.host.self), .severity = SEVERITY_WARN,
+                          .severity_text = LIT("WARN"), .event_name = log->event_name, .context = &untraced,
+                          .definition = log->definition, .key_name = log->event_name };
+    ta_str event = log->has_event ? tna_event_name(otlp, log->event) : (ta_str){ 0 };
+    otlp->log_body.len = 0;
+    bool ok = tna_buf_room(&otlp->log_body, event.len + 1u + log->body.len);
+    if (ok) {
+        tna_put_bytes(&otlp->log_body, event.ptr, event.len);
+        if (event.len != 0) {
+            tna_put_bytes(&otlp->log_body, " ", 1);
+        }
+        tna_put_bytes(&otlp->log_body, log->body.ptr, log->body.len);
+    }
+    line.body = (ta_str){ (const char *)otlp->log_body.data, (uint32_t)otlp->log_body.len };
+    tna_otlp_buf *buf = &otlp->scratch;
+    buf->len = 0;
+    char decimal[24];
+    if (ok && log->session != 0) {
+        ok = tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.session_id"), tna_decimal(log->session, decimal));
+    }
+    ta_definition_inspection view;
+    if (ok && log->definition != 0 && ta_definition_inspect(otlp->config.core, log->definition, &view) == TA_OK) {
+        ok = tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("tinyactors.definition.family"), view.identity.family.name) &&
+             tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("tinyactors.definition.revision"),
+                           (ta_str){ (const char *)view.identity.revision.ptr, view.identity.revision.len });
+    }
+    if (ok && event.len != 0) {
+        ok = tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("scxml.event.name"), (ta_str){ line.body.ptr, event.len });
+    }
+    if (ok && log->key.len != 0) {
+        ok = tna_kv_string(buf, F_LOG_ATTRIBUTES, log->key, log->value);
+    }
+    if (!ok || !tna_log_append(otlp, &line)) {
+        otlp->dropped += 1u;
+    }
 }
 
 void tna_otlp_log(tna_otlp *otlp, const ta_log_record *record) {
