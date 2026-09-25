@@ -1,0 +1,62 @@
+# Acronyms whose spelling in code is either ALL CAPITALS or all lowercase,
+# never Titlecase or mixedCase: `metricsToOTLP` or `otlpBytes`, never
+# `metricsToOtlp`. `mise run check-acronyms` enforces it; the rule is in
+# AGENTS.md ("Acronyms").
+#
+# To add one: put it on its own line, in capitals, in alphabetical order,
+# then run `mise run check-acronyms` and fix what it reports. Add only
+# acronyms whose mixed spelling is a mistake. An official mixed spelling
+# (gRPC, macOS) does not belong here.
+#
+# Lines starting with `#` and blank lines are ignored.
+
+ABI
+ADR
+API
+ASCII
+AST
+CCXML
+CDATA
+CPU
+CSS
+DOM
+DSL
+DTD
+FIFO
+GC
+HTTP
+HTTPS
+ID
+IO
+IR
+IRP
+JS
+JSON
+LLM
+MIME
+NUL
+OS
+OTEL
+OTLP
+PCDATA
+REPL
+RFC
+RPC
+RSS
+RTOS
+SCXML
+SDK
+SIMD
+SQL
+TCP
+TTL
+TUI
+UDP
+UML
+URI
+URL
+UTF
+UUID
+W3C
+WASM
+XML

@@ -37,6 +37,29 @@ so no outside code depends on an API or ABI staying the same.
   its rewrite. Change the call sites there too, keep the edit to those
   lines, and say in your report which of its files you touched.
 
+## Acronyms
+
+An acronym in code is spelled in ALL CAPITALS or all lowercase, never
+Titlecase or mixedCase: `metricsToOTLP` or `otlpBytes`, never
+`metricsToOtlp`. The list is `acronyms.txt` (OTLP, IO, HTTP, ID, URL, URI,
+JSON, XML, SCXML, API, SDK, ...); add to it when you introduce a new one.
+
+- **C** is snake_case, so acronyms are lowercase in names and capitals in
+  macros: `otlp_writer`, `ta_session_id`, `TA_OTLP_...`.
+- **JavaScript and TypeScript:** `OTLPExporter`, `toOTLP`, `sessionID`,
+  `actorIDs` (the plural `s` stays lowercase). At the start of a camelCase
+  name the acronym is all lowercase: `ioProcessors`, `otlpBytes`, `idPage`.
+- **Ruby:** constants in capitals, as the standard library does (`JSON`,
+  `URI`, `Net::HTTP`): `module API`, `RPCError`. Methods and variables are
+  snake_case, so lowercase: `session_id`.
+- **File names** are lowercase: `otlp.js`, `scxml_irp/`.
+- Prose follows English: write "OTLP" and "I/O" in sentences.
+
+`mise run check-acronyms` enforces this as part of `mise run test`, and
+`mise run check-acronyms -- --fix` rewrites what it finds. Names we do not
+own (an SDK's `traceId`, REXML's `CData`) go in `acronyms-allow.txt` with a
+reason. ADRs and research notes are not checked: they are a record.
+
 ## Proposals are not instructions
 
 `docs/proposals/` holds outlines of possible future work. They are not

@@ -1,0 +1,39 @@
+#!/usr/bin/env ruby
+#MISE description="Fail when a listed acronym is spelled in Titlecase or mixedCase in code (acronyms.txt)"
+# vim:ft=ruby
+
+# Usage:
+#   mise run check-acronyms            check every tracked file; exit 1 on a finding
+#   mise run check-acronyms -- PATH... check only these paths (relative to the root)
+#   mise run check-acronyms -- --fix   rewrite each finding: the acronym in capitals
+#
+# The rule is in AGENTS.md ("Acronyms"), the list in acronyms.txt, and the
+# names we may not change in acronyms-allow.txt. See mise/lib/acronym_case.rb
+# for how an identifier is split into segments.
+
+require 'open3'
+require 'acronym_case'
+
+root = AcronymCase::ROOT
+fix = !ARGV.delete('--fix').nil?
+paths = if ARGV.empty?
+          out, status = Open3.capture2('git', 'ls-files', '-z', chdir: root)
+          abort 'check-acronyms: git ls-files failed' unless status.success?
+          out.split("\0")
+        else
+          ARGV
+        end
+
+findings = AcronymCase.check(paths, root: root)
+if fix && !findings.empty?
+  AcronymCase.fix(findings, root: root)
+  puts "check-acronyms: fixed #{findings.size} mixed-case acronym(s) in #{findings.map(&:path).uniq.size} file(s)"
+  findings = AcronymCase.check(paths, root: root)
+end
+findings.each { |finding| puts "check-acronyms: #{finding}" }
+if findings.empty?
+  puts 'check-acronyms: acronyms are ALL CAPS or all lowercase'
+else
+  puts "check-acronyms: #{findings.size} mixed-case acronym(s); see AGENTS.md (Acronyms)"
+  exit 1 unless ENV['ACRONYMS_REPORT_ONLY'] == '1'
+end

@@ -1,0 +1,31 @@
+# Words `mise run check-acronyms` accepts although they spell a listed
+# acronym in mixed case (acronyms.txt), because we do not own the name.
+#
+# Format: `WORD` or `WORD PATH-GLOB`, then `# reason`. With a glob, the word
+# is allowed only in matching paths (File.fnmatch, `**` spans directories).
+# Keep this list short: a name we own is renamed, not allowed.
+
+# The OpenTelemetry JS SDK's SpanContext and ReadableSpan fields. Only the
+# code that builds SDK objects may use them; our own API spells them traceID.
+traceId        tinyactors-napi/test/{otel-sdk.js,fixtures/otel-sdk.js}   # SDK SpanContext field
+spanId         tinyactors-napi/test/{otel-sdk.js,fixtures/otel-sdk.js}   # SDK SpanContext field
+traceId        tinyactors-napi/docs/tracing.md                           # SDK example: SpanContext field
+spanId         tinyactors-napi/docs/tracing.md                           # SDK example: SpanContext field
+
+# REXML's class for a CDATA section (Ruby standard library).
+CData          tinyactors-test/ruby/**/*.rb                              # REXML::CData
+
+# `-Os`, the C compiler's optimize-for-size flag, not OS; tinyxml names
+# its freestanding tiers after the flags.
+Os             tinyxml/**                                                # compiler flag -Os
+
+# Attribute names from the W3C SCXML IRP suite's conf: namespace, which the
+# importer matches as they are written in the vendored test documents.
+varIdVal       tinyactors-test/ruby/scxml_irp/*.rb                       # conf:varIdVal
+namelistIdVal  tinyactors-test/ruby/scxml_irp/*.rb                       # conf:namelistIdVal
+AeventIdParam  tinyactors-test/ruby/scxml_irp/*.rb                       # regex \A + conf:eventIdParam
+
+# The rule's own examples of what not to write, in AGENTS.md.
+metricsToOtlp  AGENTS.md                                                 # example of a violation
+traceId        AGENTS.md                                                 # example of an allowed SDK name
+CData          AGENTS.md                                                 # example of an allowed REXML name

@@ -1,0 +1,82 @@
+#!/usr/bin/env ruby
+#MISE description="Self-test for check-acronyms: identifiers it must accept and ones it must flag"
+# vim:ft=ruby
+
+# The cases below are wrong on purpose, so the checker skips this file
+# (AcronymCase::EXCLUDED).
+
+require 'acronym_case'
+
+LIST = %w[ID IO HTTP HTTPS OTLP JSON XML SCXML W3C UTF OS API].freeze
+REGEX = AcronymCase.pattern(LIST)
+BY_UPCASE = LIST.to_h { |a| [a, a] }
+
+def flagged(word) = AcronymCase.check_word(word, REGEX, BY_UPCASE).map { |_i, spelling, _a| spelling }
+
+failures = []
+check = lambda do |description, actual, expected|
+  failures << "#{description}: expected #{expected.inspect}, got #{actual.inspect}" unless actual == expected
+end
+
+# Accepted: capitals, lowercase, and words that only start like an acronym.
+%w[
+  metricsToOTLP otlpBytes OTLPExporter toOTLP sessionID actorIDs actorids ioProcessors
+  XMLHTTPRequest SCXMLIRP w3cTraceContext W3CTraceContext utf8 UTF8 TA_OTLP_WRITER otlp_writer
+  Idle Iota Identity Identifier idle ioctl Oslo Ossify Apiary Httpd jsonl
+].each { |word| check.call("accepts #{word}", flagged(word), []) }
+
+# Flagged: Titlecase and mixedCase segments, plurals, runs of capitals.
+{
+  'metricsToOtlp' => %w[Otlp],
+  'OtlpExporter' => %w[Otlp],
+  'sessionId' => %w[Id],
+  'actorIds' => %w[Ids],
+  'IoOrigins' => %w[Io],
+  'XMLHttpRequest' => %w[Http],
+  'ScxmlIrpX' => %w[Scxml],
+  'W3cContext' => %w[W3c],
+  'Utf8' => %w[Utf],
+  'toJson' => %w[Json],
+  'oTLPBytes' => %w[oTLP],
+  'Api' => %w[Api],
+  'fetchHttps' => %w[Https],
+  'traceIdLow' => %w[Id],
+  'Https2x' => %w[Https]
+}.each { |word, expected| check.call("flags #{word}", flagged(word), expected) }
+
+# Fixing puts each flagged segment in capitals and keeps the plural s.
+{
+  'metricsToOtlp' => 'metricsToOTLP',
+  'actorIds' => 'actorIDs',
+  'IoOrigins' => 'IOOrigins',
+  'traceIdLow' => 'traceIDLow',
+  'RpcError' => 'RpcError' # RPC is not in this test's list
+}.each do |word, expected|
+  found = AcronymCase.check_word(word, REGEX, BY_UPCASE)
+  check.call("fixes #{word}", AcronymCase.fix_word(word, found), expected)
+end
+
+# Markdown: prose is not checked, code spans and fenced blocks are.
+markdown = <<~MD
+  The Otlp exporter, in prose, is not checked.
+  Call `metricsToOtlp(snapshot)` here.
+  ```js
+  const sessionId = 1;
+  ```
+MD
+text = AcronymCase.checked_text('doc.md', markdown)
+words = text.scan(/[A-Za-z0-9_$]+/).flat_map { |w| flagged(w) }
+check.call('markdown checks only code', words, %w[Otlp Id])
+
+# The allow list: a word, optionally only in matching paths.
+allow = [['traceId', 'tinyactors-napi/test/{a.js,b.js}'], ['Os', nil]]
+check.call('allowed in a matching path', AcronymCase.allowed_word?(allow, 'traceId', 'tinyactors-napi/test/a.js'), true)
+check.call('not allowed elsewhere', AcronymCase.allowed_word?(allow, 'traceId', 'tinyactors-napi/lib/x.js'), false)
+check.call('allowed everywhere without a glob', AcronymCase.allowed_word?(allow, 'Os', 'any/path.c'), true)
+
+if failures.empty?
+  puts 'check-acronyms-test passed'
+else
+  failures.each { |failure| puts "check-acronyms-test: #{failure}" }
+  exit 1
+end
