@@ -195,7 +195,9 @@ export interface System {
       /**
        * Fetches `<data src>` and `<script src>` while the document is
        * defined: the content as a string or a Uint8Array, or undefined for a
-       * src it does not know, which refuses the document there.
+       * src it does not know, which refuses the document there. The
+       * definition keeps it: an `<invoke type="scxml" src>` fetches its
+       * child document with it, and the child inherits it (napi ADR 0021).
        */
       resolve?: (src: string) => string | Uint8Array | undefined;
       microstepLimit?: number;

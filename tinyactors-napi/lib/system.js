@@ -711,6 +711,8 @@ class System {
    * document is defined: it returns the content as a string or a
    * Uint8Array, or undefined for a src it does not know, which refuses the
    * document. Without it, any `src` is refused.
+   * The definition keeps `resolve`: an `<invoke type="scxml" src>` fetches
+   * its child document with it, and the child inherits it (napi ADR 0021).
    */
   define(source, options = {}) {
     const limit = microstepLimitOption(options, 'define()');

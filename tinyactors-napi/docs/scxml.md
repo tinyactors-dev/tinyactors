@@ -73,6 +73,33 @@ Content, whether fetched or written inline, that is JSON becomes that
 value; any other content becomes a space-normalized string, as SCXML B.2.2
 says: runs of whitespace are one space, with none at either end.
 
+## `<invoke type="scxml">`: child documents
+
+An invoke of type `scxml` (or `http://www.w3.org/TR/scxml/`) starts a
+child session in the same system (napi ADR 0021). The child is an ordinary
+actor with a parent link, so `#_parent`, `#_<invokeid>`, `done.invoke.<id>`,
+`<donedata>`, `<finalize>` and `autoforward` work as SCXML says. Its
+document is:
+
+- a literal `<content>` holding an `<scxml>` document, imported when the
+  invoke starts;
+- the document a `src` or `srcexpr` names, fetched with the `resolve` the
+  parent's document was defined with. A child imported that way keeps the
+  same `resolve` for its own `src`s and `<data src>`. Without `resolve`, a
+  `src` raises `error.execution` in the parent.
+
+The child picks its data model with its own `datamodel` attribute. Each
+distinct document is imported once per system and reused. Only the
+`<param>` and `namelist` names the child declares as top-level `<data>`
+enter its data (SCXML 6.4). A child document that cannot be imported
+raises `error.execution` in the parent, whose data is the reason.
+
+Children are reachable only through their parent (`#_<invokeid>`) or their
+session ID; they have no name in the directory. Leaving the invoking state,
+or destroying the parent, destroys the child. A child that faults, a
+runaway for example, is quarantined like any actor, and its parent is not
+told.
+
 ## When a document is refused
 
 `define()` throws a `TinyactorsError` (`invalid`, or `unsupported` for a
