@@ -147,7 +147,9 @@ enum TA_CONSTANTS_OF(ta_result, "TA_") {
     TA_ERR_DEFINITION_MISMATCH = -8,
     TA_ERR_UNLOADED = -9,
     TA_ERR_STALE = -10,
-    TA_ERR_DONE = -11
+    TA_ERR_DONE = -11,
+    /* The macrostep ran its microstep limit (ADR 0074); nothing changed. */
+    TA_ERR_RUNAWAY = -12
 };
 
 typedef struct { const char *ptr; uint32_t len; } ta_str TA_STRING;
@@ -1020,7 +1022,12 @@ typedef enum {
 
     /* Decisions, again (ADR 0072). */
     TA_TRACE_IGNORED,           /* `event`: taken, and it enabled no transition */
-    TA_TRACE_FORWARDED          /* `invoke`, `event`: autoforwarded to that invocation; its cause is this record's key */
+    TA_TRACE_FORWARDED,         /* `invoke`, `event`: autoforwarded to that invocation; its cause is this record's key */
+
+    /* Runaway macrosteps (ADR 0074): `transitions` of the microstep that
+     * reached the count, and `states`, the configuration before it. */
+    TA_TRACE_LONG_MACROSTEP,    /* the macrostep reached a tenth of its microstep limit */
+    TA_TRACE_RUNAWAY            /* the macrostep reached its microstep limit; the run stops */
 } ta_trace_kind TA_SYMBOLS("TA_TRACE_");
 
 /* The bit of `kind` in a sink's mask. */
@@ -2295,6 +2302,11 @@ typedef struct {
     uint32_t budget;
     TA_OUT ta_run_status *status;
     uint32_t action_budget;
+    /*
+     * True lifts the microstep limit (ADR 0074) for this call: a host sets
+     * it for an actor an operator released after TA_ERR_RUNAWAY.
+     */
+    bool no_microstep_limit;
 } ta_actor_resume_params;
 typedef struct {
     ta_actor_id actor;
@@ -2844,7 +2856,12 @@ TA_API void ta_session_image_destroy(TA_DESTROYS ta_session_image *image);
  */
 
 
-typedef struct { ta_allocator allocator; ta_time initial_time; } ta_system_config;
+/*
+ * `microstep_limit` (ADR 0074): the microsteps one macrostep may run before
+ * ta_actor_resume() answers TA_ERR_RUNAWAY, for definitions that set none
+ * of their own; 0 for no limit.
+ */
+typedef struct { ta_allocator allocator; ta_time initial_time; uint32_t microstep_limit; } ta_system_config;
 typedef struct {
     ta_event_name_id name;
     TA_BUFFER(capacity, needed) TA_OPTIONAL char *buffer;
@@ -2945,7 +2962,17 @@ typedef struct {
     uint64_t invocations_ended;
     uint64_t runs_paused;          /* a budget ran out */
     uint64_t runs_stopped;         /* an allocation failed (ADR 0070) */
+    uint64_t macrosteps_long;      /* a macrostep reached a tenth of its microstep limit (ADR 0074) */
+    uint64_t runaways;             /* a macrostep reached its microstep limit (ADR 0074) */
 } ta_counters;
+
+/*
+ * A definition's microstep limit (ADR 0074): 0 takes the system's,
+ * TA_MICROSTEP_LIMIT_NONE is none. TA_ERR_NOT_FOUND for an unknown or freed
+ * definition.
+ */
+#define TA_MICROSTEP_LIMIT_NONE ((uint32_t)UINT32_MAX)
+TA_API ta_result ta_definition_set_microstep_limit(ta_system *system, ta_definition_id definition, uint32_t limit);
 
 /* A definition's counters; TA_ERR_NOT_FOUND for an unknown or freed one. */
 TA_API ta_result ta_definition_counters(const ta_system *system, ta_definition_id definition,

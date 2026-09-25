@@ -27,7 +27,8 @@ module TinyactorsTest
 
     NAMES = {
       'macrostep_begin' => 'begin', 'macrostep_end' => 'end', 'microstep' => 'micro', 'condition' => 'cond',
-      'data_init' => 'data', 'action_failed' => 'failed', 'invoke_cancelled' => 'uninvoked'
+      'data_init' => 'data', 'action_failed' => 'failed', 'invoke_cancelled' => 'uninvoked',
+      'long_macrostep' => 'long'
     }.freeze
     LIFECYCLE = %w[spawned loaded unloaded finished destroyed].freeze
     MACROSTEP = %w[macrostep_begin macrostep_end].freeze
@@ -67,6 +68,7 @@ module TinyactorsTest
       when 'foreach' then ["i#{@record[:iteration]}"]
       when 'action_failed' then ["a#{@record[:action]}", fault]
       when 'finished' then [state_name(@record[:state])]
+      when 'long_macrostep', 'runaway' then [transitions, states(:states)]
       else []
       end
     end

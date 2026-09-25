@@ -180,6 +180,13 @@
       "value": 18446744073709551615
     },
     {
+      "name": "TA_MICROSTEP_LIMIT_NONE",
+      "type": {
+        "builtin": "uint32_t"
+      },
+      "value": 4294967295
+    },
+    {
       "name": "TA_SPEC_INDEX_NONE",
       "type": {
         "builtin": "uint32_t"
@@ -2081,6 +2088,13 @@
           "type": {
             "builtin": "uint32_t"
           }
+        },
+        {
+          "name": "no_microstep_limit",
+          "type": {
+            "builtin": "bool"
+          },
+          "doc": "True lifts the microstep limit (ADR 0074) for this call: a host sets it for an actor an operator released after TA_ERR_RUNAWAY."
         }
       ],
       "layout": {
@@ -2091,7 +2105,8 @@
             "actor": 0,
             "budget": 8,
             "status": 16,
-            "action_budget": 24
+            "action_budget": 24,
+            "no_microstep_limit": 28
           }
         },
         "wasm32-unknown-unknown": {
@@ -2101,7 +2116,8 @@
             "actor": 0,
             "budget": 8,
             "status": 12,
-            "action_budget": 16
+            "action_budget": 16,
+            "no_microstep_limit": 20
           }
         }
       }
@@ -4134,11 +4150,25 @@
             "builtin": "uint64_t"
           },
           "doc": "an allocation failed (ADR 0070)"
+        },
+        {
+          "name": "macrosteps_long",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "a macrostep reached a tenth of its microstep limit (ADR 0074)"
+        },
+        {
+          "name": "runaways",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "a macrostep reached its microstep limit (ADR 0074)"
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 168,
+          "size": 184,
           "align": 8,
           "offsets": {
             "spawned": 0,
@@ -4161,11 +4191,13 @@
             "invocations_started": 136,
             "invocations_ended": 144,
             "runs_paused": 152,
-            "runs_stopped": 160
+            "runs_stopped": 160,
+            "macrosteps_long": 168,
+            "runaways": 176
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 168,
+          "size": 184,
           "align": 8,
           "offsets": {
             "spawned": 0,
@@ -4188,7 +4220,9 @@
             "invocations_started": 136,
             "invocations_ended": 144,
             "runs_paused": 152,
-            "runs_stopped": 160
+            "runs_stopped": 160,
+            "macrosteps_long": 168,
+            "runaways": 176
           }
         }
       }
@@ -10659,6 +10693,12 @@
           "name": "TA_ERR_DONE",
           "value": -11,
           "symbol": "err_done"
+        },
+        {
+          "name": "TA_ERR_RUNAWAY",
+          "value": -12,
+          "symbol": "err_runaway",
+          "doc": "The macrostep ran its microstep limit (ADR 0074); nothing changed."
         }
       ],
       "doc": "======================================================================== Scalar handles, results, and plain data",
@@ -13289,7 +13329,7 @@
     },
     "ta_system_config": {
       "kind": "struct",
-      "doc": "======================================================================== Systems",
+      "doc": "`microstep_limit` (ADR 0074): the microsteps one macrostep may run before ta_actor_resume() answers TA_ERR_RUNAWAY, for definitions that set none of their own; 0 for no limit.",
       "fields": [
         {
           "name": "allocator",
@@ -13302,23 +13342,31 @@
           "type": {
             "type": "ta_time"
           }
+        },
+        {
+          "name": "microstep_limit",
+          "type": {
+            "builtin": "uint32_t"
+          }
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "allocator": 0,
+            "initial_time": 16,
+            "microstep_limit": 24
+          }
+        },
+        "wasm32-unknown-unknown": {
           "size": 24,
           "align": 8,
           "offsets": {
             "allocator": 0,
-            "initial_time": 16
-          }
-        },
-        "wasm32-unknown-unknown": {
-          "size": 16,
-          "align": 8,
-          "offsets": {
-            "allocator": 0,
-            "initial_time": 8
+            "initial_time": 8,
+            "microstep_limit": 16
           }
         }
       }
@@ -13681,6 +13729,18 @@
           "value": 23,
           "symbol": "forwarded",
           "doc": "`invoke`, `event`: autoforwarded to that invocation; its cause is this record's key"
+        },
+        {
+          "name": "TA_TRACE_LONG_MACROSTEP",
+          "value": 24,
+          "symbol": "long_macrostep",
+          "doc": "the macrostep reached a tenth of its microstep limit"
+        },
+        {
+          "name": "TA_TRACE_RUNAWAY",
+          "value": 25,
+          "symbol": "runaway",
+          "doc": "the macrostep reached its microstep limit; the run stops"
         }
       ],
       "doc": "======================================================================== Tracing (ADR 0067)\n\nCore reports its decisions and the data they changed to one trace sink per system, as flat records. A record is written once, when the step that produced it has committed: a step that runs out of memory and runs again (ADR 0070) writes its records on the run that commits, and the step counters move only then, so an interrupted run and an uninterrupted one write the same records apart from PAUSED, RESUMED and STOPPED.",
@@ -18009,6 +18069,42 @@
           "name": "sink",
           "type": {
             "type": "ta_trace_sink"
+          }
+        }
+      ]
+    },
+    {
+      "name": "ta_definition_set_microstep_limit",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "definition",
+          "type": {
+            "type": "ta_definition_id"
+          }
+        },
+        {
+          "name": "limit",
+          "type": {
+            "builtin": "uint32_t"
           }
         }
       ]

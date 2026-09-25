@@ -1323,6 +1323,9 @@ struct ta_definition {
      * `occupancy` has `state_count` entries, from registration on. */
     ta_counters counters;
     uint32_t *occupancy;
+    /* The microstep limit (ADR 0074): 0 takes the system's,
+     * TA_MICROSTEP_LIMIT_NONE is none. Bookkeeping, like the counters. */
+    uint32_t microstep_limit;
     /* The system whose atoms and event names this definition uses. */
     ta_system *system;
     bool registered;
@@ -1792,6 +1795,9 @@ struct ta_system {
     uint64_t trace_threshold;
     /* Every definition's counters, freed ones included (ADR 0072). */
     ta_counters counters;
+    /* Microsteps one macrostep may run, for definitions that set none (ADR
+     * 0074); 0 for no limit. */
+    uint32_t microstep_limit;
     ta_atom scxml_io_type;
     /* The short form "scxml" also selects the built-in processor. */
     ta_atom scxml_io_alias;
@@ -1926,6 +1932,8 @@ typedef struct {
     struct ta_trace_condition *conditions;
     uint32_t condition_count;
     uint32_t condition_capacity;
+    /* Microsteps the running macrostep may run (ADR 0074); 0 for no limit. */
+    uint32_t microstep_limit;
 } ta_interpreter;
 
 TA_PRIVATE ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_actor_resume_params *params);
@@ -12294,7 +12302,8 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
     }
     *system = (ta_system){ .allocator = config->allocator,
                            .block_cache_limit = TA_EVENT_BLOCK_CACHE_DEFAULT,
-                           .trace = ta_null_trace_sink() };
+                           .trace = ta_null_trace_sink(),
+                           .microstep_limit = config->microstep_limit };
     ta_system_seed_trace_ids(system, 0);
     ta_clock_set(&system->clock, config->initial_time);
     ta_vec_init(&system->actors.pages, config->allocator, TA_VEC_LAYOUT(ta_actor_slot *));
@@ -12791,6 +12800,15 @@ TA_API ta_result ta_definition_counters(const ta_system *system, ta_definition_i
     return TA_OK;
 }
 
+TA_API ta_result ta_definition_set_microstep_limit(ta_system *system, ta_definition_id definition, uint32_t limit) {
+    ta_definition *found = system == NULL ? NULL : ta_system_definition(system, definition);
+    if (found == NULL) {
+        return system == NULL ? TA_ERR_INVALID : TA_ERR_NOT_FOUND;
+    }
+    found->microstep_limit = limit;
+    return TA_OK;
+}
+
 TA_API void ta_system_counters(const ta_system *system, ta_counters *out) {
     if (system != NULL && out != NULL) {
         *out = system->counters;
@@ -13172,9 +13190,7 @@ static void ta_trace_end(ta_interpreter *it) {
  * the exit set in exit order, the entry set in entry order, and the history
  * states the exit recorded. It is written before its actions run.
  */
-static void ta_trace_microstep(ta_interpreter *it, const ta_event *event) {
-    it->actor->trace_microstep += 1u;
-    TA_COUNT(it->system, it->actor->definition, microsteps);
+static void ta_trace_microstep_record(ta_interpreter *it, const ta_event *event) {
     if (!ta_tracing(it, TA_TRACE_MICROSTEP) || it->trace_states == NULL) {
         return;
     }
@@ -13201,6 +13217,48 @@ static void ta_trace_microstep(ta_interpreter *it, const ta_event *event) {
     }
     record.history = history;
     ta_trace_emit(it, &record);
+}
+
+/*
+ * The microstep that reached a tenth of the limit, or the limit itself
+ * (ADR 0074): a counter, and a record with its transitions and the
+ * configuration before it. Counts move only here, on commit, so a retry
+ * never counts twice.
+ */
+static void ta_trace_runaway_mark(ta_interpreter *it) {
+    uint32_t limit = it->microstep_limit;
+    uint32_t count = it->actor->trace_microstep;
+    uint32_t warning = limit / 10u == 0 ? 1u : limit / 10u;
+    if (limit == 0 || (count != warning && count != limit)) {
+        return;
+    }
+    ta_trace_kind kind = count == limit ? TA_TRACE_RUNAWAY : TA_TRACE_LONG_MACROSTEP;
+    if (kind == TA_TRACE_RUNAWAY) {
+        TA_COUNT(it->system, it->actor->definition, runaways);
+    } else {
+        TA_COUNT(it->system, it->actor->definition, macrosteps_long);
+    }
+    if (!ta_tracing(it, kind) || it->trace_states == NULL) {
+        return;
+    }
+    ta_trace_record record = ta_trace_record_now(it, kind);
+    record.position = ta_trace_nowhere();
+    if (it->enabled_count != 0 && it->enabled[0] != TA_ENABLED_BOOTSTRAP) {
+        record.transitions = it->enabled;
+        record.transition_count = it->enabled_count;
+    }
+    record.states = it->trace_states;
+    record.state_count = ta_trace_states(it, it->active, it->trace_states, false);
+    ta_trace_emit(it, &record);
+}
+
+/* A microstep commits: its counter moves, its record is written, and the
+ * runaway marks are checked. */
+static void ta_trace_microstep(ta_interpreter *it, const ta_event *event) {
+    it->actor->trace_microstep += 1u;
+    TA_COUNT(it->system, it->actor->definition, microsteps);
+    ta_trace_microstep_record(it, event);
+    ta_trace_runaway_mark(it);
 }
 
 /* Keeps a guard the selection evaluated, to be written when it completes. */
@@ -16409,7 +16467,8 @@ static ta_result ta_interpreter_init(ta_interpreter *it, ta_system *system, ta_a
     it->trace_kinds = ta_trace_macrostep_kinds(&system->trace, &parent.context);
     it->trace_action = TA_ACTION_NONE;
     uint32_t wanted = ta_trace_any_kinds(&system->trace);
-    if ((wanted & (TA_TRACE_BIT(TA_TRACE_MICROSTEP) | TA_TRACE_BIT(TA_TRACE_MACROSTEP_END))) != 0) {
+    if ((wanted & (TA_TRACE_BIT(TA_TRACE_MICROSTEP) | TA_TRACE_BIT(TA_TRACE_MACROSTEP_END) |
+                   TA_TRACE_BIT(TA_TRACE_LONG_MACROSTEP) | TA_TRACE_BIT(TA_TRACE_RUNAWAY))) != 0) {
         it->trace_states = ta_arena_alloc(&system->scratch, (3u * (size_t)definition->state_count + 1u) *
                                                                 sizeof(ta_state_id),
                                           _Alignof(ta_state_id));
@@ -16474,6 +16533,11 @@ static ta_result ta_run(ta_interpreter *it, uint32_t budget, ta_run_status *stat
             }
             it->at = (ta_micro_position){ .phase = TA_PHASE_FINISH, .state = it->definition->state_count,
                                           .stage = TA_FINISH_EXIT };
+        } else if (it->microstep_limit != 0 && actor->trace_begun && actor->trace_microstep >= it->microstep_limit) {
+            /* Between microsteps, nothing open: the actor stays mid-macrostep
+             * and a later resume continues it (ADR 0074). */
+            *status = TA_RUN_ERROR;
+            return TA_ERR_RUNAWAY;
         } else if (it->steps >= budget) {
             ta_trace_control(it, TA_TRACE_PAUSED);
             *status = TA_RUN_PAUSED;
@@ -16529,6 +16593,9 @@ TA_PRIVATE ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, c
     }
     it->pausable = true;
     it->action_budget = params->action_budget;
+    uint32_t limit = actor->definition->microstep_limit == 0 ? system->microstep_limit
+                                                            : actor->definition->microstep_limit;
+    it->microstep_limit = params->no_microstep_limit || limit == TA_MICROSTEP_LIMIT_NONE ? 0 : limit;
     if (it->at.phase != TA_PHASE_NONE) {
         /* Continuing a stopped run changes the actor again, so an image
          * taken while it was stopped no longer describes it. */
