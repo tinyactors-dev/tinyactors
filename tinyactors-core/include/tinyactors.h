@@ -1019,7 +1019,8 @@ typedef enum {
     TA_TRACE_STOPPED,           /* an allocation failed; the run stopped where it stood (ADR 0070) */
 
     /* Decisions, again (ADR 0072). */
-    TA_TRACE_IGNORED            /* `event`: taken, and it enabled no transition */
+    TA_TRACE_IGNORED,           /* `event`: taken, and it enabled no transition */
+    TA_TRACE_FORWARDED          /* `invoke`, `event`: autoforwarded to that invocation; its cause is this record's key */
 } ta_trace_kind TA_SYMBOLS("TA_TRACE_");
 
 /* The bit of `kind` in a sink's mask. */

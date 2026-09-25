@@ -137,6 +137,48 @@ async function bytesOutliveTheTurn() {
   system.close();
 }
 
+// Autoforwarding is a span event naming the invocation and the event, and
+// an invoker's UNAVAILABLE is the RAISED event it queued (core ADR 0067
+// open point 3, and events core queues outside a run).
+async function forwardedAndUnavailable() {
+  const forwarded = [];
+  const system = createSystem({
+    invokers: {
+      echo: { start() { return { cancel() {}, forward(event) { forwarded.push(event.name); } }; } },
+      flaky: { start() { throw new Error('no backend'); } },
+    },
+  });
+  const sink = recorder(system);
+  const definition = system.define(
+    statechart({ family: 'forwarding', revision: 'v1' })
+      .data('failed', false)
+      .state('running', (s) => {
+        s.invoke((i) => i.type('echo').id('svc').autoforward());
+        s.invoke((i) => i.type('flaky').id('bad'));
+        s.on('error.communication', (t) => t.assign('failed', () => true));
+        s.on('hello', (t) => t.assign('failed', ({ data }) => data.failed));
+      }),
+  );
+  const actor = system.spawn(definition);
+  for (let turn = 0; turn < 20 && !actor.inspect().data.failed; turn += 1) {
+    await system.flush();
+  }
+  assert.equal(actor.inspect().data.failed, true, 'the flaky service was reported unavailable');
+  actor.post('hello');
+  await system.flush();
+  const events = sink.spans.flatMap((span) => span.events);
+  const forwards = events.filter((event) => event.name === 'scxml.forward');
+  assert.ok(forwards.some((event) => event.attributes['scxml.event.name'] === 'hello'),
+            `a forward of hello: ${JSON.stringify(forwards.map((event) => event.attributes))}`);
+  assert.ok(forwards.every((event) => event.attributes['scxml.invoke_id'] === 'svc'), 'forwards name the invocation');
+  assert.ok(forwarded.includes('hello'), 'the service got it');
+  const raised = events.filter((event) => event.name === 'scxml.raise')
+    .map((event) => event.attributes['scxml.event.name']);
+  assert.ok(raised.includes('error.communication.invoke.bad.unavailable'), `raised: ${JSON.stringify(raised)}`);
+  assert.ok(TRACE_KINDS.includes('forwarded') && TRACE_KINDS.includes('ignored'));
+  system.close();
+}
+
 // The mask decides what core builds, and so which spans there are.
 async function kinds() {
   const system = createSystem();
@@ -551,6 +593,7 @@ async function watchAndSample() {
   await batches();
   await bytesOutliveTheTurn();
   await kinds();
+  await forwardedAndUnavailable();
   await traceparentIn();
   await startedTraces();
   helpers();

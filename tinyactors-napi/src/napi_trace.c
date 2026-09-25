@@ -14,9 +14,9 @@ static const char *const tna_trace_kinds[] = {
     "spawned",        "loaded",   "unloaded",  "finished",   "destroyed",      "macrostepBegin",
     "macrostepEnd",   "condition", "microstep", "raised",     "dataInit",       "assign",
     "script",         "foreach",  "actionFailed", "sent",    "cancelled",      "invoked",
-    "invokeCancelled", "paused",  "resumed",   "stopped",    "ignored",
+    "invokeCancelled", "paused",  "resumed",   "stopped",    "ignored",        "forwarded",
 };
-_Static_assert(sizeof tna_trace_kinds / sizeof tna_trace_kinds[0] == (size_t)TA_TRACE_IGNORED + 1u,
+_Static_assert(sizeof tna_trace_kinds / sizeof tna_trace_kinds[0] == (size_t)TA_TRACE_FORWARDED + 1u,
                "one name per ta_trace_kind");
 
 static void tna_js_put(napi_env env, napi_value object, const char *name, napi_value value) {

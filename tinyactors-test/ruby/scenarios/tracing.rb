@@ -73,7 +73,7 @@ module Tracing
   # Every kind but the ones a residency cycle adds on purpose.
   SWEEP_KINDS = %w[spawned finished destroyed macrostep_begin macrostep_end condition microstep raised data_init
                    assign script foreach action_failed sent cancelled invoked invoke_cancelled paused resumed
-                   stopped].freeze
+                   stopped forwarded].freeze
 
   TRACE_ID = '4bf92f3577b34da6a3ce929d0e0e4736'
 end
@@ -90,6 +90,45 @@ TinyactorsTest.scenarios 'tracing' do
     spawn :trace_basic
     assert_equal ['spawned', 'begin 1 -', 'data 1.0 bootstrap n', 'data 1.0 bootstrap i',
                   'micro 1.1 - [] exit[] enter[idle]', 'end 1 [idle]'], trace_lines
+  end
+
+  # Catches: autoforwarding that leaves no record (ADR 0067 open point 3),
+  # or one written before the forward committed.
+  # Every external event is forwarded (SCXML 6.4), the child's own too.
+  scenario 'each autoforwarded event is recorded once, naming the invocation and the event' do
+    recording_trace(kinds: %i[forwarded])
+    caller = spawn :caller
+    run_system('the child starts')
+    caller.deliver 'finish'
+    forwarded = trace_lines(actor: caller).map { |line| line.sub(/ v\d+ /, ' v ') }
+    assert_equal ['forwarded 2.0 finalize v progress', 'forwarded 3.0 finalize v finish',
+                  'forwarded 4.0 finalize v done.invoke.worker'], forwarded
+    assert_equal ['progress 21', 'done 42'], caller.data('.log'), 'the child still finished'
+  end
+
+  # Catches: an invoker's UNAVAILABLE queued with no RAISED record, so its
+  # macrostep had no visible cause (ADR 0072 closed the other such cases).
+  scenario "an invoker's UNAVAILABLE is recorded as the event it raised" do
+    service = scripted_invoker('urn:tinyactors:test:service')
+    client = spawn :service_client
+    recording_trace(kinds: %i[raised])
+    report_invoke(service.started.first, :unavailable)
+    raised = trace_lines(actor: client)
+    assert_equal 1, raised.size, "one RAISED record: #{raised.inspect}"
+    assert raised.first.match?(/\Araised .*error\.communication\.invoke\.svc\.unavailable/), raised.first
+  end
+
+  # Catches: an invocation lost across an image queued with no RAISED record.
+  scenario 'each invocation lost across an image is recorded as the event it raised' do
+    scripted_invoker('urn:tinyactors:test:service')
+    pair = spawn :service_pair, name: 'p1'
+    recording_trace(kinds: %i[raised])
+    cycle_residency(pair)
+    run_system('restored')
+    raised = trace_lines.grep(/unavailable/)
+    assert_equal 2, raised.size, "two RAISED records: #{trace_lines.inspect}"
+    assert raised[0].include?('invoke.first.unavailable'), raised[0]
+    assert raised[1].include?('invoke.second.unavailable'), raised[1]
   end
 
   # Catches: a targetless transition that exits or enters, a <foreach>

@@ -261,6 +261,16 @@ void ta_interpreter_trace_invoke(ta_interpreter *it, ta_trace_kind kind, ta_invo
     ta_trace_emit(it, &record);
 }
 
+void ta_interpreter_trace_forward(ta_interpreter *it, ta_invoke_id invoke, const ta_event *event) {
+    if (!ta_tracing(it, TA_TRACE_FORWARDED)) {
+        return;
+    }
+    ta_trace_record record = ta_trace_record_now(it, TA_TRACE_FORWARDED);
+    record.invoke = invoke;
+    record.event = event;
+    ta_trace_emit(it, &record);
+}
+
 /* An action of the running unit failed; its error is queued. */
 static void ta_trace_action_failed(ta_interpreter *it, const ta_fault *fault) {
     if (!ta_tracing(it, TA_TRACE_ACTION_FAILED)) {

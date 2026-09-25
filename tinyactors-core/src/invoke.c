@@ -732,13 +732,18 @@ static ta_result ta_invoke_forward(ta_interpreter *it, uint32_t index, const ta_
         /* Autoforwarding is an exact envelope copy, including the invoke ID
          * that identifies the child which originally sent the event. */
         ta_event copy = *event;
-        return ta_invoke_submit(it->system, &(ta_invoke_delivery){
-                                                .sender = it->actor,
-                                                .destination = { .kind = TA_ACTOR_REF_RUNTIME,
-                                                                 .as.runtime = meta.child },
-                                                .event = copy,
-                                                .trace = ta_interpreter_trace_here(it),
-                                            });
+        ta_result result = ta_invoke_submit(it->system, &(ta_invoke_delivery){
+                                                            .sender = it->actor,
+                                                            .destination = { .kind = TA_ACTOR_REF_RUNTIME,
+                                                                             .as.runtime = meta.child },
+                                                            .event = copy,
+                                                            .trace = ta_interpreter_trace_here(it),
+                                                        });
+        if (result == TA_OK) {
+            /* Written once it is committed: a submit that fails runs again (ADR 0070). */
+            ta_interpreter_trace_forward(it, sparse->invokes[index].id, event);
+        }
+        return result;
     }
     if (meta.invoker.v != NULL && meta.invoker.v->forward != NULL) {
         ta_fault fault = {0};
@@ -748,6 +753,7 @@ static ta_result ta_invoke_forward(ta_interpreter *it, uint32_t index, const ta_
                                                               .fault = &fault,
                                                           });
         ta_value_release(&fault.data);
+        ta_interpreter_trace_forward(it, sparse->invokes[index].id, event);
     }
     return TA_OK;
 }
@@ -911,7 +917,13 @@ ta_result ta_invoke_report_lost(ta_system *system, ta_actor *actor, ta_invoke_id
         return result;
     }
     ta_event event = { .name = name, .type = TA_EVENT_PLATFORM, .invoke_id = TA_INVOKE_ID_NONE };
-    return ta_interpreter_enqueue_internal(system, actor, &event);
+    result = ta_interpreter_enqueue_internal(system, actor, &event);
+    if (result == TA_OK) {
+        /* Queued outside a run: no unit commits it, so it is counted and
+         * recorded here (ADR 0072). The image carries no request to name. */
+        ta_interpreter_raised_outside(system, actor, name, NULL);
+    }
+    return result;
 }
 
 static ta_result ta_invoke_unavailable(ta_system *system, ta_actor *actor, const ta_invoke_report_params *params) {
@@ -927,7 +939,11 @@ static ta_result ta_invoke_unavailable(ta_system *system, ta_actor *actor, const
     }
     result = ta_interpreter_enqueue_internal(system, actor, &event);
     if (result == TA_OK) {
-        ta_interpreter_start_macrostep(actor, NULL);
+        /* Queued outside a run, like a failed delayed send's error: counted
+         * and recorded here (ADR 0072), under the invoke request's trace, as
+         * the service's own events are. */
+        ta_interpreter_raised_outside(system, actor, name, &params->trace);
+        ta_interpreter_start_macrostep(actor, &params->trace);
     }
     return result;
 }

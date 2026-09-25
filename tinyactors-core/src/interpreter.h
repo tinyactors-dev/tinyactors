@@ -146,6 +146,8 @@ uint32_t ta_interpreter_queue_mark(const ta_actor *actor);
 void ta_interpreter_trace_raised(ta_interpreter *it, uint32_t mark);
 /* Writes an INVOKED or INVOKE_CANCELLED record for `invoke`. */
 void ta_interpreter_trace_invoke(ta_interpreter *it, ta_trace_kind kind, ta_invoke_id invoke);
+/* Records that `event` was autoforwarded to `invoke` (ADR 0067 open point 3). */
+void ta_interpreter_trace_forward(ta_interpreter *it, ta_invoke_id invoke, const ta_event *event);
 /* What a step running now passes to what it produces: the macrostep's
  * context, and the step's own key as the cause (ADR 0067 section 6). */
 ta_trace_parent ta_interpreter_trace_here(const ta_interpreter *it);

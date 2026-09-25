@@ -13675,6 +13675,12 @@
           "value": 22,
           "symbol": "ignored",
           "doc": "`event`: taken, and it enabled no transition"
+        },
+        {
+          "name": "TA_TRACE_FORWARDED",
+          "value": 23,
+          "symbol": "forwarded",
+          "doc": "`invoke`, `event`: autoforwarded to that invocation; its cause is this record's key"
         }
       ],
       "doc": "======================================================================== Tracing (ADR 0067)\n\nCore reports its decisions and the data they changed to one trace sink per system, as flat records. A record is written once, when the step that produced it has committed: a step that runs out of memory and runs again (ADR 0070) writes its records on the run that commits, and the step counters move only then, so an interrupted run and an uninterrupted one write the same records apart from PAUSED, RESUMED and STOPPED.",

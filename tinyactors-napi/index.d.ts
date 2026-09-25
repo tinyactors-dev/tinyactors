@@ -1146,7 +1146,7 @@ export type TraceKind =
   | 'macrostepBegin' | 'macrostepEnd' | 'condition' | 'microstep' | 'raised'
   | 'dataInit' | 'assign' | 'script' | 'foreach' | 'actionFailed'
   | 'sent' | 'cancelled' | 'invoked' | 'invokeCancelled'
-  | 'paused' | 'resumed' | 'stopped';
+  | 'paused' | 'resumed' | 'stopped' | 'ignored' | 'forwarded';
 
 export declare const TRACE_KINDS: readonly TraceKind[];
 

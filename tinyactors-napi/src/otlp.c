@@ -636,9 +636,9 @@ static ta_str tna_decimal(uint64_t value, char *out) {
 static const char *const tna_kind_names[] = {
     "spawned",   "loaded",    "unloaded", "finished", "destroyed", "macrostep_begin", "macrostep_end", "condition",
     "microstep", "raise",     "data",     "assign",   "script",    "foreach",         "error",         "send",
-    "cancel",    "invoke",    "invoke.cancel", "paused", "resumed", "stopped",  "ignored",
+    "cancel",    "invoke",    "invoke.cancel", "paused", "resumed", "stopped",  "ignored", "forward",
 };
-_Static_assert(sizeof tna_kind_names / sizeof tna_kind_names[0] == (size_t)TA_TRACE_IGNORED + 1u,
+_Static_assert(sizeof tna_kind_names / sizeof tna_kind_names[0] == (size_t)TA_TRACE_FORWARDED + 1u,
                "one name per ta_trace_kind");
 
 static const char *const tna_at_names[] = { "none", "select", "exit", "transition", "enter", "bootstrap", "finalize",
@@ -1672,7 +1672,7 @@ size_t tna_otlp_put_logs(tna_otlp *otlp, uint8_t *out, size_t size) {
 }
 
 void tna_otlp_write(tna_otlp *otlp, const ta_trace_record *record) {
-    if ((uint32_t)record->kind > (uint32_t)TA_TRACE_IGNORED) {
+    if ((uint32_t)record->kind > (uint32_t)TA_TRACE_FORWARDED) {
         otlp->dropped += 1u;
         return;
     }
