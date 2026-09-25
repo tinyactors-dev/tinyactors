@@ -173,7 +173,7 @@ class System {
    *   for a loader (napi ADR 0020); `data` and `traceparent` are what
    *   posting the message again needs, absent when it had none.
    * - childDocuments: { maxCount = 256, maxBytes = 16 MiB }, the bounds of
-   *   the cache of SCXML documents the invoker imports (napi ADR 0022);
+   *   the cache of SCXML documents the invoker imports (napi ADR 0023);
    *   evicting one retires its definition.
    */
   constructor(options) {

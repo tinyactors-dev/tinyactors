@@ -848,7 +848,7 @@ at the repository root (`abee06b`)):
 - the test host's RPC carries `ta_bytes` as a JSON string, so its scenarios
   cannot offload; a binary-safe encoding would let them.
 
-**Invoked documents** (ADR 0022: a bounded LRU keyed by a hash, done):
+**Invoked documents** (ADR 0023: a bounded LRU keyed by a hash, done):
 - the binding filter still exports the child's whole definition on every
   invoke to read its declared `<data>`; cache the names per definition;
 - a `resolve` is found by a linear search of the kept resolvers, one per

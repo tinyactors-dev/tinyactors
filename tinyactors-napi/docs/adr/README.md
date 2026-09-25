@@ -32,4 +32,4 @@ particular on core ADRs 0011, 0029, 0040, 0047, 0050, 0053–0059, 0061,
 | [0020](0020-mail-for-an-unloaded-actor-waits-while-a-loader-brings-it-back.md) | [Mail for an unloaded actor waits while a loader brings it back](0020-mail-for-an-unloaded-actor-waits-while-a-loader-brings-it-back.md) |
 | [0021](0021-an-invoked-scxml-document-is-imported-in-the-invoke.md) | [An invoked SCXML document is imported in the invoke](0021-an-invoked-scxml-document-is-imported-in-the-invoke.md) |
 | [0022](0022-mail-a-chart-sends-nowhere-raises-error-communication.md) | [Mail a chart sends nowhere raises `error.communication`](0022-mail-a-chart-sends-nowhere-raises-error-communication.md) |
-| [0022](0022-invoked-documents-are-cached-in-a-bounded-lru.md) | [Invoked documents are cached in a bounded LRU](0022-invoked-documents-are-cached-in-a-bounded-lru.md) |
+| [0023](0023-invoked-documents-are-cached-in-a-bounded-lru.md) | [Invoked documents are cached in a bounded LRU](0023-invoked-documents-are-cached-in-a-bounded-lru.md) |

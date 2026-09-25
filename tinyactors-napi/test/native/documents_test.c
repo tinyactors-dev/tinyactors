@@ -1,4 +1,4 @@
-/* The cache of invoked child documents (napi ADR 0022). */
+/* The cache of invoked child documents (napi ADR 0023). */
 #include <string.h>
 
 #include "allocator.h"

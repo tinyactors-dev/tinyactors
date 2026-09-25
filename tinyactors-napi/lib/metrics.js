@@ -109,7 +109,7 @@ function buildSnapshot({ startTime, time, systemName, system, definitions, host 
   metric('tinyactors.load.duration', 's', 'histogram')
     .points.push({ attributes: base, ...histogramPoint(host.native.load) });
   metric('tinyactors.messages.waiting', '{message}', 'gauge').points.push({ attributes: base, value: host.native.waiting });
-  // The cache of invoked child documents (napi ADR 0022): a document that
+  // The cache of invoked child documents (napi ADR 0023): a document that
   // changes on every invoke shows as a steady miss rate, then evictions.
   const documents = host.native.childDocuments;
   metric('tinyactors.invoke.documents', '{document}', 'gauge').points.push({ attributes: base, value: documents.count });

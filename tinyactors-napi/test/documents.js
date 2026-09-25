@@ -1,6 +1,6 @@
 'use strict';
 
-// The cache of SCXML documents the invoker imports (napi ADR 0022): a
+// The cache of SCXML documents the invoker imports (napi ADR 0023): a
 // bounded LRU keyed by a hash of the bytes. Evicting a document retires its
 // definition, a child still running keeps it alive, and the next invoke
 // imports it again. Resolvers go once their definition is freed. Runs on

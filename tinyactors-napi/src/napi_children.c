@@ -96,7 +96,7 @@ static napi_value tna_resolver_of(tna_napi_system *wrapper, ta_definition_id def
 }
 
 /*
- * Releases the resolvers of definitions core has freed (ADR 0022 point 5).
+ * Releases the resolvers of definitions core has freed (ADR 0023 point 5).
  * Core has no "freed" hook, but a freed definition's ID is stale, so
  * inspection answers TA_ERR_NOT_FOUND for it. Runs when the list has
  * doubled since the last sweep, so its cost is spread over the growth.
@@ -134,7 +134,7 @@ ta_result tna_children_keep_resolver(tna_napi_system *wrapper, ta_definition_id 
 }
 
 /* ------------------------------------------------------------------------
- * Imported children, cached by document bytes (ADR 0022)
+ * Imported children, cached by document bytes (ADR 0023)
  */
 
 /*
@@ -154,7 +154,7 @@ static bool tna_cached_document(tna_napi_system *wrapper, ta_bytes bytes, ta_def
     return false;
 }
 
-/* The WARN log of an eviction, about the parent that invoked (ADR 0022 point 4). */
+/* The WARN log of an eviction, about the parent that invoked (ADR 0023 point 4). */
 static void tna_eviction_log(tna_napi_system *wrapper, ta_definition_id parent) {
     const tna_documents_limits *limits = &wrapper->children.documents.limits;
     char body[256];
@@ -266,7 +266,7 @@ static bool tna_clear_exception(napi_env env, char *message, size_t capacity) {
 static ta_op_status tna_import_document(tna_napi_system *wrapper, const tna_child_params *params, ta_bytes document,
                                         napi_value resolve);
 
-/* The definition for a child document: cached, or imported and cached (ADR 0022). */
+/* The definition for a child document: cached, or imported and cached (ADR 0023). */
 static ta_op_status tna_import_child(tna_napi_system *wrapper, const tna_child_params *params, ta_bytes document,
                                      tna_invoking parent) {
     if (tna_cached_document(wrapper, document, params->out)) {

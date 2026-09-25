@@ -10,7 +10,7 @@
  * - a `src` string is fetched with the parent definition's resolve(src)
  *   and imported the same way.
  * Imported children are cached by document bytes in a bounded LRU
- * (documents.h, ADR 0022); evicting one retires its definition. They
+ * (documents.h, ADR 0023); evicting one retires its definition. They
  * inherit their parent's resolver. JavaScript runs only in resolve(src)
  * and a registered data model's compile; neither may call core (ADR 0013).
  */
@@ -25,8 +25,8 @@ typedef struct tna_napi_system tna_napi_system;
 
 typedef struct {
     tna_vec resolvers;       /* tna_child_resolver: define()'s resolve, per definition */
-    uint32_t resolvers_mark; /* sweep the resolvers once there are this many (ADR 0022) */
-    tna_documents documents; /* imported children, by bytes (ADR 0022) */
+    uint32_t resolvers_mark; /* sweep the resolvers once there are this many (ADR 0023) */
+    tna_documents documents; /* imported children, by bytes (ADR 0023) */
     uint64_t hits;           /* invokes of an imported child found in the cache */
     uint64_t misses;         /* ... and imported */
     uint64_t evictions;      /* entries evicted, their definitions retired */

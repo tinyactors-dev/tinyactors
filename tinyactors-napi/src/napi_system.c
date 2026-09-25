@@ -1117,7 +1117,7 @@ static napi_value tna_host_metrics_method(napi_env env, napi_callback_info info)
     }
     if (status == napi_ok) status = napi_set_named_property(env, out, "loads", loads);
     if (status == napi_ok) status = tna_set_number(env, out, "waiting", (double)system->loads.waiting);
-    /* The cache of invoked child documents (napi ADR 0022). */
+    /* The cache of invoked child documents (napi ADR 0023). */
     napi_value children = NULL;
     if (status == napi_ok) status = tna_children_metrics(env, wrapper, &children);
     if (status == napi_ok) status = napi_set_named_property(env, out, "childDocuments", children);

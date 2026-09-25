@@ -89,7 +89,7 @@ document is:
   `src` raises `error.execution` in the parent.
 
 The child picks its data model with its own `datamodel` attribute. Each
-distinct document is imported once and cached (napi ADR 0022): at most
+distinct document is imported once and cached (napi ADR 0023): at most
 256 documents and 16 MiB of them by default, set with
 `createSystem({ childDocuments: { maxCount, maxBytes } })`. Past a bound
 the least recently used document is evicted and its definition retired;

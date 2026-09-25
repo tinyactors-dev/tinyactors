@@ -47,7 +47,7 @@ export interface SystemOptions {
   log?: LogSink;
   /**
    * Bounds of the cache of SCXML documents the invoker imports (napi ADR
-   * 0022): at most `maxCount` documents (default 256) and `maxBytes` bytes
+   * 0023): at most `maxCount` documents (default 256) and `maxBytes` bytes
    * of them (default 16 MiB). Past a bound the least recently used document
    * is evicted and its definition retired; the next invoke imports it again.
    */
