@@ -51,3 +51,4 @@ are in [`docs/proposals/`](docs/proposals/README.md).
   project; releases are built with one command on a Mac or a Linux VM and
   published to npm and GitHub Releases:
   [Packaging and releases](docs/proposals/packaging.md).
+- [ ] **Demo application.** A new project, tinyactors-open-stage uses tinyactors-napi for building a web-based val.town clone where people can deploy their actors, hot-reload them, and connect and listen to events. 
