@@ -65,7 +65,7 @@ or partial, ☑ done and tested, — not offered.
 | `setBreakpoints` | yes | Lines map to the nearest action, transition or state; stops before the action, before the transition's content, or on entry or exit. Live: only stops between macrosteps; inside a macrostep they act as logpoints. Conditions, hit conditions and log messages | C5 | ☑ | ☑ |
 | `breakpointLocations` | yes | The lines that hold an action, a transition or a state | C5 | ☑ | ☑ |
 | `setFunctionBreakpoints` | yes | By name: `past_due` (entry), `exit:past_due`, `on:payment.failed`, `idle → busy` (a transition's ADR 0071 name) | none | ☑ | ☑ |
-| `setExceptionBreakpoints` | yes | Filters `error.execution`, `error.communication`, `error.platform`, `ignored`, `stopped`, and `dead-letter` in napi | none | ☑ | ◐ |
+| `setExceptionBreakpoints` | yes | Filters `error.execution`, `error.communication`, `error.platform`, `ignored`, `stopped`, and `dead-letter` and `runaway` in napi | none | ☑ | ◐ |
 | `dataBreakpointInfo` | yes | A data-model location can be watched for writes | none | ☑ | ☑ |
 | `setDataBreakpoints` | yes | Stops after an `ASSIGN` record writes the location | none | ☑ | ☑ |
 | `setInstructionBreakpoints` | no | A chart has no instructions | — | — | — |
@@ -230,6 +230,14 @@ Every ☑ is covered by `tinyactors-napi/test/debug.js`, on Node and Bun.
   unit stops before it runs.
 - `setExceptionBreakpoints` is ◐: every filter but `dead-letter`. A dead
   letter is reported as `important` output, but does not stop.
+- `runaway` is napi's alone: the addon quarantines an actor whose
+  macrostep runs its microstep limit (core ADR 0075, 100,000 by default),
+  says so as `important` output, and with the filter stops with reason
+  `exception`; `abandon` then `goto` moves it out of its loop (core ADR
+  0082). The test host sets no microstep limit (core's default is none),
+  so a runaway never stops its actors, and its adapter pauses a macrostep
+  that never ends instead. The shared `initialize` transcript matches the
+  five filters both declare as a prefix.
 - `setDataBreakpoints` stops after an `<assign>` to a location written as
   a data-model path; an `<assign>` whose location is an expression that
   computes the path is not matched.

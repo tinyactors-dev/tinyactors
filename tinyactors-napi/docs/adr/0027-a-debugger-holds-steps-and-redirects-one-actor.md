@@ -183,7 +183,11 @@ The addon's scheduling grew two things this ADR had to fit beside:
   macrostep (the entry's `UNLIMITED` flag). A debugger has a third choice:
   abandon the runaway macrostep (core ADR 0082), which also clears
   `UNLIMITED`, jump out of the loop, and `release()`, after which the next
-  macrostep is limited again (`test/runaway.js`).
+  macrostep is limited again (`test/runaway.js`). The pump hands a
+  runaway's fault record to the effects handler (`runaway`) after the
+  turn's traces, as it does holds, and the debug session reports it as
+  `important` output and, with the `runaway` exception filter, as an
+  exception stop (`test/debug.js`).
 - **Flags.** The scheduling entry's 8 flag bits hold `BACKOFF`,
   `FINISHED`, ADR 0075's `UNLIMITED`, and this ADR's `HOLD`, `UNFINISHED`,
   `OWN_BUDGETS`, `ANYWHERE` and `MICROSTEP_START`: they are full, so the

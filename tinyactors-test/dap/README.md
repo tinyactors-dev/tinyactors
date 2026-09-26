@@ -41,9 +41,13 @@ too: a change to one shows in the same directory as its twin.
 
 ## Charts
 
-napi builds charts in JavaScript and does not import SCXML, so each chart
-has a fixture in each host's authoring form, with the same state IDs,
-events, data and actions, in the same order. Keep these the same:
+Each chart has a fixture in each host's authoring form, with the same
+state IDs, events, data and actions, in the same order. They were written
+when napi could not import SCXML; napi imports it now (napi ADR 0019), so
+one SCXML fixture could serve both hosts, but napi's SCXML import names no
+source file for its spans, and the two builders' fixtures also check each
+host's own source lines. Until a transcript needs it, keep the pairs, and
+keep these the same:
 
 - the names of states and events, and the transitions and their order;
 - the actions of each block, in order: frames name an action by its kind

@@ -109,7 +109,8 @@ let effectHandler;
 // application (ADR 0027). `traces(traces, logs)` gets every turn's OTLP bytes
 // the application's trace sink gets, installing a sink of its own when the
 // application has none; `log(record)` every <log> record; `held(actor)`
-// each actor a hold stopped; `defined(id)` each definition define()
+// each actor a hold stopped; `runaway(actor)` each actor quarantined as a
+// runaway (core ADR 0075); `defined(id)` each definition define()
 // registered, a new one or one answered by identity (core ADR 0077), whose
 // spans may have moved (core ADR 0086). Returns { stop() }. index.js does
 // not export it.
@@ -548,6 +549,9 @@ class System {
         return;
       case 'held':
         this.#notify('held', payload);
+        return;
+      case 'runaway':
+        this.#notify('runaway', payload);
         return;
       case 'io':
         this.#runIO(payload);

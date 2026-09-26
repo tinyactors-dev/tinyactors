@@ -32,13 +32,13 @@
           "supportsSteppingGranularity": true,
           "supportTerminateDebuggee": false,
           "supportSuspendDebuggee": false,
-          "exceptionBreakpointFilters": [
+          "exceptionBreakpointFilters": { "$prefix": [
             { "filter": "error.execution", "label": { "$any": true } },
             { "filter": "error.communication", "label": { "$any": true } },
             { "filter": "error.platform", "label": { "$any": true } },
             { "filter": "ignored", "label": { "$any": true } },
             { "filter": "stopped", "label": { "$any": true } }
-          ],
+          ] },
           "supportsCancelRequest": { "$absent": true },
           "supportsInstructionBreakpoints": { "$absent": true },
           "supportsDisassembleRequest": { "$absent": true },

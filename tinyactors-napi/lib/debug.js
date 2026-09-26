@@ -429,6 +429,7 @@ class DebugSession {
       traces: (traces) => this.#onTraces(traces),
       log: mode === 'fork' ? undefined : (record) => this.#onLog(record),
       held: (held) => this.#onHeld(held),
+      runaway: (actor) => this.#onRunaway(actor),
       defined: (id) => this.#onDefined(id),
     });
     attached.watch = attached.system.watchTraces({ sessions: [attached.actor] });
@@ -727,6 +728,27 @@ class DebugSession {
 
   // A hold stopped the attached actor; the traces of the turn were read
   // already.
+  // A macrostep of the actor ran its microstep limit, and the addon
+  // quarantined it (core ADR 0075): it stands between two microsteps of a
+  // macrostep it cannot finish. The console says what can be done; with the
+  // `runaway` filter it is an exception stop.
+  #onRunaway(actor) {
+    const attached = this.#attached;
+    if (attached === null || !actor.equals(attached.actor)) return;
+    this.#output('important', `${attached.label} is quarantined as a runaway: a macrostep ran its microstep limit ` +
+                              '(core ADR 0075). `abandon` ends that macrostep and `goto` moves it out of the loop; ' +
+                              'the application\'s release() lets the macrostep go on');
+    if (!this.#breakpoints.wants('runaway') || this.#stop !== null) return;
+    const hit = { kind: 'exception', breakpoints: [], description: 'a macrostep ran its microstep limit',
+                  exception: { filter: 'runaway' } };
+    if (!this.#gate) {
+      const why = attached.mode === 'watch' ? '' : ' (stopping needs the "hold" permission)';
+      this.#output('console', `would have stopped: ${hit.description}${why}`);
+      return;
+    }
+    this.#halt(undefined, { hits: [hit] });
+  }
+
   #onHeld(actor) {
     const attached = this.#attached;
     if (attached === null || !actor.equals(attached.actor)) return;

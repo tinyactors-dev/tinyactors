@@ -195,7 +195,7 @@ async function session() {
   assert.equal(capabilities.supportsBreakpointLocationsRequest, true);
   assert.equal(capabilities.supportsDisassembleRequest, undefined);
   assert.deepEqual(capabilities.exceptionBreakpointFilters.map((filter) => filter.filter),
-                   ['error.execution', 'error.communication', 'error.platform', 'ignored', 'stopped']);
+                   ['error.execution', 'error.communication', 'error.platform', 'ignored', 'stopped', 'runaway']);
 
   await client.refused('launch', {}, /attach/);
   await client.refused('threads', {}, undefined).catch(() => {});
@@ -923,6 +923,39 @@ async function movedLines() {
   system.close();
 }
 
+// A runaway (core ADR 0075): the addon quarantines the actor, the console
+// says what can be done, and with the `runaway` filter it is an exception
+// stop. `abandon` ends the macrostep and `goto` moves it out of the loop.
+async function runaway() {
+  const system = createSystem({ clock: 'manual', scheduling: { microstepLimit: 50 } });
+  const chart = statechart({ family: 'spinner', revision: 'v1' });
+  chart.state('idle', (s) => s.on('go', (t) => t.target('spin')));
+  chart.state('spin', (s) => s.always((t) => t.target('spin')));
+  const actor = system.spawn(system.define(chart), { name: 's1' });
+  await system.flush();
+  const client = new Client(system, { mode: 'live', allow: ALL });
+  await client.start({ address: 'spinner/s1' });
+  await client.ok('setExceptionBreakpoints', { filters: ['runaway'] });
+  const mark = client.mark();
+  actor.post('go');
+  const stop = await client.stoppedAfter(mark, 'exception');
+  assert.match(stop.text, /microstep limit/);
+  const info = await client.ok('exceptionInfo', { threadId: 1 });
+  assert.equal(info.details.typeName, 'runaway');
+  assert.match(client.output(), /quarantined as a runaway/);
+  assert.equal(system.inspect(actor).scheduling, 'quarantined');
+  await client.repl('abandon');
+  assert.equal(system.inspect(actor).macrostepInProgress, false);
+  await client.repl('goto idle');
+  await client.ok('setExceptionBreakpoints', { filters: [] });
+  await client.ok('continue', { threadId: 1 });
+  system.release(actor);
+  await system.flush();
+  assert.deepEqual(system.inspect(actor).activeStates, ['idle'], 'the jump was taken after the release');
+  await client.ok('disconnect');
+  system.close();
+}
+
 // A fork: a copy in a debug system of its own, stopped anywhere, stepped
 // one unit at a time and back, on its own clock, with stand-ins for its
 // I/O; production does not move.
@@ -1221,6 +1254,7 @@ async function ending() {
   await catalog();
   await sources();
   await movedLines();
+  await runaway();
   await forks();
   await forkStepping();
   await ending();

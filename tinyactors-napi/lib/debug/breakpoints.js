@@ -22,6 +22,8 @@ const EXCEPTION_FILTERS = Object.freeze([
   { filter: 'ignored', label: 'Ignored events',
     description: 'An event was taken and enabled no transition (core ADR 0072)' },
   { filter: 'stopped', label: 'Out of memory', description: 'A run stopped because an allocation failed (core ADR 0070)' },
+  { filter: 'runaway', label: 'Runaway macrosteps',
+    description: 'A macrostep ran its microstep limit, and the actor was quarantined (core ADR 0075)' },
 ]);
 const FILTERS = EXCEPTION_FILTERS.map((entry) => entry.filter);
 const ERRORS = FILTERS.slice(0, 3);
@@ -85,6 +87,11 @@ class Breakpoints {
   #data = [];
   #lines = new Map();
   #filters = new Set();
+
+  /** Whether the client asked to stop for the exception filter `filter`. */
+  wants(filter) {
+    return this.#filters.has(filter);
+  }
   #next = 0;
   #reached = new Set();
 
