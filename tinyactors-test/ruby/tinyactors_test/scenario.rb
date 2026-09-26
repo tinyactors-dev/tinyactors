@@ -744,6 +744,28 @@ module TinyactorsTest
       end
     end
 
+    # Installs a definition.recording instrument as the system's definition
+    # sink (core ADR 0079). Its journal lists every registration, retirement
+    # and free, on the seq counter every instrument shares.
+    def recording_definitions
+      @instruments['definitions'] || begin
+        sink = instrument('definitions', 'definition.recording')
+        core('ta_system_set_definition_sink',
+             ta.system.set_definition_sink(system: system_handle, sink: sink.adapter(system: system_handle)))
+        sink
+      end
+    end
+
+    # The definition events the sink was told, oldest first, as
+    # [kind, family, definition ID]. `since:` skips events up to that seq.
+    def definition_events(since: nil)
+      sink = @instruments['definitions']
+      raise ScenarioError, 'definition_events: install the sink with `recording_definitions` first' unless sink
+
+      sink.journal(since: since).select { |entry| entry[:op] == 'definition' }
+          .map { |entry| [entry[:kind], entry[:family], Integer(entry[:definition])] }
+    end
+
     # ----------------------------------------------------------------------
     # Trace records (ADR 0067)
 

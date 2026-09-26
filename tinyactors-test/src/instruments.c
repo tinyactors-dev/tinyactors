@@ -37,13 +37,14 @@ typedef enum {
     TAT_INSTRUMENT_CONNECTION,
     TAT_INSTRUMENT_REQUEST,
     TAT_INSTRUMENT_TRACE,
+    TAT_INSTRUMENT_DEFINITION,
 } tat_instrument_kind;
 
 static const char *const TAT_INSTRUMENT_KINDS[] = {
     "allocator.counting", "router.recording", "directory.memory",
     "invoker.scripted",   "io.recording",     "log.recording",
     "inspector.recording", "io.peer",          "io.connection",
-    "io.request",         "trace.recording",
+    "io.request",         "trace.recording",  "definition.recording",
 };
 
 /* allocator.counting: the size and alignment of every live allocation. */
@@ -1336,6 +1337,35 @@ bool tat_make_recording_trace(tat_bind *bind, jv config, void *out) {
 }
 
 /* ------------------------------------------------------------------------
+ * definition.recording
+ *
+ * The system's definition sink (core ADR 0079). It journals each lifecycle
+ * event (op "definition": kind, definition, identity, and family as text),
+ * on the shared `seq` counter, so a scenario can order definition events
+ * against every other instrument's. Being told cannot fail, so it has no
+ * commands. Config: {"name", "system"}.
+ */
+
+static void tat_recording_definition(void *self, const ta_definition_event *event) {
+    tat_instrument *instrument = self;
+    jv entry = tat_encode_ta_definition_event(instrument->bind, event);
+    entry = jv_object_set(entry, jv_string("family"), tat_text(event->identity.family.name));
+    tat_journal(instrument, "definition", entry);
+}
+
+static const ta_definition_sink_vtable TAT_RECORDING_DEFINITION = {.notify = tat_recording_definition};
+
+bool tat_make_recording_definition(tat_bind *bind, jv config, void *out) {
+    bool created = false;
+    tat_instrument *instrument = tat_instrument_resolve(bind, config, TAT_INSTRUMENT_DEFINITION, NULL, true, &created);
+    if (instrument == NULL) {
+        return false;
+    }
+    *(ta_definition_sink *)out = (ta_definition_sink){.self = instrument, .v = &TAT_RECORDING_DEFINITION};
+    return true;
+}
+
+/* ------------------------------------------------------------------------
  * inspector.recording
  *
  * The ta_actor_inspector ta_system_visit_actors() walks resident actors
@@ -1685,9 +1715,12 @@ static jv tat_control_invoker(tat_instrument *instrument, const char *command, j
 static jv tat_control_log(tat_instrument *instrument, const char *command, jv args, int *error_code) {
     (void)command;
     (void)args;
-    return tat_invalid(error_code, jv_string(instrument->kind == TAT_INSTRUMENT_TRACE
-                                                 ? "trace.recording has no commands; read its journal with instrument.journal"
-                                                 : "log.recording has no commands; read its journal with instrument.journal"));
+    const char *name = instrument->kind == TAT_INSTRUMENT_TRACE        ? "trace.recording"
+                       : instrument->kind == TAT_INSTRUMENT_DEFINITION ? "definition.recording"
+                                                                       : "log.recording";
+    char message[128];
+    snprintf(message, sizeof message, "%s has no commands; read its journal with instrument.journal", name);
+    return tat_invalid(error_code, jv_string(message));
 }
 
 /*
@@ -2001,6 +2034,7 @@ jv tat_instrument_control_method(tat_bind *bind, jv params, int *error_code) {
             break;
         case TAT_INSTRUMENT_LOG:
         case TAT_INSTRUMENT_TRACE:
+        case TAT_INSTRUMENT_DEFINITION:
             result = tat_control_log(instrument, jv_string_value(command), args, error_code);
             break;
         case TAT_INSTRUMENT_INSPECTOR:

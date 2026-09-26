@@ -26,6 +26,7 @@ bool tat_make_connection_io(tat_bind *bind, jv config, void *out);
 bool tat_make_request_io(tat_bind *bind, jv config, void *out);
 bool tat_make_recording_log(tat_bind *bind, jv config, void *out);
 bool tat_make_recording_trace(tat_bind *bind, jv config, void *out);
+bool tat_make_recording_definition(tat_bind *bind, jv config, void *out);
 bool tat_make_recording_inspector(tat_bind *bind, jv config, void *out);
 
 /* instrument.list, instrument.journal, instrument.control. */
