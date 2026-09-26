@@ -1,12 +1,15 @@
 'use strict';
 
-// The breakpoints that need no source spans: function breakpoints by name,
-// the exception filters, and data breakpoints on data-model locations. Each
-// is found in the records of a macrostep that ended (lib/debug/macrosteps),
-// so on a live actor a breakpoint stops it after that macrostep, between
-// macrosteps, and never inside one (the proposal's "Holding a live actor").
-// An `on:` breakpoint can stop before the macrostep: the adapter reads the
-// next message of a held actor's mailbox.
+// Breakpoints: function breakpoints by name, line breakpoints on the
+// element a source line holds (core ADR 0086), the exception filters, and
+// data breakpoints on data-model locations. On a live actor each is found
+// in the records of a macrostep that ended (lib/debug/macrosteps), so it
+// stops the actor after that macrostep, between macrosteps, and never
+// inside one (the proposal's "Holding a live actor"); an `on:` breakpoint
+// stops before the macrostep, from the next message of the held actor's
+// mailbox. A fork's copy is single-stepped, so there they are also found
+// where it stands (atPosition), before the unit they name. A line
+// breakpoint with a log message is a logpoint: it writes and never stops.
 
 const { TinyactorsError } = require('../errors');
 
@@ -66,14 +69,81 @@ function describe(breakpoint) {
   }
 }
 
+// A line breakpoint's element, as the breakpoint's description names it.
+function describeLine(breakpoint) {
+  const { element } = breakpoint;
+  return `line ${breakpoint.line} (${element.kind} ${element.name ?? element.id})`;
+}
+
+// Where a position stands, to count one hit per block and step.
+const placeKey = (view) => `${view.step.macrostep}.${view.step.microstep}:${view.position.at}:${view.position.state}:` +
+  `${view.position.transition}`;
+
 class Breakpoints {
   #functions = [];
   #data = [];
+  #lines = new Map();
   #filters = new Set();
   #next = 0;
+  #reached = new Set();
 
   any() {
-    return this.#functions.length > 0 || this.#data.length > 0 || this.#filters.size > 0;
+    return this.#functions.length > 0 || this.#data.length > 0 || this.#filters.size > 0 ||
+      [...this.#lines.values()].some((list) => list.some((entry) => entry.element !== undefined));
+  }
+
+  #allLines() {
+    return [...this.#lines.values()].flat().filter((entry) => entry.element !== undefined);
+  }
+
+  /**
+   * setBreakpoints for one source: replaces that source's breakpoints.
+   * `resolve(line)` answers the element the line stands for, as
+   * { element: { kind, id, name }, line, column, source }, or a string
+   * saying why there is none. Answers DAP Breakpoint objects.
+   */
+  setLines(path, specs, resolve) {
+    const entries = [];
+    const answered = specs.map((spec) => {
+      const id = (this.#next += 1);
+      const found = resolve(Number(spec?.line));
+      if (typeof found === 'string' || found === undefined) {
+        entries.push({ id, path, spec });
+        return { id, verified: false, message: found ?? `no state, transition or action at line ${spec?.line}` };
+      }
+      const breakpoint = { id, kind: 'line', path, spec, line: found.line, element: found.element, condition: spec.condition,
+                           hitCondition: spec.hitCondition, logMessage: spec.logMessage, hits: 0 };
+      entries.push(breakpoint);
+      return { id, verified: true, line: found.line, column: found.column, source: found.source };
+    });
+    this.#lines.set(path, entries);
+    return answered;
+  }
+
+  /** The sources with line breakpoints and what the client asked for, to resolve again later. */
+  get lineRequests() {
+    return [...this.#lines].map(([path, entries]) => ({ path, specs: entries.map((entry) => entry.spec),
+                                                        ids: entries.map((entry) => entry.id) }));
+  }
+
+  /**
+   * Resolves a source's line breakpoints again (after attaching), keeping
+   * their IDs. Answers the DAP Breakpoint objects, for `breakpoint` events.
+   */
+  relocate(path, resolve) {
+    const entries = this.#lines.get(path) ?? [];
+    const answered = [];
+    this.#lines.set(path, entries.map((entry) => {
+      const found = resolve(Number(entry.spec?.line));
+      if (typeof found === 'string' || found === undefined) {
+        answered.push({ id: entry.id, verified: false, message: found ?? `no state, transition or action at line ${entry.spec?.line}` });
+        return { id: entry.id, path, spec: entry.spec };
+      }
+      answered.push({ id: entry.id, verified: true, line: found.line, column: found.column, source: found.source });
+      return { ...entry, kind: 'line', line: found.line, element: found.element, condition: entry.spec.condition,
+               hitCondition: entry.spec.hitCondition, logMessage: entry.spec.logMessage, hits: entry.hits ?? 0 };
+    }));
+    return answered;
   }
 
   /** The `on:` breakpoints, for a held actor's next message. */
@@ -168,11 +238,17 @@ class Breakpoints {
    * exception }]. `location(expressionID)` names an <assign>'s location;
    * `fires(breakpoint)` confirms a condition.
    */
-  hits(macrostep, { label, location, fires, skipTaking = false }) {
+  hits(macrostep, { label, location, fires, log, skipTaking = false, skip = new Set() }) {
     const out = [];
     const exception = this.#exception(macrostep);
     if (exception !== undefined) out.push(exception);
-    const functions = this.#functions.filter((breakpoint) => {
+    const lines = this.#allLines().filter((breakpoint) => !skip.has(breakpoint.id) && lineRan(breakpoint.element, macrostep))
+      .filter((breakpoint) => this.#fire(breakpoint, fires))
+      .filter((breakpoint) => (breakpoint.logMessage ? (log(breakpoint), false) : true));
+    if (lines.length > 0) {
+      out.push({ kind: 'line', breakpoints: lines.map((entry) => entry.id), description: lines.map(describeLine).join(', ') });
+    }
+    const functions = this.#functions.filter((breakpoint) => !skip.has(breakpoint.id)).filter((breakpoint) => {
       switch (breakpoint.kind) {
         case 'on': return !skipTaking && macrostep.event !== null && matchesEvent(breakpoint.target, macrostep.event.name);
         case 'entry': return macrostep.microsteps.some((micro) => micro.entered.includes(breakpoint.target));
@@ -198,6 +274,60 @@ class Breakpoints {
       out.push({ kind: 'data', breakpoints: data.map((entry) => entry.id),
                  description: writes.map((entry) => `${entry.location.join('.')}${entry.value === undefined ? ' written'
                    : ` = ${entry.value}`}`).join(', ') });
+    }
+    return out;
+  }
+
+  /**
+   * The breakpoints a fork's copy has reached where it stands (`view`, its
+   * inspection): before the event an `on:` names is taken, and before the
+   * block or unit a function or line breakpoint names. Each hits once per
+   * block and step. `transition(id)` names a transition; `log(breakpoint)`
+   * writes a logpoint. Answers [{ kind, breakpoints, description }].
+   */
+  atPosition(view, { transition, fires, log }) {
+    if (!view.macrostepInProgress) {
+      this.#reached.clear();
+      return [];
+    }
+    const key = placeKey(view);
+    const { position } = view;
+    const about = view.step.macrostep === 0 && view.currentEvent !== null ? view.currentEvent.name : undefined;
+    const reached = (breakpoint) => {
+      switch (breakpoint.kind) {
+        case 'on': return about !== undefined && matchesEvent(breakpoint.target, about);
+        case 'entry': return position.at === 'enter' && position.state === breakpoint.target;
+        case 'exit': return position.at === 'exit' && position.state === breakpoint.target;
+        case 'transition': {
+          if (position.at !== 'transition') return false;
+          const shown = normalize(transition(position.transition));
+          return shown === breakpoint.target || shown.startsWith(`${breakpoint.target} on `);
+        }
+        default: {
+          const { element } = breakpoint;
+          if (element.kind === 'state') return position.at === 'enter' && position.state === element.name;
+          if (element.kind === 'transition') return position.at === 'transition' && position.transition === element.id;
+          return position.action === element.id;
+        }
+      }
+    };
+    const fresh = (breakpoint) => {
+      const once = `${breakpoint.id}@${key}${breakpoint.kind === 'line' && breakpoint.element.kind === 'action' ? `:${position.action}:${position.iteration}` : ''}`;
+      if (this.#reached.has(once)) return false;
+      this.#reached.add(once);
+      return true;
+    };
+    const out = [];
+    const functions = this.#functions.filter(reached).filter(fresh).filter((breakpoint) => this.#fire(breakpoint, fires));
+    if (functions.length > 0) {
+      out.push({ kind: 'function', breakpoints: functions.map((entry) => entry.id),
+                 description: functions.map((entry) => (entry.kind === 'on' ? `about to take ${about}` : describe(entry)))
+                   .join(', ') });
+    }
+    const lines = this.#allLines().filter(reached).filter(fresh).filter((breakpoint) => this.#fire(breakpoint, fires))
+      .filter((breakpoint) => (breakpoint.logMessage ? (log(breakpoint), false) : true));
+    if (lines.length > 0) {
+      out.push({ kind: 'line', breakpoints: lines.map((entry) => entry.id), description: lines.map(describeLine).join(', ') });
     }
     return out;
   }
@@ -238,6 +368,15 @@ class Breakpoints {
       : hit.filter === 'stopped' ? 'an allocation failed; the run stopped where it stood'
         : [hit.name, hit.fault].filter((part) => part !== undefined).join(': ');
     return { kind: 'exception', breakpoints: [], description, exception: hit };
+  }
+}
+
+// Whether a macrostep ran the element a line breakpoint stands for.
+function lineRan(element, macrostep) {
+  switch (element.kind) {
+    case 'state': return macrostep.microsteps.some((micro) => micro.entered.includes(element.name));
+    case 'transition': return macrostep.microsteps.some((micro) => micro.transitionIDs.includes(element.id));
+    default: return macrostep.records.some((entry) => entry.attributes['scxml.action.id'] === element.id);
   }
 }
 

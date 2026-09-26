@@ -185,8 +185,10 @@ async function session() {
   assert.equal(capabilities.supportsFunctionBreakpoints, true);
   assert.equal(capabilities.supportsDataBreakpoints, true);
   assert.equal(capabilities.supportTerminateDebuggee, false);
-  assert.equal(capabilities.supportsStepBack, undefined, 'not declared: stepping back needs a fork');
-  assert.equal(capabilities.supportsLogPoints, undefined, 'not declared: logpoints are line breakpoints');
+  assert.equal(capabilities.supportsStepBack, true, 'a fork steps back');
+  assert.equal(capabilities.supportsLogPoints, true);
+  assert.equal(capabilities.supportsBreakpointLocationsRequest, true);
+  assert.equal(capabilities.supportsDisassembleRequest, undefined);
   assert.deepEqual(capabilities.exceptionBreakpointFilters.map((filter) => filter.filter),
                    ['error.execution', 'error.communication', 'error.platform', 'ignored', 'stopped']);
 
@@ -196,7 +198,6 @@ async function session() {
   await client.refused('attach', {}, /address/);
   await client.refused('attach', { address: 'nope' }, /address/);
   await client.refused('attach', { address: 'subscription/nobody' }, /no resident actor/);
-  await client.refused('attach', { address: 'subscription/acct_1', mode: 'fork' }, /ADR 0085/);
   await client.refused('attach', { address: 'subscription/acct_1', mode: 'sideways' }, /mode/);
   await client.refused('attach', { actor: { slot: 999, generation: 1 } }, /no resident actor/);
   await client.refused('attach', { sessionID: 'x' }, /session ID/);
@@ -213,19 +214,20 @@ async function session() {
   assert.deepEqual(client.audit[0].allow, ALL);
   assert.equal(client.audit[0].actor, 'subscription/acct_1');
 
-  // Requests a chart has no use for, and ones that need what is pending.
+  // Requests a chart has no use for, and those only a fork answers.
   for (const [command, pattern] of [
-    ['stepBack', /ADR 0085/], ['reverseContinue', /ADR 0085/], ['restartFrame', /ADR 0085/],
-    ['breakpointLocations', /ADR 0086/], ['cancel', /nothing to cancel/], ['stepInTargets', /one way in/],
+    ['stepBack', /fork/], ['reverseContinue', /fork/], ['restartFrame', /fork/],
+    ['cancel', /nothing to cancel/], ['stepInTargets', /one way in/],
     ['terminateThreads', /destroy an actor/], ['setInstructionBreakpoints', /no instructions/],
     ['locations', /source/], ['readMemory', /memory/], ['writeMemory', /memory/], ['disassemble', /instructions/],
     ['runInTerminal', /not supported/],
   ]) {
     await client.refused(command, {}, pattern);
   }
-  const lines = await client.ok('setBreakpoints', { source: { path: 'chart.js' }, breakpoints: [{ line: 3 }] });
-  assert.deepEqual(lines.breakpoints, [{ verified: false,
-    message: 'line breakpoints need source spans (core ADR 0086); use function breakpoints' }]);
+  const lines = await client.ok('setBreakpoints', { source: { path: 'elsewhere.js' }, breakpoints: [{ line: 3 }] });
+  assert.equal(lines.breakpoints[0].verified, false);
+  assert.match(lines.breakpoints[0].message, /no state, transition or action/);
+  assert.deepEqual((await client.ok('breakpointLocations', { source: { path: 'elsewhere.js' }, line: 1 })).breakpoints, []);
 
   // Attach by actor ID and by session ID, and restart.
   const other = new Client(system, { mode: 'watch' });
@@ -570,9 +572,8 @@ async function console() {
   await client.refused('evaluate', { expression: 'replace v9', context: 'repl' }, /no registered/);
   void v2;
 
-  // What a fork would do.
-  await client.refused('evaluate', { expression: 'clock +3d', context: 'repl' }, /ADR 0085/);
-  await client.refused('evaluate', { expression: 'fork', context: 'repl' }, /ADR 0085/);
+  // The clock is a fork's.
+  await client.refused('evaluate', { expression: 'clock +3d', context: 'repl' }, /every actor of the system/);
   await client.ok('disconnect');
   system.close();
 }
@@ -758,6 +759,280 @@ async function state() {
   system.close();
 }
 
+// A renewal, written one builder call per statement, so each element's
+// source span (core ADR 0086) is its own line on every engine.
+function renewal() {
+  const chart = statechart({ family: 'renewal', revision: 'v1' });
+  chart.data('renewals', 0);
+  chart.data('notes', []);
+  chart.state('active', (s) => {
+    s.entry((e) => {
+      e.send('renew', (send) => send.id('renewal').after('30s'));
+    });
+    s.on('renew', (t) => {
+      t.target('renewing');
+    });
+    s.on('webhook', (t) => {
+      t.send('notify', (send) => send.via('http').to('https://example.test/hook'));
+    });
+  });
+  chart.state('renewing', (s) => {
+    s.entry((e) => {
+      e.script(function () { this.notes.push('start'); });
+      e.assign('renewals', function () { return this.renewals + 1; });
+      e.script(function () { this.notes.push('done'); });
+    });
+    s.always((t) => {
+      t.target('active');
+    });
+  });
+  return chart;
+}
+
+// The ID of the action of `kind` in `definition` whose index in its block is `index`.
+function actionID(system, definition, kind, index) {
+  for (let id = 0; id < 64; id += 1) {
+    const place = definition.sourceOf('action', id);
+    if (place === undefined) continue;
+    const { core } = require('../lib/native');
+    const { nativeOf } = require('../lib/system');
+    const info = core.definition_action(nativeOf(system), definition.id, id);
+    if (info.kind === kind && info.index === index) return id;
+  }
+  return undefined;
+}
+
+// Source spans (core ADR 0086): frames have lines, a line breakpoint
+// stands for the element on its line, logpoints write, and breakpoints set
+// before attaching are placed once the chart is known.
+async function sources() {
+  const system = createSystem({ clock: 'manual' });
+  const definition = system.define(renewal());
+  const actor = system.spawn(definition, { name: 'r1' });
+  await system.flush();
+  const stateLine = (name) => definition.sourceOf('state', system.inspect(actor).definitionID === definition.id
+    ? require('../lib/native').core.definition_find_state(require('../lib/system').nativeOf(system), definition.id, name) : 0).line;
+  const renewing = stateLine('renewing');
+  const assign = definition.sourceOf('action', actionID(system, definition, 'assign', 1)).line;
+  const client = new Client(system, { mode: 'live', allow: ALL });
+  await client.ok('initialize', { clientID: 'test' });
+  // Set before attaching: unverified until the chart is known.
+  const early = await client.ok('setBreakpoints', { source: { path: __filename }, breakpoints: [{ line: renewing }] });
+  assert.equal(early.breakpoints[0].verified, false);
+  assert.match(early.breakpoints[0].message, /attach first/);
+  await client.ok('attach', { address: 'renewal/r1' });
+  await client.ok('configurationDone');
+  const [placed] = client.events('breakpoint');
+  assert.deepEqual(placed, { reason: 'changed', breakpoint: { id: early.breakpoints[0].id, verified: true, line: renewing,
+                                                               column: placed.breakpoint.column,
+                                                               source: { name: 'debug.js', path: __filename } } });
+
+  // A frame of an actor at rest names its state's line.
+  const { stackFrames } = await client.ok('stackTrace', { threadId: 1 });
+  assert.equal(stackFrames[0].source.path, __filename);
+  assert.equal(stackFrames[0].line, stateLine('active'));
+
+  // Lines: locations, a line between elements snaps to the next one, and a
+  // logpoint.
+  const locations = await client.ok('breakpointLocations', { source: { path: __filename }, line: renewing, endLine: assign });
+  assert.ok(locations.breakpoints.some((entry) => entry.line === renewing));
+  assert.ok(locations.breakpoints.some((entry) => entry.line === assign));
+  const set = await client.ok('setBreakpoints', { source: { path: __filename }, breakpoints: [
+    { line: renewing }, { line: assign, logMessage: 'renewals is {renewals}' }, { line: 1 },
+  ] });
+  assert.equal(set.breakpoints[0].line, renewing);
+  assert.equal(set.breakpoints[1].line, assign);
+  assert.ok(set.breakpoints[2].verified && set.breakpoints[2].line > 1, 'line 1 snaps to the first element after it');
+  await client.ok('setBreakpoints', { source: { path: __filename }, breakpoints: [
+    { line: renewing }, { line: assign, logMessage: 'renewals is {renewals}' },
+  ] });
+  const mark = client.mark();
+  actor.post('renew');
+  const stop = await client.stoppedAfter(mark, 'breakpoint');
+  assert.deepEqual(stop.hitBreakpointIds.length, 1);
+  assert.match(stop.description, /line \d+ \(state renewing\)/);
+  assert.match(client.output(), /renewals is 1/, 'the logpoint wrote, with its expression evaluated');
+
+  // goto targets on a line.
+  const { targets } = await client.ok('gotoTargets', { source: { path: __filename }, line: renewing });
+  assert.deepEqual(targets.map((target) => [target.label, target.line]), [['renewing', renewing]]);
+  await client.ok('setBreakpoints', { source: { path: __filename }, breakpoints: [] });
+  await client.ok('continue', { threadId: 1 });
+  await client.ok('disconnect');
+  system.close();
+}
+
+// A chart with no JavaScript in it, built in two places: defining it again
+// is answered by its definition (core ADR 0077), which then says where the
+// chart is written now (core ADR 0086), and a line breakpoint is placed
+// again against those lines.
+function plainChartHere() {
+  const chart = statechart({ family: 'moved', revision: 'v1' });
+  chart.state('a', (s) => s.on('go', (t) => t.target('b')));
+  chart.state('b');
+  return chart;
+}
+
+function plainChartThere() {
+  const chart = statechart({ family: 'moved', revision: 'v1' });
+  chart.state('a', (s) => s.on('go', (t) => t.target('b')));
+  chart.state('b');
+  return chart;
+}
+
+async function movedLines() {
+  const system = createSystem({ clock: 'manual' });
+  const definition = system.define(plainChartHere());
+  system.spawn(definition, { name: 'm1' });
+  await system.flush();
+  const here = stateLine(system, definition, 'b');
+  const client = new Client(system, { mode: 'live', allow: ALL });
+  await client.ok('initialize', { clientID: 'test' });
+  await client.ok('attach', { address: 'moved/m1' });
+  await client.ok('configurationDone');
+  const set = await client.ok('setBreakpoints', { source: { path: __filename }, breakpoints: [{ line: here }] });
+  assert.equal(set.breakpoints[0].line, here);
+  const mark = client.mark();
+  const again = system.define(plainChartThere());
+  assert.equal(again.id, definition.id, 'the same definition answers');
+  const there = stateLine(system, again, 'a');
+  assert.ok(there > here, 'its spans moved to where it was built now');
+  const [changed] = client.since(mark, 'breakpoint');
+  assert.equal(changed.reason, 'changed');
+  assert.equal(changed.breakpoint.id, set.breakpoints[0].id);
+  assert.equal(changed.breakpoint.line, there, 'the line snaps to the next element of the chart as it is now');
+  await client.ok('setBreakpoints', { source: { path: __filename }, breakpoints: [] });
+  await client.ok('disconnect');
+  system.close();
+}
+
+// A fork: a copy in a debug system of its own, stopped anywhere, stepped
+// one unit at a time and back, on its own clock, with stand-ins for its
+// I/O; production does not move.
+async function forks() {
+  const system = createSystem({ clock: 'manual' });
+  const definition = system.define(renewal());
+  const actor = system.spawn(definition, { name: 'r1' });
+  await system.flush();
+  const client = new Client(system, { mode: 'fork', allow: ['evaluate'] });
+  let mark = client.mark();
+  await client.start({ address: 'renewal/r1', mode: 'fork' });
+  await client.stoppedAfter(mark, 'entry');
+  const text = client.output();
+  assert.match(text, /attached to renewal\/r1 .* in fork mode; allowed: send, set, goto, hold, evaluate/);
+  assert.match(text, /fork: its I\/O processors and invokers \(http\) are stand-ins that only record/);
+  assert.match(text, /on a clock of its own at t=0ms/);
+  assert.equal((await client.ok('threads')).threads[0].name, 'renewal/r1 (fork) · active');
+
+  // The copy's clock: the renewal falls due there, not in production.
+  assert.match((await client.repl('clock +30s')).result, /t=30000ms; 1 message waiting for the copy/);
+  assert.equal(system.time, 0);
+  assert.equal(actor.inspect().data.renewals, 0);
+
+  // stepIn: the copy takes the message and stands before its macrostep.
+  mark = client.mark();
+  await client.ok('stepIn', { threadId: 1 });
+  await client.stoppedAfter(mark, 'step');
+  let frames = (await client.ok('stackTrace', { threadId: 1 })).stackFrames;
+  assert.equal(frames[0].name, 'about to take renew (before transition selection)');
+  // Unit by unit through renewing's onentry.
+  mark = client.mark();
+  await client.ok('stepIn', { threadId: 1 });
+  await client.stoppedAfter(mark, 'step');
+  frames = (await client.ok('stackTrace', { threadId: 1 })).stackFrames;
+  const assignLine = definition.sourceOf('action', actionID(system, definition, 'assign', 1)).line;
+  assert.equal(frames[0].name, 'assign 2');
+  assert.equal(frames[0].line, assignLine, 'the frame is the unit the copy runs next');
+  assert.equal(frames[1].name, 'onentry of renewing');
+  assert.deepEqual((await client.repl('notes')).result, '["start"]');
+  mark = client.mark();
+  await client.ok('next', { threadId: 1 });
+  await client.stoppedAfter(mark, 'step');
+  assert.equal((await client.repl('renewals')).result, '1');
+
+  // stepBack restores the image kept at the previous stop.
+  mark = client.mark();
+  await client.ok('stepBack', { threadId: 1 });
+  await client.stoppedAfter(mark, 'step');
+  assert.equal((await client.repl('renewals')).result, '0');
+  frames = (await client.ok('stackTrace', { threadId: 1 })).stackFrames;
+  assert.equal(frames[0].name, 'assign 2');
+
+  // stepOut runs to the end of the block, then continue to rest.
+  mark = client.mark();
+  await client.ok('stepOut', { threadId: 1 });
+  await client.stoppedAfter(mark, 'step');
+  assert.deepEqual((await client.repl('notes')).result, '["start","done"]');
+  mark = client.mark();
+  await client.ok('continue', { threadId: 1 });
+  await client.until(() => client.output().includes('now in active'), 'the copy at rest');
+  assert.equal(actor.inspect().data.renewals, 0, 'production did not move');
+  assert.deepEqual(actor.inspect().activeStates, ['active']);
+
+  // A line breakpoint stops the copy before the unit on its line.
+  mark = client.mark();
+  await client.ok('pause', { threadId: 1 });
+  await client.stoppedAfter(mark, 'pause');
+  await client.ok('setBreakpoints', { source: { path: __filename }, breakpoints: [{ line: assignLine }] });
+  assert.match((await client.repl('send renew')).result, /waits in the mailbox/);
+  mark = client.mark();
+  await client.ok('continue', { threadId: 1 });
+  const stop = await client.stoppedAfter(mark, 'breakpoint');
+  assert.match(stop.description, /\(action assign 2\)/);
+  assert.equal((await client.repl('renewals')).result, '1', 'stopped before the second renewal\'s assign');
+  // restartFrame: back to the first stop kept in this macrostep.
+  frames = (await client.ok('stackTrace', { threadId: 1 })).stackFrames;
+  const macrostep = frames.find((frame) => frame.name.startsWith('macrostep'));
+  mark = client.mark();
+  await client.ok('restartFrame', { frameId: macrostep.id });
+  await client.stoppedAfter(mark, 'restart');
+  await client.refused('restartFrame', { frameId: 9999 }, /not valid/);
+  // reverseContinue goes back to the previous breakpoint stop, or the first stop.
+  mark = client.mark();
+  await client.ok('reverseContinue', { threadId: 1 });
+  await client.stoppedAfter(mark, 'step');
+  await client.ok('setBreakpoints', { source: { path: __filename }, breakpoints: [] });
+
+  // A send to the outside reaches a stand-in.
+  mark = client.mark();
+  await client.ok('continue', { threadId: 1 });
+  await client.repl('send webhook');
+  await client.until(() => client.output().includes('fork: would send notify via http to https://example.test/hook'),
+                     'the stand-in');
+
+  // restart makes a new copy of the live actor.
+  mark = client.mark();
+  await client.ok('restart', {});
+  await client.stoppedAfter(mark, 'entry');
+  assert.equal((await client.repl('renewals')).result, '0');
+
+  // goto on a copy stopped at rest runs the jump's macrostep and stops after it.
+  mark = client.mark();
+  assert.match((await client.repl('goto renewing')).result, /goto renewing$/);
+  await client.stoppedAfter(mark, 'goto');
+  assert.deepEqual((await client.ok('threads')).threads[0].name, 'renewal/r1 (fork) · active',
+                   'renewing went on to active in the same macrostep');
+  assert.equal((await client.repl('renewals')).result, '1');
+  assert.ok(client.audit.some((entry) => entry.operation === 'clock'));
+  await client.ok('disconnect');
+  assert.equal(system.exists(actor), true);
+
+  // From live to a fork with the console's `fork`.
+  const live = new Client(system, { mode: 'live', allow: ALL });
+  await live.start({ address: 'renewal/r1' });
+  mark = live.mark();
+  assert.match((await live.repl('fork')).result, /now debugging renewal\/r1 \(fork\), a copy of renewal\/r1/);
+  await live.stoppedAfter(mark, 'entry');
+  await live.refused('evaluate', { expression: 'fork', context: 'repl' }, /a fork already/);
+  await live.ok('disconnect');
+  const watcher = new Client(system, { mode: 'watch' });
+  await watcher.start({ address: 'renewal/r1' });
+  await watcher.refused('evaluate', { expression: 'fork', context: 'repl' }, /watch mode at most/);
+  await watcher.refused('attach', { address: 'renewal/r1', mode: 'fork' }, /already attached/);
+  await watcher.ok('disconnect');
+  system.close();
+}
+
 // Modules and sources: every registered revision, retired ones included.
 async function catalog() {
   const { system, definition } = await world();
@@ -768,7 +1043,9 @@ async function catalog() {
   assert.deepEqual(modules[0], { id: String(definition.id), name: 'subscription', version: 'v1' });
   const next = system.define(subscription('v2'));
   const { sources } = await client.ok('loadedSources');
-  assert.deepEqual(sources.map((source) => source.name), ['subscription v1.json', 'subscription v2.json']);
+  assert.deepEqual(sources.map((source) => source.name), ['subscription v1.json', 'subscription v2.json', 'debug.js']);
+  assert.equal(sources[2].path, __filename, 'the file statechart() recorded (core ADR 0086)');
+  await client.refused('source', { source: { path: __filename } }, /the client reads itself/);
   assert.ok(client.events('module').some((event) => event.reason === 'new' && event.module.version === 'v2'));
   assert.ok(client.events('loadedSource').length >= 2);
   const text = await client.ok('source', { sourceReference: sources[0].sourceReference });
@@ -829,6 +1106,9 @@ async function ending() {
   await audit();
   await state();
   await catalog();
+  await sources();
+  await movedLines();
+  await forks();
   await ending();
   clearTimeout(watchdog);
   process.stdout.write('debug.js passed\n');

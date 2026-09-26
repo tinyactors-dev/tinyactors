@@ -10,41 +10,9 @@
 //
 // Where the actor stands comes from inspection, so an actor that paused
 // before the debugger attached has a position too. The transitions of its
-// microstep and the event of its macrostep come from the trace spans the
-// session read, and are left out when it did not see them.
-//
-// Frames have no source location: that needs source spans (core ADR 0086).
-// `locate` is where they would come from; it answers nothing yet.
-
-/** The source and line of a position, once core has source spans (ADR 0086). */
-function locate() {
-  return undefined;
-}
-
-/**
- * [{ name, hint }] for a thread. `view` is its inspection or undefined when
- * it is gone; `labels` names compiled IDs; `seen` is { macrostep, microstep }
- * from the spans, or undefined; `note` is added to an actor at rest (what
- * holds it).
- */
-function frames({ view, labels, seen, note }) {
-  if (view === undefined) {
-    return [{ name: 'gone', hint: 'label' }];
-  }
-  const definition = view.definitionID;
-  if (view.residency === 'done') {
-    return [{ name: `done in ${view.finalState ?? 'its final state'}`, hint: 'normal' }];
-  }
-  if (!view.macrostepInProgress) {
-    const at = leaves(view, labels).join(' ') || 'no state';
-    return [{ name: `idle in ${at}${note ? ` (${note})` : ''}`, hint: 'normal' }];
-  }
-  if (view.step.macrostep === 0) {
-    const name = view.currentEvent === null ? 'no event' : view.currentEvent.name;
-    return [{ name: `about to take ${name} (before transition selection)`, hint: 'normal' }];
-  }
-  return [...unitFrames(view.position, definition, labels), ...stepFrames(view, seen)];
-}
+// microstep come from the trace spans the session read, and are left out
+// when it did not see them. Each frame's place in the JavaScript that wrote
+// the chart comes from its source spans (core ADR 0086), when it has them.
 
 /** The active states no other active state is inside of. */
 function leaves(view, labels) {
@@ -57,9 +25,39 @@ function leaves(view, labels) {
   return view.activeStates.filter((state) => !parents.has(state));
 }
 
-function unitFrames(position, definition, labels) {
+/**
+ * [{ name, hint, place, macrostep }] for a thread. `view` is its inspection
+ * or undefined when it is gone; `labels` names compiled IDs; `sources`
+ * places them; `seen` is { macrostep, microstep } from the spans, or
+ * undefined; `note` is added to an actor at rest (what holds it).
+ */
+function frames({ view, labels, sources, seen, note }) {
+  if (view === undefined) {
+    return [{ name: 'gone', hint: 'label' }];
+  }
+  const definition = view.definitionID;
+  const statePlace = (name) => sources.place(definition, 'state', labels.stateID(definition, name));
+  if (view.residency === 'done') {
+    return [{ name: `done in ${view.finalState ?? 'its final state'}`, hint: 'normal',
+              place: view.finalState === null ? undefined : statePlace(view.finalState) }];
+  }
+  if (!view.macrostepInProgress) {
+    const at = leaves(view, labels);
+    return [{ name: `idle in ${at.join(' ') || 'no state'}${note ? ` (${note})` : ''}`, hint: 'normal',
+              place: at.length === 0 ? undefined : statePlace(at[0]) }];
+  }
+  if (view.step.macrostep === 0) {
+    const name = view.currentEvent === null ? 'no event' : view.currentEvent.name;
+    return [{ name: `about to take ${name} (before transition selection)`, hint: 'normal' }];
+  }
+  return [...unitFrames(view, labels, sources), ...stepFrames(view, seen, sources)];
+}
+
+function unitFrames(view, labels, sources) {
+  const { position, definitionID: definition } = view;
+  const macrostep = view.step.macrostep;
   if (position.at === 'none') {
-    return [{ name: 'selecting transitions', hint: 'normal' }];
+    return [{ name: 'selecting transitions', hint: 'normal', macrostep }];
   }
   const out = [];
   const action = position.action;
@@ -67,7 +65,7 @@ function unitFrames(position, definition, labels) {
     const info = labels.actionInfo(definition, action);
     const foreachNext = info?.kind === 'foreach';
     out.push({ name: `${labels.action(definition, action)}${foreachNext ? ` iteration ${position.iteration + 1}` : ''}`,
-               hint: 'normal' });
+               hint: 'normal', place: sources.place(definition, 'action', action), macrostep });
     // The iteration is the innermost loop's: the one this action is in,
     // unless the action is a loop itself (core ADR 0083, open point 2).
     let innermost = !foreachNext;
@@ -77,10 +75,12 @@ function unitFrames(position, definition, labels) {
         if (innermost) name += ` iteration ${position.iteration + 1}`;
         innermost = false;
       }
-      out.push({ name, hint: 'normal' });
+      out.push({ name, hint: 'normal', place: sources.place(definition, 'action', owner), macrostep });
     }
   }
-  out.push({ name: blockName(position, definition, labels), hint: 'normal' });
+  const block = position.at === 'transition' ? sources.place(definition, 'transition', position.transition)
+    : position.state === null ? undefined : sources.place(definition, 'state', labels.stateID(definition, position.state));
+  out.push({ name: blockName(position, definition, labels), hint: 'normal', place: block, macrostep });
   return out;
 }
 
@@ -101,17 +101,31 @@ function blockName(position, definition, labels) {
   }
 }
 
-function stepFrames(view, seen) {
+function stepFrames(view, seen, sources) {
   const { macrostep, microstep } = view.step;
   const out = [];
   if (microstep > 0) {
-    const taken = seen?.microstep !== undefined && seen.macrostep === macrostep && seen.microstep.number === microstep
-      ? `: ${seen.microstep.transitions.join('; ') || 'goto'}` : '';
-    out.push({ name: `microstep ${macrostep}.${microstep}${taken}`, hint: 'normal' });
+    const known = seen?.microstep !== undefined && seen.macrostep === macrostep && seen.microstep.number === microstep;
+    const taken = known ? `: ${seen.microstep.transitions.join('; ') || 'goto'}` : '';
+    const first = known ? seen.microstep.transitionIDs[0] : undefined;
+    out.push({ name: `microstep ${macrostep}.${microstep}${taken}`, hint: 'normal', macrostep,
+               place: first === undefined ? undefined : sources.place(view.definitionID, 'transition', first) });
   }
   const event = view.currentEvent === null ? '' : ` on ${view.currentEvent.name}`;
-  out.push({ name: `macrostep ${macrostep}${event}`, hint: 'normal' });
+  out.push({ name: `macrostep ${macrostep}${event}`, hint: 'normal', macrostep });
   return out;
 }
 
-module.exports = { frames, leaves, locate };
+/** The depth of a position: how many <if> and <foreach> bodies its unit is in; -1 with no unit. */
+function depthOf(view, labels) {
+  const action = view.position.action;
+  return action === null ? -1 : labels.enclosing(view.definitionID, action).length;
+}
+
+/** The block a position is in: the phase, the state and the transition. */
+function blockOf(view) {
+  const { position } = view;
+  return `${position.at}:${position.state}:${position.transition}`;
+}
+
+module.exports = { frames, leaves, depthOf, blockOf };

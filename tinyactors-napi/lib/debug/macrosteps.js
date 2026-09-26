@@ -75,7 +75,7 @@ const list = (value) => (Array.isArray(value) ? value : value === undefined ? []
 
 /*
  * { session, number, definition, event: { name, type, data } | null,
- *   microsteps: [{ number, event, transitions, exited, entered, jump }],
+ *   microsteps: [{ number, event, transitions, transitionIDs, exited, entered, jump }],
  *   records: [{ name, attributes }] in the order they happened,
  *   states, incomplete }
  */
@@ -91,6 +91,7 @@ function record(session, span, microsteps) {
         number: a['scxml.microstep'],
         event: a['scxml.event.name'],
         transitions,
+        transitionIDs: list(a['scxml.transition.id']),
         exited: list(a['scxml.state.exited']),
         entered: list(a['scxml.state.entered']),
         // An operator transition names no chart transition (core ADR 0082).

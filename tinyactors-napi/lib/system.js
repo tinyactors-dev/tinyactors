@@ -109,7 +109,10 @@ let effectHandler;
 // application (ADR 0027). `traces(traces, logs)` gets every turn's OTLP bytes
 // the application's trace sink gets, installing a sink of its own when the
 // application has none; `log(record)` every <log> record; `held(actor)`
-// each actor a hold stopped. Returns { stop() }. index.js does not export it.
+// each actor a hold stopped; `defined(id)` each definition define()
+// registered, a new one or one answered by identity (core ADR 0077), whose
+// spans may have moved (core ADR 0086). Returns { stop() }. index.js does
+// not export it.
 let observe;
 
 // The SCXML invoker type core normalizes "scxml" and its URI to (core
@@ -822,6 +825,7 @@ class System {
     if (limit !== undefined) {
       core.definition_set_microstep_limit(this.#native, id, limit === 0 ? MICROSTEP_LIMIT_NONE : limit);
     }
+    this.#notify('defined', id);
     return new Definition(this, this.#native, id);
   }
 
