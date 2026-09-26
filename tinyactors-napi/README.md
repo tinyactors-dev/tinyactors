@@ -70,3 +70,44 @@ a trace in otel-tui.
 SCXML documents import with `define(xml, { format: 'scxml' })`, and
 `registerDatamodel()` plugs in a compiler for their expression text. See
 [`docs/scxml.md`](docs/scxml.md).
+
+## Debugging an actor
+
+`createDebugSession(system, { mode, allow, audit, send })` is a Debug
+Adapter Protocol session over one actor of a running system: give it each
+incoming message with `receive()`, and it hands each outgoing one to
+`send`. It opens no socket and checks no credentials; put it behind your
+own transport and authentication, and decide each user's mode and
+permissions before you create it. `DAPReader` and `encodeDAPMessage` frame
+messages on a byte stream (stdio, a TCP socket); a WebSocket needs neither.
+
+A client attaches with `{ "address": "family/name" }` (or `"sessionID"`)
+and a mode no higher than the session's:
+
+- `watch` never stops or changes the actor. Breakpoints report where they
+  would have stopped; each macrostep shows in the console.
+- `fork` copies the actor into a debug system of its own, with a manual
+  clock (`clock +3d`), a copy of its data and I/O processors that only
+  record. It steps one action at a time and steps back to earlier stops.
+  The console says how the copy differs from the live actor.
+- `live` works on the actor itself, as `allow` permits: `send`, `set`,
+  `goto` (with `abandon`, `cancel` and `replace`), and `hold` (pause,
+  stepping and stopping breakpoints). A live actor stops only between
+  macrosteps, and a hold ends by itself after `holdTimeout` (30 s).
+
+**`evaluate` runs arbitrary code.** Watch, hover and console expressions
+and breakpoint conditions run JavaScript in your process, a fork's
+included. They need the `evaluate` permission, which is off unless
+granted; without it the Variables pane and the console commands still
+work. Grant it only to someone who may run code on the host.
+
+`audit(entry)` hears every attach, detach, breakpoint change, console
+command, evaluation and mutation before it happens; a hook that throws
+refuses it.
+
+`mise run dap-server` serves sessions for a small example system over
+stdio, or on a local port with `-- --port 4711`, to try a DAP client
+against. It grants every permission; it is a development tool, not part
+of the package. See
+[ADR 0027](docs/adr/0027-a-debugger-holds-steps-and-redirects-one-actor.md)
+and [the status of every DAP message](../docs/debug-adapter.md).

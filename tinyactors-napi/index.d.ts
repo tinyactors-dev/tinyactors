@@ -1632,3 +1632,109 @@ export declare function parseTraceparent(header: string | undefined):
   { traceID: string; parentSpanID: string; flags: number; sampled: boolean } | undefined;
 export declare function formatTraceparent(span: { traceID: string; spanID: string; sampled?: boolean; flags?: number }): string;
 export declare function stepSpanID(session: bigint | number, macrostep: bigint | number, microstep?: number): string;
+
+// ---------------------------------------------------------------------------
+// The debug adapter (napi ADR 0027)
+
+/** An operation a debug session may be allowed on the live actor. */
+export type DebugPermission = 'send' | 'set' | 'goto' | 'hold' | 'evaluate';
+
+/**
+ * The most a session may do: `watch` never stops or changes the actor;
+ * `fork` debugs a copy in a debug System of its own; `live` works on the
+ * actor itself, as `allow` permits, and stops it only between macrosteps.
+ */
+export type DebugMode = 'watch' | 'fork' | 'live';
+
+/** One record for the audit hook. `time` is milliseconds since the epoch. */
+export type DebugAuditEntry = {
+  time: number;
+  /** DebugSession.id. */
+  session: number;
+  /** While attached: the actor's label, its session ID and the mode. */
+  actor?: string;
+  /** In decimal. */
+  sessionID?: string;
+  mode?: DebugMode;
+} & (
+  | { type: 'attach'; allow: DebugPermission[]; [detail: string]: unknown }
+  | { type: 'detach'; reason: string }
+  | { type: 'breakpoints'; kind: 'line' | 'function' | 'data'; [detail: string]: unknown }
+  /** A console line, before it runs. */
+  | { type: 'command'; text: string }
+  | { type: 'evaluate'; context: string; expression: string }
+  /**
+   * A change to the actor, a hold or a step: send, set, goto, abandon,
+   * cancel, replace, clock, hold, release (also on the hold timeout, with
+   * `reason: 'hold timeout'`), step, restart, stepBack, reverseContinue,
+   * restartFrame.
+   */
+  | { type: 'mutation'; operation: string; [detail: string]: unknown }
+);
+
+export interface DebugSessionOptions {
+  /** The highest mode an attach may ask for. */
+  mode: DebugMode;
+  /**
+   * What an attach may ask to do on a live actor (default none). A fork
+   * allows everything on its copy but `evaluate`, which it needs granted.
+   *
+   * `evaluate` runs arbitrary JavaScript in this process: watch, hover and
+   * console expressions, breakpoint conditions and logpoint `{expression}`
+   * parts. Grant it only to someone who may run code on the host. Without
+   * it the Variables pane, the console commands and setVariable still work.
+   */
+  allow?: DebugPermission[];
+  /**
+   * Hears every attach, detach, breakpoint change, console command,
+   * evaluation and mutation before it happens; throwing refuses it.
+   */
+  audit?: (entry: DebugAuditEntry) => void;
+  /** Takes each outgoing DAP message (an object). */
+  send: (message: DAPMessage) => void;
+  /** Milliseconds after which a live hold ends by itself (default 30,000). */
+  holdTimeout?: number;
+}
+
+/** A Debug Adapter Protocol message: a request, response or event. */
+export interface DAPMessage {
+  seq: number;
+  type: 'request' | 'response' | 'event';
+  [field: string]: unknown;
+}
+
+/**
+ * A DAP session over one attached actor. It opens no socket and checks no
+ * credentials: put it behind the application's transport and
+ * authentication, and decide each user's mode and permissions before
+ * creating it.
+ */
+export interface DebugSession {
+  readonly id: number;
+  readonly mode: DebugMode;
+  readonly allow: DebugPermission[];
+  /** True while an actor is attached. */
+  readonly attached: boolean;
+  /**
+   * Takes one incoming message. Requests are answered in the order they
+   * arrive; the promise settles once this one is answered.
+   */
+  receive(message: DAPMessage): Promise<void>;
+  /** The transport closed: detach, releasing a hold and closing a fork, without answering. */
+  close(): void;
+}
+
+export declare function createDebugSession(system: System, options: DebugSessionOptions): DebugSession;
+
+/**
+ * The base protocol's framing for a byte stream (stdio, a TCP socket):
+ * push() each chunk; `onMessage` gets each whole message in order. A
+ * malformed header or body throws an `invalid` TinyactorsError.
+ */
+export declare class DAPReader {
+  constructor(onMessage: (message: DAPMessage) => void);
+  push(chunk: Uint8Array | string): void;
+}
+
+/** One message as bytes: the Content-Length header, then its JSON. */
+export declare function encodeDAPMessage(message: object): Uint8Array;

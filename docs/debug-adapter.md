@@ -43,13 +43,13 @@ or partial, ☑ done and tested, — not offered.
 
 | Request | Plan | What it does | Needs | test | napi |
 |---|---|---|---|---|---|
-| `initialize` | yes | Answers the capabilities below; sends `initialized` | none | ☑ | ☐ |
-| `configurationDone` | yes | Ends configuration; a `launch`ed workbench starts running | none | ☑ | ☐ |
+| `initialize` | yes | Answers the capabilities below; sends `initialized` | none | ☑ | ☑ |
+| `configurationDone` | yes | Ends configuration; a `launch`ed workbench starts running | none | ☑ | ☑ |
 | `launch` | yes | tinyactors-test only: runs a chart directory as a workbench. napi answers an error: production is attached to | none | ☑ | — |
-| `attach` | yes | `{ address, mode, allow }`: one actor, in watch, fork or live mode; the host checks `allow` | none; fork needs C4 | — | ☐ |
-| `restart` | yes | Fork: makes a new copy from the live actor. Live and watch: reattach | C4 | ☑ | ☐ |
-| `disconnect` | yes | Detaches; closes the `debug` scope; releases a hold. Never destroys the actor, whatever `terminateDebuggee` says | none | ☑ | ☐ |
-| `terminate` | yes | Same as `disconnect`: the debuggee is never terminated | none | ☑ | ☐ |
+| `attach` | yes | `{ address, mode, allow }`: one actor, in watch, fork or live mode; the host checks `allow` | none; fork needs C4 | — | ☑ |
+| `restart` | yes | Fork: makes a new copy from the live actor. Live and watch: reattach | C4 | ☑ | ☑ |
+| `disconnect` | yes | Detaches; closes the `debug` scope; releases a hold. Never destroys the actor, whatever `terminateDebuggee` says | none | ☑ | ☑ |
+| `terminate` | yes | Same as `disconnect`: the debuggee is never terminated | none | ☑ | ☑ |
 | `cancel` | no | Every request answers at once, so there is nothing to cancel | — | — | — |
 | `runInTerminal` | no | A reverse request; the adapter never asks the client for a terminal | — | — | — |
 | `startDebugging` | no | A reverse request; invoked children are threads of one session, not sessions of their own | — | — | — |
@@ -58,28 +58,28 @@ or partial, ☑ done and tested, — not offered.
 
 | Request | Plan | What it does | Needs | test | napi |
 |---|---|---|---|---|---|
-| `setBreakpoints` | yes | Lines map to the nearest action, transition or state; stops before the action, before the transition's content, or on entry or exit. Live: only stops between macrosteps; inside a macrostep they act as logpoints. Conditions, hit conditions and log messages | C5 | ☑ | ☐ |
-| `breakpointLocations` | yes | The lines that hold an action, a transition or a state | C5 | ☑ | ☐ |
-| `setFunctionBreakpoints` | yes | By name: `past_due` (entry), `exit:past_due`, `on:payment.failed`, `idle → busy` (a transition's ADR 0071 name) | none | ☑ | ☐ |
-| `setExceptionBreakpoints` | yes | Filters `error.execution`, `error.communication`, `error.platform`, `ignored`, `stopped`, and `dead-letter` in napi | none | ☑ | ☐ |
-| `dataBreakpointInfo` | yes | A data-model location can be watched for writes | none | ☑ | ☐ |
-| `setDataBreakpoints` | yes | Stops after an `ASSIGN` record writes the location | none | ☑ | ☐ |
+| `setBreakpoints` | yes | Lines map to the nearest action, transition or state; stops before the action, before the transition's content, or on entry or exit. Live: only stops between macrosteps; inside a macrostep they act as logpoints. Conditions, hit conditions and log messages | C5 | ☑ | ☑ |
+| `breakpointLocations` | yes | The lines that hold an action, a transition or a state | C5 | ☑ | ☑ |
+| `setFunctionBreakpoints` | yes | By name: `past_due` (entry), `exit:past_due`, `on:payment.failed`, `idle → busy` (a transition's ADR 0071 name) | none | ☑ | ☑ |
+| `setExceptionBreakpoints` | yes | Filters `error.execution`, `error.communication`, `error.platform`, `ignored`, `stopped`, and `dead-letter` in napi | none | ☑ | ◐ |
+| `dataBreakpointInfo` | yes | A data-model location can be watched for writes | none | ☑ | ☑ |
+| `setDataBreakpoints` | yes | Stops after an `ASSIGN` record writes the location | none | ☑ | ☑ |
 | `setInstructionBreakpoints` | no | A chart has no instructions | — | — | — |
 
 ### Execution
 
 | Request | Plan | What it does | Needs | test | napi |
 |---|---|---|---|---|---|
-| `continue` | yes | Resumes with the normal budgets and releases held mail | none; live needs N1 | ☑ | ☐ |
-| `next` | yes | The next action at the same block depth or shallower. On an idle actor, takes the next held message and stops before transition selection | fork or test host: none; live: N1, N2 | ☑ | ☐ |
-| `stepIn` | yes | One unit (`action_budget: 1`): an action, or a `<foreach>` iteration | as `next` | ☑ | ☐ |
-| `stepOut` | yes | To the end of the block, then the microstep, then the macrostep | as `next` | ☑ | ☐ |
-| `stepBack` | fork | Restores the image captured at the previous stop | C4 | ☑ | ☐ |
-| `reverseContinue` | fork | Restores images back to the previous breakpoint | C4 | ☑ | ☐ |
-| `restartFrame` | fork | Restores the image captured when that macrostep began | C4 | ☑ | ☐ |
-| `goto` | yes | An operator transition to the target's state | C2; live needs N3 | ☑ | ☐ |
-| `gotoTargets` | yes | The states at a source line; every state when there is no line | C5 for lines | ☑ | ☐ |
-| `pause` | yes | Fork and test host: stop at the next unit. Live: hold the mailbox, stop when the macrostep ends | live needs N1 | ☑ | ☐ |
+| `continue` | yes | Resumes with the normal budgets and releases held mail | none; live needs N1 | ☑ | ☑ |
+| `next` | yes | The next action at the same block depth or shallower. On an idle actor, takes the next held message and stops before transition selection | fork or test host: none; live: N1, N2 | ☑ | ☑ |
+| `stepIn` | yes | One unit (`action_budget: 1`): an action, or a `<foreach>` iteration | as `next` | ☑ | ☑ |
+| `stepOut` | yes | To the end of the block, then the microstep, then the macrostep | as `next` | ☑ | ☑ |
+| `stepBack` | fork | Restores the image captured at the previous stop | C4 | ☑ | ☑ |
+| `reverseContinue` | fork | Restores images back to the previous breakpoint | C4 | ☑ | ☑ |
+| `restartFrame` | fork | Restores the image captured when that macrostep began | C4 | ☑ | ☑ |
+| `goto` | yes | An operator transition to the target's state | C2; live needs N3 | ☑ | ☑ |
+| `gotoTargets` | yes | The states at a source line; every state when there is no line | C5 for lines | ☑ | ☑ |
+| `pause` | yes | Fork and test host: stop at the next unit. Live: hold the mailbox, stop when the macrostep ends | live needs N1 | ☑ | ☑ |
 | `stepInTargets` | no | An action has one way in | — | — | — |
 | `terminateThreads` | no | Ending a thread would destroy an actor | — | — | — |
 
@@ -87,18 +87,18 @@ or partial, ☑ done and tested, — not offered.
 
 | Request | Plan | What it does | Needs | test | napi |
 |---|---|---|---|---|---|
-| `threads` | yes | The attached actor and its invoked children; every actor in a workbench | none | ☑ | ☐ |
-| `stackTrace` | yes | Action, `<foreach>` iterations, block, microstep, macrostep; then a `label` frame and the causal chain | C1 to attach to an actor already paused; C5 for locations | ◐ | ☐ |
-| `scopes` | yes | Data model, Event, Configuration, Queues, Timers, Invocations, System | none | ☑ | ☐ |
-| `variables` | yes | Expands a scope or a value, with paging | none | ☑ | ☐ |
-| `setVariable` | yes | Writes a data-model location; other scopes are read-only | none | ☑ | ☐ |
-| `setExpression` | yes | Assigns to a data-model location expression | none | ☑ | ☐ |
-| `evaluate` | yes | `repl`: the console commands; `watch`, `hover`, `clipboard`, `variables`: an expression in the data model | none; `goto` C2, `abandon` C2, `cancel` C3, `clock` C4 | ☑ | ☐ |
-| `completions` | yes | Event names after `send`, state IDs after `goto`, data locations otherwise | none | ☑ | ☐ |
-| `exceptionInfo` | yes | The fault of the `error.*` event or failed action that stopped the thread | none | ☑ | ☐ |
-| `source` | yes | A chart's text: its file, or the encoded chart with the encode-side spans | C5 | ◐ | ☐ |
-| `loadedSources` | yes | One source per definition revision | none | ☑ | ☐ |
-| `modules` | yes | Definition families and their revisions, retired ones included | none | ☑ | ☐ |
+| `threads` | yes | The attached actor and its invoked children; every actor in a workbench | none | ☑ | ☑ |
+| `stackTrace` | yes | Action, `<foreach>` iterations, block, microstep, macrostep; then a `label` frame and the causal chain | C1 to attach to an actor already paused; C5 for locations | ◐ | ☑ |
+| `scopes` | yes | Data model, Event, Configuration, Queues, Timers, Invocations, System | none | ☑ | ☑ |
+| `variables` | yes | Expands a scope or a value, with paging | none | ☑ | ☑ |
+| `setVariable` | yes | Writes a data-model location; other scopes are read-only | none | ☑ | ☑ |
+| `setExpression` | yes | Assigns to a data-model location expression | none | ☑ | ☑ |
+| `evaluate` | yes | `repl`: the console commands; `watch`, `hover`, `clipboard`, `variables`: an expression in the data model | none; `goto` C2, `abandon` C2, `cancel` C3, `clock` C4 | ☑ | ☑ |
+| `completions` | yes | Event names after `send`, state IDs after `goto`, data locations otherwise | none | ☑ | ☑ |
+| `exceptionInfo` | yes | The fault of the `error.*` event or failed action that stopped the thread | none | ☑ | ☑ |
+| `source` | yes | A chart's text: its file, or the encoded chart with the encode-side spans | C5 | ◐ | ◐ |
+| `loadedSources` | yes | One source per definition revision | none | ☑ | ☑ |
+| `modules` | yes | Definition families and their revisions, retired ones included | none | ☑ | ☑ |
 | `locations` | no | No value in a chart names a place in a source | — | — | — |
 | `readMemory` | no | A chart has no memory to show | — | — | — |
 | `writeMemory` | no | A chart has no memory to show | — | — | — |
@@ -108,22 +108,22 @@ or partial, ☑ done and tested, — not offered.
 
 | Event | Plan | When | Needs | test | napi |
 |---|---|---|---|---|---|
-| `initialized` | yes | After `initialize` answers | none | ☑ | ☐ |
-| `stopped` | yes | Reasons `breakpoint`, `step`, `pause`, `exception`, `goto`, `data breakpoint`, `function breakpoint`, `entry` | none | ☑ | ☐ |
-| `continued` | yes | When the adapter resumes an actor the client did not ask it to | none | ☑ | ☐ |
+| `initialized` | yes | After `initialize` answers | none | ☑ | ☑ |
+| `stopped` | yes | Reasons `breakpoint`, `step`, `pause`, `exception`, `goto`, `data breakpoint`, `function breakpoint`, `entry` | none | ☑ | ☑ |
+| `continued` | yes | When the adapter resumes an actor the client did not ask it to | none | ☑ | ☑ |
 | `exited` | no | Actors do not exit with a code | — | — | — |
-| `terminated` | yes | The attached actor finished, was destroyed, or its address was left empty | none | ☑ | ☐ |
-| `thread` | yes | `SPAWNED`, `FINISHED` and `DESTROYED` records of the actor and its children | none | ☑ | ☐ |
-| `output` | yes | `console`: a summary of each macrostep; `stdout`: `<log>` records; `important`: dead letters and dropped sends | none | ☑ | ☐ |
-| `breakpoint` | yes | A breakpoint is verified once its definition's spans are known, or moves after a hot replace | C5 | ☑ | ☐ |
-| `module` | yes | A definition revision is registered or retired | none | ☑ | ☐ |
-| `loadedSource` | yes | A definition revision's source becomes available | none | ☑ | ☐ |
-| `process` | yes | After `attach` or `launch`: the host process, `startMethod` `attach` or `launch` | none | ☑ | ☐ |
+| `terminated` | yes | The attached actor finished, was destroyed, or its address was left empty | none | ☑ | ☑ |
+| `thread` | yes | `SPAWNED`, `FINISHED` and `DESTROYED` records of the actor and its children | none | ☑ | ☑ |
+| `output` | yes | `console`: a summary of each macrostep; `stdout`: `<log>` records; `important`: dead letters and dropped sends | none | ☑ | ☑ |
+| `breakpoint` | yes | A breakpoint is verified once its definition's spans are known, or moves after a hot replace | C5 | ☑ | ☑ |
+| `module` | yes | A definition revision is registered or retired | none | ☑ | ☑ |
+| `loadedSource` | yes | A definition revision's source becomes available | none | ☑ | ☑ |
+| `process` | yes | After `attach` or `launch`: the host process, `startMethod` `attach` or `launch` | none | ☑ | ☑ |
 | `capabilities` | no | Capabilities do not change during a session | — | — | — |
 | `progressStart` | no | Nothing the adapter does takes long enough | — | — | — |
 | `progressUpdate` | no | As `progressStart` | — | — | — |
 | `progressEnd` | no | As `progressStart` | — | — | — |
-| `invalidated` | yes | After every macrostep: `threads` and `variables` | none | ☑ | ☐ |
+| `invalidated` | yes | After every macrostep: `threads` and `variables` | none | ☑ | ☑ |
 | `memory` | no | A chart has no memory to show | — | — | — |
 
 ## Capabilities
@@ -153,14 +153,14 @@ The `repl` context of `evaluate`.
 
 | Command | Does | Allowed in | Needs | test | napi |
 |---|---|---|---|---|---|
-| `send <event> [json]` | Delivers through the host's normal path, with the `debug` origin | fork; live with `send` | none | ☑ | ☐ |
-| `goto <state…> [from <state>]` | An operator transition | fork; live with `goto` | C2 | ☑ | ☐ |
-| `abandon` | Abandons a macrostep that never ends | fork; live with `goto` | C2 | ☑ | ☐ |
-| `cancel <send ID>` | Withdraws one pending delayed send | fork; live with `goto` | C3 | ☑ | ☐ |
-| `replace <file>` | Hot-replaces the actor with a new revision | fork; live with `goto` | none | ☐ | ☐ |
-| `clock +<duration>` | Advances logical time | fork; the test host's workbench | C4 for forks | ☑ | ☐ |
-| `fork` | Copies the live actor and switches to the copy | live | C4 | ☑ | ☐ |
-| `<expression>` | Evaluated in the data model | all | none | ☑ | ☐ |
+| `send <event> [json]` | Delivers through the host's normal path, with the `debug` origin | fork; live with `send` | none | ☑ | ☑ |
+| `goto <state…> [from <state>]` | An operator transition | fork; live with `goto` | C2 | ☑ | ☑ |
+| `abandon` | Abandons a macrostep that never ends | fork; live with `goto` | C2 | ☑ | ☑ |
+| `cancel <send ID>` | Withdraws one pending delayed send | fork; live with `goto` | C3 | ☑ | ☑ |
+| `replace <file>` | Hot-replaces the actor with a new revision | fork; live with `goto` | none | ☐ | ☑ |
+| `clock +<duration>` | Advances logical time | fork; the test host's workbench | C4 for forks | ☑ | ☑ |
+| `fork` | Copies the live actor and switches to the copy | live | C4 | ☑ | ☑ |
+| `<expression>` | Evaluated in the data model | all | none | ☑ | ☑ |
 
 ## Notes on the tinyactors-test column
 
@@ -199,6 +199,31 @@ The adapter is `tinyactors-test/bin/dap`; see
 - `replace` is not a console command in the test host: saving the chart
   file replaces its actors.
 
+## Notes on the napi column
+
+The adapter is `createDebugSession()` in `tinyactors-napi/lib/debug.js`
+([ADR 0020](../tinyactors-napi/docs/adr/0027-a-debugger-holds-steps-and-redirects-one-actor.md));
+`mise run //tinyactors-napi:dap-server` serves it for an example system.
+Every ☑ is covered by `tinyactors-napi/test/debug.js`, on Node and Bun.
+
+- Live stepping is one macrostep: `next`, `stepIn` and `stepOut` each
+  deliver one held message, or finish the macrostep in progress. On a
+  fork, stepping is by action as the table says.
+- `setExceptionBreakpoints` is ◐: every filter but `dead-letter`. A dead
+  letter is reported as `important` output, but does not stop.
+- `setDataBreakpoints` stops after an `<assign>` to a location written as
+  a data-model path; an `<assign>` whose location is an expression that
+  computes the path is not matched.
+- `source` is ◐: a file the spans name is the client's to read; a chart
+  without one is served as its exported spec (JSON), not as an encoded
+  chart with encode-side spans.
+- `replace <revision>` takes a revision already registered in the system,
+  not a file: the application loads definitions.
+- The System scope shows `_sessionid`, `_name`, the time, the definition
+  and the scheduling state; `_ioprocessors` is not shown there.
+- A fork does not mirror the live actor's later events into the copy: it
+  is the actor as it was when forked (or restarted).
+
 ## Prerequisites
 
 | Mark | What | Where | Status |
@@ -209,8 +234,8 @@ The adapter is `tinyactors-test/bin/dap`; see
 | C4 | Images restore into another system | tinyactors-core [ADR 0085](../tinyactors-core/docs/adr/0085-an-image-restores-into-any-system-that-registers-its-revision.md), tinyactors-napi [ADR 0026](../tinyactors-napi/docs/adr/0026-a-system-restoring-another-systems-image-copies-its-boxes.md) | ☑ |
 | C5 | Source spans on decode and encode | tinyactors-core [ADR 0086](../tinyactors-core/docs/adr/0086-a-spec-says-where-its-elements-were-written-and-an-encode-says-where-it-wrote-them.md), tinyactors-scxml, the Ruby DSL, napi's builder | ☑ |
 | C6 | A resume stops before a microstep's first unit | tinyactors-core [ADR 0087](../tinyactors-core/docs/adr/0087-a-resume-can-stop-before-a-microsteps-first-unit.md) | ☑ |
-| N1 | `held` scheduling state | tinyactors-napi | ☐ |
-| N2 | Budgets for one actor | tinyactors-napi | ☐ |
-| N3 | Operator transitions in the envelope; settling on abandon | tinyactors-napi | ☐ |
+| N1 | `held` scheduling state | tinyactors-napi [ADR 0027](../tinyactors-napi/docs/adr/0027-a-debugger-holds-steps-and-redirects-one-actor.md) | ☑ |
+| N2 | Budgets for one actor | tinyactors-napi [ADR 0027](../tinyactors-napi/docs/adr/0027-a-debugger-holds-steps-and-redirects-one-actor.md) | ☑ |
+| N3 | Operator transitions in the envelope; settling on abandon | tinyactors-napi [ADR 0027](../tinyactors-napi/docs/adr/0027-a-debugger-holds-steps-and-redirects-one-actor.md) | ☑ |
 | T1 | Shared DAP transcript suite | both hosts | ☐ |
 | X1 | VS Code extension that registers the debug type | new | ☐ |

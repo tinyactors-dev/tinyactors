@@ -6,7 +6,7 @@ rewritten from scratch against them. Where `../design.md` or
 
 Core decisions live in `tinyactors-core/docs/adr`. This addon depends in
 particular on core ADRs 0011, 0029, 0040, 0047, 0050, 0053–0059, 0061,
-0062, 0065 and 0085, and benefits from 0063 and 0064.
+0062, 0065, 0082 to 0086, and benefits from 0063 and 0064.
 
 | ADR | Title |
 |---|---|
@@ -36,3 +36,4 @@ particular on core ADRs 0011, 0029, 0040, 0047, 0050, 0053–0059, 0061,
 | [0024](0024-a-child-chart-is-a-nested-definition.md) | [A child chart is a nested definition](0024-a-child-chart-is-a-nested-definition.md) |
 | [0025](0025-a-quarantined-child-tells-its-parent.md) | [A quarantined child tells its parent](0025-a-quarantined-child-tells-its-parent.md) |
 | [0026](0026-a-system-restoring-another-systems-image-copies-its-boxes.md) | [A system restoring another system's image copies its boxes](0026-a-system-restoring-another-systems-image-copies-its-boxes.md) |
+| [0027](0027-a-debugger-holds-steps-and-redirects-one-actor.md) | [A debugger holds, steps and redirects one actor](0027-a-debugger-holds-steps-and-redirects-one-actor.md) |
