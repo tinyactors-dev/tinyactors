@@ -200,9 +200,9 @@ static const char *const kind_names[] = {
     "spawned", "loaded",  "unloaded", "finished", "destroyed", "begin", "end",     "cond",
     "micro",   "raised",  "data",     "assign",   "script",    "foreach", "failed", "sent",
     "cancelled", "invoked", "uninvoked", "paused", "resumed", "stopped", "ignored", "forwarded",
-    "long", "runaway", "definition-registered", "definition-retired", "definition-freed",
+    "long", "runaway", "definition-registered", "definition-retired", "definition-freed", "abandoned",
 };
-_Static_assert(sizeof kind_names / sizeof kind_names[0] == (size_t)TA_TRACE_DEFINITION_FREED + 1u,
+_Static_assert(sizeof kind_names / sizeof kind_names[0] == (size_t)TA_TRACE_ABANDONED + 1u,
                "a name for every trace kind");
 static const char *const at_names[] = { "", "select", "exit", "transition", "enter", "boot", "finalize", "invoke" };
 

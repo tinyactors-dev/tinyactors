@@ -24,7 +24,11 @@ sparse state:
 - the live active set, the exit set, the entry set and the default-entry
   set, computed once as the microstep began;
 - the data declarations the binding supplies, while bootstrapping;
-- the default-history map and the enabled transitions;
+- the default-history map and the enabled transitions, by compiled ID;
+  the bootstrap's initial transition and an operator transition
+  (ADR 0082) are marks, since nothing reads them after the microstep has
+  begun but their executable content, which an operator transition does
+  not have;
 - the executor's `ta_exec_frame`s: open blocks with their cursors, and each
   running `<foreach>` with its snapshot, position and count (ADR 0033).
 
@@ -44,6 +48,13 @@ top-level final state, or in exiting a cancelled invoked session; running
 out of memory stops all of them but the last. An
 invoked session cancelled while paused inside a microstep exits its live
 active set, and the rest of its continuation is dropped.
+
+`ta_actor_abandon()` refuses an actor that holds a continuation
+(`TA_ERR_BUSY`): the states a stopped step entered or exited have already
+started or cancelled invocations and recorded history, which the stored
+configuration does not reflect. Resuming with a budget of 1 and no action
+budget finishes the step and pauses between microsteps, where abandoning
+is allowed (ADR 0082).
 
 The implementation never reports a half-completed microstep as
 `TA_RUN_STABLE`, and the configuration it reports while paused is the one

@@ -11,6 +11,12 @@ It exists for two reasons:
 
 `ta_actor_capture()` may capture an idle actor or a paused actor mid-macrostep. The image therefore preserves configuration, history, continuation/current/internal events when present, invocations, delayed sends, logical self identity, and exact definition revision.
 
+A delivered event that carries an operator transition (ADR 0082) and has
+not been taken yet is captured with a copy of the transition in the image's
+arena; restoring the image gives the actor its own copy. Once taken, the
+transition is a mark in the continuation's enabled transitions, and nothing
+else is carried.
+
 A terminal actor's final data and an invoked child's pending completion linkage
 are also preserved. An unpublished prepared replacement cannot be captured:
 its held activation effects belong to an incomplete replacement transaction,

@@ -3,7 +3,11 @@
 Within an actor, semantic ordering is SCXML-defined and deterministic given deterministic callbacks/data:
 
 1. eventless transitions are considered at the required stable-point checks;
-2. internal events are processed before another external event;
+2. internal events are processed before another external event; the one
+   exception is an event that carries an operator transition (ADR 0082): it
+   is taken first, ahead of internal events queued after it was delivered,
+   so that the transition runs from the configuration it was checked
+   against;
 3. internal events are FIFO;
 4. errors are internal events and therefore do not jump ahead of already queued internal events;
 5. a parallel state's regions are simultaneously active but processed in defined serial/document order for exits/entries/actions as required by SCXML;

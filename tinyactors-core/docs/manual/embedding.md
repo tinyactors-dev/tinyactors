@@ -61,6 +61,48 @@ do with a queued message from its result alone, and does not need to call
 A finished actor answers `TA_ERR_DONE`, never `TA_ERR_BUSY`, so a host never
 keeps a message waiting for an actor that will not take it.
 
+## Unwedging an actor
+
+An actor stuck in a state, waiting for an event that will never come, can be
+moved by an operator without the chart having been written for it
+(ADR 0082). Deliver an event, named as you like, with an operator
+transition:
+
+```c
+ta_state_id target = /* ta_definition_find_state(...) */;
+ta_actor_deliver(system, &(ta_actor_deliver_params){
+    .actor = actor,
+    .event = &operator_event,          /* e.g. "operator.goto", with data */
+    .transition = &(ta_operator_transition){
+        .source = TA_STATE_NONE,       /* the root; or an active state, e.g. a region */
+        .targets = &target,
+        .target_count = 1,
+    },
+});
+```
+
+Core takes the event with that transition instead of the chart's: an
+internal transition with no guard and no content, run by the normal engine.
+Exit handlers, history, invocations, entry handlers, default states and
+`done.state` events all happen as for any transition, and `_event` in the
+handlers is your event, so a chart can tell a jump from a normal entry.
+Targets may be history states (to put a region back where it was) and a
+top-level `<final>` (to finish the session). Deliver refuses a malformed
+transition, or a source that is not active, with `TA_ERR_INVALID`.
+
+A macrostep that never becomes stable, such as eventless transitions that
+cycle forever, keeps the actor busy, so a jump is refused too.
+`ta_actor_abandon(system, actor)` ends it: the internal queue and the
+macrostep's event are discarded, and the actor is idle with the
+configuration after its last completed microstep. What the macrostep
+already did stays done. It is allowed only between microsteps: an actor
+paused inside one answers `TA_ERR_BUSY`, and resuming it with a budget of 1
+and no action budget brings it there. Then deliver the jump.
+
+The trace shows both: the jump's `MICROSTEP` record has no transitions and
+carries the targets in `states`, and abandoning writes `ABANDONED` with the
+number of internal events dropped, then `MACROSTEP_END`.
+
 ## Node, CPython, CRuby, WASM, ESP32
 
 The same synchronous C ABI works in all of these environments. Host callbacks may call directly into Node/Python/Ruby when execution is already on the host's permitted interpreter thread. If the embedder chooses native worker threads, reacquiring the host runtime's required thread/GIL/GVL/event-loop context is the embedder's responsibility.

@@ -739,25 +739,40 @@
             "type": "ta_trace_parent"
           },
           "doc": "What the macrostep that takes the event runs under (ADR 0067); a router passes ta_external_delivery.trace. All zero is none."
+        },
+        {
+          "name": "transition",
+          "type": {
+            "pointer": {
+              "type": "ta_operator_transition",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in",
+          "optional": true,
+          "doc": "When present, the event is taken by this transition instead of by transition selection: no chart transition sees it, and neither <finalize > nor autoforwarding runs for it (ADR 0082)."
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 64,
+          "size": 72,
           "align": 8,
           "offsets": {
             "actor": 0,
             "event": 8,
-            "trace": 16
+            "trace": 16,
+            "transition": 64
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 64,
+          "size": 72,
           "align": 8,
           "offsets": {
             "actor": 0,
             "event": 8,
-            "trace": 16
+            "trace": 16,
+            "transition": 64
           }
         }
       }
@@ -11278,6 +11293,57 @@
         }
       }
     },
+    "ta_operator_transition": {
+      "kind": "struct",
+      "doc": "An operator transition (ADR 0082): a transition core builds when the event is delivered and takes, through the normal engine, as the first microstep of the macrostep, instead of selecting the chart's transitions for the event. It is internal and has no guard and no executable content. `source` is an active state, or TA_STATE_NONE for the root; `targets` are one or more states of the definition, history states and a top-level <final > included, that together can form a legal configuration: no target is another's ancestor, and two targets meet only below a <parallel >. A history state stands for its parent's region there.",
+      "fields": [
+        {
+          "name": "source",
+          "type": {
+            "type": "ta_state_id"
+          }
+        },
+        {
+          "name": "targets",
+          "type": {
+            "pointer": {
+              "type": "ta_state_id",
+              "const": true
+            }
+          },
+          "count": "target_count",
+          "shape": "counted",
+          "direction": "in"
+        },
+        {
+          "name": "target_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "count_of": "targets"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "source": 0,
+            "targets": 8,
+            "target_count": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 12,
+          "align": 4,
+          "offsets": {
+            "source": 0,
+            "targets": 4,
+            "target_count": 8
+          }
+        }
+      }
+    },
     "ta_origin": {
       "kind": "struct",
       "fields": [
@@ -14600,7 +14666,7 @@
           "name": "TA_TRACE_MICROSTEP",
           "value": 8,
           "symbol": "microstep",
-          "doc": "`event` (none: eventless), `transitions`, `exited`, `entered`, `history`"
+          "doc": "`event` (none: eventless), `transitions`, `exited`, `entered`, `history`; an operator transition's (ADR 0082): no `transitions`, `state` its source, `states` its targets"
         },
         {
           "name": "TA_TRACE_RAISED",
@@ -14721,6 +14787,12 @@
           "value": 28,
           "symbol": "definition_freed",
           "doc": "Definitions (ADR 0080): lifecycle records, never sampled, written just before the definition sink hears of the same event (ADR 0079). `definition` and `identity`; the key is TA_TRACE_DEFINITIONS_SESSION, the definition ID as `macrostep`, and 1, 2 or 3 as `microstep`."
+        },
+        {
+          "name": "TA_TRACE_ABANDONED",
+          "value": 29,
+          "symbol": "abandoned",
+          "doc": "`event`: the external event, or none; `dropped`: the internal events discarded; MACROSTEP_END follows"
         }
       ],
       "doc": "======================================================================== Tracing (ADR 0067)\n\nCore reports its decisions and the data they changed to one trace sink per system, as flat records. A record is written once, when the step that produced it has committed: a step that runs out of memory and runs again (ADR 0070) writes its records on the run that commits, and the step counters move only then, so an interrupted run and an uninterrupted one write the same records apart from PAUSED, RESUMED and STOPPED.",
@@ -14833,7 +14905,7 @@
     },
     "ta_trace_record": {
       "kind": "struct",
-      "doc": "One record. Only the fields its kind names are meaningful; the rest are zero, or NONE for IDs. Everything is borrowed for the call: retain a value to keep it (ADR 0006). `context` is the running macrostep's; `cause`, for MACROSTEP_BEGIN and SPAWNED, is the key of the step that caused it. A fault carries its `detail`, `code` and `message`. Its data went into the error.execution event of the RAISED record that follows; ACTION_FAILED also borrows it, so a sink can say why an action failed from one record. A sink never releases a record's fault data.",
+      "doc": "One record. Only the fields its kind names are meaningful; the rest are zero, or NONE for IDs. Everything is borrowed for the call: retain a value to keep it (ADR 0006). `context` is the running macrostep's; `cause`, for MACROSTEP_BEGIN and SPAWNED, is the key of the step that caused it. A fault carries its `detail`, `code` and `message`. Its data went into the error.execution event of the RAISED record that follows; ACTION_FAILED also borrows it, so a sink can say why an action failed from one record. A sink never releases a record's fault data. A MICROSTEP that carries `states` was an operator transition's (ADR 0082), which a chart's never does: `states` are the targets the operator named, history states included, `state` the source (TA_STATE_NONE: the root), and there are no `transitions`. `exited`, `entered` and `history` are as for any microstep.",
       "fields": [
         {
           "name": "kind",
@@ -14975,6 +15047,12 @@
           }
         },
         {
+          "name": "dropped",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
           "name": "transitions",
           "type": {
             "pointer": {
@@ -15072,7 +15150,7 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 368,
+          "size": 376,
           "align": 8,
           "offsets": {
             "kind": 0,
@@ -15097,20 +15175,21 @@
             "value": 224,
             "has_fault": 240,
             "fault": 248,
-            "transitions": 288,
-            "transition_count": 296,
-            "exited": 304,
-            "exited_count": 312,
-            "entered": 320,
-            "entered_count": 328,
-            "history": 336,
-            "history_count": 344,
-            "states": 352,
-            "state_count": 360
+            "dropped": 288,
+            "transitions": 296,
+            "transition_count": 304,
+            "exited": 312,
+            "exited_count": 320,
+            "entered": 328,
+            "entered_count": 336,
+            "history": 344,
+            "history_count": 352,
+            "states": 360,
+            "state_count": 368
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 272,
+          "size": 280,
           "align": 8,
           "offsets": {
             "kind": 0,
@@ -15135,16 +15214,17 @@
             "value": 196,
             "has_fault": 204,
             "fault": 208,
-            "transitions": 232,
-            "transition_count": 236,
-            "exited": 240,
-            "exited_count": 244,
-            "entered": 248,
-            "entered_count": 252,
-            "history": 256,
-            "history_count": 260,
-            "states": 264,
-            "state_count": 268
+            "dropped": 232,
+            "transitions": 236,
+            "transition_count": 240,
+            "exited": 244,
+            "exited_count": 248,
+            "entered": 252,
+            "entered_count": 256,
+            "history": 260,
+            "history_count": 264,
+            "states": 268,
+            "state_count": 272
           }
         }
       }
@@ -17702,7 +17782,7 @@
     },
     {
       "name": "ta_actor_deliver",
-      "doc": "Offers an external event to a resident actor: the admission test (ADR 0055). The result alone tells a host what to do with the message, so it never needs to inspect the actor first: - TA_OK: accepted; the actor holds the event, so resume it. - TA_ERR_BUSY: the actor is inside a macrostep, including one paused by ta_actor_resume()'s budgets (ADR 0061), or already holds an event. Keep the message queued for this actor. - TA_ERR_DONE: the actor has reached a top-level final state. Drop the message or route it to a dead-letter policy. - TA_ERR_NOT_FOUND: no resident actor has this ID (unknown, stale or unloaded). The receiver is gone from here; drop or route the message. - TA_ERR_INVALID: a caller error only: a null event, an event name this system never issued, or the root name. - TA_ERR_NOMEM: no memory for the event block the event would live in until its macrostep ends (ADR 0069). Keep the message and try again later; ta_system_set_event_block_cache() keeps blocks for reuse. On any result but TA_OK nothing is retained and the event is untouched. A malformed event is TA_ERR_INVALID whatever the actor's state, and a finished actor is TA_ERR_DONE, never TA_ERR_BUSY: finishing is permanent, so a host that kept a message queued would wait forever.",
+      "doc": "Offers an external event to a resident actor: the admission test (ADR 0055). The result alone tells a host what to do with the message, so it never needs to inspect the actor first: - TA_OK: accepted; the actor holds the event, so resume it. - TA_ERR_BUSY: the actor is inside a macrostep, including one paused by ta_actor_resume()'s budgets (ADR 0061), or already holds an event. Keep the message queued for this actor. - TA_ERR_DONE: the actor has reached a top-level final state. Drop the message or route it to a dead-letter policy. - TA_ERR_NOT_FOUND: no resident actor has this ID (unknown, stale or unloaded). The receiver is gone from here; drop or route the message. - TA_ERR_INVALID: a caller error only: a null event, an event name this system never issued, or the root name; or an operator transition with no targets, an unknown state, targets that cannot form a legal configuration, or a source that is not active (ADR 0082). - TA_ERR_NOMEM: no memory for the event block the event would live in until its macrostep ends (ADR 0069), or for the operator transition. Keep the message and try again later; ta_system_set_event_block_cache() keeps blocks for reuse. On any result but TA_OK nothing is retained and the event is untouched. A malformed event or operator transition is TA_ERR_INVALID whatever the actor's state, except that whether its source is active is asked only of an actor that would otherwise accept it. A finished actor is TA_ERR_DONE, never TA_ERR_BUSY: finishing is permanent, so a host that kept a message queued would wait forever.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -17775,6 +17855,37 @@
           },
           "shape": "single",
           "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_actor_abandon",
+      "doc": "Abandons the actor's macrostep, one that may never end (ADR 0082): its continuation, its internal queue and its external event are discarded, and the actor is idle with the configuration after its last completed microstep. What the macrostep already did stays done: its sends, its invocations, its data. An ABANDONED record, then MACROSTEP_END, is written. The results: - TA_OK: abandoned. - TA_ERR_BUSY: the actor is paused or stopped inside a microstep (`microstep_in_progress`), or has not completed its bootstrap's microstep; resume it with a budget of 1 and no action budget to finish that microstep, then abandon. - TA_ERR_INVALID: no macrostep is in progress; there is nothing to abandon. - TA_ERR_DONE: the actor has reached a top-level final state. - TA_ERR_NOT_FOUND: no resident actor has this ID. - TA_ERR_NOMEM: no scratch memory to write the records; nothing changed.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          }
         }
       ]
     },

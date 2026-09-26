@@ -99,7 +99,9 @@ If the directory entry is unloaded, `ta_actor_find` returns
 `TA_ERR_UNLOADED` and leaves its output unchanged. The host obtains the
 checkpoint and binding and calls `ta_actor_load` before retrying delivery.
 
-`ta_actor_deliver` begins delivery of one external event to an actor that is ready for a new macrostep. It does not imply an unbounded external mailbox.
+`ta_actor_deliver` begins delivery of one external event to an actor that is ready for a new macrostep. It does not imply an unbounded external mailbox. With an operator transition in its params (ADR 0082), the event is taken by that transition, built at run time from a source that is active and targets that can form a legal configuration, instead of by transition selection; a malformed one is `TA_ERR_INVALID` with nothing retained.
+
+`ta_actor_abandon` abandons a macrostep that never ends (ADR 0082): the continuation, internal queue and external event are discarded, and the actor is idle with the configuration after its last completed microstep. It is refused (`TA_ERR_BUSY`) while the actor is stopped inside a step, and is `TA_ERR_INVALID` for an actor with no macrostep in progress.
 
 `ta_actor_report_invoke` is the asynchronous return path for an invoked service.
 It reports an ordinary child event, normal completion, or terminal service

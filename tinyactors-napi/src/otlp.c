@@ -657,8 +657,9 @@ static const char *const tna_kind_names[] = {
     "microstep", "raise",     "data",     "assign",   "script",    "foreach",         "error",         "send",
     "cancel",    "invoke",    "invoke.cancel", "paused", "resumed", "stopped",  "ignored", "forward",
     "macrostep.long", "runaway", "definition.registered", "definition.retired", "definition.freed",
+    "abandoned",
 };
-_Static_assert(sizeof tna_kind_names / sizeof tna_kind_names[0] == (size_t)TA_TRACE_DEFINITION_FREED + 1u,
+_Static_assert(sizeof tna_kind_names / sizeof tna_kind_names[0] == (size_t)TA_TRACE_ABANDONED + 1u,
                "one name per ta_trace_kind");
 
 static const char *const tna_at_names[] = { "none", "select", "exit", "transition", "enter", "bootstrap", "finalize",
@@ -1776,7 +1777,7 @@ size_t tna_otlp_put_logs(tna_otlp *otlp, uint8_t *out, size_t size) {
 }
 
 void tna_otlp_write(tna_otlp *otlp, const ta_trace_record *record) {
-    if ((uint32_t)record->kind > (uint32_t)TA_TRACE_DEFINITION_FREED) {
+    if ((uint32_t)record->kind > (uint32_t)TA_TRACE_ABANDONED) {
         otlp->dropped += 1u;
         return;
     }
@@ -1784,7 +1785,7 @@ void tna_otlp_write(tna_otlp *otlp, const ta_trace_record *record) {
      * definition sink writes them as the tinyactors.definition.* logs (napi
      * ADR 0017 section 7), with the origin core does not know. A sink that
      * asks for the kinds gets nothing more here, and nothing twice. */
-    if (record->kind >= TA_TRACE_DEFINITION_REGISTERED) {
+    if (record->kind >= TA_TRACE_DEFINITION_REGISTERED && record->kind <= TA_TRACE_DEFINITION_FREED) {
         return;
     }
     /* The clock is read at span boundaries only; span events use that reading. */
