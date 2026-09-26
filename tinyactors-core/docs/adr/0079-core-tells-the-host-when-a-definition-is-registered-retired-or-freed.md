@@ -179,8 +179,14 @@ per definition or per actor.
 - **napi** (napi ADR 0024's resolvers, napi ADR 0017's name cache): the
   native System installs a sink when it is created (`src/napi_system.c`).
   On FREED it releases the definition's kept `resolve` functions
-  (`tna_children_forget`) and, when tracing, drops the OTLP encoder's
-  cached names for it (`tna_otlp_forget_definition`). Deleted:
+  (`tna_children_forget`), removes the definition from a family watch's
+  `matched` and `checked` sets (`tna_trace_watch_forget_definition`, napi
+  ADR 0017 section 3 with core ADR 0078), and, when tracing, drops the OTLP
+  encoder's cached names for it (`tna_otlp_forget_definition`). Before,
+  a family watch on a system churning through invoke-time children grew
+  its `checked` set without bound until the watch was replaced. The sets
+  are open-addressing with linear probing, so a removal re-places the rest
+  of its probe run instead of leaving a tombstone. Deleted:
   - the resolver sweep in `src/napi_children.c`, its mark and its
     constant, and the resolver walk in `tna_children_close`, whose
     `env_usable` parameter went with it;
@@ -192,9 +198,14 @@ per definition or per actor.
 - **napi tests:** `test/invoke.js` `resolverLifetime` checks, on Node and
   Bun, that a retired definition an actor still uses keeps its `resolve`
   (a `srcexpr` is resolved after `retire()`), and that the function is
-  collectable once the last actor goes. `test/native/otlp_test.c`
-  `forget_definition` checks the encoder drops exactly that definition's
-  names and names it again afterwards.
+  collectable once the last actor goes; `watchedChurn` checks that 50
+  invoke-time children coming and going under a family watch leave its
+  sets at their baseline size, through a test-only native
+  `traceWatchSizes()` (without the forget, the test fails).
+  `test/native/otlp_test.c` `forget_definition` checks the encoder drops
+  exactly that definition's names and names it again afterwards, and
+  `test/native/watch_test.c` `freed_definitions_leave` frees every third of
+  300 watched definitions and checks the rest are still members.
 - **Not reported:** REGISTERED and RETIRED reach napi's sink but nothing
   uses them yet. A host that wants definition lifecycles in its telemetry
   would emit them from there.
