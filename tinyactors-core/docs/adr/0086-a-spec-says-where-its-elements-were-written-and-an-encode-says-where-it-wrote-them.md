@@ -300,7 +300,12 @@ Other shapes considered:
   gets the file and line of the DSL call that wrote it, and the chart's
   sources are those files. Expressions get no span of their own: they are
   arguments of the call that wrote their element, on its line.
-- **napi's builder.** See the implementation notes.
+- **napi's builder.** Every state, transition, initial transition and
+  action gets the file, line and column of the builder call that wrote
+  it, from a V8 call site, and the chart's sources are those files.
+  Expressions are JavaScript functions, host expressions whose place the
+  host can learn from the function itself, and get no span of their own.
+  `Definition.sourceOf(kind, id)` reads a span back.
 
 ## Consequences
 
@@ -343,6 +348,49 @@ Recorded when this ADR was implemented (2026-09-26).
   with its source unnamed, in one system: every registration is answered by
   the first definition, which then reports the latest spans, and a
   registration without spans keeps them (`ta_definition_take_spans()`).
+  Nothing is per actor: `actor_fixed_bytes` does not change.
+- **`ta_expression` did not grow** on x86-64: `span` sits in the padding
+  after `kind`, and the type is 32 bytes as before. On wasm32 it grows
+  from 16 to 20 bytes, and so does each entry of every definition's
+  expression table there, spans or not: 4 bytes per expression per
+  definition. The spec's elements grow too (on wasm32 an action spec from
+  128 to 156 bytes, a state spec from 44 to 48), but a spec is the
+  front end's and lives only until it is compiled.
+- **The SCXML codec now indents what it encodes.** Before, the output was
+  one line after the declaration, which would put every element on line 2.
+  It writes a line break and two spaces per open element before each SCXML
+  element and before the end tag of one with element children, as text,
+  and nothing inside a `<content>`, `<script>`, `<data>` or `<assign>`
+  body. Decoding ignores whitespace between SCXML elements, so the IRP
+  documents and the codec's round trips keep their revisions and re-encode
+  byte for byte. A test decodes the encoding of a chart and finds every
+  element exactly where encode reported it: offsets, lines and columns
+  agree.
+- **Import has a name for its input.** The test host's SCXML invoker and
+  the IRP harness pass none; their definitions' source 0 is unnamed.
+- **The Ruby DSL** takes the first caller outside `chart.rb`, so a helper
+  in a scenario file that calls the DSL is where its elements were
+  written. It knows lines only. A branch of a `conditional` is an `<if>`,
+  written where the branch is, and a history state's default transition
+  is written with the history state.
+- **napi's capture costs 5 to 7 µs per element** at definition time and
+  nothing afterwards. Building a chart of 2000 states, each with a
+  transition and an action (6000 elements), took 170 to 180 ns per element
+  on Node 22 without spans and 5.4 to 5.7 µs with them; on Bun 1.3, 470 to
+  600 ns without and about 7 µs with. The cost is V8 building call sites
+  (`Error.captureStackTrace` with a structured `prepareStackTrace` and
+  `stackTraceLimit` 6), so a chart of a thousand elements takes a few
+  milliseconds longer to define. There is no switch to turn it off; one can
+  be added if a host defines charts on a hot path.
+- **Engines place a call differently.** A column is where the engine says
+  the call is: V8 names the method's name, JavaScriptCore the dot before
+  it. JavaScriptCore also places a call inside a chain that spans lines at
+  an earlier line of the chain, so napi's test writes one call per
+  statement. Columns count UTF-16 code units, as JavaScript does; for
+  ASCII sources they are bytes.
+- **`docs/internal/scxml.md` is the W3C recommendation**, rendered, and
+  has no place for this; the codec's spans are documented in
+  `tinyactors-scxml/README.md`.
 - **The test host's RPC** carries spans as members like any other: `span`
   on elements, `spans`, `sources` and `script_span` at the root. An
   expression with a span crosses as `{"source": text, "span": n}`, text
@@ -352,4 +400,5 @@ Recorded when this ADR was implemented (2026-09-26).
   value writes none of them.
 - **napi** binds `ta_definition_span()` through the generator;
   `ta_chart_span_sink` joins the codec adapters napi skips, as no codec is
-  registered there yet.
+  registered there yet. `lib/definition.js` wraps it as `sourceOf()`, and
+  `index.d.ts` types the spec's span members.

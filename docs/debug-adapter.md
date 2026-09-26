@@ -195,7 +195,7 @@ The adapter is `tinyactors-test/bin/dap`; see
 | C2 | Operator transitions and abandoning a macrostep | tinyactors-core [ADR 0082](../tinyactors-core/docs/adr/0082-operator-transitions-and-abandoning-a-macrostep.md) | ☑ |
 | C3 | Withdrawing one delayed send | tinyactors-core [ADR 0084](../tinyactors-core/docs/adr/0084-an-operator-can-withdraw-one-pending-delayed-send.md) | ☑ |
 | C4 | Images restore into another system | tinyactors-core [ADR 0085](../tinyactors-core/docs/adr/0085-an-image-restores-into-any-system-that-registers-its-revision.md), tinyactors-napi [ADR 0026](../tinyactors-napi/docs/adr/0026-a-system-restoring-another-systems-image-copies-its-boxes.md) | ☑ |
-| C5 | Source spans on decode and encode | tinyactors-core ADR, tinyactors-scxml, the Ruby DSL, napi's builder | ☐ |
+| C5 | Source spans on decode and encode | tinyactors-core [ADR 0086](../tinyactors-core/docs/adr/0086-a-spec-says-where-its-elements-were-written-and-an-encode-says-where-it-wrote-them.md), tinyactors-scxml, the Ruby DSL, napi's builder | ☑ |
 | N1 | `held` scheduling state | tinyactors-napi | ☐ |
 | N2 | Budgets for one actor | tinyactors-napi | ☐ |
 | N3 | Operator transitions in the envelope; settling on abandon | tinyactors-napi | ☐ |

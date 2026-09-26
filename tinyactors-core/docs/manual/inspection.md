@@ -56,7 +56,21 @@ The data-model root is a host value. For CPython it may simply wrap the existing
 | `actor_fixed_bytes` | what each actor costs before it processes events: actor record, session storage, data-model instance |
 | `definition_bytes` | the definition's own storage |
 
-The byte counts are measurements and may change between releases. `ta_system_find_definition()` resolves an exact identity, for example one read from a stored session, to the most recently registered definition with that identity that is not retired.
+The byte counts are measurements and may change between releases.
+
+`ta_definition_span()` says where a state, transition, action or expression was written, by the same IDs trace records and `ta_definition_action()` use: a span (offset, length, and the line and column of its start and end) and the name of its source, when the chart said (ADR 0086). The SCXML codec records where it read every element of a document, the Ruby chart DSL the file and line of each call, and napi's builder the file, line and column of each builder call; a spec built without spans keeps none, and `TA_ERR_NOT_FOUND` says so. Spans never change a definition's revision, so a chart moved down a line or reformatted restores its session images as before. A debugger builds line breakpoints and frame locations from them. When the chart's file is not at hand, `ta_definition_encode()` with `spans` writes the chart as text and fills a `ta_source_map` with where each element landed in that text, so the text can be shown as the source.
+
+```c
+ta_source_location where;
+if (ta_definition_span(system, &(ta_definition_span_params){
+        .definition = view.definition_id, .kind = TA_ELEMENT_STATE, .id = states[0], .out = &where }) == TA_OK) {
+    /* where.source, where.span.line, where.span.column */
+}
+```
+
+Registering a chart again that only moved (ADR 0077 answers it with the definition already registered) hands that definition the new spans, so its line numbers follow the file; a host that keeps a line index per definition rebuilds it after such a registration.
+
+`ta_system_find_definition()` resolves an exact identity, for example one read from a stored session, to the most recently registered definition with that identity that is not retired.
 
 ### Retiring definitions
 
