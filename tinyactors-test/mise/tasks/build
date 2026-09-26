@@ -78,7 +78,15 @@ unless libjq.file? && libonig.file?
       chdir: JQ_BUILD
     )
   end
-  run('make', '-j2', 'install', chdir: JQ_BUILD)
+  # The vendored release ships its generated autotools files, and nothing
+  # here may regenerate them. Git dates files by when they were checked
+  # out, not as the release did, so oniguruma's Makefile (which, unlike
+  # jq's, keeps automake's rebuild rules live) can find configure.ac newer
+  # than aclocal.m4 and rerun aclocal and autoconf in the source tree,
+  # rewriting tracked files from this machine's libtool. The tools as
+  # `true` make those rules no-ops; make passes them to sub-makes.
+  run('make', '-j2', 'ACLOCAL=true', 'AUTOCONF=true', 'AUTOMAKE=true', 'AUTOHEADER=true', 'install',
+      chdir: JQ_BUILD)
 end
 
 unless QUICKJS_SOURCE.join('.tinyactors-vendor-version').file?
