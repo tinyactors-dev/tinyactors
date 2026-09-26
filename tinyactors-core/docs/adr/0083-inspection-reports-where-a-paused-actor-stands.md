@@ -1,6 +1,6 @@
 # ADR 0083: Inspection reports where a paused actor stands
 
-**Status:** Accepted and implemented (2026-09-26). Applies ADR 0060, ADR 0061, ADR 0067, ADR 0070 and ADR 0071; refines ADR 0067 section 3 (what the position of PAUSED, RESUMED and STOPPED names).
+**Status:** Accepted and implemented (2026-09-26). Applies ADR 0060, ADR 0061, ADR 0067, ADR 0070 and ADR 0071; refines ADR 0067 section 3 (what the position of PAUSED, RESUMED and STOPPED names). Section 2 refined by ADR 0087 (at a microstep's start, the position is its first unit).
 **Date:** 2026-09-26
 
 ## Context

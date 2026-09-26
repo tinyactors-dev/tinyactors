@@ -102,7 +102,7 @@ module TinyactorsNapiBindings
     'ta_actor_directory_*' => 'directory callback arguments (ADR 0006)',
     'ta_actor_inspector' => 'enumeration is plumbing (ADR 0003)',
     'ta_actor_visit_params' => 'enumeration is plumbing (ADR 0003)',
-    'ta_actor_resume_params' => 'the pump resumes actors (ADR 0007)',
+    'ta_actor_resume_params' => 'the pump resumes actors and chooses the budgets and the pause at a microstep start (ADR 0007, core ADR 0087)',
     'ta_due_dispatch_params' => 'the clock belongs to the pump (ADR 0007)',
     'ta_external_{delivery,event_submit_params}' => 'router callback arguments (ADR 0006)',
     'ta_invoke_{request,report_params}' => 'invoker plumbing (step 13)',

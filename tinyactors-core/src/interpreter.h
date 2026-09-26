@@ -57,14 +57,16 @@ typedef struct {
     uint32_t exec_capacity;
     /*
      * Where the run stands inside a phase (ADR 0061, ADR 0070), the units of
-     * executable content this call may run and has run, and whether the
-     * block running now is one a pause may stop.
+     * executable content this call may run and has run, whether the block
+     * running now is one a pause may stop, and whether a microstep this
+     * call begins pauses at its start (ADR 0087).
      */
     ta_micro_position at;
     uint32_t action_budget;
     uint32_t actions;
     bool pausable;
     bool in_microstep;
+    bool pause_at_start;
     /* The continuation this call resumed from, which the actor no longer
      * holds: the run stops into it again, or gives it to the system. */
     ta_continuation *resumed;

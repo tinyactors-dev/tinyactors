@@ -36,6 +36,14 @@ as at the end of a macrostep, `ABANDONED` and `MACROSTEP_END` are written,
 and the actor is idle with its stored configuration. An actor holding a
 continuation, or one whose bootstrap microstep has not completed, is busy.
 
+A microstep begins at its start (`TA_PHASE_START`): its transitions are
+selected, its sets computed, history recorded and `MICROSTEP` written.
+Running it passes the start and exits states from the highest down. A
+resume with `pause_at_microstep_start` pauses every microstep it begins
+there instead, before any state is exited or any unit runs; a resume from
+that pause passes it. The bootstrap's microstep never pauses there
+(ADR 0087).
+
 The continuation's ordered sets and executable-content frame stack are the
 resumption boundary. A budget may stop between semantic operations, but never
 inside a host callback or at a point not fully described by that continuation.
