@@ -124,6 +124,24 @@ typedef struct {
     const ta_actor_ref *destination;
 } tna_unreachable;
 
+/*
+ * A quarantined invoked child's report to its parent (napi ADR 0025):
+ * error.communication.invoke.<id>.quarantined, kept until core takes it and
+ * the parent is scheduled, so running out of memory delays it but never
+ * loses it.
+ */
+typedef struct {
+    ta_actor_id parent;
+    ta_invoke_id invoke_id;
+    /* The child's step when it faulted (core ADR 0067). */
+    ta_trace_parent trace;
+    /* The fault, as the fault hook sees it: core's result and the call. */
+    ta_result code;
+    const char *operation;
+    /* Core took the report; making the parent runnable is what is left. */
+    bool reported;
+} tna_quarantine_report;
+
 struct tna_system {
     tna_allocator allocator;
     tna_scratch scratch;
@@ -187,6 +205,16 @@ struct tna_system {
      */
     bool (*unreachable_data)(void *context, const tna_unreachable *unreachable, ta_value *out);
     void *unreachable_context;
+    /*
+     * The data of the error a quarantined child's parent gets (napi ADR
+     * 0025): the Node-API layer makes { code, message }, as the fault hook
+     * sees them. False: no memory, so the report waits for a later turn.
+     * Without the callback the event has no data.
+     */
+    bool (*quarantine_data)(void *context, const tna_quarantine_report *report, ta_value *out);
+    void *quarantine_context;
+    /* Reports to parents that core has not taken yet (tna_quarantine_report). */
+    tna_vec quarantine_reports;
     /* One record per registered I/O processor type (adapters/io.h, core ADR 0068). */
     tna_vec io_processors; /* tna_io_processor * */
     /* Turn duration and timer lateness (host_metrics.h, napi ADR 0017 section 7). */

@@ -154,4 +154,23 @@ TinyactorsTest.scenarios 'invocation errors' do
     assert_equal({ n: failures }, client.data('.error_data'))
     assert_equal [], client.observe[:invokes]
   end
+
+  # Catches: a host that cannot tell whom an invoked child's fault concerns.
+  # Inspection names the child's invocation, which a host reports to, and
+  # the step the child is at (core ADR 0081).
+  scenario 'inspection names an invoked child\'s parent and invocation' do
+    parent = spawn :caller
+    child = invoked_actors.fetch(0)
+    view = child.inspect_actor
+    assert_equal true, view[:has_parent]
+    assert_equal parent.handle, view.dig(:parent, :actor)
+    assert_equal parent.inspect_actor.fetch(:invokes).first.fetch(:id), view.dig(:parent, :invoke_id)
+    assert_equal view[:session_id], view.dig(:trace, :cause, :session)
+    assert_equal false, parent.inspect_actor[:has_parent], 'a spawned actor has no parent'
+
+    report = ta.actor.report_invoke(system: system_handle, actor: view.dig(:parent, :actor),
+                                    invoke_id: view.dig(:parent, :invoke_id), kind: 'error',
+                                    error: { reason: 'quarantined', ends: false })
+    assert_equal 'ok', report[:result]
+  end
 end

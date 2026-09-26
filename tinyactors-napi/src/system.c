@@ -47,6 +47,8 @@ ta_result tna_system_create(tna_system **out) {
     tna_definitions_init(&system->definitions, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER));
     tna_vec_init(&system->io_processors, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER),
                  TNA_LAYOUT(tna_io_processor *));
+    tna_vec_init(&system->quarantine_reports, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER),
+                 TNA_LAYOUT(tna_quarantine_report));
     tna_host_metrics_init(&system->metrics);
     ta_result result = tna_scratch_init(&system->scratch, &system->allocator);
     if (result != TA_OK) {
@@ -109,6 +111,7 @@ void tna_system_close(tna_system *system) {
     /* Core held the I/O processor records as adapters until now. */
     tna_io_close(system);
     tna_sched_destroy(&system->sched);
+    tna_vec_destroy(&system->quarantine_reports);
     tna_trace_watch_destroy(&system->trace_watch);
     /* Core freed every definition in its teardown, so the origins are empty. */
     tna_definitions_destroy(&system->definitions);
@@ -158,6 +161,7 @@ static bool tna_system_due_now(const tna_system *system) {
 
 bool tna_system_quiet(const tna_system *system) {
     return tna_sched_quiet(&system->sched) && system->effects.count == 0 &&
+           system->quarantine_reports.count == 0 &&
            tna_loads_pending_requests(&system->loads) == 0 &&
            (!system->tracing || system->otlp.span_count == 0) &&
            !tna_system_due_now(system);
@@ -376,6 +380,92 @@ void tna_system_want_turn(tna_system *system) {
     }
 }
 
+/*
+ * Hands one report to core and schedules the parent (napi ADR 0025). True
+ * when it is finished with: taken and the parent scheduled, or dropped
+ * because the parent or its invocation is gone. False when it must wait
+ * for a later turn because memory ran out.
+ */
+static bool tna_quarantine_report_try(tna_system *system, tna_quarantine_report *report) {
+    if (!report->reported) {
+        ta_value data = { 0 };
+        bool has_data = system->quarantine_data != NULL;
+        if (has_data && !system->quarantine_data(system->quarantine_context, report, &data)) {
+            return false;
+        }
+        static const char reason[] = "quarantined";
+        ta_invoke_error error = {
+            .reason = { .ptr = reason, .len = sizeof reason - 1u },
+            .data = has_data ? &data : NULL,
+            .ends = false,
+        };
+        system->inside_core = true;
+        ta_result result = ta_actor_report_invoke(system->core, &(ta_invoke_report_params){
+                                                                    .actor = report->parent,
+                                                                    .invoke_id = report->invoke_id,
+                                                                    .kind = TA_INVOKE_REPORT_ERROR,
+                                                                    .trace = report->trace,
+                                                                    .as.error = &error,
+                                                                });
+        system->inside_core = false;
+        ta_value_release(&data);
+        if (result == TA_ERR_NOMEM) {
+            return false;
+        }
+        if (result != TA_OK) {
+            return true; /* TA_ERR_NOT_FOUND: the parent or its invocation is gone */
+        }
+        report->reported = true;
+    }
+    if (tna_sched_wake(&system->sched, report->parent) == TA_ERR_NOMEM) {
+        return false;
+    }
+    tna_system_want_turn(system);
+    return true;
+}
+
+/* Tries the reports still waiting, keeping those that must wait again. */
+static void tna_quarantine_reports_retry(tna_system *system) {
+    tna_vec *reports = &system->quarantine_reports;
+    uint32_t kept = 0;
+    for (uint32_t index = 0; index < reports->count; index += 1) {
+        tna_quarantine_report *report = tna_vec_at(reports, index);
+        if (!tna_quarantine_report_try(system, report)) {
+            *(tna_quarantine_report *)tna_vec_at(reports, kept) = *report;
+            kept += 1u;
+        }
+    }
+    reports->count = kept;
+}
+
+/*
+ * The turn's quarantines of invoked children tell their parents (napi ADR
+ * 0025). The child is inspected now, while it still stands where it
+ * faulted; a report that must wait is kept for the next turn.
+ */
+static void tna_quarantine_reports_make(tna_system *system) {
+    for (const tna_turn_record *record = system->sched.records; record != NULL; record = record->next) {
+        ta_actor_inspection view;
+        if (record->kind != TNA_RECORD_FAULT || ta_actor_inspect(system->core, record->actor, &view) != TA_OK ||
+            !view.has_parent) {
+            continue;
+        }
+        tna_quarantine_report report = {
+            .parent = view.parent.actor,
+            .invoke_id = view.parent.invoke_id,
+            .trace = view.trace,
+            .code = record->code,
+            .operation = record->operation,
+        };
+        if (!tna_quarantine_report_try(system, &report)) {
+            /* A push that fails loses the report: the parent is not told,
+             * though the fault hook, the failure log and the quarantine
+             * gauge still are. */
+            (void)tna_vec_push(&system->quarantine_reports, &report);
+        }
+    }
+}
+
 void tna_system_turn(tna_system *system) {
     system->turn_pending = false;
     if (system->closed) {
@@ -389,6 +479,8 @@ void tna_system_turn(tna_system *system) {
                                        .budgets = system->budgets,
                                        .watch = &system->trace_watch,
                                    });
+    tna_quarantine_reports_retry(system);
+    tna_quarantine_reports_make(system);
     /* Unloaded actors whose own timers are due wake through their loader
      * (napi ADR 0020): the request goes to JavaScript after this turn. */
     tna_loads_fire_wakes(&system->loads, &(tna_wake_fire){ .directory = &system->directory,

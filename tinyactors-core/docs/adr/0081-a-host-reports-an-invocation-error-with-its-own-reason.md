@@ -1,6 +1,6 @@
 # ADR 0081: A host reports an invocation error with its own reason
 
-**Status:** Accepted. Replaces `TA_INVOKE_REPORT_UNAVAILABLE` (ADR 0038's report of a lost service) with a general error report. Motivated by napi ADR 0025.
+**Status:** Accepted and implemented; see the implementation notes. Replaces `TA_INVOKE_REPORT_UNAVAILABLE` (ADR 0038's report of a lost service) with a general error report. Motivated by napi ADR 0025.
 **Date:** 2026-09-26
 
 ## Context
@@ -87,3 +87,51 @@ ADR 0038) keeps its name and uses the same code path with `unavailable`.
   - An empty `reason`, or one with a `.`, answers `TA_ERR_INVALID`.
   - Out of memory while building the name changes nothing (the fault
     sweep).
+
+## Implementation notes
+
+Implemented 2026-09-26.
+
+- **The interface:** `ta_invoke_report_params.as.error` points to a
+  `ta_invoke_error { ta_str reason; const ta_value *data; bool ends; }`.
+  `data` is optional and retained. The old `as.fault` is gone: core used
+  only its `data`, never its `code` or `message`.
+- **One path:** `ta_invoke_raise()` in `src/invoke.c` builds the name,
+  queues the event, and counts and records it as raised outside a run.
+  `ta_invoke_report_lost()` (reconstruction) and an `ERROR` report both
+  use it. With `ends`, the invocation is removed only after the event is
+  queued, so an out-of-memory report leaves the invocation active and
+  queues nothing. Before this change, `UNAVAILABLE` removed the invocation
+  first.
+- **Never BUSY, verified:** the event goes to the session's internal
+  queue, whether the session is idle, paused by a budget, or holding a
+  delivered event. Core's queue marks that undo a step's events after an
+  allocation fails are local to one call, so a report made between two
+  resumes is never taken back. `ta_interpreter_start_macrostep()` does
+  nothing for a session already inside a macrostep.
+- **Addition: inspection names the parent and the current step.** A host
+  that must report for a child needs its invocation. napi spawns SCXML
+  children, but it did not keep their parent links, and core had no way to
+  read them. `ta_actor_inspection` gains `has_parent` and `parent` (the
+  `ta_actor_parent` the child was spawned with), and `trace`: the context
+  of the actor's current macrostep and the key of its current step. napi
+  runs the report under that `trace` (napi ADR 0025 point 6).
+- **Callers migrated:** napi's `reportInvoke("unavailable")` (reason
+  `unavailable`, `ends` true), and the test host's `report_invoke`, which
+  takes `:error, reason:, ends:, data:`.
+- **Tests:** `tinyactors-test/ruby/scenarios/invoke_errors.rb`:
+  - `ends` false leaves the invocation active: events, then `DONE`, still
+    arrive;
+  - leaving the state still cancels;
+  - `ends` true retires the invocation;
+  - a report into a paused macrostep answers `ok` and is taken in that
+    macrostep;
+  - an empty reason, a dotted one, and one with a space are
+    `err_invalid`;
+  - an out-of-memory sweep refuses each allocation the report makes in
+    turn, and each refusal changes nothing;
+  - inspection names a child's parent, its invocation and its session's
+    step.
+
+  The existing unavailable scenarios (`tracing.rb`, `residency.rb`,
+  `instruments_selftest.rb`) use the new kind.

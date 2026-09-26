@@ -132,6 +132,7 @@ static void tna_close(tna_napi_system *wrapper, bool env_usable) {
     tna_system_close(wrapper->system);
     tna_children_close(wrapper);
     wrapper->system->unreachable_data = NULL;
+    wrapper->system->quarantine_data = NULL;
     tna_js_datamodel_close(&wrapper->dm, !wrapper->env_data->torn_down);
     tna_unlist(wrapper);
     wrapper->env_data->systems_closed += 1u;

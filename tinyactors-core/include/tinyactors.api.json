@@ -1543,11 +1543,31 @@
             "builtin": "size_t"
           },
           "doc": "Bytes the core currently allocates for this actor: the actor record, session storage (configuration and history), the data-model instance, sparse state, and queue capacities. Excludes memory the data-model adapter allocates itself. A measurement: it may change between releases."
+        },
+        {
+          "name": "has_parent",
+          "type": {
+            "builtin": "bool"
+          },
+          "doc": "An invoked child's link to the invocation that started it: the parent and its invoke ID, which a host reports to for the child with ta_actor_report_invoke() (ADR 0081). has_parent is false for an actor spawned without a parent."
+        },
+        {
+          "name": "parent",
+          "type": {
+            "type": "ta_actor_parent"
+          }
+        },
+        {
+          "name": "trace",
+          "type": {
+            "type": "ta_trace_parent"
+          },
+          "doc": "What a step caused by this actor now runs under (ADR 0067): the trace context of its current macrostep and the key of its current step. Between macrosteps the key names the session alone, and the context is whatever the actor's event block still holds, often none."
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 168,
+          "size": 240,
           "align": 8,
           "offsets": {
             "actor": 0,
@@ -1570,11 +1590,14 @@
             "has_completion": 140,
             "completion": 144,
             "final_state": 152,
-            "allocated_bytes": 160
+            "allocated_bytes": 160,
+            "has_parent": 168,
+            "parent": 176,
+            "trace": 192
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 120,
+          "size": 184,
           "align": 8,
           "offsets": {
             "actor": 0,
@@ -1597,7 +1620,10 @@
             "has_completion": 100,
             "completion": 104,
             "final_state": 108,
-            "allocated_bytes": 112
+            "allocated_bytes": 112,
+            "has_parent": 116,
+            "parent": 120,
+            "trace": 136
           }
         }
       }

@@ -64,7 +64,11 @@ export interface DoneRecord<Data = unknown> {
   readonly data: Data | undefined;
 }
 
-/** A core call for an actor failed; the actor is quarantined (ADR 0008). */
+/**
+ * A core call for an actor failed; the actor is quarantined (ADR 0008). An
+ * invoked child's parent also gets error.communication.invoke.<id>.quarantined
+ * with `{ code, message }` from this record (napi ADR 0025).
+ */
 export interface FaultRecord {
   readonly actor: Actor;
   readonly operation: string;

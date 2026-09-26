@@ -11498,6 +11498,11 @@ TA_API ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_in
         .current_event = ta_actor_paused_event(actor),
         .allocated_bytes = ta_actor_allocated_bytes(actor),
         .final_state = TA_STATE_NONE,
+        .trace = { .context = ta_actor_macrostep_parent(actor).context,
+                   .cause = actor->trace_begun ? (ta_step_key){ .session = actor->session_id,
+                                                                .macrostep = actor->trace_macrostep,
+                                                                .microstep = actor->trace_microstep }
+                                               : (ta_step_key){ .session = actor->session_id } },
     };
     /* A taken head is `_event`, not work that waits. */
     uint32_t waiting = ta_actor_waiting_internal(actor);
@@ -11513,6 +11518,8 @@ TA_API ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_in
         out->has_completion = actor->finished;
         out->completion = actor->finished ? &actor->sparse->completion : NULL;
         out->final_state = actor->finished ? actor->sparse->final_state : TA_STATE_NONE;
+        out->has_parent = actor->sparse->has_parent;
+        out->parent = actor->sparse->parent;
     }
     return TA_OK;
 }

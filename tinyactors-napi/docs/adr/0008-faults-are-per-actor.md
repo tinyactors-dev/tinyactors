@@ -1,6 +1,6 @@
 # ADR 0008: Faults are per actor
 
-**Status:** Accepted Refined by ADR 0022: a chart's mail to a target that does not exist is `error.communication` in the sender, not a dead letter; mail from JavaScript is unchanged.
+**Status:** Accepted Refined by ADR 0022: a chart's mail to a target that does not exist is `error.communication` in the sender, not a dead letter; mail from JavaScript is unchanged. Refined by ADR 0025: quarantining an invoked child also tells its parent.
 **Date:** 2026-09-23
 
 ## Context

@@ -104,9 +104,23 @@ time raises `error.execution` in the parent, whose data is the reason.
 
 Children are reachable only through their parent (`#_<invokeid>`) or their
 session ID; they have no name in the directory. Leaving the invoking state,
-or destroying the parent, destroys the child. A child that faults, a
-runaway for example, is quarantined like any actor, and its parent is not
-told.
+or destroying the parent, destroys the child.
+
+A child that faults, a runaway for example, is quarantined like any actor,
+and its parent gets `error.communication.invoke.<id>.quarantined` (napi
+ADR 0025). The event's data is `{ code, message }`, as the `fault` hook
+sees them. The invocation stays active: the parent may leave the invoking
+state, which destroys the child, or wait. If an operator releases the child
+and it reaches its final state, `done.invoke.<id>` still arrives. Each
+quarantine is reported once, to the direct parent only:
+
+```xml
+<state id="waiting">
+  <invoke type="scxml" id="worker" src="worker.scxml"/>
+  <transition event="done.invoke.worker" target="done"/>
+  <transition event="error.communication.invoke.worker.quarantined" target="failed"/>
+</state>
+```
 
 ## When a document is refused
 

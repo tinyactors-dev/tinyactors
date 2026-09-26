@@ -446,10 +446,14 @@ void tna_pump_host_log(tna_system *system, ta_actor_id actor, tna_otlp_host_log_
     tna_otlp_host_log(&system->otlp, &log);
 }
 
+void tna_fault_message(const char *operation, ta_result code, char *buffer, size_t size) {
+    snprintf(buffer, size, "%s failed: %s", operation, tna_result_code(code));
+}
+
 static void tna_fault_record(napi_env env, tna_napi_system *wrapper, const tna_turn_record *record, napi_value *first_error) {
     const char *code = tna_result_code(record->code);
     char message[160];
-    snprintf(message, sizeof message, "%s failed: %s", record->operation, code);
+    tna_fault_message(record->operation, record->code, message, sizeof message);
     char body[200];
     int length = snprintf(body, sizeof body, "actor quarantined: %s", message);
     tna_pump_host_log(wrapper->system, record->actor,

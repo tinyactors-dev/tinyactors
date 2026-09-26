@@ -2673,6 +2673,21 @@ typedef struct {
      * adapter allocates itself. A measurement: it may change between releases.
      */
     size_t allocated_bytes;
+    /*
+     * An invoked child's link to the invocation that started it: the parent
+     * and its invoke ID, which a host reports to for the child with
+     * ta_actor_report_invoke() (ADR 0081). has_parent is false for an actor
+     * spawned without a parent.
+     */
+    bool has_parent;
+    ta_actor_parent parent;
+    /*
+     * What a step caused by this actor now runs under (ADR 0067): the trace
+     * context of its current macrostep and the key of its current step.
+     * Between macrosteps the key names the session alone, and the context
+     * is whatever the actor's event block still holds, often none.
+     */
+    ta_trace_parent trace;
 } ta_actor_inspection;
 
 typedef ta_result (*ta_actor_inspection_visitor)(void *self,

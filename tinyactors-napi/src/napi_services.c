@@ -290,10 +290,42 @@ static bool tna_unreachable_data(void *context, const tna_unreachable *unreachab
     return made;
 }
 
+/*
+ * The data of the error.communication.invoke.<id>.quarantined a quarantined
+ * child's parent gets (napi ADR 0025): { code, message }, as the fault hook
+ * has them.
+ */
+static bool tna_quarantine_data(void *context, const tna_quarantine_report *report, ta_value *out) {
+    tna_napi_system *wrapper = context;
+    if (!wrapper->dm.js_usable) {
+        return false;
+    }
+    napi_env env = wrapper->env;
+    napi_handle_scope scope = NULL;
+    if (napi_open_handle_scope(env, &scope) != napi_ok) {
+        return false;
+    }
+    char text[160];
+    tna_fault_message(report->operation, report->code, text, sizeof text);
+    napi_value data = NULL;
+    napi_value code = NULL;
+    napi_value message = NULL;
+    bool made = napi_create_object(env, &data) == napi_ok &&
+                napi_create_string_utf8(env, tna_result_code(report->code), NAPI_AUTO_LENGTH, &code) == napi_ok &&
+                napi_create_string_utf8(env, text, NAPI_AUTO_LENGTH, &message) == napi_ok &&
+                napi_set_named_property(env, data, "code", code) == napi_ok &&
+                napi_set_named_property(env, data, "message", message) == napi_ok &&
+                tna_value_make(&wrapper->values, data, out);
+    napi_close_handle_scope(env, scope);
+    return made;
+}
+
 void tna_services_init(tna_napi_system *wrapper) {
     tna_children_init(wrapper);
     wrapper->system->unreachable_data = tna_unreachable_data;
     wrapper->system->unreachable_context = wrapper;
+    wrapper->system->quarantine_data = tna_quarantine_data;
+    wrapper->system->quarantine_context = wrapper;
 }
 
 /* ------------------------------------------------------------------------

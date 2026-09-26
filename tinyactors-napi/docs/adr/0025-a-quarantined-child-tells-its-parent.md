@@ -1,6 +1,6 @@
 # ADR 0025: A quarantined child tells its parent
 
-**Status:** Accepted. Refines ADR 0008 point 1 and ADR 0021 point 6: a quarantined invoked child is no longer silent to its parent. Needs core ADR 0081.
+**Status:** Accepted and implemented; see the implementation notes. Refines ADR 0008 point 1 and ADR 0021 point 6: a quarantined invoked child is no longer silent to its parent. Needs core ADR 0081.
 **Date:** 2026-09-26
 
 ## Context
@@ -110,3 +110,47 @@ child stays quarantined, and the invocation stays active.**
   followed by `done.invoke`.
 - **The out-of-memory sweep** covers the report, so a failed allocation
   delays the report but never loses it.
+
+## Implementation notes
+
+Implemented 2026-09-26.
+
+- **Where:** in the portable plumbing (`src/system.c`), not in the pump.
+  Right after the scheduler's part of a turn, `tna_system_turn()` walks the
+  turn's fault records. For each child it inspects, a report is made while
+  the child still stands where it faulted: `has_parent`, `parent` and
+  `trace` from `ta_actor_inspect()`, the core addition in core ADR 0081's
+  notes. This covers every cause of quarantine, because every quarantine
+  writes a fault record.
+- **Data:** `{ code, message }` comes from a callback the Node-API layer
+  installs (`quarantine_data`, as `unreachable_data` does for ADR 0022).
+  It uses `tna_fault_message()` from `src/pump.c`, the formatter the
+  `fault` hook uses, so the texts cannot drift apart. Without the
+  callback, as in the native tests' own systems, the event has no data.
+- **Retry:** a report whose data or core call runs out of memory, or whose
+  parent cannot be put on the runnable queue, waits in
+  `system->quarantine_reports`. The system is not quiet while one waits,
+  so the next turn tries again. A report that core has taken but whose
+  parent could not be scheduled keeps only the scheduling step. If even
+  queueing the report fails, it is lost, and the fault hook, the failure
+  log and the gauge still show the quarantine.
+- **Dropped:** `TA_ERR_NOT_FOUND` from core (the parent or its invocation
+  is gone) ends the report.
+- **Deviation from the Testing section:** the JavaScript suite does not
+  include the out-of-memory case. `refuseAllocationsFrom()` refuses by
+  size, and no threshold separated the report's allocations from the
+  child's and the turn's reliably. `test/native/quarantine_test.c` covers
+  it instead: data that fails twice, then the report arriving, with the
+  system busy until then; and a parent destroyed while its report waits.
+  Core's side of an out-of-memory report is covered by tinyactors-test's
+  sweep (core ADR 0081).
+- **Tests on Node and Bun (`test/quarantine.js`):**
+  - the parent is told, with the fault hook's code and message, and keeps
+    waiting;
+  - the report's macrostep is in the child's trace, and its parent span
+    is the child's step at the limit;
+  - release, then a second runaway, reports again, and after a second
+    release `done.invoke` arrives;
+  - leaving the invoking state destroys the quarantined child;
+  - a parent destroyed from the fault hook;
+  - a grandchild reports to its own parent only.

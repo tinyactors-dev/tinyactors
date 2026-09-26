@@ -1,6 +1,6 @@
 # ADR 0021: An invoked SCXML document is imported in the invoke
 
-**Status:** Accepted and implemented (2026-09-25); see the implementation notes. Refines ADR 0019 (SCXML import) and the in-system SCXML invoker of ROADMAP step 13 (`src/adapters/invoker.h`). Point 3 (the cache of imported children) is refined by ADR 0023: a bounded LRU keyed by a hash, whose evictions retire definitions, and resolvers released when their definition is freed. Point 3 is superseded by ADR 0024 and core ADR 0077: a child chart is a nested definition, compiled when its parent is defined or, for text at invoke time, reused by identity and freed with its children.
+**Status:** Accepted and implemented (2026-09-25); see the implementation notes. Refines ADR 0019 (SCXML import) and the in-system SCXML invoker of ROADMAP step 13 (`src/adapters/invoker.h`). Point 3 (the cache of imported children) is refined by ADR 0023: a bounded LRU keyed by a hash, whose evictions retire definitions, and resolvers released when their definition is freed. Point 3 is superseded by ADR 0024 and core ADR 0077: a child chart is a nested definition, compiled when its parent is defined or, for text at invoke time, reused by identity and freed with its children. Point 6 is refined by ADR 0025: a quarantined child's parent gets `error.communication.invoke.<id>.quarantined`, and the invocation stays active.
 **Date:** 2026-09-25
 
 ## Context

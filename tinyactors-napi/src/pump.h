@@ -54,6 +54,12 @@ napi_value tna_pump_advance_to(napi_env env, tna_napi_system *wrapper, napi_valu
 /* The ActorID view of `actor` (ADR 0002), or NULL without a class or facade. */
 napi_value tna_actor_view(napi_env env, tna_napi_system *wrapper, ta_actor_id actor);
 /* { family, name } for an address. */
+/*
+ * The fault hook's `message` for a failed core call, such as "resume failed:
+ * runaway" (ADR 0008). A quarantined child's parent gets the same text
+ * (napi ADR 0025).
+ */
+void tna_fault_message(const char *operation, ta_result code, char *buffer, size_t size);
 napi_value tna_address_object(napi_env env, const ta_actor_address *address);
 /* The dotted text of an event name, formatted by core (ADR 0004), or NULL. */
 napi_value tna_event_text(napi_env env, tna_system *system, ta_event_name_id name);
