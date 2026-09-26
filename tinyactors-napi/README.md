@@ -33,6 +33,20 @@ lists what is outstanding, and `mise run check-api-status` (part of
 `mise run test`) fails when a marker is stale or a missing declaration is
 unmarked, for the exports and for the objects it can probe at runtime.
 
+## Benchmarks
+
+`mise run bench [population ...]` runs the tracing bench on Node and Bun and
+prints throughput and memory side by side; `mise run bench-compare <commit>`
+builds another commit beside the working tree and runs both alternately on
+this machine, flagging changes past 5%. Results are stored under
+`bench/results/<machine signature>/` (see its README).
+
+**Reporting convention.** A benchmark report always gives throughput and
+memory together, names the machine signature it ran under, and compares
+builds side by side with `bench-compare`, never against numbers from another
+day or another machine: the same build measured 30% apart on two days on
+one machine.
+
 ## Loading actors on demand
 
 `System.setLoader(family, loader)` brings actors of a family back when mail

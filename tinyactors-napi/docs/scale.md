@@ -257,6 +257,15 @@ move beyond run-to-run noise.
 
 ## 2026-09-25: tracing throughput, the accepted baseline (napi ADRs 0016 to 0018)
 
+> **Note (2026-09-26):** the figures below were taken before results were
+> keyed by machine signature, and the same build later measured about 30%
+> faster on the same computer. Read them as ratios to their own untraced
+> row, not as absolutes. From now on, results live in
+> `bench/results/<machine signature>/` (`mise run bench`), and builds are
+> compared side by side with `mise run bench-compare <commit>`; this
+> machine's signatures are `a99e44a37e2e` (Node 22.23.2) and
+> `c989bd79a51f` (Bun 1.4.1).
+
 **This is the baseline tracing is held to from now on.** The traced-path
 targets of napi ADR 0017 section 4 (about 280 ns per event over untraced
 for macrostep spans, 780 for every record) are withdrawn: two rounds of

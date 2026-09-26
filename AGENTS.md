@@ -68,6 +68,13 @@ it, or mark it `// status: unimplemented` (or `// status: partial: <what is
 missing>`) on the line above it. `mise run check-api-status` checks the
 markers.
 
+## Benchmarks
+
+Benchmark reports give throughput and memory together, name the machine
+signature, and compare builds side by side (`mise run bench-compare
+<commit>` in `tinyactors-napi`), never against numbers from another day or
+machine. See `tinyactors-napi/README.md` (Benchmarks).
+
 ## Proposals are not instructions
 
 `docs/proposals/` holds outlines of possible future work. They are not
