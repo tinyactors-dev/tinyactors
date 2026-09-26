@@ -1,29 +1,30 @@
 # frozen_string_literal: true
 
 module DAP
-  # Where an actor stands between two units of a macrostep, from the last
-  # PAUSED record it wrote (ADR 0061, ADR 0067). `key` is [macrostep,
-  # microstep]. Core writes PAUSED with the phase, the state or transition
-  # and the <foreach> iteration, but with no action: which unit runs next is
-  # not in the record, so frames name the unit that ran last instead.
-  #
-  # Core ADR 0083 puts the paused position into ta_actor_inspection. Once it
-  # is there, `Position.from_inspection` belongs beside `from_record`, so an
-  # actor that was paused before the adapter saw it has a position too.
-  Position = Data.define(:key, :at, :state, :transition, :iteration) do
-    def self.from_record(record)
-      where = record[:position] || {}
-      new(key: [Integer(record.dig(:key, :macrostep)), Integer(record.dig(:key, :microstep))],
-          at: where[:at].to_s, state: where[:state], transition: where[:transition],
+  # Where a stopped actor stands (core ADR 0083): `key` is [macrostep,
+  # microstep] of its step, and the rest names the unit it runs next, which
+  # is also the first unit a single step runs. `at` is 'none' between two
+  # microsteps and outside a macrostep. A PAUSED record carries the same.
+  Position = Data.define(:key, :at, :state, :transition, :action, :iteration) do
+    def self.from_inspection(view)
+      where = view[:position] || {}
+      step = view[:step] || {}
+      new(key: [Integer(step[:macrostep] || 0), Integer(step[:microstep] || 0)], at: where[:at].to_s,
+          state: where[:state], transition: where[:transition],
+          action: Labels.none?(where[:action]) ? nil : Integer(where[:action]),
           iteration: Integer(where[:iteration] || 0))
     end
 
-    # The block a position is in: the phase and the state or transition.
+    # The block the next unit is in: the phase and the state or transition.
     def block = [key, at, at == 'transition' ? transition : state]
+
+    def nowhere? = at == 'none' || at.empty?
   end
 
-  # What the debugger knows about one actor's current macrostep, from its
-  # trace records. Keyed by session ID, which survives a reload (ADR 0066).
+  # What the debugger learns about one actor's current macrostep from its
+  # trace records, for what inspection does not say: the event it took,
+  # the transitions of its microstep, and the summary written when it ends.
+  # Keyed by session ID, which survives a reload (ADR 0066).
   # `entry_stopped` says the actor was stopped before this macrostep began
   # (an `on:` breakpoint, or a step of an idle actor), so neither the next
   # round nor its MACROSTEP_BEGIN stops it there again.
@@ -31,8 +32,8 @@ module DAP
   # and `fault` the last fault a record carried, for the error event after it.
   # `taken` is the event the macrostep began with, `event` the one of the
   # step it is in, which is _event.
-  Track = Struct.new(:session, :definition, :in_macrostep, :macrostep, :taken, :event, :microstep, :position,
-                     :last_action, :summary, :entry_stopped, :pending, :fault, keyword_init: true)
+  Track = Struct.new(:session, :definition, :in_macrostep, :macrostep, :taken, :event, :microstep,
+                     :summary, :entry_stopped, :pending, :fault, keyword_init: true)
 
   # The Scheduler's monitor while a client is attached: it decides the
   # budgets of every resume, reads the trace records each one wrote, and
@@ -45,7 +46,7 @@ module DAP
     Stop = Struct.new(:thread, :session, :reason, :description, :breakpoints, :exception, keyword_init: true)
 
     # A step in progress. `start` is the position it started from and
-    # `depth` how deeply nested the last unit that ran there was. `waiting`
+    # `depth` how deeply nested its next unit was. `waiting`
     # is a step of an idle actor, which waits for its next event.
     Step = Struct.new(:kind, :granularity, :thread, :session, :handle, :start, :depth, :waiting,
                       keyword_init: true)
@@ -87,6 +88,12 @@ module DAP
     def event_of(thread)
       track = @tracks[thread.session]
       track&.in_macrostep ? track.event : @session.inspect_actor(thread.handle)&.dig(:current_event)
+    end
+
+    # Where `thread` stands now, from inspection; nil when it is gone.
+    def position(thread)
+      view = @session.inspect_actor(thread.handle)
+      view && Position.from_inspection(view)
     end
 
     # How many macrosteps ended since the last call; the adapter sends
@@ -141,14 +148,13 @@ module DAP
       raise RequestError, "#{thread.label} is not resident" if view.nil?
       raise RequestError, "#{thread.label} is done: its session ended" if view[:residency] == 'done'
 
-      track = (@tracks[thread.session] ||= new_track(thread.session, thread.definition))
       waiting = !view[:macrostep_in_progress]
-      start = track.in_macrostep ? track.position : nil
+      start = Position.from_inspection(view)
       @stop = nil
       @pause_requested = false
       @step = Step.new(kind: kind, granularity: granularity || 'statement', thread: thread.id,
                        session: thread.session, handle: thread.handle, start: start,
-                       depth: start_depth(track, start), waiting: waiting)
+                       depth: depth(view[:definition_id], start), waiting: waiting)
       scheduler.go!
       waiting
     end
@@ -218,7 +224,11 @@ module DAP
       thread = thread_of_handle(id)
       return nil if thread.nil?
 
-      decide(thread, records, status) ? :stop : nil
+      view = @session.inspect_actor(thread.handle)
+      position = view && Position.from_inspection(view)
+      track = @tracks[thread.session]
+      @breakpoints.reach(track, position) { |hit| @hits << hit } if track && position
+      decide(thread, position, status) ? :stop : nil
     end
 
     # A delayed send that could not be delivered raises its
@@ -228,7 +238,7 @@ module DAP
       return nil if @aside
       return :stop if @stop
 
-      decide(nil, [], nil) ? :stop : nil
+      decide(nil, nil, nil) ? :stop : nil
     end
 
     def interrupt? = @interrupt.call
@@ -253,7 +263,7 @@ module DAP
     # After a resume of `thread` (nil after a dispatch): stop for an
     # exception, a function or data breakpoint, the end of the step, or a
     # pause, in that order. Answers whether it stopped.
-    def decide(thread, records, status)
+    def decide(thread, position, status)
       hits = @hits
       @hits = []
       if (hit = hits.find { |candidate| candidate[:kind] == :exception })
@@ -264,9 +274,7 @@ module DAP
       elsif (hit = confirmed(hits, :data))
         stop_at(thread_of_session(hit[:session]) || thread, 'data breakpoint', hit[:description],
                 breakpoints: hit[:ids])
-      elsif thread && @step && @step.session == thread.session &&
-            step_done?(@step, thread, records.select { |record| record.dig(:key, :session) == thread.session },
-                       status)
+      elsif thread && @step && @step.session == thread.session && step_done?(@step, thread, position, status)
         stop_at(thread, 'step', nil)
       elsif thread && @pause_requested
         stop_at(thread, 'pause', nil)
@@ -297,13 +305,19 @@ module DAP
                        breakpoints: breakpoints, exception: exception)
     end
 
-    # Whether a step is over after a resume of its actor that wrote
-    # `records` and answered `status`.
-    def step_done?(step, thread, records, status)
+    # Whether a step is over after a resume of its actor that answered
+    # `status` and left it at `position`.
+    #
+    # `stepIn` stops before the next unit. At `statement` granularity it
+    # passes over a stop that names the unit it started at: a <foreach> that
+    # has not run and the same loop before its first iteration have one
+    # position (ADR 0083, open point 1), and a debugger that stops twice at
+    # one place looks stuck. `next` goes on until the next unit is at the
+    # depth it started at or shallower, or in another block; `stepOut` until
+    # it is shallower, or in another block, and between microsteps until the
+    # macrostep ends. At `line` granularity a step is a microstep.
+    def step_done?(step, thread, position, status)
       return true unless status == 'paused'
-
-      track = @tracks[thread.session]
-      position = track&.position
       return true if position.nil? || step.start.nil?
 
       if step.granularity == 'line'
@@ -311,31 +325,24 @@ module DAP
 
         return position.key != step.start.key
       end
-      return true if step.kind == :in || step.granularity == 'instruction'
+      same = position == step.start
+      return !same || step.granularity == 'instruction' if step.kind == :in
+      return true if step.granularity == 'instruction' && step.kind == :over
 
       changed = position.block != step.start.block
-      depth = last_depth(thread, records)
+      depth = depth(thread.definition, position)
       if step.kind == :over
-        changed || depth.nil? || depth <= step.depth
+        changed || (!same && depth <= step.depth)
       else
-        return false if step.start.at == 'none'
+        return false if step.start.nowhere?
 
-        changed || (!depth.nil? && depth < step.depth)
+        changed || depth < step.depth
       end
     end
 
-    # How deeply nested the last unit that ran was, among `records`; nil
-    # when none of them names an action (a <log>, for one, writes none).
-    def last_depth(thread, records)
-      record = records.reverse.find { |candidate| !Labels.none?(candidate.dig(:position, :action)) }
-      record && @labels.depth(record[:definition], record.dig(:position, :action))
-    end
-
-    def start_depth(track, start)
-      last = track.last_action
-      return 0 if start.nil? || last.nil? || last[:block] != start.block
-
-      @labels.depth(track.definition, last[:action])
+    # How deeply nested the next unit is in <if> and <foreach> bodies.
+    def depth(definition, position)
+      position.action.nil? ? 0 : @labels.depth(definition, position.action)
     end
 
     def absorb(record)
@@ -349,28 +356,19 @@ module DAP
         track.taken = record[:event]
         track.event = record[:event]
         track.microstep = nil
-        track.position = Position.new(key: [track.macrostep, 0], at: 'none', state: nil, transition: nil,
-                                      iteration: 0)
-        track.last_action = nil
         track.summary = []
         track.pending = []
         track.fault = nil
       when 'microstep'
         track.microstep = record
         track.event = record[:event] if record[:event]
-        track.position = Position.from_record(record)
         summarize(track, record)
-      when 'paused'
-        track.position = Position.from_record(record)
       when 'macrostep_end', 'finished', 'destroyed'
         finish(track, record)
+      when 'abandoned'
+        abandoned(track, record)
       else
         summarize(track, record)
-      end
-      unless Labels.none?(record.dig(:position, :action))
-        position = Position.from_record(record)
-        track.last_action = { action: record.dig(:position, :action), block: position.block, kind: record[:kind],
-                              iteration: position.iteration }
       end
       thread = @breakpoints.watching_data? ? @threads.by_session(session) : nil
       @breakpoints.observe(record, track, thread) { |hit| @hits << hit }
@@ -383,9 +381,22 @@ module DAP
       end
       track.in_macrostep = false
       track.entry_stopped = false
-      track.position = nil
-      track.last_action = nil
       track.microstep = nil
+    end
+
+    # An abandoned macrostep (ADR 0082) ends with MACROSTEP_END when it had
+    # begun; one that never began writes ABANDONED alone.
+    def abandoned(track, record)
+      dropped = Integer(record[:dropped] || 0)
+      line = "  abandoned#{dropped.positive? ? ", #{dropped} internal event(s) dropped" : ''}"
+      if track.in_macrostep
+        track.summary << line
+      else
+        who = thread_of_session(track.session)&.label || "session #{track.session}"
+        event = record.dig(:event, :name_text)
+        @output.call('console', "#{who}: abandoned #{event || 'its waiting event'} before it began")
+        track.entry_stopped = false
+      end
     end
 
     def new_track(session, definition)
@@ -401,9 +412,7 @@ module DAP
 
       definition = record[:definition]
       line = case record[:kind]
-             when 'microstep'
-               transitions = Array(record[:transitions]).map { |id| @labels.transition(definition, id) }
-               transitions.empty? ? nil : "  #{transitions.join('; ')}"
+             when 'microstep' then "  #{@labels.microstep(definition, record)}"
              when 'condition'
                text = @labels.expression(definition, record[:expr])
                outcome = record[:has_fault] ? "fault #{record.dig(:fault, :message) || record.dig(:fault, :code)}" : record[:result]

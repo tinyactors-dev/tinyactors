@@ -50,6 +50,21 @@ module DAP
     end
 
 
+    # What a MICROSTEP record took: its transitions, or an operator's jump
+    # (core ADR 0082), which names no transition and lists its targets in
+    # `states` and its source in `state`.
+    def microstep(definition, record)
+      transitions = Array(record[:transitions])
+      targets = Array(record[:states])
+      if transitions.empty? && !targets.empty?
+        from = Labels.none?(record[:state]) ? '' : " from #{state(definition, record[:state])}"
+        return "goto #{targets.map { |target| state(definition, target) }.join(' ')}#{from}"
+      end
+      return 'initial' if transitions.empty?
+
+      transitions.map { |id| transition(definition, id) }.join('; ')
+    end
+
     def action_info(definition, id) = lookup(definition, :action, id)
 
     # `assign 2`: the element and its place in its block, from 1.

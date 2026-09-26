@@ -117,19 +117,24 @@ the client continues or steps. The host single-steps on `action_budget: 1`
 (core ADR 0061) whenever a breakpoint, a step or a pause is armed, and
 runs with the workbench's budgets otherwise.
 
-**Frames**, innermost first: the unit that ran last (`after assign 1`) and
-the `<if>` and `<foreach>` around it (`foreach 2 iteration 2`), the block
-(`entering busy`, `transition idle → busy on bump`, `onexit of busy`), the
-microstep with its transitions, and the macrostep with the event it took.
-An actor at rest has one frame, `idle in <states>`; one holding an event it
-has not begun has `about to take <event> (before transition selection)`.
-Frames have no source locations yet: those need source spans (core ADR
-0086).
+**Frames**, innermost first: the unit the actor runs next, as a
+debugger's current line is (`assign 2`), the `<if>` and `<foreach>` around
+it (`foreach 2 iteration 2`), the block (`onentry of busy`, `transition
+idle → busy on bump`, `onexit of busy`), the microstep with its
+transitions, and the macrostep with the event it took. Between two
+microsteps the top frame is `selecting transitions`. An actor at rest has
+one frame, `idle in <states>`; one holding an event it has not begun has
+`about to take <event> (before transition selection)`. Frames have no
+source locations yet: those need source spans (core ADR 0086).
 
-The position comes from the last `PAUSED` trace record. That record names
-the phase, the state or transition, and the `<foreach>` iteration, but not
-the action that runs next, so the innermost frame names the unit that ran
-last. A unit that writes no trace record, such as `<log>`, is not named.
+Where an actor stands comes from `ta.actor.inspect` (core ADR 0083): its
+step key and the next unit, so an actor reloaded from an image, as writing
+data does, still shows where it stands. A `<foreach>` that has not run
+and the same loop before its first iteration have the same position (the
+ADR's open point 1); only the innermost loop's iteration is known, so an
+enclosing `<foreach>` is shown without one (open point 2). The
+transitions of the microstep and the event of the macrostep come from
+the trace records.
 
 **Scopes**, the same for every frame of a thread:
 
@@ -161,9 +166,19 @@ had then, so a retired revision still shows the chart it ran.
 | `next` | until a unit at the same depth or shallower runs, or the block ends | one unit | to the next microstep |
 | `stepOut` | to the end of the block (between microsteps: of the macrostep) | as `statement` | to the end of the macrostep |
 
-A resume on `action_budget: 1` always runs at least one unit, so a stop
-comes after the first unit of a microstep at the earliest: a transition
-breakpoint stops after the first action of its content.
+`stepIn` at `statement` granularity passes over a stop that names the
+unit it started at, so the repeated `<foreach>` position above costs no
+extra step; `instruction` stops there anyway.
+
+A resume that selects a microstep always runs its first unit before it
+can pause (`action_budget` counts units run, and a microstep budget
+pauses only between microsteps), so no stop is possible before a
+microstep's first unit. Everything after it is reachable: a breakpoint on
+a state's entry or exit, or on a transition, stops before the first unit
+of its block, unless that unit is the microstep's first, in which case it
+stops after it. `idle → busy` on a transition with content stops at its
+second action; `busy` stops before `busy`'s onentry when the microstep
+exited a state with an onexit or ran transition content first.
 
 A step of an idle actor waits for its next event and stops before the
 macrostep that takes it, as the proposal's "`next` on an idle actor" says.

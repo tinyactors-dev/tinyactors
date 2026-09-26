@@ -168,9 +168,8 @@ The adapter is `tinyactors-test/bin/dap`; see
 
 - `attach` answers an error in the test host: it launches workbench
   directories, and attaching to a running actor is napi's.
-- `stackTrace` is ◐: frames have no source locations until C5, and the
-  innermost frame names the unit that ran last, because a `PAUSED` record
-  names no action.
+- `stackTrace` is ◐: frames have no source locations until C5. The top
+  frame is the unit the actor runs next, from inspection (C1).
 - `source` is ◐: it serves the chart's Ruby file, as it was when the
   revision loaded; encoded charts need C5.
 - `stopped` is ◐: every reason except `breakpoint` (C5) and `goto` (C2).

@@ -430,8 +430,8 @@ Dir.mktmpdir('dap-selftest') do |tmp|
         stopped['description'] == 'entered busy' && stopped['threadId'] == tid
     end
     names = frame_of.call(tid).map { |f| f['name'] }
-    check('frames: the block, the microstep, the macrostep') do
-      names == ['entering busy', 'microstep 2.1: idle → busy on bump', 'macrostep 2 on bump']
+    check('frames: the next unit, its block, the microstep, the macrostep') do
+      names == ['log 1', 'onentry of busy', 'microstep 2.1: idle → busy on bump', 'macrostep 2 on bump']
     end
     top = frame_of.call(tid).first['id']
     event = vars.call(scope_ref.call(top, 'Event')).to_h { |variable| [variable['name'], variable['value']] }
@@ -455,25 +455,34 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     check('the unit was the <log>, whose record is stdout output') do
       client.take('output').any? { |body| body['category'] == 'stdout' && body['output'] == "<log> busy 1\n" }
     end
-    step.call('stepIn')
-    check('a <foreach> is a unit of its own, before its iterations') do
-      frame_of.call(tid).first['name'] == 'entering busy'
+    top_names = -> { frame_of.call(tid).map { |f| f['name'] } }
+    check('the top frame is the next unit: a <foreach> that has not run') do
+      top_names.call.first(2) == ['foreach 2 iteration 1', 'onentry of busy']
+    end
+    step.call('stepIn', granularity: 'instruction')
+    check('instruction granularity stops at every unit, even where the position repeats (ADR 0083)') do
+      top_names.call.first(2) == ['foreach 2 iteration 1', 'onentry of busy']
     end
     step.call('stepIn')
-    check('so is each iteration') { frame_of.call(tid).first['name'] == 'foreach 2 iteration 1' }
-    step.call('next')
-    check('next steps over the body to the next iteration') do
-      frame_of.call(tid).map { |f| f['name'] }.first(2) == ['foreach 2 iteration 2', 'entering busy'] &&
+    check('stepIn goes into the body: its first unit, in the first iteration') do
+      top_names.call.first(3) == ['assign 1', 'foreach 2 iteration 1', 'onentry of busy']
+    end
+    step.call('stepIn')
+    check('then back to the loop, before its second iteration') do
+      top_names.call.first(2) == ['foreach 2 iteration 2', 'onentry of busy'] &&
         evaluate.call('.count', 'watch', frame_of.call(tid).first['id'])['body']['result'] == '2'
     end
-    step.call('stepIn')
-    check('stepIn into the last unit of the microstep leaves it between microsteps') do
-      frame_of.call(tid).map { |f| f['name'] } == ['microstep 2.1: idle → busy on bump', 'macrostep 2 on bump'] &&
+    step.call('next')
+    check('next steps over the rest of the loop; the microstep is over, selection is next') do
+      top_names.call == ['selecting transitions', 'microstep 2.1: idle → busy on bump', 'macrostep 2 on bump'] &&
         evaluate.call('.count', 'watch', frame_of.call(tid).first['id'])['body']['result'] == '4'
+    end
+    check('the macrostep summary is not written before the macrostep ends') do
+      client.outputs.none? { |text| text.include?('macrostep 2') }
     end
     answer, stopped = step.call('stepOut')
     check('stepOut between microsteps runs to the end of the macrostep') do
-      stopped['reason'] == 'step' && frame_of.call(tid).map { |f| f['name'] } == ['idle in busy']
+      stopped['reason'] == 'step' && top_names.call == ['idle in busy']
     end
     check('the macrostep summary is written when it ends') do
       summary = client.outputs.find { |text| text.start_with?('acct1: macrostep 2 on bump') }
@@ -499,7 +508,8 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     check('an exit breakpoint of a state without onexit hits where the actor next stands') do
       stopped['reason'] == 'function breakpoint' && stopped['hitBreakpointIds'] == [exit_id] &&
         stopped['description'] == 'exited busy' &&
-        frame_of.call(tid).map { |f| f['name'] } == ['microstep 3.1: busy → idle on done', 'macrostep 3 on done']
+        frame_of.call(tid).map { |f| f['name'] } ==
+          ['selecting transitions', 'microstep 3.1: busy → idle on done', 'macrostep 3 on done']
     end
     step.call('next')
     check('next between microsteps finishes the macrostep') { frame_of.call(tid).map { |f| f['name'] } == ['idle in idle'] }
@@ -627,9 +637,11 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     check('the first hit of a hit condition of 2 does not stop') { client.take('stopped').empty? }
     client.request('evaluate', 'expression' => 'send bump', 'context' => 'repl')
     stopped = client.event('stopped')
-    check('the second does, at the transition\'s content') do
+    # A resume runs at least one unit after it selects a microstep, so a
+    # block that is the microstep's first stops after its first unit.
+    check('the second does, in the transition\'s content: after its first unit, the microstep\'s first') do
       stopped['reason'] == 'function breakpoint' && stopped['hitBreakpointIds'] == [conditional.last['id']] &&
-        frame_of.call(tid).map { |f| f['name'] }.first(2) == ['after assign 1', 'transition idle → busy on bump']
+        frame_of.call(tid).map { |f| f['name'] }.first(2) == ['assign 2', 'transition idle → busy on bump']
     end
 
     puts 'writing data'
@@ -640,7 +652,7 @@ Dir.mktmpdir('dap-selftest') do |tmp|
         client.request('evaluate', 'expression' => '.count', 'context' => 'watch')['body']['result'] == '42'
     end
     check('the actor stays where it was stopped, and keeps its thread') do
-      frame_of.call(tid).map { |f| f['name'] }.first(2) == ['after assign 1', 'transition idle → busy on bump']
+      frame_of.call(tid).map { |f| f['name'] }.first(2) == ['assign 2', 'transition idle → busy on bump']
     end
     data_ref = scope_ref.call(frame_of.call(tid).first['id'], 'Data model')
     check('a value may be an expression') do
@@ -732,16 +744,16 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     check('pause stops the actor that is running') { stopped['reason'] == 'pause' && stopped['threadId'] == spinner }
     names = frame_of.call(spinner).map { |f| f['name'] }
     check('inside its macrostep') do
-      names.last == 'macrostep 2 on spin' && names.first.start_with?('microstep 2.')
+      names.last == 'macrostep 2 on spin' && names[1].start_with?('microstep 2.')
     end
     before = client.request('evaluate', 'expression' => '.n', 'context' => 'watch',
                                         'frameId' => frame_of.call(spinner).first['id'])['body']['result'].to_i
     microstep = ->(name) { name[/\Amicrostep 2\.(\d+):/, 1].to_i }
-    was = microstep.call(frame_of.call(spinner).first['name'])
+    was = microstep.call(frame_of.call(spinner)[1]['name'])
     client.request('stepIn', 'threadId' => spinner, 'granularity' => 'instruction')
     client.event('stopped')
     check('and it can be stepped from there, one unit: this microstep\'s one assign') do
-      microstep.call(frame_of.call(spinner).first['name']) == was + 1 &&
+      microstep.call(frame_of.call(spinner)[1]['name']) == was + 1 &&
         client.request('evaluate', 'expression' => '.n', 'context' => 'watch',
                                    'frameId' => frame_of.call(spinner).first['id'])['body']['result'].to_i == before + 1
     end

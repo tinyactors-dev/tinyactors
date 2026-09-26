@@ -1,14 +1,22 @@
 # frozen_string_literal: true
 
 module DAP
-  # The stack of a thread, innermost first: the unit that ran last and the
+  # The stack of a thread, innermost first: the unit it runs next and the
   # <if> and <foreach> around it, the block (`onentry of busy`, a
   # transition's content), the microstep, and the macrostep with its event.
-  # An actor between macrosteps has one frame that says where it rests.
+  # The top frame is where the actor stands, as a debugger's current line
+  # is: what a step runs next (core ADR 0083). Between two microsteps that
+  # is transition selection. An actor between macrosteps has one frame that
+  # says where it rests.
+  #
+  # Where the actor stands comes from inspection, so an actor that paused
+  # before the adapter saw it, or was reloaded from an image, has a
+  # position too. The transitions of its microstep and the event of its
+  # macrostep come from the trace records (Control), and are left out when
+  # the adapter did not see them.
   #
   # There are no source locations yet: they need source spans (core ADR
-  # 0086), so every frame has line 0. `Frame#position` is what a source map
-  # will turn into a line.
+  # 0086), so every frame has line 0.
   class Frames
     Frame = Struct.new(:id, :thread, :name, :hint, keyword_init: true) do
       def to_dap = { 'id' => id, 'name' => name, 'line' => 0, 'column' => 0, 'presentationHint' => hint }
@@ -48,34 +56,37 @@ module DAP
       return [["done in #{@labels.state(definition, view[:final_state]) || 'its final state'}", 'normal']] if view[:residency] == 'done'
       return [["idle in #{Array(@threads.leaves(thread.handle, view)).join(' ')}", 'normal']] unless view[:macrostep_in_progress]
 
-      track = @control.track(thread.session)
-      unless track&.in_macrostep
+      position = Position.from_inspection(view)
+      if position.key[0].zero?
         event = view[:current_event]
         name = event ? @session.context.event_text(event[:name]) : 'no event'
         return [["about to take #{name} (before transition selection)", 'normal']]
       end
 
-      block_frames(track, definition) + step_frames(track, definition)
+      track = @control.track(thread.session)
+      unit_frames(position, definition) + step_frames(position, track, definition)
     end
 
-    def block_frames(track, definition)
-      position = track.position
-      return [] if position.nil? || position.at == 'none'
+    def unit_frames(position, definition)
+      return [['selecting transitions', 'normal']] if position.nowhere?
 
       frames = []
-      last = track.last_action
-      if last && last[:block] == position.block
-        frames << if last[:kind] == 'foreach'
-                    ["#{@labels.action(definition, last[:action])} iteration #{last[:iteration] + 1}", 'normal']
-                  else
-                    ["after #{@labels.action(definition, last[:action])}", 'normal']
-                  end
-        innermost = true
-        @labels.enclosing(definition, last[:action]).each do |owner|
-          info = @labels.action_info(definition, owner)
+      action = position.action
+      if action
+        info = @labels.action_info(definition, action)
+        foreach_next = info&.dig(:kind) == 'foreach'
+        label = @labels.action(definition, action)
+        label += " iteration #{position.iteration + 1}" if foreach_next
+        frames << [label, 'normal']
+        # The iteration is the innermost loop's: the one this action is in,
+        # unless the action is a loop itself (ADR 0083, open point 2).
+        innermost = !foreach_next
+        @labels.enclosing(definition, action).each do |owner|
           label = @labels.action(definition, owner)
-          label += " iteration #{position.iteration + 1}" if info&.dig(:kind) == 'foreach' && innermost
-          innermost = false if info&.dig(:kind) == 'foreach'
+          if @labels.action_info(definition, owner)&.dig(:kind) == 'foreach'
+            label += " iteration #{position.iteration + 1}" if innermost
+            innermost = false
+          end
           frames << [label, 'normal']
         end
       end
@@ -87,7 +98,7 @@ module DAP
       case position.at
       when 'exit' then "onexit of #{state}"
       when 'transition' then "transition #{@labels.transition(definition, position.transition)}"
-      when 'enter' then "entering #{state}"
+      when 'enter' then entering(position, definition, state)
       when 'select' then 'selecting transitions'
       when 'finalize' then "finalize in #{state}"
       when 'invoke' then "starting the invocations of #{state}"
@@ -96,16 +107,24 @@ module DAP
       end
     end
 
-    def step_frames(track, definition)
+    # The next action says which content of the state runs: its onentry,
+    # or the content of its initial or history default.
+    def entering(position, definition, state)
+      outer = position.action && @labels.action_info(definition, @labels.enclosing(definition, position.action).last || position.action)
+      outer&.dig(:block) == 'onentry' ? "onentry of #{state}" : "entering #{state}"
+    end
+
+    def step_frames(position, track, definition)
+      macrostep, microstep = position.key
       frames = []
-      micro = track.microstep
-      if micro && micro.dig(:key, :macrostep) == track.macrostep
-        transitions = Array(micro[:transitions]).map { |id| @labels.transition(definition, id) }
-        frames << ["microstep #{track.macrostep}.#{micro.dig(:key, :microstep)}: #{transitions.join('; ')}",
-                   'normal']
+      micro = track&.microstep
+      if microstep.positive?
+        taken = micro && micro.dig(:key, :macrostep) == macrostep && micro.dig(:key, :microstep) == microstep
+        what = taken ? ": #{@labels.microstep(definition, micro)}" : ''
+        frames << ["microstep #{macrostep}.#{microstep}#{what}", 'normal']
       end
-      event = track.taken ? track.taken[:name_text] : 'no event'
-      frames << ["macrostep #{track.macrostep} on #{event}", 'normal']
+      event = track&.in_macrostep && track.macrostep == macrostep && track.taken ? " on #{track.taken[:name_text]}" : ''
+      frames << ["macrostep #{macrostep}#{event}", 'normal']
     end
   end
 end

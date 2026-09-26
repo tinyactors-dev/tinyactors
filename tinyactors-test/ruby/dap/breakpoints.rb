@@ -119,6 +119,14 @@ module DAP
       data(record, thread, &hit) unless @data.empty? || thread.nil?
     end
 
+    # Yields the entry, exit and transition breakpoints an actor that
+    # stands at `position` (core ADR 0083: the unit it runs next) has
+    # reached: it is about to run the block they name, or it passed it.
+    def reach(track, position)
+      reached, track.pending = track.pending.partition { |pending| reached?(pending, position) }
+      reached.each { |pending| yield function_hit(track, pending[:breakpoint]) }
+    end
+
     # The condition holds and the hit condition is met, counting this hit.
     def fire?(breakpoint, thread)
       if breakpoint.condition && !breakpoint.condition.strip.empty? && thread
@@ -147,10 +155,13 @@ module DAP
     end
 
     # Entry, exit and transition breakpoints are noted when the MICROSTEP
-    # record names their state or transition, and hit once the actor
-    # stands at it: before the state's onentry or onexit, or before the
-    # transition's content. When there is no unit to stand before (a state
-    # without handlers), they hit at the next place the actor stops.
+    # record names their state or transition, and hit (`reach`) once the
+    # actor stands before the block they name: the state's onentry or
+    # onexit, or the transition's content. When there is no unit to stand
+    # before (a state without handlers), they hit at the next place the
+    # actor stops. A resume always runs one unit after it selects a
+    # microstep, so when the block's first unit is the microstep's first,
+    # the stop comes after that unit.
     def functions(record, track, &hit)
       definition = record[:definition]
       case record[:kind]
@@ -160,10 +171,6 @@ module DAP
           target = pending_target(breakpoint, record, definition)
           track.pending << { breakpoint: breakpoint, at: target[0], id: target[1] } if target
         end
-      when 'paused'
-        position = Position.from_record(record)
-        reached, track.pending = track.pending.partition { |pending| reached?(pending, position) }
-        reached.each { |pending| yield function_hit(track, pending[:breakpoint]) }
       when 'macrostep_end', 'finished', 'destroyed'
         overdue(track, &hit)
       when 'macrostep_begin'
