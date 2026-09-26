@@ -134,6 +134,16 @@ because failure skips the remainder of one handler without skipping later
 handlers. `on()` creates an external transition by default; `always()` creates
 an eventless transition. `internal()` changes a transition's kind.
 
+The builder records where each state, transition, initial transition and
+action was written: the file, line and column of the builder call, from a
+V8 call site, as a source span of the spec (core ADR 0086).
+`definition.sourceOf(kind, id)` reads one back by core's ID, which is how a
+debugger places trace records and breakpoints in the JavaScript that wrote
+the chart. Spans never change a revision. The capture costs about 5 to 7 µs
+per element when the chart is defined and nothing afterwards. A call is
+located at its own statement: JavaScriptCore (Bun) places a call inside a
+chain that spans lines less exactly than V8 does.
+
 Top-level assignments use typed property names, such as
 `.assign("volleys", 1)`. `assignAt()` accepts an explicit getter/setter
 `Location` for nested or computed storage. A function in a value position is

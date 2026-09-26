@@ -120,11 +120,40 @@ function idLocation(value, what) {
   return { kind: 'location', location: location(value, what) };
 }
 
+// Where a builder call was written (core ADR 0086): the first stack frame
+// outside this file, as V8 reports it. Structured call sites cost less than
+// formatting and parsing a stack string, and ten frames are enough to leave
+// this file's own helpers.
+const structured = (_, frames) => frames;
+
+function callSite() {
+  const { prepareStackTrace, stackTraceLimit } = Error;
+  Error.prepareStackTrace = structured;
+  Error.stackTraceLimit = 6;
+  const holder = {};
+  Error.captureStackTrace(holder, callSite);
+  const frames = holder.stack;
+  Error.prepareStackTrace = prepareStackTrace;
+  Error.stackTraceLimit = stackTraceLimit;
+  if (!Array.isArray(frames)) {
+    return undefined;
+  }
+  const frame = frames.find((each) => {
+    const file = each.getFileName();
+    return file !== null && file !== undefined && file !== __filename;
+  });
+  return frame === undefined ? undefined : { file: frame.getFileName(), line: frame.getLineNumber(), column: frame.getColumnNumber() };
+}
+
 // One builder tree shares one root: once build() or System.define() has
-// consumed it, every builder in the tree refuses changes.
+// consumed it, every builder in the tree refuses changes. The root also
+// holds the spec's spans: where each state, transition, initial transition
+// and action was written, with the JavaScript files as the sources.
 class Root {
   constructor() {
     this.consumed = false;
+    this.spans = [];
+    this.sources = new Map();
   }
 
   check() {
@@ -132,6 +161,39 @@ class Root {
       throw invalid('this statechart builder was already built; start a new one with statechart()');
     }
   }
+
+  // The span of the builder call being evaluated: its index into the spec's
+  // spans, from 1, or undefined when the stack says nothing.
+  span() {
+    const site = callSite();
+    if (site === undefined || !(site.line > 0)) {
+      return undefined;
+    }
+    let source = this.sources.get(site.file);
+    if (source === undefined) {
+      source = this.sources.size;
+      this.sources.set(site.file, source);
+    }
+    this.spans.push({ source, line: site.line, column: site.column });
+    return this.spans.length;
+  }
+
+  // The spec's spans and sources, or nothing when no call was located.
+  located() {
+    if (this.spans.length === 0) {
+      return {};
+    }
+    return { spans: this.spans, sources: [...this.sources.keys()].map((name) => ({ name })) };
+  }
+}
+
+// Sets `span` on an element when the call that wrote it was located.
+function located(root, element) {
+  const span = root.span();
+  if (span !== undefined) {
+    element.span = span;
+  }
+  return element;
 }
 
 function block(root, build, what) {
@@ -155,7 +217,7 @@ class ActionSequenceBuilder {
 
   #push(action) {
     this.#root.check();
-    this.actions.push(action);
+    this.actions.push(located(this.#root, action));
     return this;
   }
 
@@ -427,7 +489,7 @@ class DoneDataBuilder {
 }
 
 function initialSpec(root, target, actions) {
-  const initial = { targets: targets(target, 'initial target') };
+  const initial = located(root, { targets: targets(target, 'initial target') });
   if (actions !== undefined) {
     initial.actions = block(root, actions, 'initial actions');
   }
@@ -445,7 +507,7 @@ class StateContainerBuilder {
 
   #child(kind, id, build, what) {
     this.#root.check();
-    const state = new StateBuilder(this.#root, kind, text(id, `${what} ID`));
+    const state = new StateBuilder(this.#root, kind, text(id, `${what} ID`), this.#root.span());
     if (build !== undefined) {
       if (typeof build !== 'function') {
         throw invalid(`${what}(): expected a function that receives the state builder`);
@@ -483,11 +545,14 @@ class StateBuilder extends StateContainerBuilder {
   #kind;
   #spec;
 
-  constructor(root, kind, id) {
+  constructor(root, kind, id, span) {
     super(root);
     this.#root = root;
     this.#kind = kind;
     this.#spec = { kind: undefined, id };
+    if (span !== undefined) {
+      this.#spec.span = span;
+    }
   }
 
   #list(member, value) {
@@ -543,6 +608,7 @@ class StateBuilder extends StateContainerBuilder {
 
   #transition(transition, build, what) {
     this.#root.check();
+    located(this.#root, transition);
     if (build !== undefined) {
       if (typeof build !== 'function') {
         throw invalid(`${what}: expected a function that receives the transition builder`);
@@ -638,6 +704,10 @@ class DefinitionBuilder extends StateContainerBuilder {
       throw invalid('script(): expected a function');
     }
     this.#spec.script = run;
+    const span = this.#root.span();
+    if (span !== undefined) {
+      this.#spec.script_span = span;
+    }
     return this;
   }
 
@@ -647,11 +717,11 @@ class DefinitionBuilder extends StateContainerBuilder {
     return this;
   }
 
-  /** The spec in the generated shape. Consumes the builder. */
+  /** The spec in the generated shape, with its spans. Consumes the builder. */
   build() {
     this.#root.check();
     this.#root.consumed = true;
-    return { ...this.#spec, states: this.states };
+    return { ...this.#spec, states: this.states, ...this.#root.located() };
   }
 }
 

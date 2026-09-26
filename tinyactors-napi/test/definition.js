@@ -178,7 +178,56 @@ function nothingStored() {
   system.close();
 }
 
+// Where each element was written (core ADR 0086): the builder records the
+// file, line and column of every call that writes a state, transition,
+// initial transition or action, core keeps them per definition, and
+// sourceOf() reads them back by core's IDs.
+function sourceSpans() {
+  const system = createSystem();
+  // The line of this statement; the chart's calls are written below it, one
+  // per statement, because engines place a call inside a chain differently.
+  const line = Number(new Error().stack.split('\n')[1].match(/:(\d+):\d+\)?$/)[1]);
+  const chart = statechart({ family: 'spans', revision: 'v1' });
+  chart.state('idle', (idle) => {
+    idle.on('go', (go) => {
+      go.raise('started');
+      go.target('busy');
+    });
+  });
+  chart.state('busy', (busy) => {
+    busy.initial('inner', (actions) => {
+      actions.log('entering');
+    });
+    busy.state('inner');
+  });
+  chart.script(() => {});
+  const spec = chart.build();
+  assert.deepEqual(spec.sources, [{ name: __filename }]);
+  const definition = system.define(spec);
+  const idle = definition.sourceOf('state', 0);
+  assert.equal(idle.source, __filename);
+  assert.equal(idle.line, line + 2);
+  // `chart.state(`: V8 points at the method's name, JavaScriptCore at the dot.
+  assert.ok([8, 9].includes(idle.column), `column ${idle.column}`);
+  assert.equal(definition.sourceOf('state', 1).line, line + 8);
+  assert.equal(definition.sourceOf('state', 2).line, line + 12);
+  // The <transition>, then busy's initial transition; the document's is SCXML's default.
+  assert.equal(definition.sourceOf('transition', 0).line, line + 3);
+  assert.equal(definition.sourceOf('transition', 1).line, line + 9);
+  assert.equal(definition.sourceOf('transition', 2), undefined);
+  const lines = [0, 1, 2].map((id) => definition.sourceOf('action', id)?.line).sort();
+  assert.deepEqual(lines, [line + 4, line + 10, line + 14].sort(), 'raise, log and the root script');
+  // A function is a host expression; the builder gives expressions no span of their own.
+  assert.equal(definition.sourceOf('expression', 0), undefined);
+  assert.equal(definition.sourceOf('state', 9), undefined);
+  // A spec without spans compiles as before and keeps none.
+  const plain = system.define({ identity: { family: { name: 'plain' }, revision: 'v1' }, states: [{ kind: 'atomic', id: 'a' }] });
+  assert.equal(plain.sourceOf('state', 0), undefined);
+  system.close();
+}
+
 definitions();
 builder();
 refusals();
 nothingStored();
+sourceSpans();
