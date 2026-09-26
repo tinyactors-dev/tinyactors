@@ -159,6 +159,18 @@ module DAP
       waiting
     end
 
+    # Runs `thread`'s next macrostep, which an operator's jump was just
+    # delivered for, and stops with reason `goto` when it ends. Only that
+    # actor runs meanwhile.
+    def start_goto(thread)
+      @stop = nil
+      @pause_requested = false
+      @step = Step.new(kind: :goto, granularity: 'macrostep', thread: thread.id, session: thread.session,
+                       handle: thread.handle, start: nil, depth: 0, waiting: false)
+      scheduler.go!
+      scheduler.wake
+    end
+
     # Runs the block with the debugger out of the way: no budgets, no
     # breakpoints, no stops. A reload needs that: a replacement must finish
     # its bootstrap before it can be activated (Workbench::Session), even
@@ -275,7 +287,7 @@ module DAP
         stop_at(thread_of_session(hit[:session]) || thread, 'data breakpoint', hit[:description],
                 breakpoints: hit[:ids])
       elsif thread && @step && @step.session == thread.session && step_done?(@step, thread, position, status)
-        stop_at(thread, 'step', nil)
+        stop_at(thread, @step.kind == :goto ? 'goto' : 'step', nil)
       elsif thread && @pause_requested
         stop_at(thread, 'pause', nil)
       else
@@ -318,6 +330,7 @@ module DAP
     # macrostep ends. At `line` granularity a step is a microstep.
     def step_done?(step, thread, position, status)
       return true unless status == 'paused'
+      return false if step.kind == :goto
       return true if position.nil? || step.start.nil?
 
       if step.granularity == 'line'

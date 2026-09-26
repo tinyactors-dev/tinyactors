@@ -47,3 +47,4 @@ hitBreakpointIds  tinyactors-test/ruby/{dap/*.rb,dap_selftest.rb}          # DAP
 exceptionId       tinyactors-test/ruby/{dap/*.rb,dap_selftest.rb}          # DAP field
 systemProcessId   tinyactors-test/ruby/{dap/*.rb,dap_selftest.rb}          # DAP field
 filterId          tinyactors-test/ruby/{dap/*.rb,dap_selftest.rb}          # DAP field
+targetId          tinyactors-test/ruby/{dap/*.rb,dap_selftest.rb}          # DAP field

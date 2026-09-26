@@ -35,6 +35,15 @@ module DAP
 
     def sources = @entries.values.map(&:source_body)
 
+    # The definition a DAP Source names, by reference or path, or nil.
+    def definition_of(source)
+      reference = source['sourceReference'].to_i
+      entry = @entries.each_value.find do |candidate|
+        reference.positive? ? candidate.reference == reference : (source['path'] && candidate.path == source['path'] && !candidate.retired)
+      end
+      entry&.definition
+    end
+
     def text(reference)
       entry = @entries.each_value.find { |candidate| candidate.reference == Integer(reference) }
       entry&.text

@@ -232,10 +232,10 @@ Dir.mktmpdir('dap-selftest') do |tmp|
          supportsSetVariable supportsSetExpression supportsCompletionsRequest supportsSteppingGranularity
          supportsModulesRequest supportsLoadedSourcesRequest supportsExceptionInfoRequest
          supportsTerminateRequest supportsEvaluateForHovers supportsClipboardContext
-         supportsConditionalBreakpoints supportsHitConditionalBreakpoints].all? { |name| capabilities[name] == true }
+         supportsConditionalBreakpoints supportsHitConditionalBreakpoints supportsGotoTargetsRequest].all? { |name| capabilities[name] == true }
     end
     check('declares nothing that needs pending core work') do
-      %w[supportsStepBack supportsRestartFrame supportsGotoTargetsRequest supportsBreakpointLocationsRequest
+      %w[supportsStepBack supportsRestartFrame supportsBreakpointLocationsRequest
          supportsRestartRequest supportsLogPoints].none? { |name| capabilities[name] }
     end
     check('never terminates or suspends the debuggee') do
@@ -378,10 +378,12 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     broken = evaluate.call('.count +', 'watch')
     check('an expression jq refuses is an error') { !broken['success'] && !broken['message'].to_s.empty? }
     check('several values come back as a list') { evaluate.call('.items[]', 'repl')['body']['result'] == '[1,2]' }
-    { 'goto busy' => '0082', 'abandon' => '0082', 'cancel dunning' => '0084', 'fork' => '0085',
-      'replace counter.rb' => 'save the chart file' }.each do |command, why|
+    { 'fork' => '0085', 'replace counter.rb' => 'save the chart file',
+      'goto nowhere' => 'not a state', 'goto idle busy' => 'cannot be entered together',
+      'abandon' => 'no macrostep to abandon', 'cancel 12345' => 'no pending send 12345',
+      'cancel dunning' => 'the number the Timers scope shows' }.each do |command, why|
       answer = evaluate.call(command, 'repl')
-      check("#{command.split.first} is refused, saying what it needs") { !answer['success'] && answer['message'].include?(why) }
+      check("#{command} is refused, saying why") { !answer['success'] && answer['message'].include?(why) }
     end
     check('clock needs a +duration') { !evaluate.call('clock 5s', 'repl')['success'] }
 
@@ -403,6 +405,11 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     end
     check('data locations') { complete.call('.it').map { |target| target['label'] } == ['items'] }
     check('console commands') { complete.call('cl').map { |target| target['label'] } == ['clock'] }
+    check('state IDs after goto, and after from') do
+      complete.call('goto ').map { |target| target['label'] } == %w[idle busy] &&
+        complete.call('goto busy from i').map { |target| target['label'] } == ['idle'] &&
+        complete.call('goto @boss s').map { |target| target['label'] } == ['supervising']
+    end
 
     puts 'send, continue and function breakpoints'
     busy_id, exit_id = functions['body']['breakpoints'].map { |breakpoint| breakpoint['id'] }
@@ -758,14 +765,93 @@ Dir.mktmpdir('dap-selftest') do |tmp|
                                    'frameId' => frame_of.call(spinner).first['id'])['body']['result'].to_i == before + 1
     end
     check('another actor cannot take a console message meanwhile; it waits') do
-      answer = client.request('evaluate', 'expression' => 'send @spinner spin', 'context' => 'repl')['body']
+      answer = client.request('evaluate', 'expression' => 'send @spinner poke', 'context' => 'repl')['body']
       queue = vars.call(scope_ref.call(frame_of.call(spinner).first['id'], 'Queues'))
                 .find { |variable| variable['name'] == 'debugger' }
-      answer['result'].start_with?('queued spin for spinner') && queue['value'].include?('spin')
+      answer['result'].start_with?('queued poke for spinner') && queue['value'].include?('poke')
     end
 
+    puts 'unwedging: abandon, goto, cancel'
+    spin_frame = -> { frame_of.call(spinner).first['id'] }
+    console = ->(text, frame_id = spin_frame.call) do
+      client.request('evaluate', 'expression' => text, 'context' => 'repl', 'frameId' => frame_id)
+    end
+    jump = console.call('goto resting')
+    check('a jump of an actor inside a macrostep is refused, pointing at abandon') do
+      !jump['success'] && jump['message'].include?('`abandon`')
+    end
+    abandoned = console.call('abandon')['body']
+    check('abandon ends the macrostep that never ends') do
+      abandoned['result'] == 'spinner: abandoned its macrostep; it is idle in its last configuration' &&
+        frame_of.call(spinner).map { |f| f['name'] } == ['idle in spinning']
+    end
+    check('its summary says so') do
+      macrostep.call('spinner', 'spin')['output'].include?('abandoned')
+    end
+    jump = console.call('goto resting')['body']
+    stopped = client.event('stopped')
+    check('goto runs an operator transition and stops with reason goto') do
+      jump['result'] == 'spinner: goto resting' && stopped['reason'] == 'goto' && stopped['threadId'] == spinner &&
+        frame_of.call(spinner).map { |f| f['name'] } == ['idle in resting']
+    end
+    check('the console shows its macrostep, taken by the operator\'s event') do
+      macrostep.call('spinner', 'operator.goto')['output'].include?('goto resting')
+    end
+    check('a jump from a state that is not active is refused') do
+      !console.call('goto spinning from spinning')['success']
+    end
+
+    boss_frame = frame_of.call(boss).first['id']
+    timers = vars.call(scope_ref.call(boss_frame, 'Timers'))
+    send_id = timers.first['name']
+    withdrawn = console.call("cancel #{send_id}", boss_frame)['body']
+    check('cancel withdraws a pending delayed send by the ID the Timers scope shows') do
+      withdrawn['result'] == "boss: withdrew send #{send_id}" &&
+        vars.call(scope_ref.call(frame_of.call(boss).first['id'], 'Timers')).empty?
+    end
+    check('a send withdrawn once is not found again') do
+      again = console.call("cancel @boss #{send_id}")
+      !again['success'] && again['message'] == "boss has no pending send #{send_id}"
+    end
+
+    puts 'goto and gotoTargets'
+    targets = client.request('gotoTargets', 'source' => counter_source, 'line' => 1)['body']['targets']
+    check('gotoTargets answers every state of the chart, whatever the line') do
+      targets.map { |target| target['label'] } == %w[idle busy]
+    end
+    check('without a source, those of the stopped thread\'s chart') do
+      client.request('gotoTargets', 'source' => {}, 'line' => 1)['body']['targets']
+            .map { |target| target['label'] }.sort == %w[resting spinning]
+    end
+    idle_target = targets.find { |target| target['label'] == 'idle' }['id']
+    wrong = client.request('goto', 'threadId' => spinner, 'targetId' => idle_target)
+    check('goto of a target in another chart is refused') { !wrong['success'] }
+    before = frame_of.call(tid).first['name']
+    went = client.request('goto', 'threadId' => tid, 'targetId' => idle_target)
+    stopped = client.event('stopped')
+    check('goto moves the thread and stops with reason goto') do
+      before == 'idle in busy' && went['success'] && stopped['reason'] == 'goto' && stopped['threadId'] == tid &&
+        frame_of.call(tid).map { |f| f['name'] } == ['idle in idle']
+    end
+    check('the console shows the jump\'s macrostep') do
+      macrostep.call('acct1', 'operator.goto')['output'].include?('goto idle')
+    end
+    client.request('setFunctionBreakpoints', 'breakpoints' => [{ 'name' => 'busy' }])
+    console.call('send @acct1 bump')
+    client.request('continue', 'threadId' => tid)
+    client.event('stopped')
+    inside = frame_of.call(tid).map { |f| f['name'] }.first(2)
+    abandoned = console.call('abandon @acct1')['body']
+    check('abandon inside a microstep finishes the microstep first, then abandons') do
+      inside == ['log 1', 'onentry of busy'] &&
+        abandoned['result'] == 'acct1: abandoned its macrostep; it is idle in its last configuration' &&
+        frame_of.call(tid).map { |f| f['name'] } == ['idle in busy'] &&
+        client.outputs.any? { |text| text == "<log> busy 47\n" }
+    end
+    client.request('setFunctionBreakpoints', 'breakpoints' => [])
+
     puts 'refused requests'
-    %w[restart setBreakpoints breakpointLocations goto gotoTargets stepBack reverseContinue restartFrame cancel
+    %w[restart setBreakpoints breakpointLocations stepBack reverseContinue restartFrame cancel
        stepInTargets terminateThreads setInstructionBreakpoints locations readMemory writeMemory disassemble].each do |command|
       answer = client.request(command, 'threadId' => tid)
       check("#{command} answers an error that says why") { !answer['success'] && answer['message'].size > 10 }

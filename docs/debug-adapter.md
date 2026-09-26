@@ -76,8 +76,8 @@ or partial, ☑ done and tested, — not offered.
 | `stepBack` | fork | Restores the image captured at the previous stop | C4 | ☐ | ☐ |
 | `reverseContinue` | fork | Restores images back to the previous breakpoint | C4 | ☐ | ☐ |
 | `restartFrame` | fork | Restores the image captured when that macrostep began | C4 | ☐ | ☐ |
-| `goto` | yes | An operator transition to the target's state | C2; live needs N3 | ☐ | ☐ |
-| `gotoTargets` | yes | The states at a source line; every state when there is no line | C5 for lines | ☐ | ☐ |
+| `goto` | yes | An operator transition to the target's state | C2; live needs N3 | ☑ | ☐ |
+| `gotoTargets` | yes | The states at a source line; every state when there is no line | C5 for lines | ◐ | ☐ |
 | `pause` | yes | Fork and test host: stop at the next unit. Live: hold the mailbox, stop when the macrostep ends | live needs N1 | ☑ | ☐ |
 | `stepInTargets` | no | An action has one way in | — | — | — |
 | `terminateThreads` | no | Ending a thread would destroy an actor | — | — | — |
@@ -153,9 +153,9 @@ The `repl` context of `evaluate`.
 | Command | Does | Allowed in | Needs | test | napi |
 |---|---|---|---|---|---|
 | `send <event> [json]` | Delivers through the host's normal path, with the `debug` origin | fork; live with `send` | none | ☑ | ☐ |
-| `goto <state…> [from <state>]` | An operator transition | fork; live with `goto` | C2 | ☐ | ☐ |
-| `abandon` | Abandons a macrostep that never ends | fork; live with `goto` | C2 | ☐ | ☐ |
-| `cancel <send ID>` | Withdraws one pending delayed send | fork; live with `goto` | C3 | ☐ | ☐ |
+| `goto <state…> [from <state>]` | An operator transition | fork; live with `goto` | C2 | ☑ | ☐ |
+| `abandon` | Abandons a macrostep that never ends | fork; live with `goto` | C2 | ☑ | ☐ |
+| `cancel <send ID>` | Withdraws one pending delayed send | fork; live with `goto` | C3 | ☑ | ☐ |
 | `replace <file>` | Hot-replaces the actor with a new revision | fork; live with `goto` | none | ☐ | ☐ |
 | `clock +<duration>` | Advances logical time | fork; the test host's workbench | C4 for forks | ☑ | ☐ |
 | `fork` | Copies the live actor and switches to the copy | live | C4 | ☐ | ☐ |
@@ -172,7 +172,10 @@ The adapter is `tinyactors-test/bin/dap`; see
   frame is the unit the actor runs next, from inspection (C1).
 - `source` is ◐: it serves the chart's Ruby file, as it was when the
   revision loaded; encoded charts need C5.
-- `stopped` is ◐: every reason except `breakpoint` (C5) and `goto` (C2).
+- `stopped` is ◐: every reason except `breakpoint` (C5).
+- `gotoTargets` is ◐: it answers every state of the chart whatever the
+  line, until C5 maps lines to states. `goto` stops with reason `goto` when
+  the jump's macrostep ends.
 - `terminated` follows `terminate`; a workbench has no single attached
   actor whose end would send it.
 - `thread` events come from comparing the actor table after each run, not

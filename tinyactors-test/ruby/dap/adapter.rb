@@ -37,6 +37,7 @@ module DAP
       'supportsDataBreakpoints' => true,
       'supportsClipboardContext' => true,
       'supportsSteppingGranularity' => true,
+      'supportsGotoTargetsRequest' => true,
       'supportTerminateDebuggee' => false,
       'supportSuspendDebuggee' => false
     }.freeze
@@ -49,8 +50,6 @@ module DAP
       'restart' => 'restarting needs a fork with its own system (core ADR 0085)',
       'setBreakpoints' => 'line breakpoints need source spans (core ADR 0086); use function breakpoints',
       'breakpointLocations' => 'breakpoint locations need source spans (core ADR 0086)',
-      'goto' => 'goto needs operator transitions (core ADR 0082)',
-      'gotoTargets' => 'goto targets need operator transitions (core ADR 0082) and source spans (core ADR 0086)',
       'stepBack' => 'stepping back needs images that restore into a debug system (core ADR 0085)',
       'reverseContinue' => 'reverse continue needs images that restore into a debug system (core ADR 0085)',
       'restartFrame' => 'restarting a frame needs images that restore into a debug system (core ADR 0085)',
@@ -372,6 +371,39 @@ module DAP
       reset_views
     end
 
+    # Every state of the definition, whatever the line: lines need source
+    # spans (core ADR 0086). The definition is the source's, when the client
+    # names a loaded source, else the stopped thread's.
+    def on_goto_targets(args, _request)
+      require_started!
+      definition = @catalog.definition_of(args['source'] || {}) ||
+                   (stopped_thread || @threads.to_a.first)&.definition
+      raise RequestError, 'no chart to jump in' if definition.nil?
+
+      targets = @operator.states(definition).map do |id, name|
+        target = (@goto_targets.key([definition, id]) || (@goto_targets.size + 1))
+        @goto_targets[target] = [definition, id]
+        { 'id' => target, 'label' => name, 'line' => 0 }
+      end
+      { 'targets' => targets }
+    end
+
+    # An operator transition of the thread to the target's state, from the
+    # root; the thread stops with reason `goto` when its macrostep ends.
+    def on_goto(args, _request)
+      require_started!
+      thread = thread_arg(args)
+      definition, state = @goto_targets[args['targetId'].to_i]
+      raise RequestError, "no goto target #{args['targetId']}; ask gotoTargets first" if definition.nil?
+      unless definition == thread.definition
+        raise RequestError, "#{thread.label} runs another chart or revision than the target's"
+      end
+
+      reset_views
+      @operator.jump(thread, [@labels.state(definition, state)])
+      {}
+    end
+
     # ------------------------------------------------------------------
     # Stack and data
 
@@ -529,6 +561,9 @@ module DAP
       @variables = Variables.new(session: @session, labels: @labels, threads: @threads, control: @control,
                                  expressions: @expressions, console: @console)
       @console.variables = @variables
+      @operator = Operator.new(session: @session, labels: @labels, control: @control)
+      @console.operator = @operator
+      @goto_targets = {}
       @frames = Frames.new(@session, @labels, @threads, @control)
       @catalog = Catalog.new(@session)
       @console.open

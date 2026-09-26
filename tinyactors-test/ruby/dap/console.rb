@@ -4,9 +4,14 @@ module DAP
   # The debug console: what a client sends as `evaluate` with context
   # `repl`, and the completions it offers there.
   #
-  #   send [@actor] <event> [json]   deliver to the actor, with the debugger as its origin
-  #   clock +<duration>              advance logical time: 500ms, 5s, 2m, 1h, 3d
-  #   <expression>                   jq over the actor's data model
+  #   send [@actor] <event> [json]           deliver to the actor, with the debugger as its origin
+  #   goto [@actor] <state…> [from <state>]  an operator transition (core ADR 0082)
+  #   abandon [@actor]                       abandon a macrostep that never ends (core ADR 0082)
+  #   cancel [@actor] <send ID>              withdraw one pending delayed send (core ADR 0084)
+  #   clock +<duration>                      advance logical time: 500ms, 5s, 2m, 1h, 3d
+  #   <expression>                           jq over the actor's data model
+  #
+  # The actor is the frame's, or the one `@actor` names by its thread label.
   #
   # The debugger is a sender an actor can answer (core ADR 0068): the
   # adapter registers an I/O processor of type `debug`, opens one scope for
@@ -25,11 +30,10 @@ module DAP
     DURATION = /\A\+?(\d+(?:\.\d+)?)(ms|s|m|h|d)?\z/
     SCALE = { nil => 1, 'ms' => 1, 's' => 1_000, 'm' => 60_000, 'h' => 3_600_000, 'd' => 86_400_000 }.freeze
 
-    # Console commands that need core work still to come, and what each needs.
+    COMMANDS = %w[send goto abandon cancel clock].freeze
+
+    # Console commands the test host does not offer, and why.
     PENDING = {
-      'goto' => 'an operator transition, which needs core ADR 0082',
-      'abandon' => 'abandoning a macrostep, which needs core ADR 0082',
-      'cancel' => 'withdrawing one delayed send, which needs core ADR 0084',
       'fork' => 'a fork with its own clock, which needs core ADR 0085',
       'replace' => 'not offered here: save the chart file, and the workbench replaces its actors in place'
     }.freeze
@@ -46,8 +50,9 @@ module DAP
       @reply_cursor = nil
     end
 
-    # The Variables that present values; it needs the console in turn.
-    attr_writer :variables
+    # The Variables that present values, and the Operator that jumps,
+    # abandons and withdraws; both are made after the console.
+    attr_writer :variables, :operator
 
     def context = @session.context
 
@@ -77,6 +82,9 @@ module DAP
       word, rest = line.strip.split(/\s+/, 2)
       case word
       when 'send' then deliver(rest.to_s, thread)
+      when 'goto' then goto(*addressed(rest, thread))
+      when 'abandon' then text(@operator.abandon(addressed(rest, thread).first))
+      when 'cancel' then text(@operator.withdraw(*addressed(rest, thread)))
       when 'clock' then clock(rest.to_s)
       when *PENDING.keys then raise RequestError, "#{word}: #{PENDING.fetch(word)}"
       else expression(line, thread, event)
@@ -141,8 +149,15 @@ module DAP
         return events_of(target).select { |name| name.start_with?(prefix) }
                                 .map { |name| target(name, column - prefix.length, prefix.length, 'event') }
       end
+      if (match = /\Agoto\s+(?:@(\S+)\s+)?(?:\S+\s+)*(\S*)\z/.match(before))
+        target = match[1] ? @threads.by_label(match[1]) : thread
+        prefix = match[2]
+        names = target ? @operator.states(target.definition).map(&:last) : []
+        return names.select { |name| name.start_with?(prefix) }
+                    .map { |name| target(name, column - prefix.length, prefix.length, 'value') }
+      end
       if (match = /\A\s*(\w*)\z/.match(before)) && !match[1].empty?
-        commands = %w[send clock].select { |word| word.start_with?(match[1]) }
+        commands = COMMANDS.select { |word| word.start_with?(match[1]) }
         return commands.map { |word| target(word, column - match[1].length, match[1].length, 'keyword') } unless commands.empty?
       end
       locations(before, column, thread)
@@ -152,12 +167,32 @@ module DAP
 
     def default_thread = @threads.to_a.first
 
-    def deliver(rest, thread)
+    # [thread, the rest of the line]: `@actor` names the thread by its
+    # label; otherwise it is the frame's, or the first.
+    def addressed(rest, thread)
+      rest = rest.to_s.strip
       if rest.start_with?('@')
         label, rest = rest.split(/\s+/, 2)
         thread = @threads.by_label(label.delete_prefix('@')) or raise RequestError, "no actor #{label}"
       end
-      thread ||= default_thread or raise RequestError, 'no actor to send to'
+      thread ||= default_thread or raise RequestError, 'no actor'
+      [thread, rest.to_s]
+    end
+
+    def text(result) = { 'result' => result, 'variablesReference' => 0 }
+
+    def goto(thread, rest)
+      words = rest.split(/\s+/)
+      from = nil
+      if (at = words.index('from'))
+        from = words[at + 1] or raise RequestError, 'goto <state…> from <state>'
+        words = words[0...at]
+      end
+      text(@operator.jump(thread, words, from: from))
+    end
+
+    def deliver(rest, thread)
+      thread, rest = addressed(rest, thread)
       event, payload = rest.to_s.split(/\s+/, 2)
       raise RequestError, 'send [@actor] <event> [json]' if event.nil? || event.empty?
 

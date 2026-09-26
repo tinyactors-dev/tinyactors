@@ -201,14 +201,20 @@ Line breakpoints answer an error until source spans exist (core ADR 0086).
 | Command | |
 |---|---|
 | `send [@actor] <event> [json]` | delivers to the frame's actor, or the one named, with the console as its origin |
+| `goto [@actor] <state…> [from <state>]` | an operator transition (core ADR 0082): runs its macrostep, then stops with reason `goto` |
+| `abandon [@actor]` | abandons the actor's macrostep (core ADR 0082); it is idle in its last configuration |
+| `cancel [@actor] <send ID>` | withdraws one pending delayed send (core ADR 0084), by the ID the Timers scope shows |
 | `clock +<duration>` | advances logical time: `+500ms`, `+5s`, `+2m`, `+1h`, `+3d` |
 | `<expression>` | jq over the actor's data model |
+
+`@actor` is a thread's label: `acct1`, or `boss.worker` for a child.
 
 Expressions see `$_event`, `$_sessionid`, `$_name`, `$_ioprocessors` and
 `In()`, bound by the adapter: `$_event` is the event of the step the actor
 is stopped in, and `In()` tests the configuration after its last completed
 microstep (core ADR 0061). Completion offers the events the actor listens
-for after `send`, and data locations otherwise.
+for after `send`, state IDs after `goto` and `from`, and data locations
+otherwise.
 
 The console is a sender an actor can answer (core ADR 0068): the adapter
 registers an I/O processor of type `debug` with the `io.connection`
@@ -218,9 +224,38 @@ typeexpr="$_event.origintype">` then shows in the console as a reply. A
 message to an actor that is inside a macrostep waits, and the Queues scope
 shows it, until the actor can take it.
 
-`goto`, `abandon`, `cancel` and `fork` answer what they need: core ADRs
-0082, 0084 and 0085. `replace` is not a command here: saving the chart
-file replaces its actors.
+## Unwedging an actor
+
+A chart that nobody prepared for an operator has no admin transitions.
+`goto` delivers an event, `operator.goto` with the targets (and `from`) as
+its data, together with an operator transition: core takes that event by
+a transition built from the targets instead of by the chart's transitions,
+through the normal engine, with every exit, entry, history and invocation
+a chart transition would have (core ADR 0082). Its handlers see the
+operator's event as `_event`. The macrostep runs, only that actor runs
+meanwhile, and the system then stops with reason `goto`; the console
+shows the macrostep's summary, whose microstep reads `goto <targets>`.
+A jump carries no console origin: it is delivered directly, not through
+the `debug` I/O processor.
+
+A jump is refused while the actor is inside a macrostep or holds an event
+it has not begun. A macrostep that never ends is ended with `abandon`:
+the actor keeps the configuration after its last completed microstep. One
+stopped inside a microstep first finishes that microstep (core abandons
+only between microsteps), and its units run as usual.
+
+`cancel` withdraws a pending delayed send of the actor, even while its
+macrostep is stopped (core ADR 0084). A send its target refused once is
+its receiver's and is not withdrawn.
+
+The DAP `goto` request does what the console's `goto` does, to one state.
+Its targets come from `gotoTargets`, which answers every state of the
+chart, whatever the line, until source spans (core ADR 0086) map lines to
+states: the chart of the source the client names, else of the stopped
+thread.
+
+`fork` answers that it needs core ADR 0085. `replace` is not a command
+here: saving the chart file replaces its actors.
 
 ## Writing data
 
@@ -253,6 +288,7 @@ started. The adapter never destroys an actor on its own, and declares
 | `variables.rb` | scopes, variables, and writing the data model |
 | `expressions.rb` | jq over the data model, with the system variables bound |
 | `console.rb` | the console commands, completions, the `debug` I/O processor |
+| `operator.rb` | jumps, abandoning a macrostep, withdrawing a delayed send |
 | `catalog.rb` | modules and loaded sources |
 | `labels.rb` | names for compiled IDs (core ADR 0071) |
 
