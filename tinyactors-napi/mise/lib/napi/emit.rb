@@ -119,7 +119,7 @@ module NapiGen
               #{release}(pointer);
           }
 
-          static const tna_handle_kind tna_handle_#{name} = { #{name.to_json}, tna_release_#{name}, #{handle[:reclaimed]}, #{handle[:any_system]} };
+          static const tna_handle_kind tna_handle_#{name} = { #{name.to_json}, tna_release_#{name}, #{handle[:reclaimed]} };
         C
       end.join("\n")
     end

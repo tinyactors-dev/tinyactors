@@ -272,65 +272,6 @@ async function closeWithImages() {
   }
 }
 
-// A renewal 100 ms out, whose data is an object, so it is a value box.
-const renewalChart = () => statechart({ family: 'renewal', revision: 'v1' })
-  .data('renewals', 0)
-  .data('plan', null)
-  .state('active', (s) => s
-    .entry((x) => x.send('billing.renewal.due', (m) => m.after(100).data(() => ({ plan: 'gold' }))))
-    .on('billing.renewal.due', (t) => t
-      .assign('renewals', ({ data }) => data.renewals + 1)
-      .assign('plan', ({ event }) => event.data.plan)));
-
-// Other event names first, so the second system numbers its own differently.
-const otherChart = () => statechart({ family: 'other', revision: 'v1' })
-  .state('idle', (s) => s.on('billing.other', (t) => t.target('idle')).on('zeta.one', (t) => t.target('idle')));
-
-// An image restores into another system (core ADR 0085, ADR 0026). The copy
-// runs on that system's clock alone and holds that system's boxes, so either
-// system may close first and the other keeps working.
-async function acrossSystems(closeFirst) {
-  const origin = createSystem({ clock: 'manual' });
-  const fork = createSystem({ clock: 'manual' });
-  const original = origin.spawn(origin.define(renewalChart()), { name: 'r1' });
-  await origin.flush();
-  const image = original.capture();
-
-  fork.spawn(fork.define(otherChart())); // the fork's runtime IDs differ from the origin's
-  fork.define(renewalChart());
-  const boxesBefore = fork.stats().values.live;
-  const copy = fork.reconstruct(image, { binding: structuredClone(image.data) });
-  await fork.flush();
-  assert.ok(fork.stats().values.live > boxesBefore, 'the copy holds boxes of its own system');
-  assert.equal(copy.inspect().sessionID, (BigInt(copy.generation) << 32n) | BigInt(copy.slot),
-    'a new session in the fork, whose ID is its runtime ID');
-  assert.notEqual(copy.inspect().sessionID, original.inspect().sessionID);
-  assert.equal(copy.inspect().delayedSends.length, 1);
-
-  await fork.advanceTo(100);
-  assert.deepEqual(copy.inspect().data, { renewals: 1, plan: 'gold' }, 'the copy fired on the fork\'s clock');
-  assert.deepEqual(original.inspect().data, { renewals: 0, plan: null }, 'the original did not move');
-
-  if (closeFirst === 'origin') {
-    image.destroy();
-    origin.close();
-    assert.equal(native.environmentStats().leakedBytes, 0, 'the origin kept no box the fork holds');
-    const again = fork.capture(copy);
-    const second = fork.reconstruct(again, { binding: { renewals: 5, plan: null } });
-    again.destroy();
-    await fork.advanceTo(200);
-    assert.equal(second.inspect().data.renewals, 5, 'its send already fired in the copy it came from');
-    fork.close();
-  } else {
-    fork.close();
-    await origin.advanceTo(100);
-    assert.deepEqual(original.inspect().data, { renewals: 1, plan: 'gold' }, 'the original fires on its own clock');
-    image.destroy();
-    origin.close();
-  }
-  assert.equal(native.environmentStats().leakedBytes, 0);
-}
-
 async function main() {
   const watchdog = setTimeout(() => {
     console.error('persist.js: timed out');
@@ -344,8 +285,6 @@ async function main() {
   await activateWhileBusy();
   await invocationsAcrossLoad();
   await closeWithImages();
-  await acrossSystems('origin');
-  await acrossSystems('fork');
   if (typeof globalThis.gc === 'function') {
     globalThis.gc();
   }

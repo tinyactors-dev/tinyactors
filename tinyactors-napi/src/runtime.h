@@ -75,7 +75,6 @@ typedef struct tna_handle_kind {
     const char *name;                /* the API description's handle name */
     void (*release)(void *pointer);  /* its destroy function */
     bool reclaimed_by_core;          /* core frees it at system teardown */
-    bool any_system;                 /* a call against another system may take it */
 } tna_handle_kind;
 
 /*
@@ -232,7 +231,6 @@ napi_value tna_enc_text(tna_call *call, const char *text, uint32_t count);
 /* Adapters the plumbing supplies (INJECT_TYPES in bindings.rb). */
 bool tna_inject_ta_allocator(tna_call *call, ta_allocator *out);
 bool tna_inject_ta_datamodel(tna_call *call, ta_datamodel *out);
-bool tna_inject_ta_value_adopter(tna_call *call, ta_value_adopter *out);
 
 /* ------------------------------------------------------------------------
  * Handle objects

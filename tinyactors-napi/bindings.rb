@@ -93,8 +93,7 @@ module TinyactorsNapiBindings
   # argument: the runtime fills it. In an output it crosses as described.
   INJECT_TYPES = {
     'ta_allocator' => 'the system allocator (ADR 0014)',
-    'ta_datamodel' => "core's null data model, or the JavaScript data model when System.define() selects it; in an output, its SCXML name",
-    'ta_value_adopter' => "the calling system's values: a restored image's boxes of another system become its own (ADR 0026)"
+    'ta_datamodel' => "core's null data model, or the JavaScript data model when System.define() selects it; in an output, its SCXML name"
   }.freeze
 
   SKIP_TYPES = {
@@ -104,7 +103,7 @@ module TinyactorsNapiBindings
     'ta_actor_directory_*' => 'directory callback arguments (ADR 0006)',
     'ta_actor_inspector' => 'enumeration is plumbing (ADR 0003)',
     'ta_actor_visit_params' => 'enumeration is plumbing (ADR 0003)',
-    'ta_actor_resume_params' => 'the pump resumes actors and chooses the budgets and the pause at a microstep start (ADR 0007, core ADR 0087)',
+    'ta_actor_resume_params' => 'the pump resumes actors (ADR 0007)',
     'ta_due_dispatch_params' => 'the clock belongs to the pump (ADR 0007)',
     'ta_external_{delivery,event_submit_params}' => 'router callback arguments (ADR 0006)',
     'ta_invoke_{request,report_params}' => 'invoker plumbing (step 13)',
@@ -142,13 +141,6 @@ module TinyactorsNapiBindings
   # so close() must not release them again (ADR 0012).
   RECLAIMED_BY_CORE = {
     'definition' => 'core reclaims compiled definitions that were never registered'
-  }.freeze
-
-  # Handles a call against another system may take: a call binds to the
-  # system of its receiver, or of its first handle, and otherwise refuses a
-  # handle of another system.
-  ANY_SYSTEM_HANDLES = {
-    'session_image' => 'an image restores into any system that registers its revision (core ADR 0085, ADR 0026)'
   }.freeze
 
   # A parameter with this name that points at a struct is flattened into

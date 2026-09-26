@@ -26,20 +26,7 @@ The image is not a byte blob. Host values held directly by interpreter structure
 
 The image also records the source actor ID and session epoch. These are local
 freshness metadata, not portable identity. `ta_actor_unload()` rejects an image
-with `TA_ERR_STALE` if the source actor has changed since capture, or if the
-image was captured in another system.
-
-Everything the capturing system interned is also kept as text in the image's
-arena (ADR 0085): each held or queued event's name (its segments, root first,
-since a segment may hold a dot), literal send ID, invocation ID and invoker
-type of an invoked service's origin; each delayed send's event name, literal
-send ID and I/O type (none for the SCXML processor); each invocation's ID; and
-the parent's invocation ID. Generated send IDs, state, transition and content
-IDs, times and trace parents are the same in every system that registers the
-revision, so they stay numbers. The image names its system by address and
-token, as offloaded bytes do (ADR 0074): `ta_system_image_token()` draws the
-token at the system's first capture, and `ta_image_foreign()` tells a restore
-whether it runs in another system.
+with `TA_ERR_STALE` if the source actor has changed since capture.
 
 `ta_session_image_next_deadline()` returns the earliest captured delayed-send
 deadline, or `TA_ERR_NOT_FOUND`. This is sufficient for a host durability layer
@@ -75,29 +62,6 @@ image. The name identifies the invocation. The envelope has
 invoked service. Reconstruction still returns `TA_OK`; the communication failure
 is ordinary statechart control flow. Late events from the lost invocation are
 ignored.
-
-### Into another system
-
-Any system that registers the exact revision can restore an image (ADR 0085),
-including after the capturing system is destroyed. Into the capturing system
-the image's numbers are used as they are. Into another system:
-
-- every name, send and invocation ID and I/O type is interned from the
-  image's text; an invoked service's origin takes that system's registry
-  index for its invoker type, or no origin when none is registered;
-- a runtime reference to the captured session (its runtime ID, or its
-  session ID as a send to itself holds it) becomes the restored actor, and
-  any other runtime reference becomes runtime ID 0, which names no actor: a
-  send to it fails as one to a destroyed actor does, and an invoked child's
-  parent is gone;
-- the restored actor is a new session, whose ID is its runtime ID, for load
-  as for reconstruct: the image's session ID is a runtime ID of the other
-  system.
-
-The params' `adopter`, when set, turns each host value the actor takes from
-the image into one the restoring system may hold; otherwise core retains the
-image's values. Interning may allocate; a restore that runs out of memory
-leaves no actor, and only the interned names stay.
 
 Changing chart definitions is actor replacement, not reconstruction.
 

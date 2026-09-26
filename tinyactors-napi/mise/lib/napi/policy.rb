@@ -7,7 +7,7 @@ module NapiGen
   # pattern must match something, so the policy cannot go stale unnoticed.
   class Policy
     TABLES = %i[HOOKED_FUNCTIONS PLUMBING_FUNCTIONS OVERRIDE_FUNCTIONS SKIP_FUNCTIONS OVERRIDE_TYPES INJECT_TYPES
-                SKIP_TYPES NUMBER_TYPES RECLAIMED_BY_CORE ANY_SYSTEM_HANDLES RESULT_CODES].freeze
+                SKIP_TYPES NUMBER_TYPES RECLAIMED_BY_CORE RESULT_CODES].freeze
 
     def self.load(path)
       mod = Module.new
@@ -31,7 +31,6 @@ module NapiGen
     def skip_type(name) = lookup(:SKIP_TYPES, name)
     def number_type(name) = lookup(:NUMBER_TYPES, name)
     def reclaimed_by_core(handle) = lookup(:RECLAIMED_BY_CORE, handle)
-    def any_system(handle) = lookup(:ANY_SYSTEM_HANDLES, handle)
     def result_code(symbol) = lookup(:RESULT_CODES, symbol)
     def flatten_parameter = @mod::FLATTEN_PARAMETER
 

@@ -2632,19 +2632,6 @@ typedef struct {
 } ta_actor_unload_params;
 typedef struct { TA_IN const ta_actor_address *address; } ta_actor_remove_unloaded_params;
 /*
- * Gives the restoring system the host values an image holds (ADR 0085):
- * queued and held event data, delayed-send targets and data, completion
- * data and <foreach> snapshots. `adopt` stores in *out a value the
- * restoring system's host may hold, owning one reference: `value` itself,
- * retained, or a copy. Any result but TA_OK fails the restore, which then
- * leaves nothing behind. A host whose values do not belong to one system
- * leaves the adopter zero, and core retains each value instead.
- */
-typedef struct ta_value_adopter_vtable {
-    ta_result (*adopt)(void *self, TA_IN const ta_value *value, TA_OUT TA_RELEASE(ta_value_release) ta_value *out);
-} ta_value_adopter_vtable TA_VTABLE;
-typedef struct { void *self; const ta_value_adopter_vtable *v; } ta_value_adopter TA_ADAPTER;
-/*
  * Captures a stable named actor as bytes and unloads it in one step (ADR
  * 0074): the bytes go into `arena`, only this system can load them, and
  * their layout may change in any build. Values go through the actor's data
@@ -2683,18 +2670,11 @@ typedef struct {
      * under it, so the load is in that message's trace. All zero: none.
      */
     ta_trace_parent trace;
-    /*
-     * Gives this system the host values of an image captured in another
-     * system (ADR 0085). Bytes need none: only their own system loads them,
-     * and their values go through its data model (ADR 0074).
-     */
-    ta_value_adopter adopter;
 } ta_actor_load_params;
 typedef struct {
     const ta_session_image *image;
     TA_IN TA_OPTIONAL const ta_value *datamodel_binding;
     TA_OUT ta_actor_id *out;
-    ta_value_adopter adopter;
 } ta_actor_reconstruct_params;
 typedef struct {
     ta_actor_id incumbent;
@@ -2794,14 +2774,10 @@ TA_API ta_result ta_actor_resume(ta_system *system, TA_IN const ta_actor_resume_
 TA_API ta_result ta_actor_abandon(ta_system *system, ta_actor_id actor);
 /*
  * Evicts a named actor without terminating it. The image must be a fresh
- * capture of actor in this system; TA_ERR_STALE means the actor changed
- * after capture, or the image was captured in another system.
+ * capture of actor; TA_ERR_STALE means the actor changed after capture.
  */
 TA_API ta_result ta_actor_unload(ta_system *system, TA_IN const ta_actor_unload_params *params);
-/*
- * Restores an unloaded named actor and atomically republishes its route.
- * The image may come from another system, as for ta_actor_reconstruct().
- */
+/* Restores an unloaded named actor and atomically republishes its route. */
 TA_API ta_result ta_actor_load(ta_system *system, TA_IN const ta_actor_load_params *params)
     TA_VALUE_MODEL(session_image, params.image);
 /*
@@ -2811,17 +2787,6 @@ TA_API ta_result ta_actor_load(ta_system *system, TA_IN const ta_actor_load_para
  * session continues, keeping its session ID, unless a resident session holds
  * that ID; then this is a new session (ADR 0066). ta_actor_load() always
  * continues the session.
- *
- * The image may have been captured in another system, which may since have
- * been destroyed, as long as this one registers the exact revision it names
- * (ADR 0085). Event names, send and invocation IDs and I/O types are
- * interned here from the text the image keeps. A runtime reference to
- * another actor cannot name anything here, so it becomes runtime ID 0, which
- * no actor has: a send to it fails as one to a destroyed actor does, and the
- * parent of an invoked child is gone. The restored actor is a new session
- * whose ID is its runtime ID, since the image's session ID is a runtime ID
- * of the system that captured it. `adopter` gives this system the host
- * values the image holds.
  */
 TA_API ta_result ta_actor_reconstruct(ta_system *system,
                                       TA_IN const ta_actor_reconstruct_params *params)

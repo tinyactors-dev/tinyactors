@@ -467,10 +467,7 @@ bool tna_handle_unwrap(tna_call *call, napi_value value, tna_handle_ref *ref) {
     if (handle == NULL || handle->kind != ref->kind) {
         return tna_invalid(call, expected);
     }
-    /* An image of another system is still its system's handle: released
-     * when that system closes, which the check below then reports. */
-    bool foreign = handle->kind->any_system && call->owner != NULL;
-    if (!foreign && !tna_call_owner(call, handle->owner)) {
+    if (!tna_call_owner(call, handle->owner)) {
         return false;
     }
     if (handle->pointer == NULL) {

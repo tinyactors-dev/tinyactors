@@ -297,9 +297,7 @@ export interface System {
    * address, or from a SessionImage; the same session ID, a new runtime ID
    * (core ADR 0066). From an image, `binding` defaults to its root. An
    * invocation active at capture is reported to the actor as
-   * `error.communication.invoke.<id>.unavailable` (core ADR 0038). An image
-   * captured in another system loads as a new session of this one (core
-   * ADR 0085).
+   * `error.communication.invoke.<id>.unavailable` (core ADR 0038).
    */
   load<Data extends object>(
     target: SessionImage<Data> | ActorAddress,
@@ -309,15 +307,7 @@ export interface System {
   /**
    * Restore an image under a fresh runtime ID without touching the directory
    * (core ADR 0052). `binding` defaults to the root the image kept, which is
-   * shared with the captured actor if it still runs; pass one, such as a
-   * structuredClone of `image.data`, for an independent copy.
-   *
-   * The image may come from another system (core ADR 0085), as a debugger's
-   * fork does: the copy is then a new session of this system, its delayed
-   * sends fire on this system's clock and go through this system's I/O
-   * processors, and a send to another actor of the image's system fails as
-   * one to a destroyed actor does. The values the image holds are copied
-   * into this system's boxes (ADR 0026), so either system may close first.
+   * shared with the captured actor if it still runs.
    */
   reconstruct<Data extends object>(
     image: SessionImage<Data>,
@@ -1093,13 +1083,10 @@ export interface DelayedSendInspection {
 /**
  * A capture held in memory (ROADMAP step 14). Its handle is destroyed by
  * destroy(), by its finalizer, or by close() of its system, whichever comes
- * first; it never outlives its system (ADR 0012). Any system in this thread
- * may load or reconstruct it while it lives (core ADR 0085). Serializing it
- * across processes is not supported: model network handoff with I/O
- * processors.
+ * first; it never outlives its system (ADR 0012). Serializing it across
+ * processes is not supported: model network handoff with I/O processors.
  */
 export interface SessionImage<Data extends object = Record<string, unknown>> {
-  /** The system that captured it, and whose close() destroys it. */
   readonly origin: System;
   /** The actor at capture; its ID is stale once the actor is unloaded. */
   readonly actor: ActorID;

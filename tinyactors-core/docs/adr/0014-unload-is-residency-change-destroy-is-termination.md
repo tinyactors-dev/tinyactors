@@ -1,6 +1,6 @@
 # ADR 0014: Unload is residency change; destroy is termination
 
-**Status:** Accepted; reconstruction mechanics refined by ADR 0038; unload also refuses an image captured in another system (ADR 0085)  
+**Status:** Accepted; reconstruction mechanics refined by ADR 0038  
 **Date:** 2026-09-15
 
 ## Context

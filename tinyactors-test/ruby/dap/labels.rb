@@ -182,8 +182,7 @@ module DAP
     # then says where the chart is written now (core ADR 0086).
     def forget_spans = @cache.delete_if { |key, _| key[1] == :span }
 
-    # The definition's family and revision: the same in every system that
-    # registers the revision (ADR 0085).
+    # The definition's family and revision.
     def identity(definition) = facts(definition)[:identity]
 
     # How many elements of `kind` the definition has (ADR 0071's counts).

@@ -14,50 +14,6 @@ compensate, or move to a failure state. Transitions listening to the broader
 
 A process-independent checkpoint is a higher-level concern. A durability module can encode a session image, map host references to stable identities, store checkpoints, keep command/input journals, replay deterministic inputs, and assign stable IDs to external effects. Applications that do not need these guarantees do not pay for them in the core ABI.
 
-## Restoring into another system
-
-An image is not tied to the system that captured it. Any system in the same
-process that registers the exact definition revision can reconstruct or load
-it, even after the capturing system is destroyed. This is how a debugger forks
-a production actor into a system of its own, whose clock it can move and whose
-I/O processors are stubs:
-
-```c
-ta_session_image *image = NULL;
-ta_actor_capture(production, &(ta_actor_capture_params){ .actor = actor, .out = &image });
-
-ta_actor_id fork = 0;
-ta_actor_reconstruct(debug, &(ta_actor_reconstruct_params){
-    .image = image,
-    .datamodel_binding = &copy_of_root, /* the fork's own data */
-    .out = &fork,
-});
-ta_session_image_destroy(image);
-
-ta_system_set_time(debug, ta_system_time(debug) + 3 * 24 * 3600 * 1000);
-/* dispatch and resume in `debug`: the fork's timers fire, production's do not */
-```
-
-In the other system:
-
-- event names, send IDs, invocation IDs and I/O types are interned there, so
-  the copy reacts to the same events and `<cancel>` finds its sends;
-- the copy is a new session, with its own session ID;
-- a send the copy makes to another actor of the capturing system, by runtime
-  or session ID, reaches nothing: it fails with `error.communication`, as a
-  send to a destroyed actor does. Sends to named addresses resolve through
-  the other system's directory, and an invoked child has no parent there;
-- invocations that were active are lost, as on every restore.
-
-The image's host values (event and send data) are handed to the other system
-through the params' `adopter`. A host whose values belong to one system gives
-an adopter that copies them; a host whose values outlive its systems leaves it
-zero, and core retains them. Bind the copy to its own data-model root, or it
-shares the original's.
-
-`ta_actor_unload()` refuses an image captured in another system with
-`TA_ERR_STALE`.
-
 ## Unloading named actors
 
 For a named virtual actor, capture and reconstruction are wrapped by the public

@@ -588,47 +588,34 @@ static void test_microstep_budget(void) {
 }
 
 /*
- * Captured at a microstep's start, destroyed, and reconstructed in the
- * same system, then in another system that registers the same chart
- * (ADR 0085): each stands where the captured actor stood and finishes as
- * it would have.
+ * Captured at a microstep's start, destroyed, and reconstructed: it stands
+ * where the captured actor stood and finishes as it would have.
  */
 static void test_capture_at_the_start(void) {
-    for (int other = 0; other <= 1; other += 1) {
-        run a;
-        start(&a);
-        offer(&a, "init");
-        CHECK(resume(&a, 0, true) == TA_RUN_PAUSED);
-        ta_actor_inspection captured = inspect(&a);
-        ta_session_image *image = NULL;
-        CHECK(ta_actor_capture(a.system, &(ta_actor_capture_params){ .actor = a.actor, .out = &image }) == TA_OK);
-        CHECK(ta_actor_destroy(a.system, a.actor) == TA_OK);
-        run b = a;
-        if (other) {
-            open_system(&b);
-        }
-        CHECK(ta_actor_reconstruct(b.system, &(ta_actor_reconstruct_params){ .image = image, .out = &b.actor }) ==
-              TA_OK);
-        ta_session_image_destroy(image);
-        ta_actor_inspection restored = inspect(&b);
-        CHECK(restored.microstep_in_progress);
-        CHECK(restored.step.macrostep == captured.step.macrostep &&
-              restored.step.microstep == captured.step.microstep);
-        CHECK(other || same_key(restored.step, captured.step));
-        CHECK(same_position(restored.position, captured.position));
-        CHECK(restored.position.at == TA_TRACE_AT_ENTER && restored.position.state == state(&b, "p"));
-        clear_log();
-        CHECK(resume(&b, 0, true) == TA_RUN_STABLE);
-        CHECK(log_is("pi "));
-        CHECK(configuration(&b) == (((uint64_t)1u << state(&b, "p")) | ((uint64_t)1u << state(&b, "b"))));
-        offer(&b, "leave");
-        CHECK(resume(&b, 0, false) == TA_RUN_STABLE);
-        CHECK(log_is("pi px "));
-        if (other) {
-            ta_system_destroy(b.system);
-        }
-        finish(&a);
-    }
+    run r;
+    start(&r);
+    offer(&r, "init");
+    CHECK(resume(&r, 0, true) == TA_RUN_PAUSED);
+    ta_actor_inspection captured = inspect(&r);
+    ta_session_image *image = NULL;
+    CHECK(ta_actor_capture(r.system, &(ta_actor_capture_params){ .actor = r.actor, .out = &image }) == TA_OK);
+    CHECK(ta_actor_destroy(r.system, r.actor) == TA_OK);
+    CHECK(ta_actor_reconstruct(r.system, &(ta_actor_reconstruct_params){ .image = image, .out = &r.actor }) ==
+          TA_OK);
+    ta_session_image_destroy(image);
+    ta_actor_inspection restored = inspect(&r);
+    CHECK(restored.microstep_in_progress);
+    CHECK(same_key(restored.step, captured.step));
+    CHECK(same_position(restored.position, captured.position));
+    CHECK(restored.position.at == TA_TRACE_AT_ENTER && restored.position.state == state(&r, "p"));
+    clear_log();
+    CHECK(resume(&r, 0, true) == TA_RUN_STABLE);
+    CHECK(log_is("pi "));
+    CHECK(configuration(&r) == (((uint64_t)1u << state(&r, "p")) | ((uint64_t)1u << state(&r, "b"))));
+    offer(&r, "leave");
+    CHECK(resume(&r, 0, false) == TA_RUN_STABLE);
+    CHECK(log_is("pi px "));
+    finish(&r);
 }
 
 /*

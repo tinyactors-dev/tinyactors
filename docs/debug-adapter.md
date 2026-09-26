@@ -278,7 +278,7 @@ Every ☑ is covered by `tinyactors-napi/test/debug.js`, on Node and Bun.
 | C1 | The paused position in `ta_actor_inspection` | tinyactors-core [ADR 0083](../tinyactors-core/docs/adr/0083-inspection-reports-where-a-paused-actor-stands.md) | ☑ |
 | C2 | Operator transitions and abandoning a macrostep | tinyactors-core [ADR 0082](../tinyactors-core/docs/adr/0082-operator-transitions-and-abandoning-a-macrostep.md) | ☑ |
 | C3 | Withdrawing one delayed send | tinyactors-core [ADR 0084](../tinyactors-core/docs/adr/0084-an-operator-can-withdraw-one-pending-delayed-send.md) | ☑ |
-| C4 | Images restore into another system | tinyactors-core [ADR 0085](../tinyactors-core/docs/adr/0085-an-image-restores-into-any-system-that-registers-its-revision.md), tinyactors-napi [ADR 0026](../tinyactors-napi/docs/adr/0026-a-system-restoring-another-systems-image-copies-its-boxes.md) | ☑ |
+| C4 | Images restore into another system | dropped: only a debugger's fork needed it, and the debugger does not fork (tinyactors-napi [ADR 0027](../tinyactors-napi/docs/adr/0027-a-debugger-watches-and-pokes-one-live-actor.md)); an image restores only into the system that captured it | ✗ |
 | C5 | Source spans on decode and encode | tinyactors-core [ADR 0086](../tinyactors-core/docs/adr/0086-a-spec-says-where-its-elements-were-written-and-an-encode-says-where-it-wrote-them.md), tinyactors-scxml, the Ruby DSL, napi's builder | ☑ |
 | C6 | A resume stops before a microstep's first unit | tinyactors-core [ADR 0087](../tinyactors-core/docs/adr/0087-a-resume-can-stop-before-a-microsteps-first-unit.md) | ☑ |
 | N1 | `held` scheduling state | tinyactors-napi [ADR 0027](../tinyactors-napi/docs/adr/0027-a-debugger-watches-and-pokes-one-live-actor.md) | ☑ |

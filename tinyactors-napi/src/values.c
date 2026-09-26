@@ -196,26 +196,6 @@ bool tna_value_make(tna_values *values, napi_value value, ta_value *out) {
     return true;
 }
 
-static ta_result tna_adopt(void *self, const ta_value *value, ta_value *out) {
-    tna_values *values = self;
-    if (value->v != &tna_box_vtable || ((const tna_box *)value->self)->values == values) {
-        *out = *value;
-        ta_value_retain(out);
-        return TA_OK;
-    }
-    napi_value held = NULL;
-    if (!tna_held(value->self, &held) || !tna_value_make(values, held, out)) {
-        return TA_ERR_NOMEM;
-    }
-    return TA_OK;
-}
-
-static const ta_value_adopter_vtable tna_adopter_vtable = { tna_adopt };
-
-ta_value_adopter tna_values_adopter(tna_values *values) {
-    return (ta_value_adopter){ values, &tna_adopter_vtable };
-}
-
 bool tna_value_get(napi_env env, const ta_value *value, napi_value *out) {
     const ta_value_vtable *v = value == NULL ? NULL : value->v;
     if (v == NULL || v == &tna_undefined_vtable) {

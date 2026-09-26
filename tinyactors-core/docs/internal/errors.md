@@ -11,7 +11,7 @@ Session reconstruction returns `TA_ERR_NOT_FOUND` when no registered definition 
 Named routing returns `TA_ERR_UNLOADED` when the address exists but must be
 loaded before it has a runtime actor ID. `TA_ERR_STALE` reports a failed
 directory comparison or an unload image whose source session epoch no longer
-matches, or that another system captured (ADR 0085). Both are retry/control results for the host and do not generate SCXML
+matches. Both are retry/control results for the host and do not generate SCXML
 events.
 
 `TA_ERR_DONE` reports that an actor has reached a top-level final state and

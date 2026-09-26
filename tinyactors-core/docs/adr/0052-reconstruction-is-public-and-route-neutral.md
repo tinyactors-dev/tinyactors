@@ -1,6 +1,6 @@
 # ADR 0052: Reconstruction is public and route-neutral
 
-- Status: Accepted; supersedes ADR 0051; refined by ADR 0085 (the image may come from another system)
+- Status: Accepted; supersedes ADR 0051
 - Date: 2026-09-21
 
 ## Context

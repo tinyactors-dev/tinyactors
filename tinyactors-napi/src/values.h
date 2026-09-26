@@ -73,14 +73,6 @@ bool tna_value_make(tna_values *values, napi_value value, ta_value *out);
  * ta_value).
  */
 bool tna_value_get(napi_env env, const ta_value *value, napi_value *out);
-/*
- * The adopter core calls for each value an image holds when it restores the
- * image into this system (core ADR 0085, ADR 0026). A box of another
- * system's values becomes a new box here holding the same JavaScript value,
- * so no box outlives its system (ADR 0011 point 7); this system's boxes and
- * inline primitives are retained.
- */
-ta_value_adopter tna_values_adopter(tna_values *values);
 /* True when this module made `value` (box or inline primitive). */
 bool tna_value_ours(const ta_value *value);
 /* True when `value` is absent: no data at all. */

@@ -1815,17 +1815,6 @@ TA_PRIVATE inline void ta_actor_touch(ta_actor *actor) { actor->session_epoch +=
 
 /* Session images are opaque; struct ta_session_image is private to session_image.c. */
 
-/*
- * The system's identity for images and offloaded bytes (ADR 0074, ADR
- * 0085): a token drawn once from its ID generator (ADR 0073), by its first
- * capture, and kept. An image or bytes name the system by its address and
- * this token.
- */
-TA_PRIVATE uint64_t ta_system_image_token(ta_system *system);
-
-/* Whether `image` was captured in another system than `system` (ADR 0085). */
-TA_PRIVATE bool ta_image_foreign(const ta_session_image *image, const ta_system *system);
-
 
 
 /*
@@ -1898,10 +1887,9 @@ struct ta_system {
     /* The trace-ID generator's state and the sampler's threshold (ADR 0073). */
     uint64_t trace_rng[4];
     uint64_t trace_threshold;
-    /* Marks the images this system captures and the bytes it offloads, with
-     * its address (ADR 0074, ADR 0085): drawn from the ID generator at the
-     * first capture; 0 until then. */
-    uint64_t image_token;
+    /* Marks the bytes this system offloads (ADR 0074), drawn from the ID
+     * generator at the first offload; 0 until then. */
+    uint64_t offload_token;
     /* Every definition's counters, freed ones included (ADR 0072). */
     ta_counters counters;
     /* Microsteps one macrostep may run, for definitions that set none (ADR
@@ -2105,11 +2093,6 @@ TA_PRIVATE size_t ta_event_block_bytes(uint32_t capacity);
 TA_PRIVATE void ta_send_id_write(const ta_system *system, ta_send_id id, ta_text_writer *writer);
 /* Returns 0 when the text names no send ID. */
 TA_PRIVATE ta_send_id ta_send_id_from_text(const ta_system *system, ta_str text);
-/* A literal send ID's text, borrowed from the system; false for a generated
- * ID or none, which are the same number in every system (ADR 0085). */
-TA_PRIVATE bool ta_send_id_literal(const ta_system *system, ta_send_id id, ta_str *out);
-/* The literal send ID with this text, interning it (ADR 0085). */
-TA_PRIVATE ta_result ta_send_id_intern_literal(ta_system *system, ta_str text, ta_send_id *out);
 /* ------------------------------------------------------------------------
  * Interpreter services used by invoke.c
  */
@@ -12199,58 +12182,20 @@ TA_API ta_result ta_actor_get_completion(ta_system *system, ta_actor_id id, ta_a
 /*
  * A session image owns one arena, and every core-owned byte it keeps lives
  * there: the session storage, the queued events, the invocation records, the
- * delayed sends, and the text of the definition identity, of a named address
- * and of every name, ID and type the capturing system interned. That text
- * would otherwise dangle — the identity's family name and revision live in
- * the *definition's* arena, a named actor's address text dies with the
- * actor, and interned text with its system — and an image is meant to
- * outlive all three, and to restore into any system that registers its
- * revision (ADR 0085).
+ * delayed sends, and the text of the definition identity and of a named
+ * address. That text would otherwise dangle — the identity's family name and
+ * revision live in the *definition's* arena, and a named actor's address text
+ * dies with the actor — and an image is meant to outlive both.
  *
  * Host values are not copied. They are retained, because a ta_value is a
  * handle and retain/release is its whole contract (ADR 0050). That is also
  * what makes capture all-or-nothing: every arena allocation happens first,
  * and only once all of them have succeeded does the image retain anything.
- * There is no half-retained image to unwind. A restore gives each value to
- * the restoring system through the caller's adopter, or retains it.
+ * There is no half-retained image to unwind.
  */
-/*
- * An event name as text: its segments, root first. A segment may hold a dot
- * (an invocation ID does), so the name is not kept dotted.
- */
-typedef struct {
-    ta_str *segments;
-    uint32_t count;
-} ta_image_name;
-
-/*
- * What an event names in the capturing system's tables, as text (ADR 0085).
- * An absent text keeps the number, which means the same in every system: a
- * generated send ID, no send ID, no invocation.
- */
-typedef struct {
-    ta_image_name name;
-    ta_str send_id;        /* a literal send ID */
-    ta_str invoke_id;      /* the invocation that generated the event */
-    ta_str origin_invoke;  /* a TA_ORIGIN_INVOKE origin's invocation */
-    ta_str origin_invoker; /* and its invoker's type */
-} ta_image_event_text;
-
-/* The same for a delayed send. */
-typedef struct {
-    ta_image_name event;
-    ta_str send_id;
-    ta_str io_type;
-} ta_image_send_text;
-
 struct ta_session_image {
     ta_allocator allocator;
     ta_arena arena;
-    /* The system that captured it, by address and token, as offloaded bytes
-     * name theirs (ADR 0074): a restore anywhere else is into another
-     * system (ADR 0085). */
-    uint64_t system;
-    uint64_t token;
 
     /* Local freshness: which actor this came from, and at which epoch. */
     ta_actor_id source_actor;
@@ -12300,19 +12245,6 @@ struct ta_session_image {
     ta_state_id final_state;
     /* A microstep paused inside executable content (ADR 0061), or null. */
     ta_continuation *paused;
-
-    /*
-     * The identities above that the capturing system interned, as text, so
-     * that any system can intern them again (ADR 0085): the external and
-     * the kept event's (`held_text[0]` and `[1]`, null when it holds
-     * neither), one entry per queued event, per delayed send and per
-     * invocation, and the parent's invocation.
-     */
-    ta_image_event_text *held_text;
-    ta_image_event_text *internal_text;
-    ta_image_send_text *send_text;
-    ta_str *invoke_text;
-    ta_str parent_invoke;
 };
 
 /* ------------------------------------------------------------------------
@@ -12427,81 +12359,6 @@ static ta_result ta_image_copy_identity(ta_arena *arena, ta_definition_identity 
     return result;
 }
 
-/*
- * Names, IDs and types interned in the capturing system, as text (ADR
- * 0085). An empty text stays empty: the number it stands for means the
- * same in every system.
- */
-static ta_result ta_image_copy_text(ta_arena *arena, ta_str text, ta_str *out) {
-    *out = text;
-    return ta_image_copy_str(arena, out);
-}
-
-static ta_result ta_image_copy_name(const ta_system *system, ta_arena *arena, ta_event_name_id name,
-                                    ta_image_name *out) {
-    ta_atom atoms[TA_EVENT_NAME_MAX_DEPTH];
-    uint32_t count = ta_event_name_segments(&system->event_names, name, atoms);
-    *out = (ta_image_name){ .count = count };
-    if (count == 0) {
-        return TA_OK;
-    }
-    out->segments = ta_arena_alloc(arena, (size_t)count * sizeof(ta_str), _Alignof(ta_str));
-    if (out->segments == NULL) {
-        return TA_ERR_NOMEM;
-    }
-    for (uint32_t index = 0; index < count; index += 1) {
-        ta_result result = ta_image_copy_text(arena, ta_atom_text(&system->atoms, atoms[index]),
-                                              &out->segments[index]);
-        if (result != TA_OK) {
-            return result;
-        }
-    }
-    return TA_OK;
-}
-
-static ta_result ta_image_copy_event_text(const ta_system *system, ta_arena *arena, const ta_event *event,
-                                          ta_image_event_text *out) {
-    *out = (ta_image_event_text){0};
-    ta_str literal = {0};
-    ta_result result = ta_image_copy_name(system, arena, event->name, &out->name);
-    if (result == TA_OK && ta_send_id_literal(system, event->send_id, &literal)) {
-        result = ta_image_copy_text(arena, literal, &out->send_id);
-    }
-    if (result == TA_OK) {
-        result = ta_image_copy_text(arena, ta_invoke_id_text(system, event->invoke_id), &out->invoke_id);
-    }
-    if (result == TA_OK && event->origin.kind == TA_ORIGIN_INVOKE) {
-        ta_atom type = ta_system_invoker_type(system, event->origin.as.invoke.invoker);
-        result = ta_image_copy_text(arena, ta_invoke_id_text(system, event->origin.as.invoke.invoke),
-                                    &out->origin_invoke);
-        if (result == TA_OK && type != TA_ATOM_NONE) {
-            result = ta_image_copy_text(arena, ta_atom_text(&system->atoms, type), &out->origin_invoker);
-        }
-    }
-    return result;
-}
-
-static ta_result ta_image_copy_send_text(const ta_system *system, ta_arena *arena, const ta_delayed_send *send,
-                                         ta_image_send_text *out) {
-    *out = (ta_image_send_text){0};
-    ta_str literal = {0};
-    ta_result result = ta_image_copy_name(system, arena, send->event, &out->event);
-    if (result == TA_OK && ta_send_id_literal(system, send->send_id, &literal)) {
-        result = ta_image_copy_text(arena, literal, &out->send_id);
-    }
-    if (result == TA_OK && send->io_type != system->scxml_io_type && ta_atom_valid(&system->atoms, send->io_type)) {
-        result = ta_image_copy_text(arena, ta_atom_text(&system->atoms, send->io_type), &out->io_type);
-    }
-    return result;
-}
-
-/*
- * About what the text of one event's or send's identities takes in the
- * arena: an estimate, not a walk of its names, so measuring costs nothing;
- * the arena grows if a long name needs more.
- */
-#define TA_IMAGE_TEXT_BYTES 64u
-
 /* ------------------------------------------------------------------------
  * Capture
  */
@@ -12517,19 +12374,17 @@ static size_t ta_image_measure(const ta_actor *actor) {
         total += sizeof(ta_address) + (size_t)view.family.name.len + (size_t)view.name.len + 2u;
     }
     if (actor->event_block != NULL) {
-        const ta_event_block *block = actor->event_block;
-        total += (size_t)block->count * sizeof(ta_queued_event);
-        total += (size_t)(block->count + 2u) * (sizeof(ta_image_event_text) + TA_IMAGE_TEXT_BYTES);
-        if (block->slots.jump != NULL) {
-            total += ta_operator_jump_bytes(block->slots.jump->target_count) + _Alignof(ta_operator_jump);
+        total += (size_t)actor->event_block->count * sizeof(ta_queued_event);
+        if (actor->event_block->slots.jump != NULL) {
+            total += ta_operator_jump_bytes(actor->event_block->slots.jump->target_count) +
+                     _Alignof(ta_operator_jump);
         }
     }
     if (sparse != NULL) {
-        total += (size_t)sparse->invoke_count * (sizeof(ta_active_invoke) + sizeof(ta_str) + TA_IMAGE_TEXT_BYTES);
+        total += (size_t)sparse->invoke_count * sizeof(ta_active_invoke);
         total += (size_t)sparse->pending_invokes.count * sizeof(ta_state_id);
     }
-    total += (size_t)ta_timer_copy_unsubmitted(ta_actor_timers(actor), NULL) *
-             (sizeof(ta_delayed_send) + sizeof(ta_image_send_text) + TA_IMAGE_TEXT_BYTES);
+    total += (size_t)ta_timer_copy_unsubmitted(ta_actor_timers(actor), NULL) * sizeof(ta_delayed_send);
     if (sparse != NULL && sparse->paused != NULL) {
         total += sparse->paused->bytes + TA_CONTINUATION_ALIGN;
     }
@@ -12553,25 +12408,11 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
     if (result == TA_OK) {
         result = ta_image_copy_address(arena, &image->self);
     }
-    if (result == TA_OK && (image->slots.external != TA_EXTERNAL_NONE || image->slots.has_kept)) {
-        image->held_text = ta_arena_alloc(arena, 2u * sizeof(ta_image_event_text), _Alignof(ta_image_event_text));
-        result = image->held_text == NULL ? TA_ERR_NOMEM : TA_OK;
-    }
-    if (result == TA_OK && image->slots.external != TA_EXTERNAL_NONE) {
-        result = ta_image_copy_event_text(system, arena, &image->slots.external_event, &image->held_text[0]);
-    }
-    if (result == TA_OK && image->slots.has_kept) {
-        result = ta_image_copy_event_text(system, arena, &image->slots.kept_event, &image->held_text[1]);
-    }
     if (result == TA_OK) {
         result = ta_image_copy_origin(system, arena, &image->slots.external_event);
     }
     if (result == TA_OK) {
         result = ta_image_copy_origin(system, arena, &image->slots.kept_event);
-    }
-    if (result == TA_OK && image->has_parent) {
-        result = ta_image_copy_text(arena, ta_invoke_id_text(system, image->parent.invoke_id),
-                                    &image->parent_invoke);
     }
     if (result != TA_OK) {
         return result;
@@ -12591,18 +12432,12 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
         uint32_t count = actor->event_block->count;
         image->internal_events = ta_arena_alloc(arena, (size_t)count * sizeof(ta_queued_event),
                                                 _Alignof(ta_queued_event));
-        image->internal_text = ta_arena_alloc(arena, (size_t)count * sizeof(ta_image_event_text),
-                                              _Alignof(ta_image_event_text));
-        if (image->internal_events == NULL || image->internal_text == NULL) {
+        if (image->internal_events == NULL) {
             return TA_ERR_NOMEM;
         }
         for (uint32_t index = 0; index < count; index += 1) {
-            ta_event *event = &image->internal_events[index].event;
             image->internal_events[index] = actor->event_block->events[index];
-            result = ta_image_copy_event_text(system, arena, event, &image->internal_text[index]);
-            if (result == TA_OK) {
-                result = ta_image_copy_origin(system, arena, event);
-            }
+            result = ta_image_copy_origin(system, arena, &image->internal_events[index].event);
             if (result != TA_OK) {
                 return result;
             }
@@ -12613,19 +12448,13 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
     if (sparse != NULL && sparse->invoke_count != 0) {
         image->invokes = ta_arena_alloc(arena, (size_t)sparse->invoke_count * sizeof(ta_active_invoke),
                                         _Alignof(ta_active_invoke));
-        image->invoke_text = ta_arena_alloc(arena, (size_t)sparse->invoke_count * sizeof(ta_str), _Alignof(ta_str));
-        if (image->invokes == NULL || image->invoke_text == NULL) {
+        if (image->invokes == NULL) {
             return TA_ERR_NOMEM;
         }
         for (uint32_t index = 0; index < sparse->invoke_count; index += 1) {
             image->invokes[index] = sparse->invokes[index];
             /* Runtime-only: the service is gone by the time this is restored. */
             image->invokes[index].service_handle = 0;
-            result = ta_image_copy_text(arena, ta_invoke_id_text(system, image->invokes[index].id),
-                                        &image->invoke_text[index]);
-            if (result != TA_OK) {
-                return result;
-            }
         }
         image->invoke_count = sparse->invoke_count;
     }
@@ -12655,20 +12484,16 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
     if (sends != 0) {
         image->delayed_sends = ta_arena_alloc(arena, (size_t)sends * sizeof(ta_delayed_send),
                                               _Alignof(ta_delayed_send));
-        image->send_text = ta_arena_alloc(arena, (size_t)sends * sizeof(ta_image_send_text),
-                                          _Alignof(ta_image_send_text));
-        if (image->delayed_sends == NULL || image->send_text == NULL) {
+        if (image->delayed_sends == NULL) {
             return TA_ERR_NOMEM;
         }
         (void)ta_timer_copy_unsubmitted(ta_actor_timers(actor), image->delayed_sends);
         image->delayed_send_count = sends;
-        /* Unsubmitted, so none has an envelope yet: `origin` and `invoke_id`
-         * are set only when the router refuses a send (ADR 0054). */
         for (uint32_t index = 0; index < sends; index += 1) {
             ta_delayed_send *send = &image->delayed_sends[index];
-            result = ta_image_copy_send_text(system, arena, send, &image->send_text[index]);
+            result = ta_image_copy_address(arena, &send->destination);
             if (result == TA_OK) {
-                result = ta_image_copy_address(arena, &send->destination);
+                result = ta_image_copy_address(arena, &send->origin);
             }
             if (result != TA_OK) {
                 return result;
@@ -12734,8 +12559,6 @@ TA_API ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_para
     const ta_actor_sparse_state *sparse = actor->sparse;
     *image = (ta_session_image){
         .allocator = system->allocator,
-        .system = (uint64_t)(uintptr_t)system,
-        .token = ta_system_image_token(system),
         .source_actor = actor->record.id,
         .session_id = actor->session_id,
         .source_epoch = actor->session_epoch,
@@ -12784,17 +12607,6 @@ TA_API ta_result ta_actor_capture(ta_system *system, const ta_actor_capture_para
 /* ------------------------------------------------------------------------
  * Reading and releasing an image
  */
-
-TA_PRIVATE uint64_t ta_system_image_token(ta_system *system) {
-    if (system->image_token == 0) {
-        system->image_token = ta_system_new_span_id(system);
-    }
-    return system->image_token;
-}
-
-TA_PRIVATE bool ta_image_foreign(const ta_session_image *image, const ta_system *system) {
-    return image->system != (uint64_t)(uintptr_t)system || image->token != system->image_token;
-}
 
 TA_API ta_result ta_session_image_next_deadline(const ta_session_image *image, ta_time *out) {
     if (image == NULL || out == NULL) {
@@ -12868,206 +12680,27 @@ TA_API ta_result ta_session_image_definition(const ta_system *system, const ta_s
 }
 
 /*
- * What one restore works with. `foreign` says the image was captured in
- * another system (ADR 0085): its runtime IDs name nothing here.
+ * A runtime reference to the actor that was captured means "itself", and the
+ * reconstructed session has a new runtime ID. Left alone, a self-addressed
+ * delayed send would fire into the id of a session that no longer exists.
  */
-typedef struct {
-    ta_system *system;
-    const ta_session_image *image;
-    ta_actor *actor;
-    const ta_value_adopter *adopter;
-    bool foreign;
-} ta_image_restore;
-
-/* A value the image holds, for this system: adopted, or retained. */
-static ta_result ta_image_adopt(const ta_image_restore *restore, const ta_value *value, ta_value *out) {
-    if (restore->adopter->v == NULL || value->v == NULL) {
-        *out = *value;
-        ta_value_retain(out);
-        return TA_OK;
+static void ta_image_rebind_self(ta_actor_ref *ref, ta_actor_id was, ta_actor_id now) {
+    if (ref->kind == TA_ACTOR_REF_RUNTIME && ref->as.runtime == was) {
+        ref->as.runtime = now;
     }
-    ta_result result = restore->adopter->v->adopt(restore->adopter->self, value, out);
-    if (result != TA_OK) {
-        *out = (ta_value){0};
-    }
-    return result;
-}
-
-/*
- * A runtime reference as this system reads it. In the capturing system it
- * stays. Elsewhere one to the captured session means the restored actor,
- * and any other names nothing: runtime ID 0, which no actor has, so a send
- * to it fails as one to a destroyed actor does.
- */
-static void ta_image_map_runtime(const ta_image_restore *restore, ta_actor_ref *ref) {
-    if (!restore->foreign || ref->kind != TA_ACTOR_REF_RUNTIME || ref->as.runtime == 0) {
-        return;
-    }
-    const ta_session_image *image = restore->image;
-    bool itself = ref->as.runtime == image->source_actor ||
-                  (image->session_id != 0 && ref->as.runtime == image->session_id);
-    ref->as.runtime = itself ? restore->actor->record.id : 0;
-}
-
-/* The names, IDs and types the image keeps as text, interned here (ADR 0085). */
-static ta_result ta_image_intern_name(ta_system *system, const ta_image_name *name, ta_event_name_id *out) {
-    ta_event_name_id interned = TA_EVENT_NAME_ROOT;
-    for (uint32_t index = 0; index < name->count; index += 1) {
-        ta_atom atom = 0;
-        ta_result result = ta_atom_intern(&system->atoms, name->segments[index], &atom);
-        if (result == TA_OK) {
-            result = ta_event_name_child(&system->event_names, interned, atom, &interned);
-        }
-        if (result != TA_OK) {
-            return result;
-        }
-    }
-    *out = interned;
-    return TA_OK;
-}
-
-static ta_result ta_image_intern_send_id(ta_system *system, ta_str text, ta_send_id *id) {
-    return text.ptr == NULL ? TA_OK : ta_send_id_intern_literal(system, text, id);
-}
-
-static ta_result ta_image_intern_invoke_id(ta_system *system, ta_str text, ta_invoke_id *id) {
-    return text.ptr == NULL ? TA_OK : ta_invoke_id_from_text(system, text, id);
-}
-
-/* No text is the SCXML processor, which every system has. */
-static ta_result ta_image_intern_io_type(ta_system *system, ta_str text, ta_atom *type) {
-    if (text.ptr == NULL) {
-        *type = system->scxml_io_type;
-        return TA_OK;
-    }
-    return ta_atom_intern(&system->atoms, text, type);
-}
-
-/*
- * An invoked service's origin names its invoker by registry index, which is
- * this system's once its type is found here. No invoker of that type leaves
- * no origin, as an unknown I/O processor type does.
- */
-static ta_result ta_image_localize_invoke_origin(ta_system *system, const ta_image_event_text *text,
-                                                 ta_origin *origin) {
-    ta_atom type = TA_ATOM_NONE;
-    uint32_t invoker = UINT32_MAX;
-    if (text->origin_invoker.ptr != NULL && ta_atom_find(&system->atoms, text->origin_invoker, &type) == TA_OK) {
-        invoker = ta_system_invoker_index(system, type);
-    }
-    if (invoker == UINT32_MAX) {
-        *origin = (ta_origin){ .kind = TA_ORIGIN_NONE };
-        return TA_OK;
-    }
-    origin->as.invoke.invoker = invoker;
-    return ta_image_intern_invoke_id(system, text->origin_invoke, &origin->as.invoke.invoke);
-}
-
-typedef struct {
-    const ta_event *event;
-    const ta_image_event_text *text;
-} ta_image_event;
-
-/*
- * A copy of an event the image holds that this system can hold: its names
- * interned here, its origin this system's, its data adopted. On failure it
- * holds nothing.
- */
-static ta_result ta_image_restore_event(const ta_image_restore *restore, ta_image_event captured, ta_event *out) {
-    ta_system *system = restore->system;
-    const ta_image_event_text *text = captured.text;
-    ta_event shell = *captured.event;
-    shell.data = (ta_value){0};
-    ta_event event;
-    ta_event_retain(&shell, &event);
-    ta_result result = TA_OK;
-    if (restore->foreign) {
-        result = ta_image_intern_name(system, &text->name, &event.name);
-    }
-    if (result == TA_OK && restore->foreign) {
-        result = ta_image_intern_send_id(system, text->send_id, &event.send_id);
-    }
-    if (result == TA_OK && restore->foreign) {
-        result = ta_image_intern_invoke_id(system, text->invoke_id, &event.invoke_id);
-    }
-    if (result == TA_OK && restore->foreign && event.origin.kind == TA_ORIGIN_INVOKE) {
-        result = ta_image_localize_invoke_origin(system, text, &event.origin);
-    }
-    if (result == TA_OK && event.origin.kind == TA_ORIGIN_ACTOR) {
-        ta_image_map_runtime(restore, &event.origin.as.actor);
-    }
-    if (result == TA_OK) {
-        result = ta_image_localize_origin(system, &event);
-    }
-    if (result == TA_OK) {
-        result = ta_image_adopt(restore, &captured.event->data, &event.data);
-    }
-    if (result != TA_OK) {
-        ta_event_release(&event);
-        return result;
-    }
-    *out = event;
-    return TA_OK;
-}
-
-/* A delayed send the image holds, stored with the restored actor. */
-static ta_result ta_image_restore_send(const ta_image_restore *restore, uint32_t index) {
-    ta_system *system = restore->system;
-    /* Only an image of another system is read by its text; bytes decoded
-     * back into an image (ADR 0074) carry none. */
-    const ta_image_send_text *text = restore->foreign ? &restore->image->send_text[index] : NULL;
-    const ta_delayed_send *captured = &restore->image->delayed_sends[index];
-    ta_delayed_send send = *captured;
-    /* A fresh timer ID; the SCXML send ID that <cancel> names is kept. */
-    send.id = 0;
-    send.owner = restore->actor->record.id;
-    send.target = (ta_value){0};
-    send.data = (ta_value){0};
-    ta_result result = TA_OK;
-    if (restore->foreign) {
-        result = ta_image_intern_name(system, &text->event, &send.event);
-    }
-    if (result == TA_OK && restore->foreign) {
-        result = ta_image_intern_send_id(system, text->send_id, &send.send_id);
-    }
-    if (result == TA_OK && restore->foreign) {
-        result = ta_image_intern_io_type(system, text->io_type, &send.io_type);
-    }
-    /* A destination naming this session is its session ID (ADR 0066); the
-     * image's detached address becomes this system's handle. */
-    ta_image_map_runtime(restore, &send.destination);
-    if (result == TA_OK) {
-        result = ta_actor_ref_localize(system, &send.destination);
-    }
-    if (result == TA_OK) {
-        result = ta_image_adopt(restore, &captured->target, &send.target);
-    }
-    if (result == TA_OK) {
-        result = ta_image_adopt(restore, &captured->data, &send.data);
-    }
-    if (result == TA_OK) {
-        result = ta_actor_schedule_send(system, restore->actor, &send);
-    }
-    if (result != TA_OK) {
-        ta_value_release(&send.target);
-        ta_value_release(&send.data);
-        ta_actor_ref_release(&send.destination);
-    }
-    return result;
 }
 
 /* Restores the queued events, invocation losses, and delayed sends. */
-static ta_result ta_image_restore_session(const ta_image_restore *restore) {
-    const ta_session_image *image = restore->image;
-    ta_system *system = restore->system;
-    ta_actor *actor = restore->actor;
+static ta_result ta_image_restore_session(ta_session_image *image, ta_actor *actor, ta_system *system) {
     for (uint32_t index = 0; index < image->internal_count; index += 1) {
         ta_event event;
-        ta_result result = ta_image_restore_event(
-            restore, (ta_image_event){ &image->internal_events[index].event, &image->internal_text[index] }, &event);
-        if (result == TA_OK) {
-            result = ta_interpreter_enqueue_internal(system, actor, &event);
+        ta_event_retain(&image->internal_events[index].event, &event);
+        ta_result result = ta_image_localize_origin(system, &event);
+        if (result != TA_OK) {
+            ta_event_release(&event);
+            return result;
         }
+        result = ta_interpreter_enqueue_internal(system, actor, &event);
         if (result != TA_OK) {
             return result;
         }
@@ -13085,21 +12718,34 @@ static ta_result ta_image_restore_session(const ta_image_restore *restore) {
         if (!image->invokes[index].active) {
             continue;
         }
-        ta_invoke_id id = image->invokes[index].id;
-        ta_result result = TA_OK;
-        if (restore->foreign) {
-            result = ta_image_intern_invoke_id(system, image->invoke_text[index], &id);
-        }
-        if (result == TA_OK) {
-            result = ta_invoke_report_lost(system, actor, id);
-        }
+        ta_result result = ta_invoke_report_lost(system, actor, image->invokes[index].id);
         if (result != TA_OK) {
             return result;
         }
     }
     for (uint32_t index = 0; index < image->delayed_send_count; index += 1) {
-        ta_result result = ta_image_restore_send(restore, index);
+        ta_delayed_send send = image->delayed_sends[index];
+        /* A fresh timer ID; the SCXML send ID that <cancel> names is kept. */
+        send.id = 0;
+        send.owner = actor->record.id;
+        /* A destination naming this session is its session ID and survives a
+         * reload as it is; only an unnamed actor's runtime origin moves. */
+        ta_image_rebind_self(&send.origin, image->source_actor, actor->record.id);
+        ta_value_retain(&send.target);
+        ta_value_retain(&send.data);
+        /* The image's detached addresses become this system's handles. */
+        ta_result result = ta_actor_ref_localize(system, &send.destination);
+        if (result == TA_OK) {
+            result = ta_actor_ref_localize(system, &send.origin);
+        }
+        if (result == TA_OK) {
+            result = ta_actor_schedule_send(system, actor, &send);
+        }
         if (result != TA_OK) {
+            ta_value_release(&send.target);
+            ta_value_release(&send.data);
+            ta_actor_ref_release(&send.destination);
+            ta_actor_ref_release(&send.origin);
             return result;
         }
     }
@@ -13116,82 +12762,30 @@ static ta_result ta_image_restore_session(const ta_image_restore *restore) {
 /*
  * Gives the actor its own copy of a microstep the image captured paused
  * inside executable content (ADR 0061 section 4); its snapshots are
- * adopted, so the image keeps its own. The actor holds the copy even when
- * an adoption fails, with every snapshot after it absent.
+ * retained again, so the image keeps its own.
  */
-static ta_result ta_image_restore_pause(const ta_image_restore *restore) {
-    ta_system *system = restore->system;
-    const ta_continuation *paused = restore->image->paused;
-    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, restore->actor);
+static ta_result ta_image_restore_pause(const ta_session_image *image, ta_actor *actor, ta_system *system) {
+    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
     if (sparse == NULL) {
         return TA_ERR_NOMEM;
     }
-    ta_continuation *copy = ta_mem_alloc(system->allocator, paused->bytes, TA_CONTINUATION_ALIGN);
+    ta_continuation *copy = ta_mem_alloc(system->allocator, image->paused->bytes, TA_CONTINUATION_ALIGN);
     if (copy == NULL) {
         return TA_ERR_NOMEM;
     }
-    ta_mem_copy(copy, paused, paused->bytes);
+    ta_mem_copy(copy, image->paused, image->paused->bytes);
+    ta_continuation_retain(copy);
     sparse->paused = copy;
-    ta_exec_frame *frames = ta_continuation_frames(copy);
-    ta_result result = TA_OK;
-    for (uint32_t index = 0; index < copy->frame_count; index += 1) {
-        if (frames[index].kind != TA_EXEC_FRAME_FOREACH) {
-            continue;
-        }
-        ta_value captured = frames[index].iteration_snapshot;
-        frames[index].iteration_snapshot = (ta_value){0};
-        if (result == TA_OK) {
-            result = ta_image_adopt(restore, &captured, &frames[index].iteration_snapshot);
-        }
-    }
-    return result;
-}
-
-/*
- * The parts of the sparse state an image may carry. The parent of an
- * invoked child is an actor of the capturing system, so elsewhere it is
- * gone: runtime ID 0.
- */
-static ta_result ta_image_restore_sparse(const ta_image_restore *restore) {
-    const ta_session_image *image = restore->image;
-    ta_system *system = restore->system;
-    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, restore->actor);
-    if (sparse == NULL) {
-        return TA_ERR_NOMEM;
-    }
-    sparse->has_parent = image->has_parent;
-    sparse->parent = image->parent;
-    if (restore->foreign) {
-        sparse->parent.actor = 0;
-    }
-    sparse->completion_pending = image->completion_pending;
-    sparse->completion = image->completion;
-    sparse->completion.data = (ta_value){0};
-    sparse->final_state = image->final_state;
-    ta_result result = TA_OK;
-    if (restore->foreign) {
-        result = ta_image_intern_invoke_id(system, image->parent_invoke, &sparse->parent.invoke_id);
-    }
-    if (result == TA_OK) {
-        result = ta_image_adopt(restore, &image->completion.data, &sparse->completion.data);
-    }
-    if (image->pending_invoke_count != 0 && sparse->pending_invokes.element_size == 0) {
-        ta_vec_init(&sparse->pending_invokes, system->allocator, TA_VEC_LAYOUT(ta_state_id));
-    }
-    for (uint32_t index = 0; result == TA_OK && index < image->pending_invoke_count; index += 1) {
-        result = ta_vec_push(&sparse->pending_invokes, &image->pending_invokes[index]);
-    }
-    return result;
+    return TA_OK;
 }
 
 /* Reconstruction without its LOADED record, which a load writes only once
  * the directory publishes the session. */
 static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstruct_params *params) {
-    if (system == NULL || params == NULL || params->image == NULL || params->out == NULL ||
-        (params->adopter.v != NULL && params->adopter.v->adopt == NULL)) {
+    if (system == NULL || params == NULL || params->image == NULL || params->out == NULL) {
         return TA_ERR_INVALID;
     }
-    const ta_session_image *image = params->image;
+    ta_session_image *image = (ta_session_image *)params->image;
     ta_definition_id definition_id = 0;
     ta_result result = ta_session_image_definition(system, image, &definition_id);
     if (result != TA_OK) {
@@ -13204,22 +12798,12 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
         return result;
     }
     ta_actor_id id = actor->record.id;
-    const ta_image_restore restore = {
-        .system = system,
-        .image = image,
-        .actor = actor,
-        .adopter = &params->adopter,
-        .foreign = ta_image_foreign(image, system),
-    };
     /*
      * The image's session continues here unless a resident session holds
      * its ID (ADR 0066): two live sessions never share one. Its ID is not
-     * this actor's runtime ID, so the session table finds it. A session ID
-     * is a runtime ID of the capturing system, which this system may issue
-     * to another actor later, so another system starts a new session
-     * (ADR 0085).
+     * this actor's runtime ID, so the session table finds it.
      */
-    if (!restore.foreign && image->session_id != 0 && !ta_session_resident(system, image->session_id)) {
+    if (image->session_id != 0 && !ta_session_resident(system, image->session_id)) {
         ta_session_node *node = NULL;
         result = ta_session_node_new(&system->sessions, &node);
         if (result != TA_OK) {
@@ -13274,6 +12858,14 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
     if (slots != NULL) {
         slots->trace = image->slots.trace;
     }
+    if (slots != NULL && image->slots.external != TA_EXTERNAL_NONE) {
+        ta_event_retain(&image->slots.external_event, &slots->external_event);
+        slots->external = image->slots.external;
+    }
+    if (slots != NULL && image->slots.has_kept) {
+        ta_event_retain(&image->slots.kept_event, &slots->kept_event);
+        slots->has_kept = true;
+    }
     /*
      * The image carries detached addresses; the actor holds this system's
      * handles (ADR 0065). A failure leaves a detached one behind, which
@@ -13282,15 +12874,11 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
     if (result == TA_OK) {
         result = ta_actor_ref_localize(system, &actor->record.self);
     }
-    if (result == TA_OK && slots != NULL && image->slots.external != TA_EXTERNAL_NONE) {
-        ta_image_event external = { &image->slots.external_event, &image->held_text[0] };
-        result = ta_image_restore_event(&restore, external, &slots->external_event);
-        slots->external = result == TA_OK ? image->slots.external : TA_EXTERNAL_NONE;
+    if (result == TA_OK && slots != NULL && slots->external != TA_EXTERNAL_NONE) {
+        result = ta_image_localize_origin(system, &slots->external_event);
     }
-    if (result == TA_OK && slots != NULL && image->slots.has_kept) {
-        ta_image_event kept = { &image->slots.kept_event, &image->held_text[1] };
-        result = ta_image_restore_event(&restore, kept, &slots->kept_event);
-        slots->has_kept = result == TA_OK;
+    if (result == TA_OK && slots != NULL && slots->has_kept) {
+        result = ta_image_localize_origin(system, &slots->kept_event);
     }
     if (result == TA_OK && slots != NULL && image->slots.jump != NULL) {
         size_t bytes = ta_operator_jump_bytes(image->slots.jump->target_count);
@@ -13302,12 +12890,29 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
         }
     }
     if (result == TA_OK && image->paused != NULL) {
-        result = ta_image_restore_pause(&restore);
+        result = ta_image_restore_pause(image, actor, system);
     }
+
     if (result == TA_OK && (image->finished || image->has_parent || image->completion.has_data ||
                             image->internal_count != 0 || image->invoke_count != 0 ||
                             image->pending_invoke_count != 0)) {
-        result = ta_image_restore_sparse(&restore);
+        ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
+        if (sparse == NULL) {
+            result = TA_ERR_NOMEM;
+        } else {
+            sparse->has_parent = image->has_parent;
+            sparse->parent = image->parent;
+            sparse->completion_pending = image->completion_pending;
+            sparse->completion = image->completion;
+            ta_value_retain(&sparse->completion.data);
+            sparse->final_state = image->final_state;
+            if (image->pending_invoke_count != 0 && sparse->pending_invokes.element_size == 0) {
+                ta_vec_init(&sparse->pending_invokes, system->allocator, TA_VEC_LAYOUT(ta_state_id));
+            }
+            for (uint32_t index = 0; result == TA_OK && index < image->pending_invoke_count; index += 1) {
+                result = ta_vec_push(&sparse->pending_invokes, &image->pending_invokes[index]);
+            }
+        }
     }
     if (result == TA_OK) {
         result = definition->datamodel.v->init_instance(
@@ -13321,7 +12926,7 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
         actor->datamodel_initialized = result == TA_OK;
     }
     if (result == TA_OK) {
-        result = ta_image_restore_session(&restore);
+        result = ta_image_restore_session(image, actor, system);
     }
     if (result != TA_OK) {
         /* Nothing of this actor is published, so the image is untouched and
@@ -13377,11 +12982,9 @@ TA_API ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params
      * The image must describe this actor as it is now. An image captured
      * before the actor processed another event would check-point a session
      * the actor has already moved past, so the host is sent back to capture
-     * again rather than silently persisting the older one. One captured in
-     * another system describes another actor, whatever its IDs say.
+     * again rather than silently persisting the older one.
      */
-    if (ta_image_foreign(image, system) || image->source_actor != actor->record.id ||
-        image->source_epoch != actor->session_epoch) {
+    if (image->source_actor != actor->record.id || image->source_epoch != actor->session_epoch) {
         return TA_ERR_STALE;
     }
     /* Room for the submitted sends to outlive the session, before anything changes. */
@@ -13435,13 +13038,12 @@ TA_API ta_result ta_actor_unload(ta_system *system, const ta_actor_unload_params
     return TA_OK;
 }
 
-/* A load from an in-memory image, with the binding and adopter to use. */
+/* A load from an in-memory image, with the binding to use. */
 typedef struct {
     const ta_session_image *image;
     const ta_value *binding;
     const ta_trace_parent *trace;
     ta_actor_id *out;
-    ta_value_adopter adopter;
 } ta_image_load_params;
 
 static ta_result ta_image_load(ta_system *system, const ta_image_load_params *params) {
@@ -13461,8 +13063,7 @@ static ta_result ta_image_load(ta_system *system, const ta_image_load_params *pa
         system,
         &(ta_actor_reconstruct_params){ .image = image,
                                         .datamodel_binding = params->binding,
-                                        .out = &id,
-                                        .adopter = params->adopter });
+                                        .out = &id });
     if (result != TA_OK) {
         return result;
     }
@@ -13671,7 +13272,7 @@ static ta_offload_header ta_offload_header_of(const ta_session_image *image, con
         .magic = TA_OFFLOAD_MAGIC,
         .header_bytes = sizeof(ta_offload_header),
         .system = (uint64_t)(uintptr_t)system,
-        .token = system->image_token,
+        .token = system->offload_token,
         .source_actor = image->source_actor,
         .session_id = image->session_id,
         .source_epoch = image->source_epoch,
@@ -13718,6 +13319,9 @@ static ta_result ta_offload_encode(const ta_offload_encode_params *params) {
     uint8_t *buffer = ta_arena_alloc(params->arena, total, _Alignof(uint64_t));
     if (buffer == NULL) {
         return TA_ERR_NOMEM;
+    }
+    if (params->system->offload_token == 0) {
+        params->system->offload_token = ta_system_new_span_id(params->system);
     }
     ta_offload_header header = ta_offload_header_of(image, params->system);
     uint8_t *at = ta_offload_put_records(buffer, image, &header);
@@ -13986,8 +13590,6 @@ static ta_result ta_offload_image(ta_system *system, const ta_offload_header *he
     }
     *image = (ta_session_image){
         .allocator = system->allocator,
-        .system = header->system,
-        .token = header->token,
         .source_actor = header->source_actor,
         .session_id = header->session_id,
         .source_epoch = header->source_epoch,
@@ -14020,8 +13622,8 @@ static ta_result ta_offload_decode(ta_system *system, ta_bytes bytes, ta_session
         header.header_bytes != sizeof(ta_offload_header)) {
         return TA_ERR_INVALID;
     }
-    if (header.system != (uint64_t)(uintptr_t)system || system->image_token == 0 ||
-        header.token != system->image_token) {
+    if (header.system != (uint64_t)(uintptr_t)system || system->offload_token == 0 ||
+        header.token != system->offload_token) {
         return TA_ERR_STALE;
     }
     ta_session_image *image = NULL;
@@ -14053,8 +13655,7 @@ TA_API ta_result ta_actor_load(ta_system *system, const ta_actor_load_params *pa
         return ta_image_load(system, &(ta_image_load_params){ .image = params->image,
                                                               .binding = params->datamodel_binding,
                                                               .trace = &params->trace,
-                                                              .out = params->out,
-                                                              .adopter = params->adopter });
+                                                              .out = params->out });
     }
     ta_session_image *image = NULL;
     ta_value root = {0};
@@ -16131,23 +15732,6 @@ TA_PRIVATE ta_send_id ta_send_id_from_text(const ta_system *system, ta_str text)
     }
     ta_atom atom = 0;
     return ta_atom_find(&system->atoms, text, &atom) == TA_OK ? ta_literal_send_id(atom) : 0;
-}
-
-TA_PRIVATE bool ta_send_id_literal(const ta_system *system, ta_send_id id, ta_str *out) {
-    if (id == 0 || (id & TA_GENERATED_SEND_ID_BIT) != 0) {
-        return false;
-    }
-    *out = ta_atom_text(&system->atoms, (ta_atom)(id - 1u));
-    return true;
-}
-
-TA_PRIVATE ta_result ta_send_id_intern_literal(ta_system *system, ta_str text, ta_send_id *out) {
-    ta_atom atom = 0;
-    ta_result result = ta_atom_intern(&system->atoms, text, &atom);
-    if (result == TA_OK) {
-        *out = ta_literal_send_id(atom);
-    }
-    return result;
 }
 
 TA_API ta_result ta_send_id_parse(const ta_system *system, ta_str text, ta_send_id *out) {
