@@ -138,7 +138,7 @@ async function bytesOutliveTheTurn() {
 }
 
 // Autoforwarding is a span event naming the invocation and the event, and
-// an invoker's UNAVAILABLE is the RAISED event it queued (core ADR 0067
+// an invoker's unavailable report is the RAISED event it queued (core ADR 0067
 // open point 3, and events core queues outside a run).
 async function forwardedAndUnavailable() {
   const forwarded = [];

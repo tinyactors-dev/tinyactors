@@ -55,7 +55,7 @@ static void use_public_types(void) {
     ta_scxml_spec spec = { .binding = TA_SCXML_BINDING_LATE };
     ta_invoke_report_params invoke_report = {
         .invoke_id = TA_INVOKE_ID_NONE,
-        .kind = TA_INVOKE_REPORT_UNAVAILABLE,
+        .kind = TA_INVOKE_REPORT_ERROR,
     };
     ta_session_image *image = 0;
     ta_arena arena = {0};

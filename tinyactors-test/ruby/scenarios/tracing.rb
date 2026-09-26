@@ -108,13 +108,13 @@ TinyactorsTest.scenarios 'tracing' do
     assert_equal ['progress 21', 'done 42'], caller.data('.log'), 'the child still finished'
   end
 
-  # Catches: an invoker's UNAVAILABLE queued with no RAISED record, so its
+  # Catches: an invoker's error report queued with no RAISED record, so its
   # macrostep had no visible cause (ADR 0072 closed the other such cases).
-  scenario "an invoker's UNAVAILABLE is recorded as the event it raised" do
+  scenario "an invoker's error report is recorded as the event it raised" do
     service = scripted_invoker('urn:tinyactors:test:service')
     client = spawn :service_client
     recording_trace(kinds: %i[raised])
-    report_invoke(service.started.first, :unavailable)
+    report_invoke(service.started.first, :error, reason: 'unavailable', ends: true)
     raised = trace_lines(actor: client)
     assert_equal 1, raised.size, "one RAISED record: #{raised.inspect}"
     assert raised.first.match?(/\Araised .*error\.communication\.invoke\.svc\.unavailable/), raised.first

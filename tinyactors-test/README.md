@@ -326,7 +326,7 @@ allocator                                  # the system's counting allocator
 router.held; router.release(id); router.drop(id)
 router.arm_fault(:submit, status: 'retry')
 report_invoke service.started.first, :event, event: 'reply', data: { value: 1 }
-report_invoke service.started.first, :unavailable
+report_invoke service.started.first, :error, reason: 'unavailable', ends: true
 allocator.arm_fault(after: 3, count: 1); allocator.stats
 allocator.budget(4096)                     # refuse what does not fit (ADR 0023)
 walk.arm_fault(after: 1, result: 'err_busy')

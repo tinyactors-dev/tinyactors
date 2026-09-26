@@ -815,9 +815,10 @@ module TinyactorsTest
 
     # Reports the outcome of a scripted invocation, given its "start"
     # journal entry, and runs the system. kind :event takes `event` (a
-    # dotted name) and `data`; :done takes `data` as done data; :unavailable
-    # takes `code` and `message`.
-    def report_invoke(start, kind, event: nil, data: nil, code: nil, message: nil)
+    # dotted name) and `data`; :done takes `data` as done data; :error takes
+    # `reason` (the last token of error.communication.invoke.<id>.<reason>),
+    # `data`, and `ends` (whether the invocation is retired, core ADR 0081).
+    def report_invoke(start, kind, event: nil, data: nil, reason: nil, ends: false)
       params = { system: system_handle, actor: start.fetch(:parent), invoke_id: start.fetch(:invoke_id),
                  kind: kind.to_s }
       case kind.to_sym
@@ -828,13 +829,16 @@ module TinyactorsTest
         params[:event][:data] = data unless data.nil?
       when :done
         params[:done_data] = data unless data.nil?
-      when :unavailable
-        params[:fault] = { code: code || -6, message: message || 'service unavailable' }
+      when :error
+        raise ScenarioError, 'report_invoke :error needs reason:' unless reason
+
+        params[:error] = { reason: reason, ends: ends }
+        params[:error][:data] = data unless data.nil?
       else
         raise ScenarioError, "report_invoke: unknown kind #{kind.inspect}"
       end
       core('ta_actor_report_invoke', ta.actor.report_invoke(**params))
-      run_system("report_invoke #{kind}#{" #{event}" if event}")
+      run_system("report_invoke #{kind}#{" #{event || reason}" if event || reason}")
     end
 
     # Destroys this run's system and fails when the counting allocator still

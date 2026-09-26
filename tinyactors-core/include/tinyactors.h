@@ -1254,14 +1254,33 @@ typedef struct { uint64_t service_handle; TA_IN const ta_event *event; TA_OUT TA
 
 /*
  * Asynchronous outcome of a previously successful invoker start.  EVENT and
- * DONE enter the actor's external-event flow.  UNAVAILABLE retires the service
- * and appends error.communication.invoke.<id>.unavailable to the internal queue.
+ * DONE enter the actor's external-event flow.  ERROR appends
+ * error.communication.invoke.<id>.<reason> to the internal queue (ADR 0081).
  */
 typedef enum {
     TA_INVOKE_REPORT_EVENT = 0,
     TA_INVOKE_REPORT_DONE,
-    TA_INVOKE_REPORT_UNAVAILABLE
+    TA_INVOKE_REPORT_ERROR
 } ta_invoke_report_kind TA_SYMBOLS("TA_INVOKE_REPORT_");
+
+/*
+ * An ERROR report (ADR 0081). `reason` is the event name's last token, one
+ * token of the host's choosing: not empty, with no '.' and no white space,
+ * or the report answers TA_ERR_INVALID and changes nothing. `data`, when
+ * set, is retained as the event's data. `ends` also retires the invocation,
+ * so its service's later events are ignored (SCXML 6.4.3); a lost service is
+ * reason "unavailable" with `ends`. Without `ends` the invocation stays
+ * active: its events, done.invoke.<id>, autoforwarding and cancellation
+ * behave as if no report was made. The event joins the internal queue
+ * whether the session is idle or inside a macrostep (paused by a budget, or
+ * holding a delivered event), so the report never answers TA_ERR_BUSY; an
+ * idle session starts a macrostep under the report's `trace`.
+ */
+typedef struct {
+    ta_str reason;
+    TA_IN TA_OPTIONAL const ta_value *data;
+    bool ends;
+} ta_invoke_error;
 
 /*
  * `trace` is what an EVENT or DONE runs under (ADR 0067): normally the
@@ -1277,7 +1296,7 @@ typedef struct {
     union {
         TA_WHEN(TA_INVOKE_REPORT_EVENT) TA_IN const ta_event *event;
         TA_WHEN(TA_INVOKE_REPORT_DONE) TA_IN TA_OPTIONAL const ta_value *done_data;
-        TA_WHEN(TA_INVOKE_REPORT_UNAVAILABLE) TA_IN TA_OPTIONAL const ta_fault *fault;
+        TA_WHEN(TA_INVOKE_REPORT_ERROR) TA_IN const ta_invoke_error *error;
     } as;
 } ta_invoke_report_params TA_TAGGED(kind, as);
 

@@ -252,7 +252,7 @@ invoker_group = TinyactorsTest.scenarios 'invoker' do
   scenario 'a lost service reaches the chart as error.communication' do
     service = scripted_invoker(SERVICE)
     actor = spawn :harness_service
-    report_invoke service.started.first, :unavailable
+    report_invoke service.started.first, :error, reason: 'unavailable', ends: true
     assert_active actor, :failed
     assert_equal 'error.communication.invoke.svc.unavailable', actor.data('.error')
   end

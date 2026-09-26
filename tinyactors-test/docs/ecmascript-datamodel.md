@@ -254,7 +254,7 @@ order does not matter:
 | Method | Receiver member | Decoded with its model |
 |---|---|---|
 | `ta.actor.deliver` | `actor` | `event.data` |
-| `ta.actor.report_invoke` | `actor` (the invoking parent) | event, done, and fault data |
+| `ta.actor.report_invoke` | `actor` (the invoking parent) | event, done, and error data |
 | `ta.actor.spawn` | `definition` | `datamodel_binding` |
 | `ta.actor.prepare_replacement` | `definition` | `datamodel_binding` |
 | `ta.actor.load`, `ta.actor.reconstruct` | `image`, through its definition (`ta_session_image_definition`) | `datamodel_binding` |

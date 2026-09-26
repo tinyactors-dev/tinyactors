@@ -879,14 +879,14 @@ void ta_invoke_release(ta_system *system, ta_actor *actor) {
  * Host reports
  */
 
-/* error.communication.invoke.<id>.unavailable */
-static ta_result ta_invoke_unavailable_name(ta_system *system, ta_invoke_id invoke, ta_event_name_id *out) {
+/* error.communication.invoke.<id>.<reason> (ADR 0081) */
+static ta_result ta_invoke_error_name(ta_system *system, ta_invoke_id invoke, ta_str reason, ta_event_name_id *out) {
     ta_event_name_id name = 0;
     ta_atom invoke_atom = 0;
-    ta_atom unavailable = 0;
+    ta_atom reason_atom = 0;
     ta_result result = ta_atom_intern(&system->atoms, (ta_str){ .ptr = "invoke", .len = 6 }, &invoke_atom);
     if (result == TA_OK) {
-        result = ta_atom_intern(&system->atoms, (ta_str){ .ptr = "unavailable", .len = 11 }, &unavailable);
+        result = ta_atom_intern(&system->atoms, reason, &reason_atom);
     }
     if (result == TA_OK) {
         result = ta_event_name_child(&system->event_names, TA_EVENT_NAME_ERROR_COMMUNICATION, invoke_atom, &name);
@@ -900,53 +900,82 @@ static ta_result ta_invoke_unavailable_name(ta_system *system, ta_invoke_id invo
         result = ta_event_name_child(&system->event_names, name, id_atom, &name);
     }
     if (result == TA_OK) {
-        result = ta_event_name_child(&system->event_names, name, unavailable, &name);
+        result = ta_event_name_child(&system->event_names, name, reason_atom, &name);
     }
     *out = name;
+    return result;
+}
+
+/* One event-name token: not empty, with no '.' and no white space. */
+static bool ta_invoke_reason_valid(ta_str reason) {
+    if (reason.ptr == NULL || reason.len == 0) {
+        return false;
+    }
+    for (size_t index = 0; index < reason.len; index += 1) {
+        char c = reason.ptr[index];
+        if (c == '.' || c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+            return false;
+        }
+    }
+    return true;
+}
+
+/*
+ * Appends error.communication.invoke.<id>.<reason> to the actor's internal
+ * queue, with a retained copy of `data` (or none). Queued outside a run, like
+ * a failed delayed send's error: counted and recorded here (ADR 0072), under
+ * `trace` when there is one. On failure nothing is queued.
+ */
+static ta_result ta_invoke_raise(ta_system *system, ta_actor *actor, ta_invoke_id invoke, ta_str reason,
+                                 const ta_value *data, const ta_trace_parent *trace) {
+    ta_event_name_id name = 0;
+    ta_result result = ta_invoke_error_name(system, invoke, reason, &name);
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_event event = { .name = name, .type = TA_EVENT_PLATFORM, .invoke_id = TA_INVOKE_ID_NONE };
+    if (data != NULL) {
+        event.data = *data;
+        ta_value_retain(&event.data);
+    }
+    result = ta_interpreter_enqueue_internal(system, actor, &event);
+    if (result == TA_OK) {
+        ta_interpreter_raised_outside(system, actor, name, trace);
+    }
     return result;
 }
 
 /*
  * Reconstruction lost the service behind an invocation: it is retired and
  * reported once, with no fault data, because nothing failed — the invocation
- * simply did not survive the image (ADR 0038).
+ * simply did not survive the image (ADR 0038). The image carries no request
+ * to name, so the event has no trace.
  */
 ta_result ta_invoke_report_lost(ta_system *system, ta_actor *actor, ta_invoke_id invoke) {
-    ta_event_name_id name = 0;
-    ta_result result = ta_invoke_unavailable_name(system, invoke, &name);
-    if (result != TA_OK) {
-        return result;
-    }
-    ta_event event = { .name = name, .type = TA_EVENT_PLATFORM, .invoke_id = TA_INVOKE_ID_NONE };
-    result = ta_interpreter_enqueue_internal(system, actor, &event);
-    if (result == TA_OK) {
-        /* Queued outside a run: no unit commits it, so it is counted and
-         * recorded here (ADR 0072). The image carries no request to name. */
-        ta_interpreter_raised_outside(system, actor, name, NULL);
-    }
-    return result;
+    return ta_invoke_raise(system, actor, invoke, (ta_str){ .ptr = "unavailable", .len = 11 }, NULL, NULL);
 }
 
-static ta_result ta_invoke_unavailable(ta_system *system, ta_actor *actor, const ta_invoke_report_params *params) {
-    ta_event_name_id name = 0;
-    ta_result result = ta_invoke_unavailable_name(system, params->invoke_id, &name);
+/*
+ * An ERROR report (ADR 0081). The event joins the internal queue whether
+ * the session is idle or inside a macrostep, so it never answers BUSY; an
+ * idle session starts a macrostep. With `ends`, the invocation is retired
+ * only once the event is queued, so a failure changes nothing.
+ */
+static ta_result ta_invoke_report_error(ta_system *system, ta_actor *actor, uint32_t index,
+                                        const ta_invoke_report_params *params) {
+    const ta_invoke_error *error = params->as.error;
+    if (error == NULL || !ta_invoke_reason_valid(error->reason)) {
+        return TA_ERR_INVALID;
+    }
+    ta_result result = ta_invoke_raise(system, actor, params->invoke_id, error->reason, error->data, &params->trace);
     if (result != TA_OK) {
         return result;
     }
-    ta_event event = { .name = name, .type = TA_EVENT_PLATFORM, .invoke_id = TA_INVOKE_ID_NONE };
-    if (params->as.fault != NULL) {
-        event.data = params->as.fault->data;
-        ta_value_retain(&event.data);
+    if (error->ends) {
+        ta_invoke_remove_at(actor->sparse, index);
     }
-    result = ta_interpreter_enqueue_internal(system, actor, &event);
-    if (result == TA_OK) {
-        /* Queued outside a run, like a failed delayed send's error: counted
-         * and recorded here (ADR 0072), under the invoke request's trace, as
-         * the service's own events are. */
-        ta_interpreter_raised_outside(system, actor, name, &params->trace);
-        ta_interpreter_start_macrostep(actor, &params->trace);
-    }
-    return result;
+    ta_interpreter_start_macrostep(actor, &params->trace);
+    return TA_OK;
 }
 
 ta_origin ta_invoke_origin_of(const ta_system *system, const ta_active_invoke *invoke) {
@@ -1001,9 +1030,8 @@ ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_report_param
             return ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = params->actor, .event = &event,
                                                                   .trace = params->trace });
         }
-        case TA_INVOKE_REPORT_UNAVAILABLE:
-            ta_invoke_remove_at(actor->sparse, (uint32_t)index);
-            return ta_invoke_unavailable(system, actor, params);
+        case TA_INVOKE_REPORT_ERROR:
+            return ta_invoke_report_error(system, actor, (uint32_t)index, params);
         default:
             return TA_ERR_INVALID;
     }

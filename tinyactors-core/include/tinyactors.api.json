@@ -9652,6 +9652,56 @@
         }
       }
     },
+    "ta_invoke_error": {
+      "kind": "struct",
+      "doc": "An ERROR report (ADR 0081). `reason` is the event name's last token, one token of the host's choosing: not empty, with no '.' and no white space, or the report answers TA_ERR_INVALID and changes nothing. `data`, when set, is retained as the event's data. `ends` also retires the invocation, so its service's later events are ignored (SCXML 6.4.3); a lost service is reason \"unavailable\" with `ends`. Without `ends` the invocation stays active: its events, done.invoke. <id >, autoforwarding and cancellation behave as if no report was made. The event joins the internal queue whether the session is idle or inside a macrostep (paused by a budget, or holding a delivered event), so the report never answers TA_ERR_BUSY; an idle session starts a macrostep under the report's `trace`.",
+      "fields": [
+        {
+          "name": "reason",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "data",
+          "type": {
+            "pointer": {
+              "type": "ta_value",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in",
+          "optional": true
+        },
+        {
+          "name": "ends",
+          "type": {
+            "builtin": "bool"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "reason": 0,
+            "data": 16,
+            "ends": 24
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "reason": 0,
+            "data": 8,
+            "ends": 12
+          }
+        }
+      }
+    },
     "ta_invoke_id": {
       "kind": "alias",
       "type": {
@@ -9778,12 +9828,12 @@
           "symbol": "done"
         },
         {
-          "name": "TA_INVOKE_REPORT_UNAVAILABLE",
+          "name": "TA_INVOKE_REPORT_ERROR",
           "value": 2,
-          "symbol": "unavailable"
+          "symbol": "error"
         }
       ],
-      "doc": "Asynchronous outcome of a previously successful invoker start.  EVENT and DONE enter the actor's external-event flow.  UNAVAILABLE retires the service and appends error.communication.invoke. <id >.unavailable to the internal queue.",
+      "doc": "Asynchronous outcome of a previously successful invoker start.  EVENT and DONE enter the actor's external-event flow.  ERROR appends error.communication.invoke. <id >. <reason > to the internal queue (ADR 0081).",
       "layout": {
         "x86_64-unknown-linux-gnu": {
           "size": 4,
@@ -9855,17 +9905,16 @@
                   "optional": true
                 },
                 {
-                  "name": "fault",
+                  "name": "error",
                   "type": {
                     "pointer": {
-                      "type": "ta_fault",
+                      "type": "ta_invoke_error",
                       "const": true
                     }
                   },
-                  "when": "TA_INVOKE_REPORT_UNAVAILABLE",
+                  "when": "TA_INVOKE_REPORT_ERROR",
                   "shape": "single",
-                  "direction": "in",
-                  "optional": true
+                  "direction": "in"
                 }
               ]
             }
@@ -9879,7 +9928,7 @@
         "members": {
           "TA_INVOKE_REPORT_EVENT": "event",
           "TA_INVOKE_REPORT_DONE": "done_data",
-          "TA_INVOKE_REPORT_UNAVAILABLE": "fault"
+          "TA_INVOKE_REPORT_ERROR": "error"
         }
       },
       "layout": {
@@ -9894,7 +9943,7 @@
             "as": 72,
             "as.event": 72,
             "as.done_data": 72,
-            "as.fault": 72
+            "as.error": 72
           }
         },
         "wasm32-unknown-unknown": {
@@ -9908,7 +9957,7 @@
             "as": 72,
             "as.event": 72,
             "as.done_data": 72,
-            "as.fault": 72
+            "as.error": 72
           }
         }
       }

@@ -42,16 +42,20 @@ IDs from `ta_invoke_request` and reports one of three outcomes through
   The completion event carries the invocation ID because it represents a report
   from the invoked child. Enough invocation metadata remains until the event is
   processed so `<finalize>` can run; the record is then removed.
-- `TA_INVOKE_REPORT_UNAVAILABLE` retires the invocation immediately and appends
-  `error.communication.invoke.<id>.unavailable` to the internal queue. The error
-  has `TA_EVENT_PLATFORM` type, `TA_ORIGIN_NONE` origin, and
-  `TA_INVOKE_ID_NONE` in its event envelope. Optional `ta_fault.data` may become
-  event data.
+- `TA_INVOKE_REPORT_ERROR` (ADR 0081) appends
+  `error.communication.invoke.<id>.<reason>` to the internal queue, where
+  `reason` is one event-name token the host chooses. The error has
+  `TA_EVENT_PLATFORM` type, `TA_ORIGIN_NONE` origin, and `TA_INVOKE_ID_NONE`
+  in its event envelope. Optional `ta_invoke_error.data` becomes event data.
+  With `ends`, the invocation is retired once the event is queued (a lost
+  service is `unavailable` with `ends`); without it, the invocation stays
+  active (napi reports a quarantined child as `quarantined`).
 
 Ordinary-event and completion reports may return `TA_ERR_BUSY`, because the
 core has no unbounded external mailbox; the host retains and retries them after
-the current macrostep. An unavailable report may be appended while an actor is
-paused, subject to the normal external-synchronization rule. A report for an
+the current macrostep. An error report is appended even while an actor is inside a
+macrostep, so it never returns `TA_ERR_BUSY`, subject to the normal
+external-synchronization rule. A report for an
 unknown, completed, cancelled, or retired invocation returns `TA_ERR_NOT_FOUND`
 and generates no chart event.
 

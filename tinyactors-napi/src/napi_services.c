@@ -652,23 +652,27 @@ napi_value tna_report_invoke_method(napi_env env, napi_callback_info info) {
     ta_actor_id parent = ta_actor_id_make(slot, generation);
     napi_value taken = NULL;
     if (strcmp(kind, "unavailable") == 0) {
-        ta_fault fault = { .code = TA_ERR_UNSUPPORTED };
-        static const char message[] = "the invoked service is unavailable";
-        fault.message = (ta_str){ .ptr = message, .len = sizeof message - 1u };
+        /* A lost service: its invocation ends (core ADR 0081). */
+        ta_value data = { 0 };
         napi_valuetype type = napi_undefined;
-        if (argc >= 6 && napi_typeof(env, argv[5], &type) == napi_ok && type != napi_undefined &&
-            !tna_value_make(&wrapper->values, argv[5], &fault.data)) {
+        bool has_data = argc >= 6 && napi_typeof(env, argv[5], &type) == napi_ok && type != napi_undefined;
+        if (has_data && !tna_value_make(&wrapper->values, argv[5], &data)) {
             return tna_throw(env, "out-of-memory", "reportInvoke: cannot keep the error");
         }
+        ta_invoke_error error = {
+            .reason = { .ptr = "unavailable", .len = 11 },
+            .data = has_data ? &data : NULL,
+            .ends = true,
+        };
         system->inside_core = true;
         ta_result result = ta_actor_report_invoke(system->core, &(ta_invoke_report_params){
                                                                     .actor = parent,
                                                                     .invoke_id = invoke,
-                                                                    .kind = TA_INVOKE_REPORT_UNAVAILABLE,
-                                                                    .as.fault = &fault,
+                                                                    .kind = TA_INVOKE_REPORT_ERROR,
+                                                                    .as.error = &error,
                                                                 });
         system->inside_core = false;
-        ta_value_release(&fault.data);
+        ta_value_release(&data);
         if (result == TA_OK) {
             (void)tna_sched_wake(&system->sched, parent);
             tna_system_want_turn(system);
