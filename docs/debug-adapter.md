@@ -191,8 +191,10 @@ The adapter is `tinyactors-test/bin/dap`; see
   time. On a thread that is not a fork they answer an error.
 - `gotoTargets` answers the states at a line (those written there, else
   the state an action or transition there belongs to), or every state
-  without a line. `goto` stops with reason `goto` when the jump's
-  macrostep ends.
+  without a line. `goto` of a resting actor with nothing waiting, while
+  the system is stopped, is taken at once and stops with reason `goto`
+  when the jump's macrostep ends; otherwise it waits in the actor's
+  mailbox, as in napi.
 - `terminated` follows `terminate`; a workbench has no single attached
   actor whose end would send it.
 - `thread` events come from comparing the actor table after each run, not
@@ -206,6 +208,13 @@ The adapter is `tinyactors-test/bin/dap`; see
   file replaces its actors.
 - `cancel` and the Timers scope name a delayed send by its ID as the
   chart holds it (ADR 0048), as napi does.
+- What the console sends an actor, events and jumps, waits in that
+  actor's mailbox, and the Scheduler's monitor hands it over when the
+  actor rests and the system runs, as napi's mailbox does. `abandon` of a
+  stopped macrostep stops again with reason `pause`. Console results,
+  summaries, `<log>` output, names and scope labels are napi's words; what
+  still differs is listed in [the transcripts'
+  README](../tinyactors-test/dap/README.md#where-the-adapters-differ).
 
 ## Notes on the napi column
 
@@ -233,14 +242,15 @@ Every ☑ is covered by `tinyactors-napi/test/debug.js`, on Node and Bun.
   and the scheduling state; `_ioprocessors` is not shown there.
 - A fork does not mirror the live actor's later events into the copy: it
   is the actor as it was when forked (or restarted).
+- A macrostep's summary is one `output`, a failure's text names the
+  action and the fault's message (`scxml.fault.message` on span events),
+  an invoked child is named by its `<invoke id>`, and the Event scope
+  uses `_event`'s names (`sendid`), as the test host does.
 - A microstep's frame names its transitions only once the microstep has
   ended (`microstep 2.1` while it runs): napi reads spans, and a
   microstep's span ends when the next one begins. For the same reason an
   exception or a data breakpoint stops a fork after the macrostep, not at
   the next unit.
-- A console `send` waits in the mailbox until the actor runs, and a
-  `goto` while the actor is inside a macrostep is queued behind it; the
-  test host delivers at once and refuses that `goto`.
 
 ## Prerequisites
 
