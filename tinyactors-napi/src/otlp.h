@@ -145,6 +145,13 @@ typedef struct {
     tna_otlp_buf label;        /* a label while it is built */
     tna_otlp_buf text;         /* an event name or ID while it is formatted */
     uint32_t span_count;       /* spans in `spans` */
+    /* Bytes this turn's requests used from `spans` and `logs`, and the
+     * typical use of a turn that wrote any (an average that moves an eighth
+     * of the way each such turn), for tna_otlp_end_turn(). */
+    size_t turn_spans;
+    size_t turn_logs;
+    size_t typical_spans;
+    size_t typical_logs;
     /* The latest sampled macrostep span opened, for the host's exemplars
      * (host_metrics.h); the host clears `set` when it takes it. */
     tna_exemplar last_macrostep;
@@ -222,6 +229,17 @@ void tna_otlp_forget_definition(tna_otlp *otlp, ta_definition_id definition);
 
 /* Ends every open span now, marked `scxml.incomplete`, so the next put
  * carries them: the sink is going away. */
+/*
+ * At the end of every pump turn, whether or not it wrote a request: a
+ * staging buffer larger than 1 MiB and more than four times a typical
+ * turn's use (as it stood before this turn) is freed. A burst, such as a
+ * turn of spawns each tracing its bootstrap, is far above typical, so its
+ * buffer goes as soon as the turn ends instead of staying for the system's
+ * life. Steady turns, and the idle turns between them, keep their buffer
+ * and allocate nothing; a new steady load regrows it a few times while the
+ * typical use catches up.
+ */
+void tna_otlp_end_turn(tna_otlp *otlp);
 void tna_otlp_end_all(tna_otlp *otlp);
 
 /* Changes the kinds the user asked for (configureTraces). */

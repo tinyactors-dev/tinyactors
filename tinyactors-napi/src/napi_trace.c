@@ -197,7 +197,11 @@ static napi_value tna_trace_bytes(napi_env env, tna_system *system) {
 
 void tna_trace_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *first_error) {
     tna_system *system = wrapper->system;
-    if (!system->tracing || (system->otlp.span_count == 0 && system->otlp.log_count == 0)) {
+    if (!system->tracing) {
+        return;
+    }
+    if (system->otlp.span_count == 0 && system->otlp.log_count == 0) {
+        tna_otlp_end_turn(&system->otlp);
         return;
     }
     napi_handle_scope scope = NULL;
@@ -206,6 +210,7 @@ void tna_trace_dispatch(napi_env env, tna_napi_system *wrapper, napi_value *firs
     napi_value handler = NULL;
     napi_value argv[3] = { NULL, NULL, NULL };
     argv[2] = tna_trace_bytes(env, system);
+    tna_otlp_end_turn(&system->otlp); /* before JavaScript runs: the sink may replace the sink */
     bool callable = argv[2] != NULL && data->effects_handler != NULL && wrapper->facade != NULL &&
                     napi_get_reference_value(env, data->effects_handler, &handler) == napi_ok && handler != NULL &&
                     napi_get_reference_value(env, wrapper->facade, &argv[0]) == napi_ok && argv[0] != NULL &&

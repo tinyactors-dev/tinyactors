@@ -96,16 +96,15 @@ static void tna_buf_free(tna_otlp_buf *buf) {
 }
 
 /*
- * The staging capacity a buffer may keep between turns. A turn that needed
- * more (a burst of spawns, each tracing its bootstrap) gives it back once
- * its request is written, so the largest turn ever seen is not held for the
- * system's life. Turns under it reuse their buffer and allocate nothing.
+ * The staging capacity a buffer always may keep between turns. Past it, a
+ * buffer is kept only while a typical turn uses a quarter of it
+ * (tna_otlp_end_turn).
  */
 #define TNA_OTLP_KEEP_BYTES ((size_t)1 << 20)
 
-/* After a request is written: an empty buffer beyond the kept capacity is freed. */
-static void tna_buf_settle(tna_otlp_buf *buf) {
-    if (buf->len == 0 && buf->cap > TNA_OTLP_KEEP_BYTES) {
+/* An empty buffer beyond the kept bytes, and four times a typical turn's use, is freed. */
+static void tna_buf_settle(tna_otlp_buf *buf, size_t used) {
+    if (buf->len == 0 && buf->cap > TNA_OTLP_KEEP_BYTES && buf->cap / 4u > used) {
         tna_buf_free(buf);
     }
 }
@@ -1770,9 +1769,9 @@ size_t tna_otlp_put_logs(tna_otlp *otlp, uint8_t *out, size_t size) {
         tna_put_bytes(&view, version.ptr, version.len);
     }
     tna_put_bytes(&view, otlp->logs.data, otlp->logs.len);
+    otlp->turn_logs += otlp->logs.len;
     otlp->logs.len = 0;
     otlp->log_count = 0;
-    tna_buf_settle(&otlp->logs);
     return view.len;
 }
 
@@ -1883,10 +1882,27 @@ size_t tna_otlp_put_traces(tna_otlp *otlp, uint8_t *out, size_t size) {
     tna_otlp_buf view = { .data = out, .cap = size };
     tna_put_request_header(otlp, &view, otlp->spans.len);
     tna_put_bytes(&view, otlp->spans.data, otlp->spans.len);
-    otlp->spans.len = 0; /* reset, not freed: its capacity serves the next turn, up to the kept bytes */
+    otlp->turn_spans += otlp->spans.len;
+    otlp->spans.len = 0; /* reset: its capacity serves the next turn (tna_otlp_end_turn) */
     otlp->span_count = 0;
-    tna_buf_settle(&otlp->spans);
     return view.len;
+}
+
+/* The typical use after a turn that used `used` bytes: idle turns leave it. */
+static size_t tna_typical_use(size_t typical, size_t used) {
+    if (used == 0) {
+        return typical;
+    }
+    return used >= typical ? typical + (used - typical) / 8u : typical - (typical - used) / 8u;
+}
+
+void tna_otlp_end_turn(tna_otlp *otlp) {
+    tna_buf_settle(&otlp->spans, otlp->typical_spans);
+    tna_buf_settle(&otlp->logs, otlp->typical_logs);
+    otlp->typical_spans = tna_typical_use(otlp->typical_spans, otlp->turn_spans);
+    otlp->typical_logs = tna_typical_use(otlp->typical_logs, otlp->turn_logs);
+    otlp->turn_spans = 0;
+    otlp->turn_logs = 0;
 }
 
 void tna_otlp_end_all(tna_otlp *otlp) {
