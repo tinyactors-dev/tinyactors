@@ -3,8 +3,9 @@
 // system.definitions() streams every definition core holds (core ADR 0078):
 // builder and imported charts, nested inline children and invoke-time
 // children. metrics() and watchTraces({ families }) see the same set, so a
-// child chart core registers on its own is reported and watchable. Runs on
-// Node and Bun.
+// child chart core registers on its own is reported and watchable. The
+// definition lifecycle (core ADR 0079) is counted in metrics() and logged.
+// Runs on Node and Bun.
 
 const assert = require('node:assert/strict');
 const { createSystem, statechart, decodeTraces } = require('..');
@@ -147,7 +148,140 @@ async function watch() {
   system.close();
 }
 
+// The strings in an OTLP protobuf message, nested messages included: enough
+// to read log bodies and attributes without a decoder.
+function protobufStrings(bytes, out = []) {
+  let at = 0;
+  const varint = () => {
+    let value = 0;
+    let scale = 1;
+    for (;;) {
+      const byte = bytes[at++];
+      if (byte === undefined) throw new Error('truncated');
+      value += (byte & 0x7f) * scale;
+      scale *= 128;
+      if ((byte & 0x80) === 0) return value;
+    }
+  };
+  while (at < bytes.length) {
+    const wire = varint() & 7;
+    if (wire === 0) varint();
+    else if (wire === 1) at += 8;
+    else if (wire === 5) at += 4;
+    else if (wire === 2) {
+      const length = varint();
+      const body = bytes.subarray(at, at + length);
+      if (body.length !== length) throw new Error('truncated');
+      at += length;
+      const text = Buffer.from(body).toString('utf8');
+      if (/^[\x20-\x7e]+$/.test(text)) out.push(text);
+      try { protobufStrings(body, out); } catch { /* a string */ }
+    } else throw new Error('wire type');
+  }
+  return out;
+}
+
+// metrics() counts the definition lifecycle (core ADR 0079), and says who
+// registered each definition still alive: the host, a parent (nested) or an
+// invoke.
+async function lifecycleMetrics() {
+  const system = setup();
+  const read = () => {
+    const snapshot = system.metrics().metrics;
+    const sum = (name) => snapshot.find((metric) => metric.name === name).points[0].value;
+    const alive = {};
+    for (const point of snapshot.find((metric) => metric.name === 'tinyactors.definitions').points) {
+      alive[`${point.attributes['tinyactors.definition.origin']}/${point.attributes['tinyactors.definition.state']}`] =
+        point.value;
+    }
+    return { registered: sum('tinyactors.definitions.registered'), retired: sum('tinyactors.definitions.retired'),
+             freed: sum('tinyactors.definitions.freed'), alive };
+  };
+  const empty = read();
+  assert.deepEqual(empty, { registered: 0, retired: 0, freed: 0,
+    alive: { 'host/live': 0, 'host/retired': 0, 'nested/live': 0, 'nested/retired': 0, 'invoke/live': 0,
+             'invoke/retired': 0 } }, 'every point is there from the first snapshot');
+
+  const built = system.define(statechart({ family: 'built', revision: 'v1' }).state('a'));
+  nesting(system);
+  const maker = making(system);
+  let counts = read();
+  assert.equal(counts.registered, 4, 'built, nester, its nested kid, maker');
+  assert.equal(counts.alive['host/live'], 3);
+  assert.equal(counts.alive['nested/live'], 1);
+
+  // Invoke-time children come and go: registered and freed keep pace (churn).
+  for (let round = 0; round < 5; round += 1) {
+    const parent = system.spawn(maker);
+    await system.flush();
+    assert.equal(read().alive['invoke/live'], 1, 'the live invoke-time child');
+    system.post(parent, 'stop');
+    await system.flush();
+    system.destroy(parent);
+    await system.flush();
+  }
+  counts = read();
+  assert.equal(counts.alive['invoke/live'], 0);
+  assert.equal(counts.registered - counts.freed, 4, 'churn: registrations and frees kept pace');
+  assert.ok(counts.freed >= 1, 'invoke-time children were freed');
+
+  // A retired definition still in use counts as retired until its last actor goes.
+  const actor = system.spawn(built);
+  await system.flush();
+  built.retire();
+  counts = read();
+  assert.equal(counts.retired, 1);
+  assert.equal(counts.alive['host/retired'], 1);
+  system.destroy(actor);
+  await system.flush();
+  assert.equal(read().alive['host/retired'], 0, 'freed with its last actor');
+  system.close();
+}
+
+// Definition churn is logged, DEBUG and INFO, rate-limited per family so a
+// family that registers a child for every invoke stays within logLimit.
+async function lifecycleLogs() {
+  const system = setup();
+  const batches = [];
+  system.setTraceSink((traces, logs) => { if (logs !== undefined) batches.push(logs); }, { logLimit: 2, sample: 0 });
+  const built = system.define(statechart({ family: 'built', revision: 'v1' }).state('a'));
+  nesting(system);
+  const maker = making(system);
+  for (let round = 0; round < 10; round += 1) {
+    const parent = system.spawn(maker);
+    await system.flush();
+    system.post(parent, 'stop');
+    await system.flush();
+    system.destroy(parent);
+  }
+  built.retire();
+  const actor = system.spawn(nesting(system));
+  await system.flush();
+  system.destroy(actor);
+  await system.flush();
+  const text = batches.flatMap((bytes) => protobufStrings(bytes));
+  assert.ok(text.includes('registered built v1 (host)'), `the host's registration: ${text.filter((t) => t.startsWith('reg'))}`);
+  assert.ok(text.some((t) => /^registered kid [0-9a-f]+ \(nested\)$/.test(t)), 'the nested child, by origin');
+  assert.ok(text.includes('retired built v1 (host)') && text.includes('INFO'), 'retiring is INFO');
+  assert.ok(text.includes('DEBUG') && text.includes('tinyactors.definition.origin'), 'DEBUG, with the origin');
+  const invokeRegistered = text.filter((t) => /^registered maker\/invoke /.test(t)).length;
+  assert.ok(invokeRegistered >= 1 && invokeRegistered <= 4,
+            `ten invoke-time children, at most logLimit a second of them logged: ${invokeRegistered}`);
+  system.close();
+
+  // logs: false writes none.
+  const quiet = setup();
+  const none = [];
+  quiet.setTraceSink((traces, logs) => { if (logs !== undefined) none.push(logs); }, { logs: false });
+  quiet.spawn(quiet.define(statechart({ family: 'quiet', revision: 'v1' }).state('a')));
+  await quiet.flush();
+  assert.equal(none.length, 0);
+  quiet.close();
+}
+
 (async () => {
+  await lifecycleMetrics();
+  await lifecycleLogs();
   await streams();
   await freed();
   await metrics();

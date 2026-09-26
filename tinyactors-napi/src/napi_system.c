@@ -165,15 +165,25 @@ tna_napi_system *tna_napi_system_unwrap(napi_env env, napi_value value) {
 }
 
 /*
- * Core tells of each definition it frees (core ADR 0079), during a turn, a
- * cascade or its teardown: what the addon keeps per definition goes then,
- * not at a later sweep.
+ * Core tells of each definition it registers, retires and frees (core ADR
+ * 0079), during a turn, a cascade or its teardown. Every event is counted
+ * for the metrics and written as a churn log when a trace sink wants logs;
+ * on FREED, what the addon keeps per definition goes then, not at a later
+ * sweep.
  */
 static void tna_definition_notify(void *self, const ta_definition_event *event) {
+    tna_napi_system *wrapper = self;
+    tna_definition_origin origin = tna_definitions_note(&wrapper->system->definitions, event);
+    if (wrapper->system->tracing) {
+        tna_otlp_definition_log(&wrapper->system->otlp, &(tna_otlp_definition_log_params){
+                                                            .event = event,
+                                                            .origin = { .ptr = tna_definition_origin_name(origin),
+                                                                        .len = (uint32_t)strlen(tna_definition_origin_name(origin)) },
+                                                        });
+    }
     if (event->kind != TA_DEFINITION_EVENT_FREED) {
         return;
     }
-    tna_napi_system *wrapper = self;
     tna_children_forget(wrapper, event->definition);
     tna_trace_watch_forget_definition(&wrapper->system->trace_watch, event->definition);
     if (wrapper->system->tracing) {
@@ -1100,7 +1110,9 @@ static napi_status tna_histogram_object(napi_env env, const tna_histogram *histo
  * ready (queue lengths, including entries a later turn skips),
  * quarantined, overdue (seconds), faults: { code: count }, deadLetters:
  * { reason: count }, and for loads of unloaded actors (napi ADR 0020)
- * load (a histogram, in seconds), loads: { outcome: count } and waiting }.
+ * load (a histogram, in seconds), loads: { outcome: count } and waiting,
+ * and the definition lifecycle (core ADR 0079) as definitions: {
+ * registered, retired, freed, alive: [{ origin, retired, count }] } }.
  */
 static napi_value tna_host_metrics_method(napi_env env, napi_callback_info info) {
     tna_napi_system *wrapper = tna_open_this(env, info);
@@ -1146,6 +1158,32 @@ static napi_value tna_host_metrics_method(napi_env env, napi_callback_info info)
     }
     if (status == napi_ok) status = napi_set_named_property(env, out, "loads", loads);
     if (status == napi_ok) status = tna_set_number(env, out, "waiting", (double)system->loads.waiting);
+    /* The definition lifecycle (core ADR 0079): events, and what is alive by origin. */
+    napi_value definitions = NULL;
+    napi_value alive = NULL;
+    uint64_t counts[TNA_ORIGINS][2];
+    tna_definitions_alive(&system->definitions, system->core, counts);
+    if (status == napi_ok) status = napi_create_object(env, &definitions);
+    if (status == napi_ok) status = tna_set_number(env, definitions, "registered", (double)system->definitions.registered);
+    if (status == napi_ok) status = tna_set_number(env, definitions, "retired", (double)system->definitions.retired);
+    if (status == napi_ok) status = tna_set_number(env, definitions, "freed", (double)system->definitions.freed);
+    if (status == napi_ok) status = napi_create_array_with_length(env, TNA_ORIGINS * 2u, &alive);
+    for (uint32_t origin = 0, at = 0; status == napi_ok && origin < TNA_ORIGINS; origin += 1u) {
+        for (uint32_t retired = 0; status == napi_ok && retired < 2u; retired += 1u, at += 1u) {
+            napi_value entry = NULL;
+            napi_value name = NULL;
+            napi_value flag = NULL;
+            status = napi_create_object(env, &entry);
+            if (status == napi_ok) status = napi_create_string_utf8(env, tna_definition_origin_name(origin), NAPI_AUTO_LENGTH, &name);
+            if (status == napi_ok) status = napi_set_named_property(env, entry, "origin", name);
+            if (status == napi_ok) status = napi_get_boolean(env, retired != 0, &flag);
+            if (status == napi_ok) status = napi_set_named_property(env, entry, "retired", flag);
+            if (status == napi_ok) status = tna_set_number(env, entry, "count", (double)counts[origin][retired]);
+            if (status == napi_ok) status = napi_set_element(env, alive, at, entry);
+        }
+    }
+    if (status == napi_ok) status = napi_set_named_property(env, definitions, "alive", alive);
+    if (status == napi_ok) status = napi_set_named_property(env, out, "definitions", definitions);
     if (status != napi_ok) {
         return tna_throw(env, "out-of-memory", "cannot build the host metrics object");
     }

@@ -197,6 +197,19 @@ typedef struct {
     ta_str value;
 } tna_otlp_host_log_params;
 void tna_otlp_host_log(tna_otlp *otlp, const tna_otlp_host_log_params *log);
+
+/*
+ * A definition lifecycle event as a log (core ADR 0079): DEBUG for
+ * registered and freed, INFO for retired, with the family, revision,
+ * origin ("host", "nested" or "invoke") and ID. Rate-limited per family
+ * and event name, not per definition, so a family that churns through
+ * invoke-time definitions stays within the limit.
+ */
+typedef struct {
+    const ta_definition_event *event;
+    ta_str origin;
+} tna_otlp_definition_log_params;
+void tna_otlp_definition_log(tna_otlp *otlp, const tna_otlp_definition_log_params *log);
 void tna_otlp_log(tna_otlp *otlp, const ta_log_record *record);
 
 /* The same pair for the log records written since the last put, as one

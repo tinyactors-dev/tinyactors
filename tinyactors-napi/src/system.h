@@ -51,6 +51,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "definitions.h"
 #include "allocator.h"
 #include "directory.h"
 #include "effects.h"
@@ -167,6 +168,8 @@ struct tna_system {
     /* What the sink asks core for, and what is watched (napi ADR 0017). */
     tna_trace_masks trace_masks;
     tna_trace_watch trace_watch;
+    /* The definition lifecycle as core tells it (core ADR 0079): counts and origins. */
+    tna_definitions definitions;
     /* The last service handle a JavaScript invoker's start was given. */
     uint64_t next_service;
     /*

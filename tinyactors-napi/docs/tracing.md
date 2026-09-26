@@ -111,6 +111,8 @@ and `tinyactors.actors.occupancy`: how many actors are in each state (by
 | `tinyactors.faults` | sum | Faults by `tinyactors.fault.code`. |
 | `tinyactors.messages.dead_lettered` | sum | Dead letters by `tinyactors.dead_letter.reason`. |
 | `tinyactors.messages.queued`, `.delivered`, `tinyactors.memory.usage` | gauge, sum, gauge | Mail and memory. |
+| `tinyactors.definitions` | gauge | Definitions alive, by `tinyactors.definition.origin` (`host`: `define()`; `nested`: an inline child compiled with its parent; `invoke`: chart text compiled when an `<invoke>` ran) and `tinyactors.definition.state` (`live`, or `retired` but still used by a child or an actor). |
+| `tinyactors.definitions.registered`, `.retired`, `.freed` | sum | The definition lifecycle (core ADR 0079). A `registered` count that keeps climbing while `freed` keeps pace is **churn**: an invoke compiling new chart text for every child. A `registered` count that climbs while `freed` does not is a leak. |
 
 No metric attribute names one actor; which actors, is what `inspect()`
 and a walk over actors answer. Post `metricsToOTLP(system.metrics(), {
@@ -155,6 +157,16 @@ per second, then one log that says how many were suppressed):
 | `tinyactors.run.stopped` | WARN | `the run stopped: an allocation failed (ADR 0070)` |
 | `tinyactors.actor.quarantined` | WARN | `actor quarantined: deliver failed: invalid` |
 | `tinyactors.message.dead_lettered` | WARN | `arm dead-lettered: not-found` |
+| `tinyactors.definition.registered`, `.freed` | DEBUG | `registered order/invoke 3f2a9c01d4e7b650 (invoke)` |
+| `tinyactors.definition.retired` | INFO | `retired order v1 (host)` |
+
+The definition logs carry `tinyactors.definition.family`, `.revision`,
+`.origin` and `.id`. They are rate-limited per **family** and event, not
+per definition, so a family that registers a new definition for every
+child writes at most `logLimit` of them a second, and a count of the
+rest; they are DEBUG and INFO, so a backend that keeps WARN and above
+drops them, while the metrics above keep the full counts. They go
+wherever the other logs go, and `logs: false` stops them too.
 
 A failure says what failed and why in its body, and in attributes for
 filtering: `exception.message` (the thrown value, an `Error` as

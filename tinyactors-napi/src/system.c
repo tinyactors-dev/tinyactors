@@ -44,6 +44,7 @@ ta_result tna_system_create(tna_system **out) {
     tna_loads_init(&system->loads, tna_allocator_for(&system->allocator, TNA_MEMORY_DIRECTORY));
     tna_offloads_init(&system->offloads, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER));
     tna_trace_watch_init(&system->trace_watch, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER));
+    tna_definitions_init(&system->definitions, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER));
     tna_vec_init(&system->io_processors, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER),
                  TNA_LAYOUT(tna_io_processor *));
     tna_host_metrics_init(&system->metrics);
@@ -109,6 +110,8 @@ void tna_system_close(tna_system *system) {
     tna_io_close(system);
     tna_sched_destroy(&system->sched);
     tna_trace_watch_destroy(&system->trace_watch);
+    /* Core freed every definition in its teardown, so the origins are empty. */
+    tna_definitions_destroy(&system->definitions);
     if (system->after_core != NULL) {
         system->after_core(system->after_core_context);
     }

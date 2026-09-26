@@ -50,8 +50,9 @@ const COUNTERS = [
  * definitions; `system` is core's totals (freed definitions included);
  * `host` is napi's own view: messages, memory, and what native
  * hostMetrics() reports (turn duration, timer lateness and overdue time,
- * the run queues, quarantine, faults by code, dead letters by reason, and
- * loads of unloaded actors: outcomes, duration and waiting mail).
+ * the run queues, quarantine, faults by code, dead letters by reason,
+ * loads of unloaded actors: outcomes, duration and waiting mail, and the
+ * definition lifecycle: events, and what is alive by origin and state).
  */
 function buildSnapshot({ startTime, time, systemName, system, definitions, host }) {
   const metrics = new Map();
@@ -109,6 +110,22 @@ function buildSnapshot({ startTime, time, systemName, system, definitions, host 
   metric('tinyactors.load.duration', 's', 'histogram')
     .points.push({ attributes: base, ...histogramPoint(host.native.load) });
   metric('tinyactors.messages.waiting', '{message}', 'gauge').points.push({ attributes: base, value: host.native.waiting });
+  // The definition lifecycle (core ADR 0079). A registered count that keeps
+  // climbing with a freed count that keeps pace is churn: an invoke that
+  // compiles new chart text for every child.
+  const lifecycle = host.native.definitions;
+  metric('tinyactors.definitions.registered', '{definition}', 'sum')
+    .points.push({ attributes: base, value: lifecycle.registered });
+  metric('tinyactors.definitions.retired', '{definition}', 'sum').points.push({ attributes: base, value: lifecycle.retired });
+  metric('tinyactors.definitions.freed', '{definition}', 'sum').points.push({ attributes: base, value: lifecycle.freed });
+  const alive = metric('tinyactors.definitions', '{definition}', 'gauge');
+  for (const { origin, retired, count } of lifecycle.alive) {
+    alive.points.push({
+      attributes: { ...base, 'tinyactors.definition.origin': origin,
+                    'tinyactors.definition.state': retired ? 'retired' : 'live' },
+      value: count,
+    });
+  }
   const memory = metric('tinyactors.memory.usage', 'By', 'gauge');
   for (const [category, bytes] of Object.entries(host.memory)) {
     memory.points.push({ attributes: { ...base, 'tinyactors.memory.category': category }, value: bytes });

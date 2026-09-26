@@ -264,7 +264,9 @@ ta_result tna_children_nest(tna_napi_system *wrapper, ta_definition_id definitio
             }
             ta_definition_id child = 0;
             if (result == TA_OK) {
+                wrapper->system->definitions.registering = TNA_ORIGIN_NESTED;
                 result = tna_compile_child(wrapper, text, parent, resolve, &child, failure);
+                wrapper->system->definitions.registering = TNA_ORIGIN_HOST;
                 if (result != TA_OK && result != TA_ERR_NOMEM) {
                     tna_child_refused(failure, invoke, result);
                     result = result == TA_ERR_UNSUPPORTED ? TA_ERR_UNSUPPORTED : TA_ERR_INVALID;
@@ -371,7 +373,9 @@ static bool tna_clear_exception(napi_env env, char *message, size_t capacity) {
 static ta_op_status tna_compile_for_invoke(tna_napi_system *wrapper, const tna_child_params *params, ta_bytes text,
                                            tna_invoking parent) {
     tna_import_failure failure;
+    wrapper->system->definitions.registering = TNA_ORIGIN_INVOKE;
     ta_result result = tna_compile_child(wrapper, text, parent.definition, parent.resolve, params->out, &failure);
+    wrapper->system->definitions.registering = TNA_ORIGIN_HOST;
     char thrown[512];
     if (tna_clear_exception(wrapper->env, thrown, sizeof thrown)) {
         if (result == TA_OK) {

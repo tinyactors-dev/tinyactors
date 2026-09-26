@@ -70,7 +70,7 @@ enum {
     F_LOG_EVENT_NAME = 12,
 };
 
-enum { SEVERITY_INFO = 9, SEVERITY_WARN = 13 };
+enum { SEVERITY_DEBUG = 5, SEVERITY_INFO = 9, SEVERITY_WARN = 13 };
 
 enum { WIRE_VARINT = 0, WIRE_I64 = 1, WIRE_LEN = 2 };
 enum { SPAN_KIND_INTERNAL = 1, STATUS_CODE_ERROR = 2 };
@@ -1615,6 +1615,55 @@ void tna_otlp_host_log(tna_otlp *otlp, const tna_otlp_host_log_params *log) {
     if (ok && log->key.len != 0) {
         ok = tna_kv_string(buf, F_LOG_ATTRIBUTES, log->key, log->value);
     }
+    if (!ok || !tna_log_append(otlp, &line)) {
+        otlp->dropped += 1u;
+    }
+}
+
+void tna_otlp_definition_log(tna_otlp *otlp, const tna_otlp_definition_log_params *log) {
+    if (otlp->config.log_limit == 0) {
+        return;
+    }
+    static const ta_trace_context untraced = { 0 };
+    static const ta_str names[] = { LIT("tinyactors.definition.registered"), LIT("tinyactors.definition.retired"),
+                                    LIT("tinyactors.definition.freed") };
+    static const ta_str verbs[] = { LIT("registered"), LIT("retired"), LIT("freed") };
+    const ta_definition_event *event = log->event;
+    uint32_t kind = event->kind <= TA_DEFINITION_EVENT_FREED ? (uint32_t)event->kind : 0u;
+    ta_str family = event->identity.family.name;
+    ta_str revision = { (const char *)event->identity.revision.ptr, event->identity.revision.len };
+    /* Registering and freeing are routine (DEBUG); retiring is a host's decision (INFO). */
+    bool retired = event->kind == TA_DEFINITION_EVENT_RETIRED;
+    /*
+     * Rate-limited per family and event, not per definition: an invoke that
+     * compiles new chart text every time registers a new definition for each
+     * child, and a per-definition limit would never engage.
+     */
+    tna_log_line line = { .now = otlp->config.host.now(otlp->config.host.self),
+                          .severity = retired ? SEVERITY_INFO : SEVERITY_DEBUG,
+                          .severity_text = retired ? LIT("INFO") : LIT("DEBUG"), .event_name = names[kind],
+                          .context = &untraced, .definition = tna_log_key(0, family), .key_name = names[kind] };
+    otlp->log_body.len = 0;
+    bool ok = tna_buf_room(&otlp->log_body, 12u + family.len + 1u + revision.len + 3u + log->origin.len + 1u);
+    if (ok) {
+        tna_put_bytes(&otlp->log_body, verbs[kind].ptr, verbs[kind].len);
+        tna_put_bytes(&otlp->log_body, " ", 1);
+        tna_put_bytes(&otlp->log_body, family.ptr, family.len);
+        if (revision.len != 0) {
+            tna_put_bytes(&otlp->log_body, " ", 1);
+            tna_put_bytes(&otlp->log_body, revision.ptr, revision.len);
+        }
+        tna_put_bytes(&otlp->log_body, " (", 2);
+        tna_put_bytes(&otlp->log_body, log->origin.ptr, log->origin.len);
+        tna_put_bytes(&otlp->log_body, ")", 1);
+    }
+    line.body = (ta_str){ (const char *)otlp->log_body.data, (uint32_t)otlp->log_body.len };
+    tna_otlp_buf *buf = &otlp->scratch;
+    buf->len = 0;
+    ok = ok && tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("tinyactors.definition.family"), family) &&
+         tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("tinyactors.definition.revision"), revision) &&
+         tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("tinyactors.definition.origin"), log->origin) &&
+         tna_kv_int(buf, F_LOG_ATTRIBUTES, LIT("tinyactors.definition.id"), (int64_t)event->definition);
     if (!ok || !tna_log_append(otlp, &line)) {
         otlp->dropped += 1u;
     }
