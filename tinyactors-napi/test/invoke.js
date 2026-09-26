@@ -11,6 +11,7 @@
 const assert = require('node:assert/strict');
 const { createSystem } = require('..');
 const { ecmascript } = require('../tools/ecmascript-datamodel');
+const { nativeOf } = require('../lib/system');
 
 const NS = 'xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript"';
 
@@ -445,8 +446,50 @@ async function resolverLifetime() {
   system.close();
 }
 
+// A family watch on invoke-time children forgets each child definition core
+// frees (core ADR 0079): its sets stay the size of what is alive, however
+// many children come and go under it.
+async function watchedChurn() {
+  const { system } = setup();
+  system.setTraceSink(() => {});
+  const parent = system.define(`<scxml ${NS} name="watched" initial="s0">
+    ${MAKER}
+    <datamodel><data id="i" expr="0"/></datamodel>
+    <state id="s0">
+      <invoke type="scxml" id="kid"><content expr="make(i)"/></invoke>
+      <transition event="done.invoke.kid" target="s0"><assign location="i" expr="i + 1"/></transition>
+      <transition event="poke"><send event="poke" target="#_kid"/></transition>
+      <transition event="next"><send event="stop" target="#_kid"/></transition>
+    </state>
+  </scxml>`, { format: 'scxml' });
+  const watch = system.watchTraces({ families: ['watched/invoke'] });
+  const actor = system.spawn(parent);
+  await system.flush();
+  const sizes = () => nativeOf(system).traceWatchSizes();
+  // One round: poke the child (a delivery the watch checks), then stop it.
+  const round = async () => {
+    system.post(actor, 'poke');
+    await system.flush();
+    const live = sizes();
+    system.post(actor, 'next');
+    await system.flush();
+    return live;
+  };
+  await round();
+  const baseline = sizes();
+  for (let at = 0; at < 50; at += 1) {
+    const live = await round();
+    assert.equal(live.matched, 1, 'the live child is in the watch');
+  }
+  assert.equal(actor.inspect().data.i, 51);
+  assert.deepEqual(sizes(), baseline, '50 children came and went; the watch holds only what is alive');
+  watch.stop();
+  system.close();
+}
+
 (async () => {
   await resolverLifetime();
+  await watchedChurn();
   await exchange();
   await cancelOnExit();
   await doneDataAndFinalize();

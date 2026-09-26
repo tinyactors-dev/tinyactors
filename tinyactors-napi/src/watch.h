@@ -33,8 +33,9 @@ typedef struct {
  * by JavaScript or by core itself (a nested or invoke-time child), is
  * caught the same way. `matched` holds the definitions whose family is
  * watched and `checked` every definition already looked at, so each
- * definition's family is read once per watch. Definition IDs are
- * generational, so remembering a freed one is harmless.
+ * definition's family is read once per watch. A definition core frees
+ * leaves both (core ADR 0079), so a watch on a system that churns through
+ * definitions stays the size of what is alive.
  */
 typedef struct {
     ta_allocator allocator;
@@ -61,6 +62,9 @@ ta_result tna_trace_watch_set(tna_trace_watch *watch, const tna_trace_watch_set_
 static inline bool tna_trace_watch_empty(const tna_trace_watch *watch) {
     return watch == NULL || watch->sessions.count + watch->family_count == 0;
 }
+
+/* Drops a definition core has freed from `matched` and `checked` (core ADR 0079). */
+void tna_trace_watch_forget_definition(tna_trace_watch *watch, ta_definition_id definition);
 
 /* Whether `id` is in the set: constant time, for tests and the scheduler. */
 bool tna_id_set_has(const tna_id_set *set, uint64_t id);

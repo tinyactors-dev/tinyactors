@@ -522,6 +522,33 @@ static bool tna_family_array(napi_env env, ta_allocator allocator, napi_value ar
 }
 
 /*
+ * traceWatchSizes(): tests only. { sessions, matched, checked }, the sizes
+ * of the watch's sets, so a test can see a family watch shed the
+ * definitions core frees (core ADR 0079). lib/ never calls it.
+ */
+napi_value tna_trace_watch_sizes_method(napi_env env, napi_callback_info info) {
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    const tna_trace_watch *watch = &wrapper->system->trace_watch;
+    napi_value sizes = NULL;
+    napi_value sessions = NULL;
+    napi_value matched = NULL;
+    napi_value checked = NULL;
+    if (napi_create_object(env, &sizes) != napi_ok ||
+        napi_create_uint32(env, watch->sessions.count, &sessions) != napi_ok ||
+        napi_create_uint32(env, watch->matched.count, &matched) != napi_ok ||
+        napi_create_uint32(env, watch->checked.count, &checked) != napi_ok ||
+        napi_set_named_property(env, sizes, "sessions", sessions) != napi_ok ||
+        napi_set_named_property(env, sizes, "matched", matched) != napi_ok ||
+        napi_set_named_property(env, sizes, "checked", checked) != napi_ok) {
+        return tna_throw(env, "out-of-memory", "traceWatchSizes: cannot build the result");
+    }
+    return sizes;
+}
+
+/*
  * setTraceWatch(sessions, families): what is watched, replacing the last:
  * session IDs, and definition family names that the watch resolves as
  * deliveries meet each definition (watch.h). No size limit of its own.

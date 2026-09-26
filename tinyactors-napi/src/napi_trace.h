@@ -28,6 +28,8 @@ napi_value tna_spawn_trace_method(napi_env env, napi_callback_info info);
 napi_value tna_configure_traces_method(napi_env env, napi_callback_info info);
 /* setTraceWatch(sessions, definitions). */
 napi_value tna_set_trace_watch_method(napi_env env, napi_callback_info info);
+/* traceWatchSizes(): tests only. */
+napi_value tna_trace_watch_sizes_method(napi_env env, napi_callback_info info);
 /*
  * options.traceparent of post()/send()/spawn(): undefined for none, or W3C
  * traceparent text, which core parses (core ADR 0073). Throws and answers

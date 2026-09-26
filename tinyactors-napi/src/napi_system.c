@@ -175,6 +175,7 @@ static void tna_definition_notify(void *self, const ta_definition_event *event) 
     }
     tna_napi_system *wrapper = self;
     tna_children_forget(wrapper, event->definition);
+    tna_trace_watch_forget_definition(&wrapper->system->trace_watch, event->definition);
     if (wrapper->system->tracing) {
         tna_otlp_forget_definition(&wrapper->system->otlp, event->definition);
     }
@@ -1235,6 +1236,7 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "loadOffloaded", NULL, tna_load_offloaded_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "configureTraces", NULL, tna_configure_traces_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "setTraceWatch", NULL, tna_set_trace_watch_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "traceWatchSizes", NULL, tna_trace_watch_sizes_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "reportInvoke", NULL, tna_report_invoke_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "closed", NULL, NULL, tna_closed_getter, NULL, NULL, napi_default_jsproperty, NULL },
     };

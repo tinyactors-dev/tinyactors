@@ -144,6 +144,43 @@ static bool tna_id_set_add(ta_allocator allocator, tna_id_set *set, uint64_t id)
     return true;
 }
 
+/*
+ * Removes `id`. With linear probing an emptied slot would cut the probe run
+ * of every ID stored after it, so the rest of the run is taken out and put
+ * back: no tombstones, and the set never grows from removals.
+ */
+static void tna_id_set_remove(tna_id_set *set, uint64_t id) {
+    if (id == TNA_ID_EMPTY) {
+        set->count -= set->has_max ? 1u : 0u;
+        set->has_max = false;
+        return;
+    }
+    if (set->capacity == 0) {
+        return;
+    }
+    uint32_t mask = set->capacity - 1u;
+    uint32_t at = (uint32_t)tna_id_hash(id) & mask;
+    while (set->slots[at] != id) {
+        if (set->slots[at] == TNA_ID_EMPTY) {
+            return;
+        }
+        at = (at + 1u) & mask;
+    }
+    set->slots[at] = TNA_ID_EMPTY;
+    set->count -= 1u;
+    for (at = (at + 1u) & mask; set->slots[at] != TNA_ID_EMPTY; at = (at + 1u) & mask) {
+        uint64_t moved = set->slots[at];
+        set->slots[at] = TNA_ID_EMPTY;
+        set->count -= 1u;
+        tna_id_set_put(set, moved);
+    }
+}
+
+void tna_trace_watch_forget_definition(tna_trace_watch *watch, ta_definition_id definition) {
+    tna_id_set_remove(&watch->matched, definition);
+    tna_id_set_remove(&watch->checked, definition);
+}
+
 /* Copies `count` family names. TA_ERR_NOMEM frees what was copied. */
 static ta_result tna_copy_families(ta_allocator allocator, const ta_str *from, uint32_t count, ta_str **out) {
     *out = NULL;

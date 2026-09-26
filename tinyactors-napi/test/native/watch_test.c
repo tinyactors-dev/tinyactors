@@ -98,9 +98,101 @@ static void families_resolve_as_met(void) {
     CHECK(tna_allocator_total(&allocator).bytes_in_use == 0);
 }
 
+/* The definition sink a host installs: it tells the watch (core ADR 0079). */
+static void forget_freed(void *self, const ta_definition_event *event) {
+    if (event->kind == TA_DEFINITION_EVENT_FREED) {
+        tna_trace_watch_forget_definition(self, event->definition);
+    }
+}
+
+static const ta_definition_sink_vtable forget_vtable = { .notify = forget_freed };
+
+/* A definition of `family` whose one state is named after `round`, so each
+ * round's chart has its own content, and so an identity of its own. */
+static ta_definition_id define_distinct(ta_system *system, ta_allocator allocator, ta_str family, uint32_t round) {
+    char name[16];
+    int length = snprintf(name, sizeof name, "s%u", round);
+    ta_scxml_state_spec states[] = {
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = { name, (uint32_t)length } },
+        {0},
+    };
+    ta_definition_identity identity = { .family = { family } };
+    ta_definition *definition = NULL;
+    ta_definition_id id = 0;
+    CHECK(ta_definition_compile_spec(system, &(ta_definition_compile_params){
+                                                 .spec = &(ta_scxml_spec){ .identity = &identity, .states = states },
+                                                 .datamodel = ta_null_datamodel(),
+                                                 .allocator = allocator,
+                                                 .out = &definition }) == TA_OK);
+    CHECK(ta_system_register_definition(system, definition, &id) == TA_OK);
+    return id;
+}
+
+/*
+ * A definition core frees leaves `matched` and `checked`, so a family watch
+ * on a system that churns through definitions stays the size of what is
+ * alive; removing from the middle of a probe run keeps every other member
+ * findable.
+ */
+static void freed_definitions_leave(void) {
+    tna_allocator allocator;
+    tna_allocator_init(&allocator);
+    ta_allocator core_allocator = tna_allocator_for(&allocator, TNA_MEMORY_CORE);
+    ta_system *system = NULL;
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = core_allocator }, &system) == TA_OK);
+    tna_trace_watch watch;
+    tna_trace_watch_init(&watch, tna_allocator_for(&allocator, TNA_MEMORY_OTHER));
+    CHECK(ta_system_set_definition_sink(system, (ta_definition_sink){ .self = &watch, .v = &forget_vtable }) ==
+          TA_OK);
+    ta_str watched_family = { "churn/invoke", 12 };
+    CHECK(tna_trace_watch_set(&watch, &(tna_trace_watch_set_params){ .families = &watched_family,
+                                                                      .family_count = 1 }) == TA_OK);
+
+    enum { ROUNDS = 300 };
+    static ta_definition_id ids[ROUNDS];
+    static ta_actor_id actors[ROUNDS];
+    for (uint32_t round = 0; round < ROUNDS; round += 1u) {
+        /* Alternating families, so both sets hold members. */
+        ta_str family = round % 2u == 0 ? watched_family : (ta_str){ "churn", 5 };
+        ids[round] = define_distinct(system, core_allocator, family, round);
+        CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = ids[round], .out = &actors[round] }) ==
+              TA_OK);
+        CHECK(marked(&watch, system, actors[round]) == (round % 2u == 0));
+    }
+    CHECK(watch.checked.count == ROUNDS && watch.matched.count == ROUNDS / 2);
+
+    /* Free every third definition: the rest stay members, whatever probe
+     * runs the removals cut through. */
+    uint32_t freed = 0;
+    for (uint32_t round = 0; round < ROUNDS; round += 3u) {
+        CHECK(ta_system_retire_definition(system, ids[round]) == TA_OK);
+        CHECK(ta_actor_destroy(system, actors[round]) == TA_OK);
+        freed += 1u;
+    }
+    CHECK(watch.checked.count == ROUNDS - freed);
+    for (uint32_t round = 0; round < ROUNDS; round += 1u) {
+        bool gone = round % 3u == 0;
+        CHECK(tna_id_set_has(&watch.checked, ids[round]) == !gone);
+        CHECK(tna_id_set_has(&watch.matched, ids[round]) == (!gone && round % 2u == 0));
+    }
+
+    /* The rest go too: both sets return to empty. */
+    for (uint32_t round = 0; round < ROUNDS; round += 1u) {
+        if (round % 3u != 0) {
+            CHECK(ta_system_retire_definition(system, ids[round]) == TA_OK);
+            CHECK(ta_actor_destroy(system, actors[round]) == TA_OK);
+        }
+    }
+    CHECK(watch.checked.count == 0 && watch.matched.count == 0);
+    tna_trace_watch_destroy(&watch);
+    ta_system_destroy(system);
+    CHECK(tna_allocator_total(&allocator).bytes_in_use == 0);
+}
+
 int main(void) {
     sets_answer_membership();
     families_resolve_as_met();
+    freed_definitions_leave();
     puts("watch_test passed");
     return 0;
 }
