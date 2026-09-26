@@ -496,3 +496,16 @@ Installing a sink adds about 270 native bytes per actor at 1M actors (and
 about 340 at 100k): per-system buffers of the encoder, amortized over the
 population. Allocator calls per event are 0 untraced and 0.2 with a sink
 installed.
+
+## 2026-09-26: an installed trace sink at rest
+
+Machine `a99e44a37e2e` (Node 22.23.2) and `c989bd79a51f` (Bun 1.4.1),
+`mise run bench-compare 27d38c5 1000000`, 2 alternating runs each,
+medians; records in `bench/results/`. With a sink installed, native bytes
+per actor fall from 597 to 329 (untraced: 328) and allocator calls per
+event from 0.20 to 0.00, in every traced variant on both runtimes;
+throughput is unchanged within the 5% rule. Causes and the full table:
+napi ADR 0017, "Follow-up, 2026-09-26". RSS per actor with a sink stays
+above untraced (Node 1,124 against 669), the high-water mark of the spawn
+turn's staging buffer.
+

@@ -836,6 +836,15 @@ at the repository root (`abee06b`)):
 - A watched delivery calls `ta_actor_inspect` to find the session and
   definition; a watch that keyed on runtime IDs would avoid it, at the
   cost of re-keying on unload and load.
+- RSS stays above untraced once a sink has traced a burst (Node, 1M
+  actors: 1,124 bytes per actor against 669). Native bytes are back to
+  untraced (ADR 0017's follow-up of 2026-09-26); the rest is the malloc
+  behind the freed staging buffer keeping its pages. Encoding a burst in
+  smaller pieces, or handing large turns over part by part, would lower
+  the peak itself.
+- Mail carrying a trace parent keeps a 48-byte parent per queued message
+  in a pool that stays at its high-water mark, as the envelope pool does:
+  a burst of N queued traced messages leaves N parents on the free list.
 
 **Offloading** (core ADR 0074, 2026-09-25; `docs/scale.md`):
 - the 208 bytes kept per unloaded address (core 114, directory 45, value

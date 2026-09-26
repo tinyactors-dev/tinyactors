@@ -1,6 +1,6 @@
 # ADR 0017: Observability owns its encoder, and makes off and sampled-out free
 
-**Status:** Accepted and implemented, except where the implementation notes say otherwise. The follow-up of 2026-09-25 in the notes adds failure logs that say why, the host metrics and the SDK metrics example; the traced-path targets and Bun's budgets stay open. ADR 0018 (the encoder writes into host memory) removed a copy and a zero-fill with no measurable gain: macrostep spans still cost about 530 ns (Node) and 575 ns (Bun) over untraced, against about 280, and every record about 1,470 against 780. Revises ADR 0016 (points 1 and 4, and its performance), move `traceparent` parsing from ADR 0015 point 4 into C, and take the napi slot core ADR 0072 names for metrics and logs, revising that ADR's section 7 for metrics. Research: [`docs/research/observability-build-vs-reuse.md`](../../../docs/research/observability-build-vs-reuse.md). **2026-09-25: the section 4 targets are withdrawn, and the measured performance is accepted as the baseline** (`docs/scale.md`, "tracing throughput, the accepted baseline"). Since core ADR 0078, `watchTraces({ families })` sends family names to the addon, which resolves each definition when a delivery first meets it, so nested and invoke-time children are watched too.
+**Status:** Accepted and implemented, except where the implementation notes say otherwise. The follow-up of 2026-09-25 in the notes adds failure logs that say why, the host metrics and the SDK metrics example; the traced-path targets and Bun's budgets stay open. ADR 0018 (the encoder writes into host memory) removed a copy and a zero-fill with no measurable gain: macrostep spans still cost about 530 ns (Node) and 575 ns (Bun) over untraced, against about 280, and every record about 1,470 against 780. Revises ADR 0016 (points 1 and 4, and its performance), move `traceparent` parsing from ADR 0015 point 4 into C, and take the napi slot core ADR 0072 names for metrics and logs, revising that ADR's section 7 for metrics. Research: [`docs/research/observability-build-vs-reuse.md`](../../../docs/research/observability-build-vs-reuse.md). **2026-09-25: the section 4 targets are withdrawn, and the measured performance is accepted as the baseline** (`docs/scale.md`, "tracing throughput, the accepted baseline"). Since core ADR 0078, `watchTraces({ families })` sends family names to the addon, which resolves each definition when a delivery first meets it, so nested and invoke-time children are watched too. The follow-up of 2026-09-26 in the notes removes the per-actor memory and the allocations an installed but idle sink cost (`b6b369e`, `db96831`, `28825dc`).
 **Date:** 2026-09-24
 
 ## Context
@@ -465,4 +465,56 @@ The original questions were:
     +43, the latter noisy). Taking the `traceparent` string out of
     JavaScript costs more on Bun; caching the last parsed text is the
     likely fix.
+
+### Follow-up, 2026-09-26: what an installed sink costs at rest
+
+The machine-keyed bench (`mise run bench`, which reports memory beside
+throughput) showed that installing a sink, even with every macrostep
+sampled out, cost about 270 native bytes per actor and 0.20 allocator
+calls per event (Node 22, 1M actors, machine `a99e44a37e2e`). Neither was
+per actor, and neither was in core; both were napi's:
+
+- **The OTLP encoder's staging buffers kept their largest turn.** The span
+  and log buffers were reset after each request but never shrunk. A turn
+  that spawns N actors traces N bootstrap macrosteps (about 365 bytes of
+  spans each under `summary`), so a million spawns in one turn left about
+  336 bytes per actor in the "other" category for the system's life.
+  Spawning in turns of 1,000 left 5 bytes per actor: it was the turn's
+  size, not the population. Now `tna_otlp_end_turn()` runs at the end of
+  every pump turn and frees a buffer past 1 MiB when it is more than four
+  times a typical turn's use (an average over turns that wrote anything,
+  moving an eighth of the way each such turn, taken before the current
+  turn). A burst's buffer goes as its turn ends; steady turns, and the
+  idle turns between them, keep theirs and allocate nothing. A first
+  version freed any buffer past 1 MiB that a request left empty, which
+  regrew it every turn under `full` at the default `messageBudget` (0.03
+  calls per event); `28825dc` replaced it.
+- **Trace parents were allocated one at a time.** Mail between actors keeps
+  its trace parent out of line (napi ADR 0015 point 4), from
+  `tna_free_list`, which allocated a record per take when empty. The first
+  round of N traced messages made N allocator calls: the 0.20 per event
+  the bench counted over five rounds. The free list now takes a chunk of
+  as many records as are live (8 to 1,024), as envelopes already did, so
+  that round costs about N/1,024 calls. Value boxes use the same list and
+  gain the same. Steady state was, and stays, zero.
+
+Measured with `mise run bench-compare 27d38c5 1000000` (2 alternating runs
+each, medians, load about 2.7):
+
+| Variant | Node native B/actor | Node allocs/event | Node ns/event | Bun native B/actor | Bun allocs/event | Bun ns/event |
+|---|---|---|---|---|---|---|
+| untraced | 328 → 328 | 0.00 → 0.00 | 446 → 445 | 328 → 328 | 0.00 → 0.00 | 388 → 387 |
+| sampled out | 597 → 329 | 0.20 → 0.00 | 464 → 464 | 597 → 329 | 0.20 → 0.00 | 418 → 425 |
+| `summary` | 597 → 329 | 0.20 → 0.00 | 922 → 909 | 597 → 329 | 0.20 → 0.00 | 798 → 820 |
+| `summary` 10% | 597 → 328 | 0.20 → 0.00 | 514 → 504 | 597 → 328 | 0.20 → 0.00 | 458 → 450 |
+| every record | 597 → 329 | 0.20 → 0.00 | 1,702 → 1,707 | 597 → 329 | 0.20 → 0.00 | 1,523 → 1,507 |
+
+RSS per actor fell 11 to 14% with a sink installed, but stays above
+untraced (Node 1,124 against 669): the burst's staging buffer is freed,
+and the malloc behind it keeps the pages. Nothing moved outside the 5%
+rule. `test/allocations.js` checks that a sink installed and sampled out,
+and `summary` at 1%, make no more napi allocator calls than untraced after
+warm-up, that the first round of messages adds only a few, and that an
+idle sink keeps at most 1 MiB plus 16 bytes per actor over untraced after
+50,000 spawns in one turn; each check fails against the old code.
 
