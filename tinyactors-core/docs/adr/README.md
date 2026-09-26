@@ -84,3 +84,4 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0078](0078-the-definitions-of-a-system-are-walked-by-page.md) | [The definitions of a system are walked by page](0078-the-definitions-of-a-system-are-walked-by-page.md) |
 | [0079](0079-core-tells-the-host-when-a-definition-is-registered-retired-or-freed.md) | [Core tells the host when a definition is registered, retired or freed](0079-core-tells-the-host-when-a-definition-is-registered-retired-or-freed.md) |
 | [0080](0080-definition-events-are-lifecycle-records-too.md) | [Definition events are lifecycle records too](0080-definition-events-are-lifecycle-records-too.md) |
+| [0081](0081-a-host-reports-an-invocation-error-with-its-own-reason.md) | [A host reports an invocation error with its own reason](0081-a-host-reports-an-invocation-error-with-its-own-reason.md) |

@@ -34,3 +34,4 @@ particular on core ADRs 0011, 0029, 0040, 0047, 0050, 0053–0059, 0061,
 | [0022](0022-mail-a-chart-sends-nowhere-raises-error-communication.md) | [Mail a chart sends nowhere raises `error.communication`](0022-mail-a-chart-sends-nowhere-raises-error-communication.md) |
 | [0023](0023-invoked-documents-are-cached-in-a-bounded-lru.md) | [Invoked documents are cached in a bounded LRU](0023-invoked-documents-are-cached-in-a-bounded-lru.md) |
 | [0024](0024-a-child-chart-is-a-nested-definition.md) | [A child chart is a nested definition](0024-a-child-chart-is-a-nested-definition.md) |
+| [0025](0025-a-quarantined-child-tells-its-parent.md) | [A quarantined child tells its parent](0025-a-quarantined-child-tells-its-parent.md) |
