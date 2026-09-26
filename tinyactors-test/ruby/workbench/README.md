@@ -275,7 +275,11 @@ other three panes without disturbing a half-typed command.
 
 `Session` builds on `TinyactorsTest::Context` (`ruby/tinyactors_test/scenario.rb`),
 the same class the scenario suite uses, so the workbench drives the public C
-API through exactly the generated bindings the tests do.
+API through exactly the generated bindings the tests do. It runs the system
+through the Context's `TinyactorsTest::Scheduler`, the loop the scenarios
+run to quiescence with. The debug adapter (`ruby/dap/README.md`) runs a
+workbench directory headless through the same Session and Scheduler, and
+steers the Scheduler to stop and step.
 
 `ruby/workbench_selftest.rb` checks all of this against the live host,
 including that nothing leaks once the system is destroyed. `mise run test`
