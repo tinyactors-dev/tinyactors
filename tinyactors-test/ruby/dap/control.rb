@@ -32,10 +32,10 @@ module DAP
   # `pending` holds breakpoints this microstep will reach (Breakpoints),
   # and `fault` the last fault a record carried, for the error event after it.
   # `taken` is the event the macrostep began with, `event` the one of the
-  # step it is in, which is _event. `fresh` says its microstep has begun
-  # and no unit of it has written a record yet (Breakpoints#first_unit).
+  # step it is in, which is _event. `reached` is the last position a line
+  # breakpoint was checked at.
   Track = Struct.new(:key, :definition, :in_macrostep, :macrostep, :taken, :event, :microstep,
-                     :summary, :entry_stopped, :pending, :fault, :fresh, keyword_init: true)
+                     :summary, :entry_stopped, :pending, :fault, :reached, keyword_init: true)
 
   # The monitor of every place's Scheduler while a client is attached: it
   # decides the budgets of every resume, reads the trace records each one
@@ -53,7 +53,12 @@ module DAP
     Step = Struct.new(:kind, :granularity, :thread, :key, :place, :handle, :start, :depth, :waiting,
                       keyword_init: true)
 
-    FINE = { budget: 1, action_budget: 1 }.freeze
+    # While anything is armed: pause before every unit (ADR 0061) and at
+    # every microstep's start, before its first unit (ADR 0087). The
+    # microstep budget is the workbench's: a stop between two microsteps
+    # would be one no breakpoint or step asks for, since the next start
+    # comes right after it.
+    FINE = { budget: TinyactorsTest::Context::RESUME_BUDGET, action_budget: 1, pause_at_microstep_start: true }.freeze
 
     # What one place's Scheduler calls: the Control, told which place.
     class Monitor
@@ -89,7 +94,54 @@ module DAP
       @macrosteps_ended = 0
       @hits = []
       @aside = false
+      # What caused each macrostep, and what each step sent, for the causal
+      # chain of a stack trace: [context, session, macrostep] => {event:,
+      # cause:}, and [context, session, macrostep, microstep] => [{event:,
+      # action:, definition:}]. Bounded: the oldest go first.
+      @macrosteps = {}
+      @sends = {}
     end
+
+    # The steps that led to `thread`'s current macrostep, nearest first:
+    # the step that sent the event it took, then the step that sent that
+    # one's, across actors, following each MACROSTEP_BEGIN's `cause` (ADR
+    # 0067). Each hop is {thread:, event:, step: "M.m", action:,
+    # definition:} for a step the adapter saw, {host: true, event:} for an
+    # event the host delivered, or {unseen: true, step:} for a step the
+    # adapter has no records of.
+    def chain(thread)
+      track = track(thread)
+      return [] unless track&.in_macrostep
+
+      context = thread.context
+      entry = @macrosteps[[context, thread.session, track.macrostep]]
+      hops = []
+      CHAIN_LIMIT.times do
+        break if entry.nil?
+
+        cause = entry[:cause] || {}
+        session = Integer(cause[:session] || 0)
+        if session.zero?
+          hops << { host: true, event: entry[:event] }
+          break
+        end
+        step = "#{cause[:macrostep]}.#{cause[:microstep]}"
+        sent = Array(@sends[[context, session, Integer(cause[:macrostep]), Integer(cause[:microstep])]])
+        send = sent.find { |candidate| candidate[:event] == entry.dig(:event, :name_text) } || sent.first
+        sender = @threads.by_key([context, session])
+        if send.nil?
+          hops << { unseen: true, step: step, thread: sender }
+          break
+        end
+        hops << { thread: sender, event: send[:event], step: step, action: send[:action],
+                  definition: send[:definition] }
+        entry = @macrosteps[[context, session, Integer(cause[:macrostep])]]
+      end
+      hops
+    end
+
+    CHAIN_LIMIT = 16
+    REMEMBERED = 1024
 
     # Makes this the monitor of a place's scheduler; a place that comes
     # while everything is stopped stops too.
@@ -102,6 +154,8 @@ module DAP
     # A fork's system is gone: what was kept about its actors goes too.
     def forget(context)
       @tracks.delete_if { |key, _| key.first.equal?(context) }
+      @macrosteps.delete_if { |key, _| key.first.equal?(context) }
+      @sends.delete_if { |key, _| key.first.equal?(context) }
       @cursors.delete(context)
     end
 
@@ -425,6 +479,8 @@ module DAP
       track.definition = record[:definition]
       case record[:kind]
       when 'macrostep_begin'
+        remember(@macrosteps, [key.first, key.last, Integer(record.dig(:key, :macrostep))],
+                 { event: record[:event], cause: record[:cause] })
         track.in_macrostep = true
         track.macrostep = Integer(record.dig(:key, :macrostep))
         track.taken = record[:event]
@@ -441,6 +497,12 @@ module DAP
         finish(track, record)
       when 'abandoned'
         abandoned(track, record)
+      when 'sent'
+        step = [key.first, key.last, Integer(record.dig(:key, :macrostep)), Integer(record.dig(:key, :microstep))]
+        list = @sends[step] || remember(@sends, step, [])
+        list << { event: record.dig(:event, :name_text), action: record.dig(:position, :action),
+                  definition: record[:definition] }
+        summarize(track, record)
       else
         summarize(track, record)
       end
@@ -473,11 +535,16 @@ module DAP
       end
     end
 
+    def remember(table, key, value)
+      table.delete(table.first.first) while table.size >= REMEMBERED
+      table[key] = value
+    end
+
     def track_for(thread) = (@tracks[thread.track_key] ||= new_track(thread.track_key, thread.definition))
 
     def new_track(key, definition)
       Track.new(key: key, definition: definition, in_macrostep: false, summary: [], entry_stopped: false,
-                pending: [], fresh: false)
+                pending: [])
     end
 
     # ------------------------------------------------------------------

@@ -179,7 +179,6 @@ module DAP
 
       exception(record, track, &hit)
       blocks(record, track, &hit)
-      first_unit(record, track, &hit)
       data(record, track, thread, &hit) unless @data.empty? || thread.nil?
     end
 
@@ -191,7 +190,11 @@ module DAP
       reached, track.pending = track.pending.partition { |pending| reached?(pending, position) }
       reached.each { |pending| yield block_hit(track, pending[:breakpoint]) }
       return if position.action.nil?
+      # A <foreach> that has not run and the same loop before its first
+      # iteration stand at one position (ADR 0083, open point 1): one hit.
+      return if position == track.reached
 
+      track.reached = position
       lines = line_breakpoints(track.definition, :action, position.action)
       yield line_hit(track, lines, 'before') unless lines.empty?
     end
@@ -252,15 +255,13 @@ module DAP
     # once the actor stands before the block they name: the state's onentry
     # or onexit, or the transition's content. When there is no unit to
     # stand before (a state without handlers), they hit at the next place
-    # the actor stops. A resume always runs one unit after it selects a
-    # microstep, so when the block's first unit is the microstep's first,
-    # the stop comes after that unit (see `first_unit`).
+    # the actor stops. A microstep's first block is reached at its start,
+    # where the actor stands before its first unit (ADR 0087).
     def blocks(record, track, &hit)
       definition = record[:definition]
       case record[:kind]
       when 'microstep'
         overdue(track, &hit)
-        track.fresh = true
         pending_blocks(record, definition).each { |pending| track.pending << pending }
       when 'macrostep_end', 'finished', 'destroyed'
         overdue(track, &hit)
@@ -273,24 +274,6 @@ module DAP
           yield block_hit(track, breakpoint)
         end
       end
-    end
-
-    # The first unit of a microstep runs in the resume that selects it,
-    # before any stop is possible, so a line breakpoint on it cannot stop
-    # before it: it stops after it, as soon as its record shows it ran.
-    # A unit that writes no record (a <log>) cannot be seen this way.
-    #
-    # Core ADR 0087 lets a resume stop before a microstep's first unit.
-    # Once it is here, the scheduler asks for that stop while any
-    # breakpoint is armed (Control#budgets), `reach` sees the first unit as
-    # the next one like any other, and this method goes.
-    def first_unit(record, track)
-      return unless track.fresh
-      return if Labels.none?(record.dig(:position, :action))
-
-      track.fresh = false
-      lines = line_breakpoints(record[:definition], :action, record.dig(:position, :action))
-      yield line_hit(track, lines, 'after') unless lines.empty?
     end
 
     def overdue(track)

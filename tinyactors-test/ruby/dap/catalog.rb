@@ -8,8 +8,23 @@ module DAP
   # from, with the text it had then, so a retired revision still shows the
   # chart it ran. A fork runs a revision the workbench has, so only the
   # workbench's definitions are listed.
+  #
+  # A definition compiled without source spans (a chart an `invoke chart:`
+  # inlines: the DSL builds inline content without them) has no file to
+  # point into. It is shown as a virtual source instead: the SCXML the codec
+  # encodes from the definition, with the place the encode wrote each
+  # element (core ADR 0086, `ta_definition_encode` with its source map),
+  # served by `sourceReference`.
   class Catalog
-    Entry = Struct.new(:definition, :family, :revision, :chart, :path, :text, :reference, :retired,
+    CODEC = { '$adapter' => 'codec.scxml' }.freeze
+    SCXML = 'application/scxml+xml'
+    RUBY = 'text/x-ruby'
+
+    # An encoded chart: its text, and where each element is in it, as one
+    # array of spans per kind, indexed by ID.
+    Virtual = Struct.new(:reference, :name, :text, :spans, keyword_init: true)
+
+    Entry = Struct.new(:definition, :family, :revision, :chart, :path, :text, :reference, :retired, :virtual,
                        keyword_init: true) do
       def module_body
         body = { 'id' => definition.id.to_s, 'name' => retired ? "#{family} (retired)" : family, 'version' => revision }
@@ -18,7 +33,8 @@ module DAP
       end
 
       def source_body
-        body = { 'name' => "#{chart}.rb@#{revision.to_s[0, 8]}", 'sourceReference' => reference,
+        name = virtual ? virtual.name : "#{chart}.rb"
+        body = { 'name' => "#{name}@#{revision.to_s[0, 8]}", 'sourceReference' => reference,
                  'presentationHint' => retired ? 'deemphasize' : 'normal' }
         body['name'] = "#{File.basename(path)}@#{revision.to_s[0, 8]}" if path
         body['path'] = path if path
@@ -26,10 +42,33 @@ module DAP
       end
     end
 
-    def initialize(session)
+    def initialize(session, labels)
       @session = session
+      @labels = labels
       @entries = {}
+      @virtuals = {}
       @next_reference = 0
+    end
+
+    # Where the encode of a definition without spans wrote an element:
+    # {reference:, name:, line:, column:, end_line:, end_column:}, or nil.
+    def location(definition, kind, id)
+      virtual = virtual(definition)
+      span = virtual&.spans&.dig(:"#{kind}s", Integer(id))
+      return nil if span.nil? || span[:line].to_i.zero?
+
+      { reference: virtual.reference, name: virtual.name, line: span[:line], column: span[:column].to_i,
+        end_line: span[:end_line].to_i, end_column: span[:end_column].to_i }
+    end
+
+    # The text and media type of a source by reference, or nil.
+    def source(reference)
+      reference = Integer(reference)
+      virtual = @virtuals.each_value.find { |candidate| candidate&.reference == reference }
+      return [virtual.text, SCXML] if virtual
+
+      entry = @entries.each_value.find { |candidate| candidate.reference == reference }
+      entry&.text && [entry.text, RUBY]
     end
 
     def modules = @entries.values.map(&:module_body)
@@ -47,11 +86,6 @@ module DAP
 
     # The definitions that are not retired.
     def live = @entries.values.reject(&:retired).map(&:definition)
-
-    def text(reference)
-      entry = @entries.each_value.find { |candidate| candidate.reference == Integer(reference) }
-      entry&.text
-    end
 
     # Notes the revisions `threads` run and the ones that were retired.
     # Answers [module events, loadedSource events] as [reason, body] pairs.
@@ -87,11 +121,42 @@ module DAP
 
       facts = response.dig(:out, :out)
       family = facts.dig(:identity, :family, :name)
+      revision = facts.dig(:identity, :revision).to_s
+      virtual = virtual(definition)
+      if virtual
+        return Entry.new(definition: definition, family: family, revision: revision, chart: family, path: nil,
+                         text: virtual.text, reference: virtual.reference, retired: false, virtual: virtual)
+      end
+
       chart, = TinyactorsTest.charts.find { |_, candidate| (candidate.document_name || candidate.name).to_s == family }
       path = chart && @session.sources.file_of(chart)
-      Entry.new(definition: definition, family: family, revision: facts.dig(:identity, :revision).to_s,
+      Entry.new(definition: definition, family: family, revision: revision,
                 chart: chart || family, path: path, text: path && File.exist?(path) ? File.read(path) : nil,
                 reference: (@next_reference += 1), retired: false)
+    end
+
+    # The encoded chart of a definition that keeps no spans, or nil when it
+    # keeps some (its elements are in its files).
+    def virtual(definition)
+      return @virtuals[definition] if @virtuals.key?(definition)
+
+      @virtuals[definition] = spans?(definition) ? nil : encode(definition)
+    end
+
+    def spans?(definition)
+      Labels::KINDS.first(3).any? do |kind|
+        (0...@labels.count(definition, kind)).any? { |id| @labels.span(definition, kind, id) }
+      end
+    end
+
+    def encode(definition)
+      context = definition.context
+      response = context.ta.definition.encode(system: context.system_handle, definition: definition.id, codec: CODEC)
+      return nil unless response[:result] == 'ok'
+
+      family = @labels.identity(definition)&.dig(:family, :name) || 'chart'
+      Virtual.new(reference: (@next_reference += 1), name: "#{family}.scxml", text: response.dig(:out, :out),
+                  spans: response.dig(:out, :spans) || {})
     end
 
     # Retired, or freed because nothing uses it any more (ADR 0043).

@@ -696,12 +696,12 @@ module DAP
 
     def on_source(args, _request)
       reference = args['sourceReference'] || args.dig('source', 'sourceReference')
-      text = reference.to_i.positive? && @catalog ? @catalog.text(reference) : nil
+      text, mime = reference.to_i.positive? && @catalog ? @catalog.source(reference) : nil
       path = args.dig('source', 'path')
-      text ||= File.read(path) if path && File.file?(path)
+      text, mime = File.read(path), Catalog::RUBY if text.nil? && path && File.file?(path)
       raise RequestError, 'no such source' if text.nil?
 
-      { 'content' => text, 'mimeType' => 'text/x-ruby' }
+      { 'content' => text, 'mimeType' => mime }
     end
 
     # ------------------------------------------------------------------
@@ -726,8 +726,8 @@ module DAP
       @operator = Operator.new(labels: @labels, control: @control)
       @console.operator = @operator
       @console.forker = method(:make_fork)
-      @frames = Frames.new(@labels, @threads, @control)
-      @catalog = Catalog.new(@session)
+      @catalog = Catalog.new(@session, @labels)
+      @frames = Frames.new(@labels, @threads, @control, @catalog, @expressions.io_origins)
       @console.open(@context)
       @control.adopt(@session)
       @dir = dir

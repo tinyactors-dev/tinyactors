@@ -176,6 +176,9 @@ SUPERVISOR = <<~CHART
       transition on: 'tick', type: :internal do
         assign '.ticks', '.ticks + 1'
       end
+      transition on: 'poke', type: :internal do
+        send_event 'bump', to: '#_actor_counter/acct1'
+      end
     end
   end
 CHART
@@ -396,6 +399,22 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     end
     check('an unknown reference is refused') { !client.request('variables', 'variablesReference' => 9999)['success'] }
 
+    puts 'a chart without spans: its encoded SCXML'
+    worker_thread = threads.find { |thread| thread['name'].start_with?('worker (actor') }['id']
+    worker_top = client.request('stackTrace', 'threadId' => worker_thread)['body']['stackFrames'].first
+    reference = worker_top.dig('source', 'sourceReference').to_i
+    encoded = client.request('source', 'sourceReference' => reference)['body']
+    check('an inline child chart has no spans; its frame is in the SCXML the codec encodes from it (ADR 0086)') do
+      worker_top['name'] == 'idle in working' && reference.positive? && worker_top.dig('source', 'name') == 'worker.scxml' &&
+        encoded['mimeType'] == 'application/scxml+xml' &&
+        encoded['content'].lines[worker_top['line'] - 1].include?('<state id="working">')
+    end
+    check('and it is a loaded source of its own, by reference') do
+      client.request('loadedSources')['body']['sources'].any? do |source|
+        source['sourceReference'] == reference && source['path'].nil? && source['name'].start_with?('worker.scxml@')
+      end
+    end
+
     puts 'evaluate'
     evaluate = ->(expression, context, frame_id = frame) do
       arguments = { 'expression' => expression, 'context' => context }
@@ -441,7 +460,7 @@ Dir.mktmpdir('dap-selftest') do |tmp|
       targets.map { |target| [target['label'], target['start'], target['length']] } == [['bump', 6, 2]]
     end
     check('another actor\'s events after send @name') do
-      complete.call('send @boss ').map { |target| target['label'] } == ['tick'] &&
+      complete.call('send @boss ').map { |target| target['label'] } == %w[poke tick] &&
         complete.call('send @acct1 d').map { |target| target['label'] } == ['done']
     end
     check('data locations') { complete.call('.it').map { |target| target['label'] } == ['items'] }
@@ -463,6 +482,10 @@ Dir.mktmpdir('dap-selftest') do |tmp|
       stack.map { |f| f['name'] } == ['about to take bump (before transition selection)']
     end
     frame_of = ->(thread) { client.request('stackTrace', 'threadId' => thread)['body']['stackFrames'] }
+    # The frames down to the macrostep; the causal chain after them has
+    # checks of its own.
+    names_of = ->(thread) { frame_of.call(thread).take_while { |f| f['presentationHint'] != 'label' }.map { |f| f['name'] } }
+    chain_of = ->(thread) { frame_of.call(thread).drop_while { |f| f['presentationHint'] != 'label' } }
     scope_ref = ->(frame_id, name) do
       client.request('scopes', 'frameId' => frame_id)['body']['scopes'].find { |scope| scope['name'] == name }['variablesReference']
     end
@@ -477,12 +500,12 @@ Dir.mktmpdir('dap-selftest') do |tmp|
       stopped['reason'] == 'function breakpoint' && stopped['hitBreakpointIds'] == [busy_id] &&
         stopped['description'] == 'entered busy' && stopped['threadId'] == tid
     end
-    names = frame_of.call(tid).map { |f| f['name'] }
+    names = names_of.call(tid)
     check('frames: the next unit, its block, the microstep, the macrostep') do
       names == ['log 1', 'onentry of busy', 'microstep 2.1: idle → busy on bump', 'macrostep 2 on bump']
     end
     check('each at the line its element was written on') do
-      frame_of.call(tid).map { |f| f['line'] } ==
+      frame_of.call(tid).take_while { |f| f['presentationHint'] != 'label' }.map { |f| f['line'] } ==
         [line_of(COUNTER, "log 'busy'"), line_of(COUNTER, 'state :busy do'), line_of(COUNTER, "on: 'bump'"), 0]
     end
     top = frame_of.call(tid).first['id']
@@ -492,6 +515,9 @@ Dir.mktmpdir('dap-selftest') do |tmp|
         event['origintype'] == '"debug"'
     end
     check('expressions see $_event') { evaluate.call('$_event.data.n', 'watch', top)['body']['result'] == '1' }
+    check('the causal chain of an event the console sent') do
+      chain_of.call(tid).map { |f| f['name'] } == ['caused by', 'the debug console sent bump']
+    end
     check('the transition\'s content ran') { evaluate.call('[.count, .last]', 'watch', top)['body']['result'] == '[1,{"n":1}]' }
     check('the macrostep summary is not written before the macrostep ends') do
       client.outputs.none? { |text| text.include?('macrostep 2') }
@@ -507,7 +533,7 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     check('the unit was the <log>, whose record is stdout output') do
       client.take('output').any? { |body| body['category'] == 'stdout' && body['output'] == "<log> busy 1\n" }
     end
-    top_names = -> { frame_of.call(tid).map { |f| f['name'] } }
+    top_names = -> { names_of.call(tid) }
     check('the top frame is the next unit: a <foreach> that has not run') do
       top_names.call.first(2) == ['foreach 2 iteration 1', 'onentry of busy']
     end
@@ -524,16 +550,11 @@ Dir.mktmpdir('dap-selftest') do |tmp|
       top_names.call.first(2) == ['foreach 2 iteration 2', 'onentry of busy'] &&
         evaluate.call('.count', 'watch', frame_of.call(tid).first['id'])['body']['result'] == '2'
     end
-    step.call('next')
-    check('next steps over the rest of the loop; the microstep is over, selection is next') do
-      top_names.call == ['selecting transitions', 'microstep 2.1: idle → busy on bump', 'macrostep 2 on bump'] &&
-        evaluate.call('.count', 'watch', frame_of.call(tid).first['id'])['body']['result'] == '4'
-    end
     check('the macrostep summary is not written before the macrostep ends') do
       client.outputs.none? { |text| text.include?('macrostep 2') }
     end
     answer, stopped = step.call('stepOut')
-    check('stepOut between microsteps runs to the end of the macrostep') do
+    check('stepOut leaves the block; its microstep was the last, so the macrostep ends') do
       stopped['reason'] == 'step' && top_names.call == ['idle in busy']
     end
     check('the macrostep summary is written when it ends') do
@@ -557,14 +578,15 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     evaluate.call('send done', 'repl', nil)
     client.request('continue', 'threadId' => tid)
     stopped = client.event('stopped')
-    check('an exit breakpoint of a state without onexit hits where the actor next stands') do
+    check('an exit breakpoint in a microstep without content stops at its start, before any of it ran (ADR 0087)') do
       stopped['reason'] == 'function breakpoint' && stopped['hitBreakpointIds'] == [exit_id] &&
         stopped['description'] == 'exited busy' &&
-        frame_of.call(tid).map { |f| f['name'] } ==
-          ['selecting transitions', 'microstep 3.1: busy → idle on done', 'macrostep 3 on done']
+        names_of.call(tid) ==
+          ['transition busy → idle on done', 'microstep 3.1: busy → idle on done', 'macrostep 3 on done'] &&
+        client.request('evaluate', 'expression' => 'In("busy")', 'context' => 'watch')['body']['result'] == 'true'
     end
     step.call('next')
-    check('next between microsteps finishes the macrostep') { frame_of.call(tid).map { |f| f['name'] } == ['idle in idle'] }
+    check('next from the start of the last microstep finishes the macrostep') { names_of.call(tid) == ['idle in idle'] }
     answer = client.request('next', 'threadId' => tid)
     continued = client.event('continued')
     check('next on an idle actor answers at once, and everything runs') do
@@ -579,7 +601,12 @@ Dir.mktmpdir('dap-selftest') do |tmp|
       stopped['reason'] == 'step' && stopped['description'] == 'took ping' && stopped['threadId'] == tid
     end
     check('before transition selection') do
-      frame_of.call(tid).map { |f| f['name'] } == ['about to take ping (before transition selection)']
+      names_of.call(tid) == ['about to take ping (before transition selection)']
+    end
+    step.call('stepIn', granularity: 'line')
+    check('a step by microsteps lands at the microstep\'s start: its first unit has not run') do
+      names_of.call(tid) == ['send 1', 'transition idle on ping', 'microstep 4.1: idle on ping', 'macrostep 4 on ping'] &&
+        client.outputs.none? { |text| text.include?('replied pong') }
     end
     step.call('stepIn', granularity: 'line')
     check('the actor answers the console: its reply arrives as output') do
@@ -610,11 +637,8 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     check('error.communication: a send nobody can take') do
       stopped['reason'] == 'exception' && stopped['text'].start_with?('error.communication')
     end
-    client.request('continue', 'threadId' => tid)
-    stopped = client.event('stopped')
-    check('ignored: the chart has no transition for it') do
-      stopped['reason'] == 'exception' && stopped['text'] == 'error.communication enabled no transition'
-    end
+    # The chart has no transition for the error.communication either; it
+    # was ignored in the same resume, and one stop reports the first.
     client.request('continue', 'threadId' => tid)
     macrostep.call('acct1', 'lost')
     client.request('evaluate', 'expression' => 'send nothing.here', 'context' => 'repl')
@@ -668,7 +692,7 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     stopped = client.event('stopped')
     check('on: stops before the macrostep that takes the event') do
       stopped['reason'] == 'function breakpoint' && stopped['hitBreakpointIds'] == [on_ping.first['id']] &&
-        frame_of.call(tid).map { |f| f['name'] } == ['about to take ping (before transition selection)']
+        names_of.call(tid) == ['about to take ping (before transition selection)']
     end
     client.request('continue', 'threadId' => tid)
     macrostep.call('acct1', 'ping')
@@ -689,11 +713,9 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     check('the first hit of a hit condition of 2 does not stop') { client.take('stopped').empty? }
     client.request('evaluate', 'expression' => 'send bump', 'context' => 'repl')
     stopped = client.event('stopped')
-    # A resume runs at least one unit after it selects a microstep, so a
-    # block that is the microstep's first stops after its first unit.
-    check('the second does, in the transition\'s content: after its first unit, the microstep\'s first') do
+    check('the second does, before the transition\'s content: at the microstep\'s start (ADR 0087)') do
       stopped['reason'] == 'function breakpoint' && stopped['hitBreakpointIds'] == [conditional.last['id']] &&
-        frame_of.call(tid).map { |f| f['name'] }.first(2) == ['assign 2', 'transition idle → busy on bump']
+        names_of.call(tid).first(2) == ['assign 1', 'transition idle → busy on bump']
     end
 
     puts 'writing data'
@@ -704,7 +726,7 @@ Dir.mktmpdir('dap-selftest') do |tmp|
         client.request('evaluate', 'expression' => '.count', 'context' => 'watch')['body']['result'] == '42'
     end
     check('the actor stays where it was stopped, and keeps its thread') do
-      frame_of.call(tid).map { |f| f['name'] }.first(2) == ['assign 2', 'transition idle → busy on bump']
+      names_of.call(tid).first(2) == ['assign 1', 'transition idle → busy on bump']
     end
     data_ref = scope_ref.call(frame_of.call(tid).first['id'], 'Data model')
     check('a value may be an expression') do
@@ -735,7 +757,7 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     client.request('continue', 'threadId' => tid)
     macrostep.call('acct1', 'bump')
     check('the macrostep finished on the written data') do
-      client.request('evaluate', 'expression' => '.count', 'context' => 'watch')['body']['result'] == '46'
+      client.request('evaluate', 'expression' => '.count', 'context' => 'watch')['body']['result'] == '47'
     end
 
     puts 'timers and the clock'
@@ -794,20 +816,26 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     client.request('pause', 'threadId' => tid)
     stopped = client.event('stopped')
     check('pause stops the actor that is running') { stopped['reason'] == 'pause' && stopped['threadId'] == spinner }
-    names = frame_of.call(spinner).map { |f| f['name'] }
+    names = names_of.call(spinner)
     check('inside its macrostep') do
-      names.last == 'macrostep 2 on spin' && names[1].start_with?('microstep 2.')
+      names.last == 'macrostep 2 on spin' && names.any? { |name| name.start_with?('microstep 2.') }
     end
-    before = client.request('evaluate', 'expression' => '.n', 'context' => 'watch',
-                                        'frameId' => frame_of.call(spinner).first['id'])['body']['result'].to_i
     microstep = ->(name) { name[/\Amicrostep 2\.(\d+):/, 1].to_i }
-    was = microstep.call(frame_of.call(spinner)[1]['name'])
-    client.request('stepIn', 'threadId' => spinner, 'granularity' => 'instruction')
+    spin_microstep = -> { microstep.call(names_of.call(spinner).find { |name| name.start_with?('microstep') }) }
+    was = spin_microstep.call
+    client.request('stepIn', 'threadId' => spinner, 'granularity' => 'line')
     client.event('stopped')
-    check('and it can be stepped from there, one unit: this microstep\'s one assign') do
-      microstep.call(frame_of.call(spinner)[1]['name']) == was + 1 &&
-        client.request('evaluate', 'expression' => '.n', 'context' => 'watch',
-                                   'frameId' => frame_of.call(spinner).first['id'])['body']['result'].to_i == before + 1
+    spin_n = -> { client.request('evaluate', 'expression' => '.n', 'context' => 'watch',
+                                             'frameId' => frame_of.call(spinner).first['id'])['body']['result'].to_i }
+    at_start = spin_microstep.call
+    n_at_start = spin_n.call
+    check('a step by microsteps stops at the next microstep\'s start, before its first unit (ADR 0087)') do
+      at_start > was && names_of.call(spinner).first(2) == ['assign 1', 'transition spinning → spinning']
+    end
+    client.request('stepIn', 'threadId' => spinner)
+    client.event('stopped')
+    check('stepIn runs that unit, the microstep\'s last, and stops at the next microstep\'s start') do
+      spin_microstep.call == at_start + 1 && names_of.call(spinner).first == 'assign 1' && spin_n.call == n_at_start + 1
     end
     check('another actor cannot take a console message meanwhile; it waits') do
       answer = client.request('evaluate', 'expression' => 'send @spinner poke', 'context' => 'repl')['body']
@@ -828,7 +856,7 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     abandoned = console.call('abandon')['body']
     check('abandon ends the macrostep that never ends') do
       abandoned['result'] == 'spinner: abandoned its macrostep; it is idle in its last configuration' &&
-        frame_of.call(spinner).map { |f| f['name'] } == ['idle in spinning']
+        names_of.call(spinner) == ['idle in spinning']
     end
     check('its summary says so') do
       macrostep.call('spinner', 'spin')['output'].include?('abandoned')
@@ -837,7 +865,7 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     stopped = client.event('stopped')
     check('goto runs an operator transition and stops with reason goto') do
       jump['result'] == 'spinner: goto resting' && stopped['reason'] == 'goto' && stopped['threadId'] == spinner &&
-        frame_of.call(spinner).map { |f| f['name'] } == ['idle in resting']
+        names_of.call(spinner) == ['idle in resting']
     end
     check('the console shows its macrostep, taken by the operator\'s event') do
       macrostep.call('spinner', 'operator.goto')['output'].include?('goto resting')
@@ -888,22 +916,31 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     stopped = client.event('stopped')
     check('goto moves the thread and stops with reason goto') do
       before == 'idle in busy' && went['success'] && stopped['reason'] == 'goto' && stopped['threadId'] == tid &&
-        frame_of.call(tid).map { |f| f['name'] } == ['idle in idle']
+        names_of.call(tid) == ['idle in idle']
     end
     check('the console shows the jump\'s macrostep') do
       macrostep.call('acct1', 'operator.goto')['output'].include?('goto idle')
     end
     client.request('setFunctionBreakpoints', 'breakpoints' => [{ 'name' => 'busy' }])
-    console.call('send @acct1 bump')
+    console.call('send @boss poke')
     client.request('continue', 'threadId' => tid)
     client.event('stopped')
-    inside = frame_of.call(tid).map { |f| f['name'] }.first(2)
+    chain = chain_of.call(tid)
+    check('the causal chain: the step of another actor that sent the event, then what sent that one') do
+      chain.map { |f| f['name'] }.first == 'caused by' && chain.first['presentationHint'] == 'label' &&
+        chain[1]['name'].match?(/\Aboss: sent bump in step \d+\.1\z/) &&
+        # The hot reload above added a line (`data revision: 3`) near the top.
+        chain[1]['line'] == line_of(SUPERVISOR, "send_event 'bump'") + 1 &&
+        chain[1].dig('source', 'name') == 'supervisor.rb' &&
+        chain[2]['name'] == 'the debug console sent poke' && chain.size == 3
+    end
+    inside = names_of.call(tid).first(2)
     abandoned = console.call('abandon @acct1')['body']
     check('abandon inside a microstep finishes the microstep first, then abandons') do
       inside == ['log 1', 'onentry of busy'] &&
         abandoned['result'] == 'acct1: abandoned its macrostep; it is idle in its last configuration' &&
-        frame_of.call(tid).map { |f| f['name'] } == ['idle in busy'] &&
-        client.outputs.any? { |text| text == "<log> busy 47\n" }
+        names_of.call(tid) == ['idle in busy'] &&
+        client.outputs.any? { |text| text == "<log> busy 48\n" }
     end
     client.request('setFunctionBreakpoints', 'breakpoints' => [])
 
@@ -935,11 +972,12 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     check('a line breakpoint whose condition is false does not stop') { client.take('stopped').empty? }
     console.call('send @acct1 bump', nil)
     stopped = client.event('stopped')
-    check('a breakpoint on a microstep\'s first unit stops after it: no resume can stop before it') do
+    check('a breakpoint on a microstep\'s first unit stops before it, at the microstep\'s start (ADR 0087)') do
       stopped['reason'] == 'breakpoint' && stopped['hitBreakpointIds'] == [set[0]['id']] &&
-        stopped['description'].start_with?('after line') &&
+        stopped['description'].start_with?('before line') &&
         frame_of.call(tid).first(2).map { |f| [f['name'], f['line']] } ==
-          [['assign 2', line_of(COUNTER, "assign '.last'")], ['transition idle → busy on bump', line_of(COUNTER, "on: 'bump'")]]
+          [['assign 1', line_of(COUNTER, "assign '.count', '.count + 1'")],
+           ['transition idle → busy on bump', line_of(COUNTER, "on: 'bump'")]]
     end
     client.request('continue', 'threadId' => tid)
     stopped = client.event('stopped')
@@ -949,9 +987,23 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     end
     client.request('continue', 'threadId' => tid)
     macrostep.call('acct1', 'bump')
-    check('a log point writes its message, with expressions, and does not stop') do
-      client.outputs.any? { |text| text.match?(/\Acount is \d+\n\z/) } && client.take('stopped').empty?
+    check('a log point writes its message, with expressions, once per iteration of its <foreach>, and does not stop') do
+      counts = client.outputs.grep(/\Acount is \d+\n\z/)
+      counts.size == 2 && counts.uniq.size == 2 && client.take('stopped').empty?
     end
+
+    console.call('goto @acct1 idle', nil)
+    client.event('stopped') { |body| body['reason'] == 'goto' }
+    client.outputs
+    console.call('goto @acct1 busy', nil)
+    stopped = client.event('stopped')
+    check('a breakpoint on a <log> that is its microstep\'s first unit stops before it, though <log> writes no trace record') do
+      stopped['reason'] == 'breakpoint' && stopped['hitBreakpointIds'] == [set[1]['id']] &&
+        names_of.call(tid).first(2) == ['log 1', 'onentry of busy'] && names_of.call(tid)[2].end_with?('.1: goto busy') &&
+        client.outputs.none? { |text| text.start_with?('<log> busy') }
+    end
+    client.request('continue', 'threadId' => tid)
+    macrostep.call('acct1', 'operator.goto')
 
     moved = "# a line above everything\n#{COUNTER}"
     dir.join('counter.rb').write(moved)
@@ -1059,6 +1111,44 @@ Dir.mktmpdir('dap-selftest') do |tmp|
       client.request('evaluate', 'expression' => '.pings', 'context' => 'watch',
                                  'frameId' => frame_of.call(pinger).first['id'])['body']['result'] == '0'
     end
+
+    puts 'stepping a fork\'s invoked child'
+    boss_fork = console.call('fork @boss', nil)['body']['result'][/\(thread (\d+)\)/, 1].to_i
+    # The copy lost the invocation (ADR 0038), whose error the fork takes
+    # first; entering its state again starts one in the fork's system.
+    check('the copy lost the invocation the actor had') do
+      summary.call('boss.fork3: macrostep').include?('error.communication.invoke.worker.unavailable')
+    end
+    console.call('goto @boss.fork3 supervising', nil)
+    client.event('stopped') { |body| body['reason'] == 'goto' && body['threadId'] == boss_fork }
+    child_id = client.event('thread') { |body| body['reason'] == 'started' && body['threadId'] > boss_fork }['threadId']
+    check('the fork\'s new invocation is a thread of its own') do
+      client.request('threads')['body']['threads'].find { |thread| thread['id'] == child_id }['name']
+            .start_with?('worker (actor')
+    end
+    client.request('continue', 'threadId' => boss_fork)
+    summary.call('boss.fork3.worker: macrostep 1')
+    client.request('pause', 'threadId' => child_id)
+    client.event('stopped') { |body| body['reason'] == 'pause' }
+    answer = client.request('stepIn', 'threadId' => child_id)
+    client.event('continued') { |body| body['threadId'] == child_id }
+    console.call('send @boss.fork3.worker finish', nil)
+    stopped = client.event('stopped')
+    check('a step of the fork\'s idle child stops when it takes its next event') do
+      answer['success'] && stopped['reason'] == 'step' && stopped['threadId'] == child_id &&
+        names_of.call(child_id) == ['about to take finish (before transition selection)']
+    end
+    client.request('stepIn', 'threadId' => child_id)
+    client.event('stopped')
+    top = frame_of.call(child_id).first
+    check('the next stepIn stands at its microstep\'s start, in the encoded SCXML of its chart') do
+      top['name'] == 'transition working → finished on finish' && top.dig('source', 'name') == 'worker.scxml' &&
+        client.request('source', 'sourceReference' => top.dig('source', 'sourceReference'))['body']['content']
+              .lines[top['line'] - 1].include?('<transition event="finish" target="finished"')
+    end
+    client.request('stepIn', 'threadId' => child_id)
+    client.event('stopped')
+    check('and the one after it finishes the child') { names_of.call(child_id) == ['done in finished'] }
 
     puts 'refused requests'
     %w[cancel stepInTargets terminateThreads setInstructionBreakpoints locations readMemory writeMemory disassemble].each do |command|

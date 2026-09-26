@@ -17,13 +17,25 @@ module DAP
   #
   # Each frame is at the place its element was written (core ADR 0086): an
   # action's line, a transition's, or a state's, in the chart's Ruby file.
+  # A chart compiled without spans (one an `invoke chart:` inlines) is shown
+  # as the SCXML the codec encodes from it, a virtual source, at the place
+  # the encode wrote each element (Catalog#location).
+  #
+  # Below the macrostep, after a `label` frame, comes the causal chain: the
+  # step that sent the event the macrostep took, then the step that sent
+  # that one's, across actors, back to the host (Control#chain).
   class Frames
     Frame = Struct.new(:id, :thread, :name, :hint, :where, keyword_init: true) do
       def to_dap
         body = { 'id' => id, 'name' => name, 'line' => 0, 'column' => 0, 'presentationHint' => hint }
         return body if where.nil?
 
-        body['source'] = { 'name' => File.basename(where[:source]), 'path' => where[:source] }
+        body['source'] = if where[:reference]
+                           { 'name' => where[:name], 'sourceReference' => where[:reference],
+                             'presentationHint' => 'deemphasize' }
+                         else
+                           { 'name' => File.basename(where[:source]), 'path' => where[:source] }
+                         end
         body['line'] = where[:line]
         body['column'] = [where[:column], 1].max
         body['endLine'] = where[:end_line] if where[:end_line].positive?
@@ -32,10 +44,15 @@ module DAP
       end
     end
 
-    def initialize(labels, threads, control)
+    # `locator` answers location(definition, kind, id) for a definition
+    # without spans (Catalog); `origins` are the I/O processors of the
+    # debug console, by registry index (Expressions#io_origins).
+    def initialize(labels, threads, control, locator, origins)
       @labels = labels
+      @origins = origins
       @threads = threads
       @control = control
+      @locator = locator
       @frames = {}
       @next_id = 0
     end
@@ -48,8 +65,8 @@ module DAP
     def [](id) = @frames[Integer(id)]
 
     def for(thread)
-      frames(thread).map do |name, where|
-        frame = Frame.new(id: (@next_id += 1), thread: thread.id, name: name, hint: 'normal', where: where)
+      frames(thread).map do |name, where, hint|
+        frame = Frame.new(id: (@next_id += 1), thread: thread.id, name: name, hint: hint || 'normal', where: where)
         @frames[frame.id] = frame
         frame
       end
@@ -76,7 +93,32 @@ module DAP
         return [["about to take #{name} (before transition selection)", leaf_span(thread, view)]]
       end
 
-      unit_frames(position, definition) + step_frames(position, @control.track(thread), definition)
+      unit_frames(position, definition) + step_frames(position, @control.track(thread), definition) +
+        cause_frames(thread)
+    end
+
+    # The causal chain, after a label frame.
+    def cause_frames(thread)
+      hops = @control.chain(thread)
+      return [] if hops.empty?
+
+      [['caused by', nil, 'label']] + hops.map do |hop|
+        if hop[:host]
+          [host_name(hop[:event]), nil, 'subtle']
+        elsif hop[:unseen]
+          ["#{hop[:thread]&.label || 'an actor'}: step #{hop[:step]}, which the debugger did not see", nil, 'subtle']
+        else
+          ["#{hop[:thread]&.label || 'an actor'}: sent #{hop[:event]} in step #{hop[:step]}",
+           span(hop[:definition], :action, hop[:action])]
+        end
+      end
+    end
+
+    def host_name(event)
+      name = event&.dig(:name_text)
+      origin = event&.dig(:origin)
+      from_console = origin&.dig(:kind) == 'io' && @origins.key?(origin.dig(:io, :processor))
+      from_console ? "the debug console sent #{name}" : "the host delivered #{name}"
     end
 
     def unit_frames(position, definition)
@@ -111,6 +153,10 @@ module DAP
       case position.at
       when 'exit' then ["onexit of #{state}", where]
       when 'transition'
+        # An operator's jump with no content stands at its start with no
+        # compiled transition to name (ADR 0087 section 3).
+        return ['taking an operator\'s jump', nil] if Labels.none?(position.transition)
+
         ["transition #{@labels.transition(definition, position.transition)}",
          span(definition, :transition, position.transition)]
       when 'enter' then [entering(position, definition, state), where]
@@ -159,6 +205,10 @@ module DAP
       span(thread.definition, :state, id)
     end
 
-    def span(definition, kind, id) = id.nil? || Labels.none?(id) ? nil : @labels.span(definition, kind, id)
+    def span(definition, kind, id)
+      return nil if definition.nil? || id.nil? || Labels.none?(id)
+
+      @labels.span(definition, kind, id) || @locator.location(definition, kind, id)
+    end
   end
 end
