@@ -84,11 +84,13 @@ TinyactorsTest.scxml_chart :trace_relay, Tracing::RELAY, datamodel: 'jq'
 
 TinyactorsTest.scenarios 'tracing' do
   # Catches: a bootstrap that is not macrostep 1, data initialized without
-  # a record, or the initial microstep's entry set missing.
+  # a record, or the initial microstep's entry set missing. With every kind,
+  # the definition's registration comes first (ADR 0080): it is registered
+  # when the actor is spawned from it.
   scenario 'the bootstrap is macrostep 1, and its data and entry are recorded' do
     recording_trace
     spawn :trace_basic
-    assert_equal ['spawned', 'begin 1 -', 'data 1.0 bootstrap n', 'data 1.0 bootstrap i',
+    assert_equal ['registered trace_basic', 'spawned', 'begin 1 -', 'data 1.0 bootstrap n', 'data 1.0 bootstrap i',
                   'micro 1.1 - [] exit[] enter[idle]', 'end 1 [idle]'], trace_lines
   end
 

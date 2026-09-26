@@ -13,6 +13,15 @@ const { TinyactorsError } = require('./errors');
 /** Record kinds, in core's order; a sink's mask is built from these names. */
 const TRACE_KINDS = Object.freeze([...native.traceKinds]);
 
+/*
+ * The definition records (core ADR 0080) are for hosts that follow core's
+ * record stream. napi's OTLP output already reports definitions from the
+ * definition sink (the tinyactors.definition.* logs), so no preset asks
+ * core to build them, and asking for them explicitly adds no output.
+ */
+const DEFINITION_KINDS = ['definitionRegistered', 'definitionRetired', 'definitionFreed'];
+const ENCODED_KINDS = Object.freeze(TRACE_KINDS.filter((kind) => !DEFINITION_KINDS.includes(kind)));
+
 const LIFECYCLE = ['spawned', 'loaded', 'unloaded', 'finished', 'destroyed'];
 const SUMMARY = [...LIFECYCLE, 'macrostepBegin', 'macrostepEnd', 'actionFailed', 'stopped'];
 
@@ -25,13 +34,13 @@ const SUMMARY = [...LIFECYCLE, 'macrostepBegin', 'macrostepEnd', 'actionFailed',
 const TRACE_DETAIL = Object.freeze({
   summary: Object.freeze(SUMMARY),
   decisions: Object.freeze([...SUMMARY, 'microstep', 'condition', 'raised']),
-  full: TRACE_KINDS,
+  full: ENCODED_KINDS,
 });
 
-/** The mask for `kinds` (names from TRACE_KINDS); every kind when undefined. */
+/** The mask for `kinds` (names from TRACE_KINDS); every encoded kind when undefined. */
 function kindMask(kinds, what = 'setTraceSink()') {
   if (kinds === undefined) {
-    return 2 ** TRACE_KINDS.length - 1;
+    return kindMask(ENCODED_KINDS, what);
   }
   if (!Array.isArray(kinds)) {
     throw new TinyactorsError(`${what}: options.kinds must be an array of record kinds`, 'invalid');

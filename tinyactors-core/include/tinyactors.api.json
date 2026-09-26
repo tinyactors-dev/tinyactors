@@ -208,6 +208,13 @@
       "value": 4294967295
     },
     {
+      "name": "TA_TRACE_DEFINITIONS_SESSION",
+      "type": {
+        "builtin": "uint64_t"
+      },
+      "value": 18446744073709551615
+    },
+    {
       "name": "TA_TRACE_DETAIL_WATCHED",
       "type": {
         "builtin": "uint8_t"
@@ -14621,6 +14628,24 @@
           "value": 25,
           "symbol": "runaway",
           "doc": "the macrostep reached its microstep limit; the run stops"
+        },
+        {
+          "name": "TA_TRACE_DEFINITION_REGISTERED",
+          "value": 26,
+          "symbol": "definition_registered",
+          "doc": "Definitions (ADR 0080): lifecycle records, never sampled, written just before the definition sink hears of the same event (ADR 0079). `definition` and `identity`; the key is TA_TRACE_DEFINITIONS_SESSION, the definition ID as `macrostep`, and 1, 2 or 3 as `microstep`."
+        },
+        {
+          "name": "TA_TRACE_DEFINITION_RETIRED",
+          "value": 27,
+          "symbol": "definition_retired",
+          "doc": "Definitions (ADR 0080): lifecycle records, never sampled, written just before the definition sink hears of the same event (ADR 0079). `definition` and `identity`; the key is TA_TRACE_DEFINITIONS_SESSION, the definition ID as `macrostep`, and 1, 2 or 3 as `microstep`."
+        },
+        {
+          "name": "TA_TRACE_DEFINITION_FREED",
+          "value": 28,
+          "symbol": "definition_freed",
+          "doc": "Definitions (ADR 0080): lifecycle records, never sampled, written just before the definition sink hears of the same event (ADR 0079). `definition` and `identity`; the key is TA_TRACE_DEFINITIONS_SESSION, the definition ID as `macrostep`, and 1, 2 or 3 as `microstep`."
         }
       ],
       "doc": "======================================================================== Tracing (ADR 0067)\n\nCore reports its decisions and the data they changed to one trace sink per system, as flat records. A record is written once, when the step that produced it has committed: a step that runs out of memory and runs again (ADR 0070) writes its records on the run that commits, and the step counters move only then, so an interrupted run and an uninterrupted one write the same records apart from PAUSED, RESUMED and STOPPED.",
@@ -14776,6 +14801,13 @@
           "type": {
             "type": "ta_definition_id"
           }
+        },
+        {
+          "name": "identity",
+          "type": {
+            "type": "ta_definition_identity"
+          },
+          "doc": "The definition's identity, for the DEFINITION_* kinds; borrowed."
         },
         {
           "name": "now",
@@ -14965,7 +14997,7 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 336,
+          "size": 368,
           "align": 8,
           "offsets": {
             "kind": 0,
@@ -14975,34 +15007,35 @@
             "cause": 80,
             "actor": 104,
             "definition": 112,
-            "now": 120,
-            "event": 128,
-            "state": 136,
-            "expr": 140,
-            "name": 144,
-            "action": 160,
-            "iteration": 164,
-            "send": 168,
-            "invoke": 176,
-            "result": 184,
-            "has_value": 185,
-            "value": 192,
-            "has_fault": 208,
-            "fault": 216,
-            "transitions": 256,
-            "transition_count": 264,
-            "exited": 272,
-            "exited_count": 280,
-            "entered": 288,
-            "entered_count": 296,
-            "history": 304,
-            "history_count": 312,
-            "states": 320,
-            "state_count": 328
+            "identity": 120,
+            "now": 152,
+            "event": 160,
+            "state": 168,
+            "expr": 172,
+            "name": 176,
+            "action": 192,
+            "iteration": 196,
+            "send": 200,
+            "invoke": 208,
+            "result": 216,
+            "has_value": 217,
+            "value": 224,
+            "has_fault": 240,
+            "fault": 248,
+            "transitions": 288,
+            "transition_count": 296,
+            "exited": 304,
+            "exited_count": 312,
+            "entered": 320,
+            "entered_count": 328,
+            "history": 336,
+            "history_count": 344,
+            "states": 352,
+            "state_count": 360
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 256,
+          "size": 272,
           "align": 8,
           "offsets": {
             "kind": 0,
@@ -15012,30 +15045,31 @@
             "cause": 80,
             "actor": 104,
             "definition": 112,
-            "now": 120,
-            "event": 128,
-            "state": 132,
-            "expr": 136,
-            "name": 140,
-            "action": 148,
-            "iteration": 152,
-            "send": 160,
-            "invoke": 168,
-            "result": 176,
-            "has_value": 177,
-            "value": 180,
-            "has_fault": 188,
-            "fault": 192,
-            "transitions": 216,
-            "transition_count": 220,
-            "exited": 224,
-            "exited_count": 228,
-            "entered": 232,
-            "entered_count": 236,
-            "history": 240,
-            "history_count": 244,
-            "states": 248,
-            "state_count": 252
+            "identity": 120,
+            "now": 136,
+            "event": 144,
+            "state": 148,
+            "expr": 152,
+            "name": 156,
+            "action": 164,
+            "iteration": 168,
+            "send": 176,
+            "invoke": 184,
+            "result": 192,
+            "has_value": 193,
+            "value": 196,
+            "has_fault": 204,
+            "fault": 208,
+            "transitions": 232,
+            "transition_count": 236,
+            "exited": 240,
+            "exited_count": 244,
+            "entered": 248,
+            "entered_count": 252,
+            "history": 256,
+            "history_count": 260,
+            "states": 264,
+            "state_count": 268
           }
         }
       }

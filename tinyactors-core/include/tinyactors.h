@@ -1059,8 +1059,22 @@ typedef enum {
     /* Runaway macrosteps (ADR 0075): `transitions` of the microstep that
      * reached the count, and `states`, the configuration before it. */
     TA_TRACE_LONG_MACROSTEP,    /* the macrostep reached a tenth of its microstep limit */
-    TA_TRACE_RUNAWAY            /* the macrostep reached its microstep limit; the run stops */
+    TA_TRACE_RUNAWAY,           /* the macrostep reached its microstep limit; the run stops */
+
+    /* Definitions (ADR 0080): lifecycle records, never sampled, written just
+     * before the definition sink hears of the same event (ADR 0079).
+     * `definition` and `identity`; the key is TA_TRACE_DEFINITIONS_SESSION,
+     * the definition ID as `macrostep`, and 1, 2 or 3 as `microstep`. */
+    TA_TRACE_DEFINITION_REGISTERED,
+    TA_TRACE_DEFINITION_RETIRED,
+    TA_TRACE_DEFINITION_FREED
 } ta_trace_kind TA_SYMBOLS("TA_TRACE_");
+
+/*
+ * The `session` of a definition record's key (ADR 0080). No actor's session
+ * has it: a session ID is a runtime ID, and no actor slot is UINT32_MAX.
+ */
+#define TA_TRACE_DEFINITIONS_SESSION ((uint64_t)UINT64_MAX)
 
 /* The bit of `kind` in a sink's mask. */
 #define TA_TRACE_BIT(kind) ((uint32_t)1u << (uint32_t)(kind))
@@ -1111,6 +1125,8 @@ typedef struct {
     ta_step_key cause;
     ta_actor_id actor;
     ta_definition_id definition;
+    /* The definition's identity, for the DEFINITION_* kinds; borrowed. */
+    ta_definition_identity identity;
     ta_time now;
 
     TA_IN TA_OPTIONAL const ta_event *event;

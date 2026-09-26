@@ -1,4 +1,5 @@
 #include "system.h"
+#include "trace.h"
 #include "interpreter.h"
 
 #define TA_SCXML_IO_URI "http://www.w3.org/TR/scxml/#SCXMLEventProcessor"
@@ -157,7 +158,33 @@ ta_result ta_system_set_definition_sink(ta_system *system, ta_definition_sink si
     return TA_OK;
 }
 
+/*
+ * One definition event, told twice (ADR 0080): first as a lifecycle record
+ * to the trace sink, when its mask asks for the kind, then to the definition
+ * sink (ADR 0079). The record goes first, so a trace sink reading the
+ * definition finds it as intact as the definition sink does, and before the
+ * host's cleanup of it.
+ */
 void ta_system_tell_definition(ta_system *system, const ta_definition *definition, ta_definition_event_kind kind) {
+    static const ta_trace_kind trace_kinds[] = {
+        [TA_DEFINITION_EVENT_REGISTERED] = TA_TRACE_DEFINITION_REGISTERED,
+        [TA_DEFINITION_EVENT_RETIRED] = TA_TRACE_DEFINITION_RETIRED,
+        [TA_DEFINITION_EVENT_FREED] = TA_TRACE_DEFINITION_FREED,
+    };
+    ta_trace_kind trace_kind = trace_kinds[kind];
+    ta_trace_context none = { 0 };
+    if (ta_trace_lifecycle_wanted(&system->trace, trace_kind, &none)) {
+        ta_trace_record record = ta_trace_record_blank(trace_kind);
+        /* One key per definition and event: a definition ID is never issued
+         * twice (ADR 0043), and each event happens at most once to it. */
+        record.key = (ta_step_key){ .session = TA_TRACE_DEFINITIONS_SESSION,
+                                    .macrostep = definition->id,
+                                    .microstep = (uint32_t)kind + 1u };
+        record.definition = definition->id;
+        record.identity = definition->identity;
+        record.now = ta_clock_now(&system->clock);
+        ta_trace_write(&system->trace, &record);
+    }
     ta_definition_event event = { .kind = kind, .definition = definition->id, .identity = definition->identity };
     system->definition_sink.v->notify(system->definition_sink.self, &event);
 }

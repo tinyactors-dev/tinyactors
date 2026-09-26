@@ -28,9 +28,14 @@ module TinyactorsTest
     NAMES = {
       'macrostep_begin' => 'begin', 'macrostep_end' => 'end', 'microstep' => 'micro', 'condition' => 'cond',
       'data_init' => 'data', 'action_failed' => 'failed', 'invoke_cancelled' => 'uninvoked',
-      'long_macrostep' => 'long'
+      'long_macrostep' => 'long', 'definition_registered' => 'registered', 'definition_retired' => 'retired',
+      'definition_freed' => 'freed'
     }.freeze
-    LIFECYCLE = %w[spawned loaded unloaded finished destroyed].freeze
+    # Records with no step key of their own: an actor's lifecycle, and a
+    # definition's (ADR 0080), whose key is the definition's, not a step.
+    LIFECYCLE = %w[spawned loaded unloaded finished destroyed
+                   definition_registered definition_retired definition_freed].freeze
+    DEFINITION = %w[definition_registered definition_retired definition_freed].freeze
     MACROSTEP = %w[macrostep_begin macrostep_end].freeze
 
     private
@@ -69,6 +74,7 @@ module TinyactorsTest
       when 'action_failed' then ["a#{@record[:action]}", fault]
       when 'finished' then [state_name(@record[:state])]
       when 'long_macrostep', 'runaway' then [transitions, states(:states)]
+      when *DEFINITION then [@record.dig(:identity, :family, :name)]
       else []
       end
     end

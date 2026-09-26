@@ -199,8 +199,11 @@ static void put_states(const char *label, const ta_state_id *states, uint32_t co
 static const char *const kind_names[] = {
     "spawned", "loaded",  "unloaded", "finished", "destroyed", "begin", "end",     "cond",
     "micro",   "raised",  "data",     "assign",   "script",    "foreach", "failed", "sent",
-    "cancelled", "invoked", "uninvoked", "paused", "resumed", "stopped", "ignored",
+    "cancelled", "invoked", "uninvoked", "paused", "resumed", "stopped", "ignored", "forwarded",
+    "long", "runaway", "definition-registered", "definition-retired", "definition-freed",
 };
+_Static_assert(sizeof kind_names / sizeof kind_names[0] == (size_t)TA_TRACE_DEFINITION_FREED + 1u,
+               "a name for every trace kind");
 static const char *const at_names[] = { "", "select", "exit", "transition", "enter", "boot", "finalize", "invoke" };
 
 static void record_write(void *self, const ta_trace_record *record) {

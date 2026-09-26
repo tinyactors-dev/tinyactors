@@ -1320,12 +1320,20 @@ export class TinyactorsError extends Error {
 // Tracing (core ADR 0067, napi ADR 0016). OTLP bytes and a decoder; no
 // telemetry dependency.
 
+/**
+ * Core's trace record kinds, in core's order (TRACE_KINDS). The three
+ * `definition*` kinds (core ADR 0080) are for hosts that follow core's
+ * record stream; the addon's OTLP output reports definitions through the
+ * `tinyactors.definition.*` logs instead, so no detail preset asks for them,
+ * and naming them in `kinds` adds nothing to the output.
+ */
 export type TraceKind =
   | 'spawned' | 'loaded' | 'unloaded' | 'finished' | 'destroyed'
   | 'macrostepBegin' | 'macrostepEnd' | 'condition' | 'microstep' | 'raised'
   | 'dataInit' | 'assign' | 'script' | 'foreach' | 'actionFailed'
   | 'sent' | 'cancelled' | 'invoked' | 'invokeCancelled'
-  | 'paused' | 'resumed' | 'stopped' | 'ignored' | 'forwarded' | 'longMacrostep' | 'runaway';
+  | 'paused' | 'resumed' | 'stopped' | 'ignored' | 'forwarded' | 'longMacrostep' | 'runaway'
+  | 'definitionRegistered' | 'definitionRetired' | 'definitionFreed';
 
 export declare const TRACE_KINDS: readonly TraceKind[];
 
