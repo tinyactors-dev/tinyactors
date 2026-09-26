@@ -242,4 +242,4 @@ Every ☑ is covered by `tinyactors-napi/test/debug.js`, on Node and Bun.
 | N2 | Budgets for one actor | tinyactors-napi [ADR 0027](../tinyactors-napi/docs/adr/0027-a-debugger-holds-steps-and-redirects-one-actor.md) | ☑ |
 | N3 | Operator transitions in the envelope; settling on abandon | tinyactors-napi [ADR 0027](../tinyactors-napi/docs/adr/0027-a-debugger-holds-steps-and-redirects-one-actor.md) | ☑ |
 | T1 | Shared DAP transcript suite | both hosts | ☐ |
-| X1 | VS Code extension that registers the debug type | new | ☐ |
+| X1 | VS Code extension that registers the debug type | [tinyactors-vscode](../tinyactors-vscode/README.md) | ☑ |

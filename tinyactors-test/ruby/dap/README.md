@@ -36,25 +36,9 @@ tinyactors-napi's adapter is for.
 ### VS Code
 
 VS Code runs a debug adapter only for a debug type an extension
-registers. That extension (X1 in the status map) is not written yet; it
-needs no code beyond its `package.json`:
-
-```json
-{
-  "name": "tinyactors-debug",
-  "engines": { "vscode": "^1.80.0" },
-  "contributes": {
-    "debuggers": [{
-      "type": "tinyactors",
-      "label": "Tinyactors workbench",
-      "program": "/path/to/tinyactors-test/bin/dap",
-      "languages": ["ruby"]
-    }]
-  }
-}
-```
-
-With it installed, a launch configuration starts the adapter itself:
+registers: install [tinyactors-vscode](../../../tinyactors-vscode/README.md)
+(`mise run build` there writes the `.vsix`). It starts `bin/dap` itself,
+found in the workspace or set with `dapPath`:
 
 ```json
 {
