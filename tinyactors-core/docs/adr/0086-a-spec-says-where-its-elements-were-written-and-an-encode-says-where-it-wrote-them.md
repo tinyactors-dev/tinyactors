@@ -130,8 +130,8 @@ its span.
 - **Encode.** A codec that reports where it wrote an element needs a name
   for the element that the caller can map back to a compiled ID. The
   index is that name (section 6).
-- **Elements written in one place share one entry**, as a DSL line that
-  makes a transition and its content does.
+- **Elements written in one place can share one entry**, as a history
+  state and its default transition do in the Ruby DSL.
 
 The cost is that authoring is two-level: a front end appends to a table
 and stores the index. The two front ends that fill spans (the DSL and
