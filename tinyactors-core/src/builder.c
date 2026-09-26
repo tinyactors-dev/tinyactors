@@ -272,7 +272,7 @@ static ta_result ta_compiler_span(ta_compiler *compiler, const ta_span_record *r
     if (span->source >= (spec->source_count == 0 ? 1u : spec->source_count)) {
         return ta_compiler_fail_at(compiler, TA_SPEC_MEMBER_SPAN, TA_SPEC_INDEX_NONE,
                                    &(ta_compiler_fault){ .code = TA_COMPILE_ERROR_MALFORMED_SPEC,
-                                                         .message = TA_PHRASE("the span names no source of the spec") });
+                                                         .message = TA_PHRASE("the span names no source") });
     }
     return ta_vec_push(&compiler->spans, record);
 }
