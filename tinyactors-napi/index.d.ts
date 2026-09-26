@@ -403,8 +403,14 @@ export interface System {
    * page was taken is skipped.
    */
   actors(options?: PageOptions): IterableIterator<ActorInspection>;
-  // status: unimplemented
-  definitions(): readonly DefinitionInspection[];
+  /**
+   * Every definition the system holds, as inspections, one page of IDs at
+   * a time (core ADR 0078): builder and imported charts, their nested
+   * inline children, and children compiled when an <invoke> ran. Retired
+   * definitions still in use are included. A definition freed after its
+   * page was taken is skipped.
+   */
+  definitions(options?: PageOptions): IterableIterator<DefinitionInspection>;
 
   /** Memory by category and allocator calls (ADRs 0009, 0014). Throws `closed` after close(). */
   stats(): SystemStats;
@@ -428,7 +434,7 @@ export interface MemoryCounters {
 }
 
 export interface PageOptions {
-  /** Actors per page; default 1024, at most 65536. */
+  /** Items per page; default 1024, at most 65536. */
   readonly pageSize?: number;
 }
 
@@ -626,6 +632,12 @@ export interface DefinitionInspection {
   readonly stateCount: number;
   readonly actorFixedBytes: number;
   readonly definitionBytes: number;
+  /** Holds taken by define() and not given back (core ADR 0077). */
+  readonly holds: number;
+  /** How many definitions nest this one as an inline child. */
+  readonly nestedBy: number;
+  /** The children this chart's <invoke>s nest, when it has any (core ADR 0078). */
+  readonly nested?: readonly DefinitionID[];
 }
 
 /* --------------------------------------------------------------------------

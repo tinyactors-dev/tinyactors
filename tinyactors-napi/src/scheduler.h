@@ -261,7 +261,7 @@ typedef struct {
     bool *inside_core; /* the reentrancy flag (ADR 0013 point 4) */
     tna_turn_budgets budgets;
     /* Watched sessions and definitions (watch.h); NULL or empty: none. */
-    const tna_trace_watch *watch;
+    tna_trace_watch *watch;
 } tna_turn_params;
 
 /* `allocator` for the table and queues, `envelopes` for the envelope store. */

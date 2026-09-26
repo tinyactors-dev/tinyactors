@@ -68,7 +68,21 @@ class Definition {
       stateCount: view.state_count,
       actorFixedBytes: view.actor_fixed_bytes,
       definitionBytes: view.definition_bytes,
+      holds: view.holds,
+      nestedBy: view.holders,
     };
+    // Nesting is reported from parent to child (core ADR 0078): a child can
+    // be nested by several parents, so it names none.
+    const nested = [];
+    for (let invoke = 0; invoke < view.invoke_count; invoke += 1) {
+      const child = core.definition_invoke(this.#native, this.id, invoke).nested;
+      if (child !== undefined && BigInt(child) !== 0n) {
+        nested.push(child);
+      }
+    }
+    if (nested.length > 0) {
+      inspection.nested = nested;
+    }
     if (view.document_name !== undefined && view.document_name !== '') {
       inspection.name = view.document_name;
     }

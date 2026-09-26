@@ -16,9 +16,27 @@ static void tna_id_set_free(ta_allocator allocator, tna_id_set *set) {
     *set = (tna_id_set){0};
 }
 
+static void tna_free_families(ta_allocator allocator, ta_str *families, uint32_t count) {
+    for (uint32_t at = 0; families != NULL && at < count; at += 1u) {
+        if (families[at].ptr != NULL) {
+            tna_free(allocator, &(ta_allocator_free_params){ .ptr = (void *)families[at].ptr,
+                                                             .size = families[at].len == 0 ? 1u : families[at].len,
+                                                             .alignment = 1 });
+        }
+    }
+    if (families != NULL) {
+        tna_free(allocator, &(ta_allocator_free_params){ .ptr = families, .size = count * sizeof(ta_str),
+                                                         .alignment = _Alignof(ta_str) });
+    }
+}
+
 void tna_trace_watch_destroy(tna_trace_watch *watch) {
     tna_id_set_free(watch->allocator, &watch->sessions);
-    tna_id_set_free(watch->allocator, &watch->definitions);
+    tna_id_set_free(watch->allocator, &watch->matched);
+    tna_id_set_free(watch->allocator, &watch->checked);
+    tna_free_families(watch->allocator, watch->families, watch->family_count);
+    watch->families = NULL;
+    watch->family_count = 0;
 }
 
 /* SplitMix64's finalizer: session and definition IDs are sequential. */
@@ -95,30 +113,126 @@ static ta_result tna_id_set_build(ta_allocator allocator, const uint64_t *ids, u
     return TA_OK;
 }
 
+/* Adds `id`, growing the set; false when there is no memory (the set is unchanged). */
+static bool tna_id_set_add(ta_allocator allocator, tna_id_set *set, uint64_t id) {
+    if (tna_id_set_has(set, id)) {
+        return true;
+    }
+    if (id != TNA_ID_EMPTY && (set->count + 1u) * 2u > set->capacity) {
+        uint32_t capacity = set->capacity == 0 ? 8u : set->capacity * 2u;
+        if (capacity < set->capacity) {
+            return false;
+        }
+        uint64_t *slots = tna_alloc(allocator, capacity * sizeof(uint64_t), _Alignof(uint64_t));
+        if (slots == NULL) {
+            return false;
+        }
+        for (uint32_t at = 0; at < capacity; at += 1u) {
+            slots[at] = TNA_ID_EMPTY;
+        }
+        tna_id_set grown = { .slots = slots, .capacity = capacity, .has_max = set->has_max,
+                             .count = set->has_max ? 1u : 0u };
+        for (uint32_t at = 0; at < set->capacity; at += 1u) {
+            if (set->slots[at] != TNA_ID_EMPTY) {
+                tna_id_set_put(&grown, set->slots[at]);
+            }
+        }
+        tna_id_set_free(allocator, set);
+        *set = grown;
+    }
+    tna_id_set_put(set, id);
+    return true;
+}
+
+/* Copies `count` family names. TA_ERR_NOMEM frees what was copied. */
+static ta_result tna_copy_families(ta_allocator allocator, const ta_str *from, uint32_t count, ta_str **out) {
+    *out = NULL;
+    if (count == 0) {
+        return TA_OK;
+    }
+    ta_str *families = tna_alloc(allocator, count * sizeof(ta_str), _Alignof(ta_str));
+    if (families == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    for (uint32_t at = 0; at < count; at += 1u) {
+        families[at] = (ta_str){0};
+    }
+    for (uint32_t at = 0; at < count; at += 1u) {
+        char *copy = tna_alloc(allocator, from[at].len == 0 ? 1u : from[at].len, 1);
+        if (copy == NULL) {
+            tna_free_families(allocator, families, count);
+            return TA_ERR_NOMEM;
+        }
+        for (uint32_t byte = 0; byte < from[at].len; byte += 1u) {
+            copy[byte] = from[at].ptr[byte];
+        }
+        families[at] = (ta_str){ .ptr = copy, .len = from[at].len };
+    }
+    *out = families;
+    return TA_OK;
+}
+
 ta_result tna_trace_watch_set(tna_trace_watch *watch, const tna_trace_watch_set_params *params) {
     tna_id_set sessions;
-    tna_id_set definitions;
+    ta_str *families = NULL;
     if (tna_id_set_build(watch->allocator, params->sessions, params->session_count, &sessions) != TA_OK) {
         return TA_ERR_NOMEM;
     }
-    if (tna_id_set_build(watch->allocator, params->definitions, params->definition_count, &definitions) != TA_OK) {
+    if (tna_copy_families(watch->allocator, params->families, params->family_count, &families) != TA_OK) {
         tna_id_set_free(watch->allocator, &sessions);
         return TA_ERR_NOMEM;
     }
     tna_trace_watch_destroy(watch);
     watch->sessions = sessions;
-    watch->definitions = definitions;
+    watch->families = families;
+    watch->family_count = params->family_count;
     return TA_OK;
 }
 
-void tna_trace_watch_mark(const tna_trace_watch *watch, ta_system *core, ta_actor_id actor, ta_trace_parent *trace) {
+static bool tna_same_str(ta_str left, ta_str right) {
+    if (left.len != right.len) {
+        return false;
+    }
+    for (uint32_t at = 0; at < left.len; at += 1u) {
+        if (left.ptr[at] != right.ptr[at]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Whether `definition`'s family is watched, read once and remembered. */
+static bool tna_trace_watch_family(tna_trace_watch *watch, ta_system *core, ta_definition_id definition) {
+    if (watch->family_count == 0) {
+        return false;
+    }
+    if (tna_id_set_has(&watch->checked, definition)) {
+        return tna_id_set_has(&watch->matched, definition);
+    }
+    ta_definition_inspection view;
+    bool watched = false;
+    if (ta_definition_inspect(core, definition, &view) == TA_OK) {
+        for (uint32_t at = 0; at < watch->family_count && !watched; at += 1u) {
+            watched = tna_same_str(view.identity.family.name, watch->families[at]);
+        }
+    }
+    /* Remembering is an optimization: with no memory, the next delivery
+     * reads the family again. `matched` first, so `checked` never claims a
+     * definition whose match was lost. */
+    if (!watched || tna_id_set_add(watch->allocator, &watch->matched, definition)) {
+        (void)tna_id_set_add(watch->allocator, &watch->checked, definition);
+    }
+    return watched;
+}
+
+void tna_trace_watch_mark(tna_trace_watch *watch, ta_system *core, ta_actor_id actor, ta_trace_parent *trace) {
     if (tna_trace_watch_empty(watch)) {
         return;
     }
     ta_actor_inspection view;
     if (ta_actor_inspect(core, actor, &view) != TA_OK ||
         (!tna_id_set_has(&watch->sessions, view.session_id) &&
-         !tna_id_set_has(&watch->definitions, view.definition_id))) {
+         !tna_trace_watch_family(watch, core, view.definition_id))) {
         return;
     }
     if (trace->context.trace_id_high == 0 && trace->context.trace_id_low == 0) {

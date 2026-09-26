@@ -141,7 +141,6 @@ class System {
   // Active watchTraces() handles, and every definition's identity, for the
   // watches and for metrics().
   #watches = new Set();
-  #definitionIdentities = new Map();
   // Loaders by family (napi ADR 0020), and why the last load of an address
   // failed, for the deadLetter hook's `detail`.
   #loaders = new Map();
@@ -448,13 +447,10 @@ class System {
       watch.sessions.forEach((session) => sessions.add(session));
       watch.families.forEach((family) => families.add(family));
     }
-    const definitions = [];
-    for (const [id, { family }] of this.#definitionIdentities) {
-      if (families.has(family)) {
-        definitions.push(id);
-      }
-    }
-    this.#native.setTraceWatch([...sessions], definitions);
+    // Families go to the addon as names: it resolves each definition the
+    // first time a delivery meets it, so definitions core registers later
+    // (nested and invoke-time children, core ADR 0078) are watched too.
+    this.#native.setTraceWatch([...sessions], [...families]);
   }
 
   // One service effect, in the order core made the calls (napi_services.h).
@@ -743,18 +739,12 @@ class System {
   }
 
   // A registered definition's facade, with its microstep limit when one is
-  // given, and what the system tracks about it.
+  // given.
   #registered(id, limit) {
     if (limit !== undefined) {
       core.definition_set_microstep_limit(this.#native, id, limit === 0 ? MICROSTEP_LIMIT_NONE : limit);
     }
-    const definition = new Definition(this, this.#native, id);
-    const identity = definition.identity;
-    this.#definitionIdentities.set(id, identity);
-    if (this.#watchedFamily(identity.family)) {
-      this.#applyWatches();
-    }
-    return definition;
+    return new Definition(this, this.#native, id);
   }
 
   // Decodes, compiles and registers an SCXML document; a refusal throws with
@@ -955,6 +945,44 @@ class System {
    * and one spawned meanwhile appears when its slot is ahead of the cursor
    * (core ADR 0062). Options: { pageSize } (default 1024, at most 65536).
    */
+  /**
+   * Every definition the system holds, as inspections, one page of IDs at
+   * a time (core ADR 0078): builder and imported charts, their nested inline
+   * children, and children compiled when an <invoke> ran. Retired
+   * definitions still in use are included (`retired` says so). A definition
+   * freed after its page was taken, and before it was reached, is skipped.
+   * Options: { pageSize } (default 1024, at most 65536).
+   */
+  *definitions(options = {}) {
+    const pageSize = pageSizeOf(options, 'definitions()');
+    for (const id of this.#definitionIDs(pageSize)) {
+      let inspection;
+      try {
+        inspection = new Definition(this, this.#native, id).inspect();
+      } catch (error) {
+        if (error instanceof TinyactorsError && error.code === 'not-found') {
+          continue;
+        }
+        throw error;
+      }
+      yield inspection;
+    }
+  }
+
+  // The IDs of the definitions core holds, in slot order, `pageSize` at a
+  // time; a page shorter than that is the last (core ADR 0078).
+  *#definitionIDs(pageSize) {
+    let from = 0;
+    for (;;) {
+      const ids = core.system_definitions(this.#native, from, pageSize);
+      yield* ids;
+      if (ids.length < pageSize) {
+        return;
+      }
+      from = Number(BigInt.asUintN(32, BigInt(ids[ids.length - 1]))) + 1;
+    }
+  }
+
   *actorIDs(options = {}) {
     const pageSize = pageSizeOf(options, 'actorIDs()');
     let from = 0;
@@ -1572,17 +1600,11 @@ class System {
   metrics() {
     const native = this.#native;
     const definitions = [];
-    for (const [id, identity] of this.#definitionIdentities) {
-      let counters;
-      try {
-        counters = core.definition_counters(native, id);
-      } catch (error) {
-        if (error instanceof TinyactorsError && error.code === 'not-found') {
-          this.#definitionIdentities.delete(id); // freed: its counts live on in the system's totals
-          continue;
-        }
-        throw error;
-      }
+    // Every definition core holds, nested and invoke-time children included
+    // (core ADR 0078); a freed one's counts live on in the system's totals.
+    for (const id of this.#definitionIDs(DEFAULT_PAGE_SIZE)) {
+      const identity = identityOf(core.definition_inspect(native, id).identity);
+      const counters = core.definition_counters(native, id);
       const occupancy = [];
       core.definition_occupancy(native, id).forEach((actors, state) => {
         if (actors !== 0) {

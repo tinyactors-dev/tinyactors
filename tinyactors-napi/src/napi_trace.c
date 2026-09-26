@@ -466,9 +466,65 @@ static void tna_free_uint64s(ta_allocator allocator, uint64_t *ids, uint32_t cou
     }
 }
 
+/* Frees what tna_family_array read. */
+static void tna_free_families(ta_allocator allocator, ta_str *families, uint32_t count) {
+    for (uint32_t at = 0; families != NULL && at < count; at += 1u) {
+        if (families[at].ptr != NULL) {
+            tna_free(allocator, &(ta_allocator_free_params){ .ptr = (void *)families[at].ptr,
+                                                             .size = (size_t)families[at].len + 1u, .alignment = 1 });
+        }
+    }
+    if (families != NULL) {
+        tna_free(allocator, &(ta_allocator_free_params){ .ptr = families, .size = count * sizeof(ta_str),
+                                                         .alignment = _Alignof(ta_str) });
+    }
+}
+
+/* Reads an array of strings. False on a wrong type or no memory. */
+static bool tna_family_array(napi_env env, ta_allocator allocator, napi_value array, ta_str **out, uint32_t *count) {
+    *out = NULL;
+    *count = 0;
+    bool is_array = false;
+    uint32_t length = 0;
+    if (napi_is_array(env, array, &is_array) != napi_ok || !is_array ||
+        napi_get_array_length(env, array, &length) != napi_ok) {
+        return false;
+    }
+    if (length == 0) {
+        return true;
+    }
+    ta_str *families = tna_alloc(allocator, length * sizeof(ta_str), _Alignof(ta_str));
+    if (families == NULL) {
+        return false;
+    }
+    for (uint32_t at = 0; at < length; at += 1u) {
+        families[at] = (ta_str){0};
+    }
+    for (uint32_t at = 0; at < length; at += 1u) {
+        napi_value item = NULL;
+        size_t size = 0;
+        char *text = NULL;
+        if (napi_get_element(env, array, at, &item) != napi_ok ||
+            napi_get_value_string_utf8(env, item, NULL, 0, &size) != napi_ok || size > UINT32_MAX - 1u ||
+            (text = tna_alloc(allocator, size + 1u, 1)) == NULL ||
+            napi_get_value_string_utf8(env, item, text, size + 1u, &size) != napi_ok) {
+            if (text != NULL) {
+                tna_free(allocator, &(ta_allocator_free_params){ .ptr = text, .size = size + 1u, .alignment = 1 });
+            }
+            tna_free_families(allocator, families, length);
+            return false;
+        }
+        families[at] = (ta_str){ .ptr = text, .len = (uint32_t)size };
+    }
+    *out = families;
+    *count = length;
+    return true;
+}
+
 /*
- * setTraceWatch(sessions, definitions): what is watched, replacing the last.
- * The watch is a hash set (watch.h), so its size has no limit of its own.
+ * setTraceWatch(sessions, families): what is watched, replacing the last:
+ * session IDs, and definition family names that the watch resolves as
+ * deliveries meet each definition (watch.h). No size limit of its own.
  */
 napi_value tna_set_trace_watch_method(napi_env env, napi_callback_info info) {
     size_t argc = 2;
@@ -482,23 +538,23 @@ napi_value tna_set_trace_watch_method(napi_env env, napi_callback_info info) {
     }
     ta_allocator allocator = tna_allocator_for(&wrapper->system->allocator, TNA_MEMORY_OTHER);
     uint64_t *sessions = NULL;
-    uint64_t *definitions = NULL;
+    ta_str *families = NULL;
     uint32_t session_count = 0;
-    uint32_t definition_count = 0;
+    uint32_t family_count = 0;
     bool read = argc >= 2 && tna_uint64_array(env, allocator, argv[0], &sessions, &session_count) &&
-                tna_uint64_array(env, allocator, argv[1], &definitions, &definition_count);
+                tna_family_array(env, allocator, argv[1], &families, &family_count);
     ta_result result = TA_ERR_INVALID;
     if (read) {
         result = tna_trace_watch_set(&wrapper->system->trace_watch,
                                      &(tna_trace_watch_set_params){ .sessions = sessions,
                                                                     .session_count = session_count,
-                                                                    .definitions = definitions,
-                                                                    .definition_count = definition_count });
+                                                                    .families = families,
+                                                                    .family_count = family_count });
     }
     tna_free_uint64s(allocator, sessions, session_count);
-    tna_free_uint64s(allocator, definitions, definition_count);
+    tna_free_families(allocator, families, family_count);
     if (!read) {
-        return tna_throw(env, "invalid", "watchTraces: expected arrays of session and definition IDs");
+        return tna_throw(env, "invalid", "watchTraces: expected arrays of session IDs and family names");
     }
     if (result != TA_OK) {
         return tna_throw(env, "out-of-memory", "watchTraces: no memory for the watch");
