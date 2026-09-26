@@ -60,6 +60,14 @@ JSON, XML, SCXML, API, SDK, ...); add to it when you introduce a new one.
 own (an SDK's `traceId`, REXML's `CData`) go in `acronyms-allow.txt` with a
 reason. ADRs and research notes are not checked: they are a record.
 
+## Desired API files
+
+`tinyactors-napi/index.d.ts` is the target, not the implementation; see its
+header. Never delete a declaration there because `lib/` lacks it: implement
+it, or mark it `// status: unimplemented` (or `// status: partial: <what is
+missing>`) on the line above it. `mise run check-api-status` checks the
+markers.
+
 ## Proposals are not instructions
 
 `docs/proposals/` holds outlines of possible future work. They are not

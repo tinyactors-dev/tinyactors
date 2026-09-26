@@ -1,14 +1,22 @@
 /**
- * The package version. The addon is being rebuilt step by step (ROADMAP.md);
- * so far createSystem(), System.close(), System.closed, System.stats(),
- * System.define(), System.findDefinition(), Definition, statechart(),
- * literal(), TinyactorsError, spawn(), inspect(), destroy(), flush(),
- * post() with data, the `done`, `fault` and `deadLetter` hooks, the
- * realtime and manual clocks (time, advanceTo(), advanceBy()), delayed
- * sends, paged enumeration, the JavaScript data model, send(), services
- * (I/O processors, invokers, the log sink), and capture, unload, load,
- * reconstruct and replacement are implemented: ROADMAP steps 1-14.
+ * @file The desired public API of tinyactors: the design target, not a
+ * description of what is built.
+ *
+ * Parts of this file are knowingly not implemented yet. Each declaration
+ * that lib/ does not implement carries a marker on the line directly above
+ * it (after its JSDoc, if it has one):
+ *
+ *     // status: unimplemented
+ *     // status: partial: <what is missing>
+ *
+ * Do not delete a declaration because lib/ lacks it: implement it, or
+ * leave it marked. `mise run check-api-status` (part of `mise run test`)
+ * keeps the markers honest where the runtime can answer: a marked
+ * declaration that exists fails, and an unmarked one that is missing
+ * fails. `grep -n "^ *// status:" index.d.ts` lists what is outstanding.
  */
+
+/** The package version. */
 export const version: string;
 
 /* --------------------------------------------------------------------------
@@ -395,6 +403,7 @@ export interface System {
    * page was taken is skipped.
    */
   actors(options?: PageOptions): IterableIterator<ActorInspection>;
+  // status: unimplemented
   definitions(): readonly DefinitionInspection[];
 
   /** Memory by category and allocator calls (ADRs 0009, 0014). Throws `closed` after close(). */

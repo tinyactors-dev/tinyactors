@@ -22,6 +22,17 @@ mise run test
 The test loads the same native addon with Node.js and Bun. See
 [`docs/design.md`](docs/design.md) for the planned binding architecture.
 
+## `index.d.ts` is the desired API
+
+`index.d.ts` is the design target, not a description of what `lib/`
+implements. A declaration that is not implemented yet carries
+`// status: unimplemented`, or `// status: partial: <what is missing>`, on
+the line directly above it. Don't delete a declaration because `lib/` lacks
+it: implement it, or leave it marked. `grep -n "^ *// status:" index.d.ts`
+lists what is outstanding, and `mise run check-api-status` (part of
+`mise run test`) fails when a marker is stale or a missing declaration is
+unmarked, for the exports and for the objects it can probe at runtime.
+
 ## Loading actors on demand
 
 `System.setLoader(family, loader)` brings actors of a family back when mail
