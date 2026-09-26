@@ -145,6 +145,11 @@ static bool tna_host_value_text(void *self, const ta_value *value, ta_str *out) 
  * byte, so nothing is copied or cleared. The sink gets a plain Uint8Array
  * over that memory, as before, not the Buffer itself. The bytes belong to
  * JavaScript: a sink may keep them across an await.
+ *
+ * The request is written before the Buffer's ArrayBuffer is asked for. Bun
+ * keeps a small Buffer's bytes in memory of its own and moves them into a
+ * new ArrayBuffer when one is asked for, after which `data` is stale; a
+ * request of up to 1,000 bytes written after that was lost (ADR 0027).
  */
 typedef size_t (*tna_put_request)(tna_otlp *otlp, uint8_t *out, size_t size);
 
@@ -154,14 +159,14 @@ static napi_value tna_request_value(napi_env env, tna_otlp *otlp, size_t size, t
     napi_value memory = NULL;
     size_t offset = 0;
     napi_value array = NULL;
-    if (napi_create_buffer(env, size, &data, &buffer) != napi_ok ||
-        napi_get_typedarray_info(env, buffer, NULL, NULL, NULL, &memory, &offset) != napi_ok) {
+    if (napi_create_buffer(env, size, &data, &buffer) != napi_ok) {
         return NULL;
     }
     if (size != 0 && put(otlp, data, size) != size) {
         return NULL;
     }
-    if (napi_create_typedarray(env, napi_uint8_array, size, memory, offset, &array) != napi_ok) {
+    if (napi_get_typedarray_info(env, buffer, NULL, NULL, NULL, &memory, &offset) != napi_ok ||
+        napi_create_typedarray(env, napi_uint8_array, size, memory, offset, &array) != napi_ok) {
         return NULL;
     }
     return array;
