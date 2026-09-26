@@ -95,6 +95,21 @@ static void tna_buf_free(tna_otlp_buf *buf) {
     buf->cap = 0;
 }
 
+/*
+ * The staging capacity a buffer may keep between turns. A turn that needed
+ * more (a burst of spawns, each tracing its bootstrap) gives it back once
+ * its request is written, so the largest turn ever seen is not held for the
+ * system's life. Turns under it reuse their buffer and allocate nothing.
+ */
+#define TNA_OTLP_KEEP_BYTES ((size_t)1 << 20)
+
+/* After a request is written: an empty buffer beyond the kept capacity is freed. */
+static void tna_buf_settle(tna_otlp_buf *buf) {
+    if (buf->len == 0 && buf->cap > TNA_OTLP_KEEP_BYTES) {
+        tna_buf_free(buf);
+    }
+}
+
 /* Room for `more` bytes past the end; false when the allocator refuses. */
 static bool tna_buf_room(tna_otlp_buf *buf, size_t more) {
     if (buf->len + more <= buf->cap) {
@@ -1757,6 +1772,7 @@ size_t tna_otlp_put_logs(tna_otlp *otlp, uint8_t *out, size_t size) {
     tna_put_bytes(&view, otlp->logs.data, otlp->logs.len);
     otlp->logs.len = 0;
     otlp->log_count = 0;
+    tna_buf_settle(&otlp->logs);
     return view.len;
 }
 
@@ -1867,8 +1883,9 @@ size_t tna_otlp_put_traces(tna_otlp *otlp, uint8_t *out, size_t size) {
     tna_otlp_buf view = { .data = out, .cap = size };
     tna_put_request_header(otlp, &view, otlp->spans.len);
     tna_put_bytes(&view, otlp->spans.data, otlp->spans.len);
-    otlp->spans.len = 0; /* reset, not freed: its capacity serves the next turn */
+    otlp->spans.len = 0; /* reset, not freed: its capacity serves the next turn, up to the kept bytes */
     otlp->span_count = 0;
+    tna_buf_settle(&otlp->spans);
     return view.len;
 }
 

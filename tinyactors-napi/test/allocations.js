@@ -162,11 +162,40 @@ async function tracedSteadyState() {
             `sampled out: the first round made ${extra} more allocator calls than untraced for ${ACTORS} messages`);
 }
 
+// Native bytes after spawning `count` actors in one turn, with or without a sink.
+async function nativeBytes(count, withSink) {
+  const system = createSystem();
+  if (withSink) {
+    system.setTraceSink(() => {});
+  }
+  const definition = system.define(charts['an assign']());
+  for (let at = 0; at < count; at += 1) {
+    system.spawn(definition);
+  }
+  await system.flush();
+  const bytes = system.stats().memory.total.bytesInUse;
+  system.close();
+  return bytes;
+}
+
+// An installed sink keeps no per-actor memory once the turn that traced a
+// burst of spawns has handed its bytes over: the encoder keeps at most 1 MiB
+// of staging capacity between turns (napi ADR 0017 implementation notes).
+async function idleSinkMemory() {
+  const COUNT = 50000;
+  const KEPT = 1 << 20;
+  const PER_ACTOR = 16;
+  const extra = (await nativeBytes(COUNT, true)) - (await nativeBytes(COUNT, false));
+  assert.ok(extra <= KEPT + PER_ACTOR * COUNT,
+            `an idle sink kept ${extra} bytes for ${COUNT} actors, more than ${KEPT} + ${PER_ACTOR} per actor`);
+}
+
 (async () => {
   for (const [name, make] of Object.entries(charts)) {
     await steadyState(name, make);
   }
   await tracedSteadyState();
+  await idleSinkMemory();
   console.log('allocations.js passed');
 })().catch((error) => {
   console.error(error);
