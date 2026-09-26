@@ -792,6 +792,62 @@ static void test_an_image_from_before_a_withdrawal_is_stale(void) {
     ta_system_destroy(system);
 }
 
+static void dispatch(ta_system *system) {
+    uint32_t dispatched = 0;
+    bool more = false;
+    CHECK(ta_system_dispatch_due(system, &(ta_due_dispatch_params){ .budget = 100, .dispatched = &dispatched,
+                                                                    .more_due = &more }) == TA_OK);
+}
+
+/*
+ * A delayed send that fires leaves its owner's pending sends, and so changes
+ * the owner as a withdrawal does: an image captured before it fired still
+ * holds the send, and unloading with it would bring the send back to fire a
+ * second time. The image is stale, whether the router takes the send or
+ * refuses it and keeps it as a submitted one.
+ */
+static void test_an_image_from_before_a_send_fired_is_stale(void) {
+    router_state router = { .answer = TA_EXTERNAL_EVENT_ACCEPTED };
+    ta_system *system = create_system(&router);
+    one_directory dir = {0};
+    CHECK(ta_system_set_actor_directory(system, (ta_actor_directory){ .self = &dir, .v = &dir_vtable }) == TA_OK);
+    ta_definition_id three = define(system, "three", three_timers);
+    ta_actor_address address = { .family = { STR("three") }, .name = STR("t1") };
+    ta_actor_id actor = spawn(system, three, &address);
+
+    ta_session_image *before = NULL;
+    CHECK(ta_actor_capture(system, &(ta_actor_capture_params){ .actor = actor, .out = &before }) == TA_OK);
+    CHECK(ta_system_set_time(system, 1000) == TA_OK);
+    dispatch(system);
+    CHECK(router.accepted == 1 && router.last_event == event_name(system, "early"));
+    CHECK(ta_actor_unload(system, &(ta_actor_unload_params){ .actor = actor, .image = before }) == TA_ERR_STALE);
+    ta_session_image_destroy(before);
+
+    /* Refused, the send stays with its owner as a submitted one, which no
+     * image holds: an image from before still holds it as pending. */
+    CHECK(ta_actor_capture(system, &(ta_actor_capture_params){ .actor = actor, .out = &before }) == TA_OK);
+    router.answer = TA_EXTERNAL_EVENT_RETRY;
+    CHECK(ta_system_set_time(system, 2000) == TA_OK);
+    dispatch(system);
+    CHECK(ta_actor_unload(system, &(ta_actor_unload_params){ .actor = actor, .image = before }) == TA_ERR_STALE);
+    ta_session_image_destroy(before);
+
+    /* An image from after holds only the send still pending. */
+    router.answer = TA_EXTERNAL_EVENT_ACCEPTED;
+    ta_session_image *after = NULL;
+    CHECK(ta_actor_capture(system, &(ta_actor_capture_params){ .actor = actor, .out = &after }) == TA_OK);
+    ta_time image_next = 0;
+    CHECK(ta_session_image_next_deadline(after, &image_next) == TA_OK && image_next == 3000);
+    CHECK(ta_actor_unload(system, &(ta_actor_unload_params){ .actor = actor, .image = after }) == TA_OK);
+    ta_actor_id loaded = 0;
+    CHECK(ta_actor_load(system, &(ta_actor_load_params){ .image = after, .out = &loaded }) == TA_OK);
+    ta_actor_inspection view;
+    CHECK(ta_actor_inspect(system, loaded, &view) == TA_OK && view.delayed_send_count == 1);
+    CHECK(view.delayed_send_count != 1 || view.delayed_sends[0].due == 3000);
+    ta_session_image_destroy(after);
+    ta_system_destroy(system);
+}
+
 int main(void) {
     test_inspection_lists_only_the_actors_sends();
     test_cancelling_the_front_send();
@@ -806,6 +862,7 @@ int main(void) {
     test_a_submitted_send_is_not_withdrawn();
     test_withdrawing_inside_a_paused_macrostep();
     test_an_image_from_before_a_withdrawal_is_stale();
+    test_an_image_from_before_a_send_fired_is_stale();
     CHECK(live_blocks == 0);
     if (failures != 0) {
         fprintf(stderr, "delayed_send_test: %d check(s) failed\n", failures);

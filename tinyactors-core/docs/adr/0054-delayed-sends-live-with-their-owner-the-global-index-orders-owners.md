@@ -198,3 +198,17 @@ the text above, as of the follow-up commits `809b64a`, `a14d8be` and
   the ID through the session table, by address while the owner is unloaded
   and by runtime ID once it is loaded again. `ta_timer_readdress_self()` is
   removed, and `ta_image_rebind_self()` no longer touches destinations.
+- **A pending send that fired left an older image fresh** (2026-09-26).
+  D2's dispatch takes the owner's front send, which changes what a capture
+  copies, but `ta_system_dispatch_due` did not advance the owner's session
+  epoch (ADR 0014). An image captured before the send fired still held it,
+  `ta_actor_unload()` accepted that image, and `ta_actor_load()` scheduled
+  the send again, so it fired a second time. Dispatch now calls
+  `ta_actor_touch()` on a live owner when the send it takes was pending, as
+  a withdrawal does (ADR 0084), so an image from before is stale whether
+  the router takes the send or refuses it (a refused send stays with its
+  owner, submitted, and no image holds a submitted send). Offering a
+  submitted send again does not touch its owner, for the same reason.
+  Tested by `delayed_send_test.c`
+  (`test_an_image_from_before_a_send_fired_is_stale`) and the scenario "an
+  image from before a send fired is stale".

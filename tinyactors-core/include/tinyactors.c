@@ -13927,7 +13927,15 @@ TA_API ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch
         }
         ta_delayed_send send;
         (void)ta_timer_pop(&system->timers, &send);
-        const ta_actor *owner = ta_actor_lookup(system, send.owner);
+        ta_actor *owner = ta_actor_lookup(system, send.owner);
+        /*
+         * A pending send leaves its owner's list as it fires, and an image
+         * captures that list, so an image taken before no longer describes
+         * the owner (ADR 0014). A submitted send is in no image.
+         */
+        if (owner != NULL && !send.submitted) {
+            ta_actor_touch(owner);
+        }
         const ta_definition *owner_definition = owner != NULL ? owner->definition : NULL;
         ta_external_event_submit_status fired = ta_interpreter_dispatch_delayed(system, &send, false);
         if (fired != TA_EXTERNAL_EVENT_RETRY) {
