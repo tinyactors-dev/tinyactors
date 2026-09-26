@@ -212,15 +212,20 @@ class Breakpoints {
     return `${label} ${JSON.stringify(path)}`;
   }
 
+  // A label can have spaces (`renewal/r1 (fork)`), so the path is what
+  // follows the first ` [` that starts a JSON array.
   static parseDataID(text) {
-    const at = typeof text === 'string' ? text.indexOf(' ') : -1;
-    if (at <= 0) return undefined;
-    try {
-      const path = JSON.parse(text.slice(at + 1));
+    if (typeof text !== 'string') return undefined;
+    for (let at = text.indexOf(' ['); at > 0; at = text.indexOf(' [', at + 1)) {
+      let path;
+      try {
+        path = JSON.parse(text.slice(at + 1));
+      } catch {
+        continue;
+      }
       return Array.isArray(path) && path.length > 0 ? { label: text.slice(0, at), path } : undefined;
-    } catch {
-      return undefined;
     }
+    return undefined;
   }
 
   /**
@@ -287,9 +292,12 @@ class Breakpoints {
    * inspection): before the event an `on:` names is taken, and before the
    * block or unit a function or line breakpoint names. Each hits once per
    * block and step. `transition(id)` names a transition; `log(breakpoint)`
-   * writes a logpoint. Answers [{ kind, breakpoints, description }].
+   * writes a logpoint; `passed(id)` hears each breakpoint reached, whether
+   * or not its condition and hit condition let it stop, so the macrostep's
+   * records do not count it again. Answers [{ kind, breakpoints,
+   * description }].
    */
-  atPosition(view, { transition, fires, log }) {
+  atPosition(view, { transition, fires, log, passed }) {
     if (!view.macrostepInProgress) {
       this.#reached.clear();
       return [];
@@ -322,6 +330,7 @@ class Breakpoints {
       const once = `${breakpoint.id}@${key}${unit}`;
       if (this.#reached.has(once)) return false;
       this.#reached.add(once);
+      passed(breakpoint.id);
       return true;
     };
     const out = [];

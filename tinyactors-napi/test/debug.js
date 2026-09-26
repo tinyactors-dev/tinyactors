@@ -1052,6 +1052,77 @@ async function forks() {
   system.close();
 }
 
+// Stepping and breakpoints on a fork's copy, as the test host's adapter
+// does them (the shared transcripts, tinyactors-test/dap/README.md): stepIn
+// by statement passes over a <foreach> position it started at; a step
+// never stops between two microsteps; stepOut at instruction granularity
+// is as at statement; the copy's <log> records are output; a hit condition
+// counts a breakpoint reached by position once; a data breakpoint takes the
+// copy's label, which has a space.
+async function forkStepping() {
+  const system = createSystem({ clock: 'manual' });
+  const chart = statechart({ family: 'loop', revision: 'v1' })
+    .data('count', 0)
+    .data('it', null)
+    .data('items', [1, 2])
+    .state('idle', (s) => s.on('go', (t) => t.target('busy').assign('count', function () { return this.count + 1; })))
+    .state('busy', (s) => s
+      .entry((e) => e.log('busy', function () { return this.count; })
+        .forEach(function () { return this.items; }, 'it', (body) => body
+          .assign('count', function () { return this.count + this.it; })))
+      .on('back', (t) => t.target('idle')));
+  system.spawn(system.define(chart), { name: 'l1' });
+  await system.flush();
+  const client = new Client(system, { mode: 'fork', allow: ALL });
+  let mark = client.mark();
+  await client.start({ address: 'loop/l1' });
+  await client.stoppedAfter(mark, 'entry');
+  const top = async () => (await client.ok('stackTrace', { threadId: 1 })).stackFrames.map((frame) => frame.name);
+  const step = async (command, args = {}) => {
+    const at = client.mark();
+    await client.ok(command, { threadId: 1, ...args });
+    await client.stoppedAfter(at, 'step');
+    return top();
+  };
+
+  await client.ok('setFunctionBreakpoints', { breakpoints: [{ name: 'busy' }] });
+  await client.repl('send go');
+  mark = client.mark();
+  await client.ok('continue', { threadId: 1 });
+  await client.stoppedAfter(mark, 'function breakpoint');
+  assert.deepEqual((await top()).slice(0, 2), ['log 1', 'onentry of busy']);
+  assert.deepEqual((await step('stepIn')).slice(0, 2), ['foreach 2 iteration 1', 'onentry of busy']);
+  assert.match(client.output(), /busy: 1\n/, 'a <log> of the copy is stdout');
+  assert.deepEqual((await step('stepIn')).slice(0, 3), ['assign 1', 'foreach 2 iteration 1', 'onentry of busy'],
+                   'statement stepIn passes over the loop\'s repeated position');
+  assert.deepEqual((await step('stepIn')).slice(0, 2), ['foreach 2 iteration 2', 'onentry of busy']);
+  assert.deepEqual(await step('stepOut', { granularity: 'instruction' }), ['idle in busy (held; 0 messages waiting)'],
+                   'stepOut leaves the block, and the macrostep ends without a stop between microsteps');
+
+  // A hit condition counts each hit once: the second `go` stops, at its
+  // microstep's start.
+  const [transition] = (await client.ok('setFunctionBreakpoints',
+                                        { breakpoints: [{ name: 'idle -> busy', hitCondition: '2' }] })).breakpoints;
+  for (const event of ['back', 'go', 'back', 'go']) await client.repl(`send ${event}`);
+  mark = client.mark();
+  await client.ok('continue', { threadId: 1 });
+  const stop = await client.stoppedAfter(mark, 'function breakpoint');
+  assert.deepEqual(stop.hitBreakpointIds, [transition.id]);
+  assert.deepEqual((await top()).slice(0, 2), ['assign 1', 'transition idle → busy on go']);
+
+  // A data breakpoint on the copy, whose label is `loop/l1 (fork)`.
+  await client.ok('setFunctionBreakpoints', { breakpoints: [] });
+  const described = await client.ok('dataBreakpointInfo', { name: '.count' });
+  assert.equal(described.dataId, 'loop/l1 (fork) ["count"]');
+  const [watched] = (await client.ok('setDataBreakpoints', { breakpoints: [{ dataId: described.dataId }] })).breakpoints;
+  assert.equal(watched.verified, true);
+  mark = client.mark();
+  await client.ok('continue', { threadId: 1 });
+  assert.match((await client.stoppedAfter(mark, 'data breakpoint')).description, /count = /);
+  await client.ok('disconnect');
+  system.close();
+}
+
 // Modules and sources: every registered revision, retired ones included.
 async function catalog() {
   const { system, definition } = await world();
@@ -1128,6 +1199,7 @@ async function ending() {
   await sources();
   await movedLines();
   await forks();
+  await forkStepping();
   await ending();
   clearTimeout(watchdog);
   process.stdout.write('debug.js passed\n');

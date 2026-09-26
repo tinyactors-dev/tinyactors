@@ -707,7 +707,10 @@ class DebugSession {
     const attached = this.#attached;
     if (attached === null) return;
     const source = record.source;
-    const address = attached.address;
+    // A fork's copy is reconstructed from an image of the live actor, so
+    // its records name that actor's address: no other actor of the fork's
+    // system has it.
+    const address = attached.fork === undefined ? attached.address : attached.origin.address;
     const ours = source instanceof ActorID ? source.equals(attached.actor)
       : address !== undefined && source?.family === address.family && source?.name === address.name;
     if (!ours) return;
@@ -788,13 +791,12 @@ class DebugSession {
     const hits = this.#hits;
     this.#hits = [];
     if (this.#gate || this.#run !== null) {
-      const here = this.#breakpoints.atPosition(view, {
+      hits.push(...this.#breakpoints.atPosition(view, {
         transition: (id) => attached.labels.transition(view.definitionID, id),
         fires: (breakpoint) => this.#condition(breakpoint, thread),
         log: (breakpoint) => this.#logpoint(breakpoint, thread),
-      });
-      for (const hit of here) hit.breakpoints.forEach((id) => this.#positionHits.add(id));
-      hits.push(...here);
+        passed: (id) => this.#positionHits.add(id),
+      }));
     }
     const run = this.#run;
     if (hits.length > 0) {
@@ -966,12 +968,23 @@ class DebugSession {
     this.#stop = null;
     this.#clearHoldTimer();
     this.#resetViews();
-    this.#run = { reason, done, description, units: 0 };
+    // Between two microsteps is no place to stop a step: the next
+    // microstep's start (core ADR 0087), or the macrostep's end, comes right
+    // after it.
+    const goal = reason === 'step'
+      ? (view) => !(view.macrostepInProgress && view.position.at === 'none' && view.step.microstep > 0) && done(view)
+      : done;
+    this.#run = { reason, done: goal, description, units: 0 };
     this.#stepCopy();
   }
 
   // The goal of a step on a fork's copy, from where it stands (core ADR
-  // 0083), as the proposal's stepping table has it.
+  // 0083), as the proposal's stepping table has it. At `statement`
+  // granularity, stepIn and next pass over a stop that names the unit they
+  // started at: a <foreach> that has not run and the same loop before its
+  // first iteration have one position (ADR 0083, open point 1), and a
+  // debugger that stops twice at one place looks stuck. `instruction`
+  // stops there anyway.
   #stepGoal(kind, granularity, start) {
     const labels = this.#attached.labels;
     const macro = start.step.macrostep;
@@ -984,13 +997,17 @@ class DebugSession {
     if (granularity === 'line') {
       return kind === 'out' ? ended : otherStep;
     }
-    if (kind === 'in' || granularity === 'instruction') {
+    if (kind !== 'out' && granularity === 'instruction') {
       return () => true;
+    }
+    const same = (view) => !otherStep(view) && samePosition(view.position, start.position);
+    if (kind === 'in') {
+      return (view) => !same(view);
     }
     const block = blockOf(start);
     const depth = depthOf(start, labels);
     if (kind === 'over') {
-      return (view) => otherStep(view) || blockOf(view) !== block || depthOf(view, labels) <= depth;
+      return (view) => otherStep(view) || blockOf(view) !== block || (!same(view) && depthOf(view, labels) <= depth);
     }
     if (start.position.at === 'none') return ended;
     return (view) => otherStep(view) || blockOf(view) !== block || depthOf(view, labels) < depth;
@@ -1790,6 +1807,13 @@ class DebugSession {
 /** A debug session over `system` (see the top of this module). */
 function createDebugSession(system, options) {
   return new DebugSession(system, options);
+}
+
+// Whether two positions (core ADR 0083) name the same unit, in the same
+// iteration of its <foreach>.
+function samePosition(one, other) {
+  return one.at === other.at && one.state === other.state && one.transition === other.transition &&
+    one.action === other.action && one.iteration === other.iteration;
 }
 
 // { family, name } from an address in one of its spellings, or undefined.
