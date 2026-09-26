@@ -113,6 +113,30 @@ static ta_result tna_id_set_build(ta_allocator allocator, const uint64_t *ids, u
     return TA_OK;
 }
 
+/*
+ * Moves the set into a table of `capacity` slots, a power of two at least
+ * twice its count. False when there is no memory: the set keeps its table.
+ */
+static bool tna_id_set_rehash(ta_allocator allocator, tna_id_set *set, uint32_t capacity) {
+    uint64_t *slots = tna_alloc(allocator, capacity * sizeof(uint64_t), _Alignof(uint64_t));
+    if (slots == NULL) {
+        return false;
+    }
+    for (uint32_t at = 0; at < capacity; at += 1u) {
+        slots[at] = TNA_ID_EMPTY;
+    }
+    tna_id_set moved = { .slots = slots, .capacity = capacity, .has_max = set->has_max,
+                         .count = set->has_max ? 1u : 0u };
+    for (uint32_t at = 0; at < set->capacity; at += 1u) {
+        if (set->slots[at] != TNA_ID_EMPTY) {
+            tna_id_set_put(&moved, set->slots[at]);
+        }
+    }
+    tna_id_set_free(allocator, set);
+    *set = moved;
+    return true;
+}
+
 /* Adds `id`, growing the set; false when there is no memory (the set is unchanged). */
 static bool tna_id_set_add(ta_allocator allocator, tna_id_set *set, uint64_t id) {
     if (tna_id_set_has(set, id)) {
@@ -120,28 +144,34 @@ static bool tna_id_set_add(ta_allocator allocator, tna_id_set *set, uint64_t id)
     }
     if (id != TNA_ID_EMPTY && (set->count + 1u) * 2u > set->capacity) {
         uint32_t capacity = set->capacity == 0 ? 8u : set->capacity * 2u;
-        if (capacity < set->capacity) {
+        if (capacity < set->capacity || !tna_id_set_rehash(allocator, set, capacity)) {
             return false;
         }
-        uint64_t *slots = tna_alloc(allocator, capacity * sizeof(uint64_t), _Alignof(uint64_t));
-        if (slots == NULL) {
-            return false;
-        }
-        for (uint32_t at = 0; at < capacity; at += 1u) {
-            slots[at] = TNA_ID_EMPTY;
-        }
-        tna_id_set grown = { .slots = slots, .capacity = capacity, .has_max = set->has_max,
-                             .count = set->has_max ? 1u : 0u };
-        for (uint32_t at = 0; at < set->capacity; at += 1u) {
-            if (set->slots[at] != TNA_ID_EMPTY) {
-                tna_id_set_put(&grown, set->slots[at]);
-            }
-        }
-        tna_id_set_free(allocator, set);
-        *set = grown;
     }
     tna_id_set_put(set, id);
     return true;
+}
+
+/*
+ * Shrinks a set whose load fell to an eighth into a table where it is at
+ * most a quarter: the next grow (past a half) and the next shrink are both
+ * a factor of two or more away, so adding and removing at either boundary
+ * never rebuilds the table each time. The smallest table, 8 slots, is
+ * kept even when empty, so one ID coming and going does not allocate each
+ * time. Without memory the set keeps its larger table, which still works.
+ */
+static void tna_id_set_shrink(ta_allocator allocator, tna_id_set *set) {
+    uint32_t stored = set->count - (set->has_max ? 1u : 0u);
+    if (set->capacity <= 8u || stored * 8u > set->capacity) {
+        return;
+    }
+    uint32_t capacity = 8u;
+    while (capacity < stored * 4u) {
+        capacity *= 2u;
+    }
+    if (capacity < set->capacity) {
+        (void)tna_id_set_rehash(allocator, set, capacity);
+    }
 }
 
 /*
@@ -179,6 +209,8 @@ static void tna_id_set_remove(tna_id_set *set, uint64_t id) {
 void tna_trace_watch_forget_definition(tna_trace_watch *watch, ta_definition_id definition) {
     tna_id_set_remove(&watch->matched, definition);
     tna_id_set_remove(&watch->checked, definition);
+    tna_id_set_shrink(watch->allocator, &watch->matched);
+    tna_id_set_shrink(watch->allocator, &watch->checked);
 }
 
 /* Copies `count` family names. TA_ERR_NOMEM frees what was copied. */

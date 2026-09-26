@@ -184,8 +184,71 @@ static void freed_definitions_leave(void) {
         }
     }
     CHECK(watch.checked.count == 0 && watch.matched.count == 0);
+    /* Empty sets are back to the smallest table. */
+    CHECK(watch.checked.capacity == 8u && watch.matched.capacity == 8u);
     tna_trace_watch_destroy(&watch);
     ta_system_destroy(system);
+    CHECK(tna_allocator_total(&allocator).bytes_in_use == 0);
+}
+
+/*
+ * Capacity follows what is alive: after a large churn the sets shrink to a
+ * table where the survivors are at most a quarter of it; adding and
+ * freeing one definition at that size does not rebuild the table; and the
+ * survivors stay findable.
+ */
+static void sets_shrink_with_hysteresis(void) {
+    tna_allocator allocator;
+    tna_allocator_init(&allocator);
+    ta_allocator core_allocator = tna_allocator_for(&allocator, TNA_MEMORY_CORE);
+    ta_system *system = NULL;
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = core_allocator }, &system) == TA_OK);
+    tna_trace_watch watch;
+    tna_trace_watch_init(&watch, tna_allocator_for(&allocator, TNA_MEMORY_OTHER));
+    CHECK(ta_system_set_definition_sink(system, (ta_definition_sink){ .self = &watch, .v = &forget_vtable }) ==
+          TA_OK);
+    ta_str family = { "shrink/invoke", 13 };
+    CHECK(tna_trace_watch_set(&watch, &(tna_trace_watch_set_params){ .families = &family, .family_count = 1 }) ==
+          TA_OK);
+    enum { ROUNDS = 512, KEPT = 4 };
+    static ta_definition_id ids[ROUNDS];
+    static ta_actor_id actors[ROUNDS];
+    for (uint32_t round = 0; round < ROUNDS; round += 1u) {
+        ids[round] = define_distinct(system, core_allocator, family, round);
+        CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = ids[round], .out = &actors[round] }) ==
+              TA_OK);
+        CHECK(marked(&watch, system, actors[round]));
+    }
+    uint32_t peak = watch.checked.capacity;
+    CHECK(peak >= ROUNDS * 2u);
+    for (uint32_t round = KEPT; round < ROUNDS; round += 1u) {
+        CHECK(ta_system_retire_definition(system, ids[round]) == TA_OK);
+        CHECK(ta_actor_destroy(system, actors[round]) == TA_OK);
+    }
+    CHECK(watch.checked.count == KEPT && watch.matched.count == KEPT);
+    CHECK(watch.checked.capacity <= 16u && watch.matched.capacity <= 16u);
+    for (uint32_t round = 0; round < KEPT; round += 1u) {
+        CHECK(tna_id_set_has(&watch.checked, ids[round]) && tna_id_set_has(&watch.matched, ids[round]));
+    }
+    /* One more comes and goes at this size: the table stays as it is. */
+    uint32_t settled = watch.checked.capacity;
+    const uint64_t *table = watch.checked.slots;
+    for (uint32_t round = 0; round < 8u; round += 1u) {
+        ta_definition_id extra = define_distinct(system, core_allocator, family, ROUNDS + round);
+        ta_actor_id actor = 0;
+        CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = extra, .out = &actor }) == TA_OK);
+        CHECK(marked(&watch, system, actor));
+        CHECK(ta_system_retire_definition(system, extra) == TA_OK);
+        CHECK(ta_actor_destroy(system, actor) == TA_OK);
+        CHECK(watch.checked.capacity == settled && watch.checked.slots == table);
+    }
+    for (uint32_t round = 0; round < KEPT; round += 1u) {
+        CHECK(ta_actor_destroy(system, actors[round]) == TA_OK);
+    }
+    /* Destroying the system frees the rest, which the sink tells the watch. */
+    ta_system_destroy(system);
+    CHECK(watch.checked.count == 0 && watch.checked.capacity == 8u);
+    tna_trace_watch_destroy(&watch);
     CHECK(tna_allocator_total(&allocator).bytes_in_use == 0);
 }
 
@@ -193,6 +256,7 @@ int main(void) {
     sets_answer_membership();
     families_resolve_as_met();
     freed_definitions_leave();
+    sets_shrink_with_hysteresis();
     puts("watch_test passed");
     return 0;
 }

@@ -17,8 +17,11 @@
 /*
  * One open-addressing hash set of IDs, with linear probing. Its capacity
  * is a power of two at least twice its count, so a lookup touches one or
- * two slots whatever the size of the watch. UINT64_MAX marks an empty
- * slot; an ID equal to it is kept in `has_max` instead.
+ * two slots whatever the size of the watch. When removals bring the load
+ * down to an eighth, the set moves to a table where it is at most a
+ * quarter (never below 8 slots), so the watch's memory
+ * follows what is alive rather than its high-water mark. UINT64_MAX marks
+ * an empty slot; an ID equal to it is kept in `has_max` instead.
  */
 typedef struct {
     uint64_t *slots;

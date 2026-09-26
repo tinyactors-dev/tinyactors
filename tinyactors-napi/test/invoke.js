@@ -483,6 +483,7 @@ async function watchedChurn() {
   }
   assert.equal(actor.inspect().data.i, 51);
   assert.deepEqual(sizes(), baseline, '50 children came and went; the watch holds only what is alive');
+  assert.ok(sizes().capacity <= 16, `the sets keep their smallest tables: ${sizes().capacity} slots`);
   watch.stop();
   system.close();
 }

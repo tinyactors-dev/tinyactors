@@ -522,8 +522,8 @@ static bool tna_family_array(napi_env env, ta_allocator allocator, napi_value ar
 }
 
 /*
- * traceWatchSizes(): tests only. { sessions, matched, checked }, the sizes
- * of the watch's sets, so a test can see a family watch shed the
+ * traceWatchSizes(): tests only. { sessions, matched, checked, capacity },
+ * the sizes of the watch's sets and the slots matched and checked take, so a test can see a family watch shed the
  * definitions core frees (core ADR 0079). lib/ never calls it.
  */
 napi_value tna_trace_watch_sizes_method(napi_env env, napi_callback_info info) {
@@ -536,13 +536,16 @@ napi_value tna_trace_watch_sizes_method(napi_env env, napi_callback_info info) {
     napi_value sessions = NULL;
     napi_value matched = NULL;
     napi_value checked = NULL;
+    napi_value capacity = NULL;
     if (napi_create_object(env, &sizes) != napi_ok ||
         napi_create_uint32(env, watch->sessions.count, &sessions) != napi_ok ||
         napi_create_uint32(env, watch->matched.count, &matched) != napi_ok ||
         napi_create_uint32(env, watch->checked.count, &checked) != napi_ok ||
+        napi_create_uint32(env, watch->matched.capacity + watch->checked.capacity, &capacity) != napi_ok ||
         napi_set_named_property(env, sizes, "sessions", sessions) != napi_ok ||
         napi_set_named_property(env, sizes, "matched", matched) != napi_ok ||
-        napi_set_named_property(env, sizes, "checked", checked) != napi_ok) {
+        napi_set_named_property(env, sizes, "checked", checked) != napi_ok ||
+        napi_set_named_property(env, sizes, "capacity", capacity) != napi_ok) {
         return tna_throw(env, "out-of-memory", "traceWatchSizes: cannot build the result");
     }
     return sizes;
