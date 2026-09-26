@@ -1,6 +1,6 @@
 # ADR 0079: Core tells the host when a definition is registered, retired or freed
 
-**Status:** Accepted; not yet implemented. Refines ADR 0043 (retirement) and ADR 0077 (holds and freeing). Serves napi ADR 0024.
+**Status:** Accepted and implemented (2026-09-26); see the implementation notes. Refines ADR 0043 (retirement) and ADR 0077 (holds and freeing). Serves napi ADR 0024.
 **Date:** 2026-09-26
 
 ## Context
@@ -151,3 +151,51 @@ per definition or per actor.
 - **napi, on Node and Bun:** a definition's `resolve` is released exactly
   when the definition is freed: not while a child it invoked still runs,
   and at once when the last one ends.
+
+## Implementation notes
+
+- **Core** (`src/system.c`, `src/system.h`, `include/tinyactors.h`):
+  `ta_null_definition_sink()`, `ta_system_set_definition_sink()` and
+  `ta_system_tell_definition()`, which every event goes through. The
+  system starts with the null sink, as it does with the null trace sink.
+  - REGISTERED fires at the end of `ta_system_register_definition` for a
+    new slot only; the reuse by identity returns before it.
+  - RETIRED fires when `ta_system_retire_definition` finds a definition
+    not yet retired.
+  - `ta_system_settle_definition` runs its cascade in two passes: the
+    worklist collects, and each collected definition is threaded onto a
+    second list through `free_next`, which the worklist no longer needs
+    once it is taken off. The second pass tells the host and frees, last
+    discovered first. `check-recursion` still reports no cycle.
+  - `ta_system_destroy` tells the host of every registered definition in
+    slot order, after destroying every actor and before destroying each
+    definition.
+- **Tests:** `retirement_test`'s `test_definition_sink` covers the null
+  sink and the setter's refusals, REGISTERED once and not for a reuse,
+  RETIRED once, FREED only after the last actor, a three-level cascade
+  (grandchild, child, parent in that order), FREED for every definition
+  left at destroy, and that each definition is inspectable inside
+  `notify` with `identity` pointing at its own storage.
+- **napi** (napi ADR 0024's resolvers, napi ADR 0017's name cache): the
+  native System installs a sink when it is created (`src/napi_system.c`).
+  On FREED it releases the definition's kept `resolve` functions
+  (`tna_children_forget`) and, when tracing, drops the OTLP encoder's
+  cached names for it (`tna_otlp_forget_definition`). Deleted:
+  - the resolver sweep in `src/napi_children.c`, its mark and its
+    constant, and the resolver walk in `tna_children_close`, whose
+    `env_usable` parameter went with it;
+  - the encoder's name-cache sweep, which inspected every cached key on
+    growth; the table rebuild it did is kept as `tna_names_rebuild`, run
+    after a forget.
+  A reference is only deleted while JavaScript can run (not in a
+  finalizer, not after the environment's cleanup hook), as before.
+- **napi tests:** `test/invoke.js` `resolverLifetime` checks, on Node and
+  Bun, that a retired definition an actor still uses keeps its `resolve`
+  (a `srcexpr` is resolved after `retire()`), and that the function is
+  collectable once the last actor goes. `test/native/otlp_test.c`
+  `forget_definition` checks the encoder drops exactly that definition's
+  names and names it again afterwards.
+- **Not reported:** REGISTERED and RETIRED reach napi's sink but nothing
+  uses them yet. A host that wants definition lifecycles in its telemetry
+  would emit them from there.
+

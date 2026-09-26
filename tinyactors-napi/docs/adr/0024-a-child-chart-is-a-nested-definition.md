@@ -1,6 +1,6 @@
 # ADR 0024: A child chart is a nested definition
 
-**Status:** Accepted and implemented (2026-09-26); see the implementation notes. Applies core ADR 0077. Supersedes ADR 0023 and ADR 0021 point 3.
+**Status:** Accepted and implemented (2026-09-26); see the implementation notes. Applies core ADR 0077. Supersedes ADR 0023 and ADR 0021 point 3. Point 5's resolver sweep is replaced by core ADR 0079: a kept `resolve` is released when core tells napi its definition was freed.
 **Date:** 2026-09-26
 
 ## Context
