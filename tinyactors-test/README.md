@@ -443,8 +443,10 @@ and the commands. `ruby/workbench_selftest.rb` checks it against the live host.
 
 `bin/dap` (`mise run dap`) is a debug adapter for the same directories: any
 Debug Adapter Protocol client (VS Code, nvim-dap, Emacs dape) can launch a
-workbench, stop and step its actors on `action_budget: 1`, look at their
-data, configuration, queues and timers, and send them events. See
+workbench, stop and step its actors on `action_budget: 1`, set line
+breakpoints in the chart files, look at their data, configuration, queues
+and timers, send them events, and fork an actor into a system of its own
+to step back through its future. See
 `ruby/dap/README.md`; `ruby/dap_selftest.rb` checks it over pipes.
 
 ## Vendored dependencies

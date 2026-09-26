@@ -46,7 +46,7 @@ or partial, ☑ done and tested, — not offered.
 | `configurationDone` | yes | Ends configuration; a `launch`ed workbench starts running | none | ☑ | ☐ |
 | `launch` | yes | tinyactors-test only: runs a chart directory as a workbench. napi answers an error: production is attached to | none | ☑ | — |
 | `attach` | yes | `{ address, mode, allow }`: one actor, in watch, fork or live mode; the host checks `allow` | none; fork needs C4 | — | ☐ |
-| `restart` | yes | Fork: makes a new copy from the live actor. Live and watch: reattach | C4 | ☐ | ☐ |
+| `restart` | yes | Fork: makes a new copy from the live actor. Live and watch: reattach | C4 | ☑ | ☐ |
 | `disconnect` | yes | Detaches; closes the `debug` scope; releases a hold. Never destroys the actor, whatever `terminateDebuggee` says | none | ☑ | ☐ |
 | `terminate` | yes | Same as `disconnect`: the debuggee is never terminated | none | ☑ | ☐ |
 | `cancel` | no | Every request answers at once, so there is nothing to cancel | — | — | — |
@@ -57,8 +57,8 @@ or partial, ☑ done and tested, — not offered.
 
 | Request | Plan | What it does | Needs | test | napi |
 |---|---|---|---|---|---|
-| `setBreakpoints` | yes | Lines map to the nearest action, transition or state; stops before the action, before the transition's content, or on entry or exit. Live: only stops between macrosteps; inside a macrostep they act as logpoints. Conditions, hit conditions and log messages | C5 | ☐ | ☐ |
-| `breakpointLocations` | yes | The lines that hold an action, a transition or a state | C5 | ☐ | ☐ |
+| `setBreakpoints` | yes | Lines map to the nearest action, transition or state; stops before the action, before the transition's content, or on entry or exit. Live: only stops between macrosteps; inside a macrostep they act as logpoints. Conditions, hit conditions and log messages | C5 | ☑ | ☐ |
+| `breakpointLocations` | yes | The lines that hold an action, a transition or a state | C5 | ☑ | ☐ |
 | `setFunctionBreakpoints` | yes | By name: `past_due` (entry), `exit:past_due`, `on:payment.failed`, `idle → busy` (a transition's ADR 0071 name) | none | ☑ | ☐ |
 | `setExceptionBreakpoints` | yes | Filters `error.execution`, `error.communication`, `error.platform`, `ignored`, `stopped`, and `dead-letter` in napi | none | ☑ | ☐ |
 | `dataBreakpointInfo` | yes | A data-model location can be watched for writes | none | ☑ | ☐ |
@@ -73,11 +73,11 @@ or partial, ☑ done and tested, — not offered.
 | `next` | yes | The next action at the same block depth or shallower. On an idle actor, takes the next held message and stops before transition selection | fork or test host: none; live: N1, N2 | ☑ | ☐ |
 | `stepIn` | yes | One unit (`action_budget: 1`): an action, or a `<foreach>` iteration | as `next` | ☑ | ☐ |
 | `stepOut` | yes | To the end of the block, then the microstep, then the macrostep | as `next` | ☑ | ☐ |
-| `stepBack` | fork | Restores the image captured at the previous stop | C4 | ☐ | ☐ |
-| `reverseContinue` | fork | Restores images back to the previous breakpoint | C4 | ☐ | ☐ |
-| `restartFrame` | fork | Restores the image captured when that macrostep began | C4 | ☐ | ☐ |
+| `stepBack` | fork | Restores the image captured at the previous stop | C4 | ☑ | ☐ |
+| `reverseContinue` | fork | Restores images back to the previous breakpoint | C4 | ☑ | ☐ |
+| `restartFrame` | fork | Restores the image captured when that macrostep began | C4 | ☑ | ☐ |
 | `goto` | yes | An operator transition to the target's state | C2; live needs N3 | ☑ | ☐ |
-| `gotoTargets` | yes | The states at a source line; every state when there is no line | C5 for lines | ◐ | ☐ |
+| `gotoTargets` | yes | The states at a source line; every state when there is no line | C5 for lines | ☑ | ☐ |
 | `pause` | yes | Fork and test host: stop at the next unit. Live: hold the mailbox, stop when the macrostep ends | live needs N1 | ☑ | ☐ |
 | `stepInTargets` | no | An action has one way in | — | — | — |
 | `terminateThreads` | no | Ending a thread would destroy an actor | — | — | — |
@@ -108,13 +108,13 @@ or partial, ☑ done and tested, — not offered.
 | Event | Plan | When | Needs | test | napi |
 |---|---|---|---|---|---|
 | `initialized` | yes | After `initialize` answers | none | ☑ | ☐ |
-| `stopped` | yes | Reasons `breakpoint`, `step`, `pause`, `exception`, `goto`, `data breakpoint`, `function breakpoint`, `entry` | none | ◐ | ☐ |
+| `stopped` | yes | Reasons `breakpoint`, `step`, `pause`, `exception`, `goto`, `data breakpoint`, `function breakpoint`, `entry` | none | ☑ | ☐ |
 | `continued` | yes | When the adapter resumes an actor the client did not ask it to | none | ☑ | ☐ |
 | `exited` | no | Actors do not exit with a code | — | — | — |
 | `terminated` | yes | The attached actor finished, was destroyed, or its address was left empty | none | ☑ | ☐ |
 | `thread` | yes | `SPAWNED`, `FINISHED` and `DESTROYED` records of the actor and its children | none | ☑ | ☐ |
 | `output` | yes | `console`: a summary of each macrostep; `stdout`: `<log>` records; `important`: dead letters and dropped sends | none | ☑ | ☐ |
-| `breakpoint` | yes | A breakpoint is verified once its definition's spans are known, or moves after a hot replace | C5 | ☐ | ☐ |
+| `breakpoint` | yes | A breakpoint is verified once its definition's spans are known, or moves after a hot replace | C5 | ☑ | ☐ |
 | `module` | yes | A definition revision is registered or retired | none | ☑ | ☐ |
 | `loadedSource` | yes | A definition revision's source becomes available | none | ☑ | ☐ |
 | `process` | yes | After `attach` or `launch`: the host process, `startMethod` `attach` or `launch` | none | ☑ | ☐ |
@@ -158,7 +158,7 @@ The `repl` context of `evaluate`.
 | `cancel <send ID>` | Withdraws one pending delayed send | fork; live with `goto` | C3 | ☑ | ☐ |
 | `replace <file>` | Hot-replaces the actor with a new revision | fork; live with `goto` | none | ☐ | ☐ |
 | `clock +<duration>` | Advances logical time | fork; the test host's workbench | C4 for forks | ☑ | ☐ |
-| `fork` | Copies the live actor and switches to the copy | live | C4 | ☐ | ☐ |
+| `fork` | Copies the live actor and switches to the copy | live | C4 | ☑ | ☐ |
 | `<expression>` | Evaluated in the data model | all | none | ☑ | ☐ |
 
 ## Notes on the tinyactors-test column
@@ -168,22 +168,33 @@ The adapter is `tinyactors-test/bin/dap`; see
 
 - `attach` answers an error in the test host: it launches workbench
   directories, and attaching to a running actor is napi's.
-- `stackTrace` is ◐: frames have no source locations until C5. The top
-  frame is the unit the actor runs next, from inspection (C1).
+- `stackTrace` is ◐: frames have the file and line their element was
+  written on (C5), and the top frame is the unit the actor runs next (C1),
+  but there is no `label` frame and no causal chain across actors yet.
+  An invoked child inlined with `invoke chart:` has no locations: the DSL
+  compiles inline charts without spans.
 - `source` is ◐: it serves the chart's Ruby file, as it was when the
-  revision loaded; encoded charts need C5.
-- `stopped` is ◐: every reason except `breakpoint` (C5).
-- `gotoTargets` is ◐: it answers every state of the chart whatever the
-  line, until C5 maps lines to states. `goto` stops with reason `goto` when
-  the jump's macrostep ends.
+  revision loaded; encoded charts with the encode-side spans are not used.
+- Line breakpoints on a microstep's first unit stop after it, since no
+  resume can stop before it; core ADR 0087 is to change that.
+- Forks (`fork` in the console) live in a system of their own (C4); the
+  adapter keeps an image at each stop of a fork's thread and at the start
+  of each of its macrosteps, which `stepBack`, `reverseContinue`,
+  `restartFrame` and `restart` restore into a fresh system at the image's
+  time. On a thread that is not a fork they answer an error.
+- `gotoTargets` answers the states at a line (those written there, else
+  the state an action or transition there belongs to), or every state
+  without a line. `goto` stops with reason `goto` when the jump's
+  macrostep ends.
 - `terminated` follows `terminate`; a workbench has no single attached
   actor whose end would send it.
 - `thread` events come from comparing the actor table after each run, not
   from the lifecycle records, so a reload's replacement keeps its thread.
 - `setVariable` and `setExpression` write through capture, unload and load
   with a changed binding (core ADR 0038), since core has no call that
-  writes an actor's data root. They refuse invoked children and actors
-  with active invocations.
+  writes an actor's data root; a fork is captured, destroyed and
+  reconstructed instead. They refuse invoked children and actors with
+  active invocations.
 - `replace` is not a console command in the test host: saving the chart
   file replaces its actors.
 
