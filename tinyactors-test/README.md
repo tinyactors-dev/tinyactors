@@ -221,6 +221,13 @@ Lower-level steps control a macrostep directly:
 - `actor.resume(budget:)` makes one `ta_actor_resume` call and returns its
   status (`"paused"`, `"stable"`, `"done"`).
 - `actor.destroy` destroys the actor and runs the system.
+- `actor.jump(*states, from:)` delivers an event (`operator.goto` unless
+  `event:` names another) with an operator transition to those states, from
+  the active state `from` or the root, and runs the system (core ADR 0082).
+  `actor.post_jump` offers the same without running the system and returns
+  the `ta_actor_deliver` result.
+- `actor.abandon` abandons the actor's macrostep, without running the
+  system, and returns the `ta_actor_abandon` result (core ADR 0082).
 
 Further observations:
 
