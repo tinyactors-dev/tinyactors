@@ -58,3 +58,7 @@ targetId           tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,to
 filterId           tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
 exceptionId        tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
 hitBreakpointIds   tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
+
+# The Id attribute of the VSIX package manifest (vsx-schema/2011), which
+# the extension's packager writes and its test reads back.
+Id             tinyactors-vscode/{mise/tasks/build,test/package.test.js}  # VSIX manifest attribute

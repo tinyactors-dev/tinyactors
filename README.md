@@ -42,6 +42,8 @@ Under active development - breaking changes are made frequently to land on a goo
 - `tinyactors-napi/` contains the Node-API binding for Node.js 22 and Bun.
 - `tinyactors-test/` contains the instrumentable JSON-RPC test host and its
   Ruby driver.
+- `tinyactors-vscode/` contains the VS Code extension that registers the
+  debug type for both hosts' debug adapters.
 - `docs/proposals/` holds outlines of possible future work, such as new
   hosts. They are not plans or decisions; see its README.
 - `docs/research/` holds background research that informed the designs,

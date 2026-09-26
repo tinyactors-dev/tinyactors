@@ -1,0 +1,57 @@
+#!/usr/bin/env ruby
+#MISE description="Run the extension in a real VS Code (downloaded once into build/): install the .vsix, launch a workbench, attach to napi's DAP server"
+#USAGE flag "--version <version>" help="The VS Code release to run (default: 1.80.0, the oldest engines.vscode allows)"
+# vim:ft=ruby
+
+# Not part of `mise run test`: it downloads VS Code (about 130 MB) and
+# needs xvfb-run on Linux. It uses the test host's and napi's builds, so
+# `mise run build` at the repository's root comes first.
+
+require 'fileutils'
+require 'pathname'
+require 'tmpdir'
+
+ROOT = Pathname.new(__dir__).join('../..').expand_path
+REPOSITORY = ROOT.parent
+version = ENV['usage_version'].to_s.empty? ? '1.80.0' : ENV['usage_version']
+
+def run(*command, **options)
+  puts command.join(' ')
+  pid = Process.spawn(*command, chdir: ROOT.to_s, **options)
+  _pid, status = Process.wait2(pid)
+  exit(status.exitstatus || 1) unless status.success?
+end
+
+abort 'integration: runs on Linux x64 only' unless RUBY_PLATFORM.start_with?('x86_64-linux')
+%w[tinyactors-test/build/tinyactors-test tinyactors-napi/build/tinyactors_napi.node].each do |built|
+  abort "integration: no #{built}; run `mise run build` at the repository's root" unless REPOSITORY.join(built).file?
+end
+abort 'integration: needs xvfb-run' unless system('command -v xvfb-run >/dev/null')
+
+run('mise', 'run', 'build')
+
+install = ROOT.join("build/vscode-#{version}")
+code = install.join('VSCode-linux-x64/code')
+unless code.executable?
+  archive = ROOT.join("build/vscode-#{version}.tar.gz")
+  run('curl', '--fail', '--location', '--silent', '--show-error', '--output', archive.to_s,
+      "https://update.code.visualstudio.com/#{version}/linux-x64/stable")
+  FileUtils.rm_rf(install)
+  install.mkpath
+  run('tar', 'xzf', archive.to_s, '-C', install.to_s)
+  archive.delete
+end
+
+Dir.mktmpdir('tinyactors-vscode-integration') do |tmp|
+  common = ['--no-sandbox', '--user-data-dir', File.join(tmp, 'user'), '--extensions-dir', File.join(tmp, 'extensions')]
+  cli = install.join('VSCode-linux-x64/bin/code').to_s
+  # The .vsix installs, and VS Code lists the extension it holds.
+  run(cli, *common, '--install-extension', ROOT.join('build/tinyactors-vscode.vsix').to_s)
+  listed = IO.popen([cli, *common, '--list-extensions'], err: File::NULL, &:read)
+  abort "integration: the .vsix did not install:\n#{listed}" unless listed.lines.map(&:strip).include?('tinyactors.tinyactors-vscode')
+  FileUtils.rm_rf(File.join(tmp, 'extensions'))
+
+  run('xvfb-run', '--auto-servernum', code.to_s, *common, '--disable-gpu', '--disable-workspace-trust',
+      '--skip-welcome', '--skip-release-notes', '--disable-extensions',
+      "--extensionDevelopmentPath=#{ROOT}", "--extensionTestsPath=#{ROOT.join('test/integration')}")
+end
