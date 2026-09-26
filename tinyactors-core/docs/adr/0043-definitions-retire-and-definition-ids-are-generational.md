@@ -1,6 +1,6 @@
 # ADR 0043: Definitions retire; definition IDs are generational
 
-**Status:** Accepted; refines ADR 0028  
+**Status:** Accepted; refines ADR 0028; refined by ADR 0077 (holds: a definition nothing holds is freed once no actor and no parent uses it; retiring drops every hold)
 **Date:** 2026-09-19
 
 ## Context

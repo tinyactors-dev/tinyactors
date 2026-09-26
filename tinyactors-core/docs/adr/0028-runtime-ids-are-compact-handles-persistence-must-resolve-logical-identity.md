@@ -1,6 +1,6 @@
 # ADR 0028: Runtime IDs are compact handles; persistence must resolve logical identity
 
-**Status:** Accepted; refined by ADR 0038 and ADR 0043  
+**Status:** Accepted; refined by ADR 0038 and ADR 0043; refined by ADR 0077 (registration is idempotent by identity; an identity with an empty revision names only a default family)
 **Date:** 2026-09-15
 
 ## Context
