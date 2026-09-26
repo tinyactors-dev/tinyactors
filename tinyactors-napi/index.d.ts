@@ -214,6 +214,14 @@ export interface System {
        * children inherit it.
        */
       resolve?: (src: string) => string | Uint8Array | undefined;
+      /**
+       * What the document is called, such as its path or a file:// URL: the
+       * source its spans name (core ADR 0086), which sourceOf() answers and
+       * a debugger opens. A child fetched by `src` or `srcexpr` is named by
+       * that src; a child inline in `<content>` has no name, since its lines
+       * count from the start of its content.
+       */
+      name?: string;
       microstepLimit?: number;
     },
   ): Definition<Data>;

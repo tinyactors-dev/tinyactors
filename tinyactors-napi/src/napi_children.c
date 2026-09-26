@@ -153,9 +153,14 @@ static void tna_child_family_of(tna_napi_system *wrapper, ta_definition_id paren
     out->identity = (ta_definition_identity){ .family = { .name = { .ptr = out->text, .len = (uint32_t)length } } };
 }
 
-/* Compiles and registers chart text as a child of `parent`, holding it. */
-static ta_result tna_compile_child(tna_napi_system *wrapper, ta_bytes text, ta_definition_id parent, napi_value resolve,
-                                   ta_definition_id *out, tna_import_failure *failure) {
+/*
+ * Compiles and registers chart text as a child of `parent`, holding it.
+ * `name` is what its spans call the text (core ADR 0086): the src it was
+ * fetched from, or empty for a child written inside its parent, whose lines
+ * count from the start of its <content> and so are not its parent's lines.
+ */
+static ta_result tna_compile_child(tna_napi_system *wrapper, ta_bytes text, ta_str name, ta_definition_id parent,
+                                   napi_value resolve, ta_definition_id *out, tna_import_failure *failure) {
     tna_child_family family;
     tna_child_family_of(wrapper, parent, &family);
     tna_src_resolver fetcher = { .env = wrapper->env, .resolve = resolve };
@@ -163,6 +168,7 @@ static ta_result tna_compile_child(tna_napi_system *wrapper, ta_bytes text, ta_d
     uint32_t count = tna_js_datamodel_choices(&wrapper->dm, choices);
     ta_result result = tna_import_scxml(wrapper->system, &(tna_import_params){
                                                             .input = text,
+                                                            .name = name,
                                                             .datamodels = choices,
                                                             .datamodel_count = count,
                                                             .out = out,
@@ -231,6 +237,7 @@ ta_result tna_children_nest(tna_napi_system *wrapper, ta_definition_id definitio
             }
             ta_content_info content;
             ta_bytes text = { 0 };
+            ta_str name = { 0 };
             ta_arena arena;
             bool fetched = false;
             if (info.content != TA_CONTENT_ID_NONE) {
@@ -250,8 +257,8 @@ ta_result tna_children_nest(tna_napi_system *wrapper, ta_definition_id definitio
                 }
                 fetched = true;
                 tna_src_resolver fetcher = { .env = wrapper->env, .resolve = resolve };
-                result = tna_fetch_src(&fetcher, (ta_str){ .ptr = (const char *)content.bytes.ptr, .len = content.bytes.len },
-                                       &arena, &text);
+                name = (ta_str){ .ptr = (const char *)content.bytes.ptr, .len = content.bytes.len };
+                result = tna_fetch_src(&fetcher, name, &arena, &text);
                 if (result == TA_ERR_NOT_FOUND) {
                     *failure = (tna_import_failure){ .stage = TA_IMPORT_STAGE_DECODE, .located = false };
                     snprintf(failure->message, sizeof failure->message,
@@ -265,7 +272,7 @@ ta_result tna_children_nest(tna_napi_system *wrapper, ta_definition_id definitio
             ta_definition_id child = 0;
             if (result == TA_OK) {
                 wrapper->system->definitions.registering = TNA_ORIGIN_NESTED;
-                result = tna_compile_child(wrapper, text, parent, resolve, &child, failure);
+                result = tna_compile_child(wrapper, text, name, parent, resolve, &child, failure);
                 wrapper->system->definitions.registering = TNA_ORIGIN_HOST;
                 if (result != TA_OK && result != TA_ERR_NOMEM) {
                     tna_child_refused(failure, invoke, result);
@@ -369,12 +376,14 @@ static bool tna_clear_exception(napi_env env, char *message, size_t capacity) {
 }
 
 /* Compiles chart text from `<content expr>` or `srcexpr` for this invoke,
- * holding it until the invoker has spawned the child (core ADR 0077). */
+ * holding it until the invoker has spawned the child (core ADR 0077).
+ * `name` is the src it was fetched from, or empty. */
 static ta_op_status tna_compile_for_invoke(tna_napi_system *wrapper, const tna_child_params *params, ta_bytes text,
-                                           tna_invoking parent) {
+                                           ta_str name, tna_invoking parent) {
     tna_import_failure failure;
     wrapper->system->definitions.registering = TNA_ORIGIN_INVOKE;
-    ta_result result = tna_compile_child(wrapper, text, parent.definition, parent.resolve, params->out, &failure);
+    ta_result result =
+        tna_compile_child(wrapper, text, name, parent.definition, parent.resolve, params->out, &failure);
     wrapper->system->definitions.registering = TNA_ORIGIN_HOST;
     char thrown[512];
     if (tna_clear_exception(wrapper->env, thrown, sizeof thrown)) {
@@ -443,12 +452,12 @@ static ta_op_status tna_child_definition_of(void *context, const tna_child_param
         }
         napi_get_value_string_utf8(env, data, text, length + 1u, &length);
         return tna_compile_for_invoke(wrapper, params, (ta_bytes){ .ptr = (const uint8_t *)text, .len = (uint32_t)length },
-                                      parent);
+                                      (ta_str){ 0 }, parent);
     }
     /* A literal <content> not nested at define time: a computed type, or a
      * chart defined without SCXML. */
     if (request->content.len != 0) {
-        return tna_compile_for_invoke(wrapper, params, request->content, parent);
+        return tna_compile_for_invoke(wrapper, params, request->content, (ta_str){ 0 }, parent);
     }
     napi_valuetype src_type = napi_undefined;
     if (src != NULL && napi_typeof(env, src, &src_type) == napi_ok && src_type == napi_string) {
@@ -479,7 +488,7 @@ static ta_op_status tna_child_definition_of(void *context, const tna_child_param
                      "invoker.scxml: resolve(src) knows no chart for src %.*s", (int)length, text);
             return tna_child_fault(wrapper, params->fault, TA_ERR_NOT_FOUND, wrapper->children.failure);
         }
-        return tna_compile_for_invoke(wrapper, params, chart, parent);
+        return tna_compile_for_invoke(wrapper, params, chart, (ta_str){ .ptr = text, .len = (uint32_t)length }, parent);
     }
     return tna_child_fault(wrapper, params->fault, TA_ERR_INVALID,
                            "invoker.scxml: the invoke names no child: no definition, no <content> and no src");

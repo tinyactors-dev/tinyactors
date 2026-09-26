@@ -28,6 +28,9 @@ typedef struct {
 
 typedef struct {
     ta_bytes input;
+    /* What the document is called, such as its path or URL: the source its
+     * spans name (core ADR 0086). Empty for a document with no name. */
+    ta_str name;
     /* The data models the document may choose from (core ADR 0076). */
     const ta_datamodel *datamodels;
     uint32_t datamodel_count;
@@ -47,3 +50,4 @@ typedef struct {
  * TA_ERR_UNSUPPORTED with `failure` saying why, TA_ERR_NOMEM.
  */
 ta_result tna_import_scxml(tna_system *system, const tna_import_params *params);
+
