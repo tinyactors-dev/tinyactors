@@ -217,7 +217,9 @@ export interface System {
       /**
        * What the document is called, such as its path or a file:// URL: the
        * source its spans name (core ADR 0086), which sourceOf() answers and
-       * a debugger opens. A child fetched by `src` or `srcexpr` is named by
+       * a debugger opens (napi ADR 0027). Without it the spans name no
+       * source, and a debug session shows the chart as SCXML it writes from
+       * the definition, by `sourceReference`. A child fetched by `src` or `srcexpr` is named by
        * that src; a child inline in `<content>` has no name, since its lines
        * count from the start of its content.
        */
@@ -1673,6 +1675,7 @@ export type DebugAuditEntry = {
 } & (
   | { type: 'attach'; allow: DebugPermission[]; [detail: string]: unknown }
   | { type: 'detach'; reason: string }
+  /** A line breakpoint's source is `path`, or `sourceReference` for SCXML the session wrote. */
   | { type: 'breakpoints'; kind: 'line' | 'function' | 'data'; [detail: string]: unknown }
   /** A console line, before it runs. */
   | { type: 'command'; text: string }

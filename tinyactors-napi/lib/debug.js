@@ -148,7 +148,11 @@ class DebugSession {
   #nextFrame = 0;
   #gotoTargets = new Map();
   #modules = new Map();
+  // sourceReference → { definition, source, virtual }: a definition's
+  // export, or the SCXML Sources writes for a chart with no file (napi ADR
+  // 0027). One count numbers both.
   #sourceRefs = new Map();
+  #lastReference = 0;
   #files = new Set();
 
   // Holding: where the actor stopped, what the next hold means (live), the
@@ -423,7 +427,7 @@ class DebugSession {
     }
     const native = nativeOf(attached.system);
     attached.labels = new Labels(native);
-    attached.sources = new Sources(attached.system, native);
+    attached.sources = new Sources(attached.system, native, () => (this.#lastReference += 1));
     this.#threads.set(ATTACHED, { id: ATTACHED, actor: attached.actor, label: attached.label, session: attached.sessionID });
     attached.observer = observe(attached.system, {
       traces: (traces) => this.#onTraces(traces),
@@ -1129,7 +1133,7 @@ class DebugSession {
       const known = this.#modules.get(key);
       if (known === undefined) {
         this.#modules.set(key, module);
-        const reference = this.#sourceRefs.size + 1;
+        const reference = (this.#lastReference += 1);
         this.#sourceRefs.set(reference, { definition: definition.id,
                                           source: exportSource(definition, revision, reference) });
         this.#event('module', { reason: 'new', module });
@@ -1144,6 +1148,7 @@ class DebugSession {
         this.#modules.set(key, module);
         this.#event('module', { reason: 'changed', module });
       }
+      this.#noteVirtual(definition.id, attached.sources.virtualSource(definition.id));
     }
     for (const [key, module] of [...this.#modules]) {
       if (!seen.has(key)) {
@@ -1159,17 +1164,32 @@ class DebugSession {
     }
   }
 
-  // The element a line of `path` stands for, in the attached actor's
-  // chart, or why there is none.
-  #resolveLine(path, line) {
+  // A definition's virtual source (napi ADR 0027), or undefined: a new one
+  // is a loaded source, and one an earlier attach numbered is removed.
+  #noteVirtual(definition, virtual) {
+    for (const [reference, entry] of [...this.#sourceRefs]) {
+      if (entry.virtual && String(entry.definition) === String(definition) && reference !== virtual?.sourceReference) {
+        this.#sourceRefs.delete(reference);
+        this.#event('loadedSource', { reason: 'removed', source: entry.source });
+      }
+    }
+    if (virtual !== undefined && !this.#sourceRefs.has(virtual.sourceReference)) {
+      this.#sourceRefs.set(virtual.sourceReference, { definition, source: virtual, virtual: true });
+      this.#event('loadedSource', { reason: 'new', source: virtual });
+    }
+  }
+
+  // The element a line of `source` (a DAP Source) stands for, in the
+  // attached actor's chart, or why there is none.
+  #resolveLine(source, line) {
     const attached = this.#attached;
     if (attached === null) return 'attach first: lines are resolved against the attached actor\'s chart';
     const definition = attached.system.inspect(attached.actor).definitionID;
-    const found = attached.sources.locate(definition, path, line);
+    const found = attached.sources.locate(definition, source, line);
     if (found === undefined) {
-      return attached.sources.files(definition).length === 0
-        ? 'the chart keeps no source spans (core ADR 0086): statechart() records them'
-        : `no state, transition or action of ${attached.label}'s chart at or after line ${line} of this file`;
+      return attached.sources.elements(definition).length === 0
+        ? 'the chart keeps no source spans (core ADR 0086) and SCXML cannot express it: statechart() records spans'
+        : `no state, transition or action of ${attached.label}'s chart at or after line ${line} of this source`;
     }
     const name = found.kind === 'state' ? attached.labels.state(definition, found.id)
       : found.kind === 'transition' ? attached.labels.transition(definition, found.id)
@@ -1189,8 +1209,8 @@ class DebugSession {
   // Line breakpoints set before attaching are resolved against the
   // attached actor's chart, and the client hears where they went.
   #relocateBreakpoints() {
-    for (const { path } of this.#breakpoints.lineRequests) {
-      for (const breakpoint of this.#breakpoints.relocate(path, (line) => this.#resolveLine(path, line))) {
+    for (const { source } of this.#breakpoints.lineRequests) {
+      for (const breakpoint of this.#breakpoints.relocate(source, (line) => this.#resolveLine(source, line))) {
         this.#event('breakpoint', { reason: 'changed', breakpoint });
       }
     }
@@ -1696,9 +1716,8 @@ class DebugSession {
         const attached = this.#requireAttached();
         const definition = attached.system.inspect(attached.actor).definitionID;
         let states = attached.labels.states(definition);
-        const path = args.source?.path;
-        if (path !== undefined && args.line !== undefined) {
-          const located = attached.sources.lines(definition, path, Number(args.line))
+        if (args.source !== undefined && args.line !== undefined) {
+          const located = attached.sources.lines(definition, args.source, Number(args.line))
             .filter((element) => element.kind === 'state').map((element) => element.id);
           if (located.length > 0) states = states.filter((state) => located.includes(state.id));
         }
@@ -1723,15 +1742,19 @@ class DebugSession {
       },
 
       setBreakpoints(args) {
-        const path = args.source?.path ?? args.source?.name;
-        if (path === undefined) throw refuse('setBreakpoints needs a source with a path');
+        const reference = Number(args.source?.sourceReference ?? 0);
+        const path = args.source?.path ?? (reference > 0 ? undefined : args.source?.name);
+        if (path === undefined && !(reference > 0)) {
+          throw refuse('setBreakpoints needs a source with a path or a sourceReference');
+        }
+        const source = path === undefined ? { sourceReference: reference } : { path };
         const specs = Array.isArray(args.breakpoints) ? args.breakpoints : (args.lines ?? []).map((line) => ({ line }));
-        this.#audited({ type: 'breakpoints', kind: 'line', path,
+        this.#audited({ type: 'breakpoints', kind: 'line', ...source,
                         breakpoints: specs.map(({ line, condition, hitCondition, logMessage }) =>
                           ({ line, condition, hitCondition, logMessage })) });
-        const answered = this.#breakpoints.setLines(path, specs, (line) => {
+        const answered = this.#breakpoints.setLines(source, specs, (line) => {
           const problem = this.#checkCondition(specs.find((spec) => Number(spec.line) === line) ?? {});
-          return problem ?? this.#resolveLine(path, line);
+          return problem ?? this.#resolveLine(source, line);
         });
         this.#updateGate();
         return { body: { breakpoints: answered } };
@@ -1739,10 +1762,12 @@ class DebugSession {
 
       breakpointLocations(args) {
         const attached = this.#requireAttached();
-        const path = args.source?.path;
-        if (path === undefined) return { body: { breakpoints: [] } };
+        if (args.source?.path === undefined && !(Number(args.source?.sourceReference) > 0)) {
+          return { body: { breakpoints: [] } };
+        }
         const definition = attached.system.inspect(attached.actor).definitionID;
-        const found = attached.sources.lines(definition, path, Number(args.line), Number(args.endLine ?? args.line));
+        const found = attached.sources.lines(definition, args.source, Number(args.line),
+                                             Number(args.endLine ?? args.line));
         const unique = new Map(found.map((element) => [`${element.line}:${element.column}`, element]));
         const breakpoints = [...unique.values()].map((element) => ({ line: element.line, column: element.column }));
         return { body: { breakpoints } };
@@ -1821,7 +1846,10 @@ class DebugSession {
 
       source(args) {
         const reference = Number(args.sourceReference ?? args.source?.sourceReference ?? 0);
+        const written = this.#attached?.sources.content(reference);
+        if (written !== undefined) return { body: written };
         const entry = this.#sourceRefs.get(reference);
+        if (entry?.virtual) throw refuse('attach first: the SCXML is written from the attached session\'s chart');
         if (entry === undefined) {
           throw refuse(args.source?.path !== undefined && this.#files.has(args.source.path)
             ? `${args.source.path} is a file the client reads itself` : 'no such source');

@@ -82,6 +82,10 @@ function describeLine(breakpoint) {
 const placeKey = (view) => `${view.step.macrostep}.${view.step.microstep}:${view.position.at}:${view.position.state}:` +
   `${view.position.transition}`;
 
+// The line breakpoints of one DAP Source are kept under its path, or its
+// sourceReference for a virtual source (napi ADR 0027).
+const sourceKey = (source) => (source.path !== undefined ? `path ${source.path}` : `reference ${source.sourceReference}`);
+
 class Breakpoints {
   #functions = [];
   #data = [];
@@ -97,61 +101,62 @@ class Breakpoints {
 
   any() {
     return this.#functions.length > 0 || this.#data.length > 0 || this.#filters.size > 0 ||
-      [...this.#lines.values()].some((list) => list.some((entry) => entry.element !== undefined));
+      [...this.#lines.values()].some(({ entries }) => entries.some((entry) => entry.element !== undefined));
   }
 
   #allLines() {
-    return [...this.#lines.values()].flat().filter((entry) => entry.element !== undefined);
+    return [...this.#lines.values()].flatMap(({ entries }) => entries).filter((entry) => entry.element !== undefined);
   }
 
   /**
-   * setBreakpoints for one source: replaces that source's breakpoints.
-   * `resolve(line)` answers the element the line stands for, as
-   * { element: { kind, id, name }, line, column, source }, or a string
-   * saying why there is none. Answers DAP Breakpoint objects.
+   * setBreakpoints for one source, { path } or { sourceReference } (napi
+   * ADR 0027): replaces that source's breakpoints. `resolve(line)` answers
+   * the element the line stands for, as { element: { kind, id, name },
+   * line, column, source }, or a string saying why there is none. Answers
+   * DAP Breakpoint objects.
    */
-  setLines(path, specs, resolve) {
+  setLines(source, specs, resolve) {
     const entries = [];
     const answered = specs.map((spec) => {
       const id = (this.#next += 1);
       const found = resolve(Number(spec?.line));
       if (typeof found === 'string' || found === undefined) {
-        entries.push({ id, path, spec });
+        entries.push({ id, spec });
         return { id, verified: false, message: found ?? `no state, transition or action at line ${spec?.line}` };
       }
-      const breakpoint = { id, kind: 'line', path, spec, line: found.line, element: found.element, condition: spec.condition,
+      const breakpoint = { id, kind: 'line', spec, line: found.line, element: found.element, condition: spec.condition,
                            hitCondition: spec.hitCondition, logMessage: spec.logMessage, hits: 0 };
       entries.push(breakpoint);
       return { id, verified: true, line: found.line, column: found.column, source: found.source };
     });
-    this.#lines.set(path, entries);
+    this.#lines.set(sourceKey(source), { source, entries });
     return answered;
   }
 
   /** The sources with line breakpoints and what the client asked for, to resolve again later. */
   get lineRequests() {
-    return [...this.#lines].map(([path, entries]) => ({ path, specs: entries.map((entry) => entry.spec),
-                                                        ids: entries.map((entry) => entry.id) }));
+    return [...this.#lines.values()].map(({ source, entries }) => ({ source, specs: entries.map((entry) => entry.spec),
+                                                                      ids: entries.map((entry) => entry.id) }));
   }
 
   /**
    * Resolves a source's line breakpoints again (after attaching), keeping
    * their IDs. Answers the DAP Breakpoint objects, for `breakpoint` events.
    */
-  relocate(path, resolve) {
-    const entries = this.#lines.get(path) ?? [];
+  relocate(source, resolve) {
+    const entries = this.#lines.get(sourceKey(source))?.entries ?? [];
     const answered = [];
-    this.#lines.set(path, entries.map((entry) => {
+    this.#lines.set(sourceKey(source), { source, entries: entries.map((entry) => {
       const found = resolve(Number(entry.spec?.line));
       if (typeof found === 'string' || found === undefined) {
         answered.push({ id: entry.id, verified: false,
                         message: found ?? `no state, transition or action at line ${entry.spec?.line}` });
-        return { id: entry.id, path, spec: entry.spec };
+        return { id: entry.id, spec: entry.spec };
       }
       answered.push({ id: entry.id, verified: true, line: found.line, column: found.column, source: found.source });
       return { ...entry, kind: 'line', line: found.line, element: found.element, condition: entry.spec.condition,
                hitCondition: entry.spec.hitCondition, logMessage: entry.spec.logMessage, hits: entry.hits ?? 0 };
-    }));
+    }) });
     return answered;
   }
 

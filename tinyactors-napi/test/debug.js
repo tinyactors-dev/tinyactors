@@ -1208,6 +1208,136 @@ async function catalog() {
   system.close();
 }
 
+// SCXML documents (napi ADR 0027): a named one is shown in its file, on
+// its author's lines; an unnamed one as a virtual source, the SCXML the
+// codec writes from the definition, which the client reads by
+// sourceReference and sets breakpoints in.
+const SCXML_NS = 'xmlns="http://www.w3.org/2005/07/scxml" version="1.0"';
+const order = (family) => `<scxml ${SCXML_NS} name="${family}">
+
+  <state id="open">
+    <transition event="ship" target="shipped">
+      <raise event="notify"/>
+    </transition>
+  </state>
+
+  <state id="shipped"/>
+</scxml>`;
+
+// The line of `text` holding `needle`, counting from 1.
+const lineOf = (text, needle) => text.split('\n').findIndex((line) => line.includes(needle)) + 1;
+
+async function scxmlSources() {
+  const system = createSystem({ clock: 'manual' });
+  const path = '/charts/order.scxml';
+  const named = order('named');
+  system.spawn(system.define(named, { format: 'scxml', name: path }), { name: 'o1' });
+  const unnamed = system.spawn(system.define(order('unnamed'), { format: 'scxml' }), { name: 'o2' });
+  await system.flush();
+
+  // A named document: frames and verified breakpoints on the author's lines.
+  let client = new Client(system, { mode: 'live', allow: ALL });
+  await client.start({ address: 'named/o1' });
+  let { stackFrames } = await client.ok('stackTrace', { threadId: 1 });
+  assert.deepEqual([stackFrames[0].source, stackFrames[0].line],
+                   [{ name: 'order.scxml', path }, lineOf(named, '<state id="open"')]);
+  const set = await client.ok('setBreakpoints', { source: { path }, breakpoints: [
+    { line: lineOf(named, '<raise') }, { line: lineOf(named, '<state id="shipped"') - 1 },
+  ] });
+  assert.deepEqual(set.breakpoints.map((breakpoint) => [breakpoint.verified, breakpoint.line]),
+                   [[true, lineOf(named, '<raise')], [true, lineOf(named, '<state id="shipped"')]]);
+  assert.ok((await client.ok('loadedSources')).sources.some((source) => source.path === path));
+  await client.ok('disconnect');
+
+  // An unnamed one: a virtual source whose text holds each frame's element.
+  client = new Client(system, { mode: 'live', allow: ALL });
+  await client.start({ address: 'unnamed/o2' });
+  ({ stackFrames } = await client.ok('stackTrace', { threadId: 1 }));
+  const [frame] = stackFrames;
+  assert.equal(frame.source.path, undefined);
+  assert.ok(frame.source.sourceReference > 0, JSON.stringify(frame.source));
+  assert.equal(frame.source.name, 'unnamed.scxml');
+  const { content, mimeType } = await client.ok('source', { source: frame.source,
+                                                            sourceReference: frame.source.sourceReference });
+  assert.equal(mimeType, 'application/scxml+xml');
+  const written = content.split('\n');
+  assert.match(written[frame.line - 1], /<state id="open"/, 'the frame is on its state\'s line in the text');
+  assert.equal(frame.column, written[frame.line - 1].indexOf('<') + 1);
+  assert.ok((await client.ok('loadedSources')).sources.some((source) =>
+    source.sourceReference === frame.source.sourceReference));
+
+  // Breakpoints, locations and goto targets on its lines.
+  const virtual = { name: frame.source.name, sourceReference: frame.source.sourceReference };
+  const raise = lineOf(content, '<raise');
+  const { breakpoints } = await client.ok('setBreakpoints', { source: virtual, breakpoints: [{ line: raise }] });
+  assert.deepEqual([breakpoints[0].verified, breakpoints[0].line, breakpoints[0].source],
+                   [true, raise, { ...virtual, origin: frame.source.origin }]);
+  const locations = await client.ok('breakpointLocations', { source: virtual, line: 1, endLine: written.length });
+  assert.deepEqual(locations.breakpoints.map((entry) => entry.line),
+                   ['<state id="open"', '<transition', '<raise', '<state id="shipped"']
+                     .map((needle) => lineOf(content, needle)));
+  const { targets } = await client.ok('gotoTargets', { source: virtual, line: lineOf(content, '<state id="shipped"') });
+  assert.deepEqual(targets.map((target) => [target.label, target.line]),
+                   [['shipped', lineOf(content, '<state id="shipped"')]]);
+  const mark = client.mark();
+  unnamed.post('ship');
+  const stop = await client.stoppedAfter(mark, 'breakpoint');
+  assert.deepEqual(stop.hitBreakpointIds, [breakpoints[0].id]);
+  // A live actor stops after the macrostep, at rest in the state it entered.
+  ({ stackFrames } = await client.ok('stackTrace', { threadId: 1 }));
+  assert.deepEqual([stackFrames[0].source.sourceReference, stackFrames[0].line],
+                   [virtual.sourceReference, lineOf(content, '<state id="shipped"')]);
+  await client.ok('setBreakpoints', { source: virtual, breakpoints: [] });
+  await client.ok('continue', { threadId: 1 });
+  await client.ok('disconnect');
+  await client.refused('source', { sourceReference: virtual.sourceReference }, /attach first|no such source/);
+  system.close();
+}
+
+// Child documents (napi ADRs 0021 and 0024): a child fetched by src is in
+// the file its src names; a child inline in <content> counts its lines
+// from the start of its content, so it is a virtual source and not its
+// parent's file, as is a child fetched from a URI that is not a file.
+async function scxmlChildren() {
+  const system = createSystem({ clock: 'manual' });
+  const child = (family) => `<scxml ${SCXML_NS} name="${family}">
+  <state id="${family}_running"/>
+</scxml>`;
+  const files = { 'charts/fetched.scxml': child('fetched'), 'https://charts.test/remote.scxml': child('remote') };
+  const parent = `<scxml ${SCXML_NS} name="parent">
+  <state id="p">
+    <invoke id="inline" type="scxml"><content>${child('inline')}</content></invoke>
+    <invoke id="fetched" type="scxml" src="charts/fetched.scxml"/>
+    <invoke id="remote" type="scxml" src="https://charts.test/remote.scxml"/>
+  </state>
+</scxml>`;
+  system.spawn(system.define(parent, { format: 'scxml', name: '/charts/parent.scxml', resolve: (src) => files[src] }),
+               { name: 'p1' });
+  await system.flush();
+  const client = new Client(system, { mode: 'live', allow: ALL });
+  await client.start({ address: 'parent/p1' });
+  // The inline child runs as a thread of its own, on the lines of its
+  // virtual source.
+  const { threads } = await client.ok('threads');
+  const thread = threads.find((entry) => entry.name.includes('invocation inline '));
+  assert.ok(thread !== undefined, JSON.stringify(threads));
+  const [frame] = (await client.ok('stackTrace', { threadId: thread.id })).stackFrames;
+  assert.deepEqual([frame.source.path, frame.source.name], [undefined, 'inline.scxml'],
+                   'an inline child is not shown in its parent\'s file');
+  const inline = await client.ok('source', { sourceReference: frame.source.sourceReference });
+  assert.match(inline.content.split('\n')[frame.line - 1], /<state id="inline_running"/);
+  // Every chart the system holds is a loaded source: the fetched child in
+  // the file its src names, the remote one as SCXML written from it.
+  const { sources } = await client.ok('loadedSources');
+  assert.ok(sources.some((source) => source.path === 'charts/fetched.scxml'), JSON.stringify(sources));
+  assert.ok(sources.some((source) => source.path === '/charts/parent.scxml'));
+  const remote = sources.find((source) => source.name === 'remote.scxml');
+  assert.ok(remote?.sourceReference > 0, JSON.stringify(sources));
+  assert.match((await client.ok('source', { source: remote })).content, /<state id="remote_running"/);
+  await client.ok('disconnect');
+  system.close();
+}
+
 // The session ends when the attached actor goes; closing the transport
 // detaches and releases what the session held.
 async function ending() {
@@ -1254,6 +1384,8 @@ async function ending() {
   await catalog();
   await sources();
   await movedLines();
+  await scxmlSources();
+  await scxmlChildren();
   await runaway();
   await forks();
   await forkStepping();
