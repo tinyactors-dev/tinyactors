@@ -114,18 +114,35 @@ actor keeps its thread across a reload. A fork is a thread too, `fork 1 of
 counter/acct1 · idle` (see "Forks" below).
 
 **Stopping is all-stop.** When one actor stops, nothing else runs until
-the client continues or steps, in the workbench or in any fork. The host single-steps on `action_budget: 1`
-(core ADR 0061) whenever a breakpoint, a step or a pause is armed, and
-runs with the workbench's budgets otherwise.
+the client continues or steps, in the workbench or in any fork. Whenever a
+breakpoint, a step or a pause is armed, the host resumes one unit at a
+time (`action_budget: 1`, core ADR 0061) and pauses at every microstep's
+start, after selection and before its first unit
+(`pause_at_microstep_start`, core ADR 0087); otherwise it runs with the
+workbench's budgets.
 
 **Frames**, innermost first: the unit the actor runs next, as a
 debugger's current line is (`assign 2`), the `<if>` and `<foreach>` around
 it (`foreach 2 iteration 2`), the block (`onentry of busy`, `transition
 idle → busy on bump`, `onexit of busy`), the microstep with its
-transitions, and the macrostep with the event it took. Between two
-microsteps the top frame is `selecting transitions`. An actor at rest has
-one frame, `idle in <states>`; one holding an event it has not begun has
-`about to take <event> (before transition selection)`.
+transitions, and the macrostep with the event it took. At a microstep's
+start the top frame is its first unit, which has not run yet; a microstep
+with no content stands at its first transition (`transition busy → idle
+on done`), and an operator's jump without content at `taking an
+operator's jump`. A pause that lands between two microsteps (the
+workbench's microstep budget ran out) shows `selecting transitions`. An
+actor at rest has one frame, `idle in <states>`; one holding an event it
+has not begun has `about to take <event> (before transition selection)`.
+
+After the macrostep, a `caused by` label frame starts the causal chain:
+the step that sent the event the macrostep took (`boss: sent bump in step
+3.1`, at the line of the send), then the step that sent that one's, across
+actors, back to `the debug console sent poke` or `the host delivered
+tick`. It follows each MACROSTEP_BEGIN record's `cause`, the step key of
+the step that produced the event (core ADR 0067), to the SENT record of
+that step. The adapter keeps the last thousand macrosteps and steps it
+saw; a step older than that, or before the adapter started, ends the
+chain with a frame that says it was not seen.
 
 Each frame is at the file and line its element was written on (core ADR
 0086): the chart DSL records the caller of every `state`, `transition`,
@@ -133,9 +150,14 @@ Each frame is at the file and line its element was written on (core ADR
 action's frame is at its action, a block's at its state or transition, a
 microstep's at its first transition (a jump's at its first target), and a
 resting actor's at its first leaf state. The DSL knows lines only, so
-columns are 1. A chart an `invoke chart:` inlines is compiled without
-spans (the DSL leaves them out of inline content), so an invoked child's
-frames have no location.
+columns are 1.
+
+A chart an `invoke chart:` inlines is compiled without spans (the DSL
+leaves them out of inline content). Its frames are in a virtual source
+instead: the SCXML the codec encodes from the definition
+(`ta_definition_encode` with its source map, core ADR 0086), served by
+`sourceReference` as `worker.scxml`, at the place the encode wrote each
+element. It is also that revision's loaded source.
 
 Where an actor stands comes from `ta.actor.inspect` (core ADR 0083): its
 step key and the next unit, so an actor reloaded from an image, as writing
@@ -180,18 +202,15 @@ had then, so a retired revision still shows the chart it ran.
 unit it started at, so the repeated `<foreach>` position above costs no
 extra step; `instruction` stops there anyway.
 
-A resume that selects a microstep always runs its first unit before it
-can pause (`action_budget` counts units run, and a microstep budget
-pauses only between microsteps), so no stop is possible before a
-microstep's first unit. Everything after it is reachable: a breakpoint on
-a state's entry or exit, on a transition, or on a line, stops before the
-first unit of its block or its action, unless that unit is the
-microstep's first, in which case it stops after it. `idle → busy` on a
-transition with content stops at its second action; `busy` stops before
-`busy`'s onentry when the microstep exited a state with an onexit or ran
-transition content first. Core ADR 0087 will let a resume stop before a
-microstep's first unit; `Breakpoints#first_unit` is the code that goes
-then.
+Stepping stops at each microstep's start (core ADR 0087): `stepIn` from a
+microstep's last unit, a step by microsteps (`line`), and a step between
+two microsteps all stop before the next microstep's first unit, where
+nothing of it has run: no `<onexit>`, no transition content, no entry. A
+breakpoint on a state's entry or exit, on a transition, or on a line stops
+before the first unit of its block or its action, the microstep's first
+included. A breakpoint whose block has no unit (a state with no
+`<onexit>`) hits at the next place the actor stops: in a microstep with no
+content, its start.
 
 A step of an idle actor waits for its next event and stops before the
 macrostep that takes it, as the proposal's "`next` on an idle actor" says.
@@ -222,9 +241,9 @@ forks run, and resolved again whenever those change. A breakpoint set
 before the actors start is unverified until its chart loads; saving a
 chart that moves lines moves the breakpoint to what is now on or near its
 line. Both are announced with a `breakpoint` event. `breakpointLocations`
-lists the lines that hold an element. A unit that writes no trace record
-(a `<log>`) cannot be seen after it ran, so a breakpoint on a `<log>` that
-is a microstep's first unit does not stop.
+lists the lines that hold an element. A breakpoint is matched against
+where the actor stands, not against trace records, so it stops before a
+`<log>`, which writes none, like any other unit.
 
 ## The debug console
 

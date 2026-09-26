@@ -88,7 +88,7 @@ or partial, ☑ done and tested, — not offered.
 | Request | Plan | What it does | Needs | test | napi |
 |---|---|---|---|---|---|
 | `threads` | yes | The attached actor and its invoked children; every actor in a workbench | none | ☑ | ☑ |
-| `stackTrace` | yes | Action, `<foreach>` iterations, block, microstep, macrostep; then a `label` frame and the causal chain | C1 to attach to an actor already paused; C5 for locations | ◐ | ☑ |
+| `stackTrace` | yes | Action, `<foreach>` iterations, block, microstep, macrostep; then a `label` frame and the causal chain | C1 to attach to an actor already paused; C5 for locations | ☑ | ☑ |
 | `scopes` | yes | Data model, Event, Configuration, Queues, Timers, Invocations, System | none | ☑ | ☑ |
 | `variables` | yes | Expands a scope or a value, with paging | none | ☑ | ☑ |
 | `setVariable` | yes | Writes a data-model location; other scopes are read-only | none | ☑ | ☑ |
@@ -96,7 +96,7 @@ or partial, ☑ done and tested, — not offered.
 | `evaluate` | yes | `repl`: the console commands; `watch`, `hover`, `clipboard`, `variables`: an expression in the data model | none; `goto` C2, `abandon` C2, `cancel` C3, `clock` C4 | ☑ | ☑ |
 | `completions` | yes | Event names after `send`, state IDs after `goto`, data locations otherwise | none | ☑ | ☑ |
 | `exceptionInfo` | yes | The fault of the `error.*` event or failed action that stopped the thread | none | ☑ | ☑ |
-| `source` | yes | A chart's text: its file, or the encoded chart with the encode-side spans | C5 | ◐ | ◐ |
+| `source` | yes | A chart's text: its file, or the encoded chart with the encode-side spans | C5 | ☑ | ◐ |
 | `loadedSources` | yes | One source per definition revision | none | ☑ | ☑ |
 | `modules` | yes | Definition families and their revisions, retired ones included | none | ☑ | ☑ |
 | `locations` | no | No value in a chart names a place in a source | — | — | — |
@@ -169,15 +169,17 @@ The adapter is `tinyactors-test/bin/dap`; see
 
 - `attach` answers an error in the test host: it launches workbench
   directories, and attaching to a running actor is napi's.
-- `stackTrace` is ◐: frames have the file and line their element was
-  written on (C5), and the top frame is the unit the actor runs next (C1),
-  but there is no `label` frame and no causal chain across actors yet.
-  An invoked child inlined with `invoke chart:` has no locations: the DSL
-  compiles inline charts without spans.
-- `source` is ◐: it serves the chart's Ruby file, as it was when the
-  revision loaded; encoded charts with the encode-side spans are not used.
-- Line breakpoints on a microstep's first unit stop after it, since no
-  resume can stop before it; core ADR 0087 is to change that.
+- `stackTrace`: frames have the file and line their element was written
+  on (C5) and the top frame is the unit the actor runs next (C1), a
+  microstep's start included (C6). After a `caused by` label frame comes
+  the causal chain, from the records' `cause`, across actors, back to the
+  host or the debug console.
+- `source` serves the chart's Ruby file as it was when the revision
+  loaded, and, for a chart compiled without spans (one `invoke chart:`
+  inlines), the SCXML the codec encodes, with the encode-side spans, by
+  `sourceReference`.
+- Breakpoints and steps stop at a microstep's start, before its first
+  unit (C6).
 - Forks (`fork` in the console) live in a system of their own (C4); the
   adapter keeps an image at each stop of a fork's thread and at the start
   of each of its macrosteps, which `stepBack`, `reverseContinue`,
