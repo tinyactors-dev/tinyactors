@@ -91,7 +91,8 @@ module TinyactorsNapiBindings
   # argument: the runtime fills it. In an output it crosses as described.
   INJECT_TYPES = {
     'ta_allocator' => 'the system allocator (ADR 0014)',
-    'ta_datamodel' => "core's null data model, or the JavaScript data model when System.define() selects it; in an output, its SCXML name"
+    'ta_datamodel' => "core's null data model, or the JavaScript data model when System.define() selects it; in an output, its SCXML name",
+    'ta_value_adopter' => "the calling system's values: a restored image's boxes of another system become its own (ADR 0026)"
   }.freeze
 
   SKIP_TYPES = {

@@ -88,3 +88,4 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0082](0082-operator-transitions-and-abandoning-a-macrostep.md) | [An operator transition is a transition, and a macrostep that never ends can be abandoned](0082-operator-transitions-and-abandoning-a-macrostep.md) |
 | [0083](0083-inspection-reports-where-a-paused-actor-stands.md) | [Inspection reports where a paused actor stands](0083-inspection-reports-where-a-paused-actor-stands.md) |
 | [0084](0084-an-operator-can-withdraw-one-pending-delayed-send.md) | [An operator can withdraw one pending delayed send](0084-an-operator-can-withdraw-one-pending-delayed-send.md) |
+| [0085](0085-an-image-restores-into-any-system-that-registers-its-revision.md) | [An image restores into any system that registers its revision](0085-an-image-restores-into-any-system-that-registers-its-revision.md) |

@@ -514,6 +514,19 @@ bool tna_inject_ta_datamodel(tna_call *call, ta_datamodel *out) {
     return true;
 }
 
+/*
+ * What gives the calling system the values of an image it restores (core
+ * ADR 0085, napi ADR 0026): each box another system made becomes one of
+ * this system's.
+ */
+bool tna_inject_ta_value_adopter(tna_call *call, ta_value_adopter *out) {
+    if (call->owner == NULL) {
+        return tna_invalid(call, "a call that runs against a system");
+    }
+    *out = tna_values_adopter(&call->owner->values);
+    return true;
+}
+
 napi_value tna_enc_ta_datamodel(tna_call *call, const ta_datamodel *in) {
     if (in->v == NULL) {
         return tna_undefined(call);

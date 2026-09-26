@@ -231,6 +231,7 @@ napi_value tna_enc_text(tna_call *call, const char *text, uint32_t count);
 /* Adapters the plumbing supplies (INJECT_TYPES in bindings.rb). */
 bool tna_inject_ta_allocator(tna_call *call, ta_allocator *out);
 bool tna_inject_ta_datamodel(tna_call *call, ta_datamodel *out);
+bool tna_inject_ta_value_adopter(tna_call *call, ta_value_adopter *out);
 
 /* ------------------------------------------------------------------------
  * Handle objects

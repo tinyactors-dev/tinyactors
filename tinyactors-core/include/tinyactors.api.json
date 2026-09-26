@@ -1814,11 +1814,18 @@
             "type": "ta_trace_parent"
           },
           "doc": "The trace parent of what caused the load (ADR 0067), such as the message that found the actor unloaded: the LOADED record is written under it, so the load is in that message's trace. All zero: none."
+        },
+        {
+          "name": "adopter",
+          "type": {
+            "type": "ta_value_adopter"
+          },
+          "doc": "Gives this system the host values of an image captured in another system (ADR 0085). Bytes need none: only their own system loads them, and their values go through its data model (ADR 0074)."
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 96,
+          "size": 112,
           "align": 8,
           "offsets": {
             "image": 0,
@@ -1826,11 +1833,12 @@
             "datamodel_binding": 24,
             "out": 32,
             "root": 40,
-            "trace": 48
+            "trace": 48,
+            "adopter": 96
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 72,
+          "size": 80,
           "align": 8,
           "offsets": {
             "image": 0,
@@ -1838,7 +1846,8 @@
             "datamodel_binding": 12,
             "out": 16,
             "root": 20,
-            "trace": 24
+            "trace": 24,
+            "adopter": 72
           }
         }
       }
@@ -2044,25 +2053,33 @@
           "shape": "single",
           "direction": "out",
           "valid_on": "success"
+        },
+        {
+          "name": "adopter",
+          "type": {
+            "type": "ta_value_adopter"
+          }
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 24,
+          "size": 40,
           "align": 8,
           "offsets": {
             "image": 0,
             "datamodel_binding": 8,
-            "out": 16
+            "out": 16,
+            "adopter": 24
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 12,
+          "size": 20,
           "align": 4,
           "offsets": {
             "image": 0,
             "datamodel_binding": 4,
-            "out": 8
+            "out": 8,
+            "adopter": 12
           }
         }
       }
@@ -15839,6 +15856,126 @@
         }
       }
     },
+    "ta_value_adopter": {
+      "kind": "struct",
+      "semantic": "adapter",
+      "fields": [
+        {
+          "name": "self",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            }
+          },
+          "shape": "raw",
+          "direction": "in"
+        },
+        {
+          "name": "v",
+          "type": {
+            "pointer": {
+              "type": "ta_value_adopter_vtable",
+              "const": true
+            }
+          },
+          "shape": "vtable",
+          "direction": "in"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "self": 0,
+            "v": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "self": 0,
+            "v": 4
+          }
+        }
+      }
+    },
+    "ta_value_adopter_vtable": {
+      "kind": "struct",
+      "semantic": "vtable",
+      "doc": "Gives the restoring system the host values an image holds (ADR 0085): queued and held event data, delayed-send targets and data, completion data and <foreach > snapshots. `adopt` stores in *out a value the restoring system's host may hold, owning one reference: `value` itself, retained, or a copy. Any result but TA_OK fails the restore, which then leaves nothing behind. A host whose values do not belong to one system leaves the adopter zero, and core retains each value instead.",
+      "fields": [
+        {
+          "name": "adopt",
+          "type": {
+            "pointer": {
+              "function": {
+                "returns": {
+                  "type": {
+                    "type": "ta_result"
+                  },
+                  "success": "TA_OK"
+                },
+                "params": [
+                  {
+                    "name": "self",
+                    "type": {
+                      "pointer": {
+                        "builtin": "void"
+                      }
+                    },
+                    "shape": "raw",
+                    "direction": "in"
+                  },
+                  {
+                    "name": "value",
+                    "type": {
+                      "pointer": {
+                        "type": "ta_value",
+                        "const": true
+                      }
+                    },
+                    "shape": "single",
+                    "direction": "in"
+                  },
+                  {
+                    "name": "out",
+                    "type": {
+                      "pointer": {
+                        "type": "ta_value"
+                      }
+                    },
+                    "shape": "single",
+                    "direction": "out",
+                    "valid_on": "success",
+                    "release": "ta_value_release"
+                  }
+                ]
+              }
+            }
+          },
+          "shape": "callback",
+          "direction": "in"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 8,
+          "align": 8,
+          "offsets": {
+            "adopt": 0
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4,
+          "offsets": {
+            "adopt": 0
+          }
+        }
+      }
+    },
     "ta_value_vtable": {
       "kind": "struct",
       "semantic": "vtable",
@@ -17914,7 +18051,7 @@
     },
     {
       "name": "ta_actor_unload",
-      "doc": "Evicts a named actor without terminating it. The image must be a fresh capture of actor; TA_ERR_STALE means the actor changed after capture.",
+      "doc": "Evicts a named actor without terminating it. The image must be a fresh capture of actor in this system; TA_ERR_STALE means the actor changed after capture, or the image was captured in another system.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -17950,7 +18087,7 @@
     },
     {
       "name": "ta_actor_load",
-      "doc": "Restores an unloaded named actor and atomically republishes its route.",
+      "doc": "Restores an unloaded named actor and atomically republishes its route. The image may come from another system, as for ta_actor_reconstruct().",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -17993,7 +18130,7 @@
     },
     {
       "name": "ta_actor_reconstruct",
-      "doc": "Reconstructs an image under a fresh runtime ID without reading or changing the actor directory. For a named image, the logical self-address is kept; sends to that address follow the directory's current route. The image's session continues, keeping its session ID, unless a resident session holds that ID; then this is a new session (ADR 0066). ta_actor_load() always continues the session.",
+      "doc": "Reconstructs an image under a fresh runtime ID without reading or changing the actor directory. For a named image, the logical self-address is kept; sends to that address follow the directory's current route. The image's session continues, keeping its session ID, unless a resident session holds that ID; then this is a new session (ADR 0066). ta_actor_load() always continues the session.\n\nThe image may have been captured in another system, which may since have been destroyed, as long as this one registers the exact revision it names (ADR 0085). Event names, send and invocation IDs and I/O types are interned here from the text the image keeps. A runtime reference to another actor cannot name anything here, so it becomes runtime ID 0, which no actor has: a send to it fails as one to a destroyed actor does, and the parent of an invoked child is gone. The restored actor is a new session whose ID is its runtime ID, since the image's session ID is a runtime ID of the system that captured it. `adopter` gives this system the host values the image holds.",
       "public": true,
       "static_inline": false,
       "implemented": true,

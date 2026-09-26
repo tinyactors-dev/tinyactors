@@ -1,6 +1,6 @@
 # ADR 0066: A session ID outlives residency
 
-**Status:** Accepted and implemented; refines ADR 0038, ADR 0044 and ADR 0052. See the implementation notes.
+**Status:** Accepted and implemented; refines ADR 0038, ADR 0044 and ADR 0052. See the implementation notes. Refined by ADR 0085: restored into another system, a session is a new one.
 **Date:** 2026-09-23
 
 ## Context

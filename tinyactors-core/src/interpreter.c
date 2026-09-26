@@ -1210,6 +1210,23 @@ ta_send_id ta_send_id_from_text(const ta_system *system, ta_str text) {
     return ta_atom_find(&system->atoms, text, &atom) == TA_OK ? ta_literal_send_id(atom) : 0;
 }
 
+bool ta_send_id_literal(const ta_system *system, ta_send_id id, ta_str *out) {
+    if (id == 0 || (id & TA_GENERATED_SEND_ID_BIT) != 0) {
+        return false;
+    }
+    *out = ta_atom_text(&system->atoms, (ta_atom)(id - 1u));
+    return true;
+}
+
+ta_result ta_send_id_intern_literal(ta_system *system, ta_str text, ta_send_id *out) {
+    ta_atom atom = 0;
+    ta_result result = ta_atom_intern(&system->atoms, text, &atom);
+    if (result == TA_OK) {
+        *out = ta_literal_send_id(atom);
+    }
+    return result;
+}
+
 ta_result ta_send_id_parse(const ta_system *system, ta_str text, ta_send_id *out) {
     if (system == NULL || out == NULL || text.ptr == NULL || text.len == 0) {
         return TA_ERR_INVALID;

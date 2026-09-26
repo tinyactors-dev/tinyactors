@@ -76,9 +76,10 @@ struct ta_system {
     /* The trace-ID generator's state and the sampler's threshold (ADR 0073). */
     uint64_t trace_rng[4];
     uint64_t trace_threshold;
-    /* Marks the bytes this system offloads (ADR 0074), drawn from the ID
-     * generator at the first offload; 0 until then. */
-    uint64_t offload_token;
+    /* Marks the images this system captures and the bytes it offloads, with
+     * its address (ADR 0074, ADR 0085): drawn from the ID generator at the
+     * first capture; 0 until then. */
+    uint64_t image_token;
     /* Every definition's counters, freed ones included (ADR 0072). */
     ta_counters counters;
     /* Microsteps one macrostep may run, for definitions that set none (ADR

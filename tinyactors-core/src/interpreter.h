@@ -143,6 +143,11 @@ size_t ta_event_block_bytes(uint32_t capacity);
 void ta_send_id_write(const ta_system *system, ta_send_id id, ta_text_writer *writer);
 /* Returns 0 when the text names no send ID. */
 ta_send_id ta_send_id_from_text(const ta_system *system, ta_str text);
+/* A literal send ID's text, borrowed from the system; false for a generated
+ * ID or none, which are the same number in every system (ADR 0085). */
+bool ta_send_id_literal(const ta_system *system, ta_send_id id, ta_str *out);
+/* The literal send ID with this text, interning it (ADR 0085). */
+ta_result ta_send_id_intern_literal(ta_system *system, ta_str text, ta_send_id *out);
 /* ------------------------------------------------------------------------
  * Interpreter services used by invoke.c
  */
