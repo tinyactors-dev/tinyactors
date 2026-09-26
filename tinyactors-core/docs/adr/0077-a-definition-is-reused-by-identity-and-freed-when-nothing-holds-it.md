@@ -1,6 +1,6 @@
 # ADR 0077: A definition is reused by identity and freed when nothing holds it
 
-**Status:** Accepted and implemented (2026-09-26); see the implementation notes. Refines ADR 0028 (identity), ADR 0043 (retirement) and ADR 0053 (literal content for invokers). Supersedes napi ADR 0023 and napi ADR 0021 point 3. ADR 0078 adds a paged walk over every held definition, so nested and invoke-time definitions are visible to hosts; nesting stays reported from parent to child, since a child can have several parents.
+**Status:** Accepted and implemented (2026-09-26); see the implementation notes. Refines ADR 0028 (identity), ADR 0043 (retirement) and ADR 0053 (literal content for invokers). Supersedes napi ADR 0023 and napi ADR 0021 point 3. ADR 0078 adds a paged walk over every held definition, so nested and invoke-time definitions are visible to hosts; nesting stays reported from parent to child, since a child can have several parents. Refined by ADR 0079: core tells the host when a definition is registered, retired or freed, and a freeing cascade frees leaves first.
 **Date:** 2026-09-26
 
 ## Context
