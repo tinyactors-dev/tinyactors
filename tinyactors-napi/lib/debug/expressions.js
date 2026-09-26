@@ -110,7 +110,10 @@ function valueAt(root, path) {
  * `start` the column the typed prefix starts at.
  */
 function locations(text, root) {
-  const match = /((?:\.?[A-Za-z_$][\w$]*)(?:\.[A-Za-z_$][\w$]*)*)?\.([A-Za-z_$][\w$]*)?$|(?:^|[^\w$.])([A-Za-z_$][\w$]*)$/.exec(text);
+  // `.a.b` or `a.b` (the object, then what was typed of a key), or a bare name.
+  const dotted = /((?:\.?[A-Za-z_$][\w$]*)(?:\.[A-Za-z_$][\w$]*)*)?\.([A-Za-z_$][\w$]*)?$/;
+  const bare = /(?:^|[^\w$.])([A-Za-z_$][\w$]*)$/;
+  const match = new RegExp(`${dotted.source}|${bare.source}`).exec(text);
   if (match === null || root === null || typeof root !== 'object') return [];
   let container = root;
   let prefix;

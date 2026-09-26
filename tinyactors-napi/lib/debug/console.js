@@ -74,7 +74,9 @@ function parse(line) {
       if (rest.length !== 1) throw new TinyactorsError('cancel <send ID>: the ID the Timers scope shows', 'invalid');
       return { command: 'cancel', id: rest[0] };
     case 'replace':
-      if (rest.length !== 1) throw new TinyactorsError('replace <revision>: a registered revision of the actor\'s family', 'invalid');
+      if (rest.length !== 1) {
+        throw new TinyactorsError('replace <revision>: a registered revision of the actor\'s family', 'invalid');
+      }
       return { command: 'replace', revision: rest[0] };
     case 'clock':
       return { command: 'clock', duration: tail };

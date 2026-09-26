@@ -47,8 +47,8 @@ function frames({ view, labels, sources, seen, note }) {
               place: at.length === 0 ? undefined : statePlace(at[0]) }];
   }
   if (view.step.macrostep === 0) {
-    const name = view.currentEvent === null ? 'no event' : view.currentEvent.name;
-    return [{ name: `about to take ${name} (before transition selection)`, hint: 'normal' }];
+    return [{ name: view.currentEvent === null ? 'about to start (its bootstrap has not run)'
+      : `about to take ${view.currentEvent.name} (before transition selection)`, hint: 'normal' }];
   }
   return [...unitFrames(view, labels, sources), ...stepFrames(view, seen, sources)];
 }

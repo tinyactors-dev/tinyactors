@@ -178,13 +178,15 @@ class DebugSession {
       throw new TinyactorsError(`createDebugSession(): options.allow lists ${PERMISSIONS.join(', ')}`, 'invalid');
     }
     if (typeof send !== 'function') {
-      throw new TinyactorsError('createDebugSession(): options.send must be a function that takes each outgoing message', 'invalid');
+      throw new TinyactorsError('createDebugSession(): options.send must be a function that takes each outgoing message',
+                                'invalid');
     }
     if (audit !== undefined && typeof audit !== 'function') {
       throw new TinyactorsError('createDebugSession(): options.audit must be a function', 'invalid');
     }
     if (!(typeof holdTimeout === 'number' && holdTimeout > 0 && holdTimeout <= 2147483647)) {
-      throw new TinyactorsError('createDebugSession(): options.holdTimeout must be a positive number of milliseconds', 'invalid');
+      throw new TinyactorsError('createDebugSession(): options.holdTimeout must be a positive number of milliseconds',
+                                'invalid');
     }
     this.#system = system;
     this.#mode = mode;
@@ -303,7 +305,8 @@ class DebugSession {
       ...entry,
       time: Date.now(),
       session: this.id,
-      ...(attached === null ? {} : { actor: attached.origin.label, sessionID: attached.origin.sessionID, mode: attached.mode }),
+      ...(attached === null ? {}
+        : { actor: attached.origin.label, sessionID: attached.origin.sessionID, mode: attached.mode }),
     });
   }
 
@@ -583,7 +586,7 @@ class DebugSession {
     const view = this.#inspect(thread);
     if (view === undefined) return `${thread.label} (gone)`;
     const where = view.residency === 'done' ? `done in ${view.finalState ?? 'its final state'}`
-      : leaves(view, this.#attached.labels).join(' ');
+      : leaves(view, this.#attached.labels).join(' ') || 'starting';
     return `${thread.label} · ${where}`;
   }
 
@@ -704,8 +707,9 @@ class DebugSession {
     const attached = this.#attached;
     if (attached === null) return;
     const source = record.source;
+    const address = attached.address;
     const ours = source instanceof ActorID ? source.equals(attached.actor)
-      : attached.address !== undefined && source?.family === attached.address.family && source?.name === attached.address.name;
+      : address !== undefined && source?.family === address.family && source?.name === address.name;
     if (!ours) return;
     const value = record.hasValue ? ` ${typeof record.value === 'string' ? record.value : jsonText(record.value)}` : '';
     this.#output('stdout', `${record.label ?? 'log'}:${value}`);
@@ -740,7 +744,8 @@ class DebugSession {
     if (this.#pending !== null) {
       const reason = this.#pending;
       this.#pending = null;
-      const description = reason === 'goto' ? 'the jump\'s macrostep ended' : reason === 'step' ? 'the macrostep ended' : 'paused';
+      const description = reason === 'goto' ? 'the jump\'s macrostep ended'
+        : reason === 'step' ? 'the macrostep ended' : 'paused';
       this.#halt(reason, { description, hits });
       return;
     }
@@ -1039,7 +1044,8 @@ class DebugSession {
 
   #mailboxNote(message) {
     const scope = this.#attached?.console?.scope;
-    const console = scope !== undefined && message.scope?.index === scope.index && message.scope?.generation === scope.generation;
+    const console = scope !== undefined && message.scope?.index === scope.index &&
+      message.scope?.generation === scope.generation;
     return {
       event: message.event,
       ...(message.data === undefined ? {} : { data: message.data }),
@@ -1086,7 +1092,8 @@ class DebugSession {
       if (known === undefined) {
         this.#modules.set(key, module);
         const reference = this.#sourceRefs.size + 1;
-        this.#sourceRefs.set(reference, { definition: definition.id, source: exportSource(definition, revision, reference) });
+        this.#sourceRefs.set(reference, { definition: definition.id,
+                                          source: exportSource(definition, revision, reference) });
         this.#event('module', { reason: 'new', module });
         this.#event('loadedSource', { reason: 'new', source: this.#sourceRefs.get(reference).source });
         for (const path of attached.sources.files(definition.id)) {
@@ -1241,7 +1248,9 @@ class DebugSession {
 
   async #replace({ revision }) {
     const attached = this.#requireChange('goto', 'replace');
-    if (attached.fork !== undefined) throw refuse('a fork\'s copy has no address to replace it at; restart makes a new copy');
+    if (attached.fork !== undefined) {
+      throw refuse('a fork\'s copy has no address to replace it at; restart makes a new copy');
+    }
     if (attached.address === undefined) throw refuse('only a named actor can be replaced in place');
     const { system } = attached;
     const definition = system.findDefinition({ family: attached.address.family, revision });
@@ -1433,7 +1442,8 @@ class DebugSession {
       threads() {
         if (this.#attached === null) return { body: { threads: [] } };
         this.#refreshThreads();
-        return { body: { threads: [...this.#threads.values()].map((thread) => ({ id: thread.id, name: this.#threadName(thread) })) } };
+        const threads = [...this.#threads.values()].map((thread) => ({ id: thread.id, name: this.#threadName(thread) }));
+        return { body: { threads } };
       },
 
       stackTrace(args) {
@@ -1474,7 +1484,9 @@ class DebugSession {
         this.#requireChange('set', 'setVariable');
         const text = String(args.value);
         const where = this.#variables.location(args.variablesReference, String(args.name));
-        if (where === undefined) throw refuse('only the Data model can be written; the other scopes are views of core state');
+        if (where === undefined) {
+          throw refuse('only the Data model can be written; the other scopes are views of core state');
+        }
         let value;
         try {
           value = JSON.parse(text);
@@ -1482,7 +1494,8 @@ class DebugSession {
           this.#requireEvaluate('a value that is not JSON');
           value = expressions.evaluate(text, this.#scope(where.thread));
         }
-        this.#audited({ type: 'mutation', operation: 'set', location: expressions.locationText(where.path), value: jsonText(value) });
+        this.#audited({ type: 'mutation', operation: 'set', location: expressions.locationText(where.path),
+                        value: jsonText(value) });
         return { body: this.#variables.set(args.variablesReference, String(args.name), value) };
       },
 
@@ -1578,7 +1591,9 @@ class DebugSession {
 
       continue() {
         this.#requireChange('hold', 'continue');
-        if (this.#stop === null && this.#pending === null && this.#run === null) return { body: { allThreadsContinued: false } };
+        if (this.#stop === null && this.#pending === null && this.#run === null) {
+          return { body: { allThreadsContinued: false } };
+        }
         this.#audited({ type: 'mutation', operation: 'release' });
         this.#release();
         return { body: { allThreadsContinued: false } };
@@ -1626,7 +1641,8 @@ class DebugSession {
         const index = this.#points.findIndex((point) => point.macrostep === frame.macrostep);
         if (index < 0) throw refuse(`no stop was kept from the start of macrostep ${frame.macrostep}`);
         this.#audited({ type: 'mutation', operation: 'restartFrame', macrostep: frame.macrostep });
-        return { after: () => this.#restore(index, 'restart', `back at the first stop kept in macrostep ${frame.macrostep}`) };
+        const description = `back at the first stop kept in macrostep ${frame.macrostep}`;
+        return { after: () => this.#restore(index, 'restart', description) };
       },
 
       gotoTargets(args) {
@@ -1681,7 +1697,8 @@ class DebugSession {
         const definition = attached.system.inspect(attached.actor).definitionID;
         const found = attached.sources.lines(definition, path, Number(args.line), Number(args.endLine ?? args.line));
         const unique = new Map(found.map((element) => [`${element.line}:${element.column}`, element]));
-        return { body: { breakpoints: [...unique.values()].map((element) => ({ line: element.line, column: element.column })) } };
+        const breakpoints = [...unique.values()].map((element) => ({ line: element.line, column: element.column }));
+        return { body: { breakpoints } };
       },
 
       setFunctionBreakpoints(args) {
@@ -1689,7 +1706,8 @@ class DebugSession {
         const attached = this.#attached;
         const definition = attached === null ? undefined : attached.system.inspect(attached.actor).definitionID;
         this.#audited({ type: 'breakpoints', kind: 'function',
-                        breakpoints: specs.map(({ name, condition, hitCondition }) => ({ name, condition, hitCondition })) });
+                        breakpoints: specs.map(({ name, condition, hitCondition }) =>
+                          ({ name, condition, hitCondition })) });
         const answered = this.#breakpoints.setFunctions(specs, (breakpoint) =>
           (attached === null ? this.#checkCondition(breakpoint) : this.#checkBreakpoint(breakpoint, definition)));
         this.#updateGate();
@@ -1728,7 +1746,8 @@ class DebugSession {
       setDataBreakpoints(args) {
         const specs = Array.isArray(args.breakpoints) ? args.breakpoints : [];
         this.#audited({ type: 'breakpoints', kind: 'data',
-                        breakpoints: specs.map(({ dataId, condition, hitCondition }) => ({ dataId, condition, hitCondition })) });
+                        breakpoints: specs.map(({ dataId, condition, hitCondition }) =>
+                          ({ dataId, condition, hitCondition })) });
         const answered = this.#breakpoints.setData(specs, (breakpoint) => {
           if (![...this.#threads.values()].some((thread) => thread.label === breakpoint.label)) {
             return `no thread is ${breakpoint.label}`;
@@ -1776,8 +1795,9 @@ function createDebugSession(system, options) {
 // { family, name } from an address in one of its spellings, or undefined.
 function parseAddress(address) {
   if (address !== null && typeof address === 'object') {
-    return typeof address.family === 'string' && typeof address.name === 'string' && address.family !== '' && address.name !== ''
-      ? { family: address.family, name: address.name } : undefined;
+    const { family, name } = address;
+    return typeof family === 'string' && typeof name === 'string' && family !== '' && name !== ''
+      ? { family, name } : undefined;
   }
   if (typeof address !== 'string') return undefined;
   const text = address.startsWith('#_actor_') ? address.slice('#_actor_'.length) : address;

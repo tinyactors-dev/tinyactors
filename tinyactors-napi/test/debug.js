@@ -11,6 +11,8 @@ const assert = require('node:assert/strict');
 const {
   createSystem, statechart, createDebugSession, DAPReader, encodeDAPMessage, TinyactorsError,
 } = require('..');
+const { core } = require('../lib/native');
+const { nativeOf } = require('../lib/system');
 
 const watchdog = setTimeout(() => {
   console.error('debug.js: timed out');
@@ -59,7 +61,8 @@ class Client {
   }
 
   events(name) {
-    return this.messages.filter((message) => message.type === 'event' && message.event === name).map((message) => message.body);
+    return this.messages.filter((message) => message.type === 'event' && message.event === name)
+      .map((message) => message.body);
   }
 
   output() {
@@ -95,7 +98,8 @@ class Client {
   }
 
   async start(attach) {
-    const capabilities = await this.ok('initialize', { clientID: 'test', adapterID: 'tinyactors', supportsInvalidatedEvent: true });
+    const capabilities = await this.ok('initialize', { clientID: 'test', adapterID: 'tinyactors',
+                                                        supportsInvalidatedEvent: true });
     await this.ok('attach', attach);
     await this.ok('configurationDone');
     return capabilities;
@@ -117,7 +121,8 @@ function subscription(revision = 'v1') {
         .on('boom', (t) => t.script(function () { throw new Error('boom'); }))
         .on('spin', (t) => t.target('loop1'))
         .on('remind', (t) => t.send('reminder', (send) => send.id('nudge').after('60s')))
-        .on('ping', (t) => t.send('pong', (send) => send.via(({ event }) => event.originType).to(({ event }) => event.origin))))
+        .on('ping', (t) => t.send('pong', (send) =>
+          send.via(({ event }) => event.originType).to(({ event }) => event.origin))))
     .state('past_due', (s) =>
       s
         .entry((e) => e.log('overdue', function () { return this.failures; }))
@@ -207,7 +212,8 @@ async function session() {
   await client.ok('configurationDone');
   const [process] = client.events('process');
   assert.deepEqual(process, { name: 'subscription/acct_1', startMethod: 'attach', isLocalProcess: true });
-  assert.match(client.output(), /attached to subscription\/acct_1 .* in live mode; allowed: send, set, goto, hold, evaluate/);
+  assert.match(client.output(),
+               /attached to subscription\/acct_1 .* in live mode; allowed: send, set, goto, hold, evaluate/);
   const { threads } = await client.ok('threads');
   assert.deepEqual(threads, [{ id: 1, name: 'subscription/acct_1 · active' }]);
   assert.equal(client.audit[0].type, 'attach');
@@ -390,7 +396,8 @@ async function breakpoints() {
     { name: 'nowhere' },
   ] });
   assert.equal(set.breakpoints[0].verified, true);
-  assert.deepEqual(set.breakpoints[1], { id: set.breakpoints[1].id, verified: false, message: 'nowhere is not a state of the chart' });
+  assert.deepEqual(set.breakpoints[1], { id: set.breakpoints[1].id, verified: false,
+                                         message: 'nowhere is not a state of the chart' });
   let mark = client.mark();
   const first = actor.send('payment.failed', { attempt: 1 });
   let stop = await client.stoppedAfter(mark, 'function breakpoint');
@@ -460,7 +467,8 @@ async function breakpoints() {
   assert.equal(byName.dataId, 'subscription/acct_1 ["plan","seats"]');
   assert.equal((await client.ok('dataBreakpointInfo', { name: 'a + b' })).dataId, null);
   const watched = await client.ok('setDataBreakpoints', { breakpoints: [
-    { dataId: described.dataId }, { dataId: 'nobody ["x"]' }, { dataId: described.dataId, accessType: 'read' }, { dataId: 'x' },
+    { dataId: described.dataId }, { dataId: 'nobody ["x"]' }, { dataId: described.dataId, accessType: 'read' },
+    { dataId: 'x' },
   ] });
   assert.deepEqual(watched.breakpoints.map((entry) => entry.verified), [true, false, false, false]);
   mark = client.mark();
@@ -480,7 +488,7 @@ async function breakpoints() {
 // needs a fork.
 async function console() {
   const { system, actor } = await world();
-  const v2 = system.define(subscription('v2'));
+  system.define(subscription('v2'));
   const client = new Client(system, { mode: 'live', allow: ALL });
   await client.start({ address: 'subscription/acct_1' });
 
@@ -570,7 +578,6 @@ async function console() {
   assert.equal(replaced.inspect().data.failures, 1);
   assert.match((await client.ok('threads')).threads[0].name, /subscription\/acct_1/);
   await client.refused('evaluate', { expression: 'replace v9', context: 'repl' }, /no registered/);
-  void v2;
 
   // The clock is a fork's.
   await client.refused('evaluate', { expression: 'clock +3d', context: 'repl' }, /every actor of the system/);
@@ -581,7 +588,7 @@ async function console() {
 // Permissions: each operation needs its own; expressions need `evaluate`,
 // and without it the Variables pane and the console commands still work.
 async function permissions() {
-  const { system, actor } = await world();
+  const { system } = await world();
   const client = new Client(system, { mode: 'live', allow: ['send'] });
   await client.start({ address: 'subscription/acct_1' });
   await client.refused('pause', { threadId: 1 }, /"hold" permission/);
@@ -595,7 +602,8 @@ async function permissions() {
   const data = scopes.find((scope) => scope.name === 'Data model');
   const { variables } = await client.ok('variables', { variablesReference: data.variablesReference });
   assert.deepEqual(variables.map((variable) => variable.name), ['failures', 'plan', 'log']);
-  await client.refused('setVariable', { variablesReference: data.variablesReference, name: 'failures', value: '5' }, /"set"/);
+  await client.refused('setVariable', { variablesReference: data.variablesReference, name: 'failures', value: '5' },
+                       /"set"/);
   const conditioned = await client.ok('setFunctionBreakpoints', { breakpoints: [{ name: 'past_due', condition: 'true' }] });
   assert.match(conditioned.breakpoints[0].message, /"evaluate" permission/);
   assert.match((await client.repl('send paid')).result, /sent paid/);
@@ -609,7 +617,6 @@ async function permissions() {
   const watcher = new Client(system, { mode: 'watch', allow: ALL });
   await watcher.ok('initialize');
   await watcher.refused('attach', { address: 'subscription/acct_1', mode: 'live' }, /watch mode at most/);
-  void actor;
   system.close();
 }
 
@@ -630,7 +637,8 @@ async function audit() {
   await client.repl('failures + 1');
   await client.ok('evaluate', { expression: 'plan.seats', context: 'hover' });
   refuse = true;
-  await client.refused('evaluate', { expression: 'send paid', context: 'repl' }, /audit hook refused it: not during a freeze/);
+  await client.refused('evaluate', { expression: 'send paid', context: 'repl' },
+                       /audit hook refused it: not during a freeze/);
   await system.flush();
   assert.equal(system.mailbox(actor).length, 0);
   refuse = false;
@@ -676,7 +684,8 @@ async function state() {
   assert.equal(plan.evaluateName, '.plan');
   assert.equal(plan.namedVariables, 2);
   const planned = await client.ok('variables', { variablesReference: plan.variablesReference });
-  assert.deepEqual(planned.variables.map((variable) => [variable.name, variable.value]), [['name', '"basic"'], ['seats', '2']]);
+  assert.deepEqual(planned.variables.map((variable) => [variable.name, variable.value]),
+                   [['name', '"basic"'], ['seats', '2']]);
   assert.deepEqual((await read('Configuration')).map((variable) => variable.name), ['active']);
   const system_ = Object.fromEntries((await read('System')).map((variable) => [variable.name, variable.value]));
   assert.equal(system_._sessionid, JSON.stringify(String(actor.inspect().sessionID)));
@@ -688,7 +697,8 @@ async function state() {
   const written = await client.ok('setVariable', { variablesReference: plan.variablesReference, name: 'seats', value: '5' });
   assert.equal(written.value, '5');
   assert.equal(actor.inspect().data.plan.seats, 5);
-  await client.ok('setVariable', { variablesReference: plan.variablesReference, name: 'name', value: 'plan.name.toUpperCase()' });
+  await client.ok('setVariable', { variablesReference: plan.variablesReference, name: 'name',
+                                   value: 'plan.name.toUpperCase()' });
   assert.equal(actor.inspect().data.plan.name, 'BASIC');
   const expression = await client.ok('setExpression', { expression: '.plan.seats', value: 'plan.seats * 2' });
   assert.equal(expression.value, '10');
@@ -705,7 +715,8 @@ async function state() {
   await client.refused('evaluate', { expression: 'undefinedThing.x', context: 'watch' }, /threw/);
 
   // completions: event names, states, send IDs, commands, data locations.
-  const complete = async (text) => (await client.ok('completions', { text, column: text.length + 1 })).targets.map((target) => target.label);
+  const complete = async (text) =>
+    (await client.ok('completions', { text, column: text.length + 1 })).targets.map((target) => target.label);
   assert.deepEqual(await complete('send pa'), ['paid', 'payment.failed']);
   assert.deepEqual(await complete('goto loop1 lo'), ['loop1', 'loop2']);
   assert.deepEqual(await complete('ab'), ['abandon']);
@@ -716,8 +727,6 @@ async function state() {
   assert.equal(target.length, 3);
 
   // An invoked child is a thread of its own.
-  const { definitionID } = actor.inspect();
-  void definitionID;
   await client.repl('goto supervising');
   await system.flush();
   let { threads } = await client.ok('threads');
@@ -789,17 +798,19 @@ function renewal() {
   return chart;
 }
 
-// The ID of the action of `kind` in `definition` whose index in its block is `index`.
+// The ID of the action of `kind` whose index in its block is `index`.
 function actionID(system, definition, kind, index) {
-  for (let id = 0; id < 64; id += 1) {
-    const place = definition.sourceOf('action', id);
-    if (place === undefined) continue;
-    const { core } = require('../lib/native');
-    const { nativeOf } = require('../lib/system');
+  const count = core.definition_inspect(nativeOf(system), definition.id).action_count;
+  for (let id = 0; id < count; id += 1) {
     const info = core.definition_action(nativeOf(system), definition.id, id);
     if (info.kind === kind && info.index === index) return id;
   }
   return undefined;
+}
+
+// The line statechart() recorded for a state (core ADR 0086).
+function stateLine(system, definition, name) {
+  return definition.sourceOf('state', core.definition_find_state(nativeOf(system), definition.id, name)).line;
 }
 
 // Source spans (core ADR 0086): frames have lines, a line breakpoint
@@ -810,9 +821,7 @@ async function sources() {
   const definition = system.define(renewal());
   const actor = system.spawn(definition, { name: 'r1' });
   await system.flush();
-  const stateLine = (name) => definition.sourceOf('state', system.inspect(actor).definitionID === definition.id
-    ? require('../lib/native').core.definition_find_state(require('../lib/system').nativeOf(system), definition.id, name) : 0).line;
-  const renewing = stateLine('renewing');
+  const renewing = stateLine(system, definition, 'renewing');
   const assign = definition.sourceOf('action', actionID(system, definition, 'assign', 1)).line;
   const client = new Client(system, { mode: 'live', allow: ALL });
   await client.ok('initialize', { clientID: 'test' });
@@ -830,11 +839,12 @@ async function sources() {
   // A frame of an actor at rest names its state's line.
   const { stackFrames } = await client.ok('stackTrace', { threadId: 1 });
   assert.equal(stackFrames[0].source.path, __filename);
-  assert.equal(stackFrames[0].line, stateLine('active'));
+  assert.equal(stackFrames[0].line, stateLine(system, definition, 'active'));
 
   // Lines: locations, a line between elements snaps to the next one, and a
   // logpoint.
-  const locations = await client.ok('breakpointLocations', { source: { path: __filename }, line: renewing, endLine: assign });
+  const locations = await client.ok('breakpointLocations',
+                                    { source: { path: __filename }, line: renewing, endLine: assign });
   assert.ok(locations.breakpoints.some((entry) => entry.line === renewing));
   assert.ok(locations.breakpoints.some((entry) => entry.line === assign));
   const set = await client.ok('setBreakpoints', { source: { path: __filename }, breakpoints: [

@@ -113,8 +113,10 @@ class Fork {
     const services = servicesOf(spec);
     for (const type of services.io) {
       this.system.registerIO(type, {
-        send: (request) => this.#record(`would send ${request.event ?? '(no event)'} via ${type} to ` +
-                                        `${typeof request.target === 'string' ? request.target : JSON.stringify(request.target)}`),
+        send: (request) => {
+          const target = typeof request.target === 'string' ? request.target : JSON.stringify(request.target);
+          this.#record(`would send ${request.event ?? '(no event)'} via ${type} to ${target}`);
+        },
       });
     }
     for (const type of services.invokers) {

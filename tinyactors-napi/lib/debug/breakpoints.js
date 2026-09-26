@@ -19,7 +19,8 @@ const EXCEPTION_FILTERS = Object.freeze([
   { filter: 'error.communication', label: 'error.communication',
     description: 'A <send> or an invocation could not reach its target' },
   { filter: 'error.platform', label: 'error.platform', description: 'The platform raised an error event' },
-  { filter: 'ignored', label: 'Ignored events', description: 'An event was taken and enabled no transition (core ADR 0072)' },
+  { filter: 'ignored', label: 'Ignored events',
+    description: 'An event was taken and enabled no transition (core ADR 0072)' },
   { filter: 'stopped', label: 'Out of memory', description: 'A run stopped because an allocation failed (core ADR 0070)' },
 ]);
 const FILTERS = EXCEPTION_FILTERS.map((entry) => entry.filter);
@@ -136,7 +137,8 @@ class Breakpoints {
     this.#lines.set(path, entries.map((entry) => {
       const found = resolve(Number(entry.spec?.line));
       if (typeof found === 'string' || found === undefined) {
-        answered.push({ id: entry.id, verified: false, message: found ?? `no state, transition or action at line ${entry.spec?.line}` });
+        answered.push({ id: entry.id, verified: false,
+                        message: found ?? `no state, transition or action at line ${entry.spec?.line}` });
         return { id: entry.id, path, spec: entry.spec };
       }
       answered.push({ id: entry.id, verified: true, line: found.line, column: found.column, source: found.source });
@@ -246,7 +248,8 @@ class Breakpoints {
       .filter((breakpoint) => this.#fire(breakpoint, fires))
       .filter((breakpoint) => (breakpoint.logMessage ? (log(breakpoint), false) : true));
     if (lines.length > 0) {
-      out.push({ kind: 'line', breakpoints: lines.map((entry) => entry.id), description: lines.map(describeLine).join(', ') });
+      out.push({ kind: 'line', breakpoints: lines.map((entry) => entry.id),
+                 description: lines.map(describeLine).join(', ') });
     }
     const functions = this.#functions.filter((breakpoint) => !skip.has(breakpoint.id)).filter((breakpoint) => {
       switch (breakpoint.kind) {
@@ -264,7 +267,8 @@ class Breakpoints {
                  description: functions.map(describe).join(', ') });
     }
     const written = macrostep.records.filter((entry) => entry.name === 'scxml.assign')
-      .map((entry) => ({ location: location(entry.attributes['scxml.expression.id']), value: entry.attributes['scxml.value'] }))
+      .map((entry) => ({ location: location(entry.attributes['scxml.expression.id']),
+                         value: entry.attributes['scxml.value'] }))
       .filter((entry) => entry.location !== undefined);
     const data = this.#data.filter((breakpoint) => breakpoint.label === label &&
       written.some((entry) => overlap(breakpoint.path, entry.location)))
@@ -312,7 +316,10 @@ class Breakpoints {
       }
     };
     const fresh = (breakpoint) => {
-      const once = `${breakpoint.id}@${key}${breakpoint.kind === 'line' && breakpoint.element.kind === 'action' ? `:${position.action}:${position.iteration}` : ''}`;
+      // An action in a <foreach> hits once per iteration.
+      const unit = breakpoint.kind === 'line' && breakpoint.element.kind === 'action'
+        ? `:${position.action}:${position.iteration}` : '';
+      const once = `${breakpoint.id}@${key}${unit}`;
       if (this.#reached.has(once)) return false;
       this.#reached.add(once);
       return true;
@@ -327,7 +334,8 @@ class Breakpoints {
     const lines = this.#allLines().filter(reached).filter(fresh).filter((breakpoint) => this.#fire(breakpoint, fires))
       .filter((breakpoint) => (breakpoint.logMessage ? (log(breakpoint), false) : true));
     if (lines.length > 0) {
-      out.push({ kind: 'line', breakpoints: lines.map((entry) => entry.id), description: lines.map(describeLine).join(', ') });
+      out.push({ kind: 'line', breakpoints: lines.map((entry) => entry.id),
+                 description: lines.map(describeLine).join(', ') });
     }
     return out;
   }

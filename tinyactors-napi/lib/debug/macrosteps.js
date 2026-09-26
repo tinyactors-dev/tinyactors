@@ -173,7 +173,7 @@ function describe(entry, definition, location) {
   const value = a['scxml.value'] === undefined ? '' : ` = ${a['scxml.value']}`;
   switch (entry.name) {
     case 'scxml.condition':
-      return `${a['scxml.transition'] ?? a['scxml.action'] ?? 'condition'}: ${a['scxml.result'] === true ? 'true' : 'false'}`;
+      return `${a['scxml.transition'] ?? a['scxml.action'] ?? 'condition'}: ${a['scxml.result'] === true}`;
     case 'scxml.assign': {
       const where = location(definition, a['scxml.expression.id']);
       return `assign ${where ?? `(${a['scxml.action'] ?? 'a location'})`}${value}`;
@@ -184,8 +184,10 @@ function describe(entry, definition, location) {
       return `send ${a['scxml.event.name'] ?? ''}${a['scxml.send_id'] === undefined ? '' : ` (${a['scxml.send_id']})`}`;
     case 'scxml.cancel':
       return `cancel ${a['scxml.send_id'] ?? ''}`;
-    case 'scxml.error':
-      return `failed: ${a['scxml.action'] ?? 'an action'}${a['scxml.fault.detail'] === undefined ? '' : `: ${a['scxml.fault.detail']}`}`;
+    case 'scxml.error': {
+      const detail = a['scxml.fault.detail'] === undefined ? '' : `: ${a['scxml.fault.detail']}`;
+      return `failed: ${a['scxml.action'] ?? 'an action'}${detail}`;
+    }
     case 'scxml.invoke':
       return `invoke ${a['scxml.invoke_id'] ?? ''}`;
     case 'scxml.invoke.cancel':
