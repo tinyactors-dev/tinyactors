@@ -17,7 +17,8 @@
 #    shorthand (empty lists, absent members, inferable union kinds);
 # 5. the lookups by ID (ADR 0071) agree with the export: every transition's
 #    source, event, targets, guard and content, every initial transition,
-#    and where every action sits, named by its path in the exported tree.
+#    and where every action sits, named by its path in the exported tree;
+# 6. the recompiled definition keeps the original's source spans (ADR 0086).
 #
 # A chart given as an SCXML document (TinyactorsTest.scxml_chart) is imported
 # through the SCXML codec instead of compiled from a spec, and has no spec of
@@ -44,11 +45,18 @@ ALLOCATOR = { '$adapter' => 'allocator.libc' }.freeze
 
 # The chart DSL's shorthand, removed from both sides before comparing:
 # empty lists and nulls are absent, and `kind` is dropped where the one
-# other member already names it ({"kind": "expr", "expr": "0"}).
+# other member already names it ({"kind": "expr", "expr": "0"}). Spans
+# (ADR 0086) are compared by ID instead (SpanAgreement): the export lays
+# its table out by kind and ID, not in the order the DSL wrote it.
+SPAN_KEYS = %w[span spans sources script_span].freeze
+
 def canonical(value)
   case value
   when Hash
-    stripped = value.transform_values { |each| canonical(each) }.reject { |_, each| each.nil? || each == [] }
+    return canonical(value['source']) if value.keys.sort == %w[source span]
+
+    stripped = value.except(*SPAN_KEYS).transform_values { |each| canonical(each) }
+                    .reject { |_, each| each.nil? || each == [] }
     others = stripped.keys - ['kind']
     stripped.delete('kind') if others.size == 1 && stripped['kind'] == others.first
     stripped
@@ -229,6 +237,29 @@ class LookupAgreement
   end
 end
 
+# Check 6: the recompiled export says where every element was written, as
+# the original does (ADR 0086), for every state, transition, action and
+# expression.
+class SpanAgreement
+  KINDS = { 'state' => :state_count, 'transition' => :transition_count, 'action' => :action_count,
+            'expression' => :expression_count }.freeze
+
+  def initialize(check)
+    @check = check
+  end
+
+  def failures(original, again)
+    view = @check.lookup(:inspect, definition: original)
+    KINDS.flat_map do |kind, count|
+      (0...view[count]).filter_map do |id|
+        before = @check.span(original, kind, id)
+        after = @check.span(again, kind, id)
+        "#{kind} #{id} was at #{before.inspect}, recompiled at #{after.inspect}" unless before == after
+      end
+    end
+  end
+end
+
 class Check
   def initialize(driver)
     @driver = driver
@@ -258,6 +289,15 @@ class Check
 
   def export(definition)
     ok('ta_definition_export', @ta.definition.export(system: @system, definition: definition))
+  end
+
+  # Where an element was written, or nil when the definition keeps no span for it.
+  def span(definition, kind, id)
+    response = @ta.definition.span(system: @system, definition: definition, kind: kind, id: id)
+    return nil if response[:result] == 'err_not_found'
+    raise "ta_definition_span: #{response[:result]}" unless response[:result] == 'ok'
+
+    response.fetch(:out).fetch(:out)
   end
 
   # The definition's exact identity.
@@ -308,7 +348,8 @@ class Check
     failures << 'exporting the recompiled definition differs' unless json(export(again)) == exported
     failures << "the export differs from the chart spec:\n#{diff(canonical(spec), canonical(exported))}" \
       unless canonical(spec) == canonical(exported)
-    failures + LookupAgreement.new(self, original).failures(exported)
+    failures << 'the chart has spans and the definition keeps none' if spec.key?('spans') && span(original, 'state', 0).nil?
+    failures + LookupAgreement.new(self, original).failures(exported) + SpanAgreement.new(self).failures(original, again)
   end
 
   # An SCXML chart: import, export and recompile (1-3), then encode and
@@ -328,6 +369,7 @@ class Check
     failures << "identity #{before} became #{identity(again)} through export" unless before == identity(again)
     failures << 'exporting the recompiled definition differs' unless json(export(again)) == exported
     failures.concat(LookupAgreement.new(self, original).failures(exported))
+    failures.concat(SpanAgreement.new(self).failures(original, again))
 
     encoded = encode(original)
     reimported, result = import(encoded, datamodel, chart.files)

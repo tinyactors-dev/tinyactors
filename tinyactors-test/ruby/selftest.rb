@@ -118,7 +118,7 @@ authored = TinyactorsTest::Chart.define(:authored) do
       cancel expr: '.sid'
     end
   end
-end.to_spec[:states].first
+end.to_spec(spans: false)[:states].first
 check(authored[:onentry] == [{ actions: [
   { kind: 'send', event: { name: 'e' }, id: { literal: 't' }, type: { literal: 'scxml' },
     target: { literal: '#_parent' }, delay: { literal: '1500ms' } },
@@ -138,7 +138,7 @@ handlers = TinyactorsTest::Chart.define(:handlers) do
     on_exit { log 'first' }
     on_exit { log 'second' }
   end
-end.to_spec[:states].first
+end.to_spec(spans: false)[:states].first
 check(handlers[:onentry] == [{ actions: [{ kind: 'raise', event: 'one' }] },
                              { actions: [{ kind: 'raise', event: 'two' }] }],
       "each on_entry is a separate handler\n#{handlers[:onentry]}")
@@ -147,7 +147,7 @@ check(handlers[:onexit] == [{ actions: [{ kind: 'log', label: 'first' }] },
       "each on_exit is a separate handler\n#{handlers[:onexit]}")
 
 TinyactorsTest.chart(:selftest_machine_value) { final :done }
-machine_json = JSON.generate(TinyactorsTest.charts.fetch(:selftest_machine_value).to_spec)
+machine_json = JSON.generate(TinyactorsTest.charts.fetch(:selftest_machine_value).to_spec(spans: false))
 valued = TinyactorsTest::Chart.define(:valued) do
   data machine: { chart: :selftest_machine_value }
   state :a do
@@ -156,7 +156,7 @@ valued = TinyactorsTest::Chart.define(:valued) do
       send_event 'e', chart: :selftest_machine_value
     end
   end
-end.to_spec
+end.to_spec(spans: false)
 machine_content = { kind: 'content', media_type: TinyactorsTest::Chart::SPEC_MEDIA_TYPE, bytes: machine_json }
 check(valued[:data] == [{ name: 'machine', initializer: machine_content }],
       "data chart: is the chart spec as content\n#{valued[:data]}")
@@ -201,7 +201,7 @@ structured = TinyactorsTest::Chart.define(:structured) do
       done_data params: { result: '.x' }
     end
   end
-end.to_spec[:states].first
+end.to_spec(spans: false)[:states].first
 check(structured[:data] == [{ name: 'pending' }, { name: 'count', initializer: { expr: '1' } }],
       "state data specs\n#{structured[:data]}")
 check(structured[:initial] == { targets: ['b'], actions: [{ kind: 'log', label: 'initial' }] },
@@ -221,5 +221,45 @@ check(structured[:states][0][:onentry] == [{ actions: [
 ] }], "conditional and foreach specs\n#{structured[:states][0][:onentry]}")
 check(structured[:states][1][:done_data] == { params: [{ name: 'result', value: { expr: '.x' } }] },
       "done_data specs\n#{structured[:states][1][:done_data]}")
+
+# Every element records the file and line of the DSL call that wrote it
+# (core ADR 0086), and a chart given as content of another carries none:
+# its bytes are part of the other chart's revision.
+line = __LINE__ + 2
+spanned = TinyactorsTest::Chart.define(:spanned) do
+  state :a do
+    initial(:b) { log 'initial' }
+    transition on: 'go', target: :b do
+      raise_event 'went'
+    end
+    state :b do
+      on_entry do
+        conditional do
+          branch('.x') { log 'x' }
+        end
+      end
+    end
+    history :h, default: :b
+  end
+  script '1'
+end.to_spec
+here = File.expand_path(__FILE__)
+check(spanned[:sources] == [{ name: here }], "the chart's source is this file\n#{spanned[:sources]}")
+line_of = ->(element) { spanned[:spans].fetch(element.fetch(:span) - 1).fetch(:line) - line }
+state_a = spanned[:states][0]
+check([line_of.call(state_a), line_of.call(state_a[:initial]), line_of.call(state_a[:initial][:actions][0]),
+       line_of.call(state_a[:transitions][0]), line_of.call(state_a[:transitions][0][:actions][0])] == [0, 1, 1, 2, 3],
+      "states, initial transitions, transitions and actions have their lines\n#{spanned}")
+state_b = state_a[:states][0]
+branch = state_b[:onentry][0][:actions][0]
+check([line_of.call(state_b), line_of.call(branch), line_of.call(branch[:then_actions][0])] == [5, 8, 8],
+      "a branch is an <if> on its own line\n#{state_b}")
+history = state_a[:states][1]
+check([line_of.call(history), line_of.call(history[:transitions][0])] == [12, 12],
+      "a history state's default transition is on its line\n#{history}")
+check(spanned[:spans].fetch(spanned[:script_span] - 1)[:line] - line == 14, 'the root script has its line')
+check(spanned[:spans].all? { |span| span.keys == %i[line] }, 'the DSL knows lines only, in its one source')
+check(TinyactorsTest.charts.fetch(:selftest_machine_value).to_spec.key?(:spans) &&
+      !valued[:data][0][:initializer][:bytes].include?('span'), 'a chart given as content carries no spans')
 
 puts 'tinyactors-test scenario DSL self-test passed'
