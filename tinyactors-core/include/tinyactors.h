@@ -3062,6 +3062,26 @@ TA_API ta_result ta_system_find_definition(const ta_system *system,
                                            TA_IN const ta_definition_identity *identity,
                                            TA_OUT ta_definition_id *out);
 /*
+ * One page of the definitions the system holds, in slot order (ADR 0078):
+ * every registered definition not yet freed, retired ones included
+ * (ta_definition_inspect() says which). A definition ID's low 32 bits are
+ * its slot, so a walk resumes with `from` = the last ID's slot + 1, and it
+ * has ended when a page holds fewer than `limit` IDs. A definition held
+ * throughout a walk is listed exactly once. A call with too small a buffer
+ * writes what fits, answers TA_ERR_NOMEM, and sets `*count` to the IDs the
+ * page holds, so a first call with no buffer sizes it.
+ */
+typedef struct {
+    /* The slot to start at: 0 for the first page. */
+    uint32_t from;
+    /* The most IDs this page takes; 0 means no limit. */
+    uint32_t limit;
+    TA_BUFFER(capacity, count) TA_OPTIONAL ta_definition_id *definitions;
+    uint32_t capacity;
+    TA_OUT TA_ALWAYS uint32_t *count;
+} ta_system_definitions_params;
+TA_API ta_result ta_system_definitions(const ta_system *system, TA_IN const ta_system_definitions_params *params);
+/*
  * Ends a definition's availability (ADR 0043). ta_actor_spawn() and
  * ta_actor_prepare_replacement() naming it fail with TA_ERR_NOT_FOUND, and
  * ta_system_find_definition() skips it. Resident actors that use it keep

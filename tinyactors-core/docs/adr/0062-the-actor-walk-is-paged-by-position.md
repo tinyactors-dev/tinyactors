@@ -1,6 +1,6 @@
 # ADR 0062: The actor walk is paged by position
 
-**Status:** Accepted and implemented; refines ADR 0018, applies ADR 0059. See the implementation notes.
+**Status:** Accepted and implemented; refines ADR 0018, applies ADR 0059. See the implementation notes. ADR 0078 walks definitions by page in the same model, returning IDs instead of visiting.
 **Date:** 2026-09-23
 
 ## Context

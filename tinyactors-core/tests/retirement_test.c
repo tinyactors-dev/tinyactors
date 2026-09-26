@@ -540,6 +540,99 @@ static void test_release(void) {
     CHECK(f.counts.live_blocks == 0 && f.counts.live_bytes == 0);
 }
 
+/* Walks every held definition, `page` IDs at a time (ADR 0078). */
+static uint32_t walk(fixture *f, uint32_t page, ta_definition_id *out, uint32_t capacity) {
+    uint32_t total = 0;
+    uint32_t from = 0;
+    for (;;) {
+        ta_definition_id ids[8];
+        uint32_t count = 0;
+        CHECK(ta_system_definitions(f->system, &(ta_system_definitions_params){
+                                                   .from = from, .limit = page, .definitions = ids,
+                                                   .capacity = 8, .count = &count }) == TA_OK);
+        for (uint32_t at = 0; at < count && total < capacity; at += 1) {
+            out[total++] = ids[at];
+        }
+        if (count < page || count == 0) {
+            return total;
+        }
+        from = (uint32_t)(ids[count - 1u] & 0xffffffffu) + 1u;
+    }
+}
+
+static bool listed(const ta_definition_id *ids, uint32_t count, ta_definition_id id) {
+    uint32_t seen = 0;
+    for (uint32_t at = 0; at < count; at += 1) {
+        seen += ids[at] == id ? 1u : 0u;
+    }
+    return seen == 1;
+}
+
+/* ADR 0078: the walk lists every held definition once, retired ones in use too. */
+static void test_walk(void) {
+    fixture f;
+    fixture_init(&f);
+    ta_definition_id empty[1];
+    CHECK(walk(&f, 2, empty, 1) == 0);
+
+    ta_definition_id a = register_chart(&f, "a");
+    ta_definition_id b = register_chart(&f, "b");
+    ta_definition_id c = register_chart(&f, "c");
+    ta_definition_id ids[16];
+    uint32_t count = walk(&f, 2, ids, 16);
+    CHECK(count == 3 && listed(ids, count, a) && listed(ids, count, b) && listed(ids, count, c));
+    CHECK(walk(&f, 0, ids, 16) == 3);
+
+    /* A size query: no buffer, TA_ERR_NOMEM and the page's count. */
+    uint32_t needed = 0;
+    CHECK(ta_system_definitions(f.system, &(ta_system_definitions_params){ .count = &needed }) == TA_ERR_NOMEM);
+    CHECK(needed == 3);
+    CHECK(ta_system_definitions(NULL, &(ta_system_definitions_params){ .count = &needed }) == TA_ERR_INVALID);
+    CHECK(ta_system_definitions(f.system, &(ta_system_definitions_params){ .from = 99, .count = &needed }) == TA_OK);
+    CHECK(needed == 0);
+
+    /* Changes between pages: b is freed, d registers; a and c, held throughout, are listed once. */
+    ta_definition_id page[8];
+    uint32_t first = 0;
+    CHECK(ta_system_definitions(f.system, &(ta_system_definitions_params){ .limit = 1, .definitions = page,
+                                                                         .capacity = 8, .count = &first }) == TA_OK);
+    CHECK(first == 1 && page[0] == a);
+    CHECK(ta_system_retire_definition(f.system, b) == TA_OK);
+    ta_definition_id d = register_chart(&f, "d");
+    uint32_t rest = 0;
+    CHECK(ta_system_definitions(f.system, &(ta_system_definitions_params){ .from = (uint32_t)(a & 0xffffffffu) + 1u,
+                                                                         .definitions = page, .capacity = 8,
+                                                                         .count = &rest }) == TA_OK);
+    CHECK(listed(page, rest, c) && listed(page, rest, d) && !listed(page, rest, b));
+
+    /* Retired but in use: listed until its last actor goes. */
+    ta_actor_id actor = 0;
+    CHECK(spawn(&f, c, &actor) == TA_OK);
+    CHECK(ta_system_retire_definition(f.system, c) == TA_OK);
+    count = walk(&f, 2, ids, 16);
+    CHECK(listed(ids, count, c));
+    CHECK(ta_actor_destroy(f.system, actor) == TA_OK);
+    count = walk(&f, 2, ids, 16);
+    CHECK(!listed(ids, count, c) && listed(ids, count, a) && listed(ids, count, d));
+
+    /* A nested child is listed, and its parent names it. */
+    ta_definition_id parent = 0;
+    CHECK(register_states(&f, "parent", invoking, &parent) == TA_OK);
+    ta_definition_id child = register_chart(&f, "child");
+    CHECK(ta_definition_nest(f.system, &(ta_definition_nest_params){ .parent = parent, .invoke = 0,
+                                                                   .child = child }) == TA_OK);
+    CHECK(ta_system_release_definition(f.system, child) == TA_OK);
+    count = walk(&f, 3, ids, 16);
+    CHECK(listed(ids, count, parent) && listed(ids, count, child));
+    ta_invoke_info info;
+    CHECK(ta_definition_invoke(f.system, &(ta_definition_invoke_params){ .definition = parent, .invoke = 0,
+                                                                        .out = &info }) == TA_OK);
+    CHECK(info.nested == child);
+
+    ta_system_destroy(f.system);
+    CHECK(f.counts.live_blocks == 0 && f.counts.live_bytes == 0);
+}
+
 static void test_system_destroy(void) {
     fixture f;
     fixture_init(&f);
@@ -572,6 +665,7 @@ int main(void) {
     test_register_is_idempotent();
     test_release();
     test_nesting();
+    test_walk();
     test_system_destroy();
     if (failures != 0) {
         fprintf(stderr, "retirement test: %d check(s) failed\n", failures);

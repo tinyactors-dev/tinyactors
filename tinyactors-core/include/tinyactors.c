@@ -13461,6 +13461,33 @@ TA_API ta_result ta_system_find_definition(const ta_system *system,
     return TA_OK;
 }
 
+TA_API ta_result ta_system_definitions(const ta_system *system, const ta_system_definitions_params *params) {
+    if (system == NULL || params == NULL || params->count == NULL) {
+        if (params != NULL && params->count != NULL) {
+            *params->count = 0;
+        }
+        return TA_ERR_INVALID;
+    }
+    /* Slots in increasing order: a definition held throughout a walk keeps
+     * its slot, so it is listed exactly once (ADR 0078). */
+    uint32_t count = 0;
+    for (uint32_t slot = params->from; slot < system->definitions.count; slot += 1u) {
+        if (params->limit != 0 && count == params->limit) {
+            break;
+        }
+        const ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
+        if (entry->definition == NULL) {
+            continue;
+        }
+        if (params->definitions != NULL && count < params->capacity) {
+            params->definitions[count] = entry->definition->id;
+        }
+        count += 1u;
+    }
+    *params->count = count;
+    return count > params->capacity ? TA_ERR_NOMEM : TA_OK;
+}
+
 TA_PRIVATE bool ta_system_is_scxml_io(const ta_system *system, ta_atom type) {
     return type == system->scxml_io_type || type == system->scxml_io_alias;
 }

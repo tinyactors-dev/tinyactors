@@ -13993,6 +13993,83 @@
         }
       }
     },
+    "ta_system_definitions_params": {
+      "kind": "struct",
+      "doc": "One page of the definitions the system holds, in slot order (ADR 0078): every registered definition not yet freed, retired ones included (ta_definition_inspect() says which). A definition ID's low 32 bits are its slot, so a walk resumes with `from` = the last ID's slot + 1, and it has ended when a page holds fewer than `limit` IDs. A definition held throughout a walk is listed exactly once. A call with too small a buffer writes what fits, answers TA_ERR_NOMEM, and sets `*count` to the IDs the page holds, so a first call with no buffer sizes it.",
+      "fields": [
+        {
+          "name": "from",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "The slot to start at: 0 for the first page."
+        },
+        {
+          "name": "limit",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "The most IDs this page takes; 0 means no limit."
+        },
+        {
+          "name": "definitions",
+          "type": {
+            "pointer": {
+              "type": "ta_definition_id"
+            }
+          },
+          "capacity": "capacity",
+          "needed": "count",
+          "shape": "buffer",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success"
+        },
+        {
+          "name": "capacity",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "capacity_of": "definitions"
+        },
+        {
+          "name": "count",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "always",
+          "needed_of": "definitions"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "from": 0,
+            "limit": 4,
+            "definitions": 8,
+            "capacity": 16,
+            "count": 24
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 20,
+          "align": 4,
+          "offsets": {
+            "from": 0,
+            "limit": 4,
+            "definitions": 8,
+            "capacity": 12,
+            "count": 16
+          }
+        }
+      }
+    },
     "ta_time": {
       "kind": "alias",
       "doc": "Monotonic logical time in milliseconds, supplied by the embedder.",
@@ -18634,6 +18711,42 @@
           "shape": "single",
           "direction": "out",
           "valid_on": "success"
+        }
+      ]
+    },
+    {
+      "name": "ta_system_definitions",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_system_definitions_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
         }
       ]
     },
