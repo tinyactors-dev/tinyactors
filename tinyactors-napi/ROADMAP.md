@@ -821,7 +821,7 @@ Open (ADR 0017's implementation notes, follow-up of 2026-09-25, and ADR
 - ~~an xstate baseline next to the plain-object one in `scale.js`~~: done.
   `SCALE_BASELINES=xstate,object` runs it; `docs/scale.md` has the numbers.
 
-**Tracing** (baseline accepted 2026-09-25, `docs/scale.md`; ADR 0016's
+**Tracing** (core ADR 0080, 2026-09-26: definition records are trace kinds for hosts following core's record stream; the addon's OTLP output keeps the definition logs as its one path for definitions. Baseline accepted 2026-09-25, `docs/scale.md`; ADR 0016's
 open points on replies, open spans and the name cache are done in
 `17b0ca5`; `watchTraces` is a hash set with no limit (`e9d194e`); core
 parses a traceparent eight digits at a time (`b9ba91c`); autoforwarding,

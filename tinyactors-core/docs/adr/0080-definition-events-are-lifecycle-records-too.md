@@ -1,6 +1,6 @@
 # ADR 0080: Definition events are lifecycle records too
 
-**Status:** Accepted; not yet implemented. Refines ADR 0067 (three lifecycle record kinds, and a field on the record) and ADR 0079 (the same events, also in the trace stream).
+**Status:** Accepted and implemented (2026-09-26); see the implementation notes. Refines ADR 0067 (three lifecycle record kinds, and a field on the record) and ADR 0079 (the same events, also in the trace stream).
 **Date:** 2026-09-26
 
 ## Context
@@ -164,3 +164,42 @@ records describe did happen.
 - **napi:** the kinds are in `TraceKind`, and asking for them doesn't
   double-report in OTLP output (napi ADR 0017's definition logs stay the
   one OTLP path).
+
+## Implementation notes
+
+- **Core** (`src/system.c`): `ta_system_tell_definition()`, the one place
+  the definition sink is told, first writes the record when the mask asks
+  for its kind (`ta_trace_lifecycle_wanted()` with an empty context, so
+  `kinds`), then tells the sink. The key is as section 2 says.
+  `TA_TRACE_DEFINITIONS_SESSION` is `((uint64_t)UINT64_MAX)`: the API
+  extractor needs the cast to type the constant.
+- **Tests:**
+  - `tests/retirement_test.c` (`test_definition_records`) writes both sinks
+    into one stream and checks each record comes just before its event,
+    REGISTERED before SPAWNED, FREED after DESTROYED, a cascade leaves
+    first, destroy's FREED after every DESTROYED, no record when the mask
+    leaves the kinds out, and the keys;
+  - `tests/trace_test.c`'s kind names now cover every kind, checked by a
+    static assertion.
+- **The test host:**
+  - `trace_line.rb` prints a definition record as `registered <family>`,
+    with no step key;
+  - a tracing scenario that records every kind now expects
+    `registered trace_basic` before `spawned`;
+  - `definition_events.rb` follows both journals by `seq`. The caller's
+    invoked child is registered inside the caller's bootstrap macrostep
+    (the test host's invoker registers it when the invoke starts), and
+    before the child's SPAWNED.
+- **napi:**
+  - `TRACE_KINDS` ends with `definitionRegistered`, `definitionRetired` and
+    `definitionFreed`;
+  - the `full` preset and a sink with no `kinds` leave them out, so core
+    doesn't build them for the addon;
+  - the OTLP encoder ignores them when a sink names them: the definition
+    logs written from the definition sink (napi ADR 0017 section 7) stay
+    the one OTLP path, and carry the origin core doesn't know;
+  - `test/definitions.js` checks one log per event and no span.
+- **Cost:** the record gains a `ta_definition_identity` (32 bytes on
+  64-bit hosts), built only when a sink asks for a kind. The untraced path
+  gains one mask test per definition event, which happens rarely.
+
