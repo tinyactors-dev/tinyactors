@@ -151,9 +151,27 @@ addon's scheduler (ADR 0005) had not:
     `restartFrame` and `restart` restore one.
 15. **Source lines come from spans (core ADR 0086).** Stack frames,
     `setBreakpoints`, `breakpointLocations`, `gotoTargets` and
-    `loadedSources` use `Definition.sourceOf()`. A chart without spans
-    still works; frames then have no line and line breakpoints stay
-    unverified.
+    `loadedSources` use `Definition.sourceOf()`. A span whose source is a
+    path, or a `file:` URL, is served as `path`, and the client reads
+    the file: statechart() records its builder calls' files, and
+    `define(text, { format: 'scxml', name })` names an SCXML document
+    (ADR 0019). A chart whose spans name nothing a client can open, an
+    SCXML document defined without a name, a child chart inline in its
+    parent's `<content>` (its lines count from the start of its content,
+    so it is left unnamed rather than given its parent's file and the
+    wrong lines), or a child fetched from a URI of another scheme, is a
+    virtual source, as in the test host's adapter: `encodeDefinition()`
+    writes the definition as SCXML with core's encode-side source map
+    (`ta_definition_encode` with `spans`), the source gets a
+    `sourceReference` and the name `<family>.scxml`, the `source` request
+    answers that text as `application/scxml+xml`, and frames,
+    breakpoints, `breakpointLocations` and `gotoTargets` use its lines.
+    The session keeps the encoded text while it is attached, not the
+    document the chart was defined from, so the text shows the chart as
+    core holds it: one element per line, comments and layout gone. A
+    chart SCXML cannot express (a builder chart whose expressions are
+    functions) and that keeps no spans still works; frames then have no
+    line and line breakpoints stay unverified.
 16. **A development transport, not a product.** `tools/dap-server.js`
     (`mise run dap-server`) serves sessions over stdio or `--port` for an
     example system. It grants every permission and is not in the package.
@@ -277,8 +295,9 @@ to be repeated with `bench-compare` against that base (napi's roadmap,
 - `test/debug.js`, on Node and Bun: framing, options and permissions, the
   audit hook, watch, live and fork modes, holding with its timeout,
   breakpoints of every kind, stepping, the console, scopes and variables,
-  modules and sources, forks with stepBack, reverseContinue, restartFrame
-  and restart, and the session's end.
+  modules and sources, SCXML documents with and without a name and their
+  inline and fetched children, forks with stepBack, reverseContinue,
+  restartFrame and restart, and the session's end.
 - `test/tracing.js` gained small OTLP requests, for the trace hand-off fix
   below.
 

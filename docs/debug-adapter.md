@@ -100,7 +100,7 @@ or partial, ☑ done and tested, — not offered.
 | `evaluate` | yes | `repl`: the console commands; `watch`, `hover`, `clipboard`, `variables`: an expression in the data model | none; `goto` C2, `abandon` C2, `cancel` C3, `clock` C4 | ☑ | ☑ |
 | `completions` | yes | Event names after `send`, state IDs after `goto`, data locations otherwise | none | ☑ | ☑ |
 | `exceptionInfo` | yes | The fault of the `error.*` event or failed action that stopped the thread | none | ☑ | ☑ |
-| `source` | yes | A chart's text: its file, or the encoded chart with the encode-side spans | C5 | ☑ | ◐ |
+| `source` | yes | A chart's text: its file, or the encoded chart with the encode-side spans | C5 | ☑ | ☑ |
 | `loadedSources` | yes | One source per definition revision | none | ☑ | ☑ |
 | `modules` | yes | Definition families and their revisions, retired ones included | none | ☑ | ☑ |
 | `locations` | no | No value in a chart names a place in a source | — | — | — |
@@ -241,9 +241,20 @@ Every ☑ is covered by `tinyactors-napi/test/debug.js`, on Node and Bun.
 - `setDataBreakpoints` stops after an `<assign>` to a location written as
   a data-model path; an `<assign>` whose location is an expression that
   computes the path is not matched.
-- `source` is ◐: a file the spans name is the client's to read; a chart
-  without one is served as its exported spec (JSON), not as an encoded
-  chart with encode-side spans.
+- `stackTrace`, `setBreakpoints`, `breakpointLocations` and
+  `gotoTargets` use the lines a chart was written on (C5): statechart()'s
+  builder calls, or an SCXML document named by `define(text, { format:
+  'scxml', name })`. A chart whose spans name no file (a document defined
+  without a name, a child inline in `<content>`, whose lines count from
+  its content, or a child fetched from a URI that is not a file) is a
+  virtual source, as in the test host: the SCXML the codec encodes, with
+  the encode-side spans, by `sourceReference`, and its frames and
+  breakpoints are on that text's lines ([ADR
+  0027](../tinyactors-napi/docs/adr/0027-a-debugger-holds-steps-and-redirects-one-actor.md)
+  point 15).
+- `source` serves that encoded SCXML by `sourceReference`, and each
+  definition's exported spec (JSON) as a loaded source of its own; a file
+  the spans name is the client's to read.
 - `replace <revision>` takes a revision already registered in the system,
   not a file: the application loads definitions.
 - The System scope shows `_sessionid`, `_name`, the time, the definition

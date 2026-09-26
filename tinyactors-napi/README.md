@@ -101,6 +101,13 @@ included. They need the `evaluate` permission, which is off unless
 granted; without it the Variables pane and the console commands still
 work. Grant it only to someone who may run code on the host.
 
+Frames and line breakpoints are on the lines a chart was written on:
+the builder calls of statechart(), or the lines of an SCXML document you
+name with `define(text, { format: 'scxml', name: path })`. A document
+defined without a name, or a child chart inline in `<content>`, is shown
+as SCXML the session writes from the definition, which the client asks
+for by `sourceReference` and sets breakpoints in.
+
 `audit(entry)` hears every attach, detach, breakpoint change, console
 command, evaluation and mutation before it happens; a hook that throws
 refuses it.
