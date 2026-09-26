@@ -421,3 +421,47 @@ about twice a resident actor. Now:
   fixed header, the definition identity's text and a raw address record;
   compacting it (varints, the definition's ID in place of its text, the
   address left to the caller) is a follow-up.
+
+## 2026-09-26: tracing throughput against the baseline, same machine
+
+`test/bench/tracing.js` at `8b73533` (after ADRs 0074 to 0080, the
+invoker, definition identity and the definition walk and sink), Node
+22.23.2 and Bun 1.4.1 through `mise exec`, load about 3 on 16 cores, best
+of 5 rounds, ns per event.
+
+**Absolute numbers moved with the machine, not the code.** Every row came
+in about 30% faster than the 2026-09-25 baseline (untraced 436 ns on Node
+at 1M, against 622). Built and run side by side on the same machine, the
+baseline commit (`2f48123`) and `8b73533` measure the same within noise,
+Node, 1M actors, two alternating runs each:
+
+| Configuration | `2f48123` | `8b73533` | Change |
+|---|---|---|---|
+| untraced | 443, 443 | 447, 442 | 0% |
+| `summary` | 815, 813 | 831, 846 | +2 to +4% |
+| `summary`, 10% sampled | 497, 499 | 500, 501 | +1% |
+| `full` (every record) | 1,411, 1,417 | 1,429, 1,471 | +1 to +4% |
+
+All within the baseline's 5% rule. **Compare builds side by side on one
+machine, not against the absolute figures above:** the same build varied
+by about 30% between the two days.
+
+This run, `8b73533`, ns per event:
+
+| Configuration | Node 10k | Node 100k | Node 1M | Bun 10k | Bun 100k | Bun 1M |
+|---|---|---|---|---|---|---|
+| untraced | 416 | 421 | 436 | 360 | 369 | 388 |
+| `traceparent` passed | 443 | 439 | 448 | 396 | 380 | 413 |
+| sampled out | 420 | 438 | 449 | 382 | 395 | 427 |
+| `summary` | 807 | 784 | 823 | 734 | 773 | 891 |
+| `summary`, 10% | 490 | 470 | 494 | 405 | 442 | 476 |
+| `summary`, 1% | 432 | 446 | 460 | 382 | 405 | 423 |
+| `decisions` | 1,154 | 1,159 | 1,225 | 1,113 | 1,193 | 1,325 |
+| `full` | 1,329 | 1,322 | 1,376 | 1,356 | 1,380 | 1,493 |
+| `full` + values | 1,549 | 1,571 | 1,673 | 1,562 | 1,578 | 1,774 |
+| `full`, then `decodeTraces` | 8,964 | 9,120 | 9,520 | 9,929 | 9,456 | 9,718 |
+
+Watching at 1M actors, nothing sampled, over untraced: Node +12 (10
+watched), +19 (100), +25 (1,000), +31 (10,000) ns; Bun +37, +39, +41, +55.
+The 40 ns budgets held on Node in every run (`traceparent` 12 to 27,
+sampled out 5 to 17 over untraced) and on Bun in this run (11 to 39).
