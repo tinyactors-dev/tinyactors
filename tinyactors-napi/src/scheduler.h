@@ -97,7 +97,8 @@ enum {
     TNA_SCHED_HOLD = 1u << 3,     /* a debugger holds it: each macrostep's end makes it HELD (ADR 0027) */
     TNA_SCHED_UNFINISHED = 1u << 4, /* HELD with a macrostep to run: core woke it, or a hold anywhere paused it */
     TNA_SCHED_OWN_BUDGETS = 1u << 5, /* resumes with the budgets tna_sched_set_budgets() gave it (ADR 0027) */
-    TNA_SCHED_ANYWHERE = 1u << 6  /* held at any pause, inside a macrostep too (a fork's copy, ADR 0027) */
+    TNA_SCHED_ANYWHERE = 1u << 6, /* held at any pause, inside a macrostep too (a fork's copy, ADR 0027) */
+    TNA_SCHED_MICROSTEP_START = 1u << 7 /* its own budgets pause each microstep at its start (core ADR 0087) */
 };
 
 typedef struct {
@@ -471,12 +472,15 @@ ta_result tna_sched_step(tna_sched *sched, const tna_sched_step_params *params);
 /*
  * Budgets for one actor (ADR 0027): it resumes with these instead of the
  * turn's, until they are cleared with `budgets` NULL. `microsteps` is at least
- * 1; `actions` 0 means no limit. TA_ERR_NOT_FOUND for an actor the table does
- * not know, TA_ERR_INVALID for a zero microstep budget, TA_ERR_NOMEM.
+ * 1; `actions` 0 means no limit. With `microstep_start`, every microstep a
+ * resume begins pauses at its start, before its first unit (core ADR 0087).
+ * TA_ERR_NOT_FOUND for an actor the table does not know, TA_ERR_INVALID for a
+ * zero microstep budget, TA_ERR_NOMEM.
  */
 typedef struct {
     uint32_t microsteps;
     uint32_t actions;
+    bool microstep_start;
 } tna_actor_budgets;
 
 typedef struct {

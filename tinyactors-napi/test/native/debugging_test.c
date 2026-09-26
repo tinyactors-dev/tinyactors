@@ -481,6 +481,21 @@ static uint32_t turns_to_stable(tna_system *system, ta_actor_id actor) {
     return turns;
 }
 
+/* Posts `event` and runs turns until the actor pauses inside a microstep,
+ * reporting where, then until it is stable; answers the turns it took. */
+static uint32_t first_pause(tna_system *system, ta_actor_id actor, ta_event_name_id event,
+                            ta_actor_inspection *view) {
+    CHECK(post(system, actor, event) == TA_OK);
+    uint32_t turns = 0;
+    do {
+        CHECK(turns < 100u);
+        turn(system);
+        turns += 1u;
+        CHECK(ta_actor_inspect(system->core, actor, view) == TA_OK);
+    } while (!view->microstep_in_progress);
+    return turns + turns_to_stable(system, actor);
+}
+
 /* One actor resumes with budgets of its own; the others keep the system's. */
 static void budgets_for_one_actor(void) {
     tna_system *system = make_system();
@@ -529,6 +544,43 @@ static void budgets_for_one_actor(void) {
     CHECK(ta_actor_destroy(system->core, debugged) == TA_OK);
     CHECK(tna_hook_actor_removed(system, debugged) == TA_OK);
     CHECK(tna_map_count(&system->sched.budgets) == 0u);
+
+    /* With microstep_start, a microstep a resume begins pauses at its start,
+     * before its first unit (core ADR 0087): the first pause names the first
+     * <log> of s1's <onentry>, where one without it names the second. */
+    ta_actor_id fresh = spawn(system, chain);
+    settle(system);
+    CHECK(tna_sched_set_budgets(&system->sched, &(tna_sched_budgets_params){
+                                                    .actor = fresh,
+                                                    .budgets = &(tna_actor_budgets){ .microsteps = 64u, .actions = 1u },
+                                                }) == TA_OK);
+    ta_actor_id started = spawn(system, chain);
+    settle(system);
+    CHECK(tna_sched_set_budgets(&system->sched, &(tna_sched_budgets_params){
+                                                    .actor = started,
+                                                    .budgets = &(tna_actor_budgets){ .microsteps = 64u, .actions = 1u,
+                                                                                     .microstep_start = true },
+                                                }) == TA_OK);
+    CHECK((tna_sched_lookup(&system->sched, started)->flags & TNA_SCHED_MICROSTEP_START) != 0);
+    ta_actor_inspection after_one;
+    uint32_t plain = first_pause(system, fresh, go, &after_one);
+    ta_actor_inspection at_start;
+    uint32_t with_starts = first_pause(system, started, go, &at_start);
+    CHECK(at_start.position.at == TA_TRACE_AT_ENTER && after_one.position.at == TA_TRACE_AT_ENTER);
+    CHECK(at_start.position.state == after_one.position.state);
+    CHECK(at_start.position.action != TA_ACTION_NONE && at_start.position.action != after_one.position.action);
+    CHECK(with_starts > plain); /* the extra stops at microstep starts */
+    CHECK(strcmp(state_of(system, started), "rest") == 0);
+    /* Budgets without it clear the flag. */
+    CHECK(tna_sched_set_budgets(&system->sched, &(tna_sched_budgets_params){
+                                                    .actor = started,
+                                                    .budgets = &(tna_actor_budgets){ .microsteps = 1u },
+                                                }) == TA_OK);
+    CHECK((tna_sched_lookup(&system->sched, started)->flags & TNA_SCHED_MICROSTEP_START) == 0);
+    CHECK(tna_sched_set_budgets(&system->sched, &(tna_sched_budgets_params){ .actor = started }) == TA_OK);
+    CHECK(tna_sched_set_budgets(&system->sched, &(tna_sched_budgets_params){ .actor = fresh }) == TA_OK);
+    CHECK(tna_map_count(&system->sched.budgets) == 0u);
+
     finish_system(system);
 }
 

@@ -1,6 +1,6 @@
 # ADR 0027: A debugger holds, steps and redirects one actor
 
-**Status:** Accepted and implemented (2026-09-26). Applies tinyactors-core ADRs 0082, 0083, 0084, 0085 and 0086 to the addon; extends ADR 0005 (scheduling states) and ADR 0008 (faults); builds on ADR 0020 (the loader's waiting mail) and core ADR 0075 (runaway quarantine), see "Beside the loader and the runaway limit".
+**Status:** Accepted and implemented (2026-09-26). Applies tinyactors-core ADRs 0082 to 0087 to the addon; extends ADR 0005 (scheduling states) and ADR 0008 (faults); builds on ADR 0020 (the loader's waiting mail) and core ADR 0075 (runaway quarantine), see "Beside the loader and the runaway limit".
 **Date:** 2026-09-26
 
 ## Context
@@ -68,7 +68,12 @@ addon's scheduler (ADR 0005) had not:
 6. **Budgets for one actor (N2).** `tna_sched_set_budgets()` stores
    `{ microsteps, actions }` for one actor in a map on the scheduler and
    sets `TNA_SCHED_OWN_BUDGETS`; the resume reads the map only when the
-   flag is set. Clearing them removes the entry and the flag.
+   flag is set. Clearing them removes the entry and the flag. With
+   `microstep_start` (a third flag, `TNA_SCHED_MICROSTEP_START`, so the map
+   entry stays one word) the resume passes core's
+   `pause_at_microstep_start` (core ADR 0087): every microstep it begins
+   pauses at its start, after selection and before its first unit. Every
+   other actor, and the pump, keep passing false.
 7. **Operator transitions in the envelope (N3).** `post()` and `send()`
    take a `transition: { targets, source }`. The envelope carries a
    `tna_jump` (the definition ID the state IDs belong to, the source, the
@@ -138,7 +143,10 @@ addon's scheduler (ADR 0005) had not:
     of the origin fails as to a destroyed one; active invocations become
     unavailable. The session says each of these in the console when it
     forks. The copy is held anywhere with budgets
-    `{ resumeBudget: 1, actionBudget: 1 }`, so it steps one action; an image is
+    `{ resumeBudget: 1, actionBudget: 1, microstepStart: true }`, so it
+    steps one action, and it stops before a microstep's first unit as
+    before any other: a breakpoint on that unit's line stops before it
+    runs, as the test host's adapter does; an image is
     captured at every stop, and `stepBack`, `reverseContinue`,
     `restartFrame` and `restart` restore one.
 15. **Source lines come from spans (core ADR 0086).** Stack frames,
@@ -178,7 +186,8 @@ The addon's scheduling grew two things this ADR had to fit beside:
   macrostep is limited again (`test/runaway.js`).
 - **Flags.** The scheduling entry's 8 flag bits hold `BACKOFF`,
   `FINISHED`, ADR 0075's `UNLIMITED`, and this ADR's `HOLD`, `UNFINISHED`,
-  `OWN_BUDGETS` and `ANYWHERE`: seven of the eight.
+  `OWN_BUDGETS`, `ANYWHERE` and `MICROSTEP_START`: they are full, so the
+  next flag makes the entry grow or takes a bit of `reserved`.
 
 ## Costs
 
@@ -251,7 +260,8 @@ change, in alternate runs); it is to be run again on a quiet machine.
 - `test/native/debugging_test.c` (under ASan, `mise run
   //tinyactors-napi:test-native-asan`): hold and step, a hold waiting for
   the macrostep, a timed-out `send()` withdrawn while held, a fault while
-  held, a wake while held, holding anywhere, budgets for one actor,
+  held, a wake while held, holding anywhere, budgets for one actor (with
+  and without a stop at a microstep's start),
   operator transitions (queued, refused, for another definition), and an
   abandoned macrostep.
 - `test/operate.js`: the facade methods.

@@ -272,9 +272,15 @@ export interface System {
   /**
    * Budgets for one actor (ADR 0027): it resumes with these instead of the
    * system's `resumeBudget` and `actionBudget` (0: no limit); undefined
-   * gives it the system's again.
+   * gives it the system's again. With `microstepStart`, every microstep a
+   * resume begins pauses at its start, after selection and before its first
+   * unit (core ADR 0087); inspection then reports that first unit.
    */
-  setBudgets(actor: ActorID, budgets?: { readonly resumeBudget: number; readonly actionBudget?: number }): void;
+  setBudgets(actor: ActorID, budgets?: {
+    readonly resumeBudget: number;
+    readonly actionBudget?: number;
+    readonly microstepStart?: boolean;
+  }): void;
   /** The messages waiting in `actor`'s mailbox, oldest first, at most `limit` (default 100). */
   mailbox(actor: ActorID, options?: { readonly limit?: number }): readonly QueuedMessage[];
   /**

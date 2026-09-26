@@ -58,7 +58,7 @@ const SCXML_INVOKER = 'http://www.w3.org/TR/scxml/';
 const ATTACHED = 1; // the attached actor's thread ID
 const OPERATOR_EVENT = 'operator.goto';
 // A fork's copy runs one unit per resume while the debugger drives it.
-const SINGLE_STEP = Object.freeze({ resumeBudget: 1, actionBudget: 1 });
+const SINGLE_STEP = Object.freeze({ resumeBudget: 1, actionBudget: 1, microstepStart: true });
 // Units a fork's copy runs toward one goal before it stops anyway.
 const MOST_UNITS = 100000;
 // Stops a fork remembers for stepping back.

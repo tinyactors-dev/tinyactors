@@ -673,7 +673,7 @@ ta_result tna_sched_set_budgets(tna_sched *sched, const tna_sched_budgets_params
     }
     if (params->budgets == NULL) {
         tna_sched_forget_budgets(sched, entry, params->actor);
-        entry->flags &= (uint8_t)~TNA_SCHED_OWN_BUDGETS;
+        entry->flags &= (uint8_t)~(TNA_SCHED_OWN_BUDGETS | TNA_SCHED_MICROSTEP_START);
         return TA_OK;
     }
     if (params->budgets->microsteps == 0) {
@@ -684,6 +684,11 @@ ta_result tna_sched_set_budgets(tna_sched *sched, const tna_sched_budgets_params
         return TA_ERR_NOMEM;
     }
     entry->flags |= TNA_SCHED_OWN_BUDGETS;
+    if (params->budgets->microstep_start) {
+        entry->flags |= TNA_SCHED_MICROSTEP_START;
+    } else {
+        entry->flags &= (uint8_t)~TNA_SCHED_MICROSTEP_START;
+    }
     return TA_OK;
 }
 
@@ -988,6 +993,7 @@ static void tna_sched_resume_one(tna_sched *sched, const tna_turn_params *params
     if ((entry->flags & TNA_SCHED_OWN_BUDGETS) != 0 && tna_map_get(&sched->budgets, actor, &own)) {
         resume.budget = (uint32_t)(own >> 32);
         resume.action_budget = (uint32_t)own;
+        resume.pause_at_microstep_start = (entry->flags & TNA_SCHED_MICROSTEP_START) != 0;
     }
     *params->inside_core = true;
     ta_result result = ta_actor_resume(params->core, &resume);

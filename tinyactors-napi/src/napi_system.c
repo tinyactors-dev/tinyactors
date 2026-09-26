@@ -516,13 +516,14 @@ static napi_value tna_step_method(napi_env env, napi_callback_info info) {
 }
 
 /*
- * setBudgets(slot, generation, microsteps?, actions?): the actor resumes with
- * these budgets instead of the system's (ADR 0027); without `microsteps`,
- * with the system's again. `actions` 0 is no limit.
+ * setBudgets(slot, generation, microsteps?, actions?, microstepStart?): the
+ * actor resumes with these budgets instead of the system's (ADR 0027); without
+ * `microsteps`, with the system's again. `actions` 0 is no limit;
+ * `microstepStart` pauses each microstep at its start (core ADR 0087).
  */
 static napi_value tna_set_budgets_method(napi_env env, napi_callback_info info) {
-    size_t argc = 4;
-    napi_value argv[4] = { NULL, NULL, NULL, NULL };
+    size_t argc = 5;
+    napi_value argv[5] = { NULL, NULL, NULL, NULL, NULL };
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
         return NULL;
     }
@@ -534,9 +535,10 @@ static napi_value tna_set_budgets_method(napi_env env, napi_callback_info info) 
     napi_valuetype type = napi_undefined;
     tna_actor_budgets budgets = { 0 };
     bool clear = argc < 3 || argv[2] == NULL || napi_typeof(env, argv[2], &type) != napi_ok || type == napi_undefined;
-    if (!clear && (napi_get_value_uint32(env, argv[2], &budgets.microsteps) != napi_ok || argc < 4 ||
-                   napi_get_value_uint32(env, argv[3], &budgets.actions) != napi_ok)) {
-        return tna_throw(env, "invalid", "setBudgets: expected (slot, generation, microsteps, actions)");
+    if (!clear && (napi_get_value_uint32(env, argv[2], &budgets.microsteps) != napi_ok || argc < 5 ||
+                   napi_get_value_uint32(env, argv[3], &budgets.actions) != napi_ok ||
+                   napi_get_value_bool(env, argv[4], &budgets.microstep_start) != napi_ok)) {
+        return tna_throw(env, "invalid", "setBudgets: expected (slot, generation, microsteps, actions, microstepStart)");
     }
     ta_result result = tna_sched_set_budgets(&wrapper->system->sched, &(tna_sched_budgets_params){
                                                                           .actor = actor,

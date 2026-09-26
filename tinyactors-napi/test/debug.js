@@ -945,6 +945,15 @@ async function forks() {
   await client.stoppedAfter(mark, 'step');
   let frames = (await client.ok('stackTrace', { threadId: 1 })).stackFrames;
   assert.equal(frames[0].name, 'about to take renew (before transition selection)');
+  // The microstep's start (core ADR 0087): its transition is selected, and
+  // the copy stands before its first unit, which has not run.
+  mark = client.mark();
+  await client.ok('stepIn', { threadId: 1 });
+  await client.stoppedAfter(mark, 'step');
+  frames = (await client.ok('stackTrace', { threadId: 1 })).stackFrames;
+  assert.equal(frames[0].name, 'script 1');
+  assert.equal(frames[0].line, definition.sourceOf('action', actionID(system, definition, 'script', 0)).line);
+  assert.deepEqual((await client.repl('notes')).result, '[]');
   // Unit by unit through renewing's onentry.
   mark = client.mark();
   await client.ok('stepIn', { threadId: 1 });

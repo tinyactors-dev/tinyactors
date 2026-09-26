@@ -1779,7 +1779,9 @@ class System {
    * Budgets for one actor (ADR 0027): it resumes with `resumeBudget`
    * microsteps (at least 1) and `actionBudget` units (0: no limit) instead
    * of the system's scheduling options; undefined gives it the system's
-   * again. Destroying the actor forgets them.
+   * again. `microstepStart` pauses every microstep a resume begins at its
+   * start, before its first unit (core ADR 0087). Destroying the actor
+   * forgets them.
    */
   setBudgets(actor, budgets) {
     const { slot, generation } = actorOf(this, actor);
@@ -1787,13 +1789,16 @@ class System {
       this.#native.setBudgets(slot, generation);
       return;
     }
-    const { resumeBudget, actionBudget = 0 } = budgets ?? {};
+    const { resumeBudget, actionBudget = 0, microstepStart = false } = budgets ?? {};
+    if (typeof microstepStart !== 'boolean') {
+      throw new TinyactorsError('setBudgets(): microstepStart must be a boolean', 'invalid');
+    }
     for (const [name, value, least] of [['resumeBudget', resumeBudget, 1], ['actionBudget', actionBudget, 0]]) {
       if (!Number.isInteger(value) || value < least || value > 4294967295) {
         throw new TinyactorsError(`setBudgets(): ${name} must be an integer of at least ${least}`, 'invalid');
       }
     }
-    this.#native.setBudgets(slot, generation, resumeBudget, actionBudget);
+    this.#native.setBudgets(slot, generation, resumeBudget, actionBudget, microstepStart);
   }
 
   /**

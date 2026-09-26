@@ -208,7 +208,9 @@ Every ☑ is covered by `tinyactors-napi/test/debug.js`, on Node and Bun.
 
 - Live stepping is one macrostep: `next`, `stepIn` and `stepOut` each
   deliver one held message, or finish the macrostep in progress. On a
-  fork, stepping is by action as the table says.
+  fork, stepping is by action as the table says, and a fork stops at each
+  microstep's start before its first unit (C6), so a breakpoint on that
+  unit stops before it runs.
 - `setExceptionBreakpoints` is ◐: every filter but `dead-letter`. A dead
   letter is reported as `important` output, but does not stop.
 - `setDataBreakpoints` stops after an `<assign>` to a location written as

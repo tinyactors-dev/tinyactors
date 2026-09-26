@@ -136,7 +136,23 @@ async function budgets() {
   assert.equal(debugged.inspect().scheduling, 'runnable');
   assertThrows(() => system.setBudgets(debugged, { resumeBudget: 0 }), 'invalid');
   assertThrows(() => system.setBudgets(debugged, { resumeBudget: 1, actionBudget: -1 }), 'invalid');
+  assertThrows(() => system.setBudgets(debugged, { resumeBudget: 1, microstepStart: 'yes' }), 'invalid');
   system.setBudgets(debugged, undefined);
+  // With microstepStart, a microstep the resume begins stops at its start
+  // (core ADR 0087): selected, in progress, and nothing of it ran.
+  // (debugged spins on, so the system never flushes: count turns.)
+  const started = system.spawn(definition);
+  for (let turns = 0; turns < 10 && started.inspect().activeStates[0] !== 'a'; turns += 1) await turn();
+  system.setBudgets(started, { resumeBudget: 1, actionBudget: 1, microstepStart: true });
+  started.post('hook');
+  for (let turns = 0; turns < 10 && !started.inspect().microstepInProgress; turns += 1) await turn();
+  const start = started.inspect();
+  assert.equal(start.microstepInProgress, true);
+  assert.equal(start.position.at, 'transition');
+  assert.equal(start.data.hooks, 0);
+  system.setBudgets(started, undefined);
+  for (let turns = 0; turns < 10 && started.inspect().macrostepInProgress; turns += 1) await turn();
+  assert.equal(started.inspect().data.hooks, 1);
   system.close();
 }
 

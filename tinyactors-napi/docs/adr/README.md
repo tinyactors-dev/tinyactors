@@ -6,7 +6,7 @@ rewritten from scratch against them. Where `../design.md` or
 
 Core decisions live in `tinyactors-core/docs/adr`. This addon depends in
 particular on core ADRs 0011, 0029, 0040, 0047, 0050, 0053–0059, 0061,
-0062, 0065, 0082 to 0086, and benefits from 0063 and 0064.
+0062, 0065, 0082 to 0087, and benefits from 0063 and 0064.
 
 | ADR | Title |
 |---|---|
