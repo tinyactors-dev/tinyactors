@@ -419,7 +419,7 @@ jv tat_encode_ta_value(tat_bind *bind, const ta_value *value) {
 
 /*
  * An expression is its source text, or {"source": text, "span": n} when it
- * says where it was written (ADR 0086): an index into the spec's spans.
+ * says where it was written (ADR 0085): an index into the spec's spans.
  */
 bool tat_decode_ta_expression(tat_bind *bind, jv value, ta_expression *out) {
     *out = (ta_expression){ .kind = TA_EXPRESSION_SOURCE };

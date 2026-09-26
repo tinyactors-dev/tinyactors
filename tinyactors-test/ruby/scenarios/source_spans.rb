@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# Where a chart's elements were written (core ADR 0086). The chart DSL
+# Where a chart's elements were written (core ADR 0085). The chart DSL
 # records the file and line of every call as a span of the spec, the spec
 # crosses the RPC with them, core keeps them per definition, and
 # ta_definition_span answers by kind and ID. A debugger builds its line
@@ -64,7 +64,7 @@ TinyactorsTest.scenarios 'source spans', chart: :spans_order do
   # Catches: a revision that moves with the chart's text, which would keep
   # every session image of a reformatted chart from restoring (ADR 0038);
   # and a definition that keeps the old lines when the moved chart is
-  # registered again and answered by it (core ADRs 0077 and 0086).
+  # registered again and answered by it (core ADRs 0077 and 0085).
   scenario 'a chart moved down a line keeps its revision and its definition, which says where it is now' do
     first = definition(SourceSpanCharts::FIRST)
     line = source_span(:state, 0, first).dig(:span, :line)

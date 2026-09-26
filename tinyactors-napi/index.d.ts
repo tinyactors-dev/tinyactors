@@ -216,8 +216,8 @@ export interface System {
       resolve?: (src: string) => string | Uint8Array | undefined;
       /**
        * What the document is called, such as its path or a file:// URL: the
-       * source its spans name (core ADR 0086), which sourceOf() answers and
-       * a debugger opens (napi ADR 0027). Without it the spans name no
+       * source its spans name (core ADR 0085), which sourceOf() answers and
+       * a debugger opens (napi ADR 0026). Without it the spans name no
        * source, and a debug session shows the chart as SCXML it writes from
        * the definition, by `sourceReference`. A child fetched by `src` or `srcexpr` is named by
        * that src; a child inline in `<content>` has no name, since its lines
@@ -538,7 +538,7 @@ export interface PostOptions {
    */
   origin?: IOOrigin;
   /**
-   * An operator transition (core ADR 0082, ADR 0027): the message is taken
+   * An operator transition (core ADR 0082, ADR 0026): the message is taken
    * by a transition to `targets`, states of the target actor's chart, from
    * the active state `source` or the root, instead of by the chart's
    * transitions, with every exit, entry, history and invocation a chart
@@ -674,7 +674,7 @@ export interface Definition<Data extends object = Record<string, unknown>> {
   inspect(): DefinitionInspection;
 
   /**
-   * Where element `id` of `kind` was written (core ADR 0086), or undefined
+   * Where element `id` of `kind` was written (core ADR 0085), or undefined
    * when the definition keeps no span for it. statechart() records the file,
    * line and column of the call that wrote each state, transition, initial
    * transition and action.
@@ -1220,7 +1220,7 @@ export interface DefinitionSpec {
   /** Where the script was written: an index into `spans`, from 1. */
   readonly script_span?: number;
   /**
-   * Where elements were written (core ADR 0086): each element's `span` is an
+   * Where elements were written (core ADR 0085): each element's `span` is an
    * index into this list, from 1, and each span's `source` an index into
    * `sources`. None of it changes the revision. statechart() fills them in.
    */
@@ -1601,7 +1601,7 @@ export declare function formatTraceparent(span: { traceID: string; spanID: strin
 export declare function stepSpanID(session: bigint | number, macrostep: bigint | number, microstep?: number): string;
 
 // ---------------------------------------------------------------------------
-// The debug adapter (napi ADR 0027)
+// The debug adapter (napi ADR 0026)
 
 /**
  * A poke a debug session may be allowed on the live actor: `send` an event,
@@ -1659,7 +1659,7 @@ export interface DAPMessage {
 
 /**
  * A DAP session over one attached actor, which it watches and pokes and
- * never stops (ADR 0027): the client hears it stopped once, on entry, and
+ * never stops (ADR 0026): the client hears it stopped once, on entry, and
  * an `invalidated` event after each of its macrosteps; breakpoints are
  * tracepoints. It opens no socket and checks no credentials: put it behind
  * the application's transport and authentication, and decide each user's

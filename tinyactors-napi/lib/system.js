@@ -106,13 +106,13 @@ let nativeOf;
 // native reference keeps a System alive.
 let effectHandler;
 // observe(system, { traces, log, runaway, defined }): what lib/debug.js reads
-// beside the application (ADR 0027). `traces(traces, logs)` gets every turn's
+// beside the application (ADR 0026). `traces(traces, logs)` gets every turn's
 // OTLP bytes the application's trace sink gets, installing a sink of its own
 // when the application has none; `log(record)` every <log> record;
 // `runaway(actor)` each actor quarantined as a
 // runaway (core ADR 0075); `defined(id)` each definition define()
 // registered, a new one or one answered by identity (core ADR 0077), whose
-// spans may have moved (core ADR 0086). Returns { stop() }. index.js does
+// spans may have moved (core ADR 0085). Returns { stop() }. index.js does
 // not export it.
 let observe;
 
@@ -395,7 +395,7 @@ class System {
   }
 
   // The native sink observers get when the application has none: nothing
-  // but what is watched, every kind of it, with values (ADR 0027).
+  // but what is watched, every kind of it, with values (ADR 0026).
   #installObserverSink() {
     const all = 2 ** TRACE_KINDS.length - 1;
     return this.#native.setTraceSink(true, 0, all, 0, 0, true, 256, false, [], undefined, 0);
@@ -790,7 +790,7 @@ class System {
    * Uint8Array, or undefined for a src it does not know, which refuses the
    * document. Without it, any `src` is refused. `options.name` is what the
    * document is called, such as its path or a file:// URL: the source its
-   * spans name (core ADR 0086), which Definition.sourceOf() answers and a
+   * spans name (core ADR 0085), which Definition.sourceOf() answers and a
    * debugger opens.
    * An `<invoke type="scxml">` whose child chart is inline in `<content>`,
    * or a literal `src` that `resolve` fetches, is compiled now, as part of
@@ -1302,7 +1302,7 @@ class System {
   }
 
   // An operator transition by state names, as the native post takes it: the
-  // target's definition now and state IDs (core ADR 0082, ADR 0027).
+  // target's definition now and state IDs (core ADR 0082, ADR 0026).
   #jumpOf(actor, transition, what) {
     const { targets, source } = transition ?? {};
     if (!Array.isArray(targets) || targets.length === 0 || !targets.every((state) => typeof state === 'string') ||
@@ -1741,7 +1741,7 @@ class System {
   }
 
   /*
-   * Debugging and operating one actor (ADR 0027, core ADRs 0082 and 0084).
+   * Debugging and operating one actor (ADR 0026, core ADRs 0082 and 0084).
    */
 
   /**

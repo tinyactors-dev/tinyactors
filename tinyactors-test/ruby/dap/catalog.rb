@@ -12,7 +12,7 @@ module DAP
   # inlines: the DSL builds inline content without them) has no file to
   # point into. It is shown as a virtual source instead: the SCXML the codec
   # encodes from the definition, with the place the encode wrote each
-  # element (core ADR 0086, `ta_definition_encode` with its source map),
+  # element (core ADR 0085, `ta_definition_encode` with its source map),
   # served by `sourceReference`.
   class Catalog
     CODEC = { '$adapter' => 'codec.scxml' }.freeze

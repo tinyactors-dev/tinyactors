@@ -192,7 +192,7 @@ The compiled definition stores it as a block of zero or one script actions
 
 ## Source spans
 
-A spec can say where each element was written (ADR 0086). `spans` is a
+A spec can say where each element was written (ADR 0085). `spans` is a
 table of `ta_source_span`s, `sources` the names they point into (the input
 a codec decoded first, then each file its resolver fetched; for the Ruby DSL
 and napi's builder, the program files). A state, transition, initial

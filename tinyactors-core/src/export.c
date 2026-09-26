@@ -22,7 +22,7 @@ typedef struct {
     uint32_t pending_count;
     uint32_t pending_capacity;
     /* Whether every exported element indexes the spans table, known span or
-     * not, as an encode asks (ADR 0086). Otherwise only the elements whose
+     * not, as an encode asks (ADR 0085). Otherwise only the elements whose
      * span the definition knows do. */
     bool numbered;
 } ta_exporter;
@@ -492,7 +492,7 @@ static void ta_export_state(ta_exporter *exporter, ta_state_id id, ta_scxml_stat
 }
 
 /*
- * The spans table the exported elements index (ADR 0086): the definition's
+ * The spans table the exported elements index (ADR 0085): the definition's
  * own, borrowed, or all zero when it keeps none and the caller numbered the
  * elements anyway, as ta_definition_encode() does to learn where each one
  * lands.

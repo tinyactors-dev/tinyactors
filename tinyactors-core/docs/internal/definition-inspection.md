@@ -15,7 +15,7 @@ can land as separate commits.
 | Debugger, visualizer, fuzzer, model checker | States, initial states, transitions (event descriptors, conditions, targets, type), handlers, invocations, done data | `ta_definition_export()` |
 | Host before spawning | Are the literal I/O processor and invoker types this chart names registered? | `ta_definition_export()` (literal `type` values; `typeexpr` stays a runtime check) |
 | Operator, host GC | Is it retired? How many actors use it? What does it cost? | `.retired`, `.actor_count`, `.actor_fixed_bytes`, `.definition_bytes` |
-| Debugger | Where was a state, transition, action or expression written? Where did an encode write it? | `ta_definition_span()`, `ta_definition_encode_params.spans` (ADR 0086) |
+| Debugger | Where was a state, transition, action or expression written? Where did an encode write it? | `ta_definition_span()`, `ta_definition_encode_params.spans` (ADR 0085) |
 | Operator | Which actors are large right now? | `ta_actor_inspection.allocated_bytes` |
 | Hot paths (`In()`, harness state names) | One state's ID, parent, kind, without an arena | `ta_definition_state()` (unchanged) |
 
@@ -143,7 +143,7 @@ The unit test `tests/export_test.c` and the harness check
 Host expressions (`TA_EXPRESSION_HOST`) are exported as the retained handles,
 borrowed; they are not retained again.
 
-### Where elements were written (ADR 0086)
+### Where elements were written (ADR 0085)
 
 A spec may say where each element was written: `ta_scxml_spec.spans` is a
 table of `ta_source_span`s (offset, length, source, start and end line and

@@ -183,7 +183,7 @@ static ta_trace_position ta_trace_nowhere(void) {
 
 /* What a run keeps of where it stands: in scratch while it runs, in the
  * actor's continuation once it stopped. The sets and the default-history
- * map are read only at a microstep's start (ADR 0087). */
+ * map are read only at a microstep's start (ADR 0086). */
 typedef struct {
     ta_micro_position at;
     const ta_transition_id *enabled;
@@ -263,7 +263,7 @@ static ta_trace_position ta_unit_at(const ta_definition *definition, const ta_ru
 }
 
 /*
- * Where a microstep stands at its start (ADR 0087): the first unit it runs,
+ * Where a microstep stands at its start (ADR 0086): the first unit it runs,
  * found from its sets without running anything, in the order the microstep
  * runs units: the <onexit> handlers of the exit set, highest first; the
  * enabled transitions' content; then, for each state of the entry set,
@@ -315,7 +315,7 @@ static ta_trace_position ta_start_position(const ta_definition *definition, cons
  * `iteration` the one it binds next. Otherwise it is the next action of the
  * innermost open block, in the iteration of the innermost <foreach> whose
  * body that block is. With no open block there is no action. At a
- * microstep's start it is the first unit the microstep runs (ADR 0087).
+ * microstep's start it is the first unit the microstep runs (ADR 0086).
  */
 static ta_trace_position ta_run_position(const ta_definition *definition, const ta_run_view *view) {
     if (view->at.phase == TA_PHASE_START) {
@@ -3304,7 +3304,7 @@ static void ta_compact_sparse(ta_interpreter *it) {
 
 /* Opens the microstep of the enabled transitions: the exit set, history
  * recorded before anything exits, and the entry set; then its MICROSTEP
- * record. It stands at its start (ADR 0087). It changes the actor, so an
+ * record. It stands at its start (ADR 0086). It changes the actor, so an
  * image taken before it no longer describes it. `event` is the event it
  * takes, or null. */
 static void ta_microstep_begin(ta_interpreter *it, const ta_event *event) {
@@ -3332,7 +3332,7 @@ static ta_result ta_microstep(ta_interpreter *it) {
     if (it->at.phase == TA_PHASE_START) {
         /* A microstep this call began; one it resumed at its start has
          * passed it already. Nothing has run, so stopping here needs no
-         * block open (ADR 0087). */
+         * block open (ADR 0086). */
         if (it->pause_at_start && it->actor->bootstrapped) {
             return TA_EXEC_PAUSED;
         }

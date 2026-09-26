@@ -602,7 +602,7 @@ static void test_compile_error_positions(ta_system *system) {
 }
 
 /* ------------------------------------------------------------------------
- * Source spans (core ADR 0086): where decode read each element, and where
+ * Source spans (core ADR 0085): where decode read each element, and where
  * encode wrote it.
  */
 

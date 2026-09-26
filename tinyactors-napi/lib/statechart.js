@@ -120,7 +120,7 @@ function idLocation(value, what) {
   return { kind: 'location', location: location(value, what) };
 }
 
-// Where a builder call was written (core ADR 0086): the first stack frame
+// Where a builder call was written (core ADR 0085): the first stack frame
 // outside this file, as V8 reports it. Structured call sites cost less than
 // formatting and parsing a stack string, and ten frames are enough to leave
 // this file's own helpers.

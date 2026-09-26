@@ -25,7 +25,7 @@
  *
  * - tna_hook_actor_abandoned: after ta_actor_abandon. The send() that
  *   followed the abandoned macrostep rejects with `abandoned`, and a runnable
- *   actor stands between macrosteps again (ADR 0027, core ADR 0082).
+ *   actor stands between macrosteps again (ADR 0026, core ADR 0082).
  *
  * Hooks take the native system, not a call, so they stay free of Node-API
  * and native tests can drive them.

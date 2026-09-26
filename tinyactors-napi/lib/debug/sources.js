@@ -1,6 +1,6 @@
 'use strict';
 
-// Where a chart's elements were written (core ADR 0086): statechart()
+// Where a chart's elements were written (core ADR 0085): statechart()
 // records the file, line and column of the builder call that wrote each
 // state, transition, initial transition and action, define(text, { format:
 // 'scxml', name }) records where in the named document each one is, and
@@ -12,8 +12,8 @@
 // A chart whose spans name no file a client can open (an SCXML document
 // defined without a name, a child chart inline in its parent's <content>,
 // a child fetched from a URI that is not a file) is shown as a virtual
-// source instead (napi ADR 0027): the SCXML the codec writes from the
-// definition, with where it wrote each element (core ADR 0086,
+// source instead (napi ADR 0026): the SCXML the codec writes from the
+// definition, with where it wrote each element (core ADR 0085,
 // ta_definition_encode with its source map), which the client asks for by
 // `sourceReference`. A chart SCXML cannot express (a builder chart whose
 // expressions are functions) and that keeps no spans has neither, and the
@@ -157,7 +157,7 @@ class Sources {
   /**
    * Forgets what was read of a definition. A chart defined again after it
    * moved is answered by the same definition (core ADR 0077), which then
-   * says where the chart is written now (core ADR 0086).
+   * says where the chart is written now (core ADR 0085).
    */
   forget(definition) {
     this.#elements.delete(String(definition));

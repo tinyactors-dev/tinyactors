@@ -232,7 +232,7 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
   # action, a <foreach> iteration, a handler, a state's activation or a
   # raised event, or that loses a snapshot across resumes (ADR 0061); and a
   # pause at a microstep's start that runs part of it twice or not at all
-  # (ADR 0087).
+  # (ADR 0086).
   scenario 'pausing inside executable content is invisible' do
     variants = (1..6).to_h { |budget| ["action budget #{budget}", { resume_action_budget: budget }] }
     variants['action budget 1, resume budget 1'] = { resume_action_budget: 1, resume_budget: 1 }
@@ -305,7 +305,7 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
 
   # Catches: a stop at a microstep's start that has already run its first
   # unit or exited a state, a position there that names anything but that
-  # first unit, and a step from there that runs more than it (ADR 0087).
+  # first unit, and a step from there that runs more than it (ADR 0086).
   scenario "a resume can stop before a microstep's first unit" do
     recording_trace(kinds: %i[paused])
     nested = spawn :nested_content

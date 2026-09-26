@@ -223,7 +223,7 @@ check(structured[:states][1][:done_data] == { params: [{ name: 'result', value: 
       "done_data specs\n#{structured[:states][1][:done_data]}")
 
 # Every element records the file and line of the DSL call that wrote it
-# (core ADR 0086), and a chart given as content of another carries none:
+# (core ADR 0085), and a chart given as content of another carries none:
 # its bytes are part of the other chart's revision.
 line = __LINE__ + 2
 spanned = TinyactorsTest::Chart.define(:spanned) do

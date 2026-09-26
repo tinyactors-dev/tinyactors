@@ -473,7 +473,7 @@ TinyactorsTest.scenarios 'running out of memory' do
       end
 
       # Catches: a failed allocation right after a stop at a microstep's
-      # start (ADR 0087) that runs part of the microstep twice or not at
+      # start (ADR 0086) that runs part of the microstep twice or not at
       # all, or loses the stop.
       if kind == :phases
         at_starts = "#{label}: each failed allocation is invisible when every microstep stops at its start"

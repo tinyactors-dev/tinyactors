@@ -1,6 +1,6 @@
 'use strict';
 
-// Operating one actor (ADR 0027; core ADRs 0082, 0083, 0084): the mailbox,
+// Operating one actor (ADR 0026; core ADRs 0082, 0083, 0084): the mailbox,
 // operator transitions in post() and send(), abandoning a macrostep,
 // withdrawing a delayed send, and what inspect() and definitions() report.
 // Runs on Node and Bun.

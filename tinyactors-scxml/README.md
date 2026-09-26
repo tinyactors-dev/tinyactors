@@ -54,7 +54,7 @@ and which lives in the same arena. That happens for:
 Only the last, and the re-serialization of `<content>` markup, are copies the
 codec itself makes.
 
-## Where elements are (core ADR 0086)
+## Where elements are (core ADR 0085)
 
 Decode fills the spec's spans: every state, transition, initial transition,
 action and expression says where it was read, as an offset, a length, and

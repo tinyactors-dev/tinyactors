@@ -178,7 +178,7 @@ function nothingStored() {
   system.close();
 }
 
-// Where each element was written (core ADR 0086): the builder records the
+// Where each element was written (core ADR 0085): the builder records the
 // file, line and column of every call that writes a state, transition,
 // initial transition or action, core keeps them per definition, and
 // sourceOf() reads them back by core's IDs.

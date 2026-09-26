@@ -1,5 +1,5 @@
 /*
- * Pausing at a microstep's start (ADR 0087): a resume with
+ * Pausing at a microstep's start (ADR 0086): a resume with
  * `pause_at_microstep_start` selects the next microstep's transitions and
  * pauses before its first unit, before any state is exited. The position
  * names that unit in each kind of block (an <onexit>, transition content,

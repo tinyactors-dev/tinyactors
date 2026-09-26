@@ -91,7 +91,7 @@ class Definition {
 
   /**
    * Where element `id` of `kind` ('state', 'transition', 'action' or
-   * 'expression') was written (core ADR 0086): the file, and the line and
+   * 'expression') was written (core ADR 0085): the file, and the line and
    * column of its builder call, or undefined when the definition keeps no
    * span for it. A chart built with statechart() records every state,
    * transition, initial transition and action; IDs are core's, as in

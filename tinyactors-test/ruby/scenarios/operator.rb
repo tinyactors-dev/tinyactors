@@ -208,7 +208,7 @@ TinyactorsTest.scenarios 'operator transitions', chart: :operator do
 
   # Catches: a jump that cannot stop before its first unit, or that has
   # exited a state or run a handler when it stops there; and an image that
-  # loses that stop (ADR 0087).
+  # loses that stop (ADR 0086).
   scenario 'a jump can stop before its first unit' do
     actor = spawn(name: 'subject')
     assert_equal 'ok', actor.post_jump(:w2)

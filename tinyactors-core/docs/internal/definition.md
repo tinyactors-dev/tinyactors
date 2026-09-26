@@ -26,7 +26,7 @@ Definitions should be compiled/validated before registration and never mutated w
 
 Where each element was written is not program data: a definition compiled
 from a spec with source spans keeps them in a side table beside the program
-(ADR 0086), one span per state, transition, action and expression, and
+(ADR 0085), one span per state, transition, action and expression, and
 `ta_definition_span()` reads it. Nothing at run time looks at it, and it is
 not part of the revision.
 

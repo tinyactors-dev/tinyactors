@@ -395,7 +395,7 @@ struct ta_definition {
     ta_str *authored_texts;
     uint32_t authored_text_count;
     /*
-     * Where each element was written (ADR 0086), when the spec knew for at
+     * Where each element was written (ADR 0085), when the spec knew for at
      * least one; null otherwise. One span per element, by kind and then by
      * ID: the states, the transitions (initial ones included), the actions
      * and the expressions (ta_definition_span_base()). Unknown spans are
@@ -473,7 +473,7 @@ size_t ta_definition_session_bytes(const ta_definition *definition);
  */
 ta_result ta_definition_place_actions(ta_definition *definition);
 /*
- * The layout of `spans` (ADR 0086): elements of `kind` are numbered from
+ * The layout of `spans` (ADR 0085): elements of `kind` are numbered from
  * ta_definition_span_base(), and there are ta_definition_element_count() of
  * them. ta_definition_export() numbers the exported spec's spans the same
  * way.
@@ -484,7 +484,7 @@ uint32_t ta_definition_span_base(const ta_definition *definition, ta_element_kin
  * Registration by identity answered `definition` with `live` (ADR 0077):
  * when `definition` knows where its elements are written, and not exactly
  * where `live` says, `live` takes its spans, and `definition`, about to be
- * destroyed, takes `live`'s old ones with it (ADR 0086). Allocates nothing,
+ * destroyed, takes `live`'s old ones with it (ADR 0085). Allocates nothing,
  * so it cannot fail.
  */
 void ta_definition_take_spans(ta_definition *live, ta_definition *definition);

@@ -8,7 +8,7 @@ typedef struct {
 } ta_state_key;
 
 /*
- * A known span the spec gives an element (ADR 0086), recorded during the
+ * A known span the spec gives an element (ADR 0085), recorded during the
  * walk and laid out once the counts are final. An initial transition's ID
  * is its index among the initial transitions until then.
  */
@@ -252,7 +252,7 @@ static ta_result ta_compiler_fail_at(ta_compiler *compiler, ta_spec_member membe
 
 /*
  * Checks the span an element names and records it when it is known
- * (ADR 0086). Nothing about a span is hashed: where an element was written
+ * (ADR 0085). Nothing about a span is hashed: where an element was written
  * is not what it means, so moving it keeps the revision.
  */
 static ta_result ta_compiler_span(ta_compiler *compiler, const ta_span_record *record) {
@@ -1857,7 +1857,7 @@ static void ta_compiler_destroy(ta_compiler *compiler) {
 }
 
 /*
- * The side table of spans (ADR 0086), once every count is final: one span
+ * The side table of spans (ADR 0085), once every count is final: one span
  * per element, by kind and ID, and the names of the sources. Nothing is
  * kept when the spec knew no span, so a definition compiled without them
  * costs what it did before.

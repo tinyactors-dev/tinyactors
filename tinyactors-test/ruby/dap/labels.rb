@@ -157,7 +157,7 @@ module DAP
       text.is_a?(String) ? text : nil
     end
 
-    # Where an element was written (core ADR 0086): {source:, line:,
+    # Where an element was written (core ADR 0085): {source:, line:,
     # column:, end_line:, end_column:}, or nil when the definition keeps no
     # span for it. `kind` is one of KINDS.
     def span(definition, kind, id)
@@ -179,7 +179,7 @@ module DAP
 
     # Drops every span read so far. A chart registered again after it moved
     # is answered by the definition registered before (core ADR 0077), which
-    # then says where the chart is written now (core ADR 0086).
+    # then says where the chart is written now (core ADR 0085).
     def forget_spans = @cache.delete_if { |key, _| key[1] == :span }
 
     # The definition's family and revision.

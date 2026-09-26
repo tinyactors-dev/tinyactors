@@ -301,7 +301,7 @@ module DAP
         held.each { |handle| @context.scheduler.release(handle) }
       end
       # A chart that only moved is answered by its definition, with the new
-      # lines (core ADRs 0077 and 0086): read the spans again.
+      # lines (core ADRs 0077 and 0085): read the spans again.
       @labels.forget_spans
       @source_map.forget
       settle
@@ -404,7 +404,7 @@ module DAP
       reset_views
     end
 
-    # The states at a line of a chart's file (core ADR 0086): the states
+    # The states at a line of a chart's file (core ADR 0085): the states
     # written there, else the state an action or a transition written there
     # belongs to. Without a line, or without a source, every state of the
     # chart: the source's, else the stopped thread's.

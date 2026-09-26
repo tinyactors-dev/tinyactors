@@ -458,7 +458,7 @@ static napi_value tna_jump_object(napi_env env, const tna_jump *jump) {
  * the actor, oldest first, as [{ event, data?, awaited, scope?, transition? }]:
  * `awaited` when a send() waits for it, `scope` ({ index, generation }) when
  * its origin is an openScope() scope, `transition` ({ source, targets } by
- * state ID) when it carries an operator transition (ADR 0027). O(limit).
+ * state ID) when it carries an operator transition (ADR 0026). O(limit).
  */
 static napi_value tna_mailbox_method(napi_env env, napi_callback_info info) {
     size_t argc = 3;
@@ -613,7 +613,7 @@ static napi_value tna_import_refusal(napi_env env, ta_result result, const tna_i
  * importDefinition(bytes, name?, resolve?): decodes an SCXML document,
  * compiles it against the data model it names, and registers it (ADR 0019,
  * core ADR 0076); `name` is what the document is called, the source its
- * spans name (core ADR 0086), and `resolve(src)` fetches <data src> and
+ * spans name (core ADR 0085), and `resolve(src)` fetches <data src> and
  * <script src>. The definition ID as a bigint, or a refusal object { code,
  * stage, message, line, column, offset }.
  */
@@ -723,8 +723,8 @@ static napi_status tna_encoded_spans(napi_env env, napi_value into, const char *
 
 /*
  * encodeDefinition(id): the definition written as an SCXML document, and
- * where each state, transition and action landed in it (napi ADR 0027,
- * core ADR 0086), as { text, spans: { state, transition, action } } with
+ * where each state, transition and action landed in it (napi ADR 0026,
+ * core ADR 0085), as { text, spans: { state, transition, action } } with
  * each kind an array by ID. The debugger serves it as a virtual source for
  * a chart whose spans name no file. Throws `not-found` for no such
  * definition, and `unsupported` when SCXML cannot express the chart, such
@@ -900,7 +900,7 @@ static napi_value tna_accept_done(napi_env env, tna_napi_system *wrapper, tna_ac
 }
 
 /*
- * The operator transition argument of post() and send() (ADR 0027, core ADR
+ * The operator transition argument of post() and send() (ADR 0026, core ADR
  * 0082): undefined, or { definition, source, targets } with the definition
  * ID (a bigint) and state IDs, the targets read into the call arena. Throws
  * and returns false when it is malformed.

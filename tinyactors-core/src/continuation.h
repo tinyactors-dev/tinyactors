@@ -29,7 +29,7 @@ typedef struct {
  * microstep's phases are START, EXIT, TRANSITIONS and ENTER. START: its
  * transitions are selected, its sets computed and its history recorded,
  * and nothing of it has run; a run stops there only when its caller asked
- * (ADR 0087). The others are the stretches outside a microstep that run
+ * (ADR 0086). The others are the stretches outside a microstep that run
  * chart code or start services, and so can run out of memory after
  * something is visible:
  *

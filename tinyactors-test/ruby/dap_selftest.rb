@@ -247,7 +247,7 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     check('an idle actor has one frame, which says what holds it') do
       stack['totalFrames'] == 1 && stack['stackFrames'].first['name'] == 'idle in idle (held; 0 messages waiting)'
     end
-    check('at the line its state was written on (core ADR 0086)') do
+    check('at the line its state was written on (core ADR 0085)') do
       top = stack['stackFrames'].first
       top.dig('source', 'path') == counter_path && top['line'] == line_of(COUNTER, 'state :idle do')
     end
@@ -299,7 +299,7 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     worker_top = client.request('stackTrace', 'threadId' => worker_thread)['body']['stackFrames'].first
     reference = worker_top.dig('source', 'sourceReference').to_i
     encoded = client.request('source', 'sourceReference' => reference)['body']
-    check('an inline child chart has no spans; its frame is in the SCXML the codec encodes from it (ADR 0086)') do
+    check('an inline child chart has no spans; its frame is in the SCXML the codec encodes from it (ADR 0085)') do
       worker_top['name'] == 'idle in working (held; 0 messages waiting)' && reference.positive? && worker_top.dig('source', 'name') == 'worker.scxml' &&
         encoded['mimeType'] == 'application/scxml+xml' &&
         encoded['content'].lines[worker_top['line'] - 1].include?('<state id="working">')
@@ -489,7 +489,7 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     evaluate.call('send done', 'repl', nil)
     client.request('continue', 'threadId' => tid)
     stopped = client.event('stopped')
-    check('an exit breakpoint in a microstep without content stops at its start, before any of it ran (ADR 0087)') do
+    check('an exit breakpoint in a microstep without content stops at its start, before any of it ran (ADR 0086)') do
       stopped['reason'] == 'function breakpoint' && stopped['hitBreakpointIds'] == [exit_id] &&
         stopped['description'] == 'exited busy' &&
         names_of.call(tid) ==
@@ -632,7 +632,7 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     check('the first hit of a hit condition of 2 does not stop') { client.take('stopped').empty? }
     client.request('evaluate', 'expression' => 'send bump', 'context' => 'repl')
     stopped = client.event('stopped')
-    check('the second does, before the transition\'s content: at the microstep\'s start (ADR 0087)') do
+    check('the second does, before the transition\'s content: at the microstep\'s start (ADR 0086)') do
       stopped['reason'] == 'function breakpoint' && stopped['hitBreakpointIds'] == [conditional.last['id']] &&
         names_of.call(tid).first(2) == ['assign 1', 'transition idle → busy on bump']
     end
@@ -749,7 +749,7 @@ Dir.mktmpdir('dap-selftest') do |tmp|
                                              'frameId' => frame_of.call(spinner).first['id'])['body']['result'].to_i }
     at_start = spin_microstep.call
     n_at_start = spin_n.call
-    check('a step by microsteps stops at the next microstep\'s start, before its first unit (ADR 0087)') do
+    check('a step by microsteps stops at the next microstep\'s start, before its first unit (ADR 0086)') do
       at_start > was && names_of.call(spinner).first(2) == ['assign 1', 'transition spinning → spinning']
     end
     client.request('stepIn', 'threadId' => spinner)
@@ -905,7 +905,7 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     check('a line breakpoint whose condition is false does not stop') { client.take('stopped').empty? }
     console.call('send @acct1 bump', nil)
     stopped = client.event('stopped')
-    check('a breakpoint on a microstep\'s first unit stops before it, at the microstep\'s start (ADR 0087)') do
+    check('a breakpoint on a microstep\'s first unit stops before it, at the microstep\'s start (ADR 0086)') do
       stopped['reason'] == 'breakpoint' && stopped['hitBreakpointIds'] == [set[0]['id']] &&
         stopped['description'].start_with?('before line') &&
         frame_of.call(tid).first(2).map { |f| [f['name'], f['line']] } ==

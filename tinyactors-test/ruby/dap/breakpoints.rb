@@ -3,7 +3,7 @@
 module DAP
   # The breakpoints a client set: line breakpoints (and log points) on the
   # chart's Ruby files, mapped to compiled IDs through source spans (core
-  # ADR 0086, SourceMap); function breakpoints by name; the exception
+  # ADR 0085, SourceMap); function breakpoints by name; the exception
   # filters; and data breakpoints on data-model locations. Each is found in
   # the trace records a resume wrote, or in where the actor stands after it
   # (core ADR 0083), so a stop comes at the first unit boundary after the
@@ -264,7 +264,7 @@ module DAP
     # or onexit, or the transition's content. When there is no unit to
     # stand before (a state without handlers), they hit at the next place
     # the actor stops. A microstep's first block is reached at its start,
-    # where the actor stands before its first unit (ADR 0087).
+    # where the actor stands before its first unit (ADR 0086).
     def blocks(record, track, &hit)
       definition = record[:definition]
       case record[:kind]

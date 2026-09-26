@@ -1,7 +1,7 @@
 'use strict';
 
 // Breakpoints: function breakpoints by name, line breakpoints on the
-// element a source line holds (core ADR 0086), the exception filters, and
+// element a source line holds (core ADR 0085), the exception filters, and
 // data breakpoints on data-model locations. Each is found in the records of
 // a macrostep that ended (lib/debug/macrosteps). A live actor is never
 // stopped, so every breakpoint is a tracepoint: the session says where it
@@ -76,7 +76,7 @@ function describeLine(breakpoint) {
 }
 
 // The line breakpoints of one DAP Source are kept under its path, or its
-// sourceReference for a virtual source (napi ADR 0027).
+// sourceReference for a virtual source (napi ADR 0026).
 const sourceKey = (source) => (source.path !== undefined ? `path ${source.path}` : `reference ${source.sourceReference}`);
 
 class Breakpoints {
@@ -97,7 +97,7 @@ class Breakpoints {
 
   /**
    * setBreakpoints for one source, { path } or { sourceReference } (napi
-   * ADR 0027): replaces that source's breakpoints. `resolve(line)` answers
+   * ADR 0026): replaces that source's breakpoints. `resolve(line)` answers
    * the element the line stands for, as { element: { kind, id, name },
    * line, column, source }, or a string saying why there is none. Answers
    * DAP Breakpoint objects.

@@ -3,7 +3,7 @@
  *
  * Decode parses the input with txml into the operation's arena and walks the
  * concrete syntax tree into a ta_scxml_spec, with the span of every element
- * it read (core ADR 0086). Encode writes a spec with txml's event writer, one
+ * it read (core ADR 0085). Encode writes a spec with txml's event writer, one
  * element per line, and reports where it wrote each element. Nothing here
  * uses the C library or performs I/O; the arena is the only memory.
  *
@@ -288,7 +288,7 @@ typedef struct {
     ta_bytes input;
     ta_chart_error error;
     uint32_t anonymous;
-    /* Where each element was read (ADR 0086): the spec's spans table as it
+    /* Where each element was read (ADR 0085): the spec's spans table as it
      * grows, and its sources, the input first and then every file the
      * resolver fetched. Growing either can run out of memory anywhere in the
      * walk, so that is remembered and reported once, at the end. */
@@ -430,7 +430,7 @@ static ta_expression source(ta_str text) {
 }
 
 /* ------------------------------------------------------------------------
- * Spans (ADR 0086): where each element and expression was read.
+ * Spans (ADR 0085): where each element and expression was read.
  */
 
 /* Doubles an arena array of `size`-byte items; the old one stays in the
@@ -1848,7 +1848,7 @@ static ta_result scxml_decode(void *self, const ta_chart_decode_params *params) 
  * Encode
  */
 
-/* Where one element or expression landed in the output (ADR 0086). */
+/* Where one element or expression landed in the output (ADR 0085). */
 typedef struct {
     uint32_t span;
     uint64_t start;

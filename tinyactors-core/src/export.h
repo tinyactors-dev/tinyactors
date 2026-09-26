@@ -11,7 +11,7 @@
 
 /*
  * The export behind ta_definition_export() and ta_definition_encode().
- * An element with a known span always indexes the spans table (ADR 0086):
+ * An element with a known span always indexes the spans table (ADR 0085):
  * the element of `kind` with ID `id` has `span`
  * ta_definition_span_base(kind) + id + 1. `numbered` gives every element
  * that `span`, and the spec a table even when the definition keeps none, so

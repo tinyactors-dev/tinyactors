@@ -2,7 +2,7 @@
   "description": "A data-model location can be watched for writes, named from the Variables pane or by an expression; an <assign> to it stops with reason data breakpoint; reads cannot be watched, and other scopes have no locations",
   "chart": "counter",
   "only": "test",
-  "why": "a data breakpoint stops; napi's adapter never stops a live actor, where it is a tracepoint (napi ADR 0027)",
+  "why": "a data breakpoint stops; napi's adapter never stops a live actor, where it is a tracepoint (napi ADR 0026)",
   "steps": [
     { "start": true },
     {

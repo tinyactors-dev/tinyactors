@@ -155,7 +155,7 @@ static void tna_child_family_of(tna_napi_system *wrapper, ta_definition_id paren
 
 /*
  * Compiles and registers chart text as a child of `parent`, holding it.
- * `name` is what its spans call the text (core ADR 0086): the src it was
+ * `name` is what its spans call the text (core ADR 0085): the src it was
  * fetched from, or empty for a child written inside its parent, whose lines
  * count from the start of its <content> and so are not its parent's lines.
  */

@@ -1,5 +1,5 @@
 /*
- * Source spans (ADR 0086): a spec's spans reach the definition's side table,
+ * Source spans (ADR 0085): a spec's spans reach the definition's side table,
  * ta_definition_span() answers by kind and ID, export carries them back,
  * ta_definition_encode() reports where a codec wrote each element, and no
  * span ever changes a revision. A spec without spans keeps nothing, and a

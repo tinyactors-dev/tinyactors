@@ -12,7 +12,7 @@
 // before the debugger attached has a position too. The transitions of its
 // microstep come from the trace spans the session read, and are left out
 // when it did not see them. Each frame's place in the JavaScript that wrote
-// the chart comes from its source spans (core ADR 0086), when it has them.
+// the chart comes from its source spans (core ADR 0085), when it has them.
 
 /** The active states no other active state is inside of. */
 function leaves(view, labels) {

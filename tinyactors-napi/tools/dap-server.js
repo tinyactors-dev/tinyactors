@@ -1,7 +1,7 @@
 'use strict';
 
 // A development transport for the debug adapter (lib/debug.js, napi ADR
-// 0027): it runs a small example system and serves a debug session over
+// 0026): it runs a small example system and serves a debug session over
 // stdio, or one per connection on a local port, so a DAP client can be
 // tried against it. It is not part of the package: a production
 // application puts createDebugSession() behind its own transport and

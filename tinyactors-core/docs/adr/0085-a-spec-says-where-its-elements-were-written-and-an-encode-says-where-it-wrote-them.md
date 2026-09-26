@@ -1,4 +1,4 @@
-# ADR 0086: A spec says where its elements were written, and an encode says where it wrote them
+# ADR 0085: A spec says where its elements were written, and an encode says where it wrote them
 
 **Status:** Accepted and implemented (2026-09-26). Extends ADR 0053 (the codec interfaces carry spans) and ADR 0058 (positions beyond the error path); decides what ADR 0071 section 4 left out (source locations). Applies ADR 0018, ADR 0038, ADR 0042, ADR 0060 and ADR 0070; builds on ADR 0077 (a registration answered by identity hands over newer spans, section 3). See the implementation notes.
 **Date:** 2026-09-26

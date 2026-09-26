@@ -2,7 +2,7 @@
   "description": "The console sends an event with the debug origin: it waits in the actor's mailbox while the system is stopped, and the Queues scope shows it; an on: breakpoint stops before the macrostep that takes it; a step lands at the microstep's start, before its <send>; the chart's reply to the event's origin comes back to the console",
   "chart": "counter",
   "only": "test",
-  "why": "console mail waits while the system is stopped, and an on: breakpoint stops before its macrostep; napi's adapter never stops a live actor (napi ADR 0027)",
+  "why": "console mail waits while the system is stopped, and an on: breakpoint stops before its macrostep; napi's adapter never stops a live actor (napi ADR 0026)",
   "steps": [
     { "start": true },
     {

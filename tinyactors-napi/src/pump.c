@@ -663,7 +663,7 @@ static void tna_settle_sends(napi_env env, tna_napi_system *wrapper) {
 }
 
 /*
- * What a debugger hears of an actor (ADR 0027), after the turn's traces, so
+ * What a debugger hears of an actor (ADR 0026), after the turn's traces, so
  * that it has the macrostep's spans already: "runaway" when a macrostep was
  * stopped at its microstep limit (core ADR 0075) and the actor was
  * quarantined. The effects handler hears it with the actor.
@@ -791,7 +791,7 @@ static napi_value tna_turn_callback(napi_env env, napi_callback_info info) {
         if (!tna_system_closed(system)) {
             tna_trace_dispatch(env, wrapper, &first_error);
         }
-        /* Then the runaways (ADR 0027), which a debugger reads with those
+        /* Then the runaways (ADR 0026), which a debugger reads with those
          * traces. */
         for (const tna_turn_record *record = system->sched.records; record != NULL; record = record->next) {
             if (tna_system_closed(system)) {

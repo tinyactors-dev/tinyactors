@@ -136,7 +136,7 @@ an eventless transition. `internal()` changes a transition's kind.
 
 The builder records where each state, transition, initial transition and
 action was written: the file, line and column of the builder call, from a
-V8 call site, as a source span of the spec (core ADR 0086).
+V8 call site, as a source span of the spec (core ADR 0085).
 `definition.sourceOf(kind, id)` reads one back by core's ID, which is how a
 debugger places trace records and breakpoints in the JavaScript that wrote
 the chart. Spans never change a revision. The capture costs about 5 to 7 µs
@@ -285,7 +285,7 @@ pending messages.
 ### Poking one actor for a debugger
 
 A debugger watches one actor and pokes it; it never stops it
-([ADR 0027](adr/0027-a-debugger-watches-and-pokes-one-live-actor.md)). An
+([ADR 0026](adr/0026-a-debugger-watches-and-pokes-one-live-actor.md)). An
 operator transition (core ADR 0082) travels in the envelope behind the
 actor's queued mail, abandoning a macrostep settles the send() that waited
 for it, and `mailbox()` lists what waits for an actor.

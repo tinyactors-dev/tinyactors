@@ -149,7 +149,7 @@ static bool tna_host_value_text(void *self, const ta_value *value, ta_str *out) 
  * The request is written before the Buffer's ArrayBuffer is asked for. Bun
  * keeps a small Buffer's bytes in memory of its own and moves them into a
  * new ArrayBuffer when one is asked for, after which `data` is stale; a
- * request of up to 1,000 bytes written after that was lost (ADR 0027).
+ * request of up to 1,000 bytes written after that was lost (ADR 0026).
  */
 typedef size_t (*tna_put_request)(tna_otlp *otlp, uint8_t *out, size_t size);
 

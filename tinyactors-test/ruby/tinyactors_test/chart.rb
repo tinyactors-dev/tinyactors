@@ -15,7 +15,7 @@ module TinyactorsTest
   #
   # Every state, transition, initial transition and action records where it
   # was written: the file and line of the DSL call, as a span of the spec
-  # (core ADR 0086). A debugger maps compiled IDs back to those lines. An
+  # (core ADR 0085). A debugger maps compiled IDs back to those lines. An
   # expression has no span of its own; it was written on its element's line.
   class Chart
     attr_reader :name, :datamodel, :binding, :document_name
@@ -75,7 +75,7 @@ module TinyactorsTest
     end
 
     # Where the DSL call being evaluated was written: the first caller outside
-    # this file, as a span with the Ruby file as its source (ADR 0086). The
+    # this file, as a span with the Ruby file as its source (ADR 0085). The
     # spec's spans count from 1; nil when no caller is outside this file.
     def span_here
       frame = caller_locations(1).find { |location| location.absolute_path != DSL_FILE }

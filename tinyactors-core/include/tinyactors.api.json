@@ -1458,7 +1458,7 @@
           "type": {
             "type": "ta_step_key"
           },
-          "doc": "Where the paused macrostep stands (ADR 0083): the key and position of the PAUSED or STOPPED record its last run wrote, whether or not a sink wanted it. Between microsteps `position.at` is TA_TRACE_AT_NONE and `step.microstep` counts the microsteps done. Inside a microstep, `position` names the phase and state (and, in transition content, the transition), and `action` the unit it runs next: the next action of the innermost open block, in `iteration` of the innermost <foreach > whose body that is, or a <foreach > itself when its next iteration is next, with `iteration` the one it binds. At a microstep's start (ADR 0087) it names the first unit the microstep runs, or, when it runs none, its first transition with no action. Outside a macrostep, `step` is (session_id, 0, 0) and `position` is at NONE with every ID NONE."
+          "doc": "Where the paused macrostep stands (ADR 0083): the key and position of the PAUSED or STOPPED record its last run wrote, whether or not a sink wanted it. Between microsteps `position.at` is TA_TRACE_AT_NONE and `step.microstep` counts the microsteps done. Inside a microstep, `position` names the phase and state (and, in transition content, the transition), and `action` the unit it runs next: the next action of the innermost open block, in `iteration` of the innermost <foreach > whose body that is, or a <foreach > itself when its next iteration is next, with `iteration` the one it binds. At a microstep's start (ADR 0086) it names the first unit the microstep runs, or, when it runs none, its first transition with no action. Outside a macrostep, `step` is (session_id, 0, 0) and `position` is at NONE with every ID NONE."
         },
         {
           "name": "position",
@@ -2232,7 +2232,7 @@
     },
     "ta_actor_resume_params": {
       "kind": "struct",
-      "doc": "`budget` is the number of microsteps this call may run (ADR 0009). `action_budget`, when not zero, is the number of units of executable content it may run before it pauses inside a microstep (ADR 0061): each action of a block, an <if > and a <foreach > included, and each <foreach > iteration. Either one reached answers TA_RUN_PAUSED, and the next call continues where this one stopped. Zero leaves pausing to `budget` alone. `pause_at_microstep_start`, when true, also pauses at the start of every microstep this call begins (ADR 0087): after its transitions are selected, before its first unit and before any state is exited. The position is that first unit's. A call that resumes from such a start passes it. The bootstrap's microstep never pauses there.",
+      "doc": "`budget` is the number of microsteps this call may run (ADR 0009). `action_budget`, when not zero, is the number of units of executable content it may run before it pauses inside a microstep (ADR 0061): each action of a block, an <if > and a <foreach > included, and each <foreach > iteration. Either one reached answers TA_RUN_PAUSED, and the next call continues where this one stopped. Zero leaves pausing to `budget` alone. `pause_at_microstep_start`, when true, also pauses at the start of every microstep this call begins (ADR 0086): after its transitions are selected, before its first unit and before any state is exited. The position is that first unit's. A call that resumes from such a start passes it. The bootstrap's microstep never pauses there.",
       "fields": [
         {
           "name": "actor",
@@ -2275,7 +2275,7 @@
           "type": {
             "builtin": "bool"
           },
-          "doc": "Pauses before the first unit of every microstep it begins (ADR 0087)."
+          "doc": "Pauses before the first unit of every microstep it begins (ADR 0086)."
         }
       ],
       "layout": {
@@ -3044,7 +3044,7 @@
           "shape": "callback",
           "direction": "in",
           "optional": true,
-          "doc": "Decode `input` into a spec.\n\nA codec that knows where it read each element fills the spec's spans (ADR 0086), with `name` as the first source and each file the resolver fetched as one more. It never has to: a spec with no spans compiles to the same revision as one with them.\n\n**The spec may point into `input`.** A codec is not required to copy, because a codec over a syntax tree keeps expression text as exact slices of the source, which is what lets an embedder map a compiled expression back to the construct it came from and run static checks on it before compiling. So `input` must stay valid as long as the spec does — until ta_definition_compile_spec() has copied it. Callers keep the buffer; codecs that do copy make that harmless.\n\nA codec bounds its own input: nesting depth, document size, expansion. Reaching one of its bounds is TA_CHART_ERROR_LIMIT. The interface sets no bound of its own, so two codecs need not accept the same documents.\n\nA literal <content > is decoded to bytes plus this codec's `info.name` as their media type. What those bytes are is the codec's rule: an XML codec serializes the content subtree with namespaces resolved as SCXML G.6 requires, rather than slicing the source, because what a recipient must see is a re-serialization and not the author's bytes.\n\nTA_OK, TA_ERR_INVALID with `error` saying why, or TA_ERR_NOMEM. Null when this codec only writes."
+          "doc": "Decode `input` into a spec.\n\nA codec that knows where it read each element fills the spec's spans (ADR 0085), with `name` as the first source and each file the resolver fetched as one more. It never has to: a spec with no spans compiles to the same revision as one with them.\n\n**The spec may point into `input`.** A codec is not required to copy, because a codec over a syntax tree keeps expression text as exact slices of the source, which is what lets an embedder map a compiled expression back to the construct it came from and run static checks on it before compiling. So `input` must stay valid as long as the spec does — until ta_definition_compile_spec() has copied it. Callers keep the buffer; codecs that do copy make that harmless.\n\nA codec bounds its own input: nesting depth, document size, expansion. Reaching one of its bounds is TA_CHART_ERROR_LIMIT. The interface sets no bound of its own, so two codecs need not accept the same documents.\n\nA literal <content > is decoded to bytes plus this codec's `info.name` as their media type. What those bytes are is the codec's rule: an XML codec serializes the content subtree with namespaces resolved as SCXML G.6 requires, rather than slicing the source, because what a recipient must see is a re-serialization and not the author's bytes.\n\nTA_OK, TA_ERR_INVALID with `error` saying why, or TA_ERR_NOMEM. Null when this codec only writes."
         },
         {
           "name": "encode",
@@ -3086,7 +3086,7 @@
           "shape": "callback",
           "direction": "in",
           "optional": true,
-          "doc": "Write `spec` in this codec's syntax. `spec->identity` is not written: identity has no chart syntax, so a round trip that must preserve an explicit one carries it beside the document and feeds it back through ta_chart_decode_params. A literal content whose media type is not this codec's own is TA_CHART_ERROR_UNREPRESENTABLE unless the codec can carry it verbatim. When `spans` is present, the codec reports where it wrote every element that has a `span` (ADR 0086). Null when this codec only reads."
+          "doc": "Write `spec` in this codec's syntax. `spec->identity` is not written: identity has no chart syntax, so a round trip that must preserve an explicit one carries it beside the document and feeds it back through ta_chart_decode_params. A literal content whose media type is not this codec's own is TA_CHART_ERROR_UNREPRESENTABLE unless the codec can carry it verbatim. When `spans` is present, the codec reports where it wrote every element that has a `span` (ADR 0085). Null when this codec only reads."
         }
       ],
       "layout": {
@@ -3825,7 +3825,7 @@
     "ta_chart_span_sink_vtable": {
       "kind": "struct",
       "semantic": "vtable",
-      "doc": "Told by an encode where it wrote each element (ADR 0086). For every element of the spec whose `span` is nonzero, the codec calls `written` once with that index and the element's place in the output: source 0, the byte range, and the lines and columns of both ends. For an expression, the place is its text: an attribute's value, or an element's character data. Recording cannot fail: a sink that needs memory reserves it before the encode.",
+      "doc": "Told by an encode where it wrote each element (ADR 0085). For every element of the spec whose `span` is nonzero, the codec calls `written` once with that index and the element's place in the output: source 0, the byte range, and the lines and columns of both ends. For an expression, the place is its text: an attribute's value, or an element's character data. Recording cannot fail: a sink that needs memory reserves it before the encode.",
       "fields": [
         {
           "name": "written",
@@ -7464,7 +7464,7 @@
           "optional": true,
           "valid_on": "success",
           "lifetime": "arena",
-          "doc": "When asked for, where each element of the definition landed in `out` (ADR 0086): its arrays are in `arena`, and an element the codec reported nothing for has an all-zero span."
+          "doc": "When asked for, where each element of the definition landed in `out` (ADR 0085): its arrays are in `arena`, and an element the codec reported nothing for has an all-zero span."
         },
         {
           "name": "identity",
@@ -7604,7 +7604,7 @@
     },
     "ta_definition_export_params": {
       "kind": "struct",
-      "doc": "Rebuilds the author-level spec of a registered definition (ADR 0042). Arrays and joined event names are allocated in `arena`; other text and expressions are borrowed from the definition and the system. Host expressions are the definition's retained handles, not retained again. The result stays valid until the arena is reset or the definition is freed, whichever comes first.\n\nExport is faithful: compiling the exported spec yields the same revision as the original. `identity` is null when the definition was fingerprinted and points to the definition's explicit identity otherwise. Empty lists are exported as null, except that a handler's `actions` is never null.\n\nA definition that keeps spans exports them (ADR 0086): `spans` is its table, borrowed, with the states first, then the transitions, the actions and the expressions, each by ID; every exported element whose span is known indexes it, and `sources` names what they point into. Compiling the export keeps the same spans. A definition without spans exports none.\n\nTA_ERR_NOT_FOUND: no existing definition has this ID. A retired definition exports until it is freed.",
+      "doc": "Rebuilds the author-level spec of a registered definition (ADR 0042). Arrays and joined event names are allocated in `arena`; other text and expressions are borrowed from the definition and the system. Host expressions are the definition's retained handles, not retained again. The result stays valid until the arena is reset or the definition is freed, whichever comes first.\n\nExport is faithful: compiling the exported spec yields the same revision as the original. `identity` is null when the definition was fingerprinted and points to the definition's explicit identity otherwise. Empty lists are exported as null, except that a handler's `actions` is never null.\n\nA definition that keeps spans exports them (ADR 0085): `spans` is its table, borrowed, with the states first, then the transitions, the actions and the expressions, each by ID; every exported element whose span is known indexes it, and `sources` names what they point into. Compiling the export keeps the same spans. A definition without spans exports none.\n\nTA_ERR_NOT_FOUND: no existing definition has this ID. A retired definition exports until it is freed.",
       "fields": [
         {
           "name": "definition",
@@ -7859,7 +7859,7 @@
           "type": {
             "type": "ta_str"
           },
-          "doc": "What the input is called, such as its path: the name of the definition's first source (ADR 0086). Empty when it has none."
+          "doc": "What the input is called, such as its path: the name of the definition's first source (ADR 0085). Empty when it has none."
         },
         {
           "name": "arena",
@@ -8425,7 +8425,7 @@
     },
     "ta_definition_span_params": {
       "kind": "struct",
-      "doc": "Where one element of a definition was written (ADR 0086), as the spec it was compiled from said. The spans are the definition's, not the actors': a definition compiled from a spec with no known span keeps none. TA_ERR_NOT_FOUND when the definition is unknown or stale, the ID is out of range, or the definition keeps no span for that element. A retired definition answers until it is freed. A registration answered by this definition (ADR 0077) that brings other spans replaces them, and `source` text read before goes with the old ones.",
+      "doc": "Where one element of a definition was written (ADR 0085), as the spec it was compiled from said. The spans are the definition's, not the actors': a definition compiled from a spec with no known span keeps none. TA_ERR_NOT_FOUND when the definition is unknown or stale, the ID is out of range, or the definition keeps no span for that element. A retired definition answers until it is freed. A registration answered by this definition (ADR 0077) that brings other spans replaces them, and `source` text read before goes with the old ones.",
       "fields": [
         {
           "name": "definition",
@@ -9193,7 +9193,7 @@
           "type": {
             "builtin": "uint32_t"
           },
-          "doc": "In a spec: where the expression was written, as an index into the spec's `spans` counting from 1, or 0 when unknown (ADR 0086). The copies a definition keeps (ta_definition_expression(), a data model's expression table) carry 0; ta_definition_span() says where one was written."
+          "doc": "In a spec: where the expression was written, as an index into the spec's `spans` counting from 1, or 0 when unknown (ADR 0085). The copies a definition keeps (ta_definition_expression(), a data model's expression table) carry 0; ta_definition_span() says where one was written."
         },
         {
           "name": "as",
@@ -12287,7 +12287,7 @@
           }
         }
       ],
-      "doc": "The `span` of an action, a transition, an initial transition and a state is where that element was written: an index into the spec's `spans` counting from 1, or 0 when unknown (ADR 0086).",
+      "doc": "The `span` of an action, a transition, an initial transition and a state is where that element was written: an index into the spec's `spans` counting from 1, or 0 when unknown (ADR 0085).",
       "zero_is_absent": true,
       "tagged": {
         "tag": "kind",
@@ -13148,7 +13148,7 @@
           "shape": "counted",
           "direction": "in",
           "optional": true,
-          "doc": "Where the elements were written (ADR 0086): the table the elements' `span` members index, and the sources its spans point into. Both are absent in a spec that says nothing about sources, and neither affects the revision. A span whose `source` is outside `sources` (other than 0 when there are none) is TA_COMPILE_ERROR_MALFORMED_SPEC, and so is an element whose `span` is beyond `span_count`."
+          "doc": "Where the elements were written (ADR 0085): the table the elements' `span` members index, and the sources its spans point into. Both are absent in a spec that says nothing about sources, and neither affects the revision. A span whose `source` is outside `sources` (other than 0 when there are none) is TA_COMPILE_ERROR_MALFORMED_SPEC, and so is an element whose `span` is beyond `span_count`."
         },
         {
           "name": "span_count",
@@ -14325,7 +14325,7 @@
     },
     "ta_source_span": {
       "kind": "struct",
-      "doc": "Source spans (ADR 0086)\n\nWhere an element of a chart was written: a place in one of the spec's sources. A front end that knows fills them in, and a spec built without them compiles exactly as before. Spans never change a definition's revision.\n\nA span is known when `line` is nonzero; an all-zero span is unknown. Lines and columns count from 1, and a column counts bytes, as ta_chart_position does. A front end that knows only lines, such as a DSL that records the line each element was written on, leaves the column, the end and the byte range zero.",
+      "doc": "Source spans (ADR 0085)\n\nWhere an element of a chart was written: a place in one of the spec's sources. A front end that knows fills them in, and a spec built without them compiles exactly as before. Spans never change a definition's revision.\n\nA span is known when `line` is nonzero; an all-zero span is unknown. Lines and columns count from 1, and a column counts bytes, as ta_chart_position does. A front end that knows only lines, such as a DSL that records the line each element was written on, leaves the column, the end and the byte range zero.",
       "fields": [
         {
           "name": "offset",

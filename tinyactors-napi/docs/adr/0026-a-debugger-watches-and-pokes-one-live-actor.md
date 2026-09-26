@@ -1,6 +1,6 @@
-# ADR 0027: A debugger watches and pokes one live actor
+# ADR 0026: A debugger watches and pokes one live actor
 
-**Status:** Accepted and implemented (2026-09-26). Applies tinyactors-core ADRs 0082 to 0084 and 0086 to the addon; extends ADR 0005 (scheduling states) and ADR 0008 (faults); sits beside ADR 0020 (the loader's waiting mail) and core ADR 0075 (runaway quarantine), see "Beside the loader and the runaway limit".
+**Status:** Accepted and implemented (2026-09-26). Applies tinyactors-core ADRs 0082 to 0085 to the addon; extends ADR 0005 (scheduling states) and ADR 0008 (faults); sits beside ADR 0020 (the loader's waiting mail) and core ADR 0075 (runaway quarantine), see "Beside the loader and the runaway limit".
 **Date:** 2026-09-26
 
 ## Context
@@ -13,7 +13,7 @@ rows N1 to N3.
 Core has what a debugger needs from a chart: the paused position in
 inspection (core ADR 0083), operator transitions and abandoning a
 macrostep (0082), withdrawing one delayed send (0084) and source spans
-(0086). The addon's scheduler (ADR 0005) did not carry the rest:
+(0085). The addon's scheduler (ADR 0005) did not carry the rest:
 
 - An operator transition goes through `ta_actor_deliver()` like an event,
   so it must wait behind the actor's queued mail in the envelope, not jump
@@ -112,7 +112,7 @@ not fork one (see Alternatives).
     `goto` does, and its macrostep shows like any other. Offering it lets
     a client's "jump to cursor" move a chart to a state without a console
     line; it never stops the actor.
-11. **Source lines come from spans (core ADR 0086).** Stack frames,
+11. **Source lines come from spans (core ADR 0085).** Stack frames,
     `setBreakpoints`, `breakpointLocations`, `gotoTargets` and
     `loadedSources` use `Definition.sourceOf()`. A span whose source is a
     path, or a `file:` URL, is served as `path`, and the client reads
@@ -192,9 +192,11 @@ With the default budgets a resume pauses between microsteps.
   first version of this ADR held a live actor between macrosteps
   (`hold`, `unhold`, `step`, a `held` scheduling state, a hold timeout),
   gave one actor budgets of its own to step one action at a time and to
-  stop at a microstep's start (core ADR 0087), and forked the actor into
-  a debug system of its own (core ADR 0085, napi ADR 0026) with its own
-  clock, where it could be stopped anywhere, stepped, and stepped back to
+  stop at a microstep's start (core ADR 0086), and forked the actor into
+  a debug system of its own, with its own clock (a core ADR let an image
+  restore into any system that registers its revision, and a napi ADR
+  copied the image's boxes into the restoring system; both were withdrawn
+  with the forks, and the numbers they had went to later ADRs), where it could be stopped anywhere, stepped, and stepped back to
   images kept at its stops. It worked, and cost four scheduling flags, a
   budgets map in `tna_sched` (56 bytes) and a record kind. The user
   decided against it: a debugger never stops a production actor, and it
@@ -202,7 +204,9 @@ With the default budgets a resume pauses between microsteps.
   which ADR 0020 decision 4 had declined for hosts; a fork brought a
   second system, box copying between systems and images across systems
   into core, for a view a developer gets from the test host's workbench.
-  Everything that existed only for holds and forks was removed with it.
+  Everything that existed only for holds and forks was removed with it,
+  core's stop at a microstep's start (core ADR 0086) aside: the test
+  host's adapter steps with it.
 - **Hold by quarantining.** Quarantine already keeps an actor out of
   scheduling, but it reports a fault, counts in the fault metrics and is
   left by `release()`. It is a verdict, not a debugger's stop.

@@ -47,7 +47,7 @@
  * record in the turn arena; the pump calls the hooks for them after the last
  * core call of the turn (ADR 0007 point 5).
  *
- * Operator transitions (ADR 0027, core ADR 0082): a message may carry one. It
+ * Operator transitions (ADR 0026, core ADR 0082): a message may carry one. It
  * queues behind the mail before it, like any message, and reaches
  * ta_actor_deliver() with it. A jump the actor no longer accepts (its source
  * is not active by then, or the actor runs another revision) is a dead letter

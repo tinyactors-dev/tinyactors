@@ -1000,7 +1000,7 @@ static void tna_sched_deliver_one(tna_sched *sched, const tna_turn_params *param
         if (result == TA_ERR_INVALID && transition != NULL) {
             /* The actor does not accept the jump now (its source is no
              * longer active): the operator's input is at fault, not the
-             * actor (ADR 0027). */
+             * actor (ADR 0026). */
             tna_sched_refuse_jump(sched, params, entry, actor);
             return;
         }

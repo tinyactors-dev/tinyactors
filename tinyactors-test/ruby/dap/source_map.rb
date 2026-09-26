@@ -2,7 +2,7 @@
 
 module DAP
   # Lines of the chart's Ruby files, and the compiled elements written on
-  # them, from the definition's source spans (core ADR 0086). The Ruby DSL
+  # them, from the definition's source spans (core ADR 0085). The Ruby DSL
   # records the file and line of each call that wrote a state, a
   # transition, an initial transition or an action; expressions are
   # arguments of those calls and have no span of their own.
@@ -10,7 +10,7 @@ module DAP
   # An index is built by walking every ID up to the counts inspection
   # reports, and kept until `forget`: a chart registered again after it
   # moved keeps its definition (core ADR 0077), whose spans then say where
-  # it is written now (core ADR 0086).
+  # it is written now (core ADR 0085).
   class SourceMap
     # One element and where it was written.
     Element = Data.define(:kind, :id, :path, :line)

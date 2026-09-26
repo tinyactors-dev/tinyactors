@@ -18,7 +18,7 @@
 # 5. the lookups by ID (ADR 0071) agree with the export: every transition's
 #    source, event, targets, guard and content, every initial transition,
 #    and where every action sits, named by its path in the exported tree;
-# 6. the recompiled definition keeps the original's source spans (ADR 0086).
+# 6. the recompiled definition keeps the original's source spans (ADR 0085).
 #
 # A chart given as an SCXML document (TinyactorsTest.scxml_chart) is imported
 # through the SCXML codec instead of compiled from a spec, and has no spec of
@@ -46,7 +46,7 @@ ALLOCATOR = { '$adapter' => 'allocator.libc' }.freeze
 # The chart DSL's shorthand, removed from both sides before comparing:
 # empty lists and nulls are absent, and `kind` is dropped where the one
 # other member already names it ({"kind": "expr", "expr": "0"}). Spans
-# (ADR 0086) are compared by ID instead (SpanAgreement): the export lays
+# (ADR 0085) are compared by ID instead (SpanAgreement): the export lays
 # its table out by kind and ID, not in the order the DSL wrote it.
 SPAN_KEYS = %w[span spans sources script_span].freeze
 
@@ -238,7 +238,7 @@ class LookupAgreement
 end
 
 # Check 6: the recompiled export says where every element was written, as
-# the original does (ADR 0086), for every state, transition, action and
+# the original does (ADR 0085), for every state, transition, action and
 # expression.
 class SpanAgreement
   KINDS = { 'state' => :state_count, 'transition' => :transition_count, 'action' => :action_count,

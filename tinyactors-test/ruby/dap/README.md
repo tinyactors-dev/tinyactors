@@ -104,7 +104,7 @@ the client continues or steps. Whenever a
 breakpoint, a step or a pause is armed, the host resumes one unit at a
 time (`action_budget: 1`, core ADR 0061) and pauses at every microstep's
 start, after selection and before its first unit
-(`pause_at_microstep_start`, core ADR 0087); otherwise it runs with the
+(`pause_at_microstep_start`, core ADR 0086); otherwise it runs with the
 workbench's budgets.
 
 **Frames**, innermost first: the unit the actor runs next, as a
@@ -133,7 +133,7 @@ saw; a step older than that, or before the adapter started, ends the
 chain with a frame that says it was not seen.
 
 Each frame is at the file and line its element was written on (core ADR
-0086): the chart DSL records the caller of every `state`, `transition`,
+0085): the chart DSL records the caller of every `state`, `transition`,
 `initial` and action call, and `ta.definition.span` answers it by ID. An
 action's frame is at its action, a block's at its state or transition, a
 microstep's at its first transition (a jump's at its first target), and a
@@ -143,7 +143,7 @@ columns are 1.
 A chart an `invoke chart:` inlines is compiled without spans (the DSL
 leaves them out of inline content). Its frames are in a virtual source
 instead: the SCXML the codec encodes from the definition
-(`ta_definition_encode` with its source map, core ADR 0086), served by
+(`ta_definition_encode` with its source map, core ADR 0085), served by
 `sourceReference` as `worker.scxml`, at the place the encode wrote each
 element. It is also that revision's loaded source.
 
@@ -208,7 +208,7 @@ had then, so a retired revision still shows the chart it ran.
 unit it started at, so the repeated `<foreach>` position above costs no
 extra step; `instruction` stops there anyway.
 
-Stepping stops at each microstep's start (core ADR 0087): `stepIn` from a
+Stepping stops at each microstep's start (core ADR 0086): `stepIn` from a
 microstep's last unit, a step by microsteps (`line`), and a step between
 two microsteps all stop before the next microstep's first unit, where
 nothing of it has run: no `<onexit>`, no transition content, no entry. A
@@ -333,7 +333,7 @@ The adapter keeps no past: `stepBack`, `reverseContinue`, `restartFrame`
 and `restart` answer an error, and their capabilities are not declared.
 It stops and steps the workbench's own actors, on a developer's machine;
 napi's adapter, which attaches to production actors, never stops one
-(napi ADR 0027).
+(napi ADR 0026).
 
 ## Writing data
 
@@ -361,7 +361,7 @@ started. The adapter never destroys an actor on its own, and declares
 | `adapter.rb` | requests, the event loop, launching the workbench |
 | `control.rb` | the Scheduler's monitor: budgets, reading trace records, stops and steps |
 | `breakpoints.rb` | line, function, exception and data breakpoints, found in trace records and positions |
-| `source_map.rb` | lines of the chart files and the elements written on them (core ADR 0086) |
+| `source_map.rb` | lines of the chart files and the elements written on them (core ADR 0085) |
 | `threads.rb` | threads with stable IDs |
 | `frames.rb` | stack frames from an actor's position |
 | `variables.rb` | scopes, variables, and writing the data model |

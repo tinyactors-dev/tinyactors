@@ -59,7 +59,7 @@ typedef struct {
      * Where the run stands inside a phase (ADR 0061, ADR 0070), the units of
      * executable content this call may run and has run, whether the block
      * running now is one a pause may stop, and whether a microstep this
-     * call begins pauses at its start (ADR 0087).
+     * call begins pauses at its start (ADR 0086).
      */
     ta_micro_position at;
     uint32_t action_budget;

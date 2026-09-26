@@ -91,7 +91,7 @@ refreshes them after each of its macrosteps. A poke from the console
 (`send`, `goto`, `abandon`, `cancel`) causes a macrostep, which shows the
 same way; setting a variable writes the data model at once. Breakpoints are tracepoints: the Debug
 Console says where one would have stopped. Stepping and pausing are
-refused (napi ADR 0027).
+refused (napi ADR 0026).
 
 To try it, `mise run dap-server -- --port 4711` in tinyactors-napi serves
 sessions over a small example system with every permission granted, and

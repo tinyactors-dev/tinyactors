@@ -15,7 +15,7 @@ module DAP
   # macrostep come from the trace records (Control), and are left out when
   # the adapter did not see them.
   #
-  # Each frame is at the place its element was written (core ADR 0086): an
+  # Each frame is at the place its element was written (core ADR 0085): an
   # action's line, a transition's, or a state's, in the chart's Ruby file.
   # A chart compiled without spans (one an `invoke chart:` inlines) is shown
   # as the SCXML the codec encodes from it, a virtual source, at the place
@@ -156,7 +156,7 @@ module DAP
       when 'exit' then ["onexit of #{state}", where]
       when 'transition'
         # An operator's jump with no content stands at its start with no
-        # compiled transition to name (ADR 0087 section 3).
+        # compiled transition to name (ADR 0086 section 3).
         return ['taking an operator\'s jump', nil] if Labels.none?(position.transition)
 
         ["transition #{@labels.transition(definition, position.transition)}",

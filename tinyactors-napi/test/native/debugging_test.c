@@ -1,5 +1,5 @@
 /*
- * What a debugger's pokes need from the scheduler (ADR 0027), driven without
+ * What a debugger's pokes need from the scheduler (ADR 0026), driven without
  * Node-API: operator transitions in the envelope (taken, refused, and for
  * another revision), and settling an abandoned macrostep.
  */

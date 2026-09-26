@@ -321,7 +321,7 @@ async function dataSrc() {
   system.close();
 }
 
-// What a document is called (core ADR 0086): define()'s `name` is the source
+// What a document is called (core ADR 0085): define()'s `name` is the source
 // its spans name. A child fetched by src or srcexpr is named by that src;
 // a child inline in <content> has lines of its own, so it has no name.
 async function names() {

@@ -526,7 +526,7 @@ typedef struct {
     ta_expression_kind kind;
     /*
      * In a spec: where the expression was written, as an index into the
-     * spec's `spans` counting from 1, or 0 when unknown (ADR 0086). The
+     * spec's `spans` counting from 1, or 0 when unknown (ADR 0085). The
      * copies a definition keeps (ta_definition_expression(), a data model's
      * expression table) carry 0; ta_definition_span() says where one was
      * written.
@@ -1427,7 +1427,7 @@ TA_API void ta_tree_put(TA_INOUT ta_tree_list *list, const void *element);
 TA_API const void *ta_tree_close(TA_INOUT ta_tree_list *list);
 
 /*
- * Source spans (ADR 0086)
+ * Source spans (ADR 0085)
  *
  * Where an element of a chart was written: a place in one of the spec's
  * sources. A front end that knows fills them in, and a spec built without
@@ -1649,7 +1649,7 @@ typedef struct {
 /*
  * The `span` of an action, a transition, an initial transition and a state
  * is where that element was written: an index into the spec's `spans`
- * counting from 1, or 0 when unknown (ADR 0086).
+ * counting from 1, or 0 when unknown (ADR 0085).
  */
 struct ta_scxml_action_spec {
     ta_scxml_action_kind kind;
@@ -1761,7 +1761,7 @@ typedef struct {
     /* Where the <script> element was written; `script.span` is its text. */
     uint32_t script_span;
     /*
-     * Where the elements were written (ADR 0086): the table the elements'
+     * Where the elements were written (ADR 0085): the table the elements'
      * `span` members index, and the sources its spans point into. Both are
      * absent in a spec that says nothing about sources, and neither affects
      * the revision. A span whose `source` is outside `sources` (other than 0
@@ -2165,7 +2165,7 @@ TA_API ta_result ta_compile_error_format(TA_IN const ta_compile_error_format_par
  * and points to the definition's explicit identity otherwise. Empty lists are
  * exported as null, except that a handler's `actions` is never null.
  *
- * A definition that keeps spans exports them (ADR 0086): `spans` is its
+ * A definition that keeps spans exports them (ADR 0085): `spans` is its
  * table, borrowed, with the states first, then the transitions, the actions
  * and the expressions, each by ID; every exported element whose span is
  * known indexes it, and `sources` names what they point into. Compiling the
@@ -2284,7 +2284,7 @@ typedef struct ta_chart_expression_printer_vtable {
 typedef struct { void *self; TA_OPTIONAL const ta_chart_expression_printer_vtable *v; } ta_chart_expression_printer TA_ADAPTER;
 
 /*
- * Told by an encode where it wrote each element (ADR 0086). For every
+ * Told by an encode where it wrote each element (ADR 0085). For every
  * element of the spec whose `span` is nonzero, the codec calls `written`
  * once with that index and the element's place in the output: source 0,
  * the byte range, and the lines and columns of both ends. For an
@@ -2335,7 +2335,7 @@ typedef struct ta_chart_codec_vtable {
      * Decode `input` into a spec.
      *
      * A codec that knows where it read each element fills the spec's spans
-     * (ADR 0086), with `name` as the first source and each file the
+     * (ADR 0085), with `name` as the first source and each file the
      * resolver fetched as one more. It never has to: a spec with no spans
      * compiles to the same revision as one with them.
      *
@@ -2368,7 +2368,7 @@ typedef struct ta_chart_codec_vtable {
      * ta_chart_decode_params. A literal content whose media type is not this
      * codec's own is TA_CHART_ERROR_UNREPRESENTABLE unless the codec can
      * carry it verbatim. When `spans` is present, the codec reports where it
-     * wrote every element that has a `span` (ADR 0086). Null when this codec
+     * wrote every element that has a `span` (ADR 0085). Null when this codec
      * only reads.
      */
     TA_OPTIONAL ta_result (*encode)(void *self, TA_IN const ta_chart_encode_params *params);
@@ -2416,7 +2416,7 @@ typedef struct {
     ta_chart_codec codec;
     ta_bytes input;
     /* What the input is called, such as its path: the name of the
-     * definition's first source (ADR 0086). Empty when it has none. */
+     * definition's first source (ADR 0085). Empty when it has none. */
     ta_str name;
     /* The operation's arena: the decode, its transients, and anything
      * `error` refers to. Core does not reset it. Reset it once the error has
@@ -2463,7 +2463,7 @@ typedef struct {
     ta_chart_expression_printer expressions;
     TA_OUT TA_LIFETIME(arena) ta_bytes *out;
     /* When asked for, where each element of the definition landed in `out`
-     * (ADR 0086): its arrays are in `arena`, and an element the codec
+     * (ADR 0085): its arrays are in `arena`, and an element the codec
      * reported nothing for has an all-zero span. */
     TA_OUT TA_OPTIONAL TA_LIFETIME(arena) ta_source_map *spans;
     TA_VIEW_OUT TA_OPTIONAL TA_LIFETIME(definition) const ta_definition_identity **identity;
@@ -2608,7 +2608,7 @@ typedef struct { TA_IN const ta_actor_address *address; TA_OUT ta_actor_id *out;
  * iteration. Either one reached answers TA_RUN_PAUSED, and the next call
  * continues where this one stopped. Zero leaves pausing to `budget` alone.
  * `pause_at_microstep_start`, when true, also pauses at the start of every
- * microstep this call begins (ADR 0087): after its transitions are
+ * microstep this call begins (ADR 0086): after its transitions are
  * selected, before its first unit and before any state is exited. The
  * position is that first unit's. A call that resumes from such a start
  * passes it. The bootstrap's microstep never pauses there.
@@ -2623,7 +2623,7 @@ typedef struct {
      * it for an actor an operator released after TA_ERR_RUNAWAY.
      */
     bool no_microstep_limit;
-    /* Pauses before the first unit of every microstep it begins (ADR 0087). */
+    /* Pauses before the first unit of every microstep it begins (ADR 0086). */
     bool pause_at_microstep_start;
 } ta_actor_resume_params;
 typedef struct {
@@ -2873,7 +2873,7 @@ typedef struct {
      * the innermost open block, in `iteration` of the innermost <foreach>
      * whose body that is, or a <foreach> itself when its next iteration is
      * next, with `iteration` the one it binds. At a microstep's start
-     * (ADR 0087) it names the first unit the microstep runs, or, when it
+     * (ADR 0086) it names the first unit the microstep runs, or, when it
      * runs none, its first transition with no action. Outside a
      * macrostep, `step` is (session_id, 0, 0) and `position` is at NONE
      * with every ID NONE.
@@ -3186,7 +3186,7 @@ typedef struct {
 } ta_source_location;
 
 /*
- * Where one element of a definition was written (ADR 0086), as the spec it
+ * Where one element of a definition was written (ADR 0085), as the spec it
  * was compiled from said. The spans are the definition's, not the actors':
  * a definition compiled from a spec with no known span keeps none.
  * TA_ERR_NOT_FOUND when the definition is unknown or stale, the ID is out of

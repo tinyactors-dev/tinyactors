@@ -206,7 +206,7 @@ module TinyactorsTest
     # One ta_actor_resume call with `budget` microsteps and, when not zero,
     # `action_budget` units of executable content (ADR 0061); with
     # `pause_at_microstep_start`, it also pauses at the start of each
-    # microstep it begins (ADR 0087). Returns the status: "paused",
+    # microstep it begins (ADR 0086). Returns the status: "paused",
     # "stable", or "done".
     def resume(budget:, action_budget: 0, pause_at_microstep_start: false)
       response = @context.ta.actor.resume(system: @context.system_handle, actor: handle, budget: budget,
@@ -342,7 +342,7 @@ module TinyactorsTest
     # ta_actor_resume and ta_system_dispatch_due; `resume_action_budget` is
     # ta_actor_resume's action budget (ADR 0061), zero for none, and
     # `resume_pause_at_microstep_start` its pause at each microstep's start
-    # (ADR 0087). `after_step` is called as
+    # (ADR 0086). `after_step` is called as
     # after_step.call(context, step_index) once a step is quiescent, before
     # it is traced and its invariants are checked; the system is run to
     # quiescence again after it, without further hooks or trace steps.
@@ -988,7 +988,7 @@ module TinyactorsTest
     end
 
     # Where element `id` of `kind` ('state', 'transition', 'action' or
-    # 'expression') was written (ADR 0086): its span and its source's name,
+    # 'expression') was written (ADR 0085): its span and its source's name,
     # or nil when the definition keeps none for it.
     def source_span(kind, id, chart = @group.chart)
       definition = chart.is_a?(Integer) ? chart : definition(chart)

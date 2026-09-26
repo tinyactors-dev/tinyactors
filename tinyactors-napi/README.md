@@ -119,7 +119,7 @@ of the package. In VS Code, install
 [tinyactors-vscode](../tinyactors-vscode/README.md): an `attach`
 configuration with the `port` and the actor's `address` connects to such a
 server. See
-[ADR 0027](docs/adr/0027-a-debugger-watches-and-pokes-one-live-actor.md)
+[ADR 0026](docs/adr/0026-a-debugger-watches-and-pokes-one-live-actor.md)
 and [the status of every DAP message](../docs/debug-adapter.md).
 
 `test/dap-transcripts.js` plays the DAP transcripts napi shares with the

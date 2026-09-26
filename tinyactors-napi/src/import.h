@@ -1,7 +1,7 @@
 #pragma once
 /*
  * Importing SCXML documents (napi ADR 0019, core ADRs 0053 and 0076), and
- * writing a definition back as one (napi ADR 0027, core ADR 0086).
+ * writing a definition back as one (napi ADR 0026, core ADR 0085).
  *
  * define(xml, { format: 'scxml' }) decodes the document with the SCXML codec
  * (tinyactors-scxml, over tinyxml), compiles it against the data model its
@@ -30,7 +30,7 @@ typedef struct {
 typedef struct {
     ta_bytes input;
     /* What the document is called, such as its path or URL: the source its
-     * spans name (core ADR 0086). Empty for a document with no name. */
+     * spans name (core ADR 0085). Empty for a document with no name. */
     ta_str name;
     /* The data models the document may choose from (core ADR 0076). */
     const ta_datamodel *datamodels;
@@ -54,7 +54,7 @@ ta_result tna_import_scxml(tna_system *system, const tna_import_params *params);
 
 /*
  * Writes `definition` as an SCXML document, with where each state,
- * transition and action landed in it (core ADR 0086): the debugger's
+ * transition and action landed in it (core ADR 0085): the debugger's
  * virtual source for a chart whose spans name no file it can open.
  */
 typedef struct {

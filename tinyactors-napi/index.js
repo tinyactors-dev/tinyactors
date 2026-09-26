@@ -24,7 +24,7 @@ module.exports = {
   stepSpanID,
   // Metrics (core ADR 0072, napi ADR 0017): system.metrics() and its OTLP bytes.
   metricsToOTLP,
-  // The debug adapter (napi ADR 0027): a DAP session the application puts
+  // The debug adapter (napi ADR 0026): a DAP session the application puts
   // behind its own transport, and the base protocol's framing for byte
   // streams.
   createDebugSession,

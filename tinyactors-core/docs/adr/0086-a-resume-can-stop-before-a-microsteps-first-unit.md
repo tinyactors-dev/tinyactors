@@ -1,4 +1,4 @@
-# ADR 0087: A resume can stop before a microstep's first unit
+# ADR 0086: A resume can stop before a microstep's first unit
 
 **Status:** Accepted and implemented (2026-09-26). Refines ADR 0061 section 1 (a pause point at a microstep's start) and ADR 0083 section 2 (what the position names there); applies ADR 0009, ADR 0047, ADR 0060, ADR 0067, ADR 0070, ADR 0075 and ADR 0082. Revised 2026-09-26: it no longer applies the withdrawn ADR on images across systems (see section 4).
 **Date:** 2026-09-26
@@ -160,7 +160,7 @@ of its effects; its `step` key names the microstep.
   into the system that captured it (ADR 0038, ADR 0074): this ADR first
   said "or another that registers the revision", after an ADR that let
   images cross systems for a debugger's forks; that ADR was withdrawn when
-  the debugger stopped forking (tinyactors-napi ADR 0027).
+  the debugger stopped forking (tinyactors-napi ADR 0026).
 
 ### 5. Running out of memory
 

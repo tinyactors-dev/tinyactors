@@ -1,8 +1,8 @@
 {
-  "description": "Function breakpoints by name: a condition in the data model that does not hold does not stop; a transition named source → target with a hit condition stops at its second hit, before the transition's content, at the microstep's start (core ADR 0087)",
+  "description": "Function breakpoints by name: a condition in the data model that does not hold does not stop; a transition named source → target with a hit condition stops at its second hit, before the transition's content, at the microstep's start (core ADR 0086)",
   "chart": "counter",
   "only": "test",
-  "why": "function breakpoints stop; napi's adapter never stops a live actor, where they are tracepoints (napi ADR 0027)",
+  "why": "function breakpoints stop; napi's adapter never stops a live actor, where they are tracepoints (napi ADR 0026)",
   "steps": [
     { "start": true },
     {

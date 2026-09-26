@@ -42,7 +42,7 @@ Running it passes the start and exits states from the highest down. A
 resume with `pause_at_microstep_start` pauses every microstep it begins
 there instead, before any state is exited or any unit runs; a resume from
 that pause passes it. The bootstrap's microstep never pauses there
-(ADR 0087).
+(ADR 0086).
 
 The continuation's ordered sets and executable-content frame stack are the
 resumption boundary. A budget may stop between semantic operations, but never

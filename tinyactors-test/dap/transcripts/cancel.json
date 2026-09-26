@@ -2,7 +2,7 @@
   "description": "The Timers scope lists a pending delayed send by the ID its chart gave it; cancel withdraws it by that ID (core ADR 0084), and a second cancel finds nothing",
   "chart": "counter",
   "only": "test",
-  "why": "it stops at a breakpoint and steps into a macrostep to reach its <send>; napi's adapter never stops a live actor (napi ADR 0027)",
+  "why": "it stops at a breakpoint and steps into a macrostep to reach its <send>; napi's adapter never stops a live actor (napi ADR 0026)",
   "steps": [
     { "start": true },
     {

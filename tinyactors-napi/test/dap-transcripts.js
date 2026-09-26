@@ -194,7 +194,7 @@ class Transcript {
   }
 
   // The session start of this host: attach to the actor, which the session
-  // reports stopped once, on entry, and never stops (napi ADR 0027).
+  // reports stopped once, on entry, and never stops (napi ADR 0026).
   // `thread` is its thread.
   async start() {
     if (!this.initialized) {

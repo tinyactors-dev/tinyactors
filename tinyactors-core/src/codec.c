@@ -431,7 +431,7 @@ ta_result ta_definition_import(ta_system *system, const ta_definition_import_par
 /*
  * Encode: export, then the codec's encode. The identity no syntax carries is
  * handed back beside the bytes. Asked where elements landed, the export
- * numbers every element by kind and ID (ADR 0086), and the codec's reports
+ * numbers every element by kind and ID (ADR 0085), and the codec's reports
  * land in one table laid out the same way.
  */
 

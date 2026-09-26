@@ -675,7 +675,7 @@ typedef struct {
  * microstep's phases are START, EXIT, TRANSITIONS and ENTER. START: its
  * transitions are selected, its sets computed and its history recorded,
  * and nothing of it has run; a run stops there only when its caller asked
- * (ADR 0087). The others are the stretches outside a microstep that run
+ * (ADR 0086). The others are the stretches outside a microstep that run
  * chart code or start services, and so can run out of memory after
  * something is visible:
  *
@@ -1405,7 +1405,7 @@ struct ta_definition {
     ta_str *authored_texts;
     uint32_t authored_text_count;
     /*
-     * Where each element was written (ADR 0086), when the spec knew for at
+     * Where each element was written (ADR 0085), when the spec knew for at
      * least one; null otherwise. One span per element, by kind and then by
      * ID: the states, the transitions (initial ones included), the actions
      * and the expressions (ta_definition_span_base()). Unknown spans are
@@ -1483,7 +1483,7 @@ TA_PRIVATE size_t ta_definition_session_bytes(const ta_definition *definition);
  */
 TA_PRIVATE ta_result ta_definition_place_actions(ta_definition *definition);
 /*
- * The layout of `spans` (ADR 0086): elements of `kind` are numbered from
+ * The layout of `spans` (ADR 0085): elements of `kind` are numbered from
  * ta_definition_span_base(), and there are ta_definition_element_count() of
  * them. ta_definition_export() numbers the exported spec's spans the same
  * way.
@@ -1494,7 +1494,7 @@ TA_PRIVATE uint32_t ta_definition_span_base(const ta_definition *definition, ta_
  * Registration by identity answered `definition` with `live` (ADR 0077):
  * when `definition` knows where its elements are written, and not exactly
  * where `live` says, `live` takes its spans, and `definition`, about to be
- * destroyed, takes `live`'s old ones with it (ADR 0086). Allocates nothing,
+ * destroyed, takes `live`'s old ones with it (ADR 0085). Allocates nothing,
  * so it cannot fail.
  */
 TA_PRIVATE void ta_definition_take_spans(ta_definition *live, ta_definition *definition);
@@ -1522,7 +1522,7 @@ TA_PRIVATE ta_result ta_duration_parse(ta_str text, ta_time *out);
 
 /*
  * The export behind ta_definition_export() and ta_definition_encode().
- * An element with a known span always indexes the spans table (ADR 0086):
+ * An element with a known span always indexes the spans table (ADR 0085):
  * the element of `kind` with ID `id` has `span`
  * ta_definition_span_base(kind) + id + 1. `numbered` gives every element
  * that `span`, and the spec a table even when the definition keeps none, so
@@ -2007,7 +2007,7 @@ typedef struct {
      * Where the run stands inside a phase (ADR 0061, ADR 0070), the units of
      * executable content this call may run and has run, whether the block
      * running now is one a pause may stop, and whether a microstep this
-     * call begins pauses at its start (ADR 0087).
+     * call begins pauses at its start (ADR 0086).
      */
     ta_micro_position at;
     uint32_t action_budget;
@@ -7177,7 +7177,7 @@ typedef struct {
 } ta_state_key;
 
 /*
- * A known span the spec gives an element (ADR 0086), recorded during the
+ * A known span the spec gives an element (ADR 0085), recorded during the
  * walk and laid out once the counts are final. An initial transition's ID
  * is its index among the initial transitions until then.
  */
@@ -7421,7 +7421,7 @@ static ta_result ta_compiler_fail_at(ta_compiler *compiler, ta_spec_member membe
 
 /*
  * Checks the span an element names and records it when it is known
- * (ADR 0086). Nothing about a span is hashed: where an element was written
+ * (ADR 0085). Nothing about a span is hashed: where an element was written
  * is not what it means, so moving it keeps the revision.
  */
 static ta_result ta_compiler_span(ta_compiler *compiler, const ta_span_record *record) {
@@ -9026,7 +9026,7 @@ static void ta_compiler_destroy(ta_compiler *compiler) {
 }
 
 /*
- * The side table of spans (ADR 0086), once every count is final: one span
+ * The side table of spans (ADR 0085), once every count is final: one span
  * per element, by kind and ID, and the names of the sources. Nothing is
  * kept when the spec knew no span, so a definition compiled without them
  * costs what it did before.
@@ -9860,7 +9860,7 @@ typedef struct {
     uint32_t pending_count;
     uint32_t pending_capacity;
     /* Whether every exported element indexes the spans table, known span or
-     * not, as an encode asks (ADR 0086). Otherwise only the elements whose
+     * not, as an encode asks (ADR 0085). Otherwise only the elements whose
      * span the definition knows do. */
     bool numbered;
 } ta_exporter;
@@ -10330,7 +10330,7 @@ static void ta_export_state(ta_exporter *exporter, ta_state_id id, ta_scxml_stat
 }
 
 /*
- * The spans table the exported elements index (ADR 0086): the definition's
+ * The spans table the exported elements index (ADR 0085): the definition's
  * own, borrowed, or all zero when it keeps none and the caller numbered the
  * elements anyway, as ta_definition_encode() does to learn where each one
  * lands.
@@ -10877,7 +10877,7 @@ TA_API ta_result ta_definition_import(ta_system *system, const ta_definition_imp
 /*
  * Encode: export, then the codec's encode. The identity no syntax carries is
  * handed back beside the bytes. Asked where elements landed, the export
- * numbers every element by kind and ID (ADR 0086), and the codec's reports
+ * numbers every element by kind and ID (ADR 0085), and the codec's reports
  * land in one table laid out the same way.
  */
 
@@ -13930,7 +13930,7 @@ TA_API ta_result ta_system_register_definition(ta_system *system, ta_definition 
      * definition: it runs differently, so it registers beside the first. */
     if (live != NULL && live->datamodel.self == definition->datamodel.self &&
         live->datamodel.v == definition->datamodel.v) {
-        /* Where the chart is written now (ADR 0086): the spans of the
+        /* Where the chart is written now (ADR 0085): the spans of the
          * registration that asked, when it brought any. */
         ta_definition_take_spans(live, definition);
         live->holds += 1u;
@@ -14612,7 +14612,7 @@ static ta_trace_position ta_trace_nowhere(void) {
 
 /* What a run keeps of where it stands: in scratch while it runs, in the
  * actor's continuation once it stopped. The sets and the default-history
- * map are read only at a microstep's start (ADR 0087). */
+ * map are read only at a microstep's start (ADR 0086). */
 typedef struct {
     ta_micro_position at;
     const ta_transition_id *enabled;
@@ -14692,7 +14692,7 @@ static ta_trace_position ta_unit_at(const ta_definition *definition, const ta_ru
 }
 
 /*
- * Where a microstep stands at its start (ADR 0087): the first unit it runs,
+ * Where a microstep stands at its start (ADR 0086): the first unit it runs,
  * found from its sets without running anything, in the order the microstep
  * runs units: the <onexit> handlers of the exit set, highest first; the
  * enabled transitions' content; then, for each state of the entry set,
@@ -14744,7 +14744,7 @@ static ta_trace_position ta_start_position(const ta_definition *definition, cons
  * `iteration` the one it binds next. Otherwise it is the next action of the
  * innermost open block, in the iteration of the innermost <foreach> whose
  * body that block is. With no open block there is no action. At a
- * microstep's start it is the first unit the microstep runs (ADR 0087).
+ * microstep's start it is the first unit the microstep runs (ADR 0086).
  */
 static ta_trace_position ta_run_position(const ta_definition *definition, const ta_run_view *view) {
     if (view->at.phase == TA_PHASE_START) {
@@ -17733,7 +17733,7 @@ static void ta_compact_sparse(ta_interpreter *it) {
 
 /* Opens the microstep of the enabled transitions: the exit set, history
  * recorded before anything exits, and the entry set; then its MICROSTEP
- * record. It stands at its start (ADR 0087). It changes the actor, so an
+ * record. It stands at its start (ADR 0086). It changes the actor, so an
  * image taken before it no longer describes it. `event` is the event it
  * takes, or null. */
 static void ta_microstep_begin(ta_interpreter *it, const ta_event *event) {
@@ -17761,7 +17761,7 @@ static ta_result ta_microstep(ta_interpreter *it) {
     if (it->at.phase == TA_PHASE_START) {
         /* A microstep this call began; one it resumed at its start has
          * passed it already. Nothing has run, so stopping here needs no
-         * block open (ADR 0087). */
+         * block open (ADR 0086). */
         if (it->pause_at_start && it->actor->bootstrapped) {
             return TA_EXEC_PAUSED;
         }

@@ -2,7 +2,7 @@
   "description": "Exception breakpoints: error.execution stops with reason exception and exceptionInfo names it; the chart then handles its error event; ignored stops for an event that enabled no transition",
   "chart": "counter",
   "only": "test",
-  "why": "exception breakpoints stop; napi's adapter never stops a live actor, where they are tracepoints (napi ADR 0027)",
+  "why": "exception breakpoints stop; napi's adapter never stops a live actor, where they are tracepoints (napi ADR 0026)",
   "steps": [
     { "start": true },
     {

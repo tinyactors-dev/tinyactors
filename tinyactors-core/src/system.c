@@ -250,7 +250,7 @@ ta_result ta_system_register_definition(ta_system *system, ta_definition *defini
      * definition: it runs differently, so it registers beside the first. */
     if (live != NULL && live->datamodel.self == definition->datamodel.self &&
         live->datamodel.v == definition->datamodel.v) {
-        /* Where the chart is written now (ADR 0086): the spans of the
+        /* Where the chart is written now (ADR 0085): the spans of the
          * registration that asked, when it brought any. */
         ta_definition_take_spans(live, definition);
         live->holds += 1u;

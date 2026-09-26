@@ -81,7 +81,7 @@ takes napi's `statechart`, so the fixture needs no path to the package.
 | Field | |
 |---|---|
 | `chart` | the fixture in `charts/` |
-| `only`, `why` | a transcript for one host (`test` or `napi`), and the reason; the other host skips it. napi's adapter never stops a live actor (napi ADR 0027), so a transcript that stops, steps or waits at a breakpoint is the test host's; any other difference between the adapters is a bug unless the status map explains it |
+| `only`, `why` | a transcript for one host (`test` or `napi`), and the reason; the other host skips it. napi's adapter never stops a live actor (napi ADR 0026), so a transcript that stops, steps or waits at a breakpoint is the test host's; any other difference between the adapters is a bug unless the status map explains it |
 | `steps` | played in order |
 
 A step is one of:
@@ -166,7 +166,7 @@ transcript therefore leaves out, matches loosely, or plays in one host
 only:
 
 - **Stopping.** napi's adapter watches a live actor and never stops it
-  (napi ADR 0027): it reports the actor stopped once, on entry, refreshes
+  (napi ADR 0026): it reports the actor stopped once, on entry, refreshes
   the view after each macrostep with an `invalidated` event, refuses
   `pause` and the steps, and answers `continue` by changing nothing.
   Breakpoints there are tracepoints (`would have stopped after macrostep

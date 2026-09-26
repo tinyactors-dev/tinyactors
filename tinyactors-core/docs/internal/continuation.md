@@ -10,7 +10,7 @@ there.
 **Inside a phase** a run stops in two ways. A pause (ADR 0061) stops the
 executor between two units of executable content of a microstep: an
 action of a block or a `<foreach>` iteration, counted against
-`action_budget`. With `pause_at_microstep_start` (ADR 0087) it also stops
+`action_budget`. With `pause_at_microstep_start` (ADR 0086) it also stops
 a microstep at its `START`, after its transitions are selected and its
 sets computed and before anything of it runs; a run that resumes from
 there passes it. Running out of memory (ADR 0070) stops it before the step
@@ -73,4 +73,4 @@ the view from scratch for `PAUSED`, `RESUMED` and `STOPPED` records, and
 `START` the view's sets give the position: `ta_start_position()` finds the
 first unit the microstep will run, walking the exit set, the enabled
 transitions and the entry set in the order the microstep runs them, or,
-with none, stands at the first transition with no action (ADR 0087).
+with none, stands at the first transition with no action (ADR 0086).

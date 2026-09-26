@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="Serve a debug session over an example system, for trying DAP clients (napi ADR 0027)"
+#MISE description="Serve a debug session over an example system, for trying DAP clients (napi ADR 0026)"
 # vim:ft=ruby
 #USAGE flag "--port <port>" help="Serve sessions on 127.0.0.1:<port> instead of stdin and stdout"
 #USAGE flag "--watch" help="Grant no permission: sessions only watch"

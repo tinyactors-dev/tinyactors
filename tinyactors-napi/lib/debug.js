@@ -1,6 +1,6 @@
 'use strict';
 
-// The debug adapter (docs/proposals/debug-adapter.md; napi ADR 0027): a
+// The debug adapter (docs/proposals/debug-adapter.md; napi ADR 0026): a
 // Debug Adapter Protocol session over one attached actor of a System.
 //
 // napi opens no socket and checks no credentials (core ADR 0002, napi ADRs
@@ -141,7 +141,7 @@ class DebugSession {
   #modules = new Map();
   // sourceReference → { definition, source, virtual }: a definition's
   // export, or the SCXML Sources writes for a chart with no file (napi ADR
-  // 0027). One count numbers both.
+  // 0026). One count numbers both.
   #sourceRefs = new Map();
   #lastReference = 0;
   #files = new Set();
@@ -693,7 +693,7 @@ class DebugSession {
   }
 
   // ------------------------------------------------------------------
-  // Modules, sources and line breakpoints (core ADR 0086)
+  // Modules, sources and line breakpoints (core ADR 0085)
 
   #refreshCatalog() {
     const attached = this.#attached;
@@ -739,7 +739,7 @@ class DebugSession {
     }
   }
 
-  // A definition's virtual source (napi ADR 0027), or undefined: a new one
+  // A definition's virtual source (napi ADR 0026), or undefined: a new one
   // is a loaded source, and one an earlier attach numbered is removed.
   #noteVirtual(definition, virtual) {
     for (const [reference, entry] of [...this.#sourceRefs]) {
@@ -763,7 +763,7 @@ class DebugSession {
     const found = attached.sources.locate(definition, source, line);
     if (found === undefined) {
       return attached.sources.elements(definition).length === 0
-        ? 'the chart keeps no source spans (core ADR 0086) and SCXML cannot express it: statechart() records spans'
+        ? 'the chart keeps no source spans (core ADR 0085) and SCXML cannot express it: statechart() records spans'
         : `no state, transition or action of ${attached.label}'s chart at or after line ${line} of this source`;
     }
     const name = found.kind === 'state' ? attached.labels.state(definition, found.id)
@@ -774,7 +774,7 @@ class DebugSession {
   }
 
   // A chart defined again: its spans may have moved (core ADRs 0077 and
-  // 0086), so its lines are read again and the breakpoints placed again.
+  // 0085), so its lines are read again and the breakpoints placed again.
   #onDefined(id) {
     if (this.#attached === null) return;
     this.#attached.sources.forget(id);

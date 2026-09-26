@@ -1,6 +1,6 @@
 'use strict';
 
-// The debug adapter (lib/debug.js; napi ADR 0027), driven by a scripted
+// The debug adapter (lib/debug.js; napi ADR 0026), driven by a scripted
 // DAP client: every request it implements and every one it refuses, the
 // permissions, the audit hook, the live view (one entry stop, then a
 // refresh after each macrostep), pokes, breakpoints as tracepoints, the
@@ -686,7 +686,7 @@ async function state() {
 }
 
 // A renewal, written one builder call per statement, so each element's
-// source span (core ADR 0086) is its own line on every engine.
+// source span (core ADR 0085) is its own line on every engine.
 function renewal() {
   const chart = statechart({ family: 'renewal', revision: 'v1' });
   chart.data('renewals', 0);
@@ -725,12 +725,12 @@ function actionID(system, definition, kind, index) {
   return undefined;
 }
 
-// The line statechart() recorded for a state (core ADR 0086).
+// The line statechart() recorded for a state (core ADR 0085).
 function stateLine(system, definition, name) {
   return definition.sourceOf('state', core.definition_find_state(nativeOf(system), definition.id, name)).line;
 }
 
-// Source spans (core ADR 0086): frames have lines, a line breakpoint
+// Source spans (core ADR 0085): frames have lines, a line breakpoint
 // stands for the element on its line and traces it, logpoints write, and
 // breakpoints set before attaching are placed once the chart is known.
 async function sources() {
@@ -789,7 +789,7 @@ async function sources() {
 
 // A chart with no JavaScript in it, built in two places: defining it again
 // is answered by its definition (core ADR 0077), which then says where the
-// chart is written now (core ADR 0086), and a line breakpoint is placed
+// chart is written now (core ADR 0085), and a line breakpoint is placed
 // again against those lines.
 function plainChartHere() {
   const chart = statechart({ family: 'moved', revision: 'v1' });
@@ -873,7 +873,7 @@ async function catalog() {
   const next = system.define(subscription('v2'));
   const { sources } = await client.ok('loadedSources');
   assert.deepEqual(sources.map((source) => source.name), ['subscription v1.json', 'subscription v2.json', 'debug.js']);
-  assert.equal(sources[2].path, __filename, 'the file statechart() recorded (core ADR 0086)');
+  assert.equal(sources[2].path, __filename, 'the file statechart() recorded (core ADR 0085)');
   await client.refused('source', { source: { path: __filename } }, /the client reads itself/);
   assert.ok(client.events('module').some((event) => event.reason === 'new' && event.module.version === 'v2'));
   assert.ok(client.events('loadedSource').length >= 2);
@@ -891,7 +891,7 @@ async function catalog() {
   system.close();
 }
 
-// SCXML documents (napi ADR 0027): a named one is shown in its file, on
+// SCXML documents (napi ADR 0026): a named one is shown in its file, on
 // its author's lines; an unnamed one as a virtual source, the SCXML the
 // codec writes from the definition, which the client reads by
 // sourceReference and sets breakpoints in.

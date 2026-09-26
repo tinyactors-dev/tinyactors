@@ -52,7 +52,7 @@ module DAP
     Step = Struct.new(:kind, :granularity, :thread, :key, :handle, :start, :depth, :waiting, keyword_init: true)
 
     # While anything is armed: pause before every unit (ADR 0061) and at
-    # every microstep's start, before its first unit (ADR 0087). The
+    # every microstep's start, before its first unit (ADR 0086). The
     # microstep budget is the workbench's: a stop between two microsteps
     # would be one no breakpoint or step asks for, since the next start
     # comes right after it.
