@@ -6,8 +6,7 @@ module DAP
   # and a revision the workbench retired after a reload stays listed, marked
   # retired. A loaded source is the chart file a revision was compiled
   # from, with the text it had then, so a retired revision still shows the
-  # chart it ran. A fork runs a revision the workbench has, so only the
-  # workbench's definitions are listed.
+  # chart it ran.
   #
   # A definition compiled without source spans (a chart an `invoke chart:`
   # inlines: the DSL builds inline content without them) has no file to
@@ -92,7 +91,7 @@ module DAP
     def refresh(threads)
       modules = []
       sources = []
-      threads.to_a.select { |thread| thread.place.equal?(@session) }.map(&:definition).uniq.each do |definition|
+      threads.to_a.map(&:definition).uniq.each do |definition|
         next if @entries.key?(definition)
 
         entry = describe(definition)

@@ -199,10 +199,10 @@ module DAP
       span(definition, :state, Array(record[:states]).first)
     end
 
-    def leaves(thread, view) = Array(@threads.leaves(thread.place, thread.handle, view))
+    def leaves(thread, view) = Array(@threads.leaves(thread.handle, view))
 
-    # What holds an actor at rest, as napi's adapter says it: the system is
-    # stopped, and so many console messages wait for it.
+    # What holds an actor at rest: the system is stopped, and so many
+    # console messages wait for it.
     def held_note(thread)
       return '' unless @control.stopped? || thread.context.scheduler.held?(thread.handle)
 

@@ -34,6 +34,9 @@
             { "filter": "ignored", "label": { "$any": true } },
             { "filter": "stopped", "label": { "$any": true } }
           ] },
+          "supportsStepBack": { "$absent": true },
+          "supportsRestartFrame": { "$absent": true },
+          "supportsRestartRequest": { "$absent": true },
           "supportsCancelRequest": { "$absent": true },
           "supportsInstructionBreakpoints": { "$absent": true },
           "supportsDisassembleRequest": { "$absent": true },

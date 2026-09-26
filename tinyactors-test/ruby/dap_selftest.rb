@@ -116,27 +116,10 @@ WORKER = <<~CHART
   end
 CHART
 
-# Timers an hour out, which never fire in the workbench during the test:
-# a fork's clock moves them.
-PINGER = <<~CHART
-  TinyactorsTest.chart :pinger do
-    data pings: 0
-    initial :waiting
-    state :waiting do
-      on_entry { send_event 'ping', to: '#_actor_counter/acct1', delay: '3600s', id: :ping }
-      on_entry { send_event 'tick', delay: '3600s', id: :tick }
-      transition on: 'tick', target: :waiting do
-        assign '.pings', '.pings + 1'
-      end
-    end
-  end
-CHART
-
 ACTORS = <<~ACTORS
   Workbench.actor :acct1, chart: :counter
   Workbench.actor :boss, chart: :supervisor
   Workbench.actor :spinner, chart: :spinner
-  Workbench.actor :pinger, chart: :pinger
 ACTORS
 
 # The line of a chart file that holds `needle`, from 1.
@@ -148,7 +131,6 @@ Dir.mktmpdir('dap-selftest') do |tmp|
   dir.join('supervisor.rb').write(SUPERVISOR)
   dir.join('worker.rb').write(WORKER)
   dir.join('spinner.rb').write(SPINNER)
-  dir.join('pinger.rb').write(PINGER)
   counter_path = dir.join('counter.rb').realpath.to_s
   dir.join('actors.rb').write(ACTORS)
 
@@ -165,12 +147,12 @@ Dir.mktmpdir('dap-selftest') do |tmp|
          supportsModulesRequest supportsLoadedSourcesRequest supportsExceptionInfoRequest
          supportsTerminateRequest supportsEvaluateForHovers supportsClipboardContext
          supportsConditionalBreakpoints supportsHitConditionalBreakpoints supportsGotoTargetsRequest
-         supportsStepBack supportsRestartFrame supportsRestartRequest supportsBreakpointLocationsRequest
-         supportsLogPoints].all? { |name| capabilities[name] == true }
+         supportsBreakpointLocationsRequest supportsLogPoints].all? { |name| capabilities[name] == true }
     end
     check('declares nothing it does not offer') do
       %w[supportsInstructionBreakpoints supportsDisassembleRequest supportsReadMemoryRequest
-         supportsStepInTargetsRequest supportsTerminateThreadsRequest].none? { |name| capabilities[name] }
+         supportsStepInTargetsRequest supportsTerminateThreadsRequest supportsStepBack supportsRestartFrame
+         supportsRestartRequest].none? { |name| capabilities[name] }
     end
     check('never terminates or suspends the debuggee') do
       capabilities['supportTerminateDebuggee'] == false && capabilities['supportSuspendDebuggee'] == false
@@ -245,16 +227,16 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     modules = client.request('modules')['body']
     check('a module per definition revision') do
       names = modules['modules'].map { |mod| mod['name'] }.sort
-      names == %w[counter pinger spinner supervisor worker] && modules['totalModules'] == 5 &&
+      names == %w[counter spinner supervisor worker] && modules['totalModules'] == 4 &&
         modules['modules'].all? { |mod| mod['version'].to_s.size == 16 }
     end
-    check('module events announced them') { client.take('module').size == 5 }
+    check('module events announced them') { client.take('module').size == 4 }
     paged = client.request('modules', 'startModule' => 1, 'moduleCount' => 1)['body']
-    check('modules page') { paged['modules'].size == 1 && paged['totalModules'] == 5 }
+    check('modules page') { paged['modules'].size == 1 && paged['totalModules'] == 4 }
     sources = client.request('loadedSources')['body']['sources']
     counter_source = sources.find { |source| source['path'] == dir.join('counter.rb').to_s }
-    check('a loaded source per revision, with its file') { sources.size == 5 && counter_source }
-    check('loadedSource events announced them') { client.take('loadedSource').size == 5 }
+    check('a loaded source per revision, with its file') { sources.size == 4 && counter_source }
+    check('loadedSource events announced them') { client.take('loadedSource').size == 4 }
     text = client.request('source', 'sourceReference' => counter_source['sourceReference'],
                                     'source' => counter_source)['body']
     check('source answers the chart file text') { text['content'] == COUNTER }
@@ -966,131 +948,27 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     end
     client.request('setBreakpoints', 'source' => counter_source_path, 'breakpoints' => [])
 
-    puts 'forks'
+    puts 'going back'
     client.request('pause', 'threadId' => tid)
     client.event('stopped') { |body| body['reason'] == 'pause' }
     tid_frame = frame_of.call(tid).first['id']
     { 'stepBack' => { 'threadId' => tid }, 'reverseContinue' => { 'threadId' => tid },
       'restartFrame' => { 'frameId' => tid_frame }, 'restart' => {} }.each do |command, arguments|
       answer = client.request(command, arguments)
-      check("#{command} on a thread that is not a fork says to fork") do
-        !answer['success'] && answer['message'].include?('`fork`')
-      end
+      check("#{command} answers an error that says why") { !answer['success'] && answer['message'].size > 10 }
     end
-    forked = console.call('fork @acct1', nil)['body']['result']
-    fork_id = forked[/\(thread (\d+)\)/, 1].to_i
-    check('fork copies an actor into a system of its own, as a thread of its own') do
-      forked.start_with?('forked acct1 as acct1.fork1') &&
-        client.event('thread') { |body| body['threadId'] == fork_id }['reason'] == 'started' &&
-        client.request('threads')['body']['threads'].find { |thread| thread['id'] == fork_id }['name'] ==
-          'counter/acct1 (fork 1) · idle'
-    end
-    fork_top = -> { frame_of.call(fork_id).first }
-    fork_eval = ->(text) { client.request('evaluate', 'expression' => text, 'context' => 'watch', 'frameId' => fork_top.call['id'])['body']['result'] }
-    main_eval = ->(text) { client.request('evaluate', 'expression' => text, 'context' => 'watch', 'frameId' => frame_of.call(tid).first['id'])['body']['result'] }
-    main_count = main_eval.call('.count')
-    check('the copy has the actor\'s data, and its frames the chart\'s lines') do
-      fork_eval.call('.count') == main_count && fork_top.call['line'] == line_of(moved, 'state :idle do')
-    end
-    fork_data = scope_ref.call(fork_top.call['id'], 'Data model')
-    written = client.request('setVariable', 'variablesReference' => fork_data, 'name' => 'count', 'value' => '1000')
-    check('setVariable on the fork writes the fork only') do
-      written['success'] && fork_eval.call('.count') == '1000' && main_eval.call('.count') == main_count
-    end
-    console.call('send @acct1.fork1 ping', nil)
-    client.request('continue', 'threadId' => fork_id)
-    check('the fork answers the console too') { summary.call('counter/acct1 (fork 1) replied pong').include?('pong 1000') }
-    macrostep.call('counter/acct1 (fork 1)', 'ping')
+    client.request('continue', 'threadId' => tid)
 
-    client.request('setFunctionBreakpoints', 'breakpoints' => [{ 'name' => 'busy' }])
-    console.call('send @acct1.fork1 bump', nil)
-    stopped = client.event('stopped')
-    check('breakpoints stop the fork like any thread') do
-      stopped['reason'] == 'function breakpoint' && stopped['threadId'] == fork_id && fork_top.call['name'] == 'log 1' &&
-        fork_top.call['line'] == line_of(moved, "log 'busy'") && main_eval.call('.count') == main_count
-    end
-    at_break = fork_eval.call('.count')
-    fork_step = ->(command) do
-      answer = client.request(command, 'threadId' => fork_id)
-      [answer, client.event('stopped')]
-    end
-    fork_step.call('stepIn')
-    stepped = fork_top.call['name']
-    answer, stopped = fork_step.call('stepBack')
-    check('stepBack restores the image of the stop before') do
-      answer['success'] && stopped['reason'] == 'step' && stopped['threadId'] == fork_id && stepped != 'log 1' &&
-        fork_top.call['name'] == 'log 1' && fork_eval.call('.count') == at_break
-    end
-    fork_step.call('stepIn')
-    fork_step.call('stepIn')
-    answer, stopped = fork_step.call('reverseContinue')
-    check('reverseContinue goes back to the last breakpoint') do
-      answer['success'] && stopped['reason'] == 'function breakpoint' && fork_top.call['name'] == 'log 1'
-    end
-    client.request('restartFrame', 'frameId' => fork_top.call['id'])
-    stopped = client.event('stopped')
-    check('restartFrame goes back to where the macrostep began') do
-      stopped['reason'] == 'restart' && fork_top.call['name'] == 'about to take bump (before transition selection)'
-    end
-    client.request('setFunctionBreakpoints', 'breakpoints' => [])
-    restarted = client.request('restart')
-    stopped = client.event('stopped')
-    check('restart makes a new copy of the source actor') do
-      restarted['success'] && stopped['reason'] == 'entry' && stopped['threadId'] == fork_id &&
-        fork_top.call['name'] == 'idle in idle (held; 0 messages waiting)' && fork_eval.call('.count') == main_count
-    end
-    targets = client.request('gotoTargets', 'source' => counter_source_path,
-                                            'line' => line_of(moved, 'state :busy do'))['body']['targets']
-    client.request('goto', 'threadId' => fork_id, 'targetId' => targets.first['id'])
-    stopped = client.event('stopped')
-    check('goto works on a fork, with a target from the chart\'s file') do
-      stopped['reason'] == 'goto' && stopped['threadId'] == fork_id &&
-        fork_top.call['name'] == 'idle in busy (held; 0 messages waiting)'
-    end
-
-    pinger = client.request('threads')['body']['threads'].find { |thread| thread['name'].start_with?('pinger/') }['id']
-    main_now = -> { vars.call(scope_ref.call(frame_of.call(pinger).first['id'], 'System')).find { |v| v['name'] == 'now' }['value'] }
-    before_now = main_now.call
-    console.call('fork @pinger', nil)
-    clock = console.call('clock @pinger.fork2 +3600s', nil)['body']['result']
-    check('clock on a fork moves the fork\'s time only') do
-      clock == "t=#{Integer(before_now) + 3_600_000}ms" && main_now.call == before_now
-    end
-    client.request('continue', 'threadId' => pinger)
-    check('what falls due runs in the fork') { macrostep.call('pinger/pinger (fork 2)', 'tick')['output'].include?('pings') }
-    check('a fork\'s sends reach nothing: the console shows them') do
-      summary.call('pinger/pinger (fork 2) sent ping to #_actor_counter/acct1').include?('not delivered')
-    end
-    check('the workbench\'s actor did not move') do
-      client.request('evaluate', 'expression' => '.pings', 'context' => 'watch',
-                                 'frameId' => frame_of.call(pinger).first['id'])['body']['result'] == '0'
-    end
-
-    puts 'stepping a fork\'s invoked child'
-    boss_fork = console.call('fork @boss', nil)['body']['result'][/\(thread (\d+)\)/, 1].to_i
-    # The copy lost the invocation (ADR 0038), whose error the fork takes
-    # first; entering its state again starts one in the fork's system.
-    check('the copy lost the invocation the actor had') do
-      summary.call('supervisor/boss (fork 3) macrostep').include?('error.communication.invoke.worker.unavailable')
-    end
-    client.request('pause', 'threadId' => boss_fork)
-    client.event('stopped') { |body| body['reason'] == 'pause' }
-    console.call('goto @boss.fork3 supervising', nil)
-    client.event('stopped') { |body| body['reason'] == 'goto' && body['threadId'] == boss_fork }
-    child_id = client.event('thread') { |body| body['reason'] == 'started' && body['threadId'] > boss_fork }['threadId']
-    check('the fork\'s new invocation is a thread of its own') do
-      client.request('threads')['body']['threads'].find { |thread| thread['id'] == child_id }['name']
-            .start_with?('supervisor/boss (fork 3) invocation worker')
-    end
-    client.request('continue', 'threadId' => boss_fork)
-    summary.call('supervisor/boss (fork 3) invocation worker macrostep 1')
+    puts 'stepping an invoked child'
+    child_id = client.request('threads')['body']['threads']
+                     .find { |thread| thread['name'].start_with?('supervisor/boss invocation worker') }['id']
     client.request('pause', 'threadId' => child_id)
     client.event('stopped') { |body| body['reason'] == 'pause' }
     answer = client.request('stepIn', 'threadId' => child_id)
     client.event('continued') { |body| body['threadId'] == child_id }
-    console.call('send @boss.fork3.worker finish', nil)
+    console.call('send @boss.worker finish', nil)
     stopped = client.event('stopped')
-    check('a step of the fork\'s idle child stops when it takes its next event') do
+    check('a step of an idle child stops when it takes its next event') do
       answer['success'] && stopped['reason'] == 'step' && stopped['threadId'] == child_id &&
         names_of.call(child_id) == ['about to take finish (before transition selection)']
     end
@@ -1105,6 +983,7 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     client.request('stepIn', 'threadId' => child_id)
     client.event('stopped')
     check('and the one after it finishes the child') { names_of.call(child_id) == ['done in finished'] }
+    client.request('continue', 'threadId' => child_id)
 
     puts 'refused requests'
     %w[cancel stepInTargets terminateThreads setInstructionBreakpoints locations readMemory writeMemory disassemble].each do |command|

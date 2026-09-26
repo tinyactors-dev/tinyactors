@@ -115,15 +115,13 @@ module DAP
     # with public API is restore an image of the actor with a changed root
     # as its data-model binding. A workbench actor goes through the
     # residency round trip of ADR 0038: capture an image, unload the actor,
-    # and load it again. A fork is reconstructed in its own system instead,
-    # since a reconstructed actor is not published at an address (Fork). The
-    # configuration, the pending delayed sends and a macrostep paused between
+    # and load it again. The configuration, the pending delayed sends and a macrostep paused between
     # units (ADR 0061) all survive. The costs are real, so they are refused
     # rather than paid silently: an invoked child has no address and its
     # parent would lose it, and a restore turns every active invocation into
     # error.communication.
     def write(thread, path, text)
-      unless thread.named? || thread.fork?
+      unless thread.named?
         raise RequestError, "#{thread.title} is an invoked child, which has no address to unload and load it at"
       end
 
@@ -138,7 +136,7 @@ module DAP
       root = @expressions.root(thread)
       root = thread.context.rpc('json.transform', filter: "setpath(#{JSON.generate(path)}; #{JSON.generate(value)})",
                                                   input: root).first
-      thread.fork? ? thread.fork.rewrite(root) : reload(thread.context, thread.actor, root)
+      reload(thread.context, thread.actor, root)
       @threads.refresh
       present(value, data: [:data, thread.id, path]).then do |body|
         { 'value' => body['result'], 'type' => body['type'], 'variablesReference' => body['variablesReference'] }
@@ -330,7 +328,7 @@ module DAP
     def invocations(thread, view)
       context = thread.context
       Array(view[:invokes]).map do |invoke|
-        child = @threads.by_handle(thread.place, Integer(invoke[:service_handle])) rescue nil
+        child = @threads.by_handle(Integer(invoke[:service_handle])) rescue nil
         [context.invoke_id_text(invoke[:id]), { type: context.ta.system.atom_text(system: context.system_handle, atom: invoke[:type])
                                           .dig(:out, :out),
                              active: invoke[:active], autoforward: invoke[:autoforward],

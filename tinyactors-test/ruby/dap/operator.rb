@@ -87,7 +87,7 @@ module DAP
       when 'ok'
         @control.collect
         # A system stopped in that macrostep stops again where the actor
-        # now rests, as napi's adapter does after an abandon.
+        # now rests.
         @control.restopped(thread, 'pause', 'its macrostep was abandoned') if @control.stopped?
         "#{thread.title}: abandoned macrostep #{macrostep}; it keeps the configuration after its last completed " \
           'microstep'

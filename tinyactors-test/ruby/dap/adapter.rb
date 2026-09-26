@@ -40,9 +40,6 @@ module DAP
       'supportsGotoTargetsRequest' => true,
       'supportsBreakpointLocationsRequest' => true,
       'supportsLogPoints' => true,
-      'supportsStepBack' => true,
-      'supportsRestartFrame' => true,
-      'supportsRestartRequest' => true,
       'supportTerminateDebuggee' => false,
       'supportSuspendDebuggee' => false
     }.freeze
@@ -52,6 +49,10 @@ module DAP
     REFUSED = {
       'attach' => 'the test host launches a workbench directory; attaching to a running actor is ' \
                   'tinyactors-napi\'s (use "launch" with "workbench")',
+      'restart' => 'save a chart file, and the workbench replaces its actors in place; or launch again',
+      'stepBack' => 'the adapter keeps no past to go back to',
+      'reverseContinue' => 'the adapter keeps no past to go back to',
+      'restartFrame' => 'the adapter keeps no past to go back to',
       'cancel' => 'every request answers at once, so there is nothing to cancel',
       'stepInTargets' => 'an action has one way in',
       'terminateThreads' => 'ending a thread would destroy an actor',
@@ -116,7 +117,6 @@ module DAP
       @source_map = SourceMap.new(@labels)
       @expressions = Expressions.new(@labels, Console.processors)
       @breakpoints = Breakpoints.new(@labels, @expressions, @source_map)
-      @forks = []
       @goto_targets = {}
     end
 
@@ -191,16 +191,10 @@ module DAP
       @control.pending?
     end
 
-    # The workbench's session and the forks: what runs threads.
-    def places = [@session, *@forks]
-
-    # Runs each system until it rests, stops, or a message arrives.
+    # Runs the system until it rests, stops, or a message arrives.
     def pump
-      places.each do |place|
-        scheduler = place.context.scheduler
-        scheduler.run('debug') if scheduler.pending? && !scheduler.stopped?
-        break if @control.stopped? || !@inbox.empty?
-      end
+      scheduler = @context.scheduler
+      scheduler.run('debug') if scheduler.pending? && !scheduler.stopped?
       if !@control.stopped? && @control.pause_requested? && !@control.pending?
         @control.halt('pause', @threads.to_a.first)
       end
@@ -218,10 +212,6 @@ module DAP
 
       @control.collect
       @session.drain_chart_logs { |_who, entry| output('stdout', Console.log_text(entry)) }
-      @forks.each do |fork|
-        fork.drain_logs
-        fork.stub_sends
-      end
       @console.replies
       announce_threads
       announce_catalog
@@ -264,23 +254,18 @@ module DAP
     end
 
     # The definitions line breakpoints resolve against: the workbench's that
-    # are not retired, and each fork's.
+    # are not retired.
     def definitions
       return [] unless @started
 
-      (@catalog.live + @forks.map { |fork| @threads.to_a.find { |thread| thread.fork.equal?(fork) }&.definition })
-        .compact.uniq
+      @catalog.live
     end
 
-    # A fork keeps an image of every stop of its thread, for stepBack and
-    # reverseContinue; a stop it was restored to is one of them already.
     def announce_stop
       stop = @control.stop
       return if stop.nil? || stop.equal?(@announced)
 
       @announced = stop
-      stopped = stop.thread && @threads[stop.thread]
-      stopped.fork.snapshot(stop.reason) if stopped&.fork? && !stop.equal?(@restored)
       body = { 'reason' => stop.reason, 'allThreadsStopped' => true }
       body['threadId'] = stop.thread if stop.thread
       body['description'] = stop.description if stop.description
@@ -297,9 +282,8 @@ module DAP
 
       @waiting_noted = step
       thread = @threads[step.thread]
-      context = thread ? thread.context : @context
-      due = context.next_deadline
-      hint = due ? "its next delayed send is due at t=#{due}ms: `clock +#{due - context.now}ms`" : 'nothing is due'
+      due = @context.next_deadline
+      hint = due ? "its next delayed send is due at t=#{due}ms: `clock +#{due - @context.now}ms`" : 'nothing is due'
       output('console', "#{thread&.title} waits for its next message; #{hint}, or `send` it one")
     end
 
@@ -309,7 +293,7 @@ module DAP
     def reload
       return unless @started
 
-      held = @control.stopped? ? @threads.to_a.select { |thread| thread.place.equal?(@session) }.map(&:handle) : []
+      held = @control.stopped? ? @threads.to_a.map(&:handle) : []
       held.each { |handle| @context.scheduler.hold(handle) }
       begin
         @control.aside { @session.reload! }
@@ -445,9 +429,7 @@ module DAP
     end
 
     # An operator transition of the thread to the target's state, from the
-    # root; the thread stops with reason `goto` when its macrostep ends. A
-    # fork runs the revision of the workbench actor it copies, so a target
-    # of that revision's file serves it too.
+    # root; the thread stops with reason `goto` when its macrostep ends.
     def on_goto(args, _request)
       require_started!
       thread = thread_arg(args)
@@ -460,93 +442,6 @@ module DAP
       reset_views
       output('console', @operator.jump(thread, [@labels.state(definition, state)]))
       {}
-    end
-
-    # ------------------------------------------------------------------
-    # Forks: going back
-
-    # A new copy of the source actor, for the fork the client is stopped in.
-    def on_restart(_args, _request)
-      require_started!
-      thread = stopped_thread
-      fork!(thread, 'restart')
-      source = @threads.to_a.find { |candidate| candidate.key == thread.fork.source_key }
-      raise RequestError, "#{thread.title}'s source actor is gone" if source.nil?
-
-      restored(thread) { thread.fork.restart(source) }
-      restop(thread, 'entry', "a new copy of #{source.title}")
-      {}
-    end
-
-    def on_step_back(args, _request)
-      require_started!
-      thread = thread_arg(args)
-      fork!(thread, 'stepBack')
-      reason = restored(thread) { thread.fork.step_back }
-      restop(thread, 'step', "back to a stop at #{reason}")
-      {}
-    end
-
-    def on_reverse_continue(args, _request)
-      require_started!
-      thread = thread_arg(args)
-      fork!(thread, 'reverseContinue')
-      reason = restored(thread) { thread.fork.reverse_continue }
-      restop(thread, reason, "back to a stop at #{reason}")
-      { 'allThreadsContinued' => false }
-    end
-
-    def on_restart_frame(args, _request)
-      require_started!
-      thread = frame_thread!(args['frameId'])
-      fork!(thread, 'restartFrame')
-      restored(thread) { thread.fork.restart_frame }
-      restop(thread, 'restart', 'back to where this macrostep began')
-      {}
-    end
-
-    def fork!(thread, request)
-      return if thread&.fork?
-
-      raise RequestError, "#{request} works on a fork, whose images the adapter keeps: " \
-                          "`fork` the actor in the console and debug the copy#{thread ? " (#{thread.title} is not one)" : ''}"
-    end
-
-    def restored(_thread)
-      reset_views
-      yield
-    ensure
-      @threads.refresh
-    end
-
-    # Stops everything again at the restored fork.
-    def restop(thread, reason, description)
-      @restored = @control.restopped(@threads[thread.id], reason, description)
-    end
-
-    # The console's `fork`: a copy of a workbench actor in a system of its
-    # own. Answers the console's text.
-    def make_fork(thread)
-      raise RequestError, "#{thread.title} is a fork; `restart` makes a new copy of its source" if thread.fork?
-
-      fork = Fork.new(number: @forks.size + 1, source: thread, driver: @driver, output: method(:output),
-                      setup: ->(made) { adopt(made) }, gone: ->(context) { forget(context) })
-      @forks << fork
-      @threads.refresh
-      copy = @threads.to_a.find { |candidate| candidate.fork.equal?(fork) }
-      "forked #{thread.label} as #{fork.label} (thread #{copy.id}) in a system of its own at t=#{fork.context.now}ms"
-    end
-
-    # A fork's new system: the adapter's monitor, the console's processor,
-    # and all-stop when everything is stopped.
-    def adopt(fork)
-      @control.adopt(fork)
-      @console.open(fork.context)
-    end
-
-    def forget(context)
-      @control.forget(context)
-      @console.forget(context)
     end
 
     # ------------------------------------------------------------------
@@ -715,22 +610,20 @@ module DAP
       @session = Workbench::Session.new(driver: @driver, sources: sources, journal: journal)
       @context = @session.context
       @context.recording_trace
-      @threads = Threads.new(@session, @labels, forks: -> { @forks })
+      @threads = Threads.new(@session, @labels)
       @console = Console.new(threads: @threads, expressions: @expressions, output: method(:output))
-      @control = Control.new(labels: @labels, threads: @threads, breakpoints: @breakpoints, places: -> { places },
+      @console.open(@context)
+      @control = Control.new(labels: @labels, threads: @threads, breakpoints: @breakpoints, session: @session,
                              output: method(:output), interrupt: -> { !@inbox.empty? },
-                             mail: ->(place) { @console.deliver_mail(place) })
+                             mail: -> { @console.deliver_mail })
       @console.stopped = -> { @control.stopped? }
       @variables = Variables.new(labels: @labels, threads: @threads, control: @control, expressions: @expressions,
                                  console: @console)
       @console.variables = @variables
       @operator = Operator.new(labels: @labels, control: @control, mailbox: @console)
       @console.operator = @operator
-      @console.forker = method(:make_fork)
       @catalog = Catalog.new(@session, @labels)
       @frames = Frames.new(@labels, @threads, @control, @catalog, @expressions.io_origins, @console)
-      @console.open(@context)
-      @control.adopt(@session)
       @dir = dir
     end
 
@@ -777,7 +670,6 @@ module DAP
       @shut = true
       @watcher&.stop
       @console&.close
-      @forks.each(&:close)
       @driver&.close
     rescue StandardError => error
       diagnostic("shutdown: #{error.message}")

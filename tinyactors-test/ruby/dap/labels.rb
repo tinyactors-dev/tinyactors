@@ -9,8 +9,8 @@ module DAP
   # Core supplies facts and the host builds labels (ADR 0071 section 3):
   # `active → dunning on payment.failed` for a transition, `assign 2` for
   # the second action of its block.
-  # A registered definition, named by the system (Context) it is registered
-  # in and its ID there: a fork's system numbers its definitions on its own.
+  # A registered definition: its ID, and the system (Context) Labels asks
+  # about it.
   Definition = Data.define(:context, :id) do
     def to_s = id.to_s
   end

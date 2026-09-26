@@ -76,7 +76,7 @@ module DAP
     end
 
     # Resolves every line breakpoint again, after definitions came or went
-    # (a hot reload, a fork). Answers the ones whose verification or line
+    # (a hot reload). Answers the ones whose verification or line
     # changed, for `breakpoint` events.
     def refresh_lines(definitions)
       @lines.values.flatten.select do |breakpoint|
@@ -143,7 +143,7 @@ module DAP
     # path: `subscription/acct1 ["failures"]`, as napi's adapter does.
     def self.data_id(title, path) = "#{title} #{JSON.generate(path)}"
 
-    # A title can have spaces (`counter/acct1 (fork 1)`), so the path is
+    # A title can have spaces (`supervisor/boss invocation worker`), so the path is
     # what follows the first ` [` that starts a JSON array.
     def self.parse_data_id(text)
       text = text.to_s

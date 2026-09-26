@@ -24,8 +24,7 @@ module DAP
   # What the debugger learns about one actor's current macrostep from its
   # trace records, for what inspection does not say: the event it took,
   # the transitions of its microstep, and the summary written when it ends.
-  # `key` is [context, session ID]: a session survives a reload (ADR 0066),
-  # and a fork's system numbers its sessions on its own.
+  # `key` is its session ID: a session survives a reload (ADR 0066).
   # `entry_stopped` says the actor was stopped before this macrostep began
   # (an `on:` breakpoint, or a step of an idle actor), so neither the next
   # round nor its MACROSTEP_BEGIN stops it there again.
@@ -37,21 +36,20 @@ module DAP
   Track = Struct.new(:key, :definition, :in_macrostep, :macrostep, :taken, :event, :microstep,
                      :summary, :entry_stopped, :pending, :fault, :reached, keyword_init: true)
 
-  # The monitor of every place's Scheduler while a client is attached: it
+  # The monitor of the workbench's Scheduler while a client is attached: it
   # decides the budgets of every resume, reads the trace records each one
   # wrote, and stops the system at a breakpoint, an exception, the end of a
-  # step, or a pause. Stopping is all-stop, across the workbench and every
-  # fork: nothing runs until the client continues or steps.
+  # step, or a pause. Stopping is all-stop: nothing runs until the client
+  # continues or steps.
   class Control
     # Why the system stopped, and in which thread. `key` is the stopped
-    # actor's track key, which a reload or a fork's restore replaces.
+    # actor's track key, which a reload replaces.
     Stop = Struct.new(:thread, :key, :reason, :description, :breakpoints, :exception, keyword_init: true)
 
     # A step in progress. `start` is the position it started from and
     # `depth` how deeply nested its next unit was. `waiting` is a step of
     # an idle actor, which waits for its next event.
-    Step = Struct.new(:kind, :granularity, :thread, :key, :place, :handle, :start, :depth, :waiting,
-                      keyword_init: true)
+    Step = Struct.new(:kind, :granularity, :thread, :key, :handle, :start, :depth, :waiting, keyword_init: true)
 
     # While anything is armed: pause before every unit (ADR 0061) and at
     # every microstep's start, before its first unit (ADR 0087). The
@@ -60,36 +58,25 @@ module DAP
     # comes right after it.
     FINE = { budget: TinyactorsTest::Context::RESUME_BUDGET, action_budget: 1, pause_at_microstep_start: true }.freeze
 
-    # What one place's Scheduler calls: the Control, told which place.
-    class Monitor
-      def initialize(control, place)
-        @control = control
-        @place = place
-      end
-
-      def budgets(id) = @control.budgets(@place, id)
-      def admit(ids) = @control.admit(@place, ids)
-      def resumed(id, status) = @control.resumed(@place, id, status)
-      def dispatched(due) = @control.dispatched(@place, due)
-      def interrupt? = @control.interrupt?
-    end
-
     attr_reader :stop, :step, :breakpoints
 
-    # `places` answers the workbench session and the forks. `output` is
-    # called as output.call(category, text) for the macrostep summaries;
-    # `interrupt` answers whether a client message is waiting; `mail` hands
-    # the console's mail to a place's resting actors (Console#deliver_mail).
-    def initialize(labels:, threads:, breakpoints:, places:, output:, interrupt:, mail:)
+    # Becomes the monitor of `session`'s Scheduler, which calls #budgets,
+    # #admit, #resumed, #dispatched and #interrupt?. `output` is called as
+    # output.call(category, text) for the macrostep summaries; `interrupt`
+    # answers whether a client message is waiting; `mail` hands the
+    # console's mail to the resting actors (Console#deliver_mail).
+    def initialize(labels:, threads:, breakpoints:, session:, output:, interrupt:, mail:)
       @labels = labels
       @mail = mail
       @threads = threads
       @breakpoints = breakpoints
-      @places = places
+      @context = session.context
+      @scheduler = @context.scheduler
+      @scheduler.monitor = self
       @output = output
       @interrupt = interrupt
       @tracks = {}
-      @cursors = {}
+      @cursor = nil
       @stop = nil
       @step = nil
       @pause_requested = false
@@ -97,9 +84,9 @@ module DAP
       @hits = []
       @aside = false
       # What caused each macrostep, and what each step sent, for the causal
-      # chain of a stack trace: [context, session, macrostep] => {event:,
-      # cause:}, and [context, session, macrostep, microstep] => [{event:,
-      # action:, definition:}]. Bounded: the oldest go first.
+      # chain of a stack trace: [session, macrostep] => {event:, cause:},
+      # and [session, macrostep, microstep] => [{event:, action:,
+      # definition:}]. Bounded: the oldest go first.
       @macrosteps = {}
       @sends = {}
     end
@@ -115,8 +102,7 @@ module DAP
       track = track(thread)
       return [] unless track&.in_macrostep
 
-      context = thread.context
-      entry = @macrosteps[[context, thread.session, track.macrostep]]
+      entry = @macrosteps[[thread.session, track.macrostep]]
       hops = []
       CHAIN_LIMIT.times do
         break if entry.nil?
@@ -128,16 +114,16 @@ module DAP
           break
         end
         step = "#{cause[:macrostep]}.#{cause[:microstep]}"
-        sent = Array(@sends[[context, session, Integer(cause[:macrostep]), Integer(cause[:microstep])]])
+        sent = Array(@sends[[session, Integer(cause[:macrostep]), Integer(cause[:microstep])]])
         send = sent.find { |candidate| candidate[:event] == entry.dig(:event, :name_text) } || sent.first
-        sender = @threads.by_key([context, session])
+        sender = @threads.by_key(session)
         if send.nil?
           hops << { unseen: true, step: step, thread: sender }
           break
         end
         hops << { thread: sender, event: send[:event], step: step, action: send[:action],
                   definition: send[:definition] }
-        entry = @macrosteps[[context, session, Integer(cause[:macrostep])]]
+        entry = @macrosteps[[session, Integer(cause[:macrostep])]]
       end
       hops
     end
@@ -145,25 +131,7 @@ module DAP
     CHAIN_LIMIT = 16
     REMEMBERED = 1024
 
-    # Makes this the monitor of a place's scheduler; a place that comes
-    # while everything is stopped stops too.
-    def adopt(place)
-      scheduler = place.context.scheduler
-      scheduler.monitor = Monitor.new(self, place)
-      scheduler.stop! if stopped?
-    end
-
-    # A fork's system is gone: what was kept about its actors goes too.
-    def forget(context)
-      @tracks.delete_if { |key, _| key.first.equal?(context) }
-      @macrosteps.delete_if { |key, _| key.first.equal?(context) }
-      @sends.delete_if { |key, _| key.first.equal?(context) }
-      @cursors.delete(context)
-    end
-
-    def schedulers = @places.call.map { |place| place.context.scheduler }
-
-    def pending? = schedulers.any?(&:pending?)
+    def pending? = @scheduler.pending?
 
     def stopped? = !@stop.nil?
 
@@ -190,15 +158,11 @@ module DAP
     # Commands
 
     # Stops everything where it stands, as a `pause` or `stopOnEntry` does.
-    # The thread is the one a scheduler was settling, when one is inside a
+    # The thread is the one the scheduler was settling, when it is inside a
     # macrostep; otherwise the one the client named.
     def halt(reason, thread)
-      @places.call.each do |place|
-        scheduler = place.context.scheduler
-        next unless scheduler.pending? && !scheduler.stopped? && (current = scheduler.current)
-
-        thread = @threads.by_handle(place, current) || thread
-        break
+      if @scheduler.pending? && !@scheduler.stopped? && (current = @scheduler.current)
+        thread = @threads.by_handle(current) || thread
       end
       stop_all
       @step = nil
@@ -210,7 +174,7 @@ module DAP
     # A pause asked for while work is pending stops after the next unit.
     def request_pause(thread)
       return halt('pause', thread) unless pending?
-      return halt('pause', thread) if schedulers.any?(&:current)
+      return halt('pause', thread) if @scheduler.current
 
       @pause_requested = true
       nil
@@ -237,8 +201,7 @@ module DAP
       @stop = nil
       @pause_requested = false
       @step = Step.new(kind: kind, granularity: granularity || 'statement', thread: thread.id, key: thread.track_key,
-                       place: thread.place, handle: thread.handle, start: start,
-                       depth: depth(thread.definition, start), waiting: waiting)
+                       handle: thread.handle, start: start, depth: depth(thread.definition, start), waiting: waiting)
       go_all
       waiting
     end
@@ -250,13 +213,13 @@ module DAP
       @stop = nil
       @pause_requested = false
       @step = Step.new(kind: :goto, granularity: 'macrostep', thread: thread.id, key: thread.track_key,
-                       place: thread.place, handle: thread.handle, start: nil, depth: 0, waiting: false)
+                       handle: thread.handle, start: nil, depth: 0, waiting: false)
       go_all
-      thread.context.scheduler.wake
+      @scheduler.wake
     end
 
-    # Stops everything again, as `stop` says, after a fork was restored
-    # from an image: its actor is a new session.
+    # Stops everything again, as `stop` says, where `thread` stands now: an
+    # abandoned macrostep leaves its actor at rest.
     def restopped(thread, reason, description = nil)
       @step = nil
       @pause_requested = false
@@ -285,28 +248,27 @@ module DAP
     end
 
     # ------------------------------------------------------------------
-    # The Schedulers' monitor, through Monitor
+    # The Scheduler's monitor
 
-    def budgets(_place, _id)
+    def budgets(_id)
       armed? && !@aside ? FINE : nil
     end
 
-    def admit(place, ids)
+    def admit(ids)
       collect
       return ids if @aside
 
       # The console's mail goes to actors that rest, unless one actor's
       # step is all that runs; one that takes a message is runnable now.
-      ids |= @mail.call(place) unless @stop || (@step && !@step.waiting)
-      ids.each { |id| starting(place, id) } if place.respond_to?(:macrostep_starting)
+      ids |= @mail.call unless @stop || (@step && !@step.waiting)
       return ids if @stop
 
-      if @step && !@step.waiting && @step.place.equal?(place)
+      if @step && !@step.waiting
         return ids.include?(@step.handle) ? [@step.handle] : ids
       end
 
       ids.each do |id|
-        thread = thread_of_handle(place, id)
+        thread = thread_of_handle(id)
         next if thread.nil?
 
         track = track_for(thread)
@@ -329,12 +291,12 @@ module DAP
       ids
     end
 
-    def resumed(place, id, status)
+    def resumed(id, status)
       collect
       return nil if @aside
       return :stop if @stop
 
-      thread = thread_of_handle(place, id)
+      thread = thread_of_handle(id)
       return nil if thread.nil?
 
       view = thread.view
@@ -346,7 +308,7 @@ module DAP
 
     # A delayed send that could not be delivered raises its
     # error.communication outside any run (ADR 0072).
-    def dispatched(_place, _due)
+    def dispatched(_due)
       collect
       return nil if @aside
       return :stop if @stop
@@ -356,38 +318,27 @@ module DAP
 
     def interrupt? = @interrupt.call
 
-    # Reads the trace records every place wrote since the last read, keeps
+    # Reads the trace records the system wrote since the last read, keeps
     # each actor's track, and writes a summary of every macrostep that
-    # ended. A record's `definition` becomes a Definition of its place.
+    # ended. A record's `definition` becomes a Definition.
     def collect
-      @places.call.each do |place|
-        context = place.context
-        sink = context.instruments['trace']
-        next if sink.nil?
+      sink = @context.instruments['trace']
+      return if sink.nil?
 
-        records = sink.journal(since: @cursors[context]).select { |entry| entry[:op] == 'trace' }
-        next if records.empty?
+      records = sink.journal(since: @cursor).select { |entry| entry[:op] == 'trace' }
+      return if records.empty?
 
-        @cursors[context] = records.last[:seq]
-        records.each { |record| absorb(record.merge(definition: Definition.new(context, record[:definition]))) }
-      end
+      @cursor = records.last[:seq]
+      records.each { |record| absorb(record.merge(definition: Definition.new(@context, record[:definition]))) }
     end
 
     private
 
     def armed? = !@step.nil? || @pause_requested || @breakpoints.any?
 
-    def stop_all = schedulers.each(&:stop!)
+    def stop_all = @scheduler.stop!
 
-    def go_all = schedulers.each(&:go!)
-
-    # A fork captures an image when one of its actors is about to begin a
-    # macrostep (it holds an event and has taken no step of it, ADR 0083),
-    # for restartFrame.
-    def starting(place, id)
-      step = place.inspect_actor(id)&.dig(:step)
-      place.macrostep_starting(id) if step && Integer(step[:macrostep]).zero?
-    end
+    def go_all = @scheduler.go!
 
     # After a resume of `thread` (nil after a dispatch): stop for an
     # exception, a breakpoint, the end of the step, or a pause, in that
@@ -480,12 +431,12 @@ module DAP
     end
 
     def absorb(record)
-      key = [record[:definition].context, record.dig(:key, :session)]
+      key = record.dig(:key, :session)
       track = (@tracks[key] ||= new_track(key, record[:definition]))
       track.definition = record[:definition]
       case record[:kind]
       when 'macrostep_begin'
-        remember(@macrosteps, [key.first, key.last, Integer(record.dig(:key, :macrostep))],
+        remember(@macrosteps, [key, Integer(record.dig(:key, :macrostep))],
                  { event: record[:event], cause: record[:cause] })
         track.in_macrostep = true
         track.macrostep = Integer(record.dig(:key, :macrostep))
@@ -504,7 +455,7 @@ module DAP
       when 'abandoned'
         abandoned(track, record)
       when 'sent'
-        step = [key.first, key.last, Integer(record.dig(:key, :macrostep)), Integer(record.dig(:key, :microstep))]
+        step = [key, Integer(record.dig(:key, :macrostep)), Integer(record.dig(:key, :microstep))]
         list = @sends[step] || remember(@sends, step, [])
         list << { event: record.dig(:event, :name_text), action: record.dig(:position, :action),
                   definition: record[:definition] }
@@ -534,7 +485,7 @@ module DAP
       if track.in_macrostep
         track.summary << [record_microstep(record), line]
       else
-        who = thread_of_key(track.key)&.title || "session #{track.key.last}"
+        who = thread_of_key(track.key)&.title || "session #{track.key}"
         event = record.dig(:event, :name_text)
         @output.call('console', "#{who}: abandoned #{event || 'its waiting event'} before it began")
         track.entry_stopped = false
@@ -577,7 +528,7 @@ module DAP
         track.summary << [number, microstep_line(definition, record), :microstep]
         return
       end
-      line = summary_line(track, definition, record)
+      line = summary_line(definition, record)
       track.summary << [number, line] if line
     end
 
@@ -600,17 +551,16 @@ module DAP
     # bootstrap's first microstep names none either.
     def track_jump?(record) = Integer(record.dig(:key, :macrostep) || 0) != 1
 
-    def summary_line(track, definition, record)
-      context = track.key.first
+    def summary_line(definition, record)
       case record[:kind]
       when 'condition' then "#{condition_place(definition, record)}: #{record[:result] == true}"
       when 'assign' then "assign #{@labels.expression(definition, record[:expr])} = #{JSON.generate(record[:value])}"
       when 'sent'
         id = record.dig(:event, :send_id)
-        text = id.to_s == '0' ? nil : context.send_id_text(Integer(id))
+        text = id.to_s == '0' ? nil : @context.send_id_text(Integer(id))
         "send #{record.dig(:event, :name_text)}#{text ? " (#{text})" : ''}"
       when 'raised' then "raise #{record.dig(:event, :name_text)}"
-      when 'cancelled' then "cancel #{context.send_id_text(Integer(record[:send])) || record[:send]}"
+      when 'cancelled' then "cancel #{@context.send_id_text(Integer(record[:send])) || record[:send]}"
       when 'action_failed' then "failed: #{fault_place(definition, record)}"
       when 'script' then record[:has_fault] ? "failed: #{fault_place(definition, record)}" : nil
       when 'ignored' then "#{record.dig(:event, :name_text)} enabled no transition"
@@ -638,7 +588,7 @@ module DAP
     end
 
     def write_summary(track, record)
-      who = thread_of_key(track.key)&.title || "session #{track.key.last}"
+      who = thread_of_key(track.key)&.title || "session #{track.key}"
       taken = track.taken
       head = if taken
                data = taken[:data]
@@ -665,8 +615,8 @@ module DAP
 
     # A child spawned since the threads were last read is found by reading
     # them again.
-    def thread_of_handle(place, handle)
-      @threads.by_handle(place, handle) || (@threads.refresh || @threads.by_handle(place, handle))
+    def thread_of_handle(handle)
+      @threads.by_handle(handle) || (@threads.refresh || @threads.by_handle(handle))
     end
 
     def thread_of_key(key)
@@ -678,7 +628,7 @@ module DAP
     def event_name(thread, event)
       return nil if event.nil?
 
-      event[:name_text] || thread.context.event_text(event[:name])
+      event[:name_text] || @context.event_text(event[:name])
     end
   end
 end

@@ -95,13 +95,12 @@ Then `M-x dape RET tinyactors`.
 its invocations started, named by address (a child by its parent and its
 `<invoke id>`) and active leaf states: `counter/acct1 · busy`,
 `supervisor/boss invocation worker · working`. A named actor keeps its
-thread across a reload. A fork is a thread too, `counter/acct1 (fork 1) ·
-idle` (see "Forks" below). What the adapter writes names an actor the same
+thread across a reload. What the adapter writes names an actor the same
 way, without the states (`sent bump to counter/acct1`), as napi's adapter
 does; the console's `@actor` takes a shorter label (below).
 
 **Stopping is all-stop.** When one actor stops, nothing else runs until
-the client continues or steps, in the workbench or in any fork. Whenever a
+the client continues or steps. Whenever a
 breakpoint, a step or a pause is armed, the host resumes one unit at a
 time (`action_budget: 1`, core ADR 0061) and pauses at every microstep's
 start, after selection and before its first unit
@@ -244,8 +243,8 @@ state, before its onentry. It stops with reason `breakpoint`. A log point
 (`logMessage`) writes its message to the console, each `{expression}`
 replaced by its value in the data model, and does not stop.
 
-Breakpoints are resolved against every definition the workbench and its
-forks run, and resolved again whenever those change. A breakpoint set
+Breakpoints are resolved against every definition the workbench runs, and
+resolved again whenever those change. A breakpoint set
 before the actors start is unverified until its chart loads; saving a
 chart that moves lines moves the breakpoint to what is now on or near its
 line. Both are announced with a `breakpoint` event. `breakpointLocations`
@@ -261,12 +260,10 @@ where the actor stands, not against trace records, so it stops before a
 | `goto [@actor] <state…> [from <state>]` | an operator transition (core ADR 0082): at once when the system is stopped and the actor rests with nothing waiting, and then stops with reason `goto`; otherwise it waits in the mailbox |
 | `abandon [@actor]` | abandons the actor's macrostep (core ADR 0082); it keeps the configuration after its last completed microstep, and a stopped system stops again there |
 | `cancel [@actor] <send ID>` | withdraws one pending delayed send (core ADR 0084), by the ID the Timers scope shows: the chart's, or `#_send.<n>` (ADR 0048) |
-| `fork [@actor]` | copies the actor into a system of its own (core ADR 0085); see "Forks" |
-| `clock [@actor] +<duration>` | advances the logical time of the actor's system: `+500ms`, `+5s`, `+2m`, `+1h`, `+3d` |
+| `clock +<duration>` | advances the workbench's logical time: `+500ms`, `+5s`, `+2m`, `+1h`, `+3d` |
 | `<expression>` | jq over the actor's data model |
 
-`@actor` is a thread's label: `acct1`, `boss.worker` for a child, or
-`acct1.fork1` for a fork.
+`@actor` is a thread's label: `acct1`, or `boss.worker` for a child.
 
 Expressions see `$_event`, `$_sessionid`, `$_name`, `$_ioprocessors` and
 `In()`, bound by the adapter: `$_event` is the event of the step the actor
@@ -277,8 +274,7 @@ otherwise.
 
 The console is a sender an actor can answer (core ADR 0068): the adapter
 registers an I/O processor of type `debug` with the `io.connection`
-instrument in every system it debugs, the workbench's and each fork's,
-opens one scope there, and delivers each `send` with an origin in it. A
+instrument in the workbench's system, opens one scope there, and delivers each `send` with an origin in it. A
 chart's `<send targetexpr="$_event.origin"
 typeexpr="$_event.origintype">` then shows in the console as a reply
 (`counter/acct1 replied pong 4`).
@@ -330,58 +326,21 @@ The DAP `goto` request does what the console's `goto` does, to one state.
 Its targets come from `gotoTargets`: at a line of a chart's file, the
 states written on that line, else the state an action or a transition
 written there belongs to; without a line, every state of the chart (the
-source's, else the stopped thread's). A target serves a fork of the same
-revision too. `replace` is not a command here: saving the chart file
-replaces its actors.
+source's, else the stopped thread's). `replace` is not a command here:
+saving the chart file replaces its actors.
 
-## Forks
-
-`fork [@actor]` captures a workbench actor and reconstructs the image in a
-system of its own (core ADR 0085). The fork's system compiles the actor's
-exported definition, the same revision with the same spans, and gets its
-own clock, its own `debug` I/O processor, and a recording router with no
-directory:
-
-- `clock @acct1.fork1 +3d` moves the fork's time only; the workbench's
-  time and timers stay where they are.
-- The fork's sends to itself work; every other send reaches nothing, and
-  the console shows it (`counter/acct1 (fork 1) sent ping to #_actor_counter/acct1:
-  not delivered`). A runtime reference to another actor names nothing in
-  the fork's system, so a send to one fails as a send to a destroyed
-  actor does, with `error.communication`.
-- An invocation the actor had is lost in the copy
-  (`error.communication.invoke.<id>.unavailable`, ADR 0038); one the fork
-  starts runs in the fork's system.
-- Everything else works on the fork's thread: stepping, breakpoints,
-  scopes, the console, `goto`, `abandon`, `cancel`, and writing data (a
-  reconstructed actor has no address, so the fork is captured, destroyed
-  and reconstructed with the new root, where it stood).
-
-The adapter keeps images of each fork: one when it was made, one at every
-stop of its thread, and one each time its actor is about to begin a
-macrostep. Going back restores one of them:
-
-| Request | Goes back to |
-|---|---|
-| `stepBack` | the image of the stop before this one |
-| `reverseContinue` | the last earlier stop at a breakpoint or an exception, else where the fork began |
-| `restartFrame` | where the current macrostep began: the actor holds its event again |
-| `restart` | a new copy of the source actor, as it is now (the stopped thread must be a fork) |
-
-Logical time never goes back in a system (ADR 0012), so a restore builds a
-fresh system that starts at the image's time and reconstructs the image
-there; the fork keeps its number and its thread, and the system stops
-there with the reason the request gives (`step`, the breakpoint's,
-`restart` or `entry`). On a thread that is not a fork these requests
-answer that they work on forks.
+The adapter keeps no past: `stepBack`, `reverseContinue`, `restartFrame`
+and `restart` answer an error, and their capabilities are not declared.
+It stops and steps the workbench's own actors, on a developer's machine;
+napi's adapter, which attaches to production actors, never stops one
+(napi ADR 0027).
 
 ## Writing data
 
 `setVariable` and `setExpression` write a data-model location. Core has
 no operation that changes an actor's data root, so the adapter uses the
 one the public API allows: it captures the actor, unloads it, and loads it
-again with the changed root as its data-model binding (core ADR 0038); a
-fork is reconstructed instead. The
+again with the changed root as its data-model binding (core ADR 0038). The
 configuration, the delayed sends, and a macrostep stopped between two
 units all survive, and the thread stays the same. Two cases are refused
 rather than harmed: an invoked child has no address to load it at, and a
@@ -400,11 +359,10 @@ started. The adapter never destroys an actor on its own, and declares
 |---|---|
 | `protocol.rb` | the base protocol: `Content-Length` framing |
 | `adapter.rb` | requests, the event loop, launching the workbench |
-| `control.rb` | the monitor of every Scheduler: budgets, reading trace records, stops and steps |
+| `control.rb` | the Scheduler's monitor: budgets, reading trace records, stops and steps |
 | `breakpoints.rb` | line, function, exception and data breakpoints, found in trace records and positions |
 | `source_map.rb` | lines of the chart files and the elements written on them (core ADR 0086) |
-| `fork.rb` | a fork's system, its stub I/O, and its images for going back |
-| `threads.rb` | threads with stable IDs, each with the place (workbench or fork) that runs it |
+| `threads.rb` | threads with stable IDs |
 | `frames.rb` | stack frames from an actor's position |
 | `variables.rb` | scopes, variables, and writing the data model |
 | `expressions.rb` | jq over the data model, with the system variables bound |
@@ -417,8 +375,7 @@ One thread touches the host: it answers requests, runs the system and
 applies reloads. A reader thread turns the input into messages, and the
 workbench's watcher turns saves into reloads; both only queue work. The
 system runs through `TinyactorsTest::Scheduler`, the same loop as every
-scenario and the workbench REPL, with `Control` as its monitor; each fork's
-system has a Scheduler of its own, monitored the same way. Between
+scenario and the workbench REPL, with `Control` as its monitor. Between
 two resumes the Scheduler asks whether a message is waiting, so a `pause`
 lands at once even in a macrostep that never ends.
 

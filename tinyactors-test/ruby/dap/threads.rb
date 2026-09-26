@@ -2,39 +2,34 @@
 
 module DAP
   # The threads of a debug session: every named actor the workbench runs
-  # and, below each, the children its invocations started; then every fork
-  # (DAP::Fork), each in a system of its own, and its children.
+  # and, below each, the children its invocations started.
   #
   # Runtime IDs change when an actor is replaced or reloaded, and DAP wants
   # a thread to keep its ID, so a thread is keyed by what stays: a named
-  # actor by its name, a fork by its number, an invoked child by its
-  # runtime ID (it has no name, and is never reloaded).
+  # actor by its name, an invoked child by its runtime ID (it has no name,
+  # and is never reloaded).
   #
-  # A thread's `place` is what runs it: the workbench's Workbench::Session,
-  # or a Fork. Both answer `context` (the TinyactorsTest::Context of their
-  # system), `inspect_actor(handle)` and `child_actors(handle)`.
+  # A thread's `place` is the workbench's Workbench::Session, which answers
+  # `context` (the TinyactorsTest::Context of its system),
+  # `inspect_actor(handle)` and `child_actors(handle)`.
   class Threads
     # `label` names the thread in the console's `@actor` (`acct1`,
-    # `boss.worker`, `acct1.fork1`); `title` names it in what the adapter
-    # writes, as napi's adapter does (`counter/acct1`, `supervisor/boss
-    # invocation worker`, `counter/acct1 (fork 1)`); `name` is the title and
-    # the leaf states, as the Threads pane shows it.
-    Entry = Struct.new(:id, :key, :place, :handle, :session, :definition, :actor, :fork, :parent, :name, :label,
-                       :title, keyword_init: true) do
+    # `boss.worker`); `title` names it in what the adapter writes, as napi's
+    # adapter does (`counter/acct1`, `supervisor/boss invocation worker`);
+    # `name` is the title and the leaf states, as the Threads pane shows it.
+    Entry = Struct.new(:id, :key, :place, :handle, :session, :definition, :actor, :parent, :name, :label, :title,
+                       keyword_init: true) do
       def named? = !actor.nil?
-      def fork? = !fork.nil?
       def context = place.context
       def view = place.inspect_actor(handle)
-      # What identifies its session across places: runtime and session
-      # IDs are numbers of one system.
-      def track_key = [place.context, session]
+      # What identifies its session: its session ID, which survives a
+      # reload (ADR 0066).
+      def track_key = session
     end
 
-    # `forks` answers the forks, in the order they were made.
-    def initialize(session, labels, forks: -> { [] })
+    def initialize(session, labels)
       @session = session
       @labels = labels
-      @forks = forks
       @ids = {}
       @entries = {}
       @next_id = 0
@@ -48,9 +43,7 @@ module DAP
 
     def by_key(key) = @entries.each_value.find { |entry| entry.track_key == key }
 
-    def by_handle(place, handle)
-      @entries.each_value.find { |entry| entry.place.equal?(place) && entry.handle == handle }
-    end
+    def by_handle(handle) = @entries.each_value.find { |entry| entry.handle == handle }
 
     def by_label(label) = @entries.each_value.find { |entry| entry.label == label.to_s }
 
@@ -65,14 +58,6 @@ module DAP
         add(seen, [:named, name], @session, actor.handle, view, actor: actor, label: name.to_s,
                                                                 where: address_of(actor, name))
         children(seen, @session, actor.handle, view, name.to_s)
-      end
-      @forks.call.each do |fork|
-        view = fork.inspect_actor(fork.handle)
-        next if view.nil?
-
-        add(seen, [:fork, fork.number], fork, fork.handle, view, fork: fork, label: fork.label,
-                                                                  where: "#{fork.source_where} (fork #{fork.number})")
-        children(seen, fork, fork.handle, view, fork.label)
       end
       @started.concat(seen.keys - @entries.keys)
       @exited.concat((@entries.keys - seen.keys).map { |id| @entries[id] })
@@ -91,9 +76,9 @@ module DAP
 
     # The names of the active states that have no active child, or nil
     # when the actor has no configuration to read.
-    def leaves(place, handle, view)
-      definition = Definition.new(place.context, view[:definition_id])
-      context = place.context
+    def leaves(handle, view)
+      context = @session.context
+      definition = Definition.new(context, view[:definition_id])
       response = context.ta.actor.active_states(system: context.system_handle, actor: handle,
                                                 capacity: view.fetch(:active_state_count))
       return nil unless response[:result] == 'ok'
@@ -114,7 +99,7 @@ module DAP
         family = child_view.dig(:definition, :family, :name)
         invoke = Array(view[:invokes]).find { |candidate| Integer(candidate[:service_handle]) == child }
         where = invoke ? "#{parent&.title} invocation #{place.context.invoke_id_text(invoke[:id])}" : "#{family} (actor #{child})"
-        add(seen, [:child, place.context, child], place, child, child_view, parent: parent&.id,
+        add(seen, [:child, child], place, child, child_view, parent: parent&.id,
                                                                            label: "#{parent_label}.#{family}",
                                                                            where: where)
         children(seen, place, child, child_view, "#{parent_label}.#{family}")
@@ -126,11 +111,11 @@ module DAP
       address ? "#{address.dig(:family, :name)}/#{address[:name]}" : name.to_s
     end
 
-    def add(seen, key, place, handle, view, where:, actor: nil, fork: nil, parent: nil, label: nil)
+    def add(seen, key, place, handle, view, where:, actor: nil, parent: nil, label: nil)
       id = (@ids[key] ||= (@next_id += 1))
       seen[id] = Entry.new(id: id, key: key, place: place, handle: handle, session: view[:session_id],
                            definition: Definition.new(place.context, view[:definition_id]), actor: actor,
-                           fork: fork, parent: parent, label: label, title: where,
+                           parent: parent, label: label, title: where,
                            name: "#{where} · #{configuration(place, handle, view)}")
     end
 
@@ -138,7 +123,7 @@ module DAP
     def configuration(place, handle, view)
       return 'done' if view[:residency] == 'done'
 
-      leaves(place, handle, view)&.join(' ') || view[:residency].to_s
+      leaves(handle, view)&.join(' ') || view[:residency].to_s
     end
   end
 end
