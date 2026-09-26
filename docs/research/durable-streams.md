@@ -1,7 +1,7 @@
 # Durable Streams: what the protocol offers a web app built on tinyactors
 
 **Date:** 2026-09-26
-**Used by:** nothing yet. Related: [replay persistence](../proposals/replay-persistence.md), [distributed systems](../proposals/distributed-systems.md), [napi ADR 0020](../../tinyactors-napi/docs/adr/0020-mail-for-an-unloaded-actor-waits-while-a-loader-brings-it-back.md) (the loader)
+**Used by:** nothing yet. Related: [DASP](dasp.md), [replay persistence](../proposals/replay-persistence.md), [distributed systems](../proposals/distributed-systems.md), [napi ADR 0020](../../tinyactors-napi/docs/adr/0020-mail-for-an-unloaded-actor-waits-while-a-loader-brings-it-back.md) (the loader)
 **Source:** [`PROTOCOL.md`](https://github.com/durable-streams/durable-streams/blob/f380bca/PROTOCOL.md) at commit `f380bca` (2026-06-02), the last commit that changed it. The document is marked **DRAFT**, version 1.0, by ElectricSQL. Section numbers below refer to that file.
 
 The question: you deploy a web app. The server runs a tinyactors system
