@@ -36,6 +36,24 @@
  * ratios and no bound:
  *
  *     tinyactors-test/build/scale_test --report 4000000
+ *
+ * It stays a "just run it" test that adapts to where it runs, and guards
+ * against misjudging that place or failing by accident:
+ * - memory it may use is what the OS offers *and* what a container allows:
+ *   on Linux MemAvailable, capped by a cgroup v2 (memory.max) or v1
+ *   (memory.limit_in_bytes) limit less what the cgroup already uses; on
+ *   macOS free, inactive, speculative and purgeable pages, halved under
+ *   the kernel's "warn" memory pressure and none under "critical";
+ * - where memory cannot be read, only the two smallest populations run;
+ * - one untimed warm-up population runs first, so CPU frequency scaling and
+ *   cold caches do not inflate the smallest size;
+ * - a population step whose ratio fails is measured once more, both sizes,
+ *   before the test fails, so one stolen time slice cannot fail CI while a
+ *   real walk (a ratio near four) still does;
+ * - TAT_SCALE_MAX_POPULATION and --report reject values that are not a
+ *   positive whole number, instead of reading them as zero;
+ * - it prints the machine and its load first, and at the end which sizes
+ *   ran and why larger ones did not.
  */
 /* getrusage() and friends, which glibc hides under -std=c11. */
 #if defined(__linux__)
@@ -49,8 +67,11 @@
 #include <time.h>
 
 #include <sys/resource.h>
+#include <sys/utsname.h>
+#include <unistd.h>
 #if defined(__APPLE__)
 #include <mach/mach.h>
+#include <sys/sysctl.h>
 #endif
 
 #include "allocator.h"
@@ -83,6 +104,9 @@ static const uint32_t POPULATIONS[] = {50000u, 200000u, 1000000u, 4000000u};
 #define WALK_PAGE_SIZE 64u
 #define PAGES 10000u
 #define REPETITIONS 3u
+/* An untimed population measured first, so frequency scaling and cold caches
+ * warm up on it rather than on the smallest measured population. */
+#define WARMUP_POPULATION 20000u
 
 /*
  * A four-fold population may cost no more than twice as much per actor.
@@ -735,42 +759,48 @@ static round_cost measure(size_t population) {
 }
 
 /* The cheapest of several rounds: the one least interrupted by the machine. */
+/* Keeps, in `best`, the cheaper of each cost of `best` and `next`. */
+static void keep_cheapest(round_cost *best_out, round_cost next) {
+    round_cost best = *best_out;
+    if (next.spawn_us < best.spawn_us) {
+        best.spawn_us = next.spawn_us;
+    }
+    if (next.upgrade_us < best.upgrade_us) {
+        best.upgrade_us = next.upgrade_us;
+    }
+    if (next.churn_us < best.churn_us) {
+        best.churn_us = next.churn_us;
+    }
+    if (next.inspect_us < best.inspect_us) {
+        best.inspect_us = next.inspect_us;
+    }
+    if (next.timer_us < best.timer_us) {
+        best.timer_us = next.timer_us;
+    }
+    if (next.cancel_us < best.cancel_us) {
+        best.cancel_us = next.cancel_us;
+    }
+    if (next.page_us < best.page_us) {
+        best.page_us = next.page_us;
+    }
+    /* The smallest longest spawn of the rounds: a spike every round has
+     * is structural; one that noise put in a single round is not. */
+    if (next.longest_spawn_us < best.longest_spawn_us) {
+        best.longest_spawn_us = next.longest_spawn_us;
+    }
+    if (next.median_spawn_us < best.median_spawn_us) {
+        best.median_spawn_us = next.median_spawn_us;
+    }
+    if (next.largest_spawn_block > best.largest_spawn_block) {
+        best.largest_spawn_block = next.largest_spawn_block;
+    }
+    *best_out = best;
+}
+
 static round_cost measure_best(size_t population, unsigned repetitions) {
     round_cost best = measure(population);
     for (unsigned round = 1; round < repetitions; round += 1) {
-        round_cost next = measure(population);
-        if (next.spawn_us < best.spawn_us) {
-            best.spawn_us = next.spawn_us;
-        }
-        if (next.upgrade_us < best.upgrade_us) {
-            best.upgrade_us = next.upgrade_us;
-        }
-        if (next.churn_us < best.churn_us) {
-            best.churn_us = next.churn_us;
-        }
-        if (next.inspect_us < best.inspect_us) {
-            best.inspect_us = next.inspect_us;
-        }
-        if (next.timer_us < best.timer_us) {
-            best.timer_us = next.timer_us;
-        }
-        if (next.cancel_us < best.cancel_us) {
-            best.cancel_us = next.cancel_us;
-        }
-        if (next.page_us < best.page_us) {
-            best.page_us = next.page_us;
-        }
-        /* The smallest longest spawn of the rounds: a spike every round has
-         * is structural; one that noise put in a single round is not. */
-        if (next.longest_spawn_us < best.longest_spawn_us) {
-            best.longest_spawn_us = next.longest_spawn_us;
-        }
-        if (next.median_spawn_us < best.median_spawn_us) {
-            best.median_spawn_us = next.median_spawn_us;
-        }
-        if (next.largest_spawn_block > best.largest_spawn_block) {
-            best.largest_spawn_block = next.largest_spawn_block;
-        }
+        keep_cheapest(&best, measure(population));
     }
     return best;
 }
@@ -794,28 +824,33 @@ static void report_header(void) {
 static uint32_t small_population = 0;
 static uint32_t large_population = 0;
 
-/* Names the two costs whose ratio failed, so the report says which walk. */
+/* The first ratio that failed in a pair, named so the report says which walk. */
+static char ratio_failure[512];
+
 static void require_flat_within(const char *what, double small, double large, double bound) {
     double ratio = small > 0.0 ? large / small : 0.0;
-    if (ratio <= bound) {
+    if (ratio <= bound || ratio_failure[0] != 0) {
         return;
     }
-    fprintf(stderr,
-            "scale test failed: %s measures %.2f against %u residents and %.2f against %u, a ratio of "
-            "%.2f against a bound of %.2f: the cost of one actor grows with the population (invariant 17)\n",
-            what, small, small_population, large, large_population, ratio, bound);
-    exit(1);
+    snprintf(ratio_failure, sizeof ratio_failure,
+             "%s measures %.2f against %u residents and %.2f against %u, a ratio of %.2f against a bound of "
+             "%.2f: the cost of one actor grows with the population (invariant 17)",
+             what, small, small_population, large, large_population, ratio, bound);
 }
 
 static void require_flat(const char *what, double small, double large) {
     require_flat_within(what, small, large, COST_RATIO_BOUND);
 }
 
-/* Every cost, and per-actor memory, flat from one population to the next. */
-static void require_flat_pair(uint32_t small_count, const round_cost *small, uint32_t large_count,
-                              const round_cost *large) {
+/*
+ * Every cost, and per-actor memory, flat from one population to the next.
+ * False, with the reason in ratio_failure, when a timed ratio failed;
+ * per-actor memory is exact, so it fails at once.
+ */
+static bool flat_pair(uint32_t small_count, const round_cost *small, uint32_t large_count, const round_cost *large) {
     small_population = small_count;
     large_population = large_count;
+    ratio_failure[0] = 0;
     require_flat("spawning an actor", small->spawn_us, large->spawn_us);
     require_flat("upgrading an actor", small->upgrade_us, large->upgrade_us);
     require_flat("an ephemeral actor", small->churn_us, large->churn_us);
@@ -835,6 +870,7 @@ require_flat("the largest block a spawn allocates", (double)small->largest_spawn
              (double)large->largest_spawn_block);
 /* Per-actor memory is a population claim too: it may not grow. */
     require(large->actor_bytes <= small->actor_bytes + 1.0, "per-actor memory grows with the population");
+    return ratio_failure[0] == 0;
 }
 
 /*
@@ -854,10 +890,68 @@ static uint64_t peak_resident_bytes(void) {
 #endif
 }
 
+#if defined(__linux__)
+/* The first unsigned number in `path`, or false; "max" reads as no limit. */
+static bool read_u64_file(const char *path, uint64_t *out, bool *unlimited) {
+    FILE *file = fopen(path, "r");
+    if (file == NULL) {
+        return false;
+    }
+    char text[64] = {0};
+    bool read = fgets(text, sizeof text, file) != NULL;
+    fclose(file);
+    if (!read) {
+        return false;
+    }
+    if (strncmp(text, "max", 3) == 0) {
+        *unlimited = true;
+        return true;
+    }
+    char *end = NULL;
+    unsigned long long value = strtoull(text, &end, 10);
+    if (end == text) {
+        return false;
+    }
+    *out = (uint64_t)value;
+    /* cgroup v1 writes a huge page-aligned number for "no limit". */
+    *unlimited = value >= (1ull << 60);
+    return true;
+}
+
+/* Room left under this process's cgroup memory limit, v2 then v1. */
+static bool cgroup_room(uint64_t *out) {
+    static const char *const limits[][2] = {
+        {"/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current"},
+        {"/sys/fs/cgroup/memory/memory.limit_in_bytes", "/sys/fs/cgroup/memory/memory.usage_in_bytes"},
+    };
+    for (size_t at = 0; at < sizeof limits / sizeof limits[0]; at += 1) {
+        uint64_t limit = 0;
+        uint64_t usage = 0;
+        bool unlimited = false;
+        bool usage_unlimited = false;
+        if (!read_u64_file(limits[at][0], &limit, &unlimited)) {
+            continue;
+        }
+        if (unlimited) {
+            return false;
+        }
+        if (!read_u64_file(limits[at][1], &usage, &usage_unlimited)) {
+            usage = 0;
+        }
+        *out = limit > usage ? limit - usage : 0;
+        return true;
+    }
+    return false;
+}
+#endif
+
+/* Where available_bytes() got its answer, for the report. */
+static const char *memory_source = "unknown";
+
 /*
  * Memory the system could give this process now, in bytes: pages that are
- * free or can be reclaimed without swapping. False when the platform does
- * not say.
+ * free or can be reclaimed without swapping, within any container limit.
+ * False when the platform does not say.
  */
 static bool available_bytes(uint64_t *out) {
 #if defined(__APPLE__)
@@ -867,7 +961,22 @@ static bool available_bytes(uint64_t *out) {
         return false;
     }
     uint64_t pages = (uint64_t)vm.free_count + vm.inactive_count + vm.speculative_count + vm.purgeable_count;
-    *out = pages * (uint64_t)vm_page_size;
+    uint64_t bytes = pages * (uint64_t)vm_page_size;
+    memory_source = "free, inactive, speculative and purgeable pages";
+    /* 1 normal, 2 warn, 4 critical: under pressure, reclaimable pages are
+     * already being reclaimed for someone else. */
+    int pressure = 0;
+    size_t length = sizeof pressure;
+    if (sysctlbyname("kern.memorystatus_vm_pressure_level", &pressure, &length, NULL, 0) == 0) {
+        if (pressure >= 4) {
+            bytes = 0;
+            memory_source = "critical memory pressure";
+        } else if (pressure >= 2) {
+            bytes /= 2u;
+            memory_source = "reclaimable pages, halved under memory pressure";
+        }
+    }
+    *out = bytes;
     return true;
 #elif defined(__linux__)
     FILE *meminfo = fopen("/proc/meminfo", "r");
@@ -884,7 +993,16 @@ static bool available_bytes(uint64_t *out) {
         }
     }
     fclose(meminfo);
-    return found;
+    if (!found) {
+        return false;
+    }
+    memory_source = "MemAvailable";
+    uint64_t room = 0;
+    if (cgroup_room(&room) && room < *out) {
+        *out = room;
+        memory_source = "the cgroup memory limit";
+    }
+    return true;
 #else
     (void)out;
     return false;
@@ -894,6 +1012,23 @@ static bool available_bytes(uint64_t *out) {
 static double gigabytes(uint64_t bytes) {
     return (double)bytes / (1024.0 * 1024.0 * 1024.0);
 }
+
+/*
+ * A positive whole number of actors from `text`, or exit 2 naming `what`.
+ */
+static uint64_t population_arg(const char *what, const char *text) {
+    char *end = NULL;
+    unsigned long long value = strtoull(text, &end, 10);
+    if (text[0] < '0' || text[0] > '9' || end == text || *end != 0 || value == 0 || value > UINT32_MAX) {
+        fprintf(stderr, "scale test: %s must be a positive whole number of actors up to %u, not \"%s\"\n", what,
+                UINT32_MAX, text);
+        exit(2);
+    }
+    return (uint64_t)value;
+}
+
+/* Why the populations stopped where they did, for the closing summary. */
+static char stop_reason[256];
 
 /*
  * Whether the population at `index` should run. The first two always do;
@@ -909,28 +1044,72 @@ static bool should_run(size_t index) {
     uint32_t population = POPULATIONS[index];
     const char *cap_text = getenv("TAT_SCALE_MAX_POPULATION");
     if (cap_text != NULL && cap_text[0] != 0) {
-        return population <= strtoull(cap_text, NULL, 10);
+        uint64_t cap = population_arg("TAT_SCALE_MAX_POPULATION", cap_text);
+        if (population > cap) {
+            snprintf(stop_reason, sizeof stop_reason, "%u is above TAT_SCALE_MAX_POPULATION=%llu", population,
+                     (unsigned long long)cap);
+            return false;
+        }
+        return true;
     }
     uint64_t available = 0;
     if (!available_bytes(&available)) {
-        printf("stopping at %u actors: this platform does not report available memory; set "
-               "TAT_SCALE_MAX_POPULATION to go further\n",
-               POPULATIONS[index - 1]);
+        snprintf(stop_reason, sizeof stop_reason,
+                 "this platform does not report available memory, so only the two smallest sizes run; set "
+                 "TAT_SCALE_MAX_POPULATION to go further");
         return false;
     }
     double per_actor = (double)peak_resident_bytes() / (double)POPULATIONS[index - 1];
     uint64_t needed = (uint64_t)(per_actor * (double)population);
     if (needed > available / 4u * 3u) {
-        printf("stopping at %u actors: %u would need about %.1f GB, and %.1f GB is available (three quarters of it "
-               "may be used)\n",
-               POPULATIONS[index - 1], population, gigabytes(needed), gigabytes(available));
+        snprintf(stop_reason, sizeof stop_reason,
+                 "%u actors would need about %.1f GB, and %.1f GB is available (%s; three quarters of it may be "
+                 "used)",
+                 population, gigabytes(needed), gigabytes(available), memory_source);
         return false;
     }
-    printf("measuring %u actors: needs about %.1f GB, %.1f GB available\n", population, gigabytes(needed),
-           gigabytes(available));
+    printf("measuring %u actors: needs about %.1f GB, %.1f GB available (%s)\n", population, gigabytes(needed),
+           gigabytes(available), memory_source);
     return true;
 }
 
+/* The machine and its load, first, so a failure can be read in context. */
+static void print_machine(void) {
+    struct utsname name;
+    char cpu[128] = "unknown CPU";
+#if defined(__APPLE__)
+    size_t length = sizeof cpu;
+    if (sysctlbyname("machdep.cpu.brand_string", cpu, &length, NULL, 0) != 0) {
+        snprintf(cpu, sizeof cpu, "unknown CPU");
+    }
+#elif defined(__linux__)
+    FILE *cpuinfo = fopen("/proc/cpuinfo", "r");
+    if (cpuinfo != NULL) {
+        char line[256];
+        while (fgets(line, sizeof line, cpuinfo) != NULL) {
+            if (strncmp(line, "model name", 10) == 0 && strchr(line, ':') != NULL) {
+                snprintf(cpu, sizeof cpu, "%s", strchr(line, ':') + 2);
+                cpu[strcspn(cpu, "\n")] = 0;
+                break;
+            }
+        }
+        fclose(cpuinfo);
+    }
+#endif
+    double load[3] = {0.0, 0.0, 0.0};
+    bool has_load = getloadavg(load, 3) == 3;
+    long cpus = sysconf(_SC_NPROCESSORS_ONLN);
+    if (uname(&name) == 0) {
+        printf("machine: %s %s %s, %s, %ld CPUs", name.sysname, name.release, name.machine, cpu, cpus);
+    } else {
+        printf("machine: %s, %ld CPUs", cpu, cpus);
+    }
+    if (has_load) {
+        printf(", load %.2f %.2f %.2f", load[0], load[1], load[2]);
+    }
+    printf("\n");
+    fflush(stdout);
+}
 
 /* ------------------------------------------------------------------------
  * Allocator calls per event (ADR 0064). An actor's internal queue is lent
@@ -1280,9 +1459,9 @@ static void check_kept_delivery_allocations(void) {
 }
 
 int main(int argc, char **argv) {
+    print_machine();
     if (argc == 3 && strcmp(argv[1], "--report") == 0) {
-        size_t population = (size_t)strtoull(argv[2], NULL, 10);
-        require(population != 0, "--report takes a population");
+        size_t population = (size_t)population_arg("--report", argv[2]);
         report_header();
         report("report", population, measure(population));
         return 0;
@@ -1291,6 +1470,12 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: scale_test [--report POPULATION]\n");
         return 2;
     }
+
+    const char *cap_text = getenv("TAT_SCALE_MAX_POPULATION");
+    if (cap_text != NULL && cap_text[0] != 0) {
+        (void)population_arg("TAT_SCALE_MAX_POPULATION", cap_text);
+    }
+    (void)measure(WARMUP_POPULATION);
 
     size_t count = 0;
     round_cost costs[POPULATION_COUNT];
@@ -1303,7 +1488,20 @@ int main(int argc, char **argv) {
         report("measured", POPULATIONS[index], costs[index]);
     }
     for (size_t index = 1; index < count; index += 1) {
-        require_flat_pair(POPULATIONS[index - 1], &costs[index - 1], POPULATIONS[index], &costs[index]);
+        if (flat_pair(POPULATIONS[index - 1], &costs[index - 1], POPULATIONS[index], &costs[index])) {
+            continue;
+        }
+        /* One stolen time slice must not fail CI: measure both sizes once
+         * more, keep the cheaper of each cost, and only then decide. */
+        printf("measuring %u and %u actors again: %s\n", POPULATIONS[index - 1], POPULATIONS[index], ratio_failure);
+        keep_cheapest(&costs[index - 1], measure_best(POPULATIONS[index - 1], REPETITIONS));
+        keep_cheapest(&costs[index], measure_best(POPULATIONS[index], REPETITIONS));
+        report("again", POPULATIONS[index - 1], costs[index - 1]);
+        report("again", POPULATIONS[index], costs[index]);
+        if (!flat_pair(POPULATIONS[index - 1], &costs[index - 1], POPULATIONS[index], &costs[index])) {
+            fprintf(stderr, "scale test failed: %s\n", ratio_failure);
+            exit(1);
+        }
     }
     check_event_allocations();
     check_batched_delivery_allocations();
@@ -1316,5 +1514,9 @@ int main(int argc, char **argv) {
 
     printf("scale test passed: per-actor cost is flat from %u to %u actors, %.0f bytes each\n", POPULATIONS[0],
            POPULATIONS[count - 1], costs[count - 1].actor_bytes);
+    if (count < POPULATION_COUNT) {
+        printf("ran %zu of %zu populations; stopped before %u: %s\n", count, (size_t)POPULATION_COUNT,
+               POPULATIONS[count], stop_reason);
+    }
     return 0;
 }
