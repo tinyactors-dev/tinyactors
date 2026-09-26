@@ -28,7 +28,8 @@ module TinyactorsTest
 
     # The monitor, or nil. It may answer any of:
     #
-    #   budgets(id)          -> {budget:, action_budget:} for this resume, or nil for the defaults
+    #   budgets(id)          -> {budget:, action_budget:, pause_at_microstep_start:} for this resume,
+    #                           or nil for the defaults; a key left out is false or zero
     #   admit(ids)           -> the runnable actors to resume this round (after holds)
     #   resumed(id, status)  -> :stop to stop the loop after this resume
     #   dispatched(due)      -> :stop to stop the loop after this dispatch
@@ -39,13 +40,15 @@ module TinyactorsTest
     # runaway chart needs.
     attr_accessor :monitor
 
-    # `resume` is called as resume.call(id, budget:, action_budget:) and
-    # answers [response, id]: the ta.actor.resume response, and the actor's
-    # ID afterwards, which a residency cycle may change.
-    def initialize(context, resume:, budget:, action_budget:, dispatch_budget:)
+    # `resume` is called as resume.call(id, budget:, action_budget:,
+    # pause_at_microstep_start:) and answers [response, id]: the
+    # ta.actor.resume response, and the actor's ID afterwards, which a
+    # residency cycle may change.
+    def initialize(context, resume:, budget:, action_budget:, dispatch_budget:, pause_at_microstep_start: false)
       @context = context
       @resume = resume
-      @defaults = { budget: budget, action_budget: action_budget }.freeze
+      @defaults = { budget: budget, action_budget: action_budget,
+                    pause_at_microstep_start: pause_at_microstep_start }.freeze
       @dispatch_budget = dispatch_budget
       @held = []
       @queue = []

@@ -204,11 +204,14 @@ module TinyactorsTest
     end
 
     # One ta_actor_resume call with `budget` microsteps and, when not zero,
-    # `action_budget` units of executable content (ADR 0061); returns the
-    # status: "paused", "stable", or "done".
-    def resume(budget:, action_budget: 0)
+    # `action_budget` units of executable content (ADR 0061); with
+    # `pause_at_microstep_start`, it also pauses at the start of each
+    # microstep it begins (ADR 0087). Returns the status: "paused",
+    # "stable", or "done".
+    def resume(budget:, action_budget: 0, pause_at_microstep_start: false)
       response = @context.ta.actor.resume(system: @context.system_handle, actor: handle, budget: budget,
-                                          action_budget: action_budget)
+                                          action_budget: action_budget,
+                                          pause_at_microstep_start: pause_at_microstep_start)
       @context.core('ta_actor_resume', response).fetch(:status)
     end
 
@@ -337,7 +340,9 @@ module TinyactorsTest
     # several runs can share one host process. `trace: true` records a Trace
     # after every step. `resume_budget` and `dispatch_budget` are passed to
     # ta_actor_resume and ta_system_dispatch_due; `resume_action_budget` is
-    # ta_actor_resume's action budget (ADR 0061), zero for none. `after_step` is called as
+    # ta_actor_resume's action budget (ADR 0061), zero for none, and
+    # `resume_pause_at_microstep_start` its pause at each microstep's start
+    # (ADR 0087). `after_step` is called as
     # after_step.call(context, step_index) once a step is quiescent, before
     # it is traced and its invariants are checked; the system is run to
     # quiescence again after it, without further hooks or trace steps.
@@ -348,14 +353,16 @@ module TinyactorsTest
     # time the system starts at, as a debugger's fork restored from an
     # image taken later needs.
     def initialize(driver, group, charts, run: 'main', trace: false, resume_budget: RESUME_BUDGET,
-                   dispatch_budget: DISPATCH_BUDGET, resume_action_budget: 0, after_step: nil,
-                   count_allocations: false, allocation_fault: nil, initial_time: 0)
+                   dispatch_budget: DISPATCH_BUDGET, resume_action_budget: 0,
+                   resume_pause_at_microstep_start: false, after_step: nil, count_allocations: false,
+                   allocation_fault: nil, initial_time: 0)
       @driver = driver
       @group = group
       @charts = charts
       @run = run
       @scheduler = Scheduler.new(self, resume: method(:resume_logical), budget: resume_budget,
-                                       action_budget: resume_action_budget, dispatch_budget: dispatch_budget)
+                                       action_budget: resume_action_budget, dispatch_budget: dispatch_budget,
+                                       pause_at_microstep_start: resume_pause_at_microstep_start)
       @after_step = after_step
       @definitions = {}
       @event_names = {}
@@ -536,11 +543,13 @@ module TinyactorsTest
     # allocation; the names of those whose resume never answered err_nomem,
     # because the allocation that failed was a host operation's (a router
     # delivering to another actor), which handled it itself; and every stop
-    # (#stops) of every run.
-    def assert_allocation_failures_invisible(counts: [1], on_stop: nil, chart_errors: false, normalize: nil, &body)
+    # (#stops) of every run. Other options (`resume_action_budget:`, ...)
+    # are the runs' Context options.
+    def assert_allocation_failures_invisible(counts: [1], on_stop: nil, chart_errors: false, normalize: nil,
+                                             **options, &body)
       raise ScenarioError, 'assert_allocation_failures_invisible needs a block' unless body
 
-      reference = fresh_run('baseline', normalize, count_allocations: true, &body)
+      reference = fresh_run('baseline', normalize, count_allocations: true, **options, &body)
       points = reference.resume_costs.each_with_index.flat_map do |allocations, resume|
         Array.new(allocations) do |after|
           counts.map do |count|
@@ -552,7 +561,7 @@ module TinyactorsTest
       stops = []
       points.each do |fault|
         name = "allocation #{fault[:after] + 1} of resume #{fault[:resume]} failing #{fault[:count]}x"
-        run = fresh_run(name, normalize, allocation_fault: fault, &body)
+        run = fresh_run(name, normalize, allocation_fault: fault, **options, &body)
         difference = Trace.difference(reference.trace, run.trace, actual_name: name)
         raise AssertionFailed, difference if difference
 
@@ -1352,9 +1361,11 @@ module TinyactorsTest
     # (#stopped), and resumes it again until it runs: those retries are part
     # of the same logical resume. Returns the last response and the actor's
     # ID, which a residency cycle changes.
-    def resume_logical(id, budget:, action_budget:)
-      resume_actor = ->(actor) { ta.actor.resume(system: system_handle, actor: actor, budget: budget,
-                                                 action_budget: action_budget) }
+    def resume_logical(id, budget:, action_budget: 0, pause_at_microstep_start: false)
+      resume_actor = lambda do |actor|
+        ta.actor.resume(system: system_handle, actor: actor, budget: budget, action_budget: action_budget,
+                        pause_at_microstep_start: pause_at_microstep_start)
+      end
       index = @resume_index
       @resume_index += 1
       return [resume_actor.call(id), id] unless @allocation_fault || @count_allocations

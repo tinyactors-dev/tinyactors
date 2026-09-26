@@ -230,10 +230,15 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
 
   # Catches: a pause inside executable content that repeats or skips an
   # action, a <foreach> iteration, a handler, a state's activation or a
-  # raised event, or that loses a snapshot across resumes (ADR 0061).
+  # raised event, or that loses a snapshot across resumes (ADR 0061); and a
+  # pause at a microstep's start that runs part of it twice or not at all
+  # (ADR 0087).
   scenario 'pausing inside executable content is invisible' do
     variants = (1..6).to_h { |budget| ["action budget #{budget}", { resume_action_budget: budget }] }
     variants['action budget 1, resume budget 1'] = { resume_action_budget: 1, resume_budget: 1 }
+    variants['every microstep start'] = { resume_pause_at_microstep_start: true }
+    variants['every microstep start, action budget 1'] = { resume_pause_at_microstep_start: true,
+                                                           resume_action_budget: 1 }
     assert_equivalent_runs(variants: variants) do
       nested = spawn :nested_content
       nested.deliver 'go'
@@ -296,6 +301,44 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
     idle = nested.inspect_actor
     assert_equal 'none', idle.dig(:position, :at), 'an idle actor stands nowhere'
     assert_equal 0, Integer(idle.dig(:step, :macrostep))
+  end
+
+  # Catches: a stop at a microstep's start that has already run its first
+  # unit or exited a state, a position there that names anything but that
+  # first unit, and a step from there that runs more than it (ADR 0087).
+  scenario "a resume can stop before a microstep's first unit" do
+    recording_trace(kinds: %i[paused])
+    nested = spawn :nested_content
+    assert_equal 'ok', nested.post('go')
+    assert_equal 'paused', nested.resume(budget: 1000, pause_at_microstep_start: true)
+    inspection = nested.inspect_actor
+    assert inspection[:microstep_in_progress], 'it stopped inside the go microstep'
+    assert_equal [], nested.data('.log'), 'no unit ran'
+    assert_equal [:a], nested.active
+    record = trace_records.reverse.find { |entry| entry[:kind] == 'paused' }
+    assert_equal record[:key], inspection[:step]
+    assert_equal record[:position], inspection[:position]
+    position = inspection[:position]
+    assert_equal 'exit', position[:at]
+    assert_equal :a, state_name(nested.definition, position[:state])
+    action = core('ta_definition_action', ta.definition.action(system: system_handle, definition: nested.definition,
+                                                                action: position[:action])).fetch(:out)
+    assert_equal ['onexit', position[:state], 0, 0], action.values_at(:block, :owner, :block_index, :index),
+                 "it stands at the first action of a's first <onexit>"
+
+    assert_equal 'paused', nested.resume(budget: 1000, action_budget: 1, pause_at_microstep_start: true)
+    assert_equal ['x1'], nested.data('.log'), 'a step runs the first unit alone'
+    starts = []
+    microstep = nested.inspect_actor.dig(:step, :microstep)
+    while nested.resume(budget: 1000, action_budget: 1, pause_at_microstep_start: true) == 'paused'
+      view = nested.inspect_actor
+      next if view.dig(:step, :microstep) == microstep
+
+      microstep = view.dig(:step, :microstep)
+      starts << [view.dig(:position, :at), nested.data('.log').last, nested.active]
+    end
+    assert_equal [['transition', 'b2 2', %i[p b]]], starts, 'the inner microstep stopped at its start'
+    assert_equal %i[p c], nested.active
   end
 
   # Catches: a cancelled child paused inside a microstep that exits the
