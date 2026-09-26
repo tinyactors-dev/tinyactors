@@ -9,6 +9,10 @@ The message list is the complete set in the protocol's JSON schema
 (`debugAdapterProtocol.json` in microsoft/debug-adapter-protocol): 45
 requests, 17 events.
 
+Both hosts play [the shared DAP transcripts](../tinyactors-test/dap/README.md)
+(T1): the common core as request, response and event, so the two
+adapters stay in step. That README lists where they differ on purpose.
+
 ## Legend
 
 **Plan**
@@ -200,6 +204,8 @@ The adapter is `tinyactors-test/bin/dap`; see
   active invocations.
 - `replace` is not a console command in the test host: saving the chart
   file replaces its actors.
+- `cancel` and the Timers scope name a delayed send by its ID as the
+  chart holds it (ADR 0048), as napi does.
 
 ## Notes on the napi column
 
@@ -227,6 +233,14 @@ Every ☑ is covered by `tinyactors-napi/test/debug.js`, on Node and Bun.
   and the scheduling state; `_ioprocessors` is not shown there.
 - A fork does not mirror the live actor's later events into the copy: it
   is the actor as it was when forked (or restarted).
+- A microstep's frame names its transitions only once the microstep has
+  ended (`microstep 2.1` while it runs): napi reads spans, and a
+  microstep's span ends when the next one begins. For the same reason an
+  exception or a data breakpoint stops a fork after the macrostep, not at
+  the next unit.
+- A console `send` waits in the mailbox until the actor runs, and a
+  `goto` while the actor is inside a macrostep is queued behind it; the
+  test host delivers at once and refuses that `goto`.
 
 ## Prerequisites
 
@@ -241,5 +255,5 @@ Every ☑ is covered by `tinyactors-napi/test/debug.js`, on Node and Bun.
 | N1 | `held` scheduling state | tinyactors-napi [ADR 0027](../tinyactors-napi/docs/adr/0027-a-debugger-holds-steps-and-redirects-one-actor.md) | ☑ |
 | N2 | Budgets for one actor | tinyactors-napi [ADR 0027](../tinyactors-napi/docs/adr/0027-a-debugger-holds-steps-and-redirects-one-actor.md) | ☑ |
 | N3 | Operator transitions in the envelope; settling on abandon | tinyactors-napi [ADR 0027](../tinyactors-napi/docs/adr/0027-a-debugger-holds-steps-and-redirects-one-actor.md) | ☑ |
-| T1 | Shared DAP transcript suite | both hosts | ☐ |
+| T1 | Shared DAP transcript suite | [tinyactors-test/dap](../tinyactors-test/dap/README.md), played by both hosts' tests | ☑ |
 | X1 | VS Code extension that registers the debug type | [tinyactors-vscode](../tinyactors-vscode/README.md) | ☑ |
