@@ -160,7 +160,7 @@ the trace records.
 | Event | `_event` of the step the actor is in |
 | Configuration | the active states as a tree, and what each history state recorded |
 | Queues | the internal queue, the event being taken, and console messages waiting |
-| Timers | pending delayed sends: event, target, when each is due |
+| Timers | pending delayed sends, each by its send ID: event, target, when it is due |
 | Invocations | each invocation, and the thread of its child |
 | System | `_sessionid`, `_name`, `_ioprocessors`, logical time, the definition |
 
@@ -236,7 +236,7 @@ where the actor stands, not against trace records, so it stops before a
 | `send [@actor] <event> [json]` | delivers to the frame's actor, or the one named, with the console as its origin |
 | `goto [@actor] <state…> [from <state>]` | an operator transition (core ADR 0082): runs its macrostep, then stops with reason `goto` |
 | `abandon [@actor]` | abandons the actor's macrostep (core ADR 0082); it is idle in its last configuration |
-| `cancel [@actor] <send ID>` | withdraws one pending delayed send (core ADR 0084), by the ID the Timers scope shows |
+| `cancel [@actor] <send ID>` | withdraws one pending delayed send (core ADR 0084), by the ID the Timers scope shows: the chart's, or `#_send.<n>` (ADR 0048) |
 | `fork [@actor]` | copies the actor into a system of its own (core ADR 0085); see "Forks" |
 | `clock [@actor] +<duration>` | advances the logical time of the actor's system: `+500ms`, `+5s`, `+2m`, `+1h`, `+3d` |
 | `<expression>` | jq over the actor's data model |

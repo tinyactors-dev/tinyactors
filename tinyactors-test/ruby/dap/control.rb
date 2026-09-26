@@ -309,14 +309,14 @@ module DAP
         event = thread.view&.dig(:current_event)
         if @step&.waiting && @step.key == thread.track_key
           track.entry_stopped = true
-          stop_at(thread, 'step', "took #{event_name(thread, event) || 'its next event'}")
+          stop_at(thread, 'step', "about to take #{event_name(thread, event) || 'its next event'}")
           return []
         end
         hits = @breakpoints.taking(thread, event)
         next if hits.empty?
 
         track.entry_stopped = true
-        stop_at(thread, 'function breakpoint', "#{thread.label} takes #{event_name(thread, event)}",
+        stop_at(thread, 'function breakpoint', "about to take #{event_name(thread, event)}",
                 breakpoints: hits)
         return []
       end

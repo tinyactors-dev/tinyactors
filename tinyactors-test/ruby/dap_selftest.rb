@@ -441,7 +441,7 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     { 'replace counter.rb' => 'save the chart file',
       'goto nowhere' => 'not a state', 'goto idle busy' => 'cannot be entered together',
       'abandon' => 'no macrostep to abandon', 'cancel 12345' => 'no pending send 12345',
-      'cancel dunning' => 'the number the Timers scope shows' }.each do |command, why|
+      'cancel dunning' => 'no pending send dunning' }.each do |command, why|
       answer = evaluate.call(command, 'repl')
       check("#{command} is refused, saying why") { !answer['success'] && answer['message'].include?(why) }
     end
@@ -598,7 +598,7 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     client.request('evaluate', 'expression' => 'send ping', 'context' => 'repl')
     stopped = client.event('stopped')
     check('the step stops when the actor takes its next event') do
-      stopped['reason'] == 'step' && stopped['description'] == 'took ping' && stopped['threadId'] == tid
+      stopped['reason'] == 'step' && stopped['description'] == 'about to take ping' && stopped['threadId'] == tid
     end
     check('before transition selection') do
       names_of.call(tid) == ['about to take ping (before transition selection)']
@@ -692,6 +692,7 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     stopped = client.event('stopped')
     check('on: stops before the macrostep that takes the event') do
       stopped['reason'] == 'function breakpoint' && stopped['hitBreakpointIds'] == [on_ping.first['id']] &&
+        stopped['description'] == 'about to take ping' &&
         names_of.call(tid) == ['about to take ping (before transition selection)']
     end
     client.request('continue', 'threadId' => tid)
@@ -763,9 +764,9 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     puts 'timers and the clock'
     boss_top = frame_of.call(boss).first['id']
     timers = vars.call(scope_ref.call(boss_top, 'Timers'))
-    check('the Timers scope lists pending delayed sends') do
+    check('the Timers scope lists pending delayed sends, by the ID the chart gave each') do
       timer = vars.call(timers.first['variablesReference']).to_h { |variable| [variable['name'], variable['value']] }
-      timers.size == 1 && timer['event'] == '"tick"' && timer['due'] == '5000'
+      timers.size == 1 && timers.first['name'] == 'tick' && timer['event'] == '"tick"' && timer['due'] == '5000'
     end
     clock = client.request('evaluate', 'expression' => 'clock +5s', 'context' => 'repl')['body']
     check('clock advances logical time') { clock['result'] == 't=5000ms' }

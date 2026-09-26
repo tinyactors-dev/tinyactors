@@ -1288,6 +1288,24 @@ module TinyactorsTest
                                 ta.event.name_format(system: system_handle, name: id, capacity: 1024)).fetch(:buffer)
     end
 
+    # The text of a send ID, as a chart sees it (ADR 0048): the author's ID,
+    # or `#_send.<n>`; nil for a send without one.
+    def send_id_text(id)
+      response = ta.send.id_format(system: system_handle, send_id: id, capacity: 1024)
+      return nil if response[:result] == 'err_not_found'
+
+      core('ta_send_id_format', response).fetch(:buffer)
+    end
+
+    # The send ID the text a chart holds names, or nil when no send of this
+    # system can have it.
+    def send_id(text)
+      response = ta.send.id_parse(system: system_handle, text: text)
+      return nil if %w[err_not_found err_invalid].include?(response[:result])
+
+      core('ta_send_id_parse', response).fetch(:out)
+    end
+
     # A pending delayed send's target, from its ta_delayed_send_info: a literal
     # target is text in the owner's definition, named by content ID.
     def send_target(definition, send)

@@ -290,9 +290,9 @@ module DAP
     def timers(thread, view)
       context = thread.context
       now = context.now
-      Array(view[:delayed_sends]).map do |send|
+      Array(view[:delayed_sends]).each_with_index.map do |send, index|
         target = context.send_target(view[:definition_id], send)
-        [send[:send_id].to_s, { event: context.event_text(send[:event]), target: target, due: send[:due],
+        [context.send_id_text(send[:send_id]) || "(no ID) #{index + 1}", { event: context.event_text(send[:event]), target: target, due: send[:due],
                                 in: "#{Integer(send[:due]) - now}ms", data: send[:data] }]
       end
     end

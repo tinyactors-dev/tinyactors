@@ -62,21 +62,24 @@ module DAP
       end
     end
 
-    # Withdraws `thread`'s pending delayed send `send`, the ID the Timers
-    # scope shows.
+    # Withdraws `thread`'s pending delayed send whose ID is `text`, as the
+    # Timers scope shows it and a chart holds it (ADR 0048): the author's
+    # ID, or `#_send.<n>`.
     def withdraw(thread, text)
-      send = Integer(text, exception: false)
-      raise RequestError, 'cancel <send ID>: the number the Timers scope shows' if send.nil?
+      raise RequestError, 'cancel <send ID>, as the Timers scope shows it' if text.to_s.empty?
 
       context = thread.context
+      send = context.send_id(text)
+      raise RequestError, "#{thread.label} has no pending send #{text}" if send.nil?
+
       result = context.ta.actor.withdraw_send(system: context.system_handle, actor: thread.handle, send: send)[:result]
       case result
-      when 'ok' then "#{thread.label}: withdrew send #{send}"
-      when 'err_not_found' then raise RequestError, "#{thread.label} has no pending send #{send}"
+      when 'ok' then "#{thread.label}: withdrew send #{text}"
+      when 'err_not_found' then raise RequestError, "#{thread.label} has no pending send #{text}"
       when 'err_done'
-        raise RequestError, "send #{send} was offered to its target once and waits to be offered again; " \
+        raise RequestError, "send #{text} was offered to its target once and waits to be offered again; " \
                             'it belongs to its receiver now'
-      when 'err_invalid' then raise RequestError, "#{send} names no send"
+      when 'err_invalid' then raise RequestError, "#{text} names no send"
       else raise RequestError, "ta_actor_withdraw_send answered #{result}"
       end
     end
