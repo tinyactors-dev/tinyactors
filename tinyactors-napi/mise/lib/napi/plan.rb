@@ -126,7 +126,8 @@ module NapiGen
     def handle_plan(name, entry)
       release = entry.fetch('destroyed_by', []).first&.fetch('function')
       { type: name, name: entry['handle'], release: release,
-        reclaimed: !@policy.reclaimed_by_core(entry['handle']).nil? }
+        reclaimed: !@policy.reclaimed_by_core(entry['handle']).nil?,
+        any_system: !@policy.any_system(entry['handle']).nil? }
     end
 
     def classify_struct(name, entry)

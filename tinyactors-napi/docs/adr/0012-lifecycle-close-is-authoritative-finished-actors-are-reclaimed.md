@@ -1,6 +1,6 @@
 # ADR 0012: Lifecycle: close is authoritative, finished actors are reclaimed
 
-**Status:** Accepted
+**Status:** Accepted; refined by ADR 0026: another system may restore an image and copies its boxes, so a box still never outlives its system
 **Date:** 2026-09-23
 
 ## Context

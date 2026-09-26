@@ -1230,7 +1230,9 @@ class System {
    * defaults to the data root the image kept, and the image stays the
    * caller's to destroy. An invocation that was active when it was captured
    * does not come back: the actor gets
-   * `error.communication.invoke.<id>.unavailable` for it (core ADR 0038).
+   * `error.communication.invoke.<id>.unavailable` for it (core ADR 0038). An
+   * image captured in another system loads too, as a new session of this one
+   * (core ADR 0085); bytes load only in the system that wrote them.
    */
   load(target, options = {}) {
     if (!(target instanceof SessionImage)) {
@@ -1239,7 +1241,7 @@ class System {
       return new ActorID(this, id.slot, id.generation);
     }
     const image = target;
-    const handle = handleOf(image, this, 'load()');
+    const handle = handleOf(image, 'load()');
     if (image.address !== undefined) {
       // The image replaces whatever unload() offloaded to its address.
       this.#native.dropOffloaded(image.address.family, image.address.name);
@@ -1251,12 +1253,17 @@ class System {
   /**
    * Restore an image under a fresh runtime ID without touching the
    * directory (core ADR 0052). It keeps the session ID unless a resident
-   * session holds it (core ADR 0066). `binding` defaults to the data root
-   * the image kept, which is shared with the captured actor if that still
-   * runs; pass one for an independent copy.
+   * session holds it (core ADR 0066). The image may come from another
+   * system (core ADR 0085): the copy then is a new session here, runs on
+   * this system's clock and I/O processors, and a send to another actor of
+   * the image's system fails as one to a destroyed actor does. The values
+   * the image holds become this system's (ADR 0026). `binding` defaults to
+   * the data root the image kept, which is shared with the captured actor if
+   * that still runs; pass one, such as a structuredClone of it, for an
+   * independent copy.
    */
   reconstruct(image, options = {}) {
-    const handle = handleOf(image, this, 'reconstruct()');
+    const handle = handleOf(image, 'reconstruct()');
     const id = core.actor_reconstruct(this.#native, handle, this.#bindingFor(image, options));
     return new ActorID(this, id.slot, id.generation);
   }
@@ -1428,7 +1435,7 @@ class System {
 
   // Loads a loader's image under the trace of the mail that caused the load.
   #loadImage(image, { index, generation, address }) {
-    const handle = handleOf(image, this, "setLoader(): the loader's image");
+    const handle = handleOf(image, "setLoader(): the loader's image");
     if (image.address === undefined || image.address.family !== address.family ||
         image.address.name !== address.name) {
       throw new TinyactorsError(`the loader returned an image of another address than ${address.family}/${address.name}`,

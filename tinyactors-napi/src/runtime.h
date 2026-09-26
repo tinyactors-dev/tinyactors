@@ -75,6 +75,7 @@ typedef struct tna_handle_kind {
     const char *name;                /* the API description's handle name */
     void (*release)(void *pointer);  /* its destroy function */
     bool reclaimed_by_core;          /* core frees it at system teardown */
+    bool any_system;                 /* a call against another system may take it */
 } tna_handle_kind;
 
 /*

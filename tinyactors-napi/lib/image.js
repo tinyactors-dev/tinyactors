@@ -12,6 +12,12 @@
 // load() and reconstruct() use it unless given another binding. It is the
 // same object, not a copy: reconstructing an image of an actor that still
 // runs shares that actor's data unless a binding is passed.
+//
+// Any system can restore an image, not only its origin (core ADR 0085): a
+// debugger's fork runs in a system with its own clock. The boxes the image
+// holds become the restoring system's (ADR 0026), so the copy keeps nothing
+// of the origin, which may close first. The image itself still belongs to
+// its origin and is destroyed when the origin closes.
 
 const native = require('./native');
 const { TinyactorsError } = require('./errors');
@@ -76,10 +82,11 @@ class SessionImage {
   }
 }
 
-// The core handle of a live image of `system` (load, unload, reconstruct).
-function handleOf(image, system, caller) {
-  if (!(image instanceof SessionImage) || image.origin !== system) {
-    throw new TinyactorsError(`${caller}: expected a SessionImage captured in this system`, 'invalid');
+// The core handle of a live image, captured in any system (load, unload,
+// reconstruct). Core refuses to unload with an image of another system.
+function handleOf(image, caller) {
+  if (!(image instanceof SessionImage)) {
+    throw new TinyactorsError(`${caller}: expected a SessionImage`, 'invalid');
   }
   if (image.destroyed) {
     throw new TinyactorsError(`${caller}: the image was destroyed`, 'invalid');

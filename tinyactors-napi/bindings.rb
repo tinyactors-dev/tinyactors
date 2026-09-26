@@ -142,6 +142,13 @@ module TinyactorsNapiBindings
     'definition' => 'core reclaims compiled definitions that were never registered'
   }.freeze
 
+  # Handles a call against another system may take: a call binds to the
+  # system of its receiver, or of its first handle, and otherwise refuses a
+  # handle of another system.
+  ANY_SYSTEM_HANDLES = {
+    'session_image' => 'an image restores into any system that registers its revision (core ADR 0085, ADR 0026)'
+  }.freeze
+
   # A parameter with this name that points at a struct is flattened into
   # positional arguments (ADR 0013).
   FLATTEN_PARAMETER = 'params'
