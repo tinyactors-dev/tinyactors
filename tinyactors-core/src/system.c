@@ -148,10 +148,54 @@ ta_result ta_system_set_external_event_router(ta_system *system, ta_external_eve
     return TA_OK;
 }
 
+static bool ta_bytes_same(ta_bytes left, ta_bytes right);
+
+/* The newest registered, non-retired definition with this identity, or NULL. */
+static ta_definition *ta_system_live_definition(const ta_system *system, const ta_definition_identity *identity) {
+    /* Slots are reused, so registration order decides: the newest match wins. */
+    ta_definition *best = NULL;
+    for (uint32_t slot = 0; slot < system->definitions.count; slot += 1) {
+        const ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
+        ta_definition *definition = entry->definition;
+        if (definition == NULL || definition->retired ||
+            (best != NULL && best->registration_serial > definition->registration_serial)) {
+            continue;
+        }
+        if (ta_str_equal(definition->identity.family.name, identity->family.name) &&
+            ta_bytes_same(definition->identity.revision, identity->revision)) {
+            best = definition;
+        }
+    }
+    return best;
+}
+
 ta_result ta_system_register_definition(ta_system *system, ta_definition *definition, ta_definition_id *out) {
     if (system == NULL || definition == NULL || out == NULL || definition->system != system ||
         definition->registered) {
         return TA_ERR_INVALID;
+    }
+    /*
+     * Idempotent by identity (ADR 0077): a live definition with this
+     * identity is the one registered, and it gains a hold. The same explicit
+     * revision for other content is refused rather than silently answered
+     * with the old chart.
+     */
+    ta_definition *live = definition->host_expressions ? NULL
+                                                       : ta_system_live_definition(system, &definition->identity);
+    if (live != NULL && live->host_expressions) {
+        live = NULL;
+    }
+    if (live != NULL && live->content_hash != definition->content_hash) {
+        return TA_ERR_DEFINITION_MISMATCH;
+    }
+    /* The same chart compiled against another data-model adapter is another
+     * definition: it runs differently, so it registers beside the first. */
+    if (live != NULL && live->datamodel.self == definition->datamodel.self &&
+        live->datamodel.v == definition->datamodel.v) {
+        live->holds += 1u;
+        *out = live->id;
+        ta_definition_destroy(definition);
+        return TA_OK;
     }
     uint32_t slot = system->free_definition_slot;
     if (slot == UINT32_MAX) {
@@ -188,6 +232,7 @@ ta_result ta_system_register_definition(ta_system *system, ta_definition *defini
     definition->unregistered_next = NULL;
     definition->id = ((ta_definition_id)entry->generation << 32) | slot;
     definition->registered = true;
+    definition->holds = 1u;
     definition->registration_serial = system->next_definition_serial++;
     *out = definition->id;
     return TA_OK;
@@ -206,15 +251,60 @@ ta_definition *ta_system_definition(const ta_system *system, ta_definition_id id
     return entry->generation == generation ? entry->definition : NULL;
 }
 
-void ta_system_free_definition(ta_system *system, ta_definition *definition) {
-    uint32_t slot = (uint32_t)(definition->id & 0xffffffffu);
-    ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
-    /* The slot's next occupant gets a new generation, so this ID goes stale. */
-    entry->definition = NULL;
-    entry->generation += 1u;
-    entry->next_free = system->free_definition_slot;
-    system->free_definition_slot = slot;
-    ta_definition_destroy(definition);
+static bool ta_definition_unused(const ta_definition *definition) {
+    return definition->holds == 0 && definition->holders == 0 && definition->actor_count == 0;
+}
+
+/*
+ * Frees `definition` if nothing uses it any more (ADR 0077): no hold, no
+ * definition nesting it, and no resident actor. Freeing a definition drops
+ * its hold on each definition it nests, which may free those in turn; the
+ * cascade runs as a worklist, not by recursion (ADR 0060).
+ */
+void ta_system_settle_definition(ta_system *system, ta_definition *definition) {
+    ta_definition *pending = ta_definition_unused(definition) ? definition : NULL;
+    if (pending != NULL) {
+        pending->free_next = NULL;
+    }
+    while (pending != NULL) {
+        ta_definition *freeing = pending;
+        pending = freeing->free_next;
+        for (uint32_t index = 0; freeing->nested != NULL && index < freeing->invoke_decl_count; index += 1u) {
+            ta_definition *child = ta_system_definition(system, freeing->nested[index]);
+            if (child == NULL) {
+                continue;
+            }
+            child->holders -= 1u;
+            if (ta_definition_unused(child)) {
+                child->free_next = pending;
+                pending = child;
+            }
+        }
+        uint32_t slot = (uint32_t)(freeing->id & 0xffffffffu);
+        ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
+        /* The slot's next occupant gets a new generation, so this ID goes stale. */
+        entry->definition = NULL;
+        entry->generation += 1u;
+        entry->next_free = system->free_definition_slot;
+        system->free_definition_slot = slot;
+        ta_definition_destroy(freeing);
+    }
+}
+
+ta_result ta_system_release_definition(ta_system *system, ta_definition_id id) {
+    if (system == NULL) {
+        return TA_ERR_INVALID;
+    }
+    ta_definition *definition = ta_system_definition(system, id);
+    if (definition == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    if (definition->holds == 0) {
+        return TA_ERR_INVALID;
+    }
+    definition->holds -= 1u;
+    ta_system_settle_definition(system, definition);
+    return TA_OK;
 }
 
 ta_result ta_system_retire_definition(ta_system *system, ta_definition_id id) {
@@ -234,9 +324,8 @@ ta_result ta_system_retire_definition(ta_system *system, ta_definition_id id) {
         return freed ? TA_OK : TA_ERR_NOT_FOUND;
     }
     definition->retired = true;
-    if (definition->actor_count == 0) {
-        ta_system_free_definition(system, definition);
-    }
+    definition->holds = 0;
+    ta_system_settle_definition(system, definition);
     return TA_OK;
 }
 
@@ -258,24 +347,11 @@ ta_result ta_system_find_definition(const ta_system *system,
     if (system == NULL || identity == NULL || out == NULL) {
         return TA_ERR_INVALID;
     }
-    /* Slots are reused, so registration order decides: the newest match wins. */
-    const ta_definition *best = NULL;
-    for (uint32_t slot = 0; slot < system->definitions.count; slot += 1) {
-        const ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
-        const ta_definition *definition = entry->definition;
-        if (definition == NULL || definition->retired ||
-            (best != NULL && best->registration_serial > definition->registration_serial)) {
-            continue;
-        }
-        if (ta_str_equal(definition->identity.family.name, identity->family.name) &&
-            ta_bytes_same(definition->identity.revision, identity->revision)) {
-            best = definition;
-        }
-    }
-    if (best == NULL) {
+    const ta_definition *live = ta_system_live_definition(system, identity);
+    if (live == NULL) {
         return TA_ERR_NOT_FOUND;
     }
-    *out = best->id;
+    *out = live->id;
     return TA_OK;
 }
 

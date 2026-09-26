@@ -215,7 +215,6 @@ typedef struct {
     ta_bytes bytes;
 } ta_content_def;
 
-#define TA_CONTENT_NONE ((ta_content_id)UINT32_MAX)
 
 /* A literal src is TA_VALUE_SOURCE_CONTENT. */
 typedef struct {
@@ -415,12 +414,35 @@ struct ta_definition {
     /* Resident actors whose `definition` points here; see ta_actor_free(). */
     uint32_t actor_count;
     /*
-     * Set by ta_system_retire_definition(): no new actors, and the system
-     * frees the definition once actor_count reaches zero (ADR 0043).
+     * Holds (ADR 0077): each ta_system_register_definition() takes one and
+     * ta_system_release_definition() gives one back. `holders` counts the
+     * definitions that nest this one for an inline <invoke>. The system
+     * frees the definition once holds, holders and actor_count are all zero.
+     */
+    uint32_t holds;
+    uint32_t holders;
+    /*
+     * Set by ta_system_retire_definition(): no new actors, no match by
+     * identity, and its holds dropped (ADR 0043, ADR 0077).
      */
     bool retired;
     /* Registration order; see ta_system_find_definition(). */
     uint64_t registration_serial;
+    /* The compiler's content hash, whatever the revision (ADR 0077). */
+    uint64_t content_hash;
+    /*
+     * The chart has a host expression, which the content hash cannot see
+     * into: registration never answers it with another definition by
+     * identity, nor refuses it for one (ADR 0077).
+     */
+    bool host_expressions;
+    /*
+     * The definition each <invoke> nests, by invoke declaration, or 0; null
+     * until the first ta_definition_nest(). Allocated in `arena`.
+     */
+    ta_definition_id *nested;
+    /* The system's free list while a release cascades (ADR 0060: no recursion). */
+    ta_definition *free_next;
 };
 
 /* A registered definition, retired or not; NULL for an unknown or stale ID. */

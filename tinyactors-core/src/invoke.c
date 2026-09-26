@@ -496,6 +496,7 @@ static ta_result ta_invoke_launch(ta_interpreter *it, const ta_invoke_launch_par
         .params = values->params,
         .autoforward = decl->autoforward,
         .trace = ta_interpreter_trace_here(it),
+        .definition = it->definition->nested != NULL ? it->definition->nested[params->decl] : 0,
     };
     if (decl->data.kind == TA_VALUE_SOURCE_CONTENT) {
         ta_interpreter_literal_content(it->definition, decl->data.as.content, &request.content_type,
@@ -1026,4 +1027,58 @@ ta_result ta_actor_publish_completion(ta_system *system, ta_actor_id id) {
         return TA_OK; /* already delivered */
     }
     return ta_invoke_publish(system, actor, (ta_trace_parent){0});
+}
+
+/* ------------------------------------------------------------------------
+ * Nested definitions (ADR 0077)
+ */
+
+ta_result ta_definition_invoke(const ta_system *system, const ta_definition_invoke_params *params) {
+    if (system == NULL || params == NULL || params->out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    const ta_definition *definition = ta_definition_lookup(system, params->definition);
+    if (definition == NULL || params->invoke >= definition->invoke_decl_count) {
+        return TA_ERR_NOT_FOUND;
+    }
+    const ta_invoke_decl *decl = &definition->invokes[params->invoke];
+    ta_invoke_info info = {
+        .content = decl->data.kind == TA_VALUE_SOURCE_CONTENT ? decl->data.as.content : TA_CONTENT_ID_NONE,
+        .src = decl->src.kind == TA_VALUE_SOURCE_CONTENT ? decl->src.as.content : TA_CONTENT_ID_NONE,
+        .nested = definition->nested != NULL ? definition->nested[params->invoke] : 0,
+    };
+    if (decl->type.kind == TA_TEXT_SOURCE_EXPR) {
+        info.has_type_expr = true;
+    } else {
+        ta_atom type = decl->type.kind == TA_TEXT_SOURCE_ATOM ? ta_invoke_normalize_type(system, decl->type.as.atom)
+                                                              : system->scxml_invoke_type;
+        info.type = ta_atom_text(&system->atoms, type);
+    }
+    *params->out = info;
+    return TA_OK;
+}
+
+ta_result ta_definition_nest(ta_system *system, const ta_definition_nest_params *params) {
+    if (system == NULL || params == NULL) {
+        return TA_ERR_INVALID;
+    }
+    ta_definition *parent = ta_system_definition(system, params->parent);
+    ta_definition *child = ta_system_definition(system, params->child);
+    if (parent == NULL || child == NULL || parent == child || parent->retired || child->retired ||
+        params->invoke >= parent->invoke_decl_count ||
+        (parent->nested != NULL && parent->nested[params->invoke] != 0)) {
+        return TA_ERR_INVALID;
+    }
+    if (parent->nested == NULL) {
+        size_t bytes = (size_t)parent->invoke_decl_count * sizeof(ta_definition_id);
+        ta_definition_id *nested = ta_arena_alloc(&parent->arena, bytes, _Alignof(ta_definition_id));
+        if (nested == NULL) {
+            return TA_ERR_NOMEM;
+        }
+        ta_mem_zero(nested, bytes);
+        parent->nested = nested;
+    }
+    parent->nested[params->invoke] = child->id;
+    child->holders += 1u;
+    return TA_OK;
 }

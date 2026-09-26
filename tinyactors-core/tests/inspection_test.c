@@ -264,10 +264,11 @@ static void test_find_definition(ta_system *system, counting_model *model) {
     CHECK(ta_system_find_definition(system, &probe, &found) == TA_OK);
     CHECK(found == first);
 
+    /* Registration is idempotent by identity (ADR 0077). */
     CHECK(compile(system, (compile_request){&spec, counting, &second}) == TA_OK);
-    CHECK(second != first);
+    CHECK(second == first);
     CHECK(ta_system_find_definition(system, &probe, &found) == TA_OK);
-    CHECK(found == second);
+    CHECK(found == first);
 
     revision[4] = 'b';
     CHECK(ta_system_find_definition(system, &probe, &found) == TA_ERR_NOT_FOUND);

@@ -110,8 +110,9 @@ struct ta_system {
  * unknown or stale ID.
  */
 ta_definition *ta_system_definition(const ta_system *system, ta_definition_id id);
-/* Frees a registered definition and its slot; no actor may use it. */
-void ta_system_free_definition(ta_system *system, ta_definition *definition);
+/* Frees a registered definition and its slot if nothing holds or uses it,
+ * and what that frees in turn (ADR 0077). */
+void ta_system_settle_definition(ta_system *system, ta_definition *definition);
 /* The adapter registered for `type`, or null (not for the SCXML processor). */
 const ta_io *ta_system_io_of(const ta_system *system, ta_atom type);
 /* The registration at registry index `index`, or null; index 0 (SCXML) has none. */

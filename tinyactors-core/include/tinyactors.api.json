@@ -145,6 +145,13 @@
       "value": 1024
     },
     {
+      "name": "TA_CONTENT_ID_NONE",
+      "type": {
+        "type": "ta_content_id"
+      },
+      "value": 4294967295
+    },
+    {
       "name": "TA_DONE_DATA_NONE",
       "type": {
         "type": "ta_done_data_id"
@@ -7500,7 +7507,7 @@
     },
     "ta_definition_identity": {
       "kind": "struct",
-      "doc": "Process-independent identity of one exact immutable definition revision. `family` is the stable logical statechart family; `revision` is an opaque fingerprint copied/owned by the compiled definition.  Any change that can alter interpretation of a session image must produce a different revision.",
+      "doc": "Process-independent identity of one exact immutable definition revision. `family` is the stable logical statechart family; `revision` is an opaque fingerprint copied/owned by the compiled definition.  Any change that can alter interpretation of a session image must produce a different revision. Given to the compiler with an empty `revision`, an identity names only the family for a chart that has no name of its own, and the revision is the compiler's fingerprint of the content (ADR 0077).",
       "fields": [
         {
           "name": "family",
@@ -7747,6 +7754,13 @@
           "doc": "Literal content readable with ta_definition_content()."
         },
         {
+          "name": "invoke_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "<invoke > declarations readable with ta_definition_invoke()."
+        },
+        {
           "name": "retired",
           "type": {
             "builtin": "bool"
@@ -7759,6 +7773,19 @@
             "builtin": "uint32_t"
           },
           "doc": "Resident actors using this definition, unpublished replacements included."
+        },
+        {
+          "name": "holds",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "Holds taken by ta_system_register_definition() and not yet released, and the definitions that nest this one (ADR 0077). The system frees the definition when both and `actor_count` are zero."
+        },
+        {
+          "name": "holders",
+          "type": {
+            "builtin": "uint32_t"
+          }
         },
         {
           "name": "actor_fixed_bytes",
@@ -7777,7 +7804,7 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 120,
+          "size": 136,
           "align": 8,
           "offsets": {
             "id": 0,
@@ -7790,14 +7817,17 @@
             "action_count": 84,
             "expression_count": 88,
             "content_count": 92,
-            "retired": 96,
-            "actor_count": 100,
-            "actor_fixed_bytes": 104,
-            "definition_bytes": 112
+            "invoke_count": 96,
+            "retired": 100,
+            "actor_count": 104,
+            "holds": 108,
+            "holders": 112,
+            "actor_fixed_bytes": 120,
+            "definition_bytes": 128
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 80,
+          "size": 96,
           "align": 8,
           "offsets": {
             "id": 0,
@@ -7810,10 +7840,106 @@
             "action_count": 52,
             "expression_count": 56,
             "content_count": 60,
-            "retired": 64,
-            "actor_count": 68,
-            "actor_fixed_bytes": 72,
-            "definition_bytes": 76
+            "invoke_count": 64,
+            "retired": 68,
+            "actor_count": 72,
+            "holds": 76,
+            "holders": 80,
+            "actor_fixed_bytes": 84,
+            "definition_bytes": 88
+          }
+        }
+      }
+    },
+    "ta_definition_invoke_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "definition",
+          "type": {
+            "type": "ta_definition_id"
+          }
+        },
+        {
+          "name": "invoke",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_invoke_info"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "definition"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "definition": 0,
+            "invoke": 8,
+            "out": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "definition": 0,
+            "invoke": 8,
+            "out": 12
+          }
+        }
+      }
+    },
+    "ta_definition_nest_params": {
+      "kind": "struct",
+      "doc": "Nests `child` as the chart `parent`'s <invoke > number `invoke` starts (ADR 0077): an inline <scxml > in <content >, or a literal src, compiled when the parent was defined. The parent holds the child until the parent is freed, and every invocation of that <invoke > gets the child as ta_invoke_request.definition. TA_ERR_INVALID when either definition is unknown or retired, `invoke` is out of range, or that <invoke > already nests a definition.",
+      "fields": [
+        {
+          "name": "parent",
+          "type": {
+            "type": "ta_definition_id"
+          }
+        },
+        {
+          "name": "invoke",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "child",
+          "type": {
+            "type": "ta_definition_id"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "parent": 0,
+            "invoke": 8,
+            "child": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "parent": 0,
+            "invoke": 8,
+            "child": 16
           }
         }
       }
@@ -9354,6 +9480,66 @@
         }
       }
     },
+    "ta_invoke_info": {
+      "kind": "struct",
+      "doc": "One <invoke > of a definition, by declaration index from 0 (ADR 0077): what a host needs to compile its child chart when the definition is defined. `type` is the literal type, normalized as ta_invoke_request's is (\"http://www.w3.org/TR/scxml/\" for the SCXML aliases and when the <invoke > names no type), or empty when the type is computed (`has_type_expr`). `content` is a literal <content > and `src` a literal src, each TA_CONTENT_ID_NONE when absent; read their bytes with ta_definition_content(). `nested` is the definition nested for it with ta_definition_nest(), or 0. TA_ERR_NOT_FOUND ends a walk over 0, 1, 2, ... and answers an unknown or stale definition.",
+      "fields": [
+        {
+          "name": "type",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "has_type_expr",
+          "type": {
+            "builtin": "bool"
+          }
+        },
+        {
+          "name": "content",
+          "type": {
+            "type": "ta_content_id"
+          }
+        },
+        {
+          "name": "src",
+          "type": {
+            "type": "ta_content_id"
+          }
+        },
+        {
+          "name": "nested",
+          "type": {
+            "type": "ta_definition_id"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "type": 0,
+            "has_type_expr": 16,
+            "content": 20,
+            "src": 24,
+            "nested": 32
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "type": 0,
+            "has_type_expr": 8,
+            "content": 12,
+            "src": 16,
+            "nested": 24
+          }
+        }
+      }
+    },
     "ta_invoke_origin": {
       "kind": "struct",
       "doc": "An event from an invoked service (ADR 0068). Core fills it: `invoker` is the registry index of the invocation's invoker, so the origin keeps its type after the invocation ends.",
@@ -9541,7 +9727,7 @@
     },
     "ta_invoke_request": {
       "kind": "struct",
-      "doc": "One invocation to start. `type` is the resolved invoker type; the SCXML aliases \"scxml\" and \"http://www.w3.org/TR/scxml\" are normalized to \"http://www.w3.org/TR/scxml/\". `src` is the evaluated src/srcexpr, `data` the evaluated ` <content expr>`, and `params` the data model's aggregate of <param >/namelist values; each is empty (null vtable) when absent. A literal <content > is not imported: it arrives as `content`, the bytes the chart holds, with `content_type` its media type (empty when nothing said), and interpreting it is the invoker's business (ADR 0053, SCXML 6.4.2). Values and bytes are borrowed for the call. A service for an SCXML session spawns its child with ta_actor_spawn() and a `parent` of {parent, invoke_id}; the core then routes `#_ <invokeid >` sends, autoforwarding, and done.invoke itself. `trace` is the invoking macrostep's context and the key of the step that invoked, which such a service passes to ta_actor_spawn(), so the child's bootstrap runs under it (ADR 0067).",
+      "doc": "One invocation to start. `type` is the resolved invoker type; the SCXML aliases \"scxml\" and \"http://www.w3.org/TR/scxml\" are normalized to \"http://www.w3.org/TR/scxml/\". `src` is the evaluated src/srcexpr, `data` the evaluated ` <content expr>`, and `params` the data model's aggregate of <param >/namelist values; each is empty (null vtable) when absent. A literal <content > is not imported: it arrives as `content`, the bytes the chart holds, with `content_type` its media type (empty when nothing said), and interpreting it is the invoker's business (ADR 0053, SCXML 6.4.2). Values and bytes are borrowed for the call. A service for an SCXML session spawns its child with ta_actor_spawn() and a `parent` of {parent, invoke_id}; the core then routes `#_ <invokeid >` sends, autoforwarding, and done.invoke itself. `trace` is the invoking macrostep's context and the key of the step that invoked, which such a service passes to ta_actor_spawn(), so the child's bootstrap runs under it (ADR 0067). `definition` is the definition nested for this <invoke > with ta_definition_nest() (ADR 0077), or 0: when it is set, the child is that chart, already compiled, and `content` and `src` describe where it came from.",
       "fields": [
         {
           "name": "system",
@@ -9612,11 +9798,17 @@
           "type": {
             "type": "ta_trace_parent"
           }
+        },
+        {
+          "name": "definition",
+          "type": {
+            "type": "ta_definition_id"
+          }
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 168,
+          "size": 176,
           "align": 8,
           "offsets": {
             "system": 0,
@@ -9629,11 +9821,12 @@
             "content": 80,
             "params": 96,
             "autoforward": 112,
-            "trace": 120
+            "trace": 120,
+            "definition": 168
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 120,
+          "size": 128,
           "align": 8,
           "offsets": {
             "system": 0,
@@ -9646,7 +9839,8 @@
             "content": 52,
             "params": 60,
             "autoforward": 68,
-            "trace": 72
+            "trace": 72,
+            "definition": 120
           }
         }
       }
@@ -17936,6 +18130,77 @@
       ]
     },
     {
+      "name": "ta_definition_invoke",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_definition_invoke_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_definition_nest",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_definition_nest_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
       "name": "ta_definition_inspect",
       "doc": "TA_ERR_NOT_FOUND when the ID names no existing definition: never registered, freed after retirement, or stale.",
       "public": true,
@@ -18279,7 +18544,7 @@
     },
     {
       "name": "ta_system_register_definition",
-      "doc": "Registration takes ownership of definition only when it returns TA_OK.",
+      "doc": "Registers a compiled definition and takes a hold on it (ADR 0077). Registration is idempotent by identity: when a registered, non-retired definition has the same identity and was compiled against the same data-model adapter, that one is the answer, it gains a hold, and `definition` is destroyed. The same identity with different content (an explicit revision reused for a changed chart) is refused with TA_ERR_DEFINITION_MISMATCH. A chart with a host expression (TA_EXPRESSION_HOST) is exempt from both: its content cannot be seen whole, so it registers beside any match. Registration takes ownership of `definition` only when it returns TA_OK.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -18374,7 +18639,38 @@
     },
     {
       "name": "ta_system_retire_definition",
-      "doc": "Ends a definition's availability (ADR 0043). ta_actor_spawn() and ta_actor_prepare_replacement() naming it fail with TA_ERR_NOT_FOUND, and ta_system_find_definition() skips it. Resident actors that use it keep running, and ta_definition_inspect(), ta_definition_state(), and ta_definition_export() keep working. The system frees the definition (its data-model state, its storage, and its ID) when no resident actor uses it: here if none does, otherwise when the last one is destroyed. Idempotent: retiring a retired definition, even one already freed, returns TA_OK. TA_ERR_NOT_FOUND when the ID was never issued.",
+      "doc": "Ends a definition's availability (ADR 0043). ta_actor_spawn() and ta_actor_prepare_replacement() naming it fail with TA_ERR_NOT_FOUND, and ta_system_find_definition() skips it. Resident actors that use it keep running, and ta_definition_inspect(), ta_definition_state(), and ta_definition_export() keep working. The system frees the definition (its data-model state, its storage, and its ID) when no resident actor uses it and no definition nests it: here if none does, otherwise when the last one goes. Retiring drops every hold registration took (ADR 0077). Idempotent: retiring a retired definition, even one already freed, returns TA_OK. TA_ERR_NOT_FOUND when the ID was never issued.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "definition",
+          "type": {
+            "type": "ta_definition_id"
+          }
+        }
+      ]
+    },
+    {
+      "name": "ta_system_release_definition",
+      "doc": "Gives back one hold taken by ta_system_register_definition(), without retiring (ADR 0077). A definition nothing holds, that no definition nests and that no resident actor uses is freed: here, or when the last of those goes. A host that registers a definition only to spawn from it or nest it releases its hold afterwards. TA_ERR_INVALID when no hold is left; TA_ERR_NOT_FOUND for an unknown or stale ID.",
       "public": true,
       "static_inline": false,
       "implemented": true,

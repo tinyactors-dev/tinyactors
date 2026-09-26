@@ -252,7 +252,7 @@ static ta_result ta_actor_claim_slot(ta_system *system, ta_actor *actor, ta_acto
 
 /*
  * Tears the actor down completely, then uncounts it. The last actor of a
- * retired definition frees the definition, so nothing below may touch it.
+ * definition nothing holds frees it (ADR 0077), so nothing below may touch it.
  */
 void ta_actor_free(ta_system *system, ta_actor *actor) {
     const ta_definition *definition = actor->definition;
@@ -274,9 +274,7 @@ void ta_actor_free(ta_system *system, ta_actor *actor) {
                                              .alignment = definition->actor_block_alignment });
     ta_definition *owner = ta_system_definition(system, definition->id);
     owner->actor_count -= 1u;
-    if (owner->retired && owner->actor_count == 0) {
-        ta_system_free_definition(system, owner);
-    }
+    ta_system_settle_definition(system, owner);
 }
 
 /*

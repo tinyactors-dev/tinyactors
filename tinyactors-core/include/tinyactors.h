@@ -102,6 +102,7 @@ typedef uint32_t ta_initial_transition_id;
 typedef uint32_t ta_data_decl_id;
 typedef uint32_t ta_initializer_id;
 typedef uint32_t ta_content_id;
+#define TA_CONTENT_ID_NONE ((ta_content_id)UINT32_MAX)
 typedef uint32_t ta_param_id;
 typedef uint32_t ta_done_data_id;
 typedef uint32_t ta_invoke_decl_id;
@@ -534,6 +535,9 @@ typedef struct {
  * `family` is the stable logical statechart family; `revision` is an opaque
  * fingerprint copied/owned by the compiled definition.  Any change that can
  * alter interpretation of a session image must produce a different revision.
+ * Given to the compiler with an empty `revision`, an identity names only the
+ * family for a chart that has no name of its own, and the revision is the
+ * compiler's fingerprint of the content (ADR 0077).
  */
 typedef struct {
     ta_definition_family family;
@@ -1185,10 +1189,14 @@ TA_API ta_trace_sink ta_null_trace_sink(void);
  * `#_<invokeid>` sends, autoforwarding, and done.invoke itself. `trace` is the
  * invoking macrostep's context and the key of the step that invoked, which
  * such a service passes to ta_actor_spawn(), so the child's bootstrap runs
- * under it (ADR 0067).
+ * under it (ADR 0067). `definition` is the definition nested for this
+ * <invoke> with ta_definition_nest() (ADR 0077), or 0: when it is set, the
+ * child is that chart, already compiled, and `content` and `src` describe
+ * where it came from.
  */
 typedef struct { ta_system *system; ta_actor_id parent; ta_invoke_id invoke_id; ta_atom type; ta_value src; ta_value data;
-                 ta_str content_type; ta_bytes content; ta_value params; bool autoforward; ta_trace_parent trace; } ta_invoke_request;
+                 ta_str content_type; ta_bytes content; ta_value params; bool autoforward; ta_trace_parent trace;
+                 ta_definition_id definition; } ta_invoke_request;
 typedef struct { TA_IN const ta_invoke_request *request; TA_OUT uint64_t *service_handle; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_invoker_start_params;
 typedef struct { uint64_t service_handle; TA_IN const ta_event *event; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_invoker_forward_params;
 
@@ -2843,6 +2851,48 @@ TA_API ta_result ta_definition_expression(const ta_system *system,
                                           TA_IN const ta_definition_expression_params *params);
 
 /*
+ * One <invoke> of a definition, by declaration index from 0 (ADR 0077):
+ * what a host needs to compile its child chart when the definition is
+ * defined. `type` is the literal type, normalized as ta_invoke_request's is
+ * ("http://www.w3.org/TR/scxml/" for the SCXML aliases and when the
+ * <invoke> names no type), or empty when the type is computed
+ * (`has_type_expr`). `content` is a literal <content> and `src` a literal src, each
+ * TA_CONTENT_ID_NONE when absent; read their bytes with
+ * ta_definition_content(). `nested` is the definition nested for it with
+ * ta_definition_nest(), or 0. TA_ERR_NOT_FOUND ends a walk over 0, 1, 2, ...
+ * and answers an unknown or stale definition.
+ */
+typedef struct {
+    ta_str type;
+    bool has_type_expr;
+    ta_content_id content;
+    ta_content_id src;
+    ta_definition_id nested;
+} ta_invoke_info;
+typedef struct {
+    ta_definition_id definition;
+    uint32_t invoke;
+    TA_OUT TA_LIFETIME(definition) ta_invoke_info *out;
+} ta_definition_invoke_params;
+TA_API ta_result ta_definition_invoke(const ta_system *system, TA_IN const ta_definition_invoke_params *params);
+
+/*
+ * Nests `child` as the chart `parent`'s <invoke> number `invoke` starts
+ * (ADR 0077): an inline <scxml> in <content>, or a literal src, compiled
+ * when the parent was defined. The parent holds the child until the parent
+ * is freed, and every invocation of that <invoke> gets the child as
+ * ta_invoke_request.definition. TA_ERR_INVALID when either definition is
+ * unknown or retired, `invoke` is out of range, or that <invoke> already
+ * nests a definition.
+ */
+typedef struct {
+    ta_definition_id parent;
+    uint32_t invoke;
+    ta_definition_id child;
+} ta_definition_nest_params;
+TA_API ta_result ta_definition_nest(ta_system *system, TA_IN const ta_definition_nest_params *params);
+
+/*
  * A read-only view of one registered definition. Text and the adapter are
  * borrowed from the system and stay valid while the definition exists (a
  * retired definition exists until its last resident actor is gone).
@@ -2871,10 +2921,19 @@ typedef struct {
     uint32_t expression_count;
     /* Literal content readable with ta_definition_content(). */
     uint32_t content_count;
+    /* <invoke> declarations readable with ta_definition_invoke(). */
+    uint32_t invoke_count;
     /* True after the definition is retired (ADR 0043). */
     bool retired;
     /* Resident actors using this definition, unpublished replacements included. */
     uint32_t actor_count;
+    /*
+     * Holds taken by ta_system_register_definition() and not yet released,
+     * and the definitions that nest this one (ADR 0077). The system frees
+     * the definition when both and `actor_count` are zero.
+     */
+    uint32_t holds;
+    uint32_t holders;
     /*
      * Bytes the core allocates for each actor of this definition before it
      * processes events: the actor record, session storage (configuration and
@@ -2979,7 +3038,18 @@ TA_API ta_result ta_system_set_event_block_cache(ta_system *system, uint32_t blo
 /* Installs the scheduler for normalized external SCXML-session events. */
 TA_API ta_result ta_system_set_external_event_router(ta_system *system,
                                                       ta_external_event_router router);
-/* Registration takes ownership of definition only when it returns TA_OK. */
+/*
+ * Registers a compiled definition and takes a hold on it (ADR 0077).
+ * Registration is idempotent by identity: when a registered, non-retired
+ * definition has the same identity and was compiled against the same
+ * data-model adapter, that one is the answer, it gains a hold, and
+ * `definition` is destroyed. The same identity with different
+ * content (an explicit revision reused for a changed chart) is refused
+ * with TA_ERR_DEFINITION_MISMATCH. A chart with a host expression
+ * (TA_EXPRESSION_HOST) is exempt from both: its content cannot be seen
+ * whole, so it registers beside any match. Registration takes ownership of
+ * `definition` only when it returns TA_OK.
+ */
 TA_API ta_result ta_system_register_definition(ta_system *system,
                                                TA_CONSUMED_ON_OK ta_definition *definition,
                                                TA_OUT ta_definition_id *out);
@@ -2997,12 +3067,22 @@ TA_API ta_result ta_system_find_definition(const ta_system *system,
  * ta_system_find_definition() skips it. Resident actors that use it keep
  * running, and ta_definition_inspect(), ta_definition_state(), and
  * ta_definition_export() keep working. The system frees the definition (its
- * data-model state, its storage, and its ID) when no resident actor uses it:
- * here if none does, otherwise when the last one is destroyed. Idempotent:
+ * data-model state, its storage, and its ID) when no resident actor uses it
+ * and no definition nests it: here if none does, otherwise when the last one
+ * goes. Retiring drops every hold registration took (ADR 0077). Idempotent:
  * retiring a retired definition, even one already freed, returns TA_OK.
  * TA_ERR_NOT_FOUND when the ID was never issued.
  */
 TA_API ta_result ta_system_retire_definition(ta_system *system, ta_definition_id definition);
+/*
+ * Gives back one hold taken by ta_system_register_definition(), without
+ * retiring (ADR 0077). A definition nothing holds, that no definition nests
+ * and that no resident actor uses is freed: here, or when the last of those
+ * goes. A host that registers a definition only to spawn from it or nest it
+ * releases its hold afterwards. TA_ERR_INVALID when no hold is left;
+ * TA_ERR_NOT_FOUND for an unknown or stale ID.
+ */
+TA_API ta_result ta_system_release_definition(ta_system *system, ta_definition_id definition);
 /*
  * The I/O processor registry (ADR 0068). Index 0 is always the SCXML
  * processor; registered processors get 1, 2, 3, ... in registration order.

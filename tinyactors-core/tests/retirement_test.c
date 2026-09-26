@@ -155,6 +155,57 @@ static void fixture_init(fixture *f) {
     }
 }
 
+static const ta_scxml_state_spec one_state[] = {
+    { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("idle") },
+    {0},
+};
+
+/* Compiles `states` under an explicit identity (family, revision), and registers it. */
+static ta_result register_states(fixture *f, const char *revision, const ta_scxml_state_spec *states,
+                                 ta_definition_id *id) {
+    uint32_t length = 0;
+    while (revision[length] != '\0') {
+        length += 1;
+    }
+    ta_definition_identity identity = { .family = { STR("retiree") },
+                                        .revision = { .ptr = (const uint8_t *)revision, .len = length } };
+    ta_definition *definition = NULL;
+    CHECK(ta_definition_compile_spec(f->system,
+                                     &(ta_definition_compile_params){
+                                         .spec = &(ta_scxml_spec){ .identity = &identity, .states = states },
+                                         .datamodel = { .self = &f->model, .v = &counting_vtable },
+                                         .allocator = f->allocator,
+                                         .out = &definition,
+                                     }) == TA_OK);
+    ta_result result = ta_system_register_definition(f->system, definition, id);
+    if (result != TA_OK) {
+        ta_definition_destroy(definition);
+    }
+    return result;
+}
+
+/* A state that invokes an inline chart: literal <content>, and a literal src. */
+static const ta_scxml_state_spec invoking[] = {
+    {
+        .kind = TA_SCXML_STATE_ATOMIC,
+        .id = STR("idle"),
+        .invokes = (const ta_scxml_invoke_spec[]){
+            { .kind = TA_SCXML_INVOKE,
+              .data = { .kind = TA_SCXML_VALUE_CONTENT,
+                        .as.content = { .bytes = { .ptr = (const uint8_t *)"<scxml/>", .len = 8 } } } },
+            { .kind = TA_SCXML_INVOKE, .type = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("http") } },
+            {0},
+        },
+    },
+    {0},
+};
+
+static uint32_t holds_of(fixture *f, ta_definition_id definition) {
+    ta_definition_inspection view;
+    CHECK(ta_definition_inspect(f->system, definition, &view) == TA_OK);
+    return view.holds;
+}
+
 /* Registers `two_states` under an explicit identity (family, revision). */
 static ta_definition_id register_chart(fixture *f, const char *revision) {
     uint32_t length = 0;
@@ -371,22 +422,118 @@ static void test_find_after_retire(void) {
     fixture f;
     fixture_init(&f);
     ta_definition_id older = register_chart(&f, "same");
-    ta_definition_id other = register_chart(&f, "other");
-    ta_definition_id newer = register_chart(&f, "same");
+    ta_actor_id actor = 0;
+    CHECK(spawn(&f, older, &actor) == TA_OK);
     ta_definition_id found = 0;
-    CHECK(find(&f, "same", &found) == TA_OK && found == newer);
-    CHECK(ta_system_retire_definition(f.system, newer) == TA_OK);
     CHECK(find(&f, "same", &found) == TA_OK && found == older);
 
-    /* The newest registration wins even from a lower, reused slot. */
-    CHECK(ta_system_retire_definition(f.system, other) == TA_OK);
-    ta_definition_id reused = register_chart(&f, "same");
-    CHECK((reused & 0xffffffffu) == (other & 0xffffffffu));
-    CHECK((reused & 0xffffffffu) < (newer & 0xffffffffu));
-    CHECK(find(&f, "same", &found) == TA_OK && found == reused);
-    CHECK(ta_system_retire_definition(f.system, reused) == TA_OK);
+    /* A retired definition still in use matches nothing: registering the
+     * identity again makes a new definition, which is then the answer. */
     CHECK(ta_system_retire_definition(f.system, older) == TA_OK);
     CHECK(find(&f, "same", &found) == TA_ERR_NOT_FOUND);
+    ta_definition_id newer = register_chart(&f, "same");
+    CHECK(newer != older);
+    CHECK(find(&f, "same", &found) == TA_OK && found == newer);
+
+    CHECK(ta_actor_destroy(f.system, actor) == TA_OK);
+    check_gone(&f, older);
+    CHECK(ta_system_retire_definition(f.system, newer) == TA_OK);
+    CHECK(find(&f, "same", &found) == TA_ERR_NOT_FOUND);
+
+    ta_system_destroy(f.system);
+    CHECK(f.model.destroyed == f.model.prepared);
+    CHECK(f.counts.live_blocks == 0 && f.counts.live_bytes == 0);
+}
+
+/* ADR 0077 rule 1: registering a live identity again answers the same definition. */
+static void test_register_is_idempotent(void) {
+    fixture f;
+    fixture_init(&f);
+    ta_definition_id first = register_chart(&f, "same");
+    long blocks = f.counts.live_blocks;
+    ta_definition_id again = register_chart(&f, "same");
+    CHECK(again == first);
+    CHECK(holds_of(&f, first) == 2);
+    /* The second compile was destroyed: nothing new is kept. */
+    CHECK(f.counts.live_blocks == blocks);
+
+    /* The same explicit revision for other content is refused, not answered. */
+    ta_definition_id other = 0;
+    CHECK(register_states(&f, "same", one_state, &other) == TA_ERR_DEFINITION_MISMATCH);
+    CHECK(holds_of(&f, first) == 2);
+
+    ta_system_destroy(f.system);
+    CHECK(f.model.destroyed == f.model.prepared);
+    CHECK(f.counts.live_blocks == 0 && f.counts.live_bytes == 0);
+}
+
+/* ADR 0077: a parent holds the definitions it nests, and frees them with it. */
+static void test_nesting(void) {
+    fixture f;
+    fixture_init(&f);
+    ta_definition_id parent = 0;
+    CHECK(register_states(&f, "parent", invoking, &parent) == TA_OK);
+    ta_definition_id child = register_chart(&f, "child");
+
+    ta_invoke_info info;
+    CHECK(ta_definition_invoke(f.system, &(ta_definition_invoke_params){ .definition = parent, .invoke = 0,
+                                                                        .out = &info }) == TA_OK);
+    CHECK(info.content != TA_CONTENT_ID_NONE && info.src == TA_CONTENT_ID_NONE && info.nested == 0);
+    CHECK(!info.has_type_expr && info.type.len == 27);
+    CHECK(ta_definition_invoke(f.system, &(ta_definition_invoke_params){ .definition = parent, .invoke = 1,
+                                                                        .out = &info }) == TA_OK);
+    CHECK(info.content == TA_CONTENT_ID_NONE && info.type.len == 4);
+    CHECK(ta_definition_invoke(f.system, &(ta_definition_invoke_params){ .definition = parent, .invoke = 2,
+                                                                        .out = &info }) == TA_ERR_NOT_FOUND);
+
+    ta_definition_nest_params nest = { .parent = parent, .invoke = 0, .child = child };
+    CHECK(ta_definition_nest(f.system, &nest) == TA_OK);
+    CHECK(ta_definition_nest(f.system, &nest) == TA_ERR_INVALID);
+    CHECK(ta_definition_nest(f.system, &(ta_definition_nest_params){ .parent = parent, .invoke = 2,
+                                                                   .child = child }) == TA_ERR_INVALID);
+    CHECK(ta_definition_invoke(f.system, &(ta_definition_invoke_params){ .definition = parent, .invoke = 0,
+                                                                        .out = &info }) == TA_OK);
+    CHECK(info.nested == child);
+
+    /* Released by its registrar, the child lives on while its parent nests it. */
+    CHECK(ta_system_release_definition(f.system, child) == TA_OK);
+    ta_definition_inspection view;
+    CHECK(ta_definition_inspect(f.system, child, &view) == TA_OK && view.holds == 0 && view.holders == 1);
+    CHECK(ta_system_retire_definition(f.system, parent) == TA_OK);
+    check_gone(&f, parent);
+    check_gone(&f, child);
+
+    ta_system_destroy(f.system);
+    CHECK(f.model.destroyed == f.model.prepared);
+    CHECK(f.counts.live_blocks == 0 && f.counts.live_bytes == 0);
+}
+
+/* ADR 0077 rule 2: a definition nothing holds is freed after its last actor. */
+static void test_release(void) {
+    fixture f;
+    fixture_init(&f);
+    ta_definition_id id = register_chart(&f, "held");
+    CHECK(register_chart(&f, "held") == id);
+    CHECK(ta_system_release_definition(f.system, id) == TA_OK);
+    CHECK(holds_of(&f, id) == 1);
+
+    ta_actor_id actor = 0;
+    CHECK(spawn(&f, id, &actor) == TA_OK);
+    CHECK(ta_system_release_definition(f.system, id) == TA_OK);
+    /* Released, not retired: still matched by identity and spawnable. */
+    ta_definition_id found = 0;
+    CHECK(find(&f, "held", &found) == TA_OK && found == id);
+    ta_actor_id second = 0;
+    CHECK(spawn(&f, id, &second) == TA_OK);
+    CHECK(ta_system_release_definition(f.system, id) == TA_ERR_INVALID);
+
+    CHECK(ta_actor_destroy(f.system, actor) == TA_OK);
+    CHECK(holds_of(&f, id) == 0);
+    CHECK(ta_actor_destroy(f.system, second) == TA_OK);
+    check_gone(&f, id);
+    /* Every definition compiled so far is destroyed, the duplicate at registration. */
+    CHECK(f.model.destroyed == f.model.prepared);
+    CHECK(ta_system_release_definition(f.system, id) == TA_ERR_NOT_FOUND);
 
     ta_system_destroy(f.system);
     CHECK(f.model.destroyed == f.model.prepared);
@@ -422,6 +569,9 @@ int main(void) {
     test_retire_without_actors();
     test_retire_with_actors();
     test_find_after_retire();
+    test_register_is_idempotent();
+    test_release();
+    test_nesting();
     test_system_destroy();
     if (failures != 0) {
         fprintf(stderr, "retirement test: %d check(s) failed\n", failures);

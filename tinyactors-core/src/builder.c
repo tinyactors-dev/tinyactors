@@ -431,6 +431,8 @@ static ta_result ta_compiler_expression(ta_compiler *compiler, const ta_compiler
                                        &copy.as.source);
             break;
         case TA_EXPRESSION_HOST:
+            /* The fingerprint cannot see into a host expression (ADR 0077). */
+            compiler->definition->host_expressions = true;
             if (expression->as.host.v == NULL || expression->as.host.v->retain == NULL) {
                 return ta_compiler_fail(compiler, TA_COMPILE_ERROR_MALFORMED_SPEC, (ta_str){0},
                                         TA_PHRASE("a host expression has no retain operation"));
@@ -1793,9 +1795,18 @@ static ta_result ta_compiler_identity(ta_compiler *compiler) {
     ta_bytes revision = {0};
     static const char hex[] = "0123456789abcdef";
     char fingerprint[16];
-    definition->fingerprinted = spec->identity == NULL;
-    if (spec->identity != NULL) {
+    /* An identity with an empty revision names only the family: the
+     * revision is still the fingerprint (ADR 0077). */
+    bool explicit_revision = spec->identity != NULL && spec->identity->revision.len != 0;
+    definition->fingerprinted = !explicit_revision;
+    /* Kept whatever the revision, so an explicit revision reused for other
+     * content is caught at registration (ADR 0077). */
+    definition->content_hash = compiler->hash;
+    /* A family-only identity is the default for a chart with no name. */
+    if (explicit_revision || (spec->identity != NULL && (family.ptr == NULL || family.len == 0))) {
         family = spec->identity->family.name;
+    }
+    if (explicit_revision) {
         revision = spec->identity->revision;
     } else {
         for (uint32_t index = 0; index < 16; index += 1) {
