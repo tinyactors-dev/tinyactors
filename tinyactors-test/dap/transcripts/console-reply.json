@@ -1,0 +1,54 @@
+{
+  "description": "The console sends an event with the debug origin; an on: breakpoint stops before the macrostep that takes it; a step lands at the microstep's start, before its <send>; the chart's reply to the event's origin comes back to the console",
+  "chart": "counter",
+  "steps": [
+    { "start": true },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "stackFrames": [ { "id": { "$capture": "frame" } } ] } }
+    },
+    {
+      "request": "setFunctionBreakpoints", "arguments": { "breakpoints": [ { "name": "on:ping" } ] },
+      "response": { "body": { "breakpoints": [ { "id": { "$capture": "on" }, "verified": true } ] } }
+    },
+    {
+      "request": "evaluate", "arguments": { "expression": "send ping", "context": "repl", "frameId": { "$var": "frame" } },
+      "response": { "body": { "result": { "$contains": "sent ping to" } } }
+    },
+    { "request": "continue", "arguments": { "threadId": { "$var": "thread" } } },
+    {
+      "event": "stopped",
+      "body": { "reason": "function breakpoint", "threadId": { "$var": "thread" }, "description": "about to take ping", "hitBreakpointIds": [ { "$var": "on" } ] }
+    },
+    {
+      "request": "exceptionInfo", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "success": false }
+    },
+    { "request": "stepIn", "arguments": { "threadId": { "$var": "thread" } } },
+    { "event": "stopped", "body": { "reason": "step" } },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "stackFrames": { "$prefix": [
+        { "name": "send 1" },
+        { "name": "transition idle on ping" },
+        { "name": { "$prefix": "microstep 2.1" } },
+        { "name": "macrostep 2 on ping" }
+      ] } } }
+    },
+    { "request": "stepIn", "arguments": { "threadId": { "$var": "thread" } } },
+    {
+      "events": [
+        { "event": "stopped", "body": { "reason": "step" } },
+        { "event": "output", "body": { "category": "console", "output": { "$contains": "replied pong 0" } } }
+      ]
+    },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "stackFrames": [ { "name": { "$prefix": "idle in idle" } } ] } }
+    },
+    {
+      "request": "evaluate", "arguments": { "expression": "send", "context": "repl" },
+      "response": { "success": false }
+    }
+  ]
+}

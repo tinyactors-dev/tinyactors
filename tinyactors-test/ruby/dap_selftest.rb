@@ -9,10 +9,11 @@
 #   DAP_TRACE=1 ruby ruby/dap_selftest.rb    # and print every message
 
 require 'json'
-require 'open3'
 require 'pathname'
 require 'timeout'
 require 'tmpdir'
+
+require_relative 'dap_client'
 
 ROOT = Pathname.new(__dir__).join('..').expand_path
 HOST = ROOT.join('build/tinyactors-test')
@@ -32,100 +33,6 @@ rescue StandardError => error
   FAILURES << what
   puts "  FAIL #{what}: #{error.class}: #{error.message}"
   puts error.backtrace.first(4).map { |line| "         #{line}" }
-end
-
-# A DAP client over the adapter's stdin and stdout. Every message is kept;
-# `request` answers the response to its request, and `event` waits for the
-# next event of a name that matches, among those not taken yet.
-class Client
-  TIMEOUT = 15
-
-  attr_reader :stderr_text
-
-  def initialize(command)
-    @stdin, @stdout, @stderr, @wait = Open3.popen3(*command)
-    @stdin.binmode
-    @stdout.binmode
-    @seq = 0
-    @events = []
-    @responses = {}
-    @stderr_text = +''
-    @stderr_reader = Thread.new { @stderr.each_line { |line| @stderr_text << line } }
-  end
-
-  def request(command, arguments = nil)
-    @seq += 1
-    message = { 'seq' => @seq, 'type' => 'request', 'command' => command }
-    message['arguments'] = arguments if arguments
-    json = JSON.generate(message)
-    warn "-> #{json}" if ENV['DAP_TRACE']
-    @stdin.write("Content-Length: #{json.bytesize}\r\n\r\n#{json}")
-    @stdin.flush
-    seq = @seq
-    read_until { @responses.key?(seq) }
-    @responses.delete(seq)
-  end
-
-  # The first event not yet taken named `name` whose body the block
-  # accepts; waits for it.
-  def event(name, &accept)
-    found = nil
-    read_until do
-      found = @events.find { |event| event['event'] == name && (accept.nil? || accept.call(event['body'] || {})) }
-    end
-    @events.delete(found)
-    found['body'] || {}
-  end
-
-  # Events of a name already received, taken.
-  def take(name)
-    taken = @events.select { |event| event['event'] == name }
-    @events -= taken
-    taken.map { |event| event['body'] || {} }
-  end
-
-  # Reads what the adapter sent so far without waiting for anything.
-  def drain
-    read_message while @stdout.wait_readable(0.2)
-  end
-
-  def outputs = take('output').map { |body| body['output'] }
-
-  def close
-    @stdin.close unless @stdin.closed?
-    @wait.join(TIMEOUT) || Process.kill('KILL', @wait.pid)
-    @stderr_reader.join(TIMEOUT)
-    @wait.value
-  end
-
-  private
-
-  def read_until
-    Timeout.timeout(TIMEOUT) do
-      read_message until yield
-    end
-  rescue Timeout::Error
-    raise "timed out; received events #{@events.map { |event| event['event'] }.inspect}; stderr: #{@stderr_text}"
-  end
-
-  def read_message
-    length = nil
-    while (line = @stdout.gets("\r\n"))
-      line = line.chomp("\r\n")
-      break if line.empty?
-
-      name, value = line.split(':', 2)
-      length = Integer(value) if name == 'Content-Length'
-    end
-    raise "the adapter closed its output; stderr: #{@stderr_text}" if length.nil?
-
-    message = JSON.parse(@stdout.read(length))
-    warn "<- #{JSON.generate(message)}" if ENV['DAP_TRACE']
-    case message['type']
-    when 'response' then @responses[message['request_seq']] = message
-    when 'event' then @events << message
-    end
-  end
 end
 
 COUNTER = <<~CHART
@@ -245,7 +152,7 @@ Dir.mktmpdir('dap-selftest') do |tmp|
   counter_path = dir.join('counter.rb').realpath.to_s
   dir.join('actors.rb').write(ACTORS)
 
-  client = Client.new([RbConfig.ruby, ROOT.join('bin/dap').to_s])
+  client = DAPClient.new([RbConfig.ruby, ROOT.join('bin/dap').to_s])
   begin
     puts 'initialize'
     response = client.request('initialize', 'adapterID' => 'tinyactors', 'linesStartAt1' => true,
@@ -1172,12 +1079,12 @@ end
 puts 'a session over TCP, as VS Code\'s debugServer connects'
 begin
   server = IO.popen([RbConfig.ruby, ROOT.join('bin/dap').to_s, '--port', '0'], err: %i[child out])
-  port = Timeout.timeout(Client::TIMEOUT) { server.gets.to_s[/listening on 127\.0\.0\.1:(\d+)/, 1] }
+  port = Timeout.timeout(DAPClient::TIMEOUT) { server.gets.to_s[/listening on 127\.0\.0\.1:(\d+)/, 1] }
   require 'socket'
   socket = TCPSocket.new('127.0.0.1', Integer(port))
   json = JSON.generate('seq' => 1, 'type' => 'request', 'command' => 'initialize', 'arguments' => {})
   socket.write("Content-Length: #{json.bytesize}\r\n\r\n#{json}")
-  header = Timeout.timeout(Client::TIMEOUT) { socket.gets("\r\n\r\n") }
+  header = Timeout.timeout(DAPClient::TIMEOUT) { socket.gets("\r\n\r\n") }
   answer = JSON.parse(socket.read(Integer(header[/Content-Length: (\d+)/, 1])))
   check('the adapter answers on its port') { answer['success'] && answer['body']['supportsConfigurationDoneRequest'] }
   socket.close

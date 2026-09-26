@@ -1,0 +1,119 @@
+{
+  "description": "Entry and exit breakpoints stop before the block's first unit, at the microstep's start (core ADR 0087); stepIn by statement goes into a <foreach> without stopping twice at its position (ADR 0083, open point 1); stepOut leaves the block and, as it was the macrostep's last, ends the macrostep; next finishes a microstep's only block",
+  "chart": "counter",
+  "steps": [
+    { "start": true },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "stackFrames": [ { "id": { "$capture": "frame" } } ] } }
+    },
+    {
+      "request": "setFunctionBreakpoints", "arguments": { "breakpoints": [ { "name": "busy" }, { "name": "exit:busy" } ] },
+      "response": { "body": { "breakpoints": [
+        { "id": { "$capture": "entry" }, "verified": true },
+        { "id": { "$capture": "exit" }, "verified": true }
+      ] } }
+    },
+    {
+      "request": "evaluate", "arguments": { "expression": "send bump {\"n\": 1}", "context": "repl", "frameId": { "$var": "frame" } },
+      "response": { "body": { "result": { "$contains": "sent bump to" } } }
+    },
+    { "request": "continue", "arguments": { "threadId": { "$var": "thread" } } },
+    {
+      "event": "stopped",
+      "body": { "reason": "function breakpoint", "threadId": { "$var": "thread" }, "description": "entered busy", "hitBreakpointIds": [ { "$var": "entry" } ] }
+    },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "stackFrames": { "$prefix": [
+        { "name": "log 1", "id": { "$capture": "frame" } },
+        { "name": "onentry of busy" },
+        { "name": { "$prefix": "microstep 2.1" } },
+        { "name": "macrostep 2 on bump" }
+      ] } } }
+    },
+    {
+      "request": "scopes", "arguments": { "frameId": { "$var": "frame" } },
+      "response": { "body": { "scopes": { "$prefix": [ { "name": "Data model" }, { "name": "Event", "variablesReference": { "$capture": "event" } } ] } } }
+    },
+    {
+      "request": "variables", "arguments": { "variablesReference": { "$var": "event" } },
+      "response": { "body": { "variables": { "$some": { "name": "name", "value": "\"bump\"" } } } }
+    },
+    {
+      "request": "variables", "arguments": { "variablesReference": { "$var": "event" } },
+      "response": { "body": { "variables": { "$some": { "name": "data", "value": "{\"n\":1}" } } } }
+    },
+    {
+      "request": "evaluate", "arguments": { "expression": { "$expr": { "jq": "[.count, .last]", "js": "[count, last]" } }, "context": "watch", "frameId": { "$var": "frame" } },
+      "response": { "body": { "result": "[1,{\"n\":1}]" } }
+    },
+    { "request": "stepIn", "arguments": { "threadId": { "$var": "thread" } } },
+    {
+      "events": [
+        { "event": "stopped", "body": { "reason": "step", "threadId": { "$var": "thread" } } },
+        { "event": "output", "body": { "category": "stdout", "output": { "$contains": "busy" } } }
+      ]
+    },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "stackFrames": { "$prefix": [ { "name": "foreach 2 iteration 1" }, { "name": "onentry of busy" } ] } } }
+    },
+    { "request": "stepIn", "arguments": { "threadId": { "$var": "thread" } } },
+    { "event": "stopped", "body": { "reason": "step" } },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "stackFrames": { "$prefix": [ { "name": "assign 1" }, { "name": "foreach 2 iteration 1" }, { "name": "onentry of busy" } ] } } }
+    },
+    { "request": "stepIn", "arguments": { "threadId": { "$var": "thread" } } },
+    { "event": "stopped", "body": { "reason": "step" } },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "stackFrames": { "$prefix": [ { "name": "foreach 2 iteration 2", "id": { "$capture": "frame" } }, { "name": "onentry of busy" } ] } } }
+    },
+    {
+      "request": "evaluate", "arguments": { "expression": ".count", "context": "watch", "frameId": { "$var": "frame" } },
+      "response": { "body": { "result": "2" } }
+    },
+    { "request": "stepOut", "arguments": { "threadId": { "$var": "thread" } } },
+    { "event": "stopped", "body": { "reason": "step" } },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "totalFrames": 1, "stackFrames": [ { "name": { "$prefix": "idle in busy" }, "id": { "$capture": "frame" } } ] } }
+    },
+    {
+      "request": "evaluate", "arguments": { "expression": ".count", "context": "watch", "frameId": { "$var": "frame" } },
+      "response": { "body": { "result": "4" } }
+    },
+    {
+      "request": "threads",
+      "response": { "body": { "threads": { "$some": { "id": { "$var": "thread" }, "name": { "$contains": "· busy" } } } } }
+    },
+    { "request": "evaluate", "arguments": { "expression": "send done", "context": "repl", "frameId": { "$var": "frame" } } },
+    { "request": "continue", "arguments": { "threadId": { "$var": "thread" } } },
+    {
+      "event": "stopped",
+      "body": { "reason": "function breakpoint", "description": "exited busy", "hitBreakpointIds": [ { "$var": "exit" } ] }
+    },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "stackFrames": { "$prefix": [
+        { "name": "log 1" },
+        { "name": "onexit of busy" },
+        { "name": { "$prefix": "microstep 3.1" } },
+        { "name": "macrostep 3 on done" }
+      ] } } }
+    },
+    { "request": "next", "arguments": { "threadId": { "$var": "thread" } } },
+    {
+      "events": [
+        { "event": "stopped", "body": { "reason": "step" } },
+        { "event": "output", "body": { "category": "stdout", "output": { "$contains": "leaving" } } }
+      ]
+    },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "totalFrames": 1, "stackFrames": [ { "name": { "$prefix": "idle in idle" } } ] } }
+    }
+  ]
+}

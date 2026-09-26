@@ -383,3 +383,20 @@ lands at once even in a macrostep that never ends.
 scripted client against a workbench directory it writes, and checks every
 message the adapter implements and every one it refuses. `mise run test`
 runs it; `DAP_TRACE=1` prints every message.
+
+## Shared transcripts
+
+`ruby/dap_transcripts.rb` plays the DAP transcripts in `dap/transcripts/`
+against this adapter, as tinyactors-napi's `test/dap-transcripts.js` plays
+them against its own: each is a behaviour both adapters must show, so the
+two stay in step. `mise run test` runs it. To add one, write the
+transcript, and the chart in both forms (`dap/charts/<chart>.rb` and
+`.js`) if it needs a new one, then play it in both hosts:
+
+```text
+ruby ruby/dap_transcripts.rb <name>               # DAP_TRACE=1 prints every message
+cd ../tinyactors-napi && node test/dap-transcripts.js <name>
+```
+
+The format, the matchers, and where the two adapters differ are in
+[`dap/README.md`](../../dap/README.md).

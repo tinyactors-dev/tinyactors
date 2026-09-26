@@ -1,0 +1,89 @@
+{
+  "description": "A macrostep that never ends: a transition breakpoint with a hit condition stops it at a microstep's start; stepIn runs that microstep's only unit and stops at the next one's start (core ADR 0087); abandon ends the macrostep (core ADR 0082); goto, from the console and from gotoTargets, runs an operator transition and stops with reason goto",
+  "chart": "spinner",
+  "steps": [
+    { "start": true },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "stackFrames": [ { "id": { "$capture": "frame" } } ] } }
+    },
+    {
+      "request": "setFunctionBreakpoints", "arguments": { "breakpoints": [ { "name": "spinning → spinning", "hitCondition": "3" } ] },
+      "response": { "body": { "breakpoints": [ { "id": { "$capture": "spin" }, "verified": true } ] } }
+    },
+    { "request": "evaluate", "arguments": { "expression": "send spin", "context": "repl", "frameId": { "$var": "frame" } } },
+    { "request": "continue", "arguments": { "threadId": { "$var": "thread" } } },
+    {
+      "event": "stopped",
+      "body": { "reason": "function breakpoint", "description": "spinning → spinning", "hitBreakpointIds": [ { "$var": "spin" } ] }
+    },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "stackFrames": { "$prefix": [
+        { "name": "assign 1", "id": { "$capture": "frame" } },
+        { "name": "transition spinning → spinning" },
+        { "name": { "$prefix": "microstep 2.4" } },
+        { "name": "macrostep 2 on spin" }
+      ] } } }
+    },
+    {
+      "request": "evaluate", "arguments": { "expression": ".n", "context": "watch", "frameId": { "$var": "frame" } },
+      "response": { "body": { "result": "2" } }
+    },
+    { "request": "setFunctionBreakpoints", "arguments": { "breakpoints": [] } },
+    { "request": "stepIn", "arguments": { "threadId": { "$var": "thread" } } },
+    { "event": "stopped", "body": { "reason": "step" } },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "stackFrames": { "$prefix": [
+        { "name": "assign 1", "id": { "$capture": "frame" } },
+        { "name": "transition spinning → spinning" },
+        { "name": { "$prefix": "microstep 2.5" } },
+        { "name": "macrostep 2 on spin" }
+      ] } } }
+    },
+    {
+      "request": "evaluate", "arguments": { "expression": ".n", "context": "watch", "frameId": { "$var": "frame" } },
+      "response": { "body": { "result": "3" } }
+    },
+    {
+      "request": "evaluate", "arguments": { "expression": "abandon", "context": "repl", "frameId": { "$var": "frame" } },
+      "response": { "body": { "result": { "$contains": "abandoned" } } }
+    },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "totalFrames": 1, "stackFrames": [ { "id": { "$capture": "frame" }, "name": { "$prefix": "idle in spinning" } } ] } }
+    },
+    {
+      "request": "evaluate", "arguments": { "expression": ".n", "context": "watch", "frameId": { "$var": "frame" } },
+      "response": { "body": { "result": "4" } }
+    },
+    {
+      "request": "evaluate", "arguments": { "expression": "abandon", "context": "repl", "frameId": { "$var": "frame" } },
+      "response": { "success": false, "message": { "$contains": "no macrostep to abandon" } }
+    },
+    {
+      "request": "evaluate", "arguments": { "expression": "goto nowhere", "context": "repl", "frameId": { "$var": "frame" } },
+      "response": { "success": false, "message": { "$contains": "not a state" } }
+    },
+    {
+      "request": "evaluate", "arguments": { "expression": "goto resting", "context": "repl", "frameId": { "$var": "frame" } },
+      "response": { "body": { "result": { "$contains": "goto resting" } } }
+    },
+    { "event": "stopped", "body": { "reason": "goto", "threadId": { "$var": "thread" } } },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "stackFrames": [ { "name": { "$prefix": "idle in resting" } } ] } }
+    },
+    {
+      "request": "gotoTargets", "arguments": { "source": {} },
+      "response": { "body": { "targets": [ { "label": "resting", "id": { "$capture": "resting" } }, { "label": "spinning" } ] } }
+    },
+    { "request": "goto", "arguments": { "threadId": { "$var": "thread" }, "targetId": { "$var": "resting" } } },
+    { "event": "stopped", "body": { "reason": "goto", "threadId": { "$var": "thread" } } },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "stackFrames": [ { "name": { "$prefix": "idle in resting" } } ] } }
+    }
+  ]
+}

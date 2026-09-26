@@ -1,0 +1,53 @@
+{
+  "description": "Exception breakpoints: error.execution stops with reason exception and exceptionInfo names it; the chart then handles its error event; ignored stops for an event that enabled no transition",
+  "chart": "counter",
+  "steps": [
+    { "start": true },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "stackFrames": [ { "id": { "$capture": "frame" } } ] } }
+    },
+    {
+      "request": "setExceptionBreakpoints", "arguments": { "filters": [ "error.nonsense" ] },
+      "response": { "success": false }
+    },
+    {
+      "request": "setExceptionBreakpoints", "arguments": { "filters": [ "error.execution" ] }
+    },
+    { "request": "evaluate", "arguments": { "expression": "send fail", "context": "repl", "frameId": { "$var": "frame" } } },
+    { "request": "continue", "arguments": { "threadId": { "$var": "thread" } } },
+    {
+      "event": "stopped",
+      "body": { "reason": "exception", "threadId": { "$var": "thread" }, "text": { "$prefix": "error.execution" } }
+    },
+    {
+      "request": "exceptionInfo", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "exceptionId": "error.execution", "breakMode": "always", "description": { "$prefix": "error.execution: " } } }
+    },
+    { "request": "setExceptionBreakpoints", "arguments": { "filters": [] } },
+    { "request": "setFunctionBreakpoints", "arguments": { "breakpoints": [ { "name": "on:ping" } ] } },
+    { "request": "evaluate", "arguments": { "expression": "send ping", "context": "repl" } },
+    { "request": "continue", "arguments": { "threadId": { "$var": "thread" } } },
+    { "event": "stopped", "body": { "reason": "function breakpoint", "description": "about to take ping" } },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "stackFrames": [ { "id": { "$capture": "frame" } } ] } }
+    },
+    {
+      "request": "evaluate", "arguments": { "expression": ".last", "context": "watch", "frameId": { "$var": "frame" } },
+      "response": { "body": { "result": "\"failed\"" } }
+    },
+    { "request": "setFunctionBreakpoints", "arguments": { "breakpoints": [] } },
+    { "request": "setExceptionBreakpoints", "arguments": { "filters": [ "ignored" ] } },
+    { "request": "evaluate", "arguments": { "expression": "send nothing.here", "context": "repl", "frameId": { "$var": "frame" } } },
+    { "request": "continue", "arguments": { "threadId": { "$var": "thread" } } },
+    {
+      "event": "stopped",
+      "body": { "reason": "exception", "text": "nothing.here enabled no transition" }
+    },
+    {
+      "request": "exceptionInfo", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "exceptionId": "nothing.here", "description": "nothing.here enabled no transition" } }
+    }
+  ]
+}

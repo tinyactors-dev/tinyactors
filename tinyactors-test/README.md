@@ -447,7 +447,9 @@ workbench, stop and step its actors on `action_budget: 1`, set line
 breakpoints in the chart files, look at their data, configuration, queues
 and timers, send them events, and fork an actor into a system of its own
 to step back through its future. See
-`ruby/dap/README.md`; `ruby/dap_selftest.rb` checks it over pipes.
+`ruby/dap/README.md`; `ruby/dap_selftest.rb` checks it over pipes, and
+`ruby/dap_transcripts.rb` plays the DAP transcripts it shares with napi's
+adapter (`dap/README.md`).
 
 ## Vendored dependencies
 

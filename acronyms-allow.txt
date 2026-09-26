@@ -39,9 +39,10 @@ traceId        tinyactors-napi/tools/otel-demo.js                        # OTLP/
 spanId         tinyactors-napi/tools/otel-demo.js                        # OTLP/JSON field
 
 # Field names of the Debug Adapter Protocol, which the test host's adapter
-# reads and writes as the protocol spells them.
-threadId          tinyactors-test/ruby/{dap/*.rb,dap_selftest.rb}          # DAP field
-frameId           tinyactors-test/ruby/{dap/*.rb,dap_selftest.rb}          # DAP field
+# reads and writes as the protocol spells them, and the shared transcripts
+# write in their examples.
+threadId          tinyactors-test/{ruby/dap/*.rb,ruby/dap_selftest.rb,dap/README.md} # DAP field
+frameId           tinyactors-test/{ruby/dap/*.rb,ruby/dap_selftest.rb,dap/README.md} # DAP field
 dataId            tinyactors-test/ruby/{dap/*.rb,dap_selftest.rb}          # DAP field
 hitBreakpointIds  tinyactors-test/ruby/{dap/*.rb,dap_selftest.rb}          # DAP field
 exceptionId       tinyactors-test/ruby/{dap/*.rb,dap_selftest.rb}          # DAP field
