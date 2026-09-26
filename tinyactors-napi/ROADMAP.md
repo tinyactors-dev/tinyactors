@@ -850,7 +850,9 @@ at the repository root (`abee06b`)):
 
 **Child charts** (ADR 0024 and core ADR 0077: nested at define time,
 reused by identity, freed with their children; ADR 0023's cache is gone;
-kept resolvers go when core frees their definition, core ADR 0079):
+kept resolvers go when core frees their definition, core ADR 0079; every
+definition event is counted and logged by origin, and the watch's sets
+shrink as definitions go, `docs/tracing.md`):
 - the binding filter still exports the child's whole definition on every
   invoke to read its declared `<data>`; cache the names per definition;
 - a `resolve` is found by a linear search of the kept resolvers, one per

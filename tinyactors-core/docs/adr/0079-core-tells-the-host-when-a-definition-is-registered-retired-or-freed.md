@@ -1,6 +1,6 @@
 # ADR 0079: Core tells the host when a definition is registered, retired or freed
 
-**Status:** Accepted and implemented (2026-09-26); see the implementation notes. Refines ADR 0043 (retirement) and ADR 0077 (holds and freeing). Serves napi ADR 0024.
+**Status:** Accepted and implemented (2026-09-26); see the implementation notes. Refines ADR 0043 (retirement) and ADR 0077 (holds and freeing). Serves napi ADR 0024. Its open points are closed (2026-09-26): napi counts every event and logs definition churn (`tinyactors.definitions*` metrics, `tinyactors.definition.*` logs), the family watch's sets shrink as definitions are freed, and the test host journals the events with a `definition.recording` instrument.
 **Date:** 2026-09-26
 
 ## Context
