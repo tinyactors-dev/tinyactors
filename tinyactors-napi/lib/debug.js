@@ -576,7 +576,8 @@ class DebugSession {
       if (this.#threadOfSession(session) === undefined) {
         const id = this.#nextThread;
         this.#nextThread += 1;
-        this.#threads.set(id, { id, actor: child, label: `${attached.label} invocation ${invocation.id}`, session });
+        this.#threads.set(id, { id, actor: child, label: `${attached.label} invocation ${attached.labels.invocation(invocation.id)}`,
+                                    session });
         this.#event('thread', { reason: 'started', threadId: id });
       }
     }
@@ -646,9 +647,7 @@ class DebugSession {
     const last = macrostep.microsteps.at(-1);
     if (last !== undefined) this.#lastMicrostep.set(macrostep.session, { macrostep: macrostep.number, microstep: last });
     const location = (definition, id) => attached.labels.expression(BigInt(definition), id);
-    for (const line of summarize(macrostep, thread.label, location)) {
-      this.#output('console', line);
-    }
+    this.#output('console', summarize(macrostep, thread.label, location).join('\n'));
     if (thread.id !== ATTACHED) return;
     const skipTaking = this.#skipTaking;
     this.#skipTaking = false;
@@ -968,11 +967,11 @@ class DebugSession {
     this.#stop = null;
     this.#clearHoldTimer();
     this.#resetViews();
-    // Between two microsteps is no place to stop a step: the next
+    // Before or between microsteps is no place to stop a step: the next
     // microstep's start (core ADR 0087), or the macrostep's end, comes right
     // after it.
     const goal = reason === 'step'
-      ? (view) => !(view.macrostepInProgress && view.position.at === 'none' && view.step.microstep > 0) && done(view)
+      ? (view) => !(view.macrostepInProgress && view.position.at === 'none' && view.step.macrostep > 0) && done(view)
       : done;
     this.#run = { reason, done: goal, description, units: 0 };
     this.#stepCopy();
@@ -1259,7 +1258,14 @@ class DebugSession {
   #cancel({ id }) {
     const attached = this.#requireChange('goto', 'cancel');
     this.#audited({ type: 'mutation', operation: 'cancel', sendID: id });
-    attached.system.withdrawSend(attached.actor, id);
+    try {
+      attached.system.withdrawSend(attached.actor, id);
+    } catch (error) {
+      if (error instanceof TinyactorsError && error.code === 'not-found') {
+        throw refuse(`${attached.label} has no pending send ${id}`);
+      }
+      throw error;
+    }
     return `${attached.label}: withdrew send ${id}`;
   }
 
@@ -1468,7 +1474,9 @@ class DebugSession {
         const attached = this.#attached;
         const view = this.#inspect(thread);
         let note;
-        if (thread.id === ATTACHED && view !== undefined && view.scheduling === 'held') {
+        // Stopped is held, a new copy that has not settled into its hold yet
+        // included.
+        if (thread.id === ATTACHED && view !== undefined && (view.scheduling === 'held' || this.#stop !== null)) {
           note = `held; ${plural(attached.system.mailbox(thread.actor).length, 'message')} waiting`;
         }
         const list = frames({ view, labels: attached.labels, sources: attached.sources,

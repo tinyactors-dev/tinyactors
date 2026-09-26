@@ -122,7 +122,8 @@ function record(session, span, microsteps) {
 
 /**
  * The console's summary of a macrostep, as lines: the event, each
- * microstep with what ran in it, and the configuration it ended in.
+ * microstep with what ran in it, and the configuration it ended in. The
+ * session writes them as one output, as the test host's adapter does.
  * `location(definition, expressionID)` names an <assign>'s location.
  */
 function summarize(macrostep, label, location) {
@@ -185,8 +186,8 @@ function describe(entry, definition, location) {
     case 'scxml.cancel':
       return `cancel ${a['scxml.send_id'] ?? ''}`;
     case 'scxml.error': {
-      const detail = a['scxml.fault.detail'] === undefined ? '' : `: ${a['scxml.fault.detail']}`;
-      return `failed: ${a['scxml.action'] ?? 'an action'}${detail}`;
+      const message = a['scxml.fault.message'] === undefined ? '' : `: ${a['scxml.fault.message']}`;
+      return `failed: ${a['scxml.action'] ?? 'an action'}${message}`;
     }
     case 'scxml.invoke':
       return `invoke ${a['scxml.invoke_id'] ?? ''}`;

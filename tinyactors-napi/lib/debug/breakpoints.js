@@ -369,7 +369,7 @@ class Breakpoints {
     for (const entry of macrostep.records) {
       const a = entry.attributes;
       if (entry.name === 'scxml.error') {
-        fault = a['scxml.fault.detail'] ?? a['scxml.action'];
+        fault = faultText(a);
       } else if (entry.name === 'scxml.raise') {
         const filter = ERRORS.find((name) => matchesEvent(name, a['scxml.event.name']));
         if (filter !== undefined) candidates.push({ filter, name: a['scxml.event.name'], fault });
@@ -386,6 +386,15 @@ class Breakpoints {
         : [hit.name, hit.fault].filter((part) => part !== undefined).join(': ');
     return { kind: 'exception', breakpoints: [], description, exception: hit };
   }
+}
+
+// What faulted and why, from a record's attributes: the action (or the
+// transition whose guard failed) and the fault's message, as the test
+// host's adapter says it too.
+function faultText(a) {
+  const parts = [a['scxml.action'] ?? a['scxml.transition'], a['scxml.fault.message']]
+    .filter((part) => part !== undefined && part !== '');
+  return parts.length === 0 ? a['scxml.fault.detail'] : parts.join(': ');
 }
 
 // Whether a macrostep ran the element a line breakpoint stands for.

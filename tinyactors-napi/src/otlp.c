@@ -586,6 +586,7 @@ static ta_str tna_action_name(tna_otlp *otlp, uint64_t definition, ta_action_id 
  */
 
 static bool tna_label_add(tna_otlp *otlp, ta_str text);
+static ta_str tna_fault_text(tna_otlp *otlp, const ta_value *data, ta_str message);
 
 /* An event name's dotted text, formatted once and then cached. The text is
  * valid until the next name is cached: use it before naming anything else. */
@@ -1233,6 +1234,12 @@ static bool tna_record_attributes(tna_otlp *otlp, tna_otlp_buf *buf, const ta_tr
         if (ok && record->fault.detail != 0) {
             ok = tna_kv_string(buf, F_EVENT_ATTRIBUTES, LIT("scxml.fault.detail"),
                                tna_event_name(otlp, record->fault.detail));
+        }
+        /* What went wrong, as the failure's log says it: a debugger shows it
+         * where the fault stopped the actor. */
+        ta_str reason = ok ? tna_fault_text(otlp, &record->fault.data, record->fault.message) : (ta_str){ 0 };
+        if (ok && reason.len != 0) {
+            ok = tna_kv_string(buf, F_EVENT_ATTRIBUTES, LIT("scxml.fault.message"), reason);
         }
     }
     if (ok && otlp->config.values && record->has_value && otlp->config.host.value_text != NULL) {

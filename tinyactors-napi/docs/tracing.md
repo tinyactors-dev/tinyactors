@@ -188,7 +188,9 @@ the one value you cannot do without.
   are child spans, `scxml.microstep <event>` or `(eventless)`.
 - Every other record is a **span event** on the step it happened in:
   `scxml.condition`, `scxml.assign`, `scxml.raise`, `scxml.send`,
-  `scxml.data`, `scxml.error`, and the rest.
+  `scxml.data`, `scxml.error`, and the rest. A record with a fault carries
+  `scxml.fault.code`, and `scxml.fault.message` with what went wrong, in
+  the words of the failure's log (a thrown `Error` as `Error: message`).
 - **Lifecycle** records (`scxml.spawned`, `scxml.finished`, ...) are spans
   of no duration.
 - Span IDs are derived from step keys, the same way in every host
@@ -200,7 +202,9 @@ the one value you cannot do without.
 - I/O processors and invokers get `request.traceparent`, naming the step
   that sent or invoked, to pass on to what they call.
 
-The full attribute table is in napi ADR 0016's implementation notes.
+The full attribute table is in napi ADR 0016's implementation notes;
+`scxml.fault.message` on span events came later, for the debug adapter's
+exception texts.
 
 ## Objects instead of bytes
 

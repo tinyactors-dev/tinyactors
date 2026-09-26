@@ -287,6 +287,10 @@ async function watchMode() {
   assert.match(text, /would have stopped after macrostep \d+: error\.execution/);
   assert.match(text, /would have stopped after macrostep \d+: entered past_due, took payment\.failed/);
   assert.match(text, /overdue: 1/, '<log> records are stdout');
+  const summary = client.events('output').map((body) => body.output)
+    .find((output) => output.startsWith('subscription/acct_1 macrostep') && output.includes('payment.failed'));
+  assert.match(summary, /^subscription\/acct_1 macrostep \d+: payment\.failed \{"attempt":3\}\n  active → past_due on payment\.failed\n    assign failures = 1\n  now in past_due\n$/,
+               'a macrostep\'s summary is one output');
   assert.ok(client.events('invalidated').length >= 2);
   assert.ok(applicationTurns.length > 0, 'the application\'s sink still gets its turns');
   // Expressions still evaluate with the permission.
@@ -444,6 +448,8 @@ async function breakpoints() {
   mark = client.mark();
   actor.post('boom');
   stop = await client.stoppedAfter(mark, 'exception');
+  assert.equal(stop.text, 'error.execution: <script> in active on boom: Error: boom',
+               'what failed, and the fault\'s message');
   assert.match(stop.text, /error\.execution/);
   const info = await client.ok('exceptionInfo', { threadId: 1 });
   assert.equal(info.exceptionId, 'error.execution');
@@ -731,7 +737,7 @@ async function state() {
   await system.flush();
   let { threads } = await client.ok('threads');
   assert.equal(threads.length, 2);
-  assert.match(threads[1].name, /subscription\/acct_4 invocation \d+ · working/);
+  assert.equal(threads[1].name, 'subscription/acct_4 invocation kid · working', 'named by its <invoke id>');
   assert.equal(client.events('thread').filter((event) => event.reason === 'started').length, 1);
   const invocations = await (async () => {
     ({ stackFrames } = await client.ok('stackTrace', { threadId: 1 }));
@@ -740,7 +746,8 @@ async function state() {
   })();
   const invocation = await client.ok('variables', { variablesReference: invocations[0].variablesReference });
   const thread = invocation.variables.find((variable) => variable.name === 'thread');
-  assert.match(thread.value, /^"2 subscription\/acct_4 invocation \d+"$/);
+  assert.equal(invocations[0].name, 'kid');
+  assert.equal(thread.value, '"2 subscription/acct_4 invocation kid"');
   const kid = await client.ok('stackTrace', { threadId: threads[1].id });
   assert.equal(kid.stackFrames[0].name, 'idle in working');
   await client.repl('goto active');
@@ -945,6 +952,10 @@ async function forks() {
   await client.stoppedAfter(mark, 'step');
   let frames = (await client.ok('stackTrace', { threadId: 1 })).stackFrames;
   assert.equal(frames[0].name, 'about to take renew (before transition selection)');
+  const eventScope = (await client.ok('scopes', { frameId: frames[0].id })).scopes.find((scope) => scope.name === 'Event');
+  const eventFields = Object.fromEntries((await client.ok('variables', { variablesReference: eventScope.variablesReference }))
+    .variables.map((variable) => [variable.name, variable.value]));
+  assert.equal(eventFields.sendid, '"renewal"', 'the Event scope has _event\'s SCXML names');
   // The microstep's start (core ADR 0087): its transition is selected, and
   // the copy stands before its first unit, which has not run.
   mark = client.mark();
@@ -1119,6 +1130,18 @@ async function forkStepping() {
   mark = client.mark();
   await client.ok('continue', { threadId: 1 });
   assert.match((await client.stoppedAfter(mark, 'data breakpoint')).description, /count = /);
+
+  // A step from before a macrostep stops at its first microstep's start or
+  // at its end, never before selection: an ignored event ends at rest.
+  await client.ok('setDataBreakpoints', { breakpoints: [] });
+  await client.ok('setFunctionBreakpoints', { breakpoints: [{ name: 'on:nothing' }] });
+  await client.repl('send nothing');
+  mark = client.mark();
+  await client.ok('continue', { threadId: 1 });
+  await client.stoppedAfter(mark, 'function breakpoint');
+  assert.deepEqual(await top(), ['about to take nothing (before transition selection)']);
+  await client.ok('setFunctionBreakpoints', { breakpoints: [] });
+  assert.deepEqual(await step('stepIn'), ['idle in busy (held; 0 messages waiting)']);
   await client.ok('disconnect');
   system.close();
 }

@@ -183,7 +183,9 @@ class Variables {
     const { system } = this.#host;
     const view = system.inspect(thread.actor);
     switch (name) {
-      case 'Event': return Object.entries(this.#host.eventOf(thread, view) ?? {});
+      // _event's SCXML names, as the test host's adapter shows them.
+      case 'Event': return Object.entries(this.#host.eventOf(thread, view) ?? {})
+        .map(([key, value]) => [key === 'sendID' ? 'sendid' : key, value]);
       case 'Configuration': return this.#configuration(thread, view);
       case 'Queues': return [
         ['internal', view.internalEvents],
@@ -196,7 +198,7 @@ class Variables {
       }]);
       case 'Invocations': return view.invocations.map((invocation) => {
         const child = this.#host.threadOfSession(invocation.serviceHandle);
-        return [String(invocation.id), { type: invocation.type, active: invocation.active,
+        return [this.#host.labels.invocation(invocation.id), { type: invocation.type, active: invocation.active,
                                          autoforward: invocation.autoforward,
                                          thread: child === undefined ? null : `${child.id} ${child.label}` }];
       });

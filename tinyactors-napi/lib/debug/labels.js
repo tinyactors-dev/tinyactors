@@ -70,6 +70,18 @@ class Labels {
     return this.states(definition).find((state) => state.name === name)?.id;
   }
 
+  /**
+   * The text of an invocation's ID (core ADR 0049): the author's `<invoke
+   * id>`, or the one core generated; its number when core no longer has it.
+   */
+  invocation(id) {
+    try {
+      return core.system_invoke_id_text(this.#native, id);
+    } catch {
+      return String(id);
+    }
+  }
+
   /** `source → targets on event`: the label the trace encoder writes too. */
   transition(definition, id) {
     const info = this.#lookup(definition, 'transition', id, () => core.definition_transition(this.#native, definition, id));
