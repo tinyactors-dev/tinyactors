@@ -38,9 +38,13 @@ Post each to the collector's `/v1/traces` and `/v1/logs`.
 
 - `detail`: `"summary"` (default) gives a span per macrostep, lifecycle
   spans, and failures. `"decisions"` adds microsteps, guard conditions and
-  raised events. `"full"` gives every kind.
+  raised events. `"full"` gives every kind the addon encodes.
 - `kinds`: the record kinds wanted (`TRACE_KINDS`), overriding `detail`.
-  Core builds no other record. Without a sink core builds nothing.
+  Core builds no other record. Without a sink core builds nothing. The
+  three `definition*` kinds (core ADR 0080) are for hosts that follow
+  core's record stream; the addon reports definitions through the
+  definition logs below instead, so no preset asks for them, and naming
+  them here adds nothing to the output.
 - `sample`: the ratio, 0 to 1 (default 1), of the traces this system
   starts that are sampled. It uses OpenTelemetry's consistent probability
   sampling, so other services agree on the decision. A `traceparent` from
@@ -166,7 +170,10 @@ per definition, so a family that registers a new definition for every
 child writes at most `logLimit` of them a second, and a count of the
 rest; they are DEBUG and INFO, so a backend that keeps WARN and above
 drops them, while the metrics above keep the full counts. They go
-wherever the other logs go, and `logs: false` stops them too.
+wherever the other logs go, and `logs: false` stops them too. They come
+from core's definition sink (core ADR 0079), which fires whatever the kind
+mask or sampling, so they are the one OTLP path for definitions; core's
+definition records (ADR 0080) never reach the output a second time.
 
 A failure says what failed and why in its body, and in attributes for
 filtering: `exception.message` (the thrown value, an `Error` as

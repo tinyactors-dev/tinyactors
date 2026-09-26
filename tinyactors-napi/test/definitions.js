@@ -8,7 +8,7 @@
 // Runs on Node and Bun.
 
 const assert = require('node:assert/strict');
-const { createSystem, statechart, decodeTraces } = require('..');
+const { createSystem, statechart, decodeTraces, TRACE_KINDS } = require('..');
 const { ecmascript } = require('../tools/ecmascript-datamodel');
 
 const NS = 'xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript"';
@@ -279,7 +279,37 @@ async function lifecycleLogs() {
   quiet.close();
 }
 
+// Core's definition records (core ADR 0080) are trace kinds a follower of
+// core's record stream reads. The addon's OTLP output reports definitions
+// once, as the definition sink's logs: no preset asks core for the records,
+// and naming them in `kinds` adds no span and no second log.
+async function definitionRecords() {
+  assert.deepEqual(TRACE_KINDS.slice(-3), ['definitionRegistered', 'definitionRetired', 'definitionFreed']);
+  const system = setup();
+  const traces = [];
+  const logs = [];
+  system.setTraceSink((trace, log) => {
+    traces.push(trace);
+    if (log !== undefined) logs.push(log);
+  }, { kinds: ['spawned', 'destroyed', 'definitionRegistered', 'definitionRetired', 'definitionFreed'], logLimit: 100 });
+  const built = system.define(statechart({ family: 'recorded', revision: 'v1' }).state('a'));
+  const actor = system.spawn(built);
+  await system.flush();
+  built.retire();
+  system.destroy(actor);
+  await system.flush();
+  const text = logs.flatMap((bytes) => protobufStrings(bytes));
+  for (const event of ['registered', 'retired', 'freed']) {
+    assert.equal(text.filter((t) => t === `${event} recorded v1 (host)`).length, 1, `one ${event} log, not two`);
+  }
+  const names = traces.flatMap((bytes) => decodeTraces(bytes)).map((span) => span.name);
+  assert.ok(names.length > 0, 'the actor spans are there');
+  assert.ok(!names.some((name) => name.includes('definition')), `no definition spans: ${names}`);
+  system.close();
+}
+
 (async () => {
+  await definitionRecords();
   await lifecycleMetrics();
   await lifecycleLogs();
   await streams();
