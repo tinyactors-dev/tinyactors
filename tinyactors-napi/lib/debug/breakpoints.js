@@ -1,0 +1,253 @@
+'use strict';
+
+// The breakpoints that need no source spans: function breakpoints by name,
+// the exception filters, and data breakpoints on data-model locations. Each
+// is found in the records of a macrostep that ended (lib/debug/macrosteps),
+// so on a live actor a breakpoint stops it after that macrostep, between
+// macrosteps, and never inside one (the proposal's "Holding a live actor").
+// An `on:` breakpoint can stop before the macrostep: the adapter reads the
+// next message of a held actor's mailbox.
+
+const { TinyactorsError } = require('../errors');
+
+const EXCEPTION_FILTERS = Object.freeze([
+  { filter: 'error.execution', label: 'error.execution',
+    description: 'An action, a guard or a <data> failed, and core raised error.execution' },
+  { filter: 'error.communication', label: 'error.communication',
+    description: 'A <send> or an invocation could not reach its target' },
+  { filter: 'error.platform', label: 'error.platform', description: 'The platform raised an error event' },
+  { filter: 'ignored', label: 'Ignored events', description: 'An event was taken and enabled no transition (core ADR 0072)' },
+  { filter: 'stopped', label: 'Out of memory', description: 'A run stopped because an allocation failed (core ADR 0070)' },
+]);
+const FILTERS = EXCEPTION_FILTERS.map((entry) => entry.filter);
+const ERRORS = FILTERS.slice(0, 3);
+
+// SCXML event descriptors match by prefix at dot boundaries (SCXML 3.12.1).
+function matchesEvent(descriptor, name) {
+  if (typeof name !== 'string') return false;
+  const bare = descriptor.replace(/\.\*$/, '').replace(/\.$/, '');
+  return bare === '*' || name === bare || name.startsWith(`${bare}.`);
+}
+
+const normalize = (text) => text.replaceAll('->', '→').replace(/\s+/g, ' ').trim();
+
+// `5` and `>= 5` stop from the fifth hit on, `== 5` only at it, `% 5` at
+// every fifth.
+function hitConditionMet(text, hits) {
+  if (text === undefined || text === null || String(text).trim() === '') return true;
+  const match = /^\s*(>=|>|==|<=|<|%)?\s*(\d+)\s*$/.exec(String(text));
+  if (match === null) return true;
+  const count = Number(match[2]);
+  switch (match[1]) {
+    case '>': return hits > count;
+    case '==': return hits === count;
+    case '<=': return hits <= count;
+    case '<': return hits < count;
+    case '%': return count > 0 && hits % count === 0;
+    default: return hits >= count;
+  }
+}
+
+function parseFunction(name) {
+  let match = /^exit:\s*(\S+)$/.exec(name);
+  if (match !== null) return { kind: 'exit', target: match[1] };
+  match = /^on:\s*(\S+)$/.exec(name);
+  if (match !== null) return { kind: 'on', target: match[1] };
+  if (/(→|->)/.test(name)) return { kind: 'transition', target: normalize(name) };
+  return { kind: 'entry', target: name };
+}
+
+function describe(breakpoint) {
+  switch (breakpoint.kind) {
+    case 'entry': return `entered ${breakpoint.target}`;
+    case 'exit': return `exited ${breakpoint.target}`;
+    case 'on': return `took ${breakpoint.target}`;
+    default: return breakpoint.target;
+  }
+}
+
+class Breakpoints {
+  #functions = [];
+  #data = [];
+  #filters = new Set();
+  #next = 0;
+
+  any() {
+    return this.#functions.length > 0 || this.#data.length > 0 || this.#filters.size > 0;
+  }
+
+  /** The `on:` breakpoints, for a held actor's next message. */
+  get takings() {
+    return this.#functions.filter((breakpoint) => breakpoint.kind === 'on');
+  }
+
+  /**
+   * setFunctionBreakpoints: replaces them all. `check(breakpoint)` answers
+   * undefined or why the breakpoint cannot be verified. Answers DAP
+   * Breakpoint objects.
+   */
+  setFunctions(specs, check) {
+    this.#functions = [];
+    return specs.map((spec) => {
+      const name = String(spec?.name ?? '').trim();
+      const breakpoint = { id: (this.#next += 1), name, ...parseFunction(name), condition: spec?.condition,
+                           hitCondition: spec?.hitCondition, hits: 0 };
+      const problem = name === '' ? 'a function breakpoint needs a name' : check(breakpoint);
+      if (problem !== undefined) {
+        return { id: breakpoint.id, verified: false, message: problem };
+      }
+      this.#functions.push(breakpoint);
+      return { id: breakpoint.id, verified: true };
+    });
+  }
+
+  setFilters(filters) {
+    const unknown = filters.filter((filter) => !FILTERS.includes(filter));
+    if (unknown.length > 0) {
+      throw new TinyactorsError(`unknown exception filter(s): ${unknown.join(', ')}`, 'invalid');
+    }
+    this.#filters = new Set(filters);
+  }
+
+  /**
+   * setDataBreakpoints: replaces them all. A dataId is the thread's label
+   * and a path of keys as JSON: `acct_1 ["failures"]`. `check(breakpoint)`
+   * as for functions.
+   */
+  setData(specs, check) {
+    this.#data = [];
+    return specs.map((spec) => {
+      const parsed = Breakpoints.parseDataID(spec?.dataId);
+      const id = (this.#next += 1);
+      if (parsed === undefined) {
+        return { id, verified: false, message: `${JSON.stringify(spec?.dataId)} is not a data-model location` };
+      }
+      if (spec.accessType !== undefined && spec.accessType !== 'write') {
+        return { id, verified: false, message: 'only writes can be watched: core traces assignments, not reads' };
+      }
+      const breakpoint = { id, ...parsed, dataId: spec.dataId, condition: spec.condition,
+                           hitCondition: spec.hitCondition, hits: 0 };
+      const problem = check(breakpoint);
+      if (problem !== undefined) {
+        return { id, verified: false, message: problem };
+      }
+      this.#data.push(breakpoint);
+      return { id, verified: true };
+    });
+  }
+
+  static dataID(label, path) {
+    return `${label} ${JSON.stringify(path)}`;
+  }
+
+  static parseDataID(text) {
+    const at = typeof text === 'string' ? text.indexOf(' ') : -1;
+    if (at <= 0) return undefined;
+    try {
+      const path = JSON.parse(text.slice(at + 1));
+      return Array.isArray(path) && path.length > 0 ? { label: text.slice(0, at), path } : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * `on:` breakpoints for an actor about to take `event`, confirmed with
+   * `fires`. Answers the hit, or undefined.
+   */
+  taking(event, fires) {
+    const hit = this.#functions.filter((breakpoint) => breakpoint.kind === 'on' && matchesEvent(breakpoint.target, event))
+      .filter((breakpoint) => this.#fire(breakpoint, fires));
+    return hit.length === 0 ? undefined
+      : { kind: 'function', breakpoints: hit.map((entry) => entry.id), description: `about to take ${event}` };
+  }
+
+  /**
+   * The hits in a macrostep that ended, of the actor labelled `label`:
+   * [{ kind: 'function' | 'exception' | 'data', breakpoints, description,
+   * exception }]. `location(expressionID)` names an <assign>'s location;
+   * `fires(breakpoint)` confirms a condition.
+   */
+  hits(macrostep, { label, location, fires, skipTaking = false }) {
+    const out = [];
+    const exception = this.#exception(macrostep);
+    if (exception !== undefined) out.push(exception);
+    const functions = this.#functions.filter((breakpoint) => {
+      switch (breakpoint.kind) {
+        case 'on': return !skipTaking && macrostep.event !== null && matchesEvent(breakpoint.target, macrostep.event.name);
+        case 'entry': return macrostep.microsteps.some((micro) => micro.entered.includes(breakpoint.target));
+        case 'exit': return macrostep.microsteps.some((micro) => micro.exited.includes(breakpoint.target));
+        default: return macrostep.microsteps.some((micro) => micro.transitions.some((text) => {
+          const shown = normalize(text);
+          return shown === breakpoint.target || shown.startsWith(`${breakpoint.target} on `);
+        }));
+      }
+    }).filter((breakpoint) => this.#fire(breakpoint, fires));
+    if (functions.length > 0) {
+      out.push({ kind: 'function', breakpoints: functions.map((entry) => entry.id),
+                 description: functions.map(describe).join(', ') });
+    }
+    const written = macrostep.records.filter((entry) => entry.name === 'scxml.assign')
+      .map((entry) => ({ location: location(entry.attributes['scxml.expression.id']), value: entry.attributes['scxml.value'] }))
+      .filter((entry) => entry.location !== undefined);
+    const data = this.#data.filter((breakpoint) => breakpoint.label === label &&
+      written.some((entry) => overlap(breakpoint.path, entry.location)))
+      .filter((breakpoint) => this.#fire(breakpoint, fires));
+    if (data.length > 0) {
+      const writes = written.filter((entry) => data.some((breakpoint) => overlap(breakpoint.path, entry.location)));
+      out.push({ kind: 'data', breakpoints: data.map((entry) => entry.id),
+                 description: writes.map((entry) => `${entry.location.join('.')}${entry.value === undefined ? ' written'
+                   : ` = ${entry.value}`}`).join(', ') });
+    }
+    return out;
+  }
+
+  #fire(breakpoint, fires) {
+    if (breakpoint.condition !== undefined && breakpoint.condition !== null && String(breakpoint.condition).trim() !== '' &&
+        !fires(breakpoint)) {
+      return false;
+    }
+    breakpoint.hits += 1;
+    return hitConditionMet(breakpoint.hitCondition, breakpoint.hits);
+  }
+
+  #exception(macrostep) {
+    if (this.#filters.size === 0) return undefined;
+    const candidates = [];
+    if (macrostep.event !== null) {
+      const filter = ERRORS.find((name) => matchesEvent(name, macrostep.event.name));
+      if (filter !== undefined) candidates.push({ filter, name: macrostep.event.name, data: macrostep.event.data });
+    }
+    let fault;
+    for (const entry of macrostep.records) {
+      const a = entry.attributes;
+      if (entry.name === 'scxml.error') {
+        fault = a['scxml.fault.detail'] ?? a['scxml.action'];
+      } else if (entry.name === 'scxml.raise') {
+        const filter = ERRORS.find((name) => matchesEvent(name, a['scxml.event.name']));
+        if (filter !== undefined) candidates.push({ filter, name: a['scxml.event.name'], fault });
+      } else if (entry.name === 'scxml.ignored') {
+        candidates.push({ filter: 'ignored', name: a['scxml.event.name'] });
+      } else if (entry.name === 'scxml.stopped') {
+        candidates.push({ filter: 'stopped', name: undefined });
+      }
+    }
+    const hit = candidates.find((candidate) => this.#filters.has(candidate.filter));
+    if (hit === undefined) return undefined;
+    const description = hit.filter === 'ignored' ? `${hit.name} enabled no transition`
+      : hit.filter === 'stopped' ? 'an allocation failed; the run stopped where it stood'
+        : [hit.name, hit.fault].filter((part) => part !== undefined).join(': ');
+    return { kind: 'exception', breakpoints: [], description, exception: hit };
+  }
+}
+
+// A write to `written` touches `watched` when one path is a prefix of the other.
+function overlap(watched, written) {
+  const length = Math.min(watched.length, written.length);
+  for (let at = 0; at < length; at += 1) {
+    if (String(watched[at]) !== String(written[at])) return false;
+  }
+  return true;
+}
+
+module.exports = { Breakpoints, EXCEPTION_FILTERS, matchesEvent };

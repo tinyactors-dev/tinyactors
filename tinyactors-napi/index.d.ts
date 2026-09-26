@@ -1014,6 +1014,8 @@ export interface ActorInspection<Data = unknown> {
   /** Stable across unload and load; the runtime ID is not (core ADR 0066). */
   readonly sessionID: bigint;
   readonly definition: DefinitionIdentity;
+  /** The definition's ID (Definition.id), which names its compiled states, transitions and actions. */
+  readonly definitionID: DefinitionID;
   readonly residency: ActorResidency;
   readonly published: boolean;
   readonly activeStates: readonly string[];

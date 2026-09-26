@@ -919,6 +919,9 @@ class System {
       actor: new ActorID(this, view.actor.slot, view.actor.generation),
       sessionID: view.session_id,
       definition: identityOf(view.definition),
+      // The definition's ID, which names its states, transitions and
+      // actions to core's lookups (core ADR 0071).
+      definitionID: view.definition_id,
       residency: view.residency,
       published: view.published,
       activeStates: core.actor_active_states(this.#native, slot, generation).map(stateName),
@@ -1846,7 +1849,17 @@ class System {
       }
       throw error;
     }
-    core.actor_withdraw_send(this.#native, slot, generation, id);
+    try {
+      core.actor_withdraw_send(this.#native, slot, generation, id);
+    } catch (error) {
+      if (error instanceof TinyactorsError && error.code === 'not-found') {
+        throw new TinyactorsError(`withdrawSend(): the actor has no pending send ${sendID}`, 'not-found');
+      }
+      if (error instanceof TinyactorsError && error.code === 'done') {
+        throw new TinyactorsError(`withdrawSend(): send ${sendID} was refused once and belongs to its receiver now`, 'done');
+      }
+      throw error;
+    }
   }
 
   /**

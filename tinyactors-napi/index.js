@@ -7,6 +7,7 @@ const { statechart, literal } = require('./lib/statechart');
 const { TRACE_KINDS, parseTraceparent, formatTraceparent, stepSpanID } = require('./lib/tracing');
 const { decodeTraces } = require('./lib/otlp');
 const { metricsToOTLP } = require('./lib/metrics');
+const { createDebugSession, DAPReader, encodeDAPMessage } = require('./lib/debug');
 
 module.exports = {
   version: native.version,
@@ -23,4 +24,10 @@ module.exports = {
   stepSpanID,
   // Metrics (core ADR 0072, napi ADR 0017): system.metrics() and its OTLP bytes.
   metricsToOTLP,
+  // The debug adapter (napi ADR 0027): a DAP session the application puts
+  // behind its own transport, and the base protocol's framing for byte
+  // streams.
+  createDebugSession,
+  DAPReader,
+  encodeDAPMessage,
 };

@@ -48,3 +48,13 @@ exceptionId       tinyactors-test/ruby/{dap/*.rb,dap_selftest.rb}          # DAP
 systemProcessId   tinyactors-test/ruby/{dap/*.rb,dap_selftest.rb}          # DAP field
 filterId          tinyactors-test/ruby/{dap/*.rb,dap_selftest.rb}          # DAP field
 targetId          tinyactors-test/ruby/{dap/*.rb,dap_selftest.rb}          # DAP field
+
+# Debug Adapter Protocol message fields (microsoft/debug-adapter-protocol),
+# which napi's debug adapter reads and writes as the protocol spells them.
+threadId           tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
+frameId            tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
+dataId             tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
+targetId           tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
+filterId           tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
+exceptionId        tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
+hitBreakpointIds   tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
