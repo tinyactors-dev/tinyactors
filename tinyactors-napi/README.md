@@ -114,3 +114,13 @@ configuration with the `port` and the actor's `address` connects to such a
 server. See
 [ADR 0027](docs/adr/0027-a-debugger-holds-steps-and-redirects-one-actor.md)
 and [the status of every DAP message](../docs/debug-adapter.md).
+
+`test/dap-transcripts.js` plays the DAP transcripts napi shares with the
+test host's adapter (`../tinyactors-test/dap/transcripts/`), under Node
+and Bun, so the two adapters stay in step. To add one, write the
+transcript, and the chart in both forms (`dap/charts/<chart>.js` and
+`.rb`) if it needs a new one, then play it in both hosts: `node
+test/dap-transcripts.js <name>` here (`DAP_TRACE=1` prints every message)
+and `ruby ruby/dap_transcripts.rb <name>` in tinyactors-test. The format
+and where the adapters differ are in
+[its README](../tinyactors-test/dap/README.md).

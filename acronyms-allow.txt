@@ -52,7 +52,7 @@ targetId          tinyactors-test/ruby/{dap/*.rb,dap_selftest.rb}          # DAP
 
 # Debug Adapter Protocol message fields (microsoft/debug-adapter-protocol),
 # which napi's debug adapter reads and writes as the protocol spells them.
-threadId           tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
+threadId           tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,test/dap-transcripts.js,tools/dap-server.js,README.md}   # DAP field
 frameId            tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
 dataId             tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
 targetId           tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
