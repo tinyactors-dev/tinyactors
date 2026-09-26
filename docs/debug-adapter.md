@@ -29,6 +29,7 @@ have what the message needs.
 | C3 | Core ADR: withdrawing one delayed send by owner and send ID |
 | C4 | Core ADR: an image restores into any system that registers its revision |
 | C5 | Core ADR: source spans on decode and encode |
+| C6 | Core ADR: a resume can stop before a microstep's first unit |
 | N1 | napi: a `held` scheduling state and delivering one held message |
 | N2 | napi: budgets for one actor |
 | N3 | napi: operator transitions in the envelope; settling on abandon |
@@ -207,6 +208,7 @@ The adapter is `tinyactors-test/bin/dap`; see
 | C3 | Withdrawing one delayed send | tinyactors-core [ADR 0084](../tinyactors-core/docs/adr/0084-an-operator-can-withdraw-one-pending-delayed-send.md) | ☑ |
 | C4 | Images restore into another system | tinyactors-core [ADR 0085](../tinyactors-core/docs/adr/0085-an-image-restores-into-any-system-that-registers-its-revision.md), tinyactors-napi [ADR 0026](../tinyactors-napi/docs/adr/0026-a-system-restoring-another-systems-image-copies-its-boxes.md) | ☑ |
 | C5 | Source spans on decode and encode | tinyactors-core [ADR 0086](../tinyactors-core/docs/adr/0086-a-spec-says-where-its-elements-were-written-and-an-encode-says-where-it-wrote-them.md), tinyactors-scxml, the Ruby DSL, napi's builder | ☑ |
+| C6 | A resume stops before a microstep's first unit | tinyactors-core [ADR 0087](../tinyactors-core/docs/adr/0087-a-resume-can-stop-before-a-microsteps-first-unit.md) | ☑ |
 | N1 | `held` scheduling state | tinyactors-napi | ☐ |
 | N2 | Budgets for one actor | tinyactors-napi | ☐ |
 | N3 | Operator transitions in the envelope; settling on abandon | tinyactors-napi | ☐ |
