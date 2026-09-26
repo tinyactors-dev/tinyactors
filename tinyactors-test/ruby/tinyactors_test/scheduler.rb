@@ -73,8 +73,13 @@ module TinyactorsTest
 
     def stopped? = @stopped
 
-    # True while a run was stopped or interrupted before the system came to rest.
+    # True while a run was stopped or interrupted before the system came to
+    # rest, or after `wake`.
     def pending? = @pending
+
+    # Notes that there is work without running it: an event was delivered
+    # outside a step, and whoever drives the loop runs it when it can.
+    def wake = @pending = true
 
     # The actor being settled, when a run stopped or was interrupted between
     # two resumes of its macrostep.

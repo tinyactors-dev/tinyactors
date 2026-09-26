@@ -136,6 +136,9 @@ module TinyactorsTest
       @diagnostics.dup
     end
 
+    # The host's process ID.
+    def pid = @wait_thread.pid
+
     def close
       call('host.shutdown') if @wait_thread.alive?
     ensure

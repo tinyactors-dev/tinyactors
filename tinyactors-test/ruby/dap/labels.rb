@@ -1,0 +1,127 @@
+# frozen_string_literal: true
+
+module DAP
+  # Names for the compiled IDs trace records carry, read from the
+  # definition with core's lookups by ID (ADR 0042, ADR 0071), and cached:
+  # a definition never changes while it is registered.
+  #
+  # Core supplies facts and the host builds labels (ADR 0071 section 3):
+  # `active → dunning on payment.failed` for a transition, `assign 2 in
+  # onentry of busy` for an action.
+  class Labels
+    NONE = 4_294_967_295
+
+    def initialize(context)
+      @context = context
+      @cache = {}
+    end
+
+    def self.none?(id) = id.nil? || Integer(id) == NONE
+
+    def state(definition, id)
+      return nil if Labels.none?(id)
+
+      lookup(definition, :state, id)&.fetch(:id)
+    end
+
+    def state_parent(definition, id)
+      info = lookup(definition, :state, id)
+      info.nil? || Labels.none?(info[:parent]) ? nil : Integer(info[:parent])
+    end
+
+    def state_kind(definition, id) = lookup(definition, :state, id)&.fetch(:kind)
+
+    # Every state of the definition, as [id, info], in ID order.
+    def states(definition)
+      @cache[[definition, :all_states]] ||= (0..).lazy.map { |id| [id, lookup(definition, :state, id)] }
+                                                  .take_while { |_, info| info }.to_a
+    end
+
+    # The ID of the state the author called `name`, or nil.
+    def state_id(definition, name)
+      states(definition).find { |_, info| info[:id] == name.to_s }&.first
+    end
+
+    # `source → targets on event`; an internal transition without targets
+    # is `source on event`, an eventless one leaves out `on`.
+    def transition(definition, id)
+      info = lookup(definition, :transition, id)
+      return "transition #{id}" if info.nil?
+
+      source = state(definition, info[:source]) || 'the document'
+      targets = Array(info[:targets]).map { |target| state(definition, target) }
+      text = targets.empty? ? source.to_s : "#{source} → #{targets.join(' ')}"
+      event = info[:event].to_s
+      event.empty? ? text : "#{text} on #{event}"
+    end
+
+    def transition_info(definition, id) = lookup(definition, :transition, id)
+
+    def action_info(definition, id) = lookup(definition, :action, id)
+
+    # `assign 2`: the element and its place in its block, from 1.
+    def action(definition, id)
+      info = lookup(definition, :action, id)
+      return "action #{id}" if info.nil?
+
+      "#{info[:kind]} #{Integer(info[:index]) + 1}"
+    end
+
+    # Where a block of actions sits: `onentry of busy`, `transition idle →
+    # busy on go`, `then of if 3`, `foreach 2`.
+    def block(definition, info)
+      owner = info[:owner]
+      case info[:block]
+      when 'onentry' then "onentry of #{state(definition, owner)}"
+      when 'onexit' then "onexit of #{state(definition, owner)}"
+      when 'transition' then "transition #{transition(definition, owner)}"
+      when 'then' then "then of #{action(definition, owner)}"
+      when 'else' then "else of #{action(definition, owner)}"
+      when 'foreach' then "body of #{action(definition, owner)}"
+      when 'finalize' then "finalize in #{state(definition, owner)}"
+      else info[:block].to_s
+      end
+    end
+
+    # The <if> and <foreach> actions around an action, innermost first.
+    def enclosing(definition, id)
+      chain = []
+      info = action_info(definition, id)
+      while info && %w[then else foreach].include?(info[:block])
+        owner = Integer(info[:owner])
+        chain << owner
+        info = action_info(definition, owner)
+      end
+      chain
+    end
+
+    # How deep an action is nested in <if> and <foreach> bodies: 0 for an
+    # action of a state's or a transition's own block.
+    def depth(definition, id) = enclosing(definition, id).size
+
+    # The block an action ultimately belongs to, as its info.
+    def outer_block(definition, id)
+      chain = enclosing(definition, id)
+      action_info(definition, chain.empty? ? id : chain.last)
+    end
+
+    # The source text of an expression, or nil for a host expression.
+    def expression(definition, id)
+      return nil if Labels.none?(id)
+
+      text = lookup(definition, :expression, id)
+      text.is_a?(String) ? text : nil
+    end
+
+    private
+
+    def lookup(definition, kind, id)
+      key = [definition, kind, Integer(id)]
+      return @cache[key] if @cache.key?(key)
+
+      response = @context.ta.definition.public_send(kind, system: @context.system_handle,
+                                                          definition: definition, kind => Integer(id))
+      @cache[key] = response[:result] == 'ok' ? response.dig(:out, :out) : nil
+    end
+  end
+end

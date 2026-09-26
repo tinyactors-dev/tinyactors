@@ -1,0 +1,14 @@
+# frozen_string_literal: true
+
+require_relative 'workbench'
+require_relative 'dap/protocol'
+require_relative 'dap/labels'
+require_relative 'dap/threads'
+require_relative 'dap/expressions'
+require_relative 'dap/breakpoints'
+require_relative 'dap/control'
+require_relative 'dap/frames'
+require_relative 'dap/variables'
+require_relative 'dap/console'
+require_relative 'dap/catalog'
+require_relative 'dap/adapter'

@@ -49,7 +49,12 @@ module Workbench
       # chart name => the spec it last loaded with, to tell a real edit from
       # a touched file.
       @specs = {}
+      # chart name => the file that defined it.
+      @chart_files = {}
     end
+
+    # The file a chart was defined in, or nil.
+    def file_of(chart) = @chart_files[chart.to_sym]
 
     def files
       Dir[@dir.join('*.rb').to_s].sort
@@ -82,6 +87,7 @@ module Workbench
       charts.clear
       @actors = {}
       @errors = {}
+      @chart_files = {}
       Workbench.collector = self
       begin
         load_files
@@ -124,6 +130,7 @@ module Workbench
       begin
         load file
         @errors.delete(file)
+        (charts.keys - charts_before).each { |name| @chart_files[name] = file }
         true
       rescue ScriptError, StandardError => error
         (charts.keys - charts_before).each { |name| charts.delete(name) }
