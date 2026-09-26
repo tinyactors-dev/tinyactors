@@ -18,6 +18,38 @@ module DefinitionEvents
            ta.system.register_definition(system: system_handle, definition: compiled.fetch(:out))).fetch(:out)
     end
   end
+
+  # The kinds a follower of the trace stream reads (ADR 0080).
+  FOLLOWED = %i[spawned destroyed macrostep_begin macrostep_end invoked
+                definition_registered definition_retired definition_freed].freeze
+
+  # Both journals as one stream, in the order of the seq counter they
+  # share: [source, kind, definition ID, actor, macrostep], where source is
+  # :record (the trace sink) or :event (the definition sink), and a record's
+  # kind drops its `definition_` prefix so the two sources compare.
+  def self.stream(context)
+    context.instance_exec do
+      entries = @instruments['trace'].journal + @instruments['definitions'].journal
+      entries.sort_by { |entry| Integer(entry[:seq]) }.filter_map do |entry|
+        case entry[:op]
+        when 'trace'
+          [:record, entry[:kind].delete_prefix('definition_'), Integer(entry[:definition]),
+           entry[:actor] && Integer(entry[:actor]), entry.dig(:key, :macrostep)]
+        when 'definition'
+          [:event, entry[:kind], Integer(entry[:definition]), nil, nil]
+        end
+      end
+    end
+  end
+
+  # Every definition record, immediately followed by the sink's event for it.
+  def self.paired?(stream)
+    stream.each_with_index.all? do |(source, kind, definition), at|
+      next true unless source == :record && %w[registered retired freed].include?(kind)
+
+      stream[at + 1]&.first(3) == [:event, kind, definition]
+    end
+  end
 end
 
 TinyactorsTest.scenarios 'definition events' do
@@ -77,5 +109,61 @@ TinyactorsTest.scenarios 'definition events' do
     freed = definition_events.drop(mark)
     assert_equal ids.sort, freed.map(&:last).sort, 'every definition is freed'
     assert freed.all? { |event| event.first == 'freed' }, "only FREED at destroy: #{freed.inspect}"
+  end
+
+  # Catches: definition records out of order with the actor records a
+  # follower reads beside them (ADR 0080): a standby would spawn an actor of
+  # a definition it has not seen, or drop a definition an actor still uses.
+  # The caller registers its invoked child mid-run: that REGISTERED comes
+  # inside the caller's bootstrap macrostep, before the child is spawned.
+  scenario 'definition records sit in order with the actor records around them' do
+    recording_definitions
+    recording_trace(kinds: DefinitionEvents::FOLLOWED)
+    parent = spawn :caller
+    caller_id = definition(:caller)
+    stream = DefinitionEvents.stream(self)
+    assert DefinitionEvents.paired?(stream), "each record just before its event: #{stream.inspect}"
+
+    at = ->(match) { stream.index { |entry| match.call(entry) } }
+    registered_caller = at.call(->(e) { e.first(3) == [:record, 'registered', caller_id] })
+    spawned_caller = at.call(->(e) { e[0] == :record && e[1] == 'spawned' && e[2] == caller_id })
+    assert registered_caller && spawned_caller && registered_caller < spawned_caller,
+           "the caller's definition before its SPAWNED: #{stream.inspect}"
+
+    child = stream.find { |e| e[0] == :record && e[1] == 'registered' && e[2] != caller_id }
+    assert child, "the invoked child's definition is registered: #{stream.inspect}"
+    child_id = child[2]
+    registered_child = stream.index(child)
+    begin_bootstrap = at.call(->(e) { e[1] == 'macrostep_begin' && e[3] == parent.handle && e[4] == 1 })
+    end_bootstrap = at.call(->(e) { e[1] == 'macrostep_end' && e[3] == parent.handle && e[4] == 1 })
+    spawned_child = at.call(->(e) { e[0] == :record && e[1] == 'spawned' && e[2] == child_id })
+    assert begin_bootstrap < registered_child && registered_child < end_bootstrap,
+           "the child registered inside the caller's bootstrap macrostep: #{stream.inspect}"
+    assert registered_child < spawned_child, "the child's definition before its SPAWNED: #{stream.inspect}"
+
+    # Destroy: every DESTROYED, then FREED for each definition left.
+    parent.post('finish')
+    run_system('the child finishes, and the caller with it')
+    mark = stream.size
+    teardown!
+    tail = DefinitionEvents.stream(self).drop(mark)
+    records = tail.select { |e| e[0] == :record }
+    last_destroyed = records.rindex { |e| e[1] == 'destroyed' }
+    first_freed = records.index { |e| e[1] == 'freed' }
+    assert first_freed, "destroy frees what is left: #{tail.inspect}"
+    assert last_destroyed.nil? || last_destroyed < first_freed, "every DESTROYED before any FREED: #{tail.inspect}"
+    assert_equal [caller_id, child_id].sort, records.select { |e| e[1] == 'freed' }.map { |e| e[2] }.sort
+    assert DefinitionEvents.paired?(DefinitionEvents.stream(self)), 'each FREED record just before its event'
+  end
+
+  # Catches: records for kinds the sink did not ask for (ADR 0067 section
+  # 2): a follower that wants actor records only would get definitions too.
+  scenario 'a mask without the definition kinds gets no definition records' do
+    recording_definitions
+    recording_trace(kinds: %i[spawned destroyed])
+    spawn :traffic_light
+    kinds = @instruments['trace'].journal.select { |e| e[:op] == 'trace' }.map { |e| e[:kind] }
+    assert_equal ['spawned'], kinds
+    assert_equal ['registered'], definition_events.map(&:first), 'the definition sink still hears'
   end
 end
