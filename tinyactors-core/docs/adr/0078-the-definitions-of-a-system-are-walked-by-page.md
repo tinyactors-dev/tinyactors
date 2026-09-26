@@ -1,6 +1,6 @@
 # ADR 0078: The definitions of a system are walked by page
 
-**Status:** Accepted; not yet implemented. Applies ADR 0043 and ADR 0077; follows the paging model of ADR 0062.
+**Status:** Accepted and implemented (2026-09-26); see the implementation notes. Applies ADR 0043 and ADR 0077; follows the paging model of ADR 0062.
 **Date:** 2026-09-26
 
 ## Context
@@ -118,3 +118,35 @@ A host that walks every definition sees each parent, and so every edge.
   nested inline and invoke-time definitions; `metrics()` reports a nested
   child's counters and occupancy; `watchTraces({ families: ['<parent>/invoke'] })`
   traces an invoke-time child; freed definitions drop out.
+
+## Implementation notes
+
+- **Core:** `ta_system_definitions()` in `src/system.c`, a scan of the
+  definition slots from `from`, as the Decision describes. It touches
+  nothing that frees definitions. `tests/retirement_test.c` (`test_walk`)
+  covers pages of one to three, a size query, a free and a registration
+  between pages, a retired definition in use, and a nested child.
+- **napi `system.definitions({ pageSize })`** is a lazy iterator over the
+  walk (default 1,024 IDs per page, at most 65,536), yielding
+  `DefinitionInspection`. Inspections gain `holds`, `nestedBy` (the
+  parents' count) and `nested` (the children this chart's `<invoke>`s
+  nest), so nesting is read from parent to child, as section 3 says.
+- **napi `metrics()`** walks core's definitions instead of its own map, so
+  nested and invoke-time children report their counters and occupancy
+  under their own families.
+- **Where the code differs from the text: `watchTraces({ families })`
+  does not read the walk.** A walk at watch time would still miss a
+  definition registered afterwards, and invoke-time children are
+  registered by core during a run, where no JavaScript runs. So the addon
+  keeps the watched family names and resolves each definition the first
+  time a delivery meets it (`src/watch.c`), remembering the answer in two
+  hash sets (matched, and checked); the check stays constant-time, and
+  definitions registered after the watch are caught. Generational IDs make
+  remembering a freed definition harmless.
+- **napi's map of defined definitions is gone,** with the re-apply it did
+  when JavaScript defined a chart of a watched family.
+- **Tests:** `test/definitions.js` on Node and Bun (streaming every kind of
+  definition in pages of one, retired and freed definitions, a nested
+  child's metrics, a watched invoke-time child), and the native
+  `watch_test` (families resolved against a real system).
+
