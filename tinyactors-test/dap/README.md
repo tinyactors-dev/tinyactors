@@ -93,7 +93,8 @@ A step is one of:
 
 Starting differs between the hosts, so each runner does its own, then
 plays the steps. Afterwards the one actor of the chart, named `a1`, is
-stopped at rest, and the variable `thread` is its thread ID:
+stopped at rest, the variable `thread` is its thread ID, and `title` the
+name the adapter writes for it (its thread's name without the states):
 
 - **test host:** a workbench directory with the chart's file and
   `Workbench.actor :a1, chart: :<chart>`, launched with `stopOnEntry`;
@@ -123,8 +124,9 @@ An object with one key starting with `$` is a matcher instead:
 | `{ "$contains": "text" }` | a string containing `text` |
 | `{ "$prefix": "text" }` | a string starting with `text` |
 | `{ "$prefix": [ … ] }` | an array whose first elements match these; the rest may be anything (a stack trace down to the macrostep, without the causal chain that follows) |
+| `{ "$text": "… {name} …" }` | the string with each `{name}` replaced by the variable's value: `{title} · busy` |
 | `{ "$some": … }` | an array with an element that matches |
-| `{ "$expr": { "jq": …, "js": … } }` | the host's form of an expression: `jq` for the test host, `js` for napi |
+| `{ "$expr": { "jq": …, "js": … } }` | the host's form: `jq` for the test host, `js` for napi; each form may be a matcher itself |
 
 In a request's arguments, `{ "$var": "name" }` is replaced by the bound
 value and `{ "$expr": … }` by the host's form. Write an expression both
@@ -145,42 +147,47 @@ never a failure, so a transcript names only what both adapters send.
    `node test/dap-transcripts.js <name>` and `bun test/dap-transcripts.js
    <name>` in tinyactors-napi.
 3. Where the two answer differently, decide which is right. A difference
-   the status map explains (the test host stops all actors at once; napi
-   has a mailbox, stops a live actor only between macrosteps, and reads
-   records only as spans end) is matched loosely, with `$contains` or
-   `$prefix`, or left out. Any other difference is a bug: fix the adapter
-   that is wrong, with a test in its own suite.
+   listed below is matched loosely, with `$contains`, `$prefix` or
+   `$expr`, or left out; match everything else exactly, with `$text` for
+   the actor's name. Any other difference is a bug: fix the adapter that
+   is wrong, with a test in its own suite.
 
 ## Where the adapters differ
 
-What a transcript leaves out or matches loosely, and why:
+The two adapters say the same things in the same words: console results,
+macrostep summaries (one output each), `<log>` output (`busy: 1`), thread
+and actor names, stop descriptions, exception texts, the frame of an actor
+at rest (`idle in idle (held; 0 messages waiting)`), and the names in the
+scopes. Console mail waits in the actor's mailbox in both, jumps into a
+macrostep queue there, and `abandon` stops again. What still differs, and
+what a transcript therefore leaves out or matches loosely:
 
-- **Presentation.** The text of console results (`sent bump to a1; it
-  runs when you continue` and `sent bump to counter/a1 (fork); it waits
-  in the mailbox`), of macrostep summaries and of `<log>` output (`<log>
-  busy 1` and `busy: 1`), and thread labels (`a1`, `counter/a1 (fork)`).
-- **Delivering.** The test host delivers a console `send` at once, so the
-  actor holds the event (`about to take bump`); napi posts it to the
-  mailbox, and the actor takes it when it runs. A transcript syncs on a
-  stop both make: an `on:` breakpoint, then `continue`.
+- **The actor's name in fork mode.** napi's fork is `counter/a1 (fork)`,
+  the test host's workbench actor `counter/a1`; the transcripts write it
+  as `{title}` (see "Session start").
+- **The data model.** jq in the test host, JavaScript in napi: an
+  expression is `$expr`, and so is text that holds one, such as an
+  `<assign>` location in a summary (`assign .count = 1`, `assign count =
+  1`) or a fault's message (`JSON expression produced no value`, `Error:
+  boom`).
 - **All-stop.** The test host stops every actor when one stops
   (`allThreadsStopped: true`) and says `continued` when a step lets them
   run; napi's session is one actor.
 - **A fork.** napi's session switches to the copy, which keeps thread 1;
-  the test host adds the copy as a thread of its own. A transcript finds
-  the fork by name with `$some`.
+  the test host adds the copy as a thread of its own, `counter/a1 (fork
+  1)`, since a workbench can have several. A transcript finds the fork by
+  name with `$some`, and the `fork` command's answer differs.
 - **Records.** The test host reads trace records as each resume writes
   them. napi reads spans, which end when the next microstep begins: a
   microstep in progress has no transitions in its frame name
   (`microstep 2.1`, not `microstep 2.1: idle → busy on bump`), and on a
   fork an exception or a data breakpoint stops after the macrostep, not
-  at the next unit.
-- **Operators.** A `goto` while the actor is inside a macrostep is
-  refused in the test host, which points at `abandon`; napi queues it
-  behind the mailbox. After `abandon`, napi sends a `stopped` event with
-  the new frames; the test host sends none, and its frames are new too.
-- **Scopes.** Event and System hold each host's own names: SCXML's
-  `_event` fields in the test host, napi's `context.event`; napi has no
-  `_ioprocessors`. A transcript matches the fields both have.
-- **Resting frame.** napi adds what holds an actor at rest: `idle in idle
-  (held; 0 messages waiting)`.
+  at the next unit, so a data breakpoint's description lists every write
+  of the macrostep (`count = 1, count = 2, count = 4`).
+- **The clock.** napi's `clock` on a fork adds how many messages fell due
+  for the copy (`t=60000ms; 1 message waiting for the copy`); the test
+  host dispatches what falls due when the system next runs.
+- **SCXML's own data.** The test host's Event scope is `_event`, with
+  `origintype` and `invokeid` besides the fields napi shows, and its
+  System scope has `_ioprocessors`. A transcript matches the fields both
+  have.

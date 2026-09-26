@@ -332,8 +332,9 @@ module Workbench
     end
 
     # New <log> records since the last drain, appended to the journal so the
-    # logs pane shows them in step with everything else.
-    def drain_chart_logs
+    # logs pane shows them in step with everything else; or, with a block,
+    # handed to it as (actor name or nil, journal entry) instead.
+    def drain_chart_logs(&handle)
       sink = @context.instruments['log']
       return if sink.nil?
 
@@ -343,6 +344,8 @@ module Workbench
       @log_cursor = entries.last[:seq]
       entries.each do |entry|
         who = name_of_handle(entry[:source].is_a?(Hash) ? entry[:source][:actor] : entry[:source])
+        next handle.call(who, entry) if handle
+
         value = entry[:has_value] ? " #{JSON.generate(entry[:value])}" : ''
         @journal.chart("#{who ? "#{who} " : ''}<log> #{entry[:label]}#{value}")
       end

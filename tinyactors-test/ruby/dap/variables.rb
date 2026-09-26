@@ -5,12 +5,16 @@ module DAP
   # scopes, because they belong to the actor, not to a frame:
   #
   # | Data model    | the data root (ta_actor_datamodel_root), read again on each expansion |
-  # | Event         | _event of the step the actor is in                                     |
+  # | Event         | _event of the step the actor is in, or of its last macrostep           |
   # | Configuration | the active states as a tree, and what each history state recorded      |
-  # | Queues        | the internal queue, the macrostep's event, debugger messages waiting   |
+  # | Queues        | the internal queue, the macrostep's event, the console's mailbox       |
   # | Timers        | pending delayed sends and when each is due                             |
   # | Invocations   | active invocations, and the thread of each child                       |
   # | System        | _sessionid, _name, _ioprocessors, logical time, the definition         |
+  #
+  # The names in the scopes are napi's adapter's where both hosts have the
+  # same thing to show; `_event`'s SCXML fields and `_ioprocessors` are
+  # this host's alone.
   #
   # A variablesReference is valid until the system runs again (`reset`).
   class Variables
@@ -120,13 +124,13 @@ module DAP
     # error.communication.
     def write(thread, path, text)
       unless thread.named? || thread.fork?
-        raise RequestError, "#{thread.label} is an invoked child, which has no address to unload and load it at"
+        raise RequestError, "#{thread.title} is an invoked child, which has no address to unload and load it at"
       end
 
       view = thread.view
       invokes = Array(view&.dig(:invokes)).count { |invoke| invoke[:active] }
       if invokes.positive?
-        raise RequestError, "#{thread.label} has #{invokes} active invocation(s), which reloading it to write " \
+        raise RequestError, "#{thread.title} has #{invokes} active invocation(s), which reloading it to write " \
                             'the data would end with error.communication'
       end
 
@@ -229,10 +233,10 @@ module DAP
     # The read-only scopes, as [name, value] pairs.
 
     def scope(thread, name)
-      view = thread.view or raise RequestError, "#{thread.label} is not resident"
+      view = thread.view or raise RequestError, "#{thread.title} is not resident"
 
       case name
-      when 'Event' then (event(thread, event_of(thread)) || {}).map { |key, value| [key.to_s, value] }
+      when 'Event' then event_scope(thread)
       when 'Configuration' then configuration(thread, view)
       when 'Queues' then queues(thread, view)
       when 'Timers' then timers(thread, view)
@@ -243,6 +247,18 @@ module DAP
     end
 
     def event(thread, event) = @expressions.scxml_event(event, thread.context)
+
+    # _event of the step the actor is in; at rest, that of its last
+    # macrostep, marked as such.
+    def event_scope(thread)
+      current = event(thread, event_of(thread))
+      return current.map { |key, value| [key.to_s, value] } if current
+
+      last = @control.track(thread)&.taken
+      return [] if last.nil?
+
+      event(thread, last).map { |key, value| [key.to_s, value] } + [['taken', 'in its last macrostep']]
+    end
 
     def configuration(thread, view)
       context = thread.context
@@ -283,8 +299,21 @@ module DAP
     def queues(thread, view)
       internal = Array(view[:internal_events]).map { |queued| event(thread, queued[:event]) }
       current = view[:current_event] ? event(thread, view[:current_event]) : nil
-      waiting = @console.queued_for(thread).map { |message| { name: message[:event], data: message[:data] } }
-      [['internal', internal], ['current', current], ['debugger', waiting]]
+      [['internal', internal], ['current', current], ['mailbox', @console.mail_for(thread).map { |message| mail(message) }]]
+    end
+
+    # A message of the console's mailbox, as napi's Queues scope shows one.
+    def mail(message)
+      if message[:goto]
+        targets, from = message[:goto].values_at(:targets, :from)
+        data = { targets: targets }
+        data[:from] = from if from
+        return { event: Operator::EVENT, data: data, transition: { source: from, targets: targets },
+                 from: 'this console' }
+      end
+      shown = { event: message[:event] }
+      shown[:data] = message[:data] unless message[:data].nil?
+      shown.merge(from: 'this console')
     end
 
     def timers(thread, view)
@@ -292,8 +321,9 @@ module DAP
       now = context.now
       Array(view[:delayed_sends]).each_with_index.map do |send, index|
         target = context.send_target(view[:definition_id], send)
-        [context.send_id_text(send[:send_id]) || "(no ID) #{index + 1}", { event: context.event_text(send[:event]), target: target, due: send[:due],
-                                in: "#{Integer(send[:due]) - now}ms", data: send[:data] }]
+        [context.send_id_text(send[:send_id]) || "(no ID) #{index + 1}",
+         { event: context.event_text(send[:event]), target: target, due: send[:due],
+           in: "#{Integer(send[:due]) - now}ms", data: send[:data], submitted: send[:submitted] }]
       end
     end
 
@@ -301,7 +331,7 @@ module DAP
       context = thread.context
       Array(view[:invokes]).map do |invoke|
         child = @threads.by_handle(thread.place, Integer(invoke[:service_handle])) rescue nil
-        [invoke[:id].to_s, { type: context.ta.system.atom_text(system: context.system_handle, atom: invoke[:type])
+        [context.invoke_id_text(invoke[:id]), { type: context.ta.system.atom_text(system: context.system_handle, atom: invoke[:type])
                                           .dig(:out, :out),
                              active: invoke[:active], autoforward: invoke[:autoforward],
                              thread: child ? "#{child.id} #{child.name}" : nil }]
@@ -309,16 +339,28 @@ module DAP
     end
 
     def system(thread, view)
+      handle = Integer(thread.handle)
       [['_sessionid', view[:session_id].to_s],
        ['_name', view.dig(:definition, :family, :name)],
        ['_ioprocessors', @expressions.value(thread, '$_ioprocessors')],
        ['now', thread.context.now],
-       ['actor', thread.handle],
-       ['definition', { id: view[:definition_id], family: view.dig(:definition, :family, :name),
-                        revision: view.dig(:definition, :revision) }],
+       # A runtime ID as its slot and generation (core ADR 0066), as napi shows it.
+       ['actor', "#{handle & 0xffff_ffff}:#{handle >> 32}"],
+       ['definition', { family: view.dig(:definition, :family, :name), revision: view.dig(:definition, :revision),
+                        id: view[:definition_id].to_s }],
        ['residency', view[:residency]],
+       ['scheduling', scheduling(thread, view)],
        ['published', view[:published]],
-       ['allocated_bytes', view[:allocated_bytes]]]
+       ['allocatedBytes', view[:allocated_bytes]]]
+    end
+
+    # As napi's scheduling states name it: `held` while the debugger holds
+    # the actor (the system is stopped, or the Scheduler leaves it out),
+    # `runnable` inside a macrostep, `idle` at rest.
+    def scheduling(thread, view)
+      return 'held' if @control.stopped? || thread.context.scheduler.held?(thread.handle)
+
+      view[:macrostep_in_progress] ? 'runnable' : 'idle'
     end
   end
 end

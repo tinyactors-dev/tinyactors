@@ -20,7 +20,7 @@
     },
     {
       "request": "dataBreakpointInfo", "arguments": { "name": ".items[1]", "frameId": { "$var": "frame" } },
-      "response": { "body": { "dataId": { "$contains": "[\"items\",1]" } } }
+      "response": { "body": { "dataId": { "$text": "{title} [\"items\",1]" }, "description": { "$text": "{title} .items[1]" } } }
     },
     {
       "request": "dataBreakpointInfo", "arguments": { "variablesReference": { "$var": "event" }, "name": "name" },
@@ -38,7 +38,7 @@
     { "request": "continue", "arguments": { "threadId": { "$var": "thread" } } },
     {
       "event": "stopped",
-      "body": { "reason": "data breakpoint", "threadId": { "$var": "thread" }, "description": { "$contains": "count" }, "hitBreakpointIds": [ { "$var": "watch" } ] }
+      "body": { "reason": "data breakpoint", "threadId": { "$var": "thread" }, "description": { "$prefix": "count = 1" }, "hitBreakpointIds": [ { "$var": "watch" } ] }
     }
   ]
 }

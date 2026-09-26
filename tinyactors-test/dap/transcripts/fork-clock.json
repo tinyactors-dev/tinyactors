@@ -44,7 +44,7 @@
     },
     {
       "request": "evaluate", "arguments": { "expression": "clock +60s", "context": "repl", "frameId": { "$var": "frame" } },
-      "response": { "body": { "result": { "$contains": "t=60000ms" } } }
+      "response": { "body": { "result": { "$prefix": "t=60000ms" } } }
     },
     { "request": "continue", "arguments": { "threadId": { "$var": "fork" } } },
     {
@@ -55,13 +55,13 @@
     { "event": "stopped", "body": { "reason": "step", "threadId": { "$var": "fork" } } },
     {
       "request": "stackTrace", "arguments": { "threadId": { "$var": "fork" } },
-      "response": { "body": { "stackFrames": { "$prefix": [ { "name": "assign 1" }, { "name": "transition idle on tick" } ] } } }
+      "response": { "body": { "stackFrames": { "$prefix": [ { "name": "assign 1" }, { "name": "transition idle on tick (internal)" } ] } } }
     },
     { "request": "stepIn", "arguments": { "threadId": { "$var": "fork" } } },
     { "event": "stopped", "body": { "reason": "step", "threadId": { "$var": "fork" } } },
     {
       "request": "stackTrace", "arguments": { "threadId": { "$var": "fork" } },
-      "response": { "body": { "stackFrames": [ { "id": { "$capture": "frame" }, "name": { "$prefix": "idle in idle" } } ] } }
+      "response": { "body": { "stackFrames": [ { "id": { "$capture": "frame" }, "name": "idle in idle (held; 0 messages waiting)" } ] } }
     },
     {
       "request": "evaluate", "arguments": { "expression": ".ticks", "context": "watch", "frameId": { "$var": "frame" } },

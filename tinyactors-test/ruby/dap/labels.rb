@@ -42,8 +42,9 @@ module DAP
                                                   .take_while { |_, info| info }.to_a
     end
 
-    # `source → targets on event`; an internal transition without targets
-    # is `source on event`, an eventless one leaves out `on`.
+    # `source → targets on event`; a transition without targets is `source
+    # on event`, an eventless one leaves out `on`, and an internal one ends
+    # in `(internal)`, as napi's adapter names them.
     def transition(definition, id)
       info = lookup(definition, :transition, id)
       return "transition #{id}" if info.nil?
@@ -52,7 +53,8 @@ module DAP
       targets = Array(info[:targets]).map { |target| state(definition, target) }
       text = targets.empty? ? source.to_s : "#{source} → #{targets.join(' ')}"
       event = info[:event].to_s
-      event.empty? ? text : "#{text} on #{event}"
+      text = "#{text} on #{event}" unless event.empty?
+      info[:type].to_s == 'internal' ? "#{text} (internal)" : text
     end
 
     # What a MICROSTEP record took: its transitions, or an operator's jump
@@ -71,6 +73,53 @@ module DAP
     end
 
     def transition_info(definition, id) = lookup(definition, :transition, id)
+
+    # A transition as napi's trace spans name it (its otlp.c), which its
+    # adapter's summaries and exception texts show: `idle → busy on bump
+    # [guarded]`, `busy on poke (internal)`, `initial of p → a`.
+    def transition_name(definition, id)
+      info = lookup(definition, :transition, id)
+      return "t#{id}" if info.nil?
+
+      targets = Array(info[:targets]).map { |target| " #{state(definition, target)}" }.join
+      if info[:origin].to_s != 'authored'
+        source = info[:origin].to_s == 'bootstrap' ? 'the document' : state(definition, info[:source])
+        return "initial of #{source} →#{targets}"
+      end
+      text = state(definition, info[:source]).to_s.dup
+      text << " →#{targets}" unless targets.empty?
+      text << " on #{info[:event]}" unless info[:event].to_s.empty?
+      text << ' [guarded]' unless Labels.none?(info[:condition])
+      text << ' (internal)' if info[:type].to_s == 'internal'
+      text
+    end
+
+    # An action as napi's trace spans name it: `<assign> in onentry of busy`,
+    # `<raise> in then of <if> in idle on go`, `<log> in finalize of
+    # <invoke> in a`.
+    def action_name(definition, id)
+      parts = []
+      loop do
+        info = lookup(definition, :action, id)
+        return "a#{id}" if info.nil?
+
+        parts << "<#{info[:kind]}>"
+        block = info[:block].to_s
+        if %w[then else foreach].include?(block)
+          parts << (block == 'foreach' ? ' in the body of ' : " in #{block} of ")
+          id = Integer(info[:owner])
+          next
+        end
+        which = Integer(info[:block_index] || 0).positive? ? " ##{Integer(info[:block_index]) + 1}" : ''
+        parts << case block
+                 when 'onentry', 'onexit' then " in #{block}#{which} of #{state(definition, info[:owner])}"
+                 when 'transition' then " in #{transition_name(definition, info[:owner])}"
+                 when 'finalize' then " in finalize of <invoke>#{which} in #{state(definition, info[:owner])}"
+                 else " in the document's <script>"
+                 end
+        return parts.join
+      end
+    end
 
     def action_info(definition, id) = lookup(definition, :action, id)
 

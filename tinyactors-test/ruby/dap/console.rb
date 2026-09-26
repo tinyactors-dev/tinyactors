@@ -21,6 +21,13 @@ module DAP
   # `<send targetexpr="$_event.origin" typeexpr="$_event.origintype">`
   # reaches the console. Closing the scope at the end of the session leaves
   # later replies with no origin, which fail as error.communication.
+  #
+  # What the console sends an actor, events and jumps alike, waits in that
+  # actor's mailbox, oldest first, as a message to one of napi's actors
+  # does: the Scheduler's monitor hands the next one over (`deliver_mail`)
+  # when the actor rests and its system runs, so a message sent while the
+  # system is stopped is taken on `continue` or a step, behind mail already
+  # waiting.
   class Console
     TYPE = 'debug'
     URI = 'debug://console'
@@ -48,14 +55,16 @@ module DAP
       @forker = nil
       # context => the debug I/O processor of that system
       @ios = {}
-      @queued = []
+      # thread ID => [{context:, event:, data:} or {context:, goto: {targets:, from:}}]
+      @mail = Hash.new { |hash, id| hash[id] = [] }
       @reply_cursors = {}
     end
 
     # The Variables that present values, the Operator that jumps, abandons
-    # and withdraws, and what makes a fork (called with a thread, answers
-    # the console's text); all are made after the console.
-    attr_writer :variables, :operator, :forker
+    # and withdraws, what makes a fork (called with a thread, answers the
+    # console's text), and what says whether the system is stopped; all are
+    # made after the console.
+    attr_writer :variables, :operator, :forker, :stopped
 
     # Registers the `debug` processor in `context`'s system and opens the
     # scope there. Tells `expressions` how to show the origin of an event
@@ -74,6 +83,13 @@ module DAP
       rescue TinyactorsTest::RPCError
         nil
       end
+    end
+
+    # A <log> record as the program's output, as napi's adapter writes it:
+    # `label: value`, a string value as it is and any other as JSON.
+    def self.log_text(entry)
+      value = entry[:value].is_a?(String) ? entry[:value] : JSON.generate(entry[:value])
+      "#{entry[:label].to_s.empty? ? 'log' : entry[:label]}:#{entry[:has_value] ? " #{value}" : ''}"
     end
 
     # The processors $_ioprocessors lists besides SCXML's, with the location
@@ -107,36 +123,46 @@ module DAP
       body
     end
 
-    # Debugger messages delivered to a busy actor wait in the instrument,
-    # oldest first. Answers what they are for `thread`.
-    def queued_for(thread) = @queued.select { |message| message[:handle] == thread.handle }
+    # ------------------------------------------------------------------
+    # Mailboxes
 
-    def queued? = !@queued.empty?
+    # What waits in `thread`'s mailbox, oldest first.
+    def mail_for(thread) = @mail.fetch(thread.id, [])
 
-    # Offers waiting messages again; delivered ones leave the queue, and
-    # their system runs them. Answers how many were delivered.
-    def flush
-      return 0 if @queued.empty?
+    # Puts a message in `thread`'s mailbox, and has its system run to hand
+    # it over. Answers what the console adds to its answer: where the
+    # message waits while the system is stopped.
+    def post(thread, message)
+      box = @mail[thread.id]
+      box << message.merge(context: thread.context)
+      thread.context.scheduler.wake
+      return '' unless @stopped.call
 
-      delivered = 0
-      @ios.each do |context, io|
-        next unless @queued.any? { |message| message[:context].equal?(context) }
+      "; it waits in the mailbox (#{box.size} message#{box.size == 1 ? '' : 's'}): continue or step to deliver it"
+    end
 
-        count = Array(io.control('flush')[:results]).size
-        mine = @queued.select { |message| message[:context].equal?(context) }.first(count)
-        @queued -= mine
-        mine.each { |message| @output.call('console', "#{message[:label]} took #{message[:event]} from the console") }
-        context.scheduler.wake if count.positive?
-        delivered += count
+    # Hands each actor of `place` that rests and is not held its next
+    # message: an event through the `debug` processor, a jump as an
+    # operator transition. Answers the handles of the actors that took one,
+    # which are runnable now.
+    def deliver_mail(place)
+      scheduler = place.context.scheduler
+      @threads.to_a.filter_map do |thread|
+        box = @mail.fetch(thread.id, nil)
+        next if box.nil? || box.empty? || !thread.place.equal?(place) || scheduler.held?(thread.handle)
+
+        view = thread.view
+        next if view.nil? || view[:macrostep_in_progress] || view[:residency] == 'done'
+
+        thread.handle if hand_over(thread, box)
       end
-      delivered
     end
 
     # A fork's system is gone: its waiting messages with it.
     def forget(context)
       @ios.delete(context)
       @reply_cursors.delete(context)
-      @queued.reject! { |message| message[:context].equal?(context) }
+      @mail.each_value { |box| box.reject! { |message| message[:context].equal?(context) } }
     end
 
     # Replies the actors sent to the console since the last call.
@@ -147,7 +173,7 @@ module DAP
 
         @reply_cursors[context] = entries.last[:seq]
         entries.each do |entry|
-          who = source_thread(context, entry[:source])&.label || 'an actor'
+          who = source_thread(context, entry[:source])&.title || 'an actor'
           data = entry[:data].nil? ? '' : " #{JSON.generate(entry[:data])}"
           refused = entry[:refused] ? " (refused: #{entry[:refused]})" : ''
           @output.call('console', "#{who} replied #{entry[:event_text]}#{data}#{refused}")
@@ -216,23 +242,35 @@ module DAP
       raise RequestError, 'send [@actor] <event> [json]' if event.nil? || event.empty?
 
       data = payload.nil? || payload.strip.empty? ? nil : parse_json(payload)
-      context = thread.context
-      io = @ios.fetch(context)
-      args = { processor: io.processor, actor: thread.handle, event: event, uri: URI, hold: true }
-      args[:data] = data unless data.nil?
-      answer = io.control('receive', **args)
-      case answer[:result]
-      when 'held'
-        @queued << { context: context, handle: thread.handle, label: thread.label, event: event, data: data }
-        text = "queued #{event} for #{thread.label}: it is inside a macrostep"
-      when 'ok'
-        text = "sent #{event} to #{thread.label}"
-        text += '; it runs when you continue' if context.scheduler.stopped?
-        context.scheduler.wake
-      else
-        raise RequestError, "#{thread.label} refused #{event}: #{answer[:result]}"
-      end
-      { 'result' => text, 'variablesReference' => 0 }
+      note = post(thread, { event: event, data: data })
+      { 'result' => "sent #{event} to #{thread.title}#{note}", 'variablesReference' => 0 }
+    end
+
+    # Hands `thread` the oldest message of `box`. Answers whether it took
+    # it; a message it refuses leaves the mailbox, and the console says why.
+    def hand_over(thread, box)
+      message = box.first
+      result = if message[:goto]
+                 @operator.deliver_jump(thread, message.dig(:goto, :targets), message.dig(:goto, :from))
+               else
+                 receive(thread, message)
+               end
+      return false if result == 'err_busy'
+
+      box.shift
+      return true if result == 'ok'
+
+      what = message[:goto] ? "goto #{message.dig(:goto, :targets).join(' ')}" : message[:event]
+      why = message[:goto] ? @operator.jump_refusal(thread, message.dig(:goto, :targets), message.dig(:goto, :from), result) : result
+      @output.call('important', "#{thread.title} refused #{what}: #{why}")
+      false
+    end
+
+    def receive(thread, message)
+      io = @ios.fetch(thread.context)
+      args = { processor: io.processor, actor: thread.handle, event: message[:event], uri: URI }
+      args[:data] = message[:data] unless message[:data].nil?
+      io.control('receive', **args)[:result]
     end
 
     # Logical time belongs to a system (ADR 0012): the frame's actor's, the
@@ -247,8 +285,7 @@ module DAP
       # everything the adapter runs.
       context.set_time(context.now + milliseconds)
       context.scheduler.wake
-      where = thread.fork? ? "#{thread.label}: " : ''
-      { 'result' => "#{where}t=#{context.now}ms", 'variablesReference' => 0 }
+      { 'result' => "t=#{context.now}ms", 'variablesReference' => 0 }
     end
 
     def parse_json(text)

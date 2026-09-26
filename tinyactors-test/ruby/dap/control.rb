@@ -78,9 +78,11 @@ module DAP
 
     # `places` answers the workbench session and the forks. `output` is
     # called as output.call(category, text) for the macrostep summaries;
-    # `interrupt` answers whether a client message is waiting.
-    def initialize(labels:, threads:, breakpoints:, places:, output:, interrupt:)
+    # `interrupt` answers whether a client message is waiting; `mail` hands
+    # the console's mail to a place's resting actors (Console#deliver_mail).
+    def initialize(labels:, threads:, breakpoints:, places:, output:, interrupt:, mail:)
       @labels = labels
+      @mail = mail
       @threads = threads
       @breakpoints = breakpoints
       @places = places
@@ -201,7 +203,8 @@ module DAP
       stop_all
       @step = nil
       @pause_requested = false
-      @stop = Stop.new(thread: thread&.id, key: thread&.track_key, reason: reason, breakpoints: [])
+      @stop = Stop.new(thread: thread&.id, key: thread&.track_key, reason: reason, breakpoints: [],
+                       description: reason == 'pause' ? 'paused' : nil)
     end
 
     # A pause asked for while work is pending stops after the next unit.
@@ -226,8 +229,8 @@ module DAP
     def start_step(thread, kind, granularity)
       collect
       view = thread.view
-      raise RequestError, "#{thread.label} is not resident" if view.nil?
-      raise RequestError, "#{thread.label} is done: its session ended" if view[:residency] == 'done'
+      raise RequestError, "#{thread.title} is not resident" if view.nil?
+      raise RequestError, "#{thread.title} is done: its session ended" if view[:residency] == 'done'
 
       waiting = !view[:macrostep_in_progress]
       start = Position.from_inspection(view)
@@ -292,6 +295,9 @@ module DAP
       collect
       return ids if @aside
 
+      # The console's mail goes to actors that rest, unless one actor's
+      # step is all that runs; one that takes a message is runnable now.
+      ids |= @mail.call(place) unless @stop || (@step && !@step.waiting)
       ids.each { |id| starting(place, id) } if place.respond_to?(:macrostep_starting)
       return ids if @stop
 
@@ -399,9 +405,9 @@ module DAP
       elsif (hit = confirmed(hits, :data))
         stop_at(thread_of_key(hit[:key]) || thread, 'data breakpoint', hit[:description], breakpoints: hit[:ids])
       elsif thread && @step && @step.key == thread.track_key && step_done?(@step, thread, position, status)
-        stop_at(thread, @step.kind == :goto ? 'goto' : 'step', nil)
+        stop_at(thread, *(@step.kind == :goto ? ['goto', 'the jump\'s macrostep ended'] : ['step', nil]))
       elsif thread && @pause_requested
-        stop_at(thread, 'pause', nil)
+        stop_at(thread, 'pause', 'paused')
       else
         return false
       end
@@ -524,11 +530,11 @@ module DAP
     # begun; one that never began writes ABANDONED alone.
     def abandoned(track, record)
       dropped = Integer(record[:dropped] || 0)
-      line = "  abandoned#{dropped.positive? ? ", #{dropped} internal event(s) dropped" : ''}"
+      line = "abandoned by an operator#{dropped.positive? ? ", #{dropped} internal event(s) dropped" : ''}"
       if track.in_macrostep
-        track.summary << line
+        track.summary << [record_microstep(record), line]
       else
-        who = thread_of_key(track.key)&.label || "session #{track.key.last}"
+        who = thread_of_key(track.key)&.title || "session #{track.key.last}"
         event = record.dig(:event, :name_text)
         @output.call('console', "#{who}: abandoned #{event || 'its waiting event'} before it began")
         track.entry_stopped = false
@@ -549,41 +555,110 @@ module DAP
 
     # ------------------------------------------------------------------
     # Macrostep summaries (output, category console)
+    #
+    # One output per macrostep, in the words of napi's adapter: the event,
+    # each microstep with what ran in it, and the configuration it ended
+    # in. Transitions and actions are named as napi's trace spans name them
+    # (Labels#transition_name, #action_name).
+    #
+    #   counter/acct1 macrostep 2: bump {"n":1}
+    #     idle → busy on bump
+    #       assign .count = 1
+    #     now in busy
 
+    # Keeps [microstep number, line] of `record` for the summary; a
+    # MICROSTEP record's line is [number, line, :microstep].
     def summarize(track, record)
       return unless track.in_macrostep
 
       definition = record[:definition]
-      line = case record[:kind]
-             when 'microstep' then "  #{@labels.microstep(definition, record)}"
-             when 'condition'
-               text = @labels.expression(definition, record[:expr])
-               outcome = record[:has_fault] ? "fault #{record.dig(:fault, :message) || record.dig(:fault, :code)}" : record[:result]
-               "  cond #{text} = #{outcome}"
-             when 'assign' then "  assign #{@labels.expression(definition, record[:expr])} = #{JSON.generate(record[:value])}"
-             when 'sent' then "  sent #{record.dig(:event, :name_text)}"
-             when 'raised' then "  raised #{record.dig(:event, :name_text)}"
-             when 'cancelled' then "  cancelled send #{record[:send]}"
-             when 'action_failed' then "  #{@labels.action(definition, record[:action])} failed: #{fault_text(record)}"
-             when 'script' then record[:has_fault] ? "  script failed: #{fault_text(record)}" : nil
-             when 'ignored' then "  ignored #{record.dig(:event, :name_text)}"
-             when 'invoked' then '  invoked'
-             end
-      track.summary << line if line
+      number = record_microstep(record)
+      if record[:kind] == 'microstep'
+        track.summary << [number, microstep_line(definition, record), :microstep]
+        return
+      end
+      line = summary_line(track, definition, record)
+      track.summary << [number, line] if line
+    end
+
+    def record_microstep(record) = Integer(record.dig(:key, :microstep) || 0)
+
+    def microstep_line(definition, record)
+      transitions = Array(record[:transitions])
+      if transitions.empty? && !Array(record[:states]).empty? && track_jump?(record)
+        exited = Array(record[:exited]).map { |state| @labels.state(definition, state) }
+        entered = Array(record[:entered]).map { |state| @labels.state(definition, state) }
+        return "goto: exited #{exited.join(' ').then { |text| text.empty? ? 'nothing' : text }}, " \
+               "entered #{entered.join(' ').then { |text| text.empty? ? 'nothing' : text }}"
+      end
+      return 'initial' if transitions.empty?
+
+      transitions.map { |id| @labels.transition_name(definition, id) }.join('; ')
+    end
+
+    # An operator's jump (core ADR 0082) names no transition; the
+    # bootstrap's first microstep names none either.
+    def track_jump?(record) = Integer(record.dig(:key, :macrostep) || 0) != 1
+
+    def summary_line(track, definition, record)
+      context = track.key.first
+      case record[:kind]
+      when 'condition' then "#{condition_place(definition, record)}: #{record[:result] == true}"
+      when 'assign' then "assign #{@labels.expression(definition, record[:expr])} = #{JSON.generate(record[:value])}"
+      when 'sent'
+        id = record.dig(:event, :send_id)
+        text = id.to_s == '0' ? nil : context.send_id_text(Integer(id))
+        "send #{record.dig(:event, :name_text)}#{text ? " (#{text})" : ''}"
+      when 'raised' then "raise #{record.dig(:event, :name_text)}"
+      when 'cancelled' then "cancel #{context.send_id_text(Integer(record[:send])) || record[:send]}"
+      when 'action_failed' then "failed: #{fault_place(definition, record)}"
+      when 'script' then record[:has_fault] ? "failed: #{fault_place(definition, record)}" : nil
+      when 'ignored' then "#{record.dig(:event, :name_text)} enabled no transition"
+      when 'invoked' then 'invoke'
+      when 'stopped' then 'the run stopped: an allocation failed'
+      end
+    end
+
+    # Where a condition was evaluated: its transition, or its <if>.
+    def condition_place(definition, record)
+      transition = record.dig(:position, :transition)
+      return @labels.transition_name(definition, transition) unless Labels.none?(transition)
+
+      action = record.dig(:position, :action)
+      Labels.none?(action) ? 'condition' : @labels.action_name(definition, action)
+    end
+
+    # What failed, and the fault's message: `<assign> in idle on fail: …`.
+    def fault_place(definition, record)
+      action = record[:action]
+      action = record.dig(:position, :action) if Labels.none?(action)
+      where = Labels.none?(action) ? 'an action' : @labels.action_name(definition, action)
+      message = record.dig(:fault, :message)
+      message.to_s.empty? ? where : "#{where}: #{message}"
     end
 
     def write_summary(track, record)
-      who = thread_of_key(track.key)&.label || "session #{track.key.last}"
-      event = track.taken ? "on #{track.taken[:name_text]}" : '(no event)'
-      states = Array(record[:states]).map { |state| @labels.state(record[:definition], state) }
-      text = "#{who}: macrostep #{track.macrostep} #{event} -> #{states.join(' ')}"
-      @output.call('console', ([text] + track.summary).join("\n"))
-      track.summary = []
-    end
+      who = thread_of_key(track.key)&.title || "session #{track.key.last}"
+      taken = track.taken
+      head = if taken
+               data = taken[:data]
+               "#{taken[:name_text]}#{data.nil? ? '' : " #{JSON.generate(data)}"}"
+             else
+               track.macrostep == 1 ? 'bootstrap' : '(no event)'
+             end
+      lines = ["#{who} macrostep #{track.macrostep}: #{head}"]
+      micro = track.summary.select { |entry| entry[2] == :microstep }.map(&:first)
+      track.summary.each { |number, line, kind| lines << "  #{line}" if kind.nil? && !micro.include?(number) }
+      track.summary.each do |number, line, kind|
+        next unless kind == :microstep
 
-    def fault_text(record)
-      fault = record[:fault] || {}
-      fault[:message] || "code #{fault[:code]}"
+        lines << "  #{line}"
+        track.summary.each { |at, text, other| lines << "    #{text}" if other.nil? && at == number }
+      end
+      states = Array(record[:states]).map { |state| @labels.state(record[:definition], state) }
+      lines << "  now in #{states.join(' ')}" unless states.empty?
+      @output.call('console', lines.join("\n"))
+      track.summary = []
     end
 
     # ------------------------------------------------------------------

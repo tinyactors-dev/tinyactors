@@ -53,12 +53,12 @@
     { "start": true },
     {
       "request": "threads",
-      "response": { "body": { "threads": { "$some": { "id": { "$var": "thread" }, "name": { "$contains": "counter/a1" } } } } }
+      "response": { "body": { "threads": { "$some": { "id": { "$var": "thread" }, "name": { "$text": "{title} · idle" } } } } }
     },
     {
       "request": "cancel",
       "arguments": { "requestId": 1 },
-      "response": { "success": false, "message": { "$contains": "nothing to cancel" } }
+      "response": { "success": false, "message": "every request answers at once, so there is nothing to cancel" }
     }
   ]
 }

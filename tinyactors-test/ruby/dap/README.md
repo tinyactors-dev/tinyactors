@@ -92,10 +92,13 @@ Then `M-x dape RET tinyactors`.
 ## What the client shows
 
 **Threads** are the workbench's named actors and, below each, the children
-its invocations started, named by address and active leaf states:
-`counter/acct1 · busy`, `worker (actor 4294967298) · working`. A named
-actor keeps its thread across a reload. A fork is a thread too, `fork 1 of
-counter/acct1 · idle` (see "Forks" below).
+its invocations started, named by address (a child by its parent and its
+`<invoke id>`) and active leaf states: `counter/acct1 · busy`,
+`supervisor/boss invocation worker · working`. A named actor keeps its
+thread across a reload. A fork is a thread too, `counter/acct1 (fork 1) ·
+idle` (see "Forks" below). What the adapter writes names an actor the same
+way, without the states (`sent bump to counter/acct1`), as napi's adapter
+does; the console's `@actor` takes a shorter label (below).
 
 **Stopping is all-stop.** When one actor stops, nothing else runs until
 the client continues or steps, in the workbench or in any fork. Whenever a
@@ -115,12 +118,14 @@ with no content stands at its first transition (`transition busy → idle
 on done`), and an operator's jump without content at `taking an
 operator's jump`. A pause that lands between two microsteps (the
 workbench's microstep budget ran out) shows `selecting transitions`. An
-actor at rest has one frame, `idle in <states>`; one holding an event it
-has not begun has `about to take <event> (before transition selection)`.
+actor at rest has one frame, `idle in <states>`, which says what holds it
+while the system is stopped: `idle in idle (held; 1 message waiting)`,
+counting the console's mail waiting for it. One holding an event it has
+not begun has `about to take <event> (before transition selection)`.
 
 After the macrostep, a `caused by` label frame starts the causal chain:
-the step that sent the event the macrostep took (`boss: sent bump in step
-3.1`, at the line of the send), then the step that sent that one's, across
+the step that sent the event the macrostep took (`supervisor/boss: sent
+bump in step 3.1`, at the line of the send), then the step that sent that one's, across
 actors, back to `the debug console sent poke` or `the host delivered
 tick`. It follows each MACROSTEP_BEGIN record's `cause`, the step key of
 the step that produced the event (core ADR 0067), to the SENT record of
@@ -157,17 +162,35 @@ the trace records.
 | Scope | |
 |---|---|
 | Data model | the data root, read again on each expansion; writable |
-| Event | `_event` of the step the actor is in |
+| Event | `_event` of the step the actor is in; at rest, of its last macrostep (`taken: in its last macrostep`) |
 | Configuration | the active states as a tree, and what each history state recorded |
-| Queues | the internal queue, the event being taken, and console messages waiting |
+| Queues | the internal queue, the event being taken, and the console's `mailbox` |
 | Timers | pending delayed sends, each by its send ID: event, target, when it is due |
 | Invocations | each invocation, and the thread of its child |
-| System | `_sessionid`, `_name`, `_ioprocessors`, logical time, the definition |
+| System | `_sessionid`, `_name`, `_ioprocessors`, `now`, `actor` (slot:generation), the definition, `residency`, `scheduling`, `published`, `allocatedBytes` |
 
-**Output.** Each macrostep that ends writes a summary to the console: the
-event, the transitions, guards, assignments with their values, sends and
-raised events. `<log>` records are `stdout`. The workbench's own notes are
-`console`, and what a reload loses is `important`.
+The names are napi's adapter's wherever both hosts show the same thing;
+`_event`'s SCXML fields (`sendid`, `origintype`, `invokeid`) and
+`_ioprocessors` are real SCXML data only this host has.
+
+**Output.** Each macrostep that ends writes its summary to the console as
+one output: the event, each microstep with what ran in it (conditions,
+assignments with their values, sends, raised events, failures), and the
+configuration it ended in:
+
+```text
+counter/acct1 macrostep 2: bump {"n":1}
+  idle → busy on bump
+    assign .count = 1
+    assign .last = {"n":1}
+  now in busy
+```
+
+Transitions and actions there are named as napi's trace spans name them
+(`idle on ping (internal)`, `<assign> in idle on fail (internal)`).
+`<log>` records are `stdout`, as `label: value` (`busy: 1`). The
+workbench's own notes are `console`, and what a reload loses is
+`important`.
 
 **Modules** are definition revisions, named by family, with the revision
 as the version; a revision a reload retired stays listed as `(retired)`.
@@ -196,11 +219,12 @@ included. A breakpoint whose block has no unit (a state with no
 `<onexit>`) hits at the next place the actor stops: in a microstep with no
 content, its start.
 
-A step of an idle actor waits for its next event and stops before the
+A step of an idle actor waits for its next message and stops before the
 macrostep that takes it, as the proposal's "`next` on an idle actor" says.
 The request answers at once, a `continued` event says everything runs, and
 when nothing is due the console says what to do: `send` it one, or move
-the clock to the next delayed send.
+the clock to the next delayed send. Console mail waiting for it is its
+next message.
 
 ## Breakpoints
 
@@ -208,7 +232,7 @@ the clock to the next delayed send.
 |---|---|
 | Function | `busy` (entering), `exit:busy`, `on:payment.failed` (a macrostep takes it; stops before selection), `idle → busy` (a transition, `->` works too). Conditions are jq over the data model; hit conditions are `5` or `>= 5` (from the fifth hit), `== 5`, `% 5` |
 | Exception | `error.execution`, `error.communication`, `error.platform`, `ignored` (an event enabled no transition), `stopped` (an allocation failed) |
-| Data | a data-model location of one actor; stops after an `<assign>` writes it or anything under it |
+| Data | a data-model location of one actor (`counter/acct1 ["count"]`); stops after an `<assign>` writes it or anything under it (`count = 5`) |
 | Line | a line of a chart's Ruby file; conditions, hit conditions and log points (below) |
 
 A line breakpoint stands for the element written on that line, the most
@@ -233,9 +257,9 @@ where the actor stands, not against trace records, so it stops before a
 
 | Command | |
 |---|---|
-| `send [@actor] <event> [json]` | delivers to the frame's actor, or the one named, with the console as its origin |
-| `goto [@actor] <state…> [from <state>]` | an operator transition (core ADR 0082): runs its macrostep, then stops with reason `goto` |
-| `abandon [@actor]` | abandons the actor's macrostep (core ADR 0082); it is idle in its last configuration |
+| `send [@actor] <event> [json]` | puts the event in the mailbox of the frame's actor, or the one named, with the console as its origin |
+| `goto [@actor] <state…> [from <state>]` | an operator transition (core ADR 0082): at once when the system is stopped and the actor rests with nothing waiting, and then stops with reason `goto`; otherwise it waits in the mailbox |
+| `abandon [@actor]` | abandons the actor's macrostep (core ADR 0082); it keeps the configuration after its last completed microstep, and a stopped system stops again there |
 | `cancel [@actor] <send ID>` | withdraws one pending delayed send (core ADR 0084), by the ID the Timers scope shows: the chart's, or `#_send.<n>` (ADR 0048) |
 | `fork [@actor]` | copies the actor into a system of its own (core ADR 0085); see "Forks" |
 | `clock [@actor] +<duration>` | advances the logical time of the actor's system: `+500ms`, `+5s`, `+2m`, `+1h`, `+3d` |
@@ -254,10 +278,23 @@ otherwise.
 The console is a sender an actor can answer (core ADR 0068): the adapter
 registers an I/O processor of type `debug` with the `io.connection`
 instrument in every system it debugs, the workbench's and each fork's,
-opens one scope there, and delivers each `send` with an origin in it. A chart's `<send targetexpr="$_event.origin"
-typeexpr="$_event.origintype">` then shows in the console as a reply. A
-message to an actor that is inside a macrostep waits, and the Queues scope
-shows it, until the actor can take it.
+opens one scope there, and delivers each `send` with an origin in it. A
+chart's `<send targetexpr="$_event.origin"
+typeexpr="$_event.origintype">` then shows in the console as a reply
+(`counter/acct1 replied pong 4`).
+
+**The mailbox.** What the console sends an actor, events and jumps alike,
+waits in that actor's mailbox, oldest first, as a message to one of
+napi's actors does, and the Queues scope shows it. The Scheduler's monitor
+hands the actor its next message when the actor rests and its system
+runs, before the actor's next round: on `continue`, on a step, or at once
+while everything runs. A message sent while the system is stopped says so
+(`sent bump to counter/acct1; it waits in the mailbox (1 message):
+continue or step to deliver it`), and a breakpoint on `on:bump` stops
+before the macrostep that takes it. Mail from other actors goes through
+the router as always; the mailbox holds only the console's. A message the
+actor refuses when it is handed over (a jump `from` a state no longer
+active) leaves the mailbox, and the console says why.
 
 ## Unwedging an actor
 
@@ -267,17 +304,23 @@ its data, together with an operator transition: core takes that event by
 a transition built from the targets instead of by the chart's transitions,
 through the normal engine, with every exit, entry, history and invocation
 a chart transition would have (core ADR 0082). Its handlers see the
-operator's event as `_event`. The macrostep runs, only that actor runs
-meanwhile, and the system then stops with reason `goto`; the console
-shows the macrostep's summary, whose microstep reads `goto <targets>`.
-A jump carries no console origin: it is delivered directly, not through
-the `debug` I/O processor.
+operator's event as `_event`. When the system is stopped and the actor
+rests with nothing in its mailbox, the jump is delivered at once: its
+macrostep runs, only that actor runs meanwhile, and the system then stops
+with reason `goto`. Otherwise it waits in the mailbox (`goto resting
+queued`) and is taken like any message, with no stop of its own; core
+answers busy to a jump of an actor inside a macrostep (ADR 0082), so the
+queue is the host's. The console shows the jump's summary, whose
+microstep reads `goto: exited <states>, entered <states>`. A jump carries
+no console origin: it is delivered directly, not through the `debug` I/O
+processor.
 
-A jump is refused while the actor is inside a macrostep or holds an event
-it has not begun. A macrostep that never ends is ended with `abandon`:
-the actor keeps the configuration after its last completed microstep. One
-stopped inside a microstep first finishes that microstep (core abandons
-only between microsteps), and its units run as usual.
+A macrostep that never ends is ended with `abandon`: the actor keeps the
+configuration after its last completed microstep, and a system stopped in
+that macrostep stops again with reason `pause` (`its macrostep was
+abandoned`), where the actor now rests. One stopped inside a microstep
+first finishes that microstep (core abandons only between microsteps), and
+its units run as usual.
 
 `cancel` withdraws a pending delayed send of the actor, even while its
 macrostep is stopped (core ADR 0084). A send its target refused once is
@@ -302,7 +345,7 @@ directory:
 - `clock @acct1.fork1 +3d` moves the fork's time only; the workbench's
   time and timers stay where they are.
 - The fork's sends to itself work; every other send reaches nothing, and
-  the console shows it (`acct1.fork1 sent ping to #_actor_counter/acct1:
+  the console shows it (`counter/acct1 (fork 1) sent ping to #_actor_counter/acct1:
   not delivered`). A runtime reference to another actor names nothing in
   the fork's system, so a send to one fails as a send to a destroyed
   actor does, with `error.communication`.
@@ -365,7 +408,7 @@ started. The adapter never destroys an actor on its own, and declares
 | `frames.rb` | stack frames from an actor's position |
 | `variables.rb` | scopes, variables, and writing the data model |
 | `expressions.rb` | jq over the data model, with the system variables bound |
-| `console.rb` | the console commands, completions, the `debug` I/O processor |
+| `console.rb` | the console commands, completions, the `debug` I/O processor, the actors' mailboxes |
 | `operator.rb` | jumps, abandoning a macrostep, withdrawing a delayed send |
 | `catalog.rb` | modules and loaded sources |
 | `labels.rb` | names for compiled IDs (core ADR 0071) |

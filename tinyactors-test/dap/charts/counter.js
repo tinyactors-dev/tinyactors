@@ -15,14 +15,14 @@ module.exports = (statechart) => statechart({ family: 'counter', revision: 'v1' 
     .on('bump', (t) => t.target('busy')
       .assign('count', function () { return this.count + 1; })
       .assign('last', ({ event }) => event.data ?? null))
-    .on('ping', (t) => t.send('pong', (send) => send
+    .on('ping', (t) => t.internal().send('pong', (send) => send
       .via(({ event }) => event.originType)
       .to(({ event }) => event.origin)
       .data(function () { return this.count; })))
-    .on('fail', (t) => t.assign('count', () => { throw new Error('boom'); }))
-    .on('error.execution', (t) => t.assign('last', 'failed'))
-    .on('remind', (t) => t.send('tick', (send) => send.id('nudge').after('60s')))
-    .on('tick', (t) => t.assign('ticks', function () { return this.ticks + 1; })))
+    .on('fail', (t) => t.internal().assign('count', () => { throw new Error('boom'); }))
+    .on('error.execution', (t) => t.internal().assign('last', 'failed'))
+    .on('remind', (t) => t.internal().send('tick', (send) => send.id('nudge').after('60s')))
+    .on('tick', (t) => t.internal().assign('ticks', function () { return this.ticks + 1; })))
   .state('busy', (s) => s
     .entry((e) => e
       .log('busy', function () { return this.count; })

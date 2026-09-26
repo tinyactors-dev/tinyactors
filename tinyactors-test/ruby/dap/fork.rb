@@ -37,7 +37,7 @@ module DAP
       @setup = setup
       @gone = gone
       @source_key = source.key
-      @source_where = source.name.split(' · ').first
+      @source_where = source.title
       @label = "#{source.label}.fork#{number}"
       @generation = 0
       @history = []
@@ -145,7 +145,7 @@ module DAP
         destination = entry[:destination] || {}
         next if destination[:kind] == 'runtime' && Integer(destination[:runtime]) == @handle
 
-        @output.call('console', "#{@label} sent #{entry.dig(:event, :name_text)} to #{describe(destination)}: " \
+        @output.call('console', "#{@source_where} (fork #{@number}) sent #{entry.dig(:event, :name_text)} to #{describe(destination)}: " \
                                 'not delivered, a fork reaches nothing outside itself')
       end
     end
@@ -157,8 +157,7 @@ module DAP
 
       @log_cursor = entries.last[:seq]
       entries.each do |entry|
-        value = entry[:has_value] ? " #{JSON.generate(entry[:value])}" : ''
-        @output.call('stdout', "#{@label} <log> #{entry[:label]}#{value}")
+        @output.call('stdout', Console.log_text(entry))
       end
     end
 
@@ -175,7 +174,7 @@ module DAP
     # Captures the source actor and reconstructs it in a new system.
     def copy(source)
       source_context = source.context
-      view = source.view or raise RequestError, "#{source.label} is not resident"
+      view = source.view or raise RequestError, "#{source.title} is not resident"
       @spec = source_context.core('ta_definition_export',
                                   source_context.ta.definition.export(system: source_context.system_handle,
                                                                       definition: view[:definition_id])).fetch(:out)

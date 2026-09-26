@@ -18,11 +18,11 @@
     { "request": "continue", "arguments": { "threadId": { "$var": "thread" } } },
     {
       "event": "stopped",
-      "body": { "reason": "exception", "threadId": { "$var": "thread" }, "text": { "$prefix": "error.execution" } }
+      "body": { "reason": "exception", "threadId": { "$var": "thread" }, "text": { "$expr": { "jq": "error.execution: <assign> in idle on fail (internal): JSON expression produced no value", "js": "error.execution: <assign> in idle on fail (internal): Error: boom" } } }
     },
     {
       "request": "exceptionInfo", "arguments": { "threadId": { "$var": "thread" } },
-      "response": { "body": { "exceptionId": "error.execution", "breakMode": "always", "description": { "$prefix": "error.execution: " } } }
+      "response": { "body": { "exceptionId": "error.execution", "breakMode": "always", "description": { "$expr": { "jq": "error.execution: <assign> in idle on fail (internal): JSON expression produced no value", "js": "error.execution: <assign> in idle on fail (internal): Error: boom" } } } }
     },
     { "request": "setExceptionBreakpoints", "arguments": { "filters": [] } },
     { "request": "setFunctionBreakpoints", "arguments": { "breakpoints": [ { "name": "on:ping" } ] } },

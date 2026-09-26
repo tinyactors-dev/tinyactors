@@ -46,9 +46,11 @@ module DAP
 
     # `locator` answers location(definition, kind, id) for a definition
     # without spans (Catalog); `origins` are the I/O processors of the
-    # debug console, by registry index (Expressions#io_origins).
-    def initialize(labels, threads, control, locator, origins)
+    # debug console, by registry index (Expressions#io_origins); `console`
+    # answers the mail waiting for an actor.
+    def initialize(labels, threads, control, locator, origins, console)
       @labels = labels
+      @console = console
       @origins = origins
       @threads = threads
       @control = control
@@ -84,7 +86,7 @@ module DAP
         final = view[:final_state]
         return [["done in #{@labels.state(definition, final) || 'its final state'}", span(definition, :state, final)]]
       end
-      return [["idle in #{leaves(thread, view).join(' ')}", leaf_span(thread, view)]] unless view[:macrostep_in_progress]
+      return [["idle in #{leaves(thread, view).join(' ')}#{held_note(thread)}", leaf_span(thread, view)]] unless view[:macrostep_in_progress]
 
       position = Position.from_inspection(view)
       if position.key[0].zero?
@@ -106,9 +108,9 @@ module DAP
         if hop[:host]
           [host_name(hop[:event]), nil, 'subtle']
         elsif hop[:unseen]
-          ["#{hop[:thread]&.label || 'an actor'}: step #{hop[:step]}, which the debugger did not see", nil, 'subtle']
+          ["#{hop[:thread]&.title || 'an actor'}: step #{hop[:step]}, which the debugger did not see", nil, 'subtle']
         else
-          ["#{hop[:thread]&.label || 'an actor'}: sent #{hop[:event]} in step #{hop[:step]}",
+          ["#{hop[:thread]&.title || 'an actor'}: sent #{hop[:event]} in step #{hop[:step]}",
            span(hop[:definition], :action, hop[:action])]
         end
       end
@@ -198,6 +200,15 @@ module DAP
     end
 
     def leaves(thread, view) = Array(@threads.leaves(thread.place, thread.handle, view))
+
+    # What holds an actor at rest, as napi's adapter says it: the system is
+    # stopped, and so many console messages wait for it.
+    def held_note(thread)
+      return '' unless @control.stopped? || thread.context.scheduler.held?(thread.handle)
+
+      waiting = @console.mail_for(thread).size
+      " (held; #{waiting} message#{waiting == 1 ? '' : 's'} waiting)"
+    end
 
     def leaf_span(thread, view)
       name = leaves(thread, view).first

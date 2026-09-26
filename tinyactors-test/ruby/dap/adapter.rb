@@ -188,7 +188,7 @@ module DAP
     def running?
       return false unless @started && !@control.stopped?
 
-      @control.pending? || @console.queued?
+      @control.pending?
     end
 
     # The workbench's session and the forks: what runs threads.
@@ -201,7 +201,6 @@ module DAP
         scheduler.run('debug') if scheduler.pending? && !scheduler.stopped?
         break if @control.stopped? || !@inbox.empty?
       end
-      @console.flush unless @control.stopped?
       if !@control.stopped? && @control.pause_requested? && !@control.pending?
         @control.halt('pause', @threads.to_a.first)
       end
@@ -218,7 +217,7 @@ module DAP
       return unless @started
 
       @control.collect
-      @session.drain_chart_logs
+      @session.drain_chart_logs { |_who, entry| output('stdout', Console.log_text(entry)) }
       @forks.each do |fork|
         fork.drain_logs
         fork.stub_sends
@@ -290,7 +289,7 @@ module DAP
       @protocol.event('stopped', body)
     end
 
-    # A step of an idle actor waits for its next event. When nothing will
+    # A step of an idle actor waits for its next message. When nothing will
     # bring one at the current logical time, the console says what would.
     def announce_waiting
       step = @control.step
@@ -300,8 +299,8 @@ module DAP
       thread = @threads[step.thread]
       context = thread ? thread.context : @context
       due = context.next_deadline
-      hint = due ? "the next delayed send is due at t=#{due}ms: `clock +#{due - context.now}ms`" : 'nothing is due'
-      output('console', "#{thread&.label} waits for its next event; #{hint}, or `send` it one")
+      hint = due ? "its next delayed send is due at t=#{due}ms: `clock +#{due - context.now}ms`" : 'nothing is due'
+      output('console', "#{thread&.title} waits for its next message; #{hint}, or `send` it one")
     end
 
     # A saved chart replaces its actors in place, even while the client has
@@ -455,11 +454,11 @@ module DAP
       definition, state = @goto_targets[args['targetId'].to_i]
       raise RequestError, "no goto target #{args['targetId']}; ask gotoTargets first" if definition.nil?
       unless @labels.identity(definition) == @labels.identity(thread.definition)
-        raise RequestError, "#{thread.label} runs another chart or revision than the target's"
+        raise RequestError, "#{thread.title} runs another chart or revision than the target's"
       end
 
       reset_views
-      @operator.jump(thread, [@labels.state(definition, state)])
+      output('console', @operator.jump(thread, [@labels.state(definition, state)]))
       {}
     end
 
@@ -472,10 +471,10 @@ module DAP
       thread = stopped_thread
       fork!(thread, 'restart')
       source = @threads.to_a.find { |candidate| candidate.key == thread.fork.source_key }
-      raise RequestError, "#{thread.label}'s source actor is gone" if source.nil?
+      raise RequestError, "#{thread.title}'s source actor is gone" if source.nil?
 
       restored(thread) { thread.fork.restart(source) }
-      restop(thread, 'entry', "a new copy of #{source.label}")
+      restop(thread, 'entry', "a new copy of #{source.title}")
       {}
     end
 
@@ -510,7 +509,7 @@ module DAP
       return if thread&.fork?
 
       raise RequestError, "#{request} works on a fork, whose images the adapter keeps: " \
-                          "`fork` the actor in the console and debug the copy#{thread ? " (#{thread.label} is not one)" : ''}"
+                          "`fork` the actor in the console and debug the copy#{thread ? " (#{thread.title} is not one)" : ''}"
     end
 
     def restored(_thread)
@@ -528,7 +527,7 @@ module DAP
     # The console's `fork`: a copy of a workbench actor in a system of its
     # own. Answers the console's text.
     def make_fork(thread)
-      raise RequestError, "#{thread.label} is a fork; `restart` makes a new copy of its source" if thread.fork?
+      raise RequestError, "#{thread.title} is a fork; `restart` makes a new copy of its source" if thread.fork?
 
       fork = Fork.new(number: @forks.size + 1, source: thread, driver: @driver, output: method(:output),
                       setup: ->(made) { adopt(made) }, gone: ->(context) { forget(context) })
@@ -611,7 +610,7 @@ module DAP
       thread = thread_arg(args)
       stop = @control.stop
       unless stop&.exception && stop.thread == thread.id
-        raise RequestError, "#{thread.label} did not stop for an exception"
+        raise RequestError, "#{thread.title} did not stop for an exception"
       end
 
       hit = stop.exception
@@ -667,8 +666,8 @@ module DAP
       end
 
       thread, path = target
-      { 'dataId' => Breakpoints.data_id(thread.label, path),
-        'description' => "#{thread.label} #{Expressions.location(path)}", 'accessTypes' => ['write'],
+      { 'dataId' => Breakpoints.data_id(thread.title, path),
+        'description' => "#{thread.title} #{Expressions.location(path)}", 'accessTypes' => ['write'],
         'canPersist' => true }
     rescue RequestError => error
       { 'dataId' => nil, 'description' => error.message }
@@ -719,15 +718,17 @@ module DAP
       @threads = Threads.new(@session, @labels, forks: -> { @forks })
       @console = Console.new(threads: @threads, expressions: @expressions, output: method(:output))
       @control = Control.new(labels: @labels, threads: @threads, breakpoints: @breakpoints, places: -> { places },
-                             output: method(:output), interrupt: -> { !@inbox.empty? })
+                             output: method(:output), interrupt: -> { !@inbox.empty? },
+                             mail: ->(place) { @console.deliver_mail(place) })
+      @console.stopped = -> { @control.stopped? }
       @variables = Variables.new(labels: @labels, threads: @threads, control: @control, expressions: @expressions,
                                  console: @console)
       @console.variables = @variables
-      @operator = Operator.new(labels: @labels, control: @control)
+      @operator = Operator.new(labels: @labels, control: @control, mailbox: @console)
       @console.operator = @operator
       @console.forker = method(:make_fork)
       @catalog = Catalog.new(@session, @labels)
-      @frames = Frames.new(@labels, @threads, @control, @catalog, @expressions.io_origins)
+      @frames = Frames.new(@labels, @threads, @control, @catalog, @expressions.io_origins, @console)
       @console.open(@context)
       @control.adopt(@session)
       @dir = dir

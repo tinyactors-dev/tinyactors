@@ -14,8 +14,13 @@ module DAP
   # or a Fork. Both answer `context` (the TinyactorsTest::Context of their
   # system), `inspect_actor(handle)` and `child_actors(handle)`.
   class Threads
+    # `label` names the thread in the console's `@actor` (`acct1`,
+    # `boss.worker`, `acct1.fork1`); `title` names it in what the adapter
+    # writes, as napi's adapter does (`counter/acct1`, `supervisor/boss
+    # invocation worker`, `counter/acct1 (fork 1)`); `name` is the title and
+    # the leaf states, as the Threads pane shows it.
     Entry = Struct.new(:id, :key, :place, :handle, :session, :definition, :actor, :fork, :parent, :name, :label,
-                       keyword_init: true) do
+                       :title, keyword_init: true) do
       def named? = !actor.nil?
       def fork? = !fork.nil?
       def context = place.context
@@ -66,7 +71,7 @@ module DAP
         next if view.nil?
 
         add(seen, [:fork, fork.number], fork, fork.handle, view, fork: fork, label: fork.label,
-                                                                  where: "fork #{fork.number} of #{fork.source_where}")
+                                                                  where: "#{fork.source_where} (fork #{fork.number})")
         children(seen, fork, fork.handle, view, fork.label)
       end
       @started.concat(seen.keys - @entries.keys)
@@ -107,9 +112,11 @@ module DAP
         next if child_view.nil?
 
         family = child_view.dig(:definition, :family, :name)
+        invoke = Array(view[:invokes]).find { |candidate| Integer(candidate[:service_handle]) == child }
+        where = invoke ? "#{parent&.title} invocation #{place.context.invoke_id_text(invoke[:id])}" : "#{family} (actor #{child})"
         add(seen, [:child, place.context, child], place, child, child_view, parent: parent&.id,
                                                                            label: "#{parent_label}.#{family}",
-                                                                           where: "#{family} (actor #{child})")
+                                                                           where: where)
         children(seen, place, child, child_view, "#{parent_label}.#{family}")
       end
     end
@@ -123,7 +130,7 @@ module DAP
       id = (@ids[key] ||= (@next_id += 1))
       seen[id] = Entry.new(id: id, key: key, place: place, handle: handle, session: view[:session_id],
                            definition: Definition.new(place.context, view[:definition_id]), actor: actor,
-                           fork: fork, parent: parent, label: label,
+                           fork: fork, parent: parent, label: label, title: where,
                            name: "#{where} · #{configuration(place, handle, view)}")
     end
 

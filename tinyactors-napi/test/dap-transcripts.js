@@ -80,6 +80,14 @@ function matchSpecial(expected, actual, bindings, where) {
       if (!Object.hasOwn(bindings, argument)) failAt(where, `no variable ${argument}`, actual);
       return match(bindings[argument], actual, bindings, where);
     case '$expr': return match(argument[EXPRESSION_FORM], actual, bindings, where);
+    case '$text': {
+      const wanted = argument.replace(/\{(\w+)\}/g, (whole, name) => {
+        if (!Object.hasOwn(bindings, name)) failAt(where, `no variable ${name}`, actual);
+        return String(bindings[name]);
+      });
+      if (actual !== wanted) failAt(where, text(wanted), actual);
+      return bindings;
+    }
     case '$contains':
       if (typeof actual !== 'string' || !actual.includes(argument)) failAt(where, `a string containing ${text(argument)}`, actual);
       return bindings;
@@ -203,6 +211,8 @@ class Transcript {
     if (this.mode === 'live') await this.send('pause', {});
     const reason = this.mode === 'fork' ? 'entry' : 'pause';
     await this.expectEvents([{ event: 'stopped', body: { reason, threadId: { $capture: 'thread' } } }]);
+    const { threads } = (await this.send('threads', {})).body;
+    this.bindings.title = threads.find((thread) => thread.id === this.bindings.thread).name.split(' · ')[0];
   }
 
   async request(step) {

@@ -1306,6 +1306,13 @@ module TinyactorsTest
       core('ta_send_id_parse', response).fetch(:out)
     end
 
+    # The text of an invocation's ID (ADR 0049): the author's `<invoke id>`,
+    # or the one core generated; the number when core no longer has it.
+    def invoke_id_text(id)
+      response = ta.system.invoke_id_text(system: system_handle, invoke: id)
+      response[:result] == 'ok' ? response.dig(:out, :out).to_s : id.to_s
+    end
+
     # A pending delayed send's target, from its ta_delayed_send_info: a literal
     # target is text in the owner's definition, named by content ID.
     def send_target(definition, send)

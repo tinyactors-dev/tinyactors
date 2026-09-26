@@ -28,7 +28,7 @@ module DAP
     # transition, named as Labels#transition names it; `->` also works).
     Function = Struct.new(:id, :name, :kind, :target, :condition, :hit_condition, :hits, keyword_init: true)
     # A data breakpoint on one actor's location: `path` as jq's path() answers it.
-    Watch = Struct.new(:id, :data_id, :label, :path, :condition, :hit_condition, :hits, keyword_init: true)
+    Watch = Struct.new(:id, :data_id, :title, :path, :condition, :hit_condition, :hits, keyword_init: true)
     # A line breakpoint, or a log point when it has a `log_message`. `line`
     # is where the client put it; `targets` maps each Definition to the
     # element the line snapped to (SourceMap::Element), and `actual` is the
@@ -108,15 +108,15 @@ module DAP
     def set_data(specs)
       @data = []
       specs.map do |spec|
-        label, path = Breakpoints.parse_data_id(spec['dataId'])
-        if label.nil?
+        title, path = Breakpoints.parse_data_id(spec['dataId'])
+        if title.nil?
           next { 'verified' => false, 'message' => "#{spec['dataId'].inspect} is not a data-model location" }
         end
         unless spec['accessType'].nil? || spec['accessType'] == 'write'
           next { 'verified' => false, 'message' => 'only writes can be watched: core traces assignments, not reads' }
         end
 
-        breakpoint = Watch.new(id: (@next_id += 1), data_id: spec['dataId'], label: label, path: path,
+        breakpoint = Watch.new(id: (@next_id += 1), data_id: spec['dataId'], title: title, path: path,
                               condition: spec['condition'], hit_condition: spec['hitCondition'], hits: 0)
         @data << breakpoint
         { 'id' => breakpoint.id, 'verified' => true }
@@ -139,15 +139,23 @@ module DAP
       end
     end
 
-    # A dataId names an actor by its thread label and a location by its
-    # path: `acct1 ["failures"]`.
-    def self.data_id(label, path) = "#{label} #{JSON.generate(path)}"
+    # A dataId names an actor by its thread's title and a location by its
+    # path: `subscription/acct1 ["failures"]`, as napi's adapter does.
+    def self.data_id(title, path) = "#{title} #{JSON.generate(path)}"
 
+    # A title can have spaces (`counter/acct1 (fork 1)`), so the path is
+    # what follows the first ` [` that starts a JSON array.
     def self.parse_data_id(text)
-      label, path = text.to_s.split(' ', 2)
-      path = JSON.parse(path.to_s)
-      path.is_a?(Array) ? [label, path] : nil
-    rescue JSON::ParserError
+      text = text.to_s
+      at = text.index(' [')
+      while at&.positive?
+        begin
+          path = JSON.parse(text[(at + 1)..])
+          return path.is_a?(Array) && !path.empty? ? [text[0...at], path] : nil
+        rescue JSON::ParserError
+          at = text.index(' [', at + 1)
+        end
+      end
       nil
     end
 
@@ -239,7 +247,7 @@ module DAP
     end
 
     def exception(record, track)
-      track.fault = record[:fault] if record[:has_fault]
+      track.fault = record[:fault].merge(where: fault_where(record)) if record[:has_fault]
       filter = exception_filter(record)
       return unless filter && @filters.include?(filter)
 
@@ -344,7 +352,7 @@ module DAP
     def data(record, track, thread)
       return unless record[:kind] == 'assign'
 
-      watching = @data.select { |breakpoint| breakpoint.label == thread.label }
+      watching = @data.select { |breakpoint| breakpoint.title == thread.title }
       return if watching.empty?
 
       location = @labels.expression(record[:definition], record[:expr])
@@ -359,7 +367,7 @@ module DAP
       return if hits.empty?
 
       yield({ kind: :data, key: track.key, breakpoints: hits,
-              description: "#{thread.label}: #{location} = #{JSON.generate(record[:value])}" })
+              description: "#{written.join('.')} = #{JSON.generate(record[:value])}" })
     end
 
     def parse(name)
@@ -429,9 +437,21 @@ module DAP
       when 'ignored' then "#{event&.dig(:name_text)} enabled no transition"
       when 'stopped' then 'an allocation failed; the run stopped where it stood'
       else
-        message = fault && (fault[:message] || "code #{fault[:code]}")
-        [event&.dig(:name_text), message].compact.join(': ')
+        message = fault && (fault[:message].to_s.empty? ? nil : fault[:message])
+        [event&.dig(:name_text), fault&.dig(:where), message].compact.join(': ')
       end
+    end
+
+    # What faulted, as napi's adapter names it: the action, or the
+    # transition whose guard failed.
+    def fault_where(record)
+      definition = record[:definition]
+      action = record[:action]
+      action = record.dig(:position, :action) if Labels.none?(action)
+      return @labels.action_name(definition, action) unless Labels.none?(action)
+
+      transition = record.dig(:position, :transition)
+      Labels.none?(transition) ? nil : @labels.transition_name(definition, transition)
     end
   end
 end

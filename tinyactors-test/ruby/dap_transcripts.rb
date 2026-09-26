@@ -69,6 +69,13 @@ module Matcher
       fail_at(path, "no variable #{argument}", actual) unless bindings.key?(argument)
       match(bindings[argument], actual, bindings, path)
     when '$expr' then match(argument.fetch(EXPRESSION_FORM), actual, bindings, path)
+    when '$text'
+      wanted = argument.gsub(/\{(\w+)\}/) do
+        name = Regexp.last_match(1)
+        bindings.fetch(name) { fail_at(path, "no variable #{name}", actual) }.to_s
+      end
+      fail_at(path, JSON.generate(wanted), actual) unless actual == wanted
+      bindings
     when '$contains'
       fail_at(path, "a string containing #{argument.inspect}", actual) unless actual.is_a?(String) && actual.include?(argument)
       bindings
@@ -193,6 +200,7 @@ class Transcript
     raise Mismatch, "no thread for #{ACTOR} among #{threads.map { |thread| thread['name'] }}" if subject.nil?
 
     @bindings['thread'] = subject['id']
+    @bindings['title'] = subject['name'].split(' · ').first
   end
 
   def request(step)
