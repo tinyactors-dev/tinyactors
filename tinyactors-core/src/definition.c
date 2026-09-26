@@ -29,6 +29,11 @@ void ta_definition_destroy(ta_definition *definition) {
                                            definition->allocator);
         }
     }
+    if (definition->spans != NULL) {
+        ta_mem_free(definition->span_allocator, definition->spans,
+                    &(ta_allocator_free_params){ .size = definition->span_bytes,
+                                                 .alignment = _Alignof(ta_source_span) });
+    }
     ta_allocator allocator = definition->allocator;
     ta_arena_destroy(&definition->arena);
     ta_mem_free(allocator, definition,
@@ -330,6 +335,92 @@ ta_result ta_definition_expression(const ta_system *system, const ta_definition_
     return TA_OK;
 }
 
+uint32_t ta_definition_element_count(const ta_definition *definition, ta_element_kind kind) {
+    switch (kind) {
+        case TA_ELEMENT_STATE: return definition->state_count;
+        case TA_ELEMENT_TRANSITION: return definition->transition_count + definition->initial_transition_count;
+        case TA_ELEMENT_ACTION: return definition->action_count;
+        case TA_ELEMENT_EXPRESSION: return definition->expression_count;
+    }
+    return 0;
+}
+
+uint32_t ta_definition_span_base(const ta_definition *definition, ta_element_kind kind) {
+    uint32_t base = 0;
+    for (uint32_t before = TA_ELEMENT_STATE; before < (uint32_t)kind; before += 1u) {
+        base += ta_definition_element_count(definition, (ta_element_kind)before);
+    }
+    return base;
+}
+
+ta_result ta_definition_span(const ta_system *system, const ta_definition_span_params *params) {
+    if (system == NULL || params == NULL || params->out == NULL || (uint32_t)params->kind > TA_ELEMENT_EXPRESSION) {
+        return TA_ERR_INVALID;
+    }
+    const ta_definition *definition = ta_definition_lookup(system, params->definition);
+    if (definition == NULL || definition->spans == NULL ||
+        params->id >= ta_definition_element_count(definition, params->kind)) {
+        return TA_ERR_NOT_FOUND;
+    }
+    const ta_source_span *span = &definition->spans[ta_definition_span_base(definition, params->kind) + params->id];
+    if (span->line == 0) {
+        return TA_ERR_NOT_FOUND;
+    }
+    ta_str source = { .ptr = "", .len = 0 };
+    if (span->source < definition->source_count) {
+        source = definition->sources[span->source].name;
+    }
+    *params->out = (ta_source_location){ .span = *span, .source = source };
+    return TA_OK;
+}
+
+/* Whether two definitions' span tables say the same, names included. */
+static bool ta_definition_same_spans(const ta_definition *left, const ta_definition *right) {
+    if (left->spans == NULL || left->span_count != right->span_count || left->source_count != right->source_count) {
+        return false;
+    }
+    for (uint32_t index = 0; index < left->span_count; index += 1u) {
+        const ta_source_span *a = &left->spans[index];
+        const ta_source_span *b = &right->spans[index];
+        if (a->offset != b->offset || a->length != b->length || a->source != b->source || a->line != b->line ||
+            a->column != b->column || a->end_line != b->end_line || a->end_column != b->end_column) {
+            return false;
+        }
+    }
+    for (uint32_t index = 0; index < left->source_count; index += 1u) {
+        if (!ta_str_equal(left->sources[index].name, right->sources[index].name)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void ta_definition_take_spans(ta_definition *live, ta_definition *definition) {
+    /* Unchanged spans stay where they are, so what a caller borrowed of
+     * them (an export, a source's name) stays valid. */
+    if (definition->spans == NULL || ta_definition_same_spans(live, definition)) {
+        return;
+    }
+    ta_source_span *spans = live->spans;
+    uint32_t span_count = live->span_count;
+    ta_scxml_source *sources = live->sources;
+    uint32_t source_count = live->source_count;
+    size_t span_bytes = live->span_bytes;
+    ta_allocator span_allocator = live->span_allocator;
+    live->spans = definition->spans;
+    live->span_count = definition->span_count;
+    live->sources = definition->sources;
+    live->source_count = definition->source_count;
+    live->span_bytes = definition->span_bytes;
+    live->span_allocator = definition->span_allocator;
+    definition->spans = spans;
+    definition->span_count = span_count;
+    definition->sources = sources;
+    definition->source_count = source_count;
+    definition->span_bytes = span_bytes;
+    definition->span_allocator = span_allocator;
+}
+
 size_t ta_definition_session_bytes(const ta_definition *definition) {
     /* The configuration, the late-binding bits (sized like it), and history. */
     return definition->configuration.bytes * 2u + definition->history.storage_bytes;
@@ -366,7 +457,7 @@ ta_result ta_definition_inspect(const ta_system *system,
         .holds = definition->holds,
         .holders = definition->holders,
         .actor_fixed_bytes = definition->actor_block_bytes,
-        .definition_bytes = ta_arena_allocated_bytes(&definition->arena),
+        .definition_bytes = ta_arena_allocated_bytes(&definition->arena) + definition->span_bytes,
     };
     return TA_OK;
 }

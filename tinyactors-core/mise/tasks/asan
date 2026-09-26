@@ -28,9 +28,10 @@ flags = %W[-I#{root.join("include")} -std=c11 -Wall -Wextra -Werror -pedantic -g
 WITH_RUNTIME = %w[address_test io_origin_test session_image_test delayed_send_test image_across_systems_test null_datamodel_test pause_test operator_test trace_test inspection_test
                   retirement_test scxml_uri_test send_id_test tree_test].freeze
 # Of the tests that include the amalgamation themselves, and so compile it
-# again, only the one about actor lifetimes runs: codec, export, compile
-# error and event pattern tests exercise pure functions.
-STANDALONE = %w[actor_id_test session_id_test offload_test].freeze
+# again, the ones about lifetimes run: actor lifetimes, and a compile that
+# runs out of memory at every allocation (span_test). The codec, export,
+# compile error and event pattern tests exercise pure functions.
+STANDALONE = %w[actor_id_test session_id_test offload_test span_test].freeze
 
 # The amalgamation is compiled once and linked into every test that needs it.
 runtime = build.join('tinyactors.o')

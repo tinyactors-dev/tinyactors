@@ -1,6 +1,6 @@
 # ADR 0058: A compile error says what is wrong and where in the chart
 
-**Status:** Accepted and implemented; extends ADR 0042, completes ADR 0053 §4. See the implementation notes for where the code differs from the text.
+**Status:** Accepted and implemented; extends ADR 0042, completes ADR 0053 §4; ADR 0086 keeps positions for a chart that compiles, and adds a span check to the compile order. See the implementation notes for where the code differs from the text.
 **Date:** 2026-09-23
 
 ## Context

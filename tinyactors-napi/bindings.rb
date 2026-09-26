@@ -98,7 +98,7 @@ module TinyactorsNapiBindings
   SKIP_TYPES = {
     '*_vtable' => 'adapter operations; adapters are hand-written plumbing',
     'ta_{actor_directory,external_event_router,io,invoker,log_sink}' => 'adapters installed by the plumbing',
-    'ta_chart_{codec,lowering,src_resolver,expression_printer}' => 'chart codec adapters; none is registered yet',
+    'ta_chart_{codec,lowering,src_resolver,expression_printer,span_sink}' => 'chart codec adapters; none is registered yet',
     'ta_actor_directory_*' => 'directory callback arguments (ADR 0006)',
     'ta_actor_inspector' => 'enumeration is plumbing (ADR 0003)',
     'ta_actor_visit_params' => 'enumeration is plumbing (ADR 0003)',

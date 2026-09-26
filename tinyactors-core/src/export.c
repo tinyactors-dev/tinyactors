@@ -21,12 +21,30 @@ typedef struct {
     struct ta_export_block *pending;
     uint32_t pending_count;
     uint32_t pending_capacity;
+    /* Whether every exported element indexes the spans table, known span or
+     * not, as an encode asks (ADR 0086). Otherwise only the elements whose
+     * span the definition knows do. */
+    bool numbered;
 } ta_exporter;
 
 struct ta_export_block {
     ta_span32 block;
     const ta_scxml_action_spec **out;
 };
+
+/*
+ * The `span` of an exported element: its place in the spans table, which is
+ * laid out as the definition's, plus 1; 0 when it has no known span and the
+ * caller did not ask for every element.
+ */
+static uint32_t ta_export_span(const ta_exporter *exporter, ta_element_kind kind, uint32_t id) {
+    const ta_definition *definition = exporter->definition;
+    uint32_t place = ta_definition_span_base(definition, kind) + id;
+    if (!exporter->numbered && (definition->spans == NULL || definition->spans[place].line == 0)) {
+        return 0;
+    }
+    return place + 1u;
+}
 
 /* Non-null text for an empty literal, which the RPC codecs keep apart from absent. */
 static const char ta_export_empty[] = "";
@@ -97,7 +115,9 @@ static ta_str ta_export_event_name(ta_exporter *exporter, ta_event_name_id name)
 }
 
 static ta_expression ta_export_expression(const ta_exporter *exporter, ta_expr_id expr) {
-    return exporter->definition->expressions[expr];
+    ta_expression expression = exporter->definition->expressions[expr];
+    expression.span = ta_export_span(exporter, TA_ELEMENT_EXPRESSION, expr);
+    return expression;
 }
 
 static ta_bytes ta_export_content(const ta_exporter *exporter, ta_content_id content) {
@@ -215,7 +235,9 @@ static void ta_export_send(ta_exporter *exporter, const ta_send_action *send, ta
     out->params = ta_export_params(exporter, send->params);
 }
 
-static void ta_export_action(ta_exporter *exporter, const ta_action_def *action, ta_scxml_action_spec *out) {
+static void ta_export_action(ta_exporter *exporter, ta_action_id id, ta_scxml_action_spec *out) {
+    const ta_action_def *action = &exporter->definition->action_defs[id];
+    out->span = ta_export_span(exporter, TA_ELEMENT_ACTION, id);
     switch (action->kind) {
         case TA_ACTION_RAISE:
             out->kind = TA_SCXML_ACTION_RAISE;
@@ -295,7 +317,7 @@ static const ta_scxml_action_spec *ta_export_actions(ta_exporter *exporter, ta_s
         ta_scxml_action_spec *items = ta_export_list(exporter, TA_VEC_LAYOUT(ta_scxml_action_spec), next.block.length);
         *next.out = items;
         for (uint32_t index = 0; items != NULL && index < next.block.length; index += 1) {
-            ta_export_action(exporter, &exporter->definition->action_defs[next.block.offset + index], &items[index]);
+            ta_export_action(exporter, next.block.offset + index, &items[index]);
         }
     }
     exporter->pending_count = 0;
@@ -346,6 +368,8 @@ static const ta_scxml_initial_spec *ta_export_initial(ta_exporter *exporter, ta_
     *out = (ta_scxml_initial_spec){
         .targets = initial->authored_targets ? ta_export_targets(exporter, initial->targets) : NULL,
         .actions = ta_export_actions(exporter, initial->actions),
+        /* Initial transitions are numbered after the <transition> elements. */
+        .span = ta_export_span(exporter, TA_ELEMENT_TRANSITION, exporter->definition->transition_count + id),
     };
     return out;
 }
@@ -357,6 +381,7 @@ static const ta_scxml_transition_spec *ta_export_transitions(ta_exporter *export
         items[index] = (ta_scxml_transition_spec){
             .kind = transition->type == TA_TRANSITION_INTERNAL ? TA_SCXML_TRANSITION_INTERNAL
                                                                 : TA_SCXML_TRANSITION_EXTERNAL,
+            .span = ta_export_span(exporter, TA_ELEMENT_TRANSITION, span.offset + index),
             .event = ta_export_authored(exporter, transition->event_text),
             .targets = ta_export_targets(exporter, transition->targets),
             .actions = ta_export_actions(exporter, transition->actions),
@@ -454,6 +479,7 @@ static void ta_export_state(ta_exporter *exporter, ta_state_id id, ta_scxml_stat
     const ta_state_def *state = &definition->states[id];
     *out = (ta_scxml_state_spec){
         .kind = ta_export_state_kind(state->kind),
+        .span = ta_export_span(exporter, TA_ELEMENT_STATE, id),
         .id = ta_export_state_id(exporter, id),
         .initial = state->kind == TA_STATE_COMPOUND ? ta_export_initial(exporter, state->initial) : NULL,
         .transitions = ta_export_transitions(exporter, state->transitions),
@@ -463,6 +489,33 @@ static void ta_export_state(ta_exporter *exporter, ta_state_id id, ta_scxml_stat
         .invokes = ta_export_invokes(exporter, id),
         .done_data = ta_export_done_data(exporter, state->done_data),
     };
+}
+
+/*
+ * The spans table the exported elements index (ADR 0086): the definition's
+ * own, borrowed, or all zero when it keeps none and the caller numbered the
+ * elements anyway, as ta_definition_encode() does to learn where each one
+ * lands.
+ */
+static void ta_export_spans(ta_exporter *exporter, ta_scxml_spec *spec) {
+    const ta_definition *definition = exporter->definition;
+    uint32_t count = ta_definition_span_base(definition, TA_ELEMENT_EXPRESSION) +
+                     ta_definition_element_count(definition, TA_ELEMENT_EXPRESSION);
+    spec->span_count = count;
+    spec->spans = definition->spans;
+    spec->sources = definition->sources;
+    spec->source_count = definition->source_count;
+    if (definition->spans != NULL || count == 0 || exporter->result != TA_OK) {
+        return;
+    }
+    ta_source_span *zeros = ta_arena_alloc(exporter->arena, (size_t)count * sizeof(ta_source_span),
+                                           _Alignof(ta_source_span));
+    if (zeros == NULL) {
+        exporter->result = TA_ERR_NOMEM;
+        return;
+    }
+    ta_mem_zero(zeros, (size_t)count * sizeof(ta_source_span));
+    spec->spans = zeros;
 }
 
 /*
@@ -506,16 +559,16 @@ static const ta_scxml_state_spec *ta_export_roots(ta_exporter *exporter) {
     return roots;
 }
 
-ta_result ta_definition_export(const ta_system *system, const ta_definition_export_params *params) {
-    if (system == NULL || params == NULL || params->arena == NULL || params->out == NULL) {
-        return TA_ERR_INVALID;
-    }
-    const ta_definition *definition = ta_definition_lookup(system, params->definition);
+ta_result ta_export_spec(const ta_system *system, const ta_export_request *request) {
+    const ta_definition *definition = ta_definition_lookup(system, request->definition);
     if (definition == NULL) {
         return TA_ERR_NOT_FOUND;
     }
-    ta_exporter exporter = { .system = system, .definition = definition, .arena = params->arena };
-    ta_scxml_spec *spec = ta_arena_alloc(params->arena, sizeof(*spec), _Alignof(ta_scxml_spec));
+    ta_exporter exporter = { .system = system,
+                             .definition = definition,
+                             .arena = request->arena,
+                             .numbered = request->numbered };
+    ta_scxml_spec *spec = ta_arena_alloc(request->arena, sizeof(*spec), _Alignof(ta_scxml_spec));
     if (spec == NULL) {
         return TA_ERR_NOMEM;
     }
@@ -532,10 +585,25 @@ ta_result ta_definition_export(const ta_system *system, const ta_definition_expo
     if (definition->global_script_actions.length == 1) {
         const ta_action_def *script = &definition->action_defs[definition->global_script_actions.offset];
         spec->script = ta_export_expression(&exporter, script->as.script);
+        spec->script_span = ta_export_span(&exporter, TA_ELEMENT_ACTION, definition->global_script_actions.offset);
+    }
+    if (exporter.numbered || definition->spans != NULL) {
+        ta_export_spans(&exporter, spec);
     }
     if (exporter.result != TA_OK) {
         return exporter.result;
     }
-    *params->out = spec;
+    *request->out = spec;
     return TA_OK;
+}
+
+ta_result ta_definition_export(const ta_system *system, const ta_definition_export_params *params) {
+    if (system == NULL || params == NULL || params->arena == NULL || params->out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    return ta_export_spec(system, &(ta_export_request){
+                                      .definition = params->definition,
+                                      .arena = params->arena,
+                                      .out = params->out,
+                                  });
 }

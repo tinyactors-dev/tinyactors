@@ -89,3 +89,4 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0083](0083-inspection-reports-where-a-paused-actor-stands.md) | [Inspection reports where a paused actor stands](0083-inspection-reports-where-a-paused-actor-stands.md) |
 | [0084](0084-an-operator-can-withdraw-one-pending-delayed-send.md) | [An operator can withdraw one pending delayed send](0084-an-operator-can-withdraw-one-pending-delayed-send.md) |
 | [0085](0085-an-image-restores-into-any-system-that-registers-its-revision.md) | [An image restores into any system that registers its revision](0085-an-image-restores-into-any-system-that-registers-its-revision.md) |
+| [0086](0086-a-spec-says-where-its-elements-were-written-and-an-encode-says-where-it-wrote-them.md) | [A spec says where its elements were written, and an encode says where it wrote them](0086-a-spec-says-where-its-elements-were-written-and-an-encode-says-where-it-wrote-them.md) |

@@ -417,17 +417,48 @@ jv tat_encode_ta_value(tat_bind *bind, const ta_value *value) {
     return tat_value_encode(value);
 }
 
+/*
+ * An expression is its source text, or {"source": text, "span": n} when it
+ * says where it was written (ADR 0086): an index into the spec's spans.
+ */
 bool tat_decode_ta_expression(tat_bind *bind, jv value, ta_expression *out) {
-    if (jv_get_kind(value) != JV_KIND_STRING) {
+    *out = (ta_expression){ .kind = TA_EXPRESSION_SOURCE };
+    if (jv_get_kind(value) == JV_KIND_STRING) {
+        return tat_decode_ta_str(bind, value, &out->as.source);
+    }
+    static const char *const keys[] = { "source", "span", NULL };
+    if (jv_get_kind(value) != JV_KIND_OBJECT) {
         return tat_fail(bind, "expected expression source text; host expressions cannot cross RPC");
     }
-    out->kind = TA_EXPRESSION_SOURCE;
-    return tat_decode_ta_str(bind, value, &out->as.source);
+    if (!tat_check_keys(bind, value, keys)) {
+        return false;
+    }
+    jv member = jv_invalid();
+    if (tat_member(value, "span", &member)) {
+        bool ok = tat_decode_u32(bind, member, &out->span);
+        jv_free(member);
+        if (!ok) {
+            return tat_at(bind, "span");
+        }
+    }
+    if (!tat_member(value, "source", &member) || jv_get_kind(member) != JV_KIND_STRING) {
+        jv_free(member);
+        tat_fail(bind, "expected expression source text");
+        return tat_at(bind, "source");
+    }
+    bool ok = tat_decode_ta_str(bind, member, &out->as.source);
+    jv_free(member);
+    return ok;
 }
 
 jv tat_encode_ta_expression(tat_bind *bind, const ta_expression *value) {
     switch (value->kind) {
         case TA_EXPRESSION_SOURCE:
+            if (value->span != 0) {
+                jv expression = jv_object_set(jv_object(), jv_string("source"),
+                                              tat_encode_ta_str(bind, &value->as.source));
+                return jv_object_set(expression, jv_string("span"), jv_number(value->span));
+            }
             return tat_encode_ta_str(bind, &value->as.source);
         case TA_EXPRESSION_HOST:
             return jv_object_set(jv_object(), jv_string("$expression"), jv_string("host"));

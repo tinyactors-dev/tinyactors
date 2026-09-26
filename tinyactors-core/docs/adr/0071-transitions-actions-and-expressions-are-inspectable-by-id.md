@@ -1,6 +1,6 @@
 # ADR 0071: Transitions, actions and expressions are inspectable by ID
 
-**Status:** Accepted and implemented; refines ADR 0042 and ADR 0049; serves ADR 0067 (closes its open point 4). See the implementation notes for where the code differs from the text.
+**Status:** Accepted and implemented; refines ADR 0042 and ADR 0049; serves ADR 0067 (closes its open point 4); source locations (section 4) decided by ADR 0086. See the implementation notes for where the code differs from the text.
 **Date:** 2026-09-24
 
 ## Context

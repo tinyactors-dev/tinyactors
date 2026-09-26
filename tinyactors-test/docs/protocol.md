@@ -153,8 +153,9 @@ JSON-RPC errors are reserved for the protocol itself:
   `ta_time`, ...) are
   JSON numbers up to 2^53-1 and decimal strings above; decoders accept both
   forms.
-- `ta_str` and `ta_bytes` are JSON strings. `ta_expression` is its source text;
-  host expressions cannot cross the protocol.
+- `ta_str` and `ta_bytes` are JSON strings. `ta_expression` is its source
+  text, or `{"source": text, "span": n}` when it says where it was written
+  (core ADR 0086); host expressions cannot cross the protocol.
 - `ta_value` is any JSON value. It decodes into a value of the data model of
   the receiving actor, as the function's `value_model` in the API description
   names it: the `actor` of `ta.actor.deliver` and `ta.actor.report_invoke`, or

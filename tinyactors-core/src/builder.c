@@ -8,6 +8,19 @@ typedef struct {
 } ta_state_key;
 
 /*
+ * A known span the spec gives an element (ADR 0086), recorded during the
+ * walk and laid out once the counts are final. An initial transition's ID
+ * is its index among the initial transitions until then.
+ */
+typedef struct {
+    ta_element_kind kind;
+    bool initial;
+    uint32_t id;
+    /* The spec's span, from 1. */
+    uint32_t span;
+} ta_span_record;
+
+/*
  * The compiler's explicit stacks (ADR 0060: no recursion in core).
  *
  * A level of pass one: one list of sibling states, the parent they belong
@@ -98,6 +111,7 @@ typedef struct {
     ta_vec names;        /* ta_state_key: every state, sorted by (name, state) after pass one */
     ta_vec levels;       /* ta_collect_frame: pass one's stack */
     ta_vec blocks;       /* ta_block_frame: the stack of nested blocks being compiled */
+    ta_vec spans;        /* ta_span_record: the known spans, in walk order */
     uint32_t action_depth; /* the deepest stack of blocks so far */
     ta_state_id path_state;
     ta_compile_error *error;
@@ -234,6 +248,33 @@ static ta_result ta_compiler_fail_at(ta_compiler *compiler, ta_spec_member membe
                                      const ta_compiler_fault *fault) {
     ta_result entered = ta_compiler_enter(compiler, member, index);
     return entered != TA_OK ? entered : ta_compiler_record(compiler, fault);
+}
+
+/*
+ * Checks the span an element names and records it when it is known
+ * (ADR 0086). Nothing about a span is hashed: where an element was written
+ * is not what it means, so moving it keeps the revision.
+ */
+static ta_result ta_compiler_span(ta_compiler *compiler, const ta_span_record *record) {
+    if (record->span == 0) {
+        return TA_OK;
+    }
+    const ta_scxml_spec *spec = compiler->spec;
+    if (record->span > spec->span_count || spec->spans == NULL) {
+        return ta_compiler_fail_at(compiler, TA_SPEC_MEMBER_SPAN, TA_SPEC_INDEX_NONE,
+                                   &(ta_compiler_fault){ .code = TA_COMPILE_ERROR_MALFORMED_SPEC,
+                                                         .message = TA_PHRASE("the span is not in the spec's spans") });
+    }
+    const ta_source_span *span = &spec->spans[record->span - 1u];
+    if (span->line == 0) {
+        return TA_OK;
+    }
+    if (span->source >= (spec->source_count == 0 ? 1u : spec->source_count)) {
+        return ta_compiler_fail_at(compiler, TA_SPEC_MEMBER_SPAN, TA_SPEC_INDEX_NONE,
+                                   &(ta_compiler_fault){ .code = TA_COMPILE_ERROR_MALFORMED_SPEC,
+                                                         .message = TA_PHRASE("the span names no source of the spec") });
+    }
+    return ta_vec_push(&compiler->spans, record);
 }
 
 /*
@@ -418,8 +459,13 @@ static ta_result ta_compiler_expression(ta_compiler *compiler, const ta_compiler
                                 expression->kind == TA_EXPRESSION_SOURCE ? expression->as.source : (ta_str){0},
                                 TA_PHRASE("the data model refused this expression"));
     }
+    ta_result result = ta_compiler_span(compiler, &(ta_span_record){ .kind = TA_ELEMENT_EXPRESSION,
+                                                                     .id = compiler->expressions.count,
+                                                                     .span = expression->span });
+    if (result != TA_OK) {
+        return result;
+    }
     ta_expression copy = { .kind = expression->kind };
-    ta_result result = TA_OK;
     switch (expression->kind) {
         case TA_EXPRESSION_SOURCE:
             ta_compiler_hash_str(compiler, expression->as.source);
@@ -934,6 +980,11 @@ static ta_result ta_compiler_block(ta_compiler *compiler, ta_spec_member member,
         ta_action_def action = {0};
         result = ta_compiler_enter(compiler, frame->member, frame->index);
         if (result == TA_OK) {
+            result = ta_compiler_span(compiler, &(ta_span_record){ .kind = TA_ELEMENT_ACTION,
+                                                                   .id = frame->base + frame->index,
+                                                                   .span = spec->span });
+        }
+        if (result == TA_OK) {
             result = ta_compiler_action(compiler, spec, &action);
         }
         if (result != TA_OK) {
@@ -1192,6 +1243,11 @@ static ta_result ta_compiler_collect(ta_compiler *compiler, const ta_scxml_state
         if (result == TA_OK) {
             result = ta_compiler_atom_at(compiler, TA_SPEC_MEMBER_ID, spec->id, &state.name);
         }
+        if (result == TA_OK) {
+            result = ta_compiler_span(compiler, &(ta_span_record){ .kind = TA_ELEMENT_STATE,
+                                                                   .id = compiler->states.count,
+                                                                   .span = spec->span });
+        }
         if (result != TA_OK) {
             break;
         }
@@ -1361,7 +1417,13 @@ static ta_result ta_compiler_transition(ta_compiler *compiler, ta_state_id sourc
         return ta_compiler_fail(compiler, TA_COMPILE_ERROR_MALFORMED_SPEC, (ta_str){0},
                                 TA_PHRASE("unknown transition kind"));
     }
-    ta_result result = ta_compiler_enter(compiler, TA_SPEC_MEMBER_EVENT, TA_SPEC_INDEX_NONE);
+    /* Transitions are numbered in the order they are stored, after their content. */
+    ta_result result = ta_compiler_span(compiler, &(ta_span_record){ .kind = TA_ELEMENT_TRANSITION,
+                                                                     .id = compiler->transitions.count,
+                                                                     .span = spec->span });
+    if (result == TA_OK) {
+        result = ta_compiler_enter(compiler, TA_SPEC_MEMBER_EVENT, TA_SPEC_INDEX_NONE);
+    }
     if (result == TA_OK) {
         result = ta_compiler_descriptors(compiler, spec->event, &transition.event_patterns);
     }
@@ -1403,6 +1465,12 @@ static ta_result ta_compiler_initial(ta_compiler *compiler, const ta_compiler_in
     ta_result result = TA_OK;
     if (params->spec != NULL) {
         result = ta_compiler_enter(compiler, TA_SPEC_MEMBER_INITIAL, TA_SPEC_INDEX_NONE);
+        if (result == TA_OK) {
+            result = ta_compiler_span(compiler, &(ta_span_record){ .kind = TA_ELEMENT_TRANSITION,
+                                                                   .initial = true,
+                                                                   .id = compiler->initials.count,
+                                                                   .span = params->spec->span });
+        }
         if (result != TA_OK) {
             return result;
         }
@@ -1781,11 +1849,62 @@ static void ta_compiler_destroy(ta_compiler *compiler) {
         &compiler->data_decls, &compiler->initializers, &compiler->contents, &compiler->patterns,
         &compiler->segments, &compiler->expressions, &compiler->roles, &compiler->history, &compiler->done_data,
         &compiler->invokes, &compiler->texts, &compiler->path, &compiler->names, &compiler->levels,
-        &compiler->blocks,
+        &compiler->blocks, &compiler->spans,
     };
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(vecs); index += 1) {
         ta_vec_destroy(vecs[index]);
     }
+}
+
+/*
+ * The side table of spans (ADR 0086), once every count is final: one span
+ * per element, by kind and ID, and the names of the sources. Nothing is
+ * kept when the spec knew no span, so a definition compiled without them
+ * costs what it did before.
+ */
+static ta_result ta_compiler_lay_out_spans(ta_compiler *compiler) {
+    ta_definition *definition = compiler->definition;
+    if (compiler->spans.count == 0) {
+        return TA_OK;
+    }
+    const ta_scxml_spec *spec = compiler->spec;
+    uint32_t count = ta_definition_span_base(definition, TA_ELEMENT_EXPRESSION) +
+                     ta_definition_element_count(definition, TA_ELEMENT_EXPRESSION);
+    /* One block: the spans, the sources, then the sources' names. */
+    size_t sources_at = (size_t)count * sizeof(ta_source_span);
+    size_t names_at = sources_at + (size_t)spec->source_count * sizeof(ta_scxml_source);
+    size_t bytes = names_at;
+    for (uint32_t index = 0; index < spec->source_count; index += 1u) {
+        bytes += spec->sources[index].name.len;
+    }
+    uint8_t *block = ta_mem_alloc(definition->allocator, bytes, _Alignof(ta_source_span));
+    if (block == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    ta_source_span *spans = (ta_source_span *)(void *)block;
+    ta_mem_zero(spans, sources_at);
+    for (uint32_t index = 0; index < compiler->spans.count; index += 1u) {
+        const ta_span_record *record = ta_vec_at(&compiler->spans, index);
+        uint32_t id = record->initial ? definition->transition_count + record->id : record->id;
+        spans[ta_definition_span_base(definition, record->kind) + id] = spec->spans[record->span - 1u];
+    }
+    ta_scxml_source *sources = spec->source_count != 0 ? (ta_scxml_source *)(void *)(block + sources_at) : NULL;
+    char *names = (char *)block + names_at;
+    for (uint32_t index = 0; index < spec->source_count; index += 1u) {
+        ta_str name = spec->sources[index].name;
+        if (name.len != 0) {
+            ta_mem_copy(names, name.ptr, name.len);
+        }
+        sources[index].name = (ta_str){ .ptr = names, .len = name.len };
+        names += name.len;
+    }
+    definition->spans = spans;
+    definition->span_count = count;
+    definition->sources = sources;
+    definition->source_count = spec->source_count;
+    definition->span_bytes = bytes;
+    definition->span_allocator = definition->allocator;
+    return TA_OK;
 }
 
 static ta_result ta_compiler_identity(ta_compiler *compiler) {
@@ -2053,7 +2172,16 @@ static ta_result ta_compiler_run(ta_compiler *compiler, ta_datamodel datamodel) 
     if (result == TA_OK && spec->script.kind != TA_EXPRESSION_NONE) {
         uint32_t base = 0;
         ta_action_def script = { .kind = TA_ACTION_SCRIPT };
-        result = ta_compiler_expression_at(compiler, &(ta_compiler_expression_at_params){ TA_SPEC_MEMBER_SCRIPT, &spec->script, TA_EXPR_ROLE_SCRIPT }, &script.as.script);
+        result = ta_compiler_enter(compiler, TA_SPEC_MEMBER_SCRIPT, TA_SPEC_INDEX_NONE);
+        if (result == TA_OK) {
+            result = ta_compiler_span(compiler, &(ta_span_record){ .kind = TA_ELEMENT_ACTION,
+                                                                   .id = compiler->actions.count,
+                                                                   .span = spec->script_span });
+        }
+        if (result == TA_OK) {
+            ta_compiler_leave(compiler);
+            result = ta_compiler_expression_at(compiler, &(ta_compiler_expression_at_params){ TA_SPEC_MEMBER_SCRIPT, &spec->script, TA_EXPR_ROLE_SCRIPT }, &script.as.script);
+        }
         if (result == TA_OK) {
             result = ta_vec_extend(&compiler->actions, 1, &base);
         }
@@ -2145,6 +2273,7 @@ static ta_result ta_compile(ta_system *system, const ta_definition_compile_param
         { &compiler.names, TA_VEC_LAYOUT(ta_state_key) },
         { &compiler.levels, TA_VEC_LAYOUT(ta_collect_frame) },
         { &compiler.blocks, TA_VEC_LAYOUT(ta_block_frame) },
+        { &compiler.spans, TA_VEC_LAYOUT(ta_span_record) },
     };
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(vecs); index += 1) {
         ta_vec_init(vecs[index].vec, params->allocator, vecs[index].layout);
@@ -2180,6 +2309,9 @@ static ta_result ta_compile(ta_system *system, const ta_definition_compile_param
         }
         definition->expression_count = 0;
         result = result == TA_OK ? sealed : result;
+    }
+    if (result == TA_OK && run->locate == UINT32_MAX) {
+        result = ta_compiler_lay_out_spans(&compiler);
     }
     ta_compiler_destroy(&compiler);
 
@@ -2453,6 +2585,7 @@ static ta_str ta_spec_member_name(ta_spec_member member) {
         case TA_SPEC_MEMBER_SENDID: return TA_PHRASE("sendid");
         case TA_SPEC_MEMBER_DATAMODEL: return TA_PHRASE("datamodel");
         case TA_SPEC_MEMBER_IDENTITY: return TA_PHRASE("identity");
+        case TA_SPEC_MEMBER_SPAN: return TA_PHRASE("span");
         default: return TA_PHRASE("?");
     }
 }

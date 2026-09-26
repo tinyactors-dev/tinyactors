@@ -3052,7 +3052,7 @@
           "shape": "callback",
           "direction": "in",
           "optional": true,
-          "doc": "Decode `input` into a spec.\n\n**The spec may point into `input`.** A codec is not required to copy, because a codec over a syntax tree keeps expression text as exact slices of the source, which is what lets an embedder map a compiled expression back to the construct it came from and run static checks on it before compiling. So `input` must stay valid as long as the spec does — until ta_definition_compile_spec() has copied it. Callers keep the buffer; codecs that do copy make that harmless.\n\nA codec bounds its own input: nesting depth, document size, expansion. Reaching one of its bounds is TA_CHART_ERROR_LIMIT. The interface sets no bound of its own, so two codecs need not accept the same documents.\n\nA literal <content > is decoded to bytes plus this codec's `info.name` as their media type. What those bytes are is the codec's rule: an XML codec serializes the content subtree with namespaces resolved as SCXML G.6 requires, rather than slicing the source, because what a recipient must see is a re-serialization and not the author's bytes.\n\nTA_OK, TA_ERR_INVALID with `error` saying why, or TA_ERR_NOMEM. Null when this codec only writes."
+          "doc": "Decode `input` into a spec.\n\nA codec that knows where it read each element fills the spec's spans (ADR 0086), with `name` as the first source and each file the resolver fetched as one more. It never has to: a spec with no spans compiles to the same revision as one with them.\n\n**The spec may point into `input`.** A codec is not required to copy, because a codec over a syntax tree keeps expression text as exact slices of the source, which is what lets an embedder map a compiled expression back to the construct it came from and run static checks on it before compiling. So `input` must stay valid as long as the spec does — until ta_definition_compile_spec() has copied it. Callers keep the buffer; codecs that do copy make that harmless.\n\nA codec bounds its own input: nesting depth, document size, expansion. Reaching one of its bounds is TA_CHART_ERROR_LIMIT. The interface sets no bound of its own, so two codecs need not accept the same documents.\n\nA literal <content > is decoded to bytes plus this codec's `info.name` as their media type. What those bytes are is the codec's rule: an XML codec serializes the content subtree with namespaces resolved as SCXML G.6 requires, rather than slicing the source, because what a recipient must see is a re-serialization and not the author's bytes.\n\nTA_OK, TA_ERR_INVALID with `error` saying why, or TA_ERR_NOMEM. Null when this codec only writes."
         },
         {
           "name": "encode",
@@ -3094,7 +3094,7 @@
           "shape": "callback",
           "direction": "in",
           "optional": true,
-          "doc": "Write `spec` in this codec's syntax. `spec->identity` is not written: identity has no chart syntax, so a round trip that must preserve an explicit one carries it beside the document and feeds it back through ta_chart_decode_params. A literal content whose media type is not this codec's own is TA_CHART_ERROR_UNREPRESENTABLE unless the codec can carry it verbatim. Null when this codec only reads."
+          "doc": "Write `spec` in this codec's syntax. `spec->identity` is not written: identity has no chart syntax, so a round trip that must preserve an explicit one carries it beside the document and feeds it back through ta_chart_decode_params. A literal content whose media type is not this codec's own is TA_CHART_ERROR_UNREPRESENTABLE unless the codec can carry it verbatim. When `spans` is present, the codec reports where it wrote every element that has a `span` (ADR 0086). Null when this codec only reads."
         }
       ],
       "layout": {
@@ -3126,6 +3126,13 @@
           "type": {
             "type": "ta_bytes"
           }
+        },
+        {
+          "name": "name",
+          "type": {
+            "type": "ta_str"
+          },
+          "doc": "What the input is called, such as its path; the decoded spec's first source. Empty when it has no name."
         },
         {
           "name": "arena",
@@ -3194,29 +3201,31 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 80,
+          "size": 96,
           "align": 8,
           "offsets": {
             "input": 0,
-            "arena": 16,
-            "resolver": 24,
-            "lowering": 40,
-            "identity": 56,
-            "out": 64,
-            "error": 72
+            "name": 16,
+            "arena": 32,
+            "resolver": 40,
+            "lowering": 56,
+            "identity": 72,
+            "out": 80,
+            "error": 88
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 40,
+          "size": 48,
           "align": 4,
           "offsets": {
             "input": 0,
-            "arena": 8,
-            "resolver": 12,
-            "lowering": 20,
-            "identity": 28,
-            "out": 32,
-            "error": 36
+            "name": 8,
+            "arena": 16,
+            "resolver": 20,
+            "lowering": 28,
+            "identity": 36,
+            "out": 40,
+            "error": 44
           }
         }
       }
@@ -3253,6 +3262,13 @@
           }
         },
         {
+          "name": "spans",
+          "type": {
+            "type": "ta_chart_span_sink"
+          },
+          "doc": "Absent when the caller does not ask where elements landed."
+        },
+        {
           "name": "out",
           "type": {
             "pointer": {
@@ -3280,25 +3296,27 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 48,
+          "size": 64,
           "align": 8,
           "offsets": {
             "spec": 0,
             "arena": 8,
             "expressions": 16,
-            "out": 32,
-            "error": 40
+            "spans": 32,
+            "out": 48,
+            "error": 56
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 24,
+          "size": 32,
           "align": 4,
           "offsets": {
             "spec": 0,
             "arena": 4,
             "expressions": 8,
-            "out": 16,
-            "error": 20
+            "spans": 16,
+            "out": 24,
+            "error": 28
           }
         }
       }
@@ -3762,6 +3780,120 @@
             "offset": 0,
             "line": 8,
             "column": 12
+          }
+        }
+      }
+    },
+    "ta_chart_span_sink": {
+      "kind": "struct",
+      "semantic": "adapter",
+      "fields": [
+        {
+          "name": "self",
+          "type": {
+            "pointer": {
+              "builtin": "void"
+            }
+          },
+          "shape": "raw",
+          "direction": "in"
+        },
+        {
+          "name": "v",
+          "type": {
+            "pointer": {
+              "type": "ta_chart_span_sink_vtable",
+              "const": true
+            }
+          },
+          "shape": "vtable",
+          "direction": "in",
+          "optional": true
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "self": 0,
+            "v": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "self": 0,
+            "v": 4
+          }
+        }
+      }
+    },
+    "ta_chart_span_sink_vtable": {
+      "kind": "struct",
+      "semantic": "vtable",
+      "doc": "Told by an encode where it wrote each element (ADR 0086). For every element of the spec whose `span` is nonzero, the codec calls `written` once with that index and the element's place in the output: source 0, the byte range, and the lines and columns of both ends. For an expression, the place is its text: an attribute's value, or an element's character data. Recording cannot fail: a sink that needs memory reserves it before the encode.",
+      "fields": [
+        {
+          "name": "written",
+          "type": {
+            "pointer": {
+              "function": {
+                "returns": {
+                  "type": {
+                    "builtin": "void"
+                  }
+                },
+                "params": [
+                  {
+                    "name": "self",
+                    "type": {
+                      "pointer": {
+                        "builtin": "void"
+                      }
+                    },
+                    "shape": "raw",
+                    "direction": "in"
+                  },
+                  {
+                    "name": "span",
+                    "type": {
+                      "builtin": "uint32_t"
+                    }
+                  },
+                  {
+                    "name": "where",
+                    "type": {
+                      "pointer": {
+                        "type": "ta_source_span",
+                        "const": true
+                      }
+                    },
+                    "shape": "single",
+                    "direction": "in"
+                  }
+                ]
+              }
+            }
+          },
+          "shape": "callback",
+          "direction": "in"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 8,
+          "align": 8,
+          "offsets": {
+            "written": 0
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4,
+          "offsets": {
+            "written": 0
           }
         }
       }
@@ -7329,6 +7461,20 @@
           "lifetime": "arena"
         },
         {
+          "name": "spans",
+          "type": {
+            "pointer": {
+              "type": "ta_source_map"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success",
+          "lifetime": "arena",
+          "doc": "When asked for, where each element of the definition landed in `out` (ADR 0086): its arrays are in `arena`, and an element the codec reported nothing for has an all-zero span."
+        },
+        {
           "name": "identity",
           "type": {
             "pointer": {
@@ -7360,7 +7506,7 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 72,
+          "size": 80,
           "align": 8,
           "offsets": {
             "definition": 0,
@@ -7368,12 +7514,13 @@
             "arena": 24,
             "expressions": 32,
             "out": 48,
-            "identity": 56,
-            "error": 64
+            "spans": 56,
+            "identity": 64,
+            "error": 72
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 40,
+          "size": 48,
           "align": 8,
           "offsets": {
             "definition": 0,
@@ -7381,8 +7528,9 @@
             "arena": 16,
             "expressions": 20,
             "out": 28,
-            "identity": 32,
-            "error": 36
+            "spans": 32,
+            "identity": 36,
+            "error": 40
           }
         }
       }
@@ -7464,7 +7612,7 @@
     },
     "ta_definition_export_params": {
       "kind": "struct",
-      "doc": "Rebuilds the author-level spec of a registered definition (ADR 0042). Arrays and joined event names are allocated in `arena`; other text and expressions are borrowed from the definition and the system. Host expressions are the definition's retained handles, not retained again. The result stays valid until the arena is reset or the definition is freed, whichever comes first.\n\nExport is faithful: compiling the exported spec yields the same revision as the original. `identity` is null when the definition was fingerprinted and points to the definition's explicit identity otherwise. Empty lists are exported as null, except that a handler's `actions` is never null.\n\nTA_ERR_NOT_FOUND: no existing definition has this ID. A retired definition exports until it is freed.",
+      "doc": "Rebuilds the author-level spec of a registered definition (ADR 0042). Arrays and joined event names are allocated in `arena`; other text and expressions are borrowed from the definition and the system. Host expressions are the definition's retained handles, not retained again. The result stays valid until the arena is reset or the definition is freed, whichever comes first.\n\nExport is faithful: compiling the exported spec yields the same revision as the original. `identity` is null when the definition was fingerprinted and points to the definition's explicit identity otherwise. Empty lists are exported as null, except that a handler's `actions` is never null.\n\nA definition that keeps spans exports them (ADR 0086): `spans` is its table, borrowed, with the states first, then the transitions, the actions and the expressions, each by ID; every exported element whose span is known indexes it, and `sources` names what they point into. Compiling the export keeps the same spans. A definition without spans exports none.\n\nTA_ERR_NOT_FOUND: no existing definition has this ID. A retired definition exports until it is freed.",
       "fields": [
         {
           "name": "definition",
@@ -7715,6 +7863,13 @@
           }
         },
         {
+          "name": "name",
+          "type": {
+            "type": "ta_str"
+          },
+          "doc": "What the input is called, such as its path: the name of the definition's first source (ADR 0086). Empty when it has none."
+        },
+        {
           "name": "arena",
           "type": {
             "pointer": {
@@ -7802,37 +7957,39 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 128,
+          "size": 144,
           "align": 8,
           "offsets": {
             "codec": 0,
             "input": 16,
-            "arena": 32,
-            "resolver": 40,
-            "lowering": 56,
-            "identity": 72,
-            "datamodels": 80,
-            "datamodel_count": 88,
-            "allocator": 96,
-            "out": 112,
-            "error": 120
+            "name": 32,
+            "arena": 48,
+            "resolver": 56,
+            "lowering": 72,
+            "identity": 88,
+            "datamodels": 96,
+            "datamodel_count": 104,
+            "allocator": 112,
+            "out": 128,
+            "error": 136
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 64,
+          "size": 72,
           "align": 4,
           "offsets": {
             "codec": 0,
             "input": 8,
-            "arena": 16,
-            "resolver": 20,
-            "lowering": 28,
-            "identity": 36,
-            "datamodels": 40,
-            "datamodel_count": 44,
-            "allocator": 48,
-            "out": 56,
-            "error": 60
+            "name": 16,
+            "arena": 24,
+            "resolver": 28,
+            "lowering": 36,
+            "identity": 44,
+            "datamodels": 48,
+            "datamodel_count": 52,
+            "allocator": 56,
+            "out": 64,
+            "error": 68
           }
         }
       }
@@ -8274,6 +8431,64 @@
         }
       }
     },
+    "ta_definition_span_params": {
+      "kind": "struct",
+      "doc": "Where one element of a definition was written (ADR 0086), as the spec it was compiled from said. The spans are the definition's, not the actors': a definition compiled from a spec with no known span keeps none. TA_ERR_NOT_FOUND when the definition is unknown or stale, the ID is out of range, or the definition keeps no span for that element. A retired definition answers until it is freed. A registration answered by this definition (ADR 0077) that brings other spans replaces them, and `source` text read before goes with the old ones.",
+      "fields": [
+        {
+          "name": "definition",
+          "type": {
+            "type": "ta_definition_id"
+          }
+        },
+        {
+          "name": "kind",
+          "type": {
+            "type": "ta_element_kind"
+          }
+        },
+        {
+          "name": "id",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "out",
+          "type": {
+            "pointer": {
+              "type": "ta_source_location"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success",
+          "lifetime": "definition"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "definition": 0,
+            "kind": 8,
+            "id": 12,
+            "out": 16
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "definition": 0,
+            "kind": 8,
+            "id": 12,
+            "out": 16
+          }
+        }
+      }
+    },
     "ta_definition_state_params": {
       "kind": "struct",
       "fields": [
@@ -8698,6 +8913,43 @@
         }
       }
     },
+    "ta_element_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_ELEMENT_STATE",
+          "value": 0,
+          "symbol": "state"
+        },
+        {
+          "name": "TA_ELEMENT_TRANSITION",
+          "value": 1,
+          "symbol": "transition",
+          "doc": "initial transitions included, as ta_definition_transition() numbers them"
+        },
+        {
+          "name": "TA_ELEMENT_ACTION",
+          "value": 2,
+          "symbol": "action"
+        },
+        {
+          "name": "TA_ELEMENT_EXPRESSION",
+          "value": 3,
+          "symbol": "expression"
+        }
+      ],
+      "doc": "The kinds of compiled element a definition numbers, for ta_definition_span().",
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
     "ta_event": {
       "kind": "struct",
       "fields": [
@@ -8945,6 +9197,13 @@
           }
         },
         {
+          "name": "span",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "In a spec: where the expression was written, as an index into the spec's `spans` counting from 1, or 0 when unknown (ADR 0086). The copies a definition keeps (ta_definition_expression(), a data model's expression table) carry 0; ta_definition_span() says where one was written."
+        },
+        {
           "name": "as",
           "type": {
             "record": {
@@ -8985,19 +9244,21 @@
           "align": 8,
           "offsets": {
             "kind": 0,
+            "span": 4,
             "as": 8,
             "as.source": 8,
             "as.host": 8
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 16,
+          "size": 20,
           "align": 4,
           "offsets": {
             "kind": 0,
-            "as": 4,
-            "as.source": 4,
-            "as.host": 4
+            "span": 4,
+            "as": 8,
+            "as.source": 8,
+            "as.host": 8
           }
         }
       }
@@ -11816,6 +12077,12 @@
           }
         },
         {
+          "name": "span",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
           "name": "as",
           "type": {
             "record": {
@@ -12028,6 +12295,7 @@
           }
         }
       ],
+      "doc": "The `span` of an action, a transition, an initial transition and a state is where that element was written: an index into the spec's `spans` counting from 1, or 0 when unknown (ADR 0086).",
       "zero_is_absent": true,
       "tagged": {
         "tag": "kind",
@@ -12052,6 +12320,7 @@
           "align": 8,
           "offsets": {
             "kind": 0,
+            "span": 4,
             "as": 8,
             "as.raise": 8,
             "as.raise.event": 8,
@@ -12080,35 +12349,36 @@
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 128,
+          "size": 156,
           "align": 4,
           "offsets": {
             "kind": 0,
-            "as": 4,
-            "as.raise": 4,
-            "as.raise.event": 4,
-            "as.raise.data": 12,
-            "as.send": 4,
-            "as.cancel": 4,
-            "as.cancel.sendid": 4,
-            "as.assign": 4,
-            "as.assign.location": 4,
-            "as.assign.value": 20,
-            "as.script": 4,
-            "as.script.script": 4,
-            "as.log": 4,
-            "as.log.label": 4,
-            "as.log.expr": 12,
-            "as.conditional": 4,
-            "as.conditional.condition": 4,
-            "as.conditional.then_actions": 20,
-            "as.conditional.else_actions": 24,
-            "as.foreach": 4,
-            "as.foreach.array": 4,
-            "as.foreach.item": 20,
-            "as.foreach.index": 28,
-            "as.foreach.body": 36,
-            "as.invoke": 4
+            "span": 4,
+            "as": 8,
+            "as.raise": 8,
+            "as.raise.event": 8,
+            "as.raise.data": 16,
+            "as.send": 8,
+            "as.cancel": 8,
+            "as.cancel.sendid": 8,
+            "as.assign": 8,
+            "as.assign.location": 8,
+            "as.assign.value": 28,
+            "as.script": 8,
+            "as.script.script": 8,
+            "as.log": 8,
+            "as.log.label": 8,
+            "as.log.expr": 16,
+            "as.conditional": 8,
+            "as.conditional.condition": 8,
+            "as.conditional.then_actions": 28,
+            "as.conditional.else_actions": 32,
+            "as.foreach": 8,
+            "as.foreach.array": 8,
+            "as.foreach.item": 28,
+            "as.foreach.index": 36,
+            "as.foreach.body": 44,
+            "as.invoke": 8
           }
         }
       }
@@ -12172,7 +12442,7 @@
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 28,
+          "size": 32,
           "align": 4,
           "offsets": {
             "name": 0,
@@ -12216,11 +12486,11 @@
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 24,
+          "size": 28,
           "align": 4,
           "offsets": {
             "content": 0,
-            "params": 20
+            "params": 24
           }
         }
       }
@@ -12312,7 +12582,7 @@
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 20,
+          "size": 24,
           "align": 4,
           "offsets": {
             "kind": 0,
@@ -12446,7 +12716,7 @@
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 20,
+          "size": 24,
           "align": 4,
           "offsets": {
             "kind": 0,
@@ -12459,6 +12729,7 @@
     },
     "ta_scxml_initial_spec": {
       "kind": "struct",
+      "doc": "An <initial > element, or an `initial` attribute (then with no actions).",
       "fields": [
         {
           "name": "targets",
@@ -12485,24 +12756,32 @@
           "shape": "terminated",
           "direction": "in",
           "optional": true
+        },
+        {
+          "name": "span",
+          "type": {
+            "builtin": "uint32_t"
+          }
         }
       ],
       "zero_is_absent": true,
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 16,
+          "size": 24,
           "align": 8,
           "offsets": {
             "targets": 0,
-            "actions": 8
+            "actions": 8,
+            "span": 16
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 8,
+          "size": 12,
           "align": 4,
           "offsets": {
             "targets": 0,
-            "actions": 4
+            "actions": 4,
+            "span": 8
           }
         }
       }
@@ -12616,17 +12895,17 @@
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 96,
+          "size": 112,
           "align": 4,
           "offsets": {
             "kind": 0,
             "id": 4,
-            "type": 24,
-            "src": 44,
-            "data": 64,
-            "autoforward": 84,
-            "params": 88,
-            "finalize": 92
+            "type": 28,
+            "src": 52,
+            "data": 76,
+            "autoforward": 100,
+            "params": 104,
+            "finalize": 108
           }
         }
       }
@@ -12658,7 +12937,7 @@
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 28,
+          "size": 32,
           "align": 4,
           "offsets": {
             "name": 0,
@@ -12737,16 +13016,44 @@
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 124,
+          "size": 148,
           "align": 4,
           "offsets": {
             "id": 0,
-            "type": 20,
-            "event": 40,
-            "target": 60,
-            "delay": 80,
-            "data": 100,
-            "params": 120
+            "type": 24,
+            "event": 48,
+            "target": 72,
+            "delay": 96,
+            "data": 120,
+            "params": 144
+          }
+        }
+      }
+    },
+    "ta_scxml_source": {
+      "kind": "struct",
+      "doc": "A source a spec's spans point into: the input a codec decoded (the first), a file a ta_chart_src_resolver fetched for it, or a program file of a DSL. `name` is what the front end calls it: a path, a URI, or empty.",
+      "fields": [
+        {
+          "name": "name",
+          "type": {
+            "type": "ta_str"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "name": 0
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "name": 0
           }
         }
       }
@@ -12829,12 +13136,60 @@
             "type": "ta_expression"
           },
           "doc": "The <scxml > <script > child (SCXML 3.2.2, 5.8), absent when zero. Each session runs it once at initialization: after early-bound data is initialized and before the initial transition is taken. A runtime failure queues error.execution. <script src> is fetched by the importer and passed as source text; the core performs no I/O."
+        },
+        {
+          "name": "script_span",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "Where the <script > element was written; `script.span` is its text."
+        },
+        {
+          "name": "spans",
+          "type": {
+            "pointer": {
+              "type": "ta_source_span",
+              "const": true
+            }
+          },
+          "count": "span_count",
+          "shape": "counted",
+          "direction": "in",
+          "optional": true,
+          "doc": "Where the elements were written (ADR 0086): the table the elements' `span` members index, and the sources its spans point into. Both are absent in a spec that says nothing about sources, and neither affects the revision. A span whose `source` is outside `sources` (other than 0 when there are none) is TA_COMPILE_ERROR_MALFORMED_SPEC, and so is an element whose `span` is beyond `span_count`."
+        },
+        {
+          "name": "span_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "count_of": "spans"
+        },
+        {
+          "name": "sources",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_source",
+              "const": true
+            }
+          },
+          "count": "source_count",
+          "shape": "counted",
+          "direction": "in",
+          "optional": true
+        },
+        {
+          "name": "source_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "count_of": "sources"
         }
       ],
       "zero_is_absent": true,
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 104,
+          "size": 144,
           "align": 8,
           "offsets": {
             "name": 0,
@@ -12844,11 +13199,16 @@
             "initial": 48,
             "states": 56,
             "data": 64,
-            "script": 72
+            "script": 72,
+            "script_span": 104,
+            "spans": 112,
+            "span_count": 120,
+            "sources": 128,
+            "source_count": 136
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 52,
+          "size": 76,
           "align": 4,
           "offsets": {
             "name": 0,
@@ -12858,7 +13218,12 @@
             "initial": 24,
             "states": 28,
             "data": 32,
-            "script": 36
+            "script": 36,
+            "script_span": 56,
+            "spans": 60,
+            "span_count": 64,
+            "sources": 68,
+            "source_count": 72
           }
         }
       }
@@ -12920,6 +13285,12 @@
           "name": "kind",
           "type": {
             "type": "ta_scxml_state_kind"
+          }
+        },
+        {
+          "name": "span",
+          "type": {
+            "builtin": "uint32_t"
           }
         },
         {
@@ -13038,6 +13409,7 @@
           "align": 8,
           "offsets": {
             "kind": 0,
+            "span": 4,
             "id": 8,
             "states": 24,
             "initial": 32,
@@ -13050,19 +13422,20 @@
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 44,
+          "size": 48,
           "align": 4,
           "offsets": {
             "kind": 0,
-            "id": 4,
-            "states": 12,
-            "initial": 16,
-            "transitions": 20,
-            "onentry": 24,
-            "onexit": 28,
-            "data": 32,
-            "invokes": 36,
-            "done_data": 40
+            "span": 4,
+            "id": 8,
+            "states": 16,
+            "initial": 20,
+            "transitions": 24,
+            "onentry": 28,
+            "onexit": 32,
+            "data": 36,
+            "invokes": 40,
+            "done_data": 44
           }
         }
       }
@@ -13155,7 +13528,7 @@
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 20,
+          "size": 24,
           "align": 4,
           "offsets": {
             "kind": 0,
@@ -13388,6 +13761,12 @@
           }
         },
         {
+          "name": "span",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
           "name": "event",
           "type": {
             "type": "ta_str"
@@ -13433,6 +13812,7 @@
           "align": 8,
           "offsets": {
             "kind": 0,
+            "span": 4,
             "event": 8,
             "condition": 24,
             "targets": 56,
@@ -13440,14 +13820,15 @@
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 36,
+          "size": 44,
           "align": 4,
           "offsets": {
             "kind": 0,
-            "event": 4,
-            "condition": 12,
-            "targets": 28,
-            "actions": 32
+            "span": 4,
+            "event": 8,
+            "condition": 16,
+            "targets": 36,
+            "actions": 40
           }
         }
       }
@@ -13572,7 +13953,7 @@
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 20,
+          "size": 24,
           "align": 4,
           "offsets": {
             "kind": 0,
@@ -13796,6 +14177,240 @@
           ]
         }
       ]
+    },
+    "ta_source_location": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "span",
+          "type": {
+            "type": "ta_source_span"
+          }
+        },
+        {
+          "name": "source",
+          "type": {
+            "type": "ta_str"
+          },
+          "doc": "The name of the source `span.source` indexes; empty when the spec named none."
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "span": 0,
+            "source": 32
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "span": 0,
+            "source": 32
+          }
+        }
+      }
+    },
+    "ta_source_map": {
+      "kind": "struct",
+      "doc": "A span for every element of a definition, by kind and ID: `states[id]` is where state `id` is, and so on. An element with no known span has an all-zero one. ta_definition_encode() fills one for the text it writes.",
+      "fields": [
+        {
+          "name": "states",
+          "type": {
+            "pointer": {
+              "type": "ta_source_span",
+              "const": true
+            }
+          },
+          "count": "state_count",
+          "shape": "counted",
+          "direction": "in",
+          "optional": true
+        },
+        {
+          "name": "state_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "count_of": "states"
+        },
+        {
+          "name": "transitions",
+          "type": {
+            "pointer": {
+              "type": "ta_source_span",
+              "const": true
+            }
+          },
+          "count": "transition_count",
+          "shape": "counted",
+          "direction": "in",
+          "optional": true,
+          "doc": "Initial transitions included, as ta_definition_transition() numbers them."
+        },
+        {
+          "name": "transition_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "count_of": "transitions"
+        },
+        {
+          "name": "actions",
+          "type": {
+            "pointer": {
+              "type": "ta_source_span",
+              "const": true
+            }
+          },
+          "count": "action_count",
+          "shape": "counted",
+          "direction": "in",
+          "optional": true
+        },
+        {
+          "name": "action_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "count_of": "actions"
+        },
+        {
+          "name": "expressions",
+          "type": {
+            "pointer": {
+              "type": "ta_source_span",
+              "const": true
+            }
+          },
+          "count": "expression_count",
+          "shape": "counted",
+          "direction": "in",
+          "optional": true
+        },
+        {
+          "name": "expression_count",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "count_of": "expressions"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "states": 0,
+            "state_count": 8,
+            "transitions": 16,
+            "transition_count": 24,
+            "actions": 32,
+            "action_count": 40,
+            "expressions": 48,
+            "expression_count": 56
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 32,
+          "align": 4,
+          "offsets": {
+            "states": 0,
+            "state_count": 4,
+            "transitions": 8,
+            "transition_count": 12,
+            "actions": 16,
+            "action_count": 20,
+            "expressions": 24,
+            "expression_count": 28
+          }
+        }
+      }
+    },
+    "ta_source_span": {
+      "kind": "struct",
+      "doc": "Source spans (ADR 0086)\n\nWhere an element of a chart was written: a place in one of the spec's sources. A front end that knows fills them in, and a spec built without them compiles exactly as before. Spans never change a definition's revision.\n\nA span is known when `line` is nonzero; an all-zero span is unknown. Lines and columns count from 1, and a column counts bytes, as ta_chart_position does. A front end that knows only lines, such as a DSL that records the line each element was written on, leaves the column, the end and the byte range zero.",
+      "fields": [
+        {
+          "name": "offset",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "The first byte, from the start of the source."
+        },
+        {
+          "name": "length",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "Bytes; 0 when the byte range is unknown."
+        },
+        {
+          "name": "source",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "An index into ta_scxml_spec.sources. In a spec that lists no sources, 0: the one unnamed source."
+        },
+        {
+          "name": "line",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "column",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        },
+        {
+          "name": "end_line",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "The position one past the last byte, as txml's spans end; zero when unknown."
+        },
+        {
+          "name": "end_column",
+          "type": {
+            "builtin": "uint32_t"
+          }
+        }
+      ],
+      "zero_is_absent": true,
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "offset": 0,
+            "length": 8,
+            "source": 12,
+            "line": 16,
+            "column": 20,
+            "end_line": 24,
+            "end_column": 28
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "offset": 0,
+            "length": 8,
+            "source": 12,
+            "line": 16,
+            "column": 20,
+            "end_line": 24,
+            "end_column": 28
+          }
+        }
+      }
     },
     "ta_span_id_format_params": {
       "kind": "struct",
@@ -14061,6 +14676,12 @@
           "name": "TA_SPEC_MEMBER_IDENTITY",
           "value": 32,
           "symbol": "identity",
+          "doc": "Single members."
+        },
+        {
+          "name": "TA_SPEC_MEMBER_SPAN",
+          "value": 33,
+          "symbol": "span",
           "doc": "Single members."
         }
       ],
@@ -18809,6 +19430,42 @@
           "type": {
             "pointer": {
               "type": "ta_definition_expression_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_definition_span",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_definition_span_params",
               "const": true
             }
           },

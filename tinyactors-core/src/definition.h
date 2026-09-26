@@ -394,6 +394,22 @@ struct ta_definition {
      */
     ta_str *authored_texts;
     uint32_t authored_text_count;
+    /*
+     * Where each element was written (ADR 0086), when the spec knew for at
+     * least one; null otherwise. One span per element, by kind and then by
+     * ID: the states, the transitions (initial ones included), the actions
+     * and the expressions (ta_definition_span_base()). Unknown spans are
+     * zero. `sources` are the names they point into. All of it is one
+     * allocation of `span_bytes` from `span_allocator`, starting at `spans`,
+     * not the arena, so that a registration answered by this definition can
+     * hand it newer spans (ta_definition_take_spans()).
+     */
+    ta_source_span *spans;
+    uint32_t span_count;
+    ta_scxml_source *sources;
+    uint32_t source_count;
+    size_t span_bytes;
+    ta_allocator span_allocator;
     /* The authored <scxml binding>; DEFAULT and EARLY both compile to early. */
     ta_scxml_binding_kind authored_binding;
     /* The authored <scxml datamodel>; empty when absent. */
@@ -456,6 +472,22 @@ size_t ta_definition_session_bytes(const ta_definition *definition);
  * <foreach>) place them all, with no recursion (ADR 0060).
  */
 ta_result ta_definition_place_actions(ta_definition *definition);
+/*
+ * The layout of `spans` (ADR 0086): elements of `kind` are numbered from
+ * ta_definition_span_base(), and there are ta_definition_element_count() of
+ * them. ta_definition_export() numbers the exported spec's spans the same
+ * way.
+ */
+uint32_t ta_definition_element_count(const ta_definition *definition, ta_element_kind kind);
+uint32_t ta_definition_span_base(const ta_definition *definition, ta_element_kind kind);
+/*
+ * Registration by identity answered `definition` with `live` (ADR 0077):
+ * when `definition` knows where its elements are written, and not exactly
+ * where `live` says, `live` takes its spans, and `definition`, about to be
+ * destroyed, takes `live`'s old ones with it (ADR 0086). Allocates nothing,
+ * so it cannot fail.
+ */
+void ta_definition_take_spans(ta_definition *live, ta_definition *definition);
 bool ta_definition_is_atomic(const ta_definition *definition, ta_state_id state);
 bool ta_definition_is_descendant(const ta_definition *definition, ta_state_id state, ta_state_id ancestor);
 bool ta_event_pattern_matches(const ta_definition *definition,
