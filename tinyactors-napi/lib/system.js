@@ -1742,11 +1742,14 @@ class System {
    * macrostep runs it to its end first, so a hold never stops a macrostep a
    * send() waits for. Returns true when it is held now, false when it will
    * be once its macrostep ends. A fault while held still quarantines it.
-   * Throws `done` for a finished actor, `not-found` for one that is gone.
+   * With `anywhere`, it is held at its next pause inside a macrostep too
+   * (setBudgets() makes it pause): only for an actor no caller waits on,
+   * such as a debugger's copy in a system of its own. Throws `done` for a
+   * finished actor, `not-found` for one that is gone.
    */
-  hold(actor) {
+  hold(actor, options = {}) {
     const { slot, generation } = actorOf(this, actor);
-    return this.#native.hold(slot, generation);
+    return this.#native.hold(slot, generation, options?.anywhere === true);
   }
 
   /** Let a held actor take its mail again (ADR 0027). Idempotent. */
@@ -1757,9 +1760,10 @@ class System {
 
   /**
    * A held actor takes exactly one message, and is held again when that
-   * message's macrostep ends (ADR 0027). Returns "message", "wake" (it runs
-   * a macrostep core gave it while it was held instead) or "waiting" (its
-   * mailbox is empty, so it takes the next message that comes). Throws
+   * message's macrostep ends (ADR 0027): "message". One held inside a
+   * macrostep (hold anywhere), or woken by core while held, runs on in that
+   * macrostep instead, up to its next pause: "macrostep". With an empty
+   * mailbox it takes the next message that comes: "waiting". Throws
    * `invalid` when the actor is not held.
    */
   step(actor) {

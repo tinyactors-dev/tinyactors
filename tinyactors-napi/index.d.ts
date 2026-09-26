@@ -252,19 +252,23 @@ export interface System {
    * send() with a timeout on a held actor is withdrawn when it times out,
    * never taken later. Returns true when it is held now, false when it will
    * be once its macrostep ends. A fault while held still quarantines it.
-   * Throws `done` for a finished actor, `not-found` for one that is gone.
+   * With `anywhere`, it is held at its next pause inside a macrostep too
+   * (setBudgets() makes it pause): only for an actor no caller waits on,
+   * such as a debugger's copy in a system of its own. Throws `done` for a
+   * finished actor, `not-found` for one that is gone.
    */
-  hold(actor: ActorID): boolean;
+  hold(actor: ActorID, options?: { readonly anywhere?: boolean }): boolean;
   /** Let a held actor take its mail again (ADR 0027). */
   unhold(actor: ActorID): void;
   /**
    * A held actor takes exactly one message and is held again when that
-   * message's macrostep ends (ADR 0027): "message"; or it runs the
-   * macrostep core gave it while held instead: "wake"; or its mailbox is
-   * empty and it takes the next message that comes: "waiting". Throws
+   * message's macrostep ends (ADR 0027): "message". One held inside a
+   * macrostep (hold anywhere), or woken by core while held, runs on in that
+   * macrostep up to its next pause instead: "macrostep". With an empty
+   * mailbox it takes the next message that comes: "waiting". Throws
    * `invalid` when the actor is not held.
    */
-  step(actor: ActorID): "message" | "wake" | "waiting";
+  step(actor: ActorID): "message" | "macrostep" | "waiting";
   /**
    * Budgets for one actor (ADR 0027): it resumes with these instead of the
    * system's `resumeBudget` and `actionBudget` (0: no limit); undefined

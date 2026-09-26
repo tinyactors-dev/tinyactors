@@ -90,6 +90,28 @@ async function holding() {
   assert.equal(other.inspect().scheduling, 'held');
   slow.close();
 
+  // Held anywhere: an actor no caller waits on stops at every pause, inside
+  // a macrostep too, and a step runs it to the next one.
+  const fork = createSystem({ clock: 'manual' });
+  const copy = fork.spawn(fork.define(chart()));
+  await fork.flush();
+  fork.setBudgets(copy, { resumeBudget: 64, actionBudget: 1 });
+  assert.equal(fork.hold(copy, { anywhere: true }), true);
+  copy.post('spin');
+  assert.equal(fork.step(copy), 'message');
+  await fork.flush();
+  assert.equal(copy.inspect().scheduling, 'held');
+  assert.equal(copy.inspect().currentEvent.name, 'spin', 'held with the event taken in, before its macrostep');
+  assert.equal(copy.inspect().step.macrostep, 0);
+  assert.equal(fork.step(copy), 'macrostep');
+  await fork.flush();
+  assert.equal(copy.inspect().microstepInProgress, true, 'held inside the microstep');
+  const before = copy.inspect().position;
+  assert.equal(fork.step(copy), 'macrostep');
+  await fork.flush();
+  assert.notDeepEqual(copy.inspect().position, before, 'one unit further');
+  fork.close();
+
   const done = createSystem({ clock: 'manual', finished: 'retain' });
   const finished = done.spawn(done.define(statechart({ family: 'f', revision: 'v1' }).final('end')));
   await done.flush();

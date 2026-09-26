@@ -379,7 +379,7 @@ static void woken_while_held(void) {
     CHECK(post(system, actor, name(system, "x")) == TA_OK);
     CHECK(tna_sched_wake(&system->sched, actor) == TA_OK);
     CHECK(state(system, actor) == TNA_SCHED_HELD);
-    CHECK(step(system, actor) == TNA_STEP_WAKE);
+    CHECK(step(system, actor) == TNA_STEP_MACROSTEP);
     CHECK(state(system, actor) == TNA_SCHED_RUNNABLE);
     turn_counts counts = settle(system);
     CHECK(counts.held == 1u);
@@ -388,6 +388,85 @@ static void woken_while_held(void) {
     CHECK(tna_sched_unhold(&system->sched, actor) == TA_OK);
     settle(system);
     CHECK(strcmp(state_of(system, actor), "b") == 0);
+    finish_system(system);
+}
+
+/* Held anywhere, an actor stops where a budget paused it, inside a
+ * macrostep; a step runs it to its next pause; letting go finishes it. */
+static void held_anywhere(void) {
+    tna_system *system = make_system();
+    ta_actor_id actor = spawn(system, define_chain(system, false));
+    settle(system);
+    CHECK(tna_sched_set_budgets(&system->sched, &(tna_sched_budgets_params){
+                                                    .actor = actor,
+                                                    .budgets = &(tna_actor_budgets){ .microsteps = 64u, .actions = 1u },
+                                                }) == TA_OK);
+    CHECK(post(system, actor, name(system, "go")) == TA_OK);
+    CHECK(post(system, actor, name(system, "go")) == TA_OK); /* ignored in rest: a second message */
+    bool held = true;
+    CHECK(tna_sched_hold(&system->sched, &(tna_sched_hold_params){ .actor = actor, .anywhere = true, .held = &held }) ==
+          TA_OK);
+    CHECK(held); /* ready: held at once, before its first message */
+    CHECK(step(system, actor) == TNA_STEP_MESSAGE);
+    turn_counts counts = turn(system); /* delivered: it stands still before the macrostep begins */
+    CHECK(counts.held == 1u);
+    CHECK(state(system, actor) == TNA_SCHED_HELD);
+    ta_actor_inspection view;
+    CHECK(ta_actor_inspect(system->core, actor, &view) == TA_OK && view.macrostep_in_progress && view.step.macrostep == 0);
+    CHECK(step(system, actor) == TNA_STEP_MACROSTEP);
+    counts = turn(system); /* the first unit, then a pause */
+    CHECK(counts.held == 1u);
+    CHECK(ta_actor_inspect(system->core, actor, &view) == TA_OK && view.macrostep_in_progress && view.step.macrostep > 0);
+    counts = settle(system);
+    CHECK(counts.held == 0u); /* it stands still inside the macrostep */
+    uint32_t units = 1;
+    for (;;) {
+        CHECK(units < 20u);
+        tna_step_kind kind = step(system, actor);
+        if (kind != TNA_STEP_MACROSTEP) {
+            CHECK(kind == TNA_STEP_MESSAGE); /* the macrostep ended: the next step takes the next message */
+            break;
+        }
+        counts = settle(system);
+        CHECK(counts.held == 1u);
+        units += 1u;
+    }
+    CHECK(units >= 4u);
+    CHECK(strcmp(state_of(system, actor), "rest") == 0);
+    CHECK(tna_sched_unhold(&system->sched, actor) == TA_OK);
+    settle(system);
+    CHECK(state(system, actor) == TNA_SCHED_IDLE);
+    CHECK((tna_sched_lookup(&system->sched, actor)->flags & (TNA_SCHED_HOLD | TNA_SCHED_ANYWHERE)) == 0);
+
+    /* A runnable actor held anywhere stands still at once. */
+    ta_actor_id fresh = spawn(system, define_steps(system));
+    CHECK(state(system, fresh) == TNA_SCHED_RUNNABLE); /* its bootstrap waits */
+    CHECK(tna_sched_hold(&system->sched, &(tna_sched_hold_params){ .actor = fresh, .anywhere = true, .held = &held }) ==
+          TA_OK);
+    CHECK(held && state(system, fresh) == TNA_SCHED_HELD);
+    settle(system);
+    CHECK(strcmp(state_of(system, fresh), "") == 0); /* not bootstrapped yet */
+    CHECK(step(system, fresh) == TNA_STEP_MACROSTEP);
+    settle(system);
+    CHECK(strcmp(state_of(system, fresh), "a") == 0);
+
+    /* Abandoned while held inside a macrostep, it has nothing left to run. */
+    ta_actor_id spinner = spawn(system, define_chain(system, true));
+    settle(system);
+    CHECK(tna_sched_hold(&system->sched, &(tna_sched_hold_params){ .actor = spinner, .anywhere = true }) == TA_OK);
+    CHECK(post(system, spinner, name(system, "go")) == TA_OK);
+    CHECK(step(system, spinner) == TNA_STEP_MESSAGE);
+    turn(system); /* delivered */
+    CHECK(step(system, spinner) == TNA_STEP_MACROSTEP);
+    for (int index = 0; index < 4 && state(system, spinner) != TNA_SCHED_HELD; index += 1) {
+        turn(system); /* the system's budgets pause between microsteps */
+    }
+    CHECK(state(system, spinner) == TNA_SCHED_HELD);
+    CHECK((tna_sched_lookup(&system->sched, spinner)->flags & TNA_SCHED_UNFINISHED) != 0);
+    CHECK(ta_actor_abandon(system->core, spinner) == TA_OK);
+    CHECK(tna_hook_actor_abandoned(system, spinner) == TA_OK);
+    CHECK((tna_sched_lookup(&system->sched, spinner)->flags & TNA_SCHED_UNFINISHED) == 0);
+    CHECK(step(system, spinner) == TNA_STEP_WAITING);
     finish_system(system);
 }
 
@@ -599,6 +678,7 @@ int main(void) {
     withdrawn_while_held();
     fault_while_held();
     woken_while_held();
+    held_anywhere();
     budgets_for_one_actor();
     operator_transitions();
     abandoned_macrostep();

@@ -55,7 +55,11 @@
  * inside a macrostep keeps running and becomes HELD when the macrostep ends,
  * so a hold never stops a macrostep a send() waits for. A fault while held
  * still quarantines and reports; the flag stays, so the actor is held again
- * once it is released and its macrostep ends.
+ * once it is released and its macrostep ends. A hold `anywhere` also stops
+ * the actor inside a macrostep: at once when it is runnable, where a budget
+ * pauses it, and after a message is delivered, before its macrostep begins.
+ * That is for an actor no caller waits on, such as a debugger's copy in a
+ * system of its own.
  *
  * Operator transitions (ADR 0027, core ADR 0082): a message may carry one. It
  * queues behind the mail before it, like any message, and reaches
@@ -91,8 +95,9 @@ enum {
      * no microstep limit until its macrostep ends */
     TNA_SCHED_UNLIMITED = 1u << 2,
     TNA_SCHED_HOLD = 1u << 3,     /* a debugger holds it: each macrostep's end makes it HELD (ADR 0027) */
-    TNA_SCHED_WOKEN = 1u << 4,    /* HELD, and core gave it a macrostep to run (tna_sched_wake) */
-    TNA_SCHED_OWN_BUDGETS = 1u << 5 /* resumes with the budgets tna_sched_set_budgets() gave it (ADR 0027) */
+    TNA_SCHED_UNFINISHED = 1u << 4, /* HELD with a macrostep to run: core woke it, or a hold anywhere paused it */
+    TNA_SCHED_OWN_BUDGETS = 1u << 5, /* resumes with the budgets tna_sched_set_budgets() gave it (ADR 0027) */
+    TNA_SCHED_ANYWHERE = 1u << 6  /* held at any pause, inside a macrostep too (a fork's copy, ADR 0027) */
 };
 
 typedef struct {
@@ -424,12 +429,15 @@ ta_result tna_sched_release(tna_sched *sched, ta_actor_id actor);
  * Holding (ADR 0027). tna_sched_hold() makes the actor stand still between
  * macrosteps: an idle or ready actor is HELD at once (TA_OK, `*held` true);
  * one inside a macrostep, or quarantined, is HELD when its macrostep ends
- * (`*held` false). TA_ERR_DONE for a finished actor, TA_ERR_NOT_FOUND for
- * one the table does not know.
+ * (`*held` false). With `anywhere`, a runnable actor is HELD at once too,
+ * and later at every pause and after every delivery.
+ * TA_ERR_DONE for a finished actor, TA_ERR_NOT_FOUND for one the table does
+ * not know.
  */
 typedef struct {
     ta_actor_id actor;
-    bool *held; /* may be NULL */
+    bool anywhere; /* inside a macrostep too */
+    bool *held;    /* may be NULL */
 } tna_sched_hold_params;
 ta_result tna_sched_hold(tna_sched *sched, const tna_sched_hold_params *params);
 /*
@@ -441,16 +449,18 @@ ta_result tna_sched_unhold(tna_sched *sched, ta_actor_id actor);
 
 typedef enum {
     TNA_STEP_MESSAGE, /* it takes the head of its mailbox now */
-    TNA_STEP_WAKE,    /* it runs the macrostep core gave it while held */
+    TNA_STEP_MACROSTEP, /* it runs on in the macrostep it stopped in, or one core gave it while held */
     TNA_STEP_WAITING  /* its mailbox is empty: it takes the next message that comes */
 } tna_step_kind;
 
 /*
  * Delivers exactly one held message: a HELD actor runs one macrostep, for
- * the head of its mailbox (or the macrostep core gave it while held), and is
- * HELD again when that macrostep ends. With an empty mailbox it waits for
- * the next message. TA_ERR_INVALID when the actor is not HELD; TA_ERR_NOMEM
- * (still held) when it cannot join its queue.
+ * the head of its mailbox, and is HELD again when that macrostep ends. One
+ * with a macrostep to run (held anywhere inside it, or woken by core while
+ * held) runs that instead, up to its next pause when held anywhere. With an
+ * empty mailbox it waits for the next message. TA_ERR_INVALID when the
+ * actor is not HELD; TA_ERR_NOMEM (still held) when it cannot join its
+ * queue.
  */
 typedef struct {
     ta_actor_id actor;
@@ -479,8 +489,9 @@ ta_result tna_sched_set_budgets(tna_sched *sched, const tna_sched_budgets_params
  * An operator abandoned the actor's macrostep (core ADR 0082): the send()
  * that follows it settles as ABANDONED, and a runnable actor stands between
  * macrosteps again (ready, idle, or HELD when it is held). Its entry in the
- * runnable queue is skipped when popped. A quarantined actor stays
- * quarantined. TA_ERR_NOT_FOUND for an actor the table does not know.
+ * runnable queue is skipped when popped. A held one has no macrostep to run
+ * any more; a quarantined one stays quarantined. TA_ERR_NOT_FOUND for an
+ * actor the table does not know.
  */
 ta_result tna_sched_abandoned(tna_sched *sched, ta_actor_id actor);
 

@@ -544,7 +544,7 @@ ta_result tna_sched_wake(tna_sched *sched, ta_actor_id actor) {
         return TA_ERR_NOT_FOUND;
     }
     if (entry->state == TNA_SCHED_HELD) {
-        entry->flags |= TNA_SCHED_WOKEN; /* it runs once it is let go or stepped */
+        entry->flags |= TNA_SCHED_UNFINISHED; /* it runs once it is let go or stepped */
         return TA_OK;
     }
     if (entry->state != TNA_SCHED_IDLE && entry->state != TNA_SCHED_READY) {
@@ -588,10 +588,18 @@ ta_result tna_sched_hold(tna_sched *sched, const tna_sched_hold_params *params) 
         return TA_ERR_DONE;
     }
     entry->flags |= TNA_SCHED_HOLD;
+    if (params->anywhere) {
+        entry->flags |= TNA_SCHED_ANYWHERE;
+    }
     /* Between macrosteps it stands still at once; a ready actor's entry in
-     * the ready queue is skipped once it is HELD. */
+     * the ready queue is skipped once it is HELD. Held anywhere, a runnable
+     * actor stands still at once too, before its next unit, and its entry
+     * in the runnable queue is skipped. */
     if (entry->state == TNA_SCHED_IDLE || entry->state == TNA_SCHED_READY) {
         entry->state = TNA_SCHED_HELD;
+    } else if (params->anywhere && entry->state == TNA_SCHED_RUNNABLE) {
+        entry->state = TNA_SCHED_HELD;
+        entry->flags |= TNA_SCHED_UNFINISHED;
     }
     if (params->held != NULL) {
         *params->held = entry->state == TNA_SCHED_HELD;
@@ -599,16 +607,16 @@ ta_result tna_sched_hold(tna_sched *sched, const tna_sched_hold_params *params) 
     return TA_OK;
 }
 
-/* A HELD actor goes back into scheduling: runnable when core woke it, ready
- * with mail, idle otherwise. The HOLD flag is the caller's. */
+/* A HELD actor goes back into scheduling: runnable when it has a macrostep
+ * to run, ready with mail, idle otherwise. The HOLD flag is the caller's. */
 static ta_result tna_sched_resume_held(tna_sched *sched, tna_sched_entry *entry, ta_actor_id actor, tna_step_kind *kind) {
-    if ((entry->flags & TNA_SCHED_WOKEN) != 0) {
+    if ((entry->flags & TNA_SCHED_UNFINISHED) != 0) {
         if (tna_ring_push(&sched->runnable, &actor) != TA_OK) {
             return TA_ERR_NOMEM;
         }
-        entry->flags &= (uint8_t)~TNA_SCHED_WOKEN;
+        entry->flags &= (uint8_t)~TNA_SCHED_UNFINISHED;
         entry->state = TNA_SCHED_RUNNABLE;
-        *kind = TNA_STEP_WAKE;
+        *kind = TNA_STEP_MACROSTEP;
         return TA_OK;
     }
     if (entry->first != 0) {
@@ -636,7 +644,7 @@ ta_result tna_sched_unhold(tna_sched *sched, ta_actor_id actor) {
             return result;
         }
     }
-    entry->flags &= (uint8_t)~TNA_SCHED_HOLD;
+    entry->flags &= (uint8_t)~(TNA_SCHED_HOLD | TNA_SCHED_ANYWHERE);
     return TA_OK;
 }
 
@@ -698,6 +706,10 @@ ta_result tna_sched_abandoned(tna_sched *sched, ta_actor_id actor) {
     tna_sched_complete(sched, actor, (tna_settlement){ .kind = TNA_SETTLE_ABANDONED });
     /* The macrostep a release() lifted the microstep limit for is gone. */
     entry->flags &= (uint8_t)~TNA_SCHED_UNLIMITED;
+    if (entry->state == TNA_SCHED_HELD) {
+        entry->flags &= (uint8_t)~TNA_SCHED_UNFINISHED; /* its macrostep is gone */
+        return TA_OK;
+    }
     if (entry->state != TNA_SCHED_RUNNABLE) {
         return TA_OK; /* quarantined (a runaway's release() then finds it stable), or core abandoned an event the addon never delivered */
     }
@@ -1002,6 +1014,13 @@ static void tna_sched_resume_one(tna_sched *sched, const tna_turn_params *params
     }
     switch (status) {
     case TA_RUN_PAUSED:
+        if ((entry->flags & TNA_SCHED_ANYWHERE) != 0) {
+            /* Held anywhere: it stands still where the budget paused it. */
+            entry->state = TNA_SCHED_HELD;
+            entry->flags |= TNA_SCHED_UNFINISHED;
+            tna_sched_record(sched, params, (tna_turn_record){ .kind = TNA_RECORD_HELD, .actor = actor });
+            return;
+        }
         tna_sched_requeue(sched, params, &sched->runnable, actor);
         return;
     case TA_RUN_DONE:
@@ -1111,6 +1130,14 @@ static void tna_sched_deliver_one(tna_sched *sched, const tna_turn_params *param
         }
         tna_envelope_give(sched, head);
         sched->delivered += 1u;
+        if ((entry->flags & TNA_SCHED_ANYWHERE) != 0) {
+            /* Held anywhere: it stands still with the event taken in, before
+             * its macrostep begins. */
+            entry->state = TNA_SCHED_HELD;
+            entry->flags |= TNA_SCHED_UNFINISHED;
+            tna_sched_record(sched, params, (tna_turn_record){ .kind = TNA_RECORD_HELD, .actor = actor });
+            return;
+        }
         entry->state = TNA_SCHED_RUNNABLE;
         tna_sched_requeue(sched, params, &sched->runnable, actor);
         return;

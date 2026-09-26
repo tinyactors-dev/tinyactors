@@ -429,14 +429,14 @@ static bool tna_actor_arguments(napi_env env, const napi_value *argv, size_t arg
 }
 
 /*
- * hold(slot, generation): holds the actor between macrosteps (ADR 0027).
- * Returns true when it is held now, false when it will be once its macrostep
- * ends. Throws `not-found` for an actor the scheduler does not know, `done`
- * for a finished one.
+ * hold(slot, generation, anywhere?): holds the actor between macrosteps
+ * (ADR 0027), or, with `anywhere`, at its next pause inside one too. Returns
+ * true when it is held now, false when it will be later. Throws `not-found`
+ * for an actor the scheduler does not know, `done` for a finished one.
  */
 static napi_value tna_hold_method(napi_env env, napi_callback_info info) {
-    size_t argc = 2;
-    napi_value argv[2] = { NULL, NULL };
+    size_t argc = 3;
+    napi_value argv[3] = { NULL, NULL, NULL };
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
         return NULL;
     }
@@ -446,7 +446,12 @@ static napi_value tna_hold_method(napi_env env, napi_callback_info info) {
         return NULL;
     }
     bool held = false;
-    ta_result result = tna_sched_hold(&wrapper->system->sched, &(tna_sched_hold_params){ .actor = actor, .held = &held });
+    bool anywhere = false;
+    if (argc >= 3 && argv[2] != NULL) {
+        (void)napi_get_value_bool(env, argv[2], &anywhere);
+    }
+    ta_result result = tna_sched_hold(&wrapper->system->sched,
+                                      &(tna_sched_hold_params){ .actor = actor, .anywhere = anywhere, .held = &held });
     if (result != TA_OK) {
         return tna_throw(env, tna_result_code(result),
                          result == TA_ERR_DONE ? "hold: the actor has finished" : "hold: the actor is not known");
@@ -480,9 +485,10 @@ static napi_value tna_unhold_method(napi_env env, napi_callback_info info) {
 
 /*
  * step(slot, generation): a held actor takes exactly one message and is held
- * again when its macrostep ends (ADR 0027). Returns "message", "wake" (it
- * runs the macrostep core gave it while held) or "waiting" (its mailbox is
- * empty). Throws `invalid` when the actor is not held.
+ * again when its macrostep ends (ADR 0027). Returns "message", "macrostep"
+ * (it runs on in the macrostep it was held in, or one core gave it while
+ * held) or "waiting" (its mailbox is empty). Throws `invalid` when the actor
+ * is not held.
  */
 static napi_value tna_step_method(napi_env env, napi_callback_info info) {
     size_t argc = 2;
@@ -502,7 +508,7 @@ static napi_value tna_step_method(napi_env env, napi_callback_info info) {
                          result == TA_ERR_INVALID ? "step: the actor is not held" : "step: the actor cannot be stepped");
     }
     tna_system_want_turn(wrapper->system);
-    static const char *const kinds[] = { [TNA_STEP_MESSAGE] = "message", [TNA_STEP_WAKE] = "wake",
+    static const char *const kinds[] = { [TNA_STEP_MESSAGE] = "message", [TNA_STEP_MACROSTEP] = "macrostep",
                                          [TNA_STEP_WAITING] = "waiting" };
     napi_value out = NULL;
     napi_create_string_utf8(env, kinds[kind], NAPI_AUTO_LENGTH, &out);
