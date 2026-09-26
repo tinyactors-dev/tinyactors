@@ -3,7 +3,16 @@
 // Bench (not part of `mise run test`): what tracing costs (core ADR 0067,
 // napi ADRs 0016 and 0017). Runs on Node and Bun.
 //
-//   node test/bench/tracing.js [population] [--check] [--variants=a,b,...]
+//   node --expose-gc test/bench/tracing.js [population] [--check]
+//        [--variants=a,b,...] [--json=<file>]
+//
+// `mise run bench` and `mise run bench-compare` run it and key the results
+// by machine signature (bench/results/README.md). --json writes one record
+// per variant: throughput and memory together. Memory is measured after
+// the actors are spawned and a GC ran (--expose-gc on Node, Bun.gc on Bun):
+// core and native bytes per actor by category, RSS and JavaScript heap per
+// actor (deltas from before the system was created), allocator calls per
+// delivered event over the timed rounds, and the process's peak RSS.
 //
 // --check fails (exit 1) when a budget of napi ADR 0017 section 2 is
 // exceeded: a traceparent on an untraced system, and a sampled-out
@@ -45,6 +54,7 @@ const args = process.argv.slice(2);
 const check = args.includes('--check');
 const population = Number(args.find((arg) => !arg.startsWith('--')) ?? 100000);
 const WATCH = Number(process.env.WATCH ?? 1000);
+const jsonPath = args.find((arg) => arg.startsWith('--json='))?.slice('--json='.length);
 const only = args.find((arg) => arg.startsWith('--variants='))?.slice('--variants='.length).split(',');
 const BUDGET_NS = 40;
 const SAMPLED = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
@@ -58,7 +68,16 @@ function chart() {
     .state('idle', (s) => { s.on('ping', (t) => t.assign('count', function () { return this.count + 1; })); });
 }
 
+const collect = globalThis.gc ?? (typeof Bun !== 'undefined' ? () => Bun.gc(true) : undefined);
+
+function settle() {
+  collect?.();
+  const { rss, heapUsed } = process.memoryUsage();
+  return { rss, heapUsed };
+}
+
 async function measure({ install, traceparent, watch }) {
+  const before = settle();
   const system = createSystem();
   install?.(system);
   const definition = system.define(chart());
@@ -66,7 +85,20 @@ async function measure({ install, traceparent, watch }) {
   for (let at = 0; at < population; at += 1) actors.push(system.spawn(definition));
   await system.flush();
   watch?.(system, actors);
-  const idle = system.stats().memory.core.bytesInUse / population;
+  const after = settle();
+  const stats = system.stats();
+  const idle = stats.memory.core.bytesInUse / population;
+  const native = {};
+  for (const [category, counters] of Object.entries(stats.memory)) {
+    native[category] = counters.bytesInUse / population;
+  }
+  const memory = {
+    coreBytesPerActor: idle,
+    nativeBytesPerActor: native,
+    rssBytesPerActor: (after.rss - before.rss) / population,
+    heapBytesPerActor: (after.heapUsed - before.heapUsed) / population,
+  };
+  const callsBefore = stats.allocatorCalls;
   const rates = [];
   for (let round = 0; round < rounds; round += 1) {
     const start = process.hrtime.bigint();
@@ -76,9 +108,11 @@ async function measure({ install, traceparent, watch }) {
     const seconds = Number(process.hrtime.bigint() - start) / 1e9;
     rates.push(population / seconds);
   }
+  memory.allocatorCallsPerEvent = (system.stats().allocatorCalls - callsBefore) / (population * rounds);
   system.close();
+  memory.peakRSSBytes = process.resourceUsage().maxRSS * 1024;
   rates.sort((a, b) => a - b);
-  return { idle, median: rates[Math.floor(rounds / 2)], best: rates.at(-1) };
+  return { idle, memory, median: rates[Math.floor(rounds / 2)], best: rates.at(-1) };
 }
 
 const variants = {
@@ -110,6 +144,7 @@ const budgeted = ['traceparent', 'sampled out'];
   console.log(`${runtime}, ${population} actors, ${rounds} rounds`);
   console.log('variant          events/s (median)   events/s (best)   ns/event   core bytes/actor');
   const ns = {};
+  const records = [];
   for (const [name, variant] of Object.entries(variants)) {
     if (check && name !== 'untraced' && !budgeted.includes(name)) {
       continue;
@@ -118,11 +153,28 @@ const budgeted = ['traceparent', 'sampled out'];
       continue;
     }
     bytesOut = 0;
-    const { idle, median, best } = await measure(variant);
-    ns[name] = 1e9 / best;
-    if (bytesOut !== 0) {
-      console.log(`  OTLP bytes per event: ${(bytesOut / (population * (rounds + 1))).toFixed(0)}`);
+    let result;
+    try {
+      result = await measure(variant);
+    } catch (error) {
+      // An older build (bench-compare) may lack what a variant uses.
+      records.push({ variant: name, population, rounds, error: String(error?.message ?? error) });
+      console.log(`${name.padEnd(16)} failed: ${error?.message ?? error}`);
+      continue;
     }
+    const { idle, memory, median, best } = result;
+    ns[name] = 1e9 / best;
+    const otlpBytesPerEvent = bytesOut === 0 ? null : bytesOut / (population * (rounds + 1));
+    if (otlpBytesPerEvent !== null) {
+      console.log(`  OTLP bytes per event: ${otlpBytesPerEvent.toFixed(0)}`);
+    }
+    records.push({
+      variant: name,
+      population,
+      rounds,
+      throughput: { eventsPerSecondMedian: median, eventsPerSecondBest: best, nsPerEvent: 1e9 / best },
+      memory: { ...memory, otlpBytesPerEvent },
+    });
     console.log(`${name.padEnd(16)} ${(median / 1e6).toFixed(2).padStart(10)} M ${(best / 1e6).toFixed(2).padStart(15)} M ` +
                 `${ns[name].toFixed(0).padStart(10)} ${idle.toFixed(0).padStart(18)}`);
   }
@@ -136,6 +188,9 @@ const budgeted = ['traceparent', 'sampled out'];
   }
   if (check && over) {
     process.exitCode = 1;
+  }
+  if (jsonPath !== undefined) {
+    require('node:fs').writeFileSync(jsonPath, `${JSON.stringify({ runtime, records })}\n`);
   }
 })().catch((error) => {
   console.error(error);
