@@ -135,9 +135,7 @@ ta_trace_parent ta_actor_macrostep_parent(const ta_actor *actor) {
     return actor->event_block == NULL ? (ta_trace_parent){0} : actor->event_block->slots.trace;
 }
 
-/* The key of the step running now; outside a macrostep, the session alone. */
-static ta_step_key ta_trace_key(const ta_interpreter *it) {
-    const ta_actor *actor = it->actor;
+ta_step_key ta_actor_step(const ta_actor *actor) {
     if (!actor->trace_begun) {
         return (ta_step_key){ .session = actor->session_id };
     }
@@ -145,14 +143,20 @@ static ta_step_key ta_trace_key(const ta_interpreter *it) {
                           .microstep = actor->trace_microstep };
 }
 
+/* The key of the step running now; outside a macrostep, the session alone. */
+static ta_step_key ta_trace_key(const ta_interpreter *it) {
+    return ta_actor_step(it->actor);
+}
+
 ta_trace_parent ta_interpreter_trace_here(const ta_interpreter *it) {
     return (ta_trace_parent){ .context = it->trace_context, .cause = ta_trace_key(it) };
 }
 
-/* The iteration of the innermost <foreach> whose body runs, from 0. */
-static uint32_t ta_trace_iteration(const ta_interpreter *it) {
-    for (uint32_t index = it->exec_count; index > 0; index -= 1u) {
-        const ta_exec_frame *frame = &it->exec_frames[index - 1u];
+/* The iteration, from 0, whose body the innermost <foreach> among the
+ * first `count` frames runs. */
+static uint32_t ta_frames_iteration(const ta_exec_frame *frames, uint32_t count) {
+    for (uint32_t index = count; index > 0; index -= 1u) {
+        const ta_exec_frame *frame = &frames[index - 1u];
         if (frame->kind == TA_EXEC_FRAME_FOREACH) {
             return frame->iteration == 0 ? 0 : frame->iteration - 1u;
         }
@@ -165,31 +169,39 @@ static ta_trace_position ta_trace_nowhere(void) {
                                 .action = TA_ACTION_NONE };
 }
 
-/* Where the interpreter stands, from the phase and position it keeps. */
-static ta_trace_position ta_trace_position_now(const ta_interpreter *it) {
+/* What a run keeps of where it stands: in scratch while it runs, in the
+ * actor's continuation once it stopped. */
+typedef struct {
+    ta_micro_position at;
+    const ta_transition_id *enabled;
+    uint32_t enabled_count;
+    const ta_exec_frame *frames;
+    uint32_t frame_count;
+} ta_run_view;
+
+/* The phase of a position, with its state and transition; no action. */
+static ta_trace_position ta_phase_position(const ta_definition *definition, const ta_run_view *view) {
     ta_trace_position position = ta_trace_nowhere();
-    position.action = it->trace_action;
-    position.iteration = ta_trace_iteration(it);
-    switch (it->at.phase) {
+    switch (view->at.phase) {
         case TA_PHASE_FINISH:
-            if (it->at.stage != TA_FINISH_EXIT) {
+            if (view->at.stage != TA_FINISH_EXIT) {
                 break;
             }
             /* fall through: exiting every state, highest first */
         case TA_PHASE_EXIT:
             position.at = TA_TRACE_AT_EXIT;
-            position.state = it->at.state == 0 ? TA_STATE_NONE : it->at.state - 1u;
+            position.state = view->at.state == 0 ? TA_STATE_NONE : view->at.state - 1u;
             break;
         case TA_PHASE_TRANSITIONS:
             position.at = TA_TRACE_AT_TRANSITION;
-            if (it->at.state < it->enabled_count && ta_enabled_authored(it->enabled[it->at.state])) {
-                position.transition = it->enabled[it->at.state];
-                position.state = it->definition->transitions[position.transition].source;
+            if (view->at.state < view->enabled_count && ta_enabled_authored(view->enabled[view->at.state])) {
+                position.transition = view->enabled[view->at.state];
+                position.state = definition->transitions[position.transition].source;
             }
             break;
         case TA_PHASE_ENTER:
             position.at = TA_TRACE_AT_ENTER;
-            position.state = it->at.state;
+            position.state = view->at.state;
             break;
         case TA_PHASE_DATA:
         case TA_PHASE_SCRIPT:
@@ -203,12 +215,64 @@ static ta_trace_position ta_trace_position_now(const ta_interpreter *it) {
             break;
         case TA_PHASE_INVOKES:
             position.at = TA_TRACE_AT_INVOKE;
-            position.state = it->at.state;
+            position.state = view->at.state;
             break;
         case TA_PHASE_NONE:
         default:
             break;
     }
+    return position;
+}
+
+/*
+ * Where a stopped run stands (ADR 0083): its phase, and the unit of
+ * executable content it runs next. With a <foreach> on top of the frames,
+ * that unit is the loop's next iteration: `action` is the <foreach> and
+ * `iteration` the one it binds next. Otherwise it is the next action of the
+ * innermost open block, in the iteration of the innermost <foreach> whose
+ * body that block is. With no open block there is no action.
+ */
+static ta_trace_position ta_run_position(const ta_definition *definition, const ta_run_view *view) {
+    ta_trace_position position = ta_phase_position(definition, view);
+    if (view->frame_count == 0) {
+        return position;
+    }
+    const ta_exec_frame *top = &view->frames[view->frame_count - 1u];
+    if (top->kind == TA_EXEC_FRAME_FOREACH) {
+        position.action = top->cursor;
+        position.iteration = top->iteration;
+        return position;
+    }
+    if (top->cursor < top->actions.length) {
+        position.action = top->actions.offset + top->cursor;
+    }
+    position.iteration = ta_frames_iteration(view->frames, view->frame_count - 1u);
+    return position;
+}
+
+static ta_run_view ta_interpreter_view(const ta_interpreter *it) {
+    return (ta_run_view){ .at = it->at, .enabled = it->enabled, .enabled_count = it->enabled_count,
+                          .frames = it->exec_frames, .frame_count = it->exec_count };
+}
+
+ta_trace_position ta_actor_position(const ta_actor *actor) {
+    ta_continuation *saved = actor->sparse == NULL ? NULL : actor->sparse->paused;
+    if (!actor->macrostep || saved == NULL) {
+        return ta_trace_nowhere();
+    }
+    ta_run_view view = { .at = saved->at, .enabled = ta_continuation_enabled(saved),
+                         .enabled_count = saved->enabled_count, .frames = ta_continuation_frames(saved),
+                         .frame_count = saved->frame_count };
+    return ta_run_position(actor->definition, &view);
+}
+
+/* Where the interpreter stands while a unit runs: the phase, the unit
+ * running now, and the iteration its innermost <foreach> runs. */
+static ta_trace_position ta_trace_position_now(const ta_interpreter *it) {
+    ta_run_view view = ta_interpreter_view(it);
+    ta_trace_position position = ta_phase_position(it->definition, &view);
+    position.action = it->trace_action;
+    position.iteration = ta_frames_iteration(it->exec_frames, it->exec_count);
     return position;
 }
 
@@ -3776,7 +3840,8 @@ static ta_result ta_interpreter_init(ta_interpreter *it, ta_system *system, ta_a
 }
 
 /* PAUSED, RESUMED or STOPPED, for a macrostep that has begun, at the
- * position the run stands at. */
+ * position the run stands at: the one ta_actor_inspect() reports while it
+ * is stopped (ADR 0083). */
 static void ta_trace_control(ta_interpreter *it, ta_trace_kind kind) {
     if (kind == TA_TRACE_PAUSED) {
         TA_COUNT(it->system, it->actor->definition, runs_paused);
@@ -3785,6 +3850,8 @@ static void ta_trace_control(ta_interpreter *it, ta_trace_kind kind) {
     }
     if (it->actor->trace_begun && ta_tracing(it, kind)) {
         ta_trace_record record = ta_trace_record_now(it, kind);
+        ta_run_view view = ta_interpreter_view(it);
+        record.position = ta_run_position(it->definition, &view);
         ta_trace_emit(it, &record);
     }
 }

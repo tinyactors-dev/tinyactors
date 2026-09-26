@@ -1104,6 +1104,9 @@ typedef enum {
  * The public view of where the interpreter stands (ADR 0060, ADR 0061).
  * IDs are the definition's compiled IDs: `action` indexes its actions, and
  * `iteration` is the <foreach> iteration, from 0, of the innermost loop.
+ * Most records name the unit that wrote them. PAUSED, RESUMED and STOPPED
+ * name where the run stands, the unit it runs next, as ta_actor_inspect()
+ * reports it (ADR 0083).
  */
 typedef struct {
     ta_trace_at at;
@@ -2702,6 +2705,20 @@ typedef struct {
      * (ADR 0061). The active states are then those after the last completed
      * microstep. */
     bool microstep_in_progress;
+    /*
+     * Where the paused macrostep stands (ADR 0083): the key and position of
+     * the PAUSED or STOPPED record its last run wrote, whether or not a sink
+     * wanted it. Between microsteps `position.at` is TA_TRACE_AT_NONE and
+     * `step.microstep` counts the microsteps done. Inside a microstep,
+     * `position` names the phase and state (and, in transition content, the
+     * transition), and `action` the unit it runs next: the next action of
+     * the innermost open block, in `iteration` of the innermost <foreach>
+     * whose body that is, or a <foreach> itself when its next iteration is
+     * next, with `iteration` the one it binds. Outside a macrostep, `step`
+     * is (session_id, 0, 0) and `position` is at NONE with every ID NONE.
+     */
+    ta_step_key step;
+    ta_trace_position position;
     /* The external event of the paused macrostep, or null. */
     TA_IN TA_OPTIONAL const ta_event *current_event;
     TA_COUNTED_BY(internal_count) TA_OPTIONAL const ta_queued_event *internal_events;

@@ -276,6 +276,28 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
     assert_equal ['x1', 'x2 1', 'one', 'x2 2', 'two', 'x3', 't 1', 't 1.1', 't 1.2', 't 2', 't 2.1', 't 2.2',
                   't 3', 't 3.1', 't 3.2', 'p 1', 'p 2', 'b1', 'b2 1', 'b2 2', 'tc', 'c1'], nested.data('.log')
   end
+
+  # Catches: a paused actor whose inspection does not say where it stands,
+  # or says something other than the PAUSED record its run wrote; a
+  # debugger that attaches to it then has no position (ADR 0083).
+  scenario 'inspection reports where a paused actor stands, as its PAUSED record did' do
+    recording_trace(kinds: %i[paused])
+    nested = spawn :nested_content
+    assert_equal 'ok', nested.post('go')
+    places = []
+    while nested.resume(budget: 1000, action_budget: 1) == 'paused'
+      record = trace_records.reverse.find { |entry| entry[:kind] == 'paused' }
+      inspection = nested.inspect_actor
+      assert_equal record[:key], inspection[:step]
+      assert_equal record[:position], inspection[:position]
+      places << inspection.dig(:position, :at)
+    end
+    assert_equal %w[exit transition enter], places.uniq, 'it paused in every phase that runs content'
+    idle = nested.inspect_actor
+    assert_equal 'none', idle.dig(:position, :at), 'an idle actor stands nowhere'
+    assert_equal 0, Integer(idle.dig(:step, :macrostep))
+  end
+
   # Catches: a cancelled child paused inside a microstep that exits the
   # configuration from before that microstep (running `idle exit` a second
   # time and never exiting the states it had entered), or that leaks its

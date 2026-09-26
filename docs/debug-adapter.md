@@ -165,7 +165,7 @@ The `repl` context of `evaluate`.
 
 | Mark | What | Where | Status |
 |---|---|---|---|
-| C1 | The paused position in `ta_actor_inspection` | tinyactors-core | ☐ |
+| C1 | The paused position in `ta_actor_inspection` | tinyactors-core [ADR 0083](../tinyactors-core/docs/adr/0083-inspection-reports-where-a-paused-actor-stands.md) | ☑ |
 | C2 | Operator transitions and abandoning a macrostep | tinyactors-core [ADR 0082](../tinyactors-core/docs/adr/0082-operator-transitions-and-abandoning-a-macrostep.md) | ☑ |
 | C3 | Withdrawing one delayed send | tinyactors-core ADR | ☐ |
 | C4 | Images restore into another system | tinyactors-core ADR, napi | ☐ |

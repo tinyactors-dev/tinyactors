@@ -59,3 +59,11 @@ is allowed (ADR 0082).
 The implementation never reports a half-completed microstep as
 `TA_RUN_STABLE`, and the configuration it reports while paused is the one
 after the last completed microstep.
+
+Where a stopped run stands is read from the continuation (ADR 0083).
+`ta_run_position()` maps a `ta_run_view` (the position, the enabled
+transitions and the frames) to a `ta_trace_position`: the phase and state,
+and the unit the run does next, from the top frame. The interpreter builds
+the view from scratch for `PAUSED`, `RESUMED` and `STOPPED` records, and
+`ta_actor_position()` builds it from the continuation for
+`ta_actor_inspect()`, so both report the same place.
