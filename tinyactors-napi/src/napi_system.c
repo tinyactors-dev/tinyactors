@@ -130,7 +130,7 @@ static void tna_close(tna_napi_system *wrapper, bool env_usable) {
     /* Closing from a finalizer: exit handlers core runs cannot call JavaScript. */
     wrapper->dm.js_usable = env_usable;
     tna_system_close(wrapper->system);
-    tna_children_close(wrapper, env_usable && !wrapper->env_data->torn_down);
+    tna_children_close(wrapper);
     wrapper->system->unreachable_data = NULL;
     tna_js_datamodel_close(&wrapper->dm, !wrapper->env_data->torn_down);
     tna_unlist(wrapper);
@@ -163,6 +163,24 @@ tna_napi_system *tna_napi_system_unwrap(napi_env env, napi_value value) {
     }
     return wrapped;
 }
+
+/*
+ * Core tells of each definition it frees (core ADR 0079), during a turn, a
+ * cascade or its teardown: what the addon keeps per definition goes then,
+ * not at a later sweep.
+ */
+static void tna_definition_notify(void *self, const ta_definition_event *event) {
+    if (event->kind != TA_DEFINITION_EVENT_FREED) {
+        return;
+    }
+    tna_napi_system *wrapper = self;
+    tna_children_forget(wrapper, event->definition);
+    if (wrapper->system->tracing) {
+        tna_otlp_forget_definition(&wrapper->system->otlp, event->definition);
+    }
+}
+
+static const ta_definition_sink_vtable tna_definition_sink_vtable = { .notify = tna_definition_notify };
 
 /* Core is gone: every value it held has been released (ADR 0011 point 7). */
 static void tna_after_core(void *context) {
@@ -239,6 +257,8 @@ static napi_value tna_construct(napi_env env, napi_callback_info info) {
         return NULL;
     }
     tna_services_init(wrapper);
+    (void)ta_system_set_definition_sink(wrapper->system->core,
+                                        (ta_definition_sink){ .self = wrapper, .v = &tna_definition_sink_vtable });
     if (napi_wrap(env, self, wrapper, tna_finalize, NULL, NULL) != napi_ok) {
         tna_pump_close(wrapper, true);
         tna_system_free(wrapper->system);

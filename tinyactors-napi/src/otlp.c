@@ -273,7 +273,7 @@ static bool tna_kv_int_array(tna_otlp_buf *buf, uint32_t field, ta_str key, cons
  */
 
 /* Event names are system-wide: they are cached under definition 0, which
- * the sweep keeps, since core never frees an interned event name. */
+ * core never frees, since it never frees an interned event name. */
 enum { NAME_STATE = 0u, NAME_TRANSITION = 1u, NAME_ACTION = 2u, NAME_EVENT = 3u };
 #define NAME_TAG(kind, id) (((uint32_t)(kind) << 30) | ((uint32_t)(id) & 0x3fffffffu))
 
@@ -327,23 +327,16 @@ static ta_str tna_name_text(const tna_otlp *otlp, const tna_otlp_name *slot) {
 }
 
 /*
- * Drops the names of definitions core has freed (napi ADR 0017 section 5).
- * Keys hold the definition's generation, so a stale entry never matches;
- * this only reclaims its room. The table is rebuilt in place, and the
- * labels still used move to the front of `names`.
+ * Rebuilds the table in place after entries were dropped: the labels still
+ * used move to the front of `names`, and every entry is reinserted, so no
+ * probe run has a hole in it.
  */
-static void tna_names_sweep(tna_otlp *otlp) {
+static void tna_names_rebuild(tna_otlp *otlp) {
     uint32_t capacity = otlp->name_capacity;
     size_t text = 0;
     for (uint32_t at = 0; at < capacity; at += 1u) {
-        tna_otlp_name *slot = &otlp->name_slots[at];
-        ta_definition_inspection view;
-        if (slot->used && slot->definition != 0 &&
-            ta_definition_inspect(otlp->config.core, slot->definition, &view) != TA_OK) {
-            slot->used = false;
-            otlp->name_count -= 1u;
-        } else if (slot->used) {
-            text += slot->len;
+        if (otlp->name_slots[at].used) {
+            text += otlp->name_slots[at].len;
         }
     }
     /* The labels still used, copied to a fresh buffer; without memory for
@@ -373,12 +366,24 @@ static void tna_names_sweep(tna_otlp *otlp) {
     }
 }
 
+void tna_otlp_forget_definition(tna_otlp *otlp, ta_definition_id definition) {
+    uint32_t dropped = 0;
+    for (uint32_t at = 0; at < otlp->name_capacity; at += 1u) {
+        tna_otlp_name *slot = &otlp->name_slots[at];
+        if (slot->used && slot->definition == definition) {
+            slot->used = false;
+            dropped += 1u;
+        }
+    }
+    if (dropped != 0) {
+        otlp->name_count -= dropped;
+        tna_names_rebuild(otlp);
+    }
+}
+
 /* Caches `otlp->label` under (definition, tag); the label as cached, or empty. */
 static ta_str tna_name_keep(tna_otlp *otlp, uint64_t definition, uint32_t tag) {
     ta_str label = { (const char *)otlp->label.data, (uint32_t)otlp->label.len };
-    if ((otlp->name_count + 1u) * 10u > otlp->name_capacity * 7u && otlp->name_capacity != 0) {
-        tna_names_sweep(otlp);
-    }
     if ((otlp->name_count + 1u) * 10u > otlp->name_capacity * 7u && !tna_names_grow(otlp)) {
         return label;
     }

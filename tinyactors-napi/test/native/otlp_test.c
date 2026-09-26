@@ -472,7 +472,42 @@ static void logs(void) {
     stop(&f);
 }
 
+/*
+ * A definition core frees takes its cached names with it (core ADR 0079):
+ * the event names, cached under definition 0, stay; the next record naming
+ * the definition's states caches them again.
+ */
+static void forget_definition(void) {
+    fixture f;
+    start(&f, true);
+    CHECK(ta_actor_spawn(f.core, &(ta_actor_spawn_params){ .definition = f.definition, .out = &f.actor }) == TA_OK);
+    CHECK(resume(&f, 64) == TA_RUN_STABLE);
+    (void)take(&f.otlp);
+    uint32_t cached = f.otlp.name_count;
+    uint32_t mine = 0;
+    for (uint32_t at = 0; at < f.otlp.name_capacity; at += 1u) {
+        mine += f.otlp.name_slots[at].used && f.otlp.name_slots[at].definition == f.definition ? 1u : 0u;
+    }
+    CHECK(mine != 0);
+    tna_otlp_forget_definition(&f.otlp, f.definition);
+    CHECK(f.otlp.name_count == cached - mine);
+    for (uint32_t at = 0; at < f.otlp.name_capacity; at += 1u) {
+        CHECK(!(f.otlp.name_slots[at].used && f.otlp.name_slots[at].definition == f.definition));
+    }
+    /* Forgetting what is not cached changes nothing. */
+    tna_otlp_forget_definition(&f.otlp, f.definition);
+    CHECK(f.otlp.name_count == cached - mine);
+    /* The encoder still names the definition's states: they are cached again. */
+    CHECK(ta_actor_destroy(f.core, f.actor) == TA_OK);
+    CHECK(ta_actor_spawn(f.core, &(ta_actor_spawn_params){ .definition = f.definition, .out = &f.actor }) == TA_OK);
+    CHECK(resume(&f, 64) == TA_RUN_STABLE);
+    CHECK(take(&f.otlp).len != 0);
+    CHECK(f.otlp.name_count > cached - mine);
+    stop(&f);
+}
+
 int main(void) {
+    forget_definition();
     logs();
     many_open();
     open_across_turns();

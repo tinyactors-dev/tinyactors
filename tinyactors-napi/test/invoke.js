@@ -379,7 +379,74 @@ async function refusals() {
   system.close();
 }
 
+function collectGarbage() {
+  if (typeof Bun !== 'undefined') {
+    Bun.gc(true);
+    return;
+  }
+  require('node:v8').setFlagsFromString('--expose-gc');
+  require('node:vm').runInNewContext('gc')();
+}
+
+// The definition keeps define()'s resolve(src) exactly as long as core keeps
+// the definition (core ADR 0079): a retired definition a running actor still
+// uses resolves srcexpr at invoke time, and the function is let go the
+// moment core frees the definition, not at a later sweep.
+async function resolverLifetime() {
+  const { system, logs } = setup();
+  const child = `<scxml ${NS} name="late" initial="l0">
+    <state id="l0"><onentry><send event="arrived" target="#_parent"/></onentry></state>
+  </scxml>`;
+  let resolved = 0;
+  // Made in a function of its own, so only the definition holds it.
+  const define = () => {
+    const resolve = (src) => {
+      resolved += 1;
+      return src === 'file:late.scxml' ? child : undefined;
+    };
+    const definition = system.define(`<scxml ${NS} name="lazy" initial="wait">
+      <state id="wait"><transition event="go" target="run"/></state>
+      <state id="run">
+        <invoke type="scxml" srcexpr="'file:' + 'late.scxml'"/>
+        <transition event="arrived"><log label="arrived"/></transition>
+      </state>
+    </scxml>`, { format: 'scxml', resolve });
+    return { definition, gone: new WeakRef(resolve) };
+  };
+  const { definition, gone } = define();
+  const actor = system.spawn(definition);
+  await system.flush();
+  definition.retire();
+  for (let round = 0; round < 3; round += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+    collectGarbage();
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.notEqual(gone.deref(), undefined, 'a definition its actor still uses keeps its resolve');
+
+  system.post(actor, 'go');
+  await system.flush();
+  assert.deepEqual(logs, ['arrived']);
+  assert.equal(resolved, 1, 'srcexpr was resolved at invoke time, after retire()');
+
+  system.destroy(actor);
+  await system.flush();
+  assert.equal(definition.retired, true);
+  // deref() keeps its target alive to the end of the job that called it,
+  // so every check is followed by a new job before the next collection.
+  let collected = false;
+  for (let round = 0; round < 10 && !collected; round += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+    collectGarbage();
+    await new Promise((resolve) => setImmediate(resolve));
+    collected = gone.deref() === undefined;
+  }
+  assert.equal(collected, true, 'freeing the definition let its resolve go');
+  system.close();
+}
+
 (async () => {
+  await resolverLifetime();
   await exchange();
   await cancelOnExit();
   await doneDataAndFinalize();

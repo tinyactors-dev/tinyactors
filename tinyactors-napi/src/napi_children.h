@@ -29,8 +29,7 @@
 typedef struct tna_napi_system tna_napi_system;
 
 typedef struct {
-    tna_vec resolvers;       /* tna_child_resolver: define()'s resolve, per definition */
-    uint32_t resolvers_mark; /* sweep the resolvers of freed definitions once there are this many */
+    tna_vec resolvers; /* tna_child_resolver: define()'s resolve, per definition, until core frees it */
     /* The message of the last refused child chart, for the invoke's fault. */
     char failure[1024];
 } tna_children;
@@ -38,8 +37,16 @@ typedef struct {
 void tna_children_init(tna_napi_system *wrapper);
 /* Keeps `resolve` (a function) with `definition`, for its children's src. */
 ta_result tna_children_keep_resolver(tna_napi_system *wrapper, ta_definition_id definition, napi_value resolve);
-/* Releases the resolvers (when the environment is usable). */
-void tna_children_close(tna_napi_system *wrapper, bool env_usable);
+/*
+ * Releases the resolve kept for `definition`, which core has freed (core ADR
+ * 0079): a definition defined again by identity keeps one per define().
+ */
+void tna_children_forget(tna_napi_system *wrapper, ta_definition_id definition);
+/*
+ * After core's teardown: every kept resolve was released when core told of
+ * its definition being freed.
+ */
+void tna_children_close(tna_napi_system *wrapper);
 
 /*
  * Compiles and nests the child charts of `definition` and, in turn, of

@@ -204,6 +204,9 @@ void tna_otlp_log(tna_otlp *otlp, const ta_log_record *record);
 size_t tna_otlp_logs_size(const tna_otlp *otlp);
 size_t tna_otlp_put_logs(tna_otlp *otlp, uint8_t *out, size_t size);
 
+/* Drops the names cached for a definition core has freed (core ADR 0079). */
+void tna_otlp_forget_definition(tna_otlp *otlp, ta_definition_id definition);
+
 /* Ends every open span now, marked `scxml.incomplete`, so the next put
  * carries them: the sink is going away. */
 void tna_otlp_end_all(tna_otlp *otlp);

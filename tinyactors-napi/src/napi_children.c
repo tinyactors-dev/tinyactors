@@ -13,9 +13,6 @@ typedef struct {
     napi_ref resolve;
 } tna_child_resolver;
 
-/* Sweep the kept resolvers once there are this many, then at twice what is left. */
-#define TNA_RESOLVERS_SWEEP_FROM 16u
-
 static ta_allocator tna_children_allocator(tna_napi_system *wrapper) {
     return tna_allocator_for(&wrapper->system->allocator, TNA_MEMORY_OTHER);
 }
@@ -95,33 +92,27 @@ static napi_value tna_resolver_of(tna_napi_system *wrapper, ta_definition_id def
     return NULL;
 }
 
-/*
- * Releases the resolvers of definitions core has freed. Core has no
- * "freed" hook, but a freed definition's ID is stale, so
- * inspection answers TA_ERR_NOT_FOUND for it. Runs when the list has
- * doubled since the last sweep, so its cost is spread over the growth.
- */
-static void tna_resolvers_sweep(tna_napi_system *wrapper) {
+void tna_children_forget(tna_napi_system *wrapper, ta_definition_id definition) {
+    /* In a finalizer or after the environment's cleanup hook no reference
+     * may be deleted; the environment takes them with it. */
+    bool usable = wrapper->dm.js_usable && !wrapper->env_data->torn_down;
     tna_vec *resolvers = &wrapper->children.resolvers;
     uint32_t kept = 0;
     for (uint32_t at = 0; at < resolvers->count; at += 1u) {
         tna_child_resolver *entry = tna_vec_at(resolvers, at);
-        ta_definition_inspection view;
-        if (ta_definition_inspect(wrapper->system->core, entry->definition, &view) != TA_OK) {
-            napi_delete_reference(wrapper->env, entry->resolve);
+        if (entry->definition == definition) {
+            if (usable) {
+                napi_delete_reference(wrapper->env, entry->resolve);
+            }
             continue;
         }
         *(tna_child_resolver *)tna_vec_at(resolvers, kept) = *entry;
         kept += 1u;
     }
     resolvers->count = kept;
-    wrapper->children.resolvers_mark = kept * 2u < TNA_RESOLVERS_SWEEP_FROM ? TNA_RESOLVERS_SWEEP_FROM : kept * 2u;
 }
 
 ta_result tna_children_keep_resolver(tna_napi_system *wrapper, ta_definition_id definition, napi_value resolve) {
-    if (wrapper->children.resolvers.count >= wrapper->children.resolvers_mark) {
-        tna_resolvers_sweep(wrapper);
-    }
     tna_child_resolver entry = { .definition = definition };
     if (napi_create_reference(wrapper->env, resolve, 1, &entry.resolve) != napi_ok) {
         return TA_ERR_NOMEM;
@@ -553,18 +544,13 @@ static ta_op_status tna_child_definition(void *context, const tna_child_params *
 void tna_children_init(tna_napi_system *wrapper) {
     ta_allocator allocator = tna_children_allocator(wrapper);
     tna_vec_init(&wrapper->children.resolvers, allocator, TNA_LAYOUT(tna_child_resolver));
-    wrapper->children.resolvers_mark = TNA_RESOLVERS_SWEEP_FROM;
     wrapper->children.failure[0] = '\0';
     wrapper->system->child_definition = tna_child_definition;
     wrapper->system->child_context = wrapper;
 }
 
-void tna_children_close(tna_napi_system *wrapper, bool env_usable) {
-    tna_vec *resolvers = &wrapper->children.resolvers;
-    for (uint32_t at = 0; env_usable && at < resolvers->count; at += 1) {
-        const tna_child_resolver *entry = tna_vec_at(resolvers, at);
-        napi_delete_reference(wrapper->env, entry->resolve);
-    }
-    tna_vec_destroy(resolvers);
+void tna_children_close(tna_napi_system *wrapper) {
+    /* Core's teardown told of every definition it freed, so nothing is left. */
+    tna_vec_destroy(&wrapper->children.resolvers);
     wrapper->system->child_definition = NULL;
 }
