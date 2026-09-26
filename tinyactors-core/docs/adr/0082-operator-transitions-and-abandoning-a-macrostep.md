@@ -309,7 +309,9 @@ microstep.
   `abandon` build on these two calls.
 - The chart cannot refuse a jump; that is the point. An author's own
   assumptions, such as data matching the state, can break, which is why
-  the adapter offers a fork first and records who jumped where.
+  the adapter needs a permission for it and records who jumped where. (This
+  said the adapter offers a fork first; napi's debugger does not fork,
+  tinyactors-napi ADR 0026.)
 - Costs, measured on x86-64 Linux with clang:
 
   | | Before | After |
