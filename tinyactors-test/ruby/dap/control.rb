@@ -10,11 +10,11 @@ module DAP
   # Core ADR 0083 puts the paused position into ta_actor_inspection. Once it
   # is there, `Position.from_inspection` belongs beside `from_record`, so an
   # actor that was paused before the adapter saw it has a position too.
-  Position = Data.define(:key, :at, :state, :transition, :action, :iteration) do
+  Position = Data.define(:key, :at, :state, :transition, :iteration) do
     def self.from_record(record)
       where = record[:position] || {}
       new(key: [Integer(record.dig(:key, :macrostep)), Integer(record.dig(:key, :microstep))],
-          at: where[:at].to_s, state: where[:state], transition: where[:transition], action: where[:action],
+          at: where[:at].to_s, state: where[:state], transition: where[:transition],
           iteration: Integer(where[:iteration] || 0))
     end
 
@@ -56,11 +56,10 @@ module DAP
 
     # `output` is called as output.call(category, text) for the macrostep
     # summaries; `interrupt` answers whether a client message is waiting.
-    def initialize(session:, labels:, threads:, expressions:, breakpoints:, output:, interrupt:)
+    def initialize(session:, labels:, threads:, breakpoints:, output:, interrupt:)
       @session = session
       @labels = labels
       @threads = threads
-      @expressions = expressions
       @breakpoints = breakpoints
       @output = output
       @interrupt = interrupt
@@ -351,7 +350,7 @@ module DAP
         track.event = record[:event]
         track.microstep = nil
         track.position = Position.new(key: [track.macrostep, 0], at: 'none', state: nil, transition: nil,
-                                      action: nil, iteration: 0)
+                                      iteration: 0)
         track.last_action = nil
         track.summary = []
         track.pending = []

@@ -524,8 +524,8 @@ module DAP
       @breakpoints = Breakpoints.new(@labels, @expressions)
       @console = Console.new(session: @session, threads: @threads, expressions: @expressions,
                              output: method(:output))
-      @control = Control.new(session: @session, labels: @labels, threads: @threads, expressions: @expressions,
-                             breakpoints: @breakpoints, output: method(:output), interrupt: -> { !@inbox.empty? })
+      @control = Control.new(session: @session, labels: @labels, threads: @threads, breakpoints: @breakpoints,
+                             output: method(:output), interrupt: -> { !@inbox.empty? })
       @variables = Variables.new(session: @session, labels: @labels, threads: @threads, control: @control,
                                  expressions: @expressions, console: @console)
       @console.variables = @variables

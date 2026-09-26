@@ -62,6 +62,7 @@ module TinyactorsTest
 
     def hold(id)
       @held << id unless @held.include?(id)
+      @resumes = 0 if @queue.first == id
       @queue.delete(id)
     end
 

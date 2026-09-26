@@ -28,8 +28,6 @@ module DAP
 
     def [](id) = @entries[Integer(id)]
 
-    def empty? = @entries.empty?
-
     def by_session(session_id) = @entries.each_value.find { |entry| entry.session == session_id }
 
     def by_handle(handle) = @entries.each_value.find { |entry| entry.handle == handle }
