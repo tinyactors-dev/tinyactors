@@ -12,13 +12,10 @@ module DAP
     # transition.
     EVENT = 'operator.goto'
 
-    def initialize(session:, labels:, control:)
-      @session = session
+    def initialize(labels:, control:)
       @labels = labels
       @control = control
     end
-
-    def context = @session.context
 
     # Delivers a jump of `thread` to the states named `targets`, from the
     # active state `from` or the root, and runs its macrostep: the system
@@ -27,6 +24,7 @@ module DAP
     def jump(thread, targets, from: nil)
       raise RequestError, 'goto <state…> [from <state>]' if targets.empty?
 
+      context = thread.context
       definition = thread.definition
       ids = targets.map { |name| state!(definition, name) }
       source = from ? state!(definition, from) : TinyactorsTest::STATE_NONE
@@ -46,12 +44,13 @@ module DAP
     # finishes that microstep (a resume with a microstep budget of 1 and no
     # action budget), since core abandons only between microsteps.
     def abandon(thread)
-      view = @session.inspect_actor(thread.handle) or raise RequestError, "#{thread.label} is not resident"
+      view = thread.view or raise RequestError, "#{thread.label} is not resident"
       raise RequestError, "#{thread.label} has no macrostep to abandon" unless view[:macrostep_in_progress]
 
       finished = view[:microstep_in_progress] && finish_microstep(thread)
       return "#{thread.label} finished its macrostep while finishing its microstep" if finished
 
+      context = thread.context
       result = context.ta.actor.abandon(system: context.system_handle, actor: thread.handle)[:result]
       case result
       when 'ok'
@@ -69,6 +68,7 @@ module DAP
       send = Integer(text, exception: false)
       raise RequestError, 'cancel <send ID>: the number the Timers scope shows' if send.nil?
 
+      context = thread.context
       result = context.ta.actor.withdraw_send(system: context.system_handle, actor: thread.handle, send: send)[:result]
       case result
       when 'ok' then "#{thread.label}: withdrew send #{send}"
@@ -84,6 +84,13 @@ module DAP
     # Every state of a definition, as [ID, name], for goto targets and
     # completions.
     def states(definition) = @labels.states(definition).map { |id, info| [id, info[:id]] }
+
+    # The events a definition's transitions name, for completions.
+    def events(definition)
+      (0...@labels.count(definition, :transition)).flat_map do |id|
+        @labels.transition_info(definition, id)&.dig(:event).to_s.split(/\s+/)
+      end.uniq.sort
+    end
 
     private
 
@@ -108,6 +115,7 @@ module DAP
     end
 
     def finish_microstep(thread)
+      context = thread.context
       response = context.ta.actor.resume(system: context.system_handle, actor: thread.handle, budget: 1,
                                          action_budget: 0)
       status = context.core('ta_actor_resume', response).fetch(:status)

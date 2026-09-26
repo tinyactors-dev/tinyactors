@@ -8,14 +8,16 @@ module DAP
   #   goto [@actor] <state…> [from <state>]  an operator transition (core ADR 0082)
   #   abandon [@actor]                       abandon a macrostep that never ends (core ADR 0082)
   #   cancel [@actor] <send ID>              withdraw one pending delayed send (core ADR 0084)
-  #   clock +<duration>                      advance logical time: 500ms, 5s, 2m, 1h, 3d
+  #   fork [@actor]                          copy the actor into a system of its own (core ADR 0085)
+  #   clock [@actor] +<duration>             advance the logical time of the actor's system
   #   <expression>                           jq over the actor's data model
   #
   # The actor is the frame's, or the one `@actor` names by its thread label.
   #
   # The debugger is a sender an actor can answer (core ADR 0068): the
-  # adapter registers an I/O processor of type `debug`, opens one scope for
-  # the session, and delivers each `send` with an origin in that scope, so
+  # adapter registers an I/O processor of type `debug` in every system it
+  # debugs (the workbench's and each fork's), opens one scope there, and
+  # delivers each `send` with an origin in that scope, so
   # `<send targetexpr="$_event.origin" typeexpr="$_event.origintype">`
   # reaches the console. Closing the scope at the end of the session leaves
   # later replies with no origin, which fail as error.communication.
@@ -30,44 +32,48 @@ module DAP
     DURATION = /\A\+?(\d+(?:\.\d+)?)(ms|s|m|h|d)?\z/
     SCALE = { nil => 1, 'ms' => 1, 's' => 1_000, 'm' => 60_000, 'h' => 3_600_000, 'd' => 86_400_000 }.freeze
 
-    COMMANDS = %w[send goto abandon cancel clock].freeze
+    COMMANDS = %w[send goto abandon cancel fork clock].freeze
 
     # Console commands the test host does not offer, and why.
     PENDING = {
-      'fork' => 'a fork with its own clock, which needs core ADR 0085',
       'replace' => 'not offered here: save the chart file, and the workbench replaces its actors in place'
     }.freeze
 
-    attr_reader :io
-
-    def initialize(session:, threads:, expressions:, output:)
-      @session = session
+    def initialize(threads:, expressions:, output:)
       @threads = threads
       @expressions = expressions
       @output = output
       @variables = nil
+      @operator = nil
+      @forker = nil
+      # context => the debug I/O processor of that system
+      @ios = {}
       @queued = []
-      @reply_cursor = nil
+      @reply_cursors = {}
     end
 
-    # The Variables that present values, and the Operator that jumps,
-    # abandons and withdraws; both are made after the console.
-    attr_writer :variables, :operator
+    # The Variables that present values, the Operator that jumps, abandons
+    # and withdraws, and what makes a fork (called with a thread, answers
+    # the console's text); all are made after the console.
+    attr_writer :variables, :operator, :forker
 
-    def context = @session.context
-
-    # Registers the `debug` processor and opens the session's scope. Tells
-    # `expressions` how to show the origin of an event the console sent.
-    def open
-      @io = context.endpoint_io(TYPE, INSTRUMENT)
-      @io.control('open', processor: @io.processor, uri: URI)
-      @expressions.io_origins[@io.processor] = { type: TYPE, uri: URI }
+    # Registers the `debug` processor in `context`'s system and opens the
+    # scope there. Tells `expressions` how to show the origin of an event
+    # the console sent. Every system registers it first, so it has the same
+    # registry index in each.
+    def open(context)
+      io = context.endpoint_io(TYPE, INSTRUMENT)
+      io.control('open', processor: io.processor, uri: URI)
+      @expressions.io_origins[io.processor] = { type: TYPE, uri: URI }
+      @ios[context] = io
     end
 
     def close
-      @io&.control('close', uri: URI)
-    rescue TinyactorsTest::RPCError
-      nil
+      @ios.each_value do |io|
+        io.control('close', uri: URI)
+      rescue TinyactorsTest::RPCError
+        nil
+      end
     end
 
     # The processors $_ioprocessors lists besides SCXML's, with the location
@@ -85,7 +91,8 @@ module DAP
       when 'goto' then goto(*addressed(rest, thread))
       when 'abandon' then text(@operator.abandon(addressed(rest, thread).first))
       when 'cancel' then text(@operator.withdraw(*addressed(rest, thread)))
-      when 'clock' then clock(rest.to_s)
+      when 'fork' then text(@forker.call(addressed(rest, thread).first))
+      when 'clock' then clock(*addressed(rest, thread))
       when *PENDING.keys then raise RequestError, "#{word}: #{PENDING.fetch(word)}"
       else expression(line, thread, event)
       end
@@ -107,32 +114,44 @@ module DAP
     def queued? = !@queued.empty?
 
     # Offers waiting messages again; delivered ones leave the queue, and
-    # the system runs them. Answers how many were delivered.
+    # their system runs them. Answers how many were delivered.
     def flush
       return 0 if @queued.empty?
 
-      answer = @io.control('flush')
-      delivered = Array(answer[:results]).size
-      @queued.shift(delivered).each do |message|
-        @output.call('console', "#{message[:label]} took #{message[:event]} from the console")
+      delivered = 0
+      @ios.each do |context, io|
+        next unless @queued.any? { |message| message[:context].equal?(context) }
+
+        count = Array(io.control('flush')[:results]).size
+        mine = @queued.select { |message| message[:context].equal?(context) }.first(count)
+        @queued -= mine
+        mine.each { |message| @output.call('console', "#{message[:label]} took #{message[:event]} from the console") }
+        context.scheduler.wake if count.positive?
+        delivered += count
       end
-      context.scheduler.wake if delivered.positive?
       delivered
+    end
+
+    # A fork's system is gone: its waiting messages with it.
+    def forget(context)
+      @ios.delete(context)
+      @reply_cursors.delete(context)
+      @queued.reject! { |message| message[:context].equal?(context) }
     end
 
     # Replies the actors sent to the console since the last call.
     def replies
-      return if @io.nil?
+      @ios.each do |context, io|
+        entries = io.journal(since: @reply_cursors[context]).select { |entry| entry[:op] == 'send' }
+        next if entries.empty?
 
-      entries = @io.journal(since: @reply_cursor).select { |entry| entry[:op] == 'send' }
-      return if entries.empty?
-
-      @reply_cursor = entries.last[:seq]
-      entries.each do |entry|
-        who = source_thread(entry[:source])&.label || 'an actor'
-        data = entry[:data].nil? ? '' : " #{JSON.generate(entry[:data])}"
-        refused = entry[:refused] ? " (refused: #{entry[:refused]})" : ''
-        @output.call('console', "#{who} replied #{entry[:event_text]}#{data}#{refused}")
+        @reply_cursors[context] = entries.last[:seq]
+        entries.each do |entry|
+          who = source_thread(context, entry[:source])&.label || 'an actor'
+          data = entry[:data].nil? ? '' : " #{JSON.generate(entry[:data])}"
+          refused = entry[:refused] ? " (refused: #{entry[:refused]})" : ''
+          @output.call('console', "#{who} replied #{entry[:event_text]}#{data}#{refused}")
+        end
       end
     end
 
@@ -197,12 +216,14 @@ module DAP
       raise RequestError, 'send [@actor] <event> [json]' if event.nil? || event.empty?
 
       data = payload.nil? || payload.strip.empty? ? nil : parse_json(payload)
-      args = { processor: @io.processor, actor: thread.handle, event: event, uri: URI, hold: true }
+      context = thread.context
+      io = @ios.fetch(context)
+      args = { processor: io.processor, actor: thread.handle, event: event, uri: URI, hold: true }
       args[:data] = data unless data.nil?
-      answer = @io.control('receive', **args)
+      answer = io.control('receive', **args)
       case answer[:result]
       when 'held'
-        @queued << { handle: thread.handle, label: thread.label, event: event, data: data }
+        @queued << { context: context, handle: thread.handle, label: thread.label, event: event, data: data }
         text = "queued #{event} for #{thread.label}: it is inside a macrostep"
       when 'ok'
         text = "sent #{event} to #{thread.label}"
@@ -214,16 +235,20 @@ module DAP
       { 'result' => text, 'variablesReference' => 0 }
     end
 
-    def clock(rest)
+    # Logical time belongs to a system (ADR 0012): the frame's actor's, the
+    # workbench's or a fork's.
+    def clock(thread, rest)
       match = DURATION.match(rest.strip)
       raise RequestError, 'clock +<duration>, such as +500ms, +5s, +2m, +1h or +3d' unless match && rest.strip.start_with?('+')
 
       milliseconds = (Float(match[1]) * SCALE.fetch(match[2])).round
+      context = thread.context
       # Time moves now; what falls due runs once the answer is out, like
       # everything the adapter runs.
       context.set_time(context.now + milliseconds)
       context.scheduler.wake
-      { 'result' => "t=#{context.now}ms", 'variablesReference' => 0 }
+      where = thread.fork? ? "#{thread.label}: " : ''
+      { 'result' => "#{where}t=#{context.now}ms", 'variablesReference' => 0 }
     end
 
     def parse_json(text)
@@ -232,16 +257,12 @@ module DAP
       raise RequestError, "the event data is not JSON: #{error.message}"
     end
 
+    # The events the thread's chart has transitions for: a descriptor may
+    # name several, separated by spaces.
     def events_of(thread)
       return [] if thread.nil?
 
-      if thread.named?
-        @session.events(thread.key[1]).flat_map { |row| row[:event].split(/\s+/) }.uniq.sort
-      else
-        []
-      end
-    rescue StandardError
-      []
+      @operator.events(thread.definition)
     end
 
     # `.a.b` completes the keys of `.a` that start with `b`.
@@ -264,13 +285,16 @@ module DAP
       { 'label' => label, 'text' => label, 'start' => start, 'length' => length, 'type' => type }
     end
 
-    # The thread of a send's source: a named actor by its name, any other
-    # by its runtime ID.
-    def source_thread(source)
-      return @threads.by_label(source[:name]) if source.is_a?(Hash) && source[:kind] == 'named'
+    # The thread of a send's source in `context`'s system: a named actor
+    # by its name (a fork keeps its source's), any other by its runtime ID.
+    def source_thread(context, source)
+      here = @threads.to_a.select { |thread| thread.context.equal?(context) }
+      if source.is_a?(Hash) && source[:kind] == 'named'
+        return here.find { |thread| thread.fork? || thread.actor&.address&.dig(:name) == source[:name] }
+      end
 
       value = source.is_a?(Hash) ? (source[:id] || source[:actor] || source[:runtime]) : source
-      @threads.by_handle(Integer(value))
+      here.find { |thread| thread.handle == Integer(value) }
     rescue ArgumentError, TypeError
       nil
     end

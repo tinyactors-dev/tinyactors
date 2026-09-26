@@ -206,11 +206,31 @@ WORKER = <<~CHART
   end
 CHART
 
+# Timers an hour out, which never fire in the workbench during the test:
+# a fork's clock moves them.
+PINGER = <<~CHART
+  TinyactorsTest.chart :pinger do
+    data pings: 0
+    initial :waiting
+    state :waiting do
+      on_entry { send_event 'ping', to: '#_actor_counter/acct1', delay: '3600s', id: :ping }
+      on_entry { send_event 'tick', delay: '3600s', id: :tick }
+      transition on: 'tick', target: :waiting do
+        assign '.pings', '.pings + 1'
+      end
+    end
+  end
+CHART
+
 ACTORS = <<~ACTORS
   Workbench.actor :acct1, chart: :counter
   Workbench.actor :boss, chart: :supervisor
   Workbench.actor :spinner, chart: :spinner
+  Workbench.actor :pinger, chart: :pinger
 ACTORS
+
+# The line of a chart file that holds `needle`, from 1.
+def line_of(text, needle) = text.lines.index { |line| line.include?(needle) } + 1
 
 Dir.mktmpdir('dap-selftest') do |tmp|
   dir = Pathname.new(tmp)
@@ -218,6 +238,8 @@ Dir.mktmpdir('dap-selftest') do |tmp|
   dir.join('supervisor.rb').write(SUPERVISOR)
   dir.join('worker.rb').write(WORKER)
   dir.join('spinner.rb').write(SPINNER)
+  dir.join('pinger.rb').write(PINGER)
+  counter_path = dir.join('counter.rb').realpath.to_s
   dir.join('actors.rb').write(ACTORS)
 
   client = Client.new([RbConfig.ruby, ROOT.join('bin/dap').to_s])
@@ -232,11 +254,13 @@ Dir.mktmpdir('dap-selftest') do |tmp|
          supportsSetVariable supportsSetExpression supportsCompletionsRequest supportsSteppingGranularity
          supportsModulesRequest supportsLoadedSourcesRequest supportsExceptionInfoRequest
          supportsTerminateRequest supportsEvaluateForHovers supportsClipboardContext
-         supportsConditionalBreakpoints supportsHitConditionalBreakpoints supportsGotoTargetsRequest].all? { |name| capabilities[name] == true }
+         supportsConditionalBreakpoints supportsHitConditionalBreakpoints supportsGotoTargetsRequest
+         supportsStepBack supportsRestartFrame supportsRestartRequest supportsBreakpointLocationsRequest
+         supportsLogPoints].all? { |name| capabilities[name] == true }
     end
-    check('declares nothing that needs pending core work') do
-      %w[supportsStepBack supportsRestartFrame supportsBreakpointLocationsRequest
-         supportsRestartRequest supportsLogPoints].none? { |name| capabilities[name] }
+    check('declares nothing it does not offer') do
+      %w[supportsInstructionBreakpoints supportsDisassembleRequest supportsReadMemoryRequest
+         supportsStepInTargetsRequest supportsTerminateThreadsRequest].none? { |name| capabilities[name] }
     end
     check('never terminates or suspends the debuggee') do
       capabilities['supportTerminateDebuggee'] == false && capabilities['supportSuspendDebuggee'] == false
@@ -267,6 +291,13 @@ Dir.mktmpdir('dap-selftest') do |tmp|
       functions['success'] && functions['body']['breakpoints'].size == 2 &&
         functions['body']['breakpoints'].all? { |breakpoint| breakpoint['verified'] }
     end
+    # A condition that never holds, so it never stops the flows below.
+    early = client.request('setBreakpoints', 'source' => { 'path' => counter_path },
+                                             'breakpoints' => [{ 'line' => line_of(COUNTER, "on: 'done'"),
+                                                                 'condition' => 'false' }])
+    check('a line breakpoint set before the actors start is not verified yet') do
+      early['success'] && early['body']['breakpoints'].first['verified'] == false
+    end
     unknown = client.request('setExceptionBreakpoints', 'filters' => ['error.nonsense'])
     check('an unknown exception filter is refused') { !unknown['success'] }
     check('exception filters are accepted') do
@@ -276,6 +307,12 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     check('configurationDone succeeds') { done['success'] }
     entry = client.event('stopped')
     check('stopOnEntry stops with reason entry') { entry['reason'] == 'entry' && entry['allThreadsStopped'] }
+    verified = client.event('breakpoint')
+    check('it is verified once its chart is loaded: a breakpoint event') do
+      verified['reason'] == 'changed' && verified.dig('breakpoint', 'verified') &&
+        verified.dig('breakpoint', 'line') == line_of(COUNTER, "on: 'done'") &&
+        verified.dig('breakpoint', 'id') == early['body']['breakpoints'].first['id']
+    end
 
     puts 'threads'
     threads = client.request('threads')['body']['threads']
@@ -296,16 +333,16 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     modules = client.request('modules')['body']
     check('a module per definition revision') do
       names = modules['modules'].map { |mod| mod['name'] }.sort
-      names == %w[counter spinner supervisor worker] && modules['totalModules'] == 4 &&
+      names == %w[counter pinger spinner supervisor worker] && modules['totalModules'] == 5 &&
         modules['modules'].all? { |mod| mod['version'].to_s.size == 16 }
     end
-    check('module events announced them') { client.take('module').size == 4 }
+    check('module events announced them') { client.take('module').size == 5 }
     paged = client.request('modules', 'startModule' => 1, 'moduleCount' => 1)['body']
-    check('modules page') { paged['modules'].size == 1 && paged['totalModules'] == 4 }
+    check('modules page') { paged['modules'].size == 1 && paged['totalModules'] == 5 }
     sources = client.request('loadedSources')['body']['sources']
     counter_source = sources.find { |source| source['path'] == dir.join('counter.rb').to_s }
-    check('a loaded source per revision, with its file') { sources.size == 4 && counter_source }
-    check('loadedSource events announced them') { client.take('loadedSource').size == 4 }
+    check('a loaded source per revision, with its file') { sources.size == 5 && counter_source }
+    check('loadedSource events announced them') { client.take('loadedSource').size == 5 }
     text = client.request('source', 'sourceReference' => counter_source['sourceReference'],
                                     'source' => counter_source)['body']
     check('source answers the chart file text') { text['content'] == COUNTER }
@@ -315,6 +352,10 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     stack = client.request('stackTrace', 'threadId' => tid)['body']
     check('an idle actor has one frame') do
       stack['totalFrames'] == 1 && stack['stackFrames'].first['name'] == 'idle in idle'
+    end
+    check('at the line its state was written on (core ADR 0086)') do
+      top = stack['stackFrames'].first
+      top.dig('source', 'path') == counter_path && top['line'] == line_of(COUNTER, 'state :idle do')
     end
     frame = stack['stackFrames'].first['id']
     scopes = client.request('scopes', 'frameId' => frame)['body']['scopes']
@@ -378,7 +419,7 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     broken = evaluate.call('.count +', 'watch')
     check('an expression jq refuses is an error') { !broken['success'] && !broken['message'].to_s.empty? }
     check('several values come back as a list') { evaluate.call('.items[]', 'repl')['body']['result'] == '[1,2]' }
-    { 'fork' => '0085', 'replace counter.rb' => 'save the chart file',
+    { 'replace counter.rb' => 'save the chart file',
       'goto nowhere' => 'not a state', 'goto idle busy' => 'cannot be entered together',
       'abandon' => 'no macrostep to abandon', 'cancel 12345' => 'no pending send 12345',
       'cancel dunning' => 'the number the Timers scope shows' }.each do |command, why|
@@ -439,6 +480,10 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     names = frame_of.call(tid).map { |f| f['name'] }
     check('frames: the next unit, its block, the microstep, the macrostep') do
       names == ['log 1', 'onentry of busy', 'microstep 2.1: idle → busy on bump', 'macrostep 2 on bump']
+    end
+    check('each at the line its element was written on') do
+      frame_of.call(tid).map { |f| f['line'] } ==
+        [line_of(COUNTER, "log 'busy'"), line_of(COUNTER, 'state :busy do'), line_of(COUNTER, "on: 'bump'"), 0]
     end
     top = frame_of.call(tid).first['id']
     event = vars.call(scope_ref.call(top, 'Event')).to_h { |variable| [variable['name'], variable['value']] }
@@ -815,8 +860,20 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     end
 
     puts 'goto and gotoTargets'
-    targets = client.request('gotoTargets', 'source' => counter_source, 'line' => 1)['body']['targets']
-    check('gotoTargets answers every state of the chart, whatever the line') do
+    at_line = ->(needle) do
+      client.request('gotoTargets', 'source' => counter_source, 'line' => line_of(COUNTER, needle))['body']['targets']
+    end
+    targets = at_line.call('state :busy do')
+    check('gotoTargets at a state\'s line: that state, at its line') do
+      targets.map { |target| [target['label'], target['line']] } == [['busy', line_of(COUNTER, 'state :busy do')]]
+    end
+    check('at an action\'s or a transition\'s line: the state it belongs to') do
+      at_line.call("assign '.count', '.count + 1'").map { |target| target['label'] } == ['idle'] &&
+        at_line.call("log 'busy'").map { |target| target['label'] } == ['busy']
+    end
+    check('at a line with nothing on it: none') { at_line.call('data count: 0').empty? }
+    targets = client.request('gotoTargets', 'source' => { 'path' => counter_path })['body']['targets']
+    check('without a line, every state of the file\'s chart') do
       targets.map { |target| target['label'] } == %w[idle busy]
     end
     check('without a source, those of the stopped thread\'s chart') do
@@ -850,9 +907,161 @@ Dir.mktmpdir('dap-selftest') do |tmp|
     end
     client.request('setFunctionBreakpoints', 'breakpoints' => [])
 
+    puts 'line breakpoints'
+    client.request('continue', 'threadId' => tid)
+    counter_source_path = { 'path' => counter_path }
+    locations = client.request('breakpointLocations', 'source' => counter_source_path, 'line' => 1,
+                                                      'endLine' => COUNTER.lines.size)['body']['breakpoints']
+                      .map { |location| location['line'] }
+    check('breakpointLocations: the lines that hold a state, a transition or an action') do
+      [line_of(COUNTER, 'state :idle do'), line_of(COUNTER, "on: 'bump'"), line_of(COUNTER, "log 'busy'")]
+        .all? { |line| locations.include?(line) } && !locations.include?(line_of(COUNTER, 'data count: 0'))
+    end
+    set = client.request('setBreakpoints', 'source' => counter_source_path, 'breakpoints' => [
+                           { 'line' => line_of(COUNTER, "assign '.count', '.count + 1'") },
+                           { 'line' => line_of(COUNTER, "log 'busy'") },
+                           { 'line' => line_of(COUNTER, 'data items: [1, 2]') },
+                           { 'line' => line_of(COUNTER, "foreach '.items'"), 'logMessage' => 'count is {.count}' },
+                           { 'line' => line_of(COUNTER, "on: 'done'"), 'condition' => '.count > 1000' }
+                         ])['body']['breakpoints']
+    check('each line is verified where it snaps to: a line without an element to the nearest') do
+      set.all? { |breakpoint| breakpoint['verified'] } &&
+        set.map { |breakpoint| breakpoint['line'] }.first(3) ==
+          [line_of(COUNTER, "assign '.count', '.count + 1'"), line_of(COUNTER, "log 'busy'"),
+           line_of(COUNTER, 'initial :idle')]
+    end
+    console.call('send @acct1 done', nil)
+    macrostep.call('acct1', 'done')
+    check('a line breakpoint whose condition is false does not stop') { client.take('stopped').empty? }
+    console.call('send @acct1 bump', nil)
+    stopped = client.event('stopped')
+    check('a breakpoint on a microstep\'s first unit stops after it: no resume can stop before it') do
+      stopped['reason'] == 'breakpoint' && stopped['hitBreakpointIds'] == [set[0]['id']] &&
+        stopped['description'].start_with?('after line') &&
+        frame_of.call(tid).first(2).map { |f| [f['name'], f['line']] } ==
+          [['assign 2', line_of(COUNTER, "assign '.last'")], ['transition idle → busy on bump', line_of(COUNTER, "on: 'bump'")]]
+    end
+    client.request('continue', 'threadId' => tid)
+    stopped = client.event('stopped')
+    check('any other stops before its unit, with reason breakpoint') do
+      stopped['reason'] == 'breakpoint' && stopped['hitBreakpointIds'] == [set[1]['id']] &&
+        frame_of.call(tid).first['name'] == 'log 1' && frame_of.call(tid).first['line'] == line_of(COUNTER, "log 'busy'")
+    end
+    client.request('continue', 'threadId' => tid)
+    macrostep.call('acct1', 'bump')
+    check('a log point writes its message, with expressions, and does not stop') do
+      client.outputs.any? { |text| text.match?(/\Acount is \d+\n\z/) } && client.take('stopped').empty?
+    end
+
+    moved = "# a line above everything\n#{COUNTER}"
+    dir.join('counter.rb').write(moved)
+    changed = client.event('breakpoint') { |body| body.dig('breakpoint', 'id') == set[1]['id'] }
+    check('a reload that moves the lines moves the breakpoints: a breakpoint event') do
+      changed['reason'] == 'changed' && changed.dig('breakpoint', 'line') == line_of(moved, "log 'busy'")
+    end
+    client.request('setBreakpoints', 'source' => counter_source_path, 'breakpoints' => [])
+
+    puts 'forks'
+    client.request('pause', 'threadId' => tid)
+    client.event('stopped') { |body| body['reason'] == 'pause' }
+    tid_frame = frame_of.call(tid).first['id']
+    { 'stepBack' => { 'threadId' => tid }, 'reverseContinue' => { 'threadId' => tid },
+      'restartFrame' => { 'frameId' => tid_frame }, 'restart' => {} }.each do |command, arguments|
+      answer = client.request(command, arguments)
+      check("#{command} on a thread that is not a fork says to fork") do
+        !answer['success'] && answer['message'].include?('`fork`')
+      end
+    end
+    forked = console.call('fork @acct1', nil)['body']['result']
+    fork_id = forked[/\(thread (\d+)\)/, 1].to_i
+    check('fork copies an actor into a system of its own, as a thread of its own') do
+      forked.start_with?('forked acct1 as acct1.fork1') &&
+        client.event('thread') { |body| body['threadId'] == fork_id }['reason'] == 'started' &&
+        client.request('threads')['body']['threads'].find { |thread| thread['id'] == fork_id }['name'] ==
+          'fork 1 of counter/acct1 · idle'
+    end
+    fork_top = -> { frame_of.call(fork_id).first }
+    fork_eval = ->(text) { client.request('evaluate', 'expression' => text, 'context' => 'watch', 'frameId' => fork_top.call['id'])['body']['result'] }
+    main_eval = ->(text) { client.request('evaluate', 'expression' => text, 'context' => 'watch', 'frameId' => frame_of.call(tid).first['id'])['body']['result'] }
+    main_count = main_eval.call('.count')
+    check('the copy has the actor\'s data, and its frames the chart\'s lines') do
+      fork_eval.call('.count') == main_count && fork_top.call['line'] == line_of(moved, 'state :idle do')
+    end
+    fork_data = scope_ref.call(fork_top.call['id'], 'Data model')
+    written = client.request('setVariable', 'variablesReference' => fork_data, 'name' => 'count', 'value' => '1000')
+    check('setVariable on the fork writes the fork only') do
+      written['success'] && fork_eval.call('.count') == '1000' && main_eval.call('.count') == main_count
+    end
+    console.call('send @acct1.fork1 ping', nil)
+    client.request('continue', 'threadId' => fork_id)
+    check('the fork answers the console too') { summary.call('acct1.fork1 replied pong').include?('pong 1000') }
+    macrostep.call('acct1.fork1', 'ping')
+
+    client.request('setFunctionBreakpoints', 'breakpoints' => [{ 'name' => 'busy' }])
+    console.call('send @acct1.fork1 bump', nil)
+    stopped = client.event('stopped')
+    check('breakpoints stop the fork like any thread') do
+      stopped['reason'] == 'function breakpoint' && stopped['threadId'] == fork_id && fork_top.call['name'] == 'log 1' &&
+        fork_top.call['line'] == line_of(moved, "log 'busy'") && main_eval.call('.count') == main_count
+    end
+    at_break = fork_eval.call('.count')
+    fork_step = ->(command) do
+      answer = client.request(command, 'threadId' => fork_id)
+      [answer, client.event('stopped')]
+    end
+    fork_step.call('stepIn')
+    stepped = fork_top.call['name']
+    answer, stopped = fork_step.call('stepBack')
+    check('stepBack restores the image of the stop before') do
+      answer['success'] && stopped['reason'] == 'step' && stopped['threadId'] == fork_id && stepped != 'log 1' &&
+        fork_top.call['name'] == 'log 1' && fork_eval.call('.count') == at_break
+    end
+    fork_step.call('stepIn')
+    fork_step.call('stepIn')
+    answer, stopped = fork_step.call('reverseContinue')
+    check('reverseContinue goes back to the last breakpoint') do
+      answer['success'] && stopped['reason'] == 'function breakpoint' && fork_top.call['name'] == 'log 1'
+    end
+    client.request('restartFrame', 'frameId' => fork_top.call['id'])
+    stopped = client.event('stopped')
+    check('restartFrame goes back to where the macrostep began') do
+      stopped['reason'] == 'restart' && fork_top.call['name'] == 'about to take bump (before transition selection)'
+    end
+    client.request('setFunctionBreakpoints', 'breakpoints' => [])
+    restarted = client.request('restart')
+    stopped = client.event('stopped')
+    check('restart makes a new copy of the source actor') do
+      restarted['success'] && stopped['reason'] == 'entry' && stopped['threadId'] == fork_id &&
+        fork_top.call['name'] == 'idle in idle' && fork_eval.call('.count') == main_count
+    end
+    targets = client.request('gotoTargets', 'source' => counter_source_path,
+                                            'line' => line_of(moved, 'state :busy do'))['body']['targets']
+    client.request('goto', 'threadId' => fork_id, 'targetId' => targets.first['id'])
+    stopped = client.event('stopped')
+    check('goto works on a fork, with a target from the chart\'s file') do
+      stopped['reason'] == 'goto' && stopped['threadId'] == fork_id && fork_top.call['name'] == 'idle in busy'
+    end
+
+    pinger = client.request('threads')['body']['threads'].find { |thread| thread['name'].start_with?('pinger/') }['id']
+    main_now = -> { vars.call(scope_ref.call(frame_of.call(pinger).first['id'], 'System')).find { |v| v['name'] == 'now' }['value'] }
+    before_now = main_now.call
+    console.call('fork @pinger', nil)
+    clock = console.call('clock @pinger.fork2 +3600s', nil)['body']['result']
+    check('clock on a fork moves the fork\'s time only') do
+      clock == "pinger.fork2: t=#{Integer(before_now) + 3_600_000}ms" && main_now.call == before_now
+    end
+    client.request('continue', 'threadId' => pinger)
+    check('what falls due runs in the fork') { macrostep.call('pinger.fork2', 'tick')['output'].include?('pings') }
+    check('a fork\'s sends reach nothing: the console shows them') do
+      summary.call('pinger.fork2 sent ping to #_actor_counter/acct1').include?('not delivered')
+    end
+    check('the workbench\'s actor did not move') do
+      client.request('evaluate', 'expression' => '.pings', 'context' => 'watch',
+                                 'frameId' => frame_of.call(pinger).first['id'])['body']['result'] == '0'
+    end
+
     puts 'refused requests'
-    %w[restart setBreakpoints breakpointLocations stepBack reverseContinue restartFrame cancel
-       stepInTargets terminateThreads setInstructionBreakpoints locations readMemory writeMemory disassemble].each do |command|
+    %w[cancel stepInTargets terminateThreads setInstructionBreakpoints locations readMemory writeMemory disassemble].each do |command|
       answer = client.request(command, 'threadId' => tid)
       check("#{command} answers an error that says why") { !answer['success'] && answer['message'].size > 10 }
     end

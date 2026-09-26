@@ -19,8 +19,7 @@ module DAP
     # run (ADR 0068), and the host does not bind ta_origin_text.
     attr_reader :io_origins
 
-    def initialize(session, labels, processors)
-      @session = session
+    def initialize(labels, processors)
       @labels = labels
       # {type => location template}, `%s` standing for the session ID: the
       # I/O processors the adapter registered, for $_ioprocessors.
@@ -28,10 +27,9 @@ module DAP
       @io_origins = {}
     end
 
-    def context = @session.context
-
     # The actor's data root; nil when its data model has none.
     def root(thread)
+      context = thread.context
       response = context.ta.actor.datamodel_root(system: context.system_handle, actor: thread.handle)
       response[:result] == 'ok' ? response.dig(:out, :out) : nil
     end
@@ -40,7 +38,7 @@ module DAP
     # message when it does not compile or fails.
     def evaluate(thread, expression, event: nil, input: :root)
       input = root(thread) if input == :root
-      context.rpc('json.transform', filter: "#{environment(thread, event)}#{expression}", input: input)
+      thread.context.rpc('json.transform', filter: "#{environment(thread, event)}#{expression}", input: input)
     rescue TinyactorsTest::RPCError => error
       raise RequestError, (error.data.is_a?(String) ? error.data : error.rpc_message).to_s
     end
@@ -84,8 +82,9 @@ module DAP
       end.join.then { |text| text.start_with?('.') ? text : ".#{text}" }
     end
 
-    # SCXML's _event (5.10.1) from a trace record's or inspection's event.
-    def scxml_event(event)
+    # SCXML's _event (5.10.1) from a trace record's or inspection's event,
+    # whose name is interned in `context`.
+    def scxml_event(event, context)
       return nil if event.nil?
 
       name = event[:name_text] || context.event_text(event[:name])
@@ -98,7 +97,7 @@ module DAP
     private
 
     def environment(thread, event)
-      view = @session.inspect_actor(thread.handle)
+      view = thread.view
       return '' if view.nil?
 
       session_id = view[:session_id].to_s
@@ -108,16 +107,17 @@ module DAP
                      SCXML_PROCESSOR => { location: "#_scxml_#{session_id}" } }
       @processors.each { |type, template| processors[type] = { location: format(template, session_id) } }
       "def In($s): any(#{JSON.generate(states)}[]; . == $s); " \
-        "#{JSON.generate(scxml_event(event))} as $_event | #{JSON.generate(session_id)} as $_sessionid | " \
+        "#{JSON.generate(scxml_event(event, thread.context))} as $_event | #{JSON.generate(session_id)} as $_sessionid | " \
         "#{JSON.generate(name)} as $_name | #{JSON.generate(processors)} as $_ioprocessors | "
     end
 
     def active_names(thread, view)
+      context = thread.context
       response = context.ta.actor.active_states(system: context.system_handle, actor: thread.handle,
                                                 capacity: view.fetch(:active_state_count))
       return [] unless response[:result] == 'ok'
 
-      Array(response.dig(:out, :states)).map { |state| @labels.state(view[:definition_id], state) }
+      Array(response.dig(:out, :states)).map { |state| @labels.state(thread.definition, state) }
     end
 
     # The origin as text where the adapter can say it, else as core

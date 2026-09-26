@@ -24,48 +24,65 @@ module DAP
   # What the debugger learns about one actor's current macrostep from its
   # trace records, for what inspection does not say: the event it took,
   # the transitions of its microstep, and the summary written when it ends.
-  # Keyed by session ID, which survives a reload (ADR 0066).
+  # `key` is [context, session ID]: a session survives a reload (ADR 0066),
+  # and a fork's system numbers its sessions on its own.
   # `entry_stopped` says the actor was stopped before this macrostep began
   # (an `on:` breakpoint, or a step of an idle actor), so neither the next
   # round nor its MACROSTEP_BEGIN stops it there again.
   # `pending` holds breakpoints this microstep will reach (Breakpoints),
   # and `fault` the last fault a record carried, for the error event after it.
   # `taken` is the event the macrostep began with, `event` the one of the
-  # step it is in, which is _event.
-  Track = Struct.new(:session, :definition, :in_macrostep, :macrostep, :taken, :event, :microstep,
-                     :summary, :entry_stopped, :pending, :fault, keyword_init: true)
+  # step it is in, which is _event. `fresh` says its microstep has begun
+  # and no unit of it has written a record yet (Breakpoints#first_unit).
+  Track = Struct.new(:key, :definition, :in_macrostep, :macrostep, :taken, :event, :microstep,
+                     :summary, :entry_stopped, :pending, :fault, :fresh, keyword_init: true)
 
-  # The Scheduler's monitor while a client is attached: it decides the
-  # budgets of every resume, reads the trace records each one wrote, and
-  # stops the system at a breakpoint, an exception, the end of a step, or a
-  # pause. Stopping is all-stop: nothing runs until the client continues or
-  # steps.
+  # The monitor of every place's Scheduler while a client is attached: it
+  # decides the budgets of every resume, reads the trace records each one
+  # wrote, and stops the system at a breakpoint, an exception, the end of a
+  # step, or a pause. Stopping is all-stop, across the workbench and every
+  # fork: nothing runs until the client continues or steps.
   class Control
-    # Why the system stopped, and in which thread.
-    # `session` is the stopped actor's session, which a reload replaces.
-    Stop = Struct.new(:thread, :session, :reason, :description, :breakpoints, :exception, keyword_init: true)
+    # Why the system stopped, and in which thread. `key` is the stopped
+    # actor's track key, which a reload or a fork's restore replaces.
+    Stop = Struct.new(:thread, :key, :reason, :description, :breakpoints, :exception, keyword_init: true)
 
     # A step in progress. `start` is the position it started from and
-    # `depth` how deeply nested its next unit was. `waiting`
-    # is a step of an idle actor, which waits for its next event.
-    Step = Struct.new(:kind, :granularity, :thread, :session, :handle, :start, :depth, :waiting,
+    # `depth` how deeply nested its next unit was. `waiting` is a step of
+    # an idle actor, which waits for its next event.
+    Step = Struct.new(:kind, :granularity, :thread, :key, :place, :handle, :start, :depth, :waiting,
                       keyword_init: true)
 
     FINE = { budget: 1, action_budget: 1 }.freeze
 
+    # What one place's Scheduler calls: the Control, told which place.
+    class Monitor
+      def initialize(control, place)
+        @control = control
+        @place = place
+      end
+
+      def budgets(id) = @control.budgets(@place, id)
+      def admit(ids) = @control.admit(@place, ids)
+      def resumed(id, status) = @control.resumed(@place, id, status)
+      def dispatched(due) = @control.dispatched(@place, due)
+      def interrupt? = @control.interrupt?
+    end
+
     attr_reader :stop, :step, :breakpoints
 
-    # `output` is called as output.call(category, text) for the macrostep
-    # summaries; `interrupt` answers whether a client message is waiting.
-    def initialize(session:, labels:, threads:, breakpoints:, output:, interrupt:)
-      @session = session
+    # `places` answers the workbench session and the forks. `output` is
+    # called as output.call(category, text) for the macrostep summaries;
+    # `interrupt` answers whether a client message is waiting.
+    def initialize(labels:, threads:, breakpoints:, places:, output:, interrupt:)
       @labels = labels
       @threads = threads
       @breakpoints = breakpoints
+      @places = places
       @output = output
       @interrupt = interrupt
       @tracks = {}
-      @cursor = nil
+      @cursors = {}
       @stop = nil
       @step = nil
       @pause_requested = false
@@ -74,26 +91,35 @@ module DAP
       @aside = false
     end
 
-    def context = @session.context
-    def scheduler = context.scheduler
+    # Makes this the monitor of a place's scheduler; a place that comes
+    # while everything is stopped stops too.
+    def adopt(place)
+      scheduler = place.context.scheduler
+      scheduler.monitor = Monitor.new(self, place)
+      scheduler.stop! if stopped?
+    end
+
+    # A fork's system is gone: what was kept about its actors goes too.
+    def forget(context)
+      @tracks.delete_if { |key, _| key.first.equal?(context) }
+      @cursors.delete(context)
+    end
+
+    def schedulers = @places.call.map { |place| place.context.scheduler }
+
+    def pending? = schedulers.any?(&:pending?)
 
     def stopped? = !@stop.nil?
 
     def pause_requested? = @pause_requested
 
-    def track(session_id) = @tracks[session_id]
+    def track(thread) = @tracks[thread.track_key]
 
     # _event for `thread`: the event of the step it is in, or the one it is
     # about to take.
     def event_of(thread)
-      track = @tracks[thread.session]
-      track&.in_macrostep ? track.event : @session.inspect_actor(thread.handle)&.dig(:current_event)
-    end
-
-    # Where `thread` stands now, from inspection; nil when it is gone.
-    def position(thread)
-      view = @session.inspect_actor(thread.handle)
-      view && Position.from_inspection(view)
+      track = track(thread)
+      track&.in_macrostep ? track.event : thread.view&.dig(:current_event)
     end
 
     # How many macrosteps ended since the last call; the adapter sends
@@ -108,28 +134,29 @@ module DAP
     # Commands
 
     # Stops everything where it stands, as a `pause` or `stopOnEntry` does.
-    # The thread is the one the scheduler was settling, when it is inside
-    # a macrostep; otherwise the one the client named.
+    # The thread is the one a scheduler was settling, when one is inside a
+    # macrostep; otherwise the one the client named.
     def halt(reason, thread)
-      if scheduler.pending? && !scheduler.stopped? && (current = scheduler.current)
-        thread = @threads.by_handle(current) || thread
+      @places.call.each do |place|
+        scheduler = place.context.scheduler
+        next unless scheduler.pending? && !scheduler.stopped? && (current = scheduler.current)
+
+        thread = @threads.by_handle(place, current) || thread
+        break
       end
-      scheduler.stop!
+      stop_all
       @step = nil
       @pause_requested = false
-      @stop = Stop.new(thread: thread&.id, session: thread&.session, reason: reason, breakpoints: [])
+      @stop = Stop.new(thread: thread&.id, key: thread&.track_key, reason: reason, breakpoints: [])
     end
 
     # A pause asked for while work is pending stops after the next unit.
     def request_pause(thread)
-      return halt('pause', thread) unless scheduler.pending?
+      return halt('pause', thread) unless pending?
+      return halt('pause', thread) if schedulers.any?(&:current)
 
-      if scheduler.current
-        halt('pause', thread)
-      else
-        @pause_requested = true
-        nil
-      end
+      @pause_requested = true
+      nil
     end
 
     def resume!
@@ -137,14 +164,14 @@ module DAP
       @stop = nil
       @step = nil
       @pause_requested = false
-      scheduler.go!
+      go_all
     end
 
     # Starts a step of `thread`: stepIn, next or stepOut (`kind` :in, :over,
     # :out) at `granularity` ('instruction', 'statement' or 'line').
     def start_step(thread, kind, granularity)
       collect
-      view = @session.inspect_actor(thread.handle)
+      view = thread.view
       raise RequestError, "#{thread.label} is not resident" if view.nil?
       raise RequestError, "#{thread.label} is done: its session ended" if view[:residency] == 'done'
 
@@ -152,10 +179,10 @@ module DAP
       start = Position.from_inspection(view)
       @stop = nil
       @pause_requested = false
-      @step = Step.new(kind: kind, granularity: granularity || 'statement', thread: thread.id,
-                       session: thread.session, handle: thread.handle, start: start,
-                       depth: depth(view[:definition_id], start), waiting: waiting)
-      scheduler.go!
+      @step = Step.new(kind: kind, granularity: granularity || 'statement', thread: thread.id, key: thread.track_key,
+                       place: thread.place, handle: thread.handle, start: start,
+                       depth: depth(thread.definition, start), waiting: waiting)
+      go_all
       waiting
     end
 
@@ -165,10 +192,20 @@ module DAP
     def start_goto(thread)
       @stop = nil
       @pause_requested = false
-      @step = Step.new(kind: :goto, granularity: 'macrostep', thread: thread.id, session: thread.session,
-                       handle: thread.handle, start: nil, depth: 0, waiting: false)
-      scheduler.go!
-      scheduler.wake
+      @step = Step.new(kind: :goto, granularity: 'macrostep', thread: thread.id, key: thread.track_key,
+                       place: thread.place, handle: thread.handle, start: nil, depth: 0, waiting: false)
+      go_all
+      thread.context.scheduler.wake
+    end
+
+    # Stops everything again, as `stop` says, after a fork was restored
+    # from an image: its actor is a new session.
+    def restopped(thread, reason, description = nil)
+      @step = nil
+      @pause_requested = false
+      stop_all
+      @stop = Stop.new(thread: thread.id, key: thread.track_key, reason: reason, description: description,
+                       breakpoints: [])
     end
 
     # Runs the block with the debugger out of the way: no budgets, no
@@ -179,73 +216,77 @@ module DAP
     def aside
       stop = @stop
       @aside = true
-      scheduler.go!
+      go_all
       yield
     ensure
       @aside = false
       @hits = []
       if stop
         @stop = stop
-        scheduler.stop!
+        stop_all
       end
     end
 
     # ------------------------------------------------------------------
-    # The Scheduler's monitor
+    # The Schedulers' monitor, through Monitor
 
-    def budgets(_id)
+    def budgets(_place, _id)
       armed? && !@aside ? FINE : nil
     end
 
-    def admit(ids)
+    def admit(place, ids)
       collect
-      return ids if @stop || @aside
+      return ids if @aside
 
-      if @step && !@step.waiting
+      ids.each { |id| starting(place, id) } if place.respond_to?(:macrostep_starting)
+      return ids if @stop
+
+      if @step && !@step.waiting && @step.place.equal?(place)
         return ids.include?(@step.handle) ? [@step.handle] : ids
       end
 
       ids.each do |id|
-        thread = thread_of_handle(id)
+        thread = thread_of_handle(place, id)
         next if thread.nil?
 
-        track = (@tracks[thread.session] ||= new_track(thread.session, thread.definition))
+        track = track_for(thread)
         next if track.in_macrostep || track.entry_stopped
 
-        event = current_event(id)
-        if @step&.waiting && @step.handle == id
+        event = thread.view&.dig(:current_event)
+        if @step&.waiting && @step.key == thread.track_key
           track.entry_stopped = true
-          stop_at(thread, 'step', "took #{event_name(event) || 'its next event'}")
+          stop_at(thread, 'step', "took #{event_name(thread, event) || 'its next event'}")
           return []
         end
         hits = @breakpoints.taking(thread, event)
         next if hits.empty?
 
         track.entry_stopped = true
-        stop_at(thread, 'function breakpoint', "#{thread.label} takes #{event_name(event)}", breakpoints: hits)
+        stop_at(thread, 'function breakpoint', "#{thread.label} takes #{event_name(thread, event)}",
+                breakpoints: hits)
         return []
       end
       ids
     end
 
-    def resumed(id, status)
-      records = collect
+    def resumed(place, id, status)
+      collect
       return nil if @aside
       return :stop if @stop
 
-      thread = thread_of_handle(id)
+      thread = thread_of_handle(place, id)
       return nil if thread.nil?
 
-      view = @session.inspect_actor(thread.handle)
+      view = thread.view
       position = view && Position.from_inspection(view)
-      track = @tracks[thread.session]
+      track = track(thread)
       @breakpoints.reach(track, position) { |hit| @hits << hit } if track && position
       decide(thread, position, status) ? :stop : nil
     end
 
     # A delayed send that could not be delivered raises its
     # error.communication outside any run (ADR 0072).
-    def dispatched(_due)
+    def dispatched(_place, _due)
       collect
       return nil if @aside
       return :stop if @stop
@@ -255,38 +296,55 @@ module DAP
 
     def interrupt? = @interrupt.call
 
-    # Reads the trace records written since the last read, keeps each
-    # actor's track, and writes a summary of every macrostep that ended.
-    # Answers the records.
+    # Reads the trace records every place wrote since the last read, keeps
+    # each actor's track, and writes a summary of every macrostep that
+    # ended. A record's `definition` becomes a Definition of its place.
     def collect
-      sink = context.instruments['trace']
-      return [] if sink.nil?
+      @places.call.each do |place|
+        context = place.context
+        sink = context.instruments['trace']
+        next if sink.nil?
 
-      records = sink.journal(since: @cursor).select { |entry| entry[:op] == 'trace' }
-      @cursor = records.last[:seq] unless records.empty?
-      records.each { |record| absorb(record) }
-      records
+        records = sink.journal(since: @cursors[context]).select { |entry| entry[:op] == 'trace' }
+        next if records.empty?
+
+        @cursors[context] = records.last[:seq]
+        records.each { |record| absorb(record.merge(definition: Definition.new(context, record[:definition]))) }
+      end
     end
 
     private
 
     def armed? = !@step.nil? || @pause_requested || @breakpoints.any?
 
+    def stop_all = schedulers.each(&:stop!)
+
+    def go_all = schedulers.each(&:go!)
+
+    # A fork captures an image when one of its actors is about to begin a
+    # macrostep (it holds an event and has taken no step of it, ADR 0083),
+    # for restartFrame.
+    def starting(place, id)
+      step = place.inspect_actor(id)&.dig(:step)
+      place.macrostep_starting(id) if step && Integer(step[:macrostep]).zero?
+    end
+
     # After a resume of `thread` (nil after a dispatch): stop for an
-    # exception, a function or data breakpoint, the end of the step, or a
-    # pause, in that order. Answers whether it stopped.
+    # exception, a breakpoint, the end of the step, or a pause, in that
+    # order. Answers whether it stopped.
     def decide(thread, position, status)
       hits = @hits
       @hits = []
       if (hit = hits.find { |candidate| candidate[:kind] == :exception })
-        stop_at(thread_of_session(hit[:session]) || thread, 'exception', hit[:description], exception: hit)
+        stop_at(thread_of_key(hit[:key]) || thread, 'exception', hit[:description], exception: hit)
+      elsif (hit = confirmed(hits, :line))
+        stop_at(thread_of_key(hit[:key]) || thread, 'breakpoint', hit[:description], breakpoints: hit[:ids])
       elsif (hit = confirmed(hits, :function))
-        stop_at(thread_of_session(hit[:session]) || thread, 'function breakpoint', hit[:description],
+        stop_at(thread_of_key(hit[:key]) || thread, 'function breakpoint', hit[:description],
                 breakpoints: hit[:ids])
       elsif (hit = confirmed(hits, :data))
-        stop_at(thread_of_session(hit[:session]) || thread, 'data breakpoint', hit[:description],
-                breakpoints: hit[:ids])
-      elsif thread && @step && @step.session == thread.session && step_done?(@step, thread, position, status)
+        stop_at(thread_of_key(hit[:key]) || thread, 'data breakpoint', hit[:description], breakpoints: hit[:ids])
+      elsif thread && @step && @step.key == thread.track_key && step_done?(@step, thread, position, status)
         stop_at(thread, @step.kind == :goto ? 'goto' : 'step', nil)
       elsif thread && @pause_requested
         stop_at(thread, 'pause', nil)
@@ -297,14 +355,17 @@ module DAP
     end
 
     # The first hit of `kind` whose breakpoints fire: their condition holds
-    # and their hit condition is met. Answers it with their IDs.
+    # and their hit condition is met. A log point fires by writing its
+    # message and does not stop. Answers the hit with the IDs that stop.
     def confirmed(hits, kind)
       hits.each do |hit|
         next unless hit[:kind] == kind
 
-        thread = thread_of_session(hit[:session])
-        ids = hit[:breakpoints].select { |breakpoint| @breakpoints.fire?(breakpoint, thread) }.map(&:id)
-        return hit.merge(ids: ids) unless ids.empty?
+        thread = thread_of_key(hit[:key])
+        firing = hit[:breakpoints].select { |breakpoint| @breakpoints.fire?(breakpoint, thread) }
+        logs, stops = firing.partition { |breakpoint| @breakpoints.log_point?(breakpoint) }
+        logs.each { |breakpoint| @output.call('console', @breakpoints.log_message(breakpoint, thread)) }
+        return hit.merge(ids: stops.map(&:id)) unless stops.empty?
       end
       nil
     end
@@ -312,8 +373,8 @@ module DAP
     def stop_at(thread, reason, description, breakpoints: [], exception: nil)
       @step = nil
       @pause_requested = false
-      scheduler.stop!
-      @stop = Stop.new(thread: thread&.id, session: thread&.session, reason: reason, description: description,
+      stop_all
+      @stop = Stop.new(thread: thread&.id, key: thread&.track_key, reason: reason, description: description,
                        breakpoints: breakpoints, exception: exception)
     end
 
@@ -359,8 +420,8 @@ module DAP
     end
 
     def absorb(record)
-      session = record.dig(:key, :session)
-      track = (@tracks[session] ||= new_track(session, record[:definition]))
+      key = [record[:definition].context, record.dig(:key, :session)]
+      track = (@tracks[key] ||= new_track(key, record[:definition]))
       track.definition = record[:definition]
       case record[:kind]
       when 'macrostep_begin'
@@ -383,7 +444,7 @@ module DAP
       else
         summarize(track, record)
       end
-      thread = @breakpoints.watching_data? ? @threads.by_session(session) : nil
+      thread = @breakpoints.needs_thread? ? @threads.by_key(key) : nil
       @breakpoints.observe(record, track, thread) { |hit| @hits << hit }
     end
 
@@ -405,16 +466,18 @@ module DAP
       if track.in_macrostep
         track.summary << line
       else
-        who = thread_of_session(track.session)&.label || "session #{track.session}"
+        who = thread_of_key(track.key)&.label || "session #{track.key.last}"
         event = record.dig(:event, :name_text)
         @output.call('console', "#{who}: abandoned #{event || 'its waiting event'} before it began")
         track.entry_stopped = false
       end
     end
 
-    def new_track(session, definition)
-      Track.new(session: session, definition: definition, in_macrostep: false, summary: [], entry_stopped: false,
-                pending: [])
+    def track_for(thread) = (@tracks[thread.track_key] ||= new_track(thread.track_key, thread.definition))
+
+    def new_track(key, definition)
+      Track.new(key: key, definition: definition, in_macrostep: false, summary: [], entry_stopped: false,
+                pending: [], fresh: false)
     end
 
     # ------------------------------------------------------------------
@@ -443,8 +506,7 @@ module DAP
     end
 
     def write_summary(track, record)
-      thread = thread_of_session(track.session)
-      who = thread&.label || "session #{track.session}"
+      who = thread_of_key(track.key)&.label || "session #{track.key.last}"
       event = track.taken ? "on #{track.taken[:name_text]}" : '(no event)'
       states = Array(record[:states]).map { |state| @labels.state(record[:definition], state) }
       text = "#{who}: macrostep #{track.macrostep} #{event} -> #{states.join(' ')}"
@@ -461,23 +523,20 @@ module DAP
 
     # A child spawned since the threads were last read is found by reading
     # them again.
-    def thread_of_handle(handle)
-      @threads.by_handle(handle) || (@threads.refresh || @threads.by_handle(handle))
+    def thread_of_handle(place, handle)
+      @threads.by_handle(place, handle) || (@threads.refresh || @threads.by_handle(place, handle))
     end
 
-    def thread_of_session(session)
-      @threads.by_session(session) || (@threads.refresh || @threads.by_session(session))
+    def thread_of_key(key)
+      return nil if key.nil?
+
+      @threads.by_key(key) || (@threads.refresh || @threads.by_key(key))
     end
 
-    def current_event(handle)
-      view = @session.inspect_actor(handle)
-      view && view[:current_event]
-    end
-
-    def event_name(event)
+    def event_name(thread, event)
       return nil if event.nil?
 
-      event[:name_text] || context.event_text(event[:name])
+      event[:name_text] || thread.context.event_text(event[:name])
     end
   end
 end

@@ -17,8 +17,7 @@ module DAP
     SCOPES = ['Data model', 'Event', 'Configuration', 'Queues', 'Timers', 'Invocations', 'System'].freeze
     PREVIEW = 60
 
-    def initialize(session:, labels:, threads:, control:, expressions:, console:)
-      @session = session
+    def initialize(labels:, threads:, control:, expressions:, console:)
       @labels = labels
       @threads = threads
       @control = control
@@ -26,8 +25,6 @@ module DAP
       @console = console
       reset
     end
-
-    def context = @session.context
 
     def reset
       @refs = {}
@@ -111,17 +108,22 @@ module DAP
     #
     # Core has no operation that changes an actor's data root, and the
     # jq data model's instance gives out copies. What the test host can do
-    # with public API is the residency round trip of ADR 0038: capture an
-    # image, unload the actor, and load it again with a changed root as its
-    # data-model binding. The configuration, the pending delayed sends and
-    # a macrostep paused between units (ADR 0061) all survive. The costs are
-    # real, so they are refused rather than paid silently: only a named
-    # actor can be unloaded, and a load turns every active invocation into
+    # with public API is restore an image of the actor with a changed root
+    # as its data-model binding. A workbench actor goes through the
+    # residency round trip of ADR 0038: capture an image, unload the actor,
+    # and load it again. A fork is reconstructed in its own system instead,
+    # since a reconstructed actor is not published at an address (Fork). The
+    # configuration, the pending delayed sends and a macrostep paused between
+    # units (ADR 0061) all survive. The costs are real, so they are refused
+    # rather than paid silently: an invoked child has no address and its
+    # parent would lose it, and a restore turns every active invocation into
     # error.communication.
     def write(thread, path, text)
-      raise RequestError, "#{thread.label} is an invoked child, which has no address to unload and load it at" unless thread.named?
+      unless thread.named? || thread.fork?
+        raise RequestError, "#{thread.label} is an invoked child, which has no address to unload and load it at"
+      end
 
-      view = @session.inspect_actor(thread.handle)
+      view = thread.view
       invokes = Array(view&.dig(:invokes)).count { |invoke| invoke[:active] }
       if invokes.positive?
         raise RequestError, "#{thread.label} has #{invokes} active invocation(s), which reloading it to write " \
@@ -130,16 +132,16 @@ module DAP
 
       value = @expressions.literal(thread, text, event: event_of(thread))
       root = @expressions.root(thread)
-      root = context.rpc('json.transform', filter: "setpath(#{JSON.generate(path)}; #{JSON.generate(value)})",
-                                           input: root).first
-      reload(thread.actor, root)
+      root = thread.context.rpc('json.transform', filter: "setpath(#{JSON.generate(path)}; #{JSON.generate(value)})",
+                                                  input: root).first
+      thread.fork? ? thread.fork.rewrite(root) : reload(thread.context, thread.actor, root)
       @threads.refresh
       present(value, data: [:data, thread.id, path]).then do |body|
         { 'value' => body['result'], 'type' => body['type'], 'variablesReference' => body['variablesReference'] }
       end
     end
 
-    def reload(actor, root)
+    def reload(context, actor, root)
       image = context.capture(actor)
       unloaded = context.unload(actor, image)
       raise RequestError, "ta_actor_unload answered #{unloaded}" unless unloaded == 'ok'
@@ -227,21 +229,24 @@ module DAP
     # The read-only scopes, as [name, value] pairs.
 
     def scope(thread, name)
-      view = @session.inspect_actor(thread.handle) or raise RequestError, "#{thread.label} is not resident"
+      view = thread.view or raise RequestError, "#{thread.label} is not resident"
 
       case name
-      when 'Event' then (@expressions.scxml_event(event_of(thread)) || {}).map { |key, value| [key.to_s, value] }
+      when 'Event' then (event(thread, event_of(thread)) || {}).map { |key, value| [key.to_s, value] }
       when 'Configuration' then configuration(thread, view)
       when 'Queues' then queues(thread, view)
-      when 'Timers' then timers(view)
-      when 'Invocations' then invocations(view)
+      when 'Timers' then timers(thread, view)
+      when 'Invocations' then invocations(thread, view)
       when 'System' then system(thread, view)
       else []
       end
     end
 
+    def event(thread, event) = @expressions.scxml_event(event, thread.context)
+
     def configuration(thread, view)
-      definition = view[:definition_id]
+      context = thread.context
+      definition = thread.definition
       response = context.ta.actor.active_states(system: context.system_handle, actor: thread.handle,
                                                 capacity: view.fetch(:active_state_count))
       active = Array(response.dig(:out, :states))
@@ -265,6 +270,7 @@ module DAP
     end
 
     def history_of(thread, state)
+      context = thread.context
       query = context.ta.actor.history(system: context.system_handle, actor: thread.handle, history: state, capacity: 0)
       count = query.dig(:out, :count).to_i
       return [] if count.zero?
@@ -275,13 +281,14 @@ module DAP
     end
 
     def queues(thread, view)
-      internal = Array(view[:internal_events]).map { |queued| @expressions.scxml_event(queued[:event]) }
-      current = view[:current_event] ? @expressions.scxml_event(view[:current_event]) : nil
+      internal = Array(view[:internal_events]).map { |queued| event(thread, queued[:event]) }
+      current = view[:current_event] ? event(thread, view[:current_event]) : nil
       waiting = @console.queued_for(thread).map { |message| { name: message[:event], data: message[:data] } }
       [['internal', internal], ['current', current], ['debugger', waiting]]
     end
 
-    def timers(view)
+    def timers(thread, view)
+      context = thread.context
       now = context.now
       Array(view[:delayed_sends]).map do |send|
         target = context.send_target(view[:definition_id], send)
@@ -290,9 +297,10 @@ module DAP
       end
     end
 
-    def invocations(view)
+    def invocations(thread, view)
+      context = thread.context
       Array(view[:invokes]).map do |invoke|
-        child = @threads.by_handle(Integer(invoke[:service_handle])) rescue nil
+        child = @threads.by_handle(thread.place, Integer(invoke[:service_handle])) rescue nil
         [invoke[:id].to_s, { type: context.ta.system.atom_text(system: context.system_handle, atom: invoke[:type])
                                           .dig(:out, :out),
                              active: invoke[:active], autoforward: invoke[:autoforward],
@@ -304,7 +312,7 @@ module DAP
       [['_sessionid', view[:session_id].to_s],
        ['_name', view.dig(:definition, :family, :name)],
        ['_ioprocessors', @expressions.value(thread, '$_ioprocessors')],
-       ['now', context.now],
+       ['now', thread.context.now],
        ['actor', thread.handle],
        ['definition', { id: view[:definition_id], family: view.dig(:definition, :family, :name),
                         revision: view.dig(:definition, :revision) }],

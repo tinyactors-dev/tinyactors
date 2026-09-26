@@ -15,15 +15,24 @@ module DAP
   # macrostep come from the trace records (Control), and are left out when
   # the adapter did not see them.
   #
-  # There are no source locations yet: they need source spans (core ADR
-  # 0086), so every frame has line 0.
+  # Each frame is at the place its element was written (core ADR 0086): an
+  # action's line, a transition's, or a state's, in the chart's Ruby file.
   class Frames
-    Frame = Struct.new(:id, :thread, :name, :hint, keyword_init: true) do
-      def to_dap = { 'id' => id, 'name' => name, 'line' => 0, 'column' => 0, 'presentationHint' => hint }
+    Frame = Struct.new(:id, :thread, :name, :hint, :where, keyword_init: true) do
+      def to_dap
+        body = { 'id' => id, 'name' => name, 'line' => 0, 'column' => 0, 'presentationHint' => hint }
+        return body if where.nil?
+
+        body['source'] = { 'name' => File.basename(where[:source]), 'path' => where[:source] }
+        body['line'] = where[:line]
+        body['column'] = [where[:column], 1].max
+        body['endLine'] = where[:end_line] if where[:end_line].positive?
+        body['endColumn'] = where[:end_column] if where[:end_column].positive?
+        body
+      end
     end
 
-    def initialize(session, labels, threads, control)
-      @session = session
+    def initialize(labels, threads, control)
       @labels = labels
       @threads = threads
       @control = control
@@ -39,8 +48,8 @@ module DAP
     def [](id) = @frames[Integer(id)]
 
     def for(thread)
-      names(thread).map do |name, hint|
-        frame = Frame.new(id: (@next_id += 1), thread: thread.id, name: name, hint: hint)
+      frames(thread).map do |name, where|
+        frame = Frame.new(id: (@next_id += 1), thread: thread.id, name: name, hint: 'normal', where: where)
         @frames[frame.id] = frame
         frame
       end
@@ -48,27 +57,30 @@ module DAP
 
     private
 
-    def names(thread)
-      view = @session.inspect_actor(thread.handle)
-      return [['gone', 'label']] if view.nil?
+    # [[name, where]] innermost first; `where` is a span or nil.
+    def frames(thread)
+      view = thread.view
+      return [['gone', nil]] if view.nil?
 
-      definition = view[:definition_id]
-      return [["done in #{@labels.state(definition, view[:final_state]) || 'its final state'}", 'normal']] if view[:residency] == 'done'
-      return [["idle in #{Array(@threads.leaves(thread.handle, view)).join(' ')}", 'normal']] unless view[:macrostep_in_progress]
+      definition = thread.definition
+      if view[:residency] == 'done'
+        final = view[:final_state]
+        return [["done in #{@labels.state(definition, final) || 'its final state'}", span(definition, :state, final)]]
+      end
+      return [["idle in #{leaves(thread, view).join(' ')}", leaf_span(thread, view)]] unless view[:macrostep_in_progress]
 
       position = Position.from_inspection(view)
       if position.key[0].zero?
         event = view[:current_event]
-        name = event ? @session.context.event_text(event[:name]) : 'no event'
-        return [["about to take #{name} (before transition selection)", 'normal']]
+        name = event ? thread.context.event_text(event[:name]) : 'no event'
+        return [["about to take #{name} (before transition selection)", leaf_span(thread, view)]]
       end
 
-      track = @control.track(thread.session)
-      unit_frames(position, definition) + step_frames(position, track, definition)
+      unit_frames(position, definition) + step_frames(position, @control.track(thread), definition)
     end
 
     def unit_frames(position, definition)
-      return [['selecting transitions', 'normal']] if position.nowhere?
+      return [['selecting transitions', nil]] if position.nowhere?
 
       frames = []
       action = position.action
@@ -77,7 +89,7 @@ module DAP
         foreach_next = info&.dig(:kind) == 'foreach'
         label = @labels.action(definition, action)
         label += " iteration #{position.iteration + 1}" if foreach_next
-        frames << [label, 'normal']
+        frames << [label, span(definition, :action, action)]
         # The iteration is the innermost loop's: the one this action is in,
         # unless the action is a loop itself (ADR 0083, open point 2).
         innermost = !foreach_next
@@ -87,23 +99,26 @@ module DAP
             label += " iteration #{position.iteration + 1}" if innermost
             innermost = false
           end
-          frames << [label, 'normal']
+          frames << [label, span(definition, :action, owner)]
         end
       end
-      frames << [block_name(position, definition), 'normal']
+      frames << block_frame(position, definition)
     end
 
-    def block_name(position, definition)
+    def block_frame(position, definition)
       state = @labels.state(definition, position.state)
+      where = span(definition, :state, position.state)
       case position.at
-      when 'exit' then "onexit of #{state}"
-      when 'transition' then "transition #{@labels.transition(definition, position.transition)}"
-      when 'enter' then entering(position, definition, state)
-      when 'select' then 'selecting transitions'
-      when 'finalize' then "finalize in #{state}"
-      when 'invoke' then "starting the invocations of #{state}"
-      when 'bootstrap' then 'bootstrap'
-      else position.at
+      when 'exit' then ["onexit of #{state}", where]
+      when 'transition'
+        ["transition #{@labels.transition(definition, position.transition)}",
+         span(definition, :transition, position.transition)]
+      when 'enter' then [entering(position, definition, state), where]
+      when 'select' then ['selecting transitions', nil]
+      when 'finalize' then ["finalize in #{state}", where]
+      when 'invoke' then ["starting the invocations of #{state}", where]
+      when 'bootstrap' then ['bootstrap', nil]
+      else [position.at, nil]
       end
     end
 
@@ -121,10 +136,29 @@ module DAP
       if microstep.positive?
         taken = micro && micro.dig(:key, :macrostep) == macrostep && micro.dig(:key, :microstep) == microstep
         what = taken ? ": #{@labels.microstep(definition, micro)}" : ''
-        frames << ["microstep #{macrostep}.#{microstep}#{what}", 'normal']
+        frames << ["microstep #{macrostep}.#{microstep}#{what}", taken ? microstep_span(definition, micro) : nil]
       end
       event = track&.in_macrostep && track.macrostep == macrostep && track.taken ? " on #{track.taken[:name_text]}" : ''
-      frames << ["macrostep #{macrostep}#{event}", 'normal']
+      frames << ["macrostep #{macrostep}#{event}", nil]
     end
+
+    # A chart's microstep is where its first transition was written; an
+    # operator's jump (ADR 0082) where its first target was.
+    def microstep_span(definition, record)
+      transition = Array(record[:transitions]).first
+      return span(definition, :transition, transition) if transition
+
+      span(definition, :state, Array(record[:states]).first)
+    end
+
+    def leaves(thread, view) = Array(@threads.leaves(thread.place, thread.handle, view))
+
+    def leaf_span(thread, view)
+      name = leaves(thread, view).first
+      id = name && @labels.states(thread.definition).find { |_, info| info[:id] == name }&.first
+      span(thread.definition, :state, id)
+    end
+
+    def span(definition, kind, id) = id.nil? || Labels.none?(id) ? nil : @labels.span(definition, kind, id)
   end
 end

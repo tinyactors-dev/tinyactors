@@ -1,11 +1,13 @@
 # frozen_string_literal: true
 
 module DAP
-  # The breakpoints a client set that need no source spans: function
-  # breakpoints by name, the exception filters, and data breakpoints on
-  # data-model locations. Each is found in the trace records a resume
-  # wrote, so a stop comes at the first unit boundary after the record
-  # (the host single-steps on `action_budget: 1` while any is set).
+  # The breakpoints a client set: line breakpoints (and log points) on the
+  # chart's Ruby files, mapped to compiled IDs through source spans (core
+  # ADR 0086, SourceMap); function breakpoints by name; the exception
+  # filters; and data breakpoints on data-model locations. Each is found in
+  # the trace records a resume wrote, or in where the actor stands after it
+  # (core ADR 0083), so a stop comes at the first unit boundary after the
+  # record (the host single-steps on `action_budget: 1` while any is set).
   class Breakpoints
     EXCEPTION_FILTERS = [
       { 'filter' => 'error.execution', 'label' => 'error.execution',
@@ -27,19 +29,62 @@ module DAP
     Function = Struct.new(:id, :name, :kind, :target, :condition, :hit_condition, :hits, keyword_init: true)
     # A data breakpoint on one actor's location: `path` as jq's path() answers it.
     Watch = Struct.new(:id, :data_id, :label, :path, :condition, :hit_condition, :hits, keyword_init: true)
+    # A line breakpoint, or a log point when it has a `log_message`. `line`
+    # is where the client put it; `targets` maps each Definition to the
+    # element the line snapped to (SourceMap::Element), and `actual` is the
+    # line of that element, which the client shows.
+    Line = Struct.new(:id, :path, :line, :condition, :hit_condition, :log_message, :hits, :targets, :actual,
+                      keyword_init: true) do
+      def verified? = !targets.empty?
 
-    def initialize(labels, expressions)
+      def to_dap(message = nil)
+        body = { 'id' => id, 'verified' => verified?, 'line' => actual || line }
+        body['source'] = { 'name' => File.basename(path), 'path' => path }
+        body['message'] = message || 'no state, transition or action of a loaded chart is on or near this line' unless verified?
+        body
+      end
+    end
+
+    def initialize(labels, expressions, source_map)
       @labels = labels
       @expressions = expressions
+      @map = source_map
       @functions = []
       @data = []
       @filters = []
+      @lines = {}
       @next_id = 0
     end
 
-    def any? = !@functions.empty? || !@data.empty? || !@filters.empty?
+    def any? = !@functions.empty? || !@data.empty? || !@filters.empty? || @lines.values.any? { |set| !set.empty? }
 
-    def watching_data? = !@data.empty?
+    # Whether `observe` needs the thread of a record: data breakpoints
+    # evaluate the location an assignment wrote in its actor.
+    def needs_thread? = !@data.empty?
+
+    # setBreakpoints: replaces the line breakpoints of one file, resolved
+    # against `definitions`. Answers DAP Breakpoints.
+    def set_lines(path, specs, definitions)
+      @lines[path] = specs.map do |spec|
+        breakpoint = Line.new(id: (@next_id += 1), path: path, line: Integer(spec.fetch('line')),
+                              condition: spec['condition'], hit_condition: spec['hitCondition'],
+                              log_message: spec['logMessage'], hits: 0, targets: {})
+        resolve(breakpoint, definitions)
+        breakpoint
+      end
+      @lines[path].map(&:to_dap)
+    end
+
+    # Resolves every line breakpoint again, after definitions came or went
+    # (a hot reload, a fork). Answers the ones whose verification or line
+    # changed, for `breakpoint` events.
+    def refresh_lines(definitions)
+      @lines.values.flatten.select do |breakpoint|
+        before = [breakpoint.verified?, breakpoint.actual]
+        resolve(breakpoint, definitions)
+        before != [breakpoint.verified?, breakpoint.actual]
+      end
+    end
 
     # setFunctionBreakpoints: replaces them all. Answers DAP Breakpoints.
     def set_functions(specs)
@@ -78,6 +123,22 @@ module DAP
       end
     end
 
+    def log_point?(breakpoint) = breakpoint.is_a?(Line) && !breakpoint.log_message.to_s.empty?
+
+    # A log point's message, with each `{expression}` replaced by its value
+    # in the actor's data model.
+    def log_message(breakpoint, thread)
+      breakpoint.log_message.gsub(/\{([^{}]+)\}/) do
+        expression = Regexp.last_match(1)
+        begin
+          value = @expressions.value(thread, expression, event: nil)
+          value.is_a?(String) ? value : JSON.generate(value)
+        rescue RequestError => error
+          "{#{expression}: #{error.message}}"
+        end
+      end
+    end
+
     # A dataId names an actor by its thread label and a location by its
     # path: `acct1 ["failures"]`.
     def self.data_id(label, path) = "#{label} #{JSON.generate(path)}"
@@ -93,17 +154,19 @@ module DAP
     # ------------------------------------------------------------------
     # Hits
     #
-    # A hit is {kind:, session:, breakpoints:, description:, exception:}.
-    # `observe` finds candidates in each record as it is read; the Control
-    # confirms function and data hits with `fire?` when it decides to stop,
-    # so conditions are evaluated against the data the stop shows.
+    # A hit is {kind:, key:, breakpoints:, description:, exception:}, `key`
+    # the track key of the actor it is in. `observe` finds candidates in
+    # each record as it is read, and `reach` in where the actor stands after
+    # a resume; the Control confirms line, function and data hits with
+    # `fire?` when it decides to stop, so conditions are evaluated against
+    # the data the stop shows.
 
     # `on:` breakpoints for an actor about to take `event`, before its
     # macrostep begins, confirmed. Answers their IDs.
     def taking(thread, event)
       return [] if event.nil?
 
-      name = event[:name_text] || @expressions.context.event_text(event[:name])
+      name = event[:name_text] || thread.context.event_text(event[:name])
       @functions.select do |breakpoint|
         breakpoint.kind == :on && matches_event?(breakpoint.target, name) && fire?(breakpoint, thread)
       end.map(&:id)
@@ -115,16 +178,22 @@ module DAP
       return unless any?
 
       exception(record, track, &hit)
-      functions(record, track, &hit) unless @functions.empty?
-      data(record, thread, &hit) unless @data.empty? || thread.nil?
+      blocks(record, track, &hit)
+      first_unit(record, track, &hit)
+      data(record, track, thread, &hit) unless @data.empty? || thread.nil?
     end
 
-    # Yields the entry, exit and transition breakpoints an actor that
-    # stands at `position` (core ADR 0083: the unit it runs next) has
-    # reached: it is about to run the block they name, or it passed it.
+    # Yields what an actor that stands at `position` (core ADR 0083: the
+    # unit it runs next) has reached: a line breakpoint on that action, and
+    # the entry, exit and transition breakpoints whose block it is about to
+    # run, or passed.
     def reach(track, position)
       reached, track.pending = track.pending.partition { |pending| reached?(pending, position) }
-      reached.each { |pending| yield function_hit(track, pending[:breakpoint]) }
+      reached.each { |pending| yield block_hit(track, pending[:breakpoint]) }
+      return if position.action.nil?
+
+      lines = line_breakpoints(track.definition, :action, position.action)
+      yield line_hit(track, lines, 'before') unless lines.empty?
     end
 
     # The condition holds and the hit condition is met, counting this hit.
@@ -143,6 +212,29 @@ module DAP
 
     private
 
+    def resolve(breakpoint, definitions)
+      breakpoint.targets = definitions.filter_map do |definition|
+        element = @map.resolve(definition, breakpoint.path, breakpoint.line)
+        [definition, element] if element
+      end.to_h
+      # The workbench's definitions come first: the file on disk is theirs.
+      breakpoint.actual = breakpoint.targets.values.first&.line
+    end
+
+    # The line breakpoints on the element `kind` `id` of `definition`.
+    def line_breakpoints(definition, kind, id)
+      @lines.values.flatten.select do |breakpoint|
+        element = breakpoint.targets[definition]
+        element && element.kind == kind && element.id == Integer(id)
+      end
+    end
+
+    def line_hit(track, breakpoints, where)
+      element = breakpoints.first.targets[track.definition]
+      { kind: :line, key: track.key, breakpoints: breakpoints,
+        description: "#{where} line #{element.line} of #{File.basename(breakpoints.first.path)}" }
+    end
+
     def exception(record, track)
       track.fault = record[:fault] if record[:has_fault]
       filter = exception_filter(record)
@@ -150,27 +242,26 @@ module DAP
 
       event = record[:event]
       fault = filter.start_with?('error.') ? track.fault : nil
-      yield({ kind: :exception, session: track.session, filter: filter, event: event, fault: fault,
+      yield({ kind: :exception, key: track.key, filter: filter, event: event, fault: fault,
               description: exception_text(filter, event, fault) })
     end
 
-    # Entry, exit and transition breakpoints are noted when the MICROSTEP
-    # record names their state or transition, and hit (`reach`) once the
-    # actor stands before the block they name: the state's onentry or
-    # onexit, or the transition's content. When there is no unit to stand
-    # before (a state without handlers), they hit at the next place the
-    # actor stops. A resume always runs one unit after it selects a
+    # Entry, exit and transition breakpoints, and line breakpoints on a
+    # state (its entry) or a transition (its content), are noted when the
+    # MICROSTEP record names their state or transition, and hit (`reach`)
+    # once the actor stands before the block they name: the state's onentry
+    # or onexit, or the transition's content. When there is no unit to
+    # stand before (a state without handlers), they hit at the next place
+    # the actor stops. A resume always runs one unit after it selects a
     # microstep, so when the block's first unit is the microstep's first,
-    # the stop comes after that unit.
-    def functions(record, track, &hit)
+    # the stop comes after that unit (see `first_unit`).
+    def blocks(record, track, &hit)
       definition = record[:definition]
       case record[:kind]
       when 'microstep'
         overdue(track, &hit)
-        @functions.each do |breakpoint|
-          target = pending_target(breakpoint, record, definition)
-          track.pending << { breakpoint: breakpoint, at: target[0], id: target[1] } if target
-        end
+        track.fresh = true
+        pending_blocks(record, definition).each { |pending| track.pending << pending }
       when 'macrostep_end', 'finished', 'destroyed'
         overdue(track, &hit)
       when 'macrostep_begin'
@@ -179,22 +270,61 @@ module DAP
         @functions.each do |breakpoint|
           next unless breakpoint.kind == :on && matches_event?(breakpoint.target, record.dig(:event, :name_text))
 
-          yield function_hit(track, breakpoint)
+          yield block_hit(track, breakpoint)
         end
       end
     end
 
+    # The first unit of a microstep runs in the resume that selects it,
+    # before any stop is possible, so a line breakpoint on it cannot stop
+    # before it: it stops after it, as soon as its record shows it ran.
+    # A unit that writes no record (a <log>) cannot be seen this way.
+    #
+    # Core ADR 0087 lets a resume stop before a microstep's first unit.
+    # Once it is here, the scheduler asks for that stop while any
+    # breakpoint is armed (Control#budgets), `reach` sees the first unit as
+    # the next one like any other, and this method goes.
+    def first_unit(record, track)
+      return unless track.fresh
+      return if Labels.none?(record.dig(:position, :action))
+
+      track.fresh = false
+      lines = line_breakpoints(record[:definition], :action, record.dig(:position, :action))
+      yield line_hit(track, lines, 'after') unless lines.empty?
+    end
+
     def overdue(track)
-      track.pending.each { |pending| yield function_hit(track, pending[:breakpoint]) }
+      track.pending.each { |pending| yield block_hit(track, pending[:breakpoint]) }
       track.pending = []
     end
 
-    def function_hit(track, breakpoint)
-      { kind: :function, session: track.session, breakpoints: [breakpoint], description: describe(breakpoint) }
+    def block_hit(track, breakpoint)
+      return line_hit(track, [breakpoint], 'at') if breakpoint.is_a?(Line)
+
+      { kind: :function, key: track.key, breakpoints: [breakpoint], description: describe(breakpoint) }
     end
 
-    # [phase, ID] a breakpoint waits for in this microstep, or nil.
-    def pending_target(breakpoint, record, definition)
+    # {breakpoint:, at:, id:} of what this microstep will reach: [phase, ID].
+    def pending_blocks(record, definition)
+      pending = @functions.filter_map do |breakpoint|
+        target = function_target(breakpoint, record, definition)
+        target && { breakpoint: breakpoint, at: target[0], id: target[1] }
+      end
+      Array(record[:entered]).each do |state|
+        line_breakpoints(definition, :state, state).each do |breakpoint|
+          pending << { breakpoint: breakpoint, at: 'enter', id: Integer(state) }
+        end
+      end
+      Array(record[:transitions]).each do |transition|
+        line_breakpoints(definition, :transition, transition).each do |breakpoint|
+          pending << { breakpoint: breakpoint, at: 'transition', id: Integer(transition) }
+        end
+      end
+      pending
+    end
+
+    # [phase, ID] a function breakpoint waits for in this microstep, or nil.
+    def function_target(breakpoint, record, definition)
       case breakpoint.kind
       when :entry
         state = Array(record[:entered]).find { |id| @labels.state(definition, id) == breakpoint.target }
@@ -228,7 +358,7 @@ module DAP
     end
 
     # A write to a watched location of the actor.
-    def data(record, thread)
+    def data(record, track, thread)
       return unless record[:kind] == 'assign'
 
       watching = @data.select { |breakpoint| breakpoint.label == thread.label }
@@ -245,7 +375,7 @@ module DAP
       hits = watching.select { |breakpoint| overlap?(breakpoint.path, written) }
       return if hits.empty?
 
-      yield({ kind: :data, session: record.dig(:key, :session), breakpoints: hits,
+      yield({ kind: :data, key: track.key, breakpoints: hits,
               description: "#{thread.label}: #{location} = #{JSON.generate(record[:value])}" })
     end
 

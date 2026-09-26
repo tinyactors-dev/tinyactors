@@ -344,10 +344,12 @@ module TinyactorsTest
     # `count_allocations: true` records what every ta_actor_resume the run
     # makes costs (#resume_costs); `allocation_fault:` {resume:, after:,
     # count:, on_stop:} fails allocations inside one of them (see
-    # #assert_allocation_failures_invisible).
+    # #assert_allocation_failures_invisible). `initial_time` is the logical
+    # time the system starts at, as a debugger's fork restored from an
+    # image taken later needs.
     def initialize(driver, group, charts, run: 'main', trace: false, resume_budget: RESUME_BUDGET,
                    dispatch_budget: DISPATCH_BUDGET, resume_action_budget: 0, after_step: nil,
-                   count_allocations: false, allocation_fault: nil)
+                   count_allocations: false, allocation_fault: nil, initial_time: 0)
       @driver = driver
       @group = group
       @charts = charts
@@ -365,7 +367,7 @@ module TinyactorsTest
       @instruments = {}
       @step_index = 0
       @in_hook = false
-      @now = 0
+      @now = initial_time
       @trace = trace ? Trace.new(self) : nil
       @count_allocations = count_allocations
       @allocation_fault = allocation_fault
@@ -689,7 +691,7 @@ module TinyactorsTest
       @system ||= begin
         @creating_system = true
         system = core('ta_system_create',
-                      ta.system.create(config: { allocator: allocator.adapter, initial_time: 0 })).fetch(:out)
+                      ta.system.create(config: { allocator: allocator.adapter, initial_time: @now })).fetch(:out)
         @creating_system = false
         router = { '$adapter' => 'router.direct', 'config' => { 'system' => system } }
         core('ta_system_set_external_event_router',

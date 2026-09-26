@@ -6,12 +6,13 @@ module DAP
   # and a revision the workbench retired after a reload stays listed, marked
   # retired. A loaded source is the chart file a revision was compiled
   # from, with the text it had then, so a retired revision still shows the
-  # chart it ran.
+  # chart it ran. A fork runs a revision the workbench has, so only the
+  # workbench's definitions are listed.
   class Catalog
     Entry = Struct.new(:definition, :family, :revision, :chart, :path, :text, :reference, :retired,
                        keyword_init: true) do
       def module_body
-        body = { 'id' => definition.to_s, 'name' => retired ? "#{family} (retired)" : family, 'version' => revision }
+        body = { 'id' => definition.id.to_s, 'name' => retired ? "#{family} (retired)" : family, 'version' => revision }
         body['path'] = path if path
         body
       end
@@ -44,6 +45,9 @@ module DAP
       entry&.definition
     end
 
+    # The definitions that are not retired.
+    def live = @entries.values.reject(&:retired).map(&:definition)
+
     def text(reference)
       entry = @entries.each_value.find { |candidate| candidate.reference == Integer(reference) }
       entry&.text
@@ -54,7 +58,7 @@ module DAP
     def refresh(threads)
       modules = []
       sources = []
-      threads.to_a.map(&:definition).uniq.each do |definition|
+      threads.to_a.select { |thread| thread.place.equal?(@session) }.map(&:definition).uniq.each do |definition|
         next if @entries.key?(definition)
 
         entry = describe(definition)
@@ -76,10 +80,9 @@ module DAP
 
     private
 
-    def context = @session.context
-
     def describe(definition)
-      response = context.ta.definition.inspect(system: context.system_handle, definition: definition)
+      context = definition.context
+      response = context.ta.definition.inspect(system: context.system_handle, definition: definition.id)
       return nil unless response[:result] == 'ok'
 
       facts = response.dig(:out, :out)
@@ -93,7 +96,8 @@ module DAP
 
     # Retired, or freed because nothing uses it any more (ADR 0043).
     def retired?(definition)
-      response = context.ta.definition.inspect(system: context.system_handle, definition: definition)
+      context = definition.context
+      response = context.ta.definition.inspect(system: context.system_handle, definition: definition.id)
       response[:result] != 'ok' || response.dig(:out, :out, :retired)
     end
   end
