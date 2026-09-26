@@ -273,5 +273,21 @@ Every ☑ is covered by `tinyactors-napi/test/debug.js`, on Node and Bun.
 | N1 | `held` scheduling state | tinyactors-napi [ADR 0027](../tinyactors-napi/docs/adr/0027-a-debugger-holds-steps-and-redirects-one-actor.md) | ☑ |
 | N2 | Budgets for one actor | tinyactors-napi [ADR 0027](../tinyactors-napi/docs/adr/0027-a-debugger-holds-steps-and-redirects-one-actor.md) | ☑ |
 | N3 | Operator transitions in the envelope; settling on abandon | tinyactors-napi [ADR 0027](../tinyactors-napi/docs/adr/0027-a-debugger-holds-steps-and-redirects-one-actor.md) | ☑ |
+
+The prerequisites sit on core ADRs 0074 to 0080 and napi ADRs 0019 to 0024:
+
+- C2 abandons a macrostep that core ADR 0075 stopped as a runaway; napi
+  quarantines such an actor, and its adapter stops for it with the
+  `runaway` filter.
+- C4 names a captured image's system as core ADR 0074's offloaded bytes
+  do, by address and token; offloaded bytes still load only where they
+  were written, and napi's `unload()` offloads, so a fork restores from an
+  in-memory image.
+- C5: registering a chart again is answered by its definition (core ADR
+  0077), which then takes the new spans, so both adapters read the lines
+  again after a hot reload.
+- N1: holding is a debugger's, not the flow control napi ADR 0020's
+  decision 4 declined; a held actor is resident, so its loader is not
+  involved.
 | T1 | Shared DAP transcript suite | [tinyactors-test/dap](../tinyactors-test/dap/README.md), played by both hosts' tests | ☑ |
 | X1 | VS Code extension that registers the debug type | [tinyactors-vscode](../tinyactors-vscode/README.md) | ☑ |

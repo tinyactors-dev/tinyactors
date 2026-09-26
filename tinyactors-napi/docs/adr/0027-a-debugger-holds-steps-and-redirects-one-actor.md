@@ -229,6 +229,11 @@ for) `mise run //tinyactors-napi:bench-check` fails its 40 ns budgets for
 the base 28bca20 as well as for this change, by similar margins (sampled
 out: 148 to 154 ns over untraced for the base, 89 to 203 ns for this
 change, in alternate runs); it is to be run again on a quiet machine.
+These runs predate core ADRs 0074 to 0080 and the addon's work on top of
+them (the loader, the runaway limit, the chunked free list and OTLP
+staging); this change was rebased onto them afterwards, and the runs are
+to be repeated with `bench-compare` against that base (napi's roadmap,
+"Debugging"). The sizes in the table above are of the rebased code.
 
 ## Alternatives
 

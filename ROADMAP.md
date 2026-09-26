@@ -55,6 +55,8 @@ are in [`docs/proposals/`](docs/proposals/README.md).
 - [ ] **Build the debug adapter.** A Debug Adapter Protocol server in both
   hosts: Ruby in tinyactors-test and JavaScript in napi, with the core
   prerequisites first (operator transitions, withdrawing a delayed send,
-  images across systems, source spans).
+  images across systems, source spans): core ADRs 0082 to 0087 and napi
+  ADRs 0025 and 0026, on top of core ADRs 0074 to 0080. Both adapters
+  run; what is left is in the status map.
   [The design](docs/proposals/debug-adapter.md) and
   [the status of every DAP message](docs/debug-adapter.md).

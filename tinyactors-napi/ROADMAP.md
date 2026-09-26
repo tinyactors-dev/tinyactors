@@ -871,6 +871,17 @@ shrink as definitions go, `docs/tracing.md`):
   `<content expr>` text, still decodes and compiles before identity answers
   it: see ADR 0024's notes for the cost.
 
+**Debugging** (ADR 0027, with core ADRs 0082 to 0087):
+- the throughput figures in ADR 0027 were measured against the addon
+  before core ADRs 0074 to 0080; measure the hold, budget and jump
+  branches again with `bench-compare` against the base they now sit on;
+- the scheduling entry's 8 flag bits are all taken (ADR 0027, "Beside the
+  loader and the runaway limit"): the next flag grows the entry or takes
+  a bit of `reserved`;
+- SCXML imports name no source file (`ta_definition_import_params.name`
+  is left empty), so the debug session has no lines for an imported chart;
+  `define(xml, { format: 'scxml', name })` would give it them.
+
 **Later:**
 - port the tinyactors-test scenario suite to run against the addon;
 - consider publishing a filtered raw core module (it would need an ADR,
