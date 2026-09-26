@@ -210,8 +210,12 @@ event, untraced:
 | 3 | 1116 | 1127 |
 
 The traceparent, sampled-out and macrostep columns move the same way.
-The difference is within the machine's noise, and
-`mise run //tinyactors-napi:bench-check` passes.
+The difference is within the machine's noise. On that shared machine
+(about 1,100 ns an event, against the ~440 ns `bench-check` was written
+for) `mise run //tinyactors-napi:bench-check` fails its 40 ns budgets for
+the base 28bca20 as well as for this change, by similar margins (sampled
+out: 148 to 154 ns over untraced for the base, 89 to 203 ns for this
+change, in alternate runs); it is to be run again on a quiet machine.
 
 ## Alternatives
 
