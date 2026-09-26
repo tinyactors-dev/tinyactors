@@ -33,3 +33,4 @@ particular on core ADRs 0011, 0029, 0040, 0047, 0050, 0053–0059, 0061,
 | [0021](0021-an-invoked-scxml-document-is-imported-in-the-invoke.md) | [An invoked SCXML document is imported in the invoke](0021-an-invoked-scxml-document-is-imported-in-the-invoke.md) |
 | [0022](0022-mail-a-chart-sends-nowhere-raises-error-communication.md) | [Mail a chart sends nowhere raises `error.communication`](0022-mail-a-chart-sends-nowhere-raises-error-communication.md) |
 | [0023](0023-invoked-documents-are-cached-in-a-bounded-lru.md) | [Invoked documents are cached in a bounded LRU](0023-invoked-documents-are-cached-in-a-bounded-lru.md) |
+| [0024](0024-a-child-chart-is-a-nested-definition.md) | [A child chart is a nested definition](0024-a-child-chart-is-a-nested-definition.md) |

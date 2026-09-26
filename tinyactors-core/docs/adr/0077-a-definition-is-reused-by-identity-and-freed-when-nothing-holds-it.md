@@ -1,6 +1,6 @@
 # ADR 0077: A definition is reused by identity and freed when nothing holds it
 
-**Status:** Accepted; not yet implemented. Refines ADR 0028 (identity), ADR 0043 (retirement) and ADR 0053 (literal content for invokers). Supersedes napi ADR 0023 and napi ADR 0021 point 3.
+**Status:** Accepted and implemented (2026-09-26); see the implementation notes. Refines ADR 0028 (identity), ADR 0043 (retirement) and ADR 0053 (literal content for invokers). Supersedes napi ADR 0023 and napi ADR 0021 point 3.
 **Date:** 2026-09-26
 
 ## Context
@@ -137,3 +137,24 @@ any imported chart does.
   a broken inline child refused at define time, `<content expr>` text
   reused by identity and freed after its last child, and no growth over
   many invokes of text that varies.
+
+## Implementation notes
+
+- **Where:** `src/system.c` (registration, `ta_system_release_definition`,
+  `ta_system_settle_definition` with its worklist), `src/actor.c` (the
+  last actor settles its definition), `src/invoke.c`
+  (`ta_definition_invoke`, `ta_definition_nest`, and
+  `ta_invoke_request.definition`), `src/builder.c` (the content hash, the
+  family-only identity, the host-expression flag), `src/definition.{c,h}`.
+- **Retiring drops every hold, not one:** `ta_system_retire_definition`
+  keeps its meaning of "this definition is done", however many times it
+  was registered.
+- **Charts with host expressions are exempt** from both registration
+  rules (section 1), found while testing: napi's builder charts reuse an
+  explicit revision for charts that differ only in their functions.
+- **Same identity, other data-model adapter:** registers beside, found
+  by the test host's `null_datamodel.rb`, which compiles one chart under
+  two data models.
+- **Measured** (napi, a parent with an inline child, 2,000 repeated
+  defines, Node 22): 22.4 µs and 5,151 bytes of core memory kept per
+  define before, 21.8 µs and 0 bytes after (napi ADR 0024).

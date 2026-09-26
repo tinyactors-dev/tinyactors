@@ -1,6 +1,6 @@
 # ADR 0023: Invoked documents are cached in a bounded LRU
 
-**Status:** Accepted and implemented (2026-09-25); see the implementation notes. Refines ADR 0021 point 3.
+**Status:** Accepted and implemented (2026-09-25); see the implementation notes. Refines ADR 0021 point 3. **Superseded by ADR 0024 and core ADR 0077** (2026-09-26): the cache is removed; definition identity and holds do its job.
 **Date:** 2026-09-25
 
 ## Context
