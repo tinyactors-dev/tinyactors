@@ -1072,8 +1072,11 @@ typedef enum {
     TA_TRACE_DEFINITION_FREED,
 
     /* Execution control, again (ADR 0082). */
-    TA_TRACE_ABANDONED          /* `event`: the external event, or none; `dropped`: the
+    TA_TRACE_ABANDONED,         /* `event`: the external event, or none; `dropped`: the
                                    internal events discarded; MACROSTEP_END follows */
+
+    /* Lifecycle-like, outside macrosteps (ADR 0084). */
+    TA_TRACE_WITHDRAWN          /* `send`: ta_actor_withdraw_send() removed it */
 } ta_trace_kind TA_SYMBOLS("TA_TRACE_");
 
 /*
@@ -2669,6 +2672,27 @@ TA_API ta_result ta_actor_destroy(ta_system *system, ta_actor_id actor);
 
 
 
+
+/*
+ * Withdraws a pending delayed send of `actor` from outside the chart
+ * (ADR 0084), as a <cancel> of `send` in that actor would: every pending
+ * send of the actor with that ID that the router has not yet been offered
+ * is removed and released. `send` is the `send_id` that inspection's
+ * `delayed_sends` reports; ta_send_id_parse() turns the text a chart sees
+ * into one. Only the actor's own sends can be named (ADR 0012). It may be
+ * called between macrosteps or while one is paused, allocates nothing, and
+ * writes a WITHDRAWN trace record outside any macrostep.
+ *
+ * - TA_ERR_INVALID: `send` is 0, which names no send.
+ * - TA_ERR_NOT_FOUND: no resident actor has that ID, or it holds no pending
+ *   send with that ID: never made, already dispatched, cancelled or
+ *   withdrawn.
+ * - TA_ERR_DONE: its only sends with that ID are submitted: the router
+ *   refused them once and they wait to be offered again. A submitted send
+ *   has been sent and belongs to its receiver (ADR 0054), so it is not
+ *   withdrawn.
+ */
+TA_API ta_result ta_actor_withdraw_send(ta_system *system, ta_actor_id actor, ta_send_id send);
 
 /*
  * A read-only operational view of one resident interpreter instance.

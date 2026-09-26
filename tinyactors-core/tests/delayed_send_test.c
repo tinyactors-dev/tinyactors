@@ -31,11 +31,13 @@ static int failures;
 
 static long live_blocks;
 static size_t largest_block;
+static long allocations;
 
 static void *count_alloc(void *self, size_t size, size_t alignment) {
     (void)self;
     (void)alignment;
     void *block = malloc(size);
+    allocations += 1;
     live_blocks += block != NULL ? 1 : 0;
     largest_block = size > largest_block ? size : largest_block;
     return block;
@@ -201,6 +203,35 @@ static const ta_scxml_state_spec immediate[] = {
         .id = STR("sent"),
         .onentry = (const ta_scxml_handler_spec[]){
             { .actions = (const ta_scxml_action_spec[]){ SEND("now", "ping", "0s"), {0} } },
+            {0},
+        },
+    },
+    {0},
+};
+
+/* Two sends with one literal ID, as a chart may make them. */
+static const ta_scxml_state_spec twins[] = {
+    {
+        .kind = TA_SCXML_STATE_ATOMIC,
+        .id = STR("waiting"),
+        .onentry = (const ta_scxml_handler_spec[]){
+            { .actions = (const ta_scxml_action_spec[]){ SEND("dup", "first", "1s"), SEND("dup", "second", "2s"),
+                                                         SEND("other", "third", "3s"), {0} } },
+            {0},
+        },
+    },
+    {0},
+};
+
+/* On `go`, content that sends `t` and `u`, then cancels `t`, in one block. */
+static const ta_scxml_state_spec send_then_cancel[] = {
+    {
+        .kind = TA_SCXML_STATE_ATOMIC,
+        .id = STR("idle"),
+        .transitions = (const ta_scxml_transition_spec[]){
+            { .kind = TA_SCXML_TRANSITION_INTERNAL, .event = STR("go"),
+              .actions = (const ta_scxml_action_spec[]){ SEND("t", "tick", "1s"), SEND("u", "tock", "2s"),
+                                                         CANCEL("t"), {0} } },
             {0},
         },
     },
@@ -541,6 +572,226 @@ static void test_refused_self_send_to_an_unloaded_owner_goes_by_address(void) {
     ta_system_destroy(system);
 }
 
+/* ------------------------------------------------------------------------
+ * Withdrawing one send from outside the chart (ADR 0084)
+ */
+
+/* The WITHDRAWN and CANCELLED records a sink saw, in order. */
+typedef struct {
+    ta_trace_kind kind;
+    ta_step_key key;
+    ta_send_id send;
+    ta_actor_id actor;
+} seen_record;
+
+static seen_record seen[16];
+static uint32_t seen_count;
+
+static void seen_write(void *self, const ta_trace_record *record) {
+    (void)self;
+    if (seen_count < 16u) {
+        seen[seen_count++] = (seen_record){ .kind = record->kind, .key = record->key, .send = record->send,
+                                            .actor = record->actor };
+    }
+}
+static const ta_trace_sink_vtable seen_vtable = { .write = seen_write };
+
+static void watch_withdrawals(ta_system *system) {
+    seen_count = 0;
+    uint32_t kinds = TA_TRACE_BIT(TA_TRACE_WITHDRAWN) | TA_TRACE_BIT(TA_TRACE_CANCELLED);
+    CHECK(ta_system_set_trace_sink(system, (ta_trace_sink){ .v = &seen_vtable, .kinds = kinds }) == TA_OK);
+}
+
+static ta_send_id send_id(ta_system *system, const char *text) {
+    ta_send_id id = 0;
+    CHECK(ta_send_id_parse(system, (ta_str){ .ptr = text, .len = (uint32_t)strlen(text) }, &id) == TA_OK);
+    return id;
+}
+
+static uint64_t cancelled_count(ta_system *system) {
+    ta_counters counters;
+    ta_system_counters(system, &counters);
+    return counters.sends_cancelled;
+}
+
+/*
+ * An operator withdraws one pending send by owner and ID: it is gone from
+ * inspection and from the global deadline, it never fires, the others do,
+ * nothing allocates, and a lifecycle-like WITHDRAWN record says so. Only
+ * the named actor's sends can be withdrawn (ADR 0012).
+ */
+static void test_withdrawing_one_send(void) {
+    router_state router = { .answer = TA_EXTERNAL_EVENT_ACCEPTED };
+    ta_system *system = create_system(&router);
+    ta_definition_id many = define(system, "many", one_timer);
+    ta_definition_id three = define(system, "three", three_timers);
+    ta_actor_id neighbour = spawn(system, many, NULL);
+    ta_actor_id actor = spawn(system, three, NULL);
+    watch_withdrawals(system);
+
+    ta_actor_inspection view;
+    CHECK(ta_actor_inspect(system, actor, &view) == TA_OK && view.delayed_send_count == 3);
+    ta_send_id early = view.delayed_sends[0].send_id;
+    CHECK(early == send_id(system, "early"));
+    uint64_t cancelled = cancelled_count(system);
+    long before = allocations;
+    CHECK(ta_actor_withdraw_send(system, actor, early) == TA_OK);
+    CHECK(allocations == before);
+    CHECK(cancelled_count(system) == cancelled + 1u);
+
+    CHECK(ta_actor_inspect(system, actor, &view) == TA_OK && view.delayed_send_count == 2);
+    if (view.delayed_send_count == 2) {
+        CHECK(view.delayed_sends[0].event == event_name(system, "middle"));
+        CHECK(view.delayed_sends[1].event == event_name(system, "late"));
+    }
+    ta_time next = 0;
+    CHECK(ta_system_next_deadline(system, &next) == TA_OK && next == 2000);
+
+    /* One record, outside any macrostep: the session's second lifecycle key
+     * (SPAWNED was the first). */
+    CHECK(seen_count == 1);
+    CHECK(seen[0].kind == TA_TRACE_WITHDRAWN && seen[0].send == early && seen[0].actor == actor);
+    CHECK(seen[0].key.session == view.session_id && seen[0].key.macrostep == 0 && seen[0].key.microstep == 2);
+
+    /* Gone once: again, it is not found, and nothing is recorded. */
+    CHECK(ta_actor_withdraw_send(system, actor, early) == TA_ERR_NOT_FOUND);
+    CHECK(seen_count == 1 && cancelled_count(system) == cancelled + 1u);
+    /* Only the owner's sends: the neighbour's `far` is not this actor's. */
+    ta_send_id far = send_id(system, "far");
+    CHECK(ta_actor_withdraw_send(system, actor, far) == TA_ERR_NOT_FOUND);
+    CHECK(ta_actor_inspect(system, neighbour, &view) == TA_OK && view.delayed_send_count == 1);
+    /* No ID, and no actor. */
+    CHECK(ta_actor_withdraw_send(system, actor, 0) == TA_ERR_INVALID);
+    CHECK(ta_actor_withdraw_send(NULL, actor, far) == TA_ERR_NOT_FOUND);
+    CHECK(ta_actor_withdraw_send(system, ta_actor_id_make(ta_actor_id_slot(actor), 0), far) == TA_ERR_NOT_FOUND);
+
+    /* The chart's own <cancel> of the withdrawn send finds nothing. */
+    deliver(system, actor, "drop");
+    CHECK(ta_actor_inspect(system, actor, &view) == TA_OK && view.delayed_send_count == 2);
+
+    CHECK(ta_system_set_time(system, 60000) == TA_OK);
+    uint32_t dispatched = 0;
+    bool more = true;
+    CHECK(ta_system_dispatch_due(system, &(ta_due_dispatch_params){ .budget = 10, .dispatched = &dispatched,
+                                                                    .more_due = &more }) == TA_OK);
+    CHECK(dispatched == 3 && router.accepted == 3);
+
+    /* A destroyed actor's ID names nothing. */
+    CHECK(ta_actor_destroy(system, actor) == TA_OK);
+    CHECK(ta_actor_withdraw_send(system, actor, send_id(system, "late")) == TA_ERR_NOT_FOUND);
+    ta_system_destroy(system);
+}
+
+/* Every pending send with the ID goes, as a <cancel> of it would; the rest stay. */
+static void test_withdrawing_a_repeated_id(void) {
+    router_state router = { .answer = TA_EXTERNAL_EVENT_ACCEPTED };
+    ta_system *system = create_system(&router);
+    ta_actor_id actor = spawn(system, define(system, "twins", twins), NULL);
+    CHECK(ta_actor_withdraw_send(system, actor, send_id(system, "dup")) == TA_OK);
+    ta_actor_inspection view;
+    CHECK(ta_actor_inspect(system, actor, &view) == TA_OK && view.delayed_send_count == 1);
+    CHECK(view.delayed_send_count != 1 || view.delayed_sends[0].event == event_name(system, "third"));
+    ta_system_destroy(system);
+}
+
+/*
+ * A submitted send was sent: the router refused it once and it waits for its
+ * receiver (ADR 0054). It is not withdrawn, and it is delivered later.
+ */
+static void test_a_submitted_send_is_not_withdrawn(void) {
+    router_state router = { .answer = TA_EXTERNAL_EVENT_RETRY };
+    ta_system *system = create_system(&router);
+    ta_actor_id sender = spawn(system, define(system, "immediate", immediate), NULL);
+    watch_withdrawals(system);
+    uint64_t cancelled = cancelled_count(system);
+    CHECK(ta_actor_withdraw_send(system, sender, send_id(system, "now")) == TA_ERR_DONE);
+    CHECK(seen_count == 0 && cancelled_count(system) == cancelled);
+    ta_actor_inspection view;
+    CHECK(ta_actor_inspect(system, sender, &view) == TA_OK && view.delayed_send_count == 1);
+
+    router.answer = TA_EXTERNAL_EVENT_ACCEPTED;
+    uint32_t dispatched = 0;
+    bool more = true;
+    CHECK(ta_system_dispatch_due(system, &(ta_due_dispatch_params){ .budget = 10, .dispatched = &dispatched,
+                                                                    .more_due = &more }) == TA_OK);
+    CHECK(dispatched == 1 && router.accepted == 1);
+    CHECK(ta_actor_withdraw_send(system, sender, send_id(system, "now")) == TA_ERR_NOT_FOUND);
+    ta_system_destroy(system);
+}
+
+/*
+ * While a macrostep is paused inside a block: a send the block has not made
+ * yet is not found; one it made is withdrawn, and the block's own <cancel>
+ * of it later in the same macrostep finds nothing. The record is outside
+ * the macrostep, between its CANCELLED record's neighbours.
+ */
+static void test_withdrawing_inside_a_paused_macrostep(void) {
+    router_state router = { .answer = TA_EXTERNAL_EVENT_ACCEPTED };
+    ta_system *system = create_system(&router);
+    ta_actor_id actor = spawn(system, define(system, "stepper", send_then_cancel), NULL);
+    watch_withdrawals(system);
+    ta_event go = { .name = event_name(system, "go"), .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
+    CHECK(ta_actor_deliver(system, &(ta_actor_deliver_params){ .actor = actor, .event = &go }) == TA_OK);
+    ta_send_id t = send_id(system, "t");
+    /* Delivered, not yet run: `t` does not exist yet. */
+    CHECK(ta_actor_withdraw_send(system, actor, t) == TA_ERR_NOT_FOUND);
+
+    ta_run_status status = TA_RUN_ERROR;
+    ta_actor_resume_params step = { .actor = actor, .budget = 100, .status = &status, .action_budget = 1 };
+    CHECK(ta_actor_resume(system, &step) == TA_OK);
+    ta_actor_inspection view;
+    CHECK(ta_actor_inspect(system, actor, &view) == TA_OK);
+    /* One unit ran: the first <send>. */
+    CHECK(status == TA_RUN_PAUSED && view.microstep_in_progress && view.delayed_send_count == 1);
+    CHECK(ta_actor_withdraw_send(system, actor, t) == TA_OK);
+    CHECK(ta_actor_inspect(system, actor, &view) == TA_OK && view.delayed_send_count == 0);
+    CHECK(view.macrostep_in_progress);
+
+    step.action_budget = 0;
+    CHECK(ta_actor_resume(system, &step) == TA_OK && status == TA_RUN_STABLE);
+    CHECK(ta_actor_inspect(system, actor, &view) == TA_OK && view.delayed_send_count == 1);
+    CHECK(view.delayed_send_count != 1 || view.delayed_sends[0].event == event_name(system, "tock"));
+    /* WITHDRAWN outside the macrostep, then the chart's own CANCELLED in it. */
+    CHECK(seen_count == 2);
+    CHECK(seen[0].kind == TA_TRACE_WITHDRAWN && seen[0].key.macrostep == 0 && seen[0].send == t);
+    CHECK(seen[1].kind == TA_TRACE_CANCELLED && seen[1].key.macrostep == 2 && seen[1].send == t);
+    ta_system_destroy(system);
+}
+
+/*
+ * Withdrawing changes the actor: an image captured before it is stale and
+ * cannot unload the actor, so the withdrawn send cannot come back through
+ * it. An image captured after it does not hold the send.
+ */
+static void test_an_image_from_before_a_withdrawal_is_stale(void) {
+    router_state router = { .answer = TA_EXTERNAL_EVENT_ACCEPTED };
+    ta_system *system = create_system(&router);
+    one_directory dir = {0};
+    CHECK(ta_system_set_actor_directory(system, (ta_actor_directory){ .self = &dir, .v = &dir_vtable }) == TA_OK);
+    ta_definition_id three = define(system, "three", three_timers);
+    ta_actor_address address = { .family = { STR("three") }, .name = STR("t1") };
+    ta_actor_id actor = spawn(system, three, &address);
+
+    ta_session_image *before = NULL;
+    CHECK(ta_actor_capture(system, &(ta_actor_capture_params){ .actor = actor, .out = &before }) == TA_OK);
+    CHECK(ta_actor_withdraw_send(system, actor, send_id(system, "early")) == TA_OK);
+    CHECK(ta_actor_unload(system, &(ta_actor_unload_params){ .actor = actor, .image = before }) == TA_ERR_STALE);
+    ta_session_image_destroy(before);
+
+    ta_session_image *after = NULL;
+    CHECK(ta_actor_capture(system, &(ta_actor_capture_params){ .actor = actor, .out = &after }) == TA_OK);
+    ta_time image_next = 0;
+    CHECK(ta_session_image_next_deadline(after, &image_next) == TA_OK && image_next == 2000);
+    CHECK(ta_actor_unload(system, &(ta_actor_unload_params){ .actor = actor, .image = after }) == TA_OK);
+    ta_actor_id loaded = 0;
+    CHECK(ta_actor_load(system, &(ta_actor_load_params){ .image = after, .out = &loaded }) == TA_OK);
+    ta_actor_inspection view;
+    CHECK(ta_actor_inspect(system, loaded, &view) == TA_OK && view.delayed_send_count == 2);
+    CHECK(view.delayed_send_count != 2 || view.delayed_sends[0].due == 2000);
+    ta_session_image_destroy(after);
+    ta_system_destroy(system);
+}
+
 int main(void) {
     test_inspection_lists_only_the_actors_sends();
     test_cancelling_the_front_send();
@@ -550,6 +801,11 @@ int main(void) {
     test_capture_and_load_keep_the_sends();
     test_refused_self_send_follows_its_owner_across_unload();
     test_refused_self_send_to_an_unloaded_owner_goes_by_address();
+    test_withdrawing_one_send();
+    test_withdrawing_a_repeated_id();
+    test_a_submitted_send_is_not_withdrawn();
+    test_withdrawing_inside_a_paused_macrostep();
+    test_an_image_from_before_a_withdrawal_is_stale();
     CHECK(live_blocks == 0);
     if (failures != 0) {
         fprintf(stderr, "delayed_send_test: %d check(s) failed\n", failures);

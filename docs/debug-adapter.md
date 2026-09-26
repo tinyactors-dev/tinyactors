@@ -167,7 +167,7 @@ The `repl` context of `evaluate`.
 |---|---|---|---|
 | C1 | The paused position in `ta_actor_inspection` | tinyactors-core [ADR 0083](../tinyactors-core/docs/adr/0083-inspection-reports-where-a-paused-actor-stands.md) | ☑ |
 | C2 | Operator transitions and abandoning a macrostep | tinyactors-core [ADR 0082](../tinyactors-core/docs/adr/0082-operator-transitions-and-abandoning-a-macrostep.md) | ☑ |
-| C3 | Withdrawing one delayed send | tinyactors-core ADR | ☐ |
+| C3 | Withdrawing one delayed send | tinyactors-core [ADR 0084](../tinyactors-core/docs/adr/0084-an-operator-can-withdraw-one-pending-delayed-send.md) | ☑ |
 | C4 | Images restore into another system | tinyactors-core ADR, napi | ☐ |
 | C5 | Source spans on decode and encode | tinyactors-core ADR, tinyactors-scxml, the Ruby DSL, napi's builder | ☐ |
 | N1 | `held` scheduling state | tinyactors-napi | ☐ |

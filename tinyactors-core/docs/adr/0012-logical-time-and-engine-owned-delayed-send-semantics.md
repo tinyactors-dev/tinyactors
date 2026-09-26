@@ -1,6 +1,6 @@
 # ADR 0012: Logical time and engine-owned delayed-send semantics
 
-**Status:** Accepted  
+**Status:** Accepted; refined by ADR 0084 (the host may withdraw a pending send of the session that created it, by owner and send ID)  
 **Date:** 2026-09-15
 
 ## Context

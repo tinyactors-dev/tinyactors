@@ -37,7 +37,7 @@ module TinyactorsTest
     }.freeze
     # Records with no step key of their own: an actor's lifecycle, and a
     # definition's (ADR 0080), whose key is the definition's, not a step.
-    LIFECYCLE = %w[spawned loaded unloaded finished destroyed
+    LIFECYCLE = %w[spawned loaded unloaded finished destroyed withdrawn
                    definition_registered definition_retired definition_freed].freeze
     DEFINITION = %w[definition_registered definition_retired definition_freed].freeze
     MACROSTEP = %w[macrostep_begin macrostep_end].freeze
@@ -73,6 +73,7 @@ module TinyactorsTest
         [none?(transition) ? 'if' : "t#{transition}", outcome(@record[:result].to_s)]
       when 'raised', 'sent' then [event]
       when 'forwarded' then ["v#{@record[:invoke]}", event]
+      when 'withdrawn' then ["send #{@record[:send]}"]
       when 'data_init' then [@record[:name], @record[:has_fault] ? fault : nil]
       when 'script' then [@record[:has_fault] ? fault : nil]
       when 'foreach' then ["i#{@record[:iteration]}"]

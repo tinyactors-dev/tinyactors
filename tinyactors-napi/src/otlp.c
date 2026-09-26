@@ -657,9 +657,9 @@ static const char *const tna_kind_names[] = {
     "microstep", "raise",     "data",     "assign",   "script",    "foreach",         "error",         "send",
     "cancel",    "invoke",    "invoke.cancel", "paused", "resumed", "stopped",  "ignored", "forward",
     "macrostep.long", "runaway", "definition.registered", "definition.retired", "definition.freed",
-    "abandoned",
+    "abandoned", "withdrawn",
 };
-_Static_assert(sizeof tna_kind_names / sizeof tna_kind_names[0] == (size_t)TA_TRACE_ABANDONED + 1u,
+_Static_assert(sizeof tna_kind_names / sizeof tna_kind_names[0] == (size_t)TA_TRACE_WITHDRAWN + 1u,
                "one name per ta_trace_kind");
 
 static const char *const tna_at_names[] = { "none", "select", "exit", "transition", "enter", "bootstrap", "finalize",
@@ -1777,7 +1777,7 @@ size_t tna_otlp_put_logs(tna_otlp *otlp, uint8_t *out, size_t size) {
 }
 
 void tna_otlp_write(tna_otlp *otlp, const ta_trace_record *record) {
-    if ((uint32_t)record->kind > (uint32_t)TA_TRACE_ABANDONED) {
+    if ((uint32_t)record->kind > (uint32_t)TA_TRACE_WITHDRAWN) {
         otlp->dropped += 1u;
         return;
     }
@@ -1816,6 +1816,7 @@ void tna_otlp_write(tna_otlp *otlp, const ta_trace_record *record) {
         case TA_TRACE_UNLOADED:
         case TA_TRACE_FINISHED:
         case TA_TRACE_DESTROYED:
+        case TA_TRACE_WITHDRAWN:
             ok = tna_lifecycle(otlp, record, now);
             break;
         case TA_TRACE_MACROSTEP_BEGIN:

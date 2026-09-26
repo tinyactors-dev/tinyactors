@@ -1338,7 +1338,7 @@ export type TraceKind =
   | 'sent' | 'cancelled' | 'invoked' | 'invokeCancelled'
   | 'paused' | 'resumed' | 'stopped' | 'ignored' | 'forwarded' | 'longMacrostep' | 'runaway'
   | 'definitionRegistered' | 'definitionRetired' | 'definitionFreed'
-  | 'abandoned';
+  | 'abandoned' | 'withdrawn';
 
 export declare const TRACE_KINDS: readonly TraceKind[];
 
