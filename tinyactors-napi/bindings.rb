@@ -38,7 +38,9 @@ module TinyactorsNapiBindings
     'ta_actor_unload' => { hook: 'unloaded', actor: 'params.actor',
                            reason: "dead-letters the actor's mailbox as unloaded (step 14)" },
     'ta_actor_activate_replacement' => { hook: 'activated', actor: 'params',
-                                         reason: "moves the incumbent's waiting mail to the replacement (step 14)" }
+                                         reason: "moves the incumbent's waiting mail to the replacement (step 14)" },
+    'ta_actor_abandon' => { hook: 'abandoned', actor: 'actor',
+                            reason: "settles the send() of the abandoned macrostep and the actor's scheduling (ADR 0027)" }
   }.freeze
 
   PLUMBING_FUNCTIONS = {

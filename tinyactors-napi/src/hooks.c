@@ -34,3 +34,11 @@ ta_result tna_hook_actor_activated(tna_system *system, const ta_actor_activate_r
     }
     return result;
 }
+
+ta_result tna_hook_actor_abandoned(tna_system *system, ta_actor_id actor) {
+    /* Core abandoned the macrostep whatever the table knows; an actor the
+     * table does not know has nothing to settle. */
+    (void)tna_sched_abandoned(&system->sched, actor);
+    tna_system_want_turn(system); /* the settlement, and mail it may take now */
+    return TA_OK;
+}

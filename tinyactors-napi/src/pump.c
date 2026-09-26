@@ -602,6 +602,10 @@ static napi_value tna_settlement_error(napi_env env, const tna_settlement *settl
         }
         return error;
     }
+    if (settlement->kind == TNA_SETTLE_ABANDONED) {
+        return tna_error(env, "abandoned",
+                         "send: an operator abandoned the message's macrostep (core ADR 0082); what it did so far stays");
+    }
     const char *code = tna_result_code(settlement->code);
     snprintf(message, sizeof message, "send: the message's macrostep failed (%s); the actor is quarantined", code);
     return tna_error(env, code, message);
@@ -654,6 +658,35 @@ static void tna_settle_sends(napi_env env, tna_napi_system *wrapper) {
         }
         if (scope != NULL) {
             napi_close_handle_scope(env, scope);
+        }
+    }
+}
+
+/*
+ * A held actor's macrostep ended (ADR 0027): the effects handler hears
+ * "held" with the actor, after the turn's traces, so a debugger that decides
+ * whether to stop has the macrostep's spans already.
+ */
+static void tna_held_record(napi_env env, tna_napi_system *wrapper, const tna_turn_record *record, napi_value *first_error) {
+    tna_env *data = wrapper->env_data;
+    napi_value handler = NULL;
+    napi_value argv[3] = { NULL, NULL, NULL };
+    if (data->effects_handler == NULL || wrapper->facade == NULL ||
+        napi_get_reference_value(env, data->effects_handler, &handler) != napi_ok || handler == NULL ||
+        napi_get_reference_value(env, wrapper->facade, &argv[0]) != napi_ok || argv[0] == NULL ||
+        napi_create_string_utf8(env, "held", NAPI_AUTO_LENGTH, &argv[1]) != napi_ok ||
+        (argv[2] = tna_actor_view(env, wrapper, record->actor)) == NULL) {
+        return;
+    }
+    napi_value global = NULL;
+    napi_value ignored = NULL;
+    napi_get_global(env, &global);
+    if (napi_call_function(env, global, handler, 3, argv, &ignored) != napi_ok) {
+        napi_value error = NULL;
+        bool pending = false;
+        if (napi_is_exception_pending(env, &pending) == napi_ok && pending &&
+            napi_get_and_clear_last_exception(env, &error) == napi_ok && *first_error == NULL) {
+            *first_error = error;
         }
     }
 }
@@ -742,7 +775,7 @@ static napi_value tna_turn_callback(napi_env env, napi_callback_info info) {
                 tna_done_record(env, wrapper, record, &first_error);
             } else if (record->kind == TNA_RECORD_FAULT) {
                 tna_fault_record(env, wrapper, record, &first_error);
-            } else {
+            } else if (record->kind == TNA_RECORD_DEAD_LETTER) {
                 tna_dead_letter_record(env, wrapper, record, &first_error);
             }
         }
@@ -755,6 +788,20 @@ static napi_value tna_turn_callback(napi_env env, napi_callback_info info) {
         /* Then the turn's trace records, as one batch (napi ADR 0015). */
         if (!tna_system_closed(system)) {
             tna_trace_dispatch(env, wrapper, &first_error);
+        }
+        /* Then the actors a hold stopped (ADR 0027), which read those traces. */
+        for (const tna_turn_record *record = system->sched.records; record != NULL; record = record->next) {
+            if (tna_system_closed(system)) {
+                break;
+            }
+            if (record->kind == TNA_RECORD_HELD && tna_sched_lookup(&system->sched, record->actor) != NULL) {
+                napi_handle_scope scope = NULL;
+                napi_open_handle_scope(env, &scope);
+                tna_held_record(env, wrapper, record, &first_error);
+                if (scope != NULL) {
+                    napi_close_handle_scope(env, scope);
+                }
+            }
         }
         if (!tna_system_closed(system)) {
             tna_settle_sends(env, wrapper);

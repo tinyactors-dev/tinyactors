@@ -13,7 +13,7 @@ const { DefinitionBuilder, needsJavaScript } = require('./statechart');
 const { ActorID } = require('./actor');
 const { EventNames } = require('./events');
 const { SessionImage, handleOf } = require('./image');
-const { traceConfig } = require('./tracing');
+const { traceConfig, TRACE_KINDS } = require('./tracing');
 const { buildSnapshot } = require('./metrics');
 
 const NO_STATE = 4294967295;
@@ -105,6 +105,12 @@ let nativeOf;
 // (src/napi_services.h). It is one function for the environment, so no
 // native reference keeps a System alive.
 let effectHandler;
+// observe(system, { traces, log, held }): what lib/debug.js reads beside the
+// application (ADR 0027). `traces(traces, logs)` gets every turn's OTLP bytes
+// the application's trace sink gets, installing a sink of its own when the
+// application has none; `log(record)` every <log> record; `held(actor)`
+// each actor a hold stopped. Returns { stop() }. index.js does not export it.
+let observe;
 
 // The SCXML invoker type core normalizes "scxml" and its URI to (core
 // ADR 0016); the in-system SCXML invoker is registered under it.
@@ -138,6 +144,10 @@ class System {
   #logSink;
   #traceSink;
   #traceConfig = {};
+  // observe() observers, and whether the native sink is installed for them
+  // alone (the application has none).
+  #observers = new Set();
+  #observerSink = false;
   // Active watchTraces() handles, and every definition's identity, for the
   // watches and for metrics().
   #watches = new Set();
@@ -156,6 +166,7 @@ class System {
   static {
     nativeOf = (system) => system.#native;
     effectHandler = (system, kind, payload) => system.#effect(kind, payload);
+    observe = (system, observer) => system.#observe(observer);
   }
 
   /**
@@ -293,8 +304,8 @@ class System {
     if (sink !== undefined && typeof sink !== 'function') {
       throw new TinyactorsError('setLogSink(): expected a function or undefined', 'invalid');
     }
-    this.#native.setLogSink(sink !== undefined);
     this.#logSink = sink;
+    this.#native.setLogSink(sink !== undefined || this.#observing('log'));
   }
 
   /**
@@ -362,15 +373,74 @@ class System {
       pairs.push(key, value);
     }
     const previous = this.#traceSink;
-    const remaining = this.#native.setTraceSink(sink !== undefined, config.kinds, config.watchedKinds,
-                                                unsampled === true ? config.kinds : 0, config.sample,
-                                                values === true, valueLimit, parent === 'link', pairs, seed,
-                                                logs === false ? 0 : logLimit);
+    const observed = sink === undefined && this.#observing('traces');
+    const remaining = observed
+      ? this.#installObserverSink()
+      : this.#native.setTraceSink(sink !== undefined, config.kinds, config.watchedKinds,
+                                  unsampled === true ? config.kinds : 0, config.sample,
+                                  values === true, valueLimit, parent === 'link', pairs, seed,
+                                  logs === false ? 0 : logLimit);
     this.#traceSink = sink;
+    this.#observerSink = observed;
     this.#traceConfig = { detail: options?.detail, kinds: options?.kinds, sample: options?.sample,
                           unsampled: unsampled === true };
     if (remaining !== undefined) {
       previous?.(remaining.traces, remaining.logs);
+      this.#notify('traces', remaining.traces, remaining.logs);
+    }
+  }
+
+  // The native sink observers get when the application has none: nothing
+  // but what is watched, every kind of it, with values (ADR 0027).
+  #installObserverSink() {
+    const all = 2 ** TRACE_KINDS.length - 1;
+    return this.#native.setTraceSink(true, 0, all, 0, 0, true, 256, false, [], undefined, 0);
+  }
+
+  #observing(what) {
+    for (const observer of this.#observers) {
+      if (typeof observer[what] === 'function') return true;
+    }
+    return false;
+  }
+
+  // Calls `what` of every observer that has it.
+  #notify(what, ...args) {
+    for (const observer of this.#observers) {
+      observer[what]?.(...args);
+    }
+  }
+
+  #observe(observer) {
+    this.#observers.add(observer);
+    this.#applyObservers();
+    return Object.freeze({
+      stop: () => {
+        if (this.#observers.delete(observer) && !this.closed) {
+          this.#applyObservers();
+        }
+      },
+    });
+  }
+
+  // Installs or removes the observers' own trace sink, and turns <log>
+  // records on or off, as the observers and the application need them.
+  #applyObservers() {
+    this.#native.setLogSink(this.#logSink !== undefined || this.#observing('log'));
+    if (this.#traceSink !== undefined) {
+      return;
+    }
+    const wanted = this.#observing('traces');
+    if (wanted === this.#observerSink) {
+      return;
+    }
+    const all = 2 ** TRACE_KINDS.length - 1;
+    const remaining = wanted
+      ? this.#installObserverSink()
+      : this.#native.setTraceSink(false, 0, all, 0, 0, false, 256, false, [], undefined, 0);
+    this.#observerSink = wanted;
+    if (remaining !== undefined) {
+      this.#notify('traces', remaining.traces, remaining.logs);
     }
   }
 
@@ -394,8 +464,11 @@ class System {
       merged.kinds = undefined;
     }
     const config = traceConfig(merged, 'configureTraces()');
-    this.#native.configureTraces(config.kinds, config.watchedKinds, merged.unsampled ? config.kinds : 0,
-                                 config.sample);
+    if (!this.#observerSink) {
+      // An observers' own sink keeps its masks: they are not the application's.
+      this.#native.configureTraces(config.kinds, config.watchedKinds, merged.unsampled ? config.kinds : 0,
+                                   config.sample);
+    }
     this.#traceConfig = merged;
   }
 
@@ -464,9 +537,14 @@ class System {
         return;
       case 'log':
         this.#logSink?.(payload);
+        this.#notify('log', payload);
         return;
       case 'trace':
         this.#traceSink?.(payload.traces, payload.logs);
+        this.#notify('traces', payload.traces, payload.logs);
+        return;
+      case 'held':
+        this.#notify('held', payload);
         return;
       case 'io':
         this.#runIO(payload);
@@ -836,6 +914,7 @@ class System {
     const { slot, generation } = actorOf(this, actor);
     const view = core.actor_inspect(this.#native, slot, generation);
     const stateName = (state) => core.definition_state(this.#native, view.definition_id, state).id;
+    const idOrNull = (id) => (id === NO_STATE ? null : id);
     const inspection = {
       actor: new ActorID(this, view.actor.slot, view.actor.generation),
       sessionID: view.session_id,
@@ -844,7 +923,30 @@ class System {
       published: view.published,
       activeStates: core.actor_active_states(this.#native, slot, generation).map(stateName),
       macrostepInProgress: view.macrostep_in_progress,
+      microstepInProgress: view.microstep_in_progress,
+      // Where a paused macrostep stands (core ADR 0083): its step key, and
+      // the unit it runs next; outside a macrostep, (session, 0, 0) and
+      // `at: "none"`.
+      step: { session: view.step.session, macrostep: Number(view.step.macrostep), microstep: view.step.microstep },
+      position: {
+        at: view.position.at,
+        state: view.position.state === NO_STATE ? null : stateName(view.position.state),
+        transition: idOrNull(view.position.transition),
+        action: idOrNull(view.position.action),
+        iteration: view.position.iteration,
+      },
+      // The external event of the macrostep in progress, and the internal
+      // queue, as `context.event` shows events.
+      currentEvent: view.current_event === undefined ? null : this.#eventOf(view.current_event),
+      internalEvents: view.internal_events.map((queued) => this.#eventOf(queued.event)),
       internalEventCount: view.internal_events.length,
+      invocations: view.invokes.map((invoke) => ({
+        id: invoke.id,
+        type: core.system_atom_text(this.#native, invoke.type),
+        active: invoke.active,
+        autoforward: invoke.autoforward,
+        serviceHandle: invoke.service_handle,
+      })),
       delayedSendCount: view.delayed_sends.length,
       delayedSends: view.delayed_sends.map((send) => this.#delayedSend(view.definition_id, send)),
       scheduling: this.#native.scheduling(slot, generation),
@@ -857,6 +959,27 @@ class System {
       completion: view.has_completion && view.completion?.has_data ? view.completion.data : undefined,
     };
     return inspection;
+  }
+
+  // An event from core's inspection, as `context.event` shows one.
+  #eventOf(event) {
+    const out = { name: this.#events.name(event.name), type: event.type };
+    if (event.send_id !== 0n) {
+      try {
+        out.sendID = core.send_id_format(this.#native, event.send_id);
+      } catch (error) {
+        if (!(error instanceof TinyactorsError && error.code === 'not-found')) throw error;
+      }
+    }
+    if (event.origin?.kind === 'actor') {
+      out.origin = this.#destination(event.origin.actor);
+    } else if (event.origin?.kind === 'io' && event.origin.io.uri !== undefined) {
+      out.origin = event.origin.io.uri;
+    }
+    if (event.data !== undefined) {
+      out.data = event.data;
+    }
+    return out;
   }
 
   // The actor's data root, or undefined under the null data model.
@@ -1140,6 +1263,9 @@ class System {
     const origin = originOf(options?.origin, what);
     const trace = options?.traceparent;
     if (!(target instanceof ActorID)) {
+      if (options?.transition !== undefined) {
+        throw new TinyactorsError(`${what}: options.transition needs an actor ID: it names that actor's states`, 'invalid');
+      }
       if (target !== null && typeof target === 'object' && 'name' in target) {
         const { family, name } = addressOf(target, what);
         const id = this.#events.id(event);
@@ -1151,9 +1277,36 @@ class System {
     }
     const { slot, generation } = actorOf(this, target);
     const id = this.#events.id(event);
+    const jump = options?.transition === undefined ? undefined : this.#jumpOf(target, options.transition, what);
     return completion
-      ? this.#native.send(slot, generation, id, data, bytes, origin, trace)
-      : this.#native.post(slot, generation, id, data, bytes, origin, trace);
+      ? this.#native.send(slot, generation, id, data, bytes, origin, trace, jump)
+      : this.#native.post(slot, generation, id, data, bytes, origin, trace, jump);
+  }
+
+  // An operator transition by state names, as the native post takes it: the
+  // target's definition now and state IDs (core ADR 0082, ADR 0027).
+  #jumpOf(actor, transition, what) {
+    const { targets, source } = transition ?? {};
+    if (!Array.isArray(targets) || targets.length === 0 || !targets.every((state) => typeof state === 'string') ||
+        (source !== undefined && source !== null && typeof source !== 'string')) {
+      throw new TinyactorsError(`${what}: options.transition must be { targets: [state, ...], source? }`, 'invalid');
+    }
+    const definition = core.actor_inspect(this.#native, actor.slot, actor.generation).definition_id;
+    const state = (name) => {
+      try {
+        return core.definition_find_state(this.#native, definition, name);
+      } catch (error) {
+        if (error instanceof TinyactorsError && error.code === 'not-found') {
+          throw new TinyactorsError(`${what}: "${name}" is not a state of the actor's chart`, 'invalid');
+        }
+        throw error;
+      }
+    };
+    return {
+      definition,
+      source: source === undefined || source === null ? NO_STATE : state(source),
+      targets: targets.map(state),
+    };
   }
 
   /*
@@ -1576,6 +1729,126 @@ class System {
     this.#native.release(slot, generation);
   }
 
+  /*
+   * Debugging and operating one actor (ADR 0027, core ADRs 0082 and 0084).
+   */
+
+  /**
+   * Hold `actor` between macrosteps (ADR 0027): it stops taking mail, which
+   * waits in its mailbox, until unhold() or step(). An actor inside a
+   * macrostep runs it to its end first, so a hold never stops a macrostep a
+   * send() waits for. Returns true when it is held now, false when it will
+   * be once its macrostep ends. A fault while held still quarantines it.
+   * Throws `done` for a finished actor, `not-found` for one that is gone.
+   */
+  hold(actor) {
+    const { slot, generation } = actorOf(this, actor);
+    return this.#native.hold(slot, generation);
+  }
+
+  /** Let a held actor take its mail again (ADR 0027). Idempotent. */
+  unhold(actor) {
+    const { slot, generation } = actorOf(this, actor);
+    this.#native.unhold(slot, generation);
+  }
+
+  /**
+   * A held actor takes exactly one message, and is held again when that
+   * message's macrostep ends (ADR 0027). Returns "message", "wake" (it runs
+   * a macrostep core gave it while it was held instead) or "waiting" (its
+   * mailbox is empty, so it takes the next message that comes). Throws
+   * `invalid` when the actor is not held.
+   */
+  step(actor) {
+    const { slot, generation } = actorOf(this, actor);
+    return this.#native.step(slot, generation);
+  }
+
+  /**
+   * Budgets for one actor (ADR 0027): it resumes with `resumeBudget`
+   * microsteps (at least 1) and `actionBudget` units (0: no limit) instead
+   * of the system's scheduling options; undefined gives it the system's
+   * again. Destroying the actor forgets them.
+   */
+  setBudgets(actor, budgets) {
+    const { slot, generation } = actorOf(this, actor);
+    if (budgets === undefined) {
+      this.#native.setBudgets(slot, generation);
+      return;
+    }
+    const { resumeBudget, actionBudget = 0 } = budgets ?? {};
+    for (const [name, value, least] of [['resumeBudget', resumeBudget, 1], ['actionBudget', actionBudget, 0]]) {
+      if (!Number.isInteger(value) || value < least || value > 4294967295) {
+        throw new TinyactorsError(`setBudgets(): ${name} must be an integer of at least ${least}`, 'invalid');
+      }
+    }
+    this.#native.setBudgets(slot, generation, resumeBudget, actionBudget);
+  }
+
+  /**
+   * The messages waiting in `actor`'s mailbox, oldest first, at most
+   * `limit` (default 100): { event, data, awaited, scope, transition }.
+   * `awaited` is true when a send() waits for the message; `scope` is
+   * { index, generation } when its origin is an openScope() scope;
+   * `transition` is { source, targets } (state IDs, source null for the
+   * root) when it carries an operator transition. O(limit).
+   */
+  mailbox(actor, options = {}) {
+    const { slot, generation } = actorOf(this, actor);
+    const { limit = 100 } = options ?? {};
+    if (!Number.isInteger(limit) || limit < 0 || limit > 4294967295) {
+      throw new TinyactorsError('mailbox(): limit must be a non-negative integer', 'invalid');
+    }
+    const messages = this.#native.mailbox(slot, generation, limit);
+    const definition = messages.some((message) => message.transition !== undefined)
+      ? core.actor_inspect(this.#native, slot, generation).definition_id
+      : undefined;
+    const stateName = (state) => (state === NO_STATE ? null : core.definition_state(this.#native, definition, state).id);
+    return messages.map((message) => (message.transition === undefined ? message : {
+      ...message,
+      transition: { source: stateName(message.transition.source), targets: message.transition.targets.map(stateName) },
+    }));
+  }
+
+  /**
+   * Abandon `actor`'s macrostep (core ADR 0082): one that never ends, or an
+   * event delivered and not yet taken. The actor keeps the configuration
+   * after its last completed microstep; what the macrostep did so far stays
+   * done. The send() that follows it rejects with `abandoned`. Throws `busy`
+   * while it is paused inside a microstep (setBudgets() with resumeBudget 1
+   * and actionBudget 0 lets it finish that microstep first) or has not
+   * finished its bootstrap, `invalid` when no macrostep is in progress,
+   * `done` and `not-found` as delivery does.
+   */
+  abandon(actor) {
+    const { slot, generation } = actorOf(this, actor);
+    core.actor_abandon(this.#native, slot, generation);
+  }
+
+  /**
+   * Withdraw `actor`'s pending delayed send `sendID` (core ADR 0084): the
+   * `id` inspect() shows in `delayedSends`, such as "#_send.3" or a chart's
+   * literal ID. Every pending send of this actor with that ID goes, as a
+   * <cancel> of it would. Throws `not-found` when the actor has none, `done`
+   * when its only ones were refused once and now belong to their receiver.
+   */
+  withdrawSend(actor, sendID) {
+    const { slot, generation } = actorOf(this, actor);
+    if (typeof sendID !== 'string' || sendID === '') {
+      throw new TinyactorsError('withdrawSend(): expected a send ID string', 'invalid');
+    }
+    let id;
+    try {
+      id = core.send_id_parse(this.#native, sendID);
+    } catch (error) {
+      if (error instanceof TinyactorsError && error.code === 'not-found') {
+        throw new TinyactorsError(`withdrawSend(): no pending send has the ID ${sendID}`, 'not-found');
+      }
+      throw error;
+    }
+    core.actor_withdraw_send(this.#native, slot, generation, id);
+  }
+
   /**
    * Resolves once the system is quiet: nothing runnable, nothing ready, no
    * dead letters to report, and nothing due at the current time (ADR 0007
@@ -1833,4 +2106,4 @@ function discardLoad(result) {
   }
 }
 
-module.exports = { System, createSystem, nativeOf, ActorID, PreparedActor, SessionImage };
+module.exports = { System, createSystem, nativeOf, observe, ActorID, PreparedActor, SessionImage };

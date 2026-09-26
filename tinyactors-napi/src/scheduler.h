@@ -42,10 +42,27 @@
  * warm-up.
  *
  * One turn resumes up to `resumes` runnable actors, each with a microstep
- * budget and an action budget (core ADR 0061). What the turn learns that
- * JavaScript must hear about (an actor finished, an actor faulted) becomes a
- * record in the turn arena; the pump calls the hooks for them after the last
- * core call of the turn (ADR 0007 point 5).
+ * budget and an action budget (core ADR 0061), or with budgets of its own
+ * (ADR 0027). What the turn learns that JavaScript must hear about (an actor
+ * finished, an actor faulted, an actor is held) becomes a record in the turn
+ * arena; the pump calls the hooks for them after the last core call of the
+ * turn (ADR 0007 point 5).
+ *
+ * Holding (ADR 0027): a debugger holds an actor between macrosteps. A held
+ * actor is out of the scheduling queues and collects mail without taking it,
+ * as a quarantined one does, until it is let go or stepped. The HOLD flag
+ * says a debugger holds it; the HELD state says it stands still now. An actor
+ * inside a macrostep keeps running and becomes HELD when the macrostep ends,
+ * so a hold never stops a macrostep a send() waits for. A fault while held
+ * still quarantines and reports; the flag stays, so the actor is held again
+ * once it is released and its macrostep ends.
+ *
+ * Operator transitions (ADR 0027, core ADR 0082): a message may carry one. It
+ * queues behind the mail before it, like any message, and reaches
+ * ta_actor_deliver() with it. A jump the actor no longer accepts (its source
+ * is not active by then, or the actor runs another revision) is a dead letter
+ * with reason `refused` and does not quarantine the actor: the operator's
+ * input is at fault, not the actor.
  */
 #include <stdbool.h>
 #include <stdint.h>
@@ -63,7 +80,8 @@ typedef enum {
     TNA_SCHED_IDLE,        /* between macrosteps, nothing to do */
     TNA_SCHED_READY,       /* has mail, is between macrosteps, and is on the ready queue */
     TNA_SCHED_RUNNABLE,    /* on the runnable queue */
-    TNA_SCHED_QUARANTINED  /* faulted: out of scheduling until released (ADR 0008) */
+    TNA_SCHED_QUARANTINED, /* faulted: out of scheduling until released (ADR 0008) */
+    TNA_SCHED_HELD         /* held between macrosteps: out of scheduling until let go or stepped (ADR 0027) */
 } tna_sched_state;
 
 enum {
@@ -71,7 +89,10 @@ enum {
     TNA_SCHED_FINISHED = 1u << 1, /* reached a top-level final state */
     /* quarantined as a runaway (core ADR 0075): once released, it runs with
      * no microstep limit until its macrostep ends */
-    TNA_SCHED_UNLIMITED = 1u << 2
+    TNA_SCHED_UNLIMITED = 1u << 2,
+    TNA_SCHED_HOLD = 1u << 3,     /* a debugger holds it: each macrostep's end makes it HELD (ADR 0027) */
+    TNA_SCHED_WOKEN = 1u << 4,    /* HELD, and core gave it a macrostep to run (tna_sched_wake) */
+    TNA_SCHED_OWN_BUDGETS = 1u << 5 /* resumes with the budgets tna_sched_set_budgets() gave it (ADR 0027) */
 };
 
 typedef struct {
@@ -112,14 +133,30 @@ typedef struct {
 } tna_mailbox;
 
 /*
+ * An operator transition a message carries (core ADR 0082), in one
+ * allocation: the definition its state IDs belong to, and the transition.
+ */
+typedef struct {
+    ta_definition_id definition;
+    ta_state_id source; /* TA_STATE_NONE: the root */
+    uint32_t count;
+    ta_state_id targets[];
+} tna_jump;
+
+/*
  * One queued message. `event` holds its own references (data, named origin).
  * `address` is set only for a dead letter to a named target that had no
- * resident actor; it holds a reference too.
+ * resident actor; it holds a reference too. `jump` is set only for a message
+ * that carries an operator transition, which only a message to an actor ID
+ * does, so the two share their room and `has_jump` says which it is.
  */
 typedef struct {
     ta_event event;
     ta_actor_id target;
-    ta_address *address;
+    union {
+        ta_address *address;
+        tna_jump *jump;
+    };
     /* The trace parent the message's macrostep runs under (core ADR 0067),
      * from the scheduler's free list, or NULL: only traced mail pays for
      * one. */
@@ -129,7 +166,14 @@ typedef struct {
     uint32_t bytes;  /* counted against max_retained (ADR 0005 point 9) */
     uint8_t reason;  /* tna_dead_reason, while on the dead list */
     uint8_t live;    /* taken from the store */
+    uint8_t has_jump; /* `jump`, not `address` */
 } tna_envelope;
+
+/* An operator transition to accept with a message (core ADR 0082). */
+typedef struct {
+    ta_definition_id definition; /* the definition the state IDs belong to */
+    ta_operator_transition transition;
+} tna_message_jump;
 
 /* A message to accept: the target, the event, and what it carries along. */
 typedef struct {
@@ -138,6 +182,9 @@ typedef struct {
     uint32_t bytes;         /* retained-bytes estimate of its data, 0 for none */
     uint32_t waiter;        /* a send() waiting for it, or 0 */
     const ta_trace_parent *trace; /* its trace parent, or NULL (core ADR 0067) */
+    /* An operator transition, or NULL; only for a target named by ID. The
+     * scheduler copies it. */
+    const tna_message_jump *jump;
 } tna_message;
 
 typedef enum {
@@ -160,7 +207,8 @@ typedef enum {
     TNA_SETTLE_STABLE, /* the message's macrostep ended with the actor stable */
     TNA_SETTLE_DONE,   /* ... with the actor finished */
     TNA_SETTLE_DEAD,   /* the message became a dead letter, or its actor went away */
-    TNA_SETTLE_FAULT   /* the macrostep failed and the actor is quarantined */
+    TNA_SETTLE_FAULT,  /* the macrostep failed and the actor is quarantined */
+    TNA_SETTLE_ABANDONED /* an operator abandoned the macrostep (core ADR 0082) */
 } tna_settle_kind;
 
 typedef struct {
@@ -184,9 +232,10 @@ typedef struct {
 } tna_envelopes;
 
 typedef enum {
-    TNA_RECORD_DONE,       /* the actor reached a top-level final state */
-    TNA_RECORD_FAULT,      /* a core call for the actor failed (ADR 0008) */
-    TNA_RECORD_DEAD_LETTER /* a message whose target is gone or finished */
+    TNA_RECORD_DONE,        /* the actor reached a top-level final state */
+    TNA_RECORD_FAULT,       /* a core call for the actor failed (ADR 0008) */
+    TNA_RECORD_DEAD_LETTER, /* a message whose target is gone or finished */
+    TNA_RECORD_HELD         /* a held actor's macrostep ended: it stands still now (ADR 0027) */
 } tna_record_kind;
 
 typedef struct tna_turn_record {
@@ -231,6 +280,9 @@ typedef struct {
     uint32_t waiters_live;
     tna_map inflight;       /* ta_actor_id -> waiter index */
     tna_ring settled;       /* tna_settlement */
+    /* Budgets of the actors with TNA_SCHED_OWN_BUDGETS (ADR 0027):
+     * ta_actor_id -> microsteps << 32 | actions. */
+    tna_map budgets;
     /* Dead letters waiting to be reported, threaded through `next`. */
     uint32_t dead_first;
     uint32_t dead_last;
@@ -367,6 +419,70 @@ uint32_t tna_sched_mailbox_count(const tna_sched *sched, ta_actor_id actor);
 ta_result tna_sched_wake(tna_sched *sched, ta_actor_id actor);
 /* Puts a quarantined actor back on the runnable queue (ADR 0008). */
 ta_result tna_sched_release(tna_sched *sched, ta_actor_id actor);
+
+/*
+ * Holding (ADR 0027). tna_sched_hold() makes the actor stand still between
+ * macrosteps: an idle or ready actor is HELD at once (TA_OK, `*held` true);
+ * one inside a macrostep, or quarantined, is HELD when its macrostep ends
+ * (`*held` false). TA_ERR_DONE for a finished actor, TA_ERR_NOT_FOUND for
+ * one the table does not know.
+ */
+typedef struct {
+    ta_actor_id actor;
+    bool *held; /* may be NULL */
+} tna_sched_hold_params;
+ta_result tna_sched_hold(tna_sched *sched, const tna_sched_hold_params *params);
+/*
+ * Lets a held actor go: it takes its mail again (ready, or runnable when core
+ * gave it a macrostep meanwhile). TA_ERR_NOMEM (still held) when it cannot
+ * join its queue.
+ */
+ta_result tna_sched_unhold(tna_sched *sched, ta_actor_id actor);
+
+typedef enum {
+    TNA_STEP_MESSAGE, /* it takes the head of its mailbox now */
+    TNA_STEP_WAKE,    /* it runs the macrostep core gave it while held */
+    TNA_STEP_WAITING  /* its mailbox is empty: it takes the next message that comes */
+} tna_step_kind;
+
+/*
+ * Delivers exactly one held message: a HELD actor runs one macrostep, for
+ * the head of its mailbox (or the macrostep core gave it while held), and is
+ * HELD again when that macrostep ends. With an empty mailbox it waits for
+ * the next message. TA_ERR_INVALID when the actor is not HELD; TA_ERR_NOMEM
+ * (still held) when it cannot join its queue.
+ */
+typedef struct {
+    ta_actor_id actor;
+    tna_step_kind *out; /* may be NULL */
+} tna_sched_step_params;
+ta_result tna_sched_step(tna_sched *sched, const tna_sched_step_params *params);
+
+/*
+ * Budgets for one actor (ADR 0027): it resumes with these instead of the
+ * turn's, until they are cleared with `budgets` NULL. `microsteps` is at least
+ * 1; `actions` 0 means no limit. TA_ERR_NOT_FOUND for an actor the table does
+ * not know, TA_ERR_INVALID for a zero microstep budget, TA_ERR_NOMEM.
+ */
+typedef struct {
+    uint32_t microsteps;
+    uint32_t actions;
+} tna_actor_budgets;
+
+typedef struct {
+    ta_actor_id actor;
+    const tna_actor_budgets *budgets; /* NULL: the turn's budgets again */
+} tna_sched_budgets_params;
+ta_result tna_sched_set_budgets(tna_sched *sched, const tna_sched_budgets_params *params);
+
+/*
+ * An operator abandoned the actor's macrostep (core ADR 0082): the send()
+ * that follows it settles as ABANDONED, and a runnable actor stands between
+ * macrosteps again (ready, idle, or HELD when it is held). Its entry in the
+ * runnable queue is skipped when popped. A quarantined actor stays
+ * quarantined. TA_ERR_NOT_FOUND for an actor the table does not know.
+ */
+ta_result tna_sched_abandoned(tna_sched *sched, ta_actor_id actor);
 
 /*
  * send() waiters. tna_sched_waiter_take() returns a free waiter's index, or
