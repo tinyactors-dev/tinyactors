@@ -108,20 +108,28 @@ void tna_map_destroy(tna_map *map);
 /* ------------------------------------------------------------ free list */
 
 typedef struct tna_free_record tna_free_record;
+typedef struct tna_free_chunk tna_free_chunk;
 
+/*
+ * Records come from chunks, not one allocation each: an empty list takes a
+ * chunk holding as many records as are live (at least 8, at most 1024), so
+ * a burst of N records costs about N/1024 allocator calls, not N. Chunks
+ * are kept until destroy, as single records on the list were before.
+ */
 typedef struct {
     ta_allocator allocator;
     tna_layout layout; /* at least a pointer, so a free record can link */
     tna_free_record *head;
+    tna_free_chunk *chunks;
     uint32_t free_count;
     uint32_t live_count;
 } tna_free_list;
 
 void tna_free_list_init(tna_free_list *list, ta_allocator allocator, tna_layout layout);
-/* A record from the list, or a new one; NULL when allocation fails. */
+/* A record from the list, or from a new chunk; NULL when allocation fails. */
 void *tna_free_list_take(tna_free_list *list);
 /* Returns a record taken from this list. */
 void tna_free_list_give(tna_free_list *list, void *record);
-/* Frees the records on the list. Records still taken are the owner's to give
- * back first; live_count says how many there are. */
+/* Frees every chunk. Every record taken must have been given back first
+ * (live_count is 0): a record still taken is freed with its chunk. */
 void tna_free_list_destroy(tna_free_list *list);

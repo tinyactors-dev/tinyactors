@@ -380,6 +380,14 @@ struct tna_free_record {
     tna_free_record *next;
 };
 
+struct tna_free_chunk {
+    tna_free_chunk *next;
+    size_t bytes; /* the whole allocation, header included */
+};
+
+#define TNA_FREE_CHUNK_MIN 8u
+#define TNA_FREE_CHUNK_MAX 1024u
+
 void tna_free_list_init(tna_free_list *list, ta_allocator allocator, tna_layout layout) {
     if (layout.size < sizeof(tna_free_record)) {
         layout.size = sizeof(tna_free_record);
@@ -387,20 +395,58 @@ void tna_free_list_init(tna_free_list *list, ta_allocator allocator, tna_layout 
     if (layout.alignment < _Alignof(tna_free_record)) {
         layout.alignment = _Alignof(tna_free_record);
     }
+    /* Records sit back to back in a chunk, so each size is a multiple of the alignment. */
+    layout.size = (layout.size + layout.alignment - 1u) & ~(layout.alignment - 1u);
     *list = (tna_free_list){ .allocator = allocator, .layout = layout };
 }
 
-void *tna_free_list_take(tna_free_list *list) {
-    tna_free_record *record = list->head;
-    if (record != NULL) {
-        list->head = record->next;
-        list->free_count -= 1u;
-    } else {
-        record = tna_alloc(list->allocator, list->layout.size, list->layout.alignment);
-        if (record == NULL) {
-            return NULL;
-        }
+/* A chunk's alignment: its header's or its records', whichever is larger. */
+static size_t tna_free_chunk_alignment(const tna_free_list *list) {
+    return list->layout.alignment < _Alignof(tna_free_chunk) ? _Alignof(tna_free_chunk) : list->layout.alignment;
+}
+
+/* Where a chunk's first record starts: past the header, aligned. */
+static size_t tna_free_chunk_offset(const tna_free_list *list) {
+    size_t alignment = tna_free_chunk_alignment(list);
+    return (sizeof(tna_free_chunk) + alignment - 1u) & ~(alignment - 1u);
+}
+
+/* Puts a new chunk's records on the list; false when allocation fails. */
+static bool tna_free_list_grow(tna_free_list *list) {
+    uint32_t count = list->live_count;
+    if (count < TNA_FREE_CHUNK_MIN) {
+        count = TNA_FREE_CHUNK_MIN;
     }
+    if (count > TNA_FREE_CHUNK_MAX) {
+        count = TNA_FREE_CHUNK_MAX;
+    }
+    size_t offset = tna_free_chunk_offset(list);
+    size_t alignment = tna_free_chunk_alignment(list);
+    size_t bytes = offset + (size_t)count * list->layout.size;
+    tna_free_chunk *chunk = tna_alloc(list->allocator, bytes, alignment);
+    if (chunk == NULL) {
+        return false;
+    }
+    chunk->bytes = bytes;
+    chunk->next = list->chunks;
+    list->chunks = chunk;
+    uint8_t *records = (uint8_t *)chunk + offset;
+    for (uint32_t at = count; at > 0; at -= 1u) {
+        tna_free_record *record = (tna_free_record *)(void *)(records + (size_t)(at - 1u) * list->layout.size);
+        record->next = list->head;
+        list->head = record;
+    }
+    list->free_count += count;
+    return true;
+}
+
+void *tna_free_list_take(tna_free_list *list) {
+    if (list->head == NULL && !tna_free_list_grow(list)) {
+        return NULL;
+    }
+    tna_free_record *record = list->head;
+    list->head = record->next;
+    list->free_count -= 1u;
     list->live_count += 1u;
     return record;
 }
@@ -417,12 +463,14 @@ void tna_free_list_give(tna_free_list *list, void *record) {
 }
 
 void tna_free_list_destroy(tna_free_list *list) {
-    tna_free_record *record = list->head;
-    while (record != NULL) {
-        tna_free_record *next = record->next;
-        tna_release(list->allocator, record, list->layout);
-        record = next;
+    size_t alignment = tna_free_chunk_alignment(list);
+    tna_free_chunk *chunk = list->chunks;
+    while (chunk != NULL) {
+        tna_free_chunk *next = chunk->next;
+        tna_release(list->allocator, chunk, (tna_layout){ .size = chunk->bytes, .alignment = alignment });
+        chunk = next;
     }
+    list->chunks = NULL;
     list->head = NULL;
     list->free_count = 0;
 }

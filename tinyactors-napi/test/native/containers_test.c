@@ -150,7 +150,7 @@ static void free_list_reuses_records(void) {
     for (int i = 0; i < 10; i += 1) {
         tna_free_list_give(&list, taken[i]);
     }
-    CHECK(list.free_count == 10 && list.live_count == 0);
+    CHECK(list.free_count >= 10 && list.live_count == 0);
 
     /* Taking again reuses the records: no allocator call. */
     uint64_t before = tna_allocator_calls(&allocator);
@@ -168,6 +168,34 @@ static void free_list_reuses_records(void) {
     CHECK(tna_allocator_total(&allocator).bytes_in_use == 0);
 }
 
+/* A burst of records costs a chunk per up-to-1024 records, not a call each,
+ * and records from one chunk never overlap. */
+static void free_list_allocates_in_chunks(void) {
+    enum { N = 10000 };
+    static record *taken[N];
+    tna_free_list list;
+    tna_free_list_init(&list, tna_allocator_for(&allocator, TNA_MEMORY_ENVELOPES), TNA_LAYOUT(record));
+    uint64_t before = tna_allocator_calls(&allocator);
+    for (int i = 0; i < N; i += 1) {
+        taken[i] = tna_free_list_take(&list);
+        CHECK(taken[i] != NULL);
+        CHECK(((uintptr_t)taken[i] & (_Alignof(record) - 1u)) == 0);
+        taken[i]->a = (uint64_t)i;
+        taken[i]->b = ~(uint64_t)i;
+    }
+    uint64_t calls = tna_allocator_calls(&allocator) - before;
+    CHECK(calls < N / 100);
+    for (int i = 0; i < N; i += 1) {
+        CHECK(taken[i]->a == (uint64_t)i && taken[i]->b == ~(uint64_t)i);
+    }
+    for (int i = 0; i < N; i += 1) {
+        tna_free_list_give(&list, taken[i]);
+    }
+    CHECK(list.live_count == 0);
+    tna_free_list_destroy(&list);
+    CHECK(tna_allocator_total(&allocator).bytes_in_use == 0);
+}
+
 int main(void) {
     tna_allocator_init(&allocator);
     vec_grows();
@@ -175,6 +203,7 @@ int main(void) {
     ring_reuses_its_spare_chunk();
     map_deletes_with_tombstones();
     free_list_reuses_records();
+    free_list_allocates_in_chunks();
     /* Accounting balances to zero over everything above. */
     tna_memory_counters total = tna_allocator_total(&allocator);
     CHECK(total.bytes_in_use == 0);

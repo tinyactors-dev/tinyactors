@@ -100,10 +100,73 @@ async function steadyState(name, make) {
   system.close();
 }
 
+// Allocator calls the addon itself makes (every category but core's, which
+// core's own tests cover), for one tracing setup: `first`, the first round
+// of messages, where pools reach their size; `steady`, ROUNDS rounds after
+// warm-up. `install` sets a sink up, or not.
+function addonAllocatorCalls(system) {
+  let calls = 0;
+  for (const [category, counters] of Object.entries(system.stats().memory)) {
+    if (category !== 'total' && category !== 'core') {
+      calls += counters.allocations + counters.frees;
+    }
+  }
+  return calls;
+}
+
+async function addonCalls({ install, traceparent }) {
+  const system = createSystem();
+  install?.(system);
+  const definition = system.define(charts['an assign']());
+  const actors = [];
+  for (let at = 0; at < ACTORS; at += 1) {
+    actors.push(system.spawn(definition));
+  }
+  await system.flush();
+  const options = traceparent === undefined ? undefined : { traceparent };
+  const round = async () => {
+    for (const actor of actors) {
+      system.post(actor, 'ping', undefined, options);
+    }
+    await system.flush();
+  };
+  const start = addonAllocatorCalls(system);
+  await round();
+  const first = addonAllocatorCalls(system) - start;
+  await round();
+  const before = addonAllocatorCalls(system);
+  for (let at = 0; at < ROUNDS; at += 1) {
+    await round();
+  }
+  const steady = addonAllocatorCalls(system) - before;
+  system.close();
+  return { first, steady };
+}
+
+// Installing a trace sink costs no allocator call per event after warm-up
+// (napi ADR 0017 section 2): sampled out, and at a low sample rate with the
+// default detail, the addon allocates no more than it does untraced.
+async function tracedSteadyState() {
+  const UNSAMPLED = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00';
+  const untraced = await addonCalls({});
+  const sampledOut = await addonCalls({ install: (system) => system.setTraceSink(() => {}), traceparent: UNSAMPLED });
+  const lowRate = await addonCalls({ install: (system) => system.setTraceSink(() => {}, { sample: 0.01 }) });
+  assert.equal(sampledOut.steady, untraced.steady,
+               `sampled out: ${sampledOut.steady} allocator calls after warm-up, untraced ${untraced.steady}`);
+  assert.equal(lowRate.steady, untraced.steady,
+               `summary at 1%: ${lowRate.steady} allocator calls after warm-up, untraced ${untraced.steady}`);
+  // Warming up, the trace parents messages carry come in chunks, as
+  // envelopes do: a few calls for the round, not one per message.
+  const extra = sampledOut.first - untraced.first;
+  assert.ok(extra <= ACTORS / 50,
+            `sampled out: the first round made ${extra} more allocator calls than untraced for ${ACTORS} messages`);
+}
+
 (async () => {
   for (const [name, make] of Object.entries(charts)) {
     await steadyState(name, make);
   }
+  await tracedSteadyState();
   console.log('allocations.js passed');
 })().catch((error) => {
   console.error(error);
