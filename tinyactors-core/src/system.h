@@ -71,6 +71,8 @@ struct ta_system {
     ta_log_sink log_sink;
     /* Never null: ta_null_trace_sink() when the host installed none (ADR 0067). */
     ta_trace_sink trace;
+    /* Never null: ta_null_definition_sink() when the host installed none (ADR 0079). */
+    ta_definition_sink definition_sink;
     /* The trace-ID generator's state and the sampler's threshold (ADR 0073). */
     uint64_t trace_rng[4];
     uint64_t trace_threshold;
@@ -113,6 +115,8 @@ ta_definition *ta_system_definition(const ta_system *system, ta_definition_id id
 /* Frees a registered definition and its slot if nothing holds or uses it,
  * and what that frees in turn (ADR 0077). */
 void ta_system_settle_definition(ta_system *system, ta_definition *definition);
+/* Tells the definition sink of one lifecycle event (ADR 0079). */
+void ta_system_tell_definition(ta_system *system, const ta_definition *definition, ta_definition_event_kind kind);
 /* The adapter registered for `type`, or null (not for the SCXML processor). */
 const ta_io *ta_system_io_of(const ta_system *system, ta_atom type);
 /* The registration at registry index `index`, or null; index 0 (SCXML) has none. */

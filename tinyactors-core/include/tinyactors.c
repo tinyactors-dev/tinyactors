@@ -1809,6 +1809,8 @@ struct ta_system {
     ta_log_sink log_sink;
     /* Never null: ta_null_trace_sink() when the host installed none (ADR 0067). */
     ta_trace_sink trace;
+    /* Never null: ta_null_definition_sink() when the host installed none (ADR 0079). */
+    ta_definition_sink definition_sink;
     /* The trace-ID generator's state and the sampler's threshold (ADR 0073). */
     uint64_t trace_rng[4];
     uint64_t trace_threshold;
@@ -1851,6 +1853,8 @@ TA_PRIVATE ta_definition *ta_system_definition(const ta_system *system, ta_defin
 /* Frees a registered definition and its slot if nothing holds or uses it,
  * and what that frees in turn (ADR 0077). */
 TA_PRIVATE void ta_system_settle_definition(ta_system *system, ta_definition *definition);
+/* Tells the definition sink of one lifecycle event (ADR 0079). */
+TA_PRIVATE void ta_system_tell_definition(ta_system *system, const ta_definition *definition, ta_definition_event_kind kind);
 /* The adapter registered for `type`, or null (not for the SCXML processor). */
 TA_PRIVATE const ta_io *ta_system_io_of(const ta_system *system, ta_atom type);
 /* The registration at registry index `index`, or null; index 0 (SCXML) has none. */
@@ -13128,7 +13132,8 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
     }
     *system = (ta_system){ .allocator = config->allocator,
                            .block_cache_limit = TA_EVENT_BLOCK_CACHE_DEFAULT,
-                           .trace = ta_null_trace_sink() };
+                           .trace = ta_null_trace_sink(),
+                           .definition_sink = ta_null_definition_sink() };
     ta_system_seed_trace_ids(system, 0);
     ta_clock_set(&system->clock, config->initial_time);
     ta_vec_init(&system->actors.pages, config->allocator, TA_VEC_LAYOUT(ta_actor_slot *));
@@ -13190,10 +13195,12 @@ TA_API void ta_system_destroy(ta_system *system) {
     while (system->unregistered_definitions != NULL) {
         ta_definition_destroy(system->unregistered_definitions);
     }
-    /* Every actor is gone, so every definition goes, retired or not. */
+    /* Every actor is gone, so every definition goes, retired or not, and
+     * the host hears of each while it is still intact (ADR 0079). */
     for (uint32_t slot = 0; slot < system->definitions.count; slot += 1) {
         ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
         if (entry->definition != NULL) {
+            ta_system_tell_definition(system, entry->definition, TA_DEFINITION_EVENT_FREED);
             ta_definition_destroy(entry->definition);
             entry->definition = NULL;
         }
@@ -13235,6 +13242,34 @@ TA_API ta_result ta_system_set_log_sink(ta_system *system, ta_log_sink sink) {
     }
     system->log_sink = sink;
     return TA_OK;
+}
+
+/* ------------------------------------------------------------------------
+ * The definition sink (ADR 0079)
+ */
+
+static void ta_null_definition_notify(void *self, const ta_definition_event *event) {
+    (void)self;
+    (void)event;
+}
+
+static const ta_definition_sink_vtable ta_null_definition_vtable = { .notify = ta_null_definition_notify };
+
+TA_API ta_definition_sink ta_null_definition_sink(void) {
+    return (ta_definition_sink){ .self = NULL, .v = &ta_null_definition_vtable };
+}
+
+TA_API ta_result ta_system_set_definition_sink(ta_system *system, ta_definition_sink sink) {
+    if (system == NULL || sink.v == NULL || sink.v->notify == NULL) {
+        return TA_ERR_INVALID;
+    }
+    system->definition_sink = sink;
+    return TA_OK;
+}
+
+TA_PRIVATE void ta_system_tell_definition(ta_system *system, const ta_definition *definition, ta_definition_event_kind kind) {
+    ta_definition_event event = { .kind = kind, .definition = definition->id, .identity = definition->identity };
+    system->definition_sink.v->notify(system->definition_sink.self, &event);
 }
 
 TA_API ta_result ta_system_set_event_block_cache(ta_system *system, uint32_t blocks) {
@@ -13341,6 +13376,7 @@ TA_API ta_result ta_system_register_definition(ta_system *system, ta_definition 
     definition->holds = 1u;
     definition->registration_serial = system->next_definition_serial++;
     *out = definition->id;
+    ta_system_tell_definition(system, definition, TA_DEFINITION_EVENT_REGISTERED);
     return TA_OK;
 }
 
@@ -13365,13 +13401,18 @@ static bool ta_definition_unused(const ta_definition *definition) {
  * Frees `definition` if nothing uses it any more (ADR 0077): no hold, no
  * definition nesting it, and no resident actor. Freeing a definition drops
  * its hold on each definition it nests, which may free those in turn; the
- * cascade runs as a worklist, not by recursion (ADR 0060).
+ * cascade runs as a worklist, not by recursion (ADR 0060). It runs in two
+ * passes (ADR 0079): the first collects the cascade, the second tells the
+ * host and frees in reverse order of discovery. A nested definition is
+ * discovered after the one nesting it, so leaves go first, and each is
+ * intact when the host hears of it.
  */
 TA_PRIVATE void ta_system_settle_definition(ta_system *system, ta_definition *definition) {
     ta_definition *pending = ta_definition_unused(definition) ? definition : NULL;
     if (pending != NULL) {
         pending->free_next = NULL;
     }
+    ta_definition *doomed = NULL;
     while (pending != NULL) {
         ta_definition *freeing = pending;
         pending = freeing->free_next;
@@ -13386,6 +13427,14 @@ TA_PRIVATE void ta_system_settle_definition(ta_system *system, ta_definition *de
                 pending = child;
             }
         }
+        /* Out of the worklist, so its link can thread the second pass. */
+        freeing->free_next = doomed;
+        doomed = freeing;
+    }
+    while (doomed != NULL) {
+        ta_definition *freeing = doomed;
+        doomed = freeing->free_next;
+        ta_system_tell_definition(system, freeing, TA_DEFINITION_EVENT_FREED);
         uint32_t slot = (uint32_t)(freeing->id & 0xffffffffu);
         ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
         /* The slot's next occupant gets a new generation, so this ID goes stale. */
@@ -13429,7 +13478,10 @@ TA_API ta_result ta_system_retire_definition(ta_system *system, ta_definition_id
                      generation < ((const ta_definition_slot *)ta_vec_at(&system->definitions, slot))->generation;
         return freed ? TA_OK : TA_ERR_NOT_FOUND;
     }
-    definition->retired = true;
+    if (!definition->retired) {
+        definition->retired = true;
+        ta_system_tell_definition(system, definition, TA_DEFINITION_EVENT_RETIRED);
+    }
     definition->holds = 0;
     ta_system_settle_definition(system, definition);
     return TA_OK;

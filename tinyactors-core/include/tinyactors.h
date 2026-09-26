@@ -1169,6 +1169,42 @@ typedef struct {
 /* The sink a system starts with: it wants nothing and writes nothing. */
 TA_API ta_trace_sink ta_null_trace_sink(void);
 
+/*
+ * The definition lifecycle, told to the host (ADR 0079). REGISTERED fires
+ * for a new registration (not a reuse by identity), including the nested
+ * children an import registers itself; RETIRED the first time a definition
+ * is retired; FREED before a registered definition's storage goes and its
+ * ID goes stale: in a cascade leaves first, and at ta_system_destroy() for
+ * every definition still alive. During every event the definition is
+ * intact: its ID resolves and `identity` is its own storage, borrowed for
+ * the call. `notify` may read definitions but must not register, retire or
+ * release one, nor spawn, destroy, resume or deliver to an actor.
+ */
+typedef enum {
+    TA_DEFINITION_EVENT_REGISTERED = 0,
+    TA_DEFINITION_EVENT_RETIRED,
+    TA_DEFINITION_EVENT_FREED
+} ta_definition_event_kind TA_SYMBOLS("TA_DEFINITION_EVENT_");
+
+typedef struct {
+    ta_definition_event_kind kind;
+    ta_definition_id definition;
+    /* The definition's own identity, borrowed for the call. */
+    ta_definition_identity identity;
+} ta_definition_event;
+
+typedef struct ta_definition_sink_vtable {
+    void (*notify)(void *self, TA_IN const ta_definition_event *event);
+} ta_definition_sink_vtable TA_VTABLE;
+
+typedef struct {
+    void *self;
+    const ta_definition_sink_vtable *v;
+} ta_definition_sink TA_ADAPTER;
+
+/* The sink a system starts with: it is told everything and does nothing. */
+TA_API ta_definition_sink ta_null_definition_sink(void);
+
 
 /* ========================================================================
  * Invokers
@@ -3125,6 +3161,12 @@ TA_API ta_result ta_system_set_log_sink(ta_system *system, ta_log_sink sink);
  * TA_ERR_INVALID for a sink whose `v` or `v->write` is null.
  */
 TA_API ta_result ta_system_set_trace_sink(ta_system *system, ta_trace_sink sink);
+/*
+ * Installs the definition sink (ADR 0079); ta_null_definition_sink() stops
+ * the notifications. TA_ERR_INVALID for a sink whose `v` or `v->notify` is
+ * null.
+ */
+TA_API ta_result ta_system_set_definition_sink(ta_system *system, ta_definition_sink sink);
 
 /*
  * Counters core keeps per definition and per system (ADR 0072). They are

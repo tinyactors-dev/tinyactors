@@ -657,6 +657,124 @@ static void test_system_destroy(void) {
     CHECK(f.counts.live_blocks == 0 && f.counts.live_bytes == 0);
 }
 
+/* ------------------------------------------------------------------------
+ * The definition sink (ADR 0079)
+ */
+
+typedef struct {
+    ta_system *system;
+    ta_definition_event_kind kinds[32];
+    ta_definition_id ids[32];
+    uint32_t count;
+    /* Every event found its definition intact: inspectable, its identity its own. */
+    bool intact;
+} recording_sink;
+
+static void record_definition(void *self, const ta_definition_event *event) {
+    recording_sink *sink = self;
+    ta_definition_inspection view;
+    if (ta_definition_inspect(sink->system, event->definition, &view) != TA_OK ||
+        view.identity.revision.ptr != event->identity.revision.ptr) {
+        sink->intact = false;
+    }
+    if (sink->count < 32u) {
+        sink->kinds[sink->count] = event->kind;
+        sink->ids[sink->count] = event->definition;
+        sink->count += 1u;
+    }
+}
+
+static const ta_definition_sink_vtable recording_vtable = { .notify = record_definition };
+
+static void install(fixture *f, recording_sink *sink) {
+    *sink = (recording_sink){ .system = f->system, .intact = true };
+    CHECK(ta_system_set_definition_sink(f->system, (ta_definition_sink){ .self = sink, .v = &recording_vtable }) ==
+          TA_OK);
+}
+
+static bool saw(const recording_sink *sink, uint32_t at, ta_definition_event_kind kind, ta_definition_id id) {
+    return at < sink->count && sink->kinds[at] == kind && sink->ids[at] == id;
+}
+
+static void test_definition_sink(void) {
+    fixture f;
+    fixture_init(&f);
+    /* The null sink is installed; a sink without notify is refused. */
+    CHECK(ta_system_set_definition_sink(f.system, (ta_definition_sink){0}) == TA_ERR_INVALID);
+    static const ta_definition_sink_vtable empty = {0};
+    CHECK(ta_system_set_definition_sink(f.system, (ta_definition_sink){ .v = &empty }) == TA_ERR_INVALID);
+    CHECK(ta_system_set_definition_sink(NULL, ta_null_definition_sink()) == TA_ERR_INVALID);
+    CHECK(ta_system_set_definition_sink(f.system, ta_null_definition_sink()) == TA_OK);
+    CHECK(ta_system_retire_definition(f.system, register_chart(&f, "unheard")) == TA_OK);
+
+    recording_sink sink;
+    install(&f, &sink);
+
+    /* REGISTERED once; a reuse by identity is a hold, not a registration. */
+    ta_definition_id id = register_chart(&f, "told");
+    CHECK(sink.count == 1 && saw(&sink, 0, TA_DEFINITION_EVENT_REGISTERED, id));
+    CHECK(register_chart(&f, "told") == id);
+    CHECK(sink.count == 1);
+
+    /* Releasing a hold frees nothing while a hold or an actor is left. */
+    CHECK(ta_system_release_definition(f.system, id) == TA_OK);
+    ta_actor_id actor = 0;
+    CHECK(spawn(&f, id, &actor) == TA_OK);
+    CHECK(ta_system_release_definition(f.system, id) == TA_OK);
+    CHECK(sink.count == 1);
+
+    /* RETIRED once; FREED when the last actor goes, and not before. */
+    CHECK(ta_system_retire_definition(f.system, id) == TA_OK);
+    CHECK(ta_system_retire_definition(f.system, id) == TA_OK);
+    CHECK(sink.count == 2 && saw(&sink, 1, TA_DEFINITION_EVENT_RETIRED, id));
+    CHECK(ta_actor_destroy(f.system, actor) == TA_OK);
+    CHECK(sink.count == 3 && saw(&sink, 2, TA_DEFINITION_EVENT_FREED, id));
+    check_gone(&f, id);
+    CHECK(ta_system_retire_definition(f.system, id) == TA_OK);
+    CHECK(sink.count == 3);
+
+    /* A cascade frees leaves first: grandchild, child, then parent. */
+    ta_definition_id parent = 0;
+    ta_definition_id child = 0;
+    CHECK(register_states(&f, "cascade-parent", invoking, &parent) == TA_OK);
+    CHECK(register_states(&f, "cascade-child", invoking, &child) == TA_OK);
+    ta_definition_id grandchild = register_chart(&f, "cascade-grandchild");
+    CHECK(ta_definition_nest(f.system, &(ta_definition_nest_params){ .parent = child, .invoke = 0,
+                                                                   .child = grandchild }) == TA_OK);
+    CHECK(ta_definition_nest(f.system, &(ta_definition_nest_params){ .parent = parent, .invoke = 0,
+                                                                   .child = child }) == TA_OK);
+    CHECK(ta_system_release_definition(f.system, grandchild) == TA_OK);
+    CHECK(ta_system_release_definition(f.system, child) == TA_OK);
+    uint32_t before = sink.count;
+    CHECK(ta_system_release_definition(f.system, parent) == TA_OK);
+    CHECK(sink.count == before + 3u);
+    CHECK(saw(&sink, before, TA_DEFINITION_EVENT_FREED, grandchild));
+    CHECK(saw(&sink, before + 1u, TA_DEFINITION_EVENT_FREED, child));
+    CHECK(saw(&sink, before + 2u, TA_DEFINITION_EVENT_FREED, parent));
+    check_gone(&f, parent);
+    check_gone(&f, child);
+    check_gone(&f, grandchild);
+
+    /* Destroy tells of every definition still alive, retired or not. */
+    ta_definition_id live = register_chart(&f, "left-live");
+    ta_definition_id busy = register_chart(&f, "left-busy");
+    CHECK(spawn(&f, busy, &actor) == TA_OK);
+    CHECK(ta_system_retire_definition(f.system, busy) == TA_OK);
+    before = sink.count;
+    ta_system_destroy(f.system);
+    uint32_t freed_live = 0;
+    uint32_t freed_busy = 0;
+    for (uint32_t at = before; at < sink.count; at += 1u) {
+        freed_live += saw(&sink, at, TA_DEFINITION_EVENT_FREED, live) ? 1u : 0u;
+        freed_busy += saw(&sink, at, TA_DEFINITION_EVENT_FREED, busy) ? 1u : 0u;
+    }
+    CHECK(freed_live == 1 && freed_busy == 1);
+    CHECK(sink.count == before + 2u);
+    CHECK(sink.intact);
+    CHECK(f.model.destroyed == f.model.prepared);
+    CHECK(f.counts.live_blocks == 0 && f.counts.live_bytes == 0);
+}
+
 int main(void) {
     test_ids();
     test_retire_without_actors();
@@ -667,6 +785,7 @@ int main(void) {
     test_nesting();
     test_walk();
     test_system_destroy();
+    test_definition_sink();
     if (failures != 0) {
         fprintf(stderr, "retirement test: %d check(s) failed\n", failures);
         return 1;
