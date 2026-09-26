@@ -2,8 +2,8 @@
 
 // Plays the shared DAP transcripts (tinyactors-test/dap/README.md) against
 // napi's debug adapter: for each transcript, a System with one actor of its
-// chart, a debug session attached to it in the transcript's mode (fork
-// unless it says otherwise), then its steps. The test host's
+// chart, a debug session attached to it with every permission, then its
+// steps. The test host's
 // ruby/dap_transcripts.rb plays the same transcripts against its adapter.
 // Runs on Node and Bun.
 //
@@ -145,16 +145,13 @@ class Transcript {
     this.system = createSystem({ clock: 'manual' });
     this.system.spawn(this.system.define(chart(statechart)), { name: ACTOR });
     await this.system.flush();
-    this.mode = this.spec.napi?.mode ?? 'fork';
-    if (!['fork', 'live'].includes(this.mode)) throw new Error(`${this.name}: napi.mode is "fork" or "live"`);
     this.pending = [];
     this.responses = new Map();
     this.seq = 0;
     this.bindings = {};
     this.initialized = false;
     this.session = createDebugSession(this.system, {
-      mode: this.mode,
-      allow: ['send', 'set', 'goto', 'hold', 'evaluate'],
+      allow: ['send', 'set', 'goto', 'evaluate'],
       send: (message) => {
         if (trace) process.stderr.write(`<- ${JSON.stringify(message)}\n`);
         if (message.type === 'event') this.pending.push(message);
@@ -196,21 +193,19 @@ class Transcript {
     return response;
   }
 
-  // The session start of this host: attach to the actor in the
-  // transcript's mode, and have it stopped at rest: a fork's copy stops on
-  // entry, a live actor is paused. `thread` is its thread.
+  // The session start of this host: attach to the actor, which the session
+  // reports stopped once, on entry, and never stops (napi ADR 0027).
+  // `thread` is its thread.
   async start() {
     if (!this.initialized) {
       await this.send('initialize', { adapterID: 'tinyactors', linesStartAt1: true, columnsStartAt1: true,
                                       supportsInvalidatedEvent: true });
       this.initialized = true;
     }
-    const attached = await this.send('attach', { address: `${this.spec.chart}/${ACTOR}`, mode: this.mode });
+    const attached = await this.send('attach', { address: `${this.spec.chart}/${ACTOR}` });
     if (!attached.success) throw new Mismatch(`attach failed: ${attached.message}`);
     await this.send('configurationDone', {});
-    if (this.mode === 'live') await this.send('pause', {});
-    const reason = this.mode === 'fork' ? 'entry' : 'pause';
-    await this.expectEvents([{ event: 'stopped', body: { reason, threadId: { $capture: 'thread' } } }]);
+    await this.expectEvents([{ event: 'stopped', body: { reason: 'entry', threadId: { $capture: 'thread' } } }]);
     const { threads } = (await this.send('threads', {})).body;
     this.bindings.title = threads.find((thread) => thread.id === this.bindings.thread).name.split(' · ')[0];
   }

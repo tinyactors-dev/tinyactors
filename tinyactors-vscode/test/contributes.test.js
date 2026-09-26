@@ -134,7 +134,7 @@ test('launch declares every argument the test host\'s adapter reads', () => {
     [...new Set(read)].sort());
 });
 
-test('attach offers the modes and permissions napi\'s debug session knows', () => {
+test('attach offers the permissions napi\'s debug session knows', () => {
   const source = fs.readFileSync(path.join(REPOSITORY, 'tinyactors-napi/lib/debug.js'), 'utf8');
   const list = (name) => {
     const found = source.match(new RegExp(`^const ${name} = (\\[[^\\]]*\\]);`, 'm'));
@@ -142,7 +142,7 @@ test('attach offers the modes and permissions napi\'s debug session knows', () =
     return JSON.parse(found[1].replaceAll("'", '"'));
   };
   const { properties } = ATTRIBUTES.attach;
-  assert.deepEqual(properties.mode.enum, list('MODES'));
+  assert.equal(properties.mode, undefined, 'napi\'s session has no modes: it watches and pokes');
   assert.deepEqual(properties.allow.items.enum, list('PERMISSIONS'));
   for (const field of ['address', 'actor', 'sessionID']) {
     assert.match(source, new RegExp(`const \\{[^}]*\\b${field}\\b[^}]*\\} = args;`), `napi resolves ${field}`);

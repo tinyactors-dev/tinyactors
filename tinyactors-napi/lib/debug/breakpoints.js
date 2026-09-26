@@ -2,14 +2,11 @@
 
 // Breakpoints: function breakpoints by name, line breakpoints on the
 // element a source line holds (core ADR 0086), the exception filters, and
-// data breakpoints on data-model locations. On a live actor each is found
-// in the records of a macrostep that ended (lib/debug/macrosteps), so it
-// stops the actor after that macrostep, between macrosteps, and never
-// inside one (the proposal's "Holding a live actor"); an `on:` breakpoint
-// stops before the macrostep, from the next message of the held actor's
-// mailbox. A fork's copy is single-stepped, so there they are also found
-// where it stands (atPosition), before the unit they name. A line
-// breakpoint with a log message is a logpoint: it writes and never stops.
+// data breakpoints on data-model locations. Each is found in the records of
+// a macrostep that ended (lib/debug/macrosteps). A live actor is never
+// stopped, so every breakpoint is a tracepoint: the session says where it
+// would have stopped. A line breakpoint with a log message is a logpoint:
+// it writes its message instead.
 
 const { TinyactorsError } = require('../errors');
 
@@ -78,10 +75,6 @@ function describeLine(breakpoint) {
   return `line ${breakpoint.line} (${element.kind} ${element.name ?? element.id})`;
 }
 
-// Where a position stands, to count one hit per block and step.
-const placeKey = (view) => `${view.step.macrostep}.${view.step.microstep}:${view.position.at}:${view.position.state}:` +
-  `${view.position.transition}`;
-
 // The line breakpoints of one DAP Source are kept under its path, or its
 // sourceReference for a virtual source (napi ADR 0027).
 const sourceKey = (source) => (source.path !== undefined ? `path ${source.path}` : `reference ${source.sourceReference}`);
@@ -97,12 +90,6 @@ class Breakpoints {
     return this.#filters.has(filter);
   }
   #next = 0;
-  #reached = new Set();
-
-  any() {
-    return this.#functions.length > 0 || this.#data.length > 0 || this.#filters.size > 0 ||
-      [...this.#lines.values()].some(({ entries }) => entries.some((entry) => entry.element !== undefined));
-  }
 
   #allLines() {
     return [...this.#lines.values()].flatMap(({ entries }) => entries).filter((entry) => entry.element !== undefined);
@@ -158,11 +145,6 @@ class Breakpoints {
                hitCondition: entry.spec.hitCondition, logMessage: entry.spec.logMessage, hits: entry.hits ?? 0 };
     }) });
     return answered;
-  }
-
-  /** The `on:` breakpoints, for a held actor's next message. */
-  get takings() {
-    return this.#functions.filter((breakpoint) => breakpoint.kind === 'on');
   }
 
   /**
@@ -224,7 +206,7 @@ class Breakpoints {
     return `${label} ${JSON.stringify(path)}`;
   }
 
-  // A label can have spaces (`renewal/r1 (fork)`), so the path is what
+  // A label can have spaces (`renewal/r1 invocation kid`), so the path is what
   // follows the first ` [` that starts a JSON array.
   static parseDataID(text) {
     if (typeof text !== 'string') return undefined;
@@ -241,36 +223,25 @@ class Breakpoints {
   }
 
   /**
-   * `on:` breakpoints for an actor about to take `event`, confirmed with
-   * `fires`. Answers the hit, or undefined.
-   */
-  taking(event, fires) {
-    const hit = this.#functions.filter((breakpoint) => breakpoint.kind === 'on' && matchesEvent(breakpoint.target, event))
-      .filter((breakpoint) => this.#fire(breakpoint, fires));
-    return hit.length === 0 ? undefined
-      : { kind: 'function', breakpoints: hit.map((entry) => entry.id), description: `about to take ${event}` };
-  }
-
-  /**
    * The hits in a macrostep that ended, of the actor labelled `label`:
    * [{ kind: 'function' | 'exception' | 'data', breakpoints, description,
    * exception }]. `location(expressionID)` names an <assign>'s location;
    * `fires(breakpoint)` confirms a condition.
    */
-  hits(macrostep, { label, location, fires, log, skipTaking = false, skip = new Set() }) {
+  hits(macrostep, { label, location, fires, log }) {
     const out = [];
     const exception = this.#exception(macrostep);
     if (exception !== undefined) out.push(exception);
-    const lines = this.#allLines().filter((breakpoint) => !skip.has(breakpoint.id) && lineRan(breakpoint.element, macrostep))
+    const lines = this.#allLines().filter((breakpoint) => lineRan(breakpoint.element, macrostep))
       .filter((breakpoint) => this.#fire(breakpoint, fires))
       .filter((breakpoint) => (breakpoint.logMessage ? (log(breakpoint), false) : true));
     if (lines.length > 0) {
       out.push({ kind: 'line', breakpoints: lines.map((entry) => entry.id),
                  description: lines.map(describeLine).join(', ') });
     }
-    const functions = this.#functions.filter((breakpoint) => !skip.has(breakpoint.id)).filter((breakpoint) => {
+    const functions = this.#functions.filter((breakpoint) => {
       switch (breakpoint.kind) {
-        case 'on': return !skipTaking && macrostep.event !== null && matchesEvent(breakpoint.target, macrostep.event.name);
+        case 'on': return macrostep.event !== null && matchesEvent(breakpoint.target, macrostep.event.name);
         case 'entry': return macrostep.microsteps.some((micro) => micro.entered.includes(breakpoint.target));
         case 'exit': return macrostep.microsteps.some((micro) => micro.exited.includes(breakpoint.target));
         default: return macrostep.microsteps.some((micro) => micro.transitions.some((text) => {
@@ -295,68 +266,6 @@ class Breakpoints {
       out.push({ kind: 'data', breakpoints: data.map((entry) => entry.id),
                  description: writes.map((entry) => `${entry.location.join('.')}${entry.value === undefined ? ' written'
                    : ` = ${entry.value}`}`).join(', ') });
-    }
-    return out;
-  }
-
-  /**
-   * The breakpoints a fork's copy has reached where it stands (`view`, its
-   * inspection): before the event an `on:` names is taken, and before the
-   * block or unit a function or line breakpoint names. Each hits once per
-   * block and step. `transition(id)` names a transition; `log(breakpoint)`
-   * writes a logpoint; `passed(id)` hears each breakpoint reached, whether
-   * or not its condition and hit condition let it stop, so the macrostep's
-   * records do not count it again. Answers [{ kind, breakpoints,
-   * description }].
-   */
-  atPosition(view, { transition, fires, log, passed }) {
-    if (!view.macrostepInProgress) {
-      this.#reached.clear();
-      return [];
-    }
-    const key = placeKey(view);
-    const { position } = view;
-    const about = view.step.macrostep === 0 && view.currentEvent !== null ? view.currentEvent.name : undefined;
-    const reached = (breakpoint) => {
-      switch (breakpoint.kind) {
-        case 'on': return about !== undefined && matchesEvent(breakpoint.target, about);
-        case 'entry': return position.at === 'enter' && position.state === breakpoint.target;
-        case 'exit': return position.at === 'exit' && position.state === breakpoint.target;
-        case 'transition': {
-          if (position.at !== 'transition') return false;
-          const shown = normalize(transition(position.transition));
-          return shown === breakpoint.target || shown.startsWith(`${breakpoint.target} on `);
-        }
-        default: {
-          const { element } = breakpoint;
-          if (element.kind === 'state') return position.at === 'enter' && position.state === element.name;
-          if (element.kind === 'transition') return position.at === 'transition' && position.transition === element.id;
-          return position.action === element.id;
-        }
-      }
-    };
-    const fresh = (breakpoint) => {
-      // An action in a <foreach> hits once per iteration.
-      const unit = breakpoint.kind === 'line' && breakpoint.element.kind === 'action'
-        ? `:${position.action}:${position.iteration}` : '';
-      const once = `${breakpoint.id}@${key}${unit}`;
-      if (this.#reached.has(once)) return false;
-      this.#reached.add(once);
-      passed(breakpoint.id);
-      return true;
-    };
-    const out = [];
-    const functions = this.#functions.filter(reached).filter(fresh).filter((breakpoint) => this.#fire(breakpoint, fires));
-    if (functions.length > 0) {
-      out.push({ kind: 'function', breakpoints: functions.map((entry) => entry.id),
-                 description: functions.map((entry) => (entry.kind === 'on' ? `about to take ${about}` : describe(entry)))
-                   .join(', ') });
-    }
-    const lines = this.#allLines().filter(reached).filter(fresh).filter((breakpoint) => this.#fire(breakpoint, fires))
-      .filter((breakpoint) => (breakpoint.logMessage ? (log(breakpoint), false) : true));
-    if (lines.length > 0) {
-      out.push({ kind: 'line', breakpoints: lines.map((entry) => entry.id),
-                 description: lines.map(describeLine).join(', ') });
     }
     return out;
   }

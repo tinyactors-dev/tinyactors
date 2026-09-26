@@ -2,11 +2,11 @@
 #MISE description="Serve a debug session over an example system, for trying DAP clients (napi ADR 0027)"
 # vim:ft=ruby
 #USAGE flag "--port <port>" help="Serve sessions on 127.0.0.1:<port> instead of stdin and stdout"
-#USAGE flag "--mode <mode>" help="The most a session may attach in: watch, fork or live (default live)"
+#USAGE flag "--watch" help="Grant no permission: sessions only watch"
 #
 # `mise run dap-server -- --port 4711`, then point a client at the port
 # (VS Code: "debugServer": 4711) and attach with
-# { "address": "subscription/acct_1", "mode": "live" }. Without --port it
+# { "address": "subscription/acct_1" }. Without --port it
 # speaks DAP on stdin and stdout, as a client that starts adapters expects.
 # tools/dap-server.js says what the example runs.
 
@@ -22,7 +22,7 @@ end
 
 forward = []
 forward.push('--port', ENV['usage_port']) if ENV['usage_port'] && !ENV['usage_port'].empty?
-forward.push('--mode', ENV['usage_mode']) if ENV['usage_mode'] && !ENV['usage_mode'].empty?
+forward.push('--watch') if ENV['usage_watch'] == 'true'
 # The build writes to stdout, which carries DAP: it goes to stderr.
 run('mise', 'run', 'build', out: $stderr)
 run('node', 'tools/dap-server.js', *forward)

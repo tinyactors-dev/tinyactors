@@ -2,10 +2,10 @@
 
 // The debug adapter (lib/debug.js; napi ADR 0027), driven by a scripted
 // DAP client: every request it implements and every one it refuses, the
-// modes and permissions, the audit hook, holding a live actor with its
-// timeout, the webhook case, breakpoints, stepping, the console, scopes,
-// modules and sources, and the base protocol's framing. Runs on Node and
-// Bun.
+// permissions, the audit hook, the live view (one entry stop, then a
+// refresh after each macrostep), pokes, breakpoints as tracepoints, the
+// console, scopes, modules and sources, and the base protocol's framing.
+// The actor is never stopped. Runs on Node and Bun.
 
 const assert = require('node:assert/strict');
 const {
@@ -20,8 +20,7 @@ const watchdog = setTimeout(() => {
 }, 60000);
 
 const turn = () => new Promise((resolve) => setImmediate(resolve));
-const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-const ALL = ['send', 'set', 'goto', 'hold', 'evaluate'];
+const ALL = ['send', 'set', 'goto', 'evaluate'];
 
 // A scripted client: requests in order, and every message the session sent.
 class Client {
@@ -78,6 +77,10 @@ class Client {
       .map((message) => message.body);
   }
 
+  outputSince(mark) {
+    return this.since(mark, 'output').map((body) => body.output).join('');
+  }
+
   async until(predicate, what) {
     for (let tries = 0; tries < 500; tries += 1) {
       if (predicate()) return;
@@ -86,11 +89,9 @@ class Client {
     assert.fail(`timed out waiting for ${what}; the session wrote:\n${this.output()}`);
   }
 
-  async stoppedAfter(mark, reason) {
-    await this.until(() => this.since(mark, 'stopped').length > 0, `a stop (${reason})`);
-    const [stop] = this.since(mark, 'stopped');
-    assert.equal(stop.reason, reason, JSON.stringify(stop));
-    return stop;
+  // Waits for output since `mark` that matches.
+  async wrote(mark, pattern) {
+    await this.until(() => pattern.test(this.outputSince(mark)), `output matching ${pattern}`);
   }
 
   async repl(text) {
@@ -103,6 +104,15 @@ class Client {
     await this.ok('attach', attach);
     await this.ok('configurationDone');
     return capabilities;
+  }
+
+  // The session never stops the actor: the entry stop, and one after each
+  // continue, are all a client ever hears.
+  assertNeverStopped() {
+    for (const stop of this.events('stopped')) {
+      assert.equal(stop.reason, 'entry', JSON.stringify(stop));
+    }
+    assert.equal(this.events('continued').length, 0);
   }
 }
 
@@ -166,44 +176,45 @@ async function framing() {
 async function options() {
   const system = createSystem({ clock: 'manual' });
   const send = () => {};
-  assert.throws(() => createDebugSession(system, { mode: 'fly', send }), /mode/);
-  assert.throws(() => createDebugSession(system, { mode: 'live', allow: ['everything'], send }), /allow/);
-  assert.throws(() => createDebugSession(system, { mode: 'live' }), /send/);
-  assert.throws(() => createDebugSession(system, { mode: 'live', send, audit: 1 }), /audit/);
-  assert.throws(() => createDebugSession(system, { mode: 'live', send, holdTimeout: 0 }), /holdTimeout/);
-  assert.throws(() => createDebugSession({}, { mode: 'live', send }), /System/);
-  const session = createDebugSession(system, { mode: 'watch', allow: ['evaluate'], send });
-  assert.equal(session.mode, 'watch');
+  assert.throws(() => createDebugSession(system, { allow: ['everything'], send }), /allow/);
+  assert.throws(() => createDebugSession(system, { allow: ['hold'], send }), /allow/);
+  assert.throws(() => createDebugSession(system, {}), /send/);
+  assert.throws(() => createDebugSession(system, { send, audit: 1 }), /audit/);
+  assert.throws(() => createDebugSession({}, { send }), /System/);
+  const session = createDebugSession(system, { allow: ['evaluate'], send });
   assert.deepEqual(session.allow, ['evaluate']);
   assert.equal(session.attached, false);
+  assert.deepEqual(createDebugSession(system, { send }).allow, [], 'no permission: watch only');
   system.close();
 }
 
-// initialize, the capabilities, attach and its refusals, and the requests
-// every client sends first.
+// initialize, the capabilities, attach and its refusals, the entry stop,
+// and the requests a live actor has no use for.
 async function session() {
   const { system, actor } = await world();
-  const client = new Client(system, { mode: 'live', allow: ALL });
+  const client = new Client(system, { allow: ALL });
   const capabilities = await client.ok('initialize', { clientID: 'test' });
   assert.deepEqual(client.events('initialized'), [undefined]);
   assert.equal(capabilities.supportsConfigurationDoneRequest, true);
   assert.equal(capabilities.supportsFunctionBreakpoints, true);
   assert.equal(capabilities.supportsDataBreakpoints, true);
   assert.equal(capabilities.supportTerminateDebuggee, false);
-  assert.equal(capabilities.supportsStepBack, true, 'a fork steps back');
   assert.equal(capabilities.supportsLogPoints, true);
   assert.equal(capabilities.supportsBreakpointLocationsRequest, true);
-  assert.equal(capabilities.supportsDisassembleRequest, undefined);
+  assert.equal(capabilities.supportsGotoTargetsRequest, true, 'goto is a poke');
+  for (const never of ['supportsStepBack', 'supportsRestartFrame', 'supportsRestartRequest',
+                       'supportsSteppingGranularity', 'supportsExceptionInfoRequest', 'supportsDisassembleRequest']) {
+    assert.equal(capabilities[never], undefined, never);
+  }
   assert.deepEqual(capabilities.exceptionBreakpointFilters.map((filter) => filter.filter),
                    ['error.execution', 'error.communication', 'error.platform', 'ignored', 'stopped', 'runaway']);
 
   await client.refused('launch', {}, /attach/);
-  await client.refused('threads', {}, undefined).catch(() => {});
   await client.refused('stackTrace', { threadId: 1 }, /attach/);
   await client.refused('attach', {}, /address/);
   await client.refused('attach', { address: 'nope' }, /address/);
   await client.refused('attach', { address: 'subscription/nobody' }, /no resident actor/);
-  await client.refused('attach', { address: 'subscription/acct_1', mode: 'sideways' }, /mode/);
+  await client.refused('attach', { address: 'subscription/acct_1', allow: 'send' }, /list of permissions/);
   await client.refused('attach', { actor: { slot: 999, generation: 1 } }, /no resident actor/);
   await client.refused('attach', { sessionID: 'x' }, /session ID/);
 
@@ -212,257 +223,154 @@ async function session() {
   await client.ok('configurationDone');
   const [process] = client.events('process');
   assert.deepEqual(process, { name: 'subscription/acct_1', startMethod: 'attach', isLocalProcess: true });
-  assert.match(client.output(),
-               /attached to subscription\/acct_1 .* in live mode; allowed: send, set, goto, hold, evaluate/);
+  assert.match(client.output(), /attached to subscription\/acct_1 \(session \d+\), watched live and never paused; allowed: send, set, goto, evaluate/);
+  // One stop, so the client shows the stack and the variables.
+  const [entry] = client.events('stopped');
+  assert.deepEqual(entry, { reason: 'entry', threadId: 1, allThreadsStopped: false, preserveFocusHint: false,
+                            description: 'watched live, never paused: the view follows each macrostep' });
   const { threads } = await client.ok('threads');
   assert.deepEqual(threads, [{ id: 1, name: 'subscription/acct_1 · active' }]);
   assert.equal(client.audit[0].type, 'attach');
   assert.deepEqual(client.audit[0].allow, ALL);
   assert.equal(client.audit[0].actor, 'subscription/acct_1');
 
-  // Requests a chart has no use for, and those only a fork answers.
+  // Nothing stops the actor, so nothing steps it or goes back.
   for (const [command, pattern] of [
-    ['stepBack', /fork/], ['reverseContinue', /fork/], ['restartFrame', /fork/],
+    ['pause', /never stopped/], ['next', /never stopped/], ['stepIn', /never stopped/], ['stepOut', /never stopped/],
+    ['stepBack', /no past/], ['reverseContinue', /no past/], ['restartFrame', /no past/],
+    ['restart', /attach again/], ['exceptionInfo', /never stops for an exception/],
     ['cancel', /nothing to cancel/], ['stepInTargets', /one way in/],
     ['terminateThreads', /destroy an actor/], ['setInstructionBreakpoints', /no instructions/],
     ['locations', /source/], ['readMemory', /memory/], ['writeMemory', /memory/], ['disassemble', /instructions/],
     ['runInTerminal', /not supported/],
   ]) {
-    await client.refused(command, {}, pattern);
+    await client.refused(command, { threadId: 1 }, pattern);
   }
+  // continue changes nothing, and the client hears the actor stopped again.
+  const mark = client.mark();
+  assert.deepEqual(await client.ok('continue', { threadId: 1 }), { allThreadsContinued: false });
+  assert.equal(client.since(mark, 'stopped').length, 1);
+  assert.match(client.outputSince(mark), /continue changes nothing/);
+  assert.equal(actor.inspect().scheduling, 'idle');
+
   const lines = await client.ok('setBreakpoints', { source: { path: 'elsewhere.js' }, breakpoints: [{ line: 3 }] });
   assert.equal(lines.breakpoints[0].verified, false);
   assert.match(lines.breakpoints[0].message, /no state, transition or action/);
   assert.deepEqual((await client.ok('breakpointLocations', { source: { path: 'elsewhere.js' }, line: 1 })).breakpoints, []);
 
-  // Attach by actor ID and by session ID, and restart.
-  const other = new Client(system, { mode: 'watch' });
+  // Attach by actor ID and by session ID.
+  const other = new Client(system, {});
   await other.start({ actor: { slot: actor.slot, generation: actor.generation } });
-  assert.match(other.output(), /attached to actor \d+:\d+/);
+  assert.match(other.output(), /attached to actor \d+:\d+ .*; watch only/);
   await other.ok('disconnect');
-  const third = new Client(system, { mode: 'watch' });
-  await third.start({ sessionID: String(actor.inspect().sessionID), mode: 'watch' });
-  await third.ok('restart', {});
-  assert.match(third.output(), /reattached/);
-  assert.deepEqual(third.audit.map((entry) => entry.type), ['attach', 'detach', 'attach']);
+  const third = new Client(system, {});
+  await third.start({ sessionID: String(actor.inspect().sessionID) });
   await third.ok('terminate');
   assert.equal(third.events('terminated').length, 1);
   assert.equal(third.session.attached, false);
+  assert.deepEqual(third.audit.map((entry) => entry.type), ['attach', 'detach']);
 
   await client.ok('disconnect', { terminateDebuggee: true });
   assert.equal(system.exists(actor), true, 'the actor is never destroyed');
   assert.equal(client.audit.at(-1).type, 'detach');
+  client.assertNeverStopped();
   client.session.close();
   system.close();
 }
 
-// Watch mode: nothing stops and nothing changes; breakpoints say where
-// they would have stopped; every macrostep is summarized from the traces,
-// and the application's own sink still gets every turn.
-async function watchMode() {
+// The live view: every macrostep of the actor, a poke's included, is a
+// summary in the console and an `invalidated` event, after which the
+// stack and the scopes show where the actor is now. The application's own
+// trace sink still gets every turn.
+async function liveView() {
   const { system, actor } = await world();
   const applicationTurns = [];
   system.setTraceSink((traces) => applicationTurns.push(traces.length), { detail: 'summary', values: true });
-  const client = new Client(system, { mode: 'watch', allow: ['evaluate'] });
+  const client = new Client(system, { allow: ALL });
   await client.start({ address: { family: 'subscription', name: 'acct_1' } });
-  await client.ok('setFunctionBreakpoints', { breakpoints: [{ name: 'past_due' }, { name: 'on:payment.failed' }] });
-  await client.ok('setExceptionBreakpoints', { filters: ['error.execution'] });
-  await client.refused('pause', { threadId: 1 }, /watch mode/);
-  await client.refused('continue', { threadId: 1 }, /watch mode/);
-  await client.refused('next', { threadId: 1 }, /watch mode/);
-  await client.refused('evaluate', { expression: 'send paid', context: 'repl' }, /watch mode/);
-  await client.refused('evaluate', { expression: 'goto active', context: 'repl' }, /watch mode/);
-  await client.refused('evaluate', { expression: 'abandon', context: 'repl' }, /watch mode/);
-  await client.refused('evaluate', { expression: 'cancel nudge', context: 'repl' }, /watch mode/);
+  let { stackFrames } = await client.ok('stackTrace', { threadId: 1 });
+  assert.equal(stackFrames[0].name, 'idle in active');
 
-  await actor.send('boom');
+  let mark = client.mark();
   await actor.send('payment.failed', { attempt: 3 });
-  await system.flush();
-  assert.equal(client.events('stopped').length, 0, 'watch mode never stops');
-  const text = client.output();
-  assert.match(text, /subscription\/acct_1 macrostep \d+: payment\.failed \{"attempt":3\}/);
-  assert.match(text, /active → past_due on payment\.failed/);
-  assert.match(text, /assign failures = 1/);
-  assert.match(text, /now in past_due/);
-  assert.match(text, /would have stopped after macrostep \d+: error\.execution/);
-  assert.match(text, /would have stopped after macrostep \d+: entered past_due, took payment\.failed/);
-  assert.match(text, /overdue: 1/, '<log> records are stdout');
-  const summary = client.events('output').map((body) => body.output)
-    .find((output) => output.startsWith('subscription/acct_1 macrostep') && output.includes('payment.failed'));
+  await client.until(() => client.since(mark, 'invalidated').length > 0, 'an invalidated event');
+  assert.deepEqual(client.since(mark, 'invalidated')[0], { areas: ['stacks', 'variables'] });
+  const summary = client.since(mark, 'output').map((body) => body.output)
+    .find((output) => output.startsWith('subscription/acct_1 macrostep'));
   assert.match(summary, /^subscription\/acct_1 macrostep \d+: payment\.failed \{"attempt":3\}\n  active → past_due on payment\.failed\n    assign failures = 1\n  now in past_due\n$/,
                'a macrostep\'s summary is one output');
-  assert.ok(client.events('invalidated').length >= 2);
+  assert.match(client.output(), /overdue: 1/, '<log> records are stdout');
+  ({ stackFrames } = await client.ok('stackTrace', { threadId: 1 }));
+  assert.equal(stackFrames[0].name, 'idle in past_due', 'the stack shows where it is now');
+
+  // A poke's macrostep shows the same way.
+  mark = client.mark();
+  assert.equal((await client.repl('send paid')).result, 'sent paid to subscription/acct_1');
+  await client.until(() => client.since(mark, 'invalidated').length > 0, 'the poke\'s macrostep');
+  assert.match(client.outputSince(mark), /past_due → active on paid/);
+  ({ stackFrames } = await client.ok('stackTrace', { threadId: 1 }));
+  assert.equal(stackFrames[0].name, 'idle in active');
+  const { scopes } = await client.ok('scopes', { frameId: stackFrames[0].id });
+  const event = scopes.find((scope) => scope.name === 'Event');
+  const fields = (await client.ok('variables', { variablesReference: event.variablesReference })).variables;
+  assert.ok(fields.some((variable) => variable.name === 'name' && variable.value === '"paid"'), JSON.stringify(fields));
   assert.ok(applicationTurns.length > 0, 'the application\'s sink still gets its turns');
-  // Expressions still evaluate with the permission.
-  assert.equal((await client.repl('failures * 10')).result, '10');
+
+  // A client that did not say it takes invalidated events hears none.
+  const plain = new Client(system, {});
+  await plain.ok('initialize', { clientID: 'plain' });
+  await plain.ok('attach', { address: 'subscription/acct_1' });
+  actor.post('payment.failed');
+  await plain.until(() => /now in past_due/.test(plain.output()), 'the summary');
+  assert.equal(plain.events('invalidated').length, 0);
+  await plain.ok('disconnect');
+  client.assertNeverStopped();
   await client.ok('disconnect');
   system.close();
 }
 
-// Holding a live actor: pause between macrosteps, the webhook case, step
-// one message at a time, continue, and the hold's timeout.
-async function holding() {
-  const { system, actor } = await world();
-  const client = new Client(system, { mode: 'live', allow: ALL, holdTimeout: 150 });
-  await client.start({ address: 'subscription/acct_1' });
-  let mark = client.mark();
-  await client.ok('pause', { threadId: 1 });
-  await client.stoppedAfter(mark, 'pause');
-  assert.equal(actor.inspect().scheduling, 'held');
-  assert.ok(client.audit.some((entry) => entry.type === 'mutation' && entry.operation === 'hold'));
-  await client.ok('pause', { threadId: 1 }); // already stopped
-
-  // The webhook case: a handler waiting with a timeout has its message
-  // withdrawn, never taken later, so Stripe's retry is not a duplicate.
-  await assert.rejects(actor.send('payment.failed', { attempt: 1 }, { timeout: 20 }), (error) => error.code === 'timeout');
-  assert.deepEqual(system.mailbox(actor), []);
-  actor.post('payment.failed', { attempt: 2 });
-  actor.post('payment.failed', { attempt: 3 });
-  await system.flush();
-  assert.equal(actor.inspect().data.failures, 0, 'held mail waits');
-  const { stackFrames } = await client.ok('stackTrace', { threadId: 1 });
-  assert.equal(stackFrames[0].name, 'idle in active (held; 2 messages waiting)');
-
-  // next takes exactly one message and stops after its macrostep.
-  mark = client.mark();
-  await client.ok('next', { threadId: 1, granularity: 'statement' });
-  const step = await client.stoppedAfter(mark, 'step');
-  assert.equal(step.threadId, 1);
-  assert.equal(actor.inspect().data.failures, 1);
-  mark = client.mark();
-  await client.ok('stepIn', { threadId: 1 });
-  await client.stoppedAfter(mark, 'step');
-  assert.equal(actor.inspect().data.failures, 2);
-  // An empty mailbox: the step waits for the next message.
-  mark = client.mark();
-  await client.ok('stepOut', { threadId: 1 });
-  await system.flush();
-  assert.match(client.output(), /waits for its next message/);
-  assert.equal(client.since(mark, 'stopped').length, 0);
-  actor.post('paid');
-  await client.stoppedAfter(mark, 'step');
-  assert.deepEqual(actor.inspect().activeStates, ['active']);
-
-  // continue lets it run; the retry is taken once.
-  const retry = actor.send('payment.failed', { attempt: 1 });
-  await client.ok('continue', { threadId: 1 });
-  assert.equal((await retry).status, 'stable');
-  assert.equal(actor.inspect().data.failures, 3);
-  assert.equal(actor.inspect().scheduling, 'idle');
-  await client.refused('next', { threadId: 1 }, /not stopped/);
-
-  // The hold's timeout lets the actor go by itself.
-  mark = client.mark();
-  await client.ok('pause', { threadId: 1 });
-  await client.stoppedAfter(mark, 'pause');
-  actor.post('paid');
-  await sleep(250);
-  await system.flush();
-  assert.equal(client.since(mark, 'continued').length, 1);
-  assert.match(client.output(), /was held for 150 ms, the most this session may hold it/);
-  assert.deepEqual(actor.inspect().activeStates, ['active'], 'the mail was taken once the hold ended');
-  assert.ok(client.audit.some((entry) => entry.operation === 'release' && entry.reason === 'hold timeout'));
-
-  // A pause while a macrostep runs stops when it ends.
-  const slow = createSystem({ clock: 'manual', scheduling: { resumeBudget: 1 } });
-  const slowActor = slow.spawn(slow.define(subscription()), { name: 'acct_2' });
-  await slow.flush();
-  const slowClient = new Client(slow, { mode: 'live', allow: ['hold'] });
-  await slowClient.start({ address: 'subscription/acct_2' });
-  const completed = slowActor.send('payment.failed');
-  await turn();
-  assert.equal(slowActor.inspect().scheduling, 'runnable');
-  mark = slowClient.mark();
-  await slowClient.ok('pause', { threadId: 1 });
-  assert.match(slowClient.output(), /is inside a macrostep; it stops when the macrostep ends/);
-  assert.equal((await completed).status, 'stable', 'the send() of the running macrostep completes');
-  await slowClient.stoppedAfter(mark, 'pause');
-  // Disconnecting releases the hold.
-  slowActor.post('paid');
-  await slowClient.ok('disconnect');
-  await slow.flush();
-  assert.deepEqual(slowActor.inspect().activeStates, ['active']);
-  slow.close();
-
-  await client.ok('disconnect');
-  system.close();
-}
-
-// Breakpoints on a live actor stop it between macrosteps.
+// Breakpoints are tracepoints: where one would have stopped, the console
+// says so, and the actor runs on.
 async function breakpoints() {
   const { system, actor } = await world();
-  const client = new Client(system, { mode: 'live', allow: ALL });
+  const client = new Client(system, { allow: ALL });
   await client.start({ address: 'subscription/acct_1' });
 
-  // Entry, with a condition and a hit condition.
+  // Entry, with a condition and a hit condition, and on:.
   const set = await client.ok('setFunctionBreakpoints', { breakpoints: [
     { name: 'past_due', condition: 'failures >= 1', hitCondition: '1' },
+    { name: 'on:paid' },
     { name: 'nowhere' },
   ] });
   assert.equal(set.breakpoints[0].verified, true);
-  assert.deepEqual(set.breakpoints[1], { id: set.breakpoints[1].id, verified: false,
+  assert.deepEqual(set.breakpoints[2], { id: set.breakpoints[2].id, verified: false,
                                          message: 'nowhere is not a state of the chart' });
   let mark = client.mark();
-  const first = actor.send('payment.failed', { attempt: 1 });
-  let stop = await client.stoppedAfter(mark, 'function breakpoint');
-  assert.equal((await first).status, 'stable', 'the macrostep ended before the stop');
-  assert.deepEqual(stop.hitBreakpointIds, [set.breakpoints[0].id]);
-  assert.match(stop.description, /entered past_due/);
-  await client.ok('continue', { threadId: 1 });
-
-  // on: stops before the macrostep that takes the event, and lets it
-  // through on continue.
-  const on = await client.ok('setFunctionBreakpoints', { breakpoints: [{ name: 'on:paid' }] });
-  actor.post('payment.failed');
+  assert.equal((await actor.send('payment.failed', { attempt: 1 })).status, 'stable');
+  await client.wrote(mark, /would have stopped after macrostep \d+: entered past_due\n/);
   mark = client.mark();
   actor.post('paid');
-  stop = await client.stoppedAfter(mark, 'function breakpoint');
-  assert.match(stop.description, /about to take paid/);
-  assert.deepEqual(stop.hitBreakpointIds, [on.breakpoints[0].id]);
-  assert.deepEqual(actor.inspect().activeStates, ['past_due']);
-  assert.equal(actor.inspect().data.failures, 2, 'the mail before it was taken');
-  mark = client.mark();
-  await client.ok('continue', { threadId: 1 });
-  await system.flush();
+  await client.wrote(mark, /would have stopped after macrostep \d+: took paid\n/);
   assert.deepEqual(actor.inspect().activeStates, ['active']);
-  assert.equal(client.since(mark, 'stopped').length, 0, 'the same message does not stop twice');
 
   // A transition by its name, and exit.
-  await client.ok('setFunctionBreakpoints', { breakpoints: [{ name: 'active -> past_due' }] });
+  await client.ok('setFunctionBreakpoints', { breakpoints: [{ name: 'active -> past_due' }, { name: 'exit:past_due' }] });
   mark = client.mark();
   actor.post('payment.failed');
-  stop = await client.stoppedAfter(mark, 'function breakpoint');
-  assert.match(stop.description, /active → past_due/);
-  await client.ok('setFunctionBreakpoints', { breakpoints: [{ name: 'exit:past_due' }] });
-  mark = client.mark();
-  await client.ok('continue', { threadId: 1 });
   actor.post('paid');
-  stop = await client.stoppedAfter(mark, 'function breakpoint');
-  assert.match(stop.description, /exited past_due/);
+  await client.wrote(mark, /would have stopped after macrostep \d+: active → past_due[^\n]*\n[^]*exited past_due/);
   await client.ok('setFunctionBreakpoints', { breakpoints: [] });
-  await client.ok('continue', { threadId: 1 });
 
-  // An exception, and exceptionInfo.
+  // An exception.
   await client.refused('setExceptionBreakpoints', { filters: ['bogus'] }, /unknown exception filter/);
   await client.ok('setExceptionBreakpoints', { filters: ['error.execution'] });
   mark = client.mark();
   actor.post('boom');
-  stop = await client.stoppedAfter(mark, 'exception');
-  assert.equal(stop.text, 'error.execution: <script> in active on boom: Error: boom',
-               'what failed, and the fault\'s message');
-  assert.match(stop.text, /error\.execution/);
-  const info = await client.ok('exceptionInfo', { threadId: 1 });
-  assert.equal(info.exceptionId, 'error.execution');
-  assert.equal(info.details.typeName, 'error.execution');
-  assert.equal(info.breakMode, 'always');
+  await client.wrote(mark, /would have stopped after macrostep \d+: error\.execution: <script> in active on boom: Error: boom\n/);
+  await client.refused('exceptionInfo', { threadId: 1 }, /never stops for an exception/);
   await client.ok('setExceptionBreakpoints', { filters: [] });
-  await client.ok('continue', { threadId: 1 });
-  await client.refused('exceptionInfo', { threadId: 1 }, /did not stop for an exception/);
 
-  // A data breakpoint, from the Variables pane.
-  mark = client.mark();
-  await client.ok('pause', { threadId: 1 });
-  await client.stoppedAfter(mark, 'pause');
+  // A data breakpoint, from the Variables pane and by name.
   const { stackFrames } = await client.ok('stackTrace', { threadId: 1 });
   const { scopes } = await client.ok('scopes', { frameId: stackFrames[0].id });
   const data = scopes.find((scope) => scope.name === 'Data model');
@@ -478,39 +386,36 @@ async function breakpoints() {
   ] });
   assert.deepEqual(watched.breakpoints.map((entry) => entry.verified), [true, false, false, false]);
   mark = client.mark();
-  await client.ok('continue', { threadId: 1 });
   actor.post('payment.failed');
-  stop = await client.stoppedAfter(mark, 'data breakpoint');
-  assert.match(stop.description, /failures/);
+  await client.wrote(mark, /would have stopped after macrostep \d+: failures = 3\n/);
   await client.ok('setDataBreakpoints', { breakpoints: [] });
-  await client.ok('continue', { threadId: 1 });
   await system.flush();
-  assert.equal(actor.inspect().scheduling, 'idle', 'no breakpoints: nothing holds it');
+  assert.equal(actor.inspect().scheduling, 'idle', 'nothing holds it');
+  client.assertNeverStopped();
   await client.ok('disconnect');
   system.close();
 }
 
-// The console: send and replies, goto, abandon, cancel, replace, and what
-// needs a fork.
+// The console's pokes: send and replies, goto, abandon, cancel, replace.
 async function console() {
   const { system, actor } = await world();
   system.define(subscription('v2'));
-  const client = new Client(system, { mode: 'live', allow: ALL });
+  const client = new Client(system, { allow: ALL });
   await client.start({ address: 'subscription/acct_1' });
 
   assert.match((await client.repl('help')).result, /send <event> \[json\]/);
+  assert.doesNotMatch((await client.repl('help')).result, /fork|clock/);
   assert.match((await client.repl('send ping')).result, /sent ping to subscription\/acct_1/);
   await system.flush();
   assert.match(client.output(), /subscription\/acct_1 replied pong/);
   await client.refused('evaluate', { expression: 'send', context: 'repl' }, /send <event>/);
   await client.refused('evaluate', { expression: 'send x {nope', context: 'repl' }, /not JSON/);
 
-  // A message sent while stopped waits in the mailbox, marked as the console's.
-  let mark = client.mark();
-  await client.ok('pause', { threadId: 1 });
-  await client.stoppedAfter(mark, 'pause');
-  assert.match((await client.repl('send payment.failed {"attempt": 9}')).result, /waits in the mailbox \(1 message\)/);
+  // Until the pump takes it, a poke waits in the mailbox, marked as the
+  // console's; the Queues scope shows it.
+  assert.equal((await client.repl('send payment.failed {"attempt": 9}')).result, 'sent payment.failed to subscription/acct_1');
   const { stackFrames } = await client.ok('stackTrace', { threadId: 1 });
+  assert.equal(stackFrames[0].name, 'idle in active (1 message waiting)');
   const { scopes } = await client.ok('scopes', { frameId: stackFrames[0].id });
   const queues = scopes.find((scope) => scope.name === 'Queues');
   const queued = await client.ok('variables', { variablesReference: queues.variablesReference });
@@ -519,35 +424,29 @@ async function console() {
   const fields = await client.ok('variables', { variablesReference: message.variablesReference });
   assert.deepEqual(Object.fromEntries(fields.variables.map((variable) => [variable.name, variable.value])),
                    { event: '"payment.failed"', data: '{"attempt":9}', from: '"this console"' });
-  mark = client.mark();
-  await client.ok('continue', { threadId: 1 });
   await system.flush();
   assert.equal(actor.inspect().data.failures, 1);
 
-  // goto, while running: queued behind real mail; and when held with an
-  // empty mailbox: taken at once, stopping with reason goto.
-  assert.match((await client.repl('goto active from past_due')).result, /goto active from past_due queued/);
+  // goto: an operator transition queued behind the mail.
+  assert.equal((await client.repl('goto active from past_due')).result,
+               'subscription/acct_1: goto active from past_due queued');
   await system.flush();
   assert.deepEqual(actor.inspect().activeStates, ['active']);
+  assert.match(client.output(), /goto: exited past_due, entered active/);
   await client.refused('evaluate', { expression: 'goto nowhere', context: 'repl' }, /not a state/);
   await client.refused('evaluate', { expression: 'goto', context: 'repl' }, /goto <state/);
-  mark = client.mark();
-  await client.ok('pause', { threadId: 1 });
-  await client.stoppedAfter(mark, 'pause');
-  mark = client.mark();
-  await client.repl('goto past_due');
-  await client.stoppedAfter(mark, 'goto');
-  assert.deepEqual(actor.inspect().activeStates, ['past_due']);
-  assert.match(client.output(), /goto: exited active, entered past_due/);
-  // The DAP goto request, from gotoTargets.
+  // The DAP goto request, from gotoTargets, is the same poke.
   const { targets } = await client.ok('gotoTargets', { source: { path: 'x' }, line: 1 });
   assert.deepEqual(targets.map((target) => target.label), ['active', 'past_due', 'loop1', 'loop2']);
-  mark = client.mark();
-  await client.ok('goto', { threadId: 1, targetId: targets[0].id });
-  await client.stoppedAfter(mark, 'goto');
-  assert.deepEqual(actor.inspect().activeStates, ['active']);
+  let mark = client.mark();
+  await client.ok('goto', { threadId: 1, targetId: targets[1].id });
+  assert.match(client.outputSince(mark), /subscription\/acct_1: goto past_due queued/);
+  await system.flush();
+  assert.deepEqual(actor.inspect().activeStates, ['past_due']);
+  assert.equal(client.since(mark, 'stopped').length, 0, 'a goto stops nothing');
   await client.refused('goto', { threadId: 1, targetId: 999 }, /gotoTargets/);
-  await client.ok('continue', { threadId: 1 });
+  actor.post('paid');
+  await system.flush();
 
   // cancel withdraws a delayed send by the ID the Timers scope shows.
   actor.post('remind');
@@ -557,25 +456,32 @@ async function console() {
   assert.equal(actor.inspect().delayedSendCount, 0);
   await client.refused('evaluate', { expression: 'cancel nudge', context: 'repl' }, /no pending send/);
 
-  // abandon: a macrostep that never ends, and a pause that waits for it.
-  const spinning = createSystem({ clock: 'manual', scheduling: { actionBudget: 1 } });
-  const spinner = spinning.spawn(spinning.define(subscription()), { name: 'acct_3' });
-  await spinning.flush();
-  const spinClient = new Client(spinning, { mode: 'live', allow: ALL });
-  await spinClient.start({ address: 'subscription/acct_3' });
-  await spinClient.refused('evaluate', { expression: 'abandon', context: 'repl' }, /no macrostep to abandon/);
-  const runaway = spinner.send('spin');
+  // abandon: a macrostep that never ends. The system's budgets pause it
+  // between microsteps, where core abandons it.
+  await client.refused('evaluate', { expression: 'abandon', context: 'repl' }, /no macrostep to abandon/);
+  const runaway = actor.send('spin');
   for (let index = 0; index < 5; index += 1) await turn();
-  mark = spinClient.mark();
-  await spinClient.ok('pause', { threadId: 1 });
-  const frames = await spinClient.ok('stackTrace', { threadId: 1 });
+  const frames = await client.ok('stackTrace', { threadId: 1 });
   assert.ok(frames.stackFrames.some((frame) => /^macrostep \d+ on spin$/.test(frame.name)), JSON.stringify(frames));
-  assert.match((await spinClient.repl('abandon')).result, /abandoned macrostep \d+/);
+  assert.match((await client.repl('abandon')).result, /abandoned macrostep \d+/);
   await assert.rejects(runaway, (error) => error.code === 'abandoned');
-  await spinClient.stoppedAfter(mark, 'pause');
-  assert.ok(spinClient.audit.some((entry) => entry.operation === 'abandon'));
-  await spinClient.ok('disconnect');
-  spinning.close();
+  assert.ok(client.audit.some((entry) => entry.operation === 'abandon'));
+  await system.flush();
+  assert.equal(actor.inspect().macrostepInProgress, false);
+
+  // Inside a microstep, where an action budget of 1 keeps this loop, core
+  // refuses, and abandon says to try again.
+  const tight = createSystem({ clock: 'manual', scheduling: { actionBudget: 1 } });
+  const spinner = tight.spawn(tight.define(subscription()), { name: 'acct_3' });
+  await tight.flush();
+  const tightClient = new Client(tight, { allow: ALL });
+  await tightClient.start({ address: 'subscription/acct_3' });
+  const stuck = spinner.send('spin');
+  for (let index = 0; index < 5; index += 1) await turn();
+  await tightClient.refused('evaluate', { expression: 'abandon', context: 'repl' }, /inside a microstep; try again/);
+  await tightClient.ok('disconnect');
+  tight.close();
+  await assert.rejects(stuck, (error) => error.code === 'closed');
 
   // replace follows the address to the new revision.
   assert.match((await client.repl('replace v2')).result, /now runs v2 from its initial state, with its data/);
@@ -584,20 +490,18 @@ async function console() {
   assert.equal(replaced.inspect().data.failures, 1);
   assert.match((await client.ok('threads')).threads[0].name, /subscription\/acct_1/);
   await client.refused('evaluate', { expression: 'replace v9', context: 'repl' }, /no registered/);
-
-  // The clock is a fork's.
-  await client.refused('evaluate', { expression: 'clock +3d', context: 'repl' }, /every actor of the system/);
+  client.assertNeverStopped();
   await client.ok('disconnect');
   system.close();
 }
 
-// Permissions: each operation needs its own; expressions need `evaluate`,
-// and without it the Variables pane and the console commands still work.
+// Permissions: each poke needs its own; with none the session only
+// watches; expressions need `evaluate`, and without it the Variables pane
+// and the console commands still work.
 async function permissions() {
   const { system } = await world();
-  const client = new Client(system, { mode: 'live', allow: ['send'] });
+  const client = new Client(system, { allow: ['send'] });
   await client.start({ address: 'subscription/acct_1' });
-  await client.refused('pause', { threadId: 1 }, /"hold" permission/);
   await client.refused('evaluate', { expression: 'goto past_due', context: 'repl' }, /"goto" permission/);
   await client.refused('evaluate', { expression: 'abandon', context: 'repl' }, /"goto" permission/);
   await client.refused('evaluate', { expression: 'failures', context: 'repl' }, /"evaluate" permission/);
@@ -616,13 +520,20 @@ async function permissions() {
   await client.ok('disconnect');
 
   // A session may ask for less than it was given, never more.
-  const narrow = new Client(system, { mode: 'live', allow: ALL });
-  await narrow.start({ address: 'subscription/acct_1', allow: ['hold'] });
+  const narrow = new Client(system, { allow: ['goto'] });
+  await narrow.start({ address: 'subscription/acct_1', allow: ['goto', 'send', 'evaluate'] });
+  assert.match(narrow.output(), /allowed: goto\n/);
   await narrow.refused('evaluate', { expression: 'send paid', context: 'repl' }, /"send" permission/);
   await narrow.ok('disconnect');
-  const watcher = new Client(system, { mode: 'watch', allow: ALL });
-  await watcher.ok('initialize');
-  await watcher.refused('attach', { address: 'subscription/acct_1', mode: 'live' }, /watch mode at most/);
+  // With none, it watches.
+  const watcher = new Client(system, { allow: ALL });
+  await watcher.start({ address: 'subscription/acct_1', allow: [] });
+  assert.match(watcher.output(), /; watch only\n/);
+  for (const line of ['send paid', 'goto active', 'abandon', 'cancel nudge', 'replace v1']) {
+    await watcher.refused('evaluate', { expression: line, context: 'repl' }, /changes the actor, and this session only watches it/);
+  }
+  await watcher.refused('setVariable', { variablesReference: 1, name: 'failures', value: '5' }, /only watches it/);
+  await watcher.ok('disconnect');
   system.close();
 }
 
@@ -632,7 +543,6 @@ async function audit() {
   let refuse = false;
   const entries = [];
   const client = new Client(system, {
-    mode: 'live',
     allow: ALL,
     audit: (entry) => {
       entries.push(entry);
@@ -652,9 +562,9 @@ async function audit() {
   assert.deepEqual(types, ['attach', 'command', 'evaluate', 'command', 'mutation:send']);
   assert.deepEqual(entries[2], { type: 'evaluate', context: 'hover', expression: 'plan.seats', time: entries[2].time,
                                   session: client.session.id, actor: 'subscription/acct_1',
-                                  sessionID: String(actor.inspect().sessionID), mode: 'live' });
+                                  sessionID: String(actor.inspect().sessionID) });
   // A refusing attach hook refuses the attach.
-  const shut = new Client(system, { mode: 'live', allow: ALL, audit: () => { throw new Error('closed for maintenance'); } });
+  const shut = new Client(system, { allow: ALL, audit: () => { throw new Error('closed for maintenance'); } });
   await shut.ok('initialize');
   await shut.refused('attach', { address: 'subscription/acct_1' }, /closed for maintenance/);
   assert.equal(shut.session.attached, false);
@@ -672,7 +582,7 @@ async function state() {
     s.invoke((i) => i.type('scxml').id('kid').content(child))));
   const actor = system.spawn(parent, { name: 'acct_4' });
   await system.flush();
-  const client = new Client(system, { mode: 'live', allow: ALL });
+  const client = new Client(system, { allow: ALL });
   await client.start({ address: 'subscription/acct_4' });
 
   // Scopes of the idle actor.
@@ -821,8 +731,8 @@ function stateLine(system, definition, name) {
 }
 
 // Source spans (core ADR 0086): frames have lines, a line breakpoint
-// stands for the element on its line, logpoints write, and breakpoints set
-// before attaching are placed once the chart is known.
+// stands for the element on its line and traces it, logpoints write, and
+// breakpoints set before attaching are placed once the chart is known.
 async function sources() {
   const system = createSystem({ clock: 'manual' });
   const definition = system.define(renewal());
@@ -830,7 +740,7 @@ async function sources() {
   await system.flush();
   const renewing = stateLine(system, definition, 'renewing');
   const assign = definition.sourceOf('action', actionID(system, definition, 'assign', 1)).line;
-  const client = new Client(system, { mode: 'live', allow: ALL });
+  const client = new Client(system, { allow: ALL });
   await client.ok('initialize', { clientID: 'test' });
   // Set before attaching: unverified until the chart is known.
   const early = await client.ok('setBreakpoints', { source: { path: __filename }, breakpoints: [{ line: renewing }] });
@@ -865,16 +775,14 @@ async function sources() {
   ] });
   const mark = client.mark();
   actor.post('renew');
-  const stop = await client.stoppedAfter(mark, 'breakpoint');
-  assert.deepEqual(stop.hitBreakpointIds.length, 1);
-  assert.match(stop.description, /line \d+ \(state renewing\)/);
-  assert.match(client.output(), /renewals is 1/, 'the logpoint wrote, with its expression evaluated');
+  await client.wrote(mark, /would have stopped after macrostep \d+: line \d+ \(state renewing\)\n/);
+  assert.match(client.outputSince(mark), /renewals is 1\n/, 'the logpoint wrote, with its expression evaluated');
 
   // goto targets on a line.
   const { targets } = await client.ok('gotoTargets', { source: { path: __filename }, line: renewing });
   assert.deepEqual(targets.map((target) => [target.label, target.line]), [['renewing', renewing]]);
   await client.ok('setBreakpoints', { source: { path: __filename }, breakpoints: [] });
-  await client.ok('continue', { threadId: 1 });
+  client.assertNeverStopped();
   await client.ok('disconnect');
   system.close();
 }
@@ -903,7 +811,7 @@ async function movedLines() {
   system.spawn(definition, { name: 'm1' });
   await system.flush();
   const here = stateLine(system, definition, 'b');
-  const client = new Client(system, { mode: 'live', allow: ALL });
+  const client = new Client(system, { allow: ALL });
   await client.ok('initialize', { clientID: 'test' });
   await client.ok('attach', { address: 'moved/m1' });
   await client.ok('configurationDone');
@@ -924,8 +832,9 @@ async function movedLines() {
 }
 
 // A runaway (core ADR 0075): the addon quarantines the actor, the console
-// says what can be done, and with the `runaway` filter it is an exception
-// stop. `abandon` ends the macrostep and `goto` moves it out of the loop.
+// says what can be done, and with the `runaway` filter a tracepoint's line
+// says it would have stopped. `abandon` ends the macrostep and `goto` moves
+// it out of the loop.
 async function runaway() {
   const system = createSystem({ clock: 'manual', scheduling: { microstepLimit: 50 } });
   const chart = statechart({ family: 'spinner', revision: 'v1' });
@@ -933,248 +842,22 @@ async function runaway() {
   chart.state('spin', (s) => s.always((t) => t.target('spin')));
   const actor = system.spawn(system.define(chart), { name: 's1' });
   await system.flush();
-  const client = new Client(system, { mode: 'live', allow: ALL });
+  const client = new Client(system, { allow: ALL });
   await client.start({ address: 'spinner/s1' });
   await client.ok('setExceptionBreakpoints', { filters: ['runaway'] });
   const mark = client.mark();
   actor.post('go');
-  const stop = await client.stoppedAfter(mark, 'exception');
-  assert.match(stop.text, /microstep limit/);
-  const info = await client.ok('exceptionInfo', { threadId: 1 });
-  assert.equal(info.details.typeName, 'runaway');
-  assert.match(client.output(), /quarantined as a runaway/);
+  await client.wrote(mark, /would have stopped: a macrostep ran its microstep limit\n/);
+  assert.match(client.outputSince(mark), /quarantined as a runaway/);
   assert.equal(system.inspect(actor).scheduling, 'quarantined');
   await client.repl('abandon');
   assert.equal(system.inspect(actor).macrostepInProgress, false);
   await client.repl('goto idle');
   await client.ok('setExceptionBreakpoints', { filters: [] });
-  await client.ok('continue', { threadId: 1 });
   system.release(actor);
   await system.flush();
   assert.deepEqual(system.inspect(actor).activeStates, ['idle'], 'the jump was taken after the release');
-  await client.ok('disconnect');
-  system.close();
-}
-
-// A fork: a copy in a debug system of its own, stopped anywhere, stepped
-// one unit at a time and back, on its own clock, with stand-ins for its
-// I/O; production does not move.
-async function forks() {
-  const system = createSystem({ clock: 'manual' });
-  const definition = system.define(renewal());
-  const actor = system.spawn(definition, { name: 'r1' });
-  await system.flush();
-  const client = new Client(system, { mode: 'fork', allow: ['evaluate'] });
-  let mark = client.mark();
-  await client.start({ address: 'renewal/r1', mode: 'fork' });
-  await client.stoppedAfter(mark, 'entry');
-  const text = client.output();
-  assert.match(text, /attached to renewal\/r1 .* in fork mode; allowed: send, set, goto, hold, evaluate/);
-  assert.match(text, /fork: its I\/O processors and invokers \(http\) are stand-ins that only record/);
-  assert.match(text, /on a clock of its own at t=0ms/);
-  assert.equal((await client.ok('threads')).threads[0].name, 'renewal/r1 (fork) · active');
-
-  // The copy's clock: the renewal falls due there, not in production.
-  assert.match((await client.repl('clock +30s')).result, /t=30000ms; 1 message waiting for the copy/);
-  assert.equal(system.time, 0);
-  assert.equal(actor.inspect().data.renewals, 0);
-
-  // stepIn: the copy takes the message and stands before its macrostep.
-  mark = client.mark();
-  await client.ok('stepIn', { threadId: 1 });
-  await client.stoppedAfter(mark, 'step');
-  let frames = (await client.ok('stackTrace', { threadId: 1 })).stackFrames;
-  assert.equal(frames[0].name, 'about to take renew (before transition selection)');
-  const eventScope = (await client.ok('scopes', { frameId: frames[0].id })).scopes.find((scope) => scope.name === 'Event');
-  const eventFields = Object.fromEntries((await client.ok('variables', { variablesReference: eventScope.variablesReference }))
-    .variables.map((variable) => [variable.name, variable.value]));
-  assert.equal(eventFields.sendid, '"renewal"', 'the Event scope has _event\'s SCXML names');
-  // The microstep's start (core ADR 0087): its transition is selected, and
-  // the copy stands before its first unit, which has not run.
-  mark = client.mark();
-  await client.ok('stepIn', { threadId: 1 });
-  await client.stoppedAfter(mark, 'step');
-  frames = (await client.ok('stackTrace', { threadId: 1 })).stackFrames;
-  assert.equal(frames[0].name, 'script 1');
-  assert.equal(frames[0].line, definition.sourceOf('action', actionID(system, definition, 'script', 0)).line);
-  assert.deepEqual((await client.repl('notes')).result, '[]');
-  // Unit by unit through renewing's onentry.
-  mark = client.mark();
-  await client.ok('stepIn', { threadId: 1 });
-  await client.stoppedAfter(mark, 'step');
-  frames = (await client.ok('stackTrace', { threadId: 1 })).stackFrames;
-  const assignLine = definition.sourceOf('action', actionID(system, definition, 'assign', 1)).line;
-  assert.equal(frames[0].name, 'assign 2');
-  assert.equal(frames[0].line, assignLine, 'the frame is the unit the copy runs next');
-  assert.equal(frames[1].name, 'onentry of renewing');
-  assert.deepEqual((await client.repl('notes')).result, '["start"]');
-  mark = client.mark();
-  await client.ok('next', { threadId: 1 });
-  await client.stoppedAfter(mark, 'step');
-  assert.equal((await client.repl('renewals')).result, '1');
-
-  // stepBack restores the image kept at the previous stop.
-  mark = client.mark();
-  await client.ok('stepBack', { threadId: 1 });
-  await client.stoppedAfter(mark, 'step');
-  assert.equal((await client.repl('renewals')).result, '0');
-  frames = (await client.ok('stackTrace', { threadId: 1 })).stackFrames;
-  assert.equal(frames[0].name, 'assign 2');
-
-  // stepOut runs to the end of the block, then continue to rest.
-  mark = client.mark();
-  await client.ok('stepOut', { threadId: 1 });
-  await client.stoppedAfter(mark, 'step');
-  assert.deepEqual((await client.repl('notes')).result, '["start","done"]');
-  mark = client.mark();
-  await client.ok('continue', { threadId: 1 });
-  await client.until(() => client.output().includes('now in active'), 'the copy at rest');
-  assert.equal(actor.inspect().data.renewals, 0, 'production did not move');
-  assert.deepEqual(actor.inspect().activeStates, ['active']);
-
-  // A line breakpoint stops the copy before the unit on its line.
-  mark = client.mark();
-  await client.ok('pause', { threadId: 1 });
-  await client.stoppedAfter(mark, 'pause');
-  await client.ok('setBreakpoints', { source: { path: __filename }, breakpoints: [{ line: assignLine }] });
-  assert.match((await client.repl('send renew')).result, /waits in the mailbox/);
-  mark = client.mark();
-  await client.ok('continue', { threadId: 1 });
-  const stop = await client.stoppedAfter(mark, 'breakpoint');
-  assert.match(stop.description, /\(action assign 2\)/);
-  assert.equal((await client.repl('renewals')).result, '1', 'stopped before the second renewal\'s assign');
-  // restartFrame: back to the first stop kept in this macrostep.
-  frames = (await client.ok('stackTrace', { threadId: 1 })).stackFrames;
-  const macrostep = frames.find((frame) => frame.name.startsWith('macrostep'));
-  mark = client.mark();
-  await client.ok('restartFrame', { frameId: macrostep.id });
-  await client.stoppedAfter(mark, 'restart');
-  await client.refused('restartFrame', { frameId: 9999 }, /not valid/);
-  // reverseContinue goes back to the previous breakpoint stop, or the first stop.
-  mark = client.mark();
-  await client.ok('reverseContinue', { threadId: 1 });
-  await client.stoppedAfter(mark, 'step');
-  await client.ok('setBreakpoints', { source: { path: __filename }, breakpoints: [] });
-
-  // A send to the outside reaches a stand-in.
-  mark = client.mark();
-  await client.ok('continue', { threadId: 1 });
-  await client.repl('send webhook');
-  await client.until(() => client.output().includes('fork: would send notify via http to https://example.test/hook'),
-                     'the stand-in');
-
-  // restart makes a new copy of the live actor.
-  mark = client.mark();
-  await client.ok('restart', {});
-  await client.stoppedAfter(mark, 'entry');
-  assert.equal((await client.repl('renewals')).result, '0');
-
-  // goto on a copy stopped at rest runs the jump's macrostep and stops after it.
-  mark = client.mark();
-  assert.match((await client.repl('goto renewing')).result, /goto renewing$/);
-  await client.stoppedAfter(mark, 'goto');
-  assert.deepEqual((await client.ok('threads')).threads[0].name, 'renewal/r1 (fork) · active',
-                   'renewing went on to active in the same macrostep');
-  assert.equal((await client.repl('renewals')).result, '1');
-  assert.ok(client.audit.some((entry) => entry.operation === 'clock'));
-  await client.ok('disconnect');
-  assert.equal(system.exists(actor), true);
-
-  // From live to a fork with the console's `fork`.
-  const live = new Client(system, { mode: 'live', allow: ALL });
-  await live.start({ address: 'renewal/r1' });
-  mark = live.mark();
-  assert.match((await live.repl('fork')).result, /now debugging renewal\/r1 \(fork\), a copy of renewal\/r1/);
-  await live.stoppedAfter(mark, 'entry');
-  await live.refused('evaluate', { expression: 'fork', context: 'repl' }, /a fork already/);
-  await live.ok('disconnect');
-  const watcher = new Client(system, { mode: 'watch' });
-  await watcher.start({ address: 'renewal/r1' });
-  await watcher.refused('evaluate', { expression: 'fork', context: 'repl' }, /watch mode at most/);
-  await watcher.refused('attach', { address: 'renewal/r1', mode: 'fork' }, /already attached/);
-  await watcher.ok('disconnect');
-  system.close();
-}
-
-// Stepping and breakpoints on a fork's copy, as the test host's adapter
-// does them (the shared transcripts, tinyactors-test/dap/README.md): stepIn
-// by statement passes over a <foreach> position it started at; a step
-// never stops between two microsteps; stepOut at instruction granularity
-// is as at statement; the copy's <log> records are output; a hit condition
-// counts a breakpoint reached by position once; a data breakpoint takes the
-// copy's label, which has a space.
-async function forkStepping() {
-  const system = createSystem({ clock: 'manual' });
-  const chart = statechart({ family: 'loop', revision: 'v1' })
-    .data('count', 0)
-    .data('it', null)
-    .data('items', [1, 2])
-    .state('idle', (s) => s.on('go', (t) => t.target('busy').assign('count', function () { return this.count + 1; })))
-    .state('busy', (s) => s
-      .entry((e) => e.log('busy', function () { return this.count; })
-        .forEach(function () { return this.items; }, 'it', (body) => body
-          .assign('count', function () { return this.count + this.it; })))
-      .on('back', (t) => t.target('idle')));
-  system.spawn(system.define(chart), { name: 'l1' });
-  await system.flush();
-  const client = new Client(system, { mode: 'fork', allow: ALL });
-  let mark = client.mark();
-  await client.start({ address: 'loop/l1' });
-  await client.stoppedAfter(mark, 'entry');
-  const top = async () => (await client.ok('stackTrace', { threadId: 1 })).stackFrames.map((frame) => frame.name);
-  const step = async (command, args = {}) => {
-    const at = client.mark();
-    await client.ok(command, { threadId: 1, ...args });
-    await client.stoppedAfter(at, 'step');
-    return top();
-  };
-
-  await client.ok('setFunctionBreakpoints', { breakpoints: [{ name: 'busy' }] });
-  await client.repl('send go');
-  mark = client.mark();
-  await client.ok('continue', { threadId: 1 });
-  await client.stoppedAfter(mark, 'function breakpoint');
-  assert.deepEqual((await top()).slice(0, 2), ['log 1', 'onentry of busy']);
-  assert.deepEqual((await step('stepIn')).slice(0, 2), ['foreach 2 iteration 1', 'onentry of busy']);
-  assert.match(client.output(), /busy: 1\n/, 'a <log> of the copy is stdout');
-  assert.deepEqual((await step('stepIn')).slice(0, 3), ['assign 1', 'foreach 2 iteration 1', 'onentry of busy'],
-                   'statement stepIn passes over the loop\'s repeated position');
-  assert.deepEqual((await step('stepIn')).slice(0, 2), ['foreach 2 iteration 2', 'onentry of busy']);
-  assert.deepEqual(await step('stepOut', { granularity: 'instruction' }), ['idle in busy (held; 0 messages waiting)'],
-                   'stepOut leaves the block, and the macrostep ends without a stop between microsteps');
-
-  // A hit condition counts each hit once: the second `go` stops, at its
-  // microstep's start.
-  const [transition] = (await client.ok('setFunctionBreakpoints',
-                                        { breakpoints: [{ name: 'idle -> busy', hitCondition: '2' }] })).breakpoints;
-  for (const event of ['back', 'go', 'back', 'go']) await client.repl(`send ${event}`);
-  mark = client.mark();
-  await client.ok('continue', { threadId: 1 });
-  const stop = await client.stoppedAfter(mark, 'function breakpoint');
-  assert.deepEqual(stop.hitBreakpointIds, [transition.id]);
-  assert.deepEqual((await top()).slice(0, 2), ['assign 1', 'transition idle → busy on go']);
-
-  // A data breakpoint on the copy, whose label is `loop/l1 (fork)`.
-  await client.ok('setFunctionBreakpoints', { breakpoints: [] });
-  const described = await client.ok('dataBreakpointInfo', { name: '.count' });
-  assert.equal(described.dataId, 'loop/l1 (fork) ["count"]');
-  const [watched] = (await client.ok('setDataBreakpoints', { breakpoints: [{ dataId: described.dataId }] })).breakpoints;
-  assert.equal(watched.verified, true);
-  mark = client.mark();
-  await client.ok('continue', { threadId: 1 });
-  assert.match((await client.stoppedAfter(mark, 'data breakpoint')).description, /count = /);
-
-  // A step from before a macrostep stops at its first microstep's start or
-  // at its end, never before selection: an ignored event ends at rest.
-  await client.ok('setDataBreakpoints', { breakpoints: [] });
-  await client.ok('setFunctionBreakpoints', { breakpoints: [{ name: 'on:nothing' }] });
-  await client.repl('send nothing');
-  mark = client.mark();
-  await client.ok('continue', { threadId: 1 });
-  await client.stoppedAfter(mark, 'function breakpoint');
-  assert.deepEqual(await top(), ['about to take nothing (before transition selection)']);
-  await client.ok('setFunctionBreakpoints', { breakpoints: [] });
-  assert.deepEqual(await step('stepIn'), ['idle in busy (held; 0 messages waiting)']);
+  client.assertNeverStopped();
   await client.ok('disconnect');
   system.close();
 }
@@ -1182,7 +865,7 @@ async function forkStepping() {
 // Modules and sources: every registered revision, retired ones included.
 async function catalog() {
   const { system, definition } = await world();
-  const client = new Client(system, { mode: 'watch' });
+  const client = new Client(system, {});
   await client.start({ address: 'subscription/acct_1' });
   let { modules, totalModules } = await client.ok('modules', { startModule: 0, moduleCount: 10 });
   assert.equal(totalModules, 1);
@@ -1236,7 +919,7 @@ async function scxmlSources() {
   await system.flush();
 
   // A named document: frames and verified breakpoints on the author's lines.
-  let client = new Client(system, { mode: 'live', allow: ALL });
+  let client = new Client(system, { allow: ALL });
   await client.start({ address: 'named/o1' });
   let { stackFrames } = await client.ok('stackTrace', { threadId: 1 });
   assert.deepEqual([stackFrames[0].source, stackFrames[0].line],
@@ -1250,7 +933,7 @@ async function scxmlSources() {
   await client.ok('disconnect');
 
   // An unnamed one: a virtual source whose text holds each frame's element.
-  client = new Client(system, { mode: 'live', allow: ALL });
+  client = new Client(system, { allow: ALL });
   await client.start({ address: 'unnamed/o2' });
   ({ stackFrames } = await client.ok('stackTrace', { threadId: 1 }));
   const [frame] = stackFrames;
@@ -1281,14 +964,12 @@ async function scxmlSources() {
                    [['shipped', lineOf(content, '<state id="shipped"')]]);
   const mark = client.mark();
   unnamed.post('ship');
-  const stop = await client.stoppedAfter(mark, 'breakpoint');
-  assert.deepEqual(stop.hitBreakpointIds, [breakpoints[0].id]);
-  // A live actor stops after the macrostep, at rest in the state it entered.
+  await client.wrote(mark, /would have stopped after macrostep \d+: line \d+ \(action raise 1\)\n/);
+  // After the macrostep the actor is at rest in the state it entered.
   ({ stackFrames } = await client.ok('stackTrace', { threadId: 1 }));
   assert.deepEqual([stackFrames[0].source.sourceReference, stackFrames[0].line],
                    [virtual.sourceReference, lineOf(content, '<state id="shipped"')]);
   await client.ok('setBreakpoints', { source: virtual, breakpoints: [] });
-  await client.ok('continue', { threadId: 1 });
   await client.ok('disconnect');
   await client.refused('source', { sourceReference: virtual.sourceReference }, /attach first|no such source/);
   system.close();
@@ -1314,7 +995,7 @@ async function scxmlChildren() {
   system.spawn(system.define(parent, { format: 'scxml', name: '/charts/parent.scxml', resolve: (src) => files[src] }),
                { name: 'p1' });
   await system.flush();
-  const client = new Client(system, { mode: 'live', allow: ALL });
+  const client = new Client(system, { allow: ALL });
   await client.start({ address: 'parent/p1' });
   // The inline child runs as a thread of its own, on the lines of its
   // virtual source.
@@ -1339,10 +1020,10 @@ async function scxmlChildren() {
 }
 
 // The session ends when the attached actor goes; closing the transport
-// detaches and releases what the session held.
+// detaches.
 async function ending() {
   const { system, actor } = await world();
-  const client = new Client(system, { mode: 'live', allow: ALL });
+  const client = new Client(system, { allow: ALL });
   await client.start({ address: 'subscription/acct_1' });
   actor.destroy();
   await client.ok('threads');
@@ -1353,16 +1034,13 @@ async function ending() {
 
   const again = system.spawn(system.findDefinition({ family: 'subscription', revision: 'v1' }), { name: 'acct_1' });
   await system.flush();
-  const second = new Client(system, { mode: 'live', allow: ALL });
+  const second = new Client(system, { allow: ALL });
   await second.start({ address: 'subscription/acct_1' });
-  const mark = second.mark();
-  await second.ok('pause', { threadId: 1 });
-  await second.stoppedAfter(mark, 'pause');
+  second.session.close();
+  second.session.close();
   again.post('payment.failed');
-  second.session.close();
-  second.session.close();
   await system.flush();
-  assert.equal(again.inspect().data.failures, 1, 'closing the transport released the hold');
+  assert.equal(again.inspect().data.failures, 1);
   assert.equal(second.audit.at(-1).reason, 'the connection closed');
   const count = second.messages.length;
   await second.session.receive({ seq: 99, type: 'request', command: 'threads' });
@@ -1374,8 +1052,7 @@ async function ending() {
   await framing();
   await options();
   await session();
-  await watchMode();
-  await holding();
+  await liveView();
   await breakpoints();
   await console();
   await permissions();
@@ -1387,8 +1064,6 @@ async function ending() {
   await scxmlSources();
   await scxmlChildren();
   await runaway();
-  await forks();
-  await forkStepping();
   await ending();
   clearTimeout(watchdog);
   process.stdout.write('debug.js passed\n');

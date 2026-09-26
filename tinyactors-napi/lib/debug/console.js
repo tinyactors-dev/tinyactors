@@ -8,8 +8,6 @@
 //   abandon                        abandon a macrostep that never ends (core ADR 0082)
 //   cancel <send ID>               withdraw one pending delayed send (core ADR 0084)
 //   replace <revision>             hot-replace the actor with another revision of its family
-//   clock +<duration>              a fork's (core ADR 0085)
-//   fork                           a fork (core ADR 0085)
 //   <expression>                   JavaScript over the data model (lib/debug/expressions)
 //
 // The console is a sender an actor can answer (core ADR 0068): the adapter
@@ -21,7 +19,7 @@ const { TinyactorsError } = require('../errors');
 const { locations } = require('./expressions');
 
 const TYPE = 'debug';
-const COMMANDS = ['send', 'goto', 'abandon', 'cancel', 'replace', 'clock', 'fork', 'help'];
+const COMMANDS = ['send', 'goto', 'abandon', 'cancel', 'replace', 'help'];
 
 const HELP = [
   'send <event> [json]            deliver an event, queued behind the actor\'s mail; replies show here',
@@ -29,8 +27,6 @@ const HELP = [
   'abandon                        abandon a macrostep that never ends; the actor keeps its last configuration',
   'cancel <send ID>               withdraw a pending delayed send, by the ID the Timers scope shows',
   'replace <revision>             replace the actor with another registered revision of its family',
-  'clock +<duration>              move a fork\'s clock (core ADR 0085)',
-  'fork                           copy the actor into a system of its own (core ADR 0085)',
   '<expression>                   JavaScript over the data model: `failures`, `.items[0]`, `inState("busy")`',
 ];
 
@@ -67,7 +63,6 @@ function parse(line) {
       return { command: 'goto', targets, from };
     }
     case 'abandon':
-    case 'fork':
     case 'help':
       return { command: word };
     case 'cancel':
@@ -78,8 +73,6 @@ function parse(line) {
         throw new TinyactorsError('replace <revision>: a registered revision of the actor\'s family', 'invalid');
       }
       return { command: 'replace', revision: rest[0] };
-    case 'clock':
-      return { command: 'clock', duration: tail };
     default:
       return { command: 'expression', text };
   }

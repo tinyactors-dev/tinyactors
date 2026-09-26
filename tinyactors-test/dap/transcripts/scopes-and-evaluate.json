@@ -5,7 +5,7 @@
     { "start": true },
     {
       "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
-      "response": { "body": { "totalFrames": 1, "stackFrames": [ { "id": { "$capture": "frame" }, "name": "idle in idle (held; 0 messages waiting)" } ] } }
+      "response": { "body": { "totalFrames": 1, "stackFrames": [ { "id": { "$capture": "frame" }, "name": { "$prefix": "idle in idle" } } ] } }
     },
     {
       "request": "scopes", "arguments": { "frameId": { "$var": "frame" } },

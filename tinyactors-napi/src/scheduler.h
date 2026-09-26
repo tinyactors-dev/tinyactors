@@ -42,24 +42,10 @@
  * warm-up.
  *
  * One turn resumes up to `resumes` runnable actors, each with a microstep
- * budget and an action budget (core ADR 0061), or with budgets of its own
- * (ADR 0027). What the turn learns that JavaScript must hear about (an actor
- * finished, an actor faulted, an actor is held) becomes a record in the turn
- * arena; the pump calls the hooks for them after the last core call of the
- * turn (ADR 0007 point 5).
- *
- * Holding (ADR 0027): a debugger holds an actor between macrosteps. A held
- * actor is out of the scheduling queues and collects mail without taking it,
- * as a quarantined one does, until it is let go or stepped. The HOLD flag
- * says a debugger holds it; the HELD state says it stands still now. An actor
- * inside a macrostep keeps running and becomes HELD when the macrostep ends,
- * so a hold never stops a macrostep a send() waits for. A fault while held
- * still quarantines and reports; the flag stays, so the actor is held again
- * once it is released and its macrostep ends. A hold `anywhere` also stops
- * the actor inside a macrostep: at once when it is runnable, where a budget
- * pauses it, and after a message is delivered, before its macrostep begins.
- * That is for an actor no caller waits on, such as a debugger's copy in a
- * system of its own.
+ * budget and an action budget (core ADR 0061). What the turn learns that
+ * JavaScript must hear about (an actor finished, an actor faulted) becomes a
+ * record in the turn arena; the pump calls the hooks for them after the last
+ * core call of the turn (ADR 0007 point 5).
  *
  * Operator transitions (ADR 0027, core ADR 0082): a message may carry one. It
  * queues behind the mail before it, like any message, and reaches
@@ -84,8 +70,7 @@ typedef enum {
     TNA_SCHED_IDLE,        /* between macrosteps, nothing to do */
     TNA_SCHED_READY,       /* has mail, is between macrosteps, and is on the ready queue */
     TNA_SCHED_RUNNABLE,    /* on the runnable queue */
-    TNA_SCHED_QUARANTINED, /* faulted: out of scheduling until released (ADR 0008) */
-    TNA_SCHED_HELD         /* held between macrosteps: out of scheduling until let go or stepped (ADR 0027) */
+    TNA_SCHED_QUARANTINED  /* faulted: out of scheduling until released (ADR 0008) */
 } tna_sched_state;
 
 enum {
@@ -93,12 +78,7 @@ enum {
     TNA_SCHED_FINISHED = 1u << 1, /* reached a top-level final state */
     /* quarantined as a runaway (core ADR 0075): once released, it runs with
      * no microstep limit until its macrostep ends */
-    TNA_SCHED_UNLIMITED = 1u << 2,
-    TNA_SCHED_HOLD = 1u << 3,     /* a debugger holds it: each macrostep's end makes it HELD (ADR 0027) */
-    TNA_SCHED_UNFINISHED = 1u << 4, /* HELD with a macrostep to run: core woke it, or a hold anywhere paused it */
-    TNA_SCHED_OWN_BUDGETS = 1u << 5, /* resumes with the budgets tna_sched_set_budgets() gave it (ADR 0027) */
-    TNA_SCHED_ANYWHERE = 1u << 6, /* held at any pause, inside a macrostep too (a fork's copy, ADR 0027) */
-    TNA_SCHED_MICROSTEP_START = 1u << 7 /* its own budgets pause each microstep at its start (core ADR 0087) */
+    TNA_SCHED_UNLIMITED = 1u << 2
 };
 
 typedef struct {
@@ -238,10 +218,9 @@ typedef struct {
 } tna_envelopes;
 
 typedef enum {
-    TNA_RECORD_DONE,        /* the actor reached a top-level final state */
-    TNA_RECORD_FAULT,       /* a core call for the actor failed (ADR 0008) */
-    TNA_RECORD_DEAD_LETTER, /* a message whose target is gone or finished */
-    TNA_RECORD_HELD         /* a held actor's macrostep ended: it stands still now (ADR 0027) */
+    TNA_RECORD_DONE,       /* the actor reached a top-level final state */
+    TNA_RECORD_FAULT,      /* a core call for the actor failed (ADR 0008) */
+    TNA_RECORD_DEAD_LETTER /* a message whose target is gone or finished */
 } tna_record_kind;
 
 typedef struct tna_turn_record {
@@ -286,9 +265,6 @@ typedef struct {
     uint32_t waiters_live;
     tna_map inflight;       /* ta_actor_id -> waiter index */
     tna_ring settled;       /* tna_settlement */
-    /* Budgets of the actors with TNA_SCHED_OWN_BUDGETS (ADR 0027):
-     * ta_actor_id -> microsteps << 32 | actions. */
-    tna_map budgets;
     /* Dead letters waiting to be reported, threaded through `next`. */
     uint32_t dead_first;
     uint32_t dead_last;
@@ -427,75 +403,11 @@ ta_result tna_sched_wake(tna_sched *sched, ta_actor_id actor);
 ta_result tna_sched_release(tna_sched *sched, ta_actor_id actor);
 
 /*
- * Holding (ADR 0027). tna_sched_hold() makes the actor stand still between
- * macrosteps: an idle or ready actor is HELD at once (TA_OK, `*held` true);
- * one inside a macrostep, or quarantined, is HELD when its macrostep ends
- * (`*held` false). With `anywhere`, a runnable actor is HELD at once too,
- * and later at every pause and after every delivery.
- * TA_ERR_DONE for a finished actor, TA_ERR_NOT_FOUND for one the table does
- * not know.
- */
-typedef struct {
-    ta_actor_id actor;
-    bool anywhere; /* inside a macrostep too */
-    bool *held;    /* may be NULL */
-} tna_sched_hold_params;
-ta_result tna_sched_hold(tna_sched *sched, const tna_sched_hold_params *params);
-/*
- * Lets a held actor go: it takes its mail again (ready, or runnable when core
- * gave it a macrostep meanwhile). TA_ERR_NOMEM (still held) when it cannot
- * join its queue.
- */
-ta_result tna_sched_unhold(tna_sched *sched, ta_actor_id actor);
-
-typedef enum {
-    TNA_STEP_MESSAGE, /* it takes the head of its mailbox now */
-    TNA_STEP_MACROSTEP, /* it runs on in the macrostep it stopped in, or one core gave it while held */
-    TNA_STEP_WAITING  /* its mailbox is empty: it takes the next message that comes */
-} tna_step_kind;
-
-/*
- * Delivers exactly one held message: a HELD actor runs one macrostep, for
- * the head of its mailbox, and is HELD again when that macrostep ends. One
- * with a macrostep to run (held anywhere inside it, or woken by core while
- * held) runs that instead, up to its next pause when held anywhere. With an
- * empty mailbox it waits for the next message. TA_ERR_INVALID when the
- * actor is not HELD; TA_ERR_NOMEM (still held) when it cannot join its
- * queue.
- */
-typedef struct {
-    ta_actor_id actor;
-    tna_step_kind *out; /* may be NULL */
-} tna_sched_step_params;
-ta_result tna_sched_step(tna_sched *sched, const tna_sched_step_params *params);
-
-/*
- * Budgets for one actor (ADR 0027): it resumes with these instead of the
- * turn's, until they are cleared with `budgets` NULL. `microsteps` is at least
- * 1; `actions` 0 means no limit. With `microstep_start`, every microstep a
- * resume begins pauses at its start, before its first unit (core ADR 0087).
- * TA_ERR_NOT_FOUND for an actor the table does not know, TA_ERR_INVALID for a
- * zero microstep budget, TA_ERR_NOMEM.
- */
-typedef struct {
-    uint32_t microsteps;
-    uint32_t actions;
-    bool microstep_start;
-} tna_actor_budgets;
-
-typedef struct {
-    ta_actor_id actor;
-    const tna_actor_budgets *budgets; /* NULL: the turn's budgets again */
-} tna_sched_budgets_params;
-ta_result tna_sched_set_budgets(tna_sched *sched, const tna_sched_budgets_params *params);
-
-/*
  * An operator abandoned the actor's macrostep (core ADR 0082): the send()
  * that follows it settles as ABANDONED, and a runnable actor stands between
- * macrosteps again (ready, idle, or HELD when it is held). Its entry in the
- * runnable queue is skipped when popped. A held one has no macrostep to run
- * any more; a quarantined one stays quarantined. TA_ERR_NOT_FOUND for an
- * actor the table does not know.
+ * macrosteps again (ready or idle). Its entry in the runnable queue is
+ * skipped when popped. A quarantined one stays quarantined.
+ * TA_ERR_NOT_FOUND for an actor the table does not know.
  */
 ta_result tna_sched_abandoned(tna_sched *sched, ta_actor_id actor);
 

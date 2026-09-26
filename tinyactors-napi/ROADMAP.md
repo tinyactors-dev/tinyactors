@@ -872,12 +872,8 @@ shrink as definitions go, `docs/tracing.md`):
   it: see ADR 0024's notes for the cost.
 
 **Debugging** (ADR 0027, with core ADRs 0082 to 0087):
-- the throughput figures in ADR 0027 were measured against the addon
-  before core ADRs 0074 to 0080; measure the hold, budget and jump
-  branches again with `bench-compare` against the base they now sit on;
-- the scheduling entry's 8 flag bits are all taken (ADR 0027, "Beside the
-  loader and the runaway limit"): the next flag grows the entry or takes
-  a bit of `reserved`.
+- measure the jump branches of ADR 0027 with `bench-compare` against the
+  base they sit on, on a quiet machine.
 
 **Later:**
 - port the tinyactors-test scenario suite to run against the addon;

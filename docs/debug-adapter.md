@@ -219,7 +219,7 @@ The adapter is `tinyactors-test/bin/dap`; see
 ## Notes on the napi column
 
 The adapter is `createDebugSession()` in `tinyactors-napi/lib/debug.js`
-([ADR 0020](../tinyactors-napi/docs/adr/0027-a-debugger-holds-steps-and-redirects-one-actor.md));
+([ADR 0020](../tinyactors-napi/docs/adr/0027-a-debugger-watches-and-pokes-one-live-actor.md));
 `mise run //tinyactors-napi:dap-server` serves it for an example system.
 Every ☑ is covered by `tinyactors-napi/test/debug.js`, on Node and Bun.
 
@@ -250,7 +250,7 @@ Every ☑ is covered by `tinyactors-napi/test/debug.js`, on Node and Bun.
   virtual source, as in the test host: the SCXML the codec encodes, with
   the encode-side spans, by `sourceReference`, and its frames and
   breakpoints are on that text's lines ([ADR
-  0027](../tinyactors-napi/docs/adr/0027-a-debugger-holds-steps-and-redirects-one-actor.md)
+  0027](../tinyactors-napi/docs/adr/0027-a-debugger-watches-and-pokes-one-live-actor.md)
   point 15).
 - `source` serves that encoded SCXML by `sourceReference`, and each
   definition's exported spec (JSON) as a loaded source of its own; a file
@@ -281,9 +281,9 @@ Every ☑ is covered by `tinyactors-napi/test/debug.js`, on Node and Bun.
 | C4 | Images restore into another system | tinyactors-core [ADR 0085](../tinyactors-core/docs/adr/0085-an-image-restores-into-any-system-that-registers-its-revision.md), tinyactors-napi [ADR 0026](../tinyactors-napi/docs/adr/0026-a-system-restoring-another-systems-image-copies-its-boxes.md) | ☑ |
 | C5 | Source spans on decode and encode | tinyactors-core [ADR 0086](../tinyactors-core/docs/adr/0086-a-spec-says-where-its-elements-were-written-and-an-encode-says-where-it-wrote-them.md), tinyactors-scxml, the Ruby DSL, napi's builder | ☑ |
 | C6 | A resume stops before a microstep's first unit | tinyactors-core [ADR 0087](../tinyactors-core/docs/adr/0087-a-resume-can-stop-before-a-microsteps-first-unit.md) | ☑ |
-| N1 | `held` scheduling state | tinyactors-napi [ADR 0027](../tinyactors-napi/docs/adr/0027-a-debugger-holds-steps-and-redirects-one-actor.md) | ☑ |
-| N2 | Budgets for one actor | tinyactors-napi [ADR 0027](../tinyactors-napi/docs/adr/0027-a-debugger-holds-steps-and-redirects-one-actor.md) | ☑ |
-| N3 | Operator transitions in the envelope; settling on abandon | tinyactors-napi [ADR 0027](../tinyactors-napi/docs/adr/0027-a-debugger-holds-steps-and-redirects-one-actor.md) | ☑ |
+| N1 | `held` scheduling state | tinyactors-napi [ADR 0027](../tinyactors-napi/docs/adr/0027-a-debugger-watches-and-pokes-one-live-actor.md) | ☑ |
+| N2 | Budgets for one actor | tinyactors-napi [ADR 0027](../tinyactors-napi/docs/adr/0027-a-debugger-watches-and-pokes-one-live-actor.md) | ☑ |
+| N3 | Operator transitions in the envelope; settling on abandon | tinyactors-napi [ADR 0027](../tinyactors-napi/docs/adr/0027-a-debugger-watches-and-pokes-one-live-actor.md) | ☑ |
 
 The prerequisites sit on core ADRs 0074 to 0080 and napi ADRs 0019 to 0024:
 

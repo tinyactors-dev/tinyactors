@@ -185,8 +185,7 @@ test('an attach passes its fields through and fills the host', () => {
     name: 'A',
     port: 4711,
     address: 'subscription/acct_1',
-    mode: 'live',
-    allow: ['send', 'hold'],
+    allow: ['send', 'goto'],
   };
   assert.deepEqual(resolve(attach), { ...attach, host: '127.0.0.1' });
   assert.deepEqual(resolve({ ...attach, host: 'example.test', address: { family: 'f', name: 'n' } }),
@@ -209,7 +208,6 @@ test('an attach is refused when its fields would not reach an actor', () => {
     [{ ...attach, address: { family: 'f', name: 'n', revision: 2 } }, /"address.revision" is not a field/],
     [{ ...attach, address: undefined, sessionID: 'x1' }, /"sessionID" does not match/],
     [{ ...attach, address: undefined, actor: { slot: -1, generation: 0 } }, /"actor.slot" is at least 0/],
-    [{ ...attach, mode: 'debug' }, /"mode" is one of "watch", "fork", "live", not "debug"/],
     [{ ...attach, allow: ['send', 'send'] }, /"allow" lists an entry twice/],
     [{ ...attach, allow: ['send', 'kill'] }, /"allow\[1\]" is one of/],
     [{ ...attach, request: 'connect' }, /"request" is "launch" or "attach", not "connect"/],

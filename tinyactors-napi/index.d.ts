@@ -255,51 +255,15 @@ export interface System {
   /** Put an actor that faulted back into scheduling (ADR 0008). */
   release(actor: ActorID): void;
 
-  /**
-   * Hold `actor` between macrosteps (ADR 0027): its mail waits in its
-   * mailbox until unhold() or step(). An actor inside a macrostep runs it to
-   * its end first, so a hold never stops a macrostep a send() waits for: a
-   * send() with a timeout on a held actor is withdrawn when it times out,
-   * never taken later. Returns true when it is held now, false when it will
-   * be once its macrostep ends. A fault while held still quarantines it.
-   * With `anywhere`, it is held at its next pause inside a macrostep too
-   * (setBudgets() makes it pause): only for an actor no caller waits on,
-   * such as a debugger's copy in a system of its own. Throws `done` for a
-   * finished actor, `not-found` for one that is gone.
-   */
-  hold(actor: ActorID, options?: { readonly anywhere?: boolean }): boolean;
-  /** Let a held actor take its mail again (ADR 0027). */
-  unhold(actor: ActorID): void;
-  /**
-   * A held actor takes exactly one message and is held again when that
-   * message's macrostep ends (ADR 0027): "message". One held inside a
-   * macrostep (hold anywhere), or woken by core while held, runs on in that
-   * macrostep up to its next pause instead: "macrostep". With an empty
-   * mailbox it takes the next message that comes: "waiting". Throws
-   * `invalid` when the actor is not held.
-   */
-  step(actor: ActorID): "message" | "macrostep" | "waiting";
-  /**
-   * Budgets for one actor (ADR 0027): it resumes with these instead of the
-   * system's `resumeBudget` and `actionBudget` (0: no limit); undefined
-   * gives it the system's again. With `microstepStart`, every microstep a
-   * resume begins pauses at its start, after selection and before its first
-   * unit (core ADR 0087); inspection then reports that first unit.
-   */
-  setBudgets(actor: ActorID, budgets?: {
-    readonly resumeBudget: number;
-    readonly actionBudget?: number;
-    readonly microstepStart?: boolean;
-  }): void;
   /** The messages waiting in `actor`'s mailbox, oldest first, at most `limit` (default 100). */
   mailbox(actor: ActorID, options?: { readonly limit?: number }): readonly QueuedMessage[];
   /**
    * Abandon `actor`'s macrostep (core ADR 0082): the actor keeps the
    * configuration after its last completed microstep, and the send() that
    * follows the macrostep rejects with `abandoned`. `busy` while it is
-   * paused inside a microstep (setBudgets() with resumeBudget 1 and
-   * actionBudget 0 finishes that microstep first) or before its bootstrap
-   * finished; `invalid` with no macrostep in progress.
+   * paused inside a microstep (the pump finishes that microstep in its next
+   * turns) or before its bootstrap finished; `invalid` with no macrostep in
+   * progress.
    */
   abandon(actor: ActorID): void;
   /**
@@ -1063,8 +1027,8 @@ export interface ActorInspection<Data = unknown> {
   readonly delayedSendCount: number;
   /** Pending delayed sends, by due time then send order (core ADR 0054). */
   readonly delayedSends: readonly DelayedSendInspection[];
-  /** The addon's scheduling state (ADR 0005); "held" by System.hold() (ADR 0027). */
-  readonly scheduling: "none" | "idle" | "ready" | "runnable" | "quarantined" | "held";
+  /** The addon's scheduling state (ADR 0005). */
+  readonly scheduling: "none" | "idle" | "ready" | "runnable" | "quarantined";
   /** The top-level final state it reached, or null (core ADR 0056). */
   readonly finalState: string | null;
   readonly allocatedBytes: number;
@@ -1652,26 +1616,22 @@ export declare function stepSpanID(session: bigint | number, macrostep: bigint |
 // ---------------------------------------------------------------------------
 // The debug adapter (napi ADR 0027)
 
-/** An operation a debug session may be allowed on the live actor. */
-export type DebugPermission = 'send' | 'set' | 'goto' | 'hold' | 'evaluate';
-
 /**
- * The most a session may do: `watch` never stops or changes the actor;
- * `fork` debugs a copy in a debug System of its own; `live` works on the
- * actor itself, as `allow` permits, and stops it only between macrosteps.
+ * A poke a debug session may be allowed on the live actor: `send` an event,
+ * `set` its data model, `goto` (operator transitions, abandon, cancel and
+ * replace), and `evaluate` expressions. With none, the session only watches.
  */
-export type DebugMode = 'watch' | 'fork' | 'live';
+export type DebugPermission = 'send' | 'set' | 'goto' | 'evaluate';
 
 /** One record for the audit hook. `time` is milliseconds since the epoch. */
 export type DebugAuditEntry = {
   time: number;
   /** DebugSession.id. */
   session: number;
-  /** While attached: the actor's label, its session ID and the mode. */
+  /** While attached: the actor's label and its session ID. */
   actor?: string;
   /** In decimal. */
   sessionID?: string;
-  mode?: DebugMode;
 } & (
   | { type: 'attach'; allow: DebugPermission[]; [detail: string]: unknown }
   | { type: 'detach'; reason: string }
@@ -1680,21 +1640,13 @@ export type DebugAuditEntry = {
   /** A console line, before it runs. */
   | { type: 'command'; text: string }
   | { type: 'evaluate'; context: string; expression: string }
-  /**
-   * A change to the actor, a hold or a step: send, set, goto, abandon,
-   * cancel, replace, clock, hold, release (also on the hold timeout, with
-   * `reason: 'hold timeout'`), step, restart, stepBack, reverseContinue,
-   * restartFrame.
-   */
+  /** A poke: send, set, goto, abandon, cancel, replace. */
   | { type: 'mutation'; operation: string; [detail: string]: unknown }
 );
 
 export interface DebugSessionOptions {
-  /** The highest mode an attach may ask for. */
-  mode: DebugMode;
   /**
-   * What an attach may ask to do on a live actor (default none). A fork
-   * allows everything on its copy but `evaluate`, which it needs granted.
+   * The pokes an attach may ask for (default none: watch only).
    *
    * `evaluate` runs arbitrary JavaScript in this process: watch, hover and
    * console expressions, breakpoint conditions and logpoint `{expression}`
@@ -1709,8 +1661,6 @@ export interface DebugSessionOptions {
   audit?: (entry: DebugAuditEntry) => void;
   /** Takes each outgoing DAP message (an object). */
   send: (message: DAPMessage) => void;
-  /** Milliseconds after which a live hold ends by itself (default 30,000). */
-  holdTimeout?: number;
 }
 
 /** A Debug Adapter Protocol message: a request, response or event. */
@@ -1721,14 +1671,15 @@ export interface DAPMessage {
 }
 
 /**
- * A DAP session over one attached actor. It opens no socket and checks no
- * credentials: put it behind the application's transport and
- * authentication, and decide each user's mode and permissions before
- * creating it.
+ * A DAP session over one attached actor, which it watches and pokes and
+ * never stops (ADR 0027): the client hears it stopped once, on entry, and
+ * an `invalidated` event after each of its macrosteps; breakpoints are
+ * tracepoints. It opens no socket and checks no credentials: put it behind
+ * the application's transport and authentication, and decide each user's
+ * permissions before creating it.
  */
 export interface DebugSession {
   readonly id: number;
-  readonly mode: DebugMode;
   readonly allow: DebugPermission[];
   /** True while an actor is attached. */
   readonly attached: boolean;
@@ -1737,7 +1688,7 @@ export interface DebugSession {
    * arrive; the promise settles once this one is answered.
    */
   receive(message: DAPMessage): Promise<void>;
-  /** The transport closed: detach, releasing a hold and closing a fork, without answering. */
+  /** The transport closed: detach without answering. */
   close(): void;
 }
 

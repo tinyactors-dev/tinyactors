@@ -105,11 +105,11 @@ let nativeOf;
 // (src/napi_services.h). It is one function for the environment, so no
 // native reference keeps a System alive.
 let effectHandler;
-// observe(system, { traces, log, held }): what lib/debug.js reads beside the
-// application (ADR 0027). `traces(traces, logs)` gets every turn's OTLP bytes
-// the application's trace sink gets, installing a sink of its own when the
-// application has none; `log(record)` every <log> record; `held(actor)`
-// each actor a hold stopped; `runaway(actor)` each actor quarantined as a
+// observe(system, { traces, log, runaway, defined }): what lib/debug.js reads
+// beside the application (ADR 0027). `traces(traces, logs)` gets every turn's
+// OTLP bytes the application's trace sink gets, installing a sink of its own
+// when the application has none; `log(record)` every <log> record;
+// `runaway(actor)` each actor quarantined as a
 // runaway (core ADR 0075); `defined(id)` each definition define()
 // registered, a new one or one answered by identity (core ADR 0077), whose
 // spans may have moved (core ADR 0086). Returns { stop() }. index.js does
@@ -546,9 +546,6 @@ class System {
       case 'trace':
         this.#traceSink?.(payload.traces, payload.logs);
         this.#notify('traces', payload.traces, payload.logs);
-        return;
-      case 'held':
-        this.#notify('held', payload);
         return;
       case 'runaway':
         this.#notify('runaway', payload);
@@ -1755,67 +1752,6 @@ class System {
    */
 
   /**
-   * Hold `actor` between macrosteps (ADR 0027): it stops taking mail, which
-   * waits in its mailbox, until unhold() or step(). An actor inside a
-   * macrostep runs it to its end first, so a hold never stops a macrostep a
-   * send() waits for. Returns true when it is held now, false when it will
-   * be once its macrostep ends. A fault while held still quarantines it.
-   * With `anywhere`, it is held at its next pause inside a macrostep too
-   * (setBudgets() makes it pause): only for an actor no caller waits on,
-   * such as a debugger's copy in a system of its own. Throws `done` for a
-   * finished actor, `not-found` for one that is gone.
-   */
-  hold(actor, options = {}) {
-    const { slot, generation } = actorOf(this, actor);
-    return this.#native.hold(slot, generation, options?.anywhere === true);
-  }
-
-  /** Let a held actor take its mail again (ADR 0027). Idempotent. */
-  unhold(actor) {
-    const { slot, generation } = actorOf(this, actor);
-    this.#native.unhold(slot, generation);
-  }
-
-  /**
-   * A held actor takes exactly one message, and is held again when that
-   * message's macrostep ends (ADR 0027): "message". One held inside a
-   * macrostep (hold anywhere), or woken by core while held, runs on in that
-   * macrostep instead, up to its next pause: "macrostep". With an empty
-   * mailbox it takes the next message that comes: "waiting". Throws
-   * `invalid` when the actor is not held.
-   */
-  step(actor) {
-    const { slot, generation } = actorOf(this, actor);
-    return this.#native.step(slot, generation);
-  }
-
-  /**
-   * Budgets for one actor (ADR 0027): it resumes with `resumeBudget`
-   * microsteps (at least 1) and `actionBudget` units (0: no limit) instead
-   * of the system's scheduling options; undefined gives it the system's
-   * again. `microstepStart` pauses every microstep a resume begins at its
-   * start, before its first unit (core ADR 0087). Destroying the actor
-   * forgets them.
-   */
-  setBudgets(actor, budgets) {
-    const { slot, generation } = actorOf(this, actor);
-    if (budgets === undefined) {
-      this.#native.setBudgets(slot, generation);
-      return;
-    }
-    const { resumeBudget, actionBudget = 0, microstepStart = false } = budgets ?? {};
-    if (typeof microstepStart !== 'boolean') {
-      throw new TinyactorsError('setBudgets(): microstepStart must be a boolean', 'invalid');
-    }
-    for (const [name, value, least] of [['resumeBudget', resumeBudget, 1], ['actionBudget', actionBudget, 0]]) {
-      if (!Number.isInteger(value) || value < least || value > 4294967295) {
-        throw new TinyactorsError(`setBudgets(): ${name} must be an integer of at least ${least}`, 'invalid');
-      }
-    }
-    this.#native.setBudgets(slot, generation, resumeBudget, actionBudget, microstepStart);
-  }
-
-  /**
    * The messages waiting in `actor`'s mailbox, oldest first, at most
    * `limit` (default 100): { event, data, awaited, scope, transition }.
    * `awaited` is true when a send() waits for the message; `scope` is
@@ -1845,8 +1781,8 @@ class System {
    * event delivered and not yet taken. The actor keeps the configuration
    * after its last completed microstep; what the macrostep did so far stays
    * done. The send() that follows it rejects with `abandoned`. Throws `busy`
-   * while it is paused inside a microstep (setBudgets() with resumeBudget 1
-   * and actionBudget 0 lets it finish that microstep first) or has not
+   * while it is paused inside a microstep (the pump finishes that microstep
+   * in its next turns, and it can be abandoned between two) or has not
    * finished its bootstrap, `invalid` when no macrostep is in progress,
    * `done` and `not-found` as delivery does.
    */

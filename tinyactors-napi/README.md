@@ -73,31 +73,31 @@ SCXML documents import with `define(xml, { format: 'scxml' })`, and
 
 ## Debugging an actor
 
-`createDebugSession(system, { mode, allow, audit, send })` is a Debug
-Adapter Protocol session over one actor of a running system: give it each
-incoming message with `receive()`, and it hands each outgoing one to
-`send`. It opens no socket and checks no credentials; put it behind your
-own transport and authentication, and decide each user's mode and
-permissions before you create it. `DAPReader` and `encodeDAPMessage` frame
-messages on a byte stream (stdio, a TCP socket); a WebSocket needs neither.
+`createDebugSession(system, { allow, audit, send })` is a Debug Adapter
+Protocol session over one actor of a running system: give it each incoming
+message with `receive()`, and it hands each outgoing one to `send`. It
+opens no socket and checks no credentials; put it behind your own
+transport and authentication, and decide each user's permissions before
+you create it. `DAPReader` and `encodeDAPMessage` frame messages on a byte
+stream (stdio, a TCP socket); a WebSocket needs neither.
 
-A client attaches with `{ "address": "family/name" }` (or `"sessionID"`)
-and a mode no higher than the session's:
+A client attaches with `{ "address": "family/name" }` (or `"sessionID"`),
+and may ask for fewer permissions with `"allow"`. The session watches the
+actor live and never stops it: a production actor is never held by a
+debugger. The client hears the actor stopped once, on entry, so it shows
+the stack and the variables, and after each macrostep the summary in the
+console and an `invalidated` event that refreshes them. `pause` and the
+steps are refused, and `continue` changes nothing. Breakpoints are
+tracepoints: the console says where one would have stopped, and a logpoint
+writes its message.
 
-- `watch` never stops or changes the actor. Breakpoints report where they
-  would have stopped; each macrostep shows in the console.
-- `fork` copies the actor into a debug system of its own, with a manual
-  clock (`clock +3d`), a copy of its data and I/O processors that only
-  record. It steps one action at a time and steps back to earlier stops.
-  The console says how the copy differs from the live actor.
-- `live` works on the actor itself, as `allow` permits: `send`, `set`,
-  `goto` (with `abandon`, `cancel` and `replace`), and `hold` (pause,
-  stepping and stopping breakpoints). A live actor stops only between
-  macrosteps, and a hold ends by itself after `holdTimeout` (30 s).
+What `allow` grants are pokes, each a transition the watcher sees as a new
+macrostep: `send` an event through the mailbox, `set` a data-model
+location, `goto` (an operator transition, with `abandon`, `cancel` and
+`replace`), and `evaluate`. With none, the session only watches.
 
 **`evaluate` runs arbitrary code.** Watch, hover and console expressions
-and breakpoint conditions run JavaScript in your process, a fork's
-included. They need the `evaluate` permission, which is off unless
+and breakpoint conditions run JavaScript in your process. They need the `evaluate` permission, which is off unless
 granted; without it the Variables pane and the console commands still
 work. Grant it only to someone who may run code on the host.
 
@@ -119,7 +119,7 @@ of the package. In VS Code, install
 [tinyactors-vscode](../tinyactors-vscode/README.md): an `attach`
 configuration with the `port` and the actor's `address` connects to such a
 server. See
-[ADR 0027](docs/adr/0027-a-debugger-holds-steps-and-redirects-one-actor.md)
+[ADR 0027](docs/adr/0027-a-debugger-watches-and-pokes-one-live-actor.md)
 and [the status of every DAP message](../docs/debug-adapter.md).
 
 `test/dap-transcripts.js` plays the DAP transcripts napi shares with the

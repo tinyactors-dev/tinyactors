@@ -1,6 +1,8 @@
 {
   "description": "A macrostep that never ends: a transition breakpoint with a hit condition stops it at a microstep's start; stepIn runs that microstep's only unit and stops at the next one's start (core ADR 0087); a goto and an event sent meanwhile wait in the mailbox; abandon ends the macrostep (core ADR 0082) and the system stops again; on continue the actor takes the jump, then the event; goto of a resting actor with nothing waiting, from the console and from gotoTargets, runs an operator transition now and stops with reason goto",
   "chart": "spinner",
+  "only": "test",
+  "why": "it stops at a breakpoint inside a runaway macrostep and steps; napi's adapter never stops a live actor (napi ADR 0027)",
   "steps": [
     { "start": true },
     {

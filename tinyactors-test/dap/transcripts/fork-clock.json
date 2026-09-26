@@ -1,7 +1,8 @@
 {
   "description": "fork copies the actor into a system of its own (core ADR 0085) with its own clock: the copy keeps the pending delayed send, clock moves the fork's time, and what falls due runs in the fork. napi attaches live here, since fork is a console command of a live session",
   "chart": "counter",
-  "napi": { "mode": "live" },
+  "only": "test",
+  "why": "napi's adapter has no forks (napi ADR 0027)",
   "steps": [
     { "start": true },
     {

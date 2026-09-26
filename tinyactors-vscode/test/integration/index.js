@@ -88,7 +88,7 @@ async function launchesAWorkbench() {
 
 async function attachesToAnApplication() {
   // The Node.js on PATH (mise's): the addon needs Node.js 22, not VS Code's.
-  const server = spawn('node', ['tools/dap-server.js', '--port', '0', '--mode', 'fork'], {
+  const server = spawn('node', ['tools/dap-server.js', '--port', '0'], {
     cwd: path.join(REPOSITORY, 'tinyactors-napi'),
     stdio: ['ignore', 'ignore', 'pipe'],
   });
@@ -102,7 +102,6 @@ async function attachesToAnApplication() {
       name: 'Attach',
       port: Number(port),
       address: 'subscription/acct_1',
-      mode: 'fork',
     });
     await until('the process event', () => received(session, (message) => message.event === 'process'));
     const { threads } = await session.customRequest('threads');

@@ -29,7 +29,7 @@ function leaves(view, labels) {
  * [{ name, hint, place, macrostep }] for a thread. `view` is its inspection
  * or undefined when it is gone; `labels` names compiled IDs; `sources`
  * places them; `seen` is { macrostep, microstep } from the spans, or
- * undefined; `note` is added to an actor at rest (what holds it).
+ * undefined; `note` is added to an actor at rest (the mail waiting for it).
  */
 function frames({ view, labels, sources, seen, note }) {
   if (view === undefined) {
@@ -116,16 +116,4 @@ function stepFrames(view, seen, sources) {
   return out;
 }
 
-/** The depth of a position: how many <if> and <foreach> bodies its unit is in; -1 with no unit. */
-function depthOf(view, labels) {
-  const action = view.position.action;
-  return action === null ? -1 : labels.enclosing(view.definitionID, action).length;
-}
-
-/** The block a position is in: the phase, the state and the transition. */
-function blockOf(view) {
-  const { position } = view;
-  return `${position.at}:${position.state}:${position.transition}`;
-}
-
-module.exports = { frames, leaves, depthOf, blockOf };
+module.exports = { frames, leaves };

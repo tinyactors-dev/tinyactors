@@ -72,7 +72,7 @@ as a workbench, stopped on entry.
   "host": "127.0.0.1",
   "port": 4711,
   "address": "subscription/acct_1",
-  "mode": "fork"
+  "allow": ["send", "goto"]
 }
 ```
 
@@ -83,8 +83,15 @@ as a workbench, stopped on entry.
 | `address` | the actor, `"family/name"` or `{ "family", "name" }` |
 | `sessionID` | or the actor by its session ID, in decimal |
 | `actor` | or by its actor ID, `{ "slot", "generation" }` |
-| `mode` | `watch`, `fork` or `live`; default and most: what the application's session allows |
-| `allow` | the permissions to ask for, of `send`, `set`, `goto`, `hold`, `evaluate`; default and most: what the session grants |
+| `allow` | the permissions to ask for, of `send`, `set`, `goto`, `evaluate`; none watches only; default and most: what the session grants |
+
+The actor runs in production and is never paused. The session reports it
+stopped once, on entry, so VS Code shows its stack and variables, and
+refreshes them after each of its macrosteps. A poke from the console
+(`send`, `goto`, `abandon`, `cancel`) causes a macrostep, which shows the
+same way; setting a variable writes the data model at once. Breakpoints are tracepoints: the Debug
+Console says where one would have stopped. Stepping and pausing are
+refused (napi ADR 0027).
 
 To try it, `mise run dap-server -- --port 4711` in tinyactors-napi serves
 sessions over a small example system with every permission granted, and

@@ -664,20 +664,19 @@ static void tna_settle_sends(napi_env env, tna_napi_system *wrapper) {
 
 /*
  * What a debugger hears of an actor (ADR 0027), after the turn's traces, so
- * that one that decides whether to stop has the macrostep's spans already:
- * "held" when a held actor's macrostep ended, and "runaway" when a macrostep
- * was stopped at its microstep limit (core ADR 0075) and the actor was
- * quarantined. The effects handler hears `what` with the actor.
+ * that it has the macrostep's spans already: "runaway" when a macrostep was
+ * stopped at its microstep limit (core ADR 0075) and the actor was
+ * quarantined. The effects handler hears it with the actor.
  */
-static void tna_actor_effect(napi_env env, tna_napi_system *wrapper, const tna_turn_record *record, napi_value *first_error) {
+static void tna_runaway_effect(napi_env env, tna_napi_system *wrapper, const tna_turn_record *record,
+                               napi_value *first_error) {
     tna_env *data = wrapper->env_data;
-    const char *what = record->kind == TNA_RECORD_HELD ? "held" : "runaway";
     napi_value handler = NULL;
     napi_value argv[3] = { NULL, NULL, NULL };
     if (data->effects_handler == NULL || wrapper->facade == NULL ||
         napi_get_reference_value(env, data->effects_handler, &handler) != napi_ok || handler == NULL ||
         napi_get_reference_value(env, wrapper->facade, &argv[0]) != napi_ok || argv[0] == NULL ||
-        napi_create_string_utf8(env, what, NAPI_AUTO_LENGTH, &argv[1]) != napi_ok ||
+        napi_create_string_utf8(env, "runaway", NAPI_AUTO_LENGTH, &argv[1]) != napi_ok ||
         (argv[2] = tna_actor_view(env, wrapper, record->actor)) == NULL) {
         return;
     }
@@ -778,7 +777,7 @@ static napi_value tna_turn_callback(napi_env env, napi_callback_info info) {
                 tna_done_record(env, wrapper, record, &first_error);
             } else if (record->kind == TNA_RECORD_FAULT) {
                 tna_fault_record(env, wrapper, record, &first_error);
-            } else if (record->kind == TNA_RECORD_DEAD_LETTER) {
+            } else {
                 tna_dead_letter_record(env, wrapper, record, &first_error);
             }
         }
@@ -792,18 +791,17 @@ static napi_value tna_turn_callback(napi_env env, napi_callback_info info) {
         if (!tna_system_closed(system)) {
             tna_trace_dispatch(env, wrapper, &first_error);
         }
-        /* Then the actors a hold or a runaway stopped (ADR 0027), which read
-         * those traces. */
+        /* Then the runaways (ADR 0027), which a debugger reads with those
+         * traces. */
         for (const tna_turn_record *record = system->sched.records; record != NULL; record = record->next) {
             if (tna_system_closed(system)) {
                 break;
             }
-            bool stopped = record->kind == TNA_RECORD_HELD ||
-                           (record->kind == TNA_RECORD_FAULT && record->code == TA_ERR_RUNAWAY);
-            if (stopped && tna_sched_lookup(&system->sched, record->actor) != NULL) {
+            if (record->kind == TNA_RECORD_FAULT && record->code == TA_ERR_RUNAWAY &&
+                tna_sched_lookup(&system->sched, record->actor) != NULL) {
                 napi_handle_scope scope = NULL;
                 napi_open_handle_scope(env, &scope);
-                tna_actor_effect(env, wrapper, record, &first_error);
+                tna_runaway_effect(env, wrapper, record, &first_error);
                 if (scope != NULL) {
                     napi_close_handle_scope(env, scope);
                 }

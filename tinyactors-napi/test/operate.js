@@ -1,9 +1,9 @@
 'use strict';
 
-// Operating one actor (ADR 0027; core ADRs 0082, 0083, 0084): hold, step
-// and unhold, budgets for one actor, the mailbox, operator transitions in
-// post() and send(), abandoning a macrostep, withdrawing a delayed send,
-// and what inspect() and definitions() report. Runs on Node and Bun.
+// Operating one actor (ADR 0027; core ADRs 0082, 0083, 0084): the mailbox,
+// operator transitions in post() and send(), abandoning a macrostep,
+// withdrawing a delayed send, and what inspect() and definitions() report.
+// Runs on Node and Bun.
 
 const assert = require('node:assert/strict');
 const { createSystem, statechart, TinyactorsError } = require('..');
@@ -46,116 +46,6 @@ const chart = () =>
         .always((t) => t.target('loop2')))
     .state('loop2', (s) => s.always((t) => t.target('loop1')));
 
-// Hold, the webhook case, step one message, and unhold.
-async function holding() {
-  const system = createSystem({ clock: 'manual' });
-  const actor = system.spawn(system.define(chart()));
-  await system.flush();
-  assert.equal(system.hold(actor), true, 'an idle actor is held at once');
-  assert.equal(actor.inspect().scheduling, 'held');
-
-  // A webhook handler that waits with a timeout: its message is withdrawn,
-  // never taken later, so a retry is not a duplicate.
-  await assertRejects(actor.send('hook', { attempt: 1 }, { timeout: 20 }), 'timeout');
-  assert.equal(system.mailbox(actor).length, 0);
-  // One that acknowledged on acceptance waits for the hold to end.
-  const accepted = await actor.send('hook', { attempt: 2 }, { until: 'accepted' });
-  assert.equal(accepted.status, 'accepted');
-  actor.post('hook', { attempt: 3 });
-  await system.flush();
-  assert.equal(actor.inspect().data.hooks, 0, 'held mail waits');
-  assert.deepEqual(system.mailbox(actor).map((message) => message.data), [{ attempt: 2 }, { attempt: 3 }]);
-  assert.deepEqual(system.mailbox(actor, { limit: 1 }).length, 1);
-
-  assert.equal(system.step(actor), 'message');
-  await system.flush();
-  assert.equal(actor.inspect().data.hooks, 1, 'exactly one message');
-  assert.equal(actor.inspect().scheduling, 'held');
-  assertThrows(() => system.step(system.spawn(system.define(chart()))), 'invalid');
-
-  system.unhold(actor);
-  await system.flush();
-  assert.equal(actor.inspect().data.hooks, 2);
-  assert.equal(actor.inspect().scheduling, 'idle');
-
-  // A hold on an actor inside a macrostep lets the macrostep end.
-  const slow = createSystem({ clock: 'manual', scheduling: { resumeBudget: 1 } });
-  const other = slow.spawn(slow.define(chart()));
-  await slow.flush();
-  const completed = other.send('hook');
-  await turn();
-  assert.equal(other.inspect().scheduling, 'runnable');
-  assert.equal(slow.hold(other), false);
-  assert.equal((await completed).status, 'stable', 'the send() of the macrostep in progress completes');
-  assert.equal(other.inspect().scheduling, 'held');
-  slow.close();
-
-  // Held anywhere: an actor no caller waits on stops at every pause, inside
-  // a macrostep too, and a step runs it to the next one.
-  const fork = createSystem({ clock: 'manual' });
-  const copy = fork.spawn(fork.define(chart()));
-  await fork.flush();
-  fork.setBudgets(copy, { resumeBudget: 64, actionBudget: 1 });
-  assert.equal(fork.hold(copy, { anywhere: true }), true);
-  copy.post('spin');
-  assert.equal(fork.step(copy), 'message');
-  await fork.flush();
-  assert.equal(copy.inspect().scheduling, 'held');
-  assert.equal(copy.inspect().currentEvent.name, 'spin', 'held with the event taken in, before its macrostep');
-  assert.equal(copy.inspect().step.macrostep, 0);
-  assert.equal(fork.step(copy), 'macrostep');
-  await fork.flush();
-  assert.equal(copy.inspect().microstepInProgress, true, 'held inside the microstep');
-  const before = copy.inspect().position;
-  assert.equal(fork.step(copy), 'macrostep');
-  await fork.flush();
-  assert.notDeepEqual(copy.inspect().position, before, 'one unit further');
-  fork.close();
-
-  const done = createSystem({ clock: 'manual', finished: 'retain' });
-  const finished = done.spawn(done.define(statechart({ family: 'f', revision: 'v1' }).final('end')));
-  await done.flush();
-  assertThrows(() => done.hold(finished), 'done');
-  done.close();
-  system.close();
-}
-
-// Budgets for one actor: it pauses where the others do not.
-async function budgets() {
-  const system = createSystem({ clock: 'manual' });
-  const definition = system.define(chart());
-  const debugged = system.spawn(definition);
-  const other = system.spawn(definition);
-  await system.flush();
-  system.setBudgets(debugged, { resumeBudget: 1, actionBudget: 1 });
-  debugged.post('spin');
-  other.post('hook');
-  await turn();
-  await turn();
-  assert.equal(other.inspect().scheduling, 'idle');
-  assert.equal(debugged.inspect().scheduling, 'runnable');
-  assertThrows(() => system.setBudgets(debugged, { resumeBudget: 0 }), 'invalid');
-  assertThrows(() => system.setBudgets(debugged, { resumeBudget: 1, actionBudget: -1 }), 'invalid');
-  assertThrows(() => system.setBudgets(debugged, { resumeBudget: 1, microstepStart: 'yes' }), 'invalid');
-  system.setBudgets(debugged, undefined);
-  // With microstepStart, a microstep the resume begins stops at its start
-  // (core ADR 0087): selected, in progress, and nothing of it ran.
-  // (debugged spins on, so the system never flushes: count turns.)
-  const started = system.spawn(definition);
-  for (let turns = 0; turns < 10 && started.inspect().activeStates[0] !== 'a'; turns += 1) await turn();
-  system.setBudgets(started, { resumeBudget: 1, actionBudget: 1, microstepStart: true });
-  started.post('hook');
-  for (let turns = 0; turns < 10 && !started.inspect().microstepInProgress; turns += 1) await turn();
-  const start = started.inspect();
-  assert.equal(start.microstepInProgress, true);
-  assert.equal(start.position.at, 'transition');
-  assert.equal(start.data.hooks, 0);
-  system.setBudgets(started, undefined);
-  for (let turns = 0; turns < 10 && started.inspect().macrostepInProgress; turns += 1) await turn();
-  assert.equal(started.inspect().data.hooks, 1);
-  system.close();
-}
-
 // Operator transitions queue behind real mail; a refused one is a dead
 // letter and the actor is not quarantined.
 async function transitions() {
@@ -163,8 +53,12 @@ async function transitions() {
   const system = createSystem({ clock: 'manual', deadLetter: (record) => deadLetters.push(record) });
   const actor = system.spawn(system.define(chart()));
   await system.flush();
-  actor.post('hook');
+  actor.post('hook', { attempt: 1 });
   const jumped = actor.send('operator.goto', { by: 'test' }, { transition: { targets: ['c'] } });
+  // The mailbox, before the pump takes it: oldest first, at most `limit`.
+  assert.deepEqual(system.mailbox(actor).map((message) => message.event), ['hook', 'operator.goto']);
+  assert.deepEqual(system.mailbox(actor, { limit: 1 }).map((message) => message.data), [{ attempt: 1 }]);
+  assertThrows(() => system.mailbox(actor, { limit: -1 }), 'invalid');
   const [queued] = system.mailbox(actor).slice(-1);
   assert.deepEqual(queued.transition, { source: null, targets: ['c'] });
   assert.equal(queued.awaited, true);
@@ -188,7 +82,7 @@ async function transitions() {
 // Abandoning a macrostep that never ends: the send() rejects with
 // `abandoned`, and the actor takes its next message.
 async function abandoning() {
-  const system = createSystem({ clock: 'manual', scheduling: { actionBudget: 1 } });
+  const system = createSystem({ clock: 'manual' });
   const actor = system.spawn(system.define(chart()));
   await system.flush();
   const runaway = actor.send('spin');
@@ -197,26 +91,31 @@ async function abandoning() {
   for (let index = 0; index < 20; index += 1) {
     await turn();
     view = actor.inspect();
-    if (view.microstepInProgress) break;
+    if (view.step.microstep > 0) break;
   }
   assert.equal(view.macrostepInProgress, true);
-  assert.equal(view.microstepInProgress, true);
   assert.ok(view.step.macrostep > 0 && view.step.microstep > 0, 'inspection names the step');
-  assert.equal(view.position.at, 'enter');
-  assert.equal(view.position.state, 'loop1');
-  // Inside a microstep core refuses; budgets of its own let it finish the
-  // microstep and pause before the next one (core ADR 0082).
-  assertThrows(() => system.abandon(actor), 'busy');
-  system.setBudgets(actor, { resumeBudget: 1, actionBudget: 0 });
-  await turn();
-  assert.equal(actor.inspect().microstepInProgress, false);
+  assert.equal(view.position.at, 'none', 'the system\'s budgets pause it between microsteps');
   system.abandon(actor);
-  system.setBudgets(actor, undefined);
   await assertRejects(runaway, 'abandoned');
   await system.flush();
   assert.deepEqual(actor.inspect().activeStates, ['d'], 'the next message, a jump, was taken');
   assertThrows(() => system.abandon(actor), 'invalid');
   system.close();
+
+  // Inside a microstep core refuses (core ADR 0082): an action budget of 1
+  // pauses this loop inside its microsteps.
+  const tight = createSystem({ clock: 'manual', scheduling: { actionBudget: 1 } });
+  const spinner = tight.spawn(tight.define(chart()));
+  await tight.flush();
+  spinner.post('spin');
+  for (let index = 0; index < 20 && !spinner.inspect().microstepInProgress; index += 1) await turn();
+  view = spinner.inspect();
+  assert.equal(view.microstepInProgress, true);
+  assert.equal(view.position.at, 'enter');
+  assert.equal(view.position.state, 'loop1');
+  assertThrows(() => tight.abandon(spinner), 'busy');
+  tight.close();
 }
 
 // Withdrawing one delayed send by the ID inspection shows.
@@ -261,8 +160,6 @@ async function inspection() {
 }
 
 (async () => {
-  await holding();
-  await budgets();
   await transitions();
   await abandoning();
   await withdrawing();

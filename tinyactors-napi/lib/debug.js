@@ -5,30 +5,26 @@
 //
 // napi opens no socket and checks no credentials (core ADR 0002, napi ADRs
 // 0015 and 0016). The application puts a session behind its own transport
-// and authentication, decides the mode and the permissions of the user
-// before it creates the session, and passes each incoming DAP message to
-// receive(); the session hands each outgoing one to `send`. An `audit` hook
-// hears attach, detach, every console command, every evaluation and every
-// mutation, before it happens: a hook that throws refuses it.
+// and authentication, decides the permissions of the user before it creates
+// the session, and passes each incoming DAP message to receive(); the
+// session hands each outgoing one to `send`. An `audit` hook hears attach,
+// detach, every console command, every evaluation and every mutation,
+// before it happens: a hook that throws refuses it.
 //
-// Modes:
-// - `watch` never stops the actor and changes nothing; breakpoints report
-//   where they would have stopped.
-// - `fork` copies the actor into a debug System of its own (core ADR 0085,
-//   napi ADR 0026) and debugs the copy: it stops anywhere, steps one unit
-//   at a time, moves its own clock, and steps back to images captured at
-//   its stops. Nothing it does reaches production.
-// - `live` works on the actor itself, as the permissions allow: `send`,
-//   `set`, `goto` (with abandon, cancel and replace), `hold` (pause,
-//   stepping and breakpoints that stop), and `evaluate`. A live actor stops
-//   only between macrosteps, so a send() waiting for a macrostep is never
-//   left waiting by a debugger, and a hold ends by itself after
-//   `holdTimeout`.
+// The session watches and pokes, and the view updates live. It never stops
+// the actor: a production actor is never held by a debugger. After each
+// macrostep of the actor the client hears the macrostep's summary and an
+// `invalidated` event, and reads the stack and the scopes again. A poke is
+// what the permissions allow: `send` (an event through the mailbox), `set`
+// (a data-model location), `goto` (an operator transition, abandon, cancel
+// and replace), and `evaluate`. Each poke that moves the actor does it in a
+// macrostep of its own, which the view shows like any other. With no
+// permission the session only watches. Breakpoints of every kind are
+// tracepoints: where one would have stopped, the console says so.
 //
 // Evaluating an expression runs arbitrary code in the process that hosts
-// the actor, a fork's copy included. It is the `evaluate` permission, off
-// unless granted: without it the Variables pane and the console commands
-// still work.
+// the actor. It is the `evaluate` permission, off unless granted: without
+// it the Variables pane and the console commands still work.
 //
 // This module is host neutral, so the browser build can share it: it uses
 // the System facade and core's generated bindings, and no Node.js module.
@@ -41,31 +37,21 @@ const { Labels } = require('./debug/labels');
 const { Macrosteps, summarize } = require('./debug/macrosteps');
 const { Breakpoints, EXCEPTION_FILTERS } = require('./debug/breakpoints');
 const { Variables } = require('./debug/variables');
-const { frames, leaves, depthOf, blockOf } = require('./debug/frames');
+const { frames, leaves } = require('./debug/frames');
 const { Sources } = require('./debug/sources');
-const { Fork } = require('./debug/fork');
 const expressions = require('./debug/expressions');
 const commands = require('./debug/console');
 const { DAPReader, encodeDAPMessage } = require('./debug/protocol');
 
-const MODES = ['watch', 'fork', 'live'];
-const PERMISSIONS = ['send', 'set', 'goto', 'hold', 'evaluate'];
-// On a fork's copy everything is allowed but evaluating, which runs code in
-// the process whatever it evaluates against.
-const FORK_PERMISSIONS = ['send', 'set', 'goto', 'hold'];
-const DEFAULT_HOLD_TIMEOUT = 30000;
+const PERMISSIONS = ['send', 'set', 'goto', 'evaluate'];
 const SCXML_INVOKER = 'http://www.w3.org/TR/scxml/';
 const ATTACHED = 1; // the attached actor's thread ID
 const OPERATOR_EVENT = 'operator.goto';
-// A fork's copy runs one unit per resume while the debugger drives it.
-const SINGLE_STEP = Object.freeze({ resumeBudget: 1, actionBudget: 1, microstepStart: true });
-// Units a fork's copy runs toward one goal before it stops anyway.
-const MOST_UNITS = 100000;
-// Stops a fork remembers for stepping back.
-const MOST_POINTS = 256;
-const DURATION = /^\+(\d+(?:\.\d+)?)(ms|s|m|h|d)?$/;
-const SCALE = { ms: 1, s: 1000, m: 60000, h: 3600000, d: 86400000 };
+// Event-loop turns an abandon waits for the pump to finish a microstep in.
+const MOST_TURNS = 100;
 
+// No stepping, stepping back, restarting or exception details: the actor is
+// never stopped. Breakpoints of every kind are declared, as tracepoints.
 const CAPABILITIES = Object.freeze({
   supportsConfigurationDoneRequest: true,
   supportsFunctionBreakpoints: true,
@@ -74,15 +60,11 @@ const CAPABILITIES = Object.freeze({
   supportsLogPoints: true,
   supportsEvaluateForHovers: true,
   exceptionBreakpointFilters: EXCEPTION_FILTERS.map(({ filter, label, description }) => ({ filter, label, description })),
-  supportsStepBack: true,
   supportsSetVariable: true,
-  supportsRestartFrame: true,
   supportsGotoTargetsRequest: true,
   supportsCompletionsRequest: true,
   completionTriggerCharacters: ['.', ' '],
   supportsModulesRequest: true,
-  supportsRestartRequest: true,
-  supportsExceptionInfoRequest: true,
   supportsDelayedStackTraceLoading: true,
   supportsLoadedSourcesRequest: true,
   supportsSetExpression: true,
@@ -90,15 +72,26 @@ const CAPABILITIES = Object.freeze({
   supportsDataBreakpoints: true,
   supportsBreakpointLocationsRequest: true,
   supportsClipboardContext: true,
-  supportsSteppingGranularity: true,
   supportTerminateDebuggee: false,
   supportSuspendDebuggee: false,
 });
+
+const NEVER_STOPPED = 'a live actor is never stopped: the session watches it and shows each macrostep as it ends; ' +
+  'send, goto, abandon, cancel and setVariable poke it';
 
 // Requests the adapter answers with an error, and why. Their capabilities
 // are not declared.
 const REFUSED = Object.freeze({
   launch: 'napi\'s adapter attaches to a running actor: use "attach" with an address (the test host launches workbenches)',
+  restart: 'napi\'s adapter watches a running actor: disconnect and attach again',
+  pause: NEVER_STOPPED,
+  next: NEVER_STOPPED,
+  stepIn: NEVER_STOPPED,
+  stepOut: NEVER_STOPPED,
+  stepBack: 'a live actor is never stopped, and the session keeps no past to go back to',
+  reverseContinue: 'a live actor is never stopped, and the session keeps no past to go back to',
+  restartFrame: 'a live actor is never stopped, and the session keeps no past to go back to',
+  exceptionInfo: 'a live actor never stops for an exception: an exception breakpoint writes to the console instead',
   cancel: 'every request answers at once, so there is nothing to cancel',
   stepInTargets: 'an action has one way in',
   terminateThreads: 'ending a thread would destroy an actor',
@@ -124,18 +117,16 @@ let HANDLERS;
 
 class DebugSession {
   #system;
-  #mode;
   #allow;
   #audit;
   #send;
-  #holdTimeout;
   #seq = 0;
   #queue = Promise.resolve();
   #client = {};
   #closed = false;
 
-  // While attached: { mode, allow, system, actor, label, address,
-  // sessionID, labels, sources, fork, observer, watch, console, origin }.
+  // While attached: { allow, actor, label, address, sessionID, args,
+  // labels, sources, observer, watch, console }.
   #attached = null;
   #threads = new Map();
   #nextThread = ATTACHED + 1;
@@ -155,29 +146,11 @@ class DebugSession {
   #lastReference = 0;
   #files = new Set();
 
-  // Holding: where the actor stopped, what the next hold means (live), the
-  // goal a fork's copy runs toward, and whether it is held after each
-  // macrostep (live) or unit (fork) for the breakpoints.
-  #stop = null;
-  #pending = null;
-  #run = null;
-  #gate = false;
-  #hits = [];
-  #positionHits = new Set();
-  #skipTaking = false;
-  #holdTimer;
-  #points = [];
-  // A new copy at rest settles in the next turn; that stop is not a step's.
-  #settling = false;
-
   constructor(system, options) {
-    if (system === null || typeof system !== 'object' || typeof system.hold !== 'function') {
+    if (system === null || typeof system !== 'object' || typeof system.withdrawSend !== 'function') {
       throw new TinyactorsError('createDebugSession(): expected a System', 'invalid');
     }
-    const { mode, allow = [], audit, send, holdTimeout = DEFAULT_HOLD_TIMEOUT } = options ?? {};
-    if (!MODES.includes(mode)) {
-      throw new TinyactorsError('createDebugSession(): options.mode must be "watch", "fork" or "live"', 'invalid');
-    }
+    const { allow = [], audit, send } = options ?? {};
     if (!Array.isArray(allow) || allow.some((entry) => !PERMISSIONS.includes(entry))) {
       throw new TinyactorsError(`createDebugSession(): options.allow lists ${PERMISSIONS.join(', ')}`, 'invalid');
     }
@@ -188,23 +161,17 @@ class DebugSession {
     if (audit !== undefined && typeof audit !== 'function') {
       throw new TinyactorsError('createDebugSession(): options.audit must be a function', 'invalid');
     }
-    if (!(typeof holdTimeout === 'number' && holdTimeout > 0 && holdTimeout <= 2147483647)) {
-      throw new TinyactorsError('createDebugSession(): options.holdTimeout must be a positive number of milliseconds',
-                                'invalid');
-    }
     this.#system = system;
-    this.#mode = mode;
     this.#allow = new Set(allow);
     this.#audit = audit;
     this.#send = send;
-    this.#holdTimeout = holdTimeout;
     sessionCount += 1;
     this.id = sessionCount;
     this.#macrosteps = new Macrosteps((session) => this.#threadOfSession(session) !== undefined);
     const session = this;
     this.#variables = new Variables({
-      get system() { return session.#attached?.system ?? session.#system; },
-      get native() { return nativeOf(this.system); },
+      system,
+      native: nativeOf(system),
       get labels() { return session.#attached.labels; },
       thread: (id) => this.#thread(id),
       eventOf: (thread, view) => this.#eventOf(thread, view),
@@ -214,11 +181,7 @@ class DebugSession {
     });
   }
 
-  /** The mode and permissions this session was created with. */
-  get mode() {
-    return this.#mode;
-  }
-
+  /** The permissions this session was created with. */
   get allow() {
     return [...this.#allow];
   }
@@ -238,7 +201,7 @@ class DebugSession {
     return run;
   }
 
-  /** The transport closed: detach, releasing a hold and closing a fork, without answering. */
+  /** The transport closed: detach without answering. */
   close() {
     if (this.#closed) return;
     this.#closed = true;
@@ -309,8 +272,7 @@ class DebugSession {
       ...entry,
       time: Date.now(),
       session: this.id,
-      ...(attached === null ? {}
-        : { actor: attached.origin.label, sessionID: attached.origin.sessionID, mode: attached.mode }),
+      ...(attached === null ? {} : { actor: attached.label, sessionID: attached.sessionID }),
     });
   }
 
@@ -328,15 +290,13 @@ class DebugSession {
     return this.#attached;
   }
 
-  // An operation that changes or stops the actor: live with the permission,
-  // or on a fork's copy.
+  // A poke: an operation that changes the actor, with its permission.
   #requireChange(permission, what) {
     const attached = this.#requireAttached();
-    if (attached.mode === 'watch') {
-      throw refuse(`${what} is not offered in watch mode, which never changes or stops the actor`);
-    }
     if (!attached.allow.has(permission)) {
-      throw refuse(`${what} needs the "${permission}" permission, which this session was not given`);
+      throw refuse(attached.allow.size === 0
+        ? `${what} changes the actor, and this session only watches it`
+        : `${what} needs the "${permission}" permission, which this session was not given`);
     }
     return attached;
   }
@@ -345,14 +305,6 @@ class DebugSession {
     const attached = this.#requireAttached();
     if (!attached.allow.has('evaluate')) {
       throw refuse(`${what} evaluates an expression, which runs code in the process; it needs the "evaluate" permission`);
-    }
-    return attached;
-  }
-
-  #requireFork(what) {
-    const attached = this.#requireAttached();
-    if (attached.mode !== 'fork') {
-      throw refuse(`${what} restores images of a fork's copy: attach in fork mode, or use the \`fork\` console command`);
     }
     return attached;
   }
@@ -391,118 +343,74 @@ class DebugSession {
     throw refuse('attach needs "address", "actor" { slot, generation } or "sessionID"');
   }
 
+  // An attach may ask for fewer permissions than the session has, never
+  // more.
   #attach(args) {
     if (this.#attached !== null) throw refuse(`already attached to ${this.#attached.label}; disconnect first`);
-    const mode = args.mode ?? this.#mode;
-    if (!MODES.includes(mode)) throw refuse('"mode" is "watch", "fork" or "live"');
-    if (MODES.indexOf(mode) > MODES.indexOf(this.#mode)) {
-      throw refuse(`this session allows ${this.#mode} mode at most, not ${mode}`);
-    }
-    const asked = Array.isArray(args.allow) ? new Set(args.allow) : this.#allow;
-    const granted = new Set([...this.#allow].filter((permission) => asked.has(permission)));
+    if (args.allow !== undefined && !Array.isArray(args.allow)) throw refuse('"allow" is a list of permissions');
+    const asked = args.allow === undefined ? this.#allow : new Set(args.allow);
+    const allow = new Set([...this.#allow].filter((permission) => asked.has(permission)));
     const { actor, address } = this.#resolve(args);
     const view = this.#system.inspect(actor);
     const label = address !== undefined ? `${address.family}/${address.name}` : `actor ${actor.slot}:${actor.generation}`;
-    const origin = { system: this.#system, actor, address, label, sessionID: String(view.sessionID), args };
-    const allow = mode === 'fork' ? new Set([...FORK_PERMISSIONS, ...[...granted].filter((entry) => entry === 'evaluate')])
-      : granted;
-    const attached = { mode, allow, origin, system: this.#system, actor, label, address, sessionID: origin.sessionID };
+    const attached = { allow, actor, label, address, sessionID: String(view.sessionID), args };
     this.#attached = attached;
     try {
       this.#audited({ type: 'attach', allow: [...allow] });
-      if (mode === 'fork') {
-        attached.fork = new Fork(this.#system, actor, {
-          record: (text) => this.#output('console', `fork: ${text}`),
-          log: (record) => this.#onLog(record),
-        });
-        attached.system = attached.fork.system;
-        attached.actor = attached.fork.copy;
-        attached.label = `${label} (fork)`;
-        attached.address = undefined;
-        attached.sessionID = String(attached.system.inspect(attached.actor).sessionID);
-      }
     } catch (error) {
       this.#attached = null;
-      throw error instanceof TinyactorsError ? refuse(error.message) : error;
+      throw error;
     }
-    const native = nativeOf(attached.system);
+    const system = this.#system;
+    const native = nativeOf(system);
     attached.labels = new Labels(native);
-    attached.sources = new Sources(attached.system, native, () => (this.#lastReference += 1));
-    this.#threads.set(ATTACHED, { id: ATTACHED, actor: attached.actor, label: attached.label, session: attached.sessionID });
-    attached.observer = observe(attached.system, {
+    attached.sources = new Sources(system, native, () => (this.#lastReference += 1));
+    this.#threads.set(ATTACHED, { id: ATTACHED, actor, label, session: attached.sessionID });
+    attached.observer = observe(system, {
       traces: (traces) => this.#onTraces(traces),
-      log: mode === 'fork' ? undefined : (record) => this.#onLog(record),
-      held: (held) => this.#onHeld(held),
-      runaway: (actor) => this.#onRunaway(actor),
+      log: (record) => this.#onLog(record),
+      runaway: (runaway) => this.#onRunaway(runaway),
       defined: (id) => this.#onDefined(id),
     });
-    attached.watch = attached.system.watchTraces({ sessions: [attached.actor] });
-    if (mode === 'fork' || (mode === 'live' && (allow.has('send') || allow.has('goto')))) {
-      attached.console = commands.openConsole(attached.system, `debug://session/${this.id}`,
-        (request) => this.#onReply(request));
-    }
-    if (mode === 'fork') {
-      this.#holdCopy(attached.actor);
+    attached.watch = system.watchTraces({ sessions: [actor] });
+    if (allow.has('send') || allow.has('goto')) {
+      attached.console = commands.openConsole(system, `debug://session/${this.id}`, (request) => this.#onReply(request));
     }
     return attached;
   }
 
-  // A new copy stands still where it was captured. One captured at rest is
-  // runnable only to be scheduled: it settles in the next turn, before any
-  // step, so a step takes its next message.
-  #holdCopy(actor) {
-    const { system } = this.#attached;
-    system.setBudgets(actor, SINGLE_STEP);
-    system.hold(actor, { anywhere: true });
-    if (!system.inspect(actor).macrostepInProgress) {
-      system.step(actor);
-      this.#settling = true;
-    }
-  }
-
-  // What attaching says, and what it sets going, once its response is out.
+  // What attaching says, once its response is out. A DAP client shows a
+  // thread's stack and variables only while it is stopped, so the actor is
+  // reported stopped once, on entry, and every view refreshes after each
+  // of its macrosteps (`invalidated`); it never is stopped.
   #announce(attached, verb) {
-    this.#event('process', { name: attached.origin.label, startMethod: 'attach', isLocalProcess: true });
+    this.#event('process', { name: attached.label, startMethod: 'attach', isLocalProcess: true });
     this.#refreshCatalog();
     this.#refreshThreads();
-    const permissions = attached.allow.size === 0 ? 'no permissions' : `allowed: ${[...attached.allow].join(', ')}`;
-    this.#output('console', `${verb} ${attached.origin.label} (session ${attached.origin.sessionID}) in ${attached.mode} ` +
-                            `mode; ${permissions}`);
-    if (attached.fork !== undefined) {
-      for (const note of attached.fork.notes) this.#output('console', `fork: ${note}`);
-      this.#output('console', `fork: the copy is ${attached.label}, on a clock of its own at t=${attached.system.time}ms`);
-    }
+    const permissions = attached.allow.size === 0 ? 'watch only' : `allowed: ${[...attached.allow].join(', ')}`;
+    this.#output('console', `${verb} ${attached.label} (session ${attached.sessionID}), watched live and never ` +
+                            `paused; ${permissions}`);
     this.#relocateBreakpoints();
-    this.#updateGate();
-    if (attached.fork !== undefined) {
-      this.#halt('entry', { description: 'the copy stands where the live actor stood' });
-    }
+    this.#presentStopped();
   }
 
-  // Ends the attachment: releases what this session holds, stops watching,
-  // closes a fork.
+  // The one stop a client needs to show the actor's stack and variables.
+  #presentStopped() {
+    if (this.#attached === null) return;
+    this.#event('stopped', { reason: 'entry', threadId: ATTACHED, allThreadsStopped: false, preserveFocusHint: false,
+                             description: 'watched live, never paused: the view follows each macrostep' });
+  }
+
+  // Ends the attachment: stops watching.
   #detach(reason) {
     const attached = this.#attached;
     if (attached === null) return;
-    this.#clearHoldTimer();
-    const system = attached.system;
-    if (attached.fork === undefined && !system.closed && system.exists(attached.actor) &&
-        (this.#gate || this.#pending !== null || this.#stop !== null)) {
-      system.unhold(attached.actor);
-    }
-    this.#gate = false;
-    this.#pending = null;
-    this.#run = null;
-    this.#stop = null;
-    this.#hits = [];
+    const system = this.#system;
     attached.observer?.stop();
     if (!system.closed) {
       attached.watch?.stop();
       attached.console?.close();
     }
-    for (const point of this.#points) point.image.destroy();
-    this.#points = [];
-    attached.fork?.close();
     try {
       this.#record({ type: 'detach', reason });
     } catch {
@@ -545,9 +453,8 @@ class DebugSession {
   }
 
   #inspect(thread) {
-    const system = this.#attached?.system ?? this.#system;
     try {
-      return system.inspect(thread.actor);
+      return this.#system.inspect(thread.actor);
     } catch (error) {
       if (error instanceof TinyactorsError && error.code === 'not-found') return undefined;
       throw error;
@@ -567,7 +474,7 @@ class DebugSession {
     const children = new Map();
     for (const invocation of view.invocations) {
       if (invocation.type !== SCXML_INVOKER || !invocation.active) continue;
-      const child = actorOfSession(attached.system, invocation.serviceHandle, false);
+      const child = actorOfSession(this.#system, invocation.serviceHandle, false);
       if (child !== undefined) children.set(String(invocation.serviceHandle), { child, invocation });
     }
     for (const thread of [...this.#threads.values()]) {
@@ -596,18 +503,6 @@ class DebugSession {
     return `${thread.label} · ${where}`;
   }
 
-  // The attached actor changed identity (a fork restored an image): its
-  // thread follows it, held where it stands.
-  #follow(actor) {
-    const attached = this.#attached;
-    attached.actor = actor;
-    const thread = this.#threads.get(ATTACHED);
-    thread.actor = actor;
-    thread.session = String(attached.system.inspect(actor).sessionID);
-    attached.sessionID = thread.session;
-    this.#holdCopy(actor);
-  }
-
   // ------------------------------------------------------------------
   // What the actor did: traces, <log> records, replies
 
@@ -630,13 +525,14 @@ class DebugSession {
       }
     }
     if (read.macrosteps.length > 0) {
+      // The live view: the client reads the stack and the scopes again.
       this.#resetViews();
-      if (this.#client.supportsInvalidatedEvent) this.#event('invalidated', { areas: ['threads', 'variables'] });
+      if (this.#client.supportsInvalidatedEvent) this.#event('invalidated', { areas: ['stacks', 'variables'] });
     }
     const attached = this.#attached;
-    if (gone === 'finished' && attached !== null && attached.system.exists(attached.actor)) {
+    if (gone === 'finished' && attached !== null && this.#system.exists(attached.actor)) {
       this.#output('important', `${attached.label} finished`);
-    } else if (gone !== undefined && attached?.fork === undefined) {
+    } else if (gone !== undefined) {
       this.#ended(gone === 'unloaded' ? 'was unloaded' : gone === 'finished' ? 'finished' : 'was destroyed');
       return;
     }
@@ -644,6 +540,8 @@ class DebugSession {
     this.#refreshCatalog();
   }
 
+  // A macrostep's summary, and the breakpoints it would have stopped at:
+  // they are tracepoints, since a live actor is never stopped.
   #onMacrostep(macrostep) {
     const attached = this.#attached;
     const thread = this.#threadOfSession(macrostep.session);
@@ -654,10 +552,6 @@ class DebugSession {
     const location = (definition, id) => attached.labels.expression(BigInt(definition), id);
     this.#output('console', summarize(macrostep, thread.label, location).join('\n'));
     if (thread.id !== ATTACHED) return;
-    const skipTaking = this.#skipTaking;
-    this.#skipTaking = false;
-    const skip = this.#positionHits;
-    this.#positionHits = new Set();
     const hits = this.#breakpoints.hits(macrostep, {
       label: thread.label,
       location: (id) => {
@@ -666,22 +560,14 @@ class DebugSession {
       },
       fires: (breakpoint) => this.#condition(breakpoint, thread),
       log: (breakpoint) => this.#logpoint(breakpoint, thread),
-      skipTaking,
-      skip,
     });
-    if (hits.length === 0) return;
-    if (this.#gate) {
-      this.#hits.push(...hits.map((hit) => ({ ...hit, macrostep: macrostep.number })));
-    } else {
-      const why = attached.mode === 'watch' ? '' : ' (stopping needs the "hold" permission)';
-      for (const hit of hits) {
-        this.#output('console', `would have stopped after macrostep ${macrostep.number}: ${hit.description}${why}`);
-      }
+    for (const hit of hits) {
+      this.#output('console', `would have stopped after macrostep ${macrostep.number}: ${hit.description}`);
     }
   }
 
   // A breakpoint's condition, in the data model where it hit. One that
-  // throws stops, so its author sees it fail.
+  // throws counts as a hit, so its author sees it fail.
   #condition(breakpoint, thread) {
     try {
       return Boolean(expressions.evaluate(breakpoint.condition, this.#scope(thread)));
@@ -711,10 +597,7 @@ class DebugSession {
     const attached = this.#attached;
     if (attached === null) return;
     const source = record.source;
-    // A fork's copy is reconstructed from an image of the live actor, so
-    // its records name that actor's address: no other actor of the fork's
-    // system has it.
-    const address = attached.fork === undefined ? attached.address : attached.origin.address;
+    const { address } = attached;
     const ours = source instanceof ActorID ? source.equals(attached.actor)
       : address !== undefined && source?.family === address.family && source?.name === address.name;
     if (!ours) return;
@@ -727,328 +610,20 @@ class DebugSession {
     this.#output('console', `${this.#attached?.label ?? 'an actor'} replied ${request.event}${data}`);
   }
 
-  // ------------------------------------------------------------------
-  // Holding (napi ADR 0027)
-
-  // A hold stopped the attached actor; the traces of the turn were read
-  // already.
   // A macrostep of the actor ran its microstep limit, and the addon
   // quarantined it (core ADR 0075): it stands between two microsteps of a
-  // macrostep it cannot finish. The console says what can be done; with the
-  // `runaway` filter it is an exception stop.
+  // macrostep it cannot finish. The console says what can be done; the
+  // `runaway` exception filter adds a tracepoint's line.
   #onRunaway(actor) {
     const attached = this.#attached;
     if (attached === null || !actor.equals(attached.actor)) return;
     this.#output('important', `${attached.label} is quarantined as a runaway: a macrostep ran its microstep limit ` +
                               '(core ADR 0075). `abandon` ends that macrostep and `goto` moves it out of the loop; ' +
                               'the application\'s release() lets the macrostep go on');
-    if (!this.#breakpoints.wants('runaway') || this.#stop !== null) return;
-    const hit = { kind: 'exception', breakpoints: [], description: 'a macrostep ran its microstep limit',
-                  exception: { filter: 'runaway' } };
-    if (!this.#gate) {
-      const why = attached.mode === 'watch' ? '' : ' (stopping needs the "hold" permission)';
-      this.#output('console', `would have stopped: ${hit.description}${why}`);
-      return;
+    if (this.#breakpoints.wants('runaway')) {
+      this.#output('console', 'would have stopped: a macrostep ran its microstep limit');
     }
-    this.#halt(undefined, { hits: [hit] });
-  }
-
-  #onHeld(actor) {
-    const attached = this.#attached;
-    if (attached === null || !actor.equals(attached.actor)) return;
-    if (this.#settling) {
-      // A new copy settled: a step asked for meanwhile runs now.
-      this.#settling = false;
-      if (this.#stop === null && (this.#run !== null || this.#gate)) this.#stepCopy();
-      return;
-    }
-    if (this.#stop !== null) return;
-    if (attached.fork !== undefined) {
-      this.#heldCopy();
-      return;
-    }
-    const hits = this.#hits;
-    this.#hits = [];
-    if (this.#pending !== null) {
-      const reason = this.#pending;
-      this.#pending = null;
-      const description = reason === 'goto' ? 'the jump\'s macrostep ended'
-        : reason === 'step' ? 'the macrostep ended' : 'paused';
-      this.#halt(reason, { description, hits });
-      return;
-    }
-    if (hits.length > 0) {
-      this.#halt(undefined, { hits });
-      return;
-    }
-    if (this.#gate) {
-      this.#advance();
-      return;
-    }
-    this.#halt('pause', { description: 'held' });
-  }
-
-  // A live actor held for the breakpoints, and nothing hit: stop before the
-  // next message when an `on:` breakpoint names it, and let it take the
-  // message otherwise.
-  #advance() {
-    const { system, actor } = this.#attached;
-    const [next] = system.mailbox(actor, { limit: 1 });
-    const skip = this.#skipTaking;
-    if (next !== undefined && !skip) {
-      const thread = this.#threads.get(ATTACHED);
-      const taking = this.#breakpoints.taking(next.event, (breakpoint) => this.#condition(breakpoint, thread));
-      if (taking !== undefined) {
-        this.#halt(undefined, { hits: [taking] });
-        return;
-      }
-    }
-    this.#skipTaking = skip || next !== undefined;
-    system.step(actor);
-  }
-
-  // A fork's copy stood still after a unit, a delivery, or its macrostep's
-  // end: stop there, or run on toward the goal and the breakpoints.
-  #heldCopy() {
-    const attached = this.#attached;
-    const view = attached.system.inspect(attached.actor);
-    const thread = this.#threads.get(ATTACHED);
-    const hits = this.#hits;
-    this.#hits = [];
-    if (this.#gate || this.#run !== null) {
-      hits.push(...this.#breakpoints.atPosition(view, {
-        transition: (id) => attached.labels.transition(view.definitionID, id),
-        fires: (breakpoint) => this.#condition(breakpoint, thread),
-        log: (breakpoint) => this.#logpoint(breakpoint, thread),
-        passed: (id) => this.#positionHits.add(id),
-      }));
-    }
-    const run = this.#run;
-    if (hits.length > 0) {
-      this.#run = null;
-      this.#halt(undefined, { hits });
-      return;
-    }
-    if (run !== null) {
-      run.units += 1;
-      const done = run.done(view);
-      if (done || run.units >= MOST_UNITS) {
-        this.#run = null;
-        this.#halt(run.reason, { description: done ? run.description
-          : `${MOST_UNITS} units ran without reaching the step's end` });
-        return;
-      }
-    } else if (!this.#gate) {
-      this.#halt('pause', { description: 'paused' });
-      return;
-    }
-    this.#stepCopy();
-  }
-
-  // The copy runs one more unit, or takes its next message. A copy that is
-  // still settling steps once it has.
-  #stepCopy() {
-    const { system, actor, label } = this.#attached;
-    if (system.inspect(actor).scheduling !== 'held') return;
-    if (system.step(actor) === 'waiting') {
-      const view = system.inspect(actor);
-      const [next] = view.delayedSends;
-      const hint = next === undefined ? 'nothing is due'
-        : `its next delayed send is due at t=${next.due}ms: \`clock +${Math.max(next.due - system.time, 0)}ms\``;
-      this.#output('console', `${label} waits for its next message; ${hint}, or \`send\` it one`);
-    }
-  }
-
-  // The actor is held: tell the client, keep the place (fork), and arm the
-  // hold's timeout (live).
-  #halt(reason, { description, hits = [] }) {
-    const attached = this.#attached;
-    const hit = hits[0];
-    const kind = reason ?? (hit.kind === 'exception' ? 'exception' : hit.kind === 'data' ? 'data breakpoint'
-      : hit.kind === 'line' ? 'breakpoint' : 'function breakpoint');
-    const text = [description, ...hits.map((entry) => entry.description)].filter((part) => part !== undefined).join('; ');
-    this.#stop = { reason: kind, description: text, exception: hits.find((entry) => entry.kind === 'exception')?.exception,
-                   breakpoints: hits.flatMap((entry) => entry.breakpoints), taking: text.includes('about to take') };
-    this.#resetViews();
-    if (attached.fork !== undefined) {
-      this.#keepPoint(hits.length > 0);
-    }
-    const body = { reason: kind, threadId: ATTACHED, allThreadsStopped: false, preserveFocusHint: false };
-    if (text !== '') body.description = text;
-    if (this.#stop.exception !== undefined) body.text = hit?.description;
-    if (this.#stop.breakpoints.length > 0) body.hitBreakpointIds = this.#stop.breakpoints;
-    this.#event('stopped', body);
-    this.#clearHoldTimer();
-    if (attached.fork === undefined) {
-      this.#holdTimer = setTimeout(() => this.#holdExpired(), this.#holdTimeout);
-      this.#holdTimer.unref?.();
-    }
-  }
-
-  // A fork remembers each stop as an image, to step back to it.
-  #keepPoint(breakpoint) {
-    const { fork, system, actor } = this.#attached;
-    let point;
-    try {
-      point = fork.capture();
-    } catch (error) {
-      this.#output('stderr', `fork: this stop cannot be kept for stepping back: ${error.message}`);
-      return;
-    }
-    const view = system.inspect(actor);
-    this.#points.push({ ...point, macrostep: view.macrostepInProgress ? view.step.macrostep : 0, breakpoint });
-    while (this.#points.length > MOST_POINTS) this.#points.shift().image.destroy();
-  }
-
-  #holdExpired() {
-    this.#holdTimer = undefined;
-    const attached = this.#attached;
-    if (attached === null || this.#stop === null) return;
-    try {
-      this.#record({ type: 'mutation', operation: 'release', reason: 'hold timeout', holdTimeout: this.#holdTimeout });
-    } catch {
-      // The release happens whatever the audit hook says: it protects production.
-    }
-    this.#output('important', `${attached.label} was held for ${this.#holdTimeout} ms, the most this session may ` +
-                              'hold it: it runs again');
-    this.#release();
-    this.#event('continued', { threadId: ATTACHED, allThreadsContinued: false });
-  }
-
-  #clearHoldTimer() {
-    if (this.#holdTimer !== undefined) {
-      clearTimeout(this.#holdTimer);
-      this.#holdTimer = undefined;
-    }
-  }
-
-  // Lets the stopped actor run again: through the breakpoints when any are
-  // set, freely otherwise.
-  #release() {
-    const attached = this.#attached;
-    const stopped = this.#stop;
-    this.#stop = null;
-    this.#pending = null;
-    this.#run = null;
-    this.#clearHoldTimer();
-    this.#resetViews();
-    if (attached === null || attached.system.closed || !attached.system.exists(attached.actor)) return;
-    const { system, actor } = attached;
-    if (attached.fork !== undefined) {
-      if (this.#gate) {
-        this.#stepCopy();
-      } else {
-        system.setBudgets(actor, undefined);
-        system.unhold(actor);
-      }
-      return;
-    }
-    if (this.#gate) {
-      // A stop before an `on:` breakpoint's message lets that message through.
-      this.#skipTaking = stopped?.taking === true;
-      if (system.inspect(actor).scheduling === 'held') this.#advance();
-    } else {
-      system.unhold(actor);
-    }
-  }
-
-  // Holds after each macrostep (live, with `hold`) or unit (fork) while
-  // breakpoints are set, so they can stop the actor.
-  #updateGate() {
-    const attached = this.#attached;
-    const wanted = attached !== null && attached.mode !== 'watch' && attached.allow.has('hold') && this.#breakpoints.any();
-    if (wanted === this.#gate) return;
-    this.#gate = wanted;
-    if (this.#stop !== null || attached === null || !attached.system.exists(attached.actor)) return;
-    const { system, actor } = attached;
-    if (attached.fork !== undefined) {
-      if (wanted) {
-        system.setBudgets(actor, SINGLE_STEP);
-        if (system.hold(actor, { anywhere: true })) this.#stepCopy();
-      }
-      return;
-    }
-    if (wanted) {
-      if (system.hold(actor)) this.#advance();
-    } else if (this.#pending === null) {
-      system.unhold(actor);
-    }
-  }
-
-  // After an operation outside a turn (abandon): a pending hold may have
-  // taken effect at once.
-  #checkHeld() {
-    const attached = this.#attached;
-    if (attached !== null && this.#stop === null && attached.system.exists(attached.actor) &&
-        attached.system.inspect(attached.actor).scheduling === 'held') {
-      this.#onHeld(attached.actor);
-    }
-  }
-
-  // ------------------------------------------------------------------
-  // Stepping a fork's copy
-
-  // Runs the copy toward a goal: `done(view)` says when it is there.
-  #runCopy(reason, done, description) {
-    this.#stop = null;
-    this.#clearHoldTimer();
-    this.#resetViews();
-    // Before or between microsteps is no place to stop a step: the next
-    // microstep's start (core ADR 0087), or the macrostep's end, comes right
-    // after it.
-    const goal = reason === 'step'
-      ? (view) => !(view.macrostepInProgress && view.position.at === 'none' && view.step.macrostep > 0) && done(view)
-      : done;
-    this.#run = { reason, done: goal, description, units: 0 };
-    this.#stepCopy();
-  }
-
-  // The goal of a step on a fork's copy, from where it stands (core ADR
-  // 0083), as the proposal's stepping table has it. At `statement`
-  // granularity, stepIn and next pass over a stop that names the unit they
-  // started at: a <foreach> that has not run and the same loop before its
-  // first iteration have one position (ADR 0083, open point 1), and a
-  // debugger that stops twice at one place looks stuck. `instruction`
-  // stops there anyway.
-  #stepGoal(kind, granularity, start) {
-    const labels = this.#attached.labels;
-    const macro = start.step.macrostep;
-    const ended = (view) => !view.macrostepInProgress || view.step.macrostep !== macro;
-    const otherStep = (view) => ended(view) || view.step.microstep !== start.step.microstep;
-    if (!start.macrostepInProgress || macro === 0) {
-      // At rest, or holding an event not taken yet: the next stop is the step.
-      return () => true;
-    }
-    if (granularity === 'line') {
-      return kind === 'out' ? ended : otherStep;
-    }
-    if (kind !== 'out' && granularity === 'instruction') {
-      return () => true;
-    }
-    const same = (view) => !otherStep(view) && samePosition(view.position, start.position);
-    if (kind === 'in') {
-      return (view) => !same(view);
-    }
-    const block = blockOf(start);
-    const depth = depthOf(start, labels);
-    if (kind === 'over') {
-      return (view) => otherStep(view) || blockOf(view) !== block || (!same(view) && depthOf(view, labels) <= depth);
-    }
-    if (start.position.at === 'none') return ended;
-    return (view) => otherStep(view) || blockOf(view) !== block || depthOf(view, labels) < depth;
-  }
-
-  // Puts the copy back at the kept stop `index`, which becomes the latest.
-  #restore(index, reason, description) {
-    const attached = this.#attached;
-    const point = this.#points[index];
-    for (const later of this.#points.splice(index + 1)) later.image.destroy();
-    this.#points.pop();
-    this.#stop = null;
-    this.#run = null;
-    this.#follow(attached.fork.restore(point));
-    point.image.destroy();
-    this.#halt(reason, { description });
+    if (this.#client.supportsInvalidatedEvent) this.#event('invalidated', { areas: ['stacks', 'variables'] });
   }
 
   // ------------------------------------------------------------------
@@ -1060,7 +635,7 @@ class DebugSession {
   }
 
   #documentName(view) {
-    const system = this.#attached?.system ?? this.#system;
+    const system = this.#system;
     try {
       return core.definition_inspect(nativeOf(system), view.definitionID).document_name || view.definition.family;
     } catch {
@@ -1123,7 +698,7 @@ class DebugSession {
   #refreshCatalog() {
     const attached = this.#attached;
     const seen = new Set();
-    for (const definition of attached.system.definitions()) {
+    for (const definition of this.#system.definitions()) {
       const key = String(definition.id);
       seen.add(key);
       const revision = typeof definition.identity.revision === 'string' ? definition.identity.revision
@@ -1184,7 +759,7 @@ class DebugSession {
   #resolveLine(source, line) {
     const attached = this.#attached;
     if (attached === null) return 'attach first: lines are resolved against the attached actor\'s chart';
-    const definition = attached.system.inspect(attached.actor).definitionID;
+    const definition = this.#system.inspect(attached.actor).definitionID;
     const found = attached.sources.locate(definition, source, line);
     if (found === undefined) {
       return attached.sources.elements(definition).length === 0
@@ -1217,91 +792,67 @@ class DebugSession {
   }
 
   // ------------------------------------------------------------------
-  // Console operations
+  // Pokes: each queues behind the actor's mail, or acts between its
+  // macrosteps, and the view shows the macrostep it causes.
 
   #post(event, data, options) {
-    const { system, actor, console } = this.#attached;
+    const { actor, console } = this.#attached;
     const origin = console === undefined ? undefined : { type: commands.TYPE, scope: console.scope };
-    system.post(actor, event, data, { ...options, origin });
-    const waiting = system.mailbox(actor).length;
-    return this.#stop !== null
-      ? `; it waits in the mailbox (${plural(waiting, 'message')}): continue or step to deliver it` : '';
+    this.#system.post(actor, event, data, { ...options, origin });
   }
 
   #consoleSend({ event, data }) {
     const attached = this.#requireChange('send', 'send');
     this.#audited({ type: 'mutation', operation: 'send', event, data });
-    const note = this.#post(event, data);
-    return `sent ${event} to ${attached.label}${note}`;
+    this.#post(event, data);
+    return `sent ${event} to ${attached.label}`;
   }
 
+  // An operator transition (core ADR 0082), queued behind the actor's mail.
   #jump(targets, from) {
     const attached = this.#requireChange('goto', 'goto');
-    const { system, actor, labels } = attached;
-    const definition = system.inspect(actor).definitionID;
+    const { actor, labels } = attached;
+    const definition = this.#system.inspect(actor).definitionID;
     for (const state of [...targets, ...(from === undefined ? [] : [from])]) {
       if (labels.stateID(definition, state) === undefined) throw refuse(`${state} is not a state of the chart`);
     }
     this.#audited({ type: 'mutation', operation: 'goto', targets, from });
     const data = { targets, ...(from === undefined ? {} : { from }) };
-    const alone = this.#stop !== null && system.mailbox(actor).length === 0 && !system.inspect(actor).macrostepInProgress;
-    const note = this.#post(OPERATOR_EVENT, data, { transition: { targets, source: from } });
-    const text = `${attached.label}: goto ${targets.join(' ')}${from === undefined ? '' : ` from ${from}`}`;
-    if (alone && attached.allow.has('hold')) {
-      // Nothing waits before it: take the jump now and stop after it.
-      const then = attached.fork !== undefined
-        ? () => this.#runCopy('goto', (view) => !view.macrostepInProgress, 'the jump\'s macrostep ended')
-        : () => this.#stepNow('goto');
-      return { text, then };
-    }
-    return { text: `${text} queued${note}` };
+    this.#post(OPERATOR_EVENT, data, { transition: { targets, source: from } });
+    return `${attached.label}: goto ${targets.join(' ')}${from === undefined ? '' : ` from ${from}`} queued`;
   }
 
+  // Core abandons only between microsteps (core ADR 0082): an actor the
+  // system's action budget paused inside one finishes it in the next turns,
+  // as it would anyway, and is abandoned as soon as it stands between two.
   async #abandon() {
     const attached = this.#requireChange('goto', 'abandon');
-    const { system, actor } = attached;
+    const { actor, label } = attached;
+    const system = this.#system;
     const view = system.inspect(actor);
-    if (!view.macrostepInProgress) throw refuse(`${attached.label} has no macrostep to abandon`);
+    if (!view.macrostepInProgress) throw refuse(`${label} has no macrostep to abandon`);
     this.#audited({ type: 'mutation', operation: 'abandon', macrostep: view.step.macrostep });
-    if (view.microstepInProgress) {
-      // Core abandons only between microsteps: let this one finish first.
-      system.setBudgets(actor, { resumeBudget: 1, actionBudget: 0 });
-      try {
-        if (system.inspect(actor).scheduling === 'held') system.step(actor);
-        for (let tries = 0; tries < 100 && system.exists(actor) && system.inspect(actor).microstepInProgress; tries += 1) {
-          await nextTurn();
-        }
-      } finally {
-        if (system.exists(actor)) system.setBudgets(actor, attached.fork === undefined ? undefined : SINGLE_STEP);
-      }
+    for (let turns = 0; turns < MOST_TURNS; turns += 1) {
       if (!system.exists(actor) || !system.inspect(actor).macrostepInProgress) {
-        return `${attached.label} finished its macrostep while finishing its microstep`;
+        return `${label} finished its macrostep while finishing its microstep`;
       }
-    }
-    try {
-      system.abandon(actor);
-    } catch (error) {
-      if (error instanceof TinyactorsError && error.code === 'busy') {
-        throw refuse(`${attached.label} has not finished its bootstrap, or is still inside a microstep; try again`);
+      try {
+        system.abandon(actor);
+        return `${label}: abandoned macrostep ${view.step.macrostep}; it keeps the configuration after its last ` +
+               'completed microstep';
+      } catch (error) {
+        if (!(error instanceof TinyactorsError && error.code === 'busy')) throw error;
       }
-      throw error;
+      await nextTurn();
     }
-    const text = `${attached.label}: abandoned macrostep ${view.step.macrostep}; it keeps the configuration after its ` +
-                 'last completed microstep';
-    if (attached.fork !== undefined && this.#stop !== null) {
-      this.#stop = null;
-      this.#halt('pause', { description: 'its macrostep was abandoned' });
-    } else {
-      this.#checkHeld();
-    }
-    return text;
+    throw refuse(`${label} has not finished its bootstrap, or is still inside a microstep; try again`);
   }
 
   #cancel({ id }) {
     const attached = this.#requireChange('goto', 'cancel');
     this.#audited({ type: 'mutation', operation: 'cancel', sendID: id });
     try {
-      attached.system.withdrawSend(attached.actor, id);
+      this.#system.withdrawSend(attached.actor, id);
     } catch (error) {
       if (error instanceof TinyactorsError && error.code === 'not-found') {
         throw refuse(`${attached.label} has no pending send ${id}`);
@@ -1313,11 +864,8 @@ class DebugSession {
 
   async #replace({ revision }) {
     const attached = this.#requireChange('goto', 'replace');
-    if (attached.fork !== undefined) {
-      throw refuse('a fork\'s copy has no address to replace it at; restart makes a new copy');
-    }
     if (attached.address === undefined) throw refuse('only a named actor can be replaced in place');
-    const { system } = attached;
+    const system = this.#system;
     const definition = system.findDefinition({ family: attached.address.family, revision });
     if (definition === undefined) throw refuse(`no registered, unretired ${attached.address.family} revision ${revision}`);
     const view = system.inspect(attached.actor);
@@ -1328,7 +876,7 @@ class DebugSession {
     let replacement;
     try {
       // The replacement bootstraps in a pump turn before it can be activated.
-      for (let tries = 0; tries < 100 && system.inspect(prepared).scheduling === 'runnable'; tries += 1) {
+      for (let tries = 0; tries < MOST_TURNS && system.inspect(prepared).scheduling === 'runnable'; tries += 1) {
         await nextTurn();
       }
       replacement = system.activate(prepared);
@@ -1337,97 +885,32 @@ class DebugSession {
       throw error;
     }
     // Follow the address to the replacement.
-    const args = { address: attached.address, mode: attached.mode, allow: [...attached.allow] };
+    const args = { address: attached.address, allow: [...attached.allow] };
     this.#detach('replaced');
     const next = this.#attach(args);
     this.#refreshThreads();
-    this.#updateGate();
     const lost = dropped.length === 0 ? '' : `; its delayed sends ${dropped.join(', ')} were dropped`;
     return `${next.label} now runs ${revision} from its initial state, with its data${lost} (actor ` +
            `${replacement.slot}:${replacement.generation})`;
   }
 
-  async #clock({ duration }) {
-    const attached = this.#requireAttached();
-    if (attached.fork === undefined) {
-      throw refuse('clock moves a fork\'s own clock; on a live actor it would move time for every actor of the system: ' +
-                   'use the `fork` command first');
-    }
-    const match = DURATION.exec(String(duration).trim());
-    if (match === null) throw refuse('clock +<duration>, such as +500ms, +5s, +2m, +1h or +3d');
-    const milliseconds = Math.round(Number(match[1]) * SCALE[match[2] ?? 'ms']);
-    this.#audited({ type: 'mutation', operation: 'clock', milliseconds });
-    await attached.system.advanceBy(milliseconds);
-    const waiting = attached.system.mailbox(attached.actor).length;
-    return `t=${attached.system.time}ms${waiting === 0 ? '' : `; ${plural(waiting, 'message')} waiting for the copy`}`;
-  }
-
-  // Switches a live or watch session to a fork of the same actor.
-  #forkNow() {
-    const attached = this.#requireAttached();
-    if (attached.fork !== undefined) throw refuse('this is a fork already; restart makes a new copy of the live actor');
-    if (MODES.indexOf(this.#mode) < MODES.indexOf('fork')) throw refuse(`this session allows ${this.#mode} mode at most`);
-    const args = { ...attached.origin.args, mode: 'fork' };
-    this.#detach('fork');
-    const next = this.#attach(args);
-    return { text: `now debugging ${next.label}, a copy of ${next.origin.label}`,
-             then: () => this.#announce(next, 'forked') };
-  }
-
-  // A held live actor takes its next message now, and stops after it.
-  #stepNow(reason) {
-    const { system, actor, label } = this.#attached;
-    this.#stop = null;
-    this.#clearHoldTimer();
-    this.#resetViews();
-    this.#pending = reason;
-    if (system.step(actor) === 'waiting') {
-      this.#output('console', `${label} waits for its next message, and stops after it`);
-    }
-  }
-
-  // next, stepIn and stepOut. A live actor stops only between macrosteps,
-  // so a step there is one macrostep, the next message's, whatever the
-  // granularity. A fork's copy steps as the proposal's stepping table says.
-  #stepRequest(args, kind) {
-    const attached = this.#requireChange('hold', 'stepping');
-    const thread = this.#threadArgument(args);
-    if (thread.id !== ATTACHED) throw refuse('only the attached actor steps; its invoked children run');
-    if (this.#stop === null) throw refuse(`${attached.label} is not stopped: pause it first`);
-    this.#audited({ type: 'mutation', operation: 'step', kind, granularity: args.granularity });
-    if (attached.fork !== undefined) {
-      const start = attached.system.inspect(attached.actor);
-      const done = this.#stepGoal(kind, args.granularity ?? 'statement', start);
-      return { after: () => this.#runCopy('step', done, undefined) };
-    }
-    return { after: () => this.#stepNow('step') };
-  }
-
   // A console line (evaluate, context repl).
   async #repl(line, thread) {
     const parsed = commands.parse(line);
-    const text = (result, after) => ({ body: { result, variablesReference: 0 }, after });
+    const text = (result) => ({ body: { result, variablesReference: 0 } });
     switch (parsed.command) {
       case 'help':
         return text(commands.HELP.join('\n'));
       case 'send':
         return text(this.#consoleSend(parsed));
-      case 'goto': {
-        const jump = this.#jump(parsed.targets, parsed.from);
-        return text(jump.text, jump.then);
-      }
+      case 'goto':
+        return text(this.#jump(parsed.targets, parsed.from));
       case 'abandon':
         return text(await this.#abandon());
       case 'cancel':
         return text(this.#cancel(parsed));
       case 'replace':
         return text(await this.#replace(parsed));
-      case 'clock':
-        return text(await this.#clock(parsed));
-      case 'fork': {
-        const forked = this.#forkNow();
-        return text(forked.text, forked.then);
-      }
       default: {
         this.#requireEvaluate('an expression');
         return { body: this.#variables.present(expressions.evaluate(parsed.text, this.#scope(thread))) };
@@ -1473,27 +956,6 @@ class DebugSession {
         return { after: () => this.#announce(attached, 'attached to') };
       },
 
-      restart(args) {
-        const attached = this.#requireAttached();
-        if (attached.fork !== undefined && args.arguments === undefined) {
-          // A fork: a new copy of the live actor.
-          this.#audited({ type: 'mutation', operation: 'restart' });
-          for (const point of this.#points) point.image.destroy();
-          this.#points = [];
-          this.#stop = null;
-          this.#run = null;
-          this.#follow(attached.fork.renew());
-          return { after: () => {
-            this.#output('console', `fork: a new copy of ${attached.origin.label}`);
-            this.#halt('entry', { description: 'a new copy stands where the live actor stands' });
-          } };
-        }
-        const config = args.arguments ?? { ...attached.origin.args, mode: attached.mode };
-        this.#detach('restart');
-        const next = this.#attach(config);
-        return { after: () => this.#announce(next, 'reattached to') };
-      },
-
       disconnect() {
         this.#detach('disconnect');
         return {};
@@ -1502,6 +964,17 @@ class DebugSession {
       terminate() {
         this.#detach('terminate');
         return { after: () => this.#event('terminated') };
+      },
+
+      // The actor was never stopped, so continuing changes nothing; the
+      // client, which now thinks it runs, hears it stopped again so that it
+      // keeps showing its stack and variables.
+      continue() {
+        const attached = this.#requireAttached();
+        return { body: { allThreadsContinued: false }, after: () => {
+          this.#output('console', `${attached.label} is watched live and never paused: continue changes nothing`);
+          this.#presentStopped();
+        } };
       },
 
       threads() {
@@ -1515,19 +988,15 @@ class DebugSession {
         const thread = this.#threadArgument(args);
         const attached = this.#attached;
         const view = this.#inspect(thread);
-        let note;
-        // Stopped is held, a new copy that has not settled into its hold yet
-        // included.
-        if (thread.id === ATTACHED && view !== undefined && (view.scheduling === 'held' || this.#stop !== null)) {
-          note = `held; ${plural(attached.system.mailbox(thread.actor).length, 'message')} waiting`;
-        }
+        const waiting = view === undefined ? 0 : this.#system.mailbox(thread.actor).length;
         const list = frames({ view, labels: attached.labels, sources: attached.sources,
-                              seen: this.#lastMicrostep.get(thread.session), note });
+                              seen: this.#lastMicrostep.get(thread.session),
+                              note: waiting === 0 ? undefined : `${plural(waiting, 'message')} waiting` });
         const start = Number(args.startFrame ?? 0);
         const levels = Number(args.levels ?? 0);
         const shown = list.slice(start, levels > 0 ? start + levels : undefined).map((frame) => {
           this.#nextFrame += 1;
-          this.#frames.set(this.#nextFrame, { thread: thread.id, macrostep: frame.macrostep });
+          this.#frames.set(this.#nextFrame, { thread: thread.id });
           const located = frame.place === undefined ? { line: 0, column: 0 }
             : { source: Sources.source(frame.place), line: frame.place.line, column: frame.place.column };
           return { id: this.#nextFrame, name: frame.name, ...located, presentationHint: frame.hint };
@@ -1617,104 +1086,9 @@ class DebugSession {
         return { body: { targets: targets.map((target) => ({ ...target, start: target.start + columnsFrom })) } };
       },
 
-      exceptionInfo(args) {
-        const thread = this.#threadArgument(args);
-        const stop = this.#stop;
-        if (stop === null || stop.exception === undefined || thread.id !== ATTACHED) {
-          throw refuse(`${thread.label} did not stop for an exception`);
-        }
-        const exception = stop.exception;
-        return { body: {
-          exceptionId: exception.name ?? exception.filter,
-          description: stop.description,
-          breakMode: 'always',
-          details: { message: stop.description, typeName: exception.filter,
-                     ...(exception.data === undefined ? {} : { innerException: [{ message: String(exception.data) }] }) },
-        } };
-      },
-
-      pause(args) {
-        const attached = this.#requireChange('hold', 'pause');
-        this.#threadArgument(args);
-        if (this.#stop !== null) return {};
-        this.#audited({ type: 'mutation', operation: 'hold' });
-        const { system, actor } = attached;
-        if (attached.fork !== undefined) {
-          system.setBudgets(actor, SINGLE_STEP);
-          if (system.hold(actor, { anywhere: true })) {
-            this.#run = null;
-            return { after: () => this.#halt('pause', { description: 'paused' }) };
-          }
-          this.#run = { reason: 'pause', done: () => true, description: 'paused', units: 0 };
-          return {};
-        }
-        if (system.hold(actor)) {
-          return { after: () => this.#halt('pause', { description: 'paused between macrosteps' }) };
-        }
-        this.#pending = 'pause';
-        return { after: () => this.#output('console', `${attached.label} is inside a macrostep; it stops when the ` +
-                                                      'macrostep ends (a macrostep that never ends needs `abandon`)') };
-      },
-
-      continue() {
-        this.#requireChange('hold', 'continue');
-        if (this.#stop === null && this.#pending === null && this.#run === null) {
-          return { body: { allThreadsContinued: false } };
-        }
-        this.#audited({ type: 'mutation', operation: 'release' });
-        this.#release();
-        return { body: { allThreadsContinued: false } };
-      },
-
-      next(args) {
-        return this.#stepRequest(args, 'over');
-      },
-
-      stepIn(args) {
-        return this.#stepRequest(args, 'in');
-      },
-
-      stepOut(args) {
-        return this.#stepRequest(args, 'out');
-      },
-
-      stepBack() {
-        this.#requireFork('stepBack');
-        if (this.#stop === null) throw refuse('stop the copy first');
-        if (this.#points.length < 2) throw refuse('no earlier stop to step back to');
-        this.#audited({ type: 'mutation', operation: 'stepBack' });
-        this.#points.pop().image.destroy();
-        return { after: () => this.#restore(this.#points.length - 1, 'step', 'stepped back to the previous stop') };
-      },
-
-      reverseContinue() {
-        this.#requireFork('reverseContinue');
-        if (this.#stop === null) throw refuse('stop the copy first');
-        if (this.#points.length < 2) throw refuse('no earlier stop to go back to');
-        this.#audited({ type: 'mutation', operation: 'reverseContinue' });
-        this.#points.pop().image.destroy();
-        let index = this.#points.length - 1;
-        while (index > 0 && !this.#points[index].breakpoint) index -= 1;
-        const found = this.#points[index].breakpoint;
-        return { after: () => this.#restore(index, found ? 'breakpoint' : 'step',
-                                             found ? 'back at the previous breakpoint' : 'back at the first stop kept') };
-      },
-
-      restartFrame(args) {
-        this.#requireFork('restartFrame');
-        const frame = this.#frames.get(Number(args.frameId));
-        if (frame === undefined) throw refuse(`frame ${args.frameId} is not valid (any more)`);
-        if (frame.macrostep === undefined || frame.macrostep === 0) throw refuse('only a frame of a macrostep restarts');
-        const index = this.#points.findIndex((point) => point.macrostep === frame.macrostep);
-        if (index < 0) throw refuse(`no stop was kept from the start of macrostep ${frame.macrostep}`);
-        this.#audited({ type: 'mutation', operation: 'restartFrame', macrostep: frame.macrostep });
-        const description = `back at the first stop kept in macrostep ${frame.macrostep}`;
-        return { after: () => this.#restore(index, 'restart', description) };
-      },
-
       gotoTargets(args) {
         const attached = this.#requireAttached();
-        const definition = attached.system.inspect(attached.actor).definitionID;
+        const definition = this.#system.inspect(attached.actor).definitionID;
         let states = attached.labels.states(definition);
         if (args.source !== undefined && args.line !== undefined) {
           const located = attached.sources.lines(definition, args.source, Number(args.line))
@@ -1730,15 +1104,18 @@ class DebugSession {
         return { body: { targets } };
       },
 
+      // A poke, as the console's `goto` is: an operator transition queued
+      // behind the actor's mail. The actor is not stopped, so the client
+      // hears nothing of a stop; the jump's macrostep shows like any other.
       goto(args) {
         const attached = this.#requireChange('goto', 'goto');
         const target = this.#gotoTargets.get(Number(args.targetId));
         if (target === undefined) throw refuse(`no goto target ${args.targetId}; ask gotoTargets first`);
-        if (target.definition !== String(attached.system.inspect(attached.actor).definitionID)) {
+        if (target.definition !== String(this.#system.inspect(attached.actor).definitionID)) {
           throw refuse(`${attached.label} runs another revision than the target's`);
         }
-        const { text, then } = this.#jump([target.state]);
-        return { after: () => { this.#output('console', text); then?.(); } };
+        const text = this.#jump([target.state]);
+        return { after: () => this.#output('console', text) };
       },
 
       setBreakpoints(args) {
@@ -1756,7 +1133,6 @@ class DebugSession {
           const problem = this.#checkCondition(specs.find((spec) => Number(spec.line) === line) ?? {});
           return problem ?? this.#resolveLine(source, line);
         });
-        this.#updateGate();
         return { body: { breakpoints: answered } };
       },
 
@@ -1765,7 +1141,7 @@ class DebugSession {
         if (args.source?.path === undefined && !(Number(args.source?.sourceReference) > 0)) {
           return { body: { breakpoints: [] } };
         }
-        const definition = attached.system.inspect(attached.actor).definitionID;
+        const definition = this.#system.inspect(attached.actor).definitionID;
         const found = attached.sources.lines(definition, args.source, Number(args.line),
                                              Number(args.endLine ?? args.line));
         const unique = new Map(found.map((element) => [`${element.line}:${element.column}`, element]));
@@ -1776,13 +1152,12 @@ class DebugSession {
       setFunctionBreakpoints(args) {
         const specs = Array.isArray(args.breakpoints) ? args.breakpoints : [];
         const attached = this.#attached;
-        const definition = attached === null ? undefined : attached.system.inspect(attached.actor).definitionID;
+        const definition = attached === null ? undefined : this.#system.inspect(attached.actor).definitionID;
         this.#audited({ type: 'breakpoints', kind: 'function',
                         breakpoints: specs.map(({ name, condition, hitCondition }) =>
                           ({ name, condition, hitCondition })) });
         const answered = this.#breakpoints.setFunctions(specs, (breakpoint) =>
           (attached === null ? this.#checkCondition(breakpoint) : this.#checkBreakpoint(breakpoint, definition)));
-        this.#updateGate();
         return { body: { breakpoints: answered } };
       },
 
@@ -1790,7 +1165,6 @@ class DebugSession {
         const filters = [...(args.filters ?? []), ...(args.filterOptions ?? []).map((option) => option.filterId)];
         const unique = [...new Set(filters)];
         this.#breakpoints.setFilters(unique);
-        this.#updateGate();
         return { body: { breakpoints: unique.map(() => ({ verified: true })) } };
       },
 
@@ -1826,7 +1200,6 @@ class DebugSession {
           }
           return this.#checkCondition(breakpoint);
         });
-        this.#updateGate();
         return { body: { breakpoints: answered } };
       },
 
@@ -1854,8 +1227,7 @@ class DebugSession {
           throw refuse(args.source?.path !== undefined && this.#files.has(args.source.path)
             ? `${args.source.path} is a file the client reads itself` : 'no such source');
         }
-        const system = this.#attached?.system ?? this.#system;
-        const spec = core.definition_export(nativeOf(system), entry.definition);
+        const spec = core.definition_export(nativeOf(this.#system), entry.definition);
         return { body: { content: exportText(spec), mimeType: 'application/json' } };
       },
     };
@@ -1865,13 +1237,6 @@ class DebugSession {
 /** A debug session over `system` (see the top of this module). */
 function createDebugSession(system, options) {
   return new DebugSession(system, options);
-}
-
-// Whether two positions (core ADR 0083) name the same unit, in the same
-// iteration of its <foreach>.
-function samePosition(one, other) {
-  return one.at === other.at && one.state === other.state && one.transition === other.transition &&
-    one.action === other.action && one.iteration === other.iteration;
 }
 
 // { family, name } from an address in one of its spellings, or undefined.

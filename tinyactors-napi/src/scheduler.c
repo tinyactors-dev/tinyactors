@@ -136,7 +136,6 @@ void tna_sched_init(tna_sched *sched, ta_allocator allocator, ta_allocator envel
      * resumesPerTurn are 1024 by default), so steady state reuses it. */
     tna_ring_init(&sched->settled, allocator,
                   (tna_ring_shape){ .layout = TNA_LAYOUT(tna_settlement), .chunk_capacity = TNA_QUEUE_CHUNK });
-    tna_map_init(&sched->budgets, allocator);
 }
 
 void tna_sched_discard_mail(tna_sched *sched) {
@@ -180,7 +179,6 @@ void tna_sched_destroy(tna_sched *sched) {
     tna_vec_destroy(&sched->waiters);
     tna_map_destroy(&sched->inflight);
     tna_ring_destroy(&sched->settled);
-    tna_map_destroy(&sched->budgets);
     sched->waiter_free = 0;
     sched->waiters_live = 0;
     sched->retained = 0;
@@ -389,13 +387,6 @@ bool tna_sched_cancel(tna_sched *sched, uint32_t index) {
     return false;
 }
 
-/* Forgets the budgets of the actor the entry held, if it had its own. */
-static void tna_sched_forget_budgets(tna_sched *sched, const tna_sched_entry *entry, ta_actor_id actor) {
-    if ((entry->flags & TNA_SCHED_OWN_BUDGETS) != 0) {
-        tna_map_remove(&sched->budgets, actor);
-    }
-}
-
 ta_result tna_sched_add(tna_sched *sched, ta_actor_id actor) {
     tna_sched_entry *entry = tna_sched_entry_make(sched, ta_actor_id_slot(actor));
     if (entry == NULL) {
@@ -408,11 +399,10 @@ ta_result tna_sched_add(tna_sched *sched, ta_actor_id actor) {
         sched->known += 1u;
     } else {
         /* A previous actor of this slot the addon never saw go: its mail is dead. */
-        ta_actor_id previous = ta_actor_id_make(ta_actor_id_slot(actor), entry->generation);
         sched->quarantined -= entry->state == TNA_SCHED_QUARANTINED ? 1u : 0u;
         tna_sched_bury(sched, entry, TNA_DEAD_NOT_FOUND);
-        tna_sched_complete(sched, previous, (tna_settlement){ .kind = TNA_SETTLE_DEAD, .reason = TNA_DEAD_NOT_FOUND });
-        tna_sched_forget_budgets(sched, entry, previous);
+        tna_sched_complete(sched, ta_actor_id_make(ta_actor_id_slot(actor), entry->generation),
+                           (tna_settlement){ .kind = TNA_SETTLE_DEAD, .reason = TNA_DEAD_NOT_FOUND });
     }
     *entry = (tna_sched_entry){ .generation = ta_actor_id_generation(actor), .state = TNA_SCHED_RUNNABLE };
     return TA_OK;
@@ -425,7 +415,6 @@ void tna_sched_remove(tna_sched *sched, ta_actor_id actor, tna_dead_reason reaso
     }
     tna_sched_bury(sched, entry, reason);
     tna_sched_complete(sched, actor, (tna_settlement){ .kind = TNA_SETTLE_DEAD, .reason = (uint8_t)reason });
-    tna_sched_forget_budgets(sched, entry, actor);
     sched->quarantined -= entry->state == TNA_SCHED_QUARANTINED ? 1u : 0u;
     *entry = (tna_sched_entry){0};
     sched->known -= 1u;
@@ -543,10 +532,6 @@ ta_result tna_sched_wake(tna_sched *sched, ta_actor_id actor) {
     if (entry == NULL) {
         return TA_ERR_NOT_FOUND;
     }
-    if (entry->state == TNA_SCHED_HELD) {
-        entry->flags |= TNA_SCHED_UNFINISHED; /* it runs once it is let go or stepped */
-        return TA_OK;
-    }
     if (entry->state != TNA_SCHED_IDLE && entry->state != TNA_SCHED_READY) {
         return TA_OK;
     }
@@ -575,134 +560,6 @@ ta_result tna_sched_release(tna_sched *sched, ta_actor_id actor) {
     return TA_OK;
 }
 
-/* ------------------------------------------------------------------------
- * Holding, stepping and budgets for one actor (ADR 0027)
- */
-
-ta_result tna_sched_hold(tna_sched *sched, const tna_sched_hold_params *params) {
-    tna_sched_entry *entry = tna_sched_lookup(sched, params->actor);
-    if (entry == NULL) {
-        return TA_ERR_NOT_FOUND;
-    }
-    if ((entry->flags & TNA_SCHED_FINISHED) != 0) {
-        return TA_ERR_DONE;
-    }
-    entry->flags |= TNA_SCHED_HOLD;
-    if (params->anywhere) {
-        entry->flags |= TNA_SCHED_ANYWHERE;
-    }
-    /* Between macrosteps it stands still at once; a ready actor's entry in
-     * the ready queue is skipped once it is HELD. Held anywhere, a runnable
-     * actor stands still at once too, before its next unit, and its entry
-     * in the runnable queue is skipped. */
-    if (entry->state == TNA_SCHED_IDLE || entry->state == TNA_SCHED_READY) {
-        entry->state = TNA_SCHED_HELD;
-    } else if (params->anywhere && entry->state == TNA_SCHED_RUNNABLE) {
-        entry->state = TNA_SCHED_HELD;
-        entry->flags |= TNA_SCHED_UNFINISHED;
-    }
-    if (params->held != NULL) {
-        *params->held = entry->state == TNA_SCHED_HELD;
-    }
-    return TA_OK;
-}
-
-/* A HELD actor goes back into scheduling: runnable when it has a macrostep
- * to run, ready with mail, idle otherwise. The HOLD flag is the caller's. */
-static ta_result tna_sched_resume_held(tna_sched *sched, tna_sched_entry *entry, ta_actor_id actor, tna_step_kind *kind) {
-    if ((entry->flags & TNA_SCHED_UNFINISHED) != 0) {
-        if (tna_ring_push(&sched->runnable, &actor) != TA_OK) {
-            return TA_ERR_NOMEM;
-        }
-        entry->flags &= (uint8_t)~TNA_SCHED_UNFINISHED;
-        entry->state = TNA_SCHED_RUNNABLE;
-        *kind = TNA_STEP_MACROSTEP;
-        return TA_OK;
-    }
-    if (entry->first != 0) {
-        if (tna_ring_push(&sched->ready, &actor) != TA_OK) {
-            return TA_ERR_NOMEM;
-        }
-        entry->state = TNA_SCHED_READY;
-        *kind = TNA_STEP_MESSAGE;
-        return TA_OK;
-    }
-    entry->state = TNA_SCHED_IDLE;
-    *kind = TNA_STEP_WAITING;
-    return TA_OK;
-}
-
-ta_result tna_sched_unhold(tna_sched *sched, ta_actor_id actor) {
-    tna_sched_entry *entry = tna_sched_lookup(sched, actor);
-    if (entry == NULL) {
-        return TA_ERR_NOT_FOUND;
-    }
-    if (entry->state == TNA_SCHED_HELD) {
-        tna_step_kind kind = TNA_STEP_WAITING;
-        ta_result result = tna_sched_resume_held(sched, entry, actor, &kind);
-        if (result != TA_OK) {
-            return result;
-        }
-    }
-    entry->flags &= (uint8_t)~(TNA_SCHED_HOLD | TNA_SCHED_ANYWHERE);
-    return TA_OK;
-}
-
-ta_result tna_sched_step(tna_sched *sched, const tna_sched_step_params *params) {
-    tna_sched_entry *entry = tna_sched_lookup(sched, params->actor);
-    if (entry == NULL) {
-        return TA_ERR_NOT_FOUND;
-    }
-    if (entry->state != TNA_SCHED_HELD) {
-        return TA_ERR_INVALID;
-    }
-    /* The HOLD flag stays: the macrostep's end makes the actor HELD again, so
-     * exactly one message is taken. */
-    tna_step_kind kind = TNA_STEP_WAITING;
-    ta_result result = tna_sched_resume_held(sched, entry, params->actor, &kind);
-    if (result == TA_OK && params->out != NULL) {
-        *params->out = kind;
-    }
-    return result;
-}
-
-ta_result tna_sched_set_budgets(tna_sched *sched, const tna_sched_budgets_params *params) {
-    tna_sched_entry *entry = tna_sched_lookup(sched, params->actor);
-    if (entry == NULL) {
-        return TA_ERR_NOT_FOUND;
-    }
-    if (params->budgets == NULL) {
-        tna_sched_forget_budgets(sched, entry, params->actor);
-        entry->flags &= (uint8_t)~(TNA_SCHED_OWN_BUDGETS | TNA_SCHED_MICROSTEP_START);
-        return TA_OK;
-    }
-    if (params->budgets->microsteps == 0) {
-        return TA_ERR_INVALID;
-    }
-    uint64_t packed = (uint64_t)params->budgets->microsteps << 32 | params->budgets->actions;
-    if (tna_map_put(&sched->budgets, params->actor, packed) != TA_OK) {
-        return TA_ERR_NOMEM;
-    }
-    entry->flags |= TNA_SCHED_OWN_BUDGETS;
-    if (params->budgets->microstep_start) {
-        entry->flags |= TNA_SCHED_MICROSTEP_START;
-    } else {
-        entry->flags &= (uint8_t)~TNA_SCHED_MICROSTEP_START;
-    }
-    return TA_OK;
-}
-
-/* A stable actor: HELD when held, ready when it has mail (true: it joins
- * the ready queue), idle otherwise. */
-static bool tna_sched_stand(tna_sched_entry *entry) {
-    if ((entry->flags & TNA_SCHED_HOLD) != 0) {
-        entry->state = TNA_SCHED_HELD;
-        return false;
-    }
-    entry->state = entry->first == 0 ? TNA_SCHED_IDLE : TNA_SCHED_READY;
-    return entry->first != 0;
-}
-
 ta_result tna_sched_abandoned(tna_sched *sched, ta_actor_id actor) {
     tna_sched_entry *entry = tna_sched_lookup(sched, actor);
     if (entry == NULL) {
@@ -711,15 +568,16 @@ ta_result tna_sched_abandoned(tna_sched *sched, ta_actor_id actor) {
     tna_sched_complete(sched, actor, (tna_settlement){ .kind = TNA_SETTLE_ABANDONED });
     /* The macrostep a release() lifted the microstep limit for is gone. */
     entry->flags &= (uint8_t)~TNA_SCHED_UNLIMITED;
-    if (entry->state == TNA_SCHED_HELD) {
-        entry->flags &= (uint8_t)~TNA_SCHED_UNFINISHED; /* its macrostep is gone */
-        return TA_OK;
-    }
     if (entry->state != TNA_SCHED_RUNNABLE) {
         return TA_OK; /* quarantined (a runaway's release() then finds it stable), or core abandoned an event the addon never delivered */
     }
     entry->flags &= (uint8_t)~TNA_SCHED_BACKOFF;
-    if (tna_sched_stand(entry) && tna_ring_push(&sched->ready, &actor) != TA_OK) {
+    if (entry->first == 0) {
+        entry->state = TNA_SCHED_IDLE;
+        return TA_OK;
+    }
+    entry->state = TNA_SCHED_READY;
+    if (tna_ring_push(&sched->ready, &actor) != TA_OK) {
         /* No room in the ready queue: it stays runnable, and its entry in the
          * runnable queue resumes it, which finds it stable and settles it. */
         entry->state = TNA_SCHED_RUNNABLE;
@@ -961,14 +819,14 @@ static void tna_sched_requeue(tna_sched *sched, const tna_turn_params *params, t
     }
 }
 
-/* A stable actor: HELD when held (ADR 0027), ready when it has mail, idle
- * otherwise. */
+/* A stable actor: ready when it has mail, idle otherwise. */
 static void tna_sched_settle(tna_sched *sched, const tna_turn_params *params, tna_sched_entry *entry, ta_actor_id actor) {
-    if (tna_sched_stand(entry)) {
-        tna_sched_requeue(sched, params, &sched->ready, actor);
-    } else if (entry->state == TNA_SCHED_HELD) {
-        tna_sched_record(sched, params, (tna_turn_record){ .kind = TNA_RECORD_HELD, .actor = actor });
+    if (entry->first == 0) {
+        entry->state = TNA_SCHED_IDLE;
+        return;
     }
+    entry->state = TNA_SCHED_READY;
+    tna_sched_requeue(sched, params, &sched->ready, actor);
 }
 
 static void tna_sched_resume_one(tna_sched *sched, const tna_turn_params *params, ta_actor_id actor) {
@@ -989,12 +847,6 @@ static void tna_sched_resume_one(tna_sched *sched, const tna_turn_params *params
         .action_budget = params->budgets.actions,
         .no_microstep_limit = (entry->flags & TNA_SCHED_UNLIMITED) != 0,
     };
-    uint64_t own = 0;
-    if ((entry->flags & TNA_SCHED_OWN_BUDGETS) != 0 && tna_map_get(&sched->budgets, actor, &own)) {
-        resume.budget = (uint32_t)(own >> 32);
-        resume.action_budget = (uint32_t)own;
-        resume.pause_at_microstep_start = (entry->flags & TNA_SCHED_MICROSTEP_START) != 0;
-    }
     *params->inside_core = true;
     ta_result result = ta_actor_resume(params->core, &resume);
     *params->inside_core = false;
@@ -1020,13 +872,6 @@ static void tna_sched_resume_one(tna_sched *sched, const tna_turn_params *params
     }
     switch (status) {
     case TA_RUN_PAUSED:
-        if ((entry->flags & TNA_SCHED_ANYWHERE) != 0) {
-            /* Held anywhere: it stands still where the budget paused it. */
-            entry->state = TNA_SCHED_HELD;
-            entry->flags |= TNA_SCHED_UNFINISHED;
-            tna_sched_record(sched, params, (tna_turn_record){ .kind = TNA_RECORD_HELD, .actor = actor });
-            return;
-        }
         tna_sched_requeue(sched, params, &sched->runnable, actor);
         return;
     case TA_RUN_DONE:
@@ -1136,14 +981,6 @@ static void tna_sched_deliver_one(tna_sched *sched, const tna_turn_params *param
         }
         tna_envelope_give(sched, head);
         sched->delivered += 1u;
-        if ((entry->flags & TNA_SCHED_ANYWHERE) != 0) {
-            /* Held anywhere: it stands still with the event taken in, before
-             * its macrostep begins. */
-            entry->state = TNA_SCHED_HELD;
-            entry->flags |= TNA_SCHED_UNFINISHED;
-            tna_sched_record(sched, params, (tna_turn_record){ .kind = TNA_RECORD_HELD, .actor = actor });
-            return;
-        }
         entry->state = TNA_SCHED_RUNNABLE;
         tna_sched_requeue(sched, params, &sched->runnable, actor);
         return;

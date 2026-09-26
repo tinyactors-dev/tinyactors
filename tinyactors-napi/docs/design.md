@@ -282,18 +282,13 @@ acceptance or completion of the message's macrostep. Queue depth and retained
 data size limits provide backpressure. Closing a system rejects queued and
 pending messages.
 
-### Holding one actor for a debugger
+### Poking one actor for a debugger
 
-A debugger can hold one actor ([ADR 0027](adr/0027-a-debugger-holds-steps-and-redirects-one-actor.md)).
-Holding is a scheduling state beside quarantine: a held actor is on no
-queue and its mail waits in its mailbox. A hold takes effect between
-macrosteps, so a message whose macrostep has started still completes;
-`step()` delivers exactly one held message, and `unhold()` lets the actor
-take its mail again. A fault while held still quarantines and reports.
-One actor can resume with budgets of its own (`setBudgets()`), and an
+A debugger watches one actor and pokes it; it never stops it
+([ADR 0027](adr/0027-a-debugger-watches-and-pokes-one-live-actor.md)). An
 operator transition (core ADR 0082) travels in the envelope behind the
-actor's queued mail. A fork's copy, in a debug system of its own, is held
-anywhere: at every pause inside a macrostep too.
+actor's queued mail, abandoning a macrostep settles the send() that waited
+for it, and `mailbox()` lists what waits for an actor.
 
 ## MessageChannel and Workers
 

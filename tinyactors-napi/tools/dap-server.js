@@ -1,22 +1,21 @@
 'use strict';
 
 // A development transport for the debug adapter (lib/debug.js, napi ADR
-// 0020): it runs a small example system and serves a debug session over
+// 0027): it runs a small example system and serves a debug session over
 // stdio, or one per connection on a local port, so a DAP client can be
 // tried against it. It is not part of the package: a production
 // application puts createDebugSession() behind its own transport and
-// authentication, and decides each user's mode and permissions.
+// authentication, and decides each user's permissions.
 //
 //   node tools/dap-server.js                  DAP on stdin and stdout
 //   node tools/dap-server.js --port 4711      sessions on 127.0.0.1:4711
-//   node tools/dap-server.js --mode watch     at most watch mode (default live)
+//   node tools/dap-server.js --watch          grant no permission: watch only
 //
-// Attach with { "address": "subscription/acct_1" } (acct_1 to acct_3),
-// and a "mode" of "watch", "fork" or "live". The example: each account
-// renews every 20 seconds of logical time and, now and then, a payment
-// fails and a webhook comes in, so a watched actor has something to show.
-// Every permission is granted, holds end after 30 seconds, and the audit
-// records go to stderr.
+// Attach with { "address": "subscription/acct_1" } (acct_1 to acct_3), and
+// an "allow" list to ask for fewer permissions. The example: each account
+// renews every 20 seconds and, now and then, a payment fails and a webhook
+// comes in, so a watched actor has something to show. Every permission is
+// granted unless --watch, and the audit records go to stderr.
 
 const net = require('node:net');
 const { createSystem, statechart, createDebugSession, DAPReader, encodeDAPMessage } = require('..');
@@ -27,7 +26,7 @@ const option = (name, fallback) => {
   return at < 0 ? fallback : args[at + 1];
 };
 const port = option('port');
-const mode = option('mode', 'live');
+const allow = args.includes('--watch') ? [] : ['send', 'set', 'goto', 'evaluate'];
 
 // Written one builder call per statement, so each element has its own line.
 function subscription() {
@@ -86,9 +85,7 @@ traffic.unref();
 
 function serve(input, write, onClose) {
   const session = createDebugSession(system, {
-    mode,
-    allow: ['send', 'set', 'goto', 'hold', 'evaluate'],
-    holdTimeout: 30000,
+    allow,
     audit: (entry) => process.stderr.write(`dap-server audit: ${JSON.stringify(entry)}\n`),
     send: (message) => write(encodeDAPMessage(message)),
   });
@@ -120,6 +117,6 @@ if (port === undefined) {
     serve(socket, (bytes) => socket.write(bytes), () => socket.destroy());
   });
   server.listen(Number(port), '127.0.0.1', () => {
-    process.stderr.write(`dap-server: ${mode} sessions on 127.0.0.1:${server.address().port}\n`);
+    process.stderr.write(`dap-server: ${allow.length === 0 ? 'watch-only' : 'watch and poke'} sessions on 127.0.0.1:${server.address().port}\n`);
   });
 }

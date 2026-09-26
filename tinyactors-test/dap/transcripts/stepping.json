@@ -1,6 +1,8 @@
 {
   "description": "A console send waits in the mailbox while the system is stopped; entry and exit breakpoints stop before the block's first unit, at the microstep's start (core ADR 0087); stepIn by statement goes into a <foreach> without stopping twice at its position (ADR 0083, open point 1), and a <log> writes `label: value`; stepOut leaves the block and, as it was the macrostep's last, ends the macrostep, whose summary is one output; next finishes a microstep's only block",
   "chart": "counter",
+  "only": "test",
+  "why": "it stops and steps; napi's adapter never stops a live actor (napi ADR 0027)",
   "steps": [
     { "start": true },
     {

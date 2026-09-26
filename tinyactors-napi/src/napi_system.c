@@ -428,132 +428,6 @@ static bool tna_actor_arguments(napi_env env, const napi_value *argv, size_t arg
     return true;
 }
 
-/*
- * hold(slot, generation, anywhere?): holds the actor between macrosteps
- * (ADR 0027), or, with `anywhere`, at its next pause inside one too. Returns
- * true when it is held now, false when it will be later. Throws `not-found`
- * for an actor the scheduler does not know, `done` for a finished one.
- */
-static napi_value tna_hold_method(napi_env env, napi_callback_info info) {
-    size_t argc = 3;
-    napi_value argv[3] = { NULL, NULL, NULL };
-    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
-        return NULL;
-    }
-    tna_napi_system *wrapper = tna_open_this(env, info);
-    ta_actor_id actor = 0;
-    if (wrapper == NULL || !tna_actor_arguments(env, argv, argc, "hold", &actor)) {
-        return NULL;
-    }
-    bool held = false;
-    bool anywhere = false;
-    if (argc >= 3 && argv[2] != NULL) {
-        (void)napi_get_value_bool(env, argv[2], &anywhere);
-    }
-    ta_result result = tna_sched_hold(&wrapper->system->sched,
-                                      &(tna_sched_hold_params){ .actor = actor, .anywhere = anywhere, .held = &held });
-    if (result != TA_OK) {
-        return tna_throw(env, tna_result_code(result),
-                         result == TA_ERR_DONE ? "hold: the actor has finished" : "hold: the actor is not known");
-    }
-    napi_value out = NULL;
-    napi_get_boolean(env, held, &out);
-    return out;
-}
-
-/* unhold(slot, generation): lets a held actor go (ADR 0027). */
-static napi_value tna_unhold_method(napi_env env, napi_callback_info info) {
-    size_t argc = 2;
-    napi_value argv[2] = { NULL, NULL };
-    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
-        return NULL;
-    }
-    tna_napi_system *wrapper = tna_open_this(env, info);
-    ta_actor_id actor = 0;
-    if (wrapper == NULL || !tna_actor_arguments(env, argv, argc, "unhold", &actor)) {
-        return NULL;
-    }
-    ta_result result = tna_sched_unhold(&wrapper->system->sched, actor);
-    if (result != TA_OK) {
-        return tna_throw(env, tna_result_code(result), "unhold: the actor is not known, or cannot be scheduled");
-    }
-    tna_system_want_turn(wrapper->system);
-    napi_value undefined = NULL;
-    napi_get_undefined(env, &undefined);
-    return undefined;
-}
-
-/*
- * step(slot, generation): a held actor takes exactly one message and is held
- * again when its macrostep ends (ADR 0027). Returns "message", "macrostep"
- * (it runs on in the macrostep it was held in, or one core gave it while
- * held) or "waiting" (its mailbox is empty). Throws `invalid` when the actor
- * is not held.
- */
-static napi_value tna_step_method(napi_env env, napi_callback_info info) {
-    size_t argc = 2;
-    napi_value argv[2] = { NULL, NULL };
-    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
-        return NULL;
-    }
-    tna_napi_system *wrapper = tna_open_this(env, info);
-    ta_actor_id actor = 0;
-    if (wrapper == NULL || !tna_actor_arguments(env, argv, argc, "step", &actor)) {
-        return NULL;
-    }
-    tna_step_kind kind = TNA_STEP_WAITING;
-    ta_result result = tna_sched_step(&wrapper->system->sched, &(tna_sched_step_params){ .actor = actor, .out = &kind });
-    if (result != TA_OK) {
-        return tna_throw(env, tna_result_code(result),
-                         result == TA_ERR_INVALID ? "step: the actor is not held" : "step: the actor cannot be stepped");
-    }
-    tna_system_want_turn(wrapper->system);
-    static const char *const kinds[] = { [TNA_STEP_MESSAGE] = "message", [TNA_STEP_MACROSTEP] = "macrostep",
-                                         [TNA_STEP_WAITING] = "waiting" };
-    napi_value out = NULL;
-    napi_create_string_utf8(env, kinds[kind], NAPI_AUTO_LENGTH, &out);
-    return out;
-}
-
-/*
- * setBudgets(slot, generation, microsteps?, actions?, microstepStart?): the
- * actor resumes with these budgets instead of the system's (ADR 0027); without
- * `microsteps`, with the system's again. `actions` 0 is no limit;
- * `microstepStart` pauses each microstep at its start (core ADR 0087).
- */
-static napi_value tna_set_budgets_method(napi_env env, napi_callback_info info) {
-    size_t argc = 5;
-    napi_value argv[5] = { NULL, NULL, NULL, NULL, NULL };
-    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
-        return NULL;
-    }
-    tna_napi_system *wrapper = tna_open_this(env, info);
-    ta_actor_id actor = 0;
-    if (wrapper == NULL || !tna_actor_arguments(env, argv, argc, "setBudgets", &actor)) {
-        return NULL;
-    }
-    napi_valuetype type = napi_undefined;
-    tna_actor_budgets budgets = { 0 };
-    bool clear = argc < 3 || argv[2] == NULL || napi_typeof(env, argv[2], &type) != napi_ok || type == napi_undefined;
-    if (!clear && (napi_get_value_uint32(env, argv[2], &budgets.microsteps) != napi_ok || argc < 5 ||
-                   napi_get_value_uint32(env, argv[3], &budgets.actions) != napi_ok ||
-                   napi_get_value_bool(env, argv[4], &budgets.microstep_start) != napi_ok)) {
-        return tna_throw(env, "invalid", "setBudgets: expected (slot, generation, microsteps, actions, microstepStart)");
-    }
-    ta_result result = tna_sched_set_budgets(&wrapper->system->sched, &(tna_sched_budgets_params){
-                                                                          .actor = actor,
-                                                                          .budgets = clear ? NULL : &budgets,
-                                                                      });
-    if (result != TA_OK) {
-        return tna_throw(env, tna_result_code(result),
-                         result == TA_ERR_INVALID ? "setBudgets: the microstep budget must be at least 1"
-                                                  : "setBudgets: the actor is not known");
-    }
-    napi_value undefined = NULL;
-    napi_get_undefined(env, &undefined);
-    return undefined;
-}
-
 static napi_status tna_put_value(napi_env env, napi_value object, const char *name, napi_value value) {
     return value == NULL ? napi_ok : napi_set_named_property(env, object, name, value);
 }
@@ -935,7 +809,7 @@ static napi_value tna_scheduling_method(napi_env env, napi_callback_info info) {
         napi_get_value_uint32(env, argv[1], &generation) != napi_ok) {
         return tna_throw(env, "invalid", "scheduling: expected (slot, generation)");
     }
-    static const char *const names[] = { "none", "idle", "ready", "runnable", "quarantined", "held" };
+    static const char *const names[] = { "none", "idle", "ready", "runnable", "quarantined" };
     const tna_sched_entry *entry = tna_sched_lookup(&wrapper->system->sched, ta_actor_id_make(slot, generation));
     napi_value state = NULL;
     napi_create_string_utf8(env, entry == NULL ? "none" : names[entry->state], NAPI_AUTO_LENGTH, &state);
@@ -1640,10 +1514,6 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "time", NULL, NULL, tna_time_getter, NULL, NULL, napi_default_jsproperty, NULL },
         { "release", NULL, tna_release_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "scheduling", NULL, tna_scheduling_method, NULL, NULL, NULL, napi_default_method, NULL },
-        { "hold", NULL, tna_hold_method, NULL, NULL, NULL, napi_default_method, NULL },
-        { "unhold", NULL, tna_unhold_method, NULL, NULL, NULL, napi_default_method, NULL },
-        { "step", NULL, tna_step_method, NULL, NULL, NULL, napi_default_method, NULL },
-        { "setBudgets", NULL, tna_set_budgets_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "mailbox", NULL, tna_mailbox_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "selectDatamodel", NULL, tna_select_datamodel_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "registerDatamodel", NULL, tna_register_datamodel_method, NULL, NULL, NULL, napi_default_method, NULL },

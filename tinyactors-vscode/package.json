@@ -155,20 +155,6 @@
                 },
                 "description": "The actor to attach to, by its actor ID."
               },
-              "mode": {
-                "type": "string",
-                "enum": [
-                  "watch",
-                  "fork",
-                  "live"
-                ],
-                "enumDescriptions": [
-                  "Never stops or changes the actor: breakpoints report where they would have stopped.",
-                  "Copies the actor into a debug system of its own, to step, change and step back freely.",
-                  "Works on the actor itself, as the permissions allow. It stops only between macrosteps."
-                ],
-                "description": "How to attach. Default, and at most: what the application's session allows."
-              },
               "allow": {
                 "type": "array",
                 "uniqueItems": true,
@@ -178,18 +164,16 @@
                     "send",
                     "set",
                     "goto",
-                    "hold",
                     "evaluate"
                   ],
                   "enumDescriptions": [
                     "Send events to the actor from the debug console.",
                     "Write the actor's data model.",
                     "Operator transitions: goto, abandon, cancel and replace.",
-                    "Pause, step and stop at breakpoints.",
                     "Run expressions in the application's process: watch, hover, console and conditions."
                   ]
                 },
-                "description": "The permissions to ask for. Default, and at most: what the application's session grants."
+                "description": "The permissions to ask for; none watches the actor only. The actor is never paused: it is watched live, and each permission is a way to poke it. Default, and at most: what the application's session grants."
               }
             }
           }
@@ -208,8 +192,7 @@
             "name": "Attach to an actor",
             "host": "127.0.0.1",
             "port": 4711,
-            "address": "family/name",
-            "mode": "fork"
+            "address": "family/name"
           }
         ],
         "configurationSnippets": [
@@ -234,7 +217,7 @@
               "host": "${2:127.0.0.1}",
               "port": 4711,
               "address": "${3:family/name}",
-              "mode": "${4|watch,fork,live|}"
+              "allow": ["${4|send,set,goto,evaluate|}"]
             }
           }
         ]

@@ -65,7 +65,8 @@ takes napi's `statechart`, so the fixture needs no path to the package.
 {
   "description": "what the transcript shows, in a sentence",
   "chart": "counter",
-  "napi": { "mode": "live" },
+  "only": "test",
+  "why": "it stops at a breakpoint; napi's adapter never stops a live actor",
   "steps": [
     { "start": true },
     { "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
@@ -80,8 +81,7 @@ takes napi's `statechart`, so the fixture needs no path to the package.
 | Field | |
 |---|---|
 | `chart` | the fixture in `charts/` |
-| `napi.mode` | the mode napi attaches in: `fork` (the default) or `live` |
-| `only`, `why` | a transcript for one host (`test` or `napi`), and the reason; the other host skips it. Keep these rare: a difference between the adapters is a bug unless the status map explains it |
+| `only`, `why` | a transcript for one host (`test` or `napi`), and the reason; the other host skips it. napi's adapter never stops a live actor (napi ADR 0027), so a transcript that stops, steps or waits at a breakpoint is the test host's; any other difference between the adapters is a bug unless the status map explains it |
 | `steps` | played in order |
 
 A step is one of:
@@ -97,16 +97,17 @@ A step is one of:
 
 Starting differs between the hosts, so each runner does its own, then
 plays the steps. Afterwards the one actor of the chart, named `a1`, is
-stopped at rest, the variable `thread` is its thread ID, and `title` the
-name the adapter writes for it (its thread's name without the states):
+at rest and reported stopped, the variable `thread` is its thread ID, and
+`title` the name the adapter writes for it (its thread's name without the
+states):
 
 - **test host:** a workbench directory with the chart's file and
   `Workbench.actor :a1, chart: :<chart>`, launched with `stopOnEntry`;
   the runner takes the `entry` stop and finds the thread named
   `<chart>/a1 · …`.
 - **napi:** a System with a manual clock and the actor spawned as `a1`;
-  `attach` to `<chart>/a1` in the transcript's mode. A fork's copy stops
-  on entry; a live actor is paused.
+  `attach` to `<chart>/a1` with every permission. The session reports the
+  actor stopped once, on entry, and never stops it.
 
 ### Matching
 
@@ -160,37 +161,35 @@ never a failure, so a transcript names only what both adapters send.
 
 The two adapters say the same things in the same words: console results,
 macrostep summaries (one output each), `<log>` output (`busy: 1`), thread
-and actor names, stop descriptions, exception texts, the frame of an actor
-at rest (`idle in idle (held; 0 messages waiting)`), and the names in the
-scopes. Console mail waits in the actor's mailbox in both, jumps into a
-macrostep queue there, and `abandon` stops again. What still differs, and
-what a transcript therefore leaves out or matches loosely:
+and actor names, and the names in the scopes. What differs, and what a
+transcript therefore leaves out, matches loosely, or plays in one host
+only:
 
-- **The actor's name in fork mode.** napi's fork is `counter/a1 (fork)`,
-  the test host's workbench actor `counter/a1`; the transcripts write it
-  as `{title}` (see "Session start").
+- **Stopping.** napi's adapter watches a live actor and never stops it
+  (napi ADR 0027): it reports the actor stopped once, on entry, refreshes
+  the view after each macrostep with an `invalidated` event, refuses
+  `pause` and the steps, and answers `continue` by changing nothing.
+  Breakpoints there are tracepoints (`would have stopped after macrostep
+  2: entered busy`). The test host's adapter stops a workbench's actors,
+  all of them when one stops (`allThreadsStopped: true`), and steps them.
+  A transcript that stops, steps or waits at a breakpoint is `only:
+  "test"`; `live-view` is `only: "napi"`.
+- **The frame of an actor at rest.** The test host's says what holds it
+  (`idle in idle (held; 0 messages waiting)`); napi's says only what
+  waits (`idle in idle`, or `idle in idle (1 message waiting)`). A
+  transcript matches it with `$prefix`.
+- **A console send.** The test host adds that the message waits in the
+  mailbox while the system is stopped; napi's answer is `sent bump to
+  counter/a1`.
 - **The data model.** jq in the test host, JavaScript in napi: an
   expression is `$expr`, and so is text that holds one, such as an
   `<assign>` location in a summary (`assign .count = 1`, `assign count =
   1`) or a fault's message (`JSON expression produced no value`, `Error:
   boom`).
-- **All-stop.** The test host stops every actor when one stops
-  (`allThreadsStopped: true`) and says `continued` when a step lets them
-  run; napi's session is one actor.
-- **A fork.** napi's session switches to the copy, which keeps thread 1;
-  the test host adds the copy as a thread of its own, `counter/a1 (fork
-  1)`, since a workbench can have several. A transcript finds the fork by
-  name with `$some`, and the `fork` command's answer differs.
 - **Records.** The test host reads trace records as each resume writes
   them. napi reads spans, which end when the next microstep begins: a
   microstep in progress has no transitions in its frame name
-  (`microstep 2.1`, not `microstep 2.1: idle → busy on bump`), and on a
-  fork an exception or a data breakpoint stops after the macrostep, not
-  at the next unit, so a data breakpoint's description lists every write
-  of the macrostep (`count = 1, count = 2, count = 4`).
-- **The clock.** napi's `clock` on a fork adds how many messages fell due
-  for the copy (`t=60000ms; 1 message waiting for the copy`); the test
-  host dispatches what falls due when the system next runs.
+  (`microstep 2.1`, not `microstep 2.1: idle → busy on bump`).
 - **SCXML's own data.** The test host's Event scope is `_event`, with
   `origintype` and `invokeid` besides the fields napi shows, and its
   System scope has `_ioprocessors`. A transcript matches the fields both
