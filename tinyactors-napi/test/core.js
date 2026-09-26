@@ -49,7 +49,8 @@ const chart = (revision = 'v1', extra = {}) => ({
 
 function categories() {
   // Bound functions are callable; plumbing-owned and skipped ones are absent.
-  for (const name of ['system_time', 'actor_spawn', 'actor_inspect', 'definition_compile_spec', 'system_register_definition']) {
+  for (const name of ['system_time', 'actor_spawn', 'actor_inspect', 'actor_abandon', 'definition_compile_spec',
+                    'system_register_definition']) {
     assert.equal(typeof core[name], 'function', `core.${name} is bound`);
   }
   for (const name of ['actor_deliver', 'actor_resume', 'system_set_time', 'system_dispatch_due', 'system_create',
@@ -107,6 +108,8 @@ function definitionsAndActors() {
   assert.deepEqual(view.delayed_sends, []);
   // Nothing schedules the actor until step 5, so it is not bootstrapped yet.
   assert.equal(view.residency, 'running');
+  // Its bootstrap has completed no microstep, so there is nothing to keep (core ADR 0082).
+  assertCode(() => core.actor_abandon(system, actor.slot, actor.generation), 'busy', /core\.actor_abandon: busy/);
 
   core.actor_destroy(system, actor.slot, actor.generation);
   assertCode(() => core.actor_inspect(system, actor.slot, actor.generation), 'not-found', /core\.actor_inspect: not-found/);
