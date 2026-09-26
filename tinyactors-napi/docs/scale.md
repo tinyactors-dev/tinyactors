@@ -474,3 +474,25 @@ Watching at 1M actors, nothing sampled, over untraced: Node +12 (10
 watched), +19 (100), +25 (1,000), +31 (10,000) ns; Bun +37, +39, +41, +55.
 The 40 ns budgets held on Node in every run (`traceparent` 12 to 27,
 sampled out 5 to 17 over untraced) and on Bun in this run (11 to 39).
+
+## 2026-09-26: machine-keyed results begin
+
+From here on, results are records in `bench/results/<machine signature>/`
+(`mise run bench`, see its README), with throughput and memory together.
+The seed run, at `716197a`, each variant in a process of its own:
+`a99e44a37e2e` (Apple M4 Max, 12 performance and 4 efficiency cores,
+48 GiB, macOS 26.6.2, arm64, AC power, Node 22.23.2) and `c989bd79a51f`
+(the same with Bun 1.4.1). At 1M actors, Node:
+
+| Variant | ns/event | core B/actor | native B/actor | RSS B/actor | heap B/actor | OTLP B/event |
+|---|---|---|---|---|---|---|
+| untraced | 445 | 280 | 328 | 652 | 115 | |
+| sampled out | 456 | 280 | 597 | 1,109 | 115 | |
+| `summary` | 910 | 280 | 597 | 1,301 | 115 | 365 |
+| `summary` 10% | 499 | 280 | 597 | 1,081 | 115 | 66 |
+| `full` | 1,704 | 280 | 597 | 1,111 | 115 | 1,112 |
+
+Installing a sink adds about 270 native bytes per actor at 1M actors (and
+about 340 at 100k): per-system buffers of the encoder, amortized over the
+population. Allocator calls per event are 0 untraced and 0.2 with a sink
+installed.
