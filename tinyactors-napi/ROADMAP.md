@@ -848,12 +848,16 @@ at the repository root (`abee06b`)):
 - the test host's RPC carries `ta_bytes` as a JSON string, so its scenarios
   cannot offload; a binary-safe encoding would let them.
 
-**Invoked documents** (ADR 0023: a bounded LRU keyed by a hash, done):
+**Child charts** (ADR 0024 and core ADR 0077: nested at define time,
+reused by identity, freed with their children; ADR 0023's cache is gone):
 - the binding filter still exports the child's whole definition on every
   invoke to read its declared `<data>`; cache the names per definition;
 - a `resolve` is found by a linear search of the kept resolvers, one per
   definition defined with it; a map by definition ID would make it
-  constant.
+  constant;
+- a repeated `define()` of the same text, and each invoke of the same
+  `<content expr>` text, still decodes and compiles before identity answers
+  it: see ADR 0024's notes for the cost.
 
 **Later:**
 - port the tinyactors-test scenario suite to run against the addon;

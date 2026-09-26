@@ -66,6 +66,7 @@ ta_result tna_import_scxml(tna_system *system, const tna_import_params *params) 
                                                     .input = params->input,
                                                     .arena = &arena,
                                                     .resolver = params->resolver,
+                                                    .identity = params->identity,
                                                     .datamodels = params->datamodels,
                                                     .datamodel_count = params->datamodel_count,
                                                     .allocator = allocator,

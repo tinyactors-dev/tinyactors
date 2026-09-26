@@ -108,6 +108,10 @@ typedef struct {
      * The invoker releases it after the spawn. */
     ta_value *binding;
     ta_fault *fault;
+    /* Set when the definition was compiled for this invoke: the hook took a
+     * hold, which the invoker gives back after the spawn, so the definition
+     * lives as long as its children (core ADR 0077). */
+    bool *release;
 } tna_child_params;
 
 /*
@@ -167,9 +171,9 @@ struct tna_system {
     uint64_t next_service;
     /*
      * The in-system SCXML invoker (adapters/invoker.c) asks the Node-API
-     * layer which registered definition an invoke starts: the one its
-     * content or src names, or an SCXML document it imports (napi ADR 0021,
-     * napi_children.h). TA_OP_ERROR with `fault` saying why, TA_OP_NOMEM.
+     * layer which registered definition an invoke starts: the child nested
+     * when the parent was defined, the one its content or src names, or
+     * chart text it compiles (napi ADR 0024, napi_children.h). TA_OP_ERROR with `fault` saying why, TA_OP_NOMEM.
      */
     ta_op_status (*child_definition)(void *context, const tna_child_params *params);
     void *child_context;

@@ -96,8 +96,8 @@ static napi_value tna_resolver_of(tna_napi_system *wrapper, ta_definition_id def
 }
 
 /*
- * Releases the resolvers of definitions core has freed (ADR 0023 point 5).
- * Core has no "freed" hook, but a freed definition's ID is stale, so
+ * Releases the resolvers of definitions core has freed. Core has no
+ * "freed" hook, but a freed definition's ID is stale, so
  * inspection answers TA_ERR_NOT_FOUND for it. Runs when the list has
  * doubled since the last sweep, so its cost is spread over the growth.
  */
@@ -134,56 +134,168 @@ ta_result tna_children_keep_resolver(tna_napi_system *wrapper, ta_definition_id 
 }
 
 /* ------------------------------------------------------------------------
- * Imported children, cached by document bytes (ADR 0023)
+ * Compiling a child chart (core ADR 0077)
  */
 
-/*
- * The cached definition for these bytes, if it is still registered and not
- * retired. One a user retired (or core freed) is dropped: a miss.
- */
-static bool tna_cached_document(tna_napi_system *wrapper, ta_bytes bytes, ta_definition_id *out) {
-    tna_documents *documents = &wrapper->children.documents;
-    if (!tna_documents_find(documents, bytes, out)) {
-        return false;
-    }
+/* The family of an unnamed child: its parent's, with "/invoke" added. */
+typedef struct {
+    char text[256];
+    ta_definition_identity identity;
+} tna_child_family;
+
+static void tna_child_family_of(tna_napi_system *wrapper, ta_definition_id parent, tna_child_family *out) {
+    static const char suffix[] = "/invoke";
     ta_definition_inspection view;
-    if (ta_definition_inspect(wrapper->system->core, *out, &view) == TA_OK && !view.retired) {
-        return true;
+    size_t length = 0;
+    if (ta_definition_inspect(wrapper->system->core, parent, &view) == TA_OK) {
+        length = view.identity.family.name.len;
+        if (length > sizeof out->text - sizeof suffix) {
+            length = sizeof out->text - sizeof suffix;
+        }
+        if (length != 0) {
+            memcpy(out->text, view.identity.family.name.ptr, length);
+        }
     }
-    (void)tna_documents_forget(documents, *out);
-    return false;
+    memcpy(out->text + length, suffix, sizeof suffix - 1u);
+    length += sizeof suffix - 1u;
+    /* An empty revision names only the family, for a chart with no name. */
+    out->identity = (ta_definition_identity){ .family = { .name = { .ptr = out->text, .len = (uint32_t)length } } };
 }
 
-/* The WARN log of an eviction, about the parent that invoked (ADR 0023 point 4). */
-static void tna_eviction_log(tna_napi_system *wrapper, ta_definition_id parent) {
-    const tna_documents_limits *limits = &wrapper->children.documents.limits;
-    char body[256];
-    int length = snprintf(body, sizeof body,
-                          "evicted a cached child document at the bound of %u documents or %zu bytes: a <content expr> "
-                          "or src that changes on every invoke imports a new definition each time",
-                          (unsigned)limits->max_count, limits->max_bytes);
-    tna_pump_host_log(wrapper->system, 0,
-                      (tna_otlp_host_log_params){
-                          .event_name = { "tinyactors.invoke.document.evicted", 34 },
-                          .body = { body, length > 0 ? (uint32_t)(length < (int)sizeof body ? length : (int)sizeof body - 1)
-                                                     : 0u },
-                          .definition = parent,
-                      });
-}
-
-/* Evicts past the bounds, retiring each evicted definition (core ADR 0043). */
-static void tna_documents_trim(tna_napi_system *wrapper, ta_definition_id parent) {
-    ta_definition_id evicted = 0;
-    while (tna_documents_evict(&wrapper->children.documents, &evicted)) {
-        (void)ta_system_retire_definition(wrapper->system->core, evicted);
-        wrapper->children.evictions += 1u;
-        tna_eviction_log(wrapper, parent);
+/* Compiles and registers chart text as a child of `parent`, holding it. */
+static ta_result tna_compile_child(tna_napi_system *wrapper, ta_bytes text, ta_definition_id parent, napi_value resolve,
+                                   ta_definition_id *out, tna_import_failure *failure) {
+    tna_child_family family;
+    tna_child_family_of(wrapper, parent, &family);
+    tna_src_resolver fetcher = { .env = wrapper->env, .resolve = resolve };
+    ta_datamodel choices[2u + TNA_DM_REGISTERED_MAX];
+    uint32_t count = tna_js_datamodel_choices(&wrapper->dm, choices);
+    ta_result result = tna_import_scxml(wrapper->system, &(tna_import_params){
+                                                            .input = text,
+                                                            .datamodels = choices,
+                                                            .datamodel_count = count,
+                                                            .out = out,
+                                                            .failure = failure,
+                                                            .resolver = tna_src_resolver_adapter(&fetcher),
+                                                            .identity = &family.identity,
+                                                        });
+    if (result == TA_OK && resolve != NULL && tna_children_keep_resolver(wrapper, *out, resolve) != TA_OK) {
+        (void)ta_system_release_definition(wrapper->system->core, *out);
+        return TA_ERR_NOMEM;
     }
+    return result;
 }
 
-void tna_children_set_limits(tna_napi_system *wrapper, tna_documents_limits limits) {
-    tna_documents_set_limits(&wrapper->children.documents, limits);
-    tna_documents_trim(wrapper, 0);
+/* ------------------------------------------------------------------------
+ * Nesting the children of a chart when it is defined
+ */
+
+static bool tna_is_scxml_type(ta_str type) {
+    static const char scxml[] = "http://www.w3.org/TR/scxml/";
+    return type.len == sizeof scxml - 1u && memcmp(type.ptr, scxml, type.len) == 0;
+}
+
+/* Says which child of which chart was refused, and why. */
+static void tna_child_refused(tna_import_failure *failure, uint32_t invoke, ta_result result) {
+    char reason[sizeof failure->message];
+    size_t length = strlen(failure->message);
+    memcpy(reason, failure->message, length + 1u);
+    if (result != TA_ERR_INVALID && result != TA_ERR_UNSUPPORTED) {
+        snprintf(reason, sizeof reason, "%s", result == TA_ERR_DEFINITION_MISMATCH
+                                                  ? "its identity is taken by another chart"
+                                                  : "it could not be compiled");
+        failure->located = false;
+    }
+    if (failure->located) {
+        snprintf(failure->message, sizeof failure->message,
+                 "the child chart of <invoke> %u is refused at line %u, column %u of its content: %s", invoke,
+                 failure->line, failure->column, reason);
+    } else {
+        snprintf(failure->message, sizeof failure->message, "the child chart of <invoke> %u is refused: %s", invoke,
+                 reason);
+    }
+    /* The position is in the child's text, not the document being defined. */
+    failure->located = false;
+}
+
+ta_result tna_children_nest(tna_napi_system *wrapper, ta_definition_id definition, napi_value resolve,
+                            tna_import_failure *failure) {
+    ta_system *core = wrapper->system->core;
+    tna_vec pending;
+    tna_vec_init(&pending, tna_children_allocator(wrapper), TNA_LAYOUT(ta_definition_id));
+    ta_result result = tna_vec_push(&pending, &definition);
+    while (result == TA_OK && pending.count != 0) {
+        ta_definition_id parent = *(const ta_definition_id *)tna_vec_at(&pending, pending.count - 1u);
+        pending.count -= 1u;
+        ta_definition_inspection view;
+        if (ta_definition_inspect(core, parent, &view) != TA_OK) {
+            continue;
+        }
+        for (uint32_t invoke = 0; result == TA_OK && invoke < view.invoke_count; invoke += 1u) {
+            ta_invoke_info info;
+            if (ta_definition_invoke(core, &(ta_definition_invoke_params){ .definition = parent, .invoke = invoke,
+                                                                         .out = &info }) != TA_OK ||
+                info.nested != 0 || info.has_type_expr || !tna_is_scxml_type(info.type)) {
+                continue;
+            }
+            ta_content_info content;
+            ta_bytes text = { 0 };
+            ta_arena arena;
+            bool fetched = false;
+            if (info.content != TA_CONTENT_ID_NONE) {
+                if (ta_definition_content(core, &(ta_definition_content_params){
+                                                    .definition = parent, .content = info.content, .out = &content }) != TA_OK) {
+                    continue;
+                }
+                text = content.bytes;
+            } else if (info.src != TA_CONTENT_ID_NONE && resolve != NULL) {
+                if (ta_definition_content(core, &(ta_definition_content_params){
+                                                    .definition = parent, .content = info.src, .out = &content }) != TA_OK) {
+                    continue;
+                }
+                if (ta_arena_init(&arena, tna_children_allocator(wrapper), 4096) != TA_OK) {
+                    result = TA_ERR_NOMEM;
+                    break;
+                }
+                fetched = true;
+                tna_src_resolver fetcher = { .env = wrapper->env, .resolve = resolve };
+                result = tna_fetch_src(&fetcher, (ta_str){ .ptr = (const char *)content.bytes.ptr, .len = content.bytes.len },
+                                       &arena, &text);
+                if (result == TA_ERR_NOT_FOUND) {
+                    *failure = (tna_import_failure){ .stage = TA_IMPORT_STAGE_DECODE, .located = false };
+                    snprintf(failure->message, sizeof failure->message,
+                             "the child chart of <invoke> %u is refused: resolve(src) knows no chart for src %.*s", invoke,
+                             (int)content.bytes.len, (const char *)content.bytes.ptr);
+                    result = TA_ERR_INVALID;
+                }
+            } else {
+                continue;
+            }
+            ta_definition_id child = 0;
+            if (result == TA_OK) {
+                result = tna_compile_child(wrapper, text, parent, resolve, &child, failure);
+                if (result != TA_OK && result != TA_ERR_NOMEM) {
+                    tna_child_refused(failure, invoke, result);
+                    result = result == TA_ERR_UNSUPPORTED ? TA_ERR_UNSUPPORTED : TA_ERR_INVALID;
+                }
+            }
+            if (fetched) {
+                ta_arena_destroy(&arena);
+            }
+            if (result != TA_OK) {
+                break;
+            }
+            /* The parent holds the child; the hold registration took goes back. */
+            result = ta_definition_nest(core, &(ta_definition_nest_params){ .parent = parent, .invoke = invoke,
+                                                                          .child = child });
+            (void)ta_system_release_definition(core, child);
+            if (result == TA_OK) {
+                result = tna_vec_push(&pending, &child);
+            }
+        }
+    }
+    tna_vec_destroy(&pending);
+    return result;
 }
 
 /* ------------------------------------------------------------------------
@@ -263,55 +375,16 @@ static bool tna_clear_exception(napi_env env, char *message, size_t capacity) {
     return true;
 }
 
-static ta_op_status tna_import_document(tna_napi_system *wrapper, const tna_child_params *params, ta_bytes document,
-                                        napi_value resolve);
-
-/* The definition for a child document: cached, or imported and cached (ADR 0023). */
-static ta_op_status tna_import_child(tna_napi_system *wrapper, const tna_child_params *params, ta_bytes document,
-                                     tna_invoking parent) {
-    if (tna_cached_document(wrapper, document, params->out)) {
-        wrapper->children.hits += 1u;
-        return TA_OP_OK;
-    }
-    /* Room first, so running out of memory changes nothing (core ADR 0070). */
-    uint32_t entry = 0;
-    if (tna_documents_reserve(&wrapper->children.documents, document, &entry) != TA_OK) {
-        return TA_OP_NOMEM;
-    }
-    ta_op_status status = tna_import_document(wrapper, params, document, parent.resolve);
-    if (status != TA_OP_OK) {
-        tna_documents_cancel(&wrapper->children.documents, entry);
-        return status;
-    }
-    wrapper->children.misses += 1u;
-    tna_documents_commit(&wrapper->children.documents, entry, *params->out);
-    if (parent.resolve != NULL) {
-        (void)tna_children_keep_resolver(wrapper, *params->out, parent.resolve);
-    }
-    tna_documents_trim(wrapper, parent.definition);
-    return TA_OP_OK;
-}
-
-/* Imports `document` as a new definition in `*params->out`, or fails the invoke. */
-static ta_op_status tna_import_document(tna_napi_system *wrapper, const tna_child_params *params, ta_bytes document,
-                                        napi_value resolve) {
-    napi_env env = wrapper->env;
-    tna_src_resolver fetcher = { .env = env, .resolve = resolve };
-    ta_datamodel choices[2u + TNA_DM_REGISTERED_MAX];
-    uint32_t count = tna_js_datamodel_choices(&wrapper->dm, choices);
+/* Compiles chart text from `<content expr>` or `srcexpr` for this invoke,
+ * holding it until the invoker has spawned the child (core ADR 0077). */
+static ta_op_status tna_compile_for_invoke(tna_napi_system *wrapper, const tna_child_params *params, ta_bytes text,
+                                           tna_invoking parent) {
     tna_import_failure failure;
-    ta_result result = tna_import_scxml(wrapper->system, &(tna_import_params){
-                                                            .input = document,
-                                                            .datamodels = choices,
-                                                            .datamodel_count = count,
-                                                            .out = params->out,
-                                                            .failure = &failure,
-                                                            .resolver = tna_src_resolver_adapter(&fetcher),
-                                                        });
+    ta_result result = tna_compile_child(wrapper, text, parent.definition, parent.resolve, params->out, &failure);
     char thrown[512];
-    if (tna_clear_exception(env, thrown, sizeof thrown)) {
+    if (tna_clear_exception(wrapper->env, thrown, sizeof thrown)) {
         if (result == TA_OK) {
-            (void)ta_system_retire_definition(wrapper->system->core, *params->out);
+            (void)ta_system_release_definition(wrapper->system->core, *params->out);
         }
         return tna_child_fault(wrapper, params->fault, TA_ERR_INVALID, thrown);
     }
@@ -320,15 +393,20 @@ static ta_op_status tna_import_document(tna_napi_system *wrapper, const tna_chil
     }
     if (result != TA_OK) {
         char *message = wrapper->children.failure;
-        if (failure.located) {
-            snprintf(message, sizeof wrapper->children.failure, "invoker.scxml: the child document is refused at line %u, column %u: %s",
-                     failure.line, failure.column, failure.message);
+        if (result == TA_ERR_DEFINITION_MISMATCH) {
+            snprintf(message, sizeof wrapper->children.failure,
+                     "invoker.scxml: the child chart is refused: its identity is taken by another chart");
+        } else if (failure.located) {
+            snprintf(message, sizeof wrapper->children.failure,
+                     "invoker.scxml: the child chart is refused at line %u, column %u: %s", failure.line,
+                     failure.column, failure.message);
         } else {
-            snprintf(message, sizeof wrapper->children.failure, "invoker.scxml: the child document is refused: %s",
+            snprintf(message, sizeof wrapper->children.failure, "invoker.scxml: the child chart is refused: %s",
                      failure.message);
         }
         return tna_child_fault(wrapper, params->fault, result, message);
     }
+    *params->release = true;
     return TA_OP_OK;
 }
 
@@ -338,6 +416,11 @@ static ta_op_status tna_child_definition_of(void *context, const tna_child_param
     const ta_invoke_request *request = params->request;
     if (env == NULL || wrapper->env_data->torn_down) {
         return tna_child_fault(wrapper, params->fault, TA_ERR_INVALID, "invoker.scxml: the environment is gone");
+    }
+    /* Nested when the parent was defined: already compiled (core ADR 0077). */
+    if (request->definition != 0) {
+        *params->out = request->definition;
+        return TA_OP_OK;
     }
     napi_value data = NULL;
     napi_value src = NULL;
@@ -352,8 +435,7 @@ static ta_op_status tna_child_definition_of(void *context, const tna_child_param
         }
     }
     tna_invoking parent = tna_parent_of(wrapper, request->parent);
-    napi_value resolve = parent.resolve;
-    /* SCXML 6.4: content from <content expr> is the document text. */
+    /* SCXML 6.4: content from <content expr> is the child chart's text. */
     napi_valuetype data_type = napi_undefined;
     if (data != NULL && napi_typeof(env, data, &data_type) == napi_ok && data_type == napi_string) {
         size_t length = 0;
@@ -365,15 +447,17 @@ static ta_op_status tna_child_definition_of(void *context, const tna_child_param
             return TA_OP_NOMEM;
         }
         napi_get_value_string_utf8(env, data, text, length + 1u, &length);
-        return tna_import_child(wrapper, params, (ta_bytes){ .ptr = (const uint8_t *)text, .len = (uint32_t)length },
-                                parent);
+        return tna_compile_for_invoke(wrapper, params, (ta_bytes){ .ptr = (const uint8_t *)text, .len = (uint32_t)length },
+                                      parent);
     }
+    /* A literal <content> not nested at define time: a computed type, or a
+     * chart defined without SCXML. */
     if (request->content.len != 0) {
-        return tna_import_child(wrapper, params, request->content, parent);
+        return tna_compile_for_invoke(wrapper, params, request->content, parent);
     }
     napi_valuetype src_type = napi_undefined;
     if (src != NULL && napi_typeof(env, src, &src_type) == napi_ok && src_type == napi_string) {
-        if (resolve == NULL) {
+        if (parent.resolve == NULL) {
             return tna_child_fault(wrapper, params->fault, TA_ERR_NOT_FOUND,
                                    "invoker.scxml: the invoke's src needs the parent's definition to have a resolve(src)");
         }
@@ -384,10 +468,10 @@ static ta_op_status tna_child_definition_of(void *context, const tna_child_param
             return TA_OP_NOMEM;
         }
         napi_get_value_string_utf8(env, src, text, length + 1u, &length);
-        tna_src_resolver fetcher = { .env = env, .resolve = resolve };
-        ta_bytes document = { 0 };
+        tna_src_resolver fetcher = { .env = env, .resolve = parent.resolve };
+        ta_bytes chart = { 0 };
         ta_result fetched = tna_fetch_src(&fetcher, (ta_str){ .ptr = text, .len = (uint32_t)length },
-                                          &wrapper->system->scratch.call, &document);
+                                          &wrapper->system->scratch.call, &chart);
         char thrown[512];
         if (tna_clear_exception(env, thrown, sizeof thrown)) {
             return tna_child_fault(wrapper, params->fault, TA_ERR_INVALID, thrown);
@@ -397,10 +481,10 @@ static ta_op_status tna_child_definition_of(void *context, const tna_child_param
         }
         if (fetched != TA_OK) {
             snprintf(wrapper->children.failure, sizeof wrapper->children.failure,
-                     "invoker.scxml: resolve(src) knows no document for src %.*s", (int)length, text);
+                     "invoker.scxml: resolve(src) knows no chart for src %.*s", (int)length, text);
             return tna_child_fault(wrapper, params->fault, TA_ERR_NOT_FOUND, wrapper->children.failure);
         }
-        return tna_import_child(wrapper, params, document, parent);
+        return tna_compile_for_invoke(wrapper, params, chart, parent);
     }
     return tna_child_fault(wrapper, params->fault, TA_ERR_INVALID,
                            "invoker.scxml: the invoke names no child: no definition, no <content> and no src");
@@ -456,63 +540,23 @@ static ta_op_status tna_child_binding(tna_napi_system *wrapper, const tna_child_
 
 static ta_op_status tna_child_definition(void *context, const tna_child_params *params) {
     ta_op_status status = tna_child_definition_of(context, params);
-    return status == TA_OP_OK ? tna_child_binding(context, params) : status;
+    if (status == TA_OP_OK) {
+        status = tna_child_binding(context, params);
+        if (status != TA_OP_OK && *params->release) {
+            (void)ta_system_release_definition(((tna_napi_system *)context)->system->core, *params->out);
+            *params->release = false;
+        }
+    }
+    return status;
 }
 
 void tna_children_init(tna_napi_system *wrapper) {
     ta_allocator allocator = tna_children_allocator(wrapper);
     tna_vec_init(&wrapper->children.resolvers, allocator, TNA_LAYOUT(tna_child_resolver));
     wrapper->children.resolvers_mark = TNA_RESOLVERS_SWEEP_FROM;
-    tna_documents_init(&wrapper->children.documents, allocator,
-                       (tna_documents_limits){ .max_count = TNA_DOCUMENTS_MAX_COUNT_DEFAULT,
-                                               .max_bytes = TNA_DOCUMENTS_MAX_BYTES_DEFAULT });
-    wrapper->children.hits = 0;
-    wrapper->children.misses = 0;
-    wrapper->children.evictions = 0;
     wrapper->children.failure[0] = '\0';
     wrapper->system->child_definition = tna_child_definition;
     wrapper->system->child_context = wrapper;
-}
-
-napi_value tna_set_child_documents_method(napi_env env, napi_callback_info info) {
-    size_t argc = 2;
-    napi_value argv[2] = { NULL };
-    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
-        return NULL;
-    }
-    tna_napi_system *wrapper = tna_open_this(env, info);
-    if (wrapper == NULL) {
-        return NULL;
-    }
-    uint32_t max_count = 0;
-    double max_bytes = 0;
-    if (argc < 2 || napi_get_value_uint32(env, argv[0], &max_count) != napi_ok || max_count == 0 ||
-        napi_get_value_double(env, argv[1], &max_bytes) != napi_ok || !(max_bytes >= 1) ||
-        max_bytes > 9007199254740991.0) {
-        return tna_throw(env, "invalid", "setChildDocuments(): expected whole numbers from 1");
-    }
-    tna_children_set_limits(wrapper, (tna_documents_limits){ .max_count = max_count, .max_bytes = (size_t)max_bytes });
-    napi_value undefined = NULL;
-    napi_get_undefined(env, &undefined);
-    return undefined;
-}
-
-static napi_status tna_set_count(napi_env env, napi_value object, const char *name, double value) {
-    napi_value number = NULL;
-    napi_status status = napi_create_double(env, value, &number);
-    return status == napi_ok ? napi_set_named_property(env, object, name, number) : status;
-}
-
-napi_status tna_children_metrics(napi_env env, const tna_napi_system *wrapper, napi_value *out) {
-    const tna_children *children = &wrapper->children;
-    napi_status status = napi_create_object(env, out);
-    if (status == napi_ok) status = tna_set_count(env, *out, "count", (double)children->documents.count);
-    if (status == napi_ok) status = tna_set_count(env, *out, "bytes", (double)children->documents.bytes);
-    if (status == napi_ok) status = tna_set_count(env, *out, "hits", (double)children->hits);
-    if (status == napi_ok) status = tna_set_count(env, *out, "misses", (double)children->misses);
-    if (status == napi_ok) status = tna_set_count(env, *out, "evictions", (double)children->evictions);
-    if (status == napi_ok) status = tna_set_count(env, *out, "resolvers", (double)children->resolvers.count);
-    return status;
 }
 
 void tna_children_close(tna_napi_system *wrapper, bool env_usable) {
@@ -522,7 +566,5 @@ void tna_children_close(tna_napi_system *wrapper, bool env_usable) {
         napi_delete_reference(wrapper->env, entry->resolve);
     }
     tna_vec_destroy(resolvers);
-    /* Core frees every definition with the system: nothing to retire. */
-    tna_documents_destroy(&wrapper->children.documents);
     wrapper->system->child_definition = NULL;
 }

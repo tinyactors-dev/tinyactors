@@ -1,50 +1,57 @@
 #pragma once
 /*
- * Children of the in-system SCXML invoker (ADR 0021).
+ * Child charts of the in-system SCXML invoker (napi ADRs 0021 and 0024,
+ * core ADR 0077).
  *
- * The invoker (adapters/invoker.c) asks which registered definition an
- * invoke starts. This module answers, on the Node-API side:
- * - a definition ID in `<content expr>` or `src` (builder charts) names it;
- * - a literal `<content>` is an SCXML document, imported here, inside the
- *   invoke, with the system's data models (ADR 0019);
- * - a `src` string is fetched with the parent definition's resolve(src)
- *   and imported the same way.
- * Imported children are cached by document bytes in a bounded LRU
- * (documents.h, ADR 0023); evicting one retires its definition. They
- * inherit their parent's resolver. JavaScript runs only in resolve(src)
- * and a registered data model's compile; neither may call core (ADR 0013).
+ * A child chart is a definition like any other:
+ * - when a chart is defined from SCXML, each <invoke> with an inline
+ *   <scxml> in <content>, or a literal src its resolve(src) fetches, is
+ *   compiled then and nested in the parent (tna_children_nest). The
+ *   parent holds it; every invocation spawns it without compiling.
+ * - at invoke time the invoker asks which definition to start: the nested
+ *   one; a definition ID in `<content expr>` or `src` (builder charts); or
+ *   chart text from `<content expr>` or `srcexpr`, compiled then. Text
+ *   whose identity is live is answered by it (core ADR 0077), and a
+ *   definition compiled for an invoke lives as long as its children.
+ *
+ * An unnamed child's family is its parent's family with "/invoke" added.
+ * A definition keeps define()'s resolve(src) for its children, which
+ * inherit it. JavaScript runs only in resolve(src) and a registered data
+ * model's compile; neither may call core (ADR 0013).
  */
 #include <node_api.h>
 #include <stdint.h>
 
 #include "containers.h"
-#include "documents.h"
+#include "import.h"
 #include "tinyactors.h"
 
 typedef struct tna_napi_system tna_napi_system;
 
 typedef struct {
     tna_vec resolvers;       /* tna_child_resolver: define()'s resolve, per definition */
-    uint32_t resolvers_mark; /* sweep the resolvers once there are this many (ADR 0023) */
-    tna_documents documents; /* imported children, by bytes (ADR 0023) */
-    uint64_t hits;           /* invokes of an imported child found in the cache */
-    uint64_t misses;         /* ... and imported */
-    uint64_t evictions;      /* entries evicted, their definitions retired */
-    /* The message of the last refused child document, for the invoke's fault. */
+    uint32_t resolvers_mark; /* sweep the resolvers of freed definitions once there are this many */
+    /* The message of the last refused child chart, for the invoke's fault. */
     char failure[1024];
 } tna_children;
 
 void tna_children_init(tna_napi_system *wrapper);
-/* The cache's bounds (createSystem's childDocuments); evicts down to them. */
-void tna_children_set_limits(tna_napi_system *wrapper, tna_documents_limits limits);
 /* Keeps `resolve` (a function) with `definition`, for its children's src. */
 ta_result tna_children_keep_resolver(tna_napi_system *wrapper, ta_definition_id definition, napi_value resolve);
-/* Releases the resolvers (when the environment is usable) and the cache. */
+/* Releases the resolvers (when the environment is usable). */
 void tna_children_close(tna_napi_system *wrapper, bool env_usable);
-/* setChildDocuments(maxCount, maxBytes): the cache's bounds; lib/ checks them. */
-napi_value tna_set_child_documents_method(napi_env env, napi_callback_info info);
-/* The cache's numbers for hostMetrics(): count, bytes, hits, misses, evictions, resolvers. */
-napi_status tna_children_metrics(napi_env env, const tna_napi_system *wrapper, napi_value *out);
+
+/*
+ * Compiles and nests the child charts of `definition` and, in turn, of
+ * theirs (core ADR 0077): each <invoke> of the SCXML type with a literal
+ * <content>, or with a literal src when `resolve` is given. TA_OK, or
+ * TA_ERR_INVALID or TA_ERR_UNSUPPORTED with `failure` saying which child
+ * and why, TA_ERR_NOMEM. A JavaScript exception from resolve or a compiler
+ * stays pending. On failure the caller retires `definition`, which frees
+ * what was nested.
+ */
+ta_result tna_children_nest(tna_napi_system *wrapper, ta_definition_id definition, napi_value resolve,
+                            tna_import_failure *failure);
 
 /*
  * A ta_chart_src_resolver over a JavaScript resolve(src) function (core ADR

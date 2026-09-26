@@ -1,10 +1,12 @@
 'use strict';
 
-// The in-system SCXML invoker imports the document it invokes (ADR 0021):
-// a literal <content> or a src its parent's resolve(src) fetches, with the
-// system's data models, cached by document bytes. Core routes #_parent,
-// #_<invokeid>, done.invoke, <finalize> and autoforwarding. Runs on Node
-// and Bun.
+// The in-system SCXML invoker starts child charts (napi ADRs 0021 and
+// 0024, core ADR 0077). An inline <scxml> in <content>, or a literal src
+// the parent's resolve(src) fetches, is compiled when the parent is defined
+// and nested in it; chart text from <content expr> is compiled at invoke
+// time, reused by identity while one is alive, and freed with its last
+// child. Core routes #_parent, #_<invokeid>, done.invoke, <finalize> and
+// autoforwarding. Runs on Node and Bun.
 
 const assert = require('node:assert/strict');
 const { createSystem } = require('..');
@@ -192,7 +194,7 @@ async function childFaults() {
 
 // src is fetched with the parent definition's resolve(src), which the child
 // inherits for its own src; the same document is imported once.
-async function srcAndCache() {
+async function srcNested() {
   const { system, logs, compiled } = setup();
   const fetched = [];
   const files = {
@@ -221,16 +223,114 @@ async function srcAndCache() {
     </state>
     <final id="end"/>
   </scxml>`, { format: 'scxml', resolve });
+  // Fetched while the parent is defined, a chart's own <invoke>s first: the
+  // second <invoke> of the same src answers the child already compiled, and
+  // its grandchild is compiled once.
+  assert.deepEqual(fetched, ['file:child.scxml', 'file:child.scxml', 'file:grandchild.scxml']);
   const before = compiled.count;
   system.spawn(parent);
   await system.flush();
   assert.deepEqual(logs, ['first', 'second']);
-  assert.deepEqual(fetched, ['file:child.scxml', 'file:grandchild.scxml', 'file:child.scxml', 'file:grandchild.scxml']);
-  const afterFirstRun = compiled.count - before;
-  // A second parent invokes the same documents: nothing is compiled again.
   system.spawn(parent);
   await system.flush();
-  assert.equal(compiled.count - before, afterFirstRun, 'the cached child definitions are reused');
+  assert.equal(compiled.count, before, 'invokes compile nothing');
+  assert.equal(fetched.length, 3, 'invokes fetch nothing');
+  system.close();
+}
+
+// An inline child is compiled once, with its parent; a broken one refuses
+// the parent at define time, saying which <invoke> and where.
+async function inlineAtDefine() {
+  const { system, logs, compiled } = setup();
+  const text = `<scxml ${NS} name="holder" initial="s0">
+    <state id="s0">
+      <invoke type="scxml"><content>
+        <scxml ${NS} initial="c0"><state id="c0"><onentry><log label="child"/></onentry></state></scxml>
+      </content></invoke>
+    </state>
+  </scxml>`;
+  const parent = system.define(text, { format: 'scxml' });
+  const afterDefine = compiled.count;
+  system.spawn(parent);
+  system.spawn(parent);
+  await system.flush();
+  assert.deepEqual(logs, ['child', 'child']);
+  assert.equal(compiled.count, afterDefine, 'the nested child was compiled at define time');
+  // Defining the same chart again answers the same definition.
+  assert.equal(system.define(text, { format: 'scxml' }).id, parent.id);
+  assert.throws(
+    () => system.define(`<scxml ${NS} name="refuser" initial="s0"><state id="s0">
+      <invoke type="scxml"><content><scxml ${NS} name="broken"><state id="x"><transition target="nowhere"/></state></scxml></content></invoke>
+    </state></scxml>`, { format: 'scxml' }),
+    (error) => /child chart of <invoke> 0 is refused at line 1/.test(error.message));
+  system.close();
+}
+
+const MAKER = `<script><![CDATA[
+  function make(n) {
+    return '<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" initial="c0">' +
+      '<datamodel><data id="n" expr="' + n + '"/></datamodel>' +
+      '<state id="c0"><transition event="stop" target="done"/></state><final id="done"/></scxml>';
+  }
+]]></script>`;
+
+// <content expr> text is compiled at invoke time, reused by identity while
+// a child of it is alive, and freed with its last child.
+async function contentExpr() {
+  const { system, compiled } = setup();
+  const parent = system.define(`<scxml ${NS} name="maker" initial="s0">
+    ${MAKER}
+    <state id="s0">
+      <invoke type="scxml" id="kid"><content expr="make(1)"/></invoke>
+      <transition event="stop"><send event="stop" target="#_kid"/></transition>
+      <transition event="done.invoke.kid" target="idle"/>
+    </state>
+    <state id="idle"/>
+  </scxml>`, { format: 'scxml' });
+  const first = system.spawn(parent);
+  await system.flush();
+  const second = system.spawn(parent);
+  await system.flush();
+  const children = [...system.actors()].map((view) => view.definition)
+    .filter((identity) => identity.family === 'maker/invoke');
+  assert.equal(children.length, 2, 'two children, of an unnamed chart in the family "maker/invoke"');
+  assert.deepEqual(children[0], children[1], 'the second invoke was answered by the live definition');
+  assert.notEqual(system.findDefinition(children[0]), undefined);
+  system.post(first, 'stop');
+  system.post(second, 'stop');
+  await system.flush();
+  assert.equal(system.findDefinition(children[0]), undefined, 'freed with its last child');
+  assert.ok(compiled.count > 0);
+  system.close();
+}
+
+// Text that differs on every invoke does not grow the system: each child
+// definition goes with its child.
+async function varyingText() {
+  const { system } = setup();
+  const parent = system.define(`<scxml ${NS} name="churn" initial="s0">
+    ${MAKER}
+    <datamodel><data id="i" expr="0"/></datamodel>
+    <state id="s0">
+      <invoke type="scxml" id="kid"><content expr="make(i)"/></invoke>
+      <transition event="done.invoke.kid" target="s0"><assign location="i" expr="i + 1"/></transition>
+      <transition event="next"><send event="stop" target="#_kid"/></transition>
+    </state>
+  </scxml>`, { format: 'scxml' });
+  const actor = system.spawn(parent);
+  await system.flush();
+  const child = () => [...system.actors()].map((view) => view.definition)
+    .find((identity) => identity.family === 'churn/invoke');
+  const seen = [];
+  for (let round = 0; round < 50; round += 1) {
+    seen.push(child());
+    system.post(actor, 'next');
+    await system.flush();
+  }
+  assert.equal(actor.inspect().data.i, 50);
+  assert.equal(new Set(seen.map((identity) => identity.revision)).size, 50, '50 distinct child charts');
+  assert.deepEqual(seen.filter((identity) => system.findDefinition(identity) !== undefined), [],
+                   'each child chart went with its child');
   system.close();
 }
 
@@ -257,13 +357,14 @@ async function params() {
   system.close();
 }
 
-// A child document that cannot be imported, or a src with no resolver,
-// raises error.execution in the parent (SCXML 6.4).
+// Chart text at invoke time that cannot be compiled, or a src with no
+// resolver, raises error.execution in the parent (SCXML 6.4).
 async function refusals() {
   const { system, logs } = setup();
   const parent = system.define(`<scxml ${NS} name="refuser" initial="s0">
+    ${MAKER}
     <state id="s0">
-      <invoke type="scxml"><content><scxml ${NS} name="broken"><state id="x"><transition target="nowhere"/></state></scxml></content></invoke>
+      <invoke type="scxml"><content expr="'&lt;scxml'"/></invoke>
       <transition event="error.execution" target="s1"><log label="refused"/></transition>
     </state>
     <state id="s1">
@@ -285,7 +386,10 @@ async function refusals() {
   await autoforward();
   await nested();
   await childFaults();
-  await srcAndCache();
+  await srcNested();
+  await inlineAtDefine();
+  await contentExpr();
+  await varyingText();
   await params();
   await refusals();
   console.log('invoke.js passed');

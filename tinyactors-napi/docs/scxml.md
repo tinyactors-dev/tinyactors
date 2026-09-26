@@ -73,35 +73,34 @@ Content, whether fetched or written inline, that is JSON becomes that
 value; any other content becomes a space-normalized string, as SCXML B.2.2
 says: runs of whitespace are one space, with none at either end.
 
-## `<invoke type="scxml">`: child documents
+## `<invoke type="scxml">`: child charts
 
 An invoke of type `scxml` (or `http://www.w3.org/TR/scxml/`) starts a
-child session in the same system (napi ADR 0021). The child is an ordinary
-actor with a parent link, so `#_parent`, `#_<invokeid>`, `done.invoke.<id>`,
-`<donedata>`, `<finalize>` and `autoforward` work as SCXML says. Its
-document is:
+child session in the same system (napi ADRs 0021 and 0024). The child is an
+ordinary actor with a parent link, so `#_parent`, `#_<invokeid>`,
+`done.invoke.<id>`, `<donedata>`, `<finalize>` and `autoforward` work as
+SCXML says. Its chart is an ordinary definition (core ADR 0077):
 
-- a literal `<content>` holding an `<scxml>` document, imported when the
-  invoke starts;
-- the document a `src` or `srcexpr` names, fetched with the `resolve` the
-  parent's document was defined with. A child imported that way keeps the
-  same `resolve` for its own `src`s and `<data src>`. Without `resolve`, a
-  `src` raises `error.execution` in the parent.
+- **An inline `<scxml>` in `<content>`, or a literal `src`** that the
+  `resolve` given to `define()` fetches, is compiled when the parent is
+  defined, and nested in it. The parent holds it, so every invoke spawns
+  it without compiling, and it goes when the parent's definition goes. A
+  broken child refuses the parent's `define()`, saying which `<invoke>` and
+  where in the child.
+- **Chart text from `<content expr>`, or a `srcexpr`** fetched with the
+  parent's `resolve`, is compiled when the invoke starts. Text whose chart
+  is already alive answers that definition (the same identity), and a chart
+  compiled for an invoke lives only as long as its children. Text that
+  differs on every invoke therefore never piles up.
 
-The child picks its data model with its own `datamodel` attribute. Each
-distinct document is imported once and cached (napi ADR 0023): at most
-256 documents and 16 MiB of them by default, set with
-`createSystem({ childDocuments: { maxCount, maxBytes } })`. Past a bound
-the least recently used document is evicted and its definition retired;
-children still running keep it, and the next invoke of that document
-imports it again. A `<content expr>` that builds a new document on every
-invoke therefore stays bounded, and shows up as misses in
-`tinyactors.invoke.document.lookups`, as `tinyactors.invoke.document.evictions`,
-and as a WARN log `tinyactors.invoke.document.evicted` naming the parent.
-Only the
+A child with no `name` gets the family `<parent's family>/invoke`, which is
+what inspection and traces show. The child picks its data model with its
+own `datamodel` attribute, and keeps the parent's `resolve` for its own
+`src`s and `<data src>`. Without `resolve`, a `src` raises
+`error.execution` in the parent when the invoke starts. Only the
 `<param>` and `namelist` names the child declares as top-level `<data>`
-enter its data (SCXML 6.4). A child document that cannot be imported
-raises `error.execution` in the parent, whose data is the reason.
+enter its data (SCXML 6.4). A child chart that cannot be compiled at invoke
+time raises `error.execution` in the parent, whose data is the reason.
 
 Children are reachable only through their parent (`#_<invokeid>`) or their
 session ID; they have no name in the directory. Leaving the invoking state,

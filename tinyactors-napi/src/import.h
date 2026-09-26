@@ -37,6 +37,9 @@ typedef struct {
     /* Fetches <data src> and <script src> (core ADR 0053); a null `v`
      * refuses every src, as TA_CHART_ERROR_SRC_UNRESOLVED. */
     ta_chart_src_resolver resolver;
+    /* Optional: an identity with an empty revision names the family of a
+     * chart with no name of its own, as for an unnamed child (core ADR 0077). */
+    const ta_definition_identity *identity;
 } tna_import_params;
 
 /*

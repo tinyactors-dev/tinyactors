@@ -82,6 +82,7 @@ static ta_op_status tna_scxml_start(void *self, const ta_invoker_start_params *p
     }
     ta_definition_id definition = 0;
     ta_value binding = { NULL, NULL };
+    bool release = false;
     if (system->child_definition == NULL) {
         return TNA_FAULT(params->fault, TA_ERR_INVALID, "invoker.scxml: the system is closing");
     }
@@ -89,7 +90,8 @@ static ta_op_status tna_scxml_start(void *self, const ta_invoker_start_params *p
                                                    &(tna_child_params){ .request = request,
                                                                         .out = &definition,
                                                                         .binding = &binding,
-                                                                        .fault = params->fault });
+                                                                        .fault = params->fault,
+                                                                        .release = &release });
     if (status != TA_OP_OK) {
         return status;
     }
@@ -104,6 +106,10 @@ static ta_op_status tna_scxml_start(void *self, const ta_invoker_start_params *p
                                                         .trace = request->trace,
                                                     });
     ta_value_release(&binding);
+    if (release) {
+        /* The child holds it now; without one, it is freed here (core ADR 0077). */
+        (void)ta_system_release_definition(system->core, definition);
+    }
     if (result != TA_OK) {
         return TNA_FAULT(params->fault, result, "invoker.scxml: could not spawn the child");
     }

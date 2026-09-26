@@ -45,13 +45,6 @@ export interface SystemOptions {
   io?: Readonly<Record<string, IOProcessor>>;
   invokers?: Readonly<Record<string, Invoker>>;
   log?: LogSink;
-  /**
-   * Bounds of the cache of SCXML documents the invoker imports (napi ADR
-   * 0023): at most `maxCount` documents (default 256) and `maxBytes` bytes
-   * of them (default 16 MiB). Past a bound the least recently used document
-   * is evicted and its definition retired; the next invoke imports it again.
-   */
-  childDocuments?: { maxCount?: number; maxBytes?: number };
 }
 
 /** An actor finished (ADR 0012). The actor is still resident while the hook runs. */
@@ -202,9 +195,11 @@ export interface System {
       /**
        * Fetches `<data src>` and `<script src>` while the document is
        * defined: the content as a string or a Uint8Array, or undefined for a
-       * src it does not know, which refuses the document there. The
-       * definition keeps it: an `<invoke type="scxml" src>` fetches its
-       * child document with it, and the child inherits it (napi ADR 0021).
+       * src it does not know, which refuses the document there. It also
+       * fetches a literal `<invoke type="scxml" src>`, whose child chart is
+       * compiled with the parent (napi ADR 0024). The definition keeps it
+       * for children compiled at invoke time from `srcexpr`, and its
+       * children inherit it.
        */
       resolve?: (src: string) => string | Uint8Array | undefined;
       microstepLimit?: number;

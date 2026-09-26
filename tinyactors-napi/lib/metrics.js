@@ -109,16 +109,6 @@ function buildSnapshot({ startTime, time, systemName, system, definitions, host 
   metric('tinyactors.load.duration', 's', 'histogram')
     .points.push({ attributes: base, ...histogramPoint(host.native.load) });
   metric('tinyactors.messages.waiting', '{message}', 'gauge').points.push({ attributes: base, value: host.native.waiting });
-  // The cache of invoked child documents (napi ADR 0023): a document that
-  // changes on every invoke shows as a steady miss rate, then evictions.
-  const documents = host.native.childDocuments;
-  metric('tinyactors.invoke.documents', '{document}', 'gauge').points.push({ attributes: base, value: documents.count });
-  metric('tinyactors.invoke.documents.size', 'By', 'gauge').points.push({ attributes: base, value: documents.bytes });
-  const lookups = metric('tinyactors.invoke.document.lookups', '{lookup}', 'sum');
-  lookups.points.push({ attributes: { ...base, 'tinyactors.lookup.result': 'hit' }, value: documents.hits });
-  lookups.points.push({ attributes: { ...base, 'tinyactors.lookup.result': 'miss' }, value: documents.misses });
-  metric('tinyactors.invoke.document.evictions', '{document}', 'sum')
-    .points.push({ attributes: base, value: documents.evictions });
   const memory = metric('tinyactors.memory.usage', 'By', 'gauge');
   for (const [category, bytes] of Object.entries(host.memory)) {
     memory.points.push({ attributes: { ...base, 'tinyactors.memory.category': category }, value: bytes });

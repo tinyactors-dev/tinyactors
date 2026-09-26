@@ -172,9 +172,6 @@ class System {
    *   0008, 0012). `detail` says why a load failed, for mail that waited
    *   for a loader (napi ADR 0020); `data` and `traceparent` are what
    *   posting the message again needs, absent when it had none.
-   * - childDocuments: { maxCount = 256, maxBytes = 16 MiB }, the bounds of
-   *   the cache of SCXML documents the invoker imports (napi ADR 0023);
-   *   evicting one retires its definition.
    */
   constructor(options) {
     if (options !== undefined && (options === null || typeof options !== 'object')) {
@@ -190,16 +187,6 @@ class System {
       throw new TinyactorsError('createSystem(): unloadValues must be "serialize" or "handles"', 'invalid');
     }
     this.#native.setOffloadValues(v8.serialize, v8.deserialize, unloadValues === 'handles');
-    const childDocuments = options?.childDocuments;
-    if (childDocuments !== undefined) {
-      const { maxCount = 256, maxBytes = 16 * 1024 * 1024 } = childDocuments ?? {};
-      if (!Number.isSafeInteger(maxCount) || maxCount < 1 || maxCount > 0xffffffff ||
-          !Number.isSafeInteger(maxBytes) || maxBytes < 1) {
-        throw new TinyactorsError('createSystem(): childDocuments.maxCount and maxBytes must be whole numbers from 1',
-                                  'invalid');
-      }
-      this.#native.setChildDocuments(maxCount, maxBytes);
-    }
     const { io, invokers, log } = options ?? {};
     for (const [type, processor] of Object.entries(servicesOf(io, 'createSystem(): io'))) {
       this.registerIO(type, processor, { location: processor?.location, origin: processor?.origin });
@@ -724,8 +711,11 @@ class System {
    * document is defined: it returns the content as a string or a
    * Uint8Array, or undefined for a src it does not know, which refuses the
    * document. Without it, any `src` is refused.
-   * The definition keeps `resolve`: an `<invoke type="scxml" src>` fetches
-   * its child document with it, and the child inherits it (napi ADR 0021).
+   * An `<invoke type="scxml">` whose child chart is inline in `<content>`,
+   * or a literal `src` that `resolve` fetches, is compiled now, as part of
+   * this definition (napi ADR 0024, core ADR 0077): a broken child refuses
+   * the document. The definition keeps `resolve` for children compiled at
+   * invoke time from `srcexpr`, and its children inherit it.
    */
   define(source, options = {}) {
     const limit = microstepLimitOption(options, 'define()');

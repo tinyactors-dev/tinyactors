@@ -520,6 +520,14 @@ static napi_value tna_import_definition_method(napi_env env, napi_callback_info 
                                                     .failure = &failure,
                                                     .resolver = tna_src_resolver_adapter(&fetcher),
                                                 });
+    /* Its inline child charts are compiled now, and nested (napi ADR 0024). */
+    if (result == TA_OK) {
+        result = tna_children_nest(wrapper, id, fetcher.resolve, &failure);
+        if (result != TA_OK) {
+            /* Retiring drops the hold, which frees the chart and what it nested. */
+            (void)ta_system_retire_definition(system->core, id);
+        }
+    }
     system->inside_core = false;
     bool pending = false;
     if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
@@ -531,8 +539,8 @@ static napi_value tna_import_definition_method(napi_env env, napi_callback_info 
     if (result != TA_OK) {
         return tna_throw(env, result == TA_ERR_NOMEM ? "out-of-memory" : "invalid", "importDefinition: the import failed");
     }
-    /* The definition keeps resolve(src) for the documents it invokes by
-     * src (napi ADR 0021). */
+    /* The definition keeps resolve(src) for the child charts it compiles at
+     * invoke time from srcexpr (napi ADR 0024). */
     if (fetcher.resolve != NULL && tna_children_keep_resolver(wrapper, id, fetcher.resolve) != TA_OK) {
         return tna_throw(env, "out-of-memory", "importDefinition: cannot keep resolve(src)");
     }
@@ -1117,10 +1125,6 @@ static napi_value tna_host_metrics_method(napi_env env, napi_callback_info info)
     }
     if (status == napi_ok) status = napi_set_named_property(env, out, "loads", loads);
     if (status == napi_ok) status = tna_set_number(env, out, "waiting", (double)system->loads.waiting);
-    /* The cache of invoked child documents (napi ADR 0023). */
-    napi_value children = NULL;
-    if (status == napi_ok) status = tna_children_metrics(env, wrapper, &children);
-    if (status == napi_ok) status = napi_set_named_property(env, out, "childDocuments", children);
     if (status != napi_ok) {
         return tna_throw(env, "out-of-memory", "cannot build the host metrics object");
     }
@@ -1205,7 +1209,6 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "wakeAt", NULL, tna_wake_at_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "cancelWake", NULL, tna_cancel_wake_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "setOffloadValues", NULL, tna_set_offload_values_method, NULL, NULL, NULL, napi_default_method, NULL },
-        { "setChildDocuments", NULL, tna_set_child_documents_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "offload", NULL, tna_offload_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "hasOffloaded", NULL, tna_has_offloaded_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "dropOffloaded", NULL, tna_drop_offloaded_method, NULL, NULL, NULL, napi_default_method, NULL },
