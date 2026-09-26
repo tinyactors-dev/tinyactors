@@ -4,7 +4,13 @@
 // napi ADRs 0016 and 0017). Runs on Node and Bun.
 //
 //   node --expose-gc test/bench/tracing.js [population] [--check]
-//        [--variants=a,b,...] [--json=<file>]
+//        [--variants=a,b,...] [--exclusive] [--json=<file>] [--list]
+//
+// --variants always adds `untraced` for comparison unless --exclusive is
+// given; --list prints the variant names as JSON and exits. `mise run
+// bench` runs each variant in a process of its own (--exclusive), because
+// RSS measured after an earlier variant's system closed reads memory the
+// allocator kept, not what this variant needs.
 //
 // `mise run bench` and `mise run bench-compare` run it and key the results
 // by machine signature (bench/results/README.md). --json writes one record
@@ -41,7 +47,7 @@
 // - watch N: nothing sampled, and N actors watched in full (by session;
 //   watchTraces has no limit), which is what turning tracing on for a
 //   few actors at 3am costs. WATCH (default 1000) sets N;
-// - summary, no logs: the default detail with the log output switched off.
+// - summary without logs: the default detail with the log output switched off.
 // For comparison, napi ADR 0016 measured before it (every record): plain
 // record objects 0.19M events/s, objects mapped to spans 0.13M, and the
 // prototype encoder 0.83M.
@@ -54,6 +60,7 @@ const args = process.argv.slice(2);
 const check = args.includes('--check');
 const population = Number(args.find((arg) => !arg.startsWith('--')) ?? 100000);
 const WATCH = Number(process.env.WATCH ?? 1000);
+const exclusive = args.includes('--exclusive');
 const jsonPath = args.find((arg) => arg.startsWith('--json='))?.slice('--json='.length);
 const only = args.find((arg) => arg.startsWith('--variants='))?.slice('--variants='.length).split(',');
 const BUDGET_NS = 40;
@@ -132,12 +139,17 @@ const variants = {
     watch: (system, actors) =>
       system.watchTraces({ sessions: actors.filter((_, at) => at % Math.ceil(actors.length / WATCH) === 0).slice(0, WATCH) }),
   },
-  'summary, no logs': { install: (system) => system.setTraceSink(count, { logs: false }) },
+  'summary without logs': { install: (system) => system.setTraceSink(count, { logs: false }) },
 };
 function count(traces, logs) {
   bytesOut += traces.length + (logs?.length ?? 0);
 }
 const budgeted = ['traceparent', 'sampled out'];
+
+if (args.includes('--list')) {
+  console.log(JSON.stringify(Object.keys(variants)));
+  process.exit(0);
+}
 
 (async () => {
   const runtime = typeof Bun === 'undefined' ? `node ${process.version}` : `bun ${Bun.version}`;
@@ -149,7 +161,7 @@ const budgeted = ['traceparent', 'sampled out'];
     if (check && name !== 'untraced' && !budgeted.includes(name)) {
       continue;
     }
-    if (only && name !== 'untraced' && !only.includes(name)) {
+    if (only && (exclusive || name !== 'untraced') && !only.includes(name)) {
       continue;
     }
     bytesOut = 0;

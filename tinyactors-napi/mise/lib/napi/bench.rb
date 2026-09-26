@@ -27,11 +27,13 @@ module NapiBench
   def commit(dir = ROOT) = git('rev-parse', '--short=7', 'HEAD', dir: dir)
   def dirty?(dir = ROOT) = !git('status', '--porcelain', dir: dir).to_s.empty?
 
-  # Runs the bench `script` against the package in `dir`, with `runtime`,
-  # and returns its parsed --json output ({ 'runtime', 'records' }).
+  # Runs the bench `script` against the package in `dir`, with `runtime`:
+  # each variant in a process of its own, because RSS measured after an
+  # earlier variant's system closed reads memory the allocator kept. Returns
+  # { 'runtime', 'records' } with one record per variant. `variants` is a
+  # comma-separated filter (nil: every variant the script defines).
   def run(dir:, runtime:, population:, variants: nil, script: SCRIPT)
     Dir.mktmpdir('tinyactors-bench') do |tmp|
-      out = File.join(tmp, 'result.json')
       local = File.join(dir, 'test', 'bench', '.bench-run.js')
       # The script requires '../..': run a copy inside `dir`, so an older
       # build is measured by today's script.
@@ -39,11 +41,18 @@ module NapiBench
       begin
         command = ['mise', 'exec', '--', runtime]
         command << '--expose-gc' if runtime == 'node'
-        command += [local, population.to_s, "--json=#{out}"]
-        command << "--variants=#{variants}" if variants
-        log, status = Open3.capture2e(*command, chdir: dir)
-        abort "tinyactors-napi: bench failed (#{runtime}, #{population}):\n#{log}" unless status.success? && File.exist?(out)
-        JSON.parse(File.read(out))
+        listed, status = Open3.capture2(*command, local, '--list', chdir: dir)
+        abort "tinyactors-napi: listing the bench's variants failed (#{runtime})" unless status.success?
+        wanted = variants&.split(',')&.map(&:strip)
+        names = JSON.parse(listed).select { |name| wanted.nil? || name == 'untraced' || wanted.include?(name) }
+        results = names.map.with_index do |name, at|
+          out = File.join(tmp, "#{at}.json")
+          log, status = Open3.capture2e(*command, local, population.to_s, "--variants=#{name}", '--exclusive',
+                                        "--json=#{out}", chdir: dir)
+          abort "tinyactors-napi: bench failed (#{runtime}, #{population}, #{name}):\n#{log}" unless status.success? && File.exist?(out)
+          JSON.parse(File.read(out))
+        end
+        { 'runtime' => results.first&.fetch('runtime'), 'records' => results.flat_map { |result| result['records'] } }
       ensure
         FileUtils.rm_f(local)
       end
