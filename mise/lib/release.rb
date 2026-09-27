@@ -94,10 +94,19 @@ module Release
     zone.nil? ? ENV.delete('TZ') : ENV['TZ'] = zone
   end
 
-  # The tree is clean, on main, and in step with origin/main.
-  def check_tree!
+  # The tree is clean, on main, and in step with origin/main. With `scope`
+  # (directories relative to the repository), an untracked file outside it
+  # is allowed: other sessions share the working tree (AGENTS.md), and a
+  # release reads only its own directories. A change to a tracked file fails
+  # wherever it is.
+  def check_tree!(scope: nil)
     git('fetch', '--quiet', '--tags', 'origin') or fail!('git fetch origin failed')
     status = git('status', '--porcelain') or fail!('git status failed')
+    if scope
+      status = status.lines.reject do |line|
+        line.start_with?('??') && scope.none? { |dir| line[3..].start_with?("#{dir.chomp('/')}/") }
+      end.join
+    end
     fail!("the working tree is not clean:\n#{status}") unless status.empty?
     branch = git('rev-parse', '--abbrev-ref', 'HEAD').to_s.strip
     fail!("on #{branch}, not main") unless branch == 'main'

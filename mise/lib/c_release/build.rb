@@ -485,7 +485,7 @@ module CRelease
     require_tools!
 
     # 1. Check.
-    Release.check_tree!
+    Release.check_tree!(scope: [directory, 'mise'])
     tag = Release.check_version!(prefix, version)
     release_fail!("#{version} is a prerelease; C releases are MAJOR.MINOR.PATCH") if Release.parse_version(version)[3]
     checks.each { |command| Release.run(*command, chdir: project.root) }
