@@ -38,5 +38,5 @@ Every proposal starts with a status line:
 | [Replay-based persistence](replay-persistence.md) | Sketch | tinyactors-core, tinyactors-napi |
 | [Distributed actor systems](distributed-systems.md) | Sketch | tinyactors-core (conformance gaps), tinyactors-napi, the browser build |
 | [An idle actor carries no event](lean-actor-events.md) | Adopted → [core ADR 0069](../../tinyactors-core/docs/adr/0069-an-idle-actor-carries-no-event.md) | tinyactors-core, tinyactors-napi |
-| [Packaging and releases](packaging.md) | Proposed | tinyxml, tinyactors-core, tinyactors-scxml, tinyactors-napi, root release tasks |
+| [Packaging and releases](packaging.md) | Adopted → [ADR 0001](../adr/0001-packaging-and-releases.md) | tinyxml, tinyactors-core, tinyactors-scxml, tinyactors-napi, root release tasks |
 | [A debug adapter](debug-adapter.md) | Adopted → [status](../debug-adapter.md) | tinyactors-core (source spans, operator transitions), tinyactors-scxml, tinyactors-test, tinyactors-napi |

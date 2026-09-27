@@ -1,6 +1,6 @@
 # Packaging and releases
 
-**Status:** Proposed (2026-09-27; first sketched 2026-09-24)
+**Status:** Adopted → [ADR 0001](../adr/0001-packaging-and-releases.md) (2026-09-28); proposed 2026-09-27, first sketched 2026-09-24
 **Touches:** tinyxml, tinyactors-core, tinyactors-scxml (release tasks,
 version macros, a wasm allocator), root `mise/lib` (the shared release
 library), tinyactors-napi (package layout, loader), root `mise.toml` (zig)
