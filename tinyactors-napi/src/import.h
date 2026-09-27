@@ -1,6 +1,7 @@
 #pragma once
 /*
- * Importing SCXML documents (napi ADR 0019, core ADRs 0053 and 0076).
+ * Importing SCXML documents (napi ADR 0019, core ADRs 0053 and 0076), and
+ * writing a definition back as one (napi ADR 0026, core ADR 0085).
  *
  * define(xml, { format: 'scxml' }) decodes the document with the SCXML codec
  * (tinyactors-scxml, over tinyxml), compiles it against the data model its
@@ -50,3 +51,29 @@ typedef struct {
  * TA_ERR_UNSUPPORTED with `failure` saying why, TA_ERR_NOMEM.
  */
 ta_result tna_import_scxml(tna_system *system, const tna_import_params *params);
+
+/*
+ * Writes `definition` as an SCXML document, with where each state,
+ * transition and action landed in it (core ADR 0085): the debugger's
+ * virtual source for a chart whose spans name no file it can open.
+ */
+typedef struct {
+    ta_definition_id definition;
+    /* An arena the caller made with tna_encode_arena(): the text and the
+     * map live in it. */
+    ta_arena *arena;
+    ta_bytes *out;
+    ta_source_map *spans;
+    /* Filled when the result is TA_ERR_INVALID. */
+    tna_import_failure *failure;
+} tna_encode_params;
+
+/* An arena for tna_encode_scxml(), over the system's core allocator. */
+ta_result tna_encode_arena(tna_system *system, ta_arena *arena);
+
+/*
+ * TA_ERR_NOT_FOUND for no such definition. TA_ERR_INVALID with `failure`
+ * saying why when SCXML cannot express the chart, such as an expression
+ * that is a JavaScript function. TA_ERR_NOMEM.
+ */
+ta_result tna_encode_scxml(tna_system *system, const tna_encode_params *params);

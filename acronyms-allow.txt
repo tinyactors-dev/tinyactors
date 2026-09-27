@@ -37,3 +37,14 @@ CData          AGENTS.md                                                 # examp
 # which the demo writes for the host's own request span.
 traceId        tinyactors-napi/tools/otel-demo.js                        # OTLP/JSON field
 spanId         tinyactors-napi/tools/otel-demo.js                        # OTLP/JSON field
+
+# Debug Adapter Protocol message fields (microsoft/debug-adapter-protocol),
+# which napi's debug adapter reads and writes as the protocol spells them.
+threadId           tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
+frameId            tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
+dataId             tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
+targetId           tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
+filterId           tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
+exceptionId        tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
+hitBreakpointIds   tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,tools/dap-server.js,README.md}   # DAP field
+

@@ -871,6 +871,10 @@ shrink as definitions go, `docs/tracing.md`):
   `<content expr>` text, still decodes and compiles before identity answers
   it: see ADR 0024's notes for the cost.
 
+**Debugging** (ADR 0026, with core ADRs 0082 to 0085):
+- measure the jump branches of ADR 0026 with `bench-compare` against the
+  base they sit on, on a quiet machine.
+
 **Later:**
 - port the tinyactors-test scenario suite to run against the addon;
 - consider publishing a filtered raw core module (it would need an ADR,

@@ -698,6 +698,100 @@ static napi_value tna_import_definition_method(napi_env env, napi_callback_info 
     return value;
 }
 
+/* One kind's spans as an array by ID: { line, column, endLine, endColumn },
+ * or null where the encode wrote nothing for the element. */
+static napi_status tna_encoded_spans(napi_env env, napi_value into, const char *kind, const ta_source_span *spans,
+                                     uint32_t count) {
+    napi_value list = NULL;
+    napi_status status = napi_create_array_with_length(env, count, &list);
+    for (uint32_t id = 0; status == napi_ok && id < count; id += 1u) {
+        const ta_source_span *span = &spans[id];
+        napi_value entry = NULL;
+        if (span->line == 0) {
+            status = napi_get_null(env, &entry);
+        } else {
+            status = napi_create_object(env, &entry);
+            if (status == napi_ok) status = tna_set_uint(env, entry, "line", span->line);
+            if (status == napi_ok) status = tna_set_uint(env, entry, "column", span->column);
+            if (status == napi_ok) status = tna_set_uint(env, entry, "endLine", span->end_line);
+            if (status == napi_ok) status = tna_set_uint(env, entry, "endColumn", span->end_column);
+        }
+        if (status == napi_ok) status = napi_set_element(env, list, id, entry);
+    }
+    return status == napi_ok ? napi_set_named_property(env, into, kind, list) : status;
+}
+
+/*
+ * encodeDefinition(id): the definition written as an SCXML document, and
+ * where each state, transition and action landed in it (napi ADR 0026,
+ * core ADR 0085), as { text, spans: { state, transition, action } } with
+ * each kind an array by ID. The debugger serves it as a virtual source for
+ * a chart whose spans name no file. Throws `not-found` for no such
+ * definition, and `unsupported` when SCXML cannot express the chart, such
+ * as a builder chart whose expressions are JavaScript functions.
+ */
+static napi_value tna_encode_definition_method(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value argv[1] = { NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    tna_system *system = wrapper->system;
+    if (system->inside_core) {
+        return tna_throw(env, "reentrant", "encodeDefinition: not from inside a core call (ADR 0013)");
+    }
+    uint64_t definition = 0;
+    bool lossless = false;
+    if (argc < 1 || napi_get_value_bigint_uint64(env, argv[0], &definition, &lossless) != napi_ok || !lossless) {
+        return tna_throw(env, "invalid", "encodeDefinition: expected a definition ID as a bigint");
+    }
+    ta_arena arena;
+    if (tna_encode_arena(system, &arena) != TA_OK) {
+        return tna_throw(env, "out-of-memory", "encodeDefinition: no memory for the encode");
+    }
+    ta_bytes text = { 0 };
+    ta_source_map map = { 0 };
+    tna_import_failure failure;
+    ta_result result = tna_encode_scxml(system, &(tna_encode_params){
+                                                    .definition = definition,
+                                                    .arena = &arena,
+                                                    .out = &text,
+                                                    .spans = &map,
+                                                    .failure = &failure,
+                                                });
+    napi_value out = NULL;
+    if (result == TA_OK) {
+        napi_value spans = NULL;
+        napi_value content = NULL;
+        napi_status status = napi_create_object(env, &out);
+        if (status == napi_ok) status = napi_create_string_utf8(env, (const char *)text.ptr, text.len, &content);
+        if (status == napi_ok) status = napi_set_named_property(env, out, "text", content);
+        if (status == napi_ok) status = napi_create_object(env, &spans);
+        if (status == napi_ok) status = tna_encoded_spans(env, spans, "state", map.states, map.state_count);
+        if (status == napi_ok) status = tna_encoded_spans(env, spans, "transition", map.transitions, map.transition_count);
+        if (status == napi_ok) status = tna_encoded_spans(env, spans, "action", map.actions, map.action_count);
+        if (status == napi_ok) status = napi_set_named_property(env, out, "spans", spans);
+        if (status != napi_ok) {
+            out = tna_throw(env, "out-of-memory", "encodeDefinition: cannot build the result");
+        }
+    } else if (result == TA_ERR_NOT_FOUND) {
+        out = tna_throw(env, "not-found", "encodeDefinition: no such definition");
+    } else if (result == TA_ERR_INVALID || result == TA_ERR_UNSUPPORTED) {
+        char message[sizeof failure.message + 64];
+        snprintf(message, sizeof message, "encodeDefinition: SCXML cannot express the chart: %s",
+                 result == TA_ERR_INVALID ? failure.message : "the codec cannot encode");
+        out = tna_throw(env, "unsupported", message);
+    } else {
+        out = tna_throw(env, "out-of-memory", "encodeDefinition: the encode failed");
+    }
+    ta_arena_destroy(&arena);
+    return out;
+}
+
 /* scheduling(slot, generation): the actor's scheduling state, for tests and inspection. */
 static napi_value tna_scheduling_method(napi_env env, napi_callback_info info) {
     size_t argc = 2;
@@ -1424,6 +1518,7 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "selectDatamodel", NULL, tna_select_datamodel_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "registerDatamodel", NULL, tna_register_datamodel_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "importDefinition", NULL, tna_import_definition_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "encodeDefinition", NULL, tna_encode_definition_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "internEvent", NULL, tna_intern_event_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "post", NULL, tna_post_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "postNamed", NULL, tna_post_named_method, NULL, NULL, NULL, napi_default_method, NULL },

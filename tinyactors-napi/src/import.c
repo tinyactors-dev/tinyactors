@@ -80,3 +80,29 @@ ta_result tna_import_scxml(tna_system *system, const tna_import_params *params) 
     ta_arena_destroy(&arena);
     return result;
 }
+
+ta_result tna_encode_arena(tna_system *system, ta_arena *arena) {
+    return ta_arena_init(arena, tna_allocator_for(&system->allocator, TNA_MEMORY_CORE), TNA_IMPORT_ARENA_BLOCK);
+}
+
+ta_result tna_encode_scxml(tna_system *system, const tna_encode_params *params) {
+    ta_scxml_codec codec;
+    ta_result result = ta_scxml_codec_init(&codec, &(ta_scxml_codec_params){ 0 });
+    if (result != TA_OK) {
+        return result;
+    }
+    ta_chart_error error = { 0 };
+    result = ta_definition_encode(system->core, &(ta_definition_encode_params){
+                                                    .definition = params->definition,
+                                                    .codec = ta_scxml_codec_adapter(&codec),
+                                                    .arena = params->arena,
+                                                    .out = params->out,
+                                                    .spans = params->spans,
+                                                    .error = &error,
+                                                });
+    if (result == TA_ERR_INVALID && params->failure != NULL) {
+        *params->failure = (tna_import_failure){ .stage = TA_IMPORT_STAGE_DECODE };
+        tna_import_decode(params->failure, &error);
+    }
+    return result;
+}
