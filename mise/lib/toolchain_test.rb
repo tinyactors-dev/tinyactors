@@ -84,6 +84,9 @@ Dir.mktmpdir('toolchain-test') do |dir|
     elsif target.macos? && tool?('llvm-otool')
       loads = Open3.capture2('llvm-otool', '-D', library.to_s).first
       check(loads.include?("@rpath/#{name}"), "#{target.name}: install name is not @rpath/#{name}:\n#{loads}")
+      commands = Open3.capture2('llvm-otool', '-l', library.to_s).first
+      minos = commands[/cmd LC_BUILD_VERSION.*?minos (\S+)/m, 1]
+      check(minos == Toolchain::MACOS_MIN, "#{target.name}: minos is #{minos.inspect}, not #{Toolchain::MACOS_MIN}")
     end
   end
 end

@@ -21,9 +21,14 @@ module Toolchain
     def linux? = os == :linux
   end
 
+  # The oldest macOS a binary runs on: 11.0, the first with Apple silicon,
+  # for both architectures. zig reads it from the triple, and writes it as
+  # the Mach-O LC_BUILD_VERSION's minos.
+  MACOS_MIN = '11.0'
+
   TARGETS = [
-    Target.new(name: 'aarch64-macos', triple: 'aarch64-macos', os: :macos, arch: :aarch64),
-    Target.new(name: 'x86_64-macos', triple: 'x86_64-macos', os: :macos, arch: :x86_64),
+    Target.new(name: 'aarch64-macos', triple: "aarch64-macos.#{MACOS_MIN}", os: :macos, arch: :aarch64),
+    Target.new(name: 'x86_64-macos', triple: "x86_64-macos.#{MACOS_MIN}", os: :macos, arch: :x86_64),
     Target.new(name: 'x86_64-linux', triple: 'x86_64-linux-musl', os: :linux, arch: :x86_64),
     Target.new(name: 'aarch64-linux', triple: 'aarch64-linux-musl', os: :linux, arch: :aarch64),
     Target.new(name: 'wasm32-freestanding', triple: 'wasm32-freestanding', os: :wasm, arch: :wasm32)
