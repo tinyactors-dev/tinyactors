@@ -86,6 +86,10 @@ static void *chunk_bump(txml_arena *arena, txml_arena_chunk *chunk, const bump_r
     return (void *)address;
 }
 
+uint32_t txml_version(void) {
+    return TXML_VERSION;
+}
+
 txml_result txml_arena_init(txml_arena *arena, txml_allocator backing, size_t chunk_size) {
     if (arena == NULL || backing.v == NULL || backing.v->alloc == NULL || backing.v->free == NULL) {
         return TXML_ERR_INVALID;

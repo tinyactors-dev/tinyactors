@@ -1,6 +1,7 @@
 {
   "format": "txml-api/1",
   "header": "include/txml.h",
+  "version": "0.1.0",
   "targets": {
     "x86_64-unknown-linux-gnu": {
       "pointer": {
@@ -136,6 +137,13 @@
         "builtin": "uint32_t"
       },
       "value": 4294967295
+    },
+    {
+      "name": "TXML_VERSION",
+      "type": {
+        "builtin": "int"
+      },
+      "value": 256
     },
     {
       "name": "TXML_VERSION_MAJOR",
@@ -1768,6 +1776,19 @@
     }
   },
   "functions": [
+    {
+      "name": "txml_version",
+      "doc": "The library's version, TXML_VERSION of the header it was built from.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "uint32_t"
+        }
+      },
+      "params": []
+    },
     {
       "name": "txml_arena_init",
       "public": true,

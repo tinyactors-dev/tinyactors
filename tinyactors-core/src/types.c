@@ -1,5 +1,9 @@
 #include "types.h"
 
+uint32_t ta_version(void) {
+    return TA_VERSION;
+}
+
 void *ta_mem_alloc(ta_allocator allocator, size_t size, size_t alignment) {
     if (allocator.v == NULL || allocator.v->alloc == NULL || size == 0) {
         return NULL;

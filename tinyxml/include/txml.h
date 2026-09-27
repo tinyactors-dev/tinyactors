@@ -29,6 +29,8 @@
 #define TXML_VERSION_MAJOR 0
 #define TXML_VERSION_MINOR 1
 #define TXML_VERSION_PATCH 0
+/* (major << 16) | (minor << 8) | patch; txml_version() answers it for the library linked. */
+#define TXML_VERSION ((TXML_VERSION_MAJOR << 16) | (TXML_VERSION_MINOR << 8) | TXML_VERSION_PATCH)
 
 /*
  * API annotations.
@@ -215,6 +217,9 @@ typedef struct { txml_arena_chunk *chunk; size_t offset; } txml_arena_mark TXML_
 
 /* Default chunk size when txml_arena_init() is given 0. */
 #define TXML_ARENA_CHUNK_DEFAULT ((size_t)65536u)
+
+/* The library's version, TXML_VERSION of the header it was built from. */
+TXML_API uint32_t txml_version(void);
 
 TXML_API txml_result txml_arena_init(TXML_OUT TXML_RELEASE(txml_arena_destroy) txml_arena *arena,
                                      txml_allocator backing,

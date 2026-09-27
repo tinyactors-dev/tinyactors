@@ -1,6 +1,7 @@
 {
   "format": "tinyactors-api/2",
   "header": "include/tinyactors.h",
+  "version": "0.1.0",
   "targets": {
     "x86_64-unknown-linux-gnu": {
       "pointer": {
@@ -241,6 +242,34 @@
         "type": "ta_transition_id"
       },
       "value": 4294967295
+    },
+    {
+      "name": "TA_VERSION",
+      "type": {
+        "builtin": "int"
+      },
+      "value": 256
+    },
+    {
+      "name": "TA_VERSION_MAJOR",
+      "type": {
+        "builtin": "int"
+      },
+      "value": 0
+    },
+    {
+      "name": "TA_VERSION_MINOR",
+      "type": {
+        "builtin": "int"
+      },
+      "value": 1
+    },
+    {
+      "name": "TA_VERSION_PATCH",
+      "type": {
+        "builtin": "int"
+      },
+      "value": 0
     }
   ],
   "flag_sets": {
@@ -16560,6 +16589,19 @@
     }
   },
   "functions": [
+    {
+      "name": "ta_version",
+      "doc": "The library's version, TA_VERSION of the header it was built from. A host compares it with TA_VERSION to find a header and library that differ.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "uint32_t"
+        }
+      },
+      "params": []
+    },
     {
       "name": "ta_address_intern",
       "doc": "Finds or adds the address; *out holds a new reference. Allocates only the first time a pair is seen, so only then can it fail with TA_ERR_NOMEM.",

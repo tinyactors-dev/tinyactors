@@ -9,6 +9,7 @@
   "properties": {
     "format": { "const": "tinyactors-api/2" },
     "header": { "type": "string" },
+    "version": { "type": "string", "description": "major.minor.patch, from the header's version macros" },
     "targets": { "type": "object", "additionalProperties": { "$ref": "#/$defs/target" } },
     "constants": { "type": "array", "items": { "$ref": "#/$defs/macro_constant" } },
     "flag_sets": {

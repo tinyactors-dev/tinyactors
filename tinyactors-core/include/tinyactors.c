@@ -2199,6 +2199,10 @@ TA_PRIVATE void ta_invoke_attach_child(ta_system *system, const ta_actor_parent 
 TA_PRIVATE void ta_invoke_release(ta_system *system, ta_actor *actor);
 
 
+TA_API uint32_t ta_version(void) {
+    return TA_VERSION;
+}
+
 TA_PRIVATE void *ta_mem_alloc(ta_allocator allocator, size_t size, size_t alignment) {
     if (allocator.v == NULL || allocator.v->alloc == NULL || size == 0) {
         return NULL;

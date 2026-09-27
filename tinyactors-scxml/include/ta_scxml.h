@@ -18,6 +18,12 @@
 
 /* The codec's name: the registered media type of SCXML documents. It is also
  * the media type of every literal <content> it decodes. */
+/* 0.x: a minor version changes the API or ABI, a patch does not. */
+#define TA_SCXML_VERSION_MAJOR 0
+#define TA_SCXML_VERSION_MINOR 1
+#define TA_SCXML_VERSION_PATCH 0
+#define TA_SCXML_VERSION ((TA_SCXML_VERSION_MAJOR << 16) | (TA_SCXML_VERSION_MINOR << 8) | TA_SCXML_VERSION_PATCH)
+
 #define TA_SCXML_MEDIA_TYPE "application/scxml+xml"
 
 /* The SCXML namespace. Elements in it are SCXML; any other element in

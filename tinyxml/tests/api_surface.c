@@ -9,12 +9,15 @@
  * This file is compiled, never linked: the symbols do not exist yet. When the
  * implementation lands it keeps its value unchanged, so leave it compile-only.
  *
- * Every function declared in include/txml.h must appear below. Fifty-eight
+ * Every function declared in include/txml.h must appear below. Sixty-one
  * today: ADR 0018 withdrew txml_doc_mark and txml_doc_rewind.
  */
 #include "../include/txml.h"
 
 struct txml_api_surface {
+    /* Version. */
+    uint32_t (*version)(void);
+
     /* Arena. */
     txml_result (*arena_init)(txml_arena *, txml_allocator, size_t);
     void *(*arena_alloc)(txml_arena *, size_t, size_t);
@@ -91,6 +94,7 @@ struct txml_api_surface {
 /* External linkage on purpose: the surface is the point of the file, and an
  * unused static would be a warning. */
 const struct txml_api_surface txml_api_surface = {
+    .version = txml_version,
     .arena_init = txml_arena_init,
     .arena_alloc = txml_arena_alloc,
     .arena_position = txml_arena_position,
@@ -160,5 +164,5 @@ const struct txml_api_surface txml_api_surface = {
 
 /* A new TXML_API function must be registered above: the struct grows and this
  * assertion is what tells you to update the count in the file header. */
-_Static_assert(sizeof(struct txml_api_surface) == 60u * sizeof(void (*)(void)),
+_Static_assert(sizeof(struct txml_api_surface) == 61u * sizeof(void (*)(void)),
                "every TXML_API function must appear in txml_api_surface");

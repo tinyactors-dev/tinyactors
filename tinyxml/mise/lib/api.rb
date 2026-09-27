@@ -27,16 +27,18 @@ module API
     ast = Clang.ast(header)
     builder = Builder.new(ast, implemented: library ? Clang.exported_functions(library) : [])
     model = builder.build
-    constants = Layout.constants(header, Clang.macros(header), known: builder.method(:known?))
-    description = {
-      'format' => FORMAT,
-      'header' => "include/#{header.basename}",
+    macros = Clang.macros(header)
+    constants = Layout.constants(header, macros, known: builder.method(:known?))
+    description = { 'format' => FORMAT, 'header' => "include/#{header.basename}" }
+    version = version(macros)
+    description['version'] = version if version
+    description.merge!(
       'targets' => nil,
       'constants' => constants,
       'flag_sets' => model['flag_sets'],
       'types' => model['types'],
       'functions' => model['functions']
-    }
+    )
     description['targets'] = Layout.apply(header, description)
     description = JSON.parse(JSON.generate(description))
     errors = Schema.load(schema).errors(description)
@@ -44,6 +46,16 @@ module API
 
     Check.run(header, description)
     description
+  end
+
+  # The header's version, "major.minor.patch", from its TXML_VERSION_*
+  # macros; nil when it defines none (the extractor's test headers).
+  def version(macros)
+    parts = %w[MAJOR MINOR PATCH].map { |part| macros["TXML_VERSION_#{part}"] }
+    return nil if parts.all?(&:nil?)
+    raise Error, "TXML_VERSION_MAJOR, _MINOR and _PATCH must all be whole numbers" unless parts.all? { _1&.match?(/\A\d+\z/) }
+
+    parts.join('.')
   end
 
   def render(description) = "#{JSON.pretty_generate(description)}\n"

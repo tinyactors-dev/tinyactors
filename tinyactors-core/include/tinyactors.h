@@ -22,6 +22,16 @@
 #endif
 
 /*
+ * The version of this header. 0.x: a minor version changes the API or ABI,
+ * a patch does not. TA_VERSION packs it as (major << 16) | (minor << 8) |
+ * patch, which ta_version() answers for the library that was linked.
+ */
+#define TA_VERSION_MAJOR 0
+#define TA_VERSION_MINOR 1
+#define TA_VERSION_PATCH 0
+#define TA_VERSION ((TA_VERSION_MAJOR << 16) | (TA_VERSION_MINOR << 8) | TA_VERSION_PATCH)
+
+/*
  * API annotations.
  *
  * These macros record what C types cannot say about the API: which pointers
@@ -154,6 +164,12 @@ enum TA_CONSTANTS_OF(ta_result, "TA_") {
 };
 
 typedef struct { const char *ptr; uint32_t len; } ta_str TA_STRING;
+
+/*
+ * The library's version, TA_VERSION of the header it was built from. A host
+ * compares it with TA_VERSION to find a header and library that differ.
+ */
+TA_API uint32_t ta_version(void);
 typedef struct { TA_COUNTED_BY(count) const ta_atom *atoms; uint32_t count; } ta_atom_list;
 typedef struct { const uint8_t *ptr; uint32_t len; } ta_bytes TA_BYTES;
 typedef struct { ta_str name; } ta_definition_family;
