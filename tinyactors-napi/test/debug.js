@@ -1173,6 +1173,51 @@ async function guardedEvaluations() {
   system.close();
 }
 
+// An invocation's serviceHandle names its in-system child by runtime ID,
+// not session ID, and the debugger resolves the child from it. Here slots
+// were reused before the parent started, and another actor of the child's
+// chart runs beside it with other data: the child thread and the
+// Invocations scope show the invoked child.
+async function invokedChildByRuntimeID() {
+  const system = createSystem({ clock: 'manual' });
+  const filler = system.define(statechart({ family: 'filler', revision: 'v1' }).state('idle'));
+  for (let index = 0; index < 3; index += 1) system.spawn(filler).destroy();
+  const child = system.define(statechart({ family: 'worker', revision: 'v1' }).data('jobs', 3).state('working'));
+  const parent = system.define(statechart({ family: 'boss', revision: 'v1' })
+    .state('supervising', (s) => s.invoke((i) => i.type('scxml').id('kid').content(child))));
+  const actor = system.spawn(parent, { name: 'b1' });
+  await system.flush();
+  const [invocation] = actor.inspect().invocations;
+  const handle = invocation.serviceHandle;
+  const invoked = { slot: Number(handle & 0xffffffffn), generation: Number(handle >> 32n) };
+  const kid = [...system.actors()].find((view) => view.actor.slot === invoked.slot).actor;
+  assert.equal(kid.generation, invoked.generation);
+  system.spawn(child, { binding: { jobs: 99 } });
+  await system.flush();
+
+  const client = new Client(system, { allow: ALL });
+  await client.start({ address: 'boss/b1' });
+  const { threads } = await client.ok('threads');
+  assert.deepEqual(threads.map((thread) => thread.name),
+                   ['boss/b1 · supervising', 'boss/b1 invocation kid · working']);
+  const { stackFrames } = await client.ok('stackTrace', { threadId: threads[1].id });
+  const { scopes } = await client.ok('scopes', { frameId: stackFrames[0].id });
+  const read = async (id, name) => {
+    const scope = (await client.ok('scopes', { frameId: id })).scopes.find((entry) => entry.name === name);
+    return (await client.ok('variables', { variablesReference: scope.variablesReference })).variables;
+  };
+  assert.ok(scopes.length > 0);
+  const jobs = (await read(stackFrames[0].id, 'Data model')).find((variable) => variable.name === 'jobs');
+  assert.equal(jobs.value, '3', 'the child thread is the invoked child');
+  const [entry] = await read((await client.ok('stackTrace', { threadId: threads[0].id })).stackFrames[0].id,
+                             'Invocations');
+  const fields = await client.ok('variables', { variablesReference: entry.variablesReference });
+  assert.equal(fields.variables.find((variable) => variable.name === 'thread').value,
+               `"${threads[1].id} boss/b1 invocation kid"`);
+  await client.ok('disconnect');
+  system.close();
+}
+
 (async () => {
   await framing();
   await options();
@@ -1189,6 +1234,7 @@ async function guardedEvaluations() {
   await movedLines();
   await scxmlSources();
   await scxmlChildren();
+  await invokedChildByRuntimeID();
   await runaway();
   await ending();
   clearTimeout(watchdog);

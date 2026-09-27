@@ -184,7 +184,7 @@ class DebugSession {
       thread: (id) => this.#thread(id),
       eventOf: (thread, view) => this.#eventOf(thread, view),
       mailboxNote: (message) => this.#mailboxNote(message),
-      threadOfSession: (sessionID) => this.#threadOfSession(sessionID),
+      threadOfInvocation: (invocation) => this.#threadOfInvocation(invocation),
       documentName: (view) => this.#documentName(view),
     });
   }
@@ -476,6 +476,13 @@ class DebugSession {
     return undefined;
   }
 
+  // The thread of an invocation's in-system child, or undefined: for other
+  // invokers, and for a child that is gone.
+  #threadOfInvocation(invocation) {
+    const child = invocation.type === SCXML_INVOKER ? childOf(this.#system, invocation.serviceHandle) : undefined;
+    return child === undefined ? undefined : this.#threadOfSession(child.session);
+  }
+
   #threadArgument(args) {
     this.#requireAttached();
     return args.threadId === undefined ? this.#threads.get(ATTACHED) : this.#thread(args.threadId);
@@ -503,8 +510,8 @@ class DebugSession {
     const children = new Map();
     for (const invocation of view.invocations) {
       if (invocation.type !== SCXML_INVOKER || !invocation.active) continue;
-      const child = actorOfSession(this.#system, invocation.serviceHandle, false);
-      if (child !== undefined) children.set(String(invocation.serviceHandle), { child, invocation });
+      const child = childOf(this.#system, invocation.serviceHandle);
+      if (child !== undefined) children.set(child.session, { child: child.actor, invocation });
     }
     for (const thread of [...this.#threads.values()]) {
       if (thread.id !== ATTACHED && !children.has(thread.session)) {
@@ -1325,21 +1332,37 @@ function parseAddress(address) {
  * The resident actor that holds session `wanted` (a bigint), or undefined.
  * A session ID is the runtime ID its session was spawned with (core ADR
  * 0066), so the actor that still has that ID is tried first and checked;
- * one reloaded since has another ID, and `walk` looks through every
- * resident actor for it.
+ * one reloaded since has another ID, so every resident actor is looked
+ * through for it.
  */
-function actorOfSession(system, wanted, walk = true) {
+function actorOfSession(system, wanted) {
   const guess = new ActorID(system, Number(wanted & 0xffffffffn), Number(wanted >> 32n));
   try {
     if (system.inspect(guess).sessionID === wanted) return guess;
   } catch (error) {
     if (!(error instanceof TinyactorsError && (error.code === 'not-found' || error.code === 'invalid'))) throw error;
   }
-  if (!walk) return undefined;
   for (const view of system.actors()) {
     if (view.sessionID === wanted) return view.actor;
   }
   return undefined;
+}
+
+/**
+ * The child an in-system SCXML invocation runs, from its serviceHandle:
+ * the child's runtime ID, (generation << 32) | slot (src/adapters/invoker.c),
+ * not its session ID; they differ once slots are reused or an actor is
+ * reloaded. Answers { actor, session } with the session in decimal, or
+ * undefined when no resident actor has that ID any more.
+ */
+function childOf(system, handle) {
+  const actor = new ActorID(system, Number(handle & 0xffffffffn), Number(handle >> 32n));
+  try {
+    return { actor, session: String(system.inspect(actor).sessionID) };
+  } catch (error) {
+    if (error instanceof TinyactorsError && (error.code === 'not-found' || error.code === 'invalid')) return undefined;
+    throw error;
+  }
 }
 
 // A definition's export as a loaded source the client asks for by reference.

@@ -62,7 +62,7 @@ class Variables {
   /**
    * `host` gives what the scopes read: `system`, `native`, `labels`,
    * `thread(id)`, `eventOf(thread)`, `mailboxNote(thread, message)`,
-   * `threadOfSession(sessionID)`.
+   * `threadOfInvocation(invocation)`.
    */
   constructor(host) {
     this.#host = host;
@@ -199,7 +199,7 @@ class Variables {
         data: send.data, submitted: send.submitted,
       }]);
       case 'Invocations': return view.invocations.map((invocation) => {
-        const child = this.#host.threadOfSession(invocation.serviceHandle);
+        const child = this.#host.threadOfInvocation(invocation);
         return [this.#host.labels.invocation(invocation.id), { type: invocation.type, active: invocation.active,
                                          autoforward: invocation.autoforward,
                                          thread: child === undefined ? null : `${child.id} ${child.label}` }];
