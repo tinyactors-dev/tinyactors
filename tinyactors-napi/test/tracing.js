@@ -569,6 +569,32 @@ async function lifecycle() {
   system.close();
 }
 
+// The default summary carries the failure kinds: a runaway macrostep's span
+// says it ran long and was stopped (core ADR 0075), without microsteps.
+async function summaryFailures() {
+  const system = createSystem({ clock: 'manual', scheduling: { microstepLimit: 50 }, fault: () => {} });
+  const batches = [];
+  system.setTraceSink((bytes) => batches.push(bytes));
+  const actor = system.spawn(system.define(statechart({ family: 'loop', revision: 'v1' })
+    .state('a', (s) => s.on('go', (t) => t.target('b')))
+    .state('b', (s) => s.always((t) => t.target('c')))
+    .state('c', (s) => s.always((t) => t.target('b')))));
+  await system.flush();
+  actor.post('go');
+  await system.flush();
+  actor.destroy();
+  await system.flush();
+  system.setTraceSink(undefined);
+  const spans = batches.flatMap((bytes) => decodeTraces(bytes));
+  assert.ok(!spans.some((span) => span.name.startsWith('scxml.microstep')), 'summary has no microstep spans');
+  const run = named(spans, 'scxml.macrostep go');
+  assert.ok(run, `the runaway macrostep has a span: ${spans.map((span) => span.name)}`);
+  const events = run.events.map((event) => event.name);
+  assert.ok(events.includes('scxml.macrostep.long'), `the long-macrostep warning: ${events}`);
+  assert.ok(events.includes('scxml.runaway'), `the runaway: ${events}`);
+  system.close();
+}
+
 // napi ADR 0017 section 3: summary by default, full for watched actors,
 // sampling for the traces the system starts, and changes in place.
 async function watchAndSample() {
@@ -654,6 +680,7 @@ async function watchAndSample() {
   await failureLogsSayWhy();
   await valuesAndLinks();
   await lifecycle();
+  await summaryFailures();
   console.log('tracing.js passed');
 })().catch((error) => {
   console.error(error);

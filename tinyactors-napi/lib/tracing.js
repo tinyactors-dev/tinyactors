@@ -23,11 +23,19 @@ const DEFINITION_KINDS = ['definitionRegistered', 'definitionRetired', 'definiti
 const ENCODED_KINDS = Object.freeze(TRACE_KINDS.filter((kind) => !DEFINITION_KINDS.includes(kind)));
 
 const LIFECYCLE = ['spawned', 'loaded', 'unloaded', 'finished', 'destroyed'];
-const SUMMARY = [...LIFECYCLE, 'macrostepBegin', 'macrostepEnd', 'actionFailed', 'stopped'];
+// The failure kinds are the ones the log path writes as failures: an action
+// that failed, a run stopped for lack of memory, and a long or runaway
+// macrostep (core ADR 0075). An operator's abandon and withdraw (core ADRs
+// 0082, 0084) are rare, and without them a summary macrostep span ends with
+// no reason given.
+const FAILURES = ['actionFailed', 'stopped', 'longMacrostep', 'runaway'];
+const INTERVENTIONS = ['abandoned', 'withdrawn'];
+const SUMMARY = [...LIFECYCLE, 'macrostepBegin', 'macrostepEnd', ...FAILURES, ...INTERVENTIONS];
 
 /**
  * Detail presets over the kind mask (napi ADR 0017 section 3):
- * - summary: a span per macrostep, lifecycle spans, and failures;
+ * - summary: a span per macrostep, lifecycle spans, failures and an
+ *   operator's interventions;
  * - decisions: adds microsteps, guard conditions and raised events;
  * - full: every kind.
  */

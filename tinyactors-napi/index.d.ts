@@ -1625,9 +1625,11 @@ export declare const TRACE_KINDS: readonly TraceKind[];
 
 export interface TraceConfiguration {
   /**
-   * "summary" (default): a span per macrostep, lifecycle spans and failures;
-   * "decisions": adds microsteps, conditions and raised events; "full":
-   * every kind. Watched actors (watchTraces) always get every kind.
+   * "summary" (default): a span per macrostep, lifecycle spans, failures
+   * (`actionFailed`, `stopped`, `longMacrostep`, `runaway`) and an
+   * operator's interventions (`abandoned`, `withdrawn`); "decisions": adds
+   * microsteps, conditions and raised events; "full": every kind. Watched
+   * actors (watchTraces) always get every kind.
    */
   detail?: 'summary' | 'decisions' | 'full';
   /** The record kinds wanted, overriding `detail`. Core builds no other record. */
