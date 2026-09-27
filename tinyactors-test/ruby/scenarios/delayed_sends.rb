@@ -243,4 +243,27 @@ TinyactorsTest.scenarios 'delayed sends at their owner' do
     assert_equal ['tick.one'], receiver.data('.inbox')
   end
 
+  # Catches: a send that fires without advancing its owner's session epoch.
+  # The image taken before still holds it, so an unload with that image
+  # would be accepted and the load would fire the send a second time. The
+  # image is stale (ADR 0014); one taken after holds only the later send.
+  scenario 'an image from before a send fired is stale' do
+    receiver = spawn DelayedSendsAtOwner.receiver
+    to = "#_scxml_#{receiver.handle}"
+    chart = DelayedSendsAtOwner.sender(:twice, [['tick.one', '10s'], ['tick.two', '40s']], to: to)
+    sender = spawn(chart, name: 'u1')
+    before = capture(sender)
+    advance_time 10_000
+    assert_equal ['tick.one'], receiver.data('.inbox')
+    assert_equal 'err_stale', unload(sender, before), 'the image still holds tick.one, which has fired'
+    destroy_image(before)
+
+    after = capture(sender)
+    assert_equal 40_000, image_deadline(after), 'an image from after holds only tick.two'
+    assert_equal 'ok', unload(sender, after)
+    assert_equal 'ok', load(sender, after)
+    destroy_image(after)
+    advance_time 50_000
+    assert_equal %w[tick.one tick.two], receiver.data('.inbox'), 'each send fired once'
+  end
 end
