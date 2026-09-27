@@ -47,6 +47,8 @@ module CRelease
   # One C library. `prefix` is its symbol prefix (`ta`, `txml`).
   Project = Data.define(:name, :prefix) do
     def root = Cache::ROOT
+    # The prefix of the header's macros: TXML for txml, TA for core.
+    def macro = prefix.upcase
     def header = root.join("include/#{name}.h")
     def amalgamation = root.join("include/#{name}.c")
     def api = root.join("include/#{name}.api.json")
@@ -160,3 +162,5 @@ module CRelease
     abort "dist: #{message}"
   end
 end
+
+require_relative 'c_release/build'

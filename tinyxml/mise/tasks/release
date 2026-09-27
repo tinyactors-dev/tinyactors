@@ -1,0 +1,38 @@
+#!/usr/bin/env ruby
+#MISE description="Release txml: check, version, build every target with zig cc, verify, pack; with --publish, also tag and create the GitHub release"
+# vim:ft=ruby
+
+# mise run release -- 0.1.0                    check, build, verify, pack; publishes nothing
+# mise run release -- 0.1.0 --publish          the same, then tag tinyxml/v0.1.0 and release
+# mise run release -- 0.1.0 --skip-containers  no Linux container smoke tests (no Docker)
+#
+# The stages and the rules they follow are in mise/lib/c_release/build.rb
+# and docs/adr/0001-packaging-and-releases.md; this file only describes txml.
+# The assets land in build/release/<version>/assets/.
+
+require 'pathname'
+require 'c_release'
+require_relative '../lib/suite'
+
+project = CRelease::Project.new(name: 'txml', prefix: 'txml')
+root = project.root
+argv = ARGV.dup
+
+CRelease.release(
+  project: project,
+  directory: 'tinyxml',
+  title: "txml #{argv.reject { |arg| arg.start_with?('--') }.first}",
+  summary: 'The first release of txml: a freestanding XML reader and writer in C, with no C library, ' \
+           'no I/O and no recursion. Each release has the header and the amalgamation to compile ' \
+           'yourself, and prebuilt static and shared libraries for macOS (arm64) and Linux (x64, arm64; ' \
+           'one build for glibc and musl).',
+  argv: argv,
+  checks: [%w[mise run amalgamate -- --check], %w[mise run test]],
+  regenerate: [%w[mise run generate]],
+  tests: Suite.public_api_tests.map do |name|
+    [name, root.join('build/objects', "#{name}.o"), Suite::BINARIES.fetch(name)]
+  end,
+  smoke: root.join('tests/release_smoke.c'),
+  readme: root.join('README.md'),
+  sources: [project.header, project.amalgamation, project.api]
+)

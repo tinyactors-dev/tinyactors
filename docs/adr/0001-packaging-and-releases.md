@@ -90,37 +90,46 @@ laid out how each library and the addon would ship. It was discussed on
     leaving them to the host, each native binary carries zig's compiler-rt,
     which defines `memcpy`, `memset`, `memmove`, `memcmp` and `bcmp`, and
     keeps those definitions private:
-    - **Linux shared libraries** link with `-shared -nostdlib
-      -rtlib=compiler-rt`: the five are local, nothing is undefined, no
-      libc is named, and only the API is exported.
-    - **Static archives** are built by partial-linking the library's
-      object and compiler-rt (`zig build-lib -fcompiler-rt` gives an
-      archive of both; `zig cc -r` joins them into one relocatable object),
-      then making the five local with `llvm-objcopy --localize-symbol`,
-      and archiving that one object. Partial-linking first matters:
-      localizing compiler-rt's copies alone would leave the library's own
-      calls undefined, for the host's libc to resolve. The archive
-      therefore neither imports `memcpy` nor overrides the `memcpy` of the
-      program that links it. Ghostty localizes the same way on macOS only
-      (`nmedit`); here it is done for every target. Member names are
-      plain, not zig's cache paths.
-    - **macOS dylibs** are linked from that localized object (`zig cc
-      -shared`, `-dead_strip`, an exported-symbols list), since
-      `-rtlib=compiler-rt` bundles nothing on Darwin.
+    - **One release object per target.** The amalgamation, compiled with
+      the API at default visibility, is partial-linked with compiler-rt
+      (the object `zig build-lib -fcompiler-rt` puts in its archive). On
+      ELF this goes through zig's `ld.lld -r --gc-sections`, rooted at the
+      API, so only the compiler-rt functions the library calls stay; zig
+      has no `ld64.lld`, so on Mach-O it is `zig cc -r`, without
+      collection. Then `llvm-objcopy --strip-debug
+      --keep-global-symbols=<the API>` leaves only the API global:
+      everything else is local, the five memory functions and the
+      amalgamation's own file-scope data (txml's `txp_*` tables) alike.
+      Partial-linking first matters: localizing compiler-rt's copies alone
+      would leave the library's own calls undefined, for the host's libc
+      to resolve. Ghostty localizes the same way on macOS only (`nmedit`);
+      here it is done for every target.
+    - **Static archives** hold that one object, under a plain member name.
+      An archive therefore neither imports `memcpy` nor overrides the
+      `memcpy` of the program that links it, and no internal name can clash
+      with the program's.
+    - **Shared libraries** are linked from the same object: on Linux with
+      `-shared -nostdlib --gc-sections`, on macOS with `-dead_strip` and an
+      exported-symbols list.
     - **wasm32** needs nothing: zig 0.16's default wasm CPU has bulk
       memory, so copies and zeroing are `memory.copy` and `memory.fill`.
     - **The release's symbol check:** the exported symbols are exactly the
       functions in the API description (plus the linker's own
-      `___dso_handle` and `__mh_dylib_header` on macOS), and nothing is
-      undefined, except on macOS three libSystem symbols every process has:
-      `dyld_stub_binder`, and compiler-rt's `__availability_version_check`
-      and `_sys_icache_invalidate`.
+      `___dso_handle` and `__mh_dylib_header` in a dylib), the memory
+      functions are local, and nothing is undefined, except on macOS four
+      libSystem symbols every process has: `dyld_stub_binder` (dylibs),
+      compiler-rt's `__availability_version_check` and
+      `_sys_icache_invalidate`, and `_bzero`, to which Darwin's clang lowers
+      zeroing whatever the flags (`-fno-builtin-bzero` does not stop it) and
+      which compiler-rt does not define.
     - **To measure before copying Ghostty further:** compiler-rt's `memset`
       is scalar in zig 0.16. Ghostty measured it 24 times slower and ships
       its own vectorized, hidden `memset`; core's release measures its own
       cost first.
-    - **Size:** the bundled compiler-rt adds about 1.4 MB to a Linux static
-      archive and about 380 KB to a macOS one after dead-stripping.
+    - **Size**, for txml 0.1.0: the collected Linux archive is 175 KB (the
+      joined object is 2 MB before collection and stripping); the macOS
+      one, without collection, 379 KB, and its dylib 139 KB after
+      `-dead_strip`.
 
     Sources: ghostty-org/ghostty at `b40acce58dcf`,
     `src/build/GhosttyLibVt.zig` L239-252 (`bundle_compiler_rt` for static
