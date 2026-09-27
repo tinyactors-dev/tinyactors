@@ -125,7 +125,32 @@ laid out how each library and the addon would ship. It was discussed on
     - **To measure before copying Ghostty further:** compiler-rt's `memset`
       is scalar in zig 0.16. Ghostty measured it 24 times slower and ships
       its own vectorized, hidden `memset`; core's release measures its own
-      cost first.
+      cost first (measured below).
+    - **Measured for core, 2026-09-28: the release ships its own
+      `memset`.** A workload of 200,000 spawn, start, deliver and destroy
+      cycles, then 100,000 resident actors each taking four events
+      (x86_64-linux, zig 0.16.0 `-O2`, the same amalgamation linked three
+      ways), in seconds:
+
+      | Linked with | Total | Spawn-to-destroy, per actor |
+      |---|---|---|
+      | glibc's `memcpy` and `memset` | 0.322–0.329 | 688–707 ns |
+      | compiler-rt's `memcpy` and `memset` (the packed library) | 0.400–0.407 | 857–893 ns |
+      | compiler-rt's `memcpy`, glibc's `memset` | 0.325–0.328 | 692–711 ns |
+      | the packed library with the release's `memset` | 0.319–0.332 | 681–747 ns |
+
+      All of the 24% came from `memset`; compiler-rt's `memcpy` matches
+      glibc's. Core's calls are small: of 2,040,072 in a shorter run,
+      1,860,024 cleared 8 to 15 bytes and 140,004 cleared 256 to 511. So
+      every native release object links `mise/lib/c_release/memset.c`: a
+      hidden, strong `memset` that takes the place of compiler-rt's weak
+      one, made local like the other memory functions. It never loops over
+      bytes: two overlapping stores of 1, 2, 4 or 8 bytes up to 16, two
+      overlapping 16-byte vector stores (clang's vector extension: SSE2,
+      NEON) up to 32, and 64 bytes a round above. A first version with a
+      byte loop under 16 bytes was slower than compiler-rt's (0.465 s),
+      because of those small calls. The wasm module needs none: bulk
+      memory makes zeroing an instruction.
     - **Size**, for txml 0.1.0: the collected Linux archive is 175 KB (the
       joined object is 2 MB before collection and stripping); the macOS
       one, without collection, 379 KB, and its dylib 139 KB after

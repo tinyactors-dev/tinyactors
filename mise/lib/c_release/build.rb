@@ -25,6 +25,9 @@ require 'release'
 module CRelease
   NATIVE_TARGETS = %w[aarch64-macos x86_64-linux aarch64-linux].freeze
   MEMORY = %w[memcpy memset memmove memcmp bcmp].freeze
+  # zig 0.16's compiler-rt memset is scalar; this one replaces it in every
+  # native release object (decision 16: 24% of core's time before, 4% after).
+  MEMSET_SOURCE = Pathname.new(__dir__).join('memset.c')
   # What a macOS library may leave undefined: libSystem, which every macOS
   # process has. The first two come from compiler-rt; Darwin's clang lowers
   # zeroing to bzero whatever the flags (-fno-builtin-bzero does not stop
@@ -132,15 +135,19 @@ module CRelease
                       flags: %w[-g0 -ffunction-sections -fdata-sections])
     joined = dir.join("#{project.name}-joined.o")
     runtime = compiler_rt(project, target)
+    # The vectorized memset takes the place of compiler-rt's weak, scalar one
+    # (MEMSET_SOURCE; decision 16).
+    memset = dir.join('memset.o')
+    Toolchain.compile(target, MEMSET_SOURCE, memset, flags: %w[-g0 -ffunction-sections -fdata-sections])
     if target.macos?
       # zig has no ld64.lld to garbage-collect a relocatable link; the
       # dylib's -dead_strip drops what the API does not reach.
-      capture!(Toolchain.zig, 'cc', '-target', target.triple, '-r', compiled, runtime, '-o', joined)
+      capture!(Toolchain.zig, 'cc', '-target', target.triple, '-r', compiled, memset, runtime, '-o', joined)
     else
       # Rooted at the API: only the compiler-rt functions the library calls
       # stay.
       capture!(Toolchain.zig, 'ld.lld', '-r', '--gc-sections', *api.flat_map { |name| ['-u', name] },
-               compiled, runtime, '-o', joined)
+               compiled, memset, runtime, '-o', joined)
     end
     exports = dir.join('exports.txt')
     exports.write(mangle(target, api).map { |name| "#{name}\n" }.join)
