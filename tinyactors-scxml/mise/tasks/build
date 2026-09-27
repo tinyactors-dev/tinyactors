@@ -30,13 +30,15 @@ end
 
 run('mise', 'run', 'dist', chdir: CORE)
 run('mise', 'run', 'dist', chdir: XML)
+# The codec builds from its amalgamation, as core and txml do.
+run('mise', 'run', 'amalgamate')
 
 COMPILER = Shellwords.split(ENV.fetch('CC', 'cc'))
 FLAGS = %w[-std=c11 -Wall -Wextra -Werror -pedantic -O2].freeze
 INCLUDES = ['-Iinclude', "-I#{CORE.join('dist/include')}", "-I#{XML.join('dist/include')}"].freeze
 
 objects = {
-  'src/ta_scxml.c' => [[*COMPILER, *FLAGS, '-ffreestanding', *INCLUDES], BUILD.join('objects/ta_scxml.o')],
+  'include/ta_scxml.c' => [[*COMPILER, *FLAGS, '-ffreestanding', *INCLUDES], BUILD.join('objects/ta_scxml.o')],
   'tests/ta_scxml_test.c' => [[*COMPILER, *FLAGS, *INCLUDES], BUILD.join('objects/ta_scxml_test.o')]
 }
 objects.each do |source, (command, object)|

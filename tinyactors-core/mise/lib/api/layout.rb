@@ -30,11 +30,13 @@ module API
       targets
     end
 
-    # [{name, type, value}] for every object-like TA_ macro that is a
-    # constant (annotation macros and TA_API are not).
-    def constants(header, macros, known:)
+    # [{name, type, value}] for every object-like `<prefix>_` macro that is
+    # an integer constant (annotation macros, TA_API and string literals
+    # are not). A header that includes another library's sees its macros
+    # too; its prefix keeps them out.
+    def constants(header, macros, known:, prefix: 'TA')
       names = macros.select do |name, body|
-        name.start_with?('TA_') && !%w[TA_API TA_API_EXTRACT].include?(name) &&
+        name.start_with?("#{prefix}_") && !%w[TA_API TA_API_EXTRACT].include?(name) && !body.start_with?('"') &&
           !body.include?('TA_ANNOTATION') && !body.include?('__attribute__')
       end.keys.sort
       return [] if names.empty?

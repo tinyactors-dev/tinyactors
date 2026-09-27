@@ -1,0 +1,399 @@
+{
+  "format": "tinyactors-api/2",
+  "header": "include/ta_scxml.h",
+  "version": "0.1.0",
+  "imports": [
+    {
+      "header": "include/tinyactors.h",
+      "version": "0.1.0"
+    }
+  ],
+  "targets": {
+    "x86_64-unknown-linux-gnu": {
+      "pointer": {
+        "size": 8,
+        "align": 8
+      },
+      "builtins": {
+        "char": {
+          "size": 1,
+          "align": 1
+        },
+        "bool": {
+          "size": 1,
+          "align": 1
+        },
+        "int": {
+          "size": 4,
+          "align": 4
+        },
+        "int8_t": {
+          "size": 1,
+          "align": 1
+        },
+        "int16_t": {
+          "size": 2,
+          "align": 2
+        },
+        "int32_t": {
+          "size": 4,
+          "align": 4
+        },
+        "int64_t": {
+          "size": 8,
+          "align": 8
+        },
+        "uint8_t": {
+          "size": 1,
+          "align": 1
+        },
+        "uint16_t": {
+          "size": 2,
+          "align": 2
+        },
+        "uint32_t": {
+          "size": 4,
+          "align": 4
+        },
+        "uint64_t": {
+          "size": 8,
+          "align": 8
+        },
+        "size_t": {
+          "size": 8,
+          "align": 8
+        }
+      }
+    },
+    "wasm32-unknown-unknown": {
+      "pointer": {
+        "size": 4,
+        "align": 4
+      },
+      "builtins": {
+        "char": {
+          "size": 1,
+          "align": 1
+        },
+        "bool": {
+          "size": 1,
+          "align": 1
+        },
+        "int": {
+          "size": 4,
+          "align": 4
+        },
+        "int8_t": {
+          "size": 1,
+          "align": 1
+        },
+        "int16_t": {
+          "size": 2,
+          "align": 2
+        },
+        "int32_t": {
+          "size": 4,
+          "align": 4
+        },
+        "int64_t": {
+          "size": 8,
+          "align": 8
+        },
+        "uint8_t": {
+          "size": 1,
+          "align": 1
+        },
+        "uint16_t": {
+          "size": 2,
+          "align": 2
+        },
+        "uint32_t": {
+          "size": 4,
+          "align": 4
+        },
+        "uint64_t": {
+          "size": 8,
+          "align": 8
+        },
+        "size_t": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    }
+  },
+  "constants": [
+    {
+      "name": "TA_SCXML_DEFAULT_MAX_ATTRIBUTES",
+      "type": {
+        "builtin": "uint32_t"
+      },
+      "value": 32
+    },
+    {
+      "name": "TA_SCXML_DEFAULT_MAX_DEPTH",
+      "type": {
+        "builtin": "uint32_t"
+      },
+      "value": 64
+    },
+    {
+      "name": "TA_SCXML_DEFAULT_MAX_DOCUMENT_BYTES",
+      "type": {
+        "builtin": "uint64_t"
+      },
+      "value": 4194304
+    },
+    {
+      "name": "TA_SCXML_DEFAULT_MAX_ENTITY_EXPANSION",
+      "type": {
+        "builtin": "uint64_t"
+      },
+      "value": 65536
+    },
+    {
+      "name": "TA_SCXML_DEFAULT_MAX_NAMES",
+      "type": {
+        "builtin": "uint32_t"
+      },
+      "value": 1024
+    },
+    {
+      "name": "TA_SCXML_DEFAULT_MAX_NAME_LENGTH",
+      "type": {
+        "builtin": "uint32_t"
+      },
+      "value": 256
+    },
+    {
+      "name": "TA_SCXML_DEFAULT_MAX_PARSE_BYTES",
+      "type": {
+        "builtin": "uint64_t"
+      },
+      "value": 33554432
+    },
+    {
+      "name": "TA_SCXML_DEFAULT_MAX_TEXT_BYTES",
+      "type": {
+        "builtin": "uint32_t"
+      },
+      "value": 1048576
+    },
+    {
+      "name": "TA_SCXML_VERSION",
+      "type": {
+        "builtin": "int"
+      },
+      "value": 256
+    },
+    {
+      "name": "TA_SCXML_VERSION_MAJOR",
+      "type": {
+        "builtin": "int"
+      },
+      "value": 0
+    },
+    {
+      "name": "TA_SCXML_VERSION_MINOR",
+      "type": {
+        "builtin": "int"
+      },
+      "value": 1
+    },
+    {
+      "name": "TA_SCXML_VERSION_PATCH",
+      "type": {
+        "builtin": "int"
+      },
+      "value": 0
+    }
+  ],
+  "flag_sets": {},
+  "types": {
+    "ta_scxml_codec": {
+      "kind": "struct",
+      "doc": "A codec. Initialize it once and keep it while its adapter is used.",
+      "fields": [
+        {
+          "name": "limits",
+          "type": {
+            "type": "ta_scxml_codec_params"
+          },
+          "doc": "The bounds in force: the params given, with every zero replaced by its default."
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "limits": 0
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "limits": 0
+          }
+        }
+      }
+    },
+    "ta_scxml_codec_params": {
+      "kind": "struct",
+      "doc": "The bounds a decode enforces. Zero selects the default beside each field. The defaults are safe for untrusted input: a document within them costs at most a few tens of MiB and a bounded stack. The largest W3C IRP test document is under 8 KiB and 12 elements deep.\n\nReaching a bound is TA_CHART_ERROR_LIMIT. Its `construct` is the field's name (\"max_depth\", ...) and its `at` is where the input reached it.\n\nBounds that txml also has are passed to txml and enforced there only: max_depth, max_attributes, max_name_length, max_names, max_entity_expansion and max_parse_bytes.",
+      "fields": [
+        {
+          "name": "max_document_bytes",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "Bytes of input. Checked before parsing."
+        },
+        {
+          "name": "max_parse_bytes",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "Bytes the parsed document may occupy: txml's max_document_bytes, its node and value storage. Markup-dense input needs several times its own size. At most UINT32_MAX."
+        },
+        {
+          "name": "max_depth",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "Element nesting, inline machines inside <content > included. It also bounds the codec's own recursion. At most 65535."
+        },
+        {
+          "name": "max_attributes",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "Attributes on one element, namespace declarations included."
+        },
+        {
+          "name": "max_text_bytes",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "Bytes of one text value the codec produces: an attribute value, a <script > body, the bytes of a literal <content >, <data > body or fetched `src`."
+        },
+        {
+          "name": "max_entity_expansion",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "Bytes produced by expanding entities the document's internal subset declares (txml's entity_expansion_budget); predefined and character references are not charged."
+        },
+        {
+          "name": "max_name_length",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "Bytes of one qualified name."
+        },
+        {
+          "name": "max_names",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "doc": "Distinct expanded names (element and attribute) in one document."
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "max_document_bytes": 0,
+            "max_parse_bytes": 8,
+            "max_depth": 16,
+            "max_attributes": 20,
+            "max_text_bytes": 24,
+            "max_entity_expansion": 32,
+            "max_name_length": 40,
+            "max_names": 44
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "max_document_bytes": 0,
+            "max_parse_bytes": 8,
+            "max_depth": 16,
+            "max_attributes": 20,
+            "max_text_bytes": 24,
+            "max_entity_expansion": 32,
+            "max_name_length": 40,
+            "max_names": 44
+          }
+        }
+      }
+    }
+  },
+  "functions": [
+    {
+      "name": "ta_scxml_codec_init",
+      "doc": "Resolves `params` (null for all defaults) into `codec`. TA_ERR_INVALID when a bound exceeds what txml can represent: max_depth above 65535, or max_parse_bytes above UINT32_MAX.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "codec",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_codec"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_codec_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in",
+          "optional": true
+        }
+      ]
+    },
+    {
+      "name": "ta_scxml_codec_adapter",
+      "doc": "The ta_chart_codec for `codec`, which must outlive it.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_chart_codec"
+        }
+      },
+      "params": [
+        {
+          "name": "codec",
+          "type": {
+            "pointer": {
+              "type": "ta_scxml_codec"
+            }
+          },
+          "shape": "single",
+          "direction": "inout"
+        }
+      ]
+    }
+  ]
+}

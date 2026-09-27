@@ -28,11 +28,11 @@ module NapiCompile
   CORE_DIR = ROOT.join('../tinyactors-core/include').expand_path
   CORE_SOURCE = CORE_DIR.join('tinyactors.c')
   # The SCXML codec and the XML reader it runs on, linked into the addon so
-  # define() can import SCXML documents (napi ADR 0019). tinyxml's
-  # amalgamation is committed, like core's.
+  # define() can import SCXML documents (napi ADR 0019). Both amalgamations
+  # are committed, like core's.
   SCXML_DIR = ROOT.join('../tinyactors-scxml').expand_path
   XML_DIR = ROOT.join('../tinyxml/include').expand_path
-  CODEC_SOURCES = [SCXML_DIR.join('src/ta_scxml.c'), XML_DIR.join('txml.c')].freeze
+  CODEC_SOURCES = [SCXML_DIR.join('include/ta_scxml.c'), XML_DIR.join('txml.c')].freeze
 
   module_function
 

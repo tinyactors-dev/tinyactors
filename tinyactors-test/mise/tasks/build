@@ -183,7 +183,7 @@ host_sources = [
   ROOT.join('src/binding.c'),
   ROOT.join('src/adapters.c'),
   ROOT.join('src/instruments.c'),
-  SCXML.join('src/ta_scxml.c'),
+  SCXML.join('include/ta_scxml.c'),
   BUILD.join('gen/ta_rpc.c')
 ]
 host_binary = BUILD.join('tinyactors-test')

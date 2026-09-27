@@ -22,8 +22,15 @@ module API
       Shellwords.split(ENV.fetch('CLANG', 'clang'))
     end
 
+    # Directories the header's own #includes need, beyond its own: those
+    # of the libraries it builds on (API.describe's `includes`).
+    def includes = @includes || []
+    def includes=(directories)
+      @includes = directories.map { |directory| "-I#{directory}" }
+    end
+
     def flags(target)
-      ["--target=#{target}", '-ffreestanding', '-std=c11', '-xc', *DEFINES]
+      ["--target=#{target}", '-ffreestanding', '-std=c11', '-xc', *DEFINES, *includes]
     end
 
     def run(*arguments, input: nil)

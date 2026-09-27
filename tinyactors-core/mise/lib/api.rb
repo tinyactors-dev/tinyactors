@@ -30,17 +30,30 @@ module API
 
   # The description of `header`; `library` is the amalgamation whose exported
   # symbols decide which functions are implemented (none without one).
-  def describe(header, library:, schema:)
+  #
+  # A library that builds on core (the SCXML codec) is described with the
+  # same extractor: `prefix` is its macro prefix (its constants and
+  # <prefix>_VERSION_*), `includes` the directories its header's #includes
+  # need, and `imports` the API descriptions of the libraries it uses,
+  # whose types its functions may name. The description lists only its
+  # own types, and records each import's header and version.
+  def describe(header, library:, schema:, prefix: 'TA', includes: [], imports: [])
     header = Pathname.new(header)
+    Clang.includes = includes
+    imported = imports.each_with_object({}) { |description, types| types.merge!(description.fetch('types')) }
     ast = Clang.ast(header)
-    builder = Builder.new(ast, implemented: library ? Clang.exported_functions(library) : [])
+    builder = Builder.new(ast, implemented: library ? Clang.exported_functions(library) : [], imports: imported)
     model = builder.build
-    model['functions'] += platform_functions(header, library, model['functions'].map { |function| function['name'] })
+    model['functions'] += platform_functions(header, library, model['functions'].map { |function| function['name'] },
+                                             imported)
     macros = Clang.macros(header)
-    constants = Layout.constants(header, macros, known: builder.method(:known?))
+    constants = Layout.constants(header, macros, known: builder.method(:known?), prefix: prefix)
     description = { 'format' => FORMAT, 'header' => "include/#{header.basename}" }
-    version = version(macros)
+    version = version(macros, prefix)
     description['version'] = version if version
+    unless imports.empty?
+      description['imports'] = imports.map { |each| { 'header' => each.fetch('header'), 'version' => each['version'] }.compact }
+    end
     description.merge!(
       'targets' => nil,
       'constants' => constants,
@@ -60,22 +73,22 @@ module API
   # The functions the header declares only for a platform, marked with it.
   # A platform function is implemented when the platform's amalgamation
   # (include/<name>_<platform>.c, beside `library`) defines it.
-  def platform_functions(header, library, portable)
+  def platform_functions(header, library, portable, imported = {})
     PLATFORMS.flat_map do |platform, options|
       source = library && Pathname.new(library).sub_ext('').then { |base| Pathname.new("#{base}_#{platform}.c") }
       implemented = source&.file? ? Clang.exported_functions(source, target: options[:target]) : []
-      Builder.new(Clang.ast(header, target: options[:target]), implemented: implemented).build['functions']
+      Builder.new(Clang.ast(header, target: options[:target]), implemented: implemented, imports: imported).build['functions']
              .reject { |function| portable.include?(function['name']) }
              .map { |function| function.merge('platform' => platform) }
     end
   end
 
-  # The header's version, "major.minor.patch", from its TA_VERSION_*
+  # The header's version, "major.minor.patch", from its <prefix>_VERSION_*
   # macros; nil when it defines none (the extractor's test headers).
-  def version(macros)
-    parts = %w[MAJOR MINOR PATCH].map { |part| macros["TA_VERSION_#{part}"] }
+  def version(macros, prefix = 'TA')
+    parts = %w[MAJOR MINOR PATCH].map { |part| macros["#{prefix}_VERSION_#{part}"] }
     return nil if parts.all?(&:nil?)
-    raise Error, "TA_VERSION_MAJOR, _MINOR and _PATCH must all be whole numbers" unless parts.all? { _1&.match?(/\A\d+\z/) }
+    raise Error, "#{prefix}_VERSION_MAJOR, _MINOR and _PATCH must all be whole numbers" unless parts.all? { _1&.match?(/\A\d+\z/) }
 
     parts.join('.')
   end

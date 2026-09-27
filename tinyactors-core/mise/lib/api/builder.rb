@@ -27,9 +27,14 @@ module API
     VALUE_MODELS = { 'actor' => 'ta_actor_id', 'definition' => 'ta_definition_id', 'session_image' => 'ta_session_image' }.freeze
     OUTPUT_SHAPES = %w[single buffer view_out handle_out raw].freeze
 
-    def initialize(ast, implemented:)
+    # `imports`: the types of the libraries this header builds on, by name
+    # (their API descriptions' `types`). A function may use them, and
+    # lookups see them, but the description lists and checks only the
+    # header's own types.
+    def initialize(ast, implemented:, imports: {})
       @ast = ast
       @implemented = implemented
+      @imports = imports
       @errors = []
       @types = {}
       @flag_sets = {}
@@ -55,7 +60,7 @@ module API
       { 'types' => @types.sort.to_h, 'flag_sets' => @flag_sets.sort.to_h, 'functions' => @functions }
     end
 
-    def known?(name) = @typedefs.key?(name)
+    def known?(name) = @typedefs.key?(name) || @imports.key?(name)
 
     private
 
@@ -147,8 +152,8 @@ module API
     def resolve(type)
       const = type && type['const']
       seen = 0
-      while type && type['type'] && @types.dig(type['type'], 'kind') == 'alias'
-        type = @types.dig(type['type'], 'type')
+      while type && type['type'] && entry_of(type['type'])&.dig('kind') == 'alias'
+        type = entry_of(type['type'])['type']
         seen += 1
         raise Error, 'alias cycle' if seen > 32
       end
@@ -156,8 +161,10 @@ module API
     end
 
     def named(type) = type && type['type']
-    def kind_of(name) = @types.dig(name, 'kind')
-    def semantic_of(name) = @types.dig(name, 'semantic')
+    # A type's entry: the header's own, else an imported library's.
+    def entry_of(name) = name && (@types[name] || @imports[name])
+    def kind_of(name) = entry_of(name)&.dig('kind')
+    def semantic_of(name) = entry_of(name)&.dig('semantic')
 
     def integer?(type)
       type = resolve(type)
@@ -630,8 +637,8 @@ module API
     end
 
     def success_of(type)
-      resolved = type && (@types.dig(named(type), 'kind') == 'enum' ? type : resolve(type))
-      entry = resolved && @types[named(resolved)]
+      resolved = type && (kind_of(named(type)) == 'enum' ? type : resolve(type))
+      entry = resolved && entry_of(named(resolved))
       entry && entry['kind'] == 'enum' ? entry['constants'].find { |constant| constant['success'] }&.dig('name') : nil
     end
 
@@ -653,7 +660,7 @@ module API
         tagged = entry['tagged'] or next
         tag = entry['fields'].find { |field| field['name'] == tagged['tag'] }
         union = entry['fields'].find { |field| field['name'] == tagged['union'] }
-        enum = tag && @types[named(tag['type'])]
+        enum = tag && entry_of(named(tag['type']))
         next error(name, "TA_TAGGED tag #{tagged['tag']} is not an enum member") unless enum && enum['kind'] == 'enum'
         next error(name, "TA_TAGGED union #{tagged['union']} is not a union member") unless union&.dig('type', 'record', 'kind') == 'union'
 
@@ -748,7 +755,7 @@ module API
     end
 
     def check_constant(path, constant, function)
-      enum = @types[named(function['returns']['type'])]
+      enum = entry_of(named(function['returns']['type']))
       return if enum && enum['kind'] == 'enum' && enum['constants'].any? { |each| each['name'] == constant }
 
       error(path, "#{constant} is not a result of #{function['name'] || 'the callback'}")
@@ -773,7 +780,7 @@ module API
       return type['record']['fields'].any? { |field| !owned?(field) && references?(field['type'], seen) } if type.key?('record')
 
       name = named(type) or return false
-      entry = @types[name]
+      entry = entry_of(name)
       return false if entry.nil? || seen[name]
 
       seen[name] = true
@@ -862,7 +869,7 @@ module API
       path.drop(1).each do |member|
         target = resolve(type)
         target = resolve(target['pointer']) if target&.key?('pointer')
-        field = @types.dig(named(target), 'fields')&.find { |each| each['name'] == member }
+        field = entry_of(named(target))&.dig('fields')&.find { |each| each['name'] == member }
         return error(function['name'], "value model path #{path.join('.')} has no member #{member}") unless field
 
         type = field['type']
@@ -888,7 +895,7 @@ module API
       return false if seen[name] || %w[adapter vtable].include?(semantic_of(name))
 
       seen[name] = true
-      (@types.dig(name, 'fields') || []).any? { |field| field['direction'] != 'out' && values_in?(field, seen) }
+      (entry_of(name)&.dig('fields') || []).any? { |field| field['direction'] != 'out' && values_in?(field, seen) }
     end
 
     # Handle types list the functions that create, destroy, and take them.
