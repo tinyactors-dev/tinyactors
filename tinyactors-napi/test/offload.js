@@ -190,11 +190,48 @@ async function storedDestinations() {
   system.close();
 }
 
+// load(address, { binding }) replaces the data the actor was unloaded with,
+// outright; without options it keeps that data. Options must be an object,
+// and the null data model, which has no root, refuses a binding.
+async function loadWithBinding() {
+  const system = createSystem({ clock: 'manual' });
+  const account = system.define(statechart({ family: 'account', revision: 'v1' })
+    .data('count', 0)
+    .state('open', (s) => s.on('add', (t) => t.assign('count', function ({ event }) { return this.count + event.data; }))));
+  const ACCOUNT = { family: 'account', name: 'a1' };
+  const opened = system.spawn(account, { name: 'a1' });
+  await system.flush();
+  opened.unload();
+  const bound = system.load(ACCOUNT, { binding: { count: 42 } });
+  assert.deepEqual(bound.data(), { count: 42 });
+  bound.post('add', 1);
+  await system.flush();
+  assert.deepEqual(bound.inspect().data, { count: 43 }, 'the bound data is the live root');
+
+  bound.unload();
+  const reloaded = system.load(ACCOUNT);
+  assert.deepEqual(reloaded.inspect().data, { count: 43 }, 'no binding keeps the unloaded data');
+  await system.flush();
+  reloaded.unload();
+  assertCode(() => system.load(ACCOUNT, null), 'invalid');
+  assert.deepEqual(system.load(ACCOUNT, {}).inspect().data, { count: 43 }, 'a refused load leaves the actor loadable');
+
+  const plain = system.define({ identity: { family: { name: 'plain' }, revision: 'v1' }, datamodel: 'null',
+                                initial: { targets: ['a'] }, states: [{ kind: 'atomic', id: 'a' }] });
+  const idle = system.spawn(plain, { name: 'p1' });
+  await system.flush();
+  idle.unload();
+  assertCode(() => system.load({ family: 'plain', name: 'p1' }, { binding: { z: 1 } }), 'unsupported');
+  assert.equal(system.load({ family: 'plain', name: 'p1' }).inspect().activeStates[0], 'a');
+  system.close();
+}
+
 (async () => {
   await roundTrip();
   await loaderDecides();
   await restartKeepsTimers();
   await storedDestinations();
+  await loadWithBinding();
   console.log('offload.js passed');
 })().catch((error) => {
   console.error(error);

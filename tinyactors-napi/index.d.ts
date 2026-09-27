@@ -311,15 +311,17 @@ export interface System {
 
   /**
    * Bring an unloaded named actor back: from the bytes unload() kept for an
-   * address, with the data it was unloaded with, or from a SessionImage;
-   * the same session ID, a new runtime ID (core ADR 0066). From an image,
-   * `binding` defaults to its root. An invocation active at capture is
+   * address, or from a SessionImage; the same session ID, a new runtime ID
+   * (core ADR 0066). `binding` replaces the data root outright, it is not
+   * merged: for an address it replaces the data the actor was unloaded
+   * with, which it keeps without one; from an image it defaults to the
+   * image's root. A chart on the null data model has no root, and a binding
+   * for it throws `unsupported`. An invocation active at capture is
    * reported to the actor as `error.communication.invoke.<id>.unavailable`
    * (core ADR 0038).
    */
-  load<Data extends object>(address: ActorAddress): Actor<Data>;
   load<Data extends object>(
-    image: SessionImage<Data>,
+    target: SessionImage<Data> | ActorAddress,
     options?: { readonly binding?: Partial<Data> | Data },
   ): Actor<Data>;
 

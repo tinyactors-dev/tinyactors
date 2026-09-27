@@ -1481,16 +1481,21 @@ class System {
    * Bring an unloaded named actor back (core ADRs 0051 and 0074): from the
    * bytes unload() kept for `target`, an address { family, name }, or from
    * a SessionImage. It keeps its session ID, gets a new runtime ID (core
-   * ADR 0066), and its address is resident again. From an image, `binding`
-   * defaults to the data root the image kept, and the image stays the
-   * caller's to destroy. An invocation that was active when it was captured
-   * does not come back: the actor gets
-   * `error.communication.invoke.<id>.unavailable` for it (core ADR 0038).
+   * ADR 0066), and its address is resident again. `binding`, when given,
+   * replaces the data root outright (it is not merged): for an address,
+   * the data the actor was unloaded with; from an image, the root the image
+   * kept, which it defaults to. The image stays the caller's to destroy. An
+   * invocation that was active when it was captured does not come back:
+   * the actor gets `error.communication.invoke.<id>.unavailable` for it
+   * (core ADR 0038).
    */
   load(target, options = {}) {
+    if (options === null || typeof options !== 'object') {
+      throw new TinyactorsError('load(): expected options { binding }', 'invalid');
+    }
     if (!(target instanceof SessionImage)) {
       const { family, name } = addressOf(target, 'load()');
-      const id = this.#native.loadOffloaded(family, name);
+      const id = this.#native.loadOffloaded(family, name, options.binding);
       return new ActorID(this, id.slot, id.generation);
     }
     const image = target;

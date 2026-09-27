@@ -454,12 +454,14 @@ napi_value tna_drop_offloaded_method(napi_env env, napi_callback_info info) {
 }
 
 /*
- * loadOffloaded(family, name): the actor comes back from its bytes, which
- * the store then frees; returns { slot, generation }.
+ * loadOffloaded(family, name, binding?): the actor comes back from its
+ * bytes, which the store then frees; returns { slot, generation }. A
+ * binding other than undefined replaces the data-model root the bytes
+ * carry (ta_actor_load_params.datamodel_binding).
  */
 napi_value tna_load_offloaded_method(napi_env env, napi_callback_info info) {
-    size_t argc = 2;
-    napi_value argv[2] = { NULL };
+    size_t argc = 3;
+    napi_value argv[3] = { NULL };
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
         return NULL;
     }
@@ -477,12 +479,23 @@ napi_value tna_load_offloaded_method(napi_env env, napi_callback_info info) {
         ta_address_release(address);
         return tna_throw(env, "not-found", "load: the address has no offloaded actor");
     }
+    ta_value binding = { NULL, NULL };
+    napi_valuetype binding_type = napi_undefined;
+    bool bound = argc > 2 && argv[2] != NULL && napi_typeof(env, argv[2], &binding_type) == napi_ok &&
+                 binding_type != napi_undefined;
+    if (bound && !tna_value_make(&wrapper->values, argv[2], &binding)) {
+        ta_address_release(address);
+        return tna_throw(env, "out-of-memory", "load: cannot keep the binding");
+    }
     ta_actor_id actor = 0;
     system->inside_core = true;
     ta_result result = ta_actor_load(system->core, &(ta_actor_load_params){
                                                        .bytes = { .ptr = entry->bytes, .len = entry->length },
+                                                       .datamodel_binding = bound ? &binding : NULL,
                                                        .out = &actor });
     system->inside_core = false;
+    /* Core retained the binding if it kept it. */
+    ta_value_release(&binding);
     if (result == TA_OK) {
         /* The actor holds its own references now; the entry's go with it. */
         (void)tna_offloads_drop(&system->offloads, address);
