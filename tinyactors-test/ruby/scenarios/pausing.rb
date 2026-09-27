@@ -233,7 +233,7 @@ TinyactorsTest.scenarios 'pausing', chart: :relay do
   # raised event, or that loses a snapshot across resumes (ADR 0061); and a
   # pause at a microstep's start that runs part of it twice or not at all
   # (ADR 0086).
-  scenario 'pausing inside executable content is invisible' do
+  scenario 'pausing inside executable content is invisible', exhaustive: true do
     variants = (1..6).to_h { |budget| ["action budget #{budget}", { resume_action_budget: budget }] }
     variants['action budget 1, resume budget 1'] = { resume_action_budget: 1, resume_budget: 1 }
     variants['every microstep start'] = { resume_pause_at_microstep_start: true }

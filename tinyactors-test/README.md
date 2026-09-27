@@ -100,8 +100,15 @@ mise run build
 mise run test
 ```
 
+`mise run test` leaves out the exhaustive scenarios (allocation sweeps and
+long random workloads); `mise run test:full` runs them too. See the root
+`AGENTS.md` (Tests) for which to run and how to mark a scenario exhaustive.
+
 `mise run workbench` opens the interactive workbench (below); `mise run
-scenarios` runs the Ruby scenarios alone.
+scenarios` runs the Ruby scenarios alone, in one worker per CPU:
+`-n PATTERN` picks scenarios by `group: name`, `--fast` leaves out the
+exhaustive ones, `--jobs N` sets the workers, and `--timings N` lists the N
+slowest.
 
 ## Population benchmark
 

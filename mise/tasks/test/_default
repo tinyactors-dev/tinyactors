@@ -1,0 +1,98 @@
+#!/usr/bin/env ruby
+#MISE description="Run project tests: the fast pass, for every commit (test:full adds the exhaustive scenarios)"
+#USAGE flag "--full" help="Also run the exhaustive scenarios (allocation sweeps, long random workloads)"
+
+require 'etc'
+require 'fileutils'
+require 'pathname'
+
+root = Pathname.new(__dir__).join('../../..').expand_path
+Dir[root.join('{,*/}mise/tasks/**/*')].each { |task| FileUtils.chmod('+x', task) if File.file?(task) }
+full = ENV['usage_full'] == 'true' || ARGV.include?('--full')
+
+# Each step runs to completion before the next; the first failure stops the
+# run. Durations are reported at the end, to see where the time goes.
+steps = []
+steps << ['acronyms', [%w[mise run check-acronyms-test], %w[mise run check-acronyms]], root]
+steps << ['build', [%w[mise run build]], root]
+steps << ['core: recursion', [%w[mise run check-recursion]], root.join('tinyactors-core')]
+# Core's lifetime tests under AddressSanitizer: a use-after-free is
+# undefined behaviour an ordinary run may survive (ADR 0065).
+steps << ['core: asan', [%w[mise run asan]], root.join('tinyactors-core')]
+core_tests = %w[actor_id_test session_id_test offload_test address_test io_origin_test session_image_test deep_test
+                delayed_send_test null_datamodel_test pause_test microstep_start_test operator_test trace_test
+                inspection_test export_test span_test codec_test compile_error_test event_pattern_test
+                retirement_test scxml_uri_test send_id_test tree_test]
+# Core tests whose API src/ does not implement yet do not link; the core build
+# reports them as pending (tinyactors-core/mise/tasks/build, PENDING_TESTS).
+# Each runs, and must pass, as soon as its binary is there. Empty today.
+pending_tests = %w[].select do |test|
+  root.join("tinyactors-core/build/#{test}").file?.tap do |linked|
+    puts "tinyactors-core: #{test} is pending (no implementation to link against)" unless linked
+  end
+end
+# Core's tests are independent programs: they run at once.
+steps << ['core: tests', (core_tests + pending_tests).map { |test| ["tinyactors-core/build/#{test}"] }, root, :parallel]
+steps << ['core: api-test', [%w[mise run api-test]], root.join('tinyactors-core')]
+# The test host's whole suite: its data model and scale tests, the smoke,
+# bindings, runner and export checks, and the scenarios; --full adds the
+# exhaustive ones. The scale test checks invariant 17: per-actor cost does
+# not grow with the population.
+steps << ['test host', [['mise', 'run', 'test', *(full ? ['--full'] : [])]], root.join('tinyactors-test')]
+# --full adds the scale test on Bun and at a million actors.
+steps << ['napi', [['mise', 'run', 'test', *(full ? ['--full'] : [])]], root.join('tinyactors-napi')]
+# The VS Code extension that registers the debug type, under a stub of
+# VS Code (its integration test downloads one, and is not run here).
+steps << ['vscode', [%w[mise run test]], root.join('tinyactors-vscode')]
+# txml: the header checks today, the full suite once tinyxml/src has an
+# implementation; it reports unlinkable binaries as pending.
+steps << ['tinyxml', [%w[mise run test]], root.join('tinyxml')]
+# The SCXML codec (ADR 0053): decode, encode, round trip, and its limits.
+steps << ['scxml codec', [%w[mise run test]], root.join('tinyactors-scxml')]
+
+clock = -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) }
+timings = []
+report = lambda do
+  total = timings.sum(&:last)
+  puts
+  puts "#{full ? 'test:full' : 'test'} step times:"
+  timings.each { |name, seconds| puts format('  %7.1fs  %s', seconds, name) }
+  puts format('  %7.1fs  total', total)
+end
+
+# Runs `commands` one per CPU; answers the status of the first that failed.
+run_parallel = lambda do |commands, chdir|
+  queue = Queue.new
+  commands.each { |command| queue << command }
+  queue.close
+  failures = Queue.new
+  Array.new([Etc.nprocessors, commands.size].min) do
+    Thread.new do
+      while (command = queue.pop)
+        pid = Process.spawn(*command, chdir: chdir.to_s)
+        _pid, status = Process.wait2(pid)
+        failures << status unless status.success?
+      end
+    end
+  end.each(&:join)
+  failures.empty? ? nil : failures.pop
+end
+
+steps.each do |name, commands, chdir, mode|
+  started = clock.call
+  failure = if mode == :parallel
+              run_parallel.call(commands, chdir)
+            else
+              commands.lazy.map do |command|
+                pid = Process.spawn(*command, chdir: chdir.to_s)
+                Process.wait2(pid).last
+              end.find { |status| !status.success? }
+            end
+  timings << [name, clock.call - started]
+  next unless failure
+
+  report.call
+  warn "#{name} failed"
+  exit(failure.exitstatus || 1)
+end
+report.call

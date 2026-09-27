@@ -43,7 +43,7 @@ module TinyactorsTest
     end
   end
 
-  Scenario = Data.define(:group, :name, :block, :expected_failure, :location) do
+  Scenario = Data.define(:group, :name, :block, :expected_failure, :location, :exhaustive) do
     def full_name
       "#{group.name}: #{name}"
     end
@@ -53,11 +53,14 @@ module TinyactorsTest
 
   # A named set of scenarios that share a default chart and invariants.
   class Group
-    attr_reader :name, :chart, :scenarios, :invariants
+    attr_reader :name, :chart, :scenarios, :invariants, :exhaustive
 
-    def initialize(name, chart:)
+    # `exhaustive`: the group repeats a run for every allocation it can fail,
+    # or the like, so it runs in `mise run test:full` only.
+    def initialize(name, chart:, exhaustive: false)
       @name = name.to_s
       @chart = chart&.to_sym
+      @exhaustive = exhaustive
       @scenarios = []
       @invariants = []
       @pending_failure = nil
@@ -75,12 +78,15 @@ module TinyactorsTest
       @invariants << Invariant.new(name: name, block: block)
     end
 
-    def scenario(name, &block)
+    # `exhaustive`: this scenario sweeps every allocation, or runs a long
+    # random workload, so it runs in `mise run test:full` only.
+    def scenario(name, exhaustive: false, &block)
       raise ScenarioError, "#{self.name}: scenario #{name.inspect} needs a block" unless block
 
       @scenarios << Scenario.new(group: self, name: name, block: block,
                                  expected_failure: @pending_failure,
-                                 location: block.source_location.join(':'))
+                                 location: block.source_location.join(':'),
+                                 exhaustive: @exhaustive || exhaustive)
       @pending_failure = nil
     end
 

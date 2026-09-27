@@ -121,7 +121,7 @@ TinyactorsTest.scenarios 'runaway macrosteps' do
 
   # Catches: a limit on turns instead of microsteps, which a long <foreach>
   # pausing across many resumes would trip.
-  scenario 'a long <foreach> that pauses across many resumes is one microstep' do
+  scenario 'a long <foreach> that pauses across many resumes is one microstep', exhaustive: true do
     Runaway.limit(self, :rw_foreach, 5)
     actor = spawn :rw_foreach
     assert_equal 'ok', actor.post('go')
@@ -152,7 +152,7 @@ TinyactorsTest.scenarios 'runaway macrosteps' do
 
   # Catches: a retry after a failed allocation that counts a microstep twice
   # or resets the count, so the warning comes at another microstep or twice.
-  scenario 'a failed allocation does not change where the warning comes' do
+  scenario 'a failed allocation does not change where the warning comes', exhaustive: true do
     result = assert_allocation_failures_invisible do
       Runaway.limit(self, :rw_counter, 1000)
       actor = spawn :rw_counter

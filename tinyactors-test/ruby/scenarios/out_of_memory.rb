@@ -439,7 +439,7 @@ module OutOfMemory
   CHART_ERRORS = %i[guards boot_early boot_late invokes].freeze
 end
 
-TinyactorsTest.scenarios 'running out of memory' do
+TinyactorsTest.scenarios 'running out of memory', exhaustive: true do
   # Every chart, in both data models, runs its body with each allocation of
   # each resume failing once.
   bodies = OutOfMemory::BODIES

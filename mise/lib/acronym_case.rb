@@ -162,13 +162,16 @@ module AcronymCase
     EXCLUDED.any? { |re| path.match?(re) }
   end
 
-  def check_text(path, text, regex, by_upcase, allow)
+  # `memo` maps each word already checked to its segments, so a word that
+  # repeats is split once.
+  def check_text(path, text, regex, by_upcase, allow, memo)
+    anywhere = unanchored(regex)
     findings = []
     checked_text(path, text).each_line.with_index(1) do |line, number|
       line.scan(/[A-Za-z0-9_$]+/) do |word|
-        next if allowed_word?(allow, word, path)
+        found = memo.fetch(word) { memo[word] = candidate?(word, anywhere) ? check_word(word, regex, by_upcase) : [] }
+        next if found.empty? || allowed_word?(allow, word, path)
 
-        found = check_word(word, regex, by_upcase)
         fixed = fix_word(word, found)
         found.each do |_i, spelling, acronym|
           findings << Finding.new(path, number, word, spelling, acronym, fixed)
@@ -178,10 +181,22 @@ module AcronymCase
     findings
   end
 
+  # Only a word with both capitals and lowercase letters, holding a listed
+  # acronym in any case, can have a mixed-case segment; most words have not.
+  def candidate?(word, anywhere)
+    word.match?(/[A-Z]/) && word.match?(/[a-z]/) && word.match?(anywhere)
+  end
+
+  # pattern() without its \G anchor: a listed acronym anywhere in a word.
+  def unanchored(regex)
+    (@unanchored ||= {})[regex] ||= Regexp.new(regex.source.delete_prefix('\\G'), regex.options)
+  end
+
   # Every finding in `paths` (relative to `root`).
   def check(paths, root: ROOT, list: acronyms, allow: allowed)
     regex = pattern(list)
     by_upcase = list.to_h { |a| [a.upcase, a] }
+    memo = {}
     paths.flat_map do |path|
       next [] if excluded?(path) || !code_file?(path, root)
 
@@ -189,7 +204,7 @@ module AcronymCase
       next [] unless File.file?(full)
 
       check_text(path, File.read(full, encoding: 'UTF-8', invalid: :replace, undef: :replace),
-                 regex, by_upcase, allow)
+                 regex, by_upcase, allow, memo)
     end
   end
 

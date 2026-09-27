@@ -1,0 +1,4 @@
+#!/usr/bin/env ruby
+#MISE description="The test host's whole suite, the exhaustive scenarios included"
+
+exec('mise', 'run', 'test', '--full')

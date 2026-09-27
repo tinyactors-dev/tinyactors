@@ -35,8 +35,8 @@ module TinyactorsTest
       @charts[name] = SCXMLChart.new(name, source, **options)
     end
 
-    def scenarios(name, chart: nil, &block)
-      group = Group.new(name, chart: chart)
+    def scenarios(name, chart: nil, exhaustive: false, &block)
+      group = Group.new(name, chart: chart, exhaustive: exhaustive)
       group.instance_eval(&block)
       group.finish!
       @groups << group

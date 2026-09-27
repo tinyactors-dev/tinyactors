@@ -13,6 +13,7 @@
 #
 #   mise run asan   exit 1 when a test fails or a sanitizer reports
 
+require 'etc'
 require 'fileutils'
 require 'pathname'
 
@@ -33,21 +34,38 @@ WITH_RUNTIME = %w[address_test io_origin_test session_image_test delayed_send_te
 # compile error and event pattern tests exercise pure functions.
 STANDALONE = %w[actor_id_test session_id_test offload_test span_test].freeze
 
+# A binary is rebuilt only when one of its inputs is newer: its test, the
+# amalgamation or a header. Tests build and run in parallel, one per CPU.
+inputs = Dir[root.join('include/*.{h,c}').to_s] + Dir[root.join('tests/*.h').to_s]
+stale = lambda do |target, sources|
+  !target.file? || (sources + inputs).any? { |source| File.mtime(source) > target.mtime }
+end
+
 # The amalgamation is compiled once and linked into every test that needs it.
 runtime = build.join('tinyactors.o')
-unless system(cc, *flags, '-c', root.join('include/tinyactors.c').to_s, '-o', runtime.to_s, chdir: root.to_s)
+if stale.call(runtime, []) &&
+   !system(cc, *flags, '-c', root.join('include/tinyactors.c').to_s, '-o', runtime.to_s, chdir: root.to_s)
   abort 'asan: the amalgamation does not compile'
 end
-failed = []
-(WITH_RUNTIME + STANDALONE).each do |test|
-  sources = [root.join("tests/#{test}.c").to_s]
-  sources << runtime.to_s if WITH_RUNTIME.include?(test)
-  binary = build.join(test)
-  unless system(cc, *flags, *sources, '-o', binary.to_s, chdir: root.to_s)
-    failed << "#{test} (build)"
-    next
+queue = Queue.new
+(WITH_RUNTIME + STANDALONE).each { |test| queue << test }
+queue.close
+failed = Queue.new
+workers = Array.new(Etc.nprocessors) do
+  Thread.new do
+    while (test = queue.pop)
+      sources = [root.join("tests/#{test}.c").to_s]
+      sources << runtime.to_s if WITH_RUNTIME.include?(test)
+      binary = build.join(test)
+      if stale.call(binary, sources) && !system(cc, *flags, *sources, '-o', binary.to_s, chdir: root.to_s)
+        failed << "#{test} (build)"
+        next
+      end
+      failed << test unless system(binary.to_s, chdir: root.to_s, out: File::NULL)
+    end
   end
-  failed << test unless system(binary.to_s, chdir: root.to_s, out: File::NULL)
 end
+workers.each(&:join)
+failed = Array.new(failed.size) { failed.pop }.sort
 abort "asan: failed: #{failed.join(', ')}" unless failed.empty?
 puts "asan: #{WITH_RUNTIME.size + STANDALONE.size} core tests pass under AddressSanitizer and UBSan"

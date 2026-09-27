@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'stringio'
+
 module TinyactorsTest
   # Outcomes:
   #   :pass  - passed, no failure expected
@@ -22,12 +24,30 @@ module TinyactorsTest
       @timeout = timeout
     end
 
-    def run(groups, filter: nil)
+    # Runs the scenarios of `groups` and reports each, in order. `jobs` > 1
+    # runs them in that many forked workers; each scenario has its own host
+    # process either way. `exhaustive: false` leaves out the scenarios and
+    # groups declared exhaustive: true. `timings` reports the
+    # slowest scenarios after the summary.
+    def run(groups, filter: nil, jobs: 1, exhaustive: true, timings: 0)
       scenarios = groups.flat_map(&:scenarios)
+      scenarios = scenarios.reject(&:exhaustive) unless exhaustive
       scenarios = scenarios.select { |scenario| filter.match?(scenario.full_name) } if filter
-      results = scenarios.map { |scenario| run_scenario(scenario).tap { |result| report(result) } }
-      summarize(results)
-      results
+      results = if jobs > 1 && scenarios.size > 1
+                  run_forked(scenarios, [jobs, scenarios.size].min)
+                else
+                  scenarios.map { |scenario| timed(scenario).tap { |(result, _)| report(result) } }
+                end
+      summarize(results.map(&:first))
+      report_timings(results, timings) if timings.positive?
+      results.map(&:first)
+    end
+
+    # A result from a worker: the report it printed, as text.
+    Reported = Data.define(:scenario, :outcome, :text) do
+      def ok?
+        %i[pass xfail].include?(outcome)
+      end
     end
 
     def run_scenario(scenario)
@@ -57,6 +77,95 @@ module TinyactorsTest
     end
 
     private
+
+    def timed(scenario)
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      result = run_scenario(scenario)
+      [result, Process.clock_gettime(Process::CLOCK_MONOTONIC) - started]
+    end
+
+    # Workers take scenario indexes from one pipe, as fixed-size records
+    # written before any worker reads, and answer on their own pipes with
+    # [index, outcome, report text, seconds]. Reports print in scenario
+    # order as soon as every earlier one is in.
+    def run_forked(scenarios, jobs)
+      jobs_read, jobs_write = IO.pipe
+      scenarios.each_index { |index| jobs_write.syswrite([index].pack('Q>')) }
+      jobs_write.close
+      @out.flush
+      workers = Array.new(jobs) do
+        answers_read, answers_write = IO.pipe
+        pid = fork do
+          answers_read.close
+          work(scenarios, jobs_read, answers_write)
+        end
+        answers_write.close
+        [pid, answers_read]
+      end
+      jobs_read.close
+      collect(scenarios, workers)
+    end
+
+    def work(scenarios, jobs, answers)
+      loop do
+        record = begin
+          jobs.sysread(8)
+        rescue EOFError
+          break
+        end
+        index = record.unpack1('Q>')
+        text = StringIO.new
+        out = @out
+        @out = text
+        begin
+          result, seconds = timed(scenarios[index])
+          report(result)
+        ensure
+          @out = out
+        end
+        message = Marshal.dump([index, result.outcome, text.string, seconds])
+        answers.write([message.bytesize].pack('N'), message)
+        answers.flush
+      end
+      exit!(0)
+    rescue StandardError => e
+      warn "scenario worker failed: #{e.class}: #{e.message}"
+      exit!(1)
+    end
+
+    def collect(scenarios, workers)
+      done = Array.new(scenarios.size)
+      printed = 0
+      open = workers.map(&:last)
+      until open.empty?
+        IO.select(open)[0].each do |io|
+          header = io.read(4)
+          if header.nil?
+            open.delete(io)
+            next
+          end
+          index, outcome, text, seconds = Marshal.load(io.read(header.unpack1('N'))) # rubocop:disable Security/MarshalLoad
+          done[index] = [Reported.new(scenario: scenarios[index], outcome: outcome, text: text), seconds]
+          while printed < done.size && done[printed]
+            @out.write(done[printed].first.text)
+            printed += 1
+          end
+        end
+      end
+      failed = workers.map(&:first).count { |pid| !Process.wait2(pid).last.success? }
+      missing = done.count(&:nil?)
+      raise ScenarioError, "#{failed} scenario workers failed; #{missing} scenarios did not run" if failed.positive? || missing.positive?
+
+      done
+    end
+
+    def report_timings(results, count)
+      @out.puts
+      @out.puts "slowest #{count}:"
+      results.sort_by { |(_, seconds)| -seconds }.first(count).each do |(result, seconds)|
+        @out.puts format('  %7.2fs  %s', seconds, result.scenario.full_name)
+      end
+    end
 
     def classify(scenario, error, shutdown_error)
       expected = scenario.expected_failure

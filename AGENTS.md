@@ -10,9 +10,76 @@
   default rule about branching before committing to the default branch.
 - **Integrate frequently.** Commit each small, working increment as you reach
   it, rather than accumulating a large change and landing it at the end. A
-  commit is expected to build and pass `mise run test`.
+  commit is expected to build and pass `mise run test` (see Tests below).
 - Keep history linear: rebase rather than merge, and never create a merge
   commit.
+
+## Tests: what to run
+
+- **`mise run test`: the fast pass. Run it before every commit.** It is
+  what "a commit passes" means. It builds, then runs every suite in the
+  repo in its fast form, and ends with how long each step took. It takes
+  about four minutes on an 8-thread laptop; if a step you touched grew,
+  the step times show it.
+- **`mise run test:full`: everything the fast pass leaves out**, on top of
+  it:
+  - the test host's exhaustive scenarios (below);
+  - `scale_test` up to four million actors (the fast pass stops at
+    200,000);
+  - napi's `scale.js` on Bun as well as Node, and up to a million actors.
+
+  Run it before a release, and before committing a change to core's
+  allocation, pause and resume, offload and paging, or trace-writing paths,
+  or to per-actor costs: that is what those checks cover. Say in the commit
+  message that it passed.
+- **While iterating, run the narrowest thing that covers the change**, then
+  the fast pass before committing:
+  - test host scenarios: `mise run //tinyactors-test:scenarios -n
+    'PATTERN'` (matches `group: name`; add `--fast` to skip the exhaustive
+    ones, `--timings 10` to list the slowest);
+  - one napi suite: `node tinyactors-napi/test/<suite>.js`, then `bun`;
+  - one project: `mise run test` (or `test:full`) inside `tinyactors-napi`
+    or `tinyactors-test`, `mise run asan` in `tinyactors-core`.
+- Do not skip, weaken or delete a check to make the fast pass faster. Make
+  it cheaper, or move it to the full pass as below.
+
+### Where a new test goes
+
+A test is **fast** unless it is exhaustive. It is exhaustive when it
+
+- repeats a run for every allocation it can fail, or every step it can
+  pause, unload or capture at (a sweep);
+- runs a long random or generated workload: populations of hundreds,
+  hundreds of messages or steps; or
+- takes more than about five seconds on its own (`--timings` shows it).
+
+Mark a test host scenario, or a whole group, `exhaustive: true`:
+
+```ruby
+TinyactorsTest.scenarios 'running out of memory', exhaustive: true do ... end
+scenario 'every record is written once when an allocation fails', exhaustive: true do ... end
+```
+
+Anything else that is exhaustive (a benchmark-style population, a
+program-level sweep) runs in its task's `--full` mode: give the task a
+`#USAGE flag "--full"`, let `mise run test:full` pass it down, and keep the
+fast mode smaller, as `scale_test` does with `TAT_SCALE_MAX_POPULATION`.
+
+When you make a test exhaustive, keep a small version of the same property
+in the fast pass, as the paging scenarios do: `20 actors, at most 3
+resident, 120 random messages` is fast, `100 actors, ..., 1000 random
+messages` is exhaustive. The fast pass must still exercise every behaviour;
+the full pass exercises it harder.
+
+### Tests run in parallel
+
+Test host scenarios run one host process each, in a worker per CPU
+(`--jobs N` changes it). The test host's checks, napi's suites (on Node and
+Bun), core's test programs and its sanitizer builds also run side by side.
+So a test must not depend on another, on the order they run in, or on a
+fixed port or file path: listen on port 0, write to a temporary directory.
+A test that compares timings (`scale_test`, `scale.js`) runs alone; put a
+new one beside them, not in a parallel list.
 
 ## The libraries are private: change APIs in place
 

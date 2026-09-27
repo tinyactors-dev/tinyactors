@@ -190,8 +190,10 @@ TinyactorsTest.chart :pager do
 end
 
 TinyactorsTest.scenarios 'virtual actor paging', chart: :pager do
-  [[100, 3, 1000], [100, 1, 400], [100, 100, 300]].each do |population, limit, messages|
-    scenario "#{population} actors, at most #{limit} resident, #{messages} random messages" do
+  # The small runs are the fast pass's; the large ones run in test:full.
+  [[20, 3, 120, false], [20, 20, 60, false],
+   [100, 3, 1000, true], [100, 1, 400, true], [100, 100, 300, true]].each do |population, limit, messages, exhaustive|
+    scenario "#{population} actors, at most #{limit} resident, #{messages} random messages", exhaustive: exhaustive do
       counts = VirtualActorPagingScenarios.run(self, population: population, limit: limit, messages: messages)
       if limit >= population
         assert_equal 0, counts[:page_outs], 'with room for every actor nothing is evicted'
@@ -206,8 +208,9 @@ TinyactorsTest.scenarios 'virtual actor paging', chart: :pager do
   # capture retained the external event a raised error.execution had
   # replaced and released, and the image released it again (a double free,
   # tinyactors-core/tests/session_image_test.c).
-  [[3, 2, 100], [10, 3, 200]].each do |population, limit, messages|
-    scenario "#{population} actors, at most #{limit} resident, #{messages} messages, loaded without their binding" do
+  [[3, 2, 100, false], [10, 3, 200, true]].each do |population, limit, messages, exhaustive|
+    scenario "#{population} actors, at most #{limit} resident, #{messages} messages, loaded without their binding",
+             exhaustive: exhaustive do
       counts = VirtualActorPagingScenarios.run(self, population: population, limit: limit, messages: messages,
                                                      keep_binding: false)
       assert counts[:unbound].positive?, "some actor was loaded without its binding: #{counts}"
@@ -231,12 +234,17 @@ TinyactorsTest.chart :pager_js, datamodel: 'ecmascript' do
 end
 
 TinyactorsTest.scenarios 'virtual actor paging, ECMAScript', chart: :pager_js do
-  scenario '100 actors, at most 3 resident, 1000 random messages' do
+  scenario '20 actors, at most 3 resident, 120 random messages' do
+    counts = VirtualActorPagingScenarios.run(self, population: 20, limit: 3, messages: 120, chart: :pager_js)
+    assert counts[:page_ins] >= 20, "every actor pages in again: #{counts}"
+  end
+
+  scenario '100 actors, at most 3 resident, 1000 random messages', exhaustive: true do
     counts = VirtualActorPagingScenarios.run(self, population: 100, limit: 3, messages: 1000, chart: :pager_js)
     assert counts[:page_ins] >= 100, "every actor pages in again: #{counts}"
   end
 
-  scenario '10 actors, at most 3 resident, 200 messages, loaded without their binding' do
+  scenario '10 actors, at most 3 resident, 200 messages, loaded without their binding', exhaustive: true do
     counts = VirtualActorPagingScenarios.run(self, population: 10, limit: 3, messages: 200, chart: :pager_js,
                                                    keep_binding: false)
     assert counts[:unbound].positive?, "some actor was loaded without its binding: #{counts}"
@@ -555,9 +563,12 @@ TinyactorsTest.chart :timed_pager_js, datamodel: 'ecmascript' do
 end
 
 TinyactorsTest.scenarios 'virtual actor paging, delayed sends', chart: :timed_pager do
-  [[:timed_pager, 20, 3, 300], [:timed_pager, 20, 1, 200], [:timed_pager, 20, 20, 200],
-   [:timed_pager_js, 20, 3, 300]].each do |chart, population, limit, steps|
-    scenario "#{chart}: #{population} actors, at most #{limit} resident, #{steps} steps with delayed sends" do
+  # The small runs are the fast pass's; the large ones run in test:full.
+  [[:timed_pager, 8, 2, 80, false], [:timed_pager, 8, 8, 60, false], [:timed_pager_js, 8, 2, 80, false],
+   [:timed_pager, 20, 3, 300, true], [:timed_pager, 20, 1, 200, true], [:timed_pager, 20, 20, 200, true],
+   [:timed_pager_js, 20, 3, 300, true]].each do |chart, population, limit, steps, exhaustive|
+    scenario "#{chart}: #{population} actors, at most #{limit} resident, #{steps} steps with delayed sends",
+             exhaustive: exhaustive do
       counts = VirtualActorPagingScenarios.run_timed(self, population: population, limit: limit, steps: steps,
                                                            chart: chart)
       warn "  #{counts}" if ENV['TAT_PAGING_VERBOSE']
@@ -572,8 +583,11 @@ TinyactorsTest.scenarios 'virtual actor paging, delayed sends', chart: :timed_pa
     end
   end
 
-  [[:timed_pager, 20, 3, 300], [:timed_pager, 20, 1, 200], [:timed_pager_js, 20, 3, 300]].each do |chart, population, limit, steps|
-    scenario "#{chart}: #{population} actors, at most #{limit} resident, #{steps} steps with sends to self" do
+  [[:timed_pager, 8, 2, 80, false], [:timed_pager_js, 8, 2, 80, false],
+   [:timed_pager, 20, 3, 300, true], [:timed_pager, 20, 1, 200, true],
+   [:timed_pager_js, 20, 3, 300, true]].each do |chart, population, limit, steps, exhaustive|
+    scenario "#{chart}: #{population} actors, at most #{limit} resident, #{steps} steps with sends to self",
+             exhaustive: exhaustive do
       counts = VirtualActorPagingScenarios.run_timed(self, population: population, limit: limit, steps: steps,
                                                            chart: chart, self_sends: true)
       warn "  #{counts}" if ENV['TAT_PAGING_VERBOSE']
