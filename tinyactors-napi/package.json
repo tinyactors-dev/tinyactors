@@ -1,6 +1,6 @@
 {
   "name": "@tinyactors/node",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Tinyactors for Node.js and Bun: SCXML statecharts as actors, on a native runtime",
   "keywords": [
     "actor",
