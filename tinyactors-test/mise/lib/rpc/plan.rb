@@ -170,7 +170,8 @@ module RPC
       tagged = entry['tagged']
       union = entry['fields'].find { |slot| slot['name'] == tagged['union'] }['type']['record']['fields']
       common_keys = plan.fields.map(&:key) + [tagged['tag']]
-      error(name, 'a tagged union that is absent when zero cannot carry other members') if plan.zero_is_absent && plan.fields.any?
+      # A tagged union that is absent when zero may carry other members (an
+      # action's `span`, ADR 0085); an absent value writes none of them.
       kinds = @api.type(tagged['enum'])['constants'].map do |constant|
         member = tagged['members'][constant['name']]
         next Kind.new(constant: constant['name'], layout: :none, keys: common_keys) unless member

@@ -12,6 +12,11 @@ module TinyactorsTest
   # send IDs are the author's strings, delays are SCXML durations, and I/O
   # processors are names. Expressions are data-model source strings; with the
   # jq data model they are jq filters over the actor's root.
+  #
+  # Every state, transition, initial transition and action records where it
+  # was written: the file and line of the DSL call, as a span of the spec
+  # (core ADR 0085). A debugger maps compiled IDs back to those lines. An
+  # expression has no span of its own; it was written on its element's line.
   class Chart
     attr_reader :name, :datamodel, :binding, :document_name
 
@@ -37,6 +42,10 @@ module TinyactorsTest
       @script = nil
       @send_ids = {}
       @unmatched_cancels = {}
+      @spans = []
+      @sources = {}
+      @initial_span = nil
+      @script_span = nil
     end
 
     def self.define(name, **options, &block)
@@ -55,13 +64,31 @@ module TinyactorsTest
       raise ChartError, "chart #{name}: script declared twice; SCXML allows one top-level <script>" if @script
 
       @script = source.to_s
+      @script_span = span_here
     end
 
     def initial=(target)
       raise ChartError, "chart #{name}: initial declared twice" if @initial
 
       @initial = Array(target).map(&:to_s)
+      @initial_span = span_here
     end
+
+    # Where the DSL call being evaluated was written: the first caller outside
+    # this file, as a span with the Ruby file as its source (ADR 0085). The
+    # spec's spans count from 1; nil when no caller is outside this file.
+    def span_here
+      frame = caller_locations(1).find { |location| location.absolute_path != DSL_FILE }
+      return nil unless frame
+
+      path = frame.absolute_path || frame.path
+      source = (@sources[path] ||= @sources.size)
+      # Zero members are absent, as the RPC writes a span back.
+      @spans << (source.zero? ? { line: frame.lineno } : { source: source, line: frame.lineno })
+      @spans.size
+    end
+
+    DSL_FILE = File.expand_path(__FILE__)
 
     # Records a literal <send> ID so literal cancels can be checked against it.
     def declare_send_id(id)
@@ -82,15 +109,35 @@ module TinyactorsTest
       @unmatched_cancels.key?(id)
     end
 
-    def to_spec
+    # The spec as JSON for ta_scxml_spec. `spans: false` leaves out where
+    # elements were written, for a spec that is content of another chart:
+    # its bytes are part of that chart's revision, which must not move with
+    # a line.
+    def to_spec(spans: true)
       spec = { name: document_name || name }
       spec[:datamodel] = datamodel if datamodel
       spec[:data] = @data
-      spec[:initial] = { targets: initial_targets }
+      spec[:initial] = { targets: initial_targets, span: @initial && @initial_span }.compact
       spec[:states] = @states.map(&:to_spec)
       spec[:binding] = binding.to_s if binding
       spec[:script] = script if script
-      spec
+      spec[:script_span] = @script_span if script && @script_span
+      unless @spans.empty?
+        spec[:spans] = @spans
+        spec[:sources] = @sources.keys.map { |path| { name: path } }
+      end
+      spans ? spec : Chart.without_spans(spec)
+    end
+
+    SPAN_KEYS = %i[span spans sources script_span].freeze
+
+    # `spec` with every span member removed.
+    def self.without_spans(spec)
+      case spec
+      when Hash then spec.except(*SPAN_KEYS).transform_values { |value| without_spans(value) }
+      when Array then spec.map { |value| without_spans(value) }
+      else spec
+      end
     end
 
     def to_json(*args)
@@ -138,12 +185,15 @@ module TinyactorsTest
     # A state or pseudo-state in the chart tree.
     class State
       attr_reader :id, :parent, :children, :transitions, :onentry, :onexit, :data, :invokes
-      attr_accessor :kind, :initial, :initial_actions, :history_default, :history_actions, :done_data
+      attr_accessor :kind, :initial, :initial_actions, :initial_span, :history_default, :history_actions, :done_data,
+                    :span
 
-      def initialize(id, kind, parent)
+      def initialize(id, kind, parent, span: nil)
         @id = id.to_s
         @kind = kind
         @parent = parent
+        @span = span
+        @initial_span = nil
         @children = []
         @transitions = []
         @onentry = []
@@ -214,8 +264,11 @@ module TinyactorsTest
 
       def to_spec
         spec = { kind: resolved_kind.to_s, id: id }
+        spec[:span] = span if span
         if history?
+          # The default transition was written with the history state.
           transition = { kind: 'external', targets: @history_default }
+          transition[:span] = span if span
           transition[:actions] = @history_actions if @history_actions
           spec[:transitions] = [transition]
           return spec
@@ -224,6 +277,7 @@ module TinyactorsTest
         if resolved_kind == :compound
           spec[:initial] = { targets: initial_targets }
           spec[:initial][:actions] = @initial_actions if @initial_actions
+          spec[:initial][:span] = @initial_span if @initial && @initial_span
         end
         spec[:states] = @children.map(&:to_spec) unless @children.empty?
         spec[:transitions] = @transitions unless @transitions.empty?
@@ -289,7 +343,7 @@ module TinyactorsTest
       child = TinyactorsTest.charts.fetch(chart_name.to_sym) do
         raise ChartError, "chart #{chart.name}: #{what} names chart #{chart_name}, which is not defined yet"
       end
-      JSON.generate(child.to_spec)
+      JSON.generate(child.to_spec(spans: false))
     end
 
     # Lowers `{ name => value }` to ta_scxml_param_spec entries. A String value
@@ -351,6 +405,7 @@ module TinyactorsTest
           raise ChartError, "state #{@state.id}: initial declared twice" if @state.initial
 
           @state.initial = targets.map(&:to_s)
+          @state.initial_span = @chart.span_here
           @state.initial_actions = actions(&block) if block
         else
           raise ChartError, "chart #{@chart.name}: the root initial takes no actions" if block
@@ -377,7 +432,7 @@ module TinyactorsTest
         raise ChartError, "history #{id} must be inside a state" unless @state
         raise ChartError, "history #{id}: type must be :shallow or :deep" unless %i[shallow deep].include?(type)
 
-        history = State.new(id, :"history_#{type}", @state)
+        history = State.new(id, :"history_#{type}", @state, span: @chart.span_here)
         history.history_default = Array(default).map(&:to_s)
         history.history_actions = actions(&block) if block
         @state.children << history
@@ -387,7 +442,7 @@ module TinyactorsTest
       # list). Omit it for an eventless transition.
       def transition(on: nil, target: nil, cond: nil, type: :external, &block)
         require_state!('transition')
-        transition = { kind: type.to_s }
+        transition = { kind: type.to_s, span: @chart.span_here }.compact
         transition[:event] = Array(on).join(' ') if on
         transition[:condition] = cond if cond
         transition[:targets] = Array(target).map(&:to_s) if target
@@ -466,7 +521,7 @@ module TinyactorsTest
 
       def add_state(id, kind, initial: nil, &block)
         parent = @state
-        state = State.new(id, kind, parent)
+        state = State.new(id, kind, parent, span: @chart.span_here)
         state.initial = Array(initial).map(&:to_s) if initial
         (parent ? parent.children : @chart.states) << state
         Builder.new(@chart, state, state).instance_eval(&block) if block
@@ -503,7 +558,7 @@ module TinyactorsTest
       def raise_event(event, data: nil)
         action = { kind: 'raise', event: event.to_s }
         action[:data] = { expr: data } if data
-        @actions << action
+        add(action)
       end
 
       # Sends an event, by default to this actor's external queue through the
@@ -533,7 +588,7 @@ module TinyactorsTest
                                                               media_type: media_type)
         action[:params] = Chart.param_specs(@chart, params) if params
         @chart.declare_send_id(id.to_s) if id
-        @actions << action.compact
+        add(action.compact)
       end
 
       # Cancels a delayed send by its literal ID, or by an expression that
@@ -546,7 +601,7 @@ module TinyactorsTest
 
         @chart.declare_unmatched_cancel(id.to_s) if unmatched
 
-        @actions << { kind: 'cancel', sendid: sendid }
+        add({ kind: 'cancel', sendid: sendid })
       end
 
       # Assigns an expression, inline content (`content:`), or a chart's spec
@@ -555,18 +610,18 @@ module TinyactorsTest
         value = Chart.value_spec(@chart, "assign #{location}", expr: expr, content: content, chart_name: chart)
         raise ChartError, "chart #{@chart.name}: assign #{location} needs an expression, content:, or chart:" unless value
 
-        @actions << { kind: 'assign', location: location, value: value }
+        add({ kind: 'assign', location: location, value: value })
       end
 
       def script(source)
-        @actions << { kind: 'script', script: source }
+        add({ kind: 'script', script: source })
       end
 
       def log(label = nil, expr: nil)
         action = { kind: 'log' }
         action[:label] = label.to_s if label
         action[:expr] = expr if expr
-        @actions << action
+        add(action)
       end
 
       # SCXML <if>/<elseif>/<else>, lowered to nested conditionals:
@@ -587,10 +642,16 @@ module TinyactorsTest
         action = { kind: 'foreach', array: array, item: item.to_s }
         action[:index] = index.to_s if index
         action[:body] = ActionBuilder.new(@chart).tap { |builder| builder.instance_eval(&block) }.actions if block
-        @actions << action
+        add(action)
       end
 
       private
+
+      # Appends an action with the span of the DSL call that wrote it.
+      def add(action)
+        span = @chart.span_here
+        @actions << (span ? { kind: action[:kind], span: span, **action.except(:kind) } : action)
+      end
 
       def pair(name, literal, expression)
         Chart.pair(@chart, name, literal, expression)
@@ -613,10 +674,11 @@ module TinyactorsTest
         @otherwise = nil
       end
 
+      # Each branch is an <if>, written where the branch is.
       def branch(condition, &block)
         raise ChartError, "chart #{@chart.name}: branch after otherwise" if @otherwise
 
-        @branches << [condition, body(&block)]
+        @branches << [condition, @chart.span_here, body(&block)]
       end
 
       def otherwise(&block)
@@ -628,8 +690,8 @@ module TinyactorsTest
       def to_spec
         raise ChartError, "chart #{@chart.name}: conditional needs a branch" if @branches.empty?
 
-        @branches.reverse.reduce(@otherwise) do |else_actions, (condition, then_actions)|
-          spec = { kind: 'if', condition: condition }
+        @branches.reverse.reduce(@otherwise) do |else_actions, (condition, span, then_actions)|
+          spec = { kind: 'if', span: span, condition: condition }.compact
           spec[:then_actions] = then_actions unless then_actions.empty?
           spec[:else_actions] = else_actions if else_actions && !else_actions.empty?
           [spec]

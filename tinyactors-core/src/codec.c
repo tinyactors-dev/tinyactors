@@ -363,6 +363,7 @@ ta_result ta_definition_import(ta_system *system, const ta_definition_import_par
     ta_result result = params->codec.v->decode(params->codec.self,
                                                &(ta_chart_decode_params){
                                                    .input = params->input,
+                                                   .name = params->name,
                                                    .arena = params->arena,
                                                    .resolver = params->resolver,
                                                    .lowering = params->lowering,
@@ -429,8 +430,34 @@ ta_result ta_definition_import(ta_system *system, const ta_definition_import_par
 
 /*
  * Encode: export, then the codec's encode. The identity no syntax carries is
- * handed back beside the bytes.
+ * handed back beside the bytes. Asked where elements landed, the export
+ * numbers every element by kind and ID (ADR 0085), and the codec's reports
+ * land in one table laid out the same way.
  */
+
+typedef struct {
+    ta_source_span *table;
+    uint32_t count;
+} ta_encode_spans;
+
+static void ta_encode_span_written(void *self, uint32_t span, const ta_source_span *where) {
+    ta_encode_spans *spans = self;
+    if (span != 0 && span <= spans->count && where != NULL) {
+        spans->table[span - 1u] = *where;
+    }
+}
+
+static const ta_chart_span_sink_vtable ta_encode_span_sink = { .written = ta_encode_span_written };
+
+/* The part of the table for one kind of element; null when it has none. */
+static const ta_source_span *ta_encode_spans_of(const ta_encode_spans *spans, const ta_definition *definition,
+                                                ta_element_kind kind) {
+    if (ta_definition_element_count(definition, kind) == 0) {
+        return NULL;
+    }
+    return spans->table + ta_definition_span_base(definition, kind);
+}
+
 ta_result ta_definition_encode(const ta_system *system, const ta_definition_encode_params *params) {
     if (system == NULL || params == NULL || params->codec.v == NULL || params->arena == NULL ||
         params->out == NULL) {
@@ -443,24 +470,50 @@ ta_result ta_definition_encode(const ta_system *system, const ta_definition_enco
         return TA_ERR_UNSUPPORTED;
     }
     const ta_scxml_spec *spec = NULL;
-    ta_result result = ta_definition_export(system, &(ta_definition_export_params){
-                                                        .definition = params->definition,
-                                                        .arena = params->arena,
-                                                        .out = &spec,
-                                                    });
+    ta_result result = ta_export_spec(system, &(ta_export_request){
+                                                  .definition = params->definition,
+                                                  .arena = params->arena,
+                                                  .numbered = params->spans != NULL,
+                                                  .out = &spec,
+                                              });
     if (result != TA_OK) {
         return result;
+    }
+    ta_encode_spans spans = { .count = params->spans != NULL ? spec->span_count : 0 };
+    if (spans.count != 0) {
+        spans.table = ta_arena_alloc(params->arena, (size_t)spans.count * sizeof(ta_source_span),
+                                     _Alignof(ta_source_span));
+        if (spans.table == NULL) {
+            return TA_ERR_NOMEM;
+        }
+        ta_mem_zero(spans.table, (size_t)spans.count * sizeof(ta_source_span));
     }
     ta_chart_error encode_error = {0};
     result = params->codec.v->encode(params->codec.self, &(ta_chart_encode_params){
                                                              .spec = spec,
                                                              .arena = params->arena,
                                                              .expressions = params->expressions,
+                                                             .spans = { .self = &spans,
+                                                                        .v = params->spans != NULL ? &ta_encode_span_sink
+                                                                                                   : NULL },
                                                              .out = params->out,
                                                              .error = &encode_error,
                                                          });
     if (result == TA_ERR_INVALID && params->error != NULL) {
         *params->error = encode_error;
+    }
+    if (result == TA_OK && params->spans != NULL) {
+        const ta_definition *definition = ta_definition_lookup(system, params->definition);
+        *params->spans = (ta_source_map){
+            .states = ta_encode_spans_of(&spans, definition, TA_ELEMENT_STATE),
+            .state_count = ta_definition_element_count(definition, TA_ELEMENT_STATE),
+            .transitions = ta_encode_spans_of(&spans, definition, TA_ELEMENT_TRANSITION),
+            .transition_count = ta_definition_element_count(definition, TA_ELEMENT_TRANSITION),
+            .actions = ta_encode_spans_of(&spans, definition, TA_ELEMENT_ACTION),
+            .action_count = ta_definition_element_count(definition, TA_ELEMENT_ACTION),
+            .expressions = ta_encode_spans_of(&spans, definition, TA_ELEMENT_EXPRESSION),
+            .expression_count = ta_definition_element_count(definition, TA_ELEMENT_EXPRESSION),
+        };
     }
     if (result == TA_OK && params->identity != NULL) {
         *params->identity = spec->identity;

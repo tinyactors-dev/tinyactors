@@ -524,6 +524,14 @@ typedef struct {
  */
 typedef struct {
     ta_expression_kind kind;
+    /*
+     * In a spec: where the expression was written, as an index into the
+     * spec's `spans` counting from 1, or 0 when unknown (ADR 0085). The
+     * copies a definition keeps (ta_definition_expression(), a data model's
+     * expression table) carry 0; ta_definition_span() says where one was
+     * written.
+     */
+    uint32_t span;
     union {
         TA_WHEN(TA_EXPRESSION_SOURCE) ta_str source;
         TA_WHEN(TA_EXPRESSION_HOST) ta_expression_host host;
@@ -1418,6 +1426,62 @@ TA_API void ta_tree_list_init(TA_OUT TA_LIFETIME(input) ta_tree_list *list,
 TA_API void ta_tree_put(TA_INOUT ta_tree_list *list, const void *element);
 TA_API const void *ta_tree_close(TA_INOUT ta_tree_list *list);
 
+/*
+ * Source spans (ADR 0085)
+ *
+ * Where an element of a chart was written: a place in one of the spec's
+ * sources. A front end that knows fills them in, and a spec built without
+ * them compiles exactly as before. Spans never change a definition's
+ * revision.
+ *
+ * A span is known when `line` is nonzero; an all-zero span is unknown.
+ * Lines and columns count from 1, and a column counts bytes, as
+ * ta_chart_position does. A front end that knows only lines, such as a
+ * DSL that records the line each element was written on, leaves the column,
+ * the end and the byte range zero.
+ */
+typedef struct {
+    /* The first byte, from the start of the source. */
+    uint64_t offset;
+    /* Bytes; 0 when the byte range is unknown. */
+    uint32_t length;
+    /* An index into ta_scxml_spec.sources. In a spec that lists no
+     * sources, 0: the one unnamed source. */
+    uint32_t source;
+    uint32_t line;
+    uint32_t column;
+    /* The position one past the last byte, as txml's spans end; zero when
+     * unknown. */
+    uint32_t end_line;
+    uint32_t end_column;
+} ta_source_span TA_ZERO_IS_ABSENT;
+
+/*
+ * A source a spec's spans point into: the input a codec decoded (the first),
+ * a file a ta_chart_src_resolver fetched for it, or a program file of a DSL.
+ * `name` is what the front end calls it: a path, a URI, or empty.
+ */
+typedef struct {
+    ta_str name;
+} ta_scxml_source;
+
+/*
+ * A span for every element of a definition, by kind and ID: `states[id]`
+ * is where state `id` is, and so on. An element with no known span has an
+ * all-zero one. ta_definition_encode() fills one for the text it writes.
+ */
+typedef struct {
+    TA_COUNTED_BY(state_count) TA_OPTIONAL const ta_source_span *states;
+    uint32_t state_count;
+    /* Initial transitions included, as ta_definition_transition() numbers them. */
+    TA_COUNTED_BY(transition_count) TA_OPTIONAL const ta_source_span *transitions;
+    uint32_t transition_count;
+    TA_COUNTED_BY(action_count) TA_OPTIONAL const ta_source_span *actions;
+    uint32_t action_count;
+    TA_COUNTED_BY(expression_count) TA_OPTIONAL const ta_source_span *expressions;
+    uint32_t expression_count;
+} ta_source_map;
+
 typedef enum {
     TA_SCXML_VALUE_NONE = 0,
     TA_SCXML_VALUE_EXPR,
@@ -1582,8 +1646,14 @@ typedef struct {
     TA_TERMINATED_BY(kind) TA_OPTIONAL const ta_scxml_action_spec *finalize;
 } ta_scxml_invoke_spec TA_ZERO_IS_ABSENT;
 
+/*
+ * The `span` of an action, a transition, an initial transition and a state
+ * is where that element was written: an index into the spec's `spans`
+ * counting from 1, or 0 when unknown (ADR 0085).
+ */
 struct ta_scxml_action_spec {
     ta_scxml_action_kind kind;
+    uint32_t span;
     union {
         TA_WHEN(TA_SCXML_ACTION_RAISE) struct { ta_str event; ta_scxml_value_spec data; } raise;
         TA_WHEN(TA_SCXML_ACTION_SEND) ta_scxml_send_spec send;
@@ -1608,13 +1678,16 @@ struct ta_scxml_action_spec {
     } as;
 };
 
+/* An <initial> element, or an `initial` attribute (then with no actions). */
 typedef struct {
     TA_TERMINATED_BY(ptr) TA_OPTIONAL const ta_str *targets;
     TA_TERMINATED_BY(kind) TA_OPTIONAL const ta_scxml_action_spec *actions;
+    uint32_t span;
 } ta_scxml_initial_spec TA_ZERO_IS_ABSENT;
 
 struct ta_scxml_transition_spec {
     ta_scxml_transition_kind kind;
+    uint32_t span;
     ta_str event;
     ta_expression condition;
     TA_TERMINATED_BY(ptr) TA_OPTIONAL const ta_str *targets;
@@ -1652,6 +1725,7 @@ typedef struct {
 
 struct ta_scxml_state_spec {
     ta_scxml_state_kind kind;
+    uint32_t span;
     ta_str id;
     TA_TERMINATED_BY(kind) TA_OPTIONAL const ta_scxml_state_spec *states;
     TA_IN TA_OPTIONAL const ta_scxml_initial_spec *initial;
@@ -1684,6 +1758,20 @@ typedef struct {
      * and passed as source text; the core performs no I/O.
      */
     ta_expression script;
+    /* Where the <script> element was written; `script.span` is its text. */
+    uint32_t script_span;
+    /*
+     * Where the elements were written (ADR 0085): the table the elements'
+     * `span` members index, and the sources its spans point into. Both are
+     * absent in a spec that says nothing about sources, and neither affects
+     * the revision. A span whose `source` is outside `sources` (other than 0
+     * when there are none) is TA_COMPILE_ERROR_MALFORMED_SPEC, and so is an
+     * element whose `span` is beyond `span_count`.
+     */
+    TA_COUNTED_BY(span_count) TA_OPTIONAL const ta_source_span *spans;
+    uint32_t span_count;
+    TA_COUNTED_BY(source_count) TA_OPTIONAL const ta_scxml_source *sources;
+    uint32_t source_count;
 } ta_scxml_spec TA_ZERO_IS_ABSENT;
 
 /**
@@ -1960,7 +2048,8 @@ typedef enum {
     TA_SPEC_MEMBER_INDEX,
     TA_SPEC_MEMBER_SENDID,
     TA_SPEC_MEMBER_DATAMODEL,
-    TA_SPEC_MEMBER_IDENTITY
+    TA_SPEC_MEMBER_IDENTITY,
+    TA_SPEC_MEMBER_SPAN
 } ta_spec_member TA_SYMBOLS("TA_SPEC_MEMBER_");
 
 /* The index of a step into a single member. */
@@ -2076,6 +2165,12 @@ TA_API ta_result ta_compile_error_format(TA_IN const ta_compile_error_format_par
  * and points to the definition's explicit identity otherwise. Empty lists are
  * exported as null, except that a handler's `actions` is never null.
  *
+ * A definition that keeps spans exports them (ADR 0085): `spans` is its
+ * table, borrowed, with the states first, then the transitions, the actions
+ * and the expressions, each by ID; every exported element whose span is
+ * known indexes it, and `sources` names what they point into. Compiling the
+ * export keeps the same spans. A definition without spans exports none.
+ *
  * TA_ERR_NOT_FOUND: no existing definition has this ID. A retired definition
  * exports until it is freed.
  */
@@ -2188,8 +2283,25 @@ typedef struct ta_chart_expression_printer_vtable {
 } ta_chart_expression_printer_vtable TA_VTABLE;
 typedef struct { void *self; TA_OPTIONAL const ta_chart_expression_printer_vtable *v; } ta_chart_expression_printer TA_ADAPTER;
 
+/*
+ * Told by an encode where it wrote each element (ADR 0085). For every
+ * element of the spec whose `span` is nonzero, the codec calls `written`
+ * once with that index and the element's place in the output: source 0,
+ * the byte range, and the lines and columns of both ends. For an
+ * expression, the place is its text: an attribute's value, or an element's
+ * character data. Recording cannot fail: a sink that needs memory reserves
+ * it before the encode.
+ */
+typedef struct ta_chart_span_sink_vtable {
+    void (*written)(void *self, uint32_t span, TA_IN const ta_source_span *where);
+} ta_chart_span_sink_vtable TA_VTABLE;
+typedef struct { void *self; TA_OPTIONAL const ta_chart_span_sink_vtable *v; } ta_chart_span_sink TA_ADAPTER;
+
 typedef struct {
     ta_bytes input;
+    /* What the input is called, such as its path; the decoded spec's first
+     * source. Empty when it has no name. */
+    ta_str name;
     /*
      * The operation's arena. Everything the decode allocates lives here — the
      * codec's own parse, the spec, and the transients in between — and
@@ -2211,6 +2323,8 @@ typedef struct {
      * needed to produce them. */
     TA_ARENA ta_arena *arena;
     ta_chart_expression_printer expressions;
+    /* Absent when the caller does not ask where elements landed. */
+    ta_chart_span_sink spans;
     TA_OUT TA_LIFETIME(arena) ta_bytes *out;
     TA_OUT TA_OPTIONAL TA_VALID_ON(TA_ERR_INVALID) TA_LIFETIME(arena) ta_chart_error *error;
 } ta_chart_encode_params;
@@ -2219,6 +2333,11 @@ typedef struct ta_chart_codec_vtable {
     ta_chart_codec_info info;
     /*
      * Decode `input` into a spec.
+     *
+     * A codec that knows where it read each element fills the spec's spans
+     * (ADR 0085), with `name` as the first source and each file the
+     * resolver fetched as one more. It never has to: a spec with no spans
+     * compiles to the same revision as one with them.
      *
      * **The spec may point into `input`.** A codec is not required to copy,
      * because a codec over a syntax tree keeps expression text as exact
@@ -2248,7 +2367,9 @@ typedef struct ta_chart_codec_vtable {
      * explicit one carries it beside the document and feeds it back through
      * ta_chart_decode_params. A literal content whose media type is not this
      * codec's own is TA_CHART_ERROR_UNREPRESENTABLE unless the codec can
-     * carry it verbatim. Null when this codec only reads.
+     * carry it verbatim. When `spans` is present, the codec reports where it
+     * wrote every element that has a `span` (ADR 0085). Null when this codec
+     * only reads.
      */
     TA_OPTIONAL ta_result (*encode)(void *self, TA_IN const ta_chart_encode_params *params);
 } ta_chart_codec_vtable TA_VTABLE;
@@ -2294,6 +2415,9 @@ typedef struct {
 typedef struct {
     ta_chart_codec codec;
     ta_bytes input;
+    /* What the input is called, such as its path: the name of the
+     * definition's first source (ADR 0085). Empty when it has none. */
+    ta_str name;
     /* The operation's arena: the decode, its transients, and anything
      * `error` refers to. Core does not reset it. Reset it once the error has
      * been read. */
@@ -2338,6 +2462,10 @@ typedef struct {
     TA_ARENA ta_arena *arena;
     ta_chart_expression_printer expressions;
     TA_OUT TA_LIFETIME(arena) ta_bytes *out;
+    /* When asked for, where each element of the definition landed in `out`
+     * (ADR 0085): its arrays are in `arena`, and an element the codec
+     * reported nothing for has an all-zero span. */
+    TA_OUT TA_OPTIONAL TA_LIFETIME(arena) ta_source_map *spans;
     TA_VIEW_OUT TA_OPTIONAL TA_LIFETIME(definition) const ta_definition_identity **identity;
     TA_OUT TA_OPTIONAL TA_VALID_ON(TA_ERR_INVALID) TA_LIFETIME(arena) ta_chart_error *error;
 } ta_definition_encode_params;
@@ -3035,6 +3163,39 @@ typedef struct {
 } ta_definition_expression_params;
 TA_API ta_result ta_definition_expression(const ta_system *system,
                                           TA_IN const ta_definition_expression_params *params);
+
+/* The kinds of compiled element a definition numbers, for ta_definition_span(). */
+typedef enum {
+    TA_ELEMENT_STATE = 0,
+    TA_ELEMENT_TRANSITION,   /* initial transitions included, as ta_definition_transition() numbers them */
+    TA_ELEMENT_ACTION,
+    TA_ELEMENT_EXPRESSION
+} ta_element_kind TA_SYMBOLS("TA_ELEMENT_");
+
+typedef struct {
+    ta_source_span span;
+    /* The name of the source `span.source` indexes; empty when the spec
+     * named none. */
+    ta_str source;
+} ta_source_location;
+
+/*
+ * Where one element of a definition was written (ADR 0085), as the spec it
+ * was compiled from said. The spans are the definition's, not the actors':
+ * a definition compiled from a spec with no known span keeps none.
+ * TA_ERR_NOT_FOUND when the definition is unknown or stale, the ID is out of
+ * range, or the definition keeps no span for that element. A retired
+ * definition answers until it is freed. A registration answered by this
+ * definition (ADR 0077) that brings other spans replaces them, and `source`
+ * text read before goes with the old ones.
+ */
+typedef struct {
+    ta_definition_id definition;
+    ta_element_kind kind;
+    uint32_t id;
+    TA_OUT TA_LIFETIME(definition) ta_source_location *out;
+} ta_definition_span_params;
+TA_API ta_result ta_definition_span(const ta_system *system, TA_IN const ta_definition_span_params *params);
 
 /*
  * One <invoke> of a definition, by declaration index from 0 (ADR 0077):

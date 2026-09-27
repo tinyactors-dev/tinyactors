@@ -601,6 +601,229 @@ static void test_compile_error_positions(ta_system *system) {
     ta_arena_destroy(&arena);
 }
 
+/* ------------------------------------------------------------------------
+ * Source spans (core ADR 0085): where decode read each element, and where
+ * encode wrote it.
+ */
+
+static const char SPANNED[] =
+    "<scxml " NS " version=\"1.0\" name=\"spans\" initial=\"main\">\n"  /* line 1 */
+    "  <script src=\"file:script.js\"/>\n"                              /* line 2 */
+    "  <state id=\"main\">\n"                                            /* line 3 */
+    "    <initial>\n"                                                     /* line 4 */
+    "      <transition target=\"idle\"/>\n"                               /* line 5 */
+    "    </initial>\n"                                                    /* line 6 */
+    "    <state id=\"idle\">\n"                                         /* line 7 */
+    "      <transition event=\"go\" cond=\"x &gt; 1\" target=\"done\">\n" /* line 8 */
+    "        <if cond=\"a\">\n"                                           /* line 9 */
+    "          <log expr=\"1\"/>\n"                                       /* line 10 */
+    "        <elseif cond=\"b\"/>\n"                                      /* line 11 */
+    "          <script><![CDATA[go()]]></script>\n"                       /* line 12 */
+    "        </if>\n"                                                     /* line 13 */
+    "      </transition>\n"                                               /* line 14 */
+    "    </state>\n"                                                      /* line 15 */
+    "  </state>\n"                                                        /* line 16 */
+    "  <final id=\"done\"/>\n"                                            /* line 17 */
+    "</scxml>\n";
+
+/* The input text a span covers. */
+static bool spans_text(const char *input, const ta_source_span *span, const char *text) {
+    size_t length = strlen(text);
+    return span->length == length && memcmp(input + span->offset, text, length) == 0;
+}
+
+/* A span's line and columns agree with its offsets in `text`. */
+static bool consistent(ta_bytes text, const ta_source_span *span) {
+    uint32_t line = 1;
+    uint32_t column = 1;
+    for (uint64_t at = 0; at < span->offset + span->length && at < text.len; at += 1u) {
+        if (at == span->offset && (line != span->line || column != span->column)) {
+            return false;
+        }
+        if (text.ptr[at] == '\n') {
+            line += 1u;
+            column = 1;
+        } else {
+            column += 1u;
+        }
+    }
+    return span->offset + span->length <= text.len && line == span->end_line && column == span->end_column;
+}
+
+static void test_decode_spans(void) {
+    ta_arena arena;
+    CHECK(ta_arena_init(&arena, test_allocator, 4096) == TA_OK);
+    decoded d = { 0 };
+    ta_chart_codec adapter = ta_scxml_codec_adapter(&default_codec);
+    d.result = adapter.v->decode(adapter.self, &(ta_chart_decode_params){
+                                                   .input = { .ptr = (const uint8_t *)SPANNED, .len = sizeof(SPANNED) - 1u },
+                                                   .name = S("charts/spans.scxml"),
+                                                   .arena = &arena,
+                                                   .resolver = resolver,
+                                                   .out = &d.spec,
+                                                   .error = &d.error,
+                                               });
+    CHECK(d.result == TA_OK);
+    if (d.result != TA_OK) {
+        ta_arena_destroy(&arena);
+        return;
+    }
+    const ta_scxml_spec *spec = d.spec;
+    CHECK(spec->source_count == 2 && str_is(spec->sources[0].name, "charts/spans.scxml") &&
+          str_is(spec->sources[1].name, "file:script.js"));
+    const ta_source_span *spans = spec->spans;
+    /* The root's `initial` attribute, name to closing quote. */
+    CHECK(spec->initial->span != 0 && spans_text(SPANNED, &spans[spec->initial->span - 1u], "initial=\"main\""));
+    /* The <script src>: the element, and all of the fetched file as its text. */
+    const ta_source_span *script = &spans[spec->script_span - 1u];
+    CHECK(script->line == 2 && script->column == 3 && spans_text(SPANNED, script, "<script src=\"file:script.js\"/>"));
+    const ta_source_span *file = &spans[spec->script.span - 1u];
+    CHECK(file->source == 1 && file->offset == 0 && file->length == 12 && file->line == 1 && file->end_column == 13);
+
+    const ta_scxml_state_spec *main_state = &spec->states[0];
+    const ta_source_span *main_span = &spans[main_state->span - 1u];
+    CHECK(main_span->line == 3 && main_span->column == 3 && main_span->end_line == 16 && main_span->end_column == 11);
+    CHECK(main_span->source == 0);
+    CHECK(spans[main_state->initial->span - 1u].line == 4 && spans[main_state->initial->span - 1u].end_line == 6);
+    const ta_scxml_state_spec *idle = &main_state->states[0];
+    CHECK(spans[idle->span - 1u].line == 7 && spans[idle->span - 1u].end_line == 15);
+    const ta_scxml_transition_spec *go = &idle->transitions[0];
+    CHECK(spans[go->span - 1u].line == 8 && spans[go->span - 1u].end_line == 14);
+    /* An expression is its value as written, references and all. */
+    CHECK(str_is(go->condition.as.source, "x > 1") && spans_text(SPANNED, &spans[go->condition.span - 1u], "x &gt; 1"));
+    const ta_scxml_action_spec *branch = &go->actions[0];
+    CHECK(branch->kind == TA_SCXML_ACTION_IF && spans[branch->span - 1u].line == 9 &&
+          spans[branch->span - 1u].end_line == 13);
+    CHECK(spans_text(SPANNED, &spans[branch->as.conditional.condition.span - 1u], "a"));
+    CHECK(spans[branch->as.conditional.then_actions[0].span - 1u].line == 10);
+    /* The <elseif> is the <if> it lowers to. */
+    const ta_scxml_action_spec *elseif = &branch->as.conditional.else_actions[0];
+    CHECK(spans_text(SPANNED, &spans[elseif->span - 1u], "<elseif cond=\"b\"/>"));
+    const ta_scxml_action_spec *body = &elseif->as.conditional.then_actions[0];
+    CHECK(spans[body->span - 1u].line == 12 && spans[body->span - 1u].column == 11);
+    /* A CDATA body is its text, inside the markers. */
+    CHECK(spans_text(SPANNED, &spans[body->as.script.script.span - 1u], "go()"));
+    CHECK(spans[spec->states[1].span - 1u].line == 17);
+    for (uint32_t index = 0; index < spec->span_count; index += 1u) {
+        if (spans[index].source == 0) {
+            CHECK(consistent((ta_bytes){ (const uint8_t *)SPANNED, sizeof(SPANNED) - 1u }, &spans[index]));
+        }
+    }
+    ta_arena_destroy(&arena);
+}
+
+static ta_result import_named(ta_system *system, ta_arena *arena, ta_bytes input, ta_str name, ta_definition_id *out) {
+    return ta_definition_import(system, &(ta_definition_import_params){
+                                            .codec = ta_scxml_codec_adapter(&default_codec),
+                                            .input = input,
+                                            .name = name,
+                                            .arena = arena,
+                                            .resolver = resolver,
+                                            .datamodels = &stub_datamodel,
+                                            .datamodel_count = 1,
+                                            .allocator = test_allocator,
+                                            .out = out,
+                                        });
+}
+
+static ta_result where(ta_system *system, ta_definition_id definition, ta_element_kind kind, uint32_t id,
+                       ta_source_location *out) {
+    return ta_definition_span(system, &(ta_definition_span_params){
+                                          .definition = definition, .kind = kind, .id = id, .out = out });
+}
+
+/*
+ * Through core: the definition keeps what decode read, a document moved down
+ * a line has the same revision, and encode reports where it wrote every
+ * element, which is where a decode of the encoding reads it.
+ */
+static void test_spans_through_core(ta_system *system) {
+    ta_arena arena;
+    CHECK(ta_arena_init(&arena, test_allocator, 4096) == TA_OK);
+    ta_bytes input = { (const uint8_t *)SPANNED, sizeof(SPANNED) - 1u };
+    ta_definition_id first = 0;
+    CHECK(import_named(system, &arena, input, S("charts/spans.scxml"), &first) == TA_OK);
+    ta_source_location location = { 0 };
+    CHECK(where(system, first, TA_ELEMENT_STATE, 1, &location) == TA_OK && location.span.line == 7 &&
+          str_is(location.source, "charts/spans.scxml"));
+
+    /* Moved down a line and renamed: the same revision, so the same
+     * definition (core ADR 0077), which now says where it is written. */
+    char moved[sizeof(SPANNED) + 1];
+    moved[0] = '\n';
+    memcpy(moved + 1, SPANNED, sizeof(SPANNED));
+    ta_definition_id lower = 0;
+    CHECK(import_named(system, &arena, (ta_bytes){ (const uint8_t *)moved, sizeof(moved) - 1u }, S("other.scxml"),
+                       &lower) == TA_OK);
+    CHECK(lower == first && same_revision(system, first, lower));
+    CHECK(where(system, first, TA_ELEMENT_STATE, 1, &location) == TA_OK && location.span.line == 8 &&
+          str_is(location.source, "other.scxml"));
+
+    /* Encode, and ask where everything landed. */
+    ta_bytes encoded = { 0 };
+    ta_source_map map = { 0 };
+    CHECK(ta_definition_encode(system, &(ta_definition_encode_params){
+                                           .definition = first,
+                                           .codec = ta_scxml_codec_adapter(&default_codec),
+                                           .arena = &arena,
+                                           .out = &encoded,
+                                           .spans = &map,
+                                       }) == TA_OK);
+    ta_definition_inspection facts = { 0 };
+    CHECK(ta_definition_inspect(system, first, &facts) == TA_OK);
+    CHECK(map.state_count == facts.state_count && map.transition_count == facts.transition_count &&
+          map.action_count == facts.action_count && map.expression_count == facts.expression_count);
+    /* One element per line, so the encoding can be shown as a source: the
+     * declaration and <scxml>, the inlined <script src>, then the states. */
+    CHECK(map.state_count == 3 && map.states[0].line == 3 && map.states[1].line == 4 && map.states[2].line == 14);
+    const char *names[] = { "<state id=\"main\"", "<state id=\"idle\"", "<final id=\"done\"" };
+    for (uint32_t id = 0; id < map.state_count; id += 1u) {
+        CHECK(memcmp(encoded.ptr + map.states[id].offset, names[id], strlen(names[id])) == 0);
+    }
+    for (uint32_t id = 0; id < map.action_count; id += 1u) {
+        CHECK(map.actions[id].line != 0 && encoded.ptr[map.actions[id].offset] == '<');
+    }
+
+    /* Decoding the encoding reads every element where encode said it wrote
+     * it: the two sides agree on offsets, lines and columns. */
+    ta_definition_id second = 0;
+    CHECK(import_named(system, &arena, encoded, S("virtual"), &second) == TA_OK);
+    CHECK(same_revision(system, first, second));
+    const struct {
+        ta_element_kind kind;
+        const ta_source_span *spans;
+        uint32_t count;
+    } kinds[] = {
+        { TA_ELEMENT_STATE, map.states, map.state_count },
+        { TA_ELEMENT_TRANSITION, map.transitions, map.transition_count },
+        { TA_ELEMENT_ACTION, map.actions, map.action_count },
+        { TA_ELEMENT_EXPRESSION, map.expressions, map.expression_count },
+    };
+    uint32_t compared = 0;
+    for (uint32_t kind = 0; kind < 4; kind += 1u) {
+        for (uint32_t id = 0; id < kinds[kind].count; id += 1u) {
+            const ta_source_span *written = &kinds[kind].spans[id];
+            ta_result read = where(system, second, kinds[kind].kind, id, &location);
+            if (written->line == 0) {
+                CHECK(read == TA_ERR_NOT_FOUND || location.span.source != 0);
+                continue;
+            }
+            compared += 1u;
+            CHECK(consistent(encoded, written));
+            if (read != TA_OK || memcmp(&location.span, written, sizeof(*written)) != 0) {
+                fprintf(stderr, "element %u/%u: encode wrote %u:%u+%u, decode read %u:%u+%u\n", kind, id,
+                        written->line, written->column, written->length, location.span.line, location.span.column,
+                        location.span.length);
+                failures += 1;
+            }
+        }
+    }
+    /* 3 states; a <transition>, main's `initial` and the root's; 5 actions
+     * (the root <script> included); 6 expressions. */
+    CHECK(compared == 3u + 3u + 5u + 6u);
+    ta_arena_destroy(&arena);
+}
+
 /* A literal content in another media type has no form in this syntax. */
 static void test_unrepresentable(void) {
     ta_arena arena;
@@ -963,6 +1186,8 @@ int main(void) {
     test_errors();
     test_lowering();
     test_round_trip(system);
+    test_decode_spans();
+    test_spans_through_core(system);
     test_compile_error_positions(system);
     test_datamodel_by_name(system);
     test_expression_roles(system);

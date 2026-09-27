@@ -1400,6 +1400,22 @@ struct ta_definition {
      */
     ta_str *authored_texts;
     uint32_t authored_text_count;
+    /*
+     * Where each element was written (ADR 0085), when the spec knew for at
+     * least one; null otherwise. One span per element, by kind and then by
+     * ID: the states, the transitions (initial ones included), the actions
+     * and the expressions (ta_definition_span_base()). Unknown spans are
+     * zero. `sources` are the names they point into. All of it is one
+     * allocation of `span_bytes` from `span_allocator`, starting at `spans`,
+     * not the arena, so that a registration answered by this definition can
+     * hand it newer spans (ta_definition_take_spans()).
+     */
+    ta_source_span *spans;
+    uint32_t span_count;
+    ta_scxml_source *sources;
+    uint32_t source_count;
+    size_t span_bytes;
+    ta_allocator span_allocator;
     /* The authored <scxml binding>; DEFAULT and EARLY both compile to early. */
     ta_scxml_binding_kind authored_binding;
     /* The authored <scxml datamodel>; empty when absent. */
@@ -1462,6 +1478,22 @@ TA_PRIVATE size_t ta_definition_session_bytes(const ta_definition *definition);
  * <foreach>) place them all, with no recursion (ADR 0060).
  */
 TA_PRIVATE ta_result ta_definition_place_actions(ta_definition *definition);
+/*
+ * The layout of `spans` (ADR 0085): elements of `kind` are numbered from
+ * ta_definition_span_base(), and there are ta_definition_element_count() of
+ * them. ta_definition_export() numbers the exported spec's spans the same
+ * way.
+ */
+TA_PRIVATE uint32_t ta_definition_element_count(const ta_definition *definition, ta_element_kind kind);
+TA_PRIVATE uint32_t ta_definition_span_base(const ta_definition *definition, ta_element_kind kind);
+/*
+ * Registration by identity answered `definition` with `live` (ADR 0077):
+ * when `definition` knows where its elements are written, and not exactly
+ * where `live` says, `live` takes its spans, and `definition`, about to be
+ * destroyed, takes `live`'s old ones with it (ADR 0085). Allocates nothing,
+ * so it cannot fail.
+ */
+TA_PRIVATE void ta_definition_take_spans(ta_definition *live, ta_definition *definition);
 TA_PRIVATE bool ta_definition_is_atomic(const ta_definition *definition, ta_state_id state);
 TA_PRIVATE bool ta_definition_is_descendant(const ta_definition *definition, ta_state_id state, ta_state_id ancestor);
 TA_PRIVATE bool ta_event_pattern_matches(const ta_definition *definition,
@@ -1483,6 +1515,23 @@ TA_PRIVATE ta_result ta_duration_parse(ta_str text, ta_time *out);
  * it (ta_definition.authored_texts and the other `authored_*` fields); see
  * docs/internal/definition-inspection.md.
  */
+
+/*
+ * The export behind ta_definition_export() and ta_definition_encode().
+ * An element with a known span always indexes the spans table (ADR 0085):
+ * the element of `kind` with ID `id` has `span`
+ * ta_definition_span_base(kind) + id + 1. `numbered` gives every element
+ * that `span`, and the spec a table even when the definition keeps none, so
+ * an encode can report where each element landed.
+ */
+typedef struct {
+    ta_definition_id definition;
+    ta_arena *arena;
+    bool numbered;
+    const ta_scxml_spec **out;
+} ta_export_request;
+
+TA_PRIVATE ta_result ta_export_spec(const ta_system *system, const ta_export_request *request);
 
 
 
@@ -6680,6 +6729,11 @@ TA_API void ta_definition_destroy(ta_definition *definition) {
                                            definition->allocator);
         }
     }
+    if (definition->spans != NULL) {
+        ta_mem_free(definition->span_allocator, definition->spans,
+                    &(ta_allocator_free_params){ .size = definition->span_bytes,
+                                                 .alignment = _Alignof(ta_source_span) });
+    }
     ta_allocator allocator = definition->allocator;
     ta_arena_destroy(&definition->arena);
     ta_mem_free(allocator, definition,
@@ -6981,6 +7035,92 @@ TA_API ta_result ta_definition_expression(const ta_system *system, const ta_defi
     return TA_OK;
 }
 
+TA_PRIVATE uint32_t ta_definition_element_count(const ta_definition *definition, ta_element_kind kind) {
+    switch (kind) {
+        case TA_ELEMENT_STATE: return definition->state_count;
+        case TA_ELEMENT_TRANSITION: return definition->transition_count + definition->initial_transition_count;
+        case TA_ELEMENT_ACTION: return definition->action_count;
+        case TA_ELEMENT_EXPRESSION: return definition->expression_count;
+    }
+    return 0;
+}
+
+TA_PRIVATE uint32_t ta_definition_span_base(const ta_definition *definition, ta_element_kind kind) {
+    uint32_t base = 0;
+    for (uint32_t before = TA_ELEMENT_STATE; before < (uint32_t)kind; before += 1u) {
+        base += ta_definition_element_count(definition, (ta_element_kind)before);
+    }
+    return base;
+}
+
+TA_API ta_result ta_definition_span(const ta_system *system, const ta_definition_span_params *params) {
+    if (system == NULL || params == NULL || params->out == NULL || (uint32_t)params->kind > TA_ELEMENT_EXPRESSION) {
+        return TA_ERR_INVALID;
+    }
+    const ta_definition *definition = ta_definition_lookup(system, params->definition);
+    if (definition == NULL || definition->spans == NULL ||
+        params->id >= ta_definition_element_count(definition, params->kind)) {
+        return TA_ERR_NOT_FOUND;
+    }
+    const ta_source_span *span = &definition->spans[ta_definition_span_base(definition, params->kind) + params->id];
+    if (span->line == 0) {
+        return TA_ERR_NOT_FOUND;
+    }
+    ta_str source = { .ptr = "", .len = 0 };
+    if (span->source < definition->source_count) {
+        source = definition->sources[span->source].name;
+    }
+    *params->out = (ta_source_location){ .span = *span, .source = source };
+    return TA_OK;
+}
+
+/* Whether two definitions' span tables say the same, names included. */
+static bool ta_definition_same_spans(const ta_definition *left, const ta_definition *right) {
+    if (left->spans == NULL || left->span_count != right->span_count || left->source_count != right->source_count) {
+        return false;
+    }
+    for (uint32_t index = 0; index < left->span_count; index += 1u) {
+        const ta_source_span *a = &left->spans[index];
+        const ta_source_span *b = &right->spans[index];
+        if (a->offset != b->offset || a->length != b->length || a->source != b->source || a->line != b->line ||
+            a->column != b->column || a->end_line != b->end_line || a->end_column != b->end_column) {
+            return false;
+        }
+    }
+    for (uint32_t index = 0; index < left->source_count; index += 1u) {
+        if (!ta_str_equal(left->sources[index].name, right->sources[index].name)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+TA_PRIVATE void ta_definition_take_spans(ta_definition *live, ta_definition *definition) {
+    /* Unchanged spans stay where they are, so what a caller borrowed of
+     * them (an export, a source's name) stays valid. */
+    if (definition->spans == NULL || ta_definition_same_spans(live, definition)) {
+        return;
+    }
+    ta_source_span *spans = live->spans;
+    uint32_t span_count = live->span_count;
+    ta_scxml_source *sources = live->sources;
+    uint32_t source_count = live->source_count;
+    size_t span_bytes = live->span_bytes;
+    ta_allocator span_allocator = live->span_allocator;
+    live->spans = definition->spans;
+    live->span_count = definition->span_count;
+    live->sources = definition->sources;
+    live->source_count = definition->source_count;
+    live->span_bytes = definition->span_bytes;
+    live->span_allocator = definition->span_allocator;
+    definition->spans = spans;
+    definition->span_count = span_count;
+    definition->sources = sources;
+    definition->source_count = source_count;
+    definition->span_bytes = span_bytes;
+    definition->span_allocator = span_allocator;
+}
+
 TA_PRIVATE size_t ta_definition_session_bytes(const ta_definition *definition) {
     /* The configuration, the late-binding bits (sized like it), and history. */
     return definition->configuration.bytes * 2u + definition->history.storage_bytes;
@@ -7017,7 +7157,7 @@ TA_API ta_result ta_definition_inspect(const ta_system *system,
         .holds = definition->holds,
         .holders = definition->holders,
         .actor_fixed_bytes = definition->actor_block_bytes,
-        .definition_bytes = ta_arena_allocated_bytes(&definition->arena),
+        .definition_bytes = ta_arena_allocated_bytes(&definition->arena) + definition->span_bytes,
     };
     return TA_OK;
 }
@@ -7028,6 +7168,19 @@ typedef struct {
     ta_atom name;
     ta_state_id state;
 } ta_state_key;
+
+/*
+ * A known span the spec gives an element (ADR 0085), recorded during the
+ * walk and laid out once the counts are final. An initial transition's ID
+ * is its index among the initial transitions until then.
+ */
+typedef struct {
+    ta_element_kind kind;
+    bool initial;
+    uint32_t id;
+    /* The spec's span, from 1. */
+    uint32_t span;
+} ta_span_record;
 
 /*
  * The compiler's explicit stacks (ADR 0060: no recursion in core).
@@ -7120,6 +7273,7 @@ typedef struct {
     ta_vec names;        /* ta_state_key: every state, sorted by (name, state) after pass one */
     ta_vec levels;       /* ta_collect_frame: pass one's stack */
     ta_vec blocks;       /* ta_block_frame: the stack of nested blocks being compiled */
+    ta_vec spans;        /* ta_span_record: the known spans, in walk order */
     uint32_t action_depth; /* the deepest stack of blocks so far */
     ta_state_id path_state;
     ta_compile_error *error;
@@ -7256,6 +7410,33 @@ static ta_result ta_compiler_fail_at(ta_compiler *compiler, ta_spec_member membe
                                      const ta_compiler_fault *fault) {
     ta_result entered = ta_compiler_enter(compiler, member, index);
     return entered != TA_OK ? entered : ta_compiler_record(compiler, fault);
+}
+
+/*
+ * Checks the span an element names and records it when it is known
+ * (ADR 0085). Nothing about a span is hashed: where an element was written
+ * is not what it means, so moving it keeps the revision.
+ */
+static ta_result ta_compiler_span(ta_compiler *compiler, const ta_span_record *record) {
+    if (record->span == 0) {
+        return TA_OK;
+    }
+    const ta_scxml_spec *spec = compiler->spec;
+    if (record->span > spec->span_count || spec->spans == NULL) {
+        return ta_compiler_fail_at(compiler, TA_SPEC_MEMBER_SPAN, TA_SPEC_INDEX_NONE,
+                                   &(ta_compiler_fault){ .code = TA_COMPILE_ERROR_MALFORMED_SPEC,
+                                                         .message = TA_PHRASE("the span is not in the spec's spans") });
+    }
+    const ta_source_span *span = &spec->spans[record->span - 1u];
+    if (span->line == 0) {
+        return TA_OK;
+    }
+    if (span->source >= (spec->source_count == 0 ? 1u : spec->source_count)) {
+        return ta_compiler_fail_at(compiler, TA_SPEC_MEMBER_SPAN, TA_SPEC_INDEX_NONE,
+                                   &(ta_compiler_fault){ .code = TA_COMPILE_ERROR_MALFORMED_SPEC,
+                                                         .message = TA_PHRASE("the span names no source") });
+    }
+    return ta_vec_push(&compiler->spans, record);
 }
 
 /*
@@ -7440,8 +7621,13 @@ static ta_result ta_compiler_expression(ta_compiler *compiler, const ta_compiler
                                 expression->kind == TA_EXPRESSION_SOURCE ? expression->as.source : (ta_str){0},
                                 TA_PHRASE("the data model refused this expression"));
     }
+    ta_result result = ta_compiler_span(compiler, &(ta_span_record){ .kind = TA_ELEMENT_EXPRESSION,
+                                                                     .id = compiler->expressions.count,
+                                                                     .span = expression->span });
+    if (result != TA_OK) {
+        return result;
+    }
     ta_expression copy = { .kind = expression->kind };
-    ta_result result = TA_OK;
     switch (expression->kind) {
         case TA_EXPRESSION_SOURCE:
             ta_compiler_hash_str(compiler, expression->as.source);
@@ -7956,6 +8142,11 @@ static ta_result ta_compiler_block(ta_compiler *compiler, ta_spec_member member,
         ta_action_def action = {0};
         result = ta_compiler_enter(compiler, frame->member, frame->index);
         if (result == TA_OK) {
+            result = ta_compiler_span(compiler, &(ta_span_record){ .kind = TA_ELEMENT_ACTION,
+                                                                   .id = frame->base + frame->index,
+                                                                   .span = spec->span });
+        }
+        if (result == TA_OK) {
             result = ta_compiler_action(compiler, spec, &action);
         }
         if (result != TA_OK) {
@@ -8214,6 +8405,11 @@ static ta_result ta_compiler_collect(ta_compiler *compiler, const ta_scxml_state
         if (result == TA_OK) {
             result = ta_compiler_atom_at(compiler, TA_SPEC_MEMBER_ID, spec->id, &state.name);
         }
+        if (result == TA_OK) {
+            result = ta_compiler_span(compiler, &(ta_span_record){ .kind = TA_ELEMENT_STATE,
+                                                                   .id = compiler->states.count,
+                                                                   .span = spec->span });
+        }
         if (result != TA_OK) {
             break;
         }
@@ -8383,7 +8579,13 @@ static ta_result ta_compiler_transition(ta_compiler *compiler, ta_state_id sourc
         return ta_compiler_fail(compiler, TA_COMPILE_ERROR_MALFORMED_SPEC, (ta_str){0},
                                 TA_PHRASE("unknown transition kind"));
     }
-    ta_result result = ta_compiler_enter(compiler, TA_SPEC_MEMBER_EVENT, TA_SPEC_INDEX_NONE);
+    /* Transitions are numbered in the order they are stored, after their content. */
+    ta_result result = ta_compiler_span(compiler, &(ta_span_record){ .kind = TA_ELEMENT_TRANSITION,
+                                                                     .id = compiler->transitions.count,
+                                                                     .span = spec->span });
+    if (result == TA_OK) {
+        result = ta_compiler_enter(compiler, TA_SPEC_MEMBER_EVENT, TA_SPEC_INDEX_NONE);
+    }
     if (result == TA_OK) {
         result = ta_compiler_descriptors(compiler, spec->event, &transition.event_patterns);
     }
@@ -8425,6 +8627,12 @@ static ta_result ta_compiler_initial(ta_compiler *compiler, const ta_compiler_in
     ta_result result = TA_OK;
     if (params->spec != NULL) {
         result = ta_compiler_enter(compiler, TA_SPEC_MEMBER_INITIAL, TA_SPEC_INDEX_NONE);
+        if (result == TA_OK) {
+            result = ta_compiler_span(compiler, &(ta_span_record){ .kind = TA_ELEMENT_TRANSITION,
+                                                                   .initial = true,
+                                                                   .id = compiler->initials.count,
+                                                                   .span = params->spec->span });
+        }
         if (result != TA_OK) {
             return result;
         }
@@ -8803,11 +9011,62 @@ static void ta_compiler_destroy(ta_compiler *compiler) {
         &compiler->data_decls, &compiler->initializers, &compiler->contents, &compiler->patterns,
         &compiler->segments, &compiler->expressions, &compiler->roles, &compiler->history, &compiler->done_data,
         &compiler->invokes, &compiler->texts, &compiler->path, &compiler->names, &compiler->levels,
-        &compiler->blocks,
+        &compiler->blocks, &compiler->spans,
     };
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(vecs); index += 1) {
         ta_vec_destroy(vecs[index]);
     }
+}
+
+/*
+ * The side table of spans (ADR 0085), once every count is final: one span
+ * per element, by kind and ID, and the names of the sources. Nothing is
+ * kept when the spec knew no span, so a definition compiled without them
+ * costs what it did before.
+ */
+static ta_result ta_compiler_lay_out_spans(ta_compiler *compiler) {
+    ta_definition *definition = compiler->definition;
+    if (compiler->spans.count == 0) {
+        return TA_OK;
+    }
+    const ta_scxml_spec *spec = compiler->spec;
+    uint32_t count = ta_definition_span_base(definition, TA_ELEMENT_EXPRESSION) +
+                     ta_definition_element_count(definition, TA_ELEMENT_EXPRESSION);
+    /* One block: the spans, the sources, then the sources' names. */
+    size_t sources_at = (size_t)count * sizeof(ta_source_span);
+    size_t names_at = sources_at + (size_t)spec->source_count * sizeof(ta_scxml_source);
+    size_t bytes = names_at;
+    for (uint32_t index = 0; index < spec->source_count; index += 1u) {
+        bytes += spec->sources[index].name.len;
+    }
+    uint8_t *block = ta_mem_alloc(definition->allocator, bytes, _Alignof(ta_source_span));
+    if (block == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    ta_source_span *spans = (ta_source_span *)(void *)block;
+    ta_mem_zero(spans, sources_at);
+    for (uint32_t index = 0; index < compiler->spans.count; index += 1u) {
+        const ta_span_record *record = ta_vec_at(&compiler->spans, index);
+        uint32_t id = record->initial ? definition->transition_count + record->id : record->id;
+        spans[ta_definition_span_base(definition, record->kind) + id] = spec->spans[record->span - 1u];
+    }
+    ta_scxml_source *sources = spec->source_count != 0 ? (ta_scxml_source *)(void *)(block + sources_at) : NULL;
+    char *names = (char *)block + names_at;
+    for (uint32_t index = 0; index < spec->source_count; index += 1u) {
+        ta_str name = spec->sources[index].name;
+        if (name.len != 0) {
+            ta_mem_copy(names, name.ptr, name.len);
+        }
+        sources[index].name = (ta_str){ .ptr = names, .len = name.len };
+        names += name.len;
+    }
+    definition->spans = spans;
+    definition->span_count = count;
+    definition->sources = sources;
+    definition->source_count = spec->source_count;
+    definition->span_bytes = bytes;
+    definition->span_allocator = definition->allocator;
+    return TA_OK;
 }
 
 static ta_result ta_compiler_identity(ta_compiler *compiler) {
@@ -9075,7 +9334,16 @@ static ta_result ta_compiler_run(ta_compiler *compiler, ta_datamodel datamodel) 
     if (result == TA_OK && spec->script.kind != TA_EXPRESSION_NONE) {
         uint32_t base = 0;
         ta_action_def script = { .kind = TA_ACTION_SCRIPT };
-        result = ta_compiler_expression_at(compiler, &(ta_compiler_expression_at_params){ TA_SPEC_MEMBER_SCRIPT, &spec->script, TA_EXPR_ROLE_SCRIPT }, &script.as.script);
+        result = ta_compiler_enter(compiler, TA_SPEC_MEMBER_SCRIPT, TA_SPEC_INDEX_NONE);
+        if (result == TA_OK) {
+            result = ta_compiler_span(compiler, &(ta_span_record){ .kind = TA_ELEMENT_ACTION,
+                                                                   .id = compiler->actions.count,
+                                                                   .span = spec->script_span });
+        }
+        if (result == TA_OK) {
+            ta_compiler_leave(compiler);
+            result = ta_compiler_expression_at(compiler, &(ta_compiler_expression_at_params){ TA_SPEC_MEMBER_SCRIPT, &spec->script, TA_EXPR_ROLE_SCRIPT }, &script.as.script);
+        }
         if (result == TA_OK) {
             result = ta_vec_extend(&compiler->actions, 1, &base);
         }
@@ -9167,6 +9435,7 @@ static ta_result ta_compile(ta_system *system, const ta_definition_compile_param
         { &compiler.names, TA_VEC_LAYOUT(ta_state_key) },
         { &compiler.levels, TA_VEC_LAYOUT(ta_collect_frame) },
         { &compiler.blocks, TA_VEC_LAYOUT(ta_block_frame) },
+        { &compiler.spans, TA_VEC_LAYOUT(ta_span_record) },
     };
     for (uint32_t index = 0; index < TA_ARRAY_COUNT(vecs); index += 1) {
         ta_vec_init(vecs[index].vec, params->allocator, vecs[index].layout);
@@ -9202,6 +9471,9 @@ static ta_result ta_compile(ta_system *system, const ta_definition_compile_param
         }
         definition->expression_count = 0;
         result = result == TA_OK ? sealed : result;
+    }
+    if (result == TA_OK && run->locate == UINT32_MAX) {
+        result = ta_compiler_lay_out_spans(&compiler);
     }
     ta_compiler_destroy(&compiler);
 
@@ -9475,6 +9747,7 @@ static ta_str ta_spec_member_name(ta_spec_member member) {
         case TA_SPEC_MEMBER_SENDID: return TA_PHRASE("sendid");
         case TA_SPEC_MEMBER_DATAMODEL: return TA_PHRASE("datamodel");
         case TA_SPEC_MEMBER_IDENTITY: return TA_PHRASE("identity");
+        case TA_SPEC_MEMBER_SPAN: return TA_PHRASE("span");
         default: return TA_PHRASE("?");
     }
 }
@@ -9579,12 +9852,30 @@ typedef struct {
     struct ta_export_block *pending;
     uint32_t pending_count;
     uint32_t pending_capacity;
+    /* Whether every exported element indexes the spans table, known span or
+     * not, as an encode asks (ADR 0085). Otherwise only the elements whose
+     * span the definition knows do. */
+    bool numbered;
 } ta_exporter;
 
 struct ta_export_block {
     ta_span32 block;
     const ta_scxml_action_spec **out;
 };
+
+/*
+ * The `span` of an exported element: its place in the spans table, which is
+ * laid out as the definition's, plus 1; 0 when it has no known span and the
+ * caller did not ask for every element.
+ */
+static uint32_t ta_export_span(const ta_exporter *exporter, ta_element_kind kind, uint32_t id) {
+    const ta_definition *definition = exporter->definition;
+    uint32_t place = ta_definition_span_base(definition, kind) + id;
+    if (!exporter->numbered && (definition->spans == NULL || definition->spans[place].line == 0)) {
+        return 0;
+    }
+    return place + 1u;
+}
 
 /* Non-null text for an empty literal, which the RPC codecs keep apart from absent. */
 static const char ta_export_empty[] = "";
@@ -9655,7 +9946,9 @@ static ta_str ta_export_event_name(ta_exporter *exporter, ta_event_name_id name)
 }
 
 static ta_expression ta_export_expression(const ta_exporter *exporter, ta_expr_id expr) {
-    return exporter->definition->expressions[expr];
+    ta_expression expression = exporter->definition->expressions[expr];
+    expression.span = ta_export_span(exporter, TA_ELEMENT_EXPRESSION, expr);
+    return expression;
 }
 
 static ta_bytes ta_export_content(const ta_exporter *exporter, ta_content_id content) {
@@ -9773,7 +10066,9 @@ static void ta_export_send(ta_exporter *exporter, const ta_send_action *send, ta
     out->params = ta_export_params(exporter, send->params);
 }
 
-static void ta_export_action(ta_exporter *exporter, const ta_action_def *action, ta_scxml_action_spec *out) {
+static void ta_export_action(ta_exporter *exporter, ta_action_id id, ta_scxml_action_spec *out) {
+    const ta_action_def *action = &exporter->definition->action_defs[id];
+    out->span = ta_export_span(exporter, TA_ELEMENT_ACTION, id);
     switch (action->kind) {
         case TA_ACTION_RAISE:
             out->kind = TA_SCXML_ACTION_RAISE;
@@ -9853,7 +10148,7 @@ static const ta_scxml_action_spec *ta_export_actions(ta_exporter *exporter, ta_s
         ta_scxml_action_spec *items = ta_export_list(exporter, TA_VEC_LAYOUT(ta_scxml_action_spec), next.block.length);
         *next.out = items;
         for (uint32_t index = 0; items != NULL && index < next.block.length; index += 1) {
-            ta_export_action(exporter, &exporter->definition->action_defs[next.block.offset + index], &items[index]);
+            ta_export_action(exporter, next.block.offset + index, &items[index]);
         }
     }
     exporter->pending_count = 0;
@@ -9904,6 +10199,8 @@ static const ta_scxml_initial_spec *ta_export_initial(ta_exporter *exporter, ta_
     *out = (ta_scxml_initial_spec){
         .targets = initial->authored_targets ? ta_export_targets(exporter, initial->targets) : NULL,
         .actions = ta_export_actions(exporter, initial->actions),
+        /* Initial transitions are numbered after the <transition> elements. */
+        .span = ta_export_span(exporter, TA_ELEMENT_TRANSITION, exporter->definition->transition_count + id),
     };
     return out;
 }
@@ -9915,6 +10212,7 @@ static const ta_scxml_transition_spec *ta_export_transitions(ta_exporter *export
         items[index] = (ta_scxml_transition_spec){
             .kind = transition->type == TA_TRANSITION_INTERNAL ? TA_SCXML_TRANSITION_INTERNAL
                                                                 : TA_SCXML_TRANSITION_EXTERNAL,
+            .span = ta_export_span(exporter, TA_ELEMENT_TRANSITION, span.offset + index),
             .event = ta_export_authored(exporter, transition->event_text),
             .targets = ta_export_targets(exporter, transition->targets),
             .actions = ta_export_actions(exporter, transition->actions),
@@ -10012,6 +10310,7 @@ static void ta_export_state(ta_exporter *exporter, ta_state_id id, ta_scxml_stat
     const ta_state_def *state = &definition->states[id];
     *out = (ta_scxml_state_spec){
         .kind = ta_export_state_kind(state->kind),
+        .span = ta_export_span(exporter, TA_ELEMENT_STATE, id),
         .id = ta_export_state_id(exporter, id),
         .initial = state->kind == TA_STATE_COMPOUND ? ta_export_initial(exporter, state->initial) : NULL,
         .transitions = ta_export_transitions(exporter, state->transitions),
@@ -10021,6 +10320,33 @@ static void ta_export_state(ta_exporter *exporter, ta_state_id id, ta_scxml_stat
         .invokes = ta_export_invokes(exporter, id),
         .done_data = ta_export_done_data(exporter, state->done_data),
     };
+}
+
+/*
+ * The spans table the exported elements index (ADR 0085): the definition's
+ * own, borrowed, or all zero when it keeps none and the caller numbered the
+ * elements anyway, as ta_definition_encode() does to learn where each one
+ * lands.
+ */
+static void ta_export_spans(ta_exporter *exporter, ta_scxml_spec *spec) {
+    const ta_definition *definition = exporter->definition;
+    uint32_t count = ta_definition_span_base(definition, TA_ELEMENT_EXPRESSION) +
+                     ta_definition_element_count(definition, TA_ELEMENT_EXPRESSION);
+    spec->span_count = count;
+    spec->spans = definition->spans;
+    spec->sources = definition->sources;
+    spec->source_count = definition->source_count;
+    if (definition->spans != NULL || count == 0 || exporter->result != TA_OK) {
+        return;
+    }
+    ta_source_span *zeros = ta_arena_alloc(exporter->arena, (size_t)count * sizeof(ta_source_span),
+                                           _Alignof(ta_source_span));
+    if (zeros == NULL) {
+        exporter->result = TA_ERR_NOMEM;
+        return;
+    }
+    ta_mem_zero(zeros, (size_t)count * sizeof(ta_source_span));
+    spec->spans = zeros;
 }
 
 /*
@@ -10064,16 +10390,16 @@ static const ta_scxml_state_spec *ta_export_roots(ta_exporter *exporter) {
     return roots;
 }
 
-TA_API ta_result ta_definition_export(const ta_system *system, const ta_definition_export_params *params) {
-    if (system == NULL || params == NULL || params->arena == NULL || params->out == NULL) {
-        return TA_ERR_INVALID;
-    }
-    const ta_definition *definition = ta_definition_lookup(system, params->definition);
+TA_PRIVATE ta_result ta_export_spec(const ta_system *system, const ta_export_request *request) {
+    const ta_definition *definition = ta_definition_lookup(system, request->definition);
     if (definition == NULL) {
         return TA_ERR_NOT_FOUND;
     }
-    ta_exporter exporter = { .system = system, .definition = definition, .arena = params->arena };
-    ta_scxml_spec *spec = ta_arena_alloc(params->arena, sizeof(*spec), _Alignof(ta_scxml_spec));
+    ta_exporter exporter = { .system = system,
+                             .definition = definition,
+                             .arena = request->arena,
+                             .numbered = request->numbered };
+    ta_scxml_spec *spec = ta_arena_alloc(request->arena, sizeof(*spec), _Alignof(ta_scxml_spec));
     if (spec == NULL) {
         return TA_ERR_NOMEM;
     }
@@ -10090,12 +10416,27 @@ TA_API ta_result ta_definition_export(const ta_system *system, const ta_definiti
     if (definition->global_script_actions.length == 1) {
         const ta_action_def *script = &definition->action_defs[definition->global_script_actions.offset];
         spec->script = ta_export_expression(&exporter, script->as.script);
+        spec->script_span = ta_export_span(&exporter, TA_ELEMENT_ACTION, definition->global_script_actions.offset);
+    }
+    if (exporter.numbered || definition->spans != NULL) {
+        ta_export_spans(&exporter, spec);
     }
     if (exporter.result != TA_OK) {
         return exporter.result;
     }
-    *params->out = spec;
+    *request->out = spec;
     return TA_OK;
+}
+
+TA_API ta_result ta_definition_export(const ta_system *system, const ta_definition_export_params *params) {
+    if (system == NULL || params == NULL || params->arena == NULL || params->out == NULL) {
+        return TA_ERR_INVALID;
+    }
+    return ta_export_spec(system, &(ta_export_request){
+                                      .definition = params->definition,
+                                      .arena = params->arena,
+                                      .out = params->out,
+                                  });
 }
 
 
@@ -10461,6 +10802,7 @@ TA_API ta_result ta_definition_import(ta_system *system, const ta_definition_imp
     ta_result result = params->codec.v->decode(params->codec.self,
                                                &(ta_chart_decode_params){
                                                    .input = params->input,
+                                                   .name = params->name,
                                                    .arena = params->arena,
                                                    .resolver = params->resolver,
                                                    .lowering = params->lowering,
@@ -10527,8 +10869,34 @@ TA_API ta_result ta_definition_import(ta_system *system, const ta_definition_imp
 
 /*
  * Encode: export, then the codec's encode. The identity no syntax carries is
- * handed back beside the bytes.
+ * handed back beside the bytes. Asked where elements landed, the export
+ * numbers every element by kind and ID (ADR 0085), and the codec's reports
+ * land in one table laid out the same way.
  */
+
+typedef struct {
+    ta_source_span *table;
+    uint32_t count;
+} ta_encode_spans;
+
+static void ta_encode_span_written(void *self, uint32_t span, const ta_source_span *where) {
+    ta_encode_spans *spans = self;
+    if (span != 0 && span <= spans->count && where != NULL) {
+        spans->table[span - 1u] = *where;
+    }
+}
+
+static const ta_chart_span_sink_vtable ta_encode_span_sink = { .written = ta_encode_span_written };
+
+/* The part of the table for one kind of element; null when it has none. */
+static const ta_source_span *ta_encode_spans_of(const ta_encode_spans *spans, const ta_definition *definition,
+                                                ta_element_kind kind) {
+    if (ta_definition_element_count(definition, kind) == 0) {
+        return NULL;
+    }
+    return spans->table + ta_definition_span_base(definition, kind);
+}
+
 TA_API ta_result ta_definition_encode(const ta_system *system, const ta_definition_encode_params *params) {
     if (system == NULL || params == NULL || params->codec.v == NULL || params->arena == NULL ||
         params->out == NULL) {
@@ -10541,24 +10909,50 @@ TA_API ta_result ta_definition_encode(const ta_system *system, const ta_definiti
         return TA_ERR_UNSUPPORTED;
     }
     const ta_scxml_spec *spec = NULL;
-    ta_result result = ta_definition_export(system, &(ta_definition_export_params){
-                                                        .definition = params->definition,
-                                                        .arena = params->arena,
-                                                        .out = &spec,
-                                                    });
+    ta_result result = ta_export_spec(system, &(ta_export_request){
+                                                  .definition = params->definition,
+                                                  .arena = params->arena,
+                                                  .numbered = params->spans != NULL,
+                                                  .out = &spec,
+                                              });
     if (result != TA_OK) {
         return result;
+    }
+    ta_encode_spans spans = { .count = params->spans != NULL ? spec->span_count : 0 };
+    if (spans.count != 0) {
+        spans.table = ta_arena_alloc(params->arena, (size_t)spans.count * sizeof(ta_source_span),
+                                     _Alignof(ta_source_span));
+        if (spans.table == NULL) {
+            return TA_ERR_NOMEM;
+        }
+        ta_mem_zero(spans.table, (size_t)spans.count * sizeof(ta_source_span));
     }
     ta_chart_error encode_error = {0};
     result = params->codec.v->encode(params->codec.self, &(ta_chart_encode_params){
                                                              .spec = spec,
                                                              .arena = params->arena,
                                                              .expressions = params->expressions,
+                                                             .spans = { .self = &spans,
+                                                                        .v = params->spans != NULL ? &ta_encode_span_sink
+                                                                                                   : NULL },
                                                              .out = params->out,
                                                              .error = &encode_error,
                                                          });
     if (result == TA_ERR_INVALID && params->error != NULL) {
         *params->error = encode_error;
+    }
+    if (result == TA_OK && params->spans != NULL) {
+        const ta_definition *definition = ta_definition_lookup(system, params->definition);
+        *params->spans = (ta_source_map){
+            .states = ta_encode_spans_of(&spans, definition, TA_ELEMENT_STATE),
+            .state_count = ta_definition_element_count(definition, TA_ELEMENT_STATE),
+            .transitions = ta_encode_spans_of(&spans, definition, TA_ELEMENT_TRANSITION),
+            .transition_count = ta_definition_element_count(definition, TA_ELEMENT_TRANSITION),
+            .actions = ta_encode_spans_of(&spans, definition, TA_ELEMENT_ACTION),
+            .action_count = ta_definition_element_count(definition, TA_ELEMENT_ACTION),
+            .expressions = ta_encode_spans_of(&spans, definition, TA_ELEMENT_EXPRESSION),
+            .expression_count = ta_definition_element_count(definition, TA_ELEMENT_EXPRESSION),
+        };
     }
     if (result == TA_OK && params->identity != NULL) {
         *params->identity = spec->identity;
@@ -13529,6 +13923,9 @@ TA_API ta_result ta_system_register_definition(ta_system *system, ta_definition 
      * definition: it runs differently, so it registers beside the first. */
     if (live != NULL && live->datamodel.self == definition->datamodel.self &&
         live->datamodel.v == definition->datamodel.v) {
+        /* Where the chart is written now (ADR 0085): the spans of the
+         * registration that asked, when it brought any. */
+        ta_definition_take_spans(live, definition);
         live->holds += 1u;
         *out = live->id;
         ta_definition_destroy(definition);

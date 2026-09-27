@@ -975,6 +975,17 @@ module TinyactorsTest
       core('ta_definition_inspect', ta.definition.inspect(system: system_handle, definition: id)).fetch(:out)
     end
 
+    # Where element `id` of `kind` ('state', 'transition', 'action' or
+    # 'expression') was written (ADR 0085): its span and its source's name,
+    # or nil when the definition keeps none for it.
+    def source_span(kind, id, chart = @group.chart)
+      definition = chart.is_a?(Integer) ? chart : definition(chart)
+      response = ta.definition.span(system: system_handle, definition: definition, kind: kind.to_s, id: id)
+      return nil if response[:result] == 'err_not_found'
+
+      core('ta_definition_span', response).fetch(:out)
+    end
+
     # The author-level spec ta_definition_export rebuilds from a definition.
     def export(chart = @group.chart)
       id = chart.is_a?(Integer) ? chart : definition(chart)

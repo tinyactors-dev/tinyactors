@@ -15,6 +15,7 @@ can land as separate commits.
 | Debugger, visualizer, fuzzer, model checker | States, initial states, transitions (event descriptors, conditions, targets, type), handlers, invocations, done data | `ta_definition_export()` |
 | Host before spawning | Are the literal I/O processor and invoker types this chart names registered? | `ta_definition_export()` (literal `type` values; `typeexpr` stays a runtime check) |
 | Operator, host GC | Is it retired? How many actors use it? What does it cost? | `.retired`, `.actor_count`, `.actor_fixed_bytes`, `.definition_bytes` |
+| Debugger | Where was a state, transition, action or expression written? Where did an encode write it? | `ta_definition_span()`, `ta_definition_encode_params.spans` (ADR 0085) |
 | Operator | Which actors are large right now? | `ta_actor_inspection.allocated_bytes` |
 | Hot paths (`In()`, harness state names) | One state's ID, parent, kind, without an arena | `ta_definition_state()` (unchanged) |
 
@@ -141,6 +142,44 @@ The unit test `tests/export_test.c` and the harness check
 
 Host expressions (`TA_EXPRESSION_HOST`) are exported as the retained handles,
 borrowed; they are not retained again.
+
+### Where elements were written (ADR 0085)
+
+A spec may say where each element was written: `ta_scxml_spec.spans` is a
+table of `ta_source_span`s (offset, length, source, start and end line and
+column), `sources` names what they point into, and each state, transition,
+initial transition, action and expression has a `span` that indexes the
+table from 1 (the root `<script>` element's is `script_span`). The compiler
+checks each index and source, hashes none of it, and, when at least one span
+is known, lays out a side table in one allocation the definition owns and
+frees (`ta_definition.spans`, `span_bytes`, counted in `definition_bytes`):
+one span per element, by kind and then by ID, as
+`ta_definition_span_base()` numbers them, with the source names beside it
+(`ta_definition.sources`). A definition compiled without known spans keeps
+nothing. A registration answered by identity (ADR 0077) that brings other
+spans swaps its table with the live definition's
+(`ta_definition_take_spans()`), so the live definition says where the chart
+is written now, and the old table is freed with the new compile.
+
+```c
+TA_API ta_result ta_definition_span(const ta_system *system,
+                                    const ta_definition_span_params *params);
+```
+
+answers where element `id` of `kind` (`TA_ELEMENT_STATE`, `_TRANSITION`,
+`_ACTION`, `_EXPRESSION`) was written, with its source's name;
+`TA_ERR_NOT_FOUND` for an unknown or stale definition, an ID beyond the
+counts in `ta_definition_inspection`, a definition without spans, or an
+element without one.
+
+Export borrows the side table as the exported spec's `spans`, sets `span` on
+every element whose span is known to its place in the table plus one, and
+borrows the source names. Compiling the export keeps the spans, and
+exporting that again gives the same table. `ta_definition_encode()` with
+`spans` asks the export to number every element that way (`numbered` in
+`ta_export_request`, `src/export.h`), even with no side table, gives the
+codec a `ta_chart_span_sink` that files each report at its number, and
+returns the result as a `ta_source_map` by kind and ID.
 
 ### Finding a definition
 

@@ -190,6 +190,27 @@ The compiled definition stores it as a block of zero or one script actions
 (`global_script_actions`), so it shares the block-level error behavior of
 4.9 and the continuation frames of all other executable content.
 
+## Source spans
+
+A spec can say where each element was written (ADR 0085). `spans` is a
+table of `ta_source_span`s, `sources` the names they point into (the input
+a codec decoded first, then each file its resolver fetched; for the Ruby DSL
+and napi's builder, the program files). A state, transition, initial
+transition, action and expression has `span`, an index into `spans` from 1,
+and the root `<script>` element has `script_span`; zero is unknown, so a
+spec built without them is unchanged.
+
+The compiler checks an element's span when it first meets the element,
+before its content: an index beyond `span_count`, or a known span whose
+`source` is not in `sources` (other than 0 when there are none), is
+`TA_COMPILE_ERROR_MALFORMED_SPEC` at `...span`. It hashes nothing about
+spans, so where an element was written never changes the revision. It
+records `(kind, ID, index)` for every known span in a vector
+(`ta_span_record`, `compiler->spans`), and once the expression table is
+sealed lays out the definition's side table from them
+(`ta_compiler_lay_out_spans`), one allocation from the definition's
+allocator: nothing when no span was known.
+
 ## Lifetime
 
 `ta_definition_compile_spec()` consumes the specification synchronously and

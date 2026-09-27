@@ -153,8 +153,9 @@ JSON-RPC errors are reserved for the protocol itself:
   `ta_time`, ...) are
   JSON numbers up to 2^53-1 and decimal strings above; decoders accept both
   forms.
-- `ta_str` and `ta_bytes` are JSON strings. `ta_expression` is its source text;
-  host expressions cannot cross the protocol.
+- `ta_str` and `ta_bytes` are JSON strings. `ta_expression` is its source
+  text, or `{"source": text, "span": n}` when it says where it was written
+  (core ADR 0085); host expressions cannot cross the protocol.
 - `ta_value` is any JSON value. It decodes into a value of the data model of
   the receiving actor, as the function's `value_model` in the API description
   names it: the `actor` of `ta.actor.deliver` and `ta.actor.report_invoke`, or
@@ -464,6 +465,17 @@ Charts compile from the JSON form of `ta_scxml_spec` (see
     nested `if` in `else_actions`
   - `foreach`: `{"array", "item", "index"?, "body"?}`, where `item` and `index`
     name the variables bound on each iteration
+- Where elements were written (core ADR 0085): the top level may have
+  `spans`, a list of `{"source", "offset"?, "length"?, "line", "column"?,
+  "end_line"?, "end_column"?}`, and `sources`, a list of `{"name"}`. A
+  state, transition, initial transition or action has `"span": n`, an index
+  into `spans` counting from 1, and the top-level `<script>` has
+  `script_span`. An expression with a span is `{"source", "span"}`. None of
+  it changes the revision. The chart DSL records the file and line of every
+  call that writes a state, transition, initial transition or action, with
+  the Ruby file as the source, and leaves out spans from a chart it embeds
+  as `chart:` content, whose bytes are part of the embedding chart's
+  revision. `ta.definition.span` answers where element `id` of `kind` is.
 
 #### Send targets
 

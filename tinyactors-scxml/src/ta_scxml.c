@@ -2,9 +2,10 @@
  * The SCXML 1.0 XML codec (core ADR 0053) over txml.
  *
  * Decode parses the input with txml into the operation's arena and walks the
- * concrete syntax tree into a ta_scxml_spec. Encode writes a spec with txml's
- * event writer. Nothing here uses the C library or performs I/O; the arena is
- * the only memory.
+ * concrete syntax tree into a ta_scxml_spec, with the span of every element
+ * it read (core ADR 0085). Encode writes a spec with txml's event writer, one
+ * element per line, and reports where it wrote each element. Nothing here
+ * uses the C library or performs I/O; the arena is the only memory.
  *
  * Text in the spec points into the input wherever the decoded text is
  * byte-for-byte what the input holds. Where XML changed it (a character or
@@ -287,6 +288,17 @@ typedef struct {
     ta_bytes input;
     ta_chart_error error;
     uint32_t anonymous;
+    /* Where each element was read (ADR 0085): the spec's spans table as it
+     * grows, and its sources, the input first and then every file the
+     * resolver fetched. Growing either can run out of memory anywhere in the
+     * walk, so that is remembered and reported once, at the end. */
+    ta_source_span *spans;
+    uint32_t span_count;
+    uint32_t span_capacity;
+    ta_scxml_source *sources;
+    uint32_t source_count;
+    uint32_t source_capacity;
+    bool out_of_memory;
 } decoder;
 
 /* An attribute the element may carry, and what the document gave it. */
@@ -295,6 +307,9 @@ typedef struct {
     bool present;
     ta_str value;
     ta_chart_position at;
+    /* Where it was written, when it has source text. */
+    bool spanned;
+    txml_attribute_span where;
 } attr;
 
 #define ATTR(name_) { .name = (name_) }
@@ -394,6 +409,8 @@ static ta_result read_attrs(decoder *d, txml_cursor node, attr *attrs, uint32_t 
         }
         found->present = true;
         found->at = at;
+        found->spanned = spanned;
+        found->where = spanned ? span : (txml_attribute_span){ 0 };
         found->value = spanned ? slice_or(d, span.value_start.offset, span.value_end.offset, view.value)
                                : from_txml(view.value);
     }
@@ -412,22 +429,149 @@ static ta_expression source(ta_str text) {
     return (ta_expression){ .kind = TA_EXPRESSION_SOURCE, .as.source = text };
 }
 
-static ta_scxml_string_spec string_pair(const attr *literal, const attr *expression) {
+/* ------------------------------------------------------------------------
+ * Spans (ADR 0085): where each element and expression was read.
+ */
+
+/* Doubles an arena array of `size`-byte items; the old one stays in the
+ * arena, which the operation resets anyway. */
+static void *grow(decoder *d, void *items, uint32_t *capacity, size_t size) {
+    uint32_t wanted = *capacity == 0 ? 16u : *capacity * 2u;
+    uint8_t *grown = ta_arena_alloc(d->arena, (size_t)wanted * size, 8);
+    if (grown == NULL || wanted < *capacity) {
+        d->out_of_memory = true;
+        return NULL;
+    }
+    if (items != NULL) {
+        copy_bytes(grown, items, (uint32_t)(*capacity * size));
+    }
+    *capacity = wanted;
+    return grown;
+}
+
+/* Adds `span` to the table; its index from 1, or 0 when out of memory. */
+static uint32_t add_span(decoder *d, ta_source_span span) {
+    if (d->span_count == d->span_capacity) {
+        ta_source_span *grown = grow(d, d->spans, &d->span_capacity, sizeof(ta_source_span));
+        if (grown == NULL) {
+            return 0;
+        }
+        d->spans = grown;
+    }
+    d->spans[d->span_count++] = span;
+    return d->span_count;
+}
+
+/* Adds a source; its index, or 0 when out of memory. */
+static uint32_t add_source(decoder *d, ta_str name) {
+    if (d->source_count == d->source_capacity) {
+        ta_scxml_source *grown = grow(d, d->sources, &d->source_capacity, sizeof(ta_scxml_source));
+        if (grown == NULL) {
+            return 0;
+        }
+        d->sources = grown;
+    }
+    d->sources[d->source_count] = (ta_scxml_source){ .name = name.ptr != NULL ? name : cstr("") };
+    return d->source_count++;
+}
+
+static ta_source_span span_of(txml_position start, txml_position end) {
+    return (ta_source_span){ .offset = start.offset, .length = (uint32_t)(end.offset - start.offset),
+                             .line = start.line, .column = start.column,
+                             .end_line = end.line, .end_column = end.column };
+}
+
+/* An element, from its start tag through its end tag. */
+static uint32_t element_span(decoder *d, txml_cursor node) {
+    txml_span span;
+    return txml_node_span(node, &span) == TXML_OK ? add_span(d, span_of(span.start, span.end)) : 0u;
+}
+
+/* A whole attribute, name and value: the `initial` attribute. */
+static uint32_t attribute_span(decoder *d, const attr *attribute) {
+    return attribute->spanned ? add_span(d, span_of(attribute->where.start, attribute->where.end)) : 0u;
+}
+
+/* An expression attribute: its value inside the quotes, as written. */
+static ta_expression expression(decoder *d, const attr *attribute) {
+    ta_expression out = source(attribute->value);
+    if (attribute->spanned) {
+        out.span = add_span(d, span_of(attribute->where.value_start, attribute->where.value_end));
+    }
+    return out;
+}
+
+/* The character data of `parent` as written: from its first text node to
+ * the end of its last, inside the CDATA markers when there are some. */
+static uint32_t text_span(decoder *d, txml_cursor parent) {
+    txml_span first = { 0 };
+    txml_span last = { 0 };
+    bool found = false;
+    bool first_cdata = false;
+    bool last_cdata = false;
+    txml_cursor child = parent;
+    for (txml_move move = txml_first_child(&child); move == TXML_MOVED; move = txml_next_sibling(&child)) {
+        txml_span span;
+        if (txml_kind(child) != TXML_NODE_TEXT || txml_node_span(child, &span) != TXML_OK) {
+            continue;
+        }
+        bool cdata = (txml_flags(child) & TXML_NODE_CDATA) != 0u;
+        if (!found) {
+            first = span;
+            first_cdata = cdata;
+            found = true;
+        }
+        last = span;
+        last_cdata = cdata;
+    }
+    if (!found) {
+        return 0;
+    }
+    if (first_cdata) {
+        first.start.offset += 9u; /* <![CDATA[ */
+        first.start.column += 9u;
+    }
+    if (last_cdata) {
+        last.end.offset -= 3u; /* ]]> */
+        last.end.column -= 3u;
+    }
+    return add_span(d, span_of(first.start, last.end));
+}
+
+/* All of a fetched file, which is a source of its own. */
+static uint32_t file_span(decoder *d, ta_str src, ta_bytes text) {
+    uint32_t index = add_source(d, src);
+    if (index == 0) {
+        return 0;
+    }
+    ta_source_span span = { .source = index, .length = text.len, .line = 1, .column = 1, .end_line = 1, .end_column = 1 };
+    for (uint32_t at = 0; at < text.len; at += 1u) {
+        if (text.ptr[at] == '\n') {
+            span.end_line += 1u;
+            span.end_column = 1;
+        } else {
+            span.end_column += 1u;
+        }
+    }
+    return add_span(d, span);
+}
+
+static ta_scxml_string_spec string_pair(decoder *d, const attr *literal, const attr *expression_attr) {
     if (literal->present) {
         return (ta_scxml_string_spec){ .kind = TA_SCXML_STRING_LITERAL, .as.literal = literal->value };
     }
-    if (expression->present) {
-        return (ta_scxml_string_spec){ .kind = TA_SCXML_STRING_EXPR, .as.expr = source(expression->value) };
+    if (expression_attr->present) {
+        return (ta_scxml_string_spec){ .kind = TA_SCXML_STRING_EXPR, .as.expr = expression(d, expression_attr) };
     }
     return (ta_scxml_string_spec){ 0 };
 }
 
-static ta_scxml_id_spec id_pair(const attr *literal, const attr *location) {
+static ta_scxml_id_spec id_pair(decoder *d, const attr *literal, const attr *location) {
     if (literal->present) {
         return (ta_scxml_id_spec){ .kind = TA_SCXML_ID_LITERAL, .as.literal = literal->value };
     }
     if (location->present) {
-        return (ta_scxml_id_spec){ .kind = TA_SCXML_ID_LOCATION, .as.location = source(location->value) };
+        return (ta_scxml_id_spec){ .kind = TA_SCXML_ID_LOCATION, .as.location = expression(d, location) };
     }
     return (ta_scxml_id_spec){ 0 };
 }
@@ -648,7 +792,7 @@ static ta_result decode_content(decoder *d, txml_cursor node, ta_scxml_value_spe
         if (elements || text) {
             return fail_attr(d, TA_CHART_ERROR_MISPLACED_CONSTRUCT, node, &attrs[0], "content has both expr and a body");
         }
-        *out = (ta_scxml_value_spec){ .kind = TA_SCXML_VALUE_EXPR, .as.expr = source(attrs[0].value) };
+        *out = (ta_scxml_value_spec){ .kind = TA_SCXML_VALUE_EXPR, .as.expr = expression(d, &attrs[0]) };
         return TA_OK;
     }
     return literal_content(d, node, out);
@@ -739,9 +883,9 @@ static ta_result decode_payload(decoder *d, txml_cursor node, payload *out) {
             list[at++] = (ta_scxml_param_spec){
                 .name = attrs[0].value,
                 .value = attrs[1].present
-                             ? (ta_scxml_value_spec){ .kind = TA_SCXML_VALUE_EXPR, .as.expr = source(attrs[1].value) }
+                             ? (ta_scxml_value_spec){ .kind = TA_SCXML_VALUE_EXPR, .as.expr = expression(d, &attrs[1]) }
                              : (ta_scxml_value_spec){ .kind = TA_SCXML_VALUE_LOCATION,
-                                                      .as.location = source(attrs[2].value) },
+                                                      .as.location = expression(d, &attrs[2]) },
             };
         }
         out->params = list;
@@ -807,6 +951,7 @@ static ta_result decode_script_text(decoder *d, txml_cursor node, ta_expression 
         result = fetch(d, node, &attrs[0], &fetched);
         if (result == TA_OK) {
             *out = source((ta_str){ .ptr = fetched.ptr != NULL ? (const char *)fetched.ptr : "", .len = fetched.len });
+            out->span = file_span(d, attrs[0].value, fetched);
         }
         return result;
     }
@@ -814,6 +959,7 @@ static ta_result decode_script_text(decoder *d, txml_cursor node, ta_expression 
     result = character_data(d, node, &body);
     if (result == TA_OK) {
         *out = source(body);
+        out->span = text_span(d, node);
     }
     return result;
 }
@@ -837,13 +983,13 @@ static ta_result decode_send(decoder *d, txml_cursor node, ta_scxml_send_spec *o
         return fail_attr(d, TA_CHART_ERROR_MISSING_ATTRIBUTE, node, &attrs[EVENT], "<send> needs event or eventexpr");
     }
     *out = (ta_scxml_send_spec){
-        .id = id_pair(&attrs[ID], &attrs[IDLOCATION]),
-        .type = string_pair(&attrs[TYPE], &attrs[TYPEEXPR]),
+        .id = id_pair(d, &attrs[ID], &attrs[IDLOCATION]),
+        .type = string_pair(d, &attrs[TYPE], &attrs[TYPEEXPR]),
         .event = attrs[EVENT].present
                      ? (ta_scxml_event_spec){ .kind = TA_SCXML_EVENT_NAME, .as.name = attrs[EVENT].value }
-                     : (ta_scxml_event_spec){ .kind = TA_SCXML_EVENT_EXPR, .as.expr = source(attrs[EVENTEXPR].value) },
-        .target = string_pair(&attrs[TARGET], &attrs[TARGETEXPR]),
-        .delay = string_pair(&attrs[DELAY], &attrs[DELAYEXPR]),
+                     : (ta_scxml_event_spec){ .kind = TA_SCXML_EVENT_EXPR, .as.expr = expression(d, &attrs[EVENTEXPR]) },
+        .target = string_pair(d, &attrs[TARGET], &attrs[TARGETEXPR]),
+        .delay = string_pair(d, &attrs[DELAY], &attrs[DELAYEXPR]),
     };
     payload body = { .namelist = &attrs[NAMELIST] };
     result = decode_payload(d, node, &body);
@@ -891,7 +1037,7 @@ static ta_result decode_action(decoder *d, txml_cursor node, ta_scxml_action_spe
         }
         if (result == TA_OK) {
             *out = (ta_scxml_action_spec){ .kind = TA_SCXML_ACTION_CANCEL,
-                                           .as.cancel = { .sendid = string_pair(&attrs[0], &attrs[1]) } };
+                                           .as.cancel = { .sendid = string_pair(d, &attrs[0], &attrs[1]) } };
         }
         return result;
     }
@@ -908,12 +1054,12 @@ static ta_result decode_action(decoder *d, txml_cursor node, ta_scxml_action_spe
         bool text = false;
         content_shape(node, &elements, &text);
         *out = (ta_scxml_action_spec){ .kind = TA_SCXML_ACTION_ASSIGN,
-                                       .as.assign = { .location = source(attrs[0].value) } };
+                                       .as.assign = { .location = expression(d, &attrs[0]) } };
         if (attrs[1].present) {
             if (elements || text) {
                 return fail_attr(d, TA_CHART_ERROR_MISPLACED_CONSTRUCT, node, &attrs[1], "<assign> has both expr and a body");
             }
-            out->as.assign.value = (ta_scxml_value_spec){ .kind = TA_SCXML_VALUE_EXPR, .as.expr = source(attrs[1].value) };
+            out->as.assign.value = (ta_scxml_value_spec){ .kind = TA_SCXML_VALUE_EXPR, .as.expr = expression(d, &attrs[1]) };
             return TA_OK;
         }
         if (!elements && !text) {
@@ -935,7 +1081,7 @@ static ta_result decode_action(decoder *d, txml_cursor node, ta_scxml_action_spe
             *out = (ta_scxml_action_spec){
                 .kind = TA_SCXML_ACTION_LOG,
                 .as.log = { .label = attrs[0].present ? attrs[0].value : (ta_str){ 0 },
-                            .expr = attrs[1].present ? source(attrs[1].value) : (ta_expression){ 0 } },
+                            .expr = attrs[1].present ? expression(d, &attrs[1]) : (ta_expression){ 0 } },
             };
         }
         return result;
@@ -958,7 +1104,7 @@ static ta_result decode_action(decoder *d, txml_cursor node, ta_scxml_action_spe
         }
         *out = (ta_scxml_action_spec){
             .kind = TA_SCXML_ACTION_FOREACH,
-            .as.foreach = { .array = source(attrs[0].value), .item = attrs[1].value,
+            .as.foreach = { .array = expression(d, &attrs[0]), .item = attrs[1].value,
                             .index = attrs[2].present ? attrs[2].value : (ta_str){ 0 } },
         };
         txml_cursor first;
@@ -1002,6 +1148,7 @@ static ta_result decode_actions(decoder *d, txml_cursor first, bool has_first, b
         if (result != TA_OK) {
             return result;
         }
+        list[index].span = element_span(d, node);
         (void)txml_next_element(&node);
     }
     *out = list;
@@ -1047,7 +1194,9 @@ static ta_result decode_else(decoder *d, txml_cursor marker, bool has_marker, co
     if (branch == NULL) {
         return TA_ERR_NOMEM;
     }
-    branch[0] = (ta_scxml_action_spec){ .kind = TA_SCXML_ACTION_IF, .as.conditional = { .condition = source(attrs[0].value) } };
+    /* An <elseif> is an <if> in the else branch, written where the <elseif> is. */
+    branch[0] = (ta_scxml_action_spec){ .kind = TA_SCXML_ACTION_IF, .span = element_span(d, marker),
+                                        .as.conditional = { .condition = expression(d, &attrs[0]) } };
     result = decode_actions(d, next, has_next, true, &branch[0].as.conditional.then_actions, &after, &has_after);
     if (result == TA_OK) {
         result = decode_else(d, after, has_after, &branch[0].as.conditional.else_actions);
@@ -1068,7 +1217,7 @@ static ta_result decode_if(decoder *d, txml_cursor node, ta_scxml_action_spec *o
     if (result != TA_OK) {
         return result;
     }
-    *out = (ta_scxml_action_spec){ .kind = TA_SCXML_ACTION_IF, .as.conditional = { .condition = source(attrs[0].value) } };
+    *out = (ta_scxml_action_spec){ .kind = TA_SCXML_ACTION_IF, .as.conditional = { .condition = expression(d, &attrs[0]) } };
     txml_cursor first;
     bool has_first = first_element(node, &first);
     txml_cursor marker;
@@ -1098,7 +1247,7 @@ static ta_result decode_transition(decoder *d, txml_cursor node, ta_scxml_transi
     if (result != TA_OK) {
         return result;
     }
-    *out = (ta_scxml_transition_spec){ .kind = TA_SCXML_TRANSITION_EXTERNAL };
+    *out = (ta_scxml_transition_spec){ .kind = TA_SCXML_TRANSITION_EXTERNAL, .span = element_span(d, node) };
     if (attrs[3].present) {
         if (str_is(attrs[3].value, "internal")) {
             out->kind = TA_SCXML_TRANSITION_INTERNAL;
@@ -1110,7 +1259,7 @@ static ta_result decode_transition(decoder *d, txml_cursor node, ta_scxml_transi
         out->event = attrs[0].value;
     }
     if (attrs[1].present) {
-        out->condition = source(attrs[1].value);
+        out->condition = expression(d, &attrs[1]);
     }
     if (attrs[2].present) {
         result = token_list(d, attrs[2].value, &out->targets);
@@ -1141,7 +1290,7 @@ static ta_result decode_data(decoder *d, txml_cursor node, ta_scxml_data_spec *o
     }
     *out = (ta_scxml_data_spec){ .name = attrs[0].value };
     if (attrs[2].present) {
-        out->initializer = (ta_scxml_value_spec){ .kind = TA_SCXML_VALUE_EXPR, .as.expr = source(attrs[2].value) };
+        out->initializer = (ta_scxml_value_spec){ .kind = TA_SCXML_VALUE_EXPR, .as.expr = expression(d, &attrs[2]) };
     } else if (attrs[1].present) {
         ta_bytes fetched = { 0 };
         result = fetch(d, node, &attrs[1], &fetched);
@@ -1290,6 +1439,7 @@ static ta_result decode_initial_element(decoder *d, txml_cursor node, ta_scxml_i
     if (result == TA_OK) {
         result = decode_block(d, transition, &out->actions);
     }
+    out->span = element_span(d, node);
     return result;
 }
 
@@ -1317,9 +1467,9 @@ static ta_result decode_invoke(decoder *d, txml_cursor node, ta_scxml_invoke_spe
     }
     *out = (ta_scxml_invoke_spec){
         .kind = TA_SCXML_INVOKE,
-        .id = id_pair(&attrs[ID], &attrs[IDLOCATION]),
-        .type = string_pair(&attrs[TYPE], &attrs[TYPEEXPR]),
-        .src = string_pair(&attrs[SRC], &attrs[SRCEXPR]),
+        .id = id_pair(d, &attrs[ID], &attrs[IDLOCATION]),
+        .type = string_pair(d, &attrs[TYPE], &attrs[TYPEEXPR]),
+        .src = string_pair(d, &attrs[SRC], &attrs[SRCEXPR]),
         .autoforward = autoforward,
     };
     payload body = { .namelist = &attrs[NAMELIST], .finalize_allowed = true, .params_with_content = true };
@@ -1368,7 +1518,7 @@ static ta_result decode_state(decoder *d, txml_cursor node, ta_scxml_state_spec 
     attr id = table[0];
     attr extra = allowed_extra != NULL ? table[1] : (attr){ 0 };
 
-    *out = (ta_scxml_state_spec){ 0 };
+    *out = (ta_scxml_state_spec){ .span = element_span(d, node) };
     if (id.present) {
         out->id = id.value;
     } else {
@@ -1450,6 +1600,9 @@ static ta_result decode_state(decoder *d, txml_cursor node, ta_scxml_state_spec 
                                : decode_initial_element(d, initial_element, initial);
         if (result != TA_OK) {
             return result;
+        }
+        if (extra.present) {
+            initial->span = attribute_span(d, &extra);
         }
         out->initial = initial;
     }
@@ -1579,6 +1732,7 @@ static ta_result decode_root(decoder *d, txml_cursor root, ta_scxml_spec *spec) 
         if (result != TA_OK) {
             return result;
         }
+        initial->span = attribute_span(d, &attrs[INITIAL]);
         spec->initial = initial;
     }
     uint32_t scripts = 0;
@@ -1592,6 +1746,7 @@ static ta_result decode_root(decoder *d, txml_cursor root, ta_scxml_spec *spec) 
             if (result != TA_OK) {
                 return result;
             }
+            spec->script_span = element_span(d, child);
         } else if (is_element(child, "history") ||
                    !(is_state_element(child) || is_element(child, "datamodel"))) {
             return fail(d, in_scxml_namespace(child) ? TA_CHART_ERROR_MISPLACED_CONSTRUCT : TA_CHART_ERROR_UNKNOWN_CONSTRUCT,
@@ -1602,6 +1757,13 @@ static ta_result decode_root(decoder *d, txml_cursor root, ta_scxml_spec *spec) 
     if (result == TA_OK) {
         result = decode_states(d, root, &spec->states);
     }
+    if (result == TA_OK && d->out_of_memory) {
+        result = TA_ERR_NOMEM;
+    }
+    spec->spans = d->spans;
+    spec->span_count = d->span_count;
+    spec->sources = d->sources;
+    spec->source_count = d->source_count;
     return result;
 }
 
@@ -1639,6 +1801,7 @@ static ta_result scxml_decode(void *self, const ta_chart_decode_params *params) 
         return TA_ERR_INVALID;
     }
     decoder d = { .params = params, .limits = &codec->limits, .arena = params->arena, .input = params->input };
+    (void)add_source(&d, params->name);
     if (params->input.len > codec->limits.max_document_bytes) {
         ta_result result = fail_at(&d, TA_CHART_ERROR_LIMIT, input_position(params->input, codec->limits.max_document_bytes),
                                    cstr("max_document_bytes"), (ta_str){ 0 }, "the input is longer than max_document_bytes");
@@ -1685,12 +1848,28 @@ static ta_result scxml_decode(void *self, const ta_chart_decode_params *params) 
  * Encode
  */
 
+/* Where one element or expression landed in the output (ADR 0085). */
+typedef struct {
+    uint32_t span;
+    uint64_t start;
+    uint64_t end;
+} landed;
+
 typedef struct {
     const ta_chart_encode_params *params;
     const ta_scxml_codec_params *limits;
     ta_arena *arena;
     output out;
     ta_chart_error error;
+    /* Elements open around the one being written, and whether each has an
+     * element child yet: a parent with one ends on a line of its own. */
+    uint32_t depth;
+    bool *nested;
+    /* Where each element with a span landed, reported once the output is
+     * whole and its lines are known. */
+    landed *landings;
+    uint32_t landing_count;
+    uint32_t landing_capacity;
 } encoder;
 
 static ta_result refuse(encoder *e, const char *construct, const char *message) {
@@ -1716,13 +1895,84 @@ static ta_result written(encoder *e, txml_result result, const char *construct) 
     return refuse(e, construct, "text that XML cannot carry");
 }
 
-static ta_result start(encoder *e, const char *local) {
+/* Bytes written so far: drained, and still in the writer's buffer. */
+static uint64_t output_offset(const output *out) {
+    return out->total + txml_writer_output(out->writer).length;
+}
+
+/*
+ * A line break and two spaces per open element, as text. The codec indents
+ * by itself rather than with TXML_WRITE_INDENT, which would also indent the
+ * markup of a <content> and so change its bytes: only SCXML elements that
+ * hold elements get whitespace, and decode ignores whitespace there.
+ */
+static ta_result indent(encoder *e, uint32_t depth) {
+    static const char spaces[] = "\n                                ";
+    ta_result result = written(e, txml_write_text(e->out.writer, (txml_str){ spaces, 1 }), "indentation");
+    for (uint32_t left = 2u * depth; result == TA_OK && left != 0;) {
+        uint32_t chunk = left < sizeof(spaces) - 2u ? left : (uint32_t)(sizeof(spaces) - 2u);
+        result = written(e, txml_write_text(e->out.writer, (txml_str){ spaces + 1, chunk }), "indentation");
+        left -= chunk;
+    }
+    return result;
+}
+
+/* Starts an element on a line of its own; `at` is where its `<` is. */
+static ta_result start_at(encoder *e, const char *local, uint64_t *at) {
+    ta_result result = TA_OK;
+    if (e->depth != 0) {
+        e->nested[e->depth - 1u] = true;
+        result = indent(e, e->depth);
+    }
+    *at = output_offset(&e->out);
     txml_write_name name = { .ns = TXML_STR(SCXML_NS), .local = { local, cstr_length(local) }, .prefix = { "", 0 } };
-    return written(e, txml_write_start(e->out.writer, &name), local);
+    if (result == TA_OK) {
+        result = written(e, txml_write_start(e->out.writer, &name), local);
+    }
+    /* The writer refuses to nest deeper than max_depth, which sizes `nested`. */
+    if (result == TA_OK) {
+        e->nested[e->depth++] = false;
+    }
+    return result;
+}
+
+static ta_result start(encoder *e, const char *local) {
+    uint64_t at = 0;
+    return start_at(e, local, &at);
 }
 
 static ta_result end(encoder *e) {
-    return written(e, txml_write_end(e->out.writer), "end tag");
+    e->depth -= 1u;
+    ta_result result = e->nested[e->depth] ? indent(e, e->depth) : TA_OK;
+    return result == TA_OK ? written(e, txml_write_end(e->out.writer), "end tag") : result;
+}
+
+/* Records that the element or expression with `span` occupies `start` up to
+ * where the output is now. */
+static ta_result landed_at(encoder *e, uint32_t span, uint64_t start) {
+    if (span == 0 || e->params->spans.v == NULL) {
+        return TA_OK;
+    }
+    if (e->landing_count == e->landing_capacity) {
+        uint32_t capacity = e->landing_capacity == 0 ? 64u : e->landing_capacity * 2u;
+        landed *grown = ta_arena_alloc(e->arena, (size_t)capacity * sizeof(landed), _Alignof(landed));
+        if (grown == NULL) {
+            return TA_ERR_NOMEM;
+        }
+        if (e->landings != NULL) {
+            copy_bytes(grown, e->landings, (uint32_t)(e->landing_count * sizeof(landed)));
+        }
+        e->landings = grown;
+        e->landing_capacity = capacity;
+    }
+    e->landings[e->landing_count++] = (landed){ .span = span, .start = start, .end = output_offset(&e->out) };
+    return TA_OK;
+}
+
+/* Ends an element started at `at` and records where it landed. */
+static ta_result end_landed(encoder *e, uint32_t span, uint64_t at) {
+    ta_result result = end(e);
+    return result == TA_OK ? landed_at(e, span, at) : result;
 }
 
 static ta_result attribute(encoder *e, const char *local, ta_str value) {
@@ -1749,13 +1999,41 @@ static ta_result expression_text(encoder *e, const ta_expression *expression, co
     return refuse(e, construct, "an absent expression");
 }
 
+/* An expression as an attribute; its span is the value inside the quotes. */
 static ta_result expression_attribute(encoder *e, const char *local, const ta_expression *expression) {
     if (expression->kind == TA_EXPRESSION_NONE) {
         return TA_OK;
     }
     ta_str text;
     ta_result result = expression_text(e, expression, local, &text);
-    return result == TA_OK ? attribute(e, local, text) : result;
+    uint64_t before = output_offset(&e->out);
+    if (result == TA_OK) {
+        result = attribute(e, local, text);
+    }
+    if (result == TA_OK && expression->span != 0 && e->params->spans.v != NULL) {
+        /* The attribute is written as ` local="value"`. */
+        uint64_t value = before + cstr_length(local) + 3u;
+        result = landed_at(e, expression->span, value);
+        if (result == TA_OK) {
+            e->landings[e->landing_count - 1u].end -= 1u;
+        }
+    }
+    return result;
+}
+
+/* An expression as an element's character data: a <script>. */
+static ta_result expression_body(encoder *e, const ta_expression *expression, const char *construct) {
+    ta_str text;
+    ta_result result = expression_text(e, expression, construct, &text);
+    /* The first text closes the start tag with a `>`. */
+    uint64_t body = output_offset(&e->out) + 1u;
+    if (result == TA_OK) {
+        result = written(e, txml_write_text(e->out.writer, to_txml(text)), construct);
+    }
+    if (result == TA_OK && text.len == 0) {
+        body = output_offset(&e->out);
+    }
+    return result == TA_OK ? landed_at(e, expression->span, body) : result;
 }
 
 static ta_result string_attribute(encoder *e, const char *literal, const char *expression, const ta_scxml_string_spec *spec) {
@@ -1903,12 +2181,13 @@ static ta_result else_branch(encoder *e, const ta_scxml_action_spec *list) {
         return TA_OK;
     }
     if (list[0].kind == TA_SCXML_ACTION_IF && list[1].kind == TA_SCXML_ACTION_NONE) {
-        ta_result result = start(e, "elseif");
+        uint64_t at = 0;
+        ta_result result = start_at(e, "elseif", &at);
         if (result == TA_OK) {
             result = expression_attribute(e, "cond", &list[0].as.conditional.condition);
         }
         if (result == TA_OK) {
-            result = end(e);
+            result = end_landed(e, list[0].span, at);
         }
         if (result == TA_OK) {
             result = actions(e, list[0].as.conditional.then_actions);
@@ -1924,19 +2203,20 @@ static ta_result else_branch(encoder *e, const ta_scxml_action_spec *list) {
 
 static ta_result action(encoder *e, const ta_scxml_action_spec *spec) {
     ta_result result = TA_OK;
+    uint64_t at = output_offset(&e->out);
     switch (spec->kind) {
         case TA_SCXML_ACTION_RAISE:
             if (spec->as.raise.data.kind != TA_SCXML_VALUE_NONE) {
                 return refuse(e, "raise", "<raise> carries no data");
             }
-            result = start(e, "raise");
+            result = start_at(e, "raise", &at);
             if (result == TA_OK) {
                 result = attribute(e, "event", spec->as.raise.event);
             }
             break;
         case TA_SCXML_ACTION_SEND: {
             const ta_scxml_send_spec *send = &spec->as.send;
-            result = start(e, "send");
+            result = start_at(e, "send", &at);
             if (result == TA_OK) {
                 if (send->event.kind == TA_SCXML_EVENT_NAME) {
                     result = attribute(e, "event", send->event.as.name);
@@ -1965,13 +2245,13 @@ static ta_result action(encoder *e, const ta_scxml_action_spec *spec) {
             break;
         }
         case TA_SCXML_ACTION_CANCEL:
-            result = start(e, "cancel");
+            result = start_at(e, "cancel", &at);
             if (result == TA_OK) {
                 result = string_attribute(e, "sendid", "sendidexpr", &spec->as.cancel.sendid);
             }
             break;
         case TA_SCXML_ACTION_ASSIGN:
-            result = start(e, "assign");
+            result = start_at(e, "assign", &at);
             if (result == TA_OK) {
                 result = expression_attribute(e, "location", &spec->as.assign.location);
             }
@@ -1986,19 +2266,14 @@ static ta_result action(encoder *e, const ta_scxml_action_spec *spec) {
                 }
             }
             break;
-        case TA_SCXML_ACTION_SCRIPT: {
-            ta_str text;
-            result = start(e, "script");
+        case TA_SCXML_ACTION_SCRIPT:
+            result = start_at(e, "script", &at);
             if (result == TA_OK) {
-                result = expression_text(e, &spec->as.script.script, "script", &text);
-            }
-            if (result == TA_OK) {
-                result = written(e, txml_write_text(e->out.writer, to_txml(text)), "script");
+                result = expression_body(e, &spec->as.script.script, "script");
             }
             break;
-        }
         case TA_SCXML_ACTION_LOG:
-            result = start(e, "log");
+            result = start_at(e, "log", &at);
             if (result == TA_OK && spec->as.log.label.ptr != NULL) {
                 result = attribute(e, "label", spec->as.log.label);
             }
@@ -2007,7 +2282,7 @@ static ta_result action(encoder *e, const ta_scxml_action_spec *spec) {
             }
             break;
         case TA_SCXML_ACTION_IF:
-            result = start(e, "if");
+            result = start_at(e, "if", &at);
             if (result == TA_OK) {
                 result = expression_attribute(e, "cond", &spec->as.conditional.condition);
             }
@@ -2019,7 +2294,7 @@ static ta_result action(encoder *e, const ta_scxml_action_spec *spec) {
             }
             break;
         case TA_SCXML_ACTION_FOREACH:
-            result = start(e, "foreach");
+            result = start_at(e, "foreach", &at);
             if (result == TA_OK) {
                 result = expression_attribute(e, "array", &spec->as.foreach.array);
             }
@@ -2036,7 +2311,7 @@ static ta_result action(encoder *e, const ta_scxml_action_spec *spec) {
         default:
             return refuse(e, "action", "no SCXML form for this action");
     }
-    return result == TA_OK ? end(e) : result;
+    return result == TA_OK ? end_landed(e, spec->span, at) : result;
 }
 
 static ta_result actions(encoder *e, const ta_scxml_action_spec *list) {
@@ -2077,7 +2352,8 @@ static ta_result datamodel(encoder *e, const ta_scxml_data_spec *data) {
 }
 
 static ta_result transition(encoder *e, const ta_scxml_transition_spec *spec) {
-    ta_result result = start(e, "transition");
+    uint64_t at = 0;
+    ta_result result = start_at(e, "transition", &at);
     if (result == TA_OK && spec->event.ptr != NULL) {
         result = attribute(e, "event", spec->event);
     }
@@ -2093,7 +2369,7 @@ static ta_result transition(encoder *e, const ta_scxml_transition_spec *spec) {
     if (result == TA_OK) {
         result = actions(e, spec->actions);
     }
-    return result == TA_OK ? end(e) : result;
+    return result == TA_OK ? end_landed(e, spec->span, at) : result;
 }
 
 static ta_result handlers(encoder *e, const char *local, const ta_scxml_handler_spec *list) {
@@ -2165,7 +2441,8 @@ static ta_result state(encoder *e, const ta_scxml_state_spec *spec) {
         default:
             return refuse(e, "state", "an unknown kind of state");
     }
-    ta_result result = start(e, local);
+    uint64_t at = 0;
+    ta_result result = start_at(e, local, &at);
     if (result == TA_OK) {
         result = attribute(e, "id", spec->id);
     }
@@ -2175,10 +2452,16 @@ static ta_result state(encoder *e, const ta_scxml_state_spec *spec) {
     const ta_scxml_initial_spec *initial = spec->initial;
     bool initial_element = initial != NULL && initial->actions != NULL && initial->actions[0].kind != TA_SCXML_ACTION_NONE;
     if (result == TA_OK && initial != NULL && !initial_element) {
+        uint64_t before = output_offset(&e->out);
         result = list_attribute(e, "initial", initial->targets);
+        /* The attribute's leading space is not part of it. */
+        if (result == TA_OK) {
+            result = landed_at(e, initial->span, before + 1u);
+        }
     }
+    uint64_t initial_at = 0;
     if (result == TA_OK && initial_element) {
-        result = start(e, "initial");
+        result = start_at(e, "initial", &initial_at);
         if (result == TA_OK) {
             result = start(e, "transition");
         }
@@ -2192,7 +2475,7 @@ static ta_result state(encoder *e, const ta_scxml_state_spec *spec) {
             result = end(e);
         }
         if (result == TA_OK) {
-            result = end(e);
+            result = end_landed(e, initial->span, initial_at);
         }
     }
     if (result == TA_OK) {
@@ -2228,7 +2511,7 @@ static ta_result state(encoder *e, const ta_scxml_state_spec *spec) {
     if (result == TA_OK) {
         result = states(e, spec->states);
     }
-    return result == TA_OK ? end(e) : result;
+    return result == TA_OK ? end_landed(e, spec->span, at) : result;
 }
 
 static ta_result states(encoder *e, const ta_scxml_state_spec *list) {
@@ -2259,22 +2542,23 @@ static ta_result encode_spec(encoder *e, const ta_scxml_spec *spec) {
         result = attribute(e, "binding", cstr(spec->binding == TA_SCXML_BINDING_LATE ? "late" : "early"));
     }
     if (result == TA_OK && spec->initial != NULL) {
+        uint64_t before = output_offset(&e->out);
         result = list_attribute(e, "initial", spec->initial->targets);
+        if (result == TA_OK) {
+            result = landed_at(e, spec->initial->span, before + 1u);
+        }
     }
     if (result == TA_OK) {
         result = datamodel(e, spec->data);
     }
     if (result == TA_OK && spec->script.kind != TA_EXPRESSION_NONE) {
-        ta_str text;
-        result = start(e, "script");
+        uint64_t at = 0;
+        result = start_at(e, "script", &at);
         if (result == TA_OK) {
-            result = expression_text(e, &spec->script, "script", &text);
+            result = expression_body(e, &spec->script, "script");
         }
         if (result == TA_OK) {
-            result = written(e, txml_write_text(e->out.writer, to_txml(text)), "script");
-        }
-        if (result == TA_OK) {
-            result = end(e);
+            result = end_landed(e, spec->script_span, at);
         }
     }
     if (result == TA_OK) {
@@ -2283,20 +2567,71 @@ static ta_result encode_spec(encoder *e, const ta_scxml_spec *spec) {
     return result == TA_OK ? end(e) : result;
 }
 
+/* Where byte `offset` is: the line whose start is the last at or before it. */
+static void place(const uint64_t *starts, uint32_t lines, uint64_t offset, uint32_t *line, uint32_t *column) {
+    uint32_t low = 0;
+    uint32_t high = lines;
+    while (high - low > 1u) {
+        uint32_t middle = low + (high - low) / 2u;
+        if (starts[middle] <= offset) {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    *line = low + 1u;
+    *column = (uint32_t)(offset - starts[low]) + 1u;
+}
+
+/* Tells the caller's sink where each element landed, with lines and columns
+ * counted as txml counts them in a decode. */
+static ta_result report_landings(encoder *e, ta_bytes output) {
+    const ta_chart_span_sink *sink = &e->params->spans;
+    if (sink->v == NULL || e->landing_count == 0) {
+        return TA_OK;
+    }
+    uint32_t lines = 1;
+    for (uint32_t at = 0; at < output.len; at += 1u) {
+        lines += output.ptr[at] == '\n' ? 1u : 0u;
+    }
+    uint64_t *starts = ta_arena_alloc(e->arena, (size_t)lines * sizeof(uint64_t), _Alignof(uint64_t));
+    if (starts == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    starts[0] = 0;
+    for (uint32_t at = 0, line = 1; at < output.len; at += 1u) {
+        if (output.ptr[at] == '\n') {
+            starts[line++] = at + 1u;
+        }
+    }
+    for (uint32_t index = 0; index < e->landing_count; index += 1u) {
+        const landed *where = &e->landings[index];
+        ta_source_span span = { .offset = where->start, .length = (uint32_t)(where->end - where->start) };
+        place(starts, lines, where->start, &span.line, &span.column);
+        place(starts, lines, where->end, &span.end_line, &span.end_column);
+        sink->v->written(sink->self, where->span, &span);
+    }
+    return TA_OK;
+}
+
 static ta_result scxml_encode(void *self, const ta_chart_encode_params *params) {
     const ta_scxml_codec *codec = self;
     if (codec == NULL || params == NULL || params->spec == NULL || params->arena == NULL || params->out == NULL) {
         return TA_ERR_INVALID;
     }
     encoder e = { .params = params, .limits = &codec->limits, .arena = params->arena };
+    e.nested = ta_arena_alloc(params->arena, (size_t)codec->limits.max_depth + 1u, 1);
     txml_result initialized = output_init(&e.out, params->arena, e.limits, TXML_WRITE_DECLARATION | TXML_WRITE_EMPTY_TAGS);
-    if (initialized != TXML_OK) {
+    if (initialized != TXML_OK || e.nested == NULL) {
         return TA_ERR_NOMEM;
     }
     ta_result result = encode_spec(&e, params->spec);
     if (result == TA_OK) {
         txml_result finished = output_finish(&e.out, params->out);
         result = finished == TXML_OK ? TA_OK : finished == TXML_ERR_NOMEM ? TA_ERR_NOMEM : refuse(&e, "scxml", "unfinished");
+    }
+    if (result == TA_OK) {
+        result = report_landings(&e, *params->out);
     }
     if (result == TA_ERR_INVALID && params->error != NULL) {
         *params->error = e.error;
