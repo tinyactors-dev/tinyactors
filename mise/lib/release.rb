@@ -93,22 +93,22 @@ module Release
   end
 
   # Release notes: the Conventional Commits since the previous release that
-  # touch `path`, grouped by type. The first release lists the features and
-  # fixes since the start, after `summary`.
+  # touch `path`, grouped by type. The first release has only `summary`: its
+  # history since the start of the repository is not a changelog.
   def notes(prefix:, path:, title:, summary:)
     previous = released_versions(prefix).last
-    range = previous ? ["#{prefix}v#{previous}..HEAD"] : []
-    subjects = (git('log', '--format=%s', *range, '--', path) || '').lines.map(&:strip)
+    return "# #{title}\n\n#{summary}\n" unless previous
+
+    subjects = (git('log', '--format=%s', "#{prefix}v#{previous}..HEAD", '--', path) || '').lines.map(&:strip)
     groups = { 'feat' => 'Features', 'fix' => 'Fixes' }
-    groups['perf'] = 'Performance' if previous
+    groups['perf'] = 'Performance'
     sections = groups.filter_map do |type, heading|
       lines = subjects.select { |subject| subject.match?(/\A#{type}(\([^)]*\))?!?:/) }
       next if lines.empty?
 
       "## #{heading}\n\n#{lines.map { |line| "- #{line}" }.join("\n")}\n"
     end
-    intro = previous ? "Changes since #{previous}." : summary
-    "# #{title}\n\n#{intro}\n\n#{sections.join("\n")}"
+    "# #{title}\n\nChanges since #{previous}.\n\n#{sections.join("\n")}"
   end
 
   # Writes SHA256SUMS for `files` into `out`, one "<sha256>  <name>" per file.
