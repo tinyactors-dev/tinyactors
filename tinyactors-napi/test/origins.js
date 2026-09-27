@@ -182,6 +182,60 @@ async function invokedService() {
   system.close();
 }
 
+// inspect() reports each event's origin as a tagged EventOrigin, with the
+// type and URI the receiver's expressions see: seen while the macrostep that
+// takes the event is paused after its first microstep.
+async function inspectedOrigins() {
+  const { io } = processors();
+  let reporter;
+  const system = createSystem({
+    clock: 'manual',
+    scheduling: { resumeBudget: 1 },
+    io,
+    invokers: { svc: { start(_, report) { reporter = report; } } },
+  });
+  const receiver = system.spawn(system.define(
+    statechart({ family: 'receiver', revision: 'v1' })
+      .state('a', (s) => s.invoke((invoke) => invoke.type('svc').id('feed')).on('*', (t) => t.target('b')))
+      .state('b', (s) => s.always((t) => t.target('a'))),
+  ), { name: 'r' });
+  await system.flush();
+  const turn = () => new Promise((resolve) => setImmediate(resolve));
+  const originOf = async (post) => {
+    post();
+    await turn();
+    await turn();
+    const { origin } = receiver.inspect().currentEvent;
+    await system.flush();
+    return origin;
+  };
+
+  assert.deepEqual(await originOf(() => receiver.post('byURI', undefined, { origin: { type: 'http', uri: 'http://c/r/1' } })),
+                   { kind: 'io', type: 'http', uri: 'http://c/r/1' });
+  assert.deepEqual(await originOf(() => receiver.post('byToken', undefined, { origin: { type: 'peer', token: 7 } })),
+                   { kind: 'io', type: 'peer', uri: 'peer://node/7' });
+  const scope = system.openScope('ws', 'ws://client/9');
+  assert.deepEqual(await originOf(() => receiver.post('byScope', undefined, { origin: { type: 'ws', scope } })),
+                   { kind: 'io', scope: { index: scope.index, generation: scope.generation }, type: 'ws', uri: 'ws://client/9' });
+  // A closed scope keeps its type, and has no URI any more.
+  assert.deepEqual(await originOf(() => {
+    receiver.post('late', undefined, { origin: { type: 'ws', scope } });
+    system.closeScope(scope);
+  }), { kind: 'io', scope: { index: scope.index, generation: scope.generation }, type: 'ws' });
+  assert.equal(await originOf(() => receiver.post('plain')), undefined);
+
+  const [invocation] = receiver.inspect().invocations;
+  assert.deepEqual(await originOf(() => reporter.event('fromService')),
+                   { kind: 'invocation', invocation: invocation.id, type: 'svc', uri: '#_feed' });
+  const origin = await originOf(() => system.spawn(system.define(
+    statechart({ family: 'sender', revision: 'v1' })
+      .state('a', (s) => s.entry((e) => e.send('hello', (send) => send.to('#_actor_receiver/r')))),
+  ), { name: 's' }));
+  assert.deepEqual(origin, { kind: 'actor', actor: { family: 'sender', name: 's' },
+                             type: 'http://www.w3.org/TR/scxml/#SCXMLEventProcessor', uri: '#_actor_sender/s' });
+  system.close();
+}
+
 // A per-message origin in a queued, dead-lettered or dropped message is
 // released with it; close() leaves nothing (checked below).
 async function originsAreReleased() {
@@ -207,7 +261,7 @@ async function originsAreReleased() {
     console.error(`origins.js: ${current} did not finish in time`);
     process.exit(1);
   }, Number(process.env.ORIGINS_TIMEOUT_MS ?? 60_000));
-  for (const test of [listsEveryProcessor, repliesPerClass, invokedService, originsAreReleased]) {
+  for (const test of [listsEveryProcessor, repliesPerClass, invokedService, inspectedOrigins, originsAreReleased]) {
     current = test.name;
     await test();
   }

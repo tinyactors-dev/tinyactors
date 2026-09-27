@@ -688,8 +688,9 @@ async function state() {
   assert.equal(threads.length, 1);
   assert.equal(client.events('thread').filter((event) => event.reason === 'exited').length, 1);
 
-  // Frames inside a paused macrostep: the unit it runs next.
-  actor.post('spin');
+  // Frames inside a paused macrostep: the unit it runs next. Sent from the
+  // console, so the Event scope shows the console as its origin.
+  await client.repl('send spin');
   for (let index = 0; index < 4; index += 1) await turn();
   ({ stackFrames } = await client.ok('stackTrace', { threadId: 1 }));
   const names = stackFrames.map((frame) => frame.name);
@@ -700,6 +701,8 @@ async function state() {
   ({ scopes } = await client.ok('scopes', { frameId: stackFrames[0].id }));
   const event = Object.fromEntries((await read('Event')).map((variable) => [variable.name, variable.value]));
   assert.equal(event.name, '"spin"');
+  assert.match(event.origin, /^"debug:\/\/session\/\d+"$/, 'origin is the URI a reply goes to');
+  assert.equal(event.origintype, '"debug"');
   await client.refused('scopes', { frameId: 9999 }, /not valid/);
   await client.refused('variables', { variablesReference: 9999 }, /not valid/);
   await client.refused('stackTrace', { threadId: 42 }, /no thread 42/);

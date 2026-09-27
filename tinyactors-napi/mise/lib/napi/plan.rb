@@ -32,7 +32,7 @@ module NapiGen
 
     INTEGERS = %w[uint8_t uint16_t uint32_t int32_t int].freeze
     RUNTIME_SEMANTICS = { 'string' => 'ta_str', 'bytes' => 'ta_bytes' }.freeze
-    RUNTIME_OVERRIDES = %w[ta_actor_id ta_actor_ref ta_value ta_expression ta_io_origin].freeze
+    RUNTIME_OVERRIDES = %w[ta_actor_id ta_actor_ref ta_value ta_expression ta_origin].freeze
     RUNTIME_ADAPTERS = %w[ta_allocator ta_datamodel].freeze
 
     # One member of a struct, or one argument. form:

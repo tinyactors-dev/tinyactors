@@ -150,7 +150,8 @@ async function inspection() {
   await turn();
   view = actor.inspect();
   assert.equal(view.currentEvent.name, 'hook');
-  assert.equal(view.currentEvent.origin, 'debug://test');
+  assert.deepEqual(view.currentEvent.origin,
+                   { kind: 'io', scope: { index: scope.index, generation: scope.generation }, type: 'debug', uri: 'debug://test' });
   assert.deepEqual(view.currentEvent.data, { n: 1 });
   await system.flush();
   const [inspected] = system.definitions();

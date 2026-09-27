@@ -1106,13 +1106,23 @@ export interface InspectedEvent {
   readonly name: EventName;
   readonly type: "external" | "internal" | "platform";
   readonly sendID?: string;
-  /**
-   * Who sent it: an actor, or an I/O origin's URI. Absent for any other
-   * origin, such as an invoked service or an I/O origin without a URI.
-   */
-  readonly origin?: ActorID | ActorAddress | string;
+  /** Who sent it; absent when it has no origin, as after a post() without `origin`. */
+  readonly origin?: EventOrigin;
   readonly data?: unknown;
 }
+
+/**
+ * Who sent an event (core ADR 0068). `type` and `uri` are what the
+ * receiver's expressions see as `event.originType` and `event.origin`, so a
+ * reply can go to them; `uri` is absent once the origin's scope is closed.
+ * `invocation` is the InvocationInspection.id of the invocation whose
+ * service sent it; `scope` is the IOScope it was posted through.
+ */
+export type EventOrigin = { readonly type: string; readonly uri?: string } & (
+  | { readonly kind: "actor"; readonly actor: ActorID | ActorAddress }
+  | { readonly kind: "invocation"; readonly invocation: InvocationID }
+  | { readonly kind: "io"; readonly scope?: { readonly index: number; readonly generation: number } }
+);
 
 /** One pending delayed send; `delayedSends` is ordered by due time, then send order. */
 export interface DelayedSendInspection {

@@ -452,33 +452,65 @@ napi_value tna_enc_ta_actor_ref(tna_call *call, const ta_actor_ref *in) {
     return object;
 }
 
-bool tna_dec_ta_io_origin(tna_call *call, napi_value value, ta_io_origin *out) {
+bool tna_dec_ta_origin(tna_call *call, napi_value value, ta_origin *out) {
     (void)value;
-    *out = (ta_io_origin){ 0 };
-    return tna_invalid(call, "no I/O origin: origins are made by the plumbing (post with an origin option)");
+    *out = (ta_origin){ 0 };
+    return tna_invalid(call, "no origin: origins are made by core and the plumbing (post with an origin option)");
 }
 
-napi_value tna_enc_ta_io_origin(tna_call *call, const ta_io_origin *in) {
-    static const char *const classes[] = { "computed", "scoped", "message" };
+/*
+ * {kind, actor | invoke | scope, type, uri} (core ADR 0068). `type` and
+ * `uri` are what the receiver's data model shows as _event.origintype and
+ * _event.origin, rendered by core; `uri` is absent when the origin has none
+ * (a closed scope), and both are absent for no origin.
+ */
+napi_value tna_enc_ta_origin(tna_call *call, const ta_origin *in) {
+    static const char *const kinds[] = { "none", "actor", "io", "invoke" };
     napi_value object = tna_object(call);
-    napi_value processor = tna_enc_uint32_t(call, &in->processor);
-    napi_value origin_class = tna_string(call, (uint32_t)in->origin_class < 3u ? classes[in->origin_class] : "unknown");
-    if (object == NULL || processor == NULL || origin_class == NULL ||
-        !tna_ok(call, napi_set_named_property(call->env, object, "processor", processor)) ||
-        !tna_ok(call, napi_set_named_property(call->env, object, "origin_class", origin_class))) {
+    napi_value kind = tna_string(call, (uint32_t)in->kind < 4u ? kinds[in->kind] : "unknown");
+    if (object == NULL || kind == NULL || !tna_ok(call, napi_set_named_property(call->env, object, "kind", kind))) {
         return NULL;
     }
-    ta_arena *arena = call->core == NULL ? NULL : tna_call_arena(call);
+    napi_value member = NULL;
+    const char *name = NULL;
+    if (in->kind == TA_ORIGIN_ACTOR) {
+        name = "actor";
+        member = tna_enc_ta_actor_ref(call, &in->as.actor);
+    } else if (in->kind == TA_ORIGIN_INVOKE) {
+        name = "invoke";
+        member = tna_enc_uint64_t(call, &in->as.invoke.invoke);
+    } else if (in->kind == TA_ORIGIN_IO && in->as.io.origin_class == TA_IO_ORIGIN_SCOPED) {
+        name = "scope";
+        member = tna_object(call);
+        napi_value index = tna_enc_uint32_t(call, &in->as.io.as.scope.index);
+        napi_value generation = tna_enc_uint32_t(call, &in->as.io.as.scope.generation);
+        if (member == NULL || index == NULL || generation == NULL ||
+            !tna_ok(call, napi_set_named_property(call->env, member, "index", index)) ||
+            !tna_ok(call, napi_set_named_property(call->env, member, "generation", generation))) {
+            return NULL;
+        }
+    }
+    if (name != NULL && (member == NULL || !tna_ok(call, napi_set_named_property(call->env, object, name, member)))) {
+        return NULL;
+    }
+    ta_arena *arena = call->core == NULL || in->kind == TA_ORIGIN_NONE ? NULL : tna_call_arena(call);
     if (arena == NULL) {
         return object;
     }
-    ta_origin origin = { .kind = TA_ORIGIN_IO, .as.io = *in };
     ta_str type = { NULL, 0 };
     ta_str uri = { NULL, 0 };
-    if (ta_origin_text(call->core, &(ta_origin_text_params){ .origin = &origin,
-                                                             .arena = ta_arena_allocator(arena),
-                                                             .type = &type,
-                                                             .uri = &uri }) == TA_OK) {
+    /* Core sets the type before it renders the URI, so a closed scope keeps its type. */
+    ta_result result = ta_origin_text(call->core, &(ta_origin_text_params){ .origin = in,
+                                                                             .arena = ta_arena_allocator(arena),
+                                                                             .type = &type,
+                                                                             .uri = &uri });
+    if (type.len != 0) {
+        napi_value text = tna_enc_ta_str(call, &type);
+        if (text == NULL || !tna_ok(call, napi_set_named_property(call->env, object, "type", text))) {
+            return NULL;
+        }
+    }
+    if (result == TA_OK) {
         napi_value text = tna_enc_ta_str(call, &uri);
         if (text == NULL || !tna_ok(call, napi_set_named_property(call->env, object, "uri", text))) {
             return NULL;

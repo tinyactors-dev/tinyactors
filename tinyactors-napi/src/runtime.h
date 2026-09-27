@@ -199,8 +199,8 @@ bool tna_dec_ta_bytes(tna_call *call, napi_value value, ta_bytes *out);
 bool tna_dec_ta_value(tna_call *call, napi_value value, ta_value *out);
 bool tna_dec_ta_expression(tna_call *call, napi_value value, ta_expression *out);
 bool tna_dec_ta_actor_ref(tna_call *call, napi_value value, ta_actor_ref *out);
-/* Always refused: I/O origins are made by the plumbing (core ADR 0068). */
-bool tna_dec_ta_io_origin(tna_call *call, napi_value value, ta_io_origin *out);
+/* Always refused: origins are made by core and the plumbing (core ADR 0068). */
+bool tna_dec_ta_origin(tna_call *call, napi_value value, ta_origin *out);
 /* {slot, generation} inside an object. */
 bool tna_dec_ta_actor_id(tna_call *call, napi_value value, ta_actor_id *out);
 /* Two positional arguments: pair[0] is the slot, pair[1] the generation. */
@@ -220,8 +220,8 @@ napi_value tna_enc_ta_bytes(tna_call *call, const ta_bytes *in);
 napi_value tna_enc_ta_value(tna_call *call, const ta_value *in);
 napi_value tna_enc_ta_expression(tna_call *call, const ta_expression *in);
 napi_value tna_enc_ta_actor_ref(tna_call *call, const ta_actor_ref *in);
-/* {processor, origin_class, uri}: the URI rendered or viewed by core (core ADR 0068). */
-napi_value tna_enc_ta_io_origin(tna_call *call, const ta_io_origin *in);
+/* {kind, actor | invoke | scope, type, uri}: type and URI rendered by core (core ADR 0068). */
+napi_value tna_enc_ta_origin(tna_call *call, const ta_origin *in);
 napi_value tna_enc_ta_actor_id(tna_call *call, const ta_actor_id *in);
 /* The adapter's SCXML data-model name. */
 napi_value tna_enc_ta_datamodel(tna_call *call, const ta_datamodel *in);

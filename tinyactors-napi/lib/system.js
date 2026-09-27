@@ -989,13 +989,37 @@ class System {
         if (!(error instanceof TinyactorsError && error.code === 'not-found')) throw error;
       }
     }
-    if (event.origin?.kind === 'actor') {
-      out.origin = this.#destination(event.origin.actor);
-    } else if (event.origin?.kind === 'io' && event.origin.io.uri !== undefined) {
-      out.origin = event.origin.io.uri;
+    const origin = this.#originOf(event.origin);
+    if (origin !== undefined) {
+      out.origin = origin;
     }
     if (event.data !== undefined) {
       out.data = event.data;
+    }
+    return out;
+  }
+
+  // An event's EventOrigin, from core's ta_origin; undefined for none.
+  // `type` and `uri` are what the receiver sees as _event.origintype and
+  // _event.origin; a closed scope has no URI (core ADR 0068).
+  #originOf(origin) {
+    let out;
+    switch (origin?.kind) {
+      case 'actor':
+        out = { kind: 'actor', actor: this.#destination(origin.actor) };
+        break;
+      case 'invoke':
+        out = { kind: 'invocation', invocation: origin.invoke };
+        break;
+      case 'io':
+        out = origin.scope === undefined ? { kind: 'io' } : { kind: 'io', scope: origin.scope };
+        break;
+      default:
+        return undefined;
+    }
+    out.type = origin.type ?? '';
+    if (origin.uri !== undefined) {
+      out.uri = origin.uri;
     }
     return out;
   }

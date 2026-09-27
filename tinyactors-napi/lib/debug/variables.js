@@ -21,6 +21,8 @@ const { locationText, valueAt } = require('./expressions');
 
 const SCOPES = ['Data model', 'Event', 'Configuration', 'Queues', 'Timers', 'Invocations', 'System'];
 const PREVIEW = 60;
+// The Event scope names _event's fields as SCXML spells them.
+const SCXML_EVENT_NAMES = { sendID: 'sendid', originType: 'origintype' };
 
 function typeOf(value) {
   if (value === null) return 'null';
@@ -185,7 +187,7 @@ class Variables {
     switch (name) {
       // _event's SCXML names, as the test host's adapter shows them.
       case 'Event': return Object.entries(this.#host.eventOf(thread, view) ?? {})
-        .map(([key, value]) => [key === 'sendID' ? 'sendid' : key, value]);
+        .map(([key, value]) => [SCXML_EVENT_NAMES[key] ?? key, value]);
       case 'Configuration': return this.#configuration(thread, view);
       case 'Queues': return [
         ['internal', view.internalEvents],

@@ -60,7 +60,7 @@ module TinyactorsNapiBindings
     'ta_io_origin_make' => 'I/O origins are made by the plumbing when JavaScript posts with an origin (core ADR 0068)',
     'ta_origin_release' => 'the plumbing releases the origins it makes (core ADR 0068)',
     'ta_io_scope_{open,close}' => 'scopes are opened and closed through hand-written System methods (core ADR 0068)',
-    'ta_origin_text' => 'the ta_io_origin codec renders an origin into the call arena (core ADR 0068)'
+    'ta_origin_text' => 'the ta_origin codec renders an origin into the call arena (core ADR 0068)'
   }.freeze
 
   OVERRIDE_FUNCTIONS = {}.freeze
@@ -84,7 +84,7 @@ module TinyactorsNapiBindings
   OVERRIDE_TYPES = {
     'ta_actor_id' => 'crosses as (slot, generation): two positional numbers at the top level, {slot, generation} inside objects (ADR 0002)',
     'ta_actor_ref' => 'a named ref is an interned ta_address handle; it crosses as family and name text (ADR 0006)',
-    'ta_io_origin' => 'crosses out as {processor, origin_class, uri}: a MESSAGE entry is a core view (core ADR 0068); JavaScript never passes one in',
+    'ta_origin' => 'crosses out as {kind, actor | invoke | scope, type, uri}, rendered by core as _event.origintype and _event.origin; a MESSAGE entry is a core view (core ADR 0068); JavaScript never passes one in',
     'ta_value' => 'values cross as value boxes (ADR 0011); undefined is an absent value',
     'ta_expression' => 'source text crosses as a string; a function, literal() or { get, set } is a host expression of the JavaScript data model (ADR 0011)'
   }.freeze
@@ -101,6 +101,7 @@ module TinyactorsNapiBindings
     'ta_{actor_directory,external_event_router,io,invoker,log_sink}' => 'adapters installed by the plumbing',
     'ta_chart_{codec,lowering,src_resolver,expression_printer,span_sink}' => 'chart codec adapters; none is registered yet',
     'ta_actor_directory_*' => 'directory callback arguments (ADR 0006)',
+    'ta_{io,invoke}_origin' => 'cross only inside ta_origin, whose hand-written codec renders them (core ADR 0068)',
     'ta_actor_inspector' => 'enumeration is plumbing (ADR 0003)',
     'ta_actor_visit_params' => 'enumeration is plumbing (ADR 0003)',
     'ta_actor_resume_params' => 'the pump resumes actors (ADR 0007)',

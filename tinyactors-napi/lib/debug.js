@@ -665,10 +665,16 @@ class DebugSession {
     }
   }
 
-  // _event of the step the thread is in, or of its last macrostep.
+  // _event of the step the thread is in, or of its last macrostep, as the
+  // chart's expressions see it: `origin` is the URI, `originType` its type.
   #eventOf(thread, view = this.#inspect(thread)) {
     if (view?.currentEvent) {
-      return view.currentEvent;
+      const { origin, ...event } = view.currentEvent;
+      if (origin !== undefined) {
+        if (origin.uri !== undefined) event.origin = origin.uri;
+        event.originType = origin.type;
+      }
+      return event;
     }
     const last = this.#lastEvent.get(thread.session);
     if (last === undefined) return undefined;
