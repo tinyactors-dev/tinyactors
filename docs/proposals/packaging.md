@@ -42,7 +42,14 @@ when the work starts.
    memory builtins that `zig cc` (clang) provides,
    `__builtin_wasm_memory_size` and `__builtin_wasm_memory_grow`, and it is
    linked into the module. A host that loads the module needs to supply
-   no memory management of its own.
+   no memory management of its own. **Each project has its own copy** of
+   the allocator, written against its own vtable types.
+7. **A release is published directly**, not as a draft, and **updating a
+   published release is a supported step**: adding a target, replacing
+   an asset, or rewriting the notes (see "Updating a release").
+8. **The libraries should not call `memcpy` or `memset`.** The
+   measurements below show that no compiler option guarantees this on
+   native targets; how to get there is an open question.
 
 ## What exists today (2026-09-27)
 
@@ -81,11 +88,42 @@ So:
   does not ship (no `lld`, `wasm-ld` or `ld64.lld`). `zig cc` has both.
 - **macOS enables the stack protector by default.** Release flags pass
   `-fno-stack-protector`, since the libraries use no C library.
-- **The optimizer turns struct copies and zeroing in core into `memcpy`
-  and `memset` calls, and core multiplies 128-bit integers** (`__multi3`
-  on wasm32). Core needs these from somewhere: compiler-rt through zig, or
-  its own definitions. Core should get a freestanding check like
-  txml's either way, so that what it needs is chosen on purpose.
+- **Core multiplies 128-bit integers** (`__multi3` on wasm32). `zig cc`
+  links its compiler-rt into a `.wasm` on its own: core links as a
+  standalone `wasm32-freestanding` module with zig 0.16.0 and nothing
+  else.
+
+### Compiler options and `memcpy`/`memset` (measured 2026-09-27)
+
+A test file with one construct per function, compiled for
+`aarch64-linux-gnu` with clang 22.1.8 and with `zig cc` 0.16.0:
+
+| Construct | `-O0` | `-O2` |
+|---|---|---|
+| copy of a 512-byte struct (`*d = *s`) | `memcpy` | `memcpy` |
+| zeroing a 512-byte struct (`*d = (big){0}`) | `memcpy`, `memset` | none |
+| a struct returned by value, changed and stored | `memcpy` | `memcpy` |
+| a byte-zeroing loop | none | none |
+| a byte-copying loop | none | none |
+
+- **The calls are the same with every option tried:** `-ffreestanding`,
+  `-ffreestanding -fno-builtin`, and those plus `-mllvm
+  -disable-loop-idiom-all`. clang has no
+  `-fno-tree-loop-distribute-patterns` (GCC's option).
+- **These options only stop the compiler turning loops into calls.**
+  Copying or zeroing a large aggregate is lowered to a `memcpy` or
+  `memset` call by the code generator whatever the options, because
+  clang, like GCC, requires a freestanding environment to provide
+  `memcpy`, `memmove`, `memset` and `memcmp`.
+- **The size at which this starts depends on the target.** A 128-byte
+  struct was copied inline on every target tried; a 512-byte one was not.
+- **Core, whole:** the amalgamation references `memcpy` and `memset` on
+  `aarch64-linux` at `-O0`, `-O2` and `-Os`, with every option above.
+- **`zig cc` does not supply them for native targets.** A shared library
+  it links for `aarch64-linux-gnu`, `aarch64-linux-musl` or `aarch64-macos`
+  still has `memcpy` undefined, resolved by the C library at load time.
+- **wasm32 is not affected.** Neither clang 22 nor zig 0.16 references
+  `memcpy` or `memset` for wasm32, with or without `-mbulk-memory`.
 
 From the Mac on 2026-09-24, `zig cc` 0.16.0 built the napi addon for
 `aarch64-macos`, `x86_64-macos`, `x86_64-linux-gnu.2.28`,
@@ -136,8 +174,9 @@ both.
 - **Target `wasm32-freestanding`** through `zig cc`. `txml.wasm` exports
   the public API and `memory`, has no entry point (`--no-entry`) and
   imports nothing.
-- **The allocator** is a small C file compiled and linked into every
-  `.wasm`:
+- **The allocator** is a small C file in each project (for example
+  `tinyxml/wasm/txml_wasm_allocator.c`), written against that project's
+  vtable types and compiled and linked into its `.wasm`:
   - It grows linear memory with `__builtin_wasm_memory_grow(0, pages)` and
     reads its size with `__builtin_wasm_memory_size(0)`. It starts at the
     linker's `__heap_base`.
@@ -190,7 +229,32 @@ AGENTS.md). The stages:
    deterministic `ar`, `-ffile-prefix-map`, then the manifest and
    `SHA256SUMS`.
 6. **Publish** (with `--publish`): push the commit and tag, then `gh
-   release create --verify-tag` with the assets and notes.
+   release create --verify-tag` with the assets and notes. The release is
+   public at once; there is no draft step.
+
+### Updating a release
+
+```sh
+mise run //tinyxml:release 0.2.0 --update             # rebuild from the tag, show what differs
+mise run //tinyxml:release 0.2.0 --update --publish   # upload what differs, rewrite SHA256SUMS
+```
+
+When the tag exists, the command switches to update mode on its own. It
+does not require the `--update` flag; the flag only states the intent.
+
+- **Always from the tag.** The command checks the tag out in a temporary
+  git worktree and builds there, so an update never ships code that is
+  newer than the version it claims. The working tree may be anywhere.
+- **What can change:**
+  - a target the release lacks is added, for example Windows later;
+  - an asset whose bytes differ is replaced (`gh release upload
+    --clobber`), after the task prints the old and new sha256;
+  - the notes are regenerated, or replaced from a file with `--notes`.
+- **Always rewritten:** `SHA256SUMS` and the manifest, so they list every
+  asset the release holds after the update.
+- **Only one target:** `--targets` restricts an update to some targets,
+  for example `--targets aarch64-macos`.
+- **The tag never moves.** A change to the code is a new version.
 
 **Secrets.** The GitHub token comes from fnox. The task never reads or
 prints it.
@@ -254,20 +318,25 @@ packages share that version. It uses the same toolchain module in
 
 ## Open questions
 
-- **Where the wasm allocator lives.** One C file shared by every project
-  (under root `mise/lib/`, or a small `tinywasm` directory), or a copy in
-  each project? Core and txml have the same vtable shape but different
-  type names.
-- **Core's `memcpy`, `memset` and `__multi3`.** Take them from zig's
-  compiler-rt, define them in core, or change the code so the compiler
-  does not emit them?
+- **How the native libraries avoid `memcpy` and `memset`** (decision 8).
+  No option does it (see the measurements). The choices:
+  - **Change the code:** no copies or zero-initializers of large
+    aggregates. A freestanding check on each release target, like
+    `//tinyxml:freestanding`, rejects any reference that appears. This
+    works as long as the check runs, but the compiler promises nothing:
+    a new compiler version or inlining decision can bring a call back,
+    and the check then fails the release.
+  - **Define them in each library**, under the library's own names
+    (`ta_memcpy`), and have the code call those instead of copying
+    aggregates. This has the same limits as changing the code, because
+    the compiler still emits `memcpy` for an aggregate copy.
+  - **Allow them:** the four functions every C compiler requires of a
+    freestanding environment (`memcpy`, `memmove`, `memset`, `memcmp`)
+    become the only undefined symbols allowed on native targets. Every
+    C library and kernel environment provides them, so the Linux libraries
+    still serve glibc and musl.
 - **A signature on `SHA256SUMS`**, for example `ssh-keygen -Y sign` with
   the git signing key.
-- **Several machines per release.** Every target cross-compiles from one
-  host, so one machine suffices. If a second machine should build a
-  target (or compare digests as a reproducibility check), the release
-  could be created as a draft that each machine uploads to, and made
-  public once every expected asset matches `SHA256SUMS`.
 - **Public repository.** While it is private, release assets are only
   visible to collaborators.
 - **Package name** for Node: `tinyactors` or `@tinyactors/node`.
