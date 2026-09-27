@@ -1,0 +1,65 @@
+{
+  "description": "The Timers scope lists a pending delayed send by the ID its chart gave it; cancel withdraws it by that ID (core ADR 0084), and a second cancel finds nothing",
+  "chart": "counter",
+  "only": "test",
+  "why": "it stops at a breakpoint and steps into a macrostep to reach its <send>; napi's adapter never stops a live actor (napi ADR 0026)",
+  "steps": [
+    { "start": true },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "stackFrames": [ { "id": { "$capture": "frame" } } ] } }
+    },
+    { "request": "setFunctionBreakpoints", "arguments": { "breakpoints": [ { "name": "on:remind" } ] } },
+    { "request": "evaluate", "arguments": { "expression": "send remind", "context": "repl", "frameId": { "$var": "frame" } } },
+    { "request": "continue", "arguments": { "threadId": { "$var": "thread" } } },
+    { "event": "stopped", "body": { "reason": "function breakpoint", "description": "about to take remind" } },
+    { "request": "stepIn", "arguments": { "threadId": { "$var": "thread" } } },
+    { "event": "stopped", "body": { "reason": "step" } },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "stackFrames": { "$prefix": [ { "name": "send 1" }, { "name": "transition idle on remind (internal)" } ] } } }
+    },
+    { "request": "stepIn", "arguments": { "threadId": { "$var": "thread" } } },
+    { "event": "stopped", "body": { "reason": "step" } },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "stackFrames": [ { "id": { "$capture": "frame" }, "name": "idle in idle (held; 0 messages waiting)" } ] } }
+    },
+    {
+      "request": "scopes", "arguments": { "frameId": { "$var": "frame" } },
+      "response": { "body": { "scopes": { "$some": { "name": "Timers", "variablesReference": { "$capture": "timers" } } } } }
+    },
+    {
+      "request": "variables", "arguments": { "variablesReference": { "$var": "timers" } },
+      "response": { "body": { "variables": [ { "name": "nudge", "variablesReference": { "$capture": "timer" } } ] } }
+    },
+    {
+      "request": "variables", "arguments": { "variablesReference": { "$var": "timer" } },
+      "response": { "body": { "variables": { "$prefix": [ { "name": "event", "value": "\"tick\"" } ] } } }
+    },
+    {
+      "request": "variables", "arguments": { "variablesReference": { "$var": "timer" } },
+      "response": { "body": { "variables": { "$some": { "name": "due", "value": "60000" } } } }
+    },
+    {
+      "request": "evaluate", "arguments": { "expression": "cancel nudge", "context": "repl", "frameId": { "$var": "frame" } },
+      "response": { "body": { "result": { "$text": "{title}: withdrew send nudge" } } }
+    },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "stackFrames": [ { "id": { "$capture": "frame" } } ] } }
+    },
+    {
+      "request": "scopes", "arguments": { "frameId": { "$var": "frame" } },
+      "response": { "body": { "scopes": { "$some": { "name": "Timers", "variablesReference": { "$capture": "timers" } } } } }
+    },
+    {
+      "request": "variables", "arguments": { "variablesReference": { "$var": "timers" } },
+      "response": { "body": { "variables": [] } }
+    },
+    {
+      "request": "evaluate", "arguments": { "expression": "cancel nudge", "context": "repl", "frameId": { "$var": "frame" } },
+      "response": { "success": false, "message": { "$text": "{title} has no pending send nudge" } }
+    }
+  ]
+}

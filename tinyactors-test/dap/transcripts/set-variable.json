@@ -1,0 +1,50 @@
+{
+  "description": "setVariable writes a data-model location with a JSON value, and setExpression the location an expression names; the other scopes are read-only",
+  "chart": "counter",
+  "steps": [
+    { "start": true },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "stackFrames": [ { "id": { "$capture": "frame" } } ] } }
+    },
+    {
+      "request": "scopes", "arguments": { "frameId": { "$var": "frame" } },
+      "response": { "body": { "scopes": { "$prefix": [
+        { "name": "Data model", "variablesReference": { "$capture": "data" } },
+        { "name": "Event" },
+        { "name": "Configuration", "variablesReference": { "$capture": "configuration" } }
+      ] } } }
+    },
+    {
+      "request": "setVariable", "arguments": { "variablesReference": { "$var": "data" }, "name": "count", "value": "42" },
+      "response": { "body": { "value": "42" } }
+    },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "stackFrames": [ { "id": { "$capture": "frame" }, "name": { "$prefix": "idle in idle" } } ] } }
+    },
+    {
+      "request": "evaluate", "arguments": { "expression": ".count", "context": "watch", "frameId": { "$var": "frame" } },
+      "response": { "body": { "result": "42" } }
+    },
+    {
+      "request": "setExpression", "arguments": { "expression": ".last", "value": "{\"x\": 1}", "frameId": { "$var": "frame" } }
+    },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "stackFrames": [ { "id": { "$capture": "frame" } } ] } }
+    },
+    {
+      "request": "evaluate", "arguments": { "expression": ".last.x", "context": "watch", "frameId": { "$var": "frame" } },
+      "response": { "body": { "result": "1" } }
+    },
+    {
+      "request": "scopes", "arguments": { "frameId": { "$var": "frame" } },
+      "response": { "body": { "scopes": { "$prefix": [ { "name": "Data model" }, { "name": "Event" }, { "name": "Configuration", "variablesReference": { "$capture": "configuration" } } ] } } }
+    },
+    {
+      "request": "setVariable", "arguments": { "variablesReference": { "$var": "configuration" }, "name": "active", "value": "{}" },
+      "response": { "success": false }
+    }
+  ]
+}

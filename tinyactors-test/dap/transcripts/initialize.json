@@ -1,0 +1,62 @@
+{
+  "description": "initialize answers the capabilities both adapters declare, and what neither offers is not declared; initialized follows; the attached or launched actor is a thread",
+  "chart": "counter",
+  "steps": [
+    {
+      "request": "initialize",
+      "arguments": { "adapterID": "tinyactors", "linesStartAt1": true, "columnsStartAt1": true, "supportsInvalidatedEvent": true },
+      "response": {
+        "body": {
+          "supportsConfigurationDoneRequest": true,
+          "supportsFunctionBreakpoints": true,
+          "supportsConditionalBreakpoints": true,
+          "supportsHitConditionalBreakpoints": true,
+          "supportsLogPoints": true,
+          "supportsEvaluateForHovers": true,
+          "supportsSetVariable": true,
+          "supportsSetExpression": true,
+          "supportsGotoTargetsRequest": true,
+          "supportsCompletionsRequest": true,
+          "completionTriggerCharacters": [".", " "],
+          "supportsModulesRequest": true,
+          "supportsDelayedStackTraceLoading": true,
+          "supportsLoadedSourcesRequest": true,
+          "supportsTerminateRequest": true,
+          "supportsDataBreakpoints": true,
+          "supportsBreakpointLocationsRequest": true,
+          "supportsClipboardContext": true,
+          "supportTerminateDebuggee": false,
+          "supportSuspendDebuggee": false,
+          "exceptionBreakpointFilters": { "$prefix": [
+            { "filter": "error.execution", "label": { "$any": true } },
+            { "filter": "error.communication", "label": { "$any": true } },
+            { "filter": "error.platform", "label": { "$any": true } },
+            { "filter": "ignored", "label": { "$any": true } },
+            { "filter": "stopped", "label": { "$any": true } }
+          ] },
+          "supportsStepBack": { "$absent": true },
+          "supportsRestartFrame": { "$absent": true },
+          "supportsRestartRequest": { "$absent": true },
+          "supportsCancelRequest": { "$absent": true },
+          "supportsInstructionBreakpoints": { "$absent": true },
+          "supportsDisassembleRequest": { "$absent": true },
+          "supportsReadMemoryRequest": { "$absent": true },
+          "supportsWriteMemoryRequest": { "$absent": true },
+          "supportsStepInTargetsRequest": { "$absent": true },
+          "supportsTerminateThreadsRequest": { "$absent": true }
+        }
+      }
+    },
+    { "event": "initialized" },
+    { "start": true },
+    {
+      "request": "threads",
+      "response": { "body": { "threads": { "$some": { "id": { "$var": "thread" }, "name": { "$text": "{title} · idle" } } } } }
+    },
+    {
+      "request": "cancel",
+      "arguments": { "requestId": 1 },
+      "response": { "success": false, "message": "every request answers at once, so there is nothing to cancel" }
+    }
+  ]
+}

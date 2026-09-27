@@ -1,0 +1,39 @@
+{
+  "description": "Completions in the debug console: the events the chart listens for after send, replacing what was typed; state IDs after goto; console commands; data locations",
+  "chart": "counter",
+  "steps": [
+    { "start": true },
+    {
+      "request": "stackTrace", "arguments": { "threadId": { "$var": "thread" } },
+      "response": { "body": { "stackFrames": [ { "id": { "$capture": "frame" } } ] } }
+    },
+    {
+      "request": "completions", "arguments": { "text": "send ", "column": 6, "frameId": { "$var": "frame" } },
+      "response": { "body": { "targets": [
+        { "label": "bump", "start": 6, "length": 0 },
+        { "label": "done" },
+        { "label": "error.execution" },
+        { "label": "fail" },
+        { "label": "ping" },
+        { "label": "remind" },
+        { "label": "tick" }
+      ] } }
+    },
+    {
+      "request": "completions", "arguments": { "text": "send bu", "column": 8, "frameId": { "$var": "frame" } },
+      "response": { "body": { "targets": [ { "label": "bump", "text": "bump", "start": 6, "length": 2 } ] } }
+    },
+    {
+      "request": "completions", "arguments": { "text": "goto ", "column": 6, "frameId": { "$var": "frame" } },
+      "response": { "body": { "targets": [ { "label": "idle" }, { "label": "busy" } ] } }
+    },
+    {
+      "request": "completions", "arguments": { "text": "ab", "column": 3, "frameId": { "$var": "frame" } },
+      "response": { "body": { "targets": [ { "label": "abandon", "start": 1, "length": 2 } ] } }
+    },
+    {
+      "request": "completions", "arguments": { "text": ".it", "column": 4, "frameId": { "$var": "frame" } },
+      "response": { "body": { "targets": [ { "label": "it", "start": 2, "length": 2 }, { "label": "items" } ] } }
+    }
+  ]
+}

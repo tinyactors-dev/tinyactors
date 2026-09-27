@@ -118,3 +118,13 @@ stdio, or on a local port with `-- --port 4711`, to try a DAP client
 against. It grants every permission; it is a development tool, not part
 of the package. See
 [ADR 0026](docs/adr/0026-a-debugger-watches-and-pokes-one-live-actor.md).
+
+`test/dap-transcripts.js` plays the DAP transcripts napi shares with the
+test host's adapter (`../tinyactors-test/dap/transcripts/`), under Node
+and Bun, so the two adapters stay in step. To add one, write the
+transcript, and the chart in both forms (`dap/charts/<chart>.js` and
+`.rb`) if it needs a new one, then play it in both hosts: `node
+test/dap-transcripts.js <name>` here (`DAP_TRACE=1` prints every message)
+and `ruby ruby/dap_transcripts.rb <name>` in tinyactors-test. The format
+and where the adapters differ are in
+[its README](../tinyactors-test/dap/README.md).
