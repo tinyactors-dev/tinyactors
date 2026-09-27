@@ -84,9 +84,10 @@ stream (stdio, a TCP socket); a WebSocket needs neither.
 A client attaches with `{ "address": "family/name" }` (or `"sessionID"`),
 and may ask for fewer permissions with `"allow"`. The session watches the
 actor live and never stops it: a production actor is never held by a
-debugger. The client hears the actor stopped once, on entry, so it shows
-the stack and the variables, and after each macrostep the summary in the
-console and an `invalidated` event that refreshes them. `pause` and the
+debugger. The client hears the actor stopped on entry, so it shows the
+stack and the variables, and after each macrostep the summary in the
+console and a refresh of both that leaves the keyboard focus where it is,
+so typing in the Debug Console is never interrupted. `pause` and the
 steps are refused, and `continue` changes nothing. Breakpoints are
 tracepoints: the console says where one would have stopped, and a logpoint
 writes its message.

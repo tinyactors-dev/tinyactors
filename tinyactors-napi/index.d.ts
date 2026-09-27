@@ -1659,8 +1659,9 @@ export interface DAPMessage {
 
 /**
  * A DAP session over one attached actor, which it watches and pokes and
- * never stops (ADR 0026): the client hears it stopped once, on entry, and
- * an `invalidated` event after each of its macrosteps; breakpoints are
+ * never stops (ADR 0026): the client hears it stopped on entry, and after
+ * each of its macrosteps a stop that keeps the focus and an `invalidated`
+ * event for the variables; breakpoints are
  * tracepoints. It opens no socket and checks no credentials: put it behind
  * the application's transport and authentication, and decide each user's
  * permissions before creating it.

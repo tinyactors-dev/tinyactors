@@ -167,7 +167,8 @@ only:
 
 - **Stopping.** napi's adapter watches a live actor and never stops it
   (napi ADR 0026): it reports the actor stopped once, on entry, refreshes
-  the view after each macrostep with an `invalidated` event, refuses
+  the view after each macrostep with a focus-keeping stop and an
+  `invalidated` event for the variables, refuses
   `pause` and the steps, and answers `continue` by changing nothing.
   Breakpoints there are tracepoints (`would have stopped after macrostep
   2: entered busy`). The test host's adapter stops a workbench's actors,

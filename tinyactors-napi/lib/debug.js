@@ -12,9 +12,11 @@
 // before it happens: a hook that throws refuses it.
 //
 // The session watches and pokes, and the view updates live. It never stops
-// the actor: a production actor is never held by a debugger. After each
-// macrostep of the actor the client hears the macrostep's summary and an
-// `invalidated` event, and reads the stack and the scopes again. A poke is
+// the actor: a production actor is never held by a debugger. The actor is
+// presented as stopped, because clients show a thread's stack and variables
+// only then; after each macrostep the client hears the macrostep's summary
+// and a stop that keeps the focus where it is, and reads the stack and the
+// scopes again (see #presentStopped). A poke is
 // what the permissions allow: `send` (an event through the mailbox), `set`
 // (a data-model location), `goto` (an operator transition, abandon, cancel
 // and replace), and `evaluate`. Each poke that moves the actor does it in a
@@ -137,6 +139,10 @@ class DebugSession {
   #variables;
   #frames = new Map();
   #nextFrame = 0;
+  // A frame's ID by thread and position. The actor is always at rest, so a
+  // frame names only its thread and depth: its ID stays valid across
+  // macrosteps, and a request a client made before a refresh still answers.
+  #frameIDs = new Map();
   #gotoTargets = new Map();
   #modules = new Map();
   // sourceReference → { definition, source, virtual }: a definition's
@@ -391,14 +397,33 @@ class DebugSession {
     this.#output('console', `${verb} ${attached.label} (session ${attached.sessionID}), watched live and never ` +
                             `paused; ${permissions}`);
     this.#relocateBreakpoints();
-    this.#presentStopped();
+    this.#presentStopped({ focus: true });
   }
 
-  // The one stop a client needs to show the actor's stack and variables.
-  #presentStopped() {
+  // Presents the actor as stopped, so the client shows its stack and
+  // variables. With `focus` (on attach, and after a `continue`) the client
+  // selects the top frame, and its Variables view has something to show;
+  // otherwise (after each macrostep) it only reads the stack again and
+  // leaves the focus where it is.
+  //
+  // The refresh after a macrostep is a stop that keeps the focus, followed
+  // by `invalidated` for the variables only, never for the stacks: VS Code
+  // answers a stacks invalidation by replaying the stops it holds, and the
+  // attach stop, which took the focus, would take it again after every
+  // macrostep, out of the Debug Console while an operator types in it.
+  #presentStopped({ focus }) {
     if (this.#attached === null) return;
-    this.#event('stopped', { reason: 'entry', threadId: ATTACHED, allThreadsStopped: false, preserveFocusHint: false,
+    this.#event('stopped', { reason: 'entry', threadId: ATTACHED, allThreadsStopped: false, preserveFocusHint: !focus,
                              description: 'watched live, never paused: the view follows each macrostep' });
+  }
+
+  // The live view after a macrostep of the actor: the stack and the scopes
+  // are read again. Frames keep their IDs (#frameIDs), so the frame the
+  // client selected stays valid.
+  #refreshView() {
+    this.#resetViews();
+    this.#presentStopped({ focus: false });
+    if (this.#client.supportsInvalidatedEvent) this.#event('invalidated', { areas: ['variables'] });
   }
 
   // Ends the attachment: stops watching.
@@ -418,6 +443,8 @@ class DebugSession {
     }
     this.#attached = null;
     this.#threads.clear();
+    this.#frames.clear();
+    this.#frameIDs.clear();
     this.#resetViews();
   }
 
@@ -524,11 +551,7 @@ class DebugSession {
         gone = entry.kind;
       }
     }
-    if (read.macrosteps.length > 0) {
-      // The live view: the client reads the stack and the scopes again.
-      this.#resetViews();
-      if (this.#client.supportsInvalidatedEvent) this.#event('invalidated', { areas: ['stacks', 'variables'] });
-    }
+    if (read.macrosteps.length > 0) this.#refreshView();
     const attached = this.#attached;
     if (gone === 'finished' && attached !== null && this.#system.exists(attached.actor)) {
       this.#output('important', `${attached.label} finished`);
@@ -623,7 +646,7 @@ class DebugSession {
     if (this.#breakpoints.wants('runaway')) {
       this.#output('console', 'would have stopped: a macrostep ran its microstep limit');
     }
-    if (this.#client.supportsInvalidatedEvent) this.#event('invalidated', { areas: ['stacks', 'variables'] });
+    this.#refreshView();
   }
 
   // ------------------------------------------------------------------
@@ -631,7 +654,6 @@ class DebugSession {
 
   #resetViews() {
     this.#variables.reset();
-    this.#frames.clear();
   }
 
   #documentName(view) {
@@ -973,7 +995,7 @@ class DebugSession {
         const attached = this.#requireAttached();
         return { body: { allThreadsContinued: false }, after: () => {
           this.#output('console', `${attached.label} is watched live and never paused: continue changes nothing`);
-          this.#presentStopped();
+          this.#presentStopped({ focus: true });
         } };
       },
 
@@ -994,12 +1016,18 @@ class DebugSession {
                               note: waiting === 0 ? undefined : `${plural(waiting, 'message')} waiting` });
         const start = Number(args.startFrame ?? 0);
         const levels = Number(args.levels ?? 0);
-        const shown = list.slice(start, levels > 0 ? start + levels : undefined).map((frame) => {
-          this.#nextFrame += 1;
-          this.#frames.set(this.#nextFrame, { thread: thread.id });
+        const shown = list.slice(start, levels > 0 ? start + levels : undefined).map((frame, index) => {
+          const key = `${thread.id}:${start + index}`;
+          let id = this.#frameIDs.get(key);
+          if (id === undefined) {
+            this.#nextFrame += 1;
+            id = this.#nextFrame;
+            this.#frameIDs.set(key, id);
+            this.#frames.set(id, { thread: thread.id });
+          }
           const located = frame.place === undefined ? { line: 0, column: 0 }
             : { source: Sources.source(frame.place), line: frame.place.line, column: frame.place.column };
-          return { id: this.#nextFrame, name: frame.name, ...located, presentationHint: frame.hint };
+          return { id, name: frame.name, ...located, presentationHint: frame.hint };
         });
         return { body: { stackFrames: shown, totalFrames: list.length } };
       },

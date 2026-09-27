@@ -1,5 +1,5 @@
 {
-  "description": "napi's live view: attached, the actor is reported stopped once, on entry, and is never paused; a send from the console runs a macrostep whose <log> and summary are output and after which an invalidated event refreshes the stack and the variables; a function breakpoint is a tracepoint that says where it would have stopped; continue changes nothing and reports the entry stop again",
+  "description": "napi's live view: attached, the actor is reported stopped once, on entry, and is never paused; a send from the console runs a macrostep whose <log> and summary are output and after which a stop that keeps the focus refreshes the stack and an invalidated event the variables; a function breakpoint is a tracepoint that says where it would have stopped; continue changes nothing and reports the entry stop again",
   "chart": "counter",
   "only": "napi",
   "why": "the test host's adapter stops its workbench's actors, on a developer's machine; napi's never stops a live actor (napi ADR 0026)",
@@ -22,7 +22,8 @@
         { "event": "output", "body": { "category": "stdout", "output": "busy: 1\n" } },
         { "event": "output", "body": { "category": "console", "output": { "$text": "{title} macrostep 2: bump\n  idle → busy on bump\n    assign count = 1\n    assign last = null\n    assign count = 2\n    assign count = 4\n  now in busy\n" } } },
         { "event": "output", "body": { "category": "console", "output": "would have stopped after macrostep 2: entered busy\n" } },
-        { "event": "invalidated", "body": { "areas": ["stacks", "variables"] } }
+        { "event": "stopped", "body": { "reason": "entry", "threadId": { "$var": "thread" }, "preserveFocusHint": true } },
+        { "event": "invalidated", "body": { "areas": ["variables"] } }
       ]
     },
     {
@@ -37,6 +38,6 @@
       "request": "continue", "arguments": { "threadId": { "$var": "thread" } },
       "response": { "body": { "allThreadsContinued": false } }
     },
-    { "event": "stopped", "body": { "reason": "entry", "threadId": { "$var": "thread" }, "allThreadsStopped": false } }
+    { "event": "stopped", "body": { "reason": "entry", "threadId": { "$var": "thread" }, "allThreadsStopped": false, "preserveFocusHint": false } }
   ]
 }

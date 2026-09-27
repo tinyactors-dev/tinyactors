@@ -93,8 +93,22 @@ not fork one (see "What was built and discarded, and why").
    session reports the actor with one `stopped` event (reason `entry`, a
    description saying it is watched live and never paused), and from then
    on, after each macrostep of the actor, a poke's included, it writes the
-   macrostep's summary as output and sends `invalidated` for stacks and
-   variables, so the client reads them again. `continue` answers success,
+   macrostep's summary as output, reports the actor stopped again with
+   `preserveFocusHint`, so the client reads the stack without moving the
+   focus, and sends `invalidated` for the variables. It never sends
+   `invalidated` for the stacks: VS Code answers that by replaying the
+   stops it holds, and the entry stop, which selects the top frame and so
+   takes the focus, would pull it out of the Debug Console after every
+   macrostep, mid-typing. Frames keep their IDs across macrosteps (an
+   actor at rest has one frame per thread and depth), so the frame the
+   client selected, and any request it made before a refresh, stays valid.
+   Both were found by recording a session in VS Code 1.139; the scripted
+   client of the tests could not see them. One limit remains there: VS
+   Code moves the editor's current-line marker only when it selects a
+   frame, and selecting one takes the focus (unless the user turns off
+   `debug.focusEditorOnBreak`), so after a refresh the Call Stack shows
+   where the actor is now while the marker stays where it was at attach,
+   until the user clicks the frame. `continue` answers success,
    changes nothing, and reports the entry stop again, so a client that
    thought the thread ran shows it once more. `pause`, `next`, `stepIn`
    and `stepOut` answer an error that says a live actor is never stopped;

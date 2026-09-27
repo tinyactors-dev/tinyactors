@@ -137,7 +137,7 @@ or partial, ☑ done and tested, — not offered.
 | `progressStart` | no | Nothing the adapter does takes long enough | — | — | — |
 | `progressUpdate` | no | As `progressStart` | — | — | — |
 | `progressEnd` | no | As `progressStart` | — | — | — |
-| `invalidated` | yes | After every macrostep: `threads` and `variables` (test host), `stacks` and `variables` (napi, the live view) | none | ☑ | ☑ |
+| `invalidated` | yes | After every macrostep: `threads` and `variables` (test host); `variables` after a focus-keeping `stopped` (napi, the live view) | none | ☑ | ☑ |
 | `memory` | no | A chart has no memory to show | — | — | — |
 
 ## Capabilities
@@ -241,8 +241,12 @@ Every ☑ is covered by `tinyactors-napi/test/debug.js`, on Node and Bun.
   `attach` it reports one `stopped` event (reason `entry`, a description
   saying the actor is watched live and never paused), since a DAP client
   shows a thread's stack and variables only while it is stopped, and
-  from then on, after each macrostep of the actor, writes its summary and
-  sends `invalidated` for stacks and variables. A poke (`send`, `goto`,
+  from then on, after each macrostep of the actor, writes its summary,
+  reports it stopped again with `preserveFocusHint` (the client reads the
+  stack without moving the focus) and sends `invalidated` for the
+  variables. Never for the stacks: VS Code answers that by replaying the
+  entry stop, which took the focus, out of the Debug Console mid-typing.
+  Frames keep their IDs across macrosteps. A poke (`send`, `goto`,
   `abandon`, `cancel`, `setVariable`, `setExpression`, the `goto`
   request) makes a transition the watcher sees as a new macrostep, or
   writes the data model at once. `pause`, `next`, `stepIn`, `stepOut` and

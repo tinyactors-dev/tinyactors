@@ -226,6 +226,8 @@ async function session() {
   assert.match(client.output(), /attached to subscription\/acct_1 \(session \d+\), watched live and never paused; allowed: send, set, goto, evaluate/);
   // One stop, so the client shows the stack and the variables.
   const [entry] = client.events('stopped');
+  // The attach stop takes the focus, so the client selects the top frame and
+  // shows its variables; the refreshes after macrosteps keep it (liveView).
   assert.deepEqual(entry, { reason: 'entry', threadId: 1, allThreadsStopped: false, preserveFocusHint: false,
                             description: 'watched live, never paused: the view follows each macrostep' });
   const { threads } = await client.ok('threads');
@@ -290,18 +292,32 @@ async function liveView() {
   await client.start({ address: { family: 'subscription', name: 'acct_1' } });
   let { stackFrames } = await client.ok('stackTrace', { threadId: 1 });
   assert.equal(stackFrames[0].name, 'idle in active');
+  const before = stackFrames[0].id;
 
   let mark = client.mark();
   await actor.send('payment.failed', { attempt: 3 });
   await client.until(() => client.since(mark, 'invalidated').length > 0, 'an invalidated event');
-  assert.deepEqual(client.since(mark, 'invalidated')[0], { areas: ['stacks', 'variables'] });
+  // The refresh: a stop that keeps the focus (the stack is read again, and
+  // the Debug Console keeps the keyboard), then the variables. Never a stacks
+  // invalidation: VS Code answers one by replaying the attach stop, which
+  // takes the focus.
+  assert.deepEqual(client.since(mark, 'invalidated')[0], { areas: ['variables'] });
+  const refresh = client.since(mark, 'stopped');
+  assert.equal(refresh.length, 1, JSON.stringify(refresh));
+  assert.equal(refresh[0].preserveFocusHint, true, 'a refresh keeps the focus');
   const summary = client.since(mark, 'output').map((body) => body.output)
     .find((output) => output.startsWith('subscription/acct_1 macrostep'));
   assert.match(summary, /^subscription\/acct_1 macrostep \d+: payment\.failed \{"attempt":3\}\n  active → past_due on payment\.failed\n    assign failures = 1\n  now in past_due\n$/,
                'a macrostep\'s summary is one output');
   assert.match(client.output(), /overdue: 1/, '<log> records are stdout');
+  // A frame names only the thread and its depth: a request a client made
+  // with the frame it had before the refresh still answers, with what is
+  // true now, and the refreshed stack gives the frame the same ID.
+  const stale = await client.ok('scopes', { frameId: before });
+  assert.ok(stale.scopes.some((scope) => scope.name === 'Data model'), JSON.stringify(stale.scopes));
   ({ stackFrames } = await client.ok('stackTrace', { threadId: 1 }));
   assert.equal(stackFrames[0].name, 'idle in past_due', 'the stack shows where it is now');
+  assert.equal(stackFrames[0].id, before, 'a frame keeps its ID across macrosteps');
 
   // A poke's macrostep shows the same way.
   mark = client.mark();
@@ -323,8 +339,12 @@ async function liveView() {
   actor.post('payment.failed');
   await plain.until(() => /now in past_due/.test(plain.output()), 'the summary');
   assert.equal(plain.events('invalidated').length, 0);
+  await plain.until(() => plain.events('stopped').length >= 2, 'the refresh stop');
+  assert.equal(plain.events('stopped').at(-1).preserveFocusHint, true, 'it still hears the stack refresh');
   await plain.ok('disconnect');
   client.assertNeverStopped();
+  // Only the attach stop took the focus: every refresh kept it.
+  assert.deepEqual(client.events('stopped').map((stop) => stop.preserveFocusHint).filter((hint) => hint === false), [false]);
   await client.ok('disconnect');
   system.close();
 }
@@ -443,7 +463,9 @@ async function console() {
   assert.match(client.outputSince(mark), /subscription\/acct_1: goto past_due queued/);
   await system.flush();
   assert.deepEqual(actor.inspect().activeStates, ['past_due']);
-  assert.equal(client.since(mark, 'stopped').length, 0, 'a goto stops nothing');
+  // Its macrostep refreshes the view like any other; nothing stops.
+  assert.ok(client.since(mark, 'stopped').every((stop) => stop.reason === 'entry' && stop.preserveFocusHint === true),
+            'a goto stops nothing');
   await client.refused('goto', { threadId: 1, targetId: 999 }, /gotoTargets/);
   actor.post('paid');
   await system.flush();
