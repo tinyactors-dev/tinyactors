@@ -6,6 +6,7 @@ require 'pathname'
 require 'rbconfig'
 require 'shellwords'
 require 'cache'
+require 'toolchain'
 
 # The one compile command for the addon's C sources, the core amalgamation and
 # the native tests. Every translation unit is compiled once to its own object
@@ -44,13 +45,11 @@ module NapiCompile
 
   def compiler = Shellwords.split(ENV.fetch('CC', 'cc'))
 
-  def command
-    @command ||= [
-      *compiler,
-      *Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic -O2')),
-      *(SANITIZE ? SANITIZE_FLAGS : []),
-      *(VALUES_TABLE ? ['-DTNA_VALUES_TABLE'] : []),
-      '-fPIC',
+  # The warnings every build of the addon holds itself to.
+  WARNINGS = %w[-std=c11 -Wall -Wextra -Werror -pedantic].freeze
+
+  def defines_and_includes
+    [
       '-DNAPI_VERSION=10',
       "-DTINYACTORS_NAPI_VERSION=\"#{version}\"",
       "-I#{NODE_API_INCLUDE}",
@@ -61,22 +60,48 @@ module NapiCompile
     ]
   end
 
+  # The compile command: for the host with $CC and $CFLAGS, as development
+  # and the tests build; for a release target (mise/lib/toolchain.rb) with
+  # the pinned `zig cc` and that target's fixed flags. A Linux target
+  # compiles against musl's headers (ADR 0001 decision 10).
+  def command(target = nil)
+    @commands ||= {}
+    @commands[target&.name] ||=
+      if target.nil?
+        [
+          *compiler,
+          *Shellwords.split(ENV.fetch('CFLAGS', "#{WARNINGS.join(' ')} -O2")),
+          *(SANITIZE ? SANITIZE_FLAGS : []),
+          *(VALUES_TABLE ? ['-DTNA_VALUES_TABLE'] : []),
+          '-fPIC',
+          *defines_and_includes
+        ]
+      else
+        [Toolchain.zig, 'cc', '-target', target.triple, *Toolchain.cflags(target), *WARNINGS, *defines_and_includes]
+      end
+  end
+
   # The addon's own sources, adapters included.
   def sources = Cache.files('src/**/*.c')
 
-  def object_for(source)
-    source = Pathname.new(source)
-    return OBJECTS.join('core/tinyactors.o') if source == CORE_SOURCE
-    return OBJECTS.join('codec', source.basename.sub_ext('.o')) if CODEC_SOURCES.include?(source)
+  # Where a release target's objects and addon go: build/<target>/.
+  def target_dir(target) = BUILD.join(target.name)
 
-    OBJECTS.join(source.relative_path_from(ROOT).sub_ext('.o'))
+  def object_for(source, target = nil)
+    source = Pathname.new(source)
+    base = target.nil? ? OBJECTS : target_dir(target).join('obj')
+    return base.join('core/tinyactors.o') if source == CORE_SOURCE
+    return base.join('codec', source.basename.sub_ext('.o')) if CODEC_SOURCES.include?(source)
+
+    base.join(source.relative_path_from(ROOT).sub_ext('.o'))
   end
 
-  # Compiles each source (reusing cached objects) and returns the objects.
-  def objects(sources)
+  # Compiles each source for `target` (nil: the host), reusing cached
+  # objects, and returns the objects.
+  def objects(sources, target = nil)
     sources.map do |source|
-      object = object_for(source)
-      state, output = Cache.compile(command, source, object)
+      object = object_for(source, target)
+      state, output = Cache.compile(command(target), source, object)
       if state == :failed
         warn output
         abort "tinyactors-napi: compiling #{source.relative_path_from(ROOT)} failed"
@@ -86,9 +111,29 @@ module NapiCompile
     end
   end
 
-  def core_object = objects([CORE_SOURCE]).first
+  def core_object(target = nil) = objects([CORE_SOURCE], target).first
 
-  def codec_objects = objects(CODEC_SOURCES)
+  def codec_objects(target = nil) = objects(CODEC_SOURCES, target)
+
+  # Every object of the addon for `target`: its own sources, core and the
+  # codec.
+  def addon_objects(target = nil) = objects(sources, target) + [core_object(target)] + codec_objects(target)
+
+  # Links the addon for a release target into build/<target>/tinyactors.node.
+  # macOS leaves Node-API to the process that loads it (`-undefined
+  # dynamic_lookup`) and links libSystem; Linux links no C library
+  # (`-nostdlib`, no DT_NEEDED), so its libc functions bind to the libc Node
+  # itself runs on, glibc or musl (ADR 0001 decision 10).
+  def link_target(target)
+    out = target_dir(target).join('tinyactors.node')
+    FileUtils.rm_f(out)
+    # Linux: -S drops the debug info zig cc emits by default (it is most of
+    # the file); a Mach-O link keeps it out of the dylib on its own.
+    flags = target.macos? ? %w[-Wl,-undefined,dynamic_lookup] : %w[-Wl,-S]
+    Toolchain.shared(target, addon_objects(target), out, name: 'tinyactors.node', libc: target.macos?, flags: flags)
+    puts "linked #{out.relative_path_from(ROOT)}"
+    out
+  end
 
   # Links `objects` into `output`, unless the same objects were linked the same
   # way last time and the output is still there.
