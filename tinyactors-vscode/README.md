@@ -17,7 +17,7 @@ two requests:
 - **`attach`** connects to an application that serves debug sessions over
   TCP, and attaches to one of its actors: tinyactors-napi's
   `createDebugSession` behind a socket
-  ([its README](../tinyactors-napi/README.md#debugging-an-actor)).
+  ([its development notes](../tinyactors-napi/DEVELOPMENT.md#the-debug-adapter)).
 
 The extension is only this registration and the checks of a
 configuration; what each Debug Adapter Protocol message does is in [the

@@ -170,7 +170,7 @@ markers.
 Benchmark reports give throughput and memory together, name the machine
 signature, and compare builds side by side (`mise run bench-compare
 <commit>` in `tinyactors-napi`), never against numbers from another day or
-machine. See `tinyactors-napi/README.md` (Benchmarks).
+machine. See `tinyactors-napi/DEVELOPMENT.md` (Benchmarks).
 
 ## Proposals are not instructions
 

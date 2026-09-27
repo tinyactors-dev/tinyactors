@@ -40,9 +40,12 @@ missing = reached.reject { |path| packed.include?(path) }.sort
 # packages (mise run package), and docs, benches and vendored headers stay in
 # the repository.
 test_only = packed.select { |path| path.start_with?('tools/', 'test/', 'build/', 'vendor/', 'docs/', 'bench/') }.sort
+# README.md is for users; DEVELOPMENT.md is for working in the repository.
+test_only << 'DEVELOPMENT.md' if packed.include?('DEVELOPMENT.md')
 problems = []
 problems << "not packed, but reached from index.js:\n  #{missing.join("\n  ")}" unless missing.empty?
 problems << "files that do not belong in the package:\n  #{test_only.join("\n  ")}" unless test_only.empty?
+problems << 'README.md is not packed: npm shows it on the package page' unless packed.include?('README.md')
 abort "tinyactors-napi: #{problems.join("\n")}" unless problems.empty?
 
-puts "pack-check passed: #{reached.size} files reached from index.js are packed, nothing under tools/, test/, build/, vendor/, docs/ or bench/"
+puts "pack-check passed: #{reached.size} files reached from index.js are packed, and README.md; nothing under tools/, test/, build/, vendor/, docs/ or bench/, and no DEVELOPMENT.md"
