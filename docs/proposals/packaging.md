@@ -50,6 +50,9 @@ when the work starts.
 8. **The libraries should not call `memcpy` or `memset`.** The
    measurements below show that no compiler option guarantees this on
    native targets; how to get there is an open question.
+9. **Platform-specific source files are chosen by file name, as in Go.**
+   A file named `*_wasm.c` is built only when building for wasm, and
+   every other build ignores it. See "Platform-specific source files".
 
 ## What exists today (2026-09-27)
 
@@ -151,7 +154,7 @@ both.
 
 | Asset | Contents |
 |---|---|
-| `txml-0.2.0-src.tar.gz` | `txml.h`, `txml.c` (the amalgamation), `txml.api.json`, license, README |
+| `txml-0.2.0-src.tar.gz` | `txml.h`, `txml.c` (the amalgamation), `txml_wasm.c` (the wasm platform files), `txml.api.json`, license, README |
 | `txml-0.2.0-wasm32.tar.gz` | `txml.h`, `lib/libtxml.a` (wasm32 objects, for linking into a larger module), `txml.wasm` (standalone, allocator included) |
 | `txml-0.2.0-aarch64-macos.tar.gz` | `include/txml.h`, `lib/libtxml.a`, `lib/libtxml.0.2.dylib` (install name `@rpath/libtxml.0.2.dylib`) |
 | `txml-0.2.0-x86_64-linux.tar.gz` | `include/txml.h`, `lib/libtxml.a`, `lib/libtxml.so.0.2` (the soname) and a `libtxml.so` symlink |
@@ -169,14 +172,49 @@ both.
 - **The shared library name follows the minor version** while on 0.x,
   because a minor bump is the breaking one.
 
+### Platform-specific source files
+
+The convention is Go's (`_GOOS`, `_GOARCH` and `_GOOS_GOARCH` file name
+suffixes), applied to C sources:
+
+- **A suffix selects the platform.** A source file in `src/` whose name
+  ends in `_<platform>.c` (or `.h`) is a platform file:
+  `src/txml_allocator_wasm.c` is built only for wasm targets.
+- **Every other file is portable** and built for every target, as today.
+- **The list of platform suffixes lives in `mise/lib/`**, one list for the
+  whole workspace. It starts with `wasm` alone. A suffix is added
+  (`linux`, `macos`, `windows`, `aarch64`, `x86_64`, or a pair such as
+  `linux_aarch64`) when the first file needs it. A suffix not in the list
+  is an ordinary part of a name, as in Go.
+- **Every task applies the same rule:** `build`, `dist`, `amalgamate`,
+  the freestanding checks and the release all select files through one
+  function in `mise/lib/`, given the target. None of them globs `src/*.c`
+  on its own.
+- **The amalgamation stays portable.** `include/txml.c` never contains a
+  platform file. `amalgamate` writes one more file per platform that has
+  any: `include/txml_wasm.c` holds every `src/*_wasm.c`. A build for that
+  platform compiles it as a second translation unit next to
+  `include/txml.c`. `amalgamate --check` covers these files too.
+- **A platform file includes only the public header.** It is its own
+  translation unit, so it cannot reach the library's private functions.
+  `src/internal.h`, which orders the portable modules, does not list it.
+- **What a platform file exports is declared in the public header** inside
+  `#if defined(__wasm__)` (or the matching test for another platform). The
+  API description records the platform of each such function, and the
+  release's symbol check compares each target with the functions for that
+  target.
+- **The source tarball includes the platform amalgamations**
+  (`txml_wasm.c`), so a source embedder can build for wasm too.
+
 ### The wasm build
 
 - **Target `wasm32-freestanding`** through `zig cc`. `txml.wasm` exports
   the public API and `memory`, has no entry point (`--no-entry`) and
   imports nothing.
-- **The allocator** is a small C file in each project (for example
-  `tinyxml/wasm/txml_wasm_allocator.c`), written against that project's
-  vtable types and compiled and linked into its `.wasm`:
+- **The allocator** is a platform file in each project:
+  `tinyxml/src/txml_allocator_wasm.c`, and
+  `tinyactors-core/src/ta_allocator_wasm.c`. Each is written against its
+  project's vtable types and linked into its project's `.wasm`:
   - It grows linear memory with `__builtin_wasm_memory_grow(0, pages)` and
     reads its size with `__builtin_wasm_memory_size(0)`. It starts at the
     linker's `__heap_base`.
@@ -188,8 +226,10 @@ both.
     library's constructors without implementing one. It also exports raw
     `alloc` and `free`, so a JavaScript host can place input bytes in
     linear memory.
-- **`libtxml.a` for wasm32 has no allocator**, for embedders who link the
-  library into their own module and bring their own.
+- **`libtxml.a` for wasm32 holds the allocator as its own object**, like
+  every platform file. An embedder who links the library into a larger
+  module and brings their own allocator never references it, so the
+  linker leaves it out.
 
 ### The release command
 
