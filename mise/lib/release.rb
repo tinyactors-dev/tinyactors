@@ -149,6 +149,10 @@ module Release
   # Publishes the tarballs in order. On a failure it stops and prints what
   # was published and what is left: npm cannot unpublish freely, so nothing
   # is retried.
+  # Publishes `tarballs` in order and stops at the first failure. Answers
+  # the tarballs published, and the one that failed (nil when all went),
+  # so the caller can undo its commit and tag when nothing was published.
+  # A failure is never retried: npm cannot unpublish freely.
   def npm_publish!(tarballs)
     published = []
     with_npm_userconfig do |userconfig|
@@ -156,19 +160,30 @@ module Release
         command = ['fnox', 'exec', '--', 'npm', 'publish', tarball.to_s, '--access', 'public',
                    '--userconfig', userconfig]
         puts "$ npm publish #{File.basename(tarball)} --access public"
-        next published << tarball if system(*command, chdir: REPO.to_s)
+        return [published, tarball] unless system(*command, chdir: REPO.to_s)
 
-        left = tarballs - published
-        abort <<~STOPPED
-          release: npm publish #{File.basename(tarball)} failed; stopping.
-            published: #{published.empty? ? 'none' : published.map { |t| File.basename(t) }.join(', ')}
-            left, to publish by hand in this order (fnox exec -- npm publish <tgz> --access public):
-              #{left.map(&:to_s).join("\n      ")}
-          Then push the commit and tag, and create the GitHub release.
-        STOPPED
+        published << tarball
       end
     end
-    published
+    [published, nil]
+  end
+
+  # Whether the registry accepts NPM_TOKEN (`npm whoami`). It cannot tell
+  # whether a publish will ask for a one-time password: a token for
+  # releases must bypass two-factor authentication (ADR 0001).
+  def npm_authenticated?
+    with_npm_userconfig do |userconfig|
+      system('fnox', 'exec', '--', 'npm', 'whoami', '--userconfig', userconfig, out: File::NULL, err: File::NULL)
+    end
+  end
+
+  # Undoes commit_and_tag! when nothing was published: deletes the tag and
+  # drops the release commit, which only HEAD may be.
+  def undo_commit_and_tag!(subject:, tag:)
+    fail!("HEAD is not #{subject.inspect}; not undoing it") unless git('log', '-1', '--format=%s')&.strip == subject
+
+    run('git', 'tag', '--delete', tag)
+    run('git', 'reset', '--quiet', '--hard', 'HEAD~1')
   end
 
   # Commits `paths` as `subject` and tags the commit, annotated with `notes`.

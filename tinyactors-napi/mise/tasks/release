@@ -52,6 +52,7 @@ names = ['@tinyactors/node'] + PLATFORMS.map { |platform| "@tinyactors/node-#{pl
 taken = names.select { |name| Release.npm_published?(name, version) }
 Release.fail!("npm already has #{taken.map { |name| "#{name}@#{version}" }.join(', ')}") unless taken.empty?
 Release.fail!('fnox has no NPM_TOKEN (fnox list)') if publish && !Release.npm_token?
+Release.fail!('the registry does not accept NPM_TOKEN (npm whoami failed)') if publish && !Release.npm_authenticated?
 napi('test')
 
 # 2. Version, in the working tree; restored unless the release commits it.
@@ -102,9 +103,25 @@ begin
   end
 
   # 6. Publish.
-  Release.commit_and_tag!(paths: [PACKAGE_JSON], subject: "release(napi): v#{version}", tag: tag, notes_file: notes)
+  subject = "release(napi): v#{version}"
+  Release.commit_and_tag!(paths: [PACKAGE_JSON], subject: subject, tag: tag, notes_file: notes)
   committed = true
-  Release.npm_publish!(platforms + [main])
+  published, failed = Release.npm_publish!(platforms + [main])
+  if failed && published.empty?
+    # Nothing reached npm: the release did not happen, so neither do its
+    # commit and tag. A retry starts from a clean tree.
+    Release.undo_commit_and_tag!(subject: subject, tag: tag)
+    Release.fail!("npm publish #{failed.basename} failed; nothing was published, and the commit and tag are undone")
+  elsif failed
+    left = (platforms + [main]) - published
+    Release.fail!(<<~STOPPED)
+      npm publish #{failed.basename} failed; stopping. The commit and tag stay: npm has some packages.
+        published: #{published.map { |t| t.basename.to_s }.join(', ')}
+        left, to publish by hand in this order (fnox exec -- npm publish <tgz> --access public):
+          #{left.map(&:to_s).join("\n      ")}
+      Then push the commit and tag, and create the GitHub release.
+    STOPPED
+  end
   Release.push_and_release!(tag: tag, title: "@tinyactors/node #{version}", notes_file: notes,
                             assets: platforms + [main, Pathname.new(sums)])
   puts "release: published @tinyactors/node #{version}, tagged #{tag}"
