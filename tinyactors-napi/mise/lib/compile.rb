@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require 'English'
 require 'fileutils'
 require 'json'
 require 'pathname'
@@ -36,20 +35,10 @@ module NapiCompile
 
   module_function
 
-  def capture(*command)
-    output = IO.popen(command, chdir: ROOT.to_s, err: %i[child out], &:read)
-    abort output unless $CHILD_STATUS.success?
-    output.strip
-  end
-
-  def node_include_dir
-    @node_include_dir ||= begin
-      node = Pathname.new(capture('mise', 'which', 'node'))
-      dir = node.dirname.parent.join('include/node')
-      abort "Node-API headers not found under #{dir}" unless dir.join('node_api.h').file?
-      dir
-    end
-  end
+  # The pinned Node-API headers (vendor/node-api-headers), not the ones of
+  # the Node mise installed: every target compiles against the same
+  # declarations, at NAPI_VERSION 10.
+  NODE_API_INCLUDE = ROOT.join('vendor/node-api-headers/include')
 
   def version = JSON.parse(ROOT.join('package.json').read).fetch('version')
 
@@ -64,7 +53,7 @@ module NapiCompile
       '-fPIC',
       '-DNAPI_VERSION=10',
       "-DTINYACTORS_NAPI_VERSION=\"#{version}\"",
-      "-I#{node_include_dir}",
+      "-I#{NODE_API_INCLUDE}",
       "-I#{CORE_DIR}",
       "-I#{SCXML_DIR.join('include')}",
       "-I#{XML_DIR}",
