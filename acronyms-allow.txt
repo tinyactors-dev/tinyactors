@@ -64,3 +64,7 @@ hitBreakpointIds   tinyactors-napi/{lib/debug.js,lib/debug/*.js,test/debug.js,to
 # the extension's packager writes and its test reads back.
 Id             tinyactors-vscode/{mise/tasks/build,test/package.test.js}  # VSIX manifest attribute
 
+# VS Code's own names, which the demo-recording director calls: the
+# command workbench.debug.action.focusRepl and the vscode.Uri class.
+focusRepl      tinyactors-vscode/.agents/skills/record-demo-video/{SKILL.md,scripts/director/*.js}  # VS Code command
+Uri            tinyactors-vscode/.agents/skills/record-demo-video/scripts/director/*.js            # VS Code API
