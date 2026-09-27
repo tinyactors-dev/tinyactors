@@ -50,7 +50,9 @@ module API
         params = function['params'].map { |param| CType.render(param['type'], param['name']) }
         params = ['void'] if params.empty?
         declarator = "#{function['name']}(#{params.join(', ')})"
-        lines << "#{function['static_inline'] ? 'static inline ' : ''}#{CType.render(function['returns']['type'], declarator)};"
+        declaration = "#{function['static_inline'] ? 'static inline ' : ''}#{CType.render(function['returns']['type'], declarator)};"
+        # A platform function is declared only for its platform (root ADR 0001, decision 9).
+        lines << (function['platform'] ? "#if #{API.platform_guard(function['platform'])}\n#{declaration}\n#endif" : declaration)
       end
       "#{lines.join("\n")}\n"
     end

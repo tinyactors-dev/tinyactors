@@ -18,7 +18,8 @@ require 'cache'
 # schema, the extractor, clang's identity and the checked-in description still
 # hash to what the last successful run recorded (mise/lib/cache.rb).
 Cache.gate('api',
-           inputs: Cache.files('include/tinyactors.h', 'include/tinyactors.api.schema.json', 'mise/lib/api.rb', 'mise/lib/api/*.rb', 'mise/tasks/api'),
+           inputs: Cache.files('include/tinyactors.h', 'include/tinyactors.api.schema.json', 'mise/lib/api.rb', 'mise/lib/api/*.rb', 'mise/tasks/api',
+                               'include/tinyactors_*.c'),
            outputs: [Cache::ROOT.join('include/tinyactors.api.json')],
            extra: [Cache.tool_id(Shellwords.split(ENV.fetch('CLANG', 'clang'))),
                    # The description reads the amalgamation only for which functions it exports, so

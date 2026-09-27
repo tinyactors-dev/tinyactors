@@ -20,6 +20,14 @@ module API
 
   module_function
 
+  # The platforms whose functions the header declares only for them (root
+  # ADR 0001, docs/adr/0001-packaging-and-releases.md, decision 9): the
+  # clang target the header is read for, and the preprocessor condition it
+  # uses.
+  PLATFORMS = { 'wasm' => { target: 'wasm32-unknown-unknown', guard: 'defined(__wasm__)' } }.freeze
+
+  def platform_guard(platform) = PLATFORMS.fetch(platform).fetch(:guard)
+
   # The description of `header`; `library` is the amalgamation whose exported
   # symbols decide which functions are implemented (none without one).
   def describe(header, library:, schema:)
@@ -27,6 +35,7 @@ module API
     ast = Clang.ast(header)
     builder = Builder.new(ast, implemented: library ? Clang.exported_functions(library) : [])
     model = builder.build
+    model['functions'] += platform_functions(header, library, model['functions'].map { |function| function['name'] })
     macros = Clang.macros(header)
     constants = Layout.constants(header, macros, known: builder.method(:known?))
     description = { 'format' => FORMAT, 'header' => "include/#{header.basename}" }
@@ -46,6 +55,19 @@ module API
 
     Check.run(header, description)
     description
+  end
+
+  # The functions the header declares only for a platform, marked with it.
+  # A platform function is implemented when the platform's amalgamation
+  # (include/<name>_<platform>.c, beside `library`) defines it.
+  def platform_functions(header, library, portable)
+    PLATFORMS.flat_map do |platform, options|
+      source = library && Pathname.new(library).sub_ext('').then { |base| Pathname.new("#{base}_#{platform}.c") }
+      implemented = source&.file? ? Clang.exported_functions(source, target: options[:target]) : []
+      Builder.new(Clang.ast(header, target: options[:target]), implemented: implemented).build['functions']
+             .reject { |function| portable.include?(function['name']) }
+             .map { |function| function.merge('platform' => platform) }
+    end
   end
 
   # The header's version, "major.minor.patch", from its TA_VERSION_*

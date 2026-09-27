@@ -8,20 +8,31 @@
 # marks definitions of public functions TA_API and gives every other defined
 # function internal linkage through TA_PRIVATE (static by default).
 #
-#   mise run amalgamate           write include/tinyactors.c
-#   mise run amalgamate --check   fail if the checked-in file is out of date
+# Platform files (root ADR 0001, docs/adr/0001-packaging-and-releases.md,
+# decision 9), src/*_<suffix>.c, are not modules: internal.h does not list
+# them, and each platform's files form their own amalgamation,
+# include/tinyactors_<suffix>.c, a second translation unit a build for that
+# platform compiles next to include/tinyactors.c. A platform file includes
+# the public header alone.
+#
+#   mise run amalgamate           write include/tinyactors.c (and the platform files)
+#   mise run amalgamate --check   fail if a checked-in file is out of date
 
 require 'pathname'
 require_relative '../lib/c_api'
 require 'cache'
+require 'platform_files'
 
 # Fresh when the inputs and the checked-in output still hash to what the last
 # successful run recorded (mise/lib/cache.rb); an output edited by hand does
 # not, in either mode: --check then re-derives the implementation and fails
 # because it differs from the (unstamped) checked-in file, exactly as before.
+PLATFORM_OUTPUTS = PlatformFiles::SUFFIXES.select { |suffix| !Dir[Cache::ROOT.join("src/*_#{suffix}.c").to_s].empty? }
+                                          .to_h { |suffix| [suffix, Cache::ROOT.join("include/tinyactors_#{suffix}.c")] }
 Cache.gate('amalgamate',
-           inputs: Cache.files('src/*.c', 'src/*.h', 'include/tinyactors.h', 'mise/lib/c_api.rb', 'mise/tasks/amalgamate'),
-           outputs: [Cache::ROOT.join('include/tinyactors.c')])
+           inputs: Cache.files('src/*.c', 'src/*.h', 'include/tinyactors.h', 'mise/lib/c_api.rb', 'mise/tasks/amalgamate',
+                               '../mise/lib/platform_files.rb'),
+           outputs: [Cache::ROOT.join('include/tinyactors.c'), *PLATFORM_OUTPUTS.values])
 
 root = Pathname.new(__dir__).join('../..').expand_path
 include_dir = root.join('include')
@@ -50,8 +61,24 @@ def read_module(root, name, extension)
   [path, strip(path.read)]
 end
 
+modules.each do |name|
+  errors << "src/internal.h lists #{name}.h, a platform file; platform files are not modules" unless PlatformFiles.portable?("#{name}.c")
+end
 headers = modules.map { |name| read_module(root, name, 'h') }
 sources = modules.map { |name| read_module(root, name, 'c') }
+platform_sources = PLATFORM_OUTPUTS.keys.to_h do |suffix|
+  files = Dir[root.join("src/*_#{suffix}.c").to_s].sort.select { |path| PlatformFiles.platform(path) == suffix }
+  [suffix, files.map { |path| Pathname.new(path) }.map { |path| [path, path.read] }]
+end
+# A platform file is its own translation unit: it includes the public header
+# alone, so it cannot reach core's internals.
+platform_sources.values.flatten(1).each do |path, text|
+  text.scan(/^#include "([^"]+)"$/).flatten.each do |included|
+    next if File.basename(included) == 'tinyactors.h'
+
+    errors << "#{path.relative_path_from(root)}: a platform file includes only tinyactors.h, not #{included}"
+  end
+end
 
 headers.each do |path, text|
   text.scan(PROTOTYPE) do
@@ -66,6 +93,11 @@ private_functions = defined - public_functions
 
 sources = sources.map do |path, text|
   [path, text.gsub(DEFINITION) { "#{public_functions.include?($2) ? 'TA_API' : 'TA_PRIVATE'} #{$1}#{$2}#{$3}" }]
+end
+platform_sources = platform_sources.transform_values do |files|
+  files.map do |path, text|
+    [path, strip(text).gsub(DEFINITION) { "#{public_functions.include?($2) ? 'TA_API' : 'TA_PRIVATE'} #{$1}#{$2}#{$3}" }]
+  end
 end
 headers = headers.map do |path, text|
   [path, text.gsub(PROTOTYPE) { |match| private_functions.include?($2) ? "TA_PRIVATE #{match}" : match }.gsub(/^static inline\b/, "TA_PRIVATE inline")]
@@ -98,9 +130,31 @@ implementation = <<~C + (headers + sources).map(&:last).join("\n")
 
 C
 outputs = { include_dir.join('tinyactors.c') => implementation }
+PLATFORM_OUTPUTS.each do |suffix, path|
+  outputs[path] = <<~C + platform_sources.fetch(suffix).map { |source, text| "/* ---- #{source.relative_path_from(root)} ---- */\n#{text}" }.join("\n")
+    /*
+     * GENERATED FILE. Do not edit; run `mise run amalgamate` in tinyactors-core.
+     * The #{suffix} platform files, those in src/ named with a _#{suffix}.c
+     * suffix: a second translation unit, compiled next to tinyactors.c only
+     * when building for #{suffix}. They use the public API alone.
+     */
+    #include "tinyactors.h"
+
+    #ifndef TA_PRIVATE
+    #if defined(__GNUC__) || defined(__clang__)
+    #define TA_PRIVATE static __attribute__((unused))
+    #else
+    #define TA_PRIVATE static
+    #endif
+    #endif
+
+  C
+end
+stale = include_dir.glob('tinyactors_*.c').reject { |path| outputs.key?(path) }
 
 if ARGV == ['--check']
   outputs.each { |path, contents| abort "#{path} is out of date; run mise run amalgamate" unless path.file? && path.read == contents }
+  abort "#{stale.join(', ')}: no platform files left; run mise run amalgamate" unless stale.empty?
   puts 'Tinyactors amalgamations are current.'
   exit
 end
@@ -108,5 +162,6 @@ end
 abort 'usage: mise run amalgamate [--check]' unless ARGV.empty?
 changed = outputs.reject { |path, contents| path.file? && path.read == contents }
 changed.each { |path, contents| path.write(contents) }
+stale.each(&:delete)
 names = outputs.keys.map { |path| path.relative_path_from(root) }.join(', ')
 puts changed.empty? ? "#{names} unchanged" : "generated #{names}"

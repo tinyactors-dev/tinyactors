@@ -220,6 +220,23 @@ typedef struct ta_allocator_vtable {
 } ta_allocator_vtable TA_VTABLE;
 typedef struct { void *self; const ta_allocator_vtable *v; } ta_allocator TA_ADAPTER;
 
+#if defined(__wasm__)
+/*
+ * The WebAssembly module's own allocator (src/ta_allocator_wasm.c, linked
+ * into tinyactors.wasm; root ADR 0001, decisions 6 and 9): blocks from the
+ * module's linear memory, above the linker's __heap_base, grown a page at a
+ * time and never returned. Freed blocks are kept on free lists by size class
+ * and handed out again, so a long-running module reuses its memory. A host
+ * passes ta_wasm_allocator() wherever the API takes a ta_allocator, and
+ * places its own bytes (a chart, an event's data) with ta_wasm_alloc();
+ * ta_wasm_free() takes back a block with the size and alignment it was asked
+ * for. Alignments above 65536 are refused.
+ */
+TA_API ta_allocator ta_wasm_allocator(void);
+TA_API void *ta_wasm_alloc(size_t size, size_t alignment);
+TA_API void ta_wasm_free(void *ptr, size_t size, size_t alignment);
+#endif
+
 
 /* ========================================================================
  * Arenas

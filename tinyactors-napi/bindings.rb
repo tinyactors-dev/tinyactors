@@ -74,6 +74,7 @@ module TinyactorsNapiBindings
       'named addresses cross as family and name text; the ta_actor_ref codec interns and views them (ADR 0006)',
     'ta_actor_id_{slot,generation,make}' => 'actor IDs cross as (slot, generation); the runtime codec splits and joins them (ADR 0002)',
     'ta_dm_host_*' => 'callable only from inside data-model callbacks (step 11)',
+    'ta_wasm_*' => 'the WebAssembly module\'s allocator (root ADR 0001, decision 9), declared only for wasm; the addon is native',
     'ta_null_datamodel' => 'the plumbing chooses the data model; it is injected into compile_spec',
     'ta_null_trace_sink' => 'the tracing hook installs it when no JavaScript callback is registered (core ADR 0067)',
     'ta_null_definition_sink' => 'the native System always installs its own definition sink (core ADR 0079)',
