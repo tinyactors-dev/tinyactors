@@ -95,16 +95,17 @@ module Release
   end
 
   # The tree is clean, on main, and in step with origin/main. With `scope`
-  # (directories relative to the repository), an untracked file outside it
-  # is allowed: other sessions share the working tree (AGENTS.md), and a
-  # release reads only its own directories. A change to a tracked file fails
-  # wherever it is.
+  # (directories relative to the repository), only changes inside it count:
+  # other sessions share the working tree (AGENTS.md), a release builds only
+  # from its own directories, and its commit stages only the files it
+  # versions, so an edit elsewhere can neither reach the release nor be
+  # committed by it.
   def check_tree!(scope: nil)
     git('fetch', '--quiet', '--tags', 'origin') or fail!('git fetch origin failed')
     status = git('status', '--porcelain') or fail!('git status failed')
     if scope
-      status = status.lines.reject do |line|
-        line.start_with?('??') && scope.none? { |dir| line[3..].start_with?("#{dir.chomp('/')}/") }
+      status = status.lines.select do |line|
+        scope.any? { |dir| line[3..].start_with?("#{dir.chomp('/')}/") }
       end.join
     end
     fail!("the working tree is not clean:\n#{status}") unless status.empty?
