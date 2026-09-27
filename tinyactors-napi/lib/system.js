@@ -788,12 +788,18 @@ class System {
    * `options.resolve(src)` fetches `<data src>` and `<script src>` while the
    * document is defined: it returns the content as a string or a
    * Uint8Array, or undefined for a src it does not know, which refuses the
-   * document. Without it, any `src` is refused.
+   * document. Without it, any `src` is refused. `options.name` is what the
+   * document is called, such as its path or a file:// URL: the source its
+   * spans name (core ADR 0085), which Definition.sourceOf() answers and a
+   * debugger opens.
    * An `<invoke type="scxml">` whose child chart is inline in `<content>`,
    * or a literal `src` that `resolve` fetches, is compiled now, as part of
    * this definition (napi ADR 0024, core ADR 0077): a broken child refuses
    * the document. The definition keeps `resolve` for children compiled at
-   * invoke time from `srcexpr`, and its children inherit it.
+   * invoke time from `srcexpr`, and its children inherit it. A child
+   * fetched by `src` or `srcexpr` is named by that src; a child inline in
+   * `<content>` is unnamed, as its lines count from the start of its
+   * content, not of the document.
    */
   define(source, options = {}) {
     const limit = microstepLimitOption(options, 'define()');
@@ -806,7 +812,11 @@ class System {
       if (resolve !== undefined && typeof resolve !== 'function') {
         throw new TinyactorsError('define(): resolve must be a function of src', 'invalid');
       }
-      return this.#registered(this.#importSCXML(source, resolve), limit);
+      const name = options?.name;
+      if (name !== undefined && typeof name !== 'string') {
+        throw new TinyactorsError('define(): name must be a string, such as the document\'s path', 'invalid');
+      }
+      return this.#registered(this.#importSCXML(source, name, resolve), limit);
     }
     let spec = source;
     if (source instanceof DefinitionBuilder) {
@@ -832,14 +842,14 @@ class System {
 
   // Decodes, compiles and registers an SCXML document; a refusal throws with
   // its position (core ADRs 0058 and 0076).
-  #importSCXML(source, resolve) {
+  #importSCXML(source, name, resolve) {
     let bytes = source;
     if (typeof source === 'string') {
       bytes = new TextEncoder().encode(source);
     } else if (!(source instanceof Uint8Array)) {
       throw new TinyactorsError('define(): an SCXML document is a string or a Uint8Array', 'invalid');
     }
-    const result = this.#native.importDefinition(bytes, resolve);
+    const result = this.#native.importDefinition(bytes, name, resolve);
     if (typeof result === 'bigint') {
       return result;
     }

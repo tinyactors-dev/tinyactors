@@ -64,6 +64,7 @@ ta_result tna_import_scxml(tna_system *system, const tna_import_params *params) 
     result = ta_definition_import(system->core, &(ta_definition_import_params){
                                                     .codec = ta_scxml_codec_adapter(&codec),
                                                     .input = params->input,
+                                                    .name = params->name,
                                                     .arena = &arena,
                                                     .resolver = params->resolver,
                                                     .identity = params->identity,

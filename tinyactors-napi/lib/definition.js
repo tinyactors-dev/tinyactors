@@ -90,6 +90,37 @@ class Definition {
   }
 
   /**
+   * Where element `id` of `kind` ('state', 'transition', 'action' or
+   * 'expression') was written (core ADR 0085): the file, and the line and
+   * column of its builder call, or undefined when the definition keeps no
+   * span for it. A chart built with statechart() records every state,
+   * transition, initial transition and action; IDs are core's, as in
+   * inspect() and trace records.
+   */
+  sourceOf(kind, id) {
+    let found;
+    try {
+      found = core.definition_span(this.#native, this.id, kind, id);
+    } catch (error) {
+      if (error instanceof TinyactorsError && error.code === 'not-found') {
+        return undefined;
+      }
+      throw error;
+    }
+    const { span, source } = found;
+    const place = { source: source ?? '', line: span.line, column: span.column ?? 0 };
+    if (span.end_line !== undefined && span.end_line !== 0) {
+      place.endLine = span.end_line;
+      place.endColumn = span.end_column ?? 0;
+    }
+    if (span.length !== undefined && span.length !== 0) {
+      place.offset = Number(span.offset ?? 0n);
+      place.length = span.length;
+    }
+    return place;
+  }
+
+  /**
    * Prevent new actors from using this definition. Actors that use it keep
    * running; core frees it when the last one is gone. Idempotent.
    */

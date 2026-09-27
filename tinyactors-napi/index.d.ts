@@ -214,6 +214,16 @@ export interface System {
        * children inherit it.
        */
       resolve?: (src: string) => string | Uint8Array | undefined;
+      /**
+       * What the document is called, such as its path or a file:// URL: the
+       * source its spans name (core ADR 0085), which sourceOf() answers and
+       * a debugger opens (napi ADR 0026). Without it the spans name no
+       * source, and a debug session shows the chart as SCXML it writes from
+       * the definition, by `sourceReference`. A child fetched by `src` or `srcexpr` is named by
+       * that src; a child inline in `<content>` has no name, since its lines
+       * count from the start of its content.
+       */
+      name?: string;
       microstepLimit?: number;
     },
   ): Definition<Data>;
@@ -663,8 +673,35 @@ export interface Definition<Data extends object = Record<string, unknown>> {
   /** Read from core. Throws `not-found` once a retired definition is freed. */
   inspect(): DefinitionInspection;
 
+  /**
+   * Where element `id` of `kind` was written (core ADR 0085), or undefined
+   * when the definition keeps no span for it. statechart() records the file,
+   * line and column of the call that wrote each state, transition, initial
+   * transition and action.
+   */
+  sourceOf(kind: ElementKind, id: number): SourcePlace | undefined;
+
   /** Prevent new actors from using this definition. Existing actors continue. */
   retire(): void;
+}
+
+/** The kinds of compiled element core numbers, as trace records name them. */
+export type ElementKind = "state" | "transition" | "action" | "expression";
+
+/**
+ * A place in a source. Lines and columns count from 1; a column is the
+ * engine's (UTF-16 code units in JavaScript). The end and the byte range are
+ * present when the front end knew them, as a document codec does.
+ */
+export interface SourcePlace {
+  /** The source's name: a file, a URL, or "" when the spec named none. */
+  readonly source: string;
+  readonly line: number;
+  readonly column: number;
+  readonly endLine?: number;
+  readonly endColumn?: number;
+  readonly offset?: number;
+  readonly length?: number;
 }
 
 export interface DefinitionInspection {
@@ -1180,10 +1217,30 @@ export interface DefinitionSpec {
   readonly states?: readonly StateSpec[];
   readonly data?: readonly DataSpec[];
   readonly script?: ExpressionSpec;
+  /** Where the script was written: an index into `spans`, from 1. */
+  readonly script_span?: number;
+  /**
+   * Where elements were written (core ADR 0085): each element's `span` is an
+   * index into this list, from 1, and each span's `source` an index into
+   * `sources`. None of it changes the revision. statechart() fills them in.
+   */
+  readonly spans?: readonly SpanSpec[];
+  readonly sources?: readonly { readonly name: string }[];
+}
+
+export interface SpanSpec {
+  readonly source?: number;
+  readonly line: number;
+  readonly column?: number;
+  readonly end_line?: number;
+  readonly end_column?: number;
+  readonly offset?: bigint;
+  readonly length?: number;
 }
 
 export interface StateSpec {
   readonly kind: StateKind;
+  readonly span?: number;
   readonly id: string;
   readonly states?: readonly StateSpec[];
   readonly initial?: InitialSpec;
@@ -1199,10 +1256,12 @@ export interface StateSpec {
 export interface InitialSpec {
   readonly targets: readonly string[];
   readonly actions?: readonly ActionSpec[];
+  readonly span?: number;
 }
 
 export interface TransitionSpec {
   readonly kind: "external" | "internal";
+  readonly span?: number;
   /** Omit for an eventless transition. Wildcard segments are supported. */
   readonly event?: string;
   readonly condition?: ExpressionSpec;
@@ -1229,7 +1288,7 @@ export type StringAttributeSpec =
   | { readonly kind: "literal"; readonly literal: string }
   | { readonly kind: "expr"; readonly expr: ExpressionSpec };
 
-export type ActionSpec =
+export type ActionSpec = { readonly span?: number } & (
   | { readonly kind: "raise"; readonly raise: { readonly event: string; readonly data?: ValueSourceSpec } }
   | { readonly kind: "send"; readonly send: SendSpec }
   | { readonly kind: "cancel"; readonly cancel: { readonly sendid: StringAttributeSpec } }
@@ -1252,7 +1311,8 @@ export type ActionSpec =
       readonly index?: string;
       readonly body?: readonly ActionSpec[];
     };
-  };
+  }
+);
 
 export interface SendSpec {
   readonly id?: { readonly kind: "literal"; readonly literal: string } | { readonly kind: "location"; readonly location: LocationSpec };

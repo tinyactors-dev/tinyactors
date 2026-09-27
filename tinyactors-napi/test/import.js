@@ -7,6 +7,7 @@
 
 const assert = require('node:assert/strict');
 const { nativeOf } = require('../lib/system');
+const { core } = require('../lib/native');
 const { createSystem, statechart, TinyactorsError } = require('..');
 const { ecmascript } = require('../tools/ecmascript-datamodel');
 
@@ -320,6 +321,55 @@ async function dataSrc() {
   system.close();
 }
 
+// What a document is called (core ADR 0085): define()'s `name` is the source
+// its spans name. A child fetched by src or srcexpr is named by that src;
+// a child inline in <content> has lines of its own, so it has no name.
+async function names() {
+  const system = createSystem();
+  system.registerDatamodel('ecmascript', ecmascript);
+  const text = `<scxml ${NS} name="named">
+  <state id="a">
+    <transition event="go" target="b"/>
+  </state>
+  <state id="b"/>
+</scxml>`;
+  const state = (definition, name) => core.definition_find_state(nativeOf(system), definition.id, name);
+  const named = system.define(text, { format: 'scxml', name: 'charts/named.scxml' });
+  assert.deepEqual([named.sourceOf('state', state(named, 'b')).source, named.sourceOf('state', state(named, 'b')).line],
+                   ['charts/named.scxml', 5]);
+  const unnamed = system.define(text.replace('"named"', '"unnamed"'), { format: 'scxml' });
+  assert.equal(unnamed.sourceOf('state', state(unnamed, 'a')).source, '');
+  for (const name of [3, null, { path: 'x' }]) {
+    assertRefused(() => system.define(text, { format: 'scxml', name }), 'invalid',
+                  (error) => assert.match(error.message, /name must be a string/));
+  }
+
+  const child = (family) => `<scxml ${NS} name="${family}"><state id="c"/></scxml>`;
+  const files = { 'file:child.scxml': child('fetched'), 'file:late.scxml': child('late') };
+  const parent = system.define(`<scxml ${NS} name="parent" datamodel="ecmascript">
+  <state id="p">
+    <invoke type="scxml"><content>${child('inline')}</content></invoke>
+    <invoke type="scxml" src="file:child.scxml"/>
+    <invoke type="scxml" srcexpr="'file:' + 'late.scxml'"/>
+  </state>
+</scxml>`, { format: 'scxml', name: 'parent.scxml', resolve: (src) => files[src] });
+  // Where a child's state `c` was written, as core says it.
+  const sourceOfFamily = (family) => {
+    const found = [...system.definitions()].find((definition) => definition.identity.family === family);
+    assert.ok(found !== undefined, `${family} is defined`);
+    const native = nativeOf(system);
+    return core.definition_span(native, found.id, 'state', core.definition_find_state(native, found.id, 'c'));
+  };
+  assert.equal(parent.sourceOf('state', state(parent, 'p')).source, 'parent.scxml');
+  assert.equal(sourceOfFamily('inline').source ?? '', '', 'an inline child is not named after its parent');
+  assert.equal(sourceOfFamily('inline').span.line, 1, 'its lines count from the start of its content');
+  assert.equal(sourceOfFamily('fetched').source, 'file:child.scxml');
+  system.spawn(parent);
+  await system.flush();
+  assert.equal(sourceOfFamily('late').source, 'file:late.scxml', 'a srcexpr child is named by the src it evaluated to');
+  system.close();
+}
+
 (async () => {
   await roles();
   await dataSrc();
@@ -328,6 +378,7 @@ async function dataSrc() {
   await builtinNames();
   await reentrancy();
   await outOfMemory();
+  await names();
   console.log('import.js passed');
 })().catch((error) => {
   console.error(error);
