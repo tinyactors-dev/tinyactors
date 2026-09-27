@@ -21,6 +21,7 @@ CData          tinyactors-test/ruby/**/*.rb                              # REXML
 # `-Os`, the C compiler's optimize-for-size flag, not OS; tinyxml names
 # its freestanding tiers after the flags.
 Os             tinyxml/**/*                                                # compiler flag -Os
+Os             docs/proposals/packaging.md                                 # compiler flag -Os
 
 # Attribute names from the W3C SCXML IRP suite's conf: namespace, which the
 # importer matches as they are written in the vendored test documents.
