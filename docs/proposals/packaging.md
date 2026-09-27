@@ -54,6 +54,13 @@ when the work starts.
 9. **Platform-specific source files are chosen by file name, as in Go.**
    A file named `*_wasm.c` is built only when building for wasm, and
    every other build ignores it. See "Platform-specific source files".
+10. **The Linux addon is built once per architecture and links no C
+    library.** It compiles against musl's headers and links with
+    `-shared -nostdlib`, so it names no libc to load. Its libc functions
+    are bound when Node loads it, to whichever libc Node itself uses, so
+    one binary serves glibc and musl. There are two Linux packages, not
+    four. Static musl inside the addon is rejected. See "One Linux addon
+    for glibc and musl".
 
 ## What exists today (2026-09-27)
 
@@ -323,40 +330,144 @@ before it can ship. Its release:
 
 ## npm packages (the napi addon)
 
-Unchanged from the 2026-09-24 sketch except for versions: the addon has
-its own version and tag (`tinyactors-napi/v0.1.0`), and its platform
-packages share that version. It uses the same toolchain module in
-`release.rb`.
+The addon has its own version and tag (`tinyactors-napi/v0.1.0`), and its
+platform packages share that version. It uses the same toolchain module
+in `release.rb`.
 
 | Package | Contents |
 |---|---|
 | `tinyactors` | `index.js`, `lib/`, `index.d.ts`, README, the loader; `optionalDependencies` on every platform package at the same exact version |
 | `@tinyactors/darwin-arm64` | `tinyactors.node`; `"os": ["darwin"], "cpu": ["arm64"]` |
 | `@tinyactors/darwin-x64` | same, `x64` |
-| `@tinyactors/linux-x64-gnu` | `"os": ["linux"], "cpu": ["x64"], "libc": ["glibc"]` |
-| `@tinyactors/linux-arm64-gnu` | `arm64`, `glibc` |
-| `@tinyactors/linux-x64-musl` | `x64`, `musl` (Alpine) |
-| `@tinyactors/linux-arm64-musl` | `arm64`, `musl` |
+| `@tinyactors/linux-x64` | `"os": ["linux"], "cpu": ["x64"]`; no `libc` field, the binary serves glibc and musl |
+| `@tinyactors/linux-arm64` | same, `arm64` |
 
-- npm, pnpm and Bun install only the optional dependency whose `os`,
-  `cpu` and `libc` match.
+- npm, pnpm and Bun install only the optional dependency whose `os` and
+  `cpu` match.
 - **The loader** (`lib/native.js`) picks the package for
-  `process.platform`, `process.arch` and the libc (musl detected from
-  `process.report`), and falls back to `build/tinyactors_napi.node` in
-  the repository. When nothing matches, it throws one error naming the
-  platform it looked for and the supported ones.
+  `process.platform` and `process.arch`, and falls back to
+  `build/tinyactors_napi.node` in the repository. When nothing matches, it
+  throws one error naming the platform it looked for and the supported
+  ones. It does not detect the libc.
 - **Node-API is ABI-stable**: one binary per platform serves every Node
   with Node-API 10 (22.14 and later; `engines` should say `>=22.14`) and
   Bun.
 - **Node-API headers** come from the pinned npm package
   `node-api-headers` under `vendor/`, not from the Node mise installed.
-- macOS links with `-undefined dynamic_lookup`; Linux needs no flag.
-- Release: `npm pack` each package, smoke test the packed tarballs with
-  npm and Bun (Linux ones in a container, glibc and musl), run the whole
-  napi suite under Bun, then publish the platform packages, then the main
-  package, then the tag and GitHub release. The npm token comes from
-  fnox; no `.npmrc` with a token is written to the tree.
+- **Linking:**
+  - macOS links with `-undefined dynamic_lookup`, because Node-API
+    functions come from the process that loads the addon.
+  - Linux compiles with `zig cc -target <arch>-linux-musl` and links with
+    `-shared -nostdlib`, which leaves both the Node-API functions and the
+    libc functions to be bound at load time (decision 10).
+- **Release:**
+  1. `npm pack` each package.
+  2. Smoke test the packed tarballs with npm and Bun. The Linux ones run
+     in containers, under glibc and under musl.
+  3. Run the whole napi suite under Bun.
+  4. Publish the platform packages, then the main package, then the tag
+     and the GitHub release.
+
+  The npm token comes from fnox; no `.npmrc` with a token is written to
+  the tree.
 - A scope needs an npm organization, `tinyactors`, created once.
+
+### One Linux addon for glibc and musl
+
+**How it works.** The addon is compiled against musl's headers and linked
+with `-shared -nostdlib`. The result names no library it needs (no
+`DT_NEEDED` entry) and contains no libc code, only references to libc
+functions by name. When Node loads it, the dynamic loader binds those
+names to the libc already in the process: glibc on Debian, musl on
+Alpine. Every thread-local and heap detail then belongs to that one
+libc. This is the mechanism macOS uses for Node-API functions
+(`-undefined dynamic_lookup`), applied to libc as well.
+
+**What it relies on.** The libc functions the addon calls must have the
+same name, arguments and types in glibc and musl. On 64-bit Linux that
+holds for everything the addon imports today, 17 functions:
+`aligned_alloc`, `bcmp`, `calloc`, `clock_gettime`, `floor` (x64 only;
+arm64 inlines it), `free`, `getrandom`, `malloc`, `memchr`, `memcpy`,
+`memmove`, `memset`, `realloc`, `snprintf`, `strlen`, `strtod` and
+`timespec_get`. It would not hold for functions that take a type whose
+layout differs between the two, such as `FILE` internals, `struct stat`
+or `jmp_buf`, or for glibc-only symbols that fortified builds pull in
+(`__snprintf_chk`, `__isoc99_*`).
+
+**No glibc version to choose.** The build targets no glibc version, so the
+oldest glibc it supports is the oldest that has every imported function:
+2.25, for `getrandom`. The official Node 22 binaries already need 2.28.
+
+**What the release checks.**
+- The addon's undefined symbols are Node-API functions plus an allowlist
+  of libc functions checked to be the same in both. A new libc call fails
+  the release until it is checked and added.
+- The packed addon is loaded and smoke tested under glibc and under musl,
+  on x64 and arm64. The full suites run natively on each architecture:
+  under qemu they are too slow, and their timing assertions fail (see
+  below).
+
+#### Measured on 2026-09-27
+
+A minimal Node-API addon that calls `malloc`, `realloc`, `free`,
+`snprintf`, `strtod`, `getrandom`, `clock_gettime`, `floor`, `strlen` and
+`memmove`, built with `zig cc` 0.16.0 for x86_64 three ways:
+
+| Build | Needs | glibc 2.44 (host) | glibc 2.36 (Debian 12) | musl (Alpine) |
+|---|---|---|---|---|
+| `-target x86_64-linux-gnu.2.28` | `libc.so.6`, `libm.so.6` | loads | loads | loads (see below) |
+| `-target x86_64-linux-musl`, normal link | `libc.so` | fails: `invalid ELF header` | fails: `libc.so: cannot open shared object file` | loads |
+| musl headers, `-shared -nostdlib` | nothing | loads | loads | loads |
+
+- **A normal musl build can't serve glibc.** It names `libc.so`, which
+  a glibc system doesn't have as a loadable library.
+- **The glibc build loading on Alpine is luck.** musl's loader answers
+  requests for `libc.so.6` itself and ignores glibc's symbol versions.
+  That works only while the addon imports no glibc-only symbol, which a
+  glibc build can pull in silently.
+
+**The real addon**, built the same way from a worktree at `c6eeb77`: all
+of `src/`, the core amalgamation, the SCXML codec and txml, compiled
+against musl's headers with `-Werror`, linked with `-shared -nostdlib`.
+It names no library it needs, and its libc imports are those of the
+glibc build minus four symbols of glibc's C runtime startup code
+(`__cxa_finalize`, `__gmon_start__`, `_ITM_*`). The 32 JS suites in
+`tinyactors-napi/test/`, run with Node 22.23.3 against it:
+
+| Where | libc | Suites passed |
+|---|---|---|
+| host, x64 | glibc 2.44 | 32 / 32 |
+| `node:22-alpine`, x64 | musl | 32 / 32 |
+| `node:22-bookworm-slim`, x64 | glibc 2.36 | 32 / 32 |
+| `node:22-bullseye-slim`, x64 | glibc 2.31 | 32 / 32 |
+| `node:22-alpine`, arm64 under qemu | musl | 30 / 32, then stopped |
+
+- **On arm64 the addon loaded and ran**, and the two failures were timing
+  assertions:
+  - `time.js` saw a timer about 486 ms later than it allows;
+  - `scale.js` failed one of its cost-ratio bounds.
+
+  The glibc arm64 runs were stopped for time before they could confirm
+  that qemu, not the libc, causes this. The IRP suite and Bun were not
+  run.
+
+**Static musl inside the addon was rejected.** Static musl is common for
+executables, where musl owns the process. In a library loaded into a
+process that already runs another libc, it breaks. What was tried:
+
+- `zig cc -shared -static` produces a static archive, not a shared
+  library.
+- The musl `libc.a` zig builds for static executables is not
+  position-independent, so it can't be linked into a shared library.
+- The position-independent one from a static-PIE build links, but the
+  result mixes the two libcs: musl's `strtod`, `snprintf` and `errno`
+  inside it, the host's `malloc`, `free` and `memcpy` outside.
+- **musl's `errno` corrupts glibc's thread state.** musl finds `errno` at
+  the thread pointer plus `0x34`. In a glibc process the thread pointer
+  points at glibc's per-thread block. A glibc program that called a
+  musl-static library whose `strtod` set `errno` found `34` (`ERANGE`)
+  written into its own per-thread block at offset `0x34`. That run did
+  not crash, but every musl function that sets `errno` writes there.
 
 ## Later
 
@@ -391,7 +502,5 @@ packages share that version. It uses the same toolchain module in
 - **Public repository.** While it is private, release assets are only
   visible to collaborators.
 - **Package name** for Node: `tinyactors` or `@tinyactors/node`.
-- **Oldest glibc** for the addon: 2.28 (Debian 10, RHEL 8) or 2.17
-  (RHEL 7). The C libraries link no libc, so they are unaffected.
 - **Does the ECMAScript or jq data model ship?** Both live in the test
   host; the npm package does not need them.
