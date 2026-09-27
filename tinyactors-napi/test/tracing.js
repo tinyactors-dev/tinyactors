@@ -179,6 +179,32 @@ async function forwardedAndUnavailable() {
   system.close();
 }
 
+// A request of up to 1,000 bytes is whole on Bun too: it is written before
+// its ArrayBuffer is asked for, which moves a small Buffer's bytes.
+async function smallRequests() {
+  const system = createSystem();
+  let whole = 0;
+  let broken = 0;
+  system.setTraceSink((traces) => {
+    assert.ok(traces.length > 0 && traces.length <= 1000, `a small request (${traces.length} bytes)`);
+    try {
+      decodeTraces(traces);
+      whole += 1;
+    } catch {
+      broken += 1;
+    }
+  }, { kinds: ['macrostepBegin', 'macrostepEnd'] });
+  const actor = system.spawn(counter(system));
+  await system.flush();
+  for (let round = 0; round < 40; round += 1) {
+    actor.post('go');
+    await system.flush();
+  }
+  assert.equal(broken, 0);
+  assert.ok(whole >= 40);
+  system.close();
+}
+
 // The mask decides what core builds, and so which spans there are.
 async function kinds() {
   const system = createSystem();
@@ -615,6 +641,7 @@ async function watchAndSample() {
   await watchAndSample();
   await batches();
   await bytesOutliveTheTurn();
+  await smallRequests();
   await kinds();
   await forwardedAndUnavailable();
   await traceparentIn();
