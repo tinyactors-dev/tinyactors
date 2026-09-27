@@ -205,9 +205,10 @@ export interface System {
   /**
    * Import an SCXML document (napi ADR 0019). Its `<scxml name>` is the
    * definition's family and is required; the revision is a hash of the
-   * document. Its `datamodel` attribute picks `null`, `javascript`, or a
-   * data model registerDatamodel() registered; a document without one gets
-   * `null`. lib/ ships no ECMAScript compiler, so under `javascript` an
+   * document. Its `datamodel` attribute picks `javascript` (also for a
+   * document without one) or a data model registerDatamodel() registered;
+   * `datamodel="null"` opts into core's null data model, which keeps no
+   * data. lib/ ships no ECMAScript compiler, so under `javascript` an
    * expression may only be `In(state)` or a data name: register a data
    * model to compile others. A refused document throws `invalid` or
    * `unsupported` with ImportRefusal as `detail`, which says where.
@@ -741,7 +742,7 @@ export interface DefinitionInspection {
   readonly identity: DefinitionIdentity;
   /** StatechartOptions.name, or an imported document's `<scxml name>`. */
   readonly name?: string;
-  /** The data model the chart was compiled against, e.g. "null". */
+  /** The data model the chart was compiled against, e.g. "javascript". */
   readonly datamodel: string;
   readonly binding: "early" | "late";
   readonly retired: boolean;
@@ -799,7 +800,6 @@ export interface ContentValue {
  * `contentType` (IORequest, InvokeRequest). Anywhere else the content is a
  * value: parsed as JSON when it parses, otherwise the text with each run of
  * whitespace made one space and none leading or trailing (SCXML B.2.2).
- * A chart holding content compiles against the JavaScript data model.
  */
 export declare function content(
   body: string | Uint8Array,
@@ -1270,12 +1270,10 @@ export interface ActorEvent<Data = unknown> {
  * An expression is a JavaScript function (a condition, value or script,
  * called with `this` bound to the actor's data), a literal() value, or source
  * text: `In(state)`, or a data name, which reads that property (ADR 0011). A
- * location is a data name or a { get, set } object. A spec with data, a
- * script, or any function, literal(), location or `content` value source
- * compiles against the JavaScript data model ("javascript"); any other spec
- * against core's null data model ("null"), which cannot make content a
- * value. `datamodel` chooses explicitly. A script, unlike
- * other expressions, must be a function.
+ * location is a data name or a { get, set } object. A spec compiles against
+ * the JavaScript data model ("javascript") unless it opts into core's null
+ * data model with `datamodel: "null"`. A script, unlike other expressions,
+ * must be a function.
  * -------------------------------------------------------------------------- */
 
 /** A function, a literal(), or source text (In(state) or a data name). */
@@ -1303,7 +1301,8 @@ export interface DefinitionSpec {
   /** The statechart document name. */
   readonly name?: string;
   /**
-   * "null" or "javascript"; absent, it is inferred (see above). define()
+   * "javascript" when absent. "null" opts into core's null data model: no
+   * data, no functions, and content that cannot become a value. define()
    * compiles every other name as "javascript", which core then refuses: a
    * data model registerDatamodel() registered is only for imported SCXML.
    */

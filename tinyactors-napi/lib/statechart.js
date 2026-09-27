@@ -10,8 +10,8 @@
 // data and one argument, the evaluation context. A value that is not a
 // function is data, and literal() makes a function data too. A location is
 // a declared data name, or an object with `get` and `set`. Source text is
-// accepted only as `In(state)` conditions and data names, so charts without
-// data keep compiling against core's null data model.
+// accepted only as `In(state)` conditions and data names. Every builder
+// chart compiles against the JavaScript data model.
 
 const native = require('./native');
 const { TinyactorsError } = require('./errors');
@@ -765,34 +765,4 @@ function statechart(options) {
   return new DefinitionBuilder(options);
 }
 
-/**
- * True when a spec needs the JavaScript data model: it declares data, has a
- * top-level script, or holds a function, a literal(), a location object or
- * literal content anywhere. Core's null data model cannot make content a
- * value, so without it only an I/O processor or an invoker could take
- * content, as text. System.define() compiles other specs against core's
- * null data model.
- */
-function needsJavaScript(spec) {
-  const seen = new Set();
-  const visit = (value) => {
-    if (typeof value === 'function' || isLiteral(value) || isLocation(value)) {
-      return true;
-    }
-    if (value === null || typeof value !== 'object' || ArrayBuffer.isView(value) || seen.has(value)) {
-      return false;
-    }
-    seen.add(value);
-    if (Array.isArray(value)) {
-      return value.some(visit);
-    }
-    if ((Array.isArray(value.data) && value.data.length > 0 && 'name' in value.data[0]) || value.script !== undefined ||
-        value.kind === 'content') {
-      return true;
-    }
-    return Object.values(value).some(visit);
-  };
-  return visit(spec);
-}
-
-module.exports = { statechart, literal, content, isLiteral, needsJavaScript, DefinitionBuilder, literalBrand };
+module.exports = { statechart, literal, content, isLiteral, DefinitionBuilder, literalBrand };

@@ -155,12 +155,15 @@ async function refusals() {
   system.close();
 }
 
-// A document without a datamodel attribute gets core's null data model, and
-// the built-in model is available by its own name.
+// A document without a datamodel attribute gets the built-in JavaScript
+// data model, which is also available by its own name; core's null data
+// model only by naming it.
 async function builtinNames() {
   const system = createSystem();
   const plain = system.define(`<scxml ${NS} name="plain"><state id="a"/></scxml>`, { format: 'scxml' });
-  assert.equal(plain.inspect().datamodel, 'null');
+  assert.equal(plain.inspect().datamodel, 'javascript');
+  const none = system.define(`<scxml ${NS} name="none" datamodel="null"><state id="a"/></scxml>`, { format: 'scxml' });
+  assert.equal(none.inspect().datamodel, 'null');
   const js = system.define(`<scxml ${NS} name="js" datamodel="javascript">
   <datamodel><data id="n"/></datamodel>
   <state id="a"><transition event="e" cond="In('a')" target="b"/></state><state id="b"/>

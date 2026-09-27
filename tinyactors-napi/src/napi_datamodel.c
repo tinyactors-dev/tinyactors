@@ -1236,8 +1236,8 @@ ta_result tna_js_datamodel_register(tna_js_datamodel *dm, ta_str name, napi_valu
 
 uint32_t tna_js_datamodel_choices(tna_js_datamodel *dm, ta_datamodel *out) {
     uint32_t count = 0;
-    out[count++] = ta_null_datamodel();
     out[count++] = tna_js_datamodel_adapter(dm);
+    out[count++] = ta_null_datamodel();
     for (uint32_t index = 0; index < dm->registered_count; index += 1) {
         out[count++] = (ta_datamodel){ .self = &dm->registered[index], .v = &dm->registered[index].vtable };
     }

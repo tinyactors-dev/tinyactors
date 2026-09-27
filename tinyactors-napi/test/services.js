@@ -97,24 +97,26 @@ async function ioCompletes() {
 }
 
 // A literal target is the text the chart wrote. It reaches the processor as
-// that string, without the data model: a chart that only sends compiles
-// against core's null data model, which has no values, and a target that
-// reads as JSON stays text. A send with no data has data undefined, and one
+// that string, without the data model: under core's null data model, which
+// a spec opts into and which has no values, and under the JavaScript one, a
+// target that reads as JSON stays text. A send with no data has data undefined, and one
 // with only params gets them as an object.
 async function ioLiteralTarget() {
   const requests = [];
   const system = createSystem({ io: { ws: { send(request) { requests.push(request); } } } });
-  const plain = system.define(
-    statechart({ family: 'plain-sender', revision: 'v1' })
+  const plain = system.define({
+    ...statechart({ family: 'plain-sender', revision: 'v1' })
       .state('idle', (s) => {
         s.on('go', (t) => t.send('ping', (send) => send.via('ws').to('client-7')));
         s.on('later', (t) => t.send('tick', (send) => send.via('ws').to('client-8').after(5)));
         s.on('park', (t) => t.send('parked', (send) => send.via('ws').to('client-9').after(60_000)));
         s.on('error.execution', (t) => t.target('failed'));
       })
-      .state('failed'),
-  );
-  assert.equal(plain.inspect().datamodel, 'null', 'a chart that only sends needs no data model');
+      .state('failed')
+      .build(),
+    datamodel: 'null',
+  });
+  assert.equal(plain.inspect().datamodel, 'null');
   const sender = system.spawn(plain);
   await system.flush();
   sender.post('go');

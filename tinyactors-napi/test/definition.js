@@ -56,7 +56,7 @@ function definitions() {
     states: [{ kind: 'atomic', id: 'idle' }],
   });
   assert.equal(named.inspect().name, 'named');
-  assert.equal(named.inspect().datamodel, 'null');
+  assert.equal(named.inspect().datamodel, 'javascript');
 
   system.close();
   assertCode(() => definition.retired, 'closed');
@@ -109,10 +109,11 @@ function builder() {
   const again = system.define({ ...exported, identity: { family: { name: 'player' }, revision: 'player/v1b' } });
   assert.equal(again.inspect().stateCount, definition.inspect().stateCount);
 
-  // Charts with data or JavaScript compile against the JavaScript data model
-  // (step 11); the rest against the null data model.
+  // Every chart compiles against the JavaScript data model (step 11); only a
+  // spec that says so gets the null data model.
   const fresh = (revision) => statechart({ family: 'later', revision });
-  assert.equal(definition.inspect().datamodel, 'null');
+  assert.equal(definition.inspect().datamodel, 'javascript');
+  assert.equal(system.define({ ...fresh('v0').state('a').build(), datamodel: 'null' }).inspect().datamodel, 'null');
   assert.equal(system.define(fresh('v1').data('count', 0).state('a')).inspect().datamodel, 'javascript');
   assert.equal(system.define(fresh('v2').state('a', (s) => s.on('e', (t) => t.when(() => true)))).inspect().datamodel,
     'javascript');
@@ -129,11 +130,15 @@ function refusals() {
   assertCode(() => system.define('nope'), 'invalid');
   assertCode(() => statechart({ family: 'x', revision: 1 }), 'invalid');
 
-  // The null data model accepts only In(state); anything else is refused
-  // when the chart is defined, naming the expression and its path.
+  // Source text is only In(state) or a data name: anything else is refused
+  // when the chart is defined, naming the expression and its path. The null
+  // data model, which a spec opts into, accepts only In(state).
   const expression = statechart({ family: 'expr', revision: 'v1' })
-    .state('a', (a) => a.on('e', (t) => t.when('x > 1').target('a')));
-  assert.throws(() => system.define(expression), (error) => {
+    .state('a', (a) => a.on('e', (t) => t.when('x > 1').target('a')))
+    .build();
+  assertCode(() => system.define(expression), 'invalid',
+    /condition: the JavaScript data model takes functions; source text is only In\(state\) or a data name "x > 1"/);
+  assert.throws(() => system.define({ ...expression, datamodel: 'null' }), (error) => {
     assert.ok(error instanceof TinyactorsError);
     assert.equal(error.code, 'invalid');
     assert.equal(error.detail.code, 'expression_rejected');

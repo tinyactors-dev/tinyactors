@@ -148,9 +148,10 @@ ta_datamodel tna_js_datamodel_adapter(tna_js_datamodel *dm);
 ta_result tna_js_datamodel_register(tna_js_datamodel *dm, ta_str name, napi_value compile);
 /*
  * The data models an imported document may choose from, in the order
- * ta_definition_import takes them: core's null data model first (a document
- * with no `datamodel` attribute gets it), then "javascript", then every
- * registered one. `out` has room for 2 + TNA_DM_REGISTERED_MAX.
+ * ta_definition_import takes them: "javascript" first (a document with no
+ * `datamodel` attribute gets it), then core's null data model, which only
+ * `datamodel="null"` opts into, then every registered one. `out` has room
+ * for 2 + TNA_DM_REGISTERED_MAX.
  */
 uint32_t tna_js_datamodel_choices(tna_js_datamodel *dm, ta_datamodel *out);
 

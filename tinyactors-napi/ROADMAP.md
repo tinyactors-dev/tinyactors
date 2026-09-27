@@ -549,12 +549,13 @@ ADRs left open:
   refused at define time, naming the expression. Importing SCXML with
   ECMAScript source text stays an open decision; `ta_definition_import`
   stays skipped.
-- **The data model is chosen per chart.** `System.define()` uses the
-  JavaScript data model for a chart with data, a script, or any function,
-  `literal()` or location, and core's null data model otherwise, so charts
-  without data still cost nothing per actor. A spec's `datamodel` overrides
-  the choice. The generated layer alone compiles against the null data
-  model.
+- **The data model is the JavaScript one.** `System.define()` compiled a
+  chart without data against core's null data model at first, so it cost
+  nothing per actor; napi no longer infers it. Every builder chart and plain
+  spec uses the JavaScript data model unless a spec says `datamodel:
+  "null"`, and an SCXML document without a `datamodel` attribute gets
+  `javascript` too. The generated layer alone compiles against the null
+  data model.
 - **An actor's data is one object:** the spawn binding (shared, not copied),
   or a new object. A bound name skips its initializer, and assigning to a
   name the object does not have is `error.execution`.

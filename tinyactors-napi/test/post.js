@@ -239,26 +239,28 @@ async function steadyState() {
 // letter and close() each give it back.
 async function dataIsReleased() {
   const live = () => native.environmentStats().valuesLive;
-  const start = live();
-  const system = createSystem();
+  const before = live();
+  // Retained, so a finished actor keeps its data root, which is a box too.
+  const system = createSystem({ finished: 'retain' });
   const actor = system.spawn(system.define(steps('data')));
+  const gone = system.spawn(system.define(steps('data-gone')));
+  const waiting = system.spawn(system.define(steps('data-waiting')));
+  gone.destroy();
+  const start = live();
   actor.post('x', { some: 'data' });
   actor.post('y', 'text');
   actor.post('z', 42);
   assert.equal(live(), start + 2, 'an object and a string are boxed; a number rides inline');
   await system.flush();
   assert.equal(live(), start, 'delivered data is released');
-  const gone = system.spawn(system.define(steps('data-gone')));
-  gone.destroy();
   gone.post('x', { lost: true });
   system.post({ family: 'nobody', name: 'here' }, 'x', ['lost']);
   await system.flush();
   assert.equal(live(), start, 'dead letters release their data');
-  const waiting = system.spawn(system.define(steps('data-waiting')));
   waiting.post('x', { waiting: true });
   assert.equal(live(), start + 1);
   system.close();
-  assert.equal(live(), start, 'close releases queued data');
+  assert.equal(live(), before, 'close releases queued data');
 }
 
 // Malformed targets.

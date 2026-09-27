@@ -187,8 +187,9 @@ async function actionBudgetSplitsAHandler() {
   system.close();
 }
 
-// In() used as a value compiles under the null data model and faults as
-// error.execution when it runs (core ADR 0057; the leftover check of step 4).
+// In() used as a value compiles under the null data model, which a spec
+// opts into, and faults as error.execution when it runs (core ADR 0057; the
+// leftover check of step 4).
 async function inAsAValueFaultsAtRunTime() {
   const system = createSystem();
   const chart = statechart({ family: 'in-value', revision: 'v1' })
@@ -200,7 +201,7 @@ async function inAsAValueFaultsAtRunTime() {
       s.on('error.execution', (t) => t.target('failed'));
     })
     .state('failed');
-  const actor = system.spawn(system.define(chart));
+  const actor = system.spawn(system.define({ ...chart.build(), datamodel: 'null' }));
   await system.flush();
   assert.deepEqual(actor.inspect().activeStates, ['failed']);
   system.close();

@@ -150,9 +150,10 @@ Top-level assignments use typed property names, such as
 an expression; `literal(functionValue)` explicitly stores a function as data.
 `content(text, { mediaType })` is literal SCXML `<content>`: an I/O
 processor or invoker gets it as text with its media type, and anywhere else
-it is a value (JSON when it parses, space-normalized text otherwise). A
-chart holding content compiles against the JavaScript data model, because
-core's null data model cannot make content a value. The normalized `DefinitionSpec` remains public as an escape hatch and as the
+it is a value (JSON when it parses, space-normalized text otherwise). Every
+builder chart compiles against the JavaScript data model; only a plain spec
+with `datamodel: "null"`, or an SCXML document with `datamodel="null"`, gets
+core's null data model. The normalized `DefinitionSpec` remains public as an escape hatch and as the
 stable boundary between authoring helpers and native compilation.
 
 ### Updating a definition in a running system

@@ -9,7 +9,7 @@ const v8 = require('node:v8');
 const native = require('./native');
 const { TinyactorsError } = require('./errors');
 const { Definition, identityOf } = require('./definition');
-const { DefinitionBuilder, needsJavaScript } = require('./statechart');
+const { DefinitionBuilder } = require('./statechart');
 const { ActorID } = require('./actor');
 const { EventNames } = require('./events');
 const { SessionImage, handleOf } = require('./image');
@@ -769,11 +769,9 @@ class System {
 
   /**
    * Compile and register a chart: a statechart() builder, or a spec in the
-   * generated shape (the shape core's definition export returns). A chart
-   * with data, a script, or a JavaScript function, literal() or location
-   * anywhere compiles against the JavaScript data model ("javascript", ADR
-   * 0011); any other chart against core's null data model ("null"), which
-   * costs nothing per actor. A spec's `datamodel` chooses explicitly.
+   * generated shape (the shape core's definition export returns). It
+   * compiles against the JavaScript data model ("javascript", ADR 0011); a
+   * plain spec opts into core's null data model with `datamodel: "null"`.
    *
    * `options.microstepLimit` overrides the system's
    * `scheduling.microstepLimit` for this definition's actors (core ADR
@@ -782,8 +780,8 @@ class System {
    *
    * With `{ format: 'scxml' }`, `source` is an SCXML document (a string or
    * a Uint8Array of UTF-8). Its `datamodel` attribute picks the data model:
-   * `null`, `javascript`, or one registerDatamodel() registered; a document
-   * without one gets `null`. A refusal says where in the document (ADR
+   * `javascript` (also for a document without one), one registerDatamodel()
+   * registered, or `null`, which a document opts into by naming it. A refusal says where in the document (ADR
    * 0058): `detail` has `stage`, `line`, `column` and `offset`.
    * `options.resolve(src)` fetches `<data src>` and `<script src>` while the
    * document is defined: it returns the content as a string or a
@@ -824,8 +822,7 @@ class System {
     } else if (source === null || typeof source !== 'object') {
       throw new TinyactorsError('define(): expected a statechart() builder or a spec object', 'invalid');
     }
-    const datamodel = spec.datamodel ?? (needsJavaScript(spec) ? 'javascript' : 'null');
-    this.#native.selectDatamodel(datamodel === 'null' ? 'null' : 'javascript');
+    this.#native.selectDatamodel(spec.datamodel === 'null' ? 'null' : 'javascript');
     const compiled = compile(this.#native, spec);
     return this.#registered(core.system_register_definition(this.#native, compiled.out), limit);
   }

@@ -31,7 +31,9 @@
 // JavaScript baseline (one object per actor with a switch-based handler).
 //
 // Three charts run (SCALE_VARIANTS=plain,data,ws by default):
-//   - plain: no data, compiled against core's null data model (step 10);
+//   - plain: no data. Step 10 measured it under core's null data model;
+//     napi no longer chooses that model by itself, so it runs the
+//     JavaScript data model every chart gets, with an empty data object;
 //   - data: the JavaScript data model (step 11). Every actor has a data
 //     object; every `ping` carries a new object as event data, and a
 //     function assigns from it;

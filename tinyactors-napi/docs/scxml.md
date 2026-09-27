@@ -11,11 +11,11 @@ const definition = system.define(xmlText, { format: 'scxml' }); // a string or a
 
 The document's `datamodel` attribute picks the data model:
 
-- no attribute, or `null`: core's null data model, which runs `In()` and
-  nothing else;
-- `javascript`: napi's own data model, whose source text is only
-  `In(state)` and bare data names;
-- any other name: a data model registered with `registerDatamodel()`.
+- no attribute, or `javascript`: napi's own data model, whose source text
+  is only `In(state)` and bare data names;
+- any other name: a data model registered with `registerDatamodel()`;
+- `null`: core's null data model, which keeps no data and runs `In()` and
+  nothing else. A document gets it only by naming it.
 
 ## A data model for expression text
 

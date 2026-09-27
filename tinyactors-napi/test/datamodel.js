@@ -463,9 +463,8 @@ async function failedSystemVariable() {
 
 // content(): literal SCXML <content> from the builder. An I/O processor and
 // an invoker get it as text with its media type; anywhere else it is a
-// value, JSON when it parses and space-normalized text otherwise. A chart
-// holding content compiles against the JavaScript data model, since core's
-// null data model cannot make content a value.
+// value, JSON when it parses and space-normalized text otherwise, which the
+// JavaScript data model every builder chart gets can make of it.
 async function literalContent() {
   const requests = [];
   const started = [];
@@ -482,7 +481,7 @@ async function literalContent() {
   const receiver = system.spawn(system.define(statechart({ family: 'receiver', revision: 'v1' })
     .data('got', null)
     .state('a', (s) => s.on('m', (t) => t.assign('got', ({ event }) => event.data)))), { name: 'r' });
-  // No data, script or function: content alone chooses the JavaScript data model.
+  // No data, script or function, and still the JavaScript data model.
   const sender = system.define(statechart({ family: 'sender', revision: 'v1' })
     .state('a', (s) => s
       .entry((e) => e
