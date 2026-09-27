@@ -31,7 +31,8 @@ when the work starts.
 4. **What a C-only project ships:**
    - its public header;
    - a source-only amalgamation;
-   - a `wasm32-freestanding` build;
+   - a `wasm32-freestanding` build: one standalone `.wasm` module, with no
+     archive of wasm objects;
    - a static and a dynamic library for Apple silicon macOS
      (`aarch64-macos`), Linux x86-64 and Linux arm64.
 
@@ -155,7 +156,7 @@ both.
 | Asset | Contents |
 |---|---|
 | `txml-0.2.0-src.tar.gz` | `txml.h`, `txml.c` (the amalgamation), `txml_wasm.c` (the wasm platform files), `txml.api.json`, license, README |
-| `txml-0.2.0-wasm32.tar.gz` | `txml.h`, `lib/libtxml.a` (wasm32 objects, for linking into a larger module), `txml.wasm` (standalone, allocator included) |
+| `txml-0.2.0-wasm32.tar.gz` | `txml.h`, `txml.wasm` (standalone, allocator included) |
 | `txml-0.2.0-aarch64-macos.tar.gz` | `include/txml.h`, `lib/libtxml.a`, `lib/libtxml.0.2.dylib` (install name `@rpath/libtxml.0.2.dylib`) |
 | `txml-0.2.0-x86_64-linux.tar.gz` | `include/txml.h`, `lib/libtxml.a`, `lib/libtxml.so.0.2` (the soname) and a `libtxml.so` symlink |
 | `txml-0.2.0-aarch64-linux.tar.gz` | the same, for arm64 |
@@ -226,10 +227,20 @@ suffixes), applied to C sources:
     library's constructors without implementing one. It also exports raw
     `alloc` and `free`, so a JavaScript host can place input bytes in
     linear memory.
-- **`libtxml.a` for wasm32 holds the allocator as its own object**, like
-  every platform file. An embedder who links the library into a larger
-  module and brings their own allocator never references it, so the
-  linker leaves it out.
+- **No wasm32 archive.**
+  - Two wasm modules cannot share a library the way native programs share
+    a `.so`. Each has its own linear memory, so a pointer from one means
+    nothing in the other, and wasm dynamic linking is not in common use.
+  - So an embedder who wants txml inside their own module must link it
+    in, and they already need a wasm C toolchain to build that module.
+    They compile the source tarball's `txml.c` and `txml_wasm.c` with
+    their own flags, which also keeps the wasm features (bulk memory and
+    others) matched to the rest of their module.
+  - A prebuilt `libtxml.a` would save one compile. In exchange it adds an
+    artifact to build, verify and keep reproducible, with flags the
+    embedder cannot change.
+  - In the repository, a module that combines libraries (the browser
+    build) is built from source, not from release assets.
 
 ### The release command
 
