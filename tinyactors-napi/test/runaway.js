@@ -152,8 +152,39 @@ async function longForeach() {
   system.close();
 }
 
+// An operator abandons a runaway's macrostep (core ADR 0082) instead of
+// letting it go on: the send() waiting for it already rejected with the
+// fault, the actor keeps the configuration of its last microstep, and after
+// release() the next macrostep is limited again, as the lifted limit went
+// with the abandoned macrostep.
+async function abandoned() {
+  const faults = [];
+  const system = createSystem({ scheduling: { microstepLimit: 100 }, fault: (fault) => faults.push(fault) });
+  const actor = system.spawn(system.define(counter('rw-abandon', 150)));
+  await system.flush();
+  const waiting = actor.send('go');
+  await system.flush();
+  assert.equal(system.inspect(actor).scheduling, 'quarantined');
+  await assert.rejects(waiting, (error) => error.code === 'runaway');
+  system.abandon(actor);
+  assert.deepEqual(system.inspect(actor).activeStates, ['spin']);
+  assert.equal(system.inspect(actor).macrostepInProgress, false);
+  system.release(actor);
+  await system.flush();
+  assert.equal(system.inspect(actor).scheduling, 'idle');
+  assert.equal(faults.length, 1);
+  actor.post('operator.goto', undefined, { transition: { targets: ['idle'] } });
+  await system.flush();
+  actor.post('go');
+  await system.flush();
+  assert.equal(faults.length, 2, 'the next macrostep is limited again');
+  assert.equal(faults[1].code, 'runaway');
+  system.close();
+}
+
 (async () => {
   await quarantinedThenReleased();
+  await abandoned();
   await overrides();
   await longForeach();
   console.log('runaway.js passed');

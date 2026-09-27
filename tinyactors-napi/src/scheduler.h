@@ -46,6 +46,13 @@
  * JavaScript must hear about (an actor finished, an actor faulted) becomes a
  * record in the turn arena; the pump calls the hooks for them after the last
  * core call of the turn (ADR 0007 point 5).
+ *
+ * Operator transitions (ADR 0026, core ADR 0082): a message may carry one. It
+ * queues behind the mail before it, like any message, and reaches
+ * ta_actor_deliver() with it. A jump the actor no longer accepts (its source
+ * is not active by then, or the actor runs another revision) is a dead letter
+ * with reason `refused` and does not quarantine the actor: the operator's
+ * input is at fault, not the actor.
  */
 #include <stdbool.h>
 #include <stdint.h>
@@ -112,14 +119,30 @@ typedef struct {
 } tna_mailbox;
 
 /*
+ * An operator transition a message carries (core ADR 0082), in one
+ * allocation: the definition its state IDs belong to, and the transition.
+ */
+typedef struct {
+    ta_definition_id definition;
+    ta_state_id source; /* TA_STATE_NONE: the root */
+    uint32_t count;
+    ta_state_id targets[];
+} tna_jump;
+
+/*
  * One queued message. `event` holds its own references (data, named origin).
  * `address` is set only for a dead letter to a named target that had no
- * resident actor; it holds a reference too.
+ * resident actor; it holds a reference too. `jump` is set only for a message
+ * that carries an operator transition, which only a message to an actor ID
+ * does, so the two share their room and `has_jump` says which it is.
  */
 typedef struct {
     ta_event event;
     ta_actor_id target;
-    ta_address *address;
+    union {
+        ta_address *address;
+        tna_jump *jump;
+    };
     /* The trace parent the message's macrostep runs under (core ADR 0067),
      * from the scheduler's free list, or NULL: only traced mail pays for
      * one. */
@@ -129,7 +152,14 @@ typedef struct {
     uint32_t bytes;  /* counted against max_retained (ADR 0005 point 9) */
     uint8_t reason;  /* tna_dead_reason, while on the dead list */
     uint8_t live;    /* taken from the store */
+    uint8_t has_jump; /* `jump`, not `address` */
 } tna_envelope;
+
+/* An operator transition to accept with a message (core ADR 0082). */
+typedef struct {
+    ta_definition_id definition; /* the definition the state IDs belong to */
+    ta_operator_transition transition;
+} tna_message_jump;
 
 /* A message to accept: the target, the event, and what it carries along. */
 typedef struct {
@@ -138,6 +168,9 @@ typedef struct {
     uint32_t bytes;         /* retained-bytes estimate of its data, 0 for none */
     uint32_t waiter;        /* a send() waiting for it, or 0 */
     const ta_trace_parent *trace; /* its trace parent, or NULL (core ADR 0067) */
+    /* An operator transition, or NULL; only for a target named by ID. The
+     * scheduler copies it. */
+    const tna_message_jump *jump;
 } tna_message;
 
 typedef enum {
@@ -160,7 +193,8 @@ typedef enum {
     TNA_SETTLE_STABLE, /* the message's macrostep ended with the actor stable */
     TNA_SETTLE_DONE,   /* ... with the actor finished */
     TNA_SETTLE_DEAD,   /* the message became a dead letter, or its actor went away */
-    TNA_SETTLE_FAULT   /* the macrostep failed and the actor is quarantined */
+    TNA_SETTLE_FAULT,  /* the macrostep failed and the actor is quarantined */
+    TNA_SETTLE_ABANDONED /* an operator abandoned the macrostep (core ADR 0082) */
 } tna_settle_kind;
 
 typedef struct {
@@ -367,6 +401,15 @@ uint32_t tna_sched_mailbox_count(const tna_sched *sched, ta_actor_id actor);
 ta_result tna_sched_wake(tna_sched *sched, ta_actor_id actor);
 /* Puts a quarantined actor back on the runnable queue (ADR 0008). */
 ta_result tna_sched_release(tna_sched *sched, ta_actor_id actor);
+
+/*
+ * An operator abandoned the actor's macrostep (core ADR 0082): the send()
+ * that follows it settles as ABANDONED, and a runnable actor stands between
+ * macrosteps again (ready or idle). Its entry in the runnable queue is
+ * skipped when popped. A quarantined one stays quarantined.
+ * TA_ERR_NOT_FOUND for an actor the table does not know.
+ */
+ta_result tna_sched_abandoned(tna_sched *sched, ta_actor_id actor);
 
 /*
  * send() waiters. tna_sched_waiter_take() returns a free waiter's index, or

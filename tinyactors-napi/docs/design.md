@@ -272,6 +272,14 @@ acceptance or completion of the message's macrostep. Queue depth and retained
 data size limits provide backpressure. Closing a system rejects queued and
 pending messages.
 
+### Poking one actor for a debugger
+
+A debugger watches one actor and pokes it; it never stops it
+([ADR 0026](adr/0026-a-debugger-watches-and-pokes-one-live-actor.md)). An
+operator transition (core ADR 0082) travels in the envelope behind the
+actor's queued mail, abandoning a macrostep settles the send() that waited
+for it, and `mailbox()` lists what waits for an actor.
+
 ## MessageChannel and Workers
 
 A private `MessageChannel` may provide the scheduler wake-up. The real

@@ -245,6 +245,25 @@ export interface System {
   /** Put an actor that faulted back into scheduling (ADR 0008). */
   release(actor: ActorID): void;
 
+  /** The messages waiting in `actor`'s mailbox, oldest first, at most `limit` (default 100). */
+  mailbox(actor: ActorID, options?: { readonly limit?: number }): readonly QueuedMessage[];
+  /**
+   * Abandon `actor`'s macrostep (core ADR 0082): the actor keeps the
+   * configuration after its last completed microstep, and the send() that
+   * follows the macrostep rejects with `abandoned`. `busy` while it is
+   * paused inside a microstep (the pump finishes that microstep in its next
+   * turns) or before its bootstrap finished; `invalid` with no macrostep in
+   * progress.
+   */
+  abandon(actor: ActorID): void;
+  /**
+   * Withdraw `actor`'s pending delayed sends with this ID (core ADR 0084),
+   * the `id` DelayedSendInspection shows. `not-found` when it has none;
+   * `done` when the only ones were refused once and belong to their
+   * receiver now.
+   */
+  withdrawSend(actor: ActorID, sendID: string): void;
+
   /**
    * Capture `actor` in memory (core ADR 0013), with the data-model root it
    * has now. `busy` for an unpublished (prepared) actor.
@@ -508,6 +527,30 @@ export interface PostOptions {
    * a scope from openScope(), or a token its origin template renders.
    */
   origin?: IOOrigin;
+  /**
+   * An operator transition (core ADR 0082, ADR 0026): the message is taken
+   * by a transition to `targets`, states of the target actor's chart, from
+   * the active state `source` or the root, instead of by the chart's
+   * transitions, with every exit, entry, history and invocation a chart
+   * transition would have. It queues behind the mail before it. When it
+   * arrives, an actor whose `source` is no longer active, or that runs
+   * another revision by then, refuses it: a dead letter with reason
+   * `refused` (a send() rejects with `invalid`), and the actor is not
+   * quarantined. Only for an ActorID target.
+   */
+  transition?: { readonly targets: readonly string[]; readonly source?: string };
+}
+
+/** A message waiting in a mailbox (System.mailbox). */
+export interface QueuedMessage {
+  readonly event: EventName;
+  readonly data?: unknown;
+  /** A send() waits for it. */
+  readonly awaited: boolean;
+  /** Its origin's scope, when it was posted with `origin: { type, scope }`. */
+  readonly scope?: { readonly index: number; readonly generation: number };
+  /** The operator transition it carries, by state names; `source` null is the root. */
+  readonly transition?: { readonly source: string | null; readonly targets: readonly string[] };
 }
 
 export type IOOrigin =
@@ -902,18 +945,38 @@ export type ActorResidency = "idle" | "running" | "done" | "unloaded";
 
 /**
  * A snapshot of core's view of one actor (ADR 0054: O(size of the actor)).
- * Invocations and the current event are not reported yet.
  */
 export interface ActorInspection<Data = unknown> {
   readonly actor: Actor;
   /** Stable across unload and load; the runtime ID is not (core ADR 0066). */
   readonly sessionID: bigint;
   readonly definition: DefinitionIdentity;
+  /** The definition's ID (Definition.id), which names its compiled states, transitions and actions. */
+  readonly definitionID: DefinitionID;
   readonly residency: ActorResidency;
   readonly published: boolean;
   readonly activeStates: readonly string[];
   readonly macrostepInProgress: boolean;
+  /** Paused inside a microstep, in executable content (core ADR 0061). */
+  readonly microstepInProgress: boolean;
+  /**
+   * The step key of where a paused macrostep stands (core ADR 0083);
+   * (session, 0, 0) outside a macrostep and before one begins.
+   */
+  readonly step: { readonly session: bigint; readonly macrostep: number; readonly microstep: number };
+  /**
+   * The unit a paused macrostep runs next (core ADR 0083): `at` is "none"
+   * between microsteps and outside a macrostep; otherwise the phase, the
+   * state, and the transition and action by compiled ID (core ADR 0071).
+   */
+  readonly position: TracePosition;
+  /** The external event of the macrostep in progress, or null. */
+  readonly currentEvent: InspectedEvent | null;
+  /** The internal queue, oldest first. */
+  readonly internalEvents: readonly InspectedEvent[];
   readonly internalEventCount: number;
+  /** Active and finished invocations of active states. */
+  readonly invocations: readonly InvocationInspection[];
   readonly delayedSendCount: number;
   /** Pending delayed sends, by due time then send order (core ADR 0054). */
   readonly delayedSends: readonly DelayedSendInspection[];
@@ -933,6 +996,26 @@ export interface InvocationInspection {
   readonly type: string;
   readonly active: boolean;
   readonly autoforward: boolean;
+  /** The invoker's handle for the service; for the in-system SCXML invoker, the child's session ID. */
+  readonly serviceHandle: bigint;
+}
+
+export interface TracePosition {
+  readonly at: "none" | "select" | "exit" | "transition" | "enter" | "bootstrap" | "finalize" | "invoke";
+  readonly state: string | null;
+  readonly transition: number | null;
+  readonly action: number | null;
+  readonly iteration: number;
+}
+
+/** An event as inspection reports it. */
+export interface InspectedEvent {
+  readonly name: EventName;
+  readonly type: "external" | "internal" | "platform";
+  readonly sendID?: string;
+  /** Who sent it: an actor, or an I/O origin's URI. */
+  readonly origin?: ActorID | ActorAddress | string;
+  readonly data?: unknown;
 }
 
 /** One pending delayed send; `delayedSends` is ordered by due time, then send order. */
@@ -1313,7 +1396,8 @@ export type TinyactorsErrorCode =
   | "closed"
   | "reentrant"
   | "aborted"
-  | "timeout";
+  | "timeout"
+  | "abandoned";
 
 export class TinyactorsError extends Error {
   readonly code: TinyactorsErrorCode;

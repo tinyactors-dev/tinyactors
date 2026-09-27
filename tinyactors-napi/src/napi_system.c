@@ -2,6 +2,7 @@
 
 #include "napi_children.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -412,6 +413,112 @@ static napi_value tna_release_method(napi_env env, napi_callback_info info) {
     return undefined;
 }
 
+/* (slot, generation) from the first two arguments; throws and returns false otherwise. */
+static bool tna_actor_arguments(napi_env env, const napi_value *argv, size_t argc, const char *what, ta_actor_id *out) {
+    uint32_t slot = 0;
+    uint32_t generation = 0;
+    if (argc < 2 || napi_get_value_uint32(env, argv[0], &slot) != napi_ok ||
+        napi_get_value_uint32(env, argv[1], &generation) != napi_ok) {
+        char message[96];
+        snprintf(message, sizeof message, "%s: expected (slot, generation)", what);
+        tna_throw(env, "invalid", message);
+        return false;
+    }
+    *out = ta_actor_id_make(slot, generation);
+    return true;
+}
+
+static napi_status tna_put_value(napi_env env, napi_value object, const char *name, napi_value value) {
+    return value == NULL ? napi_ok : napi_set_named_property(env, object, name, value);
+}
+
+/* { source, targets }: an operator transition waiting in a mailbox, by state ID. */
+static napi_value tna_jump_object(napi_env env, const tna_jump *jump) {
+    napi_value out = NULL;
+    napi_value source = NULL;
+    napi_value targets = NULL;
+    if (napi_create_object(env, &out) != napi_ok || napi_create_uint32(env, jump->source, &source) != napi_ok ||
+        napi_create_array_with_length(env, jump->count, &targets) != napi_ok) {
+        return NULL;
+    }
+    for (uint32_t at = 0; at < jump->count; at += 1u) {
+        napi_value target = NULL;
+        if (napi_create_uint32(env, jump->targets[at], &target) != napi_ok ||
+            napi_set_element(env, targets, at, target) != napi_ok) {
+            return NULL;
+        }
+    }
+    return tna_put_value(env, out, "source", source) == napi_ok && tna_put_value(env, out, "targets", targets) == napi_ok
+               ? out
+               : NULL;
+}
+
+/*
+ * mailbox(slot, generation, limit): the first `limit` messages waiting for
+ * the actor, oldest first, as [{ event, data?, awaited, scope?, transition? }]:
+ * `awaited` when a send() waits for it, `scope` ({ index, generation }) when
+ * its origin is an openScope() scope, `transition` ({ source, targets } by
+ * state ID) when it carries an operator transition (ADR 0026). O(limit).
+ */
+static napi_value tna_mailbox_method(napi_env env, napi_callback_info info) {
+    size_t argc = 3;
+    napi_value argv[3] = { NULL, NULL, NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    ta_actor_id actor = 0;
+    uint32_t limit = 0;
+    if (wrapper == NULL || !tna_actor_arguments(env, argv, argc, "mailbox", &actor)) {
+        return NULL;
+    }
+    if (argc < 3 || napi_get_value_uint32(env, argv[2], &limit) != napi_ok) {
+        return tna_throw(env, "invalid", "mailbox: expected (slot, generation, limit)");
+    }
+    tna_system *system = wrapper->system;
+    const tna_sched_entry *entry = tna_sched_lookup(&system->sched, actor);
+    napi_value out = NULL;
+    if (napi_create_array(env, &out) != napi_ok) {
+        return tna_throw(env, "out-of-memory", "mailbox: cannot build the list");
+    }
+    uint32_t count = 0;
+    for (uint32_t index = entry == NULL ? 0 : entry->first; index != 0 && count < limit;
+         index = tna_sched_envelope(&system->sched, index)->next) {
+        const tna_envelope *envelope = tna_sched_envelope(&system->sched, index);
+        napi_value item = NULL;
+        napi_value awaited = NULL;
+        napi_value data = NULL;
+        napi_status status = napi_create_object(env, &item);
+        if (status == napi_ok) status = tna_put_value(env, item, "event", tna_event_text(env, system, envelope->event.name));
+        if (status == napi_ok && !tna_value_absent(&envelope->event.data) && tna_value_get(env, &envelope->event.data, &data)) {
+            status = tna_put_value(env, item, "data", data);
+        }
+        if (status == napi_ok) status = napi_get_boolean(env, envelope->waiter != 0, &awaited);
+        if (status == napi_ok) status = tna_put_value(env, item, "awaited", awaited);
+        const ta_origin *origin = &envelope->event.origin;
+        if (status == napi_ok && origin->kind == TA_ORIGIN_IO && origin->as.io.origin_class == TA_IO_ORIGIN_SCOPED) {
+            napi_value scope = NULL;
+            napi_value number = NULL;
+            status = napi_create_object(env, &scope);
+            if (status == napi_ok) status = napi_create_uint32(env, origin->as.io.as.scope.index, &number);
+            if (status == napi_ok) status = tna_put_value(env, scope, "index", number);
+            if (status == napi_ok) status = napi_create_uint32(env, origin->as.io.as.scope.generation, &number);
+            if (status == napi_ok) status = tna_put_value(env, scope, "generation", number);
+            if (status == napi_ok) status = tna_put_value(env, item, "scope", scope);
+        }
+        if (status == napi_ok && envelope->has_jump) {
+            napi_value jump = tna_jump_object(env, envelope->jump);
+            status = jump == NULL ? napi_generic_failure : tna_put_value(env, item, "transition", jump);
+        }
+        if (status == napi_ok) status = napi_set_element(env, out, count, item);
+        if (status != napi_ok) {
+            return tna_throw(env, "out-of-memory", "mailbox: cannot build the list");
+        }
+        count += 1u;
+    }
+    return out;
+}
+
 /*
  * selectDatamodel(name): the data model the next compile uses, "null" (core's
  * null data model, the default) or "javascript". System.define() calls it
@@ -689,8 +796,54 @@ static napi_value tna_accept_done(napi_env env, tna_napi_system *wrapper, tna_ac
 }
 
 /*
- * post(slot, generation, name, data?, bytes?) and send(...): queue an event
- * for an actor (ADR 0005). `name` is a ta_event_name_id from internEvent();
+ * The operator transition argument of post() and send() (ADR 0026, core ADR
+ * 0082): undefined, or { definition, source, targets } with the definition
+ * ID (a bigint) and state IDs, the targets read into the call arena. Throws
+ * and returns false when it is malformed.
+ */
+static bool tna_jump_argument(napi_env env, tna_system *system, napi_value value, tna_message_jump *out, bool *present) {
+    napi_valuetype type = napi_undefined;
+    *present = false;
+    if (value == NULL || napi_typeof(env, value, &type) != napi_ok || type == napi_undefined) {
+        return true;
+    }
+    napi_value definition = NULL;
+    napi_value source = NULL;
+    napi_value targets = NULL;
+    bool lossless = true;
+    bool is_array = false;
+    uint32_t count = 0;
+    if (type != napi_object || napi_get_named_property(env, value, "definition", &definition) != napi_ok ||
+        napi_get_value_bigint_uint64(env, definition, &out->definition, &lossless) != napi_ok || !lossless ||
+        napi_get_named_property(env, value, "source", &source) != napi_ok ||
+        napi_get_value_uint32(env, source, &out->transition.source) != napi_ok ||
+        napi_get_named_property(env, value, "targets", &targets) != napi_ok ||
+        napi_is_array(env, targets, &is_array) != napi_ok || !is_array ||
+        napi_get_array_length(env, targets, &count) != napi_ok || count == 0) {
+        tna_throw(env, "invalid", "post: transition must be { definition, source, targets } with at least one target");
+        return false;
+    }
+    ta_state_id *ids = ta_arena_alloc(&system->scratch.call, (size_t)count * sizeof(ta_state_id), _Alignof(ta_state_id));
+    if (ids == NULL) {
+        tna_throw(env, "out-of-memory", "post: cannot read the transition");
+        return false;
+    }
+    for (uint32_t at = 0; at < count; at += 1u) {
+        napi_value target = NULL;
+        if (napi_get_element(env, targets, at, &target) != napi_ok || napi_get_value_uint32(env, target, &ids[at]) != napi_ok) {
+            tna_throw(env, "invalid", "post: transition targets must be state IDs");
+            return false;
+        }
+    }
+    out->transition.targets = ids;
+    out->transition.target_count = count;
+    *present = true;
+    return true;
+}
+
+/*
+ * post(slot, generation, name, data?, bytes?, origin?, trace?, transition?)
+ * and send(...): queue an event for an actor (ADR 0005). `name` is a ta_event_name_id from internEvent();
  * `data` is any JavaScript value, shared, not copied (ADR 0011); `bytes` is
  * its retained-bytes estimate. Mail for a stale ID is accepted as a dead
  * letter. post() throws "queue-full" when a limit is reached; send() returns
@@ -699,8 +852,8 @@ static napi_value tna_accept_done(napi_env env, tna_napi_system *wrapper, tna_ac
  * allowed inside a core call (a data-model callback may post; ADR 0013).
  */
 static napi_value tna_post_common(napi_env env, napi_callback_info info, bool send) {
-    size_t argc = 7;
-    napi_value argv[7] = { NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+    size_t argc = 8;
+    napi_value argv[8] = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
         return NULL;
     }
@@ -730,8 +883,16 @@ static napi_value tna_post_common(napi_env env, napi_callback_info info, bool se
         ta_event_release(&event);
         return NULL;
     }
+    tna_message_jump jump;
+    bool has_jump = false;
+    if (!tna_jump_argument(env, wrapper->system, argc < 8 ? NULL : argv[7], &jump, &has_jump)) {
+        tna_scratch_reset_call(&wrapper->system->scratch);
+        ta_event_release(&event);
+        return NULL;
+    }
     tna_accepting accepting = { .send = send };
     if (!tna_accept_begin(env, wrapper, &accepting)) {
+        tna_scratch_reset_call(&wrapper->system->scratch);
         ta_event_release(&event);
         return NULL;
     }
@@ -743,7 +904,11 @@ static napi_value tna_post_common(napi_env env, napi_callback_info info, bool se
                                                                   .bytes = bytes,
                                                                   .waiter = accepting.waiter,
                                                                   .trace = &trace,
+                                                                  .jump = has_jump ? &jump : NULL,
                                                               });
+    if (has_jump) {
+        tna_scratch_reset_call(&wrapper->system->scratch); /* the scheduler copied the targets */
+    }
     if (result != TA_OK) {
         ta_event_release(&event);
         return tna_accept_failed(env, wrapper, &accepting, result);
@@ -1245,6 +1410,7 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "time", NULL, NULL, tna_time_getter, NULL, NULL, napi_default_jsproperty, NULL },
         { "release", NULL, tna_release_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "scheduling", NULL, tna_scheduling_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "mailbox", NULL, tna_mailbox_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "selectDatamodel", NULL, tna_select_datamodel_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "registerDatamodel", NULL, tna_register_datamodel_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "importDefinition", NULL, tna_import_definition_method, NULL, NULL, NULL, napi_default_method, NULL },

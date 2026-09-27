@@ -23,6 +23,10 @@
  *   mailbox, so nothing accepted for the address is lost when the incumbent
  *   is destroyed (ROADMAP step 14).
  *
+ * - tna_hook_actor_abandoned: after ta_actor_abandon. The send() that
+ *   followed the abandoned macrostep rejects with `abandoned`, and a runnable
+ *   actor stands between macrosteps again (ADR 0026, core ADR 0082).
+ *
  * Hooks take the native system, not a call, so they stay free of Node-API
  * and native tests can drive them.
  */
@@ -33,3 +37,4 @@ ta_result tna_hook_actor_created(tna_system *system, ta_actor_id actor);
 ta_result tna_hook_actor_removed(tna_system *system, ta_actor_id actor);
 ta_result tna_hook_actor_unloaded(tna_system *system, ta_actor_id actor);
 ta_result tna_hook_actor_activated(tna_system *system, const ta_actor_activate_replacement_params *params);
+ta_result tna_hook_actor_abandoned(tna_system *system, ta_actor_id actor);

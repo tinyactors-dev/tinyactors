@@ -55,12 +55,34 @@ static uint32_t tna_envelope_take(tna_sched *sched) {
     return index;
 }
 
+static size_t tna_jump_size(uint32_t count) {
+    return sizeof(tna_jump) + (size_t)count * sizeof(ta_state_id);
+}
+
+/* Frees the operator transition an envelope carries, if any. */
+static void tna_jump_give(tna_sched *sched, tna_envelope *envelope) {
+    if (!envelope->has_jump) {
+        return;
+    }
+    tna_free(sched->envelopes.allocator, &(ta_allocator_free_params){
+                                             .ptr = envelope->jump,
+                                             .size = tna_jump_size(envelope->jump->count),
+                                             .alignment = _Alignof(tna_jump),
+                                         });
+    envelope->jump = NULL;
+    envelope->has_jump = 0;
+}
+
 /* Releases the envelope's references and returns it to the free list. */
 static void tna_envelope_give(tna_sched *sched, uint32_t index) {
     tna_envelope *envelope = tna_sched_envelope(sched, index);
     sched->retained -= envelope->bytes;
     ta_event_release(&envelope->event);
-    ta_address_release(envelope->address);
+    if (envelope->has_jump) {
+        tna_jump_give(sched, envelope);
+    } else {
+        ta_address_release(envelope->address);
+    }
     if (envelope->trace != NULL) {
         tna_free_list_give(&sched->traces, envelope->trace);
     }
@@ -123,8 +145,12 @@ void tna_sched_discard_mail(tna_sched *sched) {
         if (envelope->live) {
             ta_event_release(&envelope->event);
             envelope->event = (ta_event){0};
-            ta_address_release(envelope->address);
-            envelope->address = NULL;
+            if (envelope->has_jump) {
+                tna_jump_give(sched, envelope);
+            } else {
+                ta_address_release(envelope->address);
+                envelope->address = NULL;
+            }
             if (envelope->trace != NULL) {
                 tna_free_list_give(&sched->traces, envelope->trace);
                 envelope->trace = NULL;
@@ -534,6 +560,31 @@ ta_result tna_sched_release(tna_sched *sched, ta_actor_id actor) {
     return TA_OK;
 }
 
+ta_result tna_sched_abandoned(tna_sched *sched, ta_actor_id actor) {
+    tna_sched_entry *entry = tna_sched_lookup(sched, actor);
+    if (entry == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    tna_sched_complete(sched, actor, (tna_settlement){ .kind = TNA_SETTLE_ABANDONED });
+    /* The macrostep a release() lifted the microstep limit for is gone. */
+    entry->flags &= (uint8_t)~TNA_SCHED_UNLIMITED;
+    if (entry->state != TNA_SCHED_RUNNABLE) {
+        return TA_OK; /* quarantined (a runaway's release() then finds it stable), or core abandoned an event the addon never delivered */
+    }
+    entry->flags &= (uint8_t)~TNA_SCHED_BACKOFF;
+    if (entry->first == 0) {
+        entry->state = TNA_SCHED_IDLE;
+        return TA_OK;
+    }
+    entry->state = TNA_SCHED_READY;
+    if (tna_ring_push(&sched->ready, &actor) != TA_OK) {
+        /* No room in the ready queue: it stays runnable, and its entry in the
+         * runnable queue resumes it, which finds it stable and settles it. */
+        entry->state = TNA_SCHED_RUNNABLE;
+    }
+    return TA_OK;
+}
+
 bool tna_sched_quiet(const tna_sched *sched) {
     return tna_ring_count(&sched->runnable) == 0 && tna_ring_count(&sched->ready) == 0 && sched->dead_count == 0 &&
            tna_ring_count(&sched->settled) == 0;
@@ -576,6 +627,28 @@ static bool tna_sched_take_trace(tna_sched *sched, const tna_message *message, t
     return true;
 }
 
+/* A copy of the message's operator transition, or NULL for none. False when
+ * there is no memory for one. */
+static bool tna_sched_take_jump(tna_sched *sched, const tna_message *message, tna_jump **out) {
+    *out = NULL;
+    const tna_message_jump *jump = message->jump;
+    if (jump == NULL) {
+        return true;
+    }
+    uint32_t count = jump->transition.target_count;
+    *out = tna_alloc(sched->envelopes.allocator, tna_jump_size(count), _Alignof(tna_jump));
+    if (*out == NULL) {
+        return false;
+    }
+    (*out)->definition = jump->definition;
+    (*out)->source = jump->transition.source;
+    (*out)->count = count;
+    if (count != 0) {
+        memcpy((*out)->targets, jump->transition.targets, (size_t)count * sizeof(ta_state_id));
+    }
+    return true;
+}
+
 /* Fills a taken envelope from the message and attaches its waiter. */
 static void tna_sched_fill(tna_sched *sched, uint32_t index, const tna_message *message, ta_trace_parent *trace) {
     tna_envelope *envelope = tna_sched_envelope(sched, index);
@@ -609,15 +682,28 @@ ta_result tna_sched_post(tna_sched *sched, const tna_message *message) {
     if (!tna_sched_take_trace(sched, message, &trace)) {
         return TA_ERR_NOMEM; /* a ready-queue entry pushed above names an idle actor; delivery skips it */
     }
-    uint32_t index = tna_envelope_take(sched);
+    tna_jump *jump = NULL;
+    uint32_t index = tna_sched_take_jump(sched, message, &jump) ? tna_envelope_take(sched) : 0;
     if (index == 0) {
         /* A ready-queue entry pushed above names an idle actor; delivery skips it. */
         if (trace != NULL) {
             tna_free_list_give(&sched->traces, trace);
         }
+        if (jump != NULL) {
+            tna_free(sched->envelopes.allocator, &(ta_allocator_free_params){
+                                                     .ptr = jump,
+                                                     .size = tna_jump_size(jump->count),
+                                                     .alignment = _Alignof(tna_jump),
+                                                 });
+        }
         return TA_ERR_NOMEM;
     }
     tna_sched_fill(sched, index, message, trace);
+    if (jump != NULL) {
+        tna_envelope *envelope = tna_sched_envelope(sched, index);
+        envelope->jump = jump;
+        envelope->has_jump = 1u;
+    }
     if (dead) {
         tna_sched_dead_append(sched, index, entry == NULL ? TNA_DEAD_NOT_FOUND : TNA_DEAD_DONE);
         return TA_OK;
@@ -807,6 +893,37 @@ static void tna_sched_resume_one(tna_sched *sched, const tna_turn_params *params
     }
 }
 
+/*
+ * The operator transition of a jump envelope for ta_actor_deliver(), or NULL
+ * when the actor no longer runs the definition its state IDs belong to (a
+ * replacement took the mail over, ADR 0005 point 12). Only a jump pays for
+ * the inspection.
+ */
+static const ta_operator_transition *tna_sched_jump(const tna_turn_params *params, ta_actor_id actor, const tna_jump *jump,
+                                                    ta_operator_transition *out) {
+    ta_actor_inspection view;
+    *params->inside_core = true;
+    ta_result result = ta_actor_inspect(params->core, actor, &view);
+    *params->inside_core = false;
+    if (result != TA_OK || view.definition_id != jump->definition) {
+        return NULL;
+    }
+    *out = (ta_operator_transition){ .source = jump->source, .targets = jump->targets, .target_count = jump->count };
+    return out;
+}
+
+/* The head envelope is a jump the actor does not accept: a dead letter with
+ * reason `refused`, and the actor stands between macrosteps as before. */
+static void tna_sched_refuse_jump(tna_sched *sched, const tna_turn_params *params, tna_sched_entry *entry, ta_actor_id actor) {
+    uint32_t head = entry->first;
+    entry->first = tna_sched_envelope(sched, head)->next;
+    if (entry->first == 0) {
+        entry->last = 0;
+    }
+    tna_sched_dead_append(sched, head, TNA_DEAD_REFUSED);
+    tna_sched_settle(sched, params, entry, actor);
+}
+
 /* Delivers the head envelope of a ready actor (ADR 0005 point 6). */
 static void tna_sched_deliver_one(tna_sched *sched, const tna_turn_params *params, ta_actor_id actor) {
     tna_sched_entry *entry = tna_sched_lookup(sched, actor);
@@ -826,11 +943,21 @@ static void tna_sched_deliver_one(tna_sched *sched, const tna_turn_params *param
     tna_envelope *envelope = tna_sched_envelope(sched, head);
     ta_trace_parent trace = envelope->trace != NULL ? *envelope->trace : (ta_trace_parent){0};
     tna_trace_watch_mark(params->watch, params->core, actor, &trace);
+    ta_operator_transition jump;
+    const ta_operator_transition *transition = NULL;
+    if (envelope->has_jump) {
+        transition = tna_sched_jump(params, actor, envelope->jump, &jump);
+        if (transition == NULL) {
+            tna_sched_refuse_jump(sched, params, entry, actor);
+            return;
+        }
+    }
     *params->inside_core = true;
     ta_result result = ta_actor_deliver(params->core, &(ta_actor_deliver_params){
                                                          .actor = actor,
                                                          .event = &envelope->event,
                                                          .trace = trace,
+                                                         .transition = transition,
                                                      });
     *params->inside_core = false;
     switch (result) {
@@ -870,6 +997,13 @@ static void tna_sched_deliver_one(tna_sched *sched, const tna_turn_params *param
         tna_sched_remove(sched, actor, TNA_DEAD_NOT_FOUND);
         return;
     default:
+        if (result == TA_ERR_INVALID && transition != NULL) {
+            /* The actor does not accept the jump now (its source is no
+             * longer active): the operator's input is at fault, not the
+             * actor (ADR 0026). */
+            tna_sched_refuse_jump(sched, params, entry, actor);
+            return;
+        }
         /*
          * Any other failure quarantines the actor and keeps its mailbox
          * (ADR 0008). The envelope core refused (for example a malformed
@@ -930,7 +1064,7 @@ static void tna_sched_report_dead(tna_sched *sched, const tna_turn_params *param
             .trace = envelope->trace != NULL ? *envelope->trace : (ta_trace_parent){0},
         };
         envelope->event.data = (ta_value){0};
-        if (envelope->address != NULL) {
+        if (!envelope->has_jump && envelope->address != NULL) {
             /* The envelope's reference goes below; the record keeps the text. */
             record.has_address = tna_copy_address(params->arena, envelope->address, &record.address);
         }
