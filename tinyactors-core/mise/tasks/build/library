@@ -29,6 +29,7 @@
 require 'pathname'
 require 'shellwords'
 require 'cache'
+require 'platform_files'
 
 ROOT = Cache::ROOT
 OBJECTS = ROOT.join('build/objects')
@@ -65,7 +66,7 @@ end
 # each module is compiled the way it is amalgamated, against its private
 # headers, not the public one.
 src_command = [*COMPILER, *FLAGS, '-Isrc'].freeze
-Dir[ROOT.join('src/*.c').to_s].sort.each do |path|
+PlatformFiles.sources(ROOT.join('src')).each do |path|
   source = Pathname.new(path).relative_path_from(ROOT)
   outcome = compile(src_command, source, OBJECTS.join("#{source.basename('.c')}.o"))
   outcome == :compiled ? compiled += 1 : reused += 1

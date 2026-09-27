@@ -22,6 +22,7 @@ require 'fileutils'
 require 'pathname'
 require 'shellwords'
 require 'cache'
+require 'platform_files'
 
 ROOT = Cache::ROOT
 BUILD = ROOT.join('build')
@@ -35,7 +36,7 @@ FREESTANDING_TESTS = %w[header_test].freeze
 # Need the implementation to link.
 LINKED_TESTS = %w[arena_test cursor_test doc_test incremental_test spec_test stream_test text_test writer_test].freeze
 
-sources = Dir[ROOT.join('src/*.c').to_s].sort
+sources = PlatformFiles.sources(ROOT.join('src'))
 objects = sources.map { |source| OBJECTS.join("#{File.basename(source, '.c')}.o") }
 
 # Relinks `test` from `inputs` unless the last successful link had the same

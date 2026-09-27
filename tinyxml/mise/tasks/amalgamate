@@ -21,6 +21,7 @@
 require 'pathname'
 require_relative '../lib/c_scan'
 require 'cache'
+require 'platform_files'
 
 # Fresh when the inputs and the checked-in output still hash to what the last
 # successful run recorded (mise/lib/cache.rb); an output edited by hand does not.
@@ -73,7 +74,8 @@ headers = header_names.map do |name|
   errors << "missing module header: #{path}" unless path.file?
   [path, path.file? ? path.read : '']
 end
-sources = Dir[root.join('src/*.c').to_s].sort.map { |path| Pathname.new(path) }.map { |path| [path, path.read] }
+# The amalgamation is portable: it never holds a platform file.
+sources = PlatformFiles.sources(root.join('src')).map { |path| Pathname.new(path) }.map { |path| [path, path.read] }
 
 # Every quoted include in src/ must resolve to a header that is inlined.
 (headers + sources).each do |path, text|

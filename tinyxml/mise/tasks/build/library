@@ -13,6 +13,7 @@
 require 'pathname'
 require 'shellwords'
 require 'cache'
+require 'platform_files'
 
 ROOT = Cache::ROOT
 OBJECTS = ROOT.join('build/objects')
@@ -20,7 +21,7 @@ COMMAND = [*Shellwords.split(ENV.fetch('CC', 'cc')), *Shellwords.split(ENV.fetch
 
 compiled = 0
 reused = 0
-Dir[ROOT.join('src/*.c').to_s].sort.each do |path|
+PlatformFiles.sources(ROOT.join('src')).each do |path|
   source = Pathname.new(path).relative_path_from(ROOT)
   outcome, output = Cache.compile(COMMAND, source, OBJECTS.join("#{source.basename('.c')}.o"))
   if outcome == :failed

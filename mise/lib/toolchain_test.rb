@@ -11,6 +11,7 @@ require 'json'
 require 'open3'
 require 'tmpdir'
 require 'toolchain'
+require 'platform_files'
 
 SOURCE = <<~C
   __attribute__((visibility("default"))) unsigned long long wide_high(unsigned long long a, unsigned long long b) {
@@ -86,6 +87,16 @@ Dir.mktmpdir('toolchain-test') do |dir|
     end
   end
 end
+
+# Platform files are chosen by name (docs/adr/0001, decision 9).
+files = %w[src/arena.c src/txml_allocator_wasm.c src/raw_wasmer.c src/io_wasm.h src/io.h]
+wasm = Toolchain.target('wasm32-freestanding')
+linux = Toolchain.target('x86_64-linux')
+check(PlatformFiles.select(files) == %w[src/arena.c src/raw_wasmer.c src/io.h],
+      "platform files: the portable build takes #{PlatformFiles.select(files)}")
+check(PlatformFiles.select(files, target: wasm) == files, "platform files: wasm takes #{PlatformFiles.select(files, target: wasm)}")
+check(PlatformFiles.select(files, target: linux) == PlatformFiles.select(files),
+      'platform files: linux takes a wasm file')
 
 if $failures.empty?
   puts "toolchain-test: #{Toolchain::TARGETS.size} targets compile, archive and link as expected"

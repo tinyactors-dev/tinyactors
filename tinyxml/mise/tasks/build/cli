@@ -12,6 +12,7 @@ require 'fileutils'
 require 'pathname'
 require 'shellwords'
 require 'cache'
+require 'platform_files'
 
 ROOT = Cache::ROOT
 OBJECTS = ROOT.join('build/objects')
@@ -28,7 +29,7 @@ if outcome == :failed
 end
 puts output unless output.empty?
 
-library = Dir[ROOT.join('src/*.c').to_s].sort.map { |path| OBJECTS.join("#{File.basename(path, '.c')}.o") }
+library = PlatformFiles.sources(ROOT.join('src')).map { |path| OBJECTS.join("#{File.basename(path, '.c')}.o") }
 inputs = [object, *library]
 command = [*COMPILER, *FLAGS, *inputs.map(&:to_s), '-o', BINARY.to_s]
 key = Cache.digest(command.map { |part| part.start_with?(ROOT.to_s) ? part.delete_prefix("#{ROOT}/") : part }.join(' '),

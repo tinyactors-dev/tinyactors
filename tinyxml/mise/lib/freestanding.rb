@@ -6,6 +6,7 @@ require 'pathname'
 require 'shellwords'
 require 'tmpdir'
 require 'cache'
+require 'platform_files'
 
 # The freestanding check (AGENTS.md hard constraint 1). The tasks under
 # mise/tasks/freestanding/ call this; mise schedules them (depends, --jobs) and
@@ -58,8 +59,8 @@ module Freestanding
   end
 
   def self.targets(root)
-    sources = Dir[root.join('src/*.c').to_s].sort.map { |path| Pathname.new(path) }
-    headers = sources + Dir[root.join('src/*.h').to_s].sort.map { |path| Pathname.new(path) }
+    sources = PlatformFiles.sources(root.join('src')).map { |path| Pathname.new(path) }
+    headers = sources + PlatformFiles.headers(root.join('src')).map { |path| Pathname.new(path) }
     amalgamation = root.join('include/txml.c')
     [Target.new('src', sources, headers, [root.join('include'), root.join('src')]),
      Target.new('amalgamation', [amalgamation], [amalgamation], [root.join('include')])]
