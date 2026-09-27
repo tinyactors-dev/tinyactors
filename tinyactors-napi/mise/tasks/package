@@ -15,6 +15,8 @@
 #   build/<target>/tinyactors.node as tinyactors.node, with `os` and `cpu`,
 #   and no `libc` field: the Linux addon serves glibc and musl.
 #
+# Every package carries the repository's LICENSE at its root.
+#
 # package.json's version is the version of every package. A target that is
 # not built, or whose addon fails `mise run symbols`, fails the task.
 
@@ -23,6 +25,7 @@ require 'json'
 require 'pathname'
 
 ROOT = Pathname.new(__dir__).join('../..').expand_path
+LICENSE = ROOT.join('../LICENSE').expand_path
 NPM = ROOT.join('build/npm')
 TARBALLS = NPM.join('tarballs')
 
@@ -54,6 +57,7 @@ unless missing.empty?
 end
 targets.each { |target| run('mise', 'run', 'symbols', '--target', target) }
 
+abort "package: #{LICENSE} is missing" unless LICENSE.file?
 FileUtils.rm_rf(NPM)
 FileUtils.mkdir_p(TARBALLS)
 shared = manifest.slice('version', 'license', 'homepage', 'repository', 'bugs')
@@ -66,6 +70,7 @@ manifest.fetch('files').each do |entry|
   FileUtils.mkdir_p(main.join(entry).dirname)
   FileUtils.cp_r(source, main.join(entry))
 end
+FileUtils.cp(LICENSE, main.join('LICENSE'))
 staged = manifest.except('devDependencies')
 staged['optionalDependencies'] = PLATFORMS.values.to_h { |platform, cpu| ["@tinyactors/node-#{platform}-#{cpu}", version] }
 main.join('package.json').write("#{JSON.pretty_generate(staged)}\n")
@@ -77,6 +82,7 @@ targets.each do |target|
   dir = NPM.join(name)
   FileUtils.mkdir_p(dir)
   FileUtils.cp(ROOT.join("build/#{target}/tinyactors.node"), dir.join('tinyactors.node'))
+  FileUtils.cp(LICENSE, dir.join('LICENSE'))
   package = {
     'name' => "@tinyactors/#{name}",
     'description' => "The #{platform}-#{cpu} native addon of @tinyactors/node",
@@ -84,7 +90,7 @@ targets.each do |target|
     'os' => [platform],
     'cpu' => [cpu],
     'main' => 'tinyactors.node',
-    'files' => ['tinyactors.node']
+    'files' => ['tinyactors.node', 'LICENSE']
   }
   dir.join('package.json').write("#{JSON.pretty_generate(package)}\n")
   dir.join('README.md').write(<<~README)
