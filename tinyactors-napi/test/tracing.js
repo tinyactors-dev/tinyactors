@@ -580,6 +580,35 @@ async function lifecycle() {
   system.close();
 }
 
+// Unloading and loading are lifecycle spans (core ADR 0074), under the
+// default summary: unload(), load(address), and a load that mail causes.
+async function loadedAndUnloaded() {
+  const system = createSystem({ clock: 'manual' });
+  const batches = [];
+  system.setTraceSink((bytes) => batches.push(bytes));
+  const definition = system.define(statechart({ family: 'paged', revision: 'v1' })
+    .data('n', 0)
+    .state('a', (s) => s.on('go', (t) => t.assign('n', function () { return this.n + 1; }))));
+  const actor = system.spawn(definition, { name: 'x' });
+  await system.flush();
+  actor.unload();
+  const back = system.load({ family: 'paged', name: 'x' });
+  await system.flush();
+  back.unload();
+  system.post({ family: 'paged', name: 'x' }, 'go');
+  await system.flush();
+  system.setTraceSink(undefined);
+  const spans = batches.flatMap((bytes) => decodeTraces(bytes));
+  const names = spans.map((span) => span.name);
+  assert.equal(names.filter((name) => name === 'scxml.unloaded').length, 2, `two unloads: ${names}`);
+  assert.equal(names.filter((name) => name === 'scxml.loaded').length, 2, `a load, and one by mail: ${names}`);
+  const session = String(system.inspect(system.findActor({ family: 'paged', name: 'x' })).sessionID);
+  for (const span of spans.filter((each) => each.name === 'scxml.loaded' || each.name === 'scxml.unloaded')) {
+    assert.equal(span.attributes['scxml.session_id'], session, 'the same session throughout');
+  }
+  system.close();
+}
+
 // The default summary carries the failure kinds: a runaway macrostep's span
 // says it ran long and was stopped (core ADR 0075), without microsteps.
 async function summaryFailures() {
@@ -692,6 +721,7 @@ async function watchAndSample() {
   await valuesAndLinks();
   await lifecycle();
   await summaryFailures();
+  await loadedAndUnloaded();
   console.log('tracing.js passed');
 })().catch((error) => {
   console.error(error);
