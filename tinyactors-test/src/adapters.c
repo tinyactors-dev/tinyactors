@@ -308,10 +308,15 @@ static tat_child_kind tat_invoker_child(tat_scxml_invoker *invoker, const ta_inv
         }
         value = tat_value_encode(&request->data);
     } else {
-        if (request->src.v == NULL || tat_value_codec_for_value(&request->src) == NULL) {
+        /* A literal src arrives as text; a srcexpr as a data-model value. */
+        jv src;
+        if (request->src_text.ptr != NULL) {
+            src = jv_string_sized(request->src_text.ptr, (int)request->src_text.len);
+        } else if (request->src.v == NULL || tat_value_codec_for_value(&request->src) == NULL) {
             return TAT_CHILD_NONE;
+        } else {
+            src = tat_value_encode(&request->src);
         }
-        jv src = tat_value_encode(&request->src);
         value = jv_invalid();
         if (jv_get_kind(src) == JV_KIND_STRING) {
             const char *text = jv_string_value(src);

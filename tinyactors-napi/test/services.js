@@ -263,6 +263,41 @@ async function javascriptInvoker() {
   system.close();
 }
 
+// A literal <invoke src> reaches the invoker as the text the chart wrote,
+// never imported into the data model: a chart that opted into the null data
+// model names one too, as it names a literal send target.
+async function invokerLiteralSource() {
+  for (const datamodel of ['null', 'javascript']) {
+    const started = [];
+    const system = createSystem({ invokers: { svc: { start(request) { started.push(request); } } } });
+    const definition = system.define(`<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+        name="literal-src" datamodel="${datamodel}" initial="running">
+      <state id="running">
+        <invoke type="svc" id="bySource" src="lit-src" autoforward="true"/>
+        <invoke type="svc" id="byContent"><content>chart text</content></invoke>
+        <transition event="error.*" target="failed"/>
+      </state>
+      <state id="failed"/>
+    </scxml>`, { format: 'scxml' });
+    assert.equal(definition.inspect().datamodel, datamodel);
+    const parent = system.spawn(definition);
+    await system.flush();
+    assert.deepEqual(parent.inspect().activeStates, ['running'], `${datamodel}: no invoke failed`);
+    const [bySource, byContent] = started;
+    assert.equal(started.length, 2, `${datamodel}: both invocations started`);
+    assert.equal(bySource.source, 'lit-src', `${datamodel}: the literal src is its text`);
+    assert.equal(bySource.type, 'svc');
+    assert.equal(bySource.invokeID, 'bySource');
+    assert.equal(bySource.autoforward, true);
+    assert.equal(bySource.content, undefined);
+    assert.equal(byContent.source, undefined);
+    assert.equal(byContent.invokeID, 'byContent');
+    assert.equal(byContent.content, 'chart text');
+    assert.deepEqual(parent.inspect().invocations.map((invocation) => invocation.type), ['svc', 'svc']);
+    system.close();
+  }
+}
+
 // A done() the parent's mailbox cannot take throws, and the invocation stays
 // alive: the service reports again once the mailbox drains, and only that
 // report ends the invocation.
@@ -441,7 +476,7 @@ async function steadyState() {
     process.exit(1);
   }, Number(process.env.SERVICES_TIMEOUT_MS ?? 60_000));
   for (const test of [
-    logSink, ioCompletes, ioLiteralTarget, ioFails, delayedCustomSend, javascriptInvoker, doneRetried, unavailableInvoker, scxmlInvoker, scxmlCancel,
+    logSink, ioCompletes, ioLiteralTarget, ioFails, delayedCustomSend, javascriptInvoker, invokerLiteralSource, doneRetried, unavailableInvoker, scxmlInvoker, scxmlCancel,
     closeCancels, steadyState,
   ]) {
     current = test.name;

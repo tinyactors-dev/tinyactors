@@ -438,6 +438,12 @@ static ta_op_status tna_child_definition_of(void *context, const tna_child_param
             return TA_OP_OK;
         }
     }
+    /* A literal src arrives as text, never as a data-model value, so a chart
+     * on the null data model can name one too. */
+    if (request->src_text.ptr != NULL &&
+        napi_create_string_utf8(env, request->src_text.ptr, request->src_text.len, &src) != napi_ok) {
+        return tna_child_fault(wrapper, params->fault, TA_ERR_INVALID, "invoker.scxml: the src is not text");
+    }
     tna_invoking parent = tna_parent_of(wrapper, request->parent);
     /* SCXML 6.4: content from <content expr> is the child chart's text. */
     napi_valuetype data_type = napi_undefined;

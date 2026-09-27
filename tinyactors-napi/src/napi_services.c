@@ -160,7 +160,9 @@ static napi_value tna_start_payload(napi_env env, tna_napi_system *wrapper, cons
     tna_put(env, payload, "invocationID", invocation);
     tna_put(env, payload, "invokeID", invoke_id);
     tna_put(env, payload, "type", tna_atom_text(env, system, effect->type));
-    tna_put(env, payload, "source", tna_value_of(env, &effect->target));
+    tna_put(env, payload, "source",
+            effect->target_text.ptr != NULL ? tna_text(env, effect->target_text.ptr, effect->target_text.len)
+                                            : tna_value_of(env, &effect->target));
     tna_put(env, payload, "params", tna_value_of(env, &effect->params));
     tna_put(env, payload, "traceparent", tna_traceparent_value(env, &effect->trace));
     tna_put(env, payload, "autoforward", autoforward);

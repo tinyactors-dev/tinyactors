@@ -1256,8 +1256,12 @@ TA_API ta_definition_sink ta_null_definition_sink(void);
 /*
  * One invocation to start. `type` is the resolved invoker type; the SCXML
  * aliases "scxml" and "http://www.w3.org/TR/scxml" are normalized to
- * "http://www.w3.org/TR/scxml/". `src` is the evaluated src/srcexpr, `data`
- * the evaluated `<content expr>`, and `params` the data model's aggregate of
+ * "http://www.w3.org/TR/scxml/". `src` is the evaluated `srcexpr`; `src_text`
+ * is a literal `src`, the text the chart wrote, which is never imported into
+ * the data model, so a chart on the null data model can name one (as
+ * ta_send.target_text does for a target). At most one of them is present;
+ * `src_text.ptr` is NULL when there is none. `data` is the evaluated
+ * `<content expr>`, and `params` the data model's aggregate of
  * <param>/namelist values; each is empty (null vtable) when absent. A literal
  * <content> is not imported: it arrives as `content`, the bytes the chart
  * holds, with `content_type` its media type (empty when nothing said), and
@@ -1272,9 +1276,9 @@ TA_API ta_definition_sink ta_null_definition_sink(void);
  * child is that chart, already compiled, and `content` and `src` describe
  * where it came from.
  */
-typedef struct { ta_system *system; ta_actor_id parent; ta_invoke_id invoke_id; ta_atom type; ta_value src; ta_value data;
-                 ta_str content_type; ta_bytes content; ta_value params; bool autoforward; ta_trace_parent trace;
-                 ta_definition_id definition; } ta_invoke_request;
+typedef struct { ta_system *system; ta_actor_id parent; ta_invoke_id invoke_id; ta_atom type; ta_value src;
+                 ta_str src_text; ta_value data; ta_str content_type; ta_bytes content; ta_value params;
+                 bool autoforward; ta_trace_parent trace; ta_definition_id definition; } ta_invoke_request;
 typedef struct { TA_IN const ta_invoke_request *request; TA_OUT uint64_t *service_handle; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_invoker_start_params;
 typedef struct { uint64_t service_handle; TA_IN const ta_event *event; TA_OUT TA_VALID_ON(TA_OP_ERROR) TA_LIFETIME(call) ta_fault *fault; } ta_invoker_forward_params;
 

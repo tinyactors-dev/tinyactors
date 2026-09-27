@@ -971,7 +971,10 @@ static ta_op_status tat_scripted_start(void *self, const ta_invoker_start_params
     entry = jv_object_set(entry, jv_string("parent"), tat_u64(request->parent));
     entry = jv_object_set(entry, jv_string("invoke_id"), tat_u64(request->invoke_id));
     entry = jv_object_set(entry, jv_string("type"), tat_atom_text(instrument->system, request->type));
-    entry = jv_object_set(entry, jv_string("src"), tat_value_or_null(&request->src));
+    entry = jv_object_set(entry, jv_string("src"),
+                          request->src_text.ptr != NULL
+                              ? jv_string_sized(request->src_text.ptr, (int)request->src_text.len)
+                              : tat_value_or_null(&request->src));
     entry = jv_object_set(entry, jv_string("data"), tat_value_or_null(&request->data));
     entry = tat_put_content(entry, request->content_type, request->content);
     entry = jv_object_set(entry, jv_string("params"), tat_value_or_null(&request->params));

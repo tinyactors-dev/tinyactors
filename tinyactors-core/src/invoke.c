@@ -397,20 +397,14 @@ static ta_result ta_invoke_resolve_type(ta_interpreter *it, const ta_invoke_decl
     return result;
 }
 
-/* src (a literal becomes a data-model value), inline content, and params. */
+/* srcexpr, inline content, and params. A literal src is not imported:
+ * ta_invoke_launch passes the text the chart holds (src_text). */
 static ta_result ta_invoke_resolve_values(ta_interpreter *it, const ta_invoke_decl *decl,
                                           ta_invoke_values *values) {
     const ta_definition *definition = it->definition;
     const ta_datamodel_vtable *v = definition->datamodel.v;
     ta_op_status status = TA_OP_OK;
-    if (decl->src.kind == TA_VALUE_SOURCE_CONTENT) {
-        ta_bytes bytes = definition->contents[decl->src.as.content].bytes;
-        status = ta_invoke_text_value(it, &(ta_datamodel_text_value_params){
-                                              .text = { .ptr = (const char *)bytes.ptr, .len = bytes.len },
-                                              .out = &values->src,
-                                              .fault = &values->fault,
-                                          });
-    } else {
+    if (decl->src.kind != TA_VALUE_SOURCE_CONTENT) {
         status = ta_interpreter_eval(it, &(ta_interpreter_value_params){
                                              .source = decl->src, .out = &values->src, .fault = &values->fault });
     }
@@ -501,6 +495,12 @@ static ta_result ta_invoke_launch(ta_interpreter *it, const ta_invoke_launch_par
     if (decl->data.kind == TA_VALUE_SOURCE_CONTENT) {
         ta_interpreter_literal_content(it->definition, decl->data.as.content, &request.content_type,
                                        &request.content);
+    }
+    if (decl->src.kind == TA_VALUE_SOURCE_CONTENT) {
+        ta_str media_type = { 0 };
+        ta_bytes text = { 0 };
+        ta_interpreter_literal_content(it->definition, decl->src.as.content, &media_type, &text);
+        request.src_text = (ta_str){ .ptr = (const char *)text.ptr, .len = text.len };
     }
     uint64_t service = 0;
     const ta_invoker *invoker = params->invoker;

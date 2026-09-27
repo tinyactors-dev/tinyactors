@@ -1516,7 +1516,11 @@ export interface InvokeRequest {
   /** The invoke ID's text: `<invoke id>` or the one core generated. */
   readonly invokeID?: string;
   readonly type: string;
-  // status: partial: under datamodel="null" a literal `<invoke src>` never reaches start(): the parent gets error.execution
+  /**
+   * A literal `<invoke src>` as the text the chart wrote, never imported into
+   * the data model, so a chart on the null data model can name one; or
+   * `srcexpr`'s value.
+   */
   readonly source?: unknown;
   /** `<content expr>`'s value, or a literal <content> as text (then `contentType` is set). */
   readonly content?: unknown;

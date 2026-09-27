@@ -10292,7 +10292,7 @@
     },
     "ta_invoke_request": {
       "kind": "struct",
-      "doc": "One invocation to start. `type` is the resolved invoker type; the SCXML aliases \"scxml\" and \"http://www.w3.org/TR/scxml\" are normalized to \"http://www.w3.org/TR/scxml/\". `src` is the evaluated src/srcexpr, `data` the evaluated ` <content expr>`, and `params` the data model's aggregate of <param >/namelist values; each is empty (null vtable) when absent. A literal <content > is not imported: it arrives as `content`, the bytes the chart holds, with `content_type` its media type (empty when nothing said), and interpreting it is the invoker's business (ADR 0053, SCXML 6.4.2). Values and bytes are borrowed for the call. A service for an SCXML session spawns its child with ta_actor_spawn() and a `parent` of {parent, invoke_id}; the core then routes `#_ <invokeid >` sends, autoforwarding, and done.invoke itself. `trace` is the invoking macrostep's context and the key of the step that invoked, which such a service passes to ta_actor_spawn(), so the child's bootstrap runs under it (ADR 0067). `definition` is the definition nested for this <invoke > with ta_definition_nest() (ADR 0077), or 0: when it is set, the child is that chart, already compiled, and `content` and `src` describe where it came from.",
+      "doc": "One invocation to start. `type` is the resolved invoker type; the SCXML aliases \"scxml\" and \"http://www.w3.org/TR/scxml\" are normalized to \"http://www.w3.org/TR/scxml/\". `src` is the evaluated `srcexpr`; `src_text` is a literal `src`, the text the chart wrote, which is never imported into the data model, so a chart on the null data model can name one (as ta_send.target_text does for a target). At most one of them is present; `src_text.ptr` is NULL when there is none. `data` is the evaluated ` <content expr>`, and `params` the data model's aggregate of <param >/namelist values; each is empty (null vtable) when absent. A literal <content > is not imported: it arrives as `content`, the bytes the chart holds, with `content_type` its media type (empty when nothing said), and interpreting it is the invoker's business (ADR 0053, SCXML 6.4.2). Values and bytes are borrowed for the call. A service for an SCXML session spawns its child with ta_actor_spawn() and a `parent` of {parent, invoke_id}; the core then routes `#_ <invokeid >` sends, autoforwarding, and done.invoke itself. `trace` is the invoking macrostep's context and the key of the step that invoked, which such a service passes to ta_actor_spawn(), so the child's bootstrap runs under it (ADR 0067). `definition` is the definition nested for this <invoke > with ta_definition_nest() (ADR 0077), or 0: when it is set, the child is that chart, already compiled, and `content` and `src` describe where it came from.",
       "fields": [
         {
           "name": "system",
@@ -10326,6 +10326,12 @@
           "name": "src",
           "type": {
             "type": "ta_value"
+          }
+        },
+        {
+          "name": "src_text",
+          "type": {
+            "type": "ta_str"
           }
         },
         {
@@ -10373,7 +10379,7 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 176,
+          "size": 192,
           "align": 8,
           "offsets": {
             "system": 0,
@@ -10381,17 +10387,18 @@
             "invoke_id": 16,
             "type": 24,
             "src": 32,
-            "data": 48,
-            "content_type": 64,
-            "content": 80,
-            "params": 96,
-            "autoforward": 112,
-            "trace": 120,
-            "definition": 168
+            "src_text": 48,
+            "data": 64,
+            "content_type": 80,
+            "content": 96,
+            "params": 112,
+            "autoforward": 128,
+            "trace": 136,
+            "definition": 184
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 128,
+          "size": 136,
           "align": 8,
           "offsets": {
             "system": 0,
@@ -10399,13 +10406,14 @@
             "invoke_id": 16,
             "type": 24,
             "src": 28,
-            "data": 36,
-            "content_type": 44,
-            "content": 52,
-            "params": 60,
-            "autoforward": 68,
-            "trace": 72,
-            "definition": 120
+            "src_text": 36,
+            "data": 44,
+            "content_type": 52,
+            "content": 60,
+            "params": 68,
+            "autoforward": 76,
+            "trace": 80,
+            "definition": 128
           }
         }
       }

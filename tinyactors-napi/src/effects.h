@@ -43,9 +43,9 @@ typedef struct tna_effect {
     /* LOG: has_value and value; IO: value is the data; START: the data. */
     bool has_value;
     ta_value value;
-    /* IO: the evaluated targetexpr; START: src. */
+    /* IO: the evaluated targetexpr; START: the evaluated srcexpr. */
     ta_value target;
-    /* IO: a literal target, copied; ptr is NULL when there is none. */
+    /* IO: a literal target; START: a literal src; copied, ptr NULL when none. */
     ta_str target_text;
     /* START: the params. */
     ta_value params;

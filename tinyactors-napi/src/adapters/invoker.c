@@ -25,6 +25,7 @@ static ta_op_status tna_js_start(void *self, const ta_invoker_start_params *para
         .type = request->type,
         .value = request->data,
         .target = request->src,
+        .target_text = request->src_text,
         .params = request->params,
         .content_type = request->content_type,
         .content = request->content,

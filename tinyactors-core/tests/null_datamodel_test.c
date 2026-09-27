@@ -305,11 +305,106 @@ static void test_runtime_errors(void) {
     CHECK(lands_in(&data_spec, NULL, "faulted"));
 }
 
+/* ------------------------------------------------------------------------
+ * A literal <invoke src> reaches the invoker as text: it is never imported
+ * into the data model, which the null data model could not do.
+ */
+
+typedef struct {
+    int starts;
+    char src_text[32];
+    bool has_src_value;
+} invoke_record;
+
+static invoke_record invoked;
+
+static ta_op_status record_start(void *self, const ta_invoker_start_params *params) {
+    (void)self;
+    const ta_invoke_request *request = params->request;
+    invoked.starts += 1;
+    invoked.has_src_value = request->src.v != NULL;
+    if (request->src_text.ptr != NULL && request->src_text.len < sizeof invoked.src_text) {
+        memcpy(invoked.src_text, request->src_text.ptr, request->src_text.len);
+        invoked.src_text[request->src_text.len] = '\0';
+    }
+    *params->service_handle = 1;
+    return TA_OP_OK;
+}
+
+static ta_op_status ignore_cancel(void *self, uint64_t service_handle, ta_fault *fault) {
+    (void)self;
+    (void)service_handle;
+    (void)fault;
+    return TA_OP_OK;
+}
+
+static ta_op_status ignore_forward(void *self, const ta_invoker_forward_params *params) {
+    (void)self;
+    (void)params;
+    return TA_OP_OK;
+}
+
+static void test_literal_invoke_src(void) {
+    static const ta_invoker_vtable recorder = { .start = record_start, .cancel = ignore_cancel,
+                                                .forward = ignore_forward };
+    static const ta_str to_faulted[] = { STR("faulted"), END };
+    ta_system *system = NULL;
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &system) == TA_OK);
+    ta_atom type = 0;
+    CHECK(ta_system_intern_atom(system, STR("svc"), &type) == TA_OK);
+    CHECK(ta_system_register_invoker(system, type, (ta_invoker){ .v = &recorder }) == TA_OK);
+    ta_scxml_invoke_spec invokes[] = {
+        { .kind = TA_SCXML_INVOKE,
+          .type = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("svc") },
+          .src = { .kind = TA_SCXML_STRING_LITERAL, .as.literal = STR("lit-src") } },
+        END,
+    };
+    ta_scxml_transition_spec failed[] = {
+        { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = STR("error.execution"), .targets = to_faulted },
+        END,
+    };
+    ta_scxml_state_spec states[] = {
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("start"), .transitions = failed, .invokes = invokes },
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("faulted") },
+        END,
+    };
+    ta_scxml_spec spec = { .name = STR("invoking"), .states = states };
+    invoked = (invoke_record){0};
+    compiled chart;
+    compile(system, &spec, &chart);
+    CHECK(chart.result == TA_OK);
+    ta_definition_id id = 0;
+    if (chart.result == TA_OK && ta_system_register_definition(system, chart.definition, &id) == TA_OK) {
+        chart.definition = NULL; /* the system owns it now */
+        ta_actor_id actor = 0;
+        CHECK(ta_actor_spawn(system, &(ta_actor_spawn_params){ .definition = id, .out = &actor }) == TA_OK);
+        ta_run_status status = TA_RUN_ERROR;
+        CHECK(ta_actor_resume(system, &(ta_actor_resume_params){ .actor = actor, .budget = 100, .status = &status }) ==
+              TA_OK);
+        CHECK(invoked.starts == 1);
+        CHECK(strcmp(invoked.src_text, "lit-src") == 0);
+        CHECK(!invoked.has_src_value);
+        ta_state_id faulted = 0;
+        CHECK(ta_definition_find_state(system, &(ta_definition_find_state_params){
+                                                   .definition = id, .id = STR("faulted"), .out = &faulted }) ==
+              TA_OK);
+        ta_state_id active[4];
+        uint32_t count = 0;
+        CHECK(ta_actor_active_states(system, &(ta_actor_active_states_params){ .actor = actor, .states = active,
+                                                                              .capacity = 4, .count = &count }) ==
+              TA_OK);
+        CHECK(count == 1 && active[0] != faulted);
+    }
+    release(&chart);
+    ta_system_destroy(system);
+}
+
 int main(void) {
     test_shape();
     test_in();
     test_refuses_other_expressions();
     test_runtime_errors();
+    test_literal_invoke_src();
     CHECK(outstanding == 0);
     if (failures != 0) {
         fprintf(stderr, "null data model test: %d check(s) failed\n", failures);
