@@ -285,6 +285,17 @@ function helpers() {
   assert.equal(parseTraceparent(`00-${'0'.repeat(32)}-00f067aa0ba902b7-01`), undefined, 'an all-zero trace ID');
   assert.equal(parseTraceparent('ff-' + TRACE_ID + '-00f067aa0ba902b7-01'), undefined, 'version ff');
   assert.equal(parseTraceparent(undefined), undefined);
+  // W3C versioning: a later version is read by its first four fields; version
+  // 00 has nothing after its flags; hex is lowercase; spaces around are fine.
+  assert.deepEqual(parseTraceparent(`01-${TRACE_ID}-00f067aa0ba902b7-01-whatever`),
+                   { traceID: TRACE_ID, parentSpanID: '00f067aa0ba902b7', flags: 1, sampled: true }, 'a later version');
+  assert.equal(parseTraceparent(`01-${TRACE_ID}-00f067aa0ba902b7-01x`), undefined, 'a later version needs a dash');
+  assert.equal(parseTraceparent(`00-${TRACE_ID}-00f067aa0ba902b7-01-extra`), undefined, 'version 00 with more');
+  assert.equal(parseTraceparent(`00-${TRACE_ID.toUpperCase()}-00f067aa0ba902b7-01`), undefined, 'uppercase hex');
+  assert.equal(parseTraceparent(`00-${TRACE_ID}-0000000000000000-01`), undefined, 'an all-zero parent ID');
+  assert.equal(parseTraceparent(` \t${traceparent('00f067aa0ba902b7')} `).traceID, TRACE_ID, 'spaces and tabs around');
+  assert.deepEqual(parseTraceparent(traceparent('0000000000000001', '00')),
+                   { traceID: TRACE_ID, parentSpanID: '0000000000000001', flags: 0, sampled: false }, 'leading zeros');
   assert.equal(formatTraceparent({ traceID: TRACE_ID, spanID: '00f067aa0ba902b7' }), traceparent('00f067aa0ba902b7'));
   assert.equal(formatTraceparent({ traceID: TRACE_ID, spanID: '00f067aa0ba902b7', sampled: false }),
                traceparent('00f067aa0ba902b7', '00'));

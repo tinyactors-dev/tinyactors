@@ -1741,6 +1741,15 @@ export interface DecodedSpan {
 /** Reads OTLP protobuf trace bytes; throws on a malformed message. */
 export declare function decodeTraces(bytes: Uint8Array): DecodedSpan[];
 
+/**
+ * A W3C `traceparent` header's fields, or undefined when it is not a valid
+ * one; parsed by core, as a traceparent given to post(), send() or spawn()
+ * is. Spaces and tabs around it are ignored and hex is lowercase. Version
+ * ff, an all-zero trace or parent ID, and version 00 with anything after
+ * the flags are refused. A later version is read by its first four fields,
+ * ignoring what follows a dash after the flags (W3C Trace Context,
+ * "Versioning of traceparent").
+ */
 export declare function parseTraceparent(header: string | undefined):
   { traceID: string; parentSpanID: string; flags: number; sampled: boolean } | undefined;
 export declare function formatTraceparent(span: { traceID: string; spanID: string; sampled?: boolean; flags?: number }): string;

@@ -67,25 +67,36 @@ function kindMask(kinds, what = 'setTraceSink()') {
 // ------------------------------------------------------------------------
 // W3C trace context: traceparent = version "-" trace-id "-" parent-id "-" flags
 
-const TRACEPARENT = /^([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/;
-const ZERO_TRACE = '0'.repeat(32);
-const ZERO_SPAN = '0'.repeat(16);
-
 /**
  * Parses a `traceparent` header: { traceID, parentSpanID, flags, sampled },
  * or undefined when it is not a valid one (the W3C rule: a receiver that
- * cannot parse it starts a new trace).
+ * cannot parse it starts a new trace). Core parses it (ta_traceparent_parse),
+ * as it does a traceparent given to post(), send() or spawn(), so the two
+ * agree: spaces and tabs around it are ignored; hex is lowercase; version
+ * ff, an all-zero trace or parent ID, and version 00 with anything after
+ * the flags are refused; a later version is read by its first four fields,
+ * and what follows a dash after its flags is ignored.
  */
 function parseTraceparent(header) {
   if (typeof header !== 'string') {
     return undefined;
   }
-  const match = TRACEPARENT.exec(header.trim().toLowerCase());
-  if (match === null || match[1] === 'ff' || match[2] === ZERO_TRACE || match[3] === ZERO_SPAN) {
-    return undefined;
+  let parsed;
+  try {
+    parsed = native.core.traceparent_parse(header);
+  } catch (error) {
+    if (error instanceof TinyactorsError && error.code === 'invalid') {
+      return undefined;
+    }
+    throw error;
   }
-  const flags = Number.parseInt(match[4], 16);
-  return { traceID: match[2], parentSpanID: match[3], flags, sampled: (flags & 1) === 1 };
+  const { context, cause } = parsed;
+  return {
+    traceID: hex16(context.trace_id_high) + hex16(context.trace_id_low),
+    parentSpanID: hex16(cause.macrostep),
+    flags: context.flags,
+    sampled: (context.flags & 1) === 1,
+  };
 }
 
 /** A `traceparent` header for a span: { traceID, spanID, sampled | flags }. */
