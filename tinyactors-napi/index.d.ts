@@ -976,10 +976,16 @@ export interface SpawnOptions<Data extends object> {
   /**
    * Delayed sends to re-arm before the actor bootstraps (core ADR 0074
    * section 8): entries of inspect().delayedSends from an earlier session
-   * of this actor, stored with its data. They keep their IDs, due times and
-   * traces; a due time already past fires on the next dispatch.
+   * of this actor, stored with its data; they survive JSON and structured
+   * clone, and may be re-armed in another system or process. They keep
+   * their IDs, due times and traces; a due time already past fires on the
+   * next dispatch. A `destination` of "self" goes to this new actor, and an
+   * address to whatever actor has that address when the send is due. An
+   * ActorID destination (a send to an unnamed other actor) re-arms only as
+   * a live ActorID of this system; any other form of it throws `invalid`
+   * naming the entry, since a stored slot and generation would name
+   * whichever actor holds that slot by then.
    */
-  // status: partial: a send's `destination` ActorID goes back to core as a raw slot and generation, so after a JSON round trip spawn() throws `invalid`, and in another system the send reaches whichever actor holds that slot
   readonly pendingSends?: readonly DelayedSendInspection[];
 }
 
@@ -1156,8 +1162,13 @@ export interface DelayedSendInspection {
   readonly due: number;
   readonly event: EventName;
   readonly ioType: string;
-  /** The resolved receiver for the built-in SCXML processor; null for custom processors, which use `target`. */
-  readonly destination: ActorID | ActorAddress | null;
+  /**
+   * The resolved receiver for the built-in SCXML processor: "self" for the
+   * actor itself (a send without a target, or to its own session), an
+   * address for a named receiver, or an ActorID for an unnamed other actor.
+   * null for custom processors, which use `target`.
+   */
+  readonly destination: "self" | ActorAddress | ActorID | null;
   readonly target: unknown;
   readonly data: unknown;
   /** The router refused this send once; it is waiting to be offered again. */

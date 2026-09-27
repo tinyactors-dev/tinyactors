@@ -2594,7 +2594,10 @@ typedef struct {
      * among them. Event names must be this system's and content IDs the
      * definition's (TA_ERR_INVALID otherwise). `target` and `data` are
      * retained. `submitted` and `destination` of a custom processor's send
-     * are ignored: every record is armed afresh.
+     * are ignored: every record is armed afresh. An SCXML send whose
+     * `destination` is runtime ID 0 goes to the new session itself, so a
+     * host re-arms a send to self without knowing the session's ID: an
+     * earlier session's runtime or session ID names another actor by then.
      */
     TA_COUNTED_BY(pending_send_count) TA_OPTIONAL const ta_delayed_send_info *pending_sends;
     uint32_t pending_send_count;

@@ -125,10 +125,76 @@ async function restartKeepsTimers() {
   system.close();
 }
 
+// A stored pending send names its receiver portably (core ADR 0074 section
+// 8): a send to the actor itself is "self", a named receiver its address,
+// so the entries survive JSON and re-arm to the right actor in another
+// system, even when another actor now holds the old one's slot. A send to
+// an unnamed other actor names it only while that actor lives: re-arming
+// the stored entry is refused.
+async function storedDestinations() {
+  // `arm` sends `tick` to itself (no target) and `hello` to the address
+  // echo/e, 1000 ms out; `forward` sends `hi` to the session in its data.
+  const chart = () => statechart({ family: 'pinger', revision: 'v1' })
+    .data('log', [])
+    .data('peer', null)
+    .state('idle', (s) => {
+      s.on('arm', (t) => t
+        .send('tick', (m) => m.after(1000))
+        .send('hello', (m) => m.to('#_actor_echo/e').after(1000)));
+      s.on('forward', (t) => t.send('hi', (m) => m.to(function () { return `#_scxml_${this.peer}`; }).after(1000)));
+      s.on('*', (t) => t.assign('log', function ({ event }) { return [...this.log, event.name]; }));
+    });
+  const echo = () => statechart({ family: 'echo', revision: 'v1' })
+    .data('heard', [])
+    .state('idle', (s) => s.on('*', (t) => t.assign('heard', function ({ event }) { return [...this.heard, event.name]; })));
+
+  let stored;
+  {
+    const system = createSystem({ clock: 'manual', initialTime: 0 });
+    const actor = system.spawn(system.define(chart()));
+    actor.post('arm');
+    await system.flush();
+    const sends = actor.inspect().delayedSends;
+    assert.deepEqual(sends.map((send) => [send.event, send.destination]),
+      [['tick', 'self'], ['hello', { family: 'echo', name: 'e' }]]);
+    stored = JSON.parse(JSON.stringify({ data: actor.inspect().data, sends }));
+    system.close();
+  }
+
+  const system = createSystem({ clock: 'manual', initialTime: 500 });
+  const pinger = system.define(chart());
+  // These take the slots the stored actor had.
+  const squatter = system.spawn(system.define(echo()));
+  const named = system.spawn(system.define(echo()), { name: 'e' });
+  const again = system.spawn(pinger, { binding: stored.data, pendingSends: stored.sends });
+  await system.advanceTo(1000);
+  await system.flush();
+  assert.deepEqual(again.inspect().data.log, ['tick'], 'the send to self reached the respawned actor');
+  assert.deepEqual(squatter.inspect().data.heard, [], 'not the actor in its old slot');
+  assert.deepEqual(named.inspect().data.heard, ['hello'], 'the named receiver got its send');
+
+  // To an unnamed other actor: an ActorID, which a stored entry cannot name again.
+  const peer = system.spawn(system.define(echo()));
+  again.data().peer = String(peer.inspect().sessionID);
+  again.post('forward');
+  await system.flush();
+  const [toPeer] = again.inspect().delayedSends;
+  assert.deepEqual([toPeer.destination.slot, toPeer.destination.generation], [peer.slot, peer.generation]);
+  const live = system.spawn(pinger, { pendingSends: [toPeer] });
+  assert.throws(() => system.spawn(pinger, { pendingSends: JSON.parse(JSON.stringify([toPeer])) }),
+    (error) => error instanceof TinyactorsError && error.code === 'invalid' && /pendingSends\[0\].*unnamed actor/.test(error.message));
+  await system.advanceTo(2000);
+  await system.flush();
+  assert.deepEqual(peer.inspect().data.heard, ['hi', 'hi'], 'a live ActorID of this system re-arms as it is');
+  assert.equal(live.inspect().delayedSendCount, 0);
+  system.close();
+}
+
 (async () => {
   await roundTrip();
   await loaderDecides();
   await restartKeepsTimers();
+  await storedDestinations();
   console.log('offload.js passed');
 })().catch((error) => {
   console.error(error);

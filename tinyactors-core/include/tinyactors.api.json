@@ -2380,7 +2380,7 @@
           "shape": "counted",
           "direction": "in",
           "optional": true,
-          "doc": "Delayed sends to re-arm in the new session before it bootstraps (ADR 0074 section 8): records a host read from ta_actor_inspect() of an earlier session of this actor and stored with its data. Each keeps its send ID, due time, event, destination, target, data, content and trace parent; a due time already past fires on the next dispatch. The session's generated-ID counter moves past every generated ID among them. Event names must be this system's and content IDs the definition's (TA_ERR_INVALID otherwise). `target` and `data` are retained. `submitted` and `destination` of a custom processor's send are ignored: every record is armed afresh."
+          "doc": "Delayed sends to re-arm in the new session before it bootstraps (ADR 0074 section 8): records a host read from ta_actor_inspect() of an earlier session of this actor and stored with its data. Each keeps its send ID, due time, event, destination, target, data, content and trace parent; a due time already past fires on the next dispatch. The session's generated-ID counter moves past every generated ID among them. Event names must be this system's and content IDs the definition's (TA_ERR_INVALID otherwise). `target` and `data` are retained. `submitted` and `destination` of a custom processor's send are ignored: every record is armed afresh. An SCXML send whose `destination` is runtime ID 0 goes to the new session itself, so a host re-arms a send to self without knowing the session's ID: an earlier session's runtime or session ID names another actor by then."
         },
         {
           "name": "pending_send_count",

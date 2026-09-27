@@ -982,7 +982,7 @@ class System {
         serviceHandle: invoke.service_handle,
       })),
       delayedSendCount: view.delayed_sends.length,
-      delayedSends: view.delayed_sends.map((send) => this.#delayedSend(view.definition_id, send)),
+      delayedSends: view.delayed_sends.map((send) => this.#delayedSend(view, send)),
       scheduling: this.#native.scheduling(slot, generation),
       // The top-level final it reached, or null (core ADR 0056).
       finalState: view.final_state === NO_STATE ? null : stateName(view.final_state),
@@ -1045,9 +1045,13 @@ class System {
     return this.#usesJavaScript(definitionID) ? core.actor_datamodel_root(this.#native, slot, generation) : undefined;
   }
 
-  // One pending delayed send, from core's ta_delayed_send_info (core ADR 0054).
-  // A literal target is text in the owner's definition, named by content ID.
-  #delayedSend(definitionID, send) {
+  // One pending delayed send of the actor `view` inspects, from core's
+  // ta_delayed_send_info (core ADR 0054). A literal target is text in the
+  // owner's definition, named by content ID. A destination naming the owner,
+  // by its runtime ID or its session ID, is "self": stored and re-armed in
+  // another session, those IDs would name another actor (core ADR 0074).
+  #delayedSend(view, send) {
+    const definitionID = view.definition_id;
     let id = null;
     try {
       id = core.send_id_format(this.#native, send.send_id);
@@ -1061,7 +1065,7 @@ class System {
       due: send.due,
       event: this.#events.name(send.event),
       ioType: core.system_atom_text(this.#native, send.io_type),
-      destination: this.#destination(send.destination),
+      destination: isOwner(view, send.destination) ? 'self' : this.#destination(send.destination),
       target: send.has_target_text
         ? new TextDecoder().decode(core.definition_content(this.#native, definitionID, send.target_text).bytes)
         : send.target,
@@ -1081,7 +1085,7 @@ class System {
     if (!Array.isArray(sends)) {
       throw new TinyactorsError('spawn(): pendingSends must be an array of inspect().delayedSends entries', 'invalid');
     }
-    return sends.map((send) => {
+    return sends.map((send, index) => {
       if (send === null || typeof send !== 'object' || !Number.isSafeInteger(send.due) || typeof send.event !== 'string') {
         throw new TinyactorsError('spawn(): a pending send needs { due, event, ... } as inspect() gives it', 'invalid');
       }
@@ -1090,7 +1094,7 @@ class System {
         due: send.due,
         event: this.#events.id(send.event),
         io_type: send.ioType ? core.system_intern_atom(this.#native, send.ioType) : 0,
-        destination: destinationRef(send.destination),
+        destination: this.#destinationRef(send.destination, index),
         target: send.targetContent === null || send.targetContent === undefined ? send.target : undefined,
         data: send.data,
         submitted: false,
@@ -1101,6 +1105,30 @@ class System {
         trace: send.traceparent ? this.#native.spawnTrace(send.traceparent, false) : NO_TRACE,
       };
     });
+  }
+
+  // A stored pending send's destination as core's actor ref (core ADR 0074
+  // section 8). "self" and null (a custom I/O processor's send, which has
+  // none) are runtime ID 0: core re-arms an SCXML send there to the new
+  // session. An address is named. An unnamed other actor re-arms only as a
+  // live ActorID of this system: a stored slot and generation would name
+  // whichever actor holds that slot by now.
+  #destinationRef(destination, index) {
+    if (destination === 'self' || destination === null || destination === undefined) {
+      return { kind: 'runtime', runtime: { slot: 0, generation: 0 } };
+    }
+    if (destination instanceof ActorID) {
+      if (destination.system !== this) {
+        throw new TinyactorsError(`spawn(): pendingSends[${index}] is a send to an unnamed actor of another system, ` +
+          'which cannot be re-armed here', 'invalid');
+      }
+      return { kind: 'runtime', runtime: { slot: destination.slot, generation: destination.generation } };
+    }
+    if (typeof destination === 'object' && typeof destination.family === 'string' && typeof destination.name === 'string') {
+      return { kind: 'named', named: { family: { name: destination.family }, name: destination.name } };
+    }
+    throw new TinyactorsError(`spawn(): pendingSends[${index}] is a send to an unnamed actor, which a stored entry ` +
+      'cannot name again: send to an address, or to the actor itself', 'invalid');
   }
 
   // A resolved destination: an ActorID, an address, or null for a custom
@@ -2044,16 +2072,15 @@ function traceparentOf(trace) {
   }
 }
 
-// A pending send's destination as core's actor ref: an ActorID, an address,
-// or null for a custom I/O processor's send, which has none (runtime 0).
-function destinationRef(destination) {
-  if (destination instanceof ActorID) {
-    return { kind: 'runtime', runtime: { slot: destination.slot, generation: destination.generation } };
+// True when core's actor ref names the inspected actor: its runtime ID, or
+// its session ID, which a send to `#_scxml_<session>` keeps after a reload.
+function isOwner(view, ref) {
+  if (ref?.kind !== 'runtime' || ref.runtime.generation === 0) {
+    return false;
   }
-  if (destination !== null && destination !== undefined && typeof destination === 'object') {
-    return { kind: 'named', named: { family: { name: destination.family }, name: destination.name } };
-  }
-  return { kind: 'runtime', runtime: { slot: 0, generation: 0 } };
+  const { slot, generation } = ref.runtime;
+  return (slot === view.actor.slot && generation === view.actor.generation) ||
+    ((BigInt(generation) << 32n) | BigInt(slot)) === BigInt(view.session_id);
 }
 
 // A named address { family, name } with non-empty text (ADR 0006).

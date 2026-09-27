@@ -11508,6 +11508,13 @@ static ta_result ta_actor_rearm_sends(ta_system *system, ta_actor *actor, const 
             .invoke_id = TA_INVOKE_ID_NONE,
             .trace = info->trace,
         };
+        /* Runtime ID 0 names no actor, so as an SCXML send's destination it
+         * means the session being spawned: a send to itself, stored by a
+         * host that cannot know the new session's ID in advance. */
+        if (send.destination.kind == TA_ACTOR_REF_RUNTIME && send.destination.as.runtime == 0 &&
+            ta_system_is_scxml_io(system, send.io_type)) {
+            send.destination.as.runtime = actor->record.id;
+        }
         ta_actor_ref_retain(&send.destination);
         ta_value_retain(&send.target);
         ta_value_retain(&send.data);

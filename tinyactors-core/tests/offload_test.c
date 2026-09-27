@@ -413,6 +413,13 @@ static void test_rearm_at_spawn(void) {
      * express, so "ping" is given one here. */
     CHECK(captured[0].due == 6000 && captured[1].due == 8000);
     captured[1].send_id = TA_GENERATED_SEND_ID_BIT | 5u;
+    /* Both are sends to self, resolved to the first session's runtime ID.
+     * A host stores such a destination as runtime ID 0, which re-arms it
+     * to the new session; another actor takes the first one's slot. */
+    CHECK(captured[0].destination.kind == TA_ACTOR_REF_RUNTIME && captured[0].destination.as.runtime == first);
+    captured[0].destination.as.runtime = 0;
+    captured[1].destination.as.runtime = 0;
+    ta_actor_id squatter = spawn(&f, NULL);
 
     CHECK(ta_system_set_time(f.system, 3000) == TA_OK);
     ta_actor_id second = 0;
@@ -434,6 +441,10 @@ static void test_rearm_at_spawn(void) {
         }
     }
     CHECK(rearmed == 2);
+    for (uint32_t index = 0; index < view.delayed_send_count; index += 1) {
+        const ta_actor_ref *to = &view.delayed_sends[index].destination;
+        CHECK(to->kind == TA_ACTOR_REF_RUNTIME && to->as.runtime == second && to->as.runtime != squatter);
+    }
 
     /* <cancel sendid="tick-1"> finds the re-armed send, and the new one. */
     deliver(&f, second, "stop");

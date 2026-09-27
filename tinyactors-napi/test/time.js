@@ -50,7 +50,7 @@ async function manualOrder() {
     { id: null, due: 1100, event: 'a', submitted: false },
     { id: 'late', due: 1200, event: 'b', submitted: false },
   ]);
-  assert.equal(sends[0].destination.slot, actor.slot, 'a send to self resolves to the actor');
+  assert.equal(sends[0].destination, 'self', 'a send to self names the actor itself');
   assert.equal(actor.inspect().delayedSendCount, 2);
 
   await system.advanceBy(99);
