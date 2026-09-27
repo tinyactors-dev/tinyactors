@@ -1,6 +1,6 @@
 # ADR 0054: Delayed sends live with their owner; the global index orders owners
 
-**Status:** Accepted and implemented; refines ADR 0026, applies ADR 0018. See the implementation notes for where the code differs from the text. A pending send also carries its trace parent, per ADR 0067.
+**Status:** Accepted and implemented; refines ADR 0026, applies ADR 0018. See the implementation notes for where the code differs from the text. A pending send also carries its trace parent, per ADR 0067. ADR 0084 adds the public withdrawal of one pending send by owner and send ID; submitted sends are not withdrawn.
 **Date:** 2026-09-23
 
 ## Context

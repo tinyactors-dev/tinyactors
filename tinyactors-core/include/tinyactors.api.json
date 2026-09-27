@@ -14810,6 +14810,12 @@
           "value": 29,
           "symbol": "abandoned",
           "doc": "`event`: the external event, or none; `dropped`: the internal events discarded; MACROSTEP_END follows"
+        },
+        {
+          "name": "TA_TRACE_WITHDRAWN",
+          "value": 30,
+          "symbol": "withdrawn",
+          "doc": "`send`: ta_actor_withdraw_send() removed it"
         }
       ],
       "doc": "======================================================================== Tracing (ADR 0067)\n\nCore reports its decisions and the data they changed to one trace sink per system, as flat records. A record is written once, when the step that produced it has committed: a step that runs out of memory and runs again (ADR 0070) writes its records on the run that commits, and the step counters move only then, so an interrupted run and an uninterrupted one write the same records apart from PAUSED, RESUMED and STOPPED.",
@@ -18162,6 +18168,43 @@
           "name": "actor",
           "type": {
             "type": "ta_actor_id"
+          }
+        }
+      ]
+    },
+    {
+      "name": "ta_actor_withdraw_send",
+      "doc": "Withdraws a pending delayed send of `actor` from outside the chart (ADR 0084), as a <cancel > of `send` in that actor would: every pending send of the actor with that ID that the router has not yet been offered is removed and released. `send` is the `send_id` that inspection's `delayed_sends` reports; ta_send_id_parse() turns the text a chart sees into one. Only the actor's own sends can be named (ADR 0012). It may be called between macrosteps or while one is paused, allocates nothing, and writes a WITHDRAWN trace record outside any macrostep.\n\n- TA_ERR_INVALID: `send` is 0, which names no send. - TA_ERR_NOT_FOUND: no resident actor has that ID, or it holds no pending send with that ID: never made, already dispatched, cancelled or withdrawn. - TA_ERR_DONE: its only sends with that ID are submitted: the router refused them once and they wait to be offered again. A submitted send has been sent and belongs to its receiver (ADR 0054), so it is not withdrawn.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          }
+        },
+        {
+          "name": "send",
+          "type": {
+            "type": "ta_send_id"
           }
         }
       ]

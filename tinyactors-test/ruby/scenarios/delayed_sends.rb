@@ -207,4 +207,40 @@ TinyactorsTest.scenarios 'delayed sends at their owner' do
     assert_equal ['tick.one'], receiver.data('.inbox')
     destroy_image(image)
   end
+
+  # Catches: an operator's withdrawal (ADR 0084) that leaves the send in the
+  # global index (it would still fire), removes another owner's send with
+  # the same ID, or writes no record. It names the owner and a send ID from
+  # inspection, and the rest go out as before.
+  scenario 'an operator withdraws one pending send of the actor it names' do
+    recording_trace(kinds: %i[withdrawn])
+    receiver = spawn DelayedSendsAtOwner.receiver
+    to = "#_scxml_#{receiver.handle}"
+    a = spawn DelayedSendsAtOwner.sender(:a, [['tick.one', '10s'], ['tick.two', '40s']], to: to)
+    b = spawn DelayedSendsAtOwner.sender(:b, [['tick.one', '20s']], to: to)
+    one = a.inspect_actor[:delayed_sends].first[:send_id]
+
+    assert_equal 'ok', ta.actor.withdraw_send(system: system_handle, actor: a.handle, send: one)[:result]
+    assert_equal [['tick.two', 40_000, false]], DelayedSendsAtOwner.pending(self, a), 'a\'s tick.one is gone'
+    assert_equal [['tick.one', 20_000, false]], DelayedSendsAtOwner.pending(self, b), 'b\'s send of that ID stays'
+    assert_equal 20_000, next_deadline, 'the owner is re-keyed to its next send'
+    assert_equal ["withdrawn send #{one}"], trace_lines(actor: a)
+    assert_equal 'err_not_found', ta.actor.withdraw_send(system: system_handle, actor: a.handle, send: one)[:result],
+                 'a send withdrawn once is not found again'
+
+    advance_time 60_000
+    assert_equal %w[tick.one tick.two], receiver.data('.inbox'), 'b\'s tick.one and a\'s tick.two'
+  end
+
+  # Catches: a withdrawal that takes back a send the router already refused
+  # once: it was sent and belongs to its receiver (ADR 0054), so it stays.
+  scenario 'a refused send is not withdrawn' do
+    receiver, sender = DelayedSendsAtOwner.refused(self)
+    send_id = sender.inspect_actor[:delayed_sends].first[:send_id]
+    result = ta.actor.withdraw_send(system: system_handle, actor: sender.handle, send: send_id)[:result]
+    assert_equal 'err_done', result, 'a submitted send is done'
+    run_system('offer it again')
+    assert_equal ['tick.one'], receiver.data('.inbox')
+  end
+
 end

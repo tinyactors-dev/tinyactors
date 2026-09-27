@@ -11447,6 +11447,45 @@ TA_API ta_result ta_actor_abandon(ta_system *system, ta_actor_id id) {
     return ta_interpreter_abandon(system, actor);
 }
 
+/*
+ * An operator's withdrawal (ADR 0084): what a <cancel> of `send` in the
+ * actor does to its pending sends, from outside any macrostep. The actor
+ * changes, so an image captured before no longer describes it, and the
+ * record is lifecycle-like: its key is the session's next lifecycle key.
+ */
+TA_API ta_result ta_actor_withdraw_send(ta_system *system, ta_actor_id id, ta_send_id send) {
+    if (send == 0) {
+        return TA_ERR_INVALID;
+    }
+    ta_actor *actor = ta_actor_lookup(system, id);
+    ta_timer_list *list = actor == NULL ? NULL : ta_actor_timers(actor);
+    if (list == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    if (ta_timer_cancel(&system->timers, list, send) != TA_OK) {
+        for (uint32_t index = 0; index < list->count; index += 1u) {
+            if (list->sends[index].send_id == send) {
+                return TA_ERR_DONE; /* only submitted ones are left */
+            }
+        }
+        return TA_ERR_NOT_FOUND;
+    }
+    ta_actor_touch(actor);
+    TA_COUNT(system, actor->definition, sends_cancelled);
+    ta_step_key key = ta_trace_lifecycle_key(actor);
+    ta_trace_context none = {0};
+    if (ta_trace_lifecycle_wanted(&system->trace, TA_TRACE_WITHDRAWN, &none)) {
+        ta_trace_record record = ta_trace_record_blank(TA_TRACE_WITHDRAWN);
+        record.key = key;
+        record.actor = actor->record.id;
+        record.definition = actor->definition->id;
+        record.now = ta_clock_now(&system->clock);
+        record.send = send;
+        ta_trace_write(&system->trace, &record);
+    }
+    return TA_OK;
+}
+
 TA_API ta_result ta_actor_destroy(ta_system *system, ta_actor_id id) {
     ta_actor *actor = ta_actor_lookup(system, id);
     if (actor == NULL) {
