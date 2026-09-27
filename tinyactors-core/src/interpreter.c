@@ -182,13 +182,18 @@ static ta_trace_position ta_trace_nowhere(void) {
 }
 
 /* What a run keeps of where it stands: in scratch while it runs, in the
- * actor's continuation once it stopped. */
+ * actor's continuation once it stopped. The sets and the default-history
+ * map are read only at a microstep's start (ADR 0086). */
 typedef struct {
     ta_micro_position at;
     const ta_transition_id *enabled;
     uint32_t enabled_count;
     const ta_exec_frame *frames;
     uint32_t frame_count;
+    const uint64_t *to_exit;
+    const uint64_t *to_enter;
+    const uint64_t *default_entry;
+    const ta_state_id *default_history;
 } ta_run_view;
 
 /* The phase of a position, with its state and transition; no action. */
@@ -236,15 +241,86 @@ static ta_trace_position ta_phase_position(const ta_definition *definition, cons
     return position;
 }
 
+/* The first block of a state's handlers that holds a unit, or an empty one. */
+static ta_span32 ta_first_block(const ta_definition *definition, ta_span32 handlers) {
+    for (uint32_t index = 0; index < handlers.length; index += 1u) {
+        ta_span32 block = definition->handlers[handlers.offset + index];
+        if (block.length != 0) {
+            return block;
+        }
+    }
+    return (ta_span32){0};
+}
+
+/* The position of the first action of `block`, run where `at` stands. */
+static ta_trace_position ta_unit_at(const ta_definition *definition, const ta_run_view *view, ta_micro_position at,
+                                    ta_span32 block) {
+    ta_run_view there = *view;
+    there.at = at;
+    ta_trace_position position = ta_phase_position(definition, &there);
+    position.action = block.length == 0 ? TA_ACTION_NONE : block.offset;
+    return position;
+}
+
+/*
+ * Where a microstep stands at its start (ADR 0086): the first unit it runs,
+ * found from its sets without running anything, in the order the microstep
+ * runs units: the <onexit> handlers of the exit set, highest first; the
+ * enabled transitions' content; then, for each state of the entry set,
+ * lowest first, its <onentry> handlers, its initial transition's content
+ * and its history default's content. A microstep with no unit stands at
+ * its first transition, with no action.
+ */
+static ta_trace_position ta_start_position(const ta_definition *definition, const ta_run_view *view) {
+    for (ta_state_id state = definition->state_count; state > 0; state -= 1u) {
+        ta_span32 block = ta_bits_get(view->to_exit, state - 1u)
+                              ? ta_first_block(definition, definition->states[state - 1u].onexit_handlers)
+                              : (ta_span32){0};
+        if (block.length != 0) {
+            return ta_unit_at(definition, view, (ta_micro_position){ .phase = TA_PHASE_EXIT, .state = state }, block);
+        }
+    }
+    ta_micro_position transitions = { .phase = TA_PHASE_TRANSITIONS };
+    for (uint32_t index = 0; index < view->enabled_count; index += 1u) {
+        ta_span32 block = ta_enabled_actions(definition, view->enabled[index]);
+        if (block.length != 0) {
+            transitions.state = index;
+            return ta_unit_at(definition, view, transitions, block);
+        }
+    }
+    for (ta_state_id state = 0; state < definition->state_count; state += 1u) {
+        if (!ta_bits_get(view->to_enter, state)) {
+            continue;
+        }
+        const ta_state_def *def = &definition->states[state];
+        ta_span32 block = ta_first_block(definition, def->onentry_handlers);
+        if (block.length == 0 && ta_bits_get(view->default_entry, state)) {
+            block = definition->initial_transitions[def->initial].actions;
+        }
+        ta_state_id history = view->default_history[state];
+        if (block.length == 0 && history != TA_STATE_NONE) {
+            block = definition->transitions[definition->states[history].transitions.offset].actions;
+        }
+        if (block.length != 0) {
+            return ta_unit_at(definition, view, (ta_micro_position){ .phase = TA_PHASE_ENTER, .state = state }, block);
+        }
+    }
+    return ta_unit_at(definition, view, (ta_micro_position){ .phase = TA_PHASE_TRANSITIONS }, (ta_span32){0});
+}
+
 /*
  * Where a stopped run stands (ADR 0083): its phase, and the unit of
  * executable content it runs next. With a <foreach> on top of the frames,
  * that unit is the loop's next iteration: `action` is the <foreach> and
  * `iteration` the one it binds next. Otherwise it is the next action of the
  * innermost open block, in the iteration of the innermost <foreach> whose
- * body that block is. With no open block there is no action.
+ * body that block is. With no open block there is no action. At a
+ * microstep's start it is the first unit the microstep runs (ADR 0086).
  */
 static ta_trace_position ta_run_position(const ta_definition *definition, const ta_run_view *view) {
+    if (view->at.phase == TA_PHASE_START) {
+        return ta_start_position(definition, view);
+    }
     ta_trace_position position = ta_phase_position(definition, view);
     if (view->frame_count == 0) {
         return position;
@@ -264,7 +340,9 @@ static ta_trace_position ta_run_position(const ta_definition *definition, const 
 
 static ta_run_view ta_interpreter_view(const ta_interpreter *it) {
     return (ta_run_view){ .at = it->at, .enabled = it->enabled, .enabled_count = it->enabled_count,
-                          .frames = it->exec_frames, .frame_count = it->exec_count };
+                          .frames = it->exec_frames, .frame_count = it->exec_count, .to_exit = it->to_exit,
+                          .to_enter = it->to_enter, .default_entry = it->default_entry,
+                          .default_history = it->default_history };
 }
 
 ta_trace_position ta_actor_position(const ta_actor *actor) {
@@ -272,9 +350,14 @@ ta_trace_position ta_actor_position(const ta_actor *actor) {
     if (!actor->macrostep || saved == NULL) {
         return ta_trace_nowhere();
     }
+    /* The sets in their order: active, to exit, to enter, default entry. */
+    const uint64_t *sets = ta_continuation_sets(saved);
     ta_run_view view = { .at = saved->at, .enabled = ta_continuation_enabled(saved),
                          .enabled_count = saved->enabled_count, .frames = ta_continuation_frames(saved),
-                         .frame_count = saved->frame_count };
+                         .frame_count = saved->frame_count, .to_exit = sets + saved->words,
+                         .to_enter = sets + 2u * (size_t)saved->words,
+                         .default_entry = sets + 3u * (size_t)saved->words,
+                         .default_history = ta_continuation_history(saved) };
     return ta_run_position(actor->definition, &view);
 }
 
@@ -2984,8 +3067,6 @@ static void ta_exit_begin(ta_interpreter *it) {
             }
         }
     }
-    it->at.state = definition->state_count;
-    it->at.stage = TA_EXIT_HANDLERS;
 }
 
 /* Exits the exit set, highest first, from where `at` stands. */
@@ -3223,14 +3304,21 @@ static void ta_compact_sparse(ta_interpreter *it) {
 
 /* Opens the microstep of the enabled transitions: the exit set, history
  * recorded before anything exits, and the entry set; then its MICROSTEP
- * record. It changes the actor, so an image taken before it no longer
- * describes it. `event` is the event it takes, or null. */
+ * record. It stands at its start (ADR 0086). It changes the actor, so an
+ * image taken before it no longer describes it. `event` is the event it
+ * takes, or null. */
 static void ta_microstep_begin(ta_interpreter *it, const ta_event *event) {
     ta_actor_touch(it->actor);
-    it->at = (ta_micro_position){ .phase = TA_PHASE_EXIT };
+    it->at = (ta_micro_position){ .phase = TA_PHASE_START };
     ta_exit_begin(it);
     ta_enter_set(it);
     ta_trace_microstep(it, event);
+}
+
+/* Passes a microstep's start: its first state to exit is next. */
+static void ta_microstep_pass_start(ta_interpreter *it) {
+    it->at = (ta_micro_position){ .phase = TA_PHASE_EXIT, .state = it->definition->state_count,
+                                  .stage = TA_EXIT_HANDLERS };
 }
 
 /*
@@ -3241,6 +3329,15 @@ static void ta_microstep_begin(ta_interpreter *it, const ta_event *event) {
  * ADR 0070).
  */
 static ta_result ta_microstep(ta_interpreter *it) {
+    if (it->at.phase == TA_PHASE_START) {
+        /* A microstep this call began; one it resumed at its start has
+         * passed it already. Nothing has run, so stopping here needs no
+         * block open (ADR 0086). */
+        if (it->pause_at_start && it->actor->bootstrapped) {
+            return TA_EXEC_PAUSED;
+        }
+        ta_microstep_pass_start(it);
+    }
     ta_result result = TA_OK;
     it->in_microstep = true;
     if (it->at.phase == TA_PHASE_EXIT) {
@@ -3494,6 +3591,7 @@ static ta_result ta_run_finish(ta_interpreter *it) {
 /* Continues the phase `at` names. */
 static ta_result ta_continue_phase(ta_interpreter *it) {
     switch (it->at.phase) {
+        case TA_PHASE_START:
         case TA_PHASE_EXIT:
         case TA_PHASE_TRANSITIONS:
         case TA_PHASE_ENTER:
@@ -3956,12 +4054,17 @@ ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_act
     uint32_t limit = actor->definition->microstep_limit == 0 ? system->microstep_limit
                                                             : actor->definition->microstep_limit;
     it->microstep_limit = params->no_microstep_limit || limit == TA_MICROSTEP_LIMIT_NONE ? 0 : limit;
+    it->pause_at_start = params->pause_at_microstep_start;
     if (it->at.phase != TA_PHASE_NONE) {
         /* Continuing a stopped run changes the actor again, so an image
          * taken while it was stopped no longer describes it. */
         ta_actor_touch(actor);
     }
     ta_trace_control(it, TA_TRACE_RESUMED);
+    if (it->at.phase == TA_PHASE_START) {
+        /* It stopped at a microstep's start: this call passes it. */
+        ta_microstep_pass_start(it);
+    }
     result = ta_run(it, params->budget, status);
     /* The live set lives in scratch memory; between calls In() derives from the configuration. */
     actor->live_active = NULL;

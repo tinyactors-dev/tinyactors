@@ -204,11 +204,14 @@ module TinyactorsTest
     end
 
     # One ta_actor_resume call with `budget` microsteps and, when not zero,
-    # `action_budget` units of executable content (ADR 0061); returns the
-    # status: "paused", "stable", or "done".
-    def resume(budget:, action_budget: 0)
+    # `action_budget` units of executable content (ADR 0061); with
+    # `pause_at_microstep_start`, it also pauses at the start of each
+    # microstep it begins (ADR 0086). Returns the status: "paused",
+    # "stable", or "done".
+    def resume(budget:, action_budget: 0, pause_at_microstep_start: false)
       response = @context.ta.actor.resume(system: @context.system_handle, actor: handle, budget: budget,
-                                          action_budget: action_budget)
+                                          action_budget: action_budget,
+                                          pause_at_microstep_start: pause_at_microstep_start)
       @context.core('ta_actor_resume', response).fetch(:status)
     end
 
@@ -316,11 +319,10 @@ module TinyactorsTest
       'null' => { '$adapter' => 'datamodel.null' }.freeze
     }.freeze
     DEFAULT_DATAMODEL = 'jq'
-    # Microsteps per ta_actor_resume call, and dispatch rounds before a step
-    # is declared non-quiescent.
+    # Microsteps per ta_actor_resume call, and delayed sends per
+    # ta_system_dispatch_due call.
     RESUME_BUDGET = 1024
     DISPATCH_BUDGET = 64
-    MAX_ROUNDS = 10_000
 
     attr_reader :now, :instruments, :trace, :run
     # With count_allocations: how many allocations each logical
@@ -334,7 +336,9 @@ module TinyactorsTest
     # several runs can share one host process. `trace: true` records a Trace
     # after every step. `resume_budget` and `dispatch_budget` are passed to
     # ta_actor_resume and ta_system_dispatch_due; `resume_action_budget` is
-    # ta_actor_resume's action budget (ADR 0061), zero for none. `after_step` is called as
+    # ta_actor_resume's action budget (ADR 0061), zero for none, and
+    # `resume_pause_at_microstep_start` its pause at each microstep's start
+    # (ADR 0086). `after_step` is called as
     # after_step.call(context, step_index) once a step is quiescent, before
     # it is traced and its invariants are checked; the system is run to
     # quiescence again after it, without further hooks or trace steps.
@@ -343,15 +347,16 @@ module TinyactorsTest
     # count:, on_stop:} fails allocations inside one of them (see
     # #assert_allocation_failures_invisible).
     def initialize(driver, group, charts, run: 'main', trace: false, resume_budget: RESUME_BUDGET,
-                   dispatch_budget: DISPATCH_BUDGET, resume_action_budget: 0, after_step: nil,
-                   count_allocations: false, allocation_fault: nil)
+                   dispatch_budget: DISPATCH_BUDGET, resume_action_budget: 0,
+                   resume_pause_at_microstep_start: false, after_step: nil, count_allocations: false,
+                   allocation_fault: nil)
       @driver = driver
       @group = group
       @charts = charts
       @run = run
-      @resume_budget = resume_budget
-      @resume_action_budget = resume_action_budget
-      @dispatch_budget = dispatch_budget
+      @scheduler = Scheduler.new(self, resume: method(:resume_logical), budget: resume_budget,
+                                       action_budget: resume_action_budget, dispatch_budget: dispatch_budget,
+                                       pause_at_microstep_start: resume_pause_at_microstep_start)
       @after_step = after_step
       @definitions = {}
       @event_names = {}
@@ -461,10 +466,11 @@ module TinyactorsTest
     end
 
     # Runs every actor to a stable state and dispatches due delayed sends
-    # until nothing is left to do at the current logical time. Then runs the
-    # after_step hook, records the trace step, and checks invariants.
+    # until nothing is left to do at the current logical time (Scheduler).
+    # Then runs the after_step hook, records the trace step, and checks
+    # invariants.
     def run_system(step)
-      quiesce(step)
+      @scheduler.run(step)
       return if @in_hook
 
       index = @step_index
@@ -473,7 +479,7 @@ module TinyactorsTest
         begin
           @in_hook = true
           @after_step.call(self, index)
-          quiesce("#{step}, after its hook")
+          @scheduler.run("#{step}, after its hook")
         ensure
           @in_hook = false
         end
@@ -531,11 +537,13 @@ module TinyactorsTest
     # allocation; the names of those whose resume never answered err_nomem,
     # because the allocation that failed was a host operation's (a router
     # delivering to another actor), which handled it itself; and every stop
-    # (#stops) of every run.
-    def assert_allocation_failures_invisible(counts: [1], on_stop: nil, chart_errors: false, normalize: nil, &body)
+    # (#stops) of every run. Other options (`resume_action_budget:`, ...)
+    # are the runs' Context options.
+    def assert_allocation_failures_invisible(counts: [1], on_stop: nil, chart_errors: false, normalize: nil,
+                                             **options, &body)
       raise ScenarioError, 'assert_allocation_failures_invisible needs a block' unless body
 
-      reference = fresh_run('baseline', normalize, count_allocations: true, &body)
+      reference = fresh_run('baseline', normalize, count_allocations: true, **options, &body)
       points = reference.resume_costs.each_with_index.flat_map do |allocations, resume|
         Array.new(allocations) do |after|
           counts.map do |count|
@@ -547,7 +555,7 @@ module TinyactorsTest
       stops = []
       points.each do |fault|
         name = "allocation #{fault[:after] + 1} of resume #{fault[:resume]} failing #{fault[:count]}x"
-        run = fresh_run(name, normalize, allocation_fault: fault, &body)
+        run = fresh_run(name, normalize, allocation_fault: fault, **options, &body)
         difference = Trace.difference(reference.trace, run.trace, actual_name: name)
         raise AssertionFailed, difference if difference
 
@@ -1340,64 +1348,34 @@ module TinyactorsTest
       context
     end
 
-    def quiesce(step)
-      MAX_ROUNDS.times do
-        # Every resident actor with work, including children spawned by
-        # invokers; settling one can make others runnable, so repeat.
-        runnable = rpc('system.actors', system: system_handle, runnable: true)
-        unless runnable.empty?
-          runnable.each { |id| settle(id) }
-          next
-        end
-        due = core('ta_system_dispatch_due', ta.system.dispatch_due(system: system_handle, budget: @dispatch_budget))
-        next if due.fetch(:dispatched).positive? || due.fetch(:more_due)
-
-        return
+    # One logical ta_actor_resume with the budgets the Scheduler chose. A
+    # run counting allocations records what it costs. A run whose
+    # allocation fault is armed for it fails the fault's allocations inside
+    # it, checks the actor each time that stops it with err_nomem
+    # (#stopped), and resumes it again until it runs: those retries are part
+    # of the same logical resume. Returns the last response and the actor's
+    # ID, which a residency cycle changes.
+    def resume_logical(id, budget:, action_budget: 0, pause_at_microstep_start: false)
+      resume_actor = lambda do |actor|
+        ta.actor.resume(system: system_handle, actor: actor, budget: budget, action_budget: action_budget,
+                        pause_at_microstep_start: pause_at_microstep_start)
       end
-      raise ScenarioError, "#{step}: the system did not become quiescent in #{MAX_ROUNDS} rounds"
-    end
-
-    # Resumes an actor until its macrostep is finished. An invoked child may
-    # be destroyed while others run, when its parent cancels the invocation.
-    def settle(id)
-      MAX_ROUNDS.times do
-        response, id = resume_logical(id)
-        return if response[:result] == 'err_not_found'
-
-        status = core('ta_actor_resume', response).fetch(:status)
-        return if %w[stable done].include?(status)
-        raise CoreResultError.new('ta_actor_resume', "status #{status}") unless status == 'paused'
-      end
-      raise ScenarioError, "actor #{id}: macrostep did not finish in #{MAX_ROUNDS} resumes"
-    end
-
-    def resume_actor(id)
-      ta.actor.resume(system: system_handle, actor: id, budget: @resume_budget, action_budget: @resume_action_budget)
-    end
-
-    # One logical ta_actor_resume. A run counting allocations records what
-    # it costs. A run whose allocation fault is armed for it fails the
-    # fault's allocations inside it, checks the actor each time that stops
-    # it with err_nomem (#stopped), and resumes it again until it runs:
-    # those retries are part of the same logical resume. Returns the last
-    # response and the actor's ID, which a residency cycle changes.
-    def resume_logical(id)
       index = @resume_index
       @resume_index += 1
-      return [resume_actor(id), id] unless @allocation_fault || @count_allocations
+      return [resume_actor.call(id), id] unless @allocation_fault || @count_allocations
 
       fault = @allocation_fault if @allocation_fault && @allocation_fault[:resume] == index
       probe_event
       before = allocator.stats[:allocations]
       allocator.arm_fault(after: fault[:after], count: fault[:count]) if fault
-      response = resume_actor(id)
+      response = resume_actor.call(id)
       retries = 0
       while fault && response[:result] == 'err_nomem'
         retries += 1
         raise ScenarioError, "resume #{index}: still out of memory after #{retries} retries" if retries > fault[:count] + 1
 
         id = stopped(id, index, fault)
-        response = resume_actor(id)
+        response = resume_actor.call(id)
       end
       allocator.clear_faults if fault
       @resume_costs << allocator.stats[:allocations] - before if @count_allocations

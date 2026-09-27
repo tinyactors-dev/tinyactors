@@ -26,9 +26,12 @@ typedef struct {
 /*
  * Where a run stands between two steps it can stop at (ADR 0061 section 2,
  * ADR 0070). NONE: nothing is open, and the actor holds all its state. The
- * microstep's phases are EXIT, TRANSITIONS and ENTER. The others are the
- * stretches outside a microstep that run chart code or start services, and
- * so can run out of memory after something is visible:
+ * microstep's phases are START, EXIT, TRANSITIONS and ENTER. START: its
+ * transitions are selected, its sets computed and its history recorded,
+ * and nothing of it has run; a run stops there only when its caller asked
+ * (ADR 0086). The others are the stretches outside a microstep that run
+ * chart code or start services, and so can run out of memory after
+ * something is visible:
  *
  *   DATA      the bootstrap's data: declaring (stage 0, `handler` the next
  *             declaration), then initializing (stage 1, `state` 0 for the
@@ -46,6 +49,7 @@ typedef struct {
  */
 typedef enum {
     TA_PHASE_NONE = 0,
+    TA_PHASE_START,
     TA_PHASE_EXIT,
     TA_PHASE_TRANSITIONS,
     TA_PHASE_ENTER,
@@ -124,7 +128,7 @@ typedef struct ta_continuation {
 
 /* The bytes a continuation of this shape takes; `shape` has the counts set. */
 size_t ta_continuation_bytes(const ta_continuation *shape);
-/* Whether the phase is one of a microstep's (EXIT, TRANSITIONS, ENTER). */
+/* Whether the phase is one of a microstep's (START, EXIT, TRANSITIONS, ENTER). */
 bool ta_run_phase_in_microstep(ta_run_phase phase);
 uint64_t *ta_continuation_sets(ta_continuation *continuation);
 uint64_t *ta_continuation_decls(ta_continuation *continuation);

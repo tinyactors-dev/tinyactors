@@ -2607,7 +2607,11 @@ typedef struct { TA_IN const ta_actor_address *address; TA_OUT ta_actor_id *out;
  * action of a block, an <if> and a <foreach> included, and each <foreach>
  * iteration. Either one reached answers TA_RUN_PAUSED, and the next call
  * continues where this one stopped. Zero leaves pausing to `budget` alone.
- * A pause that cannot save its position keeps running to the next unit.
+ * `pause_at_microstep_start`, when true, also pauses at the start of every
+ * microstep this call begins (ADR 0086): after its transitions are
+ * selected, before its first unit and before any state is exited. The
+ * position is that first unit's. A call that resumes from such a start
+ * passes it. The bootstrap's microstep never pauses there.
  */
 typedef struct {
     ta_actor_id actor;
@@ -2619,6 +2623,8 @@ typedef struct {
      * it for an actor an operator released after TA_ERR_RUNAWAY.
      */
     bool no_microstep_limit;
+    /* Pauses before the first unit of every microstep it begins (ADR 0086). */
+    bool pause_at_microstep_start;
 } ta_actor_resume_params;
 typedef struct {
     ta_actor_id actor;

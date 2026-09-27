@@ -76,5 +76,6 @@ void ta_continuation_free(ta_allocator allocator, ta_continuation **continuation
 }
 
 bool ta_run_phase_in_microstep(ta_run_phase phase) {
-    return phase == TA_PHASE_EXIT || phase == TA_PHASE_TRANSITIONS || phase == TA_PHASE_ENTER;
+    return phase == TA_PHASE_START || phase == TA_PHASE_EXIT || phase == TA_PHASE_TRANSITIONS ||
+           phase == TA_PHASE_ENTER;
 }

@@ -10,9 +10,12 @@ there.
 **Inside a phase** a run stops in two ways. A pause (ADR 0061) stops the
 executor between two units of executable content of a microstep: an
 action of a block or a `<foreach>` iteration, counted against
-`action_budget`. Running out of memory (ADR 0070) stops it before the step
+`action_budget`. With `pause_at_microstep_start` (ADR 0086) it also stops
+a microstep at its `START`, after its transitions are selected and its
+sets computed and before anything of it runs; a run that resumes from
+there passes it. Running out of memory (ADR 0070) stops it before the step
 that failed, in any phase: the microstep's (`EXIT`, `TRANSITIONS`,
-`ENTER`), the bootstrap's `DATA` and `SCRIPT`, `FINALIZE` and `SELECT`
+`ENTER`; nothing between selection and `START` allocates), the bootstrap's `DATA` and `SCRIPT`, `FINALIZE` and `SELECT`
 after an external event was taken, `INVOKES` at the end of a macrostep,
 and `FINISH` at a top-level final state. What the interpreter held in its
 scratch then moves into one `ta_continuation`, reached from the actor's
@@ -59,3 +62,15 @@ is allowed (ADR 0082).
 The implementation never reports a half-completed microstep as
 `TA_RUN_STABLE`, and the configuration it reports while paused is the one
 after the last completed microstep.
+
+Where a stopped run stands is read from the continuation (ADR 0083).
+`ta_run_position()` maps a `ta_run_view` (the position, the enabled
+transitions and the frames) to a `ta_trace_position`: the phase and state,
+and the unit the run does next, from the top frame. The interpreter builds
+the view from scratch for `PAUSED`, `RESUMED` and `STOPPED` records, and
+`ta_actor_position()` builds it from the continuation for
+`ta_actor_inspect()`, so both report the same place. At a microstep's
+`START` the view's sets give the position: `ta_start_position()` finds the
+first unit the microstep will run, walking the exit set, the enabled
+transitions and the entry set in the order the microstep runs them, or,
+with none, stands at the first transition with no action (ADR 0086).

@@ -2232,7 +2232,7 @@
     },
     "ta_actor_resume_params": {
       "kind": "struct",
-      "doc": "`budget` is the number of microsteps this call may run (ADR 0009). `action_budget`, when not zero, is the number of units of executable content it may run before it pauses inside a microstep (ADR 0061): each action of a block, an <if > and a <foreach > included, and each <foreach > iteration. Either one reached answers TA_RUN_PAUSED, and the next call continues where this one stopped. Zero leaves pausing to `budget` alone. A pause that cannot save its position keeps running to the next unit.",
+      "doc": "`budget` is the number of microsteps this call may run (ADR 0009). `action_budget`, when not zero, is the number of units of executable content it may run before it pauses inside a microstep (ADR 0061): each action of a block, an <if > and a <foreach > included, and each <foreach > iteration. Either one reached answers TA_RUN_PAUSED, and the next call continues where this one stopped. Zero leaves pausing to `budget` alone. `pause_at_microstep_start`, when true, also pauses at the start of every microstep this call begins (ADR 0086): after its transitions are selected, before its first unit and before any state is exited. The position is that first unit's. A call that resumes from such a start passes it. The bootstrap's microstep never pauses there.",
       "fields": [
         {
           "name": "actor",
@@ -2269,6 +2269,13 @@
             "builtin": "bool"
           },
           "doc": "True lifts the microstep limit (ADR 0075) for this call: a host sets it for an actor an operator released after TA_ERR_RUNAWAY."
+        },
+        {
+          "name": "pause_at_microstep_start",
+          "type": {
+            "builtin": "bool"
+          },
+          "doc": "Pauses before the first unit of every microstep it begins (ADR 0086)."
         }
       ],
       "layout": {
@@ -2280,7 +2287,8 @@
             "budget": 8,
             "status": 16,
             "action_budget": 24,
-            "no_microstep_limit": 28
+            "no_microstep_limit": 28,
+            "pause_at_microstep_start": 29
           }
         },
         "wasm32-unknown-unknown": {
@@ -2291,7 +2299,8 @@
             "budget": 8,
             "status": 12,
             "action_budget": 16,
-            "no_microstep_limit": 20
+            "no_microstep_limit": 20,
+            "pause_at_microstep_start": 21
           }
         }
       }

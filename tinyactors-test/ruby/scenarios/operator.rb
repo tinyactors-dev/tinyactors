@@ -196,6 +196,7 @@ TinyactorsTest.scenarios 'operator transitions', chart: :operator do
   scenario 'pausing inside a jump is invisible' do
     variants = (1..3).to_h { |budget| ["action budget #{budget}", { resume_action_budget: budget }] }
     variants['resume budget 1'] = { resume_budget: 1 }
+    variants['every microstep start'] = { resume_pause_at_microstep_start: true }
     assert_equivalent_runs(variants: variants) do
       actor = spawn
       actor.jump :w1
@@ -203,6 +204,29 @@ TinyactorsTest.scenarios 'operator transitions', chart: :operator do
       actor.jump :wh
       actor.jump :end
     end
+  end
+
+  # Catches: a jump that cannot stop before its first unit, or that has
+  # exited a state or run a handler when it stops there; and an image that
+  # loses that stop (ADR 0086).
+  scenario 'a jump can stop before its first unit' do
+    actor = spawn(name: 'subject')
+    assert_equal 'ok', actor.post_jump(:w2)
+    assert_equal 'paused', actor.resume(budget: 1000, pause_at_microstep_start: true)
+    view = actor.inspect_actor
+    assert view[:microstep_in_progress], 'it stopped inside the jump'
+    assert_equal [:idle], actor.active
+    assert_equal [], actor.data('.log')
+    assert_equal 'enter', view.dig(:position, :at)
+    assert_equal :work, state_name(actor.definition, view.dig(:position, :state))
+    assert_equal 'err_busy', actor.abandon
+    cycle_residency(actor)
+    assert_equal view.slice(:step, :position), actor.inspect_actor.slice(:step, :position)
+    assert_equal 'paused', actor.resume(budget: 1000, action_budget: 1, pause_at_microstep_start: true)
+    assert_equal ['enter work operator.goto'], actor.data('.log')
+    run_system('finish the jump')
+    assert_equal %i[work w2], actor.active
+    assert_equal ['enter work operator.goto', 'enter w2 operator.goto'], actor.data('.log')
   end
 
   # Catches: an image that loses an operator transition waiting with its

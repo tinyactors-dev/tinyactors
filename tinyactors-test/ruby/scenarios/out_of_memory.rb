@@ -472,6 +472,21 @@ TinyactorsTest.scenarios 'running out of memory' do
         assert result[:stops].size > result[:runs], 'retries ran out of memory again'
       end
 
+      # Catches: a failed allocation right after a stop at a microstep's
+      # start (ADR 0086) that runs part of the microstep twice or not at
+      # all, or loses the stop.
+      if kind == :phases
+        at_starts = "#{label}: each failed allocation is invisible when every microstep stops at its start"
+        scenario "#{at_starts} (#{datamodel})" do
+          result = assert_allocation_failures_invisible(chart_errors: errors, resume_pause_at_microstep_start: true,
+                                                        resume_action_budget: 1) do
+            instance_exec(chart, nil, &body)
+          end
+          assert result[:runs] >= 3, "only #{result[:runs]} allocations were failed"
+          assert_equal [], result[:unreported], 'every failed allocation is reported'
+        end
+      end
+
       # Catches: a stopped actor whose image (ADR 0038) loses where it
       # stopped, so that the loaded actor redoes or skips a step. Loading
       # does not bring invocations back (ADR 0038), so the charts with

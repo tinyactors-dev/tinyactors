@@ -28,6 +28,16 @@ for (;;) {
 }
 ```
 
+`budget` bounds the microsteps one call runs. `action_budget`, when not
+zero, also bounds the units of executable content it runs (each action,
+and each `<foreach>` iteration), so a long handler cannot hold the thread
+(ADR 0061). A debugger steps with `action_budget = 1` and
+`pause_at_microstep_start = true`: each call then runs one unit, and a
+call that selects the next microstep's transitions pauses before its
+first unit, before any state is exited, so a stop always comes before
+the code it names (ADR 0086). `ta_actor_inspect()` says where the actor
+stands after each call (`inspection.md`).
+
 A named actor may instead resolve as `TA_ERR_UNLOADED`. The host retrieves its
 checkpoint and data-model binding, calls `ta_actor_load()`, and retries delivery
 with the returned runtime actor ID. `virtual-actors.md` shows this path.
