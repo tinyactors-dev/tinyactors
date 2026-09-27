@@ -52,3 +52,15 @@ are in [`docs/proposals/`](docs/proposals/README.md).
   published to npm and GitHub Releases:
   [Packaging and releases](docs/proposals/packaging.md).
 - [ ] **Demo application.** A new project, tinyactors-open-stage uses tinyactors-napi for building a web-based val.town clone where people can deploy their actors, hot-reload them, and connect and listen to events. 
+- [ ] **Build the debug adapter.** A Debug Adapter Protocol server in both
+  hosts: Ruby in tinyactors-test and JavaScript in napi, with the core
+  prerequisites first (operator transitions, the paused position,
+  withdrawing a delayed send, source spans, a stop before a microstep's
+  first unit): core ADRs 0082 to 0086 and napi ADR 0026, on top of core
+  ADRs 0074 to 0080. napi's adapter watches and pokes a production actor
+  and never stops or forks it; the test host's steps a developer's
+  workbench. Forks, holds and images across systems were built and
+  dropped (napi ADR 0026). Both adapters run; what is left is in the
+  status map.
+  [The design](docs/proposals/debug-adapter.md) and
+  [the status of every DAP message](docs/debug-adapter.md).
