@@ -45,7 +45,8 @@ struct ta_session_image {
     uint32_t trace_lifecycle;
     uint64_t trace_macrostep;
     /* The external and kept events and what `_event` names (ADR 0069). A
-     * bound queue head is internal_events[0]. */
+     * bound queue head is internal_events[0]. An operator transition waiting
+     * with the external event is copied into the arena (ADR 0082). */
     ta_event_slots slots;
     uint64_t next_send_id;
 
@@ -197,6 +198,10 @@ static size_t ta_image_measure(const ta_actor *actor) {
     }
     if (actor->event_block != NULL) {
         total += (size_t)actor->event_block->count * sizeof(ta_queued_event);
+        if (actor->event_block->slots.jump != NULL) {
+            total += ta_operator_jump_bytes(actor->event_block->slots.jump->target_count) +
+                     _Alignof(ta_operator_jump);
+        }
     }
     if (sparse != NULL) {
         total += (size_t)sparse->invoke_count * sizeof(ta_active_invoke);
@@ -234,6 +239,16 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
     }
     if (result != TA_OK) {
         return result;
+    }
+
+    /* An operator transition waiting with the external event (ADR 0082). */
+    if (actor->event_block != NULL && actor->event_block->slots.jump != NULL) {
+        size_t bytes = ta_operator_jump_bytes(actor->event_block->slots.jump->target_count);
+        image->slots.jump = ta_arena_alloc(arena, bytes, _Alignof(ta_operator_jump));
+        if (image->slots.jump == NULL) {
+            return TA_ERR_NOMEM;
+        }
+        ta_mem_copy(image->slots.jump, actor->event_block->slots.jump, bytes);
     }
 
     if (actor->event_block != NULL && actor->event_block->count != 0) {
@@ -687,6 +702,15 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
     }
     if (result == TA_OK && slots != NULL && slots->has_kept) {
         result = ta_image_localize_origin(system, &slots->kept_event);
+    }
+    if (result == TA_OK && slots != NULL && image->slots.jump != NULL) {
+        size_t bytes = ta_operator_jump_bytes(image->slots.jump->target_count);
+        slots->jump = ta_mem_alloc(system->allocator, bytes, _Alignof(ta_operator_jump));
+        if (slots->jump == NULL) {
+            result = TA_ERR_NOMEM;
+        } else {
+            ta_mem_copy(slots->jump, image->slots.jump, bytes);
+        }
     }
     if (result == TA_OK && image->paused != NULL) {
         result = ta_image_restore_pause(image, actor, system);

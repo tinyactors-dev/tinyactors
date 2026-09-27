@@ -804,7 +804,9 @@ ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *par
     if (actor == NULL) {
         return TA_ERR_NOT_FOUND;
     }
-    if (!ta_event_name_valid(&system->event_names, event->name) || event->name == TA_EVENT_NAME_ROOT) {
+    const ta_operator_transition *transition = params->transition;
+    if (!ta_event_name_valid(&system->event_names, event->name) || event->name == TA_EVENT_NAME_ROOT ||
+        (transition != NULL && !ta_interpreter_jump_valid(actor->definition, transition))) {
         return TA_ERR_INVALID;
     }
     /* Before busy: a finished actor never becomes free again (ADR 0055). */
@@ -814,21 +816,44 @@ ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_params *par
     if (actor->macrostep || ta_actor_external_event(actor) != NULL) {
         return TA_ERR_BUSY;
     }
+    /* An idle actor's configuration is the one the operator transition runs
+     * from: it is the first step its macrostep takes (ADR 0082). */
+    if (transition != NULL && transition->source != TA_STATE_NONE &&
+        !ta_actor_state_active(actor, transition->source)) {
+        return TA_ERR_INVALID;
+    }
     ta_event accepted = *event;
     ta_result result = ta_actor_accept_origin(system, actor, &accepted);
     if (result != TA_OK) {
         return result;
     }
-    /* The event lives in the actor's event block until its macrostep ends
-     * (ADR 0069): the only step here that can fail, and it changes nothing
-     * when it does. */
+    /* The operator transition, and the event block the event lives in until
+     * its macrostep ends (ADR 0069), are the steps here that can fail, and
+     * they change nothing when they do. */
+    ta_operator_jump *jump = NULL;
+    if (transition != NULL) {
+        jump = ta_mem_alloc(system->allocator, ta_operator_jump_bytes(transition->target_count),
+                            _Alignof(ta_operator_jump));
+        if (jump == NULL) {
+            return TA_ERR_NOMEM;
+        }
+        jump->source = transition->source;
+        jump->target_count = transition->target_count;
+        ta_mem_copy(jump->targets, transition->targets, (size_t)transition->target_count * sizeof(ta_state_id));
+    }
     result = ta_interpreter_hold_block(system, actor);
     if (result != TA_OK) {
+        if (jump != NULL) {
+            ta_mem_free(system->allocator, jump,
+                        &(ta_allocator_free_params){ .size = ta_operator_jump_bytes(jump->target_count),
+                                                     .alignment = _Alignof(ta_operator_jump) });
+        }
         return result;
     }
     ta_event_slots *slots = &actor->event_block->slots;
     ta_event_retain(&accepted, &slots->external_event);
     slots->external = TA_EXTERNAL_WAITING;
+    slots->jump = jump;
     /* The macrostep that takes it runs under the delivery's parent. */
     slots->trace = params->trace;
     actor->macrostep = true;
@@ -846,6 +871,14 @@ ta_result ta_actor_resume(ta_system *system, const ta_actor_resume_params *param
         return TA_ERR_NOT_FOUND;
     }
     return ta_interpreter_resume(system, actor, params);
+}
+
+ta_result ta_actor_abandon(ta_system *system, ta_actor_id id) {
+    ta_actor *actor = ta_actor_lookup(system, id);
+    if (actor == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    return ta_interpreter_abandon(system, actor);
 }
 
 ta_result ta_actor_destroy(ta_system *system, ta_actor_id id) {

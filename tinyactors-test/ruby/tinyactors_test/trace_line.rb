@@ -8,6 +8,10 @@ module TinyactorsTest
   #   micro 2.1 go [t0] exit[a] enter[b] history[h]
   #   raised 2.1 transition:a inner   an event queued in transition content
   #   end 2 [b]                       stable, with the active configuration
+  #   micro 3.1 operator.goto jump root->[w2] exit[idle] enter[work,w2]
+  #                                   an operator transition (ADR 0082)
+  #   abandoned 4.7 spin dropped 3    a macrostep abandoned, and the internal
+  #                                   events it dropped
   #
   # The key is macrostep.microstep; states and events are named, and
   # transitions, expressions and actions are compiled IDs.
@@ -61,8 +65,9 @@ module TinyactorsTest
       when 'macrostep_end' then [states(:states)]
       when 'microstep'
         history = Array(@record[:history])
-        [event, transitions, "exit#{states(:exited)}", "enter#{states(:entered)}",
+        [event, jump? ? jump : transitions, "exit#{states(:exited)}", "enter#{states(:entered)}",
          history.empty? ? nil : "history#{states(:history)}"]
+      when 'abandoned' then [event, "dropped #{@record[:dropped]}"]
       when 'condition'
         transition = @record.dig(:position, :transition)
         [none?(transition) ? 'if' : "t#{transition}", outcome(@record[:result].to_s)]
@@ -89,6 +94,14 @@ module TinyactorsTest
     end
 
     def transitions = "[#{Array(@record[:transitions]).map { |id| "t#{id}" }.join(',')}]"
+
+    # A MICROSTEP that names targets is an operator transition's (ADR 0082).
+    def jump? = !Array(@record[:states]).empty?
+
+    def jump
+      source = @record[:state]
+      "jump #{state_none?(source) ? 'root' : state_name(source)}->#{states(:states)}"
+    end
 
     def states(name) = "[#{Array(@record[name]).map { |state| state_name(state) }.join(',')}]"
 

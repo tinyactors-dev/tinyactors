@@ -51,6 +51,23 @@ typedef enum {
 } ta_event_binding;
 
 /*
+ * An operator transition delivered with the external event (ADR 0082), in
+ * one allocation the event block owns until the macrostep takes the event.
+ * Its targets are checked when it is delivered, against the configuration
+ * it will run from: the event it came with is the first step taken.
+ */
+typedef struct ta_operator_jump {
+    ta_state_id source; /* TA_STATE_NONE: the root */
+    uint32_t target_count;
+    ta_state_id targets[];
+} ta_operator_jump;
+
+/* The bytes an operator transition with `count` targets takes. */
+static inline size_t ta_operator_jump_bytes(uint32_t count) {
+    return offsetof(ta_operator_jump, targets) + (size_t)count * sizeof(ta_state_id);
+}
+
+/*
  * An actor's events other than its queued internal ones (ADR 0069). Taking
  * an event does not move it: `bound` names where it is. An event leaves
  * only when `_event` moves on, and it moves into `kept_event` when
@@ -69,6 +86,9 @@ typedef struct {
      * while the macrostep runs (ADR 0047). */
     ta_event external_event;
     ta_event kept_event;
+    /* The operator transition that takes the waiting external event, or
+     * null (ADR 0082). */
+    ta_operator_jump *jump;
     /*
      * What the running macrostep runs under (ADR 0067): its delivery's, its
      * spawn's, or the failed send's that queued its first event. Set when a

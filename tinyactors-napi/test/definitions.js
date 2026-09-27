@@ -284,7 +284,8 @@ async function lifecycleLogs() {
 // once, as the definition sink's logs: no preset asks core for the records,
 // and naming them in `kinds` adds no span and no second log.
 async function definitionRecords() {
-  assert.deepEqual(TRACE_KINDS.slice(-3), ['definitionRegistered', 'definitionRetired', 'definitionFreed']);
+  const first = TRACE_KINDS.indexOf('definitionRegistered');
+  assert.deepEqual(TRACE_KINDS.slice(first, first + 3), ['definitionRegistered', 'definitionRetired', 'definitionFreed']);
   const system = setup();
   const traces = [];
   const logs = [];

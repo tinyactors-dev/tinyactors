@@ -3,7 +3,9 @@
 **Status:** Accepted; reconstruction wording refined by ADR 0038; subject
 narrowed by ADR 0046, which removes the extension action — the rule now
 describes I/O processors and invokers, which cannot change a configuration
-by construction  
+by construction; narrowed by ADR 0082: an operator transition that core
+builds at run time and takes through the normal engine is a transition,
+not an escape hatch  
 **Date:** 2026-09-15
 
 ## Context

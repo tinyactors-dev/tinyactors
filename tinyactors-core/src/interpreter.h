@@ -31,6 +31,9 @@ typedef struct {
     ta_state_id *default_history;
     ta_transition_id *enabled;
     uint32_t enabled_count;
+    /* The operator transition being taken, while its microstep begins
+     * (ADR 0082); null otherwise. */
+    const struct ta_operator_jump *jump;
     ta_transition_id *filtered;
     bool *remove;
     /*
@@ -92,6 +95,14 @@ typedef struct {
 } ta_interpreter;
 
 ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_actor_resume_params *params);
+/*
+ * Whether an operator transition is well formed for the definition (ADR
+ * 0082): at least one target, known states, and targets that can form a
+ * legal configuration. Whether its source is active is the caller's check.
+ */
+bool ta_interpreter_jump_valid(const ta_definition *definition, const ta_operator_transition *transition);
+/* ta_actor_abandon() for a resident actor (ADR 0082). */
+ta_result ta_interpreter_abandon(ta_system *system, ta_actor *actor);
 /*
  * Runs SCXML exitInterpreter for a cancelled invoked session, without
  * done.invoke, and for every session it invoked in turn, without recursion

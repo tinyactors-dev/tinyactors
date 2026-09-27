@@ -378,6 +378,32 @@ static void end_all(void) {
     stop(&f);
 }
 
+/* An abandoned macrostep (core ADR 0082) ends its spans, complete, with the
+ * ABANDONED record as a span event: MACROSTEP_END follows ABANDONED. */
+static void abandoned(void) {
+    fixture f;
+    start(&f, true);
+    CHECK(ta_actor_spawn(f.core, &(ta_actor_spawn_params){ .definition = f.definition, .out = &f.actor }) == TA_OK);
+    CHECK(resume(&f, 1) == TA_RUN_PAUSED);
+    (void)take(&f.otlp);
+    CHECK(tna_otlp_open_count(&f.otlp) == 1);
+    CHECK(ta_actor_abandon(f.core, f.actor) == TA_OK);
+    CHECK(tna_otlp_open_count(&f.otlp) == 0);
+    span_view spans[4];
+    uint32_t count = read_spans(take(&f.otlp), spans, 4);
+    const span_view *macro = named(spans, count, "scxml.macrostep bootstrap");
+    CHECK(macro != NULL && !macro->incomplete);
+    uint32_t events = 0;
+    for (uint32_t at = 0; at < count; at += 1u) {
+        CHECK(!spans[at].incomplete);
+        events += spans[at].events;
+    }
+    /* The macrostep and its open microstep, which carries PAUSED and ABANDONED. */
+    CHECK(count == 2u && events == 2u);
+    CHECK(f.otlp.dropped == 0);
+    stop(&f);
+}
+
 /* The bytes of a small request, with a resource, are fixed. */
 static void golden(void) {
     fixture f;
@@ -512,6 +538,7 @@ int main(void) {
     many_open();
     open_across_turns();
     end_all();
+    abandoned();
     golden();
     free(taken);
     puts("otlp_test passed");

@@ -180,6 +180,29 @@ module TinyactorsTest
       offer(event, data: data, trace: trace)[:result]
     end
 
+    # Delivers `event` with an operator transition (ADR 0082) to the states
+    # `to`, from the active state `from` or the root, and runs the system.
+    # The transition takes the event instead of the chart's transitions.
+    # States are names; an Integer is passed as a raw state ID.
+    def jump(*to, from: nil, event: 'operator.goto', data: nil, trace: nil)
+      @context.core('ta_actor_deliver',
+                    offer(event, data: data, trace: trace, transition: operator_transition(to, from)))
+      @context.run_system("jump to #{to.join(' ')}")
+    end
+
+    # Offers a jump without running the system, and returns the
+    # ta_actor_deliver result, as #post does.
+    def post_jump(*to, from: nil, event: 'operator.goto', data: nil)
+      offer(event, data: data, transition: operator_transition(to, from))[:result]
+    end
+
+    # Abandons the actor's macrostep (ADR 0082) without running the system,
+    # and returns the ta_actor_abandon result: "ok", "err_busy",
+    # "err_invalid", "err_done", ...
+    def abandon
+      @context.ta.actor.abandon(system: @context.system_handle, actor: handle)[:result]
+    end
+
     # One ta_actor_resume call with `budget` microsteps and, when not zero,
     # `action_budget` units of executable content (ADR 0061); returns the
     # status: "paused", "stable", or "done".
@@ -239,17 +262,29 @@ module TinyactorsTest
 
     private
 
-    def offer(event, data:, trace: nil)
+    def offer(event, data:, trace: nil, transition: nil)
       params = { name: @context.event_name(event), type: 'external', invoke_id: INVOKE_ID_NONE }
       params[:data] = data unless data.nil?
       delivery = { system: @context.system_handle, actor: handle, event: params }
       delivery[:trace] = trace unless trace.nil?
+      delivery[:transition] = transition unless transition.nil?
       @context.ta.actor.deliver(**delivery)
     end
+
+    # A ta_operator_transition: state names become IDs, and no source is
+    # the root.
+    def operator_transition(targets, source)
+      { source: source.nil? ? STATE_NONE : state_ref(source), targets: targets.map { |target| state_ref(target) } }
+    end
+
+    def state_ref(state) = state.is_a?(Integer) ? state : @context.state_id(definition, state)
   end
 
   # TA_INVOKE_ID_NONE; 64-bit values above 2^53-1 travel as decimal strings.
   INVOKE_ID_NONE = '18446744073709551615'
+
+  # TA_STATE_NONE: the root, as an operator transition's source.
+  STATE_NONE = 4_294_967_295
 
   # A trace parent (ADR 0067) as ta_actor_deliver and ta_actor_spawn take
   # it: the W3C trace-id `trace_id` (32 hex digits), its trace-flags, and

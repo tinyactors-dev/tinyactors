@@ -1539,6 +1539,23 @@ typedef enum {
 } ta_event_binding;
 
 /*
+ * An operator transition delivered with the external event (ADR 0082), in
+ * one allocation the event block owns until the macrostep takes the event.
+ * Its targets are checked when it is delivered, against the configuration
+ * it will run from: the event it came with is the first step taken.
+ */
+typedef struct ta_operator_jump {
+    ta_state_id source; /* TA_STATE_NONE: the root */
+    uint32_t target_count;
+    ta_state_id targets[];
+} ta_operator_jump;
+
+/* The bytes an operator transition with `count` targets takes. */
+TA_PRIVATE inline size_t ta_operator_jump_bytes(uint32_t count) {
+    return offsetof(ta_operator_jump, targets) + (size_t)count * sizeof(ta_state_id);
+}
+
+/*
  * An actor's events other than its queued internal ones (ADR 0069). Taking
  * an event does not move it: `bound` names where it is. An event leaves
  * only when `_event` moves on, and it moves into `kept_event` when
@@ -1557,6 +1574,9 @@ typedef struct {
      * while the macrostep runs (ADR 0047). */
     ta_event external_event;
     ta_event kept_event;
+    /* The operator transition that takes the waiting external event, or
+     * null (ADR 0082). */
+    ta_operator_jump *jump;
     /*
      * What the running macrostep runs under (ADR 0067): its delivery's, its
      * spawn's, or the failed send's that queued its first event. Set when a
@@ -1906,6 +1926,9 @@ typedef struct {
     ta_state_id *default_history;
     ta_transition_id *enabled;
     uint32_t enabled_count;
+    /* The operator transition being taken, while its microstep begins
+     * (ADR 0082); null otherwise. */
+    const struct ta_operator_jump *jump;
     ta_transition_id *filtered;
     bool *remove;
     /*
@@ -1967,6 +1990,14 @@ typedef struct {
 } ta_interpreter;
 
 TA_PRIVATE ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_actor_resume_params *params);
+/*
+ * Whether an operator transition is well formed for the definition (ADR
+ * 0082): at least one target, known states, and targets that can form a
+ * legal configuration. Whether its source is active is the caller's check.
+ */
+TA_PRIVATE bool ta_interpreter_jump_valid(const ta_definition *definition, const ta_operator_transition *transition);
+/* ta_actor_abandon() for a resident actor (ADR 0082). */
+TA_PRIVATE ta_result ta_interpreter_abandon(ta_system *system, ta_actor *actor);
 /*
  * Runs SCXML exitInterpreter for a cancelled invoked session, without
  * done.invoke, and for every session it invoked in turn, without recursion
@@ -11333,7 +11364,9 @@ TA_API ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_para
     if (actor == NULL) {
         return TA_ERR_NOT_FOUND;
     }
-    if (!ta_event_name_valid(&system->event_names, event->name) || event->name == TA_EVENT_NAME_ROOT) {
+    const ta_operator_transition *transition = params->transition;
+    if (!ta_event_name_valid(&system->event_names, event->name) || event->name == TA_EVENT_NAME_ROOT ||
+        (transition != NULL && !ta_interpreter_jump_valid(actor->definition, transition))) {
         return TA_ERR_INVALID;
     }
     /* Before busy: a finished actor never becomes free again (ADR 0055). */
@@ -11343,21 +11376,44 @@ TA_API ta_result ta_actor_deliver(ta_system *system, const ta_actor_deliver_para
     if (actor->macrostep || ta_actor_external_event(actor) != NULL) {
         return TA_ERR_BUSY;
     }
+    /* An idle actor's configuration is the one the operator transition runs
+     * from: it is the first step its macrostep takes (ADR 0082). */
+    if (transition != NULL && transition->source != TA_STATE_NONE &&
+        !ta_actor_state_active(actor, transition->source)) {
+        return TA_ERR_INVALID;
+    }
     ta_event accepted = *event;
     ta_result result = ta_actor_accept_origin(system, actor, &accepted);
     if (result != TA_OK) {
         return result;
     }
-    /* The event lives in the actor's event block until its macrostep ends
-     * (ADR 0069): the only step here that can fail, and it changes nothing
-     * when it does. */
+    /* The operator transition, and the event block the event lives in until
+     * its macrostep ends (ADR 0069), are the steps here that can fail, and
+     * they change nothing when they do. */
+    ta_operator_jump *jump = NULL;
+    if (transition != NULL) {
+        jump = ta_mem_alloc(system->allocator, ta_operator_jump_bytes(transition->target_count),
+                            _Alignof(ta_operator_jump));
+        if (jump == NULL) {
+            return TA_ERR_NOMEM;
+        }
+        jump->source = transition->source;
+        jump->target_count = transition->target_count;
+        ta_mem_copy(jump->targets, transition->targets, (size_t)transition->target_count * sizeof(ta_state_id));
+    }
     result = ta_interpreter_hold_block(system, actor);
     if (result != TA_OK) {
+        if (jump != NULL) {
+            ta_mem_free(system->allocator, jump,
+                        &(ta_allocator_free_params){ .size = ta_operator_jump_bytes(jump->target_count),
+                                                     .alignment = _Alignof(ta_operator_jump) });
+        }
         return result;
     }
     ta_event_slots *slots = &actor->event_block->slots;
     ta_event_retain(&accepted, &slots->external_event);
     slots->external = TA_EXTERNAL_WAITING;
+    slots->jump = jump;
     /* The macrostep that takes it runs under the delivery's parent. */
     slots->trace = params->trace;
     actor->macrostep = true;
@@ -11375,6 +11431,14 @@ TA_API ta_result ta_actor_resume(ta_system *system, const ta_actor_resume_params
         return TA_ERR_NOT_FOUND;
     }
     return ta_interpreter_resume(system, actor, params);
+}
+
+TA_API ta_result ta_actor_abandon(ta_system *system, ta_actor_id id) {
+    ta_actor *actor = ta_actor_lookup(system, id);
+    if (actor == NULL) {
+        return TA_ERR_NOT_FOUND;
+    }
+    return ta_interpreter_abandon(system, actor);
 }
 
 TA_API ta_result ta_actor_destroy(ta_system *system, ta_actor_id id) {
@@ -11710,7 +11774,8 @@ struct ta_session_image {
     uint32_t trace_lifecycle;
     uint64_t trace_macrostep;
     /* The external and kept events and what `_event` names (ADR 0069). A
-     * bound queue head is internal_events[0]. */
+     * bound queue head is internal_events[0]. An operator transition waiting
+     * with the external event is copied into the arena (ADR 0082). */
     ta_event_slots slots;
     uint64_t next_send_id;
 
@@ -11862,6 +11927,10 @@ static size_t ta_image_measure(const ta_actor *actor) {
     }
     if (actor->event_block != NULL) {
         total += (size_t)actor->event_block->count * sizeof(ta_queued_event);
+        if (actor->event_block->slots.jump != NULL) {
+            total += ta_operator_jump_bytes(actor->event_block->slots.jump->target_count) +
+                     _Alignof(ta_operator_jump);
+        }
     }
     if (sparse != NULL) {
         total += (size_t)sparse->invoke_count * sizeof(ta_active_invoke);
@@ -11899,6 +11968,16 @@ static ta_result ta_image_fill(ta_session_image *image, const ta_actor *actor) {
     }
     if (result != TA_OK) {
         return result;
+    }
+
+    /* An operator transition waiting with the external event (ADR 0082). */
+    if (actor->event_block != NULL && actor->event_block->slots.jump != NULL) {
+        size_t bytes = ta_operator_jump_bytes(actor->event_block->slots.jump->target_count);
+        image->slots.jump = ta_arena_alloc(arena, bytes, _Alignof(ta_operator_jump));
+        if (image->slots.jump == NULL) {
+            return TA_ERR_NOMEM;
+        }
+        ta_mem_copy(image->slots.jump, actor->event_block->slots.jump, bytes);
     }
 
     if (actor->event_block != NULL && actor->event_block->count != 0) {
@@ -12352,6 +12431,15 @@ static ta_result ta_image_reconstruct(ta_system *system, const ta_actor_reconstr
     }
     if (result == TA_OK && slots != NULL && slots->has_kept) {
         result = ta_image_localize_origin(system, &slots->kept_event);
+    }
+    if (result == TA_OK && slots != NULL && image->slots.jump != NULL) {
+        size_t bytes = ta_operator_jump_bytes(image->slots.jump->target_count);
+        slots->jump = ta_mem_alloc(system->allocator, bytes, _Alignof(ta_operator_jump));
+        if (slots->jump == NULL) {
+            result = TA_ERR_NOMEM;
+        } else {
+            ta_mem_copy(slots->jump, image->slots.jump, bytes);
+        }
     }
     if (result == TA_OK && image->paused != NULL) {
         result = ta_image_restore_pause(image, actor, system);
@@ -13900,12 +13988,46 @@ TA_API ta_result ta_definition_occupancy(const ta_system *system, const ta_defin
  * authored ones); it only marks the bootstrap microstep. */
 #define TA_ENABLED_BOOTSTRAP (UINT32_MAX - 1u)
 
+/* In `enabled`: an operator transition (ADR 0082), which `it->jump` holds
+ * while the microstep begins. It has no executable content, so nothing
+ * after that reads it, and a continuation carries this mark alone. */
+#define TA_ENABLED_OPERATOR (UINT32_MAX - 2u)
+
+/* Whether an entry of `enabled` is one of the definition's transitions. */
+static bool ta_enabled_authored(ta_transition_id transition) {
+    return transition != TA_ENABLED_BOOTSTRAP && transition != TA_ENABLED_OPERATOR;
+}
+
+/* A list of states: a transition's targets, in the definition or in an
+ * operator transition. */
+typedef struct {
+    const ta_state_id *ids;
+    uint32_t count;
+} ta_state_list;
+
 typedef struct {
     ta_state_id source;
-    ta_span32 targets;
+    ta_state_list targets;
     ta_transition_type type;
     ta_span32 actions;
 } ta_transition_view;
+
+static ta_state_list ta_targets(const ta_interpreter *it, ta_span32 targets) {
+    return (ta_state_list){ .ids = targets.length == 0 ? NULL : it->definition->targets + targets.offset,
+                            .count = targets.length };
+}
+
+/* The executable content of an entry of `enabled`; an operator transition
+ * has none. */
+static ta_span32 ta_enabled_actions(const ta_definition *definition, ta_transition_id transition) {
+    if (transition == TA_ENABLED_BOOTSTRAP) {
+        return definition->initial_transitions[definition->root_initial].actions;
+    }
+    if (transition == TA_ENABLED_OPERATOR) {
+        return (ta_span32){0};
+    }
+    return definition->transitions[transition].actions;
+}
 
 static ta_transition_view ta_view(const ta_interpreter *it, ta_transition_id transition) {
     const ta_definition *definition = it->definition;
@@ -13913,17 +14035,25 @@ static ta_transition_view ta_view(const ta_interpreter *it, ta_transition_id tra
         const ta_initial_transition_def *initial = &definition->initial_transitions[definition->root_initial];
         return (ta_transition_view){
             .source = TA_STATE_NONE,
-            .targets = initial->targets,
+            .targets = ta_targets(it, initial->targets),
             .type = TA_TRANSITION_EXTERNAL,
-            .actions = initial->actions,
+            .actions = ta_enabled_actions(definition, transition),
+        };
+    }
+    if (transition == TA_ENABLED_OPERATOR) {
+        const ta_operator_jump *jump = it->jump;
+        return (ta_transition_view){
+            .source = jump == NULL ? TA_STATE_NONE : jump->source,
+            .targets = { .ids = jump == NULL ? NULL : jump->targets, .count = jump == NULL ? 0 : jump->target_count },
+            .type = TA_TRANSITION_INTERNAL,
         };
     }
     const ta_transition_def *def = &definition->transitions[transition];
     return (ta_transition_view){
         .source = def->source,
-        .targets = def->targets,
+        .targets = ta_targets(it, def->targets),
         .type = def->type,
-        .actions = def->actions,
+        .actions = ta_enabled_actions(definition, transition),
     };
 }
 
@@ -13942,10 +14072,6 @@ static bool ta_descends(const ta_interpreter *it, ta_state_id state, ta_state_id
 
 static ta_state_id ta_child_at(const ta_interpreter *it, ta_state_id state, uint32_t index) {
     return it->definition->children[ta_state(it, state)->children.offset + index];
-}
-
-static ta_state_id ta_target_at(const ta_interpreter *it, ta_span32 targets, uint32_t index) {
-    return it->definition->targets[targets.offset + index];
 }
 
 static void ta_bits_clear(const ta_interpreter *it, uint64_t *words) {
@@ -14038,7 +14164,7 @@ static ta_trace_position ta_trace_position_now(const ta_interpreter *it) {
             break;
         case TA_PHASE_TRANSITIONS:
             position.at = TA_TRACE_AT_TRANSITION;
-            if (it->at.state < it->enabled_count && it->enabled[it->at.state] != TA_ENABLED_BOOTSTRAP) {
+            if (it->at.state < it->enabled_count && ta_enabled_authored(it->enabled[it->at.state])) {
                 position.transition = it->enabled[it->at.state];
                 position.state = it->definition->transitions[position.transition].source;
             }
@@ -14244,9 +14370,14 @@ static void ta_trace_microstep_record(ta_interpreter *it, const ta_event *event)
     ta_trace_record record = ta_trace_record_now(it, TA_TRACE_MICROSTEP);
     record.position = ta_trace_nowhere();
     record.event = event;
-    if (it->enabled_count != 0 && it->enabled[0] != TA_ENABLED_BOOTSTRAP) {
+    if (it->enabled_count != 0 && ta_enabled_authored(it->enabled[0])) {
         record.transitions = it->enabled;
         record.transition_count = it->enabled_count;
+    } else if (it->jump != NULL) {
+        /* An operator transition: its source and the targets it named. */
+        record.state = it->jump->source;
+        record.states = it->jump->targets;
+        record.state_count = it->jump->target_count;
     }
     ta_state_id *lists = it->trace_states;
     record.exited = lists;
@@ -14591,9 +14722,28 @@ static void ta_unbind_event(ta_actor *actor) {
     slots->bound = slots->bound_before;
 }
 
+/* Frees the operator transition a waiting external event came with. */
+static void ta_jump_free(ta_system *system, ta_event_slots *slots) {
+    if (slots->jump != NULL) {
+        ta_mem_free(system->allocator, slots->jump,
+                    &(ta_allocator_free_params){ .size = ta_operator_jump_bytes(slots->jump->target_count),
+                                                 .alignment = _Alignof(ta_operator_jump) });
+        slots->jump = NULL;
+    }
+}
+
+/* Releases the external event, and the operator transition it came with. */
+static void ta_release_external(ta_system *system, ta_event_slots *slots) {
+    if (slots->external != TA_EXTERNAL_NONE) {
+        ta_event_release(&slots->external_event);
+        slots->external = TA_EXTERNAL_NONE;
+    }
+    ta_jump_free(system, slots);
+}
+
 /* Releases every event the actor holds: its queue, taken head included,
  * its kept event and its external event. */
-static void ta_release_events(ta_actor *actor) {
+static void ta_release_events(ta_system *system, ta_actor *actor) {
     ta_event_block *block = actor->event_block;
     if (block == NULL) {
         return;
@@ -14607,10 +14757,7 @@ static void ta_release_events(ta_actor *actor) {
         ta_event_release(&slots->kept_event);
         slots->has_kept = false;
     }
-    if (slots->external != TA_EXTERNAL_NONE) {
-        ta_event_release(&slots->external_event);
-        slots->external = TA_EXTERNAL_NONE;
-    }
+    ta_release_external(system, slots);
     slots->bound = TA_BOUND_NONE;
 }
 
@@ -14620,10 +14767,10 @@ static void ta_release_events(ta_actor *actor) {
  * <onexit> between its macrosteps (SCXML 6.4); any other session lets go of
  * every event, and its block goes back when the run returns.
  */
-static void ta_end_macrostep_events(ta_actor *actor) {
+static void ta_end_macrostep_events(ta_system *system, ta_actor *actor) {
     ta_event_block *block = actor->event_block;
     if (block == NULL || actor->sparse == NULL || !actor->sparse->has_parent) {
-        ta_release_events(actor);
+        ta_release_events(system, actor);
         return;
     }
     ta_event_slots *slots = &block->slots;
@@ -14636,10 +14783,7 @@ static void ta_end_macrostep_events(ta_actor *actor) {
         slots->external = TA_EXTERNAL_NONE;
         slots->bound = TA_BOUND_KEPT;
     }
-    if (slots->external != TA_EXTERNAL_NONE) {
-        ta_event_release(&slots->external_event);
-        slots->external = TA_EXTERNAL_NONE;
-    }
+    ta_release_external(system, slots);
 }
 
 typedef struct {
@@ -16161,9 +16305,9 @@ static ta_result ta_run_handlers(ta_interpreter *it, ta_span32 handlers) {
  * a worklist, each at most once, so a history default that leads back to
  * itself ends instead of looping.
  */
-static void ta_effective_span(ta_interpreter *it, ta_span32 targets, uint64_t *out, uint32_t *pending) {
-    for (uint32_t index = 0; index < targets.length; index += 1) {
-        ta_state_id target = ta_target_at(it, targets, index);
+static void ta_effective_span(ta_interpreter *it, ta_state_list targets, uint64_t *out, uint32_t *pending) {
+    for (uint32_t index = 0; index < targets.count; index += 1) {
+        ta_state_id target = targets.ids[index];
         if (!ta_is_history(it, target)) {
             ta_bits_put(out, target, true);
         } else if (!ta_bits_get(it->history_seen, target)) {
@@ -16173,7 +16317,7 @@ static void ta_effective_span(ta_interpreter *it, ta_span32 targets, uint64_t *o
     }
 }
 
-static void ta_effective_targets(ta_interpreter *it, ta_span32 targets, uint64_t *out) {
+static void ta_effective_targets(ta_interpreter *it, ta_state_list targets, uint64_t *out) {
     ta_bits_clear(it, it->history_seen);
     uint32_t pending = 0;
     ta_effective_span(it, targets, out, &pending);
@@ -16186,7 +16330,7 @@ static void ta_effective_targets(ta_interpreter *it, ta_span32 targets, uint64_t
             }
         } else {
             const ta_transition_def *fallback = &it->definition->transitions[ta_state(it, history)->transitions.offset];
-            ta_effective_span(it, fallback->targets, out, &pending);
+            ta_effective_span(it, ta_targets(it, fallback->targets), out, &pending);
         }
     }
 }
@@ -16194,7 +16338,7 @@ static void ta_effective_targets(ta_interpreter *it, ta_span32 targets, uint64_t
 /* False when the transition is targetless and so has no domain. */
 static bool ta_transition_domain(ta_interpreter *it, ta_transition_id transition, ta_state_id *out) {
     ta_transition_view view = ta_view(it, transition);
-    if (view.targets.length == 0) {
+    if (view.targets.count == 0) {
         return false;
     }
     if (view.source == TA_STATE_NONE) {
@@ -16404,7 +16548,7 @@ struct ta_entry_frame {
     ta_state_id state;
     ta_state_id ancestor;
     ta_state_id history;    /* the history state that owns this frame, or TA_STATE_NONE */
-    ta_span32 targets;
+    ta_state_list targets;
     uint32_t cursor;
 };
 
@@ -16449,16 +16593,18 @@ static void ta_entry_start(ta_interpreter *it, uint32_t *top) {
                                               .history = state };
         } else {
             it->default_history[def->parent] = state;
+            ta_span32 fallback = it->definition->transitions[def->transitions.offset].targets;
             *frame = (struct ta_entry_frame){ .kind = TA_ENTRY_TARGETS, .ancestor = def->parent, .history = state,
-                                              .targets = it->definition->transitions[def->transitions.offset].targets };
+                                              .targets = ta_targets(it, fallback) };
         }
         return;
     }
     ta_bits_put(it->to_enter, state, true);
     if (def->kind == TA_STATE_COMPOUND) {
         ta_bits_put(it->default_entry, state, true);
+        ta_span32 initial = it->definition->initial_transitions[def->initial].targets;
         *frame = (struct ta_entry_frame){ .kind = TA_ENTRY_TARGETS, .ancestor = state, .history = TA_STATE_NONE,
-                                          .targets = it->definition->initial_transitions[def->initial].targets };
+                                          .targets = ta_targets(it, initial) };
     } else if (def->kind == TA_STATE_PARALLEL) {
         *frame = (struct ta_entry_frame){ .kind = TA_ENTRY_REGIONS, .state = state, .history = TA_STATE_NONE };
     } else {
@@ -16492,7 +16638,7 @@ static bool ta_entry_step(ta_interpreter *it, uint32_t *top) {
             ta_entry_start(it, top);
             return true;
         case TA_ENTRY_TARGETS: {
-            if (frame->cursor == frame->targets.length) {
+            if (frame->cursor == frame->targets.count) {
                 if (frame->ancestors) {
                     ta_entry_pop(it, top);
                     return true;
@@ -16501,7 +16647,7 @@ static bool ta_entry_step(ta_interpreter *it, uint32_t *top) {
                 frame->cursor = 0;
                 return true;
             }
-            ta_state_id target = ta_target_at(it, frame->targets, frame->cursor++);
+            ta_state_id target = frame->targets.ids[frame->cursor++];
             return ta_entry_push(it, top, frame->ancestors ? ta_entry_ancestors(it, target, frame->ancestor)
                                                            : ta_entry_descendants(target));
         }
@@ -16794,8 +16940,8 @@ static void ta_enter_set(ta_interpreter *it) {
         if (!ta_transition_domain(it, transition, &ancestor)) {
             continue;
         }
-        for (uint32_t target = 0; target < view.targets.length; target += 1) {
-            ta_add_descendants(it, ta_target_at(it, view.targets, target));
+        for (uint32_t target = 0; target < view.targets.count; target += 1) {
+            ta_add_descendants(it, view.targets.ids[target]);
         }
         ta_bits_clear(it, it->entry_targets);
         ta_effective_targets(it, view.targets, it->entry_targets);
@@ -17224,7 +17370,7 @@ static ta_result ta_run_finish(ta_interpreter *it) {
     }
     /* Sends the router already refused once stay queued: they were sent before termination. */
     ta_timer_cancel_unsubmitted(&it->system->timers, ta_actor_timers(it->actor));
-    ta_release_events(it->actor);
+    ta_release_events(it->system, it->actor);
     /* Invoke: cancel this session's invocations and report done.invoke to its parent. */
     ta_result result = ta_invoke_finished(it);
     if (result != TA_OK) {
@@ -17277,6 +17423,28 @@ static ta_result ta_continue_phase(ta_interpreter *it) {
 }
 
 /*
+ * Takes an external event that came with an operator transition (ADR 0082):
+ * the transition, not selection, takes it, as the macrostep's first step.
+ * Nothing here allocates, so there is nothing to give back, and taking it
+ * commits the macrostep. <finalize> and autoforwarding do not run, since
+ * no chart transition sees the event. Once the microstep has begun, its
+ * sets hold all it needs, and the operator transition is freed.
+ */
+static void ta_take_jump(ta_interpreter *it) {
+    ta_actor *actor = it->actor;
+    ta_bind_event(actor, TA_BOUND_EXTERNAL);
+    ta_trace_begin(it);
+    TA_COUNT(it->system, actor->definition, events_taken);
+    ta_event_slots *slots = &actor->event_block->slots;
+    it->jump = slots->jump;
+    it->enabled[0] = TA_ENABLED_OPERATOR;
+    it->enabled_count = 1;
+    ta_microstep_begin(it, ta_actor_bound_event(actor));
+    it->jump = NULL;
+    ta_jump_free(it->system, slots);
+}
+
+/*
  * Nothing is open: the next step of the macrostep (SCXML mainEventLoop).
  * An eventless transition first, then the next internal event, then the
  * invocations of the states the macrostep entered, then the next external
@@ -17290,6 +17458,13 @@ static ta_result ta_next_step(ta_interpreter *it, bool *stable) {
     ta_actor *actor = it->actor;
     bool external_waiting =
         actor->event_block != NULL && actor->event_block->slots.external == TA_EXTERNAL_WAITING;
+    if (external_waiting && !actor->trace_begun && actor->event_block->slots.jump != NULL) {
+        /* An operator transition is the first microstep of its macrostep,
+         * before internal events queued since it was delivered, so it runs
+         * from the configuration it was checked against. */
+        ta_take_jump(it);
+        return TA_OK;
+    }
     bool skip_to_external = !ta_interpreter_internal_pending(actor) &&
                             (it->after_invokes || (external_waiting && !actor->trace_begun));
     it->after_invokes = false;
@@ -17334,7 +17509,7 @@ static ta_result ta_next_step(ta_interpreter *it, bool *stable) {
     }
     ta_compact_sparse(it);
     ta_trace_end(it);
-    ta_end_macrostep_events(actor);
+    ta_end_macrostep_events(it->system, actor);
     actor->macrostep = false;
     actor->record.residency = TA_ACTOR_IDLE;
     *stable = true;
@@ -17860,7 +18035,7 @@ TA_PRIVATE bool ta_interpreter_internal_pending(const ta_actor *actor) {
 }
 
 TA_PRIVATE void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor) {
-    ta_release_events(actor);
+    ta_release_events(system, actor);
     if (actor->event_block != NULL) {
         /* The actor goes: its block goes too, whatever it ran under. */
         actor->event_block->slots.trace = (ta_trace_parent){0};
@@ -17879,4 +18054,96 @@ TA_PRIVATE void ta_interpreter_release_actor_state(ta_system *system, ta_actor *
                 &(ta_allocator_free_params){ .size = sizeof(ta_actor_sparse_state),
                                              .alignment = _Alignof(ta_actor_sparse_state) });
     actor->sparse = NULL;
+}
+
+/* ------------------------------------------------------------------------
+ * Operator transitions and abandoning a macrostep (ADR 0082)
+ */
+
+/* Where a target sits for the legality check: a history state stands for
+ * its parent, whose region it restores. */
+static ta_state_id ta_jump_place(const ta_definition *definition, ta_state_id target) {
+    ta_state_kind kind = definition->states[target].kind;
+    bool history = kind == TA_STATE_HISTORY_SHALLOW || kind == TA_STATE_HISTORY_DEEP;
+    return history ? definition->states[target].parent : target;
+}
+
+/*
+ * Whether two targets can be in one legal configuration: neither is the
+ * other or its ancestor, and the first state above both is a <parallel>.
+ * The root counts as a compound state.
+ */
+static bool ta_jump_compatible(const ta_definition *definition, ta_state_id first, ta_state_id second) {
+    if (first == TA_STATE_NONE || second == TA_STATE_NONE || first == second ||
+        ta_definition_is_descendant(definition, first, second) ||
+        ta_definition_is_descendant(definition, second, first)) {
+        return false;
+    }
+    ta_state_id meet = definition->states[first].parent;
+    while (meet != TA_STATE_NONE && !ta_definition_is_descendant(definition, second, meet)) {
+        meet = definition->states[meet].parent;
+    }
+    return meet != TA_STATE_NONE && definition->states[meet].kind == TA_STATE_PARALLEL;
+}
+
+TA_PRIVATE bool ta_interpreter_jump_valid(const ta_definition *definition, const ta_operator_transition *transition) {
+    uint32_t count = transition->target_count;
+    if (count == 0 || transition->targets == NULL ||
+        (transition->source != TA_STATE_NONE && transition->source >= definition->state_count)) {
+        return false;
+    }
+    for (uint32_t index = 0; index < count; index += 1u) {
+        if (transition->targets[index] >= definition->state_count) {
+            return false;
+        }
+    }
+    for (uint32_t index = 0; index < count; index += 1u) {
+        ta_state_id first = ta_jump_place(definition, transition->targets[index]);
+        for (uint32_t other = index + 1u; other < count; other += 1u) {
+            if (!ta_jump_compatible(definition, first, ta_jump_place(definition, transition->targets[other]))) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+TA_PRIVATE ta_result ta_interpreter_abandon(ta_system *system, ta_actor *actor) {
+    if (actor->finished) {
+        return TA_ERR_DONE;
+    }
+    if (!actor->macrostep) {
+        return TA_ERR_INVALID;
+    }
+    /* A run stopped inside a step, or a bootstrap whose microstep has not
+     * completed, holds no configuration an idle actor could keep. */
+    if (!actor->bootstrapped || (actor->sparse != NULL && actor->sparse->paused != NULL)) {
+        return TA_ERR_BUSY;
+    }
+    ta_interpreter interpreter;
+    ta_interpreter *it = &interpreter;
+    ta_result result = ta_interpreter_init(it, system, actor);
+    actor->live_active = NULL;
+    if (result != TA_OK) {
+        return result;
+    }
+    uint32_t dropped = ta_actor_waiting_internal(actor);
+    if (ta_tracing(it, TA_TRACE_ABANDONED)) {
+        ta_trace_record record = ta_trace_record_now(it, TA_TRACE_ABANDONED);
+        record.position = ta_trace_nowhere();
+        record.event = ta_actor_external_event(actor);
+        record.dropped = dropped;
+        ta_trace_emit(it, &record);
+    }
+    ta_trace_end(it);
+    /* The waiting internal events go; `_event` and the external event end
+     * as at the end of any macrostep (ADR 0069). */
+    ta_queue_truncate(actor, ta_queue_mark(actor) - dropped);
+    ta_end_macrostep_events(system, actor);
+    ta_actor_touch(actor);
+    actor->macrostep = false;
+    actor->record.residency = TA_ACTOR_IDLE;
+    ta_compact_sparse(it);
+    ta_block_settle(system, actor);
+    return TA_OK;
 }
