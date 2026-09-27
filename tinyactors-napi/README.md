@@ -116,7 +116,10 @@ refuses it.
 `mise run dap-server` serves sessions for a small example system over
 stdio, or on a local port with `-- --port 4711`, to try a DAP client
 against. It grants every permission; it is a development tool, not part
-of the package. See
+of the package. In VS Code, install
+[tinyactors-vscode](../tinyactors-vscode/README.md): an `attach`
+configuration with the `port` and the actor's `address` connects to such a
+server. See
 [ADR 0026](docs/adr/0026-a-debugger-watches-and-pokes-one-live-actor.md).
 
 `test/dap-transcripts.js` plays the DAP transcripts napi shares with the

@@ -1,0 +1,19 @@
+#!/usr/bin/env ruby
+#MISE description="Test the VS Code extension under a stub of VS Code: activation, configurations, package.json's contributes, and the .vsix"
+# vim:ft=ruby
+
+# Needs no VS Code: `mise run integration` runs the extension in a real one.
+
+require 'pathname'
+
+ROOT = Pathname.new(__dir__).join('../..').expand_path
+
+def run(*command)
+  puts command.join(' ')
+  pid = Process.spawn(*command, chdir: ROOT.to_s)
+  _pid, status = Process.wait2(pid)
+  exit(status.exitstatus || 1) unless status.success?
+end
+
+run('mise', 'run', 'build')
+run('node', '--test', *Dir.glob('test/*.test.js', base: ROOT.to_s).sort)

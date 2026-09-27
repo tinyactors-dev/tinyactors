@@ -67,6 +67,12 @@ pid = Process.spawn('mise', 'run', 'test', chdir: root.join('tinyactors-napi').t
 _pid, status = Process.wait2(pid)
 exit(status.exitstatus || 1) unless status.success?
 
+# The VS Code extension that registers the debug type, under a stub of
+# VS Code (its integration test downloads one, and is not run here).
+pid = Process.spawn('mise', 'run', 'test', chdir: root.join('tinyactors-vscode').to_s)
+_pid, status = Process.wait2(pid)
+exit(status.exitstatus || 1) unless status.success?
+
 # txml: runs the header checks today and the full suite once tinyxml/src has
 # an implementation; it reports unlinkable binaries as pending rather than
 # failing the build.
