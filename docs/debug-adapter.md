@@ -330,4 +330,4 @@ The prerequisites sit on core ADRs 0074 to 0080 and napi ADRs 0019 to 0024:
 | Mark | What | Where | Status |
 |---|---|---|---|
 | T1 | Shared DAP transcript suite | [tinyactors-test/dap](../tinyactors-test/dap/README.md), played by both hosts' tests | ☑ |
-| X1 | VS Code extension that registers the debug type | [tinyactors-vscode](../tinyactors-vscode/README.md) | ☑ |
+| X1 | VS Code extension that registers the debug type (experimental, internal: a DAP client for testing the adapters) | [tinyactors-vscode](../tinyactors-vscode/README.md) | ☑ |

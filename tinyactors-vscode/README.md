@@ -1,5 +1,12 @@
 # Tinyactors for VS Code
 
+> **Experimental and internal.** This extension exists mainly to test the
+> Tinyactors debug adapters against a real Debug Adapter Protocol client:
+> the test host's (`tinyactors-test/bin/dap`) and tinyactors-napi's
+> `createDebugSession`. It is not published, it is not a supported
+> product, and its configuration may change with any commit. Use it to try
+> an adapter change in VS Code, or to record a demo; do not build on it.
+
 Registers the `tinyactors` debug type, so VS Code starts the Tinyactors
 debug adapters itself: no `debugServer` in your configurations. It has
 two requests:

@@ -124,6 +124,16 @@ so no outside code depends on an API or ABI staying the same.
   its rewrite. Change the call sites there too, keep the edit to those
   lines, and say in your report which of its files you touched.
 
+## The VS Code extension is a test client
+
+`tinyactors-vscode` is experimental and internal: it exists mainly to test
+the debug adapters (the test host's and tinyactors-napi's) against a real
+Debug Adapter Protocol client, and to record demos. It is not published or
+supported. Keep it to what that needs: do not add features for their own
+sake, and change its configuration freely, like any other private API
+here. Adapter behaviour belongs in the adapters and the shared DAP
+transcripts, not in the extension.
+
 ## Acronyms
 
 An acronym in code is spelled in ALL CAPITALS or all lowercase, never

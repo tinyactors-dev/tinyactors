@@ -1,7 +1,8 @@
 {
   "name": "tinyactors-vscode",
-  "displayName": "Tinyactors",
-  "description": "Debug Tinyactors charts: run a workbench with the test host's adapter, or attach to an actor in a running application",
+  "displayName": "Tinyactors (experimental)",
+  "description": "Experimental and internal: a Debug Adapter Protocol client for testing the Tinyactors debug adapters. Runs a workbench with the test host's adapter, or attaches to an actor in a running application",
+  "preview": true,
   "version": "0.0.0",
   "publisher": "tinyactors",
   "private": true,
