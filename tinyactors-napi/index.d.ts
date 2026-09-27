@@ -725,14 +725,15 @@ export type ElementKind = "state" | "transition" | "action" | "expression";
 
 /**
  * A place in a source. Lines and columns count from 1; a column is the
- * engine's (UTF-16 code units in JavaScript). The end and the byte range are
- * present when the front end knew them, as a document codec does.
+ * engine's (UTF-16 code units in JavaScript). The column, the end and the
+ * byte range are present when the front end knew them: statechart() and a
+ * document codec record the column; a spec's span may give only a line.
  */
 export interface SourcePlace {
   /** The source's name: a file, a URL, or "" when the spec named none. */
   readonly source: string;
   readonly line: number;
-  readonly column: number;
+  readonly column?: number;
   readonly endLine?: number;
   readonly endColumn?: number;
   readonly offset?: number;

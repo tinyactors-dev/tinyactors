@@ -108,10 +108,17 @@ class Definition {
       throw error;
     }
     const { span, source } = found;
-    const place = { source: source ?? '', line: span.line, column: span.column ?? 0 };
+    // Core keeps zero for a column the front end did not know (a spec's
+    // span may give only a line); the place leaves it out.
+    const place = { source: source ?? '', line: span.line };
+    if (span.column !== undefined && span.column !== 0) {
+      place.column = span.column;
+    }
     if (span.end_line !== undefined && span.end_line !== 0) {
       place.endLine = span.end_line;
-      place.endColumn = span.end_column ?? 0;
+      if (span.end_column !== undefined && span.end_column !== 0) {
+        place.endColumn = span.end_column;
+      }
     }
     if (span.length !== undefined && span.length !== 0) {
       place.offset = Number(span.offset ?? 0n);

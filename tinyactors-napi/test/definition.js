@@ -228,6 +228,16 @@ function sourceSpans() {
   // A spec without spans compiles as before and keeps none.
   const plain = system.define({ identity: { family: { name: 'plain' }, revision: 'v1' }, states: [{ kind: 'atomic', id: 'a' }] });
   assert.equal(plain.sourceOf('state', 0), undefined);
+  // A span that gives only a line: no column, and no end column, rather
+  // than a column 0 that SourcePlace's count from 1 does not have.
+  const lined = system.define({
+    identity: { family: { name: 'lined' }, revision: 'v1' },
+    sources: [{ name: 'chart.txt' }],
+    spans: [{ source: 0, line: 3 }, { source: 0, line: 5, column: 7, end_line: 6 }],
+    states: [{ kind: 'atomic', id: 'a', span: 1 }, { kind: 'atomic', id: 'b', span: 2 }],
+  });
+  assert.deepEqual(lined.sourceOf('state', 0), { source: 'chart.txt', line: 3 });
+  assert.deepEqual(lined.sourceOf('state', 1), { source: 'chart.txt', line: 5, column: 7, endLine: 6 });
   system.close();
 }
 

@@ -102,7 +102,7 @@ class Sources {
       const virtual = this.#virtual(definition);
       list = virtual === null ? [] : virtual.elements;
     }
-    list.sort((left, right) => left.line - right.line || left.column - right.column);
+    list.sort((left, right) => left.line - right.line || (left.column ?? 0) - (right.column ?? 0));
     this.#elements.set(key, list);
     return list;
   }

@@ -1114,7 +1114,8 @@ class DebugSession {
             this.#frames.set(id, { thread: thread.id });
           }
           const located = frame.place === undefined ? { line: 0, column: 0 }
-            : { source: Sources.source(frame.place), line: frame.place.line, column: frame.place.column };
+            // DAP needs a column: the start of the line when the span has none.
+            : { source: Sources.source(frame.place), line: frame.place.line, column: frame.place.column ?? 1 };
           return { id, name: frame.name, ...located, presentationHint: frame.hint };
         });
         return { body: { stackFrames: shown, totalFrames: list.length } };
