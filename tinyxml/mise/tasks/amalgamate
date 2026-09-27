@@ -25,9 +25,14 @@ require 'platform_files'
 
 # Fresh when the inputs and the checked-in output still hash to what the last
 # successful run recorded (mise/lib/cache.rb); an output edited by hand does not.
+# One more output per platform with files (decision 9): include/txml_wasm.c
+# holds every src/*_wasm.c.
+PLATFORM_OUTPUTS = PlatformFiles::SUFFIXES.select { |suffix| !Dir[Cache::ROOT.join("src/*_#{suffix}.c").to_s].empty? }
+                                          .to_h { |suffix| [suffix, Cache::ROOT.join("include/txml_#{suffix}.c")] }
 Cache.gate('amalgamate',
-           inputs: Cache.files('src/*.c', 'src/*.h', 'include/txml.h', 'mise/lib/c_scan.rb', 'mise/tasks/amalgamate'),
-           outputs: [Cache::ROOT.join('include/txml.c')])
+           inputs: Cache.files('src/*.c', 'src/*.h', 'include/txml.h', 'mise/lib/c_scan.rb', 'mise/tasks/amalgamate',
+                               '../mise/lib/platform_files.rb'),
+           outputs: [Cache::ROOT.join('include/txml.c'), *PLATFORM_OUTPUTS.values])
 
 root = Pathname.new(__dir__).join('../..').expand_path
 include_dir = root.join('include')
@@ -74,8 +79,14 @@ headers = header_names.map do |name|
   errors << "missing module header: #{path}" unless path.file?
   [path, path.file? ? path.read : '']
 end
-# The amalgamation is portable: it never holds a platform file.
+# The amalgamation is portable: it never holds a platform file. Each
+# platform's files form their own amalgamation, a second translation unit a
+# build for that platform compiles next to include/txml.c.
 sources = PlatformFiles.sources(root.join('src')).map { |path| Pathname.new(path) }.map { |path| [path, path.read] }
+platform_sources = PLATFORM_OUTPUTS.keys.to_h do |suffix|
+  files = Dir[root.join("src/*_#{suffix}.c").to_s].sort.select { |path| PlatformFiles.platform(path) == suffix }
+  [suffix, files.map { |path| Pathname.new(path) }.map { |path| [path, path.read] }]
+end
 
 # Every quoted include in src/ must resolve to a header that is inlined.
 (headers + sources).each do |path, text|
@@ -86,9 +97,21 @@ sources = PlatformFiles.sources(root.join('src')).map { |path| Pathname.new(path
     errors << "#{path.relative_path_from(root)}: includes #{included}, which src/internal.h does not list"
   end
 end
+# A platform file is its own translation unit: it includes the public header
+# alone, so it cannot reach txml's internals.
+platform_sources.values.flatten(1).each do |path, text|
+  text.scan(/^#include "([^"]+)"$/).flatten.each do |included|
+    next if File.basename(included) == 'txml.h'
+
+    errors << "#{path.relative_path_from(root)}: a platform file includes only txml.h, not #{included}"
+  end
+end
 
 headers = headers.map { |path, text| [path, rewrite(strip_includes(text), public_functions, errors, path.relative_path_from(root))] }
 sources = sources.map { |path, text| [path, rewrite(strip_includes(text), public_functions, errors, path.relative_path_from(root))] }
+platform_sources = platform_sources.transform_values do |files|
+  files.map { |path, text| [path, rewrite(strip_includes(text), public_functions, errors, path.relative_path_from(root))] }
+end
 
 unless errors.empty?
   errors.each { |error| warn error }
@@ -119,16 +142,45 @@ C
 
 pieces = headers.map { |path, text| "/* ---- #{path.relative_path_from(root)} ---- */\n#{text}" } +
          sources.map { |path, text| "/* ---- #{path.relative_path_from(root)} ---- */\n#{text}" }
-implementation = banner + pieces.join("\n")
-output = include_dir.join('txml.c')
+outputs = { include_dir.join('txml.c') => banner + pieces.join("\n") }
+PLATFORM_OUTPUTS.each do |suffix, path|
+  outputs[path] = <<~C + platform_sources.fetch(suffix).map { |source, text| "/* ---- #{source.relative_path_from(root)} ---- */\n#{text}" }.join("\n")
+    /*
+     * GENERATED FILE. Do not edit; run `mise run amalgamate` in tinyxml.
+     * The #{suffix} platform files, those in src/ named with a _#{suffix}.c
+     * suffix: a second translation unit, compiled next to txml.c only when
+     * building for #{suffix}. They use the public API alone.
+     */
+    #include "txml.h"
+
+    #ifndef TXML_PRIVATE
+    #if defined(__GNUC__) || defined(__clang__)
+    #define TXML_PRIVATE static __attribute__((unused))
+    #else
+    #define TXML_PRIVATE static
+    #endif
+    #endif
+
+  C
+end
+stale = include_dir.glob('txml_*.c').reject { |path| outputs.key?(path) }
 
 if ARGV == ['--check']
-  abort "#{output.relative_path_from(root)} is out of date; run mise run amalgamate" unless output.file? && output.read == implementation
-  puts 'txml amalgamation is current.'
+  outputs.each do |path, text|
+    abort "#{path.relative_path_from(root)} is out of date; run mise run amalgamate" unless path.file? && path.read == text
+  end
+  abort "#{stale.map { |path| path.relative_path_from(root) }.join(', ')}: no platform files left; run mise run amalgamate" unless stale.empty?
+  puts "txml amalgamation is current (#{outputs.keys.map { |path| path.basename }.join(', ')})."
   exit
 end
 
 abort 'usage: mise run amalgamate [--check]' unless ARGV.empty?
-changed = !(output.file? && output.read == implementation)
-output.write(implementation) if changed
-puts changed ? "generated #{output.relative_path_from(root)}" : "#{output.relative_path_from(root)} unchanged"
+outputs.each do |path, text|
+  changed = !(path.file? && path.read == text)
+  path.write(text) if changed
+  puts changed ? "generated #{path.relative_path_from(root)}" : "#{path.relative_path_from(root)} unchanged"
+end
+stale.each do |path|
+  path.delete
+  puts "removed #{path.relative_path_from(root)}"
+end

@@ -54,7 +54,9 @@ module API
       Dir.mktmpdir('txml-api') do |directory|
         object = File.join(directory, 'library.o')
         run(*flags(target), "-I#{File.dirname(source)}", '-c', source.to_s, '-o', object)
-        output, errors, status = Open3.capture3(*Shellwords.split(ENV.fetch('NM', 'nm')), '-P', '-g', object)
+        # GNU nm does not read wasm objects; llvm-nm reads every format.
+        nm = ENV.fetch('NM') { target.start_with?('wasm') ? 'llvm-nm' : 'nm' }
+        output, errors, status = Open3.capture3(*Shellwords.split(nm), '-P', '-g', object)
         raise Error, "nm failed:\n#{errors}" unless status.success?
 
         output.lines.filter_map { |line| line.split[0] if line.split[1] == 'T' }

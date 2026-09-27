@@ -173,7 +173,8 @@ module CRelease
     end
     FileUtils.mkdir_p(dir.join('include'))
     FileUtils.cp(project.header, dir.join('include'))
-    { target: target, dir: dir, object: object, archive: archive, shared: lib.join(name), shared_name: name }
+    { target: target, dir: dir, object: object, archive: archive, shared: lib.join(name), shared_name: name,
+      cflags: Toolchain.cflags(target) + %w[-g0 -ffunction-sections -fdata-sections] }
   end
 
   def symbols(file, *flags)
@@ -281,6 +282,105 @@ module CRelease
   end
 
   # ------------------------------------------------------------------
+  # WebAssembly (decisions 4 and 6)
+
+  WASM = 'wasm32-freestanding'
+
+  # The standalone module <out>/wasm32-freestanding/<name>.wasm: the
+  # amalgamation and the platform amalgamation include/<name>_wasm.c (the
+  # module's allocator among it), linked with no entry point, exporting the
+  # API, the platform's functions included, and its memory, and importing
+  # nothing. zig's default wasm CPU has bulk memory, so copies need no
+  # memcpy (decision 16).
+  def build_wasm(project, out)
+    target = Toolchain.target(WASM)
+    dir = out.join(target.name)
+    FileUtils.rm_rf(dir)
+    work = dir.join('work')
+    platform = project.root.join("include/#{project.name}_wasm.c")
+    release_fail!("#{platform.basename} is missing: run mise run amalgamate") unless platform.file?
+    objects = [project.amalgamation, platform].map do |source|
+      Toolchain.compile(target, source, work.join("#{source.basename('.c')}.o"),
+                        includes: [project.header.dirname],
+                        defines: ["#{project.macro}_API=__attribute__((visibility(\"default\")))"], flags: %w[-g0])
+    end
+    wasm = Toolchain.wasm_module(target, objects, dir.join("#{project.name}.wasm"),
+                                 exports: api_functions(project, platform: 'wasm'))
+    FileUtils.mkdir_p(dir.join('include'))
+    FileUtils.cp(project.header, dir.join('include'))
+    { target: target, dir: dir, wasm: wasm, extra: [wasm], asset: 'wasm32', cflags: Toolchain.cflags(target) + %w[-g0] }
+  end
+
+  # The imports and exports of a wasm module, as [[module, name, kind]] and
+  # [[name, kind]], read from its binary: the import section (2) and the
+  # export section (7).
+  def wasm_interface(path)
+    bytes = path.binread.bytes
+    release_fail!("#{path} is not a wasm module") unless bytes[0, 4] == [0, 0x61, 0x73, 0x6d]
+    at = 8
+    leb = lambda do
+      value = 0
+      shift = 0
+      loop do
+        byte = bytes[at]
+        at += 1
+        value |= (byte & 0x7f) << shift
+        shift += 7
+        break if byte < 0x80
+      end
+      value
+    end
+    name = lambda do
+      length = leb.call
+      text = bytes[at, length].pack('C*').force_encoding('UTF-8')
+      at += length
+      text
+    end
+    kinds = %w[function table memory global tag]
+    imports = []
+    exports = []
+    while at < bytes.size
+      id = bytes[at]
+      at += 1
+      size = leb.call
+      finish = at + size
+      if id == 2
+        leb.call.times do
+          module_name = name.call
+          field = name.call
+          kind = bytes[at]
+          at += 1
+          imports << [module_name, field, kinds[kind]]
+          at = finish # the rest of an import's type is not needed to know it exists
+          break
+        end
+      elsif id == 7
+        leb.call.times do
+          export = name.call
+          kind = bytes[at]
+          at += 1
+          leb.call
+          exports << [export, kinds[kind]]
+        end
+      end
+      at = finish
+    end
+    [imports, exports]
+  end
+
+  # The module imports nothing and exports exactly the API, the platform's
+  # functions and its memory; then `test`, a lambda from the module's path
+  # to a command, runs it.
+  def verify_wasm!(project, build, test: nil)
+    imports, exports = wasm_interface(build[:wasm])
+    release_fail!("#{build[:wasm].basename} imports #{imports.map { |i| i.first(2).join('.') }.join(', ')}") unless imports.empty?
+    expected = api_functions(project, platform: 'wasm').map { |name| [name, 'function'] } + [%w[memory memory]]
+    expect_equal!("#{build[:wasm].basename} exports", exports.sort, expected.sort)
+    puts "release: #{build[:wasm].basename}: imports nothing, exports the #{expected.size - 1} functions and memory"
+    capture!(*test.call(build[:wasm])).lines.each { |line| puts "release: #{line.strip}" } if test
+  end
+
+  # ------------------------------------------------------------------
   # Packing
 
   # A deterministic .tar.gz of `dirname` under `parent`: sorted entries,
@@ -323,16 +423,17 @@ module CRelease
 
     builds.each do |build|
       target = build[:target]
-      staged = staging.join("#{base}-#{target.name}")
+      label = build[:asset] || target.name
+      staged = staging.join("#{base}-#{label}")
       FileUtils.mkdir_p(staged)
       FileUtils.cp_r(build[:dir].join('include'), staged)
       FileUtils.cp_r(build[:dir].join('lib'), staged) if build[:dir].join('lib').directory?
       build[:extra]&.each { |file| FileUtils.cp(file, staged) }
       FileUtils.cp(Release::REPO.join('LICENSE'), staged)
-      packed << tarball(staging, staged.basename, assets.join("#{base}-#{target.name}.tar.gz"), epoch)
-      manifest_targets[target.name] = {
+      packed << tarball(staging, staged.basename, assets.join("#{base}-#{label}.tar.gz"), epoch)
+      manifest_targets[label] = {
         'triple' => target.triple,
-        'cflags' => Toolchain.cflags(target) + %w[-g0 -ffunction-sections -fdata-sections],
+        'cflags' => build.fetch(:cflags),
         'files' => sha256_tree(staged)
       }
     end

@@ -69,3 +69,7 @@ Id             tinyactors-vscode/{mise/tasks/build,test/package.test.js}  # VSIX
 # command workbench.debug.action.focusRepl and the vscode.Uri class.
 focusRepl      tinyactors-vscode/.agents/skills/record-demo-video/{SKILL.md,scripts/director/*.js}  # VS Code command
 Uri            tinyactors-vscode/.agents/skills/record-demo-video/scripts/director/*.js            # VS Code API
+
+# llvm-readobj's name for a Mach-O header's CPU type, which the C release
+# matches to check a binary's architecture.
+CpuType        mise/lib/c_release/build.rb                               # llvm-readobj output field

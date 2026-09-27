@@ -166,3 +166,17 @@ const struct txml_api_surface txml_api_surface = {
  * assertion is what tells you to update the count in the file header. */
 _Static_assert(sizeof(struct txml_api_surface) == 61u * sizeof(void (*)(void)),
                "every TXML_API function must appear in txml_api_surface");
+
+#if defined(__wasm__)
+/* The WebAssembly module's own functions (docs/adr/0001-packaging-and-
+ * releases.md, decision 9), declared in txml.h only for wasm. */
+const struct {
+    txml_allocator (*wasm_allocator)(void);
+    void *(*wasm_alloc)(size_t, size_t);
+    void (*wasm_free)(void *, size_t, size_t);
+} txml_api_surface_wasm = {
+    .wasm_allocator = txml_wasm_allocator,
+    .wasm_alloc = txml_wasm_alloc,
+    .wasm_free = txml_wasm_free,
+};
+#endif

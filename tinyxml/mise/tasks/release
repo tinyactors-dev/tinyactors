@@ -24,8 +24,8 @@ CRelease.release(
   title: "txml #{argv.reject { |arg| arg.start_with?('--') }.first}",
   summary: 'The first release of txml: a freestanding XML reader and writer in C, with no C library, ' \
            'no I/O and no recursion. Each release has the header and the amalgamation to compile ' \
-           'yourself, and prebuilt static and shared libraries for macOS (arm64) and Linux (x64, arm64; ' \
-           'one build for glibc and musl).',
+           'yourself, prebuilt static and shared libraries for macOS (arm64) and Linux (x64, arm64; one ' \
+           'build for glibc and musl), and a standalone WebAssembly module with its own allocator.',
   argv: argv,
   checks: [%w[mise run amalgamate -- --check], %w[mise run test]],
   regenerate: [%w[mise run generate]],
@@ -34,5 +34,13 @@ CRelease.release(
   end,
   smoke: root.join('tests/release_smoke.c'),
   readme: root.join('README.md'),
-  sources: [project.header, project.amalgamation, project.api]
+  # The source tarball has the platform amalgamation too, so a source
+  # embedder can build for wasm (decision 9).
+  sources: [project.header, project.amalgamation, root.join('include/txml_wasm.c'), project.api],
+  extra_build: ->(targets) { [CRelease.build_wasm(project, targets)] },
+  extra_verify: lambda do |builds|
+    wasm = builds.find { |build| build[:wasm] }
+    CRelease.verify_wasm!(project, wasm,
+                          test: ->(module_path) { ['node', root.join('tests/wasm/wasm_test.js'), module_path, project.api] })
+  end
 )

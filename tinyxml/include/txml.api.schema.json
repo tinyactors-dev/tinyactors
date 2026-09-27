@@ -271,6 +271,7 @@
         "public": { "type": "boolean" },
         "static_inline": { "type": "boolean" },
         "implemented": { "type": "boolean" },
+        "platform": { "enum": ["wasm"], "description": "Declared only for this platform (ADR 0001, decision 9); absent for a portable function." },
         "returns": { "$ref": "#/$defs/returns" },
         "params": { "type": "array", "items": { "$ref": "#/$defs/slot" } },
         "value_model": {

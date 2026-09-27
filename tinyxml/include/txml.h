@@ -190,6 +190,22 @@ typedef struct txml_allocator_vtable {
 
 typedef struct { void *self; const txml_allocator_vtable *v; } txml_allocator TXML_ADAPTER;
 
+#if defined(__wasm__)
+/*
+ * The WebAssembly module's own allocator (src/txml_allocator_wasm.c, linked
+ * into txml.wasm): blocks from the module's linear memory, above the linker's
+ * __heap_base, grown a page at a time and never returned. Freed blocks are
+ * kept on free lists by size class and handed out again, so a long-running
+ * module reuses its memory. A host passes txml_wasm_allocator() wherever the
+ * API takes a txml_allocator, and places its own bytes (a document to parse)
+ * with txml_wasm_alloc(); txml_wasm_free() takes back a block with the size
+ * and alignment it was asked for. Alignments above 65536 are refused.
+ */
+TXML_API txml_allocator txml_wasm_allocator(void);
+TXML_API void *txml_wasm_alloc(size_t size, size_t alignment);
+TXML_API void txml_wasm_free(void *ptr, size_t size, size_t alignment);
+#endif
+
 /* ========================================================================
  * Arena
  *
