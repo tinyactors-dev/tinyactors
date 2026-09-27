@@ -44,8 +44,15 @@ require 'toolchain'
 #   profile's flags: a hand-edited or deleted archive is rebuilt, and one
 #   profile's run never perturbs another's cache record.
 module CRelease
-  # One C library. `prefix` is its symbol prefix (`ta`, `txml`).
-  Project = Data.define(:name, :prefix) do
+  # One C library. `prefix` is its symbol prefix (`ta`, `txml`, `ta_scxml`).
+  # `includes` are the directories its header and amalgamation need beyond
+  # their own: those of the libraries it builds on (the codec's core and
+  # txml).
+  Project = Data.define(:name, :prefix, :includes) do
+    def initialize(name:, prefix:, includes: [])
+      super(name: name, prefix: prefix, includes: includes.map { |dir| Pathname.new(dir).expand_path })
+    end
+
     def root = Cache::ROOT
     # The prefix of the header's macros: TXML for txml, TA for core.
     def macro = prefix.upcase
@@ -75,7 +82,7 @@ module CRelease
     FileUtils.rm_f(temp)
     if target.nil?
       object = project.root.join("build/dist/#{profile}/#{project.name}.o")
-      outcome, output = Cache.compile(host_compile_command(profile), project.amalgamation, object)
+      outcome, output = Cache.compile(host_compile_command(profile, project), project.amalgamation, object)
       fail!("include/#{project.name}.c does not compile:\n#{output}") if outcome == :failed
       ar_output = IO.popen({ 'ZERO_AR_DATE' => '1' }, [*host_ar, 'rcs', temp.to_s, object.to_s],
                           err: %i[child out], &:read)
@@ -83,7 +90,7 @@ module CRelease
     else
       toolchain_target = Toolchain.target(target)
       object = project.root.join("build/release/#{target}/#{project.name}.o")
-      Toolchain.compile(toolchain_target, project.amalgamation, object, includes: [project.header.dirname])
+      Toolchain.compile(toolchain_target, project.amalgamation, object, includes: [project.header.dirname, *project.includes])
       Toolchain.archive(toolchain_target, [object], temp)
     end
     replace_if_changed(temp, out)
@@ -91,8 +98,9 @@ module CRelease
   end
 
   # The host compile command of a dist profile: $CC, never $CFLAGS.
-  def host_compile_command(profile)
-    [*Shellwords.split(ENV.fetch('CC', 'cc')), *PROFILES.fetch(profile), '-Iinclude']
+  def host_compile_command(profile, project)
+    [*Shellwords.split(ENV.fetch('CC', 'cc')), *PROFILES.fetch(profile), '-Iinclude',
+     *project.includes.map { |dir| "-I#{dir}" }]
   end
 
   def host_ar = Shellwords.split(ENV.fetch('AR', 'ar'))
@@ -112,7 +120,7 @@ module CRelease
       project.api => dist.join("include/#{project.name}.api.json")
     }
     archive_path = dist.join(archive_name(project, profile))
-    command = host_compile_command(profile)
+    command = host_compile_command(profile, project)
     Cache.gate("dist-#{profile}",
                inputs: Cache.files("include/#{project.name}.h", "include/#{project.name}.c",
                                    "include/#{project.name}.api.json", 'mise/tasks/dist'),
