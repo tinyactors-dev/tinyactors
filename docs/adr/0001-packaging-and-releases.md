@@ -70,6 +70,19 @@ laid out how each library and the addon would ship. It was discussed on
     from Linux and verified by their symbols only, until a Mac runs them.
     Linux arm64 gets a smoke test under qemu, not the full suites, whose
     timing assertions fail there.
+15. **Development builds go to the `next` dist-tag** (2026-09-28). `mise
+    run //tinyactors-napi:release -- --dev --publish` publishes HEAD as
+    `<next minor>-dev.<YYYYMMDD>.<n>.g<sha>`: the commit's date in UTC,
+    the commits since the last release, and the commit. Semver compares
+    prerelease identifiers left to right, numeric ones as numbers, so on
+    linear `main` a later commit always sorts later; the sha only names the
+    commit (a sha alone does not sort, and `g` keeps an all-digit one from
+    being an invalid number). The same checks, builds and smoke tests run as
+    for a release. A development build publishes all five packages under
+    `next`, never `latest`, and makes no commit, tag or GitHub release: npm
+    keeps every version, so it is published on demand, not per commit.
+    `mise run //tinyactors-napi:package -- --dev` stamps the same version
+    into local tarballs.
 
 ## Still open
 

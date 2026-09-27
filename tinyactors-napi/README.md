@@ -34,6 +34,20 @@ main();
 `index.d.ts` describes the whole API. The package is 0.x: its API changes
 in minor versions.
 
+### Development builds
+
+Development builds of unreleased commits are published under the `next`
+dist-tag, so a plain install never picks one up:
+
+```text
+npm install @tinyactors/node@next
+```
+
+A development version is `<next minor>-dev.<date>.<n>.g<commit>`, for
+example `0.2.0-dev.20260928.4.g1a2b3c4`: the commit's date, the number of
+commits since the last release, and the commit. Later commits sort later,
+and semver ranges such as `^0.1.0` never match a development build.
+
 ## Working on it in the repository
 
 In this repository the package is built and tested through the task
@@ -51,6 +65,22 @@ are built and released: `mise run build --target <t>` builds a release
 target's addon with zig, `mise run symbols` checks what it imports, and
 `mise run package` stages and packs the npm packages into
 `build/npm/tarballs/`.
+
+To try the current commit in another project without publishing, pack it
+under a development version and install the main tarball with your
+platform's:
+
+```text
+mise run package -- --dev
+npm install <repo>/tinyactors-napi/build/npm/tarballs/tinyactors-node-<version>.tgz \
+            <repo>/tinyactors-napi/build/npm/tarballs/tinyactors-node-linux-x64-<version>.tgz
+```
+
+The maintainer releases with `mise run release -- <version> --publish`,
+and publishes a development build of `main` with `mise run release -- --dev
+--publish` (npm only, under `next`: no commit, tag or GitHub release). Both
+run the suite, build every target, check their symbols and smoke test the
+packages first; without `--publish` they are dry runs.
 
 ## `index.d.ts` is the desired API
 

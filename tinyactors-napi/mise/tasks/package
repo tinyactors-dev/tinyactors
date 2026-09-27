@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 #MISE description="Stage and pack the npm packages: @tinyactors/node and one platform package per built release target, into build/npm/tarballs/"
 #USAGE flag "--targets <targets>" help="Comma-separated release targets to package (default: all four); each must be built with `mise run build --target <t>`"
+#USAGE flag "--dev" help="Stamp HEAD's development version (<next minor>-dev.<date>.<n>.g<sha>) instead of package.json's"
 # vim:ft=ruby
 
 # The npm packages (docs/adr/0001-packaging-and-releases.md):
@@ -17,12 +18,19 @@
 #
 # Every package carries the repository's LICENSE at its root.
 #
-# package.json's version is the version of every package. A target that is
-# not built, or whose addon fails `mise run symbols`, fails the task.
+# package.json's version is the version of every package, and the build
+# compiles it into the addon (`version`), so each addon must embed it. With
+# --dev, every package gets HEAD's development version instead
+# (Release.dev_version, ADR 0001 decision 15), so local tarballs are never
+# mistaken for a release by npm's cache or a lockfile: package.json holds it
+# while the packaged targets are rebuilt and packed, and is restored after.
+# A target that is not built, whose addon fails `mise run symbols`, or whose
+# addon embeds another version, fails the task.
 
 require 'fileutils'
 require 'json'
 require 'pathname'
+require 'release'
 
 ROOT = Pathname.new(__dir__).join('../..').expand_path
 LICENSE = ROOT.join('../LICENSE').expand_path
@@ -49,13 +57,25 @@ targets = requested.empty? ? PLATFORMS.keys : requested.split(',').map(&:strip)
 unknown = targets - PLATFORMS.keys
 abort "package: unknown targets #{unknown.join(', ')}; known: #{PLATFORMS.keys.join(', ')}" unless unknown.empty?
 
-manifest = JSON.parse(ROOT.join('package.json').read)
+package_json = ROOT.join('package.json')
+original = package_json.read
+if ENV['usage_dev'] == 'true' || ARGV.include?('--dev')
+  dev_version = Release.dev_version('tinyactors-napi/')
+  at_exit { package_json.write(original) }
+  package_json.write(original.sub(/^(\s*"version":\s*)"[^"]*"/) { "#{Regexp.last_match(1)}\"#{dev_version}\"" })
+  targets.each { |target| run('mise', 'run', 'build', '--target', target) }
+end
+manifest = JSON.parse(package_json.read)
 version = manifest.fetch('version')
 missing = targets.reject { |target| ROOT.join("build/#{target}/tinyactors.node").file? }
 unless missing.empty?
   abort "package: not built: #{missing.join(', ')}; run `mise run build --target <t>` for each"
 end
 targets.each { |target| run('mise', 'run', 'symbols', '--target', target) }
+stale = targets.reject { |target| File.binread(ROOT.join("build/#{target}/tinyactors.node")).include?(version) }
+unless stale.empty?
+  abort "package: the addon of #{stale.join(', ')} does not embed #{version}; rebuild with `mise run build --target <t>`"
+end
 
 abort "package: #{LICENSE} is missing" unless LICENSE.file?
 FileUtils.rm_rf(NPM)

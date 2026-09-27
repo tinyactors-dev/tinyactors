@@ -65,6 +65,35 @@ module Release
                                                  .sort { |a, b| compare_versions(a, b) }
   end
 
+  # The development version of HEAD (ADR 0001, decision 15):
+  # <next minor>-dev.<YYYYMMDD>.<N>.g<sha>, where the date is HEAD's commit
+  # date in UTC and N counts the commits since the last `prefix` release
+  # (all commits before the first). Semver compares prerelease identifiers
+  # left to right and numeric ones as numbers, so on linear main a later
+  # commit always sorts after an earlier one: the date first, then N. The
+  # sha only names the commit; the `g` keeps an all-digit sha with a leading
+  # zero from being an invalid numeric identifier. The same commit always
+  # gets the same version.
+  def dev_version(prefix)
+    latest = released_versions(prefix).last
+    major, minor, = latest ? parse_version(latest) : [0, 0, 0]
+    range = latest ? "#{prefix}v#{latest}..HEAD" : 'HEAD'
+    count = git('rev-list', '--count', range).to_s.strip
+    date = with_utc { git('show', '-s', '--format=%cd', '--date=format-local:%Y%m%d', 'HEAD') }.to_s.strip
+    sha = git('rev-parse', '--short=7', 'HEAD').to_s.strip
+    fail!('cannot describe HEAD for a development version') if [count, date, sha].any?(&:empty?)
+
+    "#{major}.#{minor + 1}.0-dev.#{date}.#{count}.g#{sha}"
+  end
+
+  def with_utc
+    zone = ENV['TZ']
+    ENV['TZ'] = 'UTC'
+    yield
+  ensure
+    zone.nil? ? ENV.delete('TZ') : ENV['TZ'] = zone
+  end
+
   # The tree is clean, on main, and in step with origin/main.
   def check_tree!
     git('fetch', '--quiet', '--tags', 'origin') or fail!('git fetch origin failed')
@@ -149,17 +178,18 @@ module Release
   # Publishes the tarballs in order. On a failure it stops and prints what
   # was published and what is left: npm cannot unpublish freely, so nothing
   # is retried.
-  # Publishes `tarballs` in order and stops at the first failure. Answers
-  # the tarballs published, and the one that failed (nil when all went),
-  # so the caller can undo its commit and tag when nothing was published.
+  # Publishes `tarballs` in order, under `dist_tag`, and stops at the first
+  # failure. Answers the tarballs published, and the one that failed (nil
+  # when all went), so the caller can undo its commit and tag when nothing
+  # was published.
   # A failure is never retried: npm cannot unpublish freely.
-  def npm_publish!(tarballs)
+  def npm_publish!(tarballs, dist_tag: 'latest')
     published = []
     with_npm_userconfig do |userconfig|
       tarballs.each do |tarball|
         command = ['fnox', 'exec', '--', 'npm', 'publish', tarball.to_s, '--access', 'public',
-                   '--userconfig', userconfig]
-        puts "$ npm publish #{File.basename(tarball)} --access public"
+                   '--tag', dist_tag, '--userconfig', userconfig]
+        puts "$ npm publish #{File.basename(tarball)} --access public --tag #{dist_tag}"
         return [published, tarball] unless system(*command, chdir: REPO.to_s)
 
         published << tarball

@@ -1,7 +1,8 @@
 #!/usr/bin/env ruby
-#MISE description="Release @tinyactors/node: check, version, build every target, verify, pack and smoke test; with --publish, also publish to npm, tag, and create the GitHub release"
-#USAGE arg "<version>" help="The version to release, MAJOR.MINOR.PATCH"
-#USAGE flag "--publish" help="Commit the version, tag it, publish to npm, push, and create the GitHub release"
+#MISE description="Release @tinyactors/node: check, version, build every target, verify, pack and smoke test; with --publish, also publish to npm, tag, and create the GitHub release; --dev makes a development build for the next dist-tag"
+#USAGE arg "[version]" help="The version to release, MAJOR.MINOR.PATCH; none with --dev, which computes it"
+#USAGE flag "--dev" help="A development build of HEAD: version <next minor>-dev.<date>.<n>.g<sha>, published under the next dist-tag, with no commit, tag or GitHub release"
+#USAGE flag "--publish" help="Publish to npm; for a release, also commit the version, tag it, push, and create the GitHub release"
 #USAGE flag "--skip-containers" help="Leave out the Docker smoke tests (glibc/musl, arm64 under qemu)"
 # vim:ft=ruby
 
@@ -21,6 +22,11 @@
 # Without --publish, nothing is committed, tagged or uploaded: package.json
 # is restored at the end, and build/npm/ keeps the tarballs, notes and
 # SHA256SUMS that --publish would upload.
+#
+# --dev (ADR 0001, decision 15) builds HEAD as a development version,
+# Release.dev_version, and publishes it under the `next` dist-tag: `npm
+# install @tinyactors/node@next`. It runs the same checks, builds and smoke
+# tests, never touches `latest`, and makes no commit, tag or GitHub release.
 
 require 'fileutils'
 require 'json'
@@ -37,9 +43,13 @@ PREFIX = 'tinyactors-napi/'
 
 version = ENV['usage_version'].to_s
 version = ARGV.find { |arg| !arg.start_with?('--') }.to_s if version.empty?
+dev = ENV['usage_dev'] == 'true' || ARGV.include?('--dev')
 publish = ENV['usage_publish'] == 'true' || ARGV.include?('--publish')
 containers = !(ENV['usage_skip_containers'] == 'true' || ARGV.include?('--skip-containers'))
-Release.fail!('usage: mise run release -- <version> [--publish] [--skip-containers]') if version.empty?
+usage = 'usage: mise run release -- (<version> | --dev) [--publish] [--skip-containers]'
+Release.fail!("#{usage}: --dev computes the version; give none") if dev && !version.empty?
+Release.fail!(usage) if !dev && version.empty?
+dist_tag = dev ? 'next' : 'latest'
 
 def napi(*task)
   Release.run('mise', 'run', *task, chdir: ROOT)
@@ -47,10 +57,18 @@ end
 
 # 1. Check.
 Release.check_tree!
-tag = Release.check_version!(PREFIX, version)
+if dev
+  version = Release.dev_version(PREFIX)
+  tag = nil
+else
+  tag = Release.check_version!(PREFIX, version)
+end
 names = ['@tinyactors/node'] + PLATFORMS.map { |platform| "@tinyactors/node-#{platform}" }
 taken = names.select { |name| Release.npm_published?(name, version) }
-Release.fail!("npm already has #{taken.map { |name| "#{name}@#{version}" }.join(', ')}") unless taken.empty?
+unless taken.empty?
+  already = taken.map { |name| "#{name}@#{version}" }.join(', ')
+  Release.fail!(dev ? "npm already has #{already}: this commit's development build is published" : "npm already has #{already}")
+end
 Release.fail!('fnox has no NPM_TOKEN (fnox list)') if publish && !Release.npm_token?
 Release.fail!('the registry does not accept NPM_TOKEN (npm whoami failed)') if publish && !Release.npm_authenticated?
 napi('test')
@@ -82,7 +100,7 @@ begin
   missing = ([main] + platforms).reject(&:file?)
   Release.fail!("package did not write #{missing.map { |t| t.basename.to_s }.join(', ')}") unless missing.empty?
   notes = RELEASE.join('notes.md')
-  notes.write(Release.notes(
+  notes.write(dev ? "# @tinyactors/node #{version}\n\nA development build of #{Release.git('rev-parse', 'HEAD').strip}.\n" : Release.notes(
     prefix: PREFIX, path: 'tinyactors-napi/', title: "@tinyactors/node #{version}",
     summary: 'The first release of @tinyactors/node: SCXML statecharts as actors for Node.js and Bun, ' \
              'on a native runtime. Prebuilt for macOS (arm64, x64) and Linux (x64, arm64; one addon for ' \
@@ -93,12 +111,28 @@ begin
   unless publish
     puts <<~DRY
       release: dry run for @tinyactors/node #{version} passed; nothing was committed, tagged or uploaded.
-        would tag:     #{tag}
-        would publish: #{(platforms + [main]).map { |t| t.basename.to_s }.join(', ')}
+        would tag:     #{tag || 'nothing (a development build)'}
+        would publish: #{(platforms + [main]).map { |t| t.basename.to_s }.join(', ')}, under the #{dist_tag} dist-tag
         notes:         #{notes.relative_path_from(ROOT)}
         checksums:     #{Pathname.new(sums).relative_path_from(ROOT)}
-      Publish with: mise run //tinyactors-napi:release -- #{version} --publish
+      Publish with: mise run //tinyactors-napi:release -- #{dev ? '--dev' : version} --publish
     DRY
+    exit 0
+  end
+
+  if dev
+    # A development build: npm only, under `next`; package.json is restored.
+    published, failed = Release.npm_publish!(platforms + [main], dist_tag: dist_tag)
+    if failed
+      left = (platforms + [main]) - published
+      Release.fail!(<<~STOPPED)
+        npm publish #{failed.basename} failed; stopping.
+          published: #{published.empty? ? 'none' : published.map { |t| t.basename.to_s }.join(', ')}
+          left, to publish by hand in this order (fnox exec -- npm publish <tgz> --access public --tag #{dist_tag}):
+            #{left.map(&:to_s).join("\n        ")}
+      STOPPED
+    end
+    puts "release: published @tinyactors/node #{version} under the #{dist_tag} dist-tag: npm install @tinyactors/node@#{dist_tag}"
     exit 0
   end
 
