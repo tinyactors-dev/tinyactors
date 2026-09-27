@@ -332,8 +332,9 @@ module Workbench
     end
 
     # New <log> records since the last drain, appended to the journal so the
-    # logs pane shows them in step with everything else.
-    def drain_chart_logs
+    # logs pane shows them in step with everything else; or, with a block,
+    # handed to it as (actor name or nil, journal entry) instead.
+    def drain_chart_logs(&handle)
       sink = @context.instruments['log']
       return if sink.nil?
 
@@ -343,10 +344,36 @@ module Workbench
       @log_cursor = entries.last[:seq]
       entries.each do |entry|
         who = name_of_handle(entry[:source].is_a?(Hash) ? entry[:source][:actor] : entry[:source])
+        next handle.call(who, entry) if handle
+
         value = entry[:has_value] ? " #{JSON.generate(entry[:value])}" : ''
         @journal.chart("#{who ? "#{who} " : ''}<log> #{entry[:label]}#{value}")
       end
       touch!
+    rescue TinyactorsTest::RPCError
+      nil
+    end
+
+    # For invoker.scxml the service handle IS the child's actor ID
+    # (src/adapters.c sets *params->service_handle = child), which is the only
+    # invoker this workbench registers.
+    def child_actors(handle)
+      view = inspect_actor(handle)
+      return [] if view.nil?
+
+      Array(view[:invokes]).filter_map do |invoke|
+        next nil unless invoke[:active]
+
+        Integer(invoke[:service_handle])
+      end
+    rescue TypeError, ArgumentError
+      []
+    end
+
+    # The actor's ta_actor_inspection, or nil when it is not resident.
+    def inspect_actor(handle)
+      response = @context.ta.actor.inspect(system: @context.system_handle, actor: handle)
+      response[:result] == 'ok' ? response.dig(:out, :out) : nil
     rescue TinyactorsTest::RPCError
       nil
     end
@@ -426,33 +453,10 @@ module Workbench
       @context.retire_definition(old_definition)
     end
 
-    # For invoker.scxml the service handle IS the child's actor ID
-    # (src/adapters.c sets *params->service_handle = child), which is the only
-    # invoker this workbench registers.
-    def child_actors(handle)
-      view = inspect_actor(handle)
-      return [] if view.nil?
-
-      Array(view[:invokes]).filter_map do |invoke|
-        next nil unless invoke[:active]
-
-        Integer(invoke[:service_handle])
-      end
-    rescue TypeError, ArgumentError
-      []
-    end
-
     # Destroys an actor and everything it invoked, deepest first.
     def destroy_tree(handle)
       child_actors(handle).each { |child| destroy_tree(child) }
       @context.ta.actor.destroy(system: @context.system_handle, actor: handle)
-    end
-
-    def inspect_actor(handle)
-      response = @context.ta.actor.inspect(system: @context.system_handle, actor: handle)
-      response[:result] == 'ok' ? response.dig(:out, :out) : nil
-    rescue TinyactorsTest::RPCError
-      nil
     end
 
     def active_states(actor)

@@ -1,0 +1,13 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# The test host's debug adapter: speaks the Debug Adapter Protocol on stdin
+# and stdout, and runs a workbench directory headless for the client that
+# launched it.
+#
+#   /path/to/tinyactors-test/bin/dap [--host PATH]
+#
+# See ruby/dap/README.md.
+require_relative '../ruby/dap'
+
+DAP::Adapter.main(ARGV)

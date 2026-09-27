@@ -325,6 +325,10 @@ module TinyactorsTest
     DISPATCH_BUDGET = 64
 
     attr_reader :now, :instruments, :trace, :run
+    # The Scheduler that runs the system after every step. The workbench and
+    # the debug adapter share it, and a debugger steers it (`monitor=`,
+    # `hold`, `stop!`).
+    attr_reader :scheduler
     # With count_allocations: how many allocations each logical
     # ta_actor_resume made, in order.
     attr_reader :resume_costs
@@ -1280,6 +1284,31 @@ module TinyactorsTest
     def event_text(id)
       @event_texts[id] ||= core('ta_event_name_format',
                                 ta.event.name_format(system: system_handle, name: id, capacity: 1024)).fetch(:buffer)
+    end
+
+    # The text of a send ID, as a chart sees it (ADR 0048): the author's ID,
+    # or `#_send.<n>`; nil for a send without one.
+    def send_id_text(id)
+      response = ta.send.id_format(system: system_handle, send_id: id, capacity: 1024)
+      return nil if response[:result] == 'err_not_found'
+
+      core('ta_send_id_format', response).fetch(:buffer)
+    end
+
+    # The send ID the text a chart holds names, or nil when no send of this
+    # system can have it.
+    def send_id(text)
+      response = ta.send.id_parse(system: system_handle, text: text)
+      return nil if %w[err_not_found err_invalid].include?(response[:result])
+
+      core('ta_send_id_parse', response).fetch(:out)
+    end
+
+    # The text of an invocation's ID (ADR 0049): the author's `<invoke id>`,
+    # or the one core generated; the number when core no longer has it.
+    def invoke_id_text(id)
+      response = ta.system.invoke_id_text(system: system_handle, invoke: id)
+      response[:result] == 'ok' ? response.dig(:out, :out).to_s : id.to_s
     end
 
     # A pending delayed send's target, from its ta_delayed_send_info: a literal
