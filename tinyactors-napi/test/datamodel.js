@@ -6,7 +6,7 @@
 const assert = require('node:assert/strict');
 const native = require('../lib/native');
 const { nativeOf } = require('../lib/system');
-const { createSystem, statechart, literal, TinyactorsError } = require('..');
+const { createSystem, statechart, literal, content, TinyactorsError } = require('..');
 
 const { core } = native;
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -461,6 +461,73 @@ async function failedSystemVariable() {
   assert.equal(native.environmentStats().leakedBytes, 0);
 }
 
+// content(): literal SCXML <content> from the builder. An I/O processor and
+// an invoker get it as text with its media type; anywhere else it is a
+// value, JSON when it parses and space-normalized text otherwise. A chart
+// holding content compiles against the JavaScript data model, since core's
+// null data model cannot make content a value.
+async function literalContent() {
+  const requests = [];
+  const started = [];
+  const finished = [];
+  const system = createSystem({
+    clock: 'manual',
+    io: { cap: { send(request) { requests.push(request); } } },
+    invokers: { svc: { start(request) { started.push(request); } } },
+    done: (record) => finished.push(record.data),
+  });
+  const csv = content('a,b\n1,2', { mediaType: 'text/csv' });
+  const json = content('{"n": 1}', { mediaType: 'application/json' });
+
+  const receiver = system.spawn(system.define(statechart({ family: 'receiver', revision: 'v1' })
+    .data('got', null)
+    .state('a', (s) => s.on('m', (t) => t.assign('got', ({ event }) => event.data)))), { name: 'r' });
+  // No data, script or function: content alone chooses the JavaScript data model.
+  const sender = system.define(statechart({ family: 'sender', revision: 'v1' })
+    .state('a', (s) => s
+      .entry((e) => e
+        .send('raw', (send) => send.via('cap').to('x').data(csv))
+        .send('params', (send) => send.via('cap').to('x').param('p', csv))
+        .send('m', (send) => send.to('#_actor_receiver/r').data(json)))
+      .invoke((invoke) => invoke.type('svc').content(csv).param('p', json))));
+  assert.equal(sender.inspect().datamodel, 'javascript');
+  system.spawn(sender);
+  await system.flush();
+  assert.deepEqual(requests.map(({ event, content: text, contentType, data }) => ({ event, text, contentType, data })), [
+    { event: 'raw', text: 'a,b\n1,2', contentType: 'text/csv', data: undefined },
+    { event: 'params', text: undefined, contentType: undefined, data: { p: 'a,b 1,2' } },
+  ]);
+  assert.deepEqual(receiver.data().got, { n: 1 });
+  assert.equal(started[0].content, 'a,b\n1,2');
+  assert.equal(started[0].contentType, 'text/csv');
+  assert.deepEqual(started[0].params, { p: { n: 1 } });
+
+  const values = system.spawn(system.define(statechart({ family: 'values', revision: 'v1' })
+    .data('parsed', json)
+    .data('text', content('  hello \n  world '))
+    .data('bytes', content(new Uint8Array([91, 49, 93])))
+    .data('assigned', null)
+    .data('raised', null)
+    .state('a', (s) => s
+      .entry((e) => e.assign('assigned', csv).raise('r', json))
+      .on('r', (t) => t.assign('raised', ({ event }) => event.data)))));
+  system.spawn(system.define(statechart({ family: 'finishing', revision: 'v1' })
+    .initial('z')
+    .final('z', (f) => f.doneData((d) => d.content(csv)))));
+  await system.flush();
+  assert.deepEqual(values.data(), { parsed: { n: 1 }, text: 'hello world', bytes: [1], assigned: 'a,b 1,2', raised: { n: 1 } });
+  assert.deepEqual(finished, ['a,b 1,2']);
+
+  // The bytes are copied, and only text or bytes with a non-empty media type are content.
+  const source = new Uint8Array([104, 105]);
+  const copied = content(source);
+  source[0] = 0;
+  assert.deepEqual([...copied.bytes], [104, 105]);
+  assertCode(() => content(5), 'invalid', /string or a Uint8Array/);
+  assertCode(() => content('x', { mediaType: '' }), 'invalid', /mediaType/);
+  system.close();
+}
+
 (async () => {
   await counter();
   await failedSystemVariable();
@@ -474,6 +541,7 @@ async function failedSystemVariable() {
   await foreachAcrossTurns();
   await handleScopes();
   await valuesAfterClose();
+  await literalContent();
   console.log('datamodel.js passed');
 })().catch((error) => {
   console.error(error);

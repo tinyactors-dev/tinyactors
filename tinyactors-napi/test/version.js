@@ -9,6 +9,7 @@ assert.deepEqual(Object.keys(addon).sort(), [
   'DAPReader',
   'TRACE_KINDS',
   'TinyactorsError',
+  'content',
   'createDebugSession',
   'createSystem',
   'decodeTraces',

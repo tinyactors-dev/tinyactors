@@ -148,7 +148,11 @@ Top-level assignments use typed property names, such as
 `.assign("volleys", 1)`. `assignAt()` accepts an explicit getter/setter
 `Location` for nested or computed storage. A function in a value position is
 an expression; `literal(functionValue)` explicitly stores a function as data.
-The normalized `DefinitionSpec` remains public as an escape hatch and as the
+`content(text, { mediaType })` is literal SCXML `<content>`: an I/O
+processor or invoker gets it as text with its media type, and anywhere else
+it is a value (JSON when it parses, space-normalized text otherwise). A
+chart holding content compiles against the JavaScript data model, because
+core's null data model cannot make content a value. The normalized `DefinitionSpec` remains public as an escape hatch and as the
 stable boundary between authoring helpers and native compilation.
 
 ### Updating a definition in a running system

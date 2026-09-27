@@ -33,6 +33,33 @@ function isLiteral(value) {
   return value !== null && typeof value === 'object' && value[literalBrand] === true;
 }
 
+const contentBrand = Symbol('tinyactors.content');
+
+/**
+ * Literal SCXML <content>: text or bytes kept in the definition, with an
+ * optional media type. The bytes are copied.
+ */
+function content(body, options = {}) {
+  let bytes;
+  if (typeof body === 'string') {
+    bytes = new TextEncoder().encode(body);
+  } else if (body instanceof Uint8Array) {
+    bytes = new Uint8Array(body);
+  } else {
+    throw invalid('content(): expected a string or a Uint8Array');
+  }
+  const mediaType = options?.mediaType;
+  if (mediaType !== undefined && (typeof mediaType !== 'string' || mediaType.length === 0)) {
+    throw invalid('content(): mediaType must be a non-empty string');
+  }
+  return Object.freeze(mediaType === undefined ? { [contentBrand]: true, bytes }
+                                               : { [contentBrand]: true, bytes, mediaType });
+}
+
+function isContent(value) {
+  return value !== null && typeof value === 'object' && value[contentBrand] === true;
+}
+
 function isLocation(value) {
   return value !== null && typeof value === 'object' && !isLiteral(value) &&
     typeof value.get === 'function' && typeof value.set === 'function';
@@ -66,8 +93,13 @@ function location(value, what) {
   return text(value, what);
 }
 
-// A value source: a function is evaluated, anything else is data.
+// A value source: a function is evaluated, content() is literal content,
+// anything else is data.
 function valueSpec(value) {
+  if (isContent(value)) {
+    const { bytes, mediaType } = value;
+    return { kind: 'content', content: mediaType === undefined ? { bytes } : { media_type: mediaType, bytes } };
+  }
   if (typeof value === 'function' || isLiteral(value)) {
     return { kind: 'expr', expr: value };
   }
@@ -448,7 +480,7 @@ class InvokeBuilder {
 
 // data(name, value): the value is data even when it is a function.
 function literalOf(value) {
-  return isLiteral(value) ? value : literal(value);
+  return isLiteral(value) || isContent(value) ? value : literal(value);
 }
 
 function functionSpec(value, what) {
@@ -735,9 +767,11 @@ function statechart(options) {
 
 /**
  * True when a spec needs the JavaScript data model: it declares data, has a
- * top-level script, or holds a function, a literal() or a location object
- * anywhere. System.define() compiles other specs against core's null data
- * model.
+ * top-level script, or holds a function, a literal(), a location object or
+ * literal content anywhere. Core's null data model cannot make content a
+ * value, so without it only an I/O processor or an invoker could take
+ * content, as text. System.define() compiles other specs against core's
+ * null data model.
  */
 function needsJavaScript(spec) {
   const seen = new Set();
@@ -752,7 +786,8 @@ function needsJavaScript(spec) {
     if (Array.isArray(value)) {
       return value.some(visit);
     }
-    if ((Array.isArray(value.data) && value.data.length > 0 && 'name' in value.data[0]) || value.script !== undefined) {
+    if ((Array.isArray(value.data) && value.data.length > 0 && 'name' in value.data[0]) || value.script !== undefined ||
+        value.kind === 'content') {
       return true;
     }
     return Object.values(value).some(visit);
@@ -760,4 +795,4 @@ function needsJavaScript(spec) {
   return visit(spec);
 }
 
-module.exports = { statechart, literal, isLiteral, needsJavaScript, DefinitionBuilder, literalBrand };
+module.exports = { statechart, literal, content, isLiteral, needsJavaScript, DefinitionBuilder, literalBrand };

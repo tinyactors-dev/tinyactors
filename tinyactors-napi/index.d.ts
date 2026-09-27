@@ -784,14 +784,38 @@ export interface LiteralValue<Value> {
 /** Force a callable JavaScript value to be data rather than an expression. */
 export declare function literal<Value>(value: Value): LiteralValue<Value>;
 
+declare const contentValueBrand: unique symbol;
+export interface ContentValue {
+  readonly [contentValueBrand]: true;
+  /** The content's bytes: a string's UTF-8, or a copy of the Uint8Array. */
+  readonly bytes: Uint8Array;
+  readonly mediaType?: string;
+}
+
+/**
+ * Literal SCXML `<content>`, kept in the definition as bytes with an
+ * optional media type; accepted wherever a value is. A send's data reaches
+ * its I/O processor, and an invoke's content its invoker, as text with
+ * `contentType` (IORequest, InvokeRequest). Anywhere else the content is a
+ * value: parsed as JSON when it parses, otherwise the text with each run of
+ * whitespace made one space and none leading or trailing (SCXML B.2.2).
+ * A chart holding content compiles against the JavaScript data model.
+ */
+export declare function content(
+  body: string | Uint8Array,
+  options?: { readonly mediaType?: string },
+): ContentValue;
+
 export type ValueInput<Data extends object, Value = unknown> =
   | (Value extends (...arguments_: never[]) => unknown ? never : Value)
   | LiteralValue<Value>
+  | ContentValue
   | Expression<Data, Value>;
 
 export interface DefinitionBuilder<Data extends object>
   extends StateContainerBuilder<Data, DefinitionBuilder<Data>> {
-  data<Key extends keyof Data & string>(name: Key, initial: Data[Key]): this;
+  /** `initial` is data even when it is a function; content() is parsed (see content()). */
+  data<Key extends keyof Data & string>(name: Key, initial: Data[Key] | ContentValue): this;
   dataExpression<Key extends keyof Data & string>(
     name: Key,
     initial: Expression<Data, Data[Key]>,
@@ -831,7 +855,8 @@ export interface StateBuilder<Data extends object>
   kind(kind: StateKind): this;
   initial(target: Target, actions?: ActionBlock<Data>): this;
 
-  data<Key extends keyof Data & string>(name: Key, initial: Data[Key]): this;
+  /** `initial` is data even when it is a function; content() is parsed (see content()). */
+  data<Key extends keyof Data & string>(name: Key, initial: Data[Key] | ContentValue): this;
   dataExpression<Key extends keyof Data & string>(
     name: Key,
     initial: Expression<Data, Data[Key]>,
@@ -1246,9 +1271,10 @@ export interface ActorEvent<Data = unknown> {
  * called with `this` bound to the actor's data), a literal() value, or source
  * text: `In(state)`, or a data name, which reads that property (ADR 0011). A
  * location is a data name or a { get, set } object. A spec with data, a
- * script, or any function, literal() or location compiles against the
- * JavaScript data model ("javascript"); any other spec against core's null
- * data model ("null"). `datamodel` chooses explicitly. A script, unlike
+ * script, or any function, literal(), location or `content` value source
+ * compiles against the JavaScript data model ("javascript"); any other spec
+ * against core's null data model ("null"), which cannot make content a
+ * value. `datamodel` chooses explicitly. A script, unlike
  * other expressions, must be a function.
  * -------------------------------------------------------------------------- */
 
