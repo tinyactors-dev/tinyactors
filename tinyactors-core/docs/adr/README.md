@@ -86,3 +86,4 @@ ADRs are the primary record of Tinyactors design intent. Unless marked otherwise
 | [0080](0080-definition-events-are-lifecycle-records-too.md) | [Definition events are lifecycle records too](0080-definition-events-are-lifecycle-records-too.md) |
 | [0081](0081-a-host-reports-an-invocation-error-with-its-own-reason.md) | [A host reports an invocation error with its own reason](0081-a-host-reports-an-invocation-error-with-its-own-reason.md) |
 | [0082](0082-operator-transitions-and-abandoning-a-macrostep.md) | [An operator transition is a transition, and a macrostep that never ends can be abandoned](0082-operator-transitions-and-abandoning-a-macrostep.md) |
+| [0083](0083-inspection-reports-where-a-paused-actor-stands.md) | [Inspection reports where a paused actor stands](0083-inspection-reports-where-a-paused-actor-stands.md) |

@@ -999,6 +999,8 @@ ta_result ta_actor_inspect(ta_system *system, ta_actor_id id, ta_actor_inspectio
         .macrostep_in_progress = actor->macrostep,
         .microstep_in_progress = actor->sparse != NULL && actor->sparse->paused != NULL &&
                                  ta_run_phase_in_microstep(actor->sparse->paused->at.phase),
+        .step = ta_actor_step(actor),
+        .position = ta_actor_position(actor),
         .current_event = ta_actor_paused_event(actor),
         .allocated_bytes = ta_actor_allocated_bytes(actor),
         .final_state = TA_STATE_NONE,

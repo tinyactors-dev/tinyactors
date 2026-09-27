@@ -175,6 +175,12 @@ void ta_interpreter_trace_forward(ta_interpreter *it, ta_invoke_id invoke, const
 ta_trace_parent ta_interpreter_trace_here(const ta_interpreter *it);
 /* The parent the actor's current macrostep runs under; all zero for none. */
 ta_trace_parent ta_actor_macrostep_parent(const ta_actor *actor);
+/* The key of the step the actor stands in: its macrostep and microstep
+ * while a macrostep has begun, the session alone otherwise (ADR 0067). */
+ta_step_key ta_actor_step(const ta_actor *actor);
+/* Where the actor's stopped macrostep stands, as its last PAUSED or STOPPED
+ * record said (ADR 0083); nowhere when no phase is open. */
+ta_trace_position ta_actor_position(const ta_actor *actor);
 /* Adds the actor's active states to its definition's occupancy, or takes
  * them away (ADR 0072), when it becomes resident or stops being so. */
 void ta_interpreter_occupancy(ta_actor *actor, bool arrive);

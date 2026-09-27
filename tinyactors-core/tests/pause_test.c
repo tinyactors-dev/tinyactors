@@ -181,6 +181,43 @@ static const ta_datamodel_vtable dm_vtable = {
 };
 
 /* ------------------------------------------------------------------------
+ * A trace sink that keeps the last execution-control record (ADR 0083)
+ */
+
+static ta_step_key last_control_key;
+static ta_trace_position last_control_position;
+static long control_records = 0;
+
+static bool same_key(ta_step_key a, ta_step_key b) {
+    return a.session == b.session && a.macrostep == b.macrostep && a.microstep == b.microstep;
+}
+static bool same_position(ta_trace_position a, ta_trace_position b) {
+    return a.at == b.at && a.state == b.state && a.transition == b.transition && a.action == b.action &&
+           a.iteration == b.iteration;
+}
+static bool nowhere(ta_trace_position position) {
+    return position.at == TA_TRACE_AT_NONE && position.state == TA_STATE_NONE &&
+           position.transition == TA_TRANSITION_NONE && position.action == TA_ACTION_NONE && position.iteration == 0;
+}
+
+static void control_write(void *self, const ta_trace_record *record) {
+    (void)self;
+    if (record->kind == TA_TRACE_RESUMED) {
+        /* A run goes on from where the last one stopped. */
+        CHECK(same_key(record->key, last_control_key));
+        CHECK(same_position(record->position, last_control_position));
+    }
+    last_control_key = record->key;
+    last_control_position = record->position;
+    control_records += 1;
+}
+static const ta_trace_sink_vtable control_vtable = { .write = control_write };
+static const ta_trace_sink control_sink = {
+    .v = &control_vtable,
+    .kinds = TA_TRACE_BIT(TA_TRACE_PAUSED) | TA_TRACE_BIT(TA_TRACE_RESUMED),
+};
+
+/* ------------------------------------------------------------------------
  * The chart: nested <if> and <foreach> in exit handlers, transition
  * content and entry handlers, several handlers per state, and a raised
  * event that moves on inside the same macrostep.
@@ -283,14 +320,18 @@ typedef struct {
     ta_system *system;
     ta_definition_id definition;
     ta_actor_id actor;
+    uint32_t budget;
     uint32_t action_budget;
     uint32_t pauses;
     uint32_t microstep_pauses;
+    /* Pauses whose inspected position named a unit to run next. */
+    uint32_t pauses_before_unit;
 } run;
 
 static void start(run *r, uint32_t action_budget) {
-    *r = (run){ .action_budget = action_budget };
+    *r = (run){ .budget = 1000, .action_budget = action_budget };
     CHECK(ta_system_create(&(ta_system_config){ .allocator = allocator }, &r->system) == TA_OK);
+    CHECK(ta_system_set_trace_sink(r->system, control_sink) == TA_OK);
     ta_definition *definition = NULL;
     CHECK(ta_definition_compile_spec(r->system, &(ta_definition_compile_params){ .spec = &chart,
                                                                                  .datamodel = { .v = &dm_vtable },
@@ -301,17 +342,42 @@ static void start(run *r, uint32_t action_budget) {
           TA_OK);
 }
 
-/* One resume call; counts pauses, and pauses inside a microstep. */
+/*
+ * One resume call; counts pauses, and pauses inside a microstep. A paused
+ * actor's inspection reports the key and position of the PAUSED record the
+ * call wrote (ADR 0083), or, when its macrostep had not begun and so wrote
+ * none, the session alone and nowhere.
+ */
 static ta_run_status resume_once(run *r) {
     ta_run_status status = TA_RUN_ERROR;
-    CHECK(ta_actor_resume(r->system, &(ta_actor_resume_params){ .actor = r->actor, .budget = 1000, .status = &status,
+    long records = control_records;
+    CHECK(ta_actor_resume(r->system, &(ta_actor_resume_params){ .actor = r->actor, .budget = r->budget,
+                                                               .status = &status,
                                                                .action_budget = r->action_budget }) == TA_OK);
+    ta_actor_inspection inspection;
+    CHECK(ta_actor_inspect(r->system, r->actor, &inspection) == TA_OK);
+    CHECK(inspection.step.session == inspection.session_id);
+    if (status != TA_RUN_PAUSED) {
+        /* Outside a macrostep: the session alone, and nowhere. */
+        CHECK(!inspection.macrostep_in_progress);
+        CHECK(same_key(inspection.step, (ta_step_key){ .session = inspection.session_id }));
+        CHECK(nowhere(inspection.position));
+    }
     if (status == TA_RUN_PAUSED) {
         r->pauses += 1u;
-        ta_actor_inspection inspection;
-        CHECK(ta_actor_inspect(r->system, r->actor, &inspection) == TA_OK);
         CHECK(inspection.macrostep_in_progress);
         r->microstep_pauses += inspection.microstep_in_progress ? 1u : 0u;
+        if (control_records != records) {
+            CHECK(same_key(inspection.step, last_control_key));
+            CHECK(same_position(inspection.position, last_control_position));
+        } else {
+            CHECK(inspection.step.macrostep == 0 && nowhere(inspection.position));
+        }
+        /* Inside a microstep it stands before a unit; between microsteps,
+         * nowhere. */
+        CHECK(inspection.microstep_in_progress == (inspection.position.action != TA_ACTION_NONE));
+        CHECK(inspection.microstep_in_progress || nowhere(inspection.position));
+        r->pauses_before_unit += inspection.position.action != TA_ACTION_NONE ? 1u : 0u;
         ta_atom atom = 0;
         CHECK(ta_system_intern_atom(r->system, STR("refused"), &atom) == TA_OK);
         ta_event refused = { .type = TA_EVENT_EXTERNAL, .invoke_id = TA_INVOKE_ID_NONE };
@@ -434,6 +500,9 @@ static void test_capture_inside_foreach(void) {
         CHECK(resume_once(&r) == TA_RUN_PAUSED);
     }
     CHECK(live_snapshots >= 2);
+    ta_actor_inspection captured;
+    CHECK(ta_actor_inspect(r.system, r.actor, &captured) == TA_OK);
+    CHECK(captured.position.at == TA_TRACE_AT_TRANSITION && captured.position.transition != TA_TRANSITION_NONE);
     ta_session_image *image = NULL;
     CHECK(ta_actor_capture(r.system, &(ta_actor_capture_params){ .actor = r.actor, .out = &image }) == TA_OK);
     long held = live_snapshots;
@@ -446,6 +515,9 @@ static void test_capture_inside_foreach(void) {
     ta_actor_inspection inspection;
     CHECK(ta_actor_inspect(r.system, r.actor, &inspection) == TA_OK);
     CHECK(inspection.microstep_in_progress);
+    /* The image keeps where it stood (ADR 0083). */
+    CHECK(same_key(inspection.step, captured.step));
+    CHECK(same_position(inspection.position, captured.position));
     settle(&r);
     note_configuration(&r);
     deliver(&r, "back");
@@ -501,10 +573,107 @@ static void test_pause_needs_no_allocation(void) {
     CHECK(live_snapshots == 0);
 }
 
+/* The block an action's innermost enclosing handler or transition is:
+ * follows <if> and <foreach> owners out to it. */
+static ta_action_info root_block(run *r, ta_action_id action) {
+    ta_action_info info = {0};
+    for (uint32_t depth = 0; depth < 16u; depth += 1u) {
+        CHECK(ta_definition_action(r->system, &(ta_definition_action_params){ .definition = r->definition,
+                                                                               .action = action, .out = &info }) ==
+              TA_OK);
+        if (info.block != TA_ACTION_IN_THEN && info.block != TA_ACTION_IN_ELSE && info.block != TA_ACTION_IN_FOREACH) {
+            break;
+        }
+        action = info.owner;
+    }
+    return info;
+}
+
+/*
+ * What the position names (ADR 0083), at action budget 1, where the run
+ * pauses before every unit: the next unit's action sits in the block the
+ * phase and state say, and a <foreach> whose next iteration is next is
+ * named with that iteration. resume_once() checks that each equals the
+ * PAUSED record.
+ */
+static void test_position_names_the_next_unit(void) {
+    trace_length = 0;
+    run r;
+    start(&r, 1);
+    settle(&r);
+    deliver(&r, "go");
+    ta_run_status status = resume_once(&r);
+    /* The first unit, `x1`, ran: next is the <if> after it in a's first <onexit>. */
+    CHECK(status == TA_RUN_PAUSED);
+    ta_actor_inspection inspection;
+    CHECK(ta_actor_inspect(r.system, r.actor, &inspection) == TA_OK);
+    CHECK(inspection.position.at == TA_TRACE_AT_EXIT && inspection.position.state == 0);
+    CHECK(inspection.step.macrostep == 2 && inspection.step.microstep == 1);
+    ta_action_info info = {0};
+    CHECK(ta_definition_action(r.system, &(ta_definition_action_params){ .definition = r.definition,
+                                                                         .action = inspection.position.action,
+                                                                         .out = &info }) == TA_OK);
+    CHECK(info.kind == TA_SCXML_ACTION_IF && info.block == TA_ACTION_IN_ONEXIT && info.owner == 0 &&
+          info.block_index == 0 && info.index == 1);
+
+    uint32_t next_iterations = 0;
+    uint32_t seen[4] = {0}; /* pauses in EXIT, TRANSITION, ENTER, elsewhere */
+    for (uint32_t calls = 0; status == TA_RUN_PAUSED && calls < 1000u; calls += 1u) {
+        CHECK(ta_actor_inspect(r.system, r.actor, &inspection) == TA_OK);
+        ta_trace_position at = inspection.position;
+        ta_action_info root = root_block(&r, at.action);
+        if (at.at == TA_TRACE_AT_EXIT) {
+            seen[0] += 1u;
+            CHECK(root.block == TA_ACTION_IN_ONEXIT && root.owner == at.state);
+        } else if (at.at == TA_TRACE_AT_TRANSITION) {
+            seen[1] += 1u;
+            CHECK(root.block == TA_ACTION_IN_TRANSITION && root.owner == at.transition);
+            ta_transition_info transition = {0};
+            CHECK(ta_definition_transition(r.system, &(ta_definition_transition_params){
+                                                         .definition = r.definition,
+                                                         .transition = at.transition,
+                                                         .out = &transition }) == TA_OK);
+            CHECK(transition.source == at.state);
+        } else if (at.at == TA_TRACE_AT_ENTER) {
+            seen[2] += 1u;
+            CHECK(root.block == TA_ACTION_IN_ONENTRY && root.owner == at.state);
+        } else {
+            seen[3] += 1u;
+        }
+        CHECK(ta_definition_action(r.system, &(ta_definition_action_params){ .definition = r.definition,
+                                                                             .action = at.action,
+                                                                             .out = &info }) == TA_OK);
+        next_iterations += info.kind == TA_SCXML_ACTION_FOREACH && at.iteration > 0 ? 1u : 0u;
+        CHECK(at.iteration < 3u);
+        status = resume_once(&r);
+    }
+    CHECK(status == TA_RUN_STABLE);
+    CHECK(seen[0] > 5u && seen[1] > 5u && seen[2] > 5u && seen[3] == 0);
+    CHECK(next_iterations > 3u);
+    CHECK(r.pauses == r.pauses_before_unit);
+    finish(&r);
+    CHECK(live_snapshots == 0);
+}
+
+/* A microstep budget pauses between microsteps: the key counts the
+ * microsteps done, and the position is nowhere. */
+static void test_position_between_microsteps(void) {
+    trace_length = 0;
+    run r;
+    start(&r, 0);
+    r.budget = 1;
+    script(&r);
+    CHECK(r.pauses >= 4u);
+    CHECK(r.microstep_pauses == 0 && r.pauses_before_unit == 0);
+    finish(&r);
+}
+
 int main(void) {
     test_every_budget_is_invisible();
     test_capture_inside_foreach();
     test_pause_needs_no_allocation();
+    test_position_names_the_next_unit();
+    test_position_between_microsteps();
     CHECK(live_allocations == 0);
     if (failures != 0) {
         fprintf(stderr, "pause test: %d check(s) failed\n", failures);

@@ -501,16 +501,26 @@ TinyactorsTest.scenarios 'running out of memory' do
 
       actor = spawn phases
       actor.deliver 'deeper'
+      recording_trace(kinds: %i[stopped])
       assert_equal 'ok', actor.post('go')
       stopped = nil
+      stopped_at = nil
+      where = ->(inspection) { [inspection[:step].except(:session), inspection[:position]] }
       20.times do
         allocator.budget(allocator.stats[:live_bytes] + 32)
         response = ta.actor.resume(system: system_handle, actor: actor.handle, budget: 1024)
         allocator.budget(0)
         break unless response[:result] == 'err_nomem'
-        next unless actor.inspect_actor[:microstep_in_progress]
 
+        inspection = actor.inspect_actor
+        next unless inspection[:microstep_in_progress]
+
+        # It stands where its STOPPED record said (ADR 0083).
+        record = trace_records.last
+        assert_equal 'stopped', record[:kind]
+        assert_equal [record[:key], record[:position]], [inspection[:step], inspection[:position]]
         stopped = actor.data('.log')
+        stopped_at = where.call(inspection)
         break
       end
       assert stopped, 'no failed allocation stopped the actor inside its microstep'
@@ -525,6 +535,9 @@ TinyactorsTest.scenarios 'running out of memory' do
       forget(actor)
       copy = TinyactorsTest::Actor.new(self, copy_id, phases, actor.definition)
       assert copy.inspect_actor[:microstep_in_progress], 'the reconstructed actor is stopped where the original was'
+      # A reconstructed actor is a new session (ADR 0066); its steps and
+      # position are the captured one's.
+      assert_equal stopped_at, where.call(copy.inspect_actor)
       assert_equal stopped, copy.data('.log')
       status = 'paused'
       20.times do

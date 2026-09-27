@@ -1454,6 +1454,19 @@
           "doc": "True while it is paused inside a microstep, in executable content (ADR 0061). The active states are then those after the last completed microstep."
         },
         {
+          "name": "step",
+          "type": {
+            "type": "ta_step_key"
+          },
+          "doc": "Where the paused macrostep stands (ADR 0083): the key and position of the PAUSED or STOPPED record its last run wrote, whether or not a sink wanted it. Between microsteps `position.at` is TA_TRACE_AT_NONE and `step.microstep` counts the microsteps done. Inside a microstep, `position` names the phase and state (and, in transition content, the transition), and `action` the unit it runs next: the next action of the innermost open block, in `iteration` of the innermost <foreach > whose body that is, or a <foreach > itself when its next iteration is next, with `iteration` the one it binds. At a microstep's start (ADR 0086) it names the first unit the microstep runs, or, when it runs none, its first transition with no action. Outside a macrostep, `step` is (session_id, 0, 0) and `position` is at NONE with every ID NONE."
+        },
+        {
+          "name": "position",
+          "type": {
+            "type": "ta_trace_position"
+          }
+        },
+        {
           "name": "current_event",
           "type": {
             "pointer": {
@@ -1582,7 +1595,7 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 240,
+          "size": 288,
           "align": 8,
           "offsets": {
             "actor": 0,
@@ -1595,24 +1608,26 @@
             "active_state_count": 80,
             "macrostep_in_progress": 84,
             "microstep_in_progress": 85,
-            "current_event": 88,
-            "internal_events": 96,
-            "internal_count": 104,
-            "invokes": 112,
-            "invoke_count": 120,
-            "delayed_sends": 128,
-            "delayed_send_count": 136,
-            "has_completion": 140,
-            "completion": 144,
-            "final_state": 152,
-            "allocated_bytes": 160,
-            "has_parent": 168,
-            "parent": 176,
-            "trace": 192
+            "step": 88,
+            "position": 112,
+            "current_event": 136,
+            "internal_events": 144,
+            "internal_count": 152,
+            "invokes": 160,
+            "invoke_count": 168,
+            "delayed_sends": 176,
+            "delayed_send_count": 184,
+            "has_completion": 188,
+            "completion": 192,
+            "final_state": 200,
+            "allocated_bytes": 208,
+            "has_parent": 216,
+            "parent": 224,
+            "trace": 240
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 184,
+          "size": 232,
           "align": 8,
           "offsets": {
             "actor": 0,
@@ -1625,20 +1640,22 @@
             "active_state_count": 64,
             "macrostep_in_progress": 68,
             "microstep_in_progress": 69,
-            "current_event": 72,
-            "internal_events": 76,
-            "internal_count": 80,
-            "invokes": 84,
-            "invoke_count": 88,
-            "delayed_sends": 92,
-            "delayed_send_count": 96,
-            "has_completion": 100,
-            "completion": 104,
-            "final_state": 108,
-            "allocated_bytes": 112,
-            "has_parent": 116,
-            "parent": 120,
-            "trace": 136
+            "step": 72,
+            "position": 96,
+            "current_event": 116,
+            "internal_events": 120,
+            "internal_count": 124,
+            "invokes": 128,
+            "invoke_count": 132,
+            "delayed_sends": 136,
+            "delayed_send_count": 140,
+            "has_completion": 144,
+            "completion": 148,
+            "final_state": 152,
+            "allocated_bytes": 156,
+            "has_parent": 160,
+            "parent": 168,
+            "trace": 184
           }
         }
       }
@@ -14845,7 +14862,7 @@
     },
     "ta_trace_position": {
       "kind": "struct",
-      "doc": "The public view of where the interpreter stands (ADR 0060, ADR 0061). IDs are the definition's compiled IDs: `action` indexes its actions, and `iteration` is the <foreach > iteration, from 0, of the innermost loop.",
+      "doc": "The public view of where the interpreter stands (ADR 0060, ADR 0061). IDs are the definition's compiled IDs: `action` indexes its actions, and `iteration` is the <foreach > iteration, from 0, of the innermost loop. Most records name the unit that wrote them. PAUSED, RESUMED and STOPPED name where the run stands, the unit it runs next, as ta_actor_inspect() reports it (ADR 0083).",
       "fields": [
         {
           "name": "at",
