@@ -13,6 +13,9 @@ clang = "22"
 # from the root runs the same Node as the package, not whatever is on PATH.
 node = "22"
 bun = "1"
+# Every release binary is built with `zig cc` (docs/adr/0001): one compiler,
+# linker and compiler-rt for every target, from any host (mise/lib/toolchain.rb).
+zig = "0.16.0"
 
 [env]
 # Puts the workspace's shared task library (mise/lib/) on Ruby's load path so

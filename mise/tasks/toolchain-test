@@ -1,0 +1,4 @@
+#!/usr/bin/env ruby
+#MISE description="Check the release toolchain (zig cc) on every release target: objects, archives, shared libraries and the wasm module"
+
+require 'toolchain_test'
