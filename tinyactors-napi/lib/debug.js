@@ -379,6 +379,8 @@ class DebugSession {
       log: (record) => this.#onLog(record),
       runaway: (runaway) => this.#onRunaway(runaway),
       defined: (id) => this.#onDefined(id),
+      deadLetter: (letter) => this.#onDeadLetter(letter),
+      dropped: (send) => this.#onDropped(send),
     });
     attached.watch = system.watchTraces({ sessions: [actor] });
     if (allow.has('send') || allow.has('goto')) {
@@ -596,6 +598,47 @@ class DebugSession {
     for (const hit of hits) {
       this.#output('console', `would have stopped after macrostep ${macrostep.number}: ${hit.description}`);
     }
+    this.#onFailedSends(macrostep, thread.label);
+  }
+
+  // A <send> of the actor that core could not route (an unknown target, a
+  // name with no actor) raises error.communication in it at once, or when
+  // a delayed one is due; the trace names the <send> that failed.
+  #onFailedSends(macrostep, label) {
+    for (const { name, attributes } of macrostep.records) {
+      if (name !== 'scxml.raise' || !String(attributes['scxml.event.name']).startsWith('error.communication')) continue;
+      const action = attributes['scxml.action'];
+      const which = action !== undefined ? action
+        : `a delayed <send> from macrostep ${attributes['scxml.cause.macrostep'] ?? '?'}, when it was due,`;
+      this.#output('important', `${label}: ${which} could not be delivered; it raised error.communication`);
+    }
+  }
+
+  // Whether `target` (an ActorID, or an address) is the attached actor.
+  #isAttached(target) {
+    const attached = this.#attached;
+    if (attached === null || target === undefined || target === null) return false;
+    if (target instanceof ActorID) return target.equals(attached.actor);
+    const { address } = attached;
+    return address !== undefined && target.family === address.family && target.name === address.name;
+  }
+
+  // Mail for the attached actor that it will never take (a dead letter,
+  // ADR 0008): the application's deadLetter hook hears it as well.
+  #onDeadLetter(letter) {
+    if (!this.#isAttached(letter.target)) return;
+    const detail = letter.detail === undefined ? '' : ` (${letter.detail})`;
+    this.#output('important', `${this.#attached.label}: ${letter.event} became a dead letter: ${letter.reason}${detail}`);
+  }
+
+  // A <send> of the attached actor that its I/O processor failed; the actor
+  // gets error.communication for it.
+  #onDropped(send) {
+    if (!this.#isAttached(send.source)) return;
+    const target = typeof send.target === 'string' && send.target !== '' ? ` to ${send.target}` : '';
+    const why = send.error instanceof Error ? send.error.message : jsonText(send.error);
+    this.#output('important', `${this.#attached.label}: the <send> of ${send.event} through ${send.type}${target} ` +
+                              `failed: ${why}`);
   }
 
   // A breakpoint's condition, in the data model where it hit. It runs only

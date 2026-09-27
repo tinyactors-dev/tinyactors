@@ -105,15 +105,19 @@ let nativeOf;
 // (src/napi_services.h). It is one function for the environment, so no
 // native reference keeps a System alive.
 let effectHandler;
-// observe(system, { traces, log, runaway, defined }): what lib/debug.js reads
-// beside the application (ADR 0026). `traces(traces, logs)` gets every turn's
-// OTLP bytes the application's trace sink gets, installing a sink of its own
-// when the application has none; `log(record)` every <log> record;
-// `runaway(actor)` each actor quarantined as a
-// runaway (core ADR 0075); `defined(id)` each definition define()
-// registered, a new one or one answered by identity (core ADR 0077), whose
-// spans may have moved (core ADR 0085). Returns { stop() }. index.js does
-// not export it.
+// observe(system, { traces, log, runaway, defined, deadLetter, dropped }):
+// what lib/debug.js reads beside the application (ADR 0026).
+// `traces(traces, logs)` gets every turn's OTLP bytes the application's
+// trace sink gets, installing a sink of its own when the application has
+// none; `log(record)` every <log> record; `runaway(actor)` each actor
+// quarantined as a runaway (core ADR 0075); `defined(id)` each definition
+// define() registered, a new one or one answered by identity (core ADR
+// 0077), whose spans may have moved (core ADR 0085); `deadLetter(record)`
+// every dead letter, as the application's deadLetter hook gets it, just
+// before it does; `dropped({ source, sendID, event, type, target, error })`
+// each <send> an I/O processor failed, as its sender gets
+// error.communication for it. Observers never change what the application
+// hears. Returns { stop() }. index.js does not export it.
 let observe;
 
 // The SCXML invoker type core normalizes "scxml" and its URI to (core
@@ -191,9 +195,13 @@ class System {
     if (options !== undefined && (options === null || typeof options !== 'object')) {
       throw new TinyactorsError('createSystem options must be an object', 'invalid');
     }
+    // The native hook is always this system's, so observers hear dead
+    // letters too; the application's hook, when it has one, gets each as
+    // before. Anything else the application passed is the native side's to
+    // refuse.
     const deadLetter = options?.deadLetter;
-    const nativeOptions = typeof deadLetter !== 'function' ? options
-      : { ...options, deadLetter: (letter) => deadLetter(this.#withLoadDetail(letter)) };
+    const nativeOptions = deadLetter !== undefined && typeof deadLetter !== 'function' ? options
+      : { ...options, deadLetter: (letter) => this.#deadLetter(letter, deadLetter) };
     this.#native = new native.System(this, nativeOptions);
     this.#events = new EventNames(this.#native);
     const unloadValues = options?.unloadValues ?? 'serialize';
@@ -615,6 +623,14 @@ class System {
   #communicationError(request, error) {
     if (this.closed || request.source === undefined) {
       return;
+    }
+    if (this.#observers.size > 0) {
+      try {
+        this.#notify('dropped', { source: request.source, sendID: request.sendID, event: request.event,
+                                  type: request.type, target: request.target, error });
+      } catch {
+        // An observer's failure is its own.
+      }
     }
     try {
       this.post(request.source, 'error.communication', { sendID: request.sendID, type: request.type, error });
@@ -1727,6 +1743,20 @@ class System {
   }
 
   // A dead letter of mail that waited for a failed load carries why it failed.
+  // One dead letter: observers first, never letting them fail the turn,
+  // then the application's hook, whose exceptions are the application's.
+  #deadLetter(letter, hook) {
+    const record = this.#withLoadDetail(letter);
+    if (this.#observers.size > 0) {
+      try {
+        this.#notify('deadLetter', record);
+      } catch {
+        // An observer's failure is its own.
+      }
+    }
+    hook?.(record);
+  }
+
   #withLoadDetail(letter) {
     if ((letter.reason === 'rejected' || letter.reason === 'load-failed' || letter.reason === 'load-timeout') &&
         !(letter.target instanceof ActorID)) {

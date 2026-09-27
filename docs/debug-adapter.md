@@ -128,7 +128,7 @@ or partial, ☑ done and tested, — not offered.
 | `exited` | no | Actors do not exit with a code | — | — | — |
 | `terminated` | yes | The attached actor finished, was destroyed, or its address was left empty | none | ☑ | ☑ |
 | `thread` | yes | `SPAWNED`, `FINISHED` and `DESTROYED` records of the actor and its children | none | ☑ | ☑ |
-| `output` | yes | `console`: a summary of each macrostep, and in napi where a breakpoint would have stopped; `stdout`: `<log>` records; `important`: dead letters and dropped sends | none | ☑ | ☑ |
+| `output` | yes | `console`: a summary of each macrostep, and in napi where a breakpoint would have stopped; `stdout`: `<log>` records; `important`: dead letters and dropped sends. napi: mail for the attached actor that became a dead letter (with its reason), each `<send>` of it that core could not route (it raised `error.communication`; the trace names the `<send>`), and each its I/O processor failed (event, type, target, error); withdrawn and cancelled delayed sends are not dropped. It hears dead letters beside the application's `deadLetter` hook, which gets each as before | none | ☑ | ☑ |
 | `breakpoint` | yes | A breakpoint is verified once its definition's spans are known, or moves after a hot replace | C5 | ☑ | ☑ |
 | `module` | yes | A definition revision is registered or retired | none | ☑ | ☑ |
 | `loadedSource` | yes | A definition revision's source becomes available | none | ☑ | ☑ |

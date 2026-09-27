@@ -943,6 +943,71 @@ async function runaway() {
   system.close();
 }
 
+// Mail the attached actor will never take, and <send>s of its that could
+// not be delivered, are `important` output while it is attached; the
+// application's deadLetter hook hears every dead letter as before.
+async function lostMail() {
+  const letters = [];
+  const system = createSystem({
+    clock: 'manual',
+    deadLetter: (letter) => letters.push(letter),
+    io: { bad: { send() { throw new Error('the socket is closed'); } } },
+  });
+  const chart = statechart({ family: 'mailer', revision: 'v1' })
+    .state('idle', (s) => s
+      .on('lost', (t) => t.send('hello', (send) => send.to('#_actor_nobody/x')))
+      .on('late', (t) => t.send('ping', (send) => send.to('#_actor_nobody/y').after(10)))
+      .on('broken', (t) => t.send('frame', (send) => send.via('bad').to('ws://peer'))))
+    .state('busy');
+  const definition = system.define(chart);
+  const actor = system.spawn(definition, { name: 'm1' });
+  await system.flush();
+  const client = new Client(system, { allow: ALL });
+  await client.start({ address: 'mailer/m1' });
+
+  // An operator transition from a state that is not active is refused: a
+  // dead letter for the attached actor.
+  let mark = client.mark();
+  system.post(actor, 'jump', undefined, { transition: { targets: ['idle'], source: 'busy' } });
+  await client.wrote(mark, /mailer\/m1: jump became a dead letter: refused\n/);
+  assert.equal(client.since(mark, 'output').find((body) => /dead letter/.test(body.output)).category, 'important');
+  assert.deepEqual(letters.map(({ event, reason }) => [event, reason]), [['jump', 'refused']],
+                   'the application\'s hook hears it as before');
+
+  mark = client.mark();
+  actor.post('lost');
+  await client.wrote(mark, /mailer\/m1: <send> in idle on lost could not be delivered; it raised error\.communication\n/);
+  mark = client.mark();
+  actor.post('late');
+  await system.flush();
+  await system.advanceBy(20);
+  await client.wrote(mark, /mailer\/m1: a delayed <send> from macrostep \d+, when it was due, could not be delivered; it raised error\.communication\n/);
+  mark = client.mark();
+  actor.post('broken');
+  await client.wrote(mark, /mailer\/m1: the <send> of frame through bad to ws:\/\/peer failed: the socket is closed\n/);
+  await system.flush();
+
+  // Another actor's lost mail is not the attached actor's.
+  const other = system.spawn(definition, { name: 'm2' });
+  await system.flush();
+  mark = client.mark();
+  system.post(other, 'jump', undefined, { transition: { targets: ['idle'], source: 'busy' } });
+  other.post('lost');
+  await system.flush();
+  assert.doesNotMatch(client.outputSince(mark), /mailer\/m2|dead letter|could not be delivered/);
+
+  // After the session detaches it writes nothing more.
+  await client.ok('disconnect');
+  mark = client.mark();
+  system.post(actor, 'jump', undefined, { transition: { targets: ['idle'], source: 'busy' } });
+  actor.post('lost');
+  actor.post('broken');
+  await system.flush();
+  assert.equal(client.since(mark, 'output').length, 0, 'nothing after the detach');
+  assert.equal(letters.filter((letter) => letter.event === 'jump').length, 3, 'the application still hears every one');
+  system.close();
+}
+
 // Modules and sources: every registered revision, retired ones included.
 async function catalog() {
   const { system, definition } = await world();
@@ -1292,6 +1357,7 @@ async function invokedChildByRuntimeID() {
   await scxmlChildren();
   await invokedChildByRuntimeID();
   await runaway();
+  await lostMail();
   await ending();
   clearTimeout(watchdog);
   process.stdout.write('debug.js passed\n');
