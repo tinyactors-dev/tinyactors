@@ -39,8 +39,8 @@ laid out how each library and the addon would ship. It was discussed on
    published release (adding a target, replacing an asset, rewriting the
    notes) is a supported step. The tag never moves.
 8. **The libraries should not call `memcpy` or `memset`.** No compiler
-   option guarantees this on native targets; how to get there is still
-   open (below).
+   option guarantees this on native targets; decision 16 settles it by
+   bundling them, hidden, into each binary.
 9. **Platform-specific source files are chosen by file name, as in Go.** A
    file named `*_wasm.c` is built only for wasm. The list of suffixes and
    the one function that applies it live in `mise/lib/platform_files.rb`;
@@ -84,12 +84,54 @@ laid out how each library and the addon would ship. It was discussed on
     `mise run //tinyactors-napi:package -- --dev` stamps the same version
     into local tarballs.
 
+16. **`memcpy` and `memset` are bundled, hidden, as Ghostty does**
+    (2026-09-28). The compiler lowers aggregate copies and zeroing to
+    `memcpy` and `memset` whatever the options (decision 8). Instead of
+    leaving them to the host, each native binary carries zig's compiler-rt,
+    which defines `memcpy`, `memset`, `memmove`, `memcmp` and `bcmp`, and
+    keeps those definitions private:
+    - **Linux shared libraries** link with `-shared -nostdlib
+      -rtlib=compiler-rt`: the five are local, nothing is undefined, no
+      libc is named, and only the API is exported.
+    - **Static archives** are built by partial-linking the library's
+      object and compiler-rt (`zig build-lib -fcompiler-rt` gives an
+      archive of both; `zig cc -r` joins them into one relocatable object),
+      then making the five local with `llvm-objcopy --localize-symbol`,
+      and archiving that one object. Partial-linking first matters:
+      localizing compiler-rt's copies alone would leave the library's own
+      calls undefined, for the host's libc to resolve. The archive
+      therefore neither imports `memcpy` nor overrides the `memcpy` of the
+      program that links it. Ghostty localizes the same way on macOS only
+      (`nmedit`); here it is done for every target. Member names are
+      plain, not zig's cache paths.
+    - **macOS dylibs** are linked from that localized object (`zig cc
+      -shared`, `-dead_strip`, an exported-symbols list), since
+      `-rtlib=compiler-rt` bundles nothing on Darwin.
+    - **wasm32** needs nothing: zig 0.16's default wasm CPU has bulk
+      memory, so copies and zeroing are `memory.copy` and `memory.fill`.
+    - **The release's symbol check:** the exported symbols are exactly the
+      functions in the API description (plus the linker's own
+      `___dso_handle` and `__mh_dylib_header` on macOS), and nothing is
+      undefined, except on macOS three libSystem symbols every process has:
+      `dyld_stub_binder`, and compiler-rt's `__availability_version_check`
+      and `_sys_icache_invalidate`.
+    - **To measure before copying Ghostty further:** compiler-rt's `memset`
+      is scalar in zig 0.16. Ghostty measured it 24 times slower and ships
+      its own vectorized, hidden `memset`; core's release measures its own
+      cost first.
+    - **Size:** the bundled compiler-rt adds about 1.4 MB to a Linux static
+      archive and about 380 KB to a macOS one after dead-stripping.
+
+    Sources: ghostty-org/ghostty at `b40acce58dcf`,
+    `src/build/GhosttyLibVt.zig` L239-252 (`bundle_compiler_rt` for static
+    builds), `src/quirks_memset.zig` (the hidden vectorized `memset`),
+    `src/build/libsystem_override.sh` (localizing on macOS); zig 0.16.0
+    `lib/compiler_rt.zig` L24-44 (compiler-rt's weak, hidden linkage).
+    Measured with zig 0.16.0 and `llvm-objcopy` on 2026-09-28 for
+    `x86_64-linux`, `aarch64-linux` and `aarch64-macos`.
+
 ## Still open
 
-- **How the native libraries avoid `memcpy` and `memset`** (decision 8):
-  change the code, define the functions under the library's names, or
-  allow the four functions a freestanding C environment must provide. The
-  proposal lists the measurements.
 - **A signature on `SHA256SUMS`**, for example `ssh-keygen -Y sign` with
   the git signing key.
 
