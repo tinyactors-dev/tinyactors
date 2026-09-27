@@ -13,7 +13,7 @@
  * leave it marked. `mise run check-api-status` (part of `mise run test`)
  * keeps the markers honest where the runtime can answer: a marked
  * declaration that exists fails, and an unmarked one that is missing
- * fails. `grep -n "^ *// status:" index.d.ts` lists what is outstanding.
+ * fails. `grep -n "// status:" index.d.ts` lists what is outstanding.
  */
 
 /** The package version. */
@@ -53,6 +53,13 @@ export interface SystemOptions {
   io?: Readonly<Record<string, IOProcessor>>;
   invokers?: Readonly<Record<string, Invoker>>;
   log?: LogSink;
+  /**
+   * How unload() keeps an actor's JavaScript values: "serialize" (the
+   * default) writes them with v8.serialize, "handles" keeps each value by
+   * handle in this process. unload() throws `unsupported` for a value it
+   * can do neither with.
+   */
+  unloadValues?: "serialize" | "handles";
 }
 
 /** An actor finished (ADR 0012). The actor is still resident while the hook runs. */
@@ -179,6 +186,7 @@ export interface SchedulingOptions {
 export declare function createSystem(options?: SystemOptions): System;
 
 export interface System {
+  /** The one member besides close() that works after close(); the others throw `closed`. */
   readonly closed: boolean;
   readonly clock: "realtime" | "manual";
   readonly time: number;
@@ -195,10 +203,14 @@ export interface System {
     options?: { microstepLimit?: number },
   ): Definition<Data>;
   /**
-   * Import an SCXML document (napi ADR 0019): its `datamodel` attribute picks
-   * `null`, `javascript`, or a data model registerDatamodel() registered; a
-   * document without one gets `null`. A refused document throws `invalid`
-   * or `unsupported` with ImportRefusal as `detail`, which says where.
+   * Import an SCXML document (napi ADR 0019). Its `<scxml name>` is the
+   * definition's family and is required; the revision is a hash of the
+   * document. Its `datamodel` attribute picks `null`, `javascript`, or a
+   * data model registerDatamodel() registered; a document without one gets
+   * `null`. lib/ ships no ECMAScript compiler, so under `javascript` an
+   * expression may only be `In(state)` or a data name: register a data
+   * model to compile others. A refused document throws `invalid` or
+   * `unsupported` with ImportRefusal as `detail`, which says where.
    */
   define<Data extends object = Record<string, unknown>>(
     source: string | Uint8Array,
@@ -235,7 +247,11 @@ export interface System {
    */
   registerDatamodel(name: string, datamodel: DatamodelCompiler): void;
 
-  /** The newest registered, unretired definition with this identity. */
+  /**
+   * The unretired definition with this identity. define() of an identity
+   * already registered returns that definition and takes another hold;
+   * different content under it throws `definition-mismatch`.
+   */
   findDefinition(identity: DefinitionIdentity): Definition | undefined;
 
   spawn<Data extends object>(
@@ -294,13 +310,15 @@ export interface System {
 
   /**
    * Bring an unloaded named actor back: from the bytes unload() kept for an
-   * address, or from a SessionImage; the same session ID, a new runtime ID
-   * (core ADR 0066). From an image, `binding` defaults to its root. An
-   * invocation active at capture is reported to the actor as
-   * `error.communication.invoke.<id>.unavailable` (core ADR 0038).
+   * address, with the data it was unloaded with, or from a SessionImage;
+   * the same session ID, a new runtime ID (core ADR 0066). From an image,
+   * `binding` defaults to its root. An invocation active at capture is
+   * reported to the actor as `error.communication.invoke.<id>.unavailable`
+   * (core ADR 0038).
    */
+  load<Data extends object>(address: ActorAddress): Actor<Data>;
   load<Data extends object>(
-    target: SessionImage<Data> | ActorAddress,
+    image: SessionImage<Data>,
     options?: { readonly binding?: Partial<Data> | Data },
   ): Actor<Data>;
 
@@ -340,6 +358,8 @@ export interface System {
   /**
    * Wake the unloaded actor at `address` through its family's loader at
    * `time` (core's clock). unload() does this for the image's next deadline.
+   * Nothing happens at `time` for an address with no unloaded actor and no
+   * loader.
    */
   wakeAt(address: ActorAddress, time: number): void;
 
@@ -373,7 +393,9 @@ export interface System {
    * Traces matching deliveries in full, sampled whatever the ratio, until
    * stop(): to these sessions (IDs or actors), to the actors at these
    * addresses, and to the actors of these definition families. What a
-   * watched delivery causes is watched too.
+   * watched delivery causes is watched too. An address is resolved once,
+   * now, to its resident actor's session: an address with none throws
+   * `not-found`, and a later session at it is not watched.
    */
   watchTraces(watch: {
     sessions?: (bigint | number | ActorID)[];
@@ -402,8 +424,14 @@ export interface System {
    * `until: "accepted"` once the message is queued. It rejects when the
    * message becomes a dead letter, when its macrostep faults, on `signal`
    * (`aborted`), after `timeout` (`timeout`), when the queue is full
-   * (`queue-full`), and on close() (`closed`). Abort and timeout withdraw a
-   * message still queued; a delivered one is not undone. Only misuse throws.
+   * (`queue-full`), and on close() (`closed`) while it is pending. Abort
+   * and timeout withdraw a message still queued; a delivered one is not
+   * undone. Only misuse throws, and a call after close() throws `closed`.
+   * A send() whose message becomes a dead letter rejects with the reason's
+   * code: `not-found` (also for `destroyed`), `done`, `unloaded`,
+   * `rejected`, `load-failed`, `load-timeout`, `waiting-full`, or `invalid`
+   * for `refused`; a macrostep quarantined as a runaway rejects with
+   * `runaway`.
    */
   send(
     target: ActorTarget,
@@ -427,7 +455,9 @@ export interface System {
    * Resident actors as pages of IDs: each page is a Uint32Array of
    * interleaved [slot, generation] pairs (ADR 0003). Pages continue from
    * core's cursor, in slot order; a page is a snapshot (core ADR 0062).
-   * Throws `reentrant` inside a core call.
+   * This and actors() and definitions() are generators: `reentrant` inside
+   * a core call, and an invalid `pageSize`, throw from the first next(),
+   * not from the call.
    */
   actorIDs(options?: PageOptions): IterableIterator<Uint32Array>;
   /**
@@ -509,7 +539,6 @@ export interface ActorAddress {
 
 declare const definitionIDBrand: unique symbol;
 declare const invocationIDBrand: unique symbol;
-declare const sendIDBrand: unique symbol;
 
 /**
  * An actor's ID: its slot and generation in the actor table, two small
@@ -523,11 +552,14 @@ export interface ActorID {
 }
 export type DefinitionID = bigint & { readonly [definitionIDBrand]: true };
 export type InvocationID = bigint & { readonly [invocationIDBrand]: true };
-export type SendID = bigint & { readonly [sendIDBrand]: true };
 
 export interface PostOptions {
   /** A W3C traceparent: the macrostep this message starts runs under it (ADR 0015). */
   traceparent?: string;
+  /**
+   * post() only checks it when called, throwing `aborted` if it already
+   * aborted; send() also withdraws a message still queued when it aborts.
+   */
   signal?: AbortSignal;
   /** The retained-bytes estimate of `data`, instead of the default (ADR 0005 point 9). */
   bytes?: number;
@@ -707,6 +739,7 @@ export interface SourcePlace {
 export interface DefinitionInspection {
   readonly id: DefinitionID;
   readonly identity: DefinitionIdentity;
+  /** StatechartOptions.name, or an imported document's `<scxml name>`. */
   readonly name?: string;
   /** The data model the chart was compiled against, e.g. "null". */
   readonly datamodel: string;
@@ -781,10 +814,14 @@ export interface StateContainerBuilder<Data extends object, Self> {
   state(id: string, build?: StateBlock<Data>): Self;
   parallel(id: string, build: StateBlock<Data>): Self;
   final(id: string, build?: StateBlock<Data>): Self;
+  /**
+   * A history state. `build` gives it its default transition, which it
+   * needs exactly one of, with always(): `h => h.always(t => t.target("a"))`.
+   */
   history(
     id: string,
     depth: "shallow" | "deep",
-    build?: StateBlock<Data>,
+    build: StateBlock<Data>,
   ): Self;
 }
 
@@ -868,6 +905,7 @@ export interface SendBuilder<Data extends object> {
   to(target: StringSpec<Data>): this;
   via(ioType: StringSpec<Data>): this;
   after(delay: DelaySpec<Data>): this;
+  /** id() and idLocation() replace each other: the last one called wins. */
   id(id: string): this;
   idLocation(location: keyof Data & string | Location<Data, string>): this;
   data(value: ValueInput<Data>): this;
@@ -879,6 +917,7 @@ export type InvokeBlock<Data extends object> = (
 ) => void;
 
 export interface InvokeBuilder<Data extends object> {
+  /** id() and idLocation() replace each other: the last one called wins. */
   id(id: string): this;
   idLocation(location: keyof Data & string | Location<Data, string>): this;
   type(type: StringSpec<Data>): this;
@@ -915,6 +954,7 @@ export interface SpawnOptions<Data extends object> {
    * of this actor, stored with its data. They keep their IDs, due times and
    * traces; a due time already past fires on the next dispatch.
    */
+  // status: partial: a send's `destination` ActorID goes back to core as a raw slot and generation, so after a JSON round trip spawn() throws `invalid`, and in another system the send reaches whichever actor holds that slot
   readonly pendingSends?: readonly DelayedSendInspection[];
 }
 
@@ -923,6 +963,10 @@ export interface SpawnOptions<Data extends object> {
  * system. It holds no native resource and no finalizer.
  */
 export interface Actor<Data extends object = Record<string, unknown>> extends ActorID {
+  /**
+   * True once no resident actor has this ID: destroyed, finished and
+   * destroyed, or unloaded. Throws `closed` after close() of its system.
+   */
   readonly destroyed: boolean;
   equals(other: ActorID): boolean;
 
@@ -950,7 +994,11 @@ export interface Actor<Data extends object = Record<string, unknown>> extends Ac
     options?: ReplacementOptions<Data>,
   ): PreparedActor<Data>;
 
-  /** Terminate this interpreter. Invoked children are not destroyed implicitly. */
+  /**
+   * Terminate this interpreter. Its active invocations are cancelled: an
+   * in-system SCXML child is destroyed with it, and a JavaScript invoker's
+   * service gets cancel().
+   */
   destroy(): void;
   [Symbol.dispose](): void;
 }
@@ -977,8 +1025,12 @@ export interface ReplacementOptions<Data extends object> {
   readonly binding?: Partial<Data> | Data;
 }
 
-/** Core's residency: "idle" between macrosteps, "running" inside one, "done" once finished. */
-export type ActorResidency = "idle" | "running" | "done" | "unloaded";
+/**
+ * Core's residency: "idle" between macrosteps, "running" inside one, "done"
+ * once finished. An unloaded actor is not resident: inspecting it throws
+ * `not-found`.
+ */
+export type ActorResidency = "idle" | "running" | "done";
 
 /**
  * A snapshot of core's view of one actor (ADR 0054: O(size of the actor)).
@@ -1033,7 +1085,11 @@ export interface InvocationInspection {
   readonly type: string;
   readonly active: boolean;
   readonly autoforward: boolean;
-  /** The invoker's handle for the service; for the in-system SCXML invoker, the child's session ID. */
+  /**
+   * The invoker's handle for the service. For the in-system SCXML invoker,
+   * the child's runtime ID as one integer, (generation << 32) | slot: it
+   * matches no actor once the child is unloaded or reconstructed.
+   */
   readonly serviceHandle: bigint;
 }
 
@@ -1050,7 +1106,10 @@ export interface InspectedEvent {
   readonly name: EventName;
   readonly type: "external" | "internal" | "platform";
   readonly sendID?: string;
-  /** Who sent it: an actor, or an I/O origin's URI. */
+  /**
+   * Who sent it: an actor, or an I/O origin's URI. Absent for any other
+   * origin, such as an invoked service or an I/O origin without a URI.
+   */
   readonly origin?: ActorID | ActorAddress | string;
   readonly data?: unknown;
 }
@@ -1135,14 +1194,15 @@ export interface Location<Data extends object, Value = unknown> {
   set(this: Data, value: Value, context: EvaluationContext<Data>): void;
 }
 
-export type ValueSpec<Data extends object, Value = unknown> =
-  | { readonly value: Value }
-  | { readonly expression: Expression<Data, Value> }
-  | { readonly location: Location<Data, Value> }
-  | { readonly content: string | Uint8Array };
-
 export type StringSpec<Data extends object> = string | Expression<Data, string>;
 
+/**
+ * A number is milliseconds, written as `${number}ms` for core, which takes
+ * an SCXML duration: a non-negative decimal without an exponent, so a
+ * number JavaScript prints with one (1e21, 1e-7) is refused at define(). A
+ * function's result is checked only when the send runs; a negative or NaN
+ * delay then raises `error.execution`.
+ */
 export type DelaySpec<Data extends object> =
   | number
   | `${number}ms`
@@ -1165,11 +1225,6 @@ export interface ActorEvent<Data = unknown> {
   readonly data: Data;
 }
 
-export type EventOrigin =
-  | { readonly kind: "actor"; readonly actor: ActorID | ActorAddress }
-  | { readonly kind: "invocation"; readonly invocation: InvocationID }
-  | { readonly kind: "io"; readonly value: bigint };
-
 /* --------------------------------------------------------------------------
  * Statechart specs: the generated shape (ADR 0013)
  *
@@ -1183,7 +1238,8 @@ export type EventOrigin =
  * location is a data name or a { get, set } object. A spec with data, a
  * script, or any function, literal() or location compiles against the
  * JavaScript data model ("javascript"); any other spec against core's null
- * data model ("null"). `datamodel` chooses explicitly.
+ * data model ("null"). `datamodel` chooses explicitly. A script, unlike
+ * other expressions, must be a function.
  * -------------------------------------------------------------------------- */
 
 /** A function, a literal(), or source text (In(state) or a data name). */
@@ -1191,6 +1247,11 @@ export type ExpressionSpec =
   | string
   | ((this: any, context: EvaluationContext<any>) => unknown)
   | LiteralValue<unknown>;
+/**
+ * A script. Source text and literal() compile, but running them fails with
+ * an internal `error.execution` (a script must be a function).
+ */
+export type ScriptSpec = (this: any, context: EvaluationContext<any>) => void;
 /** A data name, or a { get, set } location. */
 export type LocationSpec = string | Location<any, unknown>;
 
@@ -1205,18 +1266,23 @@ export type StateKind =
 export interface DefinitionSpec {
   /** The statechart document name. */
   readonly name?: string;
-  /** The data model the chart requires; absent means no requirement. */
-  readonly datamodel?: string;
+  /**
+   * "null" or "javascript"; absent, it is inferred (see above). define()
+   * compiles every other name as "javascript", which core then refuses: a
+   * data model registerDatamodel() registered is only for imported SCXML.
+   */
+  readonly datamodel?: "null" | "javascript";
   readonly identity?: {
     readonly family: { readonly name: string };
     readonly revision: string | Uint8Array;
   };
+  /** "default" is early binding: inspection reports it as "early". */
   readonly binding?: "default" | "early" | "late";
   readonly initial?: InitialSpec;
   /** Document order is semantically significant. */
   readonly states?: readonly StateSpec[];
   readonly data?: readonly DataSpec[];
-  readonly script?: ExpressionSpec;
+  readonly script?: ScriptSpec;
   /** Where the script was written: an index into `spans`, from 1. */
   readonly script_span?: number;
   /**
@@ -1293,7 +1359,7 @@ export type ActionSpec = { readonly span?: number } & (
   | { readonly kind: "send"; readonly send: SendSpec }
   | { readonly kind: "cancel"; readonly cancel: { readonly sendid: StringAttributeSpec } }
   | { readonly kind: "assign"; readonly assign: { readonly location: LocationSpec; readonly value?: ValueSourceSpec } }
-  | { readonly kind: "script"; readonly script: { readonly script: ExpressionSpec } }
+  | { readonly kind: "script"; readonly script: { readonly script: ScriptSpec } }
   | { readonly kind: "log"; readonly log: { readonly label?: string; readonly expr?: ExpressionSpec } }
   | {
     readonly kind: "if";
@@ -1376,7 +1442,11 @@ export interface IORequest {
   readonly contentType?: string;
 }
 
-/** One per system: `signal` aborts on close(). */
+/**
+ * One per system, except that a request carrying a traceparent gets its
+ * own, whose post() carries that traceparent unless given another.
+ * `signal` aborts on close().
+ */
 export interface EffectContext {
   readonly system: System;
   readonly signal: AbortSignal;
@@ -1400,6 +1470,7 @@ export interface InvokeRequest {
   /** The invoke ID's text: `<invoke id>` or the one core generated. */
   readonly invokeID?: string;
   readonly type: string;
+  // status: partial: under datamodel="null" a literal `<invoke src>` never reaches start(): the parent gets error.execution
   readonly source?: unknown;
   /** `<content expr>`'s value, or a literal <content> as text (then `contentType` is set). */
   readonly content?: unknown;
@@ -1418,11 +1489,13 @@ export interface InvokedService {
  * external events (done as done.invoke.<id>); unavailable() retires the
  * invocation and the parent gets error.communication. Each returns false
  * once the invocation has ended (done, unavailable, cancelled, closed).
+ * event() and done() throw `queue-full` when the parent's mailbox is full.
  */
 export interface InvocationReporter {
   /** Aborts when the invocation ends: cancel, done, unavailable, or close(). */
   readonly signal: AbortSignal;
   event(name: EventName, data?: unknown): boolean;
+  // status: partial: the invocation ends before done.invoke is posted, so a done() that throws is lost: the parent never hears it, and every later call returns false
   done(data?: unknown): boolean;
   unavailable(error?: unknown): boolean;
 }
@@ -1445,10 +1518,8 @@ export type TinyactorsErrorCode =
   | "invalid"
   | "out-of-memory"
   | "not-found"
-  | "not-reconstructible"
   | "busy"
   | "unsupported"
-  | "corrupt"
   | "definition-mismatch"
   | "unloaded"
   | "stale"
@@ -1457,7 +1528,13 @@ export type TinyactorsErrorCode =
   | "reentrant"
   | "aborted"
   | "timeout"
-  | "abandoned";
+  | "abandoned"
+  | "runaway"
+  /** A send()'s message became a dead letter with this reason (DeadLetterRecord). */
+  | "rejected"
+  | "load-failed"
+  | "load-timeout"
+  | "waiting-full";
 
 export class TinyactorsError extends Error {
   readonly code: TinyactorsErrorCode;
@@ -1498,7 +1575,8 @@ export interface TraceConfiguration {
   /**
    * The ratio (0 to 1, default 1) of the traces this system starts that are
    * sampled, decided as OpenTelemetry's TraceIDRatioBased does. A
-   * traceparent keeps its caller's decision.
+   * traceparent keeps its caller's decision. Lifecycle spans (spawned,
+   * loaded, unloaded, finished, destroyed) are kept whatever the decision.
    */
   sample?: number;
 }
@@ -1571,7 +1649,12 @@ export declare function metricsToOTLP(
   options?: { resource?: Record<string, string>; version?: string },
 ): Uint8Array;
 
-/** A span as decodeTraces() reads it. IDs are lowercase hex. */
+/**
+ * A span as decodeTraces() reads it. IDs are lowercase hex. The addon's own
+ * spans are all `internal`, with status `unset` or `error` (no message) and
+ * links without attributes; the other values come from other producers'
+ * bytes.
+ */
 export interface DecodedSpan {
   traceID: string;
   spanID: string;
@@ -1640,11 +1723,14 @@ export interface DebugSessionOptions {
    * parts. Grant it only to someone who may run code on the host. Without
    * it the Variables pane, the console commands and setVariable still work.
    */
+  // status: partial: breakpoint conditions are checked against `evaluate` only when set, so conditions set before an attach that drops `evaluate` still run
   allow?: DebugPermission[];
   /**
    * Hears every attach, detach, breakpoint change, console command,
-   * evaluation and mutation before it happens; throwing refuses it.
+   * evaluation and mutation before it happens; throwing refuses it. A
+   * detach is recorded after it happens and cannot be refused.
    */
+  // status: partial: breakpoint conditions, logpoint expressions and setExceptionBreakpoints are never audited, and setVariable with a non-JSON value and setExpression run their JavaScript before the audit
   audit?: (entry: DebugAuditEntry) => void;
   /** Takes each outgoing DAP message (an object). */
   send: (message: DAPMessage) => void;
@@ -1687,6 +1773,7 @@ export declare function createDebugSession(system: System, options: DebugSession
  * push() each chunk; `onMessage` gets each whole message in order. A
  * malformed header or body throws an `invalid` TinyactorsError.
  */
+// status: partial: a header that is not UTF-8 throws a plain TypeError, and a JSON body that is not an object (such as `5`) reaches onMessage
 export declare class DAPReader {
   constructor(onMessage: (message: DAPMessage) => void);
   push(chunk: Uint8Array | string): void;
