@@ -1,5 +1,7 @@
 #!/usr/bin/env ruby
 #MISE description="Test the VS Code extension under a stub of VS Code: activation, configurations, package.json's contributes, and the .vsix"
+#MISE sources=["lib/**/*", "test/**/*", "package.json", "mise/**/*", "mise.toml", "../tinyactors-napi/lib/**/*", "../tinyactors-napi/index.js", "../tinyactors-napi/index.d.ts", "../tinyactors-napi/package.json", "../mise/lib/**/*", "../mise.toml"]
+#MISE outputs={auto=true}
 # vim:ft=ruby
 
 # Needs no VS Code: `mise run integration` runs the extension in a real one.

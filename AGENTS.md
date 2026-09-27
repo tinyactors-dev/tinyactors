@@ -16,13 +16,31 @@
 
 ## Tests: what to run
 
-- **`mise run test`: the fast pass. Run it before every commit.** It is
-  what "a commit passes" means. It builds, then runs every suite in the
-  repo in its fast form, and ends with how long each step took. It takes
-  about four minutes on an 8-thread laptop; if a step you touched grew,
-  the step times show it.
-- **`mise run test:full`: everything the fast pass leaves out**, on top of
-  it:
+- **`mise run test` before every commit.** It is what "a commit passes"
+  means. It checks acronyms and builds, then runs the `test` task of each
+  project whose sources changed since that task last passed, and ends with
+  the time of each step, marking the projects it skipped as up to date.
+  mise decides what changed: each project's `test` task lists its sources
+  in `#MISE sources` (its own code and tests, and those of the projects it
+  builds against), with `#MISE outputs={auto=true}` so mise remembers the
+  last pass. A failed run is not remembered, so it runs again.
+- **What a change reruns** follows the dependencies:
+
+  | You changed                         | These projects' tests run                |
+  |-------------------------------------|------------------------------------------|
+  | `tinyactors-core` code or tests     | all of them                              |
+  | `tinyxml`, `tinyactors-scxml`       | that one, the scxml codec, test host, napi |
+  | `tinyactors-test`                   | test host, and napi when `dap/` or the IRP importer changed |
+  | `tinyactors-napi`                   | napi, vscode                             |
+  | `tinyactors-vscode`                 | vscode                                   |
+  | root `mise/lib`, `mise.toml`        | all of them                              |
+  | docs, READMEs, ADRs only            | none (the acronym check still runs)      |
+
+  When you add a directory a project's tests read, add it to that
+  project's `#MISE sources`, or a change there will not rerun them.
+- **`mise run test --all`** runs every project's tests, changed or not.
+- **`mise run test:full`** runs everything, plus what the fast pass leaves
+  out:
   - the test host's exhaustive scenarios (below);
   - `scale_test` up to four million actors (the fast pass stops at
     200,000);
@@ -30,16 +48,18 @@
 
   Run it before a release, and before committing a change to core's
   allocation, pause and resume, offload and paging, or trace-writing paths,
-  or to per-actor costs: that is what those checks cover. Say in the commit
-  message that it passed.
-- **While iterating, run the narrowest thing that covers the change**, then
-  the fast pass before committing:
+  or to per-actor costs. Say in the commit message that it passed.
+- **While iterating, run the narrowest thing that covers the change.** A
+  whole suite keeps every CPU of a laptop busy for minutes; do not run one
+  after each edit.
+  - one core test program: `tinyactors-core/build/<name>_test` after
+    `mise run build` in `tinyactors-core`; `mise run asan` there after
+    changing `src/`;
   - test host scenarios: `mise run //tinyactors-test:scenarios -n
-    'PATTERN'` (matches `group: name`; add `--fast` to skip the exhaustive
-    ones, `--timings 10` to list the slowest);
+    'PATTERN'` (matches `group: name`; `--fast` skips the exhaustive ones,
+    `--timings 10` lists the slowest, `--jobs N` limits the workers);
   - one napi suite: `node tinyactors-napi/test/<suite>.js`, then `bun`;
-  - one project: `mise run test` (or `test:full`) inside `tinyactors-napi`
-    or `tinyactors-test`, `mise run asan` in `tinyactors-core`.
+  - one project's whole suite: `mise run test` inside it.
 - Do not skip, weaken or delete a check to make the fast pass faster. Make
   it cheaper, or move it to the full pass as below.
 

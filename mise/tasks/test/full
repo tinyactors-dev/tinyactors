@@ -1,4 +1,4 @@
 #!/usr/bin/env ruby
-#MISE description="Run every test, the exhaustive scenarios included: before a release, and after changing allocation, paging or pausing paths"
+#MISE description="Run every test of every project, the exhaustive checks included: before a release, and after changing allocation, paging, pausing, tracing or per-actor-cost paths"
 
 exec('mise', 'run', 'test', '--full')

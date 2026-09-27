@@ -1,5 +1,7 @@
 #!/usr/bin/env ruby
 #MISE description="Run the txml test suite"
+#MISE sources=["include/**/*", "src/**/*", "tests/**/*", "cli/**/*", "mise/**/*", "mise.toml", "../mise/lib/**/*", "../mise.toml"]
+#MISE outputs={auto=true}
 #MISE depends=["generated", "freestanding", "lint-src", "build", "amalgamate-test", "api-test"]
 # vim:ft=ruby
 

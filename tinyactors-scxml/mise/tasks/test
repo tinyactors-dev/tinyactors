@@ -1,5 +1,7 @@
 #!/usr/bin/env ruby
 #MISE description="Build and run the SCXML codec tests"
+#MISE sources=["include/**/*", "src/**/*", "tests/**/*", "mise/**/*", "mise.toml", "../tinyactors-core/include/**/*", "../tinyxml/include/**/*", "../mise/lib/**/*", "../mise.toml"]
+#MISE outputs={auto=true}
 #MISE depends=["build"]
 # vim:ft=ruby
 
