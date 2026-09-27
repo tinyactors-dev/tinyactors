@@ -39,8 +39,12 @@ function platformPackageWins() {
 }
 
 function repositoryBuildWithoutPackage() {
+  // An empty node_modules, not just an empty directory: where no
+  // node_modules exists up the tree, Bun resolves packages from its global
+  // install cache (auto-install), which may hold a published platform
+  // package.
   const empty = path.join(scratch, 'empty');
-  fs.mkdirSync(empty);
+  fs.mkdirSync(path.join(empty, 'node_modules'), { recursive: true });
   const loaded = loadAddon({ platform: 'linux', arch: 'x64', paths: [empty] });
   assert.equal(loaded, require(REPOSITORY_BUILD));
 }
