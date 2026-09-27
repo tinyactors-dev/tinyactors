@@ -1741,7 +1741,7 @@ export type DebugAuditEntry = {
   | { type: 'attach'; allow: DebugPermission[]; [detail: string]: unknown }
   | { type: 'detach'; reason: string }
   /** A line breakpoint's source is `path`, or `sourceReference` for SCXML the session wrote. */
-  | { type: 'breakpoints'; kind: 'line' | 'function' | 'data'; [detail: string]: unknown }
+  | { type: 'breakpoints'; kind: 'line' | 'function' | 'data' | 'exception'; [detail: string]: unknown }
   /** A console line, before it runs. */
   | { type: 'command'; text: string }
   | { type: 'evaluate'; context: string; expression: string }
@@ -1757,15 +1757,23 @@ export interface DebugSessionOptions {
    * console expressions, breakpoint conditions and logpoint `{expression}`
    * parts. Grant it only to someone who may run code on the host. Without
    * it the Variables pane, the console commands and setVariable still work.
+   * Each evaluation checks the permissions of the attach it runs under: a
+   * condition set before an attach that did not keep `evaluate` never runs,
+   * and the client hears that breakpoint changed to unverified; a logpoint's
+   * parts are then written as they are.
    */
-  // status: partial: breakpoint conditions are checked against `evaluate` only when set, so conditions set before an attach that drops `evaluate` still run
   allow?: DebugPermission[];
   /**
-   * Hears every attach, detach, breakpoint change, console command,
-   * evaluation and mutation before it happens; throwing refuses it. A
-   * detach is recorded after it happens and cannot be refused.
+   * Hears every attach, detach, breakpoint change (exception filters
+   * included), console command, evaluation and mutation before it happens;
+   * throwing refuses it. Evaluations include a breakpoint condition and a
+   * logpoint part at each hit (context "condition", "logpoint"), and a
+   * setVariable or setExpression value that is not JSON (context
+   * "setVariable", "setExpression"), before it runs. A refused condition
+   * does not fire, a refused logpoint part is written as `<refused>`, and
+   * the console says why. A detach is recorded after it happens and cannot
+   * be refused.
    */
-  // status: partial: breakpoint conditions, logpoint expressions and setExceptionBreakpoints are never audited, and setVariable with a non-JSON value and setExpression run their JavaScript before the audit
   audit?: (entry: DebugAuditEntry) => void;
   /** Takes each outgoing DAP message (an object). */
   send: (message: DAPMessage) => void;

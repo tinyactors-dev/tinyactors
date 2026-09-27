@@ -46,6 +46,8 @@ const commands = require('./debug/console');
 const { DAPReader, encodeDAPMessage } = require('./debug/protocol');
 
 const PERMISSIONS = ['send', 'set', 'goto', 'evaluate'];
+const CONDITION_NEEDS_EVALUATE =
+  'a condition is an expression, which runs code in the process; it needs the "evaluate" permission';
 const SCXML_INVOKER = 'http://www.w3.org/TR/scxml/';
 const ATTACHED = 1; // the attached actor's thread ID
 const OPERATOR_EVENT = 'operator.goto';
@@ -589,9 +591,15 @@ class DebugSession {
     }
   }
 
-  // A breakpoint's condition, in the data model where it hit. One that
+  // A breakpoint's condition, in the data model where it hit. It runs only
+  // with the `evaluate` permission the attach has now, and only once the
+  // audit hook has heard it; without either it never fires. One that
   // throws counts as a hit, so its author sees it fail.
   #condition(breakpoint, thread) {
+    if (!this.#attached.allow.has('evaluate')) return false;
+    if (!this.#auditEvaluation('condition', String(breakpoint.condition), `the condition of breakpoint ${breakpoint.id}`)) {
+      return false;
+    }
     try {
       return Boolean(expressions.evaluate(breakpoint.condition, this.#scope(thread)));
     } catch (error) {
@@ -600,12 +608,26 @@ class DebugSession {
     }
   }
 
+  // An evaluation the session makes on its own, at a hit: the audit hook
+  // hears it first. One it refuses does not run, and the console says so.
+  #auditEvaluation(context, expression, what) {
+    try {
+      this.#record({ type: 'evaluate', context, expression });
+      return true;
+    } catch (error) {
+      this.#output('stderr', `the audit hook refused ${what}: ${error?.message ?? error}`);
+      return false;
+    }
+  }
+
   // A logpoint writes its message: {expression} parts are evaluated with
-  // the `evaluate` permission, and left as written without it.
+  // the `evaluate` permission, and left as written without it; a part the
+  // audit hook refuses is written as <refused>.
   #logpoint(breakpoint, thread) {
     const evaluate = this.#attached.allow.has('evaluate');
     const text = String(breakpoint.logMessage).replace(/\{([^{}]+)\}/g, (whole, expression) => {
       if (!evaluate) return whole;
+      if (!this.#auditEvaluation('logpoint', expression, `a part of logpoint ${breakpoint.id}`)) return '<refused>';
       try {
         const value = expressions.evaluate(expression, this.#scope(thread));
         return typeof value === 'string' ? value : jsonText(value);
@@ -817,6 +839,16 @@ class DebugSession {
         this.#event('breakpoint', { reason: 'changed', breakpoint });
       }
     }
+    this.#unverifyConditions();
+  }
+
+  // Conditions set before an attach that did not keep `evaluate` never run
+  // (#condition): the client hears those breakpoints are unverified.
+  #unverifyConditions() {
+    if (this.#attached === null || this.#attached.allow.has('evaluate')) return;
+    for (const { id } of this.#breakpoints.conditioned) {
+      this.#event('breakpoint', { reason: 'changed', breakpoint: { id, verified: false, message: CONDITION_NEEDS_EVALUATE } });
+    }
   }
 
   // ------------------------------------------------------------------
@@ -959,7 +991,7 @@ class DebugSession {
     const condition = breakpoint.condition;
     const allowed = this.#attached === null ? this.#allow.has('evaluate') : this.#attached.allow.has('evaluate');
     if (condition !== undefined && condition !== null && String(condition).trim() !== '' && !allowed) {
-      return 'a condition is an expression, which runs code in the process; it needs the "evaluate" permission';
+      return CONDITION_NEEDS_EVALUATE;
     }
     return undefined;
   }
@@ -1062,6 +1094,7 @@ class DebugSession {
           value = JSON.parse(text);
         } catch {
           this.#requireEvaluate('a value that is not JSON');
+          this.#audited({ type: 'evaluate', context: 'setVariable', expression: text });
           value = expressions.evaluate(text, this.#scope(where.thread));
         }
         this.#audited({ type: 'mutation', operation: 'set', location: expressions.locationText(where.path),
@@ -1079,6 +1112,7 @@ class DebugSession {
         try {
           value = JSON.parse(text);
         } catch {
+          this.#audited({ type: 'evaluate', context: 'setExpression', expression: text });
           value = expressions.evaluate(text, scope);
         }
         this.#audited({ type: 'mutation', operation: 'set', expression: String(args.expression), value: jsonText(value) });
@@ -1198,6 +1232,7 @@ class DebugSession {
       setExceptionBreakpoints(args) {
         const filters = [...(args.filters ?? []), ...(args.filterOptions ?? []).map((option) => option.filterId)];
         const unique = [...new Set(filters)];
+        this.#audited({ type: 'breakpoints', kind: 'exception', filters: unique });
         this.#breakpoints.setFilters(unique);
         return { body: { breakpoints: unique.map(() => ({ verified: true })) } };
       },

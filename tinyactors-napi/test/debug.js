@@ -1073,6 +1073,106 @@ async function ending() {
   system.close();
 }
 
+// What a session evaluates on its own, and what evaluates before it
+// changes something, obeys the permissions the attach has now and the audit
+// hook: a condition set before a watch-only attach never runs, conditions
+// and logpoint parts are audited at each hit, setVariable and setExpression
+// are audited before their JavaScript runs, and exception breakpoints are
+// audited like the others.
+async function guardedEvaluations() {
+  const system = createSystem({ clock: 'manual' });
+  const definition = system.define(renewal());
+  const actor = system.spawn(definition, { name: 'r1' });
+  await system.flush();
+  const renewing = stateLine(system, definition, 'renewing');
+  const assign = definition.sourceOf('action', actionID(system, definition, 'assign', 1)).line;
+  const effect = '(globalThis.conditionRan = (globalThis.conditionRan ?? 0) + 1) > 0';
+
+  // Set while the session may evaluate, then attached watch-only: the
+  // conditions are unverified and never run.
+  const watcher = new Client(system, { allow: ALL });
+  await watcher.ok('initialize', { clientID: 'test' });
+  const early = await watcher.ok('setFunctionBreakpoints', { breakpoints: [{ name: 'renewing', condition: effect }] });
+  assert.equal(early.breakpoints[0].verified, true);
+  const line = await watcher.ok('setBreakpoints', { source: { path: __filename },
+                                                    breakpoints: [{ line: renewing, condition: effect }] });
+  await watcher.ok('attach', { address: 'renewal/r1', allow: [] });
+  await watcher.ok('configurationDone');
+  const changed = new Map(watcher.events('breakpoint').map(({ breakpoint }) => [breakpoint.id, breakpoint]));
+  for (const id of [early.breakpoints[0].id, line.breakpoints[0].id]) {
+    assert.equal(changed.get(id).verified, false, `breakpoint ${id} is unverified`);
+    assert.match(changed.get(id).message, /"evaluate" permission/);
+  }
+  let mark = watcher.mark();
+  await actor.send('renew');
+  await system.flush();
+  assert.equal(globalThis.conditionRan, undefined, 'no condition ran');
+  assert.doesNotMatch(watcher.outputSince(mark), /would have stopped/);
+  assert.ok(!watcher.audit.some((entry) => entry.type === 'evaluate'), 'nothing was evaluated');
+  await watcher.ok('disconnect');
+
+  // Conditions and logpoint parts are audited at each hit; refused, a
+  // condition does not fire and a part is written as <refused>.
+  let refuse = false;
+  const client = new Client(system, {
+    allow: ALL,
+    audit: (entry) => {
+      client.audit.push(entry);
+      if (refuse && entry.type === 'evaluate') throw new Error('no code today');
+    },
+  });
+  await client.start({ address: 'renewal/r1' });
+  await client.ok('setFunctionBreakpoints', { breakpoints: [{ name: 'renewing', condition: 'renewals >= 0' }] });
+  await client.ok('setBreakpoints', { source: { path: __filename },
+                                      breakpoints: [{ line: assign, logMessage: 'renewals is {renewals}' }] });
+  mark = client.mark();
+  let audited = client.audit.length;
+  await actor.send('renew');
+  await client.wrote(mark, /would have stopped after macrostep \d+: entered renewing\n/);
+  assert.match(client.outputSince(mark), /renewals is \d+\n/);
+  assert.deepEqual(client.audit.slice(audited).filter((entry) => entry.type === 'evaluate')
+    .map(({ context, expression }) => `${context}: ${expression}`).sort(),
+  ['condition: renewals >= 0', 'logpoint: renewals']);
+  refuse = true;
+  mark = client.mark();
+  await actor.send('renew');
+  await client.wrote(mark, /renewals is <refused>\n/);
+  assert.doesNotMatch(client.outputSince(mark), /would have stopped/);
+  assert.match(client.outputSince(mark), /the audit hook refused the condition of breakpoint \d+: no code today/);
+
+  // setVariable and setExpression: the audit hook hears the expression
+  // before it runs, and refusing it leaves no side effect.
+  const { stackFrames } = await client.ok('stackTrace', { threadId: 1 });
+  const { scopes } = await client.ok('scopes', { frameId: stackFrames[0].id });
+  const data = scopes.find((scope) => scope.name === 'Data model');
+  await client.refused('setVariable', { variablesReference: data.variablesReference, name: 'renewals',
+                                        value: '(globalThis.setRan = true, 7)' }, /audit hook refused it: no code today/);
+  await client.refused('setExpression', { frameId: stackFrames[0].id, expression: 'renewals',
+                                          value: '(globalThis.setRan = true, 7)' }, /audit hook refused it: no code today/);
+  assert.equal(globalThis.setRan, undefined, 'the refused expressions did not run');
+  assert.notEqual(actor.data().renewals, 7);
+  refuse = false;
+  audited = client.audit.length;
+  await client.ok('setVariable', { variablesReference: data.variablesReference, name: 'renewals', value: '3 + 4' });
+  assert.deepEqual(client.audit.slice(audited).map((entry) => `${entry.type}:${entry.context ?? entry.operation}`),
+                   ['evaluate:setVariable', 'mutation:set']);
+  assert.equal(actor.data().renewals, 7);
+
+  // Exception breakpoints are breakpoint changes the hook hears, and can refuse.
+  audited = client.audit.length;
+  await client.ok('setExceptionBreakpoints', { filters: ['runaway'] });
+  assert.deepEqual(client.audit.slice(audited).map(({ type, kind, filters }) => ({ type, kind, filters })),
+                   [{ type: 'breakpoints', kind: 'exception', filters: ['runaway'] }]);
+  const shut = new Client(system, { allow: ALL, audit: (entry) => {
+    if (entry.type === 'breakpoints') throw new Error('frozen');
+  } });
+  await shut.start({ address: 'renewal/r1' });
+  await shut.refused('setExceptionBreakpoints', { filters: ['runaway'] }, /audit hook refused it: frozen/);
+  await shut.ok('disconnect');
+  await client.ok('disconnect');
+  system.close();
+}
+
 (async () => {
   await framing();
   await options();
@@ -1082,6 +1182,7 @@ async function ending() {
   await console();
   await permissions();
   await audit();
+  await guardedEvaluations();
   await state();
   await catalog();
   await sources();

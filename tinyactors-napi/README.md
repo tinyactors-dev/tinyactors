@@ -97,10 +97,13 @@ macrostep: `send` an event through the mailbox, `set` a data-model
 location, `goto` (an operator transition, with `abandon`, `cancel` and
 `replace`), and `evaluate`. With none, the session only watches.
 
-**`evaluate` runs arbitrary code.** Watch, hover and console expressions
-and breakpoint conditions run JavaScript in your process. They need the `evaluate` permission, which is off unless
-granted; without it the Variables pane and the console commands still
-work. Grant it only to someone who may run code on the host.
+**`evaluate` runs arbitrary code.** Watch, hover and console expressions,
+breakpoint conditions and logpoint `{expression}` parts run JavaScript in
+your process. They need the `evaluate` permission, which is off unless
+granted, and each is checked against the attach it runs under: a
+condition set before a watch-only attach never runs. Without it the
+Variables pane and the console commands still work. Grant it only to
+someone who may run code on the host.
 
 Frames and line breakpoints are on the lines a chart was written on:
 the builder calls of statechart(), or the lines of an SCXML document you
@@ -111,7 +114,9 @@ for by `sourceReference` and sets breakpoints in.
 
 `audit(entry)` hears every attach, detach, breakpoint change, console
 command, evaluation and mutation before it happens; a hook that throws
-refuses it.
+refuses it. That includes each breakpoint condition and logpoint part at
+each hit: a refused condition does not fire, and a refused part is
+written as `<refused>`. Only a detach is heard after it happens.
 
 `mise run dap-server` serves sessions for a small example system over
 stdio, or on a local port with `-- --port 4711`, to try a DAP client

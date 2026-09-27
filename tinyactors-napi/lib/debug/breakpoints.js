@@ -79,6 +79,11 @@ function describeLine(breakpoint) {
 // sourceReference for a virtual source (napi ADR 0026).
 const sourceKey = (source) => (source.path !== undefined ? `path ${source.path}` : `reference ${source.sourceReference}`);
 
+// A condition that is not blank.
+function hasCondition(breakpoint) {
+  return breakpoint.condition !== undefined && breakpoint.condition !== null && String(breakpoint.condition).trim() !== '';
+}
+
 class Breakpoints {
   #functions = [];
   #data = [];
@@ -118,6 +123,12 @@ class Breakpoints {
     });
     this.#lines.set(sourceKey(source), { source, entries });
     return answered;
+  }
+
+  /** The placed breakpoints of every kind that have a condition. */
+  get conditioned() {
+    const lines = [...this.#lines.values()].flatMap(({ entries }) => entries.filter((entry) => entry.kind === 'line'));
+    return [...lines, ...this.#functions, ...this.#data].filter((breakpoint) => hasCondition(breakpoint));
   }
 
   /** The sources with line breakpoints and what the client asked for, to resolve again later. */
@@ -271,8 +282,7 @@ class Breakpoints {
   }
 
   #fire(breakpoint, fires) {
-    if (breakpoint.condition !== undefined && breakpoint.condition !== null && String(breakpoint.condition).trim() !== '' &&
-        !fires(breakpoint)) {
+    if (hasCondition(breakpoint) && !fires(breakpoint)) {
       return false;
     }
     breakpoint.hits += 1;
