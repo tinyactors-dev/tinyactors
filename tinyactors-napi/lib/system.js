@@ -198,10 +198,13 @@ class System {
     // The native hook is always this system's, so observers hear dead
     // letters too; the application's hook, when it has one, gets each as
     // before. Anything else the application passed is the native side's to
-    // refuse.
+    // refuse. The native side holds its hooks strongly, so the hook reaches
+    // this system through a WeakRef: a system the application drops without
+    // close() is still finalized, as with the environment-wide effect handler.
     const deadLetter = options?.deadLetter;
+    const self = new WeakRef(this);
     const nativeOptions = deadLetter !== undefined && typeof deadLetter !== 'function' ? options
-      : { ...options, deadLetter: (letter) => this.#deadLetter(letter, deadLetter) };
+      : { ...options, deadLetter: (letter) => self.deref()?.#deadLetter(letter, deadLetter) };
     this.#native = new native.System(this, nativeOptions);
     this.#events = new EventNames(this.#native);
     const unloadValues = options?.unloadValues ?? 'serialize';
