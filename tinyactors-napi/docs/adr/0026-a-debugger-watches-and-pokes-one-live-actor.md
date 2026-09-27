@@ -26,7 +26,7 @@ The user decided what a debugger may do to a production actor: it watches
 and pokes, and the view updates live. A poke (send, goto, abandon, cancel,
 set) creates a transition, which yields a new macrostep the watcher sees.
 No production actor is ever stopped by a debugger, and the debugger does
-not fork one (see Alternatives).
+not fork one (see "What was built and discarded, and why").
 
 ## Decision
 
@@ -186,27 +186,94 @@ loop (an `actionBudget` smaller than the loop's shortest microstep) gives
 `abandon` no moment between microsteps: the session answers "try again".
 With the default budgets a resume pauses between microsteps.
 
+## What was built and discarded, and why
+
+The first version of this ADR gave the debugger three modes and a way
+to stop a live actor. All of it was built and tested, and then
+discarded by the user's decision. This section says what each part was
+and why it went, so that it is not proposed again without an answer to
+these reasons.
+
+### Holding and stepping a live actor
+
+**What it was.** `hold`, `unhold` and `step` on `System`, a `held`
+scheduling state, a hold timeout, and budgets of one actor's own, so a
+debugger could stop a production actor between macrosteps and step it
+one message, one microstep or one action at a time.
+
+**Why it went.**
+
+- **ADR 0020 had already declined it.** Its decision 4 (option D) gives
+  hosts no hold or release state for resident actors: a host pauses an
+  actor by unloading it, which is easy to reason about. A debugger's hold
+  was that state under another name, and the scheduler carried it for
+  every actor.
+- **Stopping a production actor is never harmless.** A hold between
+  macrosteps delays everyone who sends to the actor. A hold inside a
+  macrostep that a caller waits on makes that caller time out while the
+  macrostep still completes later, so a retrying caller (a webhook
+  sender) delivers the event twice. A debugger whose connection drops
+  without a `disconnect` leaves the actor held until the timeout.
+- **Watching gives the same information without stopping.** Every
+  macrostep's trace already says which transitions were taken, which
+  guards held and what was assigned. The user's decision: a debugger
+  watches the live actor and pokes it; a poke creates a transition, and
+  that transition is a new macrostep to watch. Breakpoints still work as
+  tracepoints: they say where they would have stopped.
+
+### Forks
+
+**What it was.** A copy of the attached actor in a debug system of its
+own, with its own clock, stub I/O processors and stub invokers, where it
+could be stopped anywhere, stepped, stepped back to images kept at its
+stops, and moved forward in time.
+
+**Why it went.**
+
+- **Moving parts out of proportion to what they gave.** A fork needed a
+  second system per fork; images that restore into another system (a
+  core ADR with a public value adopter and a per-system token, and its
+  two-systems-alike caveat); a napi ADR that copied the image's boxes
+  between systems, with its own binding-generator policy; an image kept
+  at every stop; and the stepping machinery above, since a fork steps.
+- **A fork is not the actor.** From the moment it is made it diverges:
+  its invocations are lost on restore (core ADR 0039), its sends go to
+  stubs, and production goes on receiving mail it does not see. Keeping
+  it faithful needed production's events mirrored into it, which was
+  never built. At 3am the question is what the live actor does, and the
+  live view answers it.
+- **Stepping a chart has a better home.** The test host's workbench runs
+  charts on a developer's machine, where stopping and stepping harm
+  nobody. Its adapter keeps breakpoints that stop, stepping, and stops
+  at a microstep's start (core ADR 0086).
+
+The core and napi ADRs that forks needed were withdrawn with them, and
+the numbers they had went to later ADRs.
+
+### Modes
+
+**What they were.** Attach took `mode`: `watch` (nothing stops, nothing
+is sent), `fork` (a copy you may do anything to) or `live` (the actor
+itself, as `allow` permits), plus `holdTimeout` for live holds.
+
+**Why they went.** With forks and holds gone, `watch` and `live` differed
+only in what an operator may do, which `allow` already says. Two knobs
+for one question could contradict each other (a `watch` session granted
+`send`), so the session has one: `allow`. An empty `allow` is watching.
+
+### What is left
+
+Everything that existed only for holds, forks and modes was removed,
+with its tests: five scheduling flags (`HOLD`, `UNFINISHED`, `ANYWHERE`,
+`OWN_BUDGETS`, `MICROSTEP_START`), the `held` state and its record kind,
+the budgets map (56 bytes of `tna_sched`), the facade's `hold`, `unhold`,
+`step` and `setBudgets`, fork mode, and step back, restart frame and
+restart. Kept: operator transitions in the envelope, abandon settling
+the addon's state, `withdrawSend`, and the mailbox listing the Queues
+scope shows.
+
 ## Alternatives
 
-- **Hold the actor, step it, and fork it (built, then removed).** The
-  first version of this ADR held a live actor between macrosteps
-  (`hold`, `unhold`, `step`, a `held` scheduling state, a hold timeout),
-  gave one actor budgets of its own to step one action at a time and to
-  stop at a microstep's start (core ADR 0086), and forked the actor into
-  a debug system of its own, with its own clock (a core ADR let an image
-  restore into any system that registers its revision, and a napi ADR
-  copied the image's boxes into the restoring system; both were withdrawn
-  with the forks, and the numbers they had went to later ADRs), where it could be stopped anywhere, stepped, and stepped back to
-  images kept at its stops. It worked, and cost four scheduling flags, a
-  budgets map in `tna_sched` (56 bytes) and a record kind. The user
-  decided against it: a debugger never stops a production actor, and it
-  does not fork one. A held actor is a hold state for a resident actor,
-  which ADR 0020 decision 4 had declined for hosts; a fork brought a
-  second system, box copying between systems and images across systems
-  into core, for a view a developer gets from the test host's workbench.
-  Everything that existed only for holds and forks was removed with it,
-  core's stop at a microstep's start (core ADR 0086) aside: the test
-  host's adapter steps with it.
 - **Hold by quarantining.** Quarantine already keeps an actor out of
   scheduling, but it reports a fault, counts in the fault metrics and is
   left by `release()`. It is a verdict, not a debugger's stop.
