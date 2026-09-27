@@ -1,0 +1,51 @@
+#!/usr/bin/env ruby
+#MISE description="Release tinyactors-scxml: check against core's and txml's published releases, build every target with zig cc, verify, pack; with --publish, also tag and create the GitHub release"
+# vim:ft=ruby
+
+# mise run release -- 0.1.0                    check, build, verify, pack; publishes nothing
+# mise run release -- 0.1.0 --publish          the same, then tag tinyactors-scxml/v0.1.0 and release
+# mise run release -- 0.1.0 --skip-containers  no Linux container smoke tests (no Docker)
+#
+# The stages and the rules they follow are in mise/lib/c_release/build.rb
+# and root ADR 0001 (docs/adr/0001-packaging-and-releases.md); this file
+# only describes the codec. It builds on core and txml, and ships only its
+# own code: the release downloads their published releases, refuses to go
+# on unless those match core and txml at HEAD, leaves their API functions
+# undefined in the codec's libraries, links their released libraries beside
+# the codec's in the tests and the smoke, and records their versions in the
+# manifest. The codec has no WebAssembly module of its own: a module
+# cannot call into another module's memory, so a wasm build that uses the
+# codec compiles the three amalgamations together (the source tarballs).
+# The assets land in build/release/<version>/assets/.
+
+require 'pathname'
+require 'c_release'
+
+root = Cache::ROOT
+project = CRelease::Project.new(name: 'ta_scxml', prefix: 'ta_scxml',
+                                includes: [root.join('../tinyactors-core/include'), root.join('../tinyxml/include')],
+                                api_macro: 'TA_API')
+argv = ARGV.dup
+
+CRelease.release(
+  project: project,
+  directory: 'tinyactors-scxml',
+  title: "tinyactors-scxml #{argv.reject { |arg| arg.start_with?('--') }.first}",
+  summary: 'The first release of tinyactors-scxml: the SCXML 1.0 codec for tinyactors, which reads and writes ' \
+           'SCXML documents over txml, with no C library and no I/O. It ships only its own code: link the ' \
+           'tinyactors-core and tinyxml releases it names in its manifest beside it. Each release has the header ' \
+           'and the amalgamation to compile yourself, and prebuilt static and shared libraries for macOS (arm64) ' \
+           'and Linux (x64, arm64; one build for glibc and musl).',
+  argv: argv,
+  checks: [%w[mise run amalgamate -- --check], %w[mise run api -- --check], %w[mise run build],
+           %w[mise run --force test]],
+  regenerate: [%w[mise run amalgamate], %w[mise run api]],
+  # The codec's test program uses the public headers alone; it links
+  # against the packed codec and the released core and txml.
+  tests: [['ta_scxml_test', root.join('build/objects/ta_scxml_test.o'), []]],
+  smoke: root.join('tests/release_smoke.c'),
+  readme: root.join('README.md'),
+  sources: [project.header, project.amalgamation, project.api],
+  dependencies: [CRelease::Dependency.new(name: 'tinyactors', directory: 'tinyactors-core', macro: 'TA'),
+                 CRelease::Dependency.new(name: 'txml', directory: 'tinyxml', macro: 'TXML')]
+)

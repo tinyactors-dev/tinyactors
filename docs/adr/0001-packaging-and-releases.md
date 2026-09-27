@@ -163,6 +163,41 @@ laid out how each library and the addon would ship. It was discussed on
     `lib/compiler_rt.zig` L24-44 (compiler-rt's weak, hidden linkage).
     Measured with zig 0.16.0 and `llvm-objcopy` on 2026-09-28 for
     `x86_64-linux`, `aarch64-linux` and `aarch64-macos`.
+17. **A library that builds on others ships only its own code**
+    (2026-09-28; the SCXML codec on core and txml). Decision 16's "nothing
+    undefined" becomes, for such a dependent:
+    - **Built against published releases.** Its release downloads each
+      dependency's release for the version its header has at HEAD (`gh
+      release download`), checks every file against that release's
+      `SHA256SUMS`, and refuses to go on unless the published header,
+      amalgamation and API description are byte-identical to HEAD's: it
+      never ships against an unreleased library. Its manifest records
+      `dependencies: { name: version }`.
+    - **Undefined symbols:** its archive and shared library may leave
+      undefined exactly the functions of its dependencies' published API
+      descriptions (plus decision 16's macOS list), and nothing else.
+    - **Its shared library names its dependencies:** it is linked against
+      their released shared libraries, so on Linux it needs exactly their
+      sonames (`libtinyactors.so.0.1`, `libtxml.so.0.1`) and still no C
+      library, and on macOS it loads exactly their `@rpath` install names
+      beside libSystem. A program that links it needs nothing more to find
+      them than any installed library: without this, a linker that drops
+      unreferenced libraries (`--as-needed`, musl's loader in the smoke
+      test) leaves the dependencies' functions unresolved.
+    - **Its API macro may be a dependency's.** The codec declares its
+      functions with core's `TA_API`, so the release compiles it with
+      `TA_API` at default visibility (`CRelease::Project#api_macro`); with
+      the wrong macro, `-fvisibility=hidden` hides the API, and zig's
+      Mach-O linker crashes on a dylib that then exports nothing.
+    - **Tests use the released artifacts together:** the codec's test
+      program and its container smoke test link the packed codec with
+      core's and txml's released libraries, static and shared.
+    - **No wasm module of its own.** A module cannot call into another
+      module's linear memory (decision 4's reasoning against a wasm
+      archive), so a standalone `ta_scxml.wasm` could not use core's or
+      txml's. A wasm build that uses the codec compiles the three
+      amalgamations from the source tarballs into one module, as the
+      repository's own combined builds do.
 
 ## Still open
 

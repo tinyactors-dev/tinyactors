@@ -15,4 +15,5 @@ require 'c_release'
 
 CRelease.dist(CRelease::Project.new(name: 'ta_scxml', prefix: 'ta_scxml',
                                     includes: [Cache::ROOT.join('../tinyactors-core/include'),
-                                               Cache::ROOT.join('../tinyxml/include')]), ARGV)
+                                               Cache::ROOT.join('../tinyxml/include')],
+                                    api_macro: 'TA_API'), ARGV)

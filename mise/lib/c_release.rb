@@ -48,9 +48,12 @@ module CRelease
   # `includes` are the directories its header and amalgamation need beyond
   # their own: those of the libraries it builds on (the codec's core and
   # txml).
-  Project = Data.define(:name, :prefix, :includes) do
-    def initialize(name:, prefix:, includes: [])
-      super(name: name, prefix: prefix, includes: includes.map { |dir| Pathname.new(dir).expand_path })
+  # `api_macro` is the macro its header declares public functions with
+  # (TXML_API, TA_API); the codec uses core's TA_API.
+  Project = Data.define(:name, :prefix, :includes, :api_macro) do
+    def initialize(name:, prefix:, includes: [], api_macro: nil)
+      super(name: name, prefix: prefix, includes: includes.map { |dir| Pathname.new(dir).expand_path },
+            api_macro: api_macro || "#{prefix.upcase}_API")
     end
 
     def root = Cache::ROOT
