@@ -1522,16 +1522,24 @@ export interface InvokedService {
 /**
  * Reports from an invocation to its parent. event() and done() arrive as
  * external events (done as done.invoke.<id>); unavailable() retires the
- * invocation and the parent gets error.communication. Each returns false
- * once the invocation has ended (done, unavailable, cancelled, closed).
- * event() and done() throw `queue-full` when the parent's mailbox is full.
+ * invocation and the parent gets error.communication. Each returns true
+ * when the report was taken, and false once the invocation has ended (done,
+ * unavailable, cancelled, closed) or its parent is gone.
+ *
+ * A report that could not be taken throws and changes nothing: event() and
+ * done() throw `queue-full` when the parent's mailbox is at
+ * maxQueuedMessages or maxRetainedBytes, and any report throws
+ * `out-of-memory` when the addon or core cannot allocate. The invocation
+ * stays alive and its signal unaborted, so the service can report again,
+ * for example once the parent has drained its mailbox.
  */
 export interface InvocationReporter {
-  /** Aborts when the invocation ends: cancel, done, unavailable, or close(). */
+  /** Aborts when the invocation ends: cancel, a taken done() or unavailable(), or close(). */
   readonly signal: AbortSignal;
   event(name: EventName, data?: unknown): boolean;
-  // status: partial: the invocation ends before done.invoke is posted, so a done() that throws is lost: the parent never hears it, and every later call returns false
+  /** Ends the invocation once the report is taken. */
   done(data?: unknown): boolean;
+  /** Ends the invocation once the report is taken. */
   unavailable(error?: unknown): boolean;
 }
 

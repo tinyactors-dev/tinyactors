@@ -658,8 +658,10 @@ static ta_result tna_done_name(tna_system *system, ta_invoke_id invoke, ta_event
  * JavaScript invocation reports to its parent. `kind` is "event" (with the
  * interned `name`), "done" or "unavailable"; `data` is the event data, the
  * done data, or the error. Returns true when the report was taken, false
- * when the parent or the invocation is gone. Throws "queue-full" when the
- * parent's mailbox is at its limits.
+ * when the parent or the invocation is gone. Throws when the report was not
+ * taken but could be again: "queue-full" when the parent's mailbox is at its
+ * limits, "out-of-memory" when core or the addon could not allocate. The
+ * caller keeps a throwing invocation alive, so its service can retry.
  */
 napi_value tna_report_invoke_method(napi_env env, napi_callback_info info) {
     size_t argc = 7;
@@ -705,6 +707,9 @@ napi_value tna_report_invoke_method(napi_env env, napi_callback_info info) {
                                                                 });
         system->inside_core = false;
         ta_value_release(&data);
+        if (result == TA_ERR_NOMEM) {
+            return tna_throw(env, "out-of-memory", "reportInvoke: the report was not accepted");
+        }
         if (result == TA_OK) {
             (void)tna_sched_wake(&system->sched, parent);
             tna_system_want_turn(system);
@@ -717,6 +722,9 @@ napi_value tna_report_invoke_method(napi_env env, napi_callback_info info) {
         system->inside_core = true;
         ta_result result = tna_done_name(system, invoke, &name);
         system->inside_core = false;
+        if (result == TA_ERR_NOMEM) {
+            return tna_throw(env, "out-of-memory", "reportInvoke: cannot name the done event");
+        }
         if (result != TA_OK) {
             napi_get_boolean(env, false, &taken);
             return taken;

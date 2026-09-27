@@ -263,6 +263,42 @@ async function javascriptInvoker() {
   system.close();
 }
 
+// A done() the parent's mailbox cannot take throws, and the invocation stays
+// alive: the service reports again once the mailbox drains, and only that
+// report ends the invocation.
+async function doneRetried() {
+  let reporter;
+  const system = createSystem({
+    scheduling: { maxQueuedMessages: 2 },
+    invokers: { job: { start(_, report) { reporter = report; } } },
+  });
+  const actor = system.spawn(system.define(
+    statechart({ family: 'retrying', revision: 'v1' })
+      .data('result', null)
+      .state('running', (s) => {
+        s.invoke((i) => i.type('job').id('work'));
+        s.on('done.invoke.work', (t) => t.target('finished').assign('result', ({ event }) => event.data));
+        s.on('noise', (t) => t.internal());
+      })
+      .state('finished'),
+  ));
+  await system.flush();
+  actor.post('noise');
+  actor.post('noise');
+  assert.throws(() => reporter.done({ n: 1 }), { code: 'queue-full' });
+  assert.equal(reporter.signal.aborted, false, 'a report that was not taken does not end the invocation');
+  assert.throws(() => reporter.event('progress'), { code: 'queue-full' });
+  await system.flush();
+  assert.deepEqual(actor.inspect().activeStates, ['running']);
+  assert.equal(reporter.done({ n: 2 }), true, 'the retried report is taken');
+  assert.equal(reporter.signal.aborted, true, 'a taken done() ends the invocation');
+  assert.equal(reporter.done({ n: 3 }), false, 'an ended invocation reports nothing');
+  await system.flush();
+  assert.deepEqual(actor.inspect().activeStates, ['finished']);
+  assert.deepEqual(actor.inspect().data.result, { n: 2 });
+  system.close();
+}
+
 // unavailable(): core retires the invocation and the parent gets
 // error.communication.
 async function unavailableInvoker() {
@@ -405,7 +441,7 @@ async function steadyState() {
     process.exit(1);
   }, Number(process.env.SERVICES_TIMEOUT_MS ?? 60_000));
   for (const test of [
-    logSink, ioCompletes, ioLiteralTarget, ioFails, delayedCustomSend, javascriptInvoker, unavailableInvoker, scxmlInvoker, scxmlCancel,
+    logSink, ioCompletes, ioLiteralTarget, ioFails, delayedCustomSend, javascriptInvoker, doneRetried, unavailableInvoker, scxmlInvoker, scxmlCancel,
     closeCancels, steadyState,
   ]) {
     current = test.name;

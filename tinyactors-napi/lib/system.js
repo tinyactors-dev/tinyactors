@@ -628,15 +628,21 @@ class System {
     const controller = new AbortController();
     const invocation = { controller, service: undefined, live: true };
     this.#invocations.set(handle, invocation);
+    // done() and unavailable() end the invocation once core took the
+    // report, or answered that the parent or the invocation is gone. A
+    // report that throws (queue-full, out-of-memory) was not taken: the
+    // invocation stays alive, its signal unaborted, for the service to
+    // report again.
     const report = (kind, name, data) => {
       if (!invocation.live || this.closed) {
         return false;
       }
+      const taken = this.#native.reportInvoke(parent.slot, parent.generation, invocationID, kind, name, data,
+                                              payload.traceparent);
       if (kind !== 'event') {
         this.#endInvocation(handle, invocation);
       }
-      return this.#native.reportInvoke(parent.slot, parent.generation, invocationID, kind, name, data,
-                                       payload.traceparent);
+      return taken;
     };
     const reporter = Object.freeze({
       signal: controller.signal,
@@ -645,8 +651,21 @@ class System {
       unavailable: (error) => report('unavailable', 0, error),
     });
     const invoker = this.#invokers.get(payload.type);
+    // No service is left to retry these reports, and a throw would reach the
+    // pump's effect loop: a report core cannot take is dropped here.
+    const unavailable = (error) => {
+      try {
+        reporter.unavailable(error);
+      } catch {
+        // queue-full or out-of-memory: the parent does not hear of it, and
+        // the invocation, with no service, ends here.
+        if (invocation.live) {
+          this.#endInvocation(handle, invocation);
+        }
+      }
+    };
     if (invoker === undefined) {
-      reporter.unavailable(new TinyactorsError(`no invoker for "${payload.type}"`, 'not-found'));
+      unavailable(new TinyactorsError(`no invoker for "${payload.type}"`, 'not-found'));
       return;
     }
     const request = Object.freeze({
@@ -666,7 +685,7 @@ class System {
     try {
       invocation.service = invoker.start(request, reporter);
     } catch (error) {
-      reporter.unavailable(error);
+      unavailable(error);
     }
   }
 
