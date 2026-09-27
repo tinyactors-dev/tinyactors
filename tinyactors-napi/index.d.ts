@@ -1836,10 +1836,22 @@ export declare function createDebugSession(system: System, options: DebugSession
 
 /**
  * The base protocol's framing for a byte stream (stdio, a TCP socket):
- * push() each chunk; `onMessage` gets each whole message in order. A
- * malformed header or body throws an `invalid` TinyactorsError.
+ * push() each chunk; `onMessage` gets each whole message in order. Chunks
+ * may split a header, a body or a UTF-8 sequence anywhere, and a string
+ * chunk may split a surrogate pair. Header fields other than
+ * Content-Length are ignored.
+ *
+ * A malformed stream throws an `invalid` TinyactorsError from push(), and
+ * every later push() throws `invalid` too: a stream cannot be
+ * resynchronized once a length is in doubt, so close the connection.
+ * Malformed is: headers that are not UTF-8, longer than 8 KiB without the
+ * blank line, or with a line that is not `Name: value`; no Content-Length,
+ * two, or one that is not a decimal number of at most 64 MiB; a body that
+ * is not UTF-8 JSON, or not an object with an integer `seq` and a `type`
+ * of "request", "response" or "event". An exception from `onMessage`
+ * propagates from push() but leaves the reader usable; messages already
+ * buffered behind it arrive with the next push().
  */
-// status: partial: a header that is not UTF-8 throws a plain TypeError, and a JSON body that is not an object (such as `5`) reaches onMessage
 export declare class DAPReader {
   constructor(onMessage: (message: DAPMessage) => void);
   push(chunk: Uint8Array | string): void;

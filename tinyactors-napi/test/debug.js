@@ -169,8 +169,64 @@ async function framing() {
   reader.push(twice.subarray(bytes.length + 3));
   assert.equal(messages.length, 2);
   assert.equal(messages[1].arguments.text, 'grüße');
-  assert.throws(() => new DAPReader((m) => m).push(new TextEncoder().encode('X: 1\r\n\r\n{}')), TinyactorsError);
   assert.throws(() => new DAPReader(), TinyactorsError);
+
+  // A UTF-8 sequence split across chunks, and a surrogate pair split across
+  // string chunks, arrive whole; other header fields are ignored.
+  const split = [];
+  const splitReader = new DAPReader((message) => split.push(message));
+  const emoji = encodeDAPMessage({ seq: 2, type: 'event', event: 'output', body: { output: 'é😀' } });
+  const at = emoji.indexOf(0xc3);
+  splitReader.push(emoji.subarray(0, at + 1));
+  splitReader.push(emoji.subarray(at + 1));
+  const text = 'Content-Type: application/vscode-jsonrpc; charset=utf-8\r\n' +
+    new TextDecoder().decode(encodeDAPMessage({ seq: 3, type: 'request', command: '😀' }));
+  const cut = text.indexOf('\uD83D') + 1;
+  splitReader.push(text.slice(0, cut));
+  splitReader.push(text.slice(cut));
+  assert.deepEqual(split.map((message) => message.body?.output ?? message.command), ['é😀', '😀']);
+
+  // Each malformed stream throws invalid, and the reader stays broken.
+  const utf8 = (text) => new TextEncoder().encode(text);
+  const framed = (body, headers = `Content-Length: ${utf8(body).length}`) => utf8(`${headers}\r\n\r\n${body}`);
+  const malformed = [
+    [framed('{}', 'X: 1'), /no Content-Length/],
+    [framed('{"seq":1,"type":"event"}', 'Content-Length: 2\r\nContent-Length: 2'), /two Content-Length/],
+    [framed('{}', 'Content-Length: -2'), /not a decimal number/],
+    [framed('{}', 'Content-Length: 0x2'), /not a decimal number/],
+    [framed('{}', 'Content-Length: 999999999'), /at most/],
+    [framed('{}', 'Content-Length 2'), /Name: value/],
+    [new Uint8Array([...utf8('Content-Length: 2\r\nX: '), 0xff, ...utf8('\r\n\r\n{}')]), /headers of a message are not UTF-8/],
+    [new Uint8Array([...utf8('Content-Length: 1\r\n\r\n'), 0xff]), /body is not UTF-8/],
+    [utf8('Content-Length: 2\r\n'.padEnd(9000, 'x')), /no blank line within/],
+    [framed('{"seq":'), /not JSON/],
+    ...['5', '[]', '"x"', 'null'].map((body) => [framed(body), /not a JSON object/]),
+    [framed('{"type":"request"}'), /integer seq/],
+    [framed('{"seq":1.5,"type":"request"}'), /integer seq/],
+    [framed('{"seq":1,"type":"note"}'), /type is "note"/],
+  ];
+  for (const [bytes, reason] of malformed) {
+    const seen = [];
+    const broken = new DAPReader((message) => seen.push(message));
+    assert.throws(() => broken.push(bytes), (error) => error instanceof TinyactorsError && error.code === 'invalid' &&
+      reason.test(error.message), `${reason}`);
+    assert.throws(() => broken.push(encodeDAPMessage({ seq: 9, type: 'event', event: 'x' })),
+      (error) => error.code === 'invalid' && /malformed earlier/.test(error.message));
+    assert.deepEqual(seen, []);
+  }
+
+  // A throwing onMessage is not the stream's fault: the reader stays usable,
+  // and the message behind it arrives with the next push().
+  const got = [];
+  const picky = new DAPReader((message) => {
+    if (message.seq === 1) throw new Error('no');
+    got.push(message.seq);
+  });
+  const both = new Uint8Array([...encodeDAPMessage({ seq: 1, type: 'event', event: 'a' }),
+    ...encodeDAPMessage({ seq: 2, type: 'event', event: 'b' })]);
+  assert.throws(() => picky.push(both), /no/);
+  picky.push(new Uint8Array(0));
+  assert.deepEqual(got, [2]);
 }
 
 async function options() {
