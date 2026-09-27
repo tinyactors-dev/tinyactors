@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="Check the npm package: every file index.js reaches through require is packed, and nothing test-only is"
+#MISE description="Check the @tinyactors/node package: every file index.js reaches through require is packed, and no test, tool, build, vendored or doc file is"
 # vim:ft=ruby
 
 require 'json'
@@ -36,10 +36,13 @@ until pending.empty?
 end
 
 missing = reached.reject { |path| packed.include?(path) }.sort
-test_only = packed.select { |path| path.start_with?('tools/', 'test/') }.sort
+# The main package ships JavaScript only: the addon is in the platform
+# packages (mise run package), and docs, benches and vendored headers stay in
+# the repository.
+test_only = packed.select { |path| path.start_with?('tools/', 'test/', 'build/', 'vendor/', 'docs/', 'bench/') }.sort
 problems = []
 problems << "not packed, but reached from index.js:\n  #{missing.join("\n  ")}" unless missing.empty?
-problems << "test-only files in the package:\n  #{test_only.join("\n  ")}" unless test_only.empty?
+problems << "files that do not belong in the package:\n  #{test_only.join("\n  ")}" unless test_only.empty?
 abort "tinyactors-napi: #{problems.join("\n")}" unless problems.empty?
 
-puts "pack-check passed: #{reached.size} files reached from index.js are packed, nothing under tools/ or test/"
+puts "pack-check passed: #{reached.size} files reached from index.js are packed, nothing under tools/, test/, build/, vendor/, docs/ or bench/"

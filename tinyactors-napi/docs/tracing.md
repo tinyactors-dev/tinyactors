@@ -8,7 +8,7 @@ those bytes as they are. tinyactors depends on no telemetry package: where
 the bytes go, and how, is yours.
 
 ```js
-const { createSystem } = require('tinyactors-napi');
+const { createSystem } = require('@tinyactors/node');
 
 const system = createSystem();
 system.setTraceSink(
@@ -225,7 +225,7 @@ traceparent:
 
 ```js
 const { context, trace } = require('@opentelemetry/api');
-const { formatTraceparent } = require('tinyactors-napi');
+const { formatTraceparent } = require('@tinyactors/node');
 
 const active = trace.getSpanContext(context.active());
 system.post(actor, 'order', body, {
@@ -250,7 +250,7 @@ tracer would give them new IDs). The example below is tested in
 `@opentelemetry/exporter-trace-otlp-http` 0.222.0):
 
 ```js
-const { decodeTraces } = require('tinyactors-napi');
+const { decodeTraces } = require('@tinyactors/node');
 const { SpanKind, SpanStatusCode, TraceFlags } = require('@opentelemetry/api');
 const { resourceFromAttributes } = require('@opentelemetry/resources');
 

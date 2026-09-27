@@ -4,7 +4,7 @@
 (napi ADR 0019, core ADRs 0053 and 0076):
 
 ```js
-const { createSystem } = require('tinyactors-napi');
+const { createSystem } = require('@tinyactors/node');
 const system = createSystem();
 const definition = system.define(xmlText, { format: 'scxml' }); // a string or a Uint8Array of UTF-8
 ```

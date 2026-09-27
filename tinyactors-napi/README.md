@@ -1,26 +1,56 @@
-# tinyactors-napi
+# @tinyactors/node
 
-`tinyactors-napi` is the Node-API binding for Tinyactors. It targets Node.js
-22 or newer and Bun.
+Tinyactors for Node.js (22.14 or newer) and Bun: SCXML statecharts run as
+actors on a native runtime, through Node-API.
 
-The binding is currently a bootstrap stub. It exports only `version`, which is
-the package version:
-
-```js
-const tinyactors = require('tinyactors-napi');
-
-console.log(tinyactors.version);
+```text
+npm install @tinyactors/node
 ```
 
-Build and test it through the repository task interface:
+The install brings a prebuilt addon for your platform: no compiler, no
+`node-gyp` and no postinstall script. There are addons for macOS on Apple
+silicon and Intel (11.0 or newer) and for Linux on x64 and arm64; the Linux
+addon links no C library, so one build serves glibc and musl (Alpine).
+
+```js
+const { createSystem, statechart } = require('@tinyactors/node');
+
+const light = statechart({ family: 'light', revision: 'v1' })
+  .data('switches', 0)
+  .state('off', (s) => s.on('toggle', (t) => t.target('on').assign('switches', function () { return this.switches + 1; })))
+  .state('on', (s) => s.on('toggle', (t) => t.target('off')));
+
+async function main() {
+  const system = createSystem();
+  const lamp = system.spawn(system.define(light), { name: 'lamp' });
+  await lamp.send('toggle'); // resolves once the macrostep it started ends
+  console.log(lamp.inspect().activeStates, lamp.data().switches); // [ 'on' ] 1
+  system.close();
+}
+
+main();
+```
+
+`index.d.ts` describes the whole API. The package is 0.x: its API changes
+in minor versions.
+
+## Working on it in the repository
+
+In this repository the package is built and tested through the task
+interface; the addon it loads is the one `mise run build` writes:
 
 ```text
 mise run build
 mise run test
 ```
 
-The test loads the same native addon with Node.js and Bun. See
-[`docs/design.md`](docs/design.md) for the planned binding architecture.
+The tests load the same native addon with Node.js and Bun. See
+[`docs/design.md`](docs/design.md) for the binding architecture, and
+[ADR 0001](../docs/adr/0001-packaging-and-releases.md) for how the packages
+are built and released: `mise run build --target <t>` builds a release
+target's addon with zig, `mise run symbols` checks what it imports, and
+`mise run package` stages and packs the npm packages into
+`build/npm/tarballs/`.
 
 ## `index.d.ts` is the desired API
 
