@@ -23,7 +23,50 @@ function isDefinition(value) {
 }
 
 const literalBrand = Symbol('tinyactors.literal');
-native.setupLiteral(literalBrand);
+
+// Whether JSON says `value` exactly: finite numbers other than -0, strings,
+// booleans, null, and arrays (without holes) and plain objects of those,
+// without cycles, accessors or symbol keys.
+function jsonExact(value, seen) {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') {
+    return true;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && !Object.is(value, -0);
+  }
+  if (typeof value !== 'object' || seen.has(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  const array = Array.isArray(value);
+  if (!array && prototype !== Object.prototype && prototype !== null) {
+    return false;
+  }
+  if (Object.getOwnPropertySymbols(value).length !== 0) {
+    return false;
+  }
+  seen.add(value);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const keys = Object.keys(descriptors).filter((key) => !(array && key === 'length'));
+  if (array && keys.length !== value.length) {
+    return false;
+  }
+  const exact = keys.every((key) => {
+    const descriptor = descriptors[key];
+    return descriptor.enumerable && 'value' in descriptor && key !== '__proto__' && jsonExact(descriptor.value, seen);
+  });
+  seen.delete(value);
+  return exact;
+}
+
+// How an encode writes a literal()'s value as source text (napi ADR 0030):
+// JSON, when JSON says the value exactly; otherwise the codec refuses it as
+// unrepresentable. The chart itself keeps the value.
+function literalText(value) {
+  return jsonExact(value, new Set()) ? JSON.stringify(value) : undefined;
+}
+
+native.setupLiteral(literalBrand, literalText);
 
 /** Force a callable JavaScript value to be data rather than an expression. */
 function literal(value) {
@@ -80,46 +123,6 @@ function isNamed(value) {
 // The source text a named function is called by.
 const call = (value) => `${value.name}()`;
 
-// Whether JSON says `value` exactly: finite numbers other than -0, strings,
-// booleans, null, and arrays (without holes) and plain objects of those,
-// without cycles, accessors or symbol keys.
-function jsonExact(value, seen) {
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') {
-    return true;
-  }
-  if (typeof value === 'number') {
-    return Number.isFinite(value) && !Object.is(value, -0);
-  }
-  if (typeof value !== 'object' || seen.has(value)) {
-    return false;
-  }
-  const prototype = Object.getPrototypeOf(value);
-  const array = Array.isArray(value);
-  if (!array && prototype !== Object.prototype && prototype !== null) {
-    return false;
-  }
-  if (Object.getOwnPropertySymbols(value).length !== 0) {
-    return false;
-  }
-  seen.add(value);
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  const keys = Object.keys(descriptors).filter((key) => !(array && key === 'length'));
-  if (array && keys.length !== value.length) {
-    return false;
-  }
-  const exact = keys.every((key) => {
-    const descriptor = descriptors[key];
-    return descriptor.enumerable && 'value' in descriptor && key !== '__proto__' && jsonExact(descriptor.value, seen);
-  });
-  seen.delete(value);
-  return exact;
-}
-
-// `value` as JSON text when JSON says it exactly, otherwise undefined.
-function jsonText(value) {
-  return jsonExact(value, new Set()) ? JSON.stringify(value) : undefined;
-}
-
 function isContent(value) {
   return value !== null && typeof value === 'object' && value[contentBrand] === true;
 }
@@ -173,11 +176,10 @@ function valueSpec(value) {
   if (isNamed(value)) {
     return { kind: 'expr', expr: call(value) };
   }
-  // Plain data is written as JSON text, which the data model parses once
-  // when the chart is defined, so core sees it whole (napi ADR 0029); what
-  // JSON cannot say exactly stays a literal().
-  const json = jsonText(value);
-  return { kind: 'expr', expr: json ?? literal(value) };
+  // Any other value is data, kept as the value itself: napi makes one
+  // record per value, so the same values give the same handles and core
+  // compares them (napi ADR 0030, core ADR 0087).
+  return { kind: 'expr', expr: literal(value) };
 }
 
 function targets(value, what) {

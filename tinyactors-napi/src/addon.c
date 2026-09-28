@@ -8,9 +8,11 @@
  *   code throws (ADR 0008); lib/errors.js calls it once per environment;
  * - setupActor(ActorID): registers the ActorID view class (ADR 0002) that the
  *   pump uses for the actors it passes to hooks; lib/actor.js calls it;
- * - setupLiteral(brand): registers the symbol that marks literal() objects,
- *   so the JavaScript data model can tell a constant from an expression
- *   (ADR 0011); lib/statechart.js calls it;
+ * - setupLiteral(brand, text): registers the symbol that marks literal()
+ *   objects, so the JavaScript data model can tell a constant from an
+ *   expression (ADR 0011), and the function that writes a literal's value
+ *   as source text when a chart is encoded (ADR 0030); lib/statechart.js
+ *   calls it;
  * - setupEffects(handler): registers the function the pump calls with each
  *   service effect, handler(system, kind, payload) (napi_services.h);
  *   lib/system.js calls it;
@@ -112,16 +114,22 @@ static napi_value tna_setup_effects(napi_env env, napi_callback_info info) {
     return undefined;
 }
 
-/* setupLiteral(brand): the symbol that marks literal() objects (lib/statechart.js). */
+/*
+ * setupLiteral(brand, text): the symbol that marks literal() objects, and
+ * (value) => JSON text or undefined, which renders one for an encode
+ * (lib/statechart.js).
+ */
 static napi_value tna_setup_literal(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value argv[1] = { NULL };
+    size_t argc = 2;
+    napi_value argv[2] = { NULL, NULL };
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
         return NULL;
     }
     napi_valuetype type = napi_undefined;
-    if (argc < 1 || napi_typeof(env, argv[0], &type) != napi_ok || type != napi_symbol) {
-        return tna_throw(env, "invalid", "setupLiteral expects the literal brand symbol");
+    napi_valuetype text_type = napi_undefined;
+    if (argc < 2 || napi_typeof(env, argv[0], &type) != napi_ok || type != napi_symbol ||
+        napi_typeof(env, argv[1], &text_type) != napi_ok || text_type != napi_function) {
+        return tna_throw(env, "invalid", "setupLiteral expects the literal brand symbol and a text function");
     }
     tna_env *data = tna_env_get(env);
     if (data == NULL) {
@@ -131,7 +139,12 @@ static napi_value tna_setup_literal(napi_env env, napi_callback_info info) {
         napi_delete_reference(env, data->literal_brand);
         data->literal_brand = NULL;
     }
-    if (napi_create_reference(env, argv[0], 1, &data->literal_brand) != napi_ok) {
+    if (data->literal_text != NULL) {
+        napi_delete_reference(env, data->literal_text);
+        data->literal_text = NULL;
+    }
+    if (napi_create_reference(env, argv[0], 1, &data->literal_brand) != napi_ok ||
+        napi_create_reference(env, argv[1], 1, &data->literal_text) != napi_ok) {
         return tna_throw(env, "out-of-memory", "cannot keep the literal brand");
     }
     napi_value undefined = NULL;

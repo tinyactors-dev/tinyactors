@@ -392,9 +392,9 @@ function exportedDocument() {
   system.close();
 }
 
-// A builder chart's functions cannot be compared, so defining its export
-// registers beside it (core ADR 0077), with an equal export: the same
-// functions, literal() values and locations, the same spans.
+// Defining a builder chart's export answers the chart itself (napi ADR 0030,
+// core ADR 0087): the export hands back the same functions, literal() values
+// and locations, which are the same handles, and the same spans.
 function exportedBuilder() {
   const system = createSystem();
   const whenPositive = function () { return this.count > 0; };
@@ -409,7 +409,7 @@ function exportedBuilder() {
   const spec = counter.export();
   assert.deepEqual(spec.identity.family, { name: 'counter' });
   const again = system.define(spec);
-  assert.notEqual(again.id, counter.id);
+  assert.equal(again.id, counter.id);
   assert.deepStrictEqual(again.export(), spec);
   assertLookupsAgree(counter);
   const go = [0, 1].map((id) => counter.transition(id)).find((transition) => transition.event === 'go');

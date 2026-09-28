@@ -86,6 +86,8 @@ typedef struct {
     ta_source_map *spans;
     /* The definition's explicit identity, or null when it was fingerprinted. */
     const ta_definition_identity **identity;
+    /* Writes a host expression as source text: a literal() as JSON (ADR 0030). */
+    ta_chart_expression_printer expressions;
     /* Filled when the result is TA_ERR_INVALID. */
     tna_import_failure *failure;
 } tna_encode_params;

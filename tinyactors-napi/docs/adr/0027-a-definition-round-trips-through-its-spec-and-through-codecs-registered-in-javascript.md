@@ -1,6 +1,6 @@
 # ADR 0027: A definition round-trips through its spec, and through codecs registered in JavaScript
 
-**Status:** Accepted (2026-09-28). Implemented (2026-09-28): points 1 to 5, see the implementation notes for where the code differs from the text. Applies core ADR 0042 (export), ADR 0053 (codecs), ADR 0071 (lookups by ID), ADR 0077 (identity) and ADR 0085 (spans) to the addon. Refines ADR 0019 (`define()` options, data models by name) and ADR 0024 (which charts are walked for inline children). Refined by ADR 0029: a function called by name is source text, so "a chart without functions" in point 1 means a chart without anonymous functions.
+**Status:** Accepted (2026-09-28). Implemented (2026-09-28): points 1 to 5, see the implementation notes for where the code differs from the text. Applies core ADR 0042 (export), ADR 0053 (codecs), ADR 0071 (lookups by ID), ADR 0077 (identity) and ADR 0085 (spans) to the addon. Refines ADR 0019 (`define()` options, data models by name) and ADR 0024 (which charts are walked for inline children). Refined by ADR 0029: a function called by name is source text, so "a chart without functions" in point 1 means a chart without anonymous functions. Within a process, `define(d.export())` answers `d` for every chart since ADR 0030.
 **Date:** 2026-09-28
 
 ## Context

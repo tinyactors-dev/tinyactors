@@ -16,13 +16,17 @@
  *   condition, a value or a script. A call is bound to its function when
  *   the chart is defined. A JSON value (a number, a string, true, false,
  *   null, an array or an object) is a value, parsed once then into a
- *   literal: the builder writes plain data so. Anything else, and a call of
+ *   literal, so a document can write `<data expr="0"/>`. Anything else, and a call of
  *   a name nothing is registered under, is refused then, naming the
  *   expression (core ADR 0058).
  *
  * Each JavaScript expression is a host expression (TA_EXPRESSION_HOST) whose
  * value is an expression record: one strong napi_ref and a count, retained
- * by the compiled definition and released with it.
+ * by the compiled definition and released with it. A system makes one
+ * record per value and kind (napi ADR 0030): a function or location by the
+ * object, a literal() by the value it holds as Object.is compares it, so
+ * the same values are the same handles and core answers the same
+ * definition for them (core ADR 0087).
  *
  * An actor's data is one JavaScript object, its root: the spawn binding when
  * one is given, otherwise a new object. <data> declarations and <foreach>
@@ -53,6 +57,18 @@ typedef enum {
 } tna_expr_kind;
 
 typedef struct tna_js_datamodel tna_js_datamodel;
+
+/* Literal records by the primitive they hold: open addressing, linear
+ * probing, a power-of-two capacity (napi ADR 0030). */
+typedef struct {
+    uint64_t hash;
+    void *record; /* a tna_expr_record; NULL when the slot is free */
+} tna_intern_slot;
+typedef struct {
+    tna_intern_slot *slots;
+    uint32_t capacity;
+    uint32_t count;
+} tna_intern_table;
 
 /* At most this many data models registered per system (ADR 0019), and the
  * longest name one may have. */
@@ -119,6 +135,16 @@ struct tna_js_datamodel {
     ta_value *handles;
     uint32_t handle_count;
     uint32_t handle_capacity;
+    /*
+     * One expression record per JavaScript value (napi ADR 0030), so the
+     * same values give core the same handles (core ADR 0087). `objects` is
+     * a WeakMap from a function, location or literal object to an external
+     * cell naming its records; `primitives` finds a literal's record by the
+     * primitive it holds. Neither keeps a value alive, and a record leaves
+     * both when its last reference goes, without running JavaScript.
+     */
+    napi_ref objects;
+    tna_intern_table primitives;
 };
 
 /*
@@ -144,6 +170,8 @@ void tna_js_datamodel_release_handles(tna_js_datamodel *dm, tna_offload_handles 
 
 /* Builds the context object; false when it cannot be made. */
 bool tna_js_datamodel_init(tna_js_datamodel *dm, tna_napi_system *wrapper, napi_env env);
+/* Frees what only core's records used, once core has released them (tna_system_close's after_core). */
+void tna_js_datamodel_after_core(tna_js_datamodel *dm);
 void tna_js_datamodel_close(tna_js_datamodel *dm, bool refs_usable);
 ta_datamodel tna_js_datamodel_adapter(tna_js_datamodel *dm);
 
@@ -180,6 +208,12 @@ ta_result tna_js_datamodel_select(tna_js_datamodel *dm, ta_str name);
  * owns: release it with tna_expression_release().
  */
 bool tna_expression_make(tna_js_datamodel *dm, napi_value value, tna_expr_kind kind, ta_expression *out);
+/*
+ * Writes this system's host expressions as source text for an encode: a
+ * literal() whose value JSON says exactly, as that JSON (napi ADR 0030).
+ * It refuses a function and a location, which have no faithful text.
+ */
+ta_chart_expression_printer tna_js_datamodel_printer(tna_js_datamodel *dm);
 void tna_expression_release(ta_expression *expression);
 /*
  * The JavaScript value of a host expression this module made (the function,

@@ -7,15 +7,146 @@
 #include "values.h"
 
 /* ------------------------------------------------------------------------
- * Expression records (TA_EXPRESSION_HOST values)
+ * Expression records (TA_EXPRESSION_HOST values), one per value (ADR 0030)
  */
 
+typedef struct tna_expr_record tna_expr_record;
+
+/*
+ * The records keyed by one object, one per kind. The WeakMap entry for the
+ * object holds an external naming the cell, and each record in it holds the
+ * cell too; the cell goes with the last of them. The external's finalizer
+ * may run after the system is gone, so a cell is plain malloc memory.
+ */
 typedef struct {
+    uint32_t references;
+    tna_expr_record *records[3]; /* by tna_expr_kind */
+} tna_intern_cell;
+
+struct tna_expr_record {
     tna_values *values; /* env, allocator, torn_down */
+    tna_js_datamodel *dm;
     napi_ref ref;
     uint32_t references;
     tna_expr_kind kind;
-} tna_expr_record;
+    /* Where the record is found again: an object's cell, or the key of the
+     * primitive a literal holds, in dm->primitives. Neither when it is not. */
+    tna_intern_cell *cell;
+    uint8_t *key;
+    uint32_t key_len;
+    uint64_t hash;
+};
+
+static void tna_cell_unref(tna_intern_cell *cell) {
+    if (--cell->references == 0) {
+        free(cell);
+    }
+}
+
+static void tna_cell_finalize(napi_env env, void *data, void *hint) {
+    (void)env;
+    (void)hint;
+    tna_cell_unref(data);
+}
+
+static uint64_t tna_hash_bytes(const uint8_t *bytes, uint32_t len) {
+    uint64_t hash = 14695981039346656037ull;
+    for (uint32_t at = 0; at < len; at += 1) {
+        hash ^= bytes[at];
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
+static bool tna_same_key(const tna_expr_record *record, uint64_t hash, const uint8_t *key, uint32_t len) {
+    return record->hash == hash && record->key_len == len && memcmp(record->key, key, len) == 0;
+}
+
+static tna_expr_record *tna_primitive_find(const tna_intern_table *table, uint64_t hash, const uint8_t *key,
+                                           uint32_t len) {
+    if (table->capacity == 0) {
+        return NULL;
+    }
+    uint32_t mask = table->capacity - 1u;
+    for (uint32_t at = (uint32_t)hash & mask;; at = (at + 1u) & mask) {
+        tna_expr_record *record = table->slots[at].record;
+        if (record == NULL) {
+            return NULL;
+        }
+        if (tna_same_key(record, hash, key, len)) {
+            return record;
+        }
+    }
+}
+
+static void tna_primitive_place(tna_intern_table *table, tna_expr_record *record) {
+    uint32_t mask = table->capacity - 1u;
+    uint32_t at = (uint32_t)record->hash & mask;
+    while (table->slots[at].record != NULL) {
+        at = (at + 1u) & mask;
+    }
+    table->slots[at] = (tna_intern_slot){ .hash = record->hash, .record = record };
+    table->count += 1u;
+}
+
+/* Adds `record` under its key; false when the table cannot grow, and the
+ * record then stays out of it. */
+static bool tna_primitive_add(tna_intern_table *table, ta_allocator allocator, tna_expr_record *record) {
+    if ((table->count + 1u) * 2u > table->capacity) {
+        uint32_t capacity = table->capacity == 0 ? 16u : table->capacity * 2u;
+        if (capacity < table->capacity) {
+            return false;
+        }
+        tna_intern_slot *slots = tna_alloc(allocator, (size_t)capacity * sizeof *slots, _Alignof(tna_intern_slot));
+        if (slots == NULL) {
+            return false;
+        }
+        for (uint32_t at = 0; at < capacity; at += 1) {
+            slots[at] = (tna_intern_slot){ 0 };
+        }
+        tna_intern_table grown = { .slots = slots, .capacity = capacity };
+        for (uint32_t at = 0; at < table->capacity; at += 1) {
+            if (table->slots[at].record != NULL) {
+                tna_primitive_place(&grown, table->slots[at].record);
+            }
+        }
+        if (table->slots != NULL) {
+            tna_free(allocator, &(ta_allocator_free_params){ .ptr = table->slots,
+                                                            .size = (size_t)table->capacity * sizeof *table->slots,
+                                                            .alignment = _Alignof(tna_intern_slot) });
+        }
+        *table = grown;
+    }
+    tna_primitive_place(table, record);
+    return true;
+}
+
+/* Takes `record` out, shifting back the slots its probe chain covered. */
+static void tna_primitive_remove(tna_intern_table *table, const tna_expr_record *record) {
+    if (table->capacity == 0) {
+        return;
+    }
+    uint32_t mask = table->capacity - 1u;
+    uint32_t at = (uint32_t)record->hash & mask;
+    while (table->slots[at].record != record) {
+        if (table->slots[at].record == NULL) {
+            return;
+        }
+        at = (at + 1u) & mask;
+    }
+    table->slots[at] = (tna_intern_slot){ 0 };
+    table->count -= 1u;
+    for (uint32_t next = (at + 1u) & mask; table->slots[next].record != NULL; next = (next + 1u) & mask) {
+        uint32_t home = (uint32_t)table->slots[next].hash & mask;
+        /* The entry at `next` may move to the hole when its home is not in (at, next]. */
+        bool stays = at <= next ? (home > at && home <= next) : (home > at || home <= next);
+        if (!stays) {
+            table->slots[at] = table->slots[next];
+            table->slots[next] = (tna_intern_slot){ 0 };
+            at = next;
+        }
+    }
+}
 
 static ta_result tna_expr_retain(void *self, void *value, ta_allocator allocator, void **out) {
     (void)self;
@@ -33,6 +164,17 @@ static void tna_expr_release(void *self, void *value, ta_allocator allocator) {
         return;
     }
     tna_values *values = record->values;
+    if (record->cell != NULL) {
+        if (record->cell->records[record->kind] == record) {
+            record->cell->records[record->kind] = NULL;
+        }
+        tna_cell_unref(record->cell);
+    }
+    if (record->key != NULL) {
+        tna_primitive_remove(&record->dm->primitives, record);
+        tna_free(values->allocator,
+                 &(ta_allocator_free_params){ .ptr = record->key, .size = record->key_len, .alignment = 1 });
+    }
     if (record->ref != NULL && !*values->torn_down) {
         napi_delete_reference(values->env, record->ref);
     }
@@ -49,21 +191,295 @@ static const tna_expr_record *tna_record_of(const ta_expression *expression) {
     return expression->as.host.value;
 }
 
-bool tna_expression_make(tna_js_datamodel *dm, napi_value value, tna_expr_kind kind, ta_expression *out) {
-    tna_values *values = &dm->wrapper->values;
-    tna_expr_record *record = tna_alloc(values->allocator, sizeof *record, _Alignof(tna_expr_record));
-    if (record == NULL) {
+/*
+ * The key of a primitive, as Object.is compares it: a tag, then the value
+ * (a number's bits, one NaN for all; a string's UTF-16; a bigint's sign and
+ * words). Allocated from the system's allocator. False for a symbol, which
+ * is not interned, and when memory runs out.
+ */
+static bool tna_primitive_key(napi_env env, napi_value value, napi_valuetype type, tna_values *values,
+                              uint8_t **key, uint32_t *len) {
+    uint8_t head[1 + sizeof(double)];
+    size_t size = 1;
+    size_t extra = 0;
+    int sign = 0;
+    switch (type) {
+    case napi_undefined:
+        head[0] = 0;
+        break;
+    case napi_null:
+        head[0] = 1;
+        break;
+    case napi_boolean: {
+        bool flag = false;
+        if (napi_get_value_bool(env, value, &flag) != napi_ok) {
+            return false;
+        }
+        head[0] = flag ? 3 : 2;
+        break;
+    }
+    case napi_number: {
+        double number = 0;
+        if (napi_get_value_double(env, value, &number) != napi_ok) {
+            return false;
+        }
+        if (number != number) {
+            number = __builtin_nan("");
+        }
+        head[0] = 4;
+        memcpy(head + 1, &number, sizeof number);
+        size += sizeof number;
+        break;
+    }
+    case napi_string:
+        head[0] = 5;
+        if (napi_get_value_string_utf16(env, value, NULL, 0, &extra) != napi_ok) {
+            return false;
+        }
+        extra *= sizeof(char16_t);
+        break;
+    case napi_bigint:
+        head[0] = 6;
+        if (napi_get_value_bigint_words(env, value, NULL, &extra, NULL) != napi_ok) {
+            return false;
+        }
+        extra = 1 + extra * sizeof(uint64_t);
+        break;
+    default:
         return false;
     }
-    *record = (tna_expr_record){ .values = values, .references = 1u, .kind = kind };
-    if (napi_create_reference(dm->env, value, 1, &record->ref) != napi_ok) {
-        tna_free(values->allocator,
-                 &(ta_allocator_free_params){ .ptr = record, .size = sizeof *record, .alignment = _Alignof(tna_expr_record) });
+    size_t total = size + extra;
+    if (total > UINT32_MAX) {
         return false;
+    }
+    uint8_t *bytes = tna_alloc(values->allocator, total, 1);
+    if (bytes == NULL) {
+        return false;
+    }
+    memcpy(bytes, head, size);
+    bool ok = true;
+    if (type == napi_string) {
+        size_t units = extra / sizeof(char16_t);
+        char16_t *text = tna_alloc(values->allocator, (units + 1u) * sizeof(char16_t), _Alignof(char16_t));
+        size_t copied = 0;
+        ok = text != NULL && napi_get_value_string_utf16(env, value, text, units + 1u, &copied) == napi_ok &&
+             copied == units;
+        if (ok) {
+            memcpy(bytes + size, text, extra);
+        }
+        if (text != NULL) {
+            tna_free(values->allocator, &(ta_allocator_free_params){ .ptr = text, .size = (units + 1u) * sizeof(char16_t),
+                                                                    .alignment = _Alignof(char16_t) });
+        }
+    } else if (type == napi_bigint) {
+        size_t count = (extra - 1u) / sizeof(uint64_t);
+        uint64_t *words = count == 0 ? NULL : tna_alloc(values->allocator, count * sizeof(uint64_t), _Alignof(uint64_t));
+        ok = (count == 0 || words != NULL) &&
+             napi_get_value_bigint_words(env, value, &sign, &count, words) == napi_ok;
+        if (ok) {
+            bytes[size] = sign != 0 ? 1 : 0;
+            if (count != 0) {
+                memcpy(bytes + size + 1, words, count * sizeof(uint64_t));
+            }
+        }
+        if (words != NULL) {
+            tna_free(values->allocator, &(ta_allocator_free_params){ .ptr = words, .size = count * sizeof(uint64_t),
+                                                                    .alignment = _Alignof(uint64_t) });
+        }
+    }
+    if (!ok) {
+        tna_free(values->allocator, &(ta_allocator_free_params){ .ptr = bytes, .size = total, .alignment = 1 });
+        return false;
+    }
+    *key = bytes;
+    *len = (uint32_t)total;
+    return true;
+}
+
+/* The system's WeakMap of objects to cells, made on first use. */
+static bool tna_objects_map(tna_js_datamodel *dm, napi_value *out) {
+    napi_env env = dm->env;
+    if (dm->objects != NULL) {
+        return napi_get_reference_value(env, dm->objects, out) == napi_ok && *out != NULL;
+    }
+    napi_value global = NULL;
+    napi_value constructor = NULL;
+    return napi_get_global(env, &global) == napi_ok &&
+           napi_get_named_property(env, global, "WeakMap", &constructor) == napi_ok &&
+           napi_new_instance(env, constructor, 0, NULL, out) == napi_ok &&
+           napi_create_reference(env, *out, 1, &dm->objects) == napi_ok;
+}
+
+static bool tna_map_call(napi_env env, napi_value map, const char *method, size_t argc, napi_value *argv,
+                         napi_value *out) {
+    napi_value function = NULL;
+    napi_value result = NULL;
+    return napi_get_named_property(env, map, method, &function) == napi_ok &&
+           napi_call_function(env, map, function, argc, argv, out != NULL ? out : &result) == napi_ok;
+}
+
+/* The cell of object `key`, made (and entered in the WeakMap) when it has none. */
+static tna_intern_cell *tna_cell_of(tna_js_datamodel *dm, napi_value key) {
+    napi_env env = dm->env;
+    napi_value map = NULL;
+    napi_value found = NULL;
+    napi_valuetype type = napi_undefined;
+    if (!tna_objects_map(dm, &map) || !tna_map_call(env, map, "get", 1, &key, &found) ||
+        napi_typeof(env, found, &type) != napi_ok) {
+        return NULL;
+    }
+    void *data = NULL;
+    if (type == napi_external) {
+        return napi_get_value_external(env, found, &data) == napi_ok ? data : NULL;
+    }
+    tna_intern_cell *cell = malloc(sizeof *cell);
+    if (cell == NULL) {
+        return NULL;
+    }
+    *cell = (tna_intern_cell){ .references = 1u };
+    napi_value external = NULL;
+    if (napi_create_external(env, cell, tna_cell_finalize, NULL, &external) != napi_ok) {
+        free(cell);
+        return NULL;
+    }
+    /* From here the external owns the cell's first reference. */
+    napi_value argv[2] = { key, external };
+    return tna_map_call(env, map, "set", 2, argv, NULL) ? cell : NULL;
+}
+
+/*
+ * Where the record for `value` of `kind` is kept: an object's cell, or a
+ * primitive's key. A place with neither (a symbol, a non-object location, a
+ * failed lookup) means the record is not shared.
+ */
+typedef struct {
+    tna_intern_cell *cell;
+    uint8_t *key;
+    uint32_t key_len;
+    uint64_t hash;
+} tna_intern_place;
+
+static tna_expr_record *tna_interned(tna_js_datamodel *dm, napi_value value, tna_expr_kind kind,
+                                     tna_intern_place *place) {
+    napi_env env = dm->env;
+    *place = (tna_intern_place){ 0 };
+    napi_value key = value;
+    if (kind == TNA_EXPR_LITERAL && napi_get_named_property(env, value, "value", &key) != napi_ok) {
+        napi_value error = NULL;
+        napi_get_and_clear_last_exception(env, &error);
+        return NULL;
+    }
+    napi_valuetype type = napi_undefined;
+    if (napi_typeof(env, key, &type) != napi_ok) {
+        return NULL;
+    }
+    if (type == napi_object || type == napi_function) {
+        place->cell = tna_cell_of(dm, key);
+        if (place->cell == NULL) {
+            napi_value error = NULL;
+            napi_get_and_clear_last_exception(env, &error);
+            return NULL;
+        }
+        return place->cell->records[kind];
+    }
+    if (kind != TNA_EXPR_LITERAL ||
+        !tna_primitive_key(env, key, type, &dm->wrapper->values, &place->key, &place->key_len)) {
+        return NULL;
+    }
+    place->hash = tna_hash_bytes(place->key, place->key_len);
+    return tna_primitive_find(&dm->primitives, place->hash, place->key, place->key_len);
+}
+
+static void tna_place_drop(tna_values *values, tna_intern_place *place) {
+    if (place->key != NULL) {
+        tna_free(values->allocator, &(ta_allocator_free_params){ .ptr = place->key, .size = place->key_len, .alignment = 1 });
+        place->key = NULL;
+    }
+}
+
+bool tna_expression_make(tna_js_datamodel *dm, napi_value value, tna_expr_kind kind, ta_expression *out) {
+    tna_values *values = &dm->wrapper->values;
+    tna_intern_place place;
+    tna_expr_record *record = tna_interned(dm, value, kind, &place);
+    if (record != NULL) {
+        tna_place_drop(values, &place);
+        record->references += 1u;
+    } else {
+        record = tna_alloc(values->allocator, sizeof *record, _Alignof(tna_expr_record));
+        if (record == NULL) {
+            tna_place_drop(values, &place);
+            return false;
+        }
+        *record = (tna_expr_record){ .values = values, .dm = dm, .references = 1u, .kind = kind };
+        if (napi_create_reference(dm->env, value, 1, &record->ref) != napi_ok) {
+            tna_place_drop(values, &place);
+            tna_free(values->allocator, &(ta_allocator_free_params){ .ptr = record, .size = sizeof *record,
+                                                                    .alignment = _Alignof(tna_expr_record) });
+            return false;
+        }
+        if (place.cell != NULL) {
+            place.cell->references += 1u;
+            place.cell->records[kind] = record;
+            record->cell = place.cell;
+        } else if (place.key != NULL) {
+            record->key = place.key;
+            record->key_len = place.key_len;
+            record->hash = place.hash;
+            if (!tna_primitive_add(&dm->primitives, values->allocator, record)) {
+                /* Not shared, then: the record works, core just never matches it. */
+                record->key = NULL;
+                tna_free(values->allocator, &(ta_allocator_free_params){ .ptr = place.key, .size = place.key_len,
+                                                                        .alignment = 1 });
+            }
+        }
     }
     *out = (ta_expression){ .kind = TA_EXPRESSION_HOST,
                             .as.host = { .self = NULL, .v = &tna_expr_vtable, .value = record } };
     return true;
+}
+
+/* A literal's value as the JSON text lib renders for it; TA_ERR_INVALID for
+ * anything else, which the codec reports as unrepresentable. */
+static ta_result tna_print_expression(void *self, const ta_expression_host *host, ta_arena *arena, ta_str *out) {
+    tna_js_datamodel *dm = self;
+    if (host->v != &tna_expr_vtable || ((const tna_expr_record *)host->value)->kind != TNA_EXPR_LITERAL) {
+        return TA_ERR_INVALID;
+    }
+    const tna_expr_record *record = host->value;
+    napi_env env = dm->env;
+    tna_env *data = tna_env_get(env);
+    napi_value box = NULL;
+    napi_value value = NULL;
+    napi_value print = NULL;
+    napi_value global = NULL;
+    napi_value text = NULL;
+    napi_valuetype type = napi_undefined;
+    size_t length = 0;
+    if (data == NULL || data->literal_text == NULL || napi_get_reference_value(env, record->ref, &box) != napi_ok ||
+        napi_get_named_property(env, box, "value", &value) != napi_ok ||
+        napi_get_reference_value(env, data->literal_text, &print) != napi_ok || napi_get_global(env, &global) != napi_ok ||
+        napi_call_function(env, global, print, 1, &value, &text) != napi_ok || napi_typeof(env, text, &type) != napi_ok ||
+        type != napi_string || napi_get_value_string_utf8(env, text, NULL, 0, &length) != napi_ok ||
+        length > UINT32_MAX - 1u) {
+        napi_value error = NULL;
+        napi_get_and_clear_last_exception(env, &error);
+        return TA_ERR_INVALID;
+    }
+    char *bytes = ta_arena_alloc(arena, length + 1u, 1);
+    if (bytes == NULL) {
+        return TA_ERR_NOMEM;
+    }
+    if (napi_get_value_string_utf8(env, text, bytes, length + 1u, &length) != napi_ok) {
+        return TA_ERR_INVALID;
+    }
+    *out = (ta_str){ bytes, (uint32_t)length };
+    return TA_OK;
+}
+
+static const ta_chart_expression_printer_vtable tna_printer_vtable = { tna_print_expression };
+
+ta_chart_expression_printer tna_js_datamodel_printer(tna_js_datamodel *dm) {
+    return (ta_chart_expression_printer){ .self = dm, .v = &tna_printer_vtable };
 }
 
 void tna_expression_release(ta_expression *expression) {
@@ -1662,8 +2078,24 @@ ta_result tna_js_datamodel_register_function(tna_js_datamodel *dm, ta_str name, 
     return napi_define_properties(env, table, 1, &property) == napi_ok ? TA_OK : TA_ERR_NOMEM;
 }
 
+void tna_js_datamodel_after_core(tna_js_datamodel *dm) {
+    /*
+     * Core has released every record, so the table is empty. A record that
+     * outlived core would find no table, and its cell stays valid on its own.
+     */
+    if (dm->primitives.slots != NULL) {
+        tna_free(dm->wrapper->values.allocator,
+                 &(ta_allocator_free_params){ .ptr = dm->primitives.slots,
+                                              .size = (size_t)dm->primitives.capacity * sizeof *dm->primitives.slots,
+                                              .alignment = _Alignof(tna_intern_slot) });
+    }
+    dm->primitives = (tna_intern_table){ 0 };
+}
+
 void tna_js_datamodel_close(tna_js_datamodel *dm, bool refs_usable) {
-    napi_ref *refs[] = { &dm->context, &dm->json_parse, &dm->array_from, &dm->functions, &dm->serialize, &dm->deserialize };
+    tna_js_datamodel_after_core(dm);
+    napi_ref *refs[] = { &dm->context, &dm->json_parse, &dm->array_from, &dm->functions, &dm->serialize, &dm->deserialize,
+                         &dm->objects };
     for (size_t at = 0; at < sizeof refs / sizeof refs[0]; at += 1) {
         if (*refs[at] != NULL && refs_usable) {
             napi_delete_reference(dm->env, *refs[at]);

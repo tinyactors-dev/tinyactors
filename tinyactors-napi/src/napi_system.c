@@ -200,6 +200,7 @@ static const ta_definition_sink_vtable tna_definition_sink_vtable = { .notify = 
 /* Core is gone: every value it held has been released (ADR 0011 point 7). */
 static void tna_after_core(void *context) {
     tna_napi_system *wrapper = context;
+    tna_js_datamodel_after_core(&wrapper->dm);
     tna_values_close(&wrapper->values);
 }
 
@@ -700,8 +701,10 @@ static napi_value tna_define_result(napi_env env, ta_result result, const tna_im
     }
     char message[96];
     if (result != TA_OK) {
-        snprintf(message, sizeof message, "%s: the definition failed", method);
-        return tna_throw(env, result == TA_ERR_NOMEM ? "out-of-memory" : "invalid", message);
+        snprintf(message, sizeof message, "%s: %s", method,
+                 result == TA_ERR_DEFINITION_MISMATCH ? "another chart is registered under this identity"
+                                                      : "the definition failed");
+        return tna_throw(env, tna_result_code(result), message);
     }
     napi_value value = NULL;
     napi_create_bigint_uint64(env, id, &value);
@@ -957,6 +960,7 @@ static napi_value tna_encode_definition_method(napi_env env, napi_callback_info 
     ta_result result = tna_encode(system, &(tna_encode_params){
                                               .definition = definition,
                                               .codec = codec.adapter,
+                                              .expressions = tna_js_datamodel_printer(&wrapper->dm),
                                               .arena = &arena,
                                               .out = &text,
                                               .spans = &map,

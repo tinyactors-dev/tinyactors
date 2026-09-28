@@ -1,9 +1,10 @@
 'use strict';
 
 // Named functions (napi ADR 0029): a chart calls a function the system
-// registered as the source text `name()`, which named() writes; plain data
-// is written as JSON text. Both are content core sees whole, so such a
-// chart is answered by identity and round-trips through export and SCXML.
+// registered as the source text `name()`, which named() writes. Values stay
+// literal()s, one handle per value (napi ADR 0030), so a chart built again
+// from the same functions and values is answered by identity; a chart of
+// source text alone also round-trips through SCXML in the same system.
 
 const assert = require('node:assert/strict');
 const { createSystem, statechart, named, literal, TinyactorsError } = require('..');
@@ -27,6 +28,7 @@ function withFunctions() {
   system.registerFunction('eventName', (context) => context.event.name);
   system.registerFunction('items', () => [1, 2, 3]);
   system.registerFunction('addItem', function () { return this.total + this.item; });
+  system.registerFunction('zero', () => 0);
   return system;
 }
 
@@ -115,30 +117,47 @@ function refusals() {
   assertCode(() => system.registerFunction('late', () => true), 'closed');
 }
 
-// Content core sees whole: answered by identity, refused under a changed
-// chart, and round-tripped through export and SCXML.
+// A chart of source text alone: named functions, and a value from one.
+function textual() {
+  return statechart({ family: 'textual', revision: '1' })
+    .initial('counting')
+    .dataExpression('count', named('zero'))
+    .state('counting', (s) => s
+      .on('bump', (t) => t.script(named('bump')))
+      .on('check', (t) => t.when(named('ready')).target('done')))
+    .state('done');
+}
+
+// Answered by identity, refused under a changed chart, and round-tripped
+// through export and SCXML.
 function identity() {
   const system = withFunctions();
   const first = system.define(counter());
   const again = system.define(counter());
-  assert.equal(again.id, first.id, 'a chart whose functions are all named is answered by identity');
+  assert.equal(again.id, first.id, 'the same functions and values are the same handles');
   assert.equal(system.define(first.export()).id, first.id, 'defining the export answers it too');
   assertCode(() => system.define(counter('bump')), 'definition-mismatch');
 
+  // A literal() is written as JSON text when JSON says its value exactly;
+  // in another system that registers the same names, the text defines the
+  // same revision.
   const encoded = first.encode('scxml');
   const text = new TextDecoder().decode(encoded.bytes);
   assert.match(text, /cond="ready\(\)"/);
   assert.match(text, /<script>bump\(\)<\/script>/);
   assert.match(text, /<data id="count" expr="0"\/>/);
-  assert.equal(system.define(encoded.bytes, { format: 'scxml', identity: encoded.identity }).id, first.id,
-    'encode to SCXML, then define, answers the same definition');
-
-  // In another system that registers the same names, the text defines the
-  // same revision.
+  assert.match(text, /<data id="last" expr="null"\/>/);
   const other = withFunctions();
   const copy = other.define(encoded.bytes, { format: 'scxml', identity: encoded.identity });
   assert.deepEqual(copy.identity, first.identity);
   other.close();
+
+  // A chart of source text alone round-trips in the same system: encode to
+  // SCXML, then define, answers the same definition.
+  const plain = system.define(textual());
+  const written = plain.encode('scxml');
+  assert.match(new TextDecoder().decode(written.bytes), /<data id="count" expr="zero\(\)"\/>/);
+  assert.equal(system.define(written.bytes, { format: 'scxml', identity: written.identity }).id, plain.id);
 
   // One anonymous function is enough to register beside (core ADR 0077).
   const anonymous = () => statechart({ family: 'anonymous', revision: '1' })
@@ -147,14 +166,19 @@ function identity() {
   system.close();
 }
 
-// Plain data is JSON text, parsed once when the chart is defined; what JSON
-// cannot say exactly stays a literal().
+// Values stay literal()s (napi ADR 0030): the definition holds the value the
+// author passed, whatever its type. Source text that is a JSON value (a
+// document's `<data expr="0"/>`) is still read as that value.
 async function data() {
   const system = createSystem();
   const date = new Date(0);
+  const object = { nested: [1, 'two', null, true] };
+  class Limits { constructor() { this.max = 3; } }
+  const limits = new Limits();
   const definition = system.define(statechart({ family: 'data', revision: '1' })
     .initial('a')
-    .data('object', { nested: [1, 'two', null, true] })
+    .data('object', object)
+    .data('limits', limits)
     .data('text', 'hello')
     .data('negative', -1.5)
     .data('date', date)
@@ -165,21 +189,30 @@ async function data() {
     .state('a'));
   const spec = definition.export();
   const byName = Object.fromEntries(spec.data.map((item) => [item.name, item.initializer?.expr]));
-  assert.equal(byName.object, '{"nested":[1,"two",null,true]}');
-  assert.equal(byName.text, '"hello"');
-  assert.equal(byName.negative, '-1.5');
-  assert.equal(byName.date.value, date, 'a Date stays a literal()');
-  assert.ok(Number.isNaN(byName.notANumber.value), 'NaN stays a literal()');
+  assert.equal(byName.object.value, object, 'a plain object is the object passed');
+  assert.equal(byName.limits.value, limits, 'a class instance is the instance passed');
+  assert.equal(byName.text.value, 'hello');
+  assert.equal(byName.negative.value, -1.5);
+  assert.equal(byName.date.value, date);
+  assert.ok(Number.isNaN(byName.notANumber.value));
   assert.equal(typeof byName.fn.value, 'function', 'a function in data() stays data');
-  assert.equal(byName.forced.value, 7, 'literal() stays a literal()');
+  assert.equal(byName.forced.value, 7);
   const actor = system.spawn(definition);
   await system.flush();
   const values = actor.inspect().data;
-  assert.deepEqual(values.object, { nested: [1, 'two', null, true] });
+  assert.deepEqual(values.object, object);
   assert.equal(values.text, 'hello');
   assert.equal(values.date, date);
   assert.equal(values.fn(), 1);
-  // JSON text in a spec is a value: not a script, and it must parse.
+  // JSON source text in a spec is a value: not a script, and it must parse.
+  const parsed = system.define({
+    name: 'json',
+    states: [{ kind: 'atomic', id: 'a' }],
+    data: [{ name: 'x', initializer: { kind: 'expr', expr: '{"a":[1,2]}' } }],
+  });
+  const reader = system.spawn(parsed);
+  await system.flush();
+  assert.deepEqual(reader.inspect().data.x, { a: [1, 2] });
   assertCode(() => system.define({ name: 'script', states: [{ kind: 'atomic', id: 'a' }], script: '1' }), 'invalid', /cannot be a location or a script/);
   assertCode(() => system.define({
     name: 'sum',

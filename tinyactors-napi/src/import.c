@@ -118,6 +118,7 @@ ta_result tna_encode(tna_system *system, const tna_encode_params *params) {
                                                               .out = params->out,
                                                               .spans = params->spans,
                                                               .identity = params->identity,
+                                                              .expressions = params->expressions,
                                                               .error = &error,
                                                           });
     if (result == TA_ERR_INVALID && params->failure != NULL) {

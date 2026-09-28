@@ -302,10 +302,12 @@ export interface System {
   /**
    * The unretired definition with this identity. define() of an identity
    * already registered returns that definition and takes another hold;
-   * different content under it throws `definition-mismatch`. A chart with
-   * an anonymous function is exempt (core ADR 0077): core cannot compare
-   * functions, so it registers beside the other, and this finds one of
-   * them. Call functions by name (named(), napi ADR 0029) to avoid that.
+   * a different structure under it throws `definition-mismatch`. Functions,
+   * locations and literal() values are compared by identity (napi ADR 0030,
+   * core ADR 0087): the same ones answer the registered definition, while
+   * new ones (closures made anew) register beside it, and this finds one of
+   * them. Named functions (named(), napi ADR 0029) are the same whatever
+   * code builds the chart.
    */
   findDefinition(identity: DefinitionIdentity): Definition | undefined;
 
@@ -799,12 +801,10 @@ export interface Definition<Data extends object = Record<string, unknown>> {
    * functions, the same literal() values; a builder chart's child is its
    * DefinitionID.
    *
-   * The round trip (napi ADR 0027): `system.define(d.export())` answers a
-   * definition whose export() is equal to d's, functions compared by
-   * identity. For a chart without anonymous functions (every imported
-   * chart, and a builder chart whose functions are all named(), napi
-   * ADR 0029) it answers d itself; a chart with an anonymous function
-   * registers beside d (core ADR 0077).
+   * The round trip (napi ADR 0027): `system.define(d.export())` answers d
+   * itself, for every chart. The export hands back the same functions,
+   * locations and literal() values, which are the same handles (napi
+   * ADR 0030, core ADR 0087).
    * `microstepLimit` and `resolve` are the host's settings, not the
    * chart's: pass them to define() again. Throws `not-found` once freed.
    */
@@ -816,7 +816,11 @@ export interface Definition<Data extends object = Record<string, unknown>> {
    * a definition with this one's revision. Throws `unsupported` when the
    * codec only decodes, and `invalid` with the codec's ChartErrorCode as
    * `detail.code` when it cannot write the chart: SCXML cannot write a
-   * function (`unrepresentable`).
+   * function (`unrepresentable`). A literal() is written as JSON text when
+   * JSON says its value exactly (napi ADR 0030), and refused otherwise.
+   * The text holds a copy of the value, not the value, so defining it while
+   * the original is registered under the same identity throws
+   * `definition-mismatch`; another system defines it under that identity.
    */
   encode(format: string): EncodedChart;
 
