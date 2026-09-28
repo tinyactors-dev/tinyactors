@@ -273,6 +273,18 @@ export interface System {
   registerDatamodel(name: string, datamodel: DatamodelCompiler): void;
 
   /**
+   * Register a function that charts call by name (napi ADR 0029): source
+   * text `name()`, which named(name) writes. It is called as a builder
+   * function is, with `this` = the data and the context. A call is bound
+   * when a chart is defined; a name nothing is registered under refuses
+   * the chart. A name is registered once; `In` is reserved. A chart whose
+   * functions are all named round-trips through export() and codecs, and
+   * defining it again answers the same definition.
+   */
+  // status: unimplemented
+  registerFunction(name: string, run: (this: any, context: EvaluationContext<any>) => unknown): void;
+
+  /**
    * Register a chart syntax (napi ADR 0027): define(text, { format }) then
    * decodes with it, and Definition.encode(format) writes with it. The
    * codec is written in JavaScript and runs synchronously inside those
@@ -289,8 +301,9 @@ export interface System {
    * The unretired definition with this identity. define() of an identity
    * already registered returns that definition and takes another hold;
    * different content under it throws `definition-mismatch`. A chart with
-   * functions is exempt (core ADR 0077): core cannot compare functions, so
-   * it registers beside the other, and this finds one of them.
+   * an anonymous function is exempt (core ADR 0077): core cannot compare
+   * functions, so it registers beside the other, and this finds one of
+   * them. Call functions by name (named(), napi ADR 0029) to avoid that.
    */
   findDefinition(identity: DefinitionIdentity): Definition | undefined;
 
@@ -791,8 +804,10 @@ export interface Definition<Data extends object = Record<string, unknown>> {
    *
    * The round trip (napi ADR 0027): `system.define(d.export())` answers a
    * definition whose export() is equal to d's, functions compared by
-   * identity. For a chart without functions (every imported chart) it
-   * answers d itself; a builder chart registers beside d (core ADR 0077).
+   * identity. For a chart without anonymous functions (every imported
+   * chart, and a builder chart whose functions are all named(), napi
+   * ADR 0029) it answers d itself; a chart with an anonymous function
+   * registers beside d (core ADR 0077).
    * `microstepLimit` and `resolve` are the host's settings, not the
    * chart's: pass them to define() again. Throws `not-found` once freed.
    */
@@ -1070,6 +1085,22 @@ export interface LiteralValue<Value> {
 /** Force a callable JavaScript value to be data rather than an expression. */
 export declare function literal<Value>(value: Value): LiteralValue<Value>;
 
+declare const namedFunctionBrand: unique symbol;
+export interface NamedFunction {
+  readonly [namedFunctionBrand]: true;
+  readonly name: string;
+}
+
+/**
+ * A call of the function registered under `name` (System.registerFunction,
+ * napi ADR 0029), accepted wherever a builder takes a function. The spec
+ * holds it as the source text `name()`, so, unlike an anonymous function,
+ * it is part of the chart's content: its fingerprint, its export, and what
+ * a codec writes.
+ */
+// status: unimplemented
+export declare function named(name: string): NamedFunction;
+
 declare const contentValueBrand: unique symbol;
 export interface ContentValue {
   readonly [contentValueBrand]: true;
@@ -1091,23 +1122,27 @@ export declare function content(
   options?: { readonly mediaType?: string },
 ): ContentValue;
 
+// status: partial: named()
 export type ValueInput<Data extends object, Value = unknown> =
   | (Value extends (...arguments_: never[]) => unknown ? never : Value)
   | LiteralValue<Value>
   | ContentValue
+  | NamedFunction
   | Expression<Data, Value>;
 
 export interface DefinitionBuilder<Data extends object>
   extends StateContainerBuilder<Data, DefinitionBuilder<Data>> {
   /** `initial` is data even when it is a function; content() is parsed (see content()). */
   data<Key extends keyof Data & string>(name: Key, initial: Data[Key] | ContentValue): this;
+  // status: partial: named()
   dataExpression<Key extends keyof Data & string>(
     name: Key,
-    initial: Expression<Data, Data[Key]>,
+    initial: Expression<Data, Data[Key]> | NamedFunction,
   ): this;
   initial(target: Target, actions?: ActionBlock<Data>): this;
   /** A script run once at initialization, after early-bound data (SCXML 3.2.2). */
-  script(run: Script<Data>): this;
+  // status: partial: named()
+  script(run: Script<Data> | NamedFunction): this;
   build(): DefinitionSpec;
 }
 
@@ -1142,9 +1177,10 @@ export interface StateBuilder<Data extends object>
 
   /** `initial` is data even when it is a function; content() is parsed (see content()). */
   data<Key extends keyof Data & string>(name: Key, initial: Data[Key] | ContentValue): this;
+  // status: partial: named()
   dataExpression<Key extends keyof Data & string>(
     name: Key,
-    initial: Expression<Data, Data[Key]>,
+    initial: Expression<Data, Data[Key]> | NamedFunction,
   ): this;
 
   /** Each call creates one separately-failing executable-content block. */
@@ -1165,8 +1201,9 @@ export type TransitionBlock<Data extends object> = (
 
 export interface TransitionBuilder<Data extends object>
   extends ActionSequenceBuilder<Data, TransitionBuilder<Data>> {
-  /** A function, or source text: "In('s')" or a data name. */
-  when(condition: Condition<Data> | string): this;
+  /** A function, named(), or source text: "In('s')", a data name, or "name()". */
+  // status: partial: named()
+  when(condition: Condition<Data> | NamedFunction | string): this;
   target(target: Target): this;
   internal(): this;
   external(): this;
@@ -1192,17 +1229,21 @@ export interface ActionSequenceBuilder<Data extends object, Self> {
     value: ValueInput<Data, Value>,
   ): Self;
 
-  script(run: Script<Data>): Self;
-  log(label?: string, value?: Expression<Data> | string): Self;
+  // status: partial: named()
+  script(run: Script<Data> | NamedFunction): Self;
+  // status: partial: named()
+  log(label?: string, value?: Expression<Data> | NamedFunction | string): Self;
 
+  // status: partial: named()
   choose(
-    condition: Condition<Data> | string,
+    condition: Condition<Data> | NamedFunction | string,
     then: ActionBlock<Data>,
     otherwise?: ActionBlock<Data>,
   ): Self;
 
+  // status: partial: named()
   forEach<Item>(
-    array: Expression<Data, readonly Item[]> | (keyof Data & string) | LiteralValue<readonly Item[]>,
+    array: Expression<Data, readonly Item[]> | NamedFunction | (keyof Data & string) | LiteralValue<readonly Item[]>,
     item: keyof Data & string,
     build: ActionBlock<Data>,
     index?: keyof Data & string,
@@ -1525,7 +1566,8 @@ export interface Location<Data extends object, Value = unknown> {
   set(this: Data, value: Value, context: EvaluationContext<Data>): void;
 }
 
-export type StringSpec<Data extends object> = string | Expression<Data, string>;
+// status: partial: named()
+export type StringSpec<Data extends object> = string | NamedFunction | Expression<Data, string>;
 
 /**
  * A number is milliseconds, written as `${number}ms` for core, which takes
@@ -1534,10 +1576,12 @@ export type StringSpec<Data extends object> = string | Expression<Data, string>;
  * function's result is checked only when the send runs; a negative or NaN
  * delay then raises `error.execution`.
  */
+// status: partial: named()
 export type DelaySpec<Data extends object> =
   | number
   | `${number}ms`
   | `${number}s`
+  | NamedFunction
   | Expression<Data, number | string>;
 
 /**
@@ -1572,16 +1616,21 @@ export interface ActorEvent<Data = unknown> {
  * must be a function.
  * -------------------------------------------------------------------------- */
 
-/** A function, a literal(), or source text (In(state) or a data name). */
+/**
+ * A function, a literal(), or source text: In(state), a data name, or
+ * `name()`, a call of a registered function (napi ADR 0029).
+ */
 export type ExpressionSpec =
   | string
   | ((this: any, context: EvaluationContext<any>) => unknown)
   | LiteralValue<unknown>;
 /**
- * A script. Source text and literal() compile, but running them fails with
- * an internal `error.execution` (a script must be a function).
+ * A script: a function, or the source text `name()`, a call of a
+ * registered function (napi ADR 0029). Other source text and literal()
+ * compile, but running them fails with an internal `error.execution`.
  */
-export type ScriptSpec = (this: any, context: EvaluationContext<any>) => void;
+// status: partial: the source text name()
+export type ScriptSpec = ((this: any, context: EvaluationContext<any>) => void) | string;
 /** A data name, or a { get, set } location. */
 export type LocationSpec = string | Location<any, unknown>;
 

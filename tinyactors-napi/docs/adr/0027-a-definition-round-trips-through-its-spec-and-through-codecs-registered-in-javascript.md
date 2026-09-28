@@ -1,6 +1,6 @@
 # ADR 0027: A definition round-trips through its spec, and through codecs registered in JavaScript
 
-**Status:** Accepted (2026-09-28); not implemented. The target API is in `index.d.ts`, marked `// status: unimplemented` or `// status: partial`. Applies core ADR 0042 (export), ADR 0053 (codecs), ADR 0071 (lookups by ID), ADR 0077 (identity) and ADR 0085 (spans) to the addon. Refines ADR 0019 (`define()` options, data models by name) and ADR 0024 (which charts are walked for inline children).
+**Status:** Accepted (2026-09-28); not implemented. The target API is in `index.d.ts`, marked `// status: unimplemented` or `// status: partial`. Applies core ADR 0042 (export), ADR 0053 (codecs), ADR 0071 (lookups by ID), ADR 0077 (identity) and ADR 0085 (spans) to the addon. Refines ADR 0019 (`define()` options, data models by name) and ADR 0024 (which charts are walked for inline children). Refined by ADR 0029: a function called by name is source text, so "a chart without functions" in point 1 means a chart without anonymous functions.
 **Date:** 2026-09-28
 
 ## Context
@@ -67,12 +67,13 @@ in the shape `define()` takes, and these hold:
   whose `export()` is structurally equal to `d.export()`: functions and
   `literal()` values compare by identity, bytes by content, and a nested
   builder child by its `DefinitionID` (a system-local name, so this holds
-  within one system). For a chart without functions, which is every
-  imported chart, it answers `d` itself (core ADR 0077).
+  within one system). For a chart without anonymous functions (every
+  imported chart, and a builder chart whose functions are all named,
+  ADR 0029), it answers `d` itself (core ADR 0077).
 - **Codec round trip.** For a codec that decodes and encodes,
   `define(e.bytes, { format, identity: e.identity })`, where
   `e = d.encode(format)`, answers a definition with `d`'s revision. It
-  answers `d` itself when the chart has no functions. The codec's
+  answers `d` itself when the chart has no anonymous functions. The codec's
   faithfulness is its own contract; the built-in SCXML codec is tested
   for it (see the implementation notes).
 - **Lookups agree with the export.** Every ID a trace record, an

@@ -38,3 +38,4 @@ particular on core ADRs 0011, 0029, 0040, 0047, 0050, 0053–0059, 0061,
 | [0026](0026-a-debugger-watches-and-pokes-one-live-actor.md) | [A debugger watches and pokes one live actor](0026-a-debugger-watches-and-pokes-one-live-actor.md) |
 | [0027](0027-a-definition-round-trips-through-its-spec-and-through-codecs-registered-in-javascript.md) | [A definition round-trips through its spec, and through codecs registered in JavaScript](0027-a-definition-round-trips-through-its-spec-and-through-codecs-registered-in-javascript.md) |
 | [0028](0028-a-trace-request-names-each-spans-definition-in-its-scope.md) | [A trace request names each span's definition in its scope](0028-a-trace-request-names-each-spans-definition-in-its-scope.md) |
+| [0029](0029-a-chart-calls-a-host-function-by-name.md) | [A chart calls a host function by name](0029-a-chart-calls-a-host-function-by-name.md) |
