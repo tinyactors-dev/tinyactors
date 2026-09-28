@@ -60,6 +60,8 @@ const exported = (exporter, spans) => new Promise((resolve) => exporter.export(s
   assert.equal(go.spanContext().traceId, TRACE_ID);
   assert.equal(go.parentSpanContext.spanId, REQUEST_SPAN);
   assert.equal(go.resource.attributes['service.name'], 'sdk-example');
+  assert.equal(go.attributes['tinyactors.definition.family'], 'relay', 'the scope\'s definition, on the span');
+  assert.equal(go.attributes['tinyactors.definition.revision'], 'v1');
 
   // Its OTLP/HTTP exporter serializes them, IDs and parents intact.
   const collector = await receiver();

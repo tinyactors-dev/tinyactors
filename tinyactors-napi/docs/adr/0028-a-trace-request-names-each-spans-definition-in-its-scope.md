@@ -1,6 +1,6 @@
 # ADR 0028: A trace request names each span's definition in its scope
 
-**Status:** Accepted (2026-09-28); not implemented. The target API is in `index.d.ts`, marked `// status: unimplemented`. Refines ADR 0016 (the request's layout and attributes) and ADR 0017 (what the encoder keeps per definition); keeps ADR 0018 (the host's memory).
+**Status:** Accepted and implemented (2026-09-28); see the implementation notes for where the code differs from the text (point 2: the facts are captured when a definition's first span is written, not at registration). Refines ADR 0016 (the request's layout and attributes) and ADR 0017 (what the encoder keeps per definition); keeps ADR 0018 (the host's memory).
 **Date:** 2026-09-28
 
 ## Context
@@ -109,19 +109,65 @@ Not decided here:
 
 ## Implementation notes
 
-- **Where:** `src/otlp.{c,h}` (per-definition runs of span bytes in a
-  request, and a scope header per run in `tna_request_size` and
-  `tna_put_request_header`; the definition logs' two attributes),
-  `src/napi_system.c` and `src/definitions.{c,h}` (the facts captured at
-  registration, dropped after the definition is freed and flushed),
-  `lib/otlp.js` (scope attributes), `test/fixtures/otel-sdk.js` and
-  `docs/tracing.md` (the SDK route and the collector example).
-- **Tests:** `test/otlp.js` and `test/native/otlp_test.c`: a turn with
-  spans from two definitions writes two scopes, each with its attributes;
-  a non-UTF-8 revision is bytes; a chart with no name and no spans leaves
-  those attributes out; a definition retired and freed in the turn of its
-  last span is still named; `decodeTraces` returns scope attributes;
-  off and sampled-out turns allocate and write nothing more than before.
-- **Benchmark:** `test/bench/tracing.js` before and after, with
-  `mise run bench-compare <commit>`: throughput and bytes per request for
-  one definition and for many, on the same machine.
+- **Where:** `src/otlp.{c,h}`. Finished spans stay in the one `spans`
+  buffer, in the order they end, so its capacity rules (ADR 0017's
+  `tna_otlp_end_turn`) are unchanged. Each span gets an entry (`at`,
+  `len`, next), chained per definition; a run per definition, in the
+  order its first span ended, holds its chain, its byte total and its
+  encoded `InstrumentationScope` (in `scopes`); an open-addressed index
+  finds a run by definition ID. `scope_spans` keeps the running total of
+  the `ResourceSpans.scope_spans` fields, so `tna_otlp_traces_size` still
+  walks nothing. `tna_otlp_put_traces` writes the resource, then each run's
+  header, scope and spans. The entries, runs, index and scopes are freed
+  with the `spans` buffer when a burst's buffer is freed. `lib/otlp.js`
+  reads scope attributes; `test/fixtures/otel-sdk.js` and
+  `docs/tracing.md` copy them onto each span for the SDK, and the docs
+  show the collector's `transform` processor.
+- **Deviation, point 2: captured with the first span, not at
+  registration.** A run's scope is encoded when the definition's first
+  span of a request is written. A span is written while the record that
+  ends it is handled, and core writes records only for actors that use
+  the definition, so the definition is always alive then: a definition
+  retired and freed later in the turn is still named, which is what point
+  2 asks for. Capturing lazily keeps nothing per definition between
+  requests (no copy of every registered definition's facts, no cleanup on
+  free), and a system without a sink, or a step sampled out, encodes no
+  scope at all (ADR 0017). `src/napi_system.c` and `src/definitions.{c,h}`
+  did not change. A span ended after its definition was freed, which core
+  never causes, would get a scope with the ID alone.
+- **Source:** the source named by the span of state 0, read with
+  `ta_definition_span`. A chart without spans (a spec with none, a SCXML
+  import without `name`) has no `.source`.
+- **Failure:** a record that cannot be encoded for lack of memory is
+  dropped as before (`dropped`), and the entries, runs and scopes it added
+  are taken back (`tna_runs_rollback`), so the request stays consistent.
+- **Tests:** `test/native/otlp_test.c`: two definitions in one request
+  make two scopes with their attributes, a non-UTF-8 revision as bytes, a
+  chart without a name leaving `.name` out and one without spans leaving
+  `.source` out; a definition destroyed, retired and freed before the take
+  is still named; an allocation sweep (every allocation from 16 bytes to
+  8 KiB refused in turn, with and without warm buffers) leaves every
+  request well-formed with each span in exactly one scope, and leaks
+  nothing; the golden request has its scope attributes.
+  `test/trace-scopes.js` (Node and Bun): the same through `decodeTraces`,
+  with a builder chart (`.source` is the test file) and an import named by
+  `file:///charts/door.scxml`; spans of one scope share its object and
+  carry its `scxml.definition`; the definition logs carry `.name` and
+  `.source`. `test/otel-sdk.js` checks the copied attributes.
+- **Benchmark** (`mise run bench-compare d281fb4`, 100,000 actors, two
+  alternating runs each, medians; `test/bench/tracing.js` gained `every
+  record in 100 charts`, the actors spread over 100 definitions):
+
+  | Variant | Node (a99e44a37e2e) ns/event | Node RSS B/actor | Bun (c989bd79a51f) ns/event | Bun RSS B/actor | OTLP B/event |
+  |---|---|---|---|---|---|
+  | untraced | 478 → 474 (−0.7%) | 751 → 746 | 401 → 403 (+0.6%) | 1,001 → 1,044 | — |
+  | sampled out | 485 → 506 (+4.5%) | 1,513 → 1,511 | 445 → 450 (+1.1%) | 1,443 → 1,446 | — |
+  | every record | 1,501 → 1,576 (+5.0%) | 1,412 → 1,443 | 1,463 → 1,496 (+2.3%) | 1,574 → 1,566 | 1,110 → 1,110 |
+  | every record in 100 charts | 1,588 → 1,571 (−1.1%) | 1,470 → 1,508 | 1,513 → 1,538 (+1.7%) | 1,455 → 1,488 | 1,110 → 1,136 (+2.4%) |
+  | summary | 877 → 896 (+2.2%) | 1,507 → 1,508 | 818 → 849 (+3.8%) | 1,447 → 1,453 | 364 → 364 |
+
+  Core and native bytes per actor and allocator calls per event are
+  unchanged (native +0.1% to +0.3%). Nothing is outside the 5% rule;
+  `every record` on Node sits at its edge. The sampled-out path runs no
+  new code, so its +4.5% on Node is the run-to-run spread. With 100
+  definitions a request carries 100 scopes: 2.4% more bytes per event.

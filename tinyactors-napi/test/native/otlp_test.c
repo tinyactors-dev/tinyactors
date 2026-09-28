@@ -221,6 +221,89 @@ static uint32_t read_spans(ta_str bytes, span_view *out, uint32_t capacity) {
     return count;
 }
 
+/* One ScopeSpans (napi ADR 0028): its scope's name and definition attributes, and its spans. */
+typedef struct {
+    char name[32];
+    char family[32];
+    uint8_t revision[32];
+    uint32_t revision_len;
+    bool revision_bytes; /* AnyValue.bytes_value rather than string_value */
+    int64_t id;
+    char document[32];   /* tinyactors.definition.name, "" when absent */
+    char source[64];     /* tinyactors.definition.source, "" when absent */
+    uint32_t spans;
+} scope_view;
+
+static void copy_text(char *out, size_t size, reader value) {
+    size_t len = (size_t)(value.end - value.at);
+    CHECK(len < size);
+    memcpy(out, value.at, len);
+    out[len] = '\0';
+}
+
+static bool key_is(reader key, const char *text) {
+    return (size_t)(key.end - key.at) == strlen(text) && memcmp(key.at, text, strlen(text)) == 0;
+}
+
+/* Descends request → resource spans → scope spans, reading each scope. */
+static uint32_t read_scopes(ta_str bytes, scope_view *out, uint32_t capacity) {
+    reader request = { (const uint8_t *)bytes.ptr, (const uint8_t *)bytes.ptr + bytes.len };
+    uint32_t count = 0;
+    uint32_t field = 0, wire = 0;
+    uint64_t scalar = 0;
+    reader rs = { 0 };
+    CHECK(read_field(&request, &field, &wire, &rs, &scalar) && field == 1);
+    while (rs.at < rs.end) {
+        reader part = { 0 };
+        CHECK(read_field(&rs, &field, &wire, &part, &scalar) && wire == 2);
+        if (field != 2) continue;
+        scope_view view = { 0 };
+        while (part.at < part.end) {
+            reader item = { 0 };
+            CHECK(read_field(&part, &field, &wire, &item, &scalar) && wire == 2);
+            if (field == 2) {
+                view.spans += 1u;
+                continue;
+            }
+            CHECK(field == 1);
+            while (item.at < item.end) {
+                reader value = { 0 };
+                CHECK(read_field(&item, &field, &wire, &value, &scalar) && wire == 2);
+                if (field == 1) {
+                    copy_text(view.name, sizeof view.name, value);
+                } else if (field == 3) {
+                    reader key = { 0 };
+                    reader any = { 0 };
+                    CHECK(read_field(&value, &field, &wire, &key, &scalar) && field == 1);
+                    CHECK(read_field(&value, &field, &wire, &any, &scalar) && field == 2);
+                    reader inner = { 0 };
+                    CHECK(read_field(&any, &field, &wire, &inner, &scalar));
+                    if (key_is(key, "tinyactors.definition.family")) {
+                        CHECK(field == 1);
+                        copy_text(view.family, sizeof view.family, inner);
+                    } else if (key_is(key, "tinyactors.definition.revision")) {
+                        CHECK(field == 1 || field == 7);
+                        view.revision_bytes = field == 7;
+                        view.revision_len = (uint32_t)(inner.end - inner.at);
+                        CHECK(view.revision_len <= sizeof view.revision);
+                        memcpy(view.revision, inner.at, view.revision_len);
+                    } else if (key_is(key, "tinyactors.definition.id")) {
+                        CHECK(field == 3);
+                        view.id = (int64_t)scalar;
+                    } else if (key_is(key, "tinyactors.definition.name")) {
+                        copy_text(view.document, sizeof view.document, inner);
+                    } else if (key_is(key, "tinyactors.definition.source")) {
+                        copy_text(view.source, sizeof view.source, inner);
+                    }
+                }
+            }
+        }
+        if (count < capacity) out[count] = view;
+        count += 1u;
+    }
+    return count;
+}
+
 static const span_view *named(const span_view *spans, uint32_t count, const char *name) {
     for (uint32_t at = 0; at < count; at += 1u) {
         if (strcmp(spans[at].name, name) == 0) return &spans[at];
@@ -404,7 +487,7 @@ static void abandoned(void) {
     stop(&f);
 }
 
-/* The bytes of a small request, with a resource, are fixed. */
+/* The bytes of a small request, with a resource and a definition's scope, are fixed. */
 static void golden(void) {
     fixture f;
     start(&f, true);
@@ -412,7 +495,7 @@ static void golden(void) {
           TA_OK);
     CHECK(ta_actor_spawn(f.core, &(ta_actor_spawn_params){ .definition = f.definition, .out = &f.actor }) == TA_OK);
     ta_str bytes = take(&f.otlp);
-    static const char expected[] = "0af1010a180a160a0c736572766963652e6e616d6512060a047465737412d4010a130a0a74696e796163746f72731205302e302e3012bc010a100101010101010101010101010101010112088b7d46327ff76c852a0d7363786d6c2e737061776e6564300139e80300000000000041e8030000000000004a200a107363786d6c2e73657373696f6e5f6964120c0a0a343239343936373239364a150a0f7363786d6c2e6d6163726f73746570120218004a140a0b7363786d6c2e6163746f7212050a03303a314a1a0a107363786d6c2e646566696e6974696f6e12061880808080104a100a0a7363786d6c2e74696d6512021800";
+    static const char expected[] = "0a9c030a180a160a0c736572766963652e6e616d6512060a047465737412ff020abd010a0a74696e796163746f72731205302e302e301a270a1c74696e796163746f72732e646566696e6974696f6e2e66616d696c7912070a05636861696e1a340a1e74696e796163746f72732e646566696e6974696f6e2e7265766973696f6e12120a10653734363930303030393138383039651a220a1874696e796163746f72732e646566696e6974696f6e2e696412061880808080101a250a1a74696e796163746f72732e646566696e6974696f6e2e6e616d6512070a05636861696e12bc010a100101010101010101010101010101010112088b7d46327ff76c852a0d7363786d6c2e737061776e6564300139e80300000000000041e8030000000000004a200a107363786d6c2e73657373696f6e5f6964120c0a0a343239343936373239364a150a0f7363786d6c2e6d6163726f73746570120218004a140a0b7363786d6c2e6163746f7212050a03303a314a1a0a107363786d6c2e646566696e6974696f6e12061880808080104a100a0a7363786d6c2e74696d6512021800";
     char hex[2048];
     CHECK(bytes.len * 2u < sizeof hex);
     for (uint32_t at = 0; at < bytes.len; at += 1u) {
@@ -532,7 +615,148 @@ static void forget_definition(void) {
     stop(&f);
 }
 
+/*
+ * The other chart: one state, written in a named file, under an explicit
+ * identity whose revision is not UTF-8 and with no <scxml name>.
+ */
+static const ta_source_span other_spans[] = { { .source = 0, .line = 3, .column = 5 } };
+static const ta_scxml_source other_sources[] = { { .name = S("file:///charts/other.scxml") } };
+static const ta_scxml_state_spec other_roots[] = {
+    { .kind = TA_SCXML_STATE_ATOMIC, .id = S("only"), .span = 1 },
+    END,
+};
+static const uint8_t other_revision[] = { 0xff, 0xfe, 0x00 };
+static const ta_definition_identity other_identity = {
+    .family = { .name = S("other") },
+    .revision = { .ptr = other_revision, .len = sizeof other_revision },
+};
+static const ta_scxml_spec other_chart = { .identity = &other_identity, .states = other_roots,
+                                           .spans = other_spans, .span_count = 1,
+                                           .sources = other_sources, .source_count = 1 };
+
+static ta_definition_id define_other(fixture *f) {
+    ta_allocator core_allocator = tna_allocator_for(&f->allocator, TNA_MEMORY_CORE);
+    ta_definition *definition = NULL;
+    CHECK(ta_definition_compile_spec(f->core, &(ta_definition_compile_params){ .spec = &other_chart,
+                                                                                .datamodel = ta_null_datamodel(),
+                                                                                .allocator = core_allocator,
+                                                                                .out = &definition }) == TA_OK);
+    ta_definition_id id = 0;
+    CHECK(ta_system_register_definition(f->core, definition, &id) == TA_OK);
+    return id;
+}
+
+static const scope_view *scope_of(const scope_view *scopes, uint32_t count, ta_definition_id definition) {
+    for (uint32_t at = 0; at < count; at += 1u) {
+        if (scopes[at].id == (int64_t)definition) return &scopes[at];
+    }
+    return NULL;
+}
+
+/*
+ * Two definitions' spans in one request make two ScopeSpans, each naming
+ * its definition (napi ADR 0028): a UTF-8 revision is a string and another
+ * is bytes; a chart with no name and no spans leaves those out.
+ */
+static void scopes_per_definition(void) {
+    fixture f;
+    start(&f, true);
+    ta_definition_id other = define_other(&f);
+    ta_actor_id second = 0;
+    CHECK(ta_actor_spawn(f.core, &(ta_actor_spawn_params){ .definition = f.definition, .out = &f.actor }) == TA_OK);
+    CHECK(ta_actor_spawn(f.core, &(ta_actor_spawn_params){ .definition = other, .out = &second }) == TA_OK);
+    CHECK(resume(&f, 100) == TA_RUN_STABLE);
+    f.actor = second;
+    CHECK(resume(&f, 100) == TA_RUN_STABLE);
+    ta_str bytes = take(&f.otlp);
+    span_view spans[32];
+    uint32_t span_count = read_spans(bytes, spans, 32);
+    scope_view scopes[4];
+    uint32_t count = read_scopes(bytes, scopes, 4);
+    CHECK(count == 2);
+    CHECK(scopes[0].spans + scopes[1].spans == span_count);
+    const scope_view *chain = scope_of(scopes, count, f.definition);
+    const scope_view *mine = scope_of(scopes, count, other);
+    CHECK(chain != NULL && mine != NULL);
+    CHECK(strcmp(chain->name, "tinyactors") == 0 && strcmp(mine->name, "tinyactors") == 0);
+    CHECK(strcmp(chain->family, "chain") == 0 && !chain->revision_bytes && chain->revision_len != 0);
+    CHECK(strcmp(chain->document, "chain") == 0 && chain->source[0] == '\0');
+    CHECK(strcmp(mine->family, "other") == 0 && mine->revision_bytes);
+    CHECK(mine->revision_len == sizeof other_revision && memcmp(mine->revision, other_revision, 3) == 0);
+    CHECK(mine->document[0] == '\0' && strcmp(mine->source, "file:///charts/other.scxml") == 0);
+    stop(&f);
+}
+
+/*
+ * A definition retired and freed in the turn of its last span is still
+ * named: its scope was written with its first span, while it was alive.
+ */
+static void freed_in_turn(void) {
+    fixture f;
+    start(&f, true);
+    ta_definition_id other = define_other(&f);
+    CHECK(ta_actor_spawn(f.core, &(ta_actor_spawn_params){ .definition = other, .out = &f.actor }) == TA_OK);
+    CHECK(resume(&f, 100) == TA_RUN_STABLE);
+    CHECK(ta_actor_destroy(f.core, f.actor) == TA_OK);
+    CHECK(ta_system_retire_definition(f.core, other) == TA_OK);
+    ta_definition_inspection view;
+    CHECK(ta_definition_inspect(f.core, other, &view) == TA_ERR_NOT_FOUND); /* freed */
+    tna_otlp_forget_definition(&f.otlp, other);
+    scope_view scopes[2];
+    CHECK(read_scopes(take(&f.otlp), scopes, 2) == 1);
+    CHECK(scopes[0].id == (int64_t)other && strcmp(scopes[0].family, "other") == 0);
+    CHECK(strcmp(scopes[0].source, "file:///charts/other.scxml") == 0);
+    stop(&f);
+}
+
+/*
+ * Every allocation the encoder makes can fail: refused from each size in
+ * turn, a run of two definitions' records drops what did not fit, and
+ * every request is still well-formed, with each span in exactly one scope
+ * and nothing leaked (stop() checks).
+ */
+static void scopes_out_of_memory(void) {
+    uint64_t dropped = 0;
+    for (size_t refuse = 16; refuse <= 8192; refuse *= 2u) {
+        for (int round = 0; round < 2; round += 1) {
+            fixture f;
+            start(&f, true);
+            ta_definition_id other = define_other(&f);
+            ta_actor_id second = 0;
+            CHECK(ta_actor_spawn(f.core, &(ta_actor_spawn_params){ .definition = f.definition, .out = &f.actor }) ==
+                  TA_OK);
+            if (round == 1) {
+                (void)take(&f.otlp); /* the buffers already hold some capacity */
+            }
+            tna_allocator_refuse_from(&f.allocator, refuse);
+            (void)ta_actor_spawn(f.core, &(ta_actor_spawn_params){ .definition = other, .out = &second });
+            (void)ta_actor_resume(f.core, &(ta_actor_resume_params){ .actor = f.actor, .budget = 100,
+                                                                     .status = &(ta_run_status){ 0 } });
+            tna_allocator_refuse_from(&f.allocator, 0);
+            ta_str bytes = take(&f.otlp);
+            if (bytes.len != 0) {
+                span_view spans[32];
+                uint32_t span_count = read_spans(bytes, spans, 32);
+                scope_view scopes[4];
+                uint32_t count = read_scopes(bytes, scopes, 4);
+                uint32_t in_scopes = 0;
+                for (uint32_t at = 0; at < count && at < 4; at += 1u) {
+                    CHECK(scopes[at].spans != 0);
+                    in_scopes += scopes[at].spans;
+                }
+                CHECK(in_scopes == span_count);
+            }
+            dropped += f.otlp.dropped;
+            stop(&f);
+        }
+    }
+    CHECK(dropped != 0); /* the sweep reached the encoder's own allocations */
+}
+
 int main(void) {
+    scopes_per_definition();
+    freed_in_turn();
+    scopes_out_of_memory();
     forget_definition();
     logs();
     many_open();

@@ -443,7 +443,6 @@ export interface System {
    * Each definition's spans share one scope, whose attributes name the
    * definition by family, revision and source (napi ADR 0028).
    */
-  // status: partial: one scope per definition, with its attributes
   setTraceSink(sink?: (traces: Uint8Array, logs?: Uint8Array) => void, options?: TraceSinkOptions): void;
   /** Changes `detail`, `kinds` and `sample` of the installed sink in place; open spans are kept. */
   configureTraces(options: TraceConfiguration): void;
@@ -2054,7 +2053,6 @@ export interface DecodedSpan {
    * `.id`, and `.name` and `.source` when it has them. Shared by the spans
    * of one scope.
    */
-  // status: partial: attributes
   scope: { name: string; version: string; attributes: Record<string, unknown> };
 }
 

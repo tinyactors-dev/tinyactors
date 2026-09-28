@@ -42,7 +42,8 @@ function toReadableSpans(bytes) {
       endTime: end,
       duration: hrTime(span.endTimeUnixNano - span.startTimeUnixNano),
       status: { code: STATUS[span.status.code], message: span.status.message },
-      attributes: span.attributes,
+      // The SDK's scope has no attributes: the definition's go on the span.
+      attributes: { ...span.scope.attributes, ...span.attributes },
       links: span.links.map((link) => ({ context: context(link.traceID, link.spanID), attributes: link.attributes })),
       events: span.events.map((event) => ({ name: event.name, time: hrTime(event.timeUnixNano),
                                             attributes: event.attributes })),

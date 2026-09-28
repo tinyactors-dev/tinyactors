@@ -201,6 +201,14 @@ the one value you cannot do without.
   `scxml.action.id` keep the compiled IDs.
 - I/O processors and invokers get `request.traceparent`, naming the step
   that sent or invoked, to pass on to what they call.
+- Each **definition's spans share one scope** (napi ADR 0028), named
+  `tinyactors`, whose attributes say which chart ran:
+  `tinyactors.definition.family`, `.revision` (bytes when it is not
+  UTF-8), `.id` (the runtime ID, as `scxml.definition` on each span),
+  `.name` when the chart has one, and `.source`, the file `statechart()`
+  was called in or the `name` given to `define()`. They are written with
+  the definition's first span in a request, so a definition freed since
+  is still named.
 
 The full attribute table is in napi ADR 0016's implementation notes;
 `scxml.fault.message` on span events came later, for the debug adapter's
@@ -210,8 +218,31 @@ exception texts.
 
 `decodeTraces(bytes)` reads the bytes back into span objects (`traceID`,
 `spanID`, `parentSpanID`, `name`, times, `attributes`, `events`, `links`,
-`status`, `resource`, `scope`), with no dependency. Use it to check
-properties in JavaScript, or to feed a pipeline that wants objects.
+`status`, `resource`, `scope` with its `attributes`), with no dependency.
+Use it to check properties in JavaScript, or to feed a pipeline that wants
+objects.
+
+## Adding data to our traces
+
+Add data in an OpenTelemetry Collector, whose processors edit OTLP as it
+passes, rather than by decoding the bytes and encoding them again: that
+round trip drops what the objects do not hold (trace state, flags, schema
+URLs, dropped counts). The definition is already named in each scope. For
+a backend that does not show scope attributes, the collector's `transform`
+processor copies them onto every span:
+
+```yaml
+processors:
+  transform/tinyactors:
+    trace_statements:
+      - context: span
+        conditions:
+          - instrumentation_scope.name == "tinyactors"
+        statements:
+          - set(attributes["tinyactors.definition.family"], instrumentation_scope.attributes["tinyactors.definition.family"])
+          - set(attributes["tinyactors.definition.revision"], instrumentation_scope.attributes["tinyactors.definition.revision"])
+          - set(attributes["tinyactors.definition.source"], instrumentation_scope.attributes["tinyactors.definition.source"])
+```
 
 ## With the official OpenTelemetry JS SDK
 
@@ -243,7 +274,9 @@ resource does not apply to bytes it never sees, so set `resource` on
 exporter that does not speak OTLP). The SDK cannot take in OTLP bytes, so
 decode them and hand the SDK `ReadableSpan` objects. This keeps our span
 IDs, so parents and links stay exact (recreating the spans with the SDK's
-tracer would give them new IDs). The example below is tested in
+tracer would give them new IDs). The SDK's instrumentation scope has no
+attributes, so the definition's scope attributes are copied onto each
+span. The example below is tested in
 `test/otel-sdk.js` against pinned SDK versions (`@opentelemetry/api`
 1.9.1, `@opentelemetry/sdk-trace-base` 2.11.0,
 `@opentelemetry/resources` 2.11.0,
@@ -278,7 +311,8 @@ function toReadableSpans(bytes) {
       endTime: hrTime(span.endTimeUnixNano),
       duration: hrTime(span.endTimeUnixNano - span.startTimeUnixNano),
       status: { code: STATUS[span.status.code], message: span.status.message },
-      attributes: span.attributes,
+      // The SDK's scope has no attributes: the definition's go on the span.
+      attributes: { ...span.scope.attributes, ...span.attributes },
       links: span.links.map((link) => ({ context: context(link.traceID, link.spanID), attributes: link.attributes })),
       events: span.events.map((event) => ({ name: event.name, time: hrTime(event.timeUnixNano),
                                             attributes: event.attributes })),

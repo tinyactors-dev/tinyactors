@@ -20,7 +20,9 @@
  * - every other record inside a macrostep is a span event on the step it
  *   happened in;
  * - a lifecycle record is a span of no duration.
- * The attribute table is in napi ADR 0016's implementation notes.
+ * The attribute table is in napi ADR 0016's implementation notes. A
+ * request holds one ScopeSpans per definition, whose scope attributes name
+ * it by family, revision, ID, name and source (napi ADR 0028).
  *
  * Memory: every buffer keeps its capacity, so once the busiest turn has been
  * seen, encoding allocates nothing. Writing cannot fail: a record that does
@@ -93,6 +95,7 @@ typedef struct {
     uint64_t start;
     uint32_t microstep;      /* for a microstep span */
     bool error;
+    uint64_t definition;     /* the definition whose scope the span goes in */
     tna_otlp_buf name;
     tna_otlp_buf attributes; /* encoded Span.attributes entries */
     tna_otlp_buf events;     /* encoded Span.events entries */
@@ -105,6 +108,27 @@ typedef struct {
     tna_otlp_span macro;
     tna_otlp_span micro;
 } tna_otlp_open;
+
+/* A finished span's place in `spans`, chained to the next of its definition's. */
+typedef struct {
+    size_t at;
+    uint32_t len;
+    uint32_t next; /* index + 1 into `entries` of the definition's next span; 0: none */
+} tna_otlp_entry;
+
+/*
+ * The spans of one definition in the request being built: one ScopeSpans,
+ * whose scope names the definition (napi ADR 0028). Its scope is encoded
+ * when its first span is written, while the definition is alive.
+ */
+typedef struct {
+    uint64_t definition;
+    size_t scope_at;   /* its encoded InstrumentationScope, in `scopes` */
+    uint32_t scope_len;
+    size_t spans;      /* the bytes of its ScopeSpans.spans entries */
+    uint32_t first;    /* index + 1 into `entries`; 0: none */
+    uint32_t last;
+} tna_otlp_run;
 
 typedef struct {
     uint64_t definition;
@@ -138,9 +162,23 @@ typedef struct {
     uint32_t name_count;
     tna_otlp_buf names;        /* the cached labels' text */
     tna_otlp_buf resource;     /* encoded Resource.attributes entries */
-    /* Encoded ScopeSpans.spans entries that ended since the last put; `len`
-     * is the running total a request's size is computed from. */
+    /* Encoded ScopeSpans.spans entries that ended since the last put, in
+     * the order they ended; `entries` says where each is and chains each
+     * definition's, and `runs` holds one per definition, in the order their
+     * first span ended (napi ADR 0028). `scope_spans` is the running total
+     * of the ResourceSpans.scope_spans fields, which a request's size is
+     * computed from. */
     tna_otlp_buf spans;
+    tna_otlp_entry *entries;
+    uint32_t entry_count;
+    uint32_t entry_capacity;
+    tna_otlp_run *runs;
+    uint32_t run_count;
+    uint32_t run_capacity;
+    uint32_t *run_index;       /* open addressing by definition: index + 1 into `runs`, 0 empty */
+    uint32_t run_index_capacity; /* a power of two, at least twice `run_count` */
+    tna_otlp_buf scopes;       /* the runs' encoded InstrumentationScope messages */
+    size_t scope_spans;
     tna_otlp_buf scratch;      /* an event's attributes while it is built */
     tna_otlp_buf label;        /* a label while it is built */
     tna_otlp_buf text;         /* an event name or ID while it is formatted */

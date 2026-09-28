@@ -36,6 +36,8 @@
 // - every record: a sink that wants every kind; the addon encodes the
 //   spans as OTLP protobuf and hands over the bytes, which are dropped:
 //   what an exporter pays before it posts them;
+// - every record in 100 charts: the same, with the actors spread over 100
+//   definitions, so each request holds 100 scopes (napi ADR 0028);
 // - decoded: every record, and decodeTraces() of each batch, which is what
 //   a user who wants span objects in JavaScript pays.
 // The configurations a deployment would choose (napi ADR 0017 section 3),
@@ -69,8 +71,8 @@ const UNSAMPLED = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00';
 const rounds = 5;
 let bytesOut = 0;
 
-function chart() {
-  return statechart({ family: 'bench-traced', revision: 'v1' })
+function chart(family = 'bench-traced') {
+  return statechart({ family, revision: 'v1' })
     .data('count', 0)
     .state('idle', (s) => { s.on('ping', (t) => t.assign('count', function () { return this.count + 1; })); });
 }
@@ -83,13 +85,14 @@ function settle() {
   return { rss, heapUsed };
 }
 
-async function measure({ install, traceparent, watch }) {
+async function measure({ install, traceparent, watch, definitions = 1 }) {
   const before = settle();
   const system = createSystem();
   install?.(system);
-  const definition = system.define(chart());
+  const charts = [];
+  for (let at = 0; at < definitions; at += 1) charts.push(system.define(chart(definitions === 1 ? undefined : `bench-traced-${at}`)));
   const actors = [];
-  for (let at = 0; at < population; at += 1) actors.push(system.spawn(definition));
+  for (let at = 0; at < population; at += 1) actors.push(system.spawn(charts[at % definitions]));
   await system.flush();
   watch?.(system, actors);
   const after = settle();
@@ -128,6 +131,10 @@ const variants = {
   'sampled out': { install: (system) => system.setTraceSink(() => {}), traceparent: UNSAMPLED },
   macrosteps: { install: (system) => system.setTraceSink(() => {}, { kinds: ['macrostepBegin', 'macrostepEnd'] }) },
   'every record': { install: (system) => system.setTraceSink((bytes) => { bytesOut += bytes.length; }, { detail: 'full' }) },
+  'every record in 100 charts': {
+    install: (system) => system.setTraceSink((bytes) => { bytesOut += bytes.length; }, { detail: 'full' }),
+    definitions: 100,
+  },
   decoded: { install: (system) => system.setTraceSink((bytes) => { decodeTraces(bytes); }, { detail: 'full' }) },
   summary: { install: (system) => system.setTraceSink(count) },
   decisions: { install: (system) => system.setTraceSink(count, { detail: 'decisions' }) },

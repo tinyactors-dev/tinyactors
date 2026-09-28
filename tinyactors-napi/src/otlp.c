@@ -20,6 +20,7 @@ enum {
     /* InstrumentationScope */
     F_SCOPE_NAME = 1,
     F_SCOPE_VERSION = 2,
+    F_SCOPE_ATTRIBUTES = 3,
     /* Span */
     F_SPAN_TRACE_ID = 1,
     F_SPAN_SPAN_ID = 2,
@@ -49,6 +50,7 @@ enum {
     F_ANY_BOOL = 2,
     F_ANY_INT = 3,
     F_ANY_ARRAY = 5,
+    F_ANY_BYTES = 7,
     /* ArrayValue */
     F_ARRAY_VALUES = 1,
     /* ExportLogsServiceRequest, ResourceLogs, ScopeLogs */
@@ -237,6 +239,17 @@ static bool tna_kv_string(tna_otlp_buf *buf, uint32_t field, ta_str key, ta_str 
     }
     tna_put_kv_head(buf, field, key, any);
     tna_put_len_header(buf, F_ANY_STRING, value.len);
+    tna_put_bytes(buf, value.ptr, value.len);
+    return true;
+}
+
+static bool tna_kv_bytes(tna_otlp_buf *buf, uint32_t field, ta_str key, ta_bytes value) {
+    size_t any = tna_len_field_size(F_ANY_BYTES, value.len);
+    if (!tna_buf_room(buf, tna_len_field_size(field, tna_kv_size(key, any)))) {
+        return false;
+    }
+    tna_put_kv_head(buf, field, key, any);
+    tna_put_len_header(buf, F_ANY_BYTES, value.len);
     tna_put_bytes(buf, value.ptr, value.len);
     return true;
 }
@@ -677,6 +690,7 @@ void tna_otlp_init(tna_otlp *otlp, const tna_otlp_config *config) {
     tna_buf_init(&otlp->names, allocator);
     tna_buf_init(&otlp->resource, allocator);
     tna_buf_init(&otlp->spans, allocator);
+    tna_buf_init(&otlp->scopes, allocator);
     tna_buf_init(&otlp->scratch, allocator);
     tna_buf_init(&otlp->label, allocator);
     tna_buf_init(&otlp->text, allocator);
@@ -866,7 +880,268 @@ static bool tna_key_empty(const ta_step_key *key) {
     return key->session == 0 && key->macrostep == 0 && key->microstep == 0;
 }
 
-/* Appends a finished span to `spans`. */
+/* ------------------------------------------------------------------------
+ * One ScopeSpans per definition (napi ADR 0028)
+ */
+
+/* Grows an array of `size`-byte elements to hold `need`; false when the allocator refuses. */
+static bool tna_array_room(ta_allocator allocator, void **items, uint32_t *capacity, uint32_t count, size_t size,
+                           size_t alignment, uint32_t need) {
+    if (need <= *capacity) {
+        return true;
+    }
+    uint32_t grown = *capacity == 0 ? 16u : *capacity;
+    while (grown < need) {
+        grown *= 2u;
+    }
+    void *moved = allocator.v->alloc(allocator.self, (size_t)grown * size, alignment);
+    if (moved == NULL) {
+        return false;
+    }
+    if (count != 0) {
+        memcpy(moved, *items, (size_t)count * size);
+    }
+    if (*items != NULL) {
+        allocator.v->free(allocator.self, &(ta_allocator_free_params){ .ptr = *items,
+                                                                     .size = (size_t)*capacity * size,
+                                                                     .alignment = alignment });
+    }
+    *items = moved;
+    *capacity = grown;
+    return true;
+}
+
+static void tna_array_free(ta_allocator allocator, void **items, uint32_t *capacity, size_t size, size_t alignment) {
+    if (*items != NULL) {
+        allocator.v->free(allocator.self, &(ta_allocator_free_params){ .ptr = *items,
+                                                                     .size = (size_t)*capacity * size,
+                                                                     .alignment = alignment });
+    }
+    *items = NULL;
+    *capacity = 0;
+}
+
+static uint32_t tna_run_hash(uint64_t definition) {
+    definition ^= definition >> 33;
+    definition *= 0xc4ceb9fe1a85ec53ull;
+    definition ^= definition >> 33;
+    return (uint32_t)definition;
+}
+
+/* The index slot of `definition`: its run's, or the empty one it would take. */
+static uint32_t *tna_run_slot(const tna_otlp *otlp, uint64_t definition) {
+    uint32_t mask = otlp->run_index_capacity - 1u;
+    for (uint32_t at = tna_run_hash(definition) & mask;; at = (at + 1u) & mask) {
+        uint32_t *slot = &otlp->run_index[at];
+        if (*slot == 0 || otlp->runs[*slot - 1u].definition == definition) {
+            return slot;
+        }
+    }
+}
+
+/* Indexes the first `otlp->run_count` runs again, into `capacity` slots. */
+static bool tna_run_index_build(tna_otlp *otlp, uint32_t capacity) {
+    ta_allocator allocator = otlp->config.allocator;
+    if (capacity != otlp->run_index_capacity) {
+        uint32_t *index = allocator.v->alloc(allocator.self, (size_t)capacity * sizeof *index, _Alignof(uint32_t));
+        if (index == NULL) {
+            return false;
+        }
+        tna_array_free(allocator, (void **)&otlp->run_index, &otlp->run_index_capacity, sizeof *otlp->run_index,
+                       _Alignof(uint32_t));
+        otlp->run_index = index;
+        otlp->run_index_capacity = capacity;
+    }
+    memset(otlp->run_index, 0, (size_t)capacity * sizeof *otlp->run_index);
+    for (uint32_t at = 0; at < otlp->run_count; at += 1u) {
+        *tna_run_slot(otlp, otlp->runs[at].definition) = at + 1u;
+    }
+    return true;
+}
+
+/* The ResourceSpans.scope_spans field a run writes. */
+static size_t tna_run_field_size(const tna_otlp_run *run) {
+    return tna_len_field_size(F_RS_SCOPE_SPANS, tna_len_field_size(F_SS_SCOPE, run->scope_len) + run->spans);
+}
+
+/* Whether `bytes` are UTF-8: no overlong forms, surrogates or code points past U+10FFFF. */
+static bool tna_valid_utf8(const uint8_t *bytes, uint32_t len) {
+    for (uint32_t at = 0; at < len;) {
+        uint8_t lead = bytes[at];
+        uint32_t more;
+        uint32_t least;
+        if (lead < 0x80u) {
+            at += 1u;
+            continue;
+        } else if ((lead & 0xe0u) == 0xc0u) {
+            more = 1u;
+            least = 0x80u;
+        } else if ((lead & 0xf0u) == 0xe0u) {
+            more = 2u;
+            least = 0x800u;
+        } else if ((lead & 0xf8u) == 0xf0u) {
+            more = 3u;
+            least = 0x10000u;
+        } else {
+            return false;
+        }
+        if (len - at <= more) {
+            return false;
+        }
+        uint32_t code = lead & (0x7fu >> (more + 1u));
+        for (uint32_t next = 1; next <= more; next += 1u) {
+            if ((bytes[at + next] & 0xc0u) != 0x80u) {
+                return false;
+            }
+            code = (code << 6) | (bytes[at + next] & 0x3fu);
+        }
+        if (code < least || code > 0x10ffffu || (code >= 0xd800u && code <= 0xdfffu)) {
+            return false;
+        }
+        at += more + 1u;
+    }
+    return true;
+}
+
+/* A definition's name and the source its first state was written in, empty when it has none. */
+static void tna_definition_facts(const tna_otlp *otlp, ta_definition_id definition, ta_str *name, ta_str *source) {
+    *name = (ta_str){ 0 };
+    *source = (ta_str){ 0 };
+    ta_definition_inspection view;
+    if (ta_definition_inspect(otlp->config.core, definition, &view) == TA_OK) {
+        *name = view.document_name;
+    }
+    ta_source_location place;
+    if (ta_definition_span(otlp->config.core, &(ta_definition_span_params){ .definition = definition,
+                                                                         .kind = TA_ELEMENT_STATE,
+                                                                         .id = 0,
+                                                                         .out = &place }) == TA_OK) {
+        *source = place.source;
+    }
+}
+
+/*
+ * Encodes a run's InstrumentationScope into `scopes`: the name and version
+ * every scope carries, and the definition's identity as attributes. A
+ * definition core no longer has is named by its ID alone.
+ */
+static bool tna_scope_encode(tna_otlp *otlp, tna_otlp_run *run) {
+    tna_otlp_buf *out = &otlp->scopes;
+    run->scope_at = out->len;
+    ta_str name = LIT("tinyactors");
+    ta_str version = otlp->config.version;
+    bool ok = tna_buf_room(out, tna_len_field_size(F_SCOPE_NAME, name.len) +
+                                    (version.len != 0 ? tna_len_field_size(F_SCOPE_VERSION, version.len) : 0));
+    if (ok) {
+        tna_put_len_header(out, F_SCOPE_NAME, name.len);
+        tna_put_bytes(out, name.ptr, name.len);
+        if (version.len != 0) {
+            tna_put_len_header(out, F_SCOPE_VERSION, version.len);
+            tna_put_bytes(out, version.ptr, version.len);
+        }
+    }
+    ta_definition_inspection view;
+    if (ok && ta_definition_inspect(otlp->config.core, run->definition, &view) == TA_OK) {
+        ta_bytes revision = view.identity.revision;
+        ok = tna_kv_string(out, F_SCOPE_ATTRIBUTES, LIT("tinyactors.definition.family"), view.identity.family.name) &&
+             (tna_valid_utf8(revision.ptr, revision.len)
+                  ? tna_kv_string(out, F_SCOPE_ATTRIBUTES, LIT("tinyactors.definition.revision"),
+                                  (ta_str){ (const char *)revision.ptr, revision.len })
+                  : tna_kv_bytes(out, F_SCOPE_ATTRIBUTES, LIT("tinyactors.definition.revision"), revision));
+    }
+    ok = ok && tna_kv_int(out, F_SCOPE_ATTRIBUTES, LIT("tinyactors.definition.id"), (int64_t)run->definition);
+    if (ok) {
+        ta_str document = { 0 };
+        ta_str source = { 0 };
+        tna_definition_facts(otlp, run->definition, &document, &source);
+        ok = (document.len == 0 || tna_kv_string(out, F_SCOPE_ATTRIBUTES, LIT("tinyactors.definition.name"), document)) &&
+             (source.len == 0 || tna_kv_string(out, F_SCOPE_ATTRIBUTES, LIT("tinyactors.definition.source"), source));
+    }
+    run->scope_len = (uint32_t)(out->len - run->scope_at);
+    return ok;
+}
+
+/* The run `definition`'s spans go in, begun with its scope when it has none yet. */
+static tna_otlp_run *tna_run_for(tna_otlp *otlp, uint64_t definition) {
+    if (otlp->run_index_capacity != 0) {
+        uint32_t index = *tna_run_slot(otlp, definition);
+        if (index != 0) {
+            return &otlp->runs[index - 1u];
+        }
+    }
+    ta_allocator allocator = otlp->config.allocator;
+    if (!tna_array_room(allocator, (void **)&otlp->runs, &otlp->run_capacity, otlp->run_count, sizeof *otlp->runs,
+                        _Alignof(tna_otlp_run), otlp->run_count + 1u)) {
+        return NULL;
+    }
+    if ((otlp->run_count + 1u) * 2u > otlp->run_index_capacity) {
+        uint32_t capacity = otlp->run_index_capacity == 0 ? 32u : otlp->run_index_capacity * 2u;
+        if (!tna_run_index_build(otlp, capacity)) {
+            return NULL;
+        }
+    }
+    tna_otlp_run *run = &otlp->runs[otlp->run_count];
+    *run = (tna_otlp_run){ .definition = definition };
+    size_t scopes_before = otlp->scopes.len;
+    if (!tna_scope_encode(otlp, run)) {
+        otlp->scopes.len = scopes_before;
+        return NULL;
+    }
+    otlp->run_count += 1u;
+    *tna_run_slot(otlp, definition) = otlp->run_count;
+    otlp->scope_spans += tna_run_field_size(run);
+    return run;
+}
+
+/* Counts the span of `len` bytes at `at` in `spans` as `run`'s latest. */
+static void tna_run_add(tna_otlp *otlp, tna_otlp_run *run, size_t at, uint32_t len) {
+    uint32_t index = otlp->entry_count;
+    otlp->entries[index] = (tna_otlp_entry){ .at = at, .len = len };
+    otlp->entry_count += 1u;
+    if (run->last != 0) {
+        otlp->entries[run->last - 1u].next = index + 1u;
+    } else {
+        run->first = index + 1u;
+    }
+    run->last = index + 1u;
+    otlp->scope_spans -= tna_run_field_size(run);
+    run->spans += len;
+    otlp->scope_spans += tna_run_field_size(run);
+}
+
+/*
+ * Forgets what a failed record added: the entries past `entries`, the runs
+ * past `runs` and their scopes. The runs that stay are rebuilt from the
+ * entries that stay. Only an allocation failure comes here.
+ */
+static void tna_runs_rollback(tna_otlp *otlp, uint32_t entries, uint32_t runs, size_t scopes) {
+    otlp->entry_count = entries;
+    otlp->run_count = runs;
+    otlp->scopes.len = scopes;
+    otlp->scope_spans = 0;
+    for (uint32_t at = 0; at < runs; at += 1u) {
+        tna_otlp_run *run = &otlp->runs[at];
+        uint32_t index = run->first;
+        run->spans = 0;
+        run->last = 0;
+        while (index != 0 && index <= entries) {
+            run->spans += otlp->entries[index - 1u].len;
+            run->last = index;
+            index = otlp->entries[index - 1u].next;
+        }
+        if (run->last == 0) {
+            run->first = 0;
+        } else {
+            otlp->entries[run->last - 1u].next = 0;
+        }
+        otlp->scope_spans += tna_run_field_size(run);
+    }
+    if (otlp->run_index_capacity != 0) {
+        (void)tna_run_index_build(otlp, otlp->run_index_capacity);
+    }
+}
+
+/* Appends a finished span to `spans`, in its definition's run. */
 static bool tna_span_end(tna_otlp *otlp, const tna_otlp_span *span, uint64_t end) {
     size_t links = 0;
     if (span->link_span_id != 0) {
@@ -877,10 +1152,15 @@ static bool tna_span_end(tna_otlp *otlp, const tna_otlp_span *span, uint64_t end
                   tna_len_field_size(F_SPAN_NAME, span->name.len) + 2u /* kind */ + 9u + 9u /* start, end */ +
                   span->attributes.len + span->events.len + (links != 0 ? tna_len_field_size(F_SPAN_LINKS, links) : 0) +
                   (span->error ? tna_len_field_size(F_SPAN_STATUS, 2) : 0);
-    if (!tna_buf_room(&otlp->spans, tna_len_field_size(F_SS_SPANS, body))) {
+    size_t entry = tna_len_field_size(F_SS_SPANS, body);
+    tna_otlp_run *run = tna_run_for(otlp, span->definition);
+    if (run == NULL || !tna_buf_room(&otlp->spans, entry) ||
+        !tna_array_room(otlp->config.allocator, (void **)&otlp->entries, &otlp->entry_capacity, otlp->entry_count,
+                        sizeof *otlp->entries, _Alignof(tna_otlp_entry), otlp->entry_count + 1u)) {
         return false;
     }
     tna_otlp_buf *out = &otlp->spans;
+    size_t at = out->len;
     tna_put_len_header(out, F_SS_SPANS, body);
     tna_put_len_header(out, F_SPAN_TRACE_ID, 16);
     tna_put_bytes(out, span->trace_id, 16);
@@ -912,6 +1192,7 @@ static bool tna_span_end(tna_otlp *otlp, const tna_otlp_span *span, uint64_t end
         tna_put_tag(out, F_STATUS_CODE, WIRE_VARINT);
         tna_put_varint(out, STATUS_CODE_ERROR);
     }
+    tna_run_add(otlp, run, at, (uint32_t)entry);
     otlp->span_count += 1u;
     return true;
 }
@@ -1032,6 +1313,7 @@ static bool tna_span_open(tna_otlp *otlp, tna_otlp_span *span, const ta_trace_re
     tna_span_reset(span);
     tna_trace_id_of(otlp, &record->context, span->trace_id);
     span->span_id = ta_step_key_span_id(record->key);
+    span->definition = record->definition;
     span->start = now;
     if (record->kind == TA_TRACE_MACROSTEP_BEGIN) {
         otlp->last_macrostep = tna_exemplar_of(&record->context, span->span_id, now);
@@ -1686,6 +1968,14 @@ void tna_otlp_definition_log(tna_otlp *otlp, const tna_otlp_definition_log_param
          tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("tinyactors.definition.revision"), revision) &&
          tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("tinyactors.definition.origin"), log->origin) &&
          tna_kv_int(buf, F_LOG_ATTRIBUTES, LIT("tinyactors.definition.id"), (int64_t)event->definition);
+    if (ok) {
+        /* Read while core still has the definition: not after it is freed. */
+        ta_str document = { 0 };
+        ta_str source = { 0 };
+        tna_definition_facts(otlp, event->definition, &document, &source);
+        ok = (document.len == 0 || tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("tinyactors.definition.name"), document)) &&
+             (source.len == 0 || tna_kv_string(buf, F_LOG_ATTRIBUTES, LIT("tinyactors.definition.source"), source));
+    }
     if (!ok || !tna_log_append(otlp, &line)) {
         otlp->dropped += 1u;
     }
@@ -1816,6 +2106,9 @@ void tna_otlp_write(tna_otlp *otlp, const ta_trace_record *record) {
     }
     size_t spans_before = otlp->spans.len;
     uint32_t count_before = otlp->span_count;
+    uint32_t entries_before = otlp->entry_count;
+    uint32_t runs_before = otlp->run_count;
+    size_t scopes_before = otlp->scopes.len;
     bool ok;
     switch (record->kind) {
         case TA_TRACE_SPAWNED:
@@ -1843,45 +2136,19 @@ void tna_otlp_write(tna_otlp *otlp, const ta_trace_record *record) {
         /* A span half-appended to `spans` would corrupt the request. */
         otlp->spans.len = spans_before;
         otlp->span_count = count_before;
+        tna_runs_rollback(otlp, entries_before, runs_before, scopes_before);
         otlp->dropped += 1u;
     }
 }
 
-/* The size of a whole trace request whose spans take `spans` bytes. */
-static size_t tna_request_size(const tna_otlp *otlp, size_t spans) {
-    ta_str version = otlp->config.version;
-    size_t scope = tna_len_field_size(F_SCOPE_NAME, sizeof "tinyactors" - 1u) +
-                   (version.len != 0 ? tna_len_field_size(F_SCOPE_VERSION, version.len) : 0);
-    size_t scope_spans = tna_len_field_size(F_SS_SCOPE, scope) + spans;
-    size_t resource_spans = tna_len_field_size(F_RS_RESOURCE, otlp->resource.len) +
-                            tna_len_field_size(F_RS_SCOPE_SPANS, scope_spans);
+/* The size of a whole trace request: its resource, then a ScopeSpans per run. */
+static size_t tna_request_size(const tna_otlp *otlp) {
+    size_t resource_spans = tna_len_field_size(F_RS_RESOURCE, otlp->resource.len) + otlp->scope_spans;
     return tna_len_field_size(F_REQUEST_RESOURCE_SPANS, resource_spans);
 }
 
-/* Writes a trace request's header: everything before its `spans` bytes of spans. */
-static void tna_put_request_header(const tna_otlp *otlp, tna_otlp_buf *out, size_t spans) {
-    ta_str name = LIT("tinyactors");
-    ta_str version = otlp->config.version;
-    size_t scope = tna_len_field_size(F_SCOPE_NAME, name.len) +
-                   (version.len != 0 ? tna_len_field_size(F_SCOPE_VERSION, version.len) : 0);
-    size_t scope_spans = tna_len_field_size(F_SS_SCOPE, scope) + spans;
-    size_t resource_spans = tna_len_field_size(F_RS_RESOURCE, otlp->resource.len) +
-                            tna_len_field_size(F_RS_SCOPE_SPANS, scope_spans);
-    tna_put_len_header(out, F_REQUEST_RESOURCE_SPANS, resource_spans);
-    tna_put_len_header(out, F_RS_RESOURCE, otlp->resource.len);
-    tna_put_bytes(out, otlp->resource.data, otlp->resource.len);
-    tna_put_len_header(out, F_RS_SCOPE_SPANS, scope_spans);
-    tna_put_len_header(out, F_SS_SCOPE, scope);
-    tna_put_len_header(out, F_SCOPE_NAME, name.len);
-    tna_put_bytes(out, name.ptr, name.len);
-    if (version.len != 0) {
-        tna_put_len_header(out, F_SCOPE_VERSION, version.len);
-        tna_put_bytes(out, version.ptr, version.len);
-    }
-}
-
 size_t tna_otlp_traces_size(const tna_otlp *otlp) {
-    return otlp->span_count == 0 ? 0 : tna_request_size(otlp, otlp->spans.len);
+    return otlp->span_count == 0 ? 0 : tna_request_size(otlp);
 }
 
 size_t tna_otlp_put_traces(tna_otlp *otlp, uint8_t *out, size_t size) {
@@ -1889,11 +2156,31 @@ size_t tna_otlp_put_traces(tna_otlp *otlp, uint8_t *out, size_t size) {
         return 0;
     }
     tna_otlp_buf view = { .data = out, .cap = size };
-    tna_put_request_header(otlp, &view, otlp->spans.len);
-    tna_put_bytes(&view, otlp->spans.data, otlp->spans.len);
+    tna_put_len_header(&view, F_REQUEST_RESOURCE_SPANS,
+                       tna_len_field_size(F_RS_RESOURCE, otlp->resource.len) + otlp->scope_spans);
+    tna_put_len_header(&view, F_RS_RESOURCE, otlp->resource.len);
+    tna_put_bytes(&view, otlp->resource.data, otlp->resource.len);
+    for (uint32_t at = 0; at < otlp->run_count; at += 1u) {
+        const tna_otlp_run *run = &otlp->runs[at];
+        tna_put_len_header(&view, F_RS_SCOPE_SPANS, tna_len_field_size(F_SS_SCOPE, run->scope_len) + run->spans);
+        tna_put_len_header(&view, F_SS_SCOPE, run->scope_len);
+        tna_put_bytes(&view, otlp->scopes.data + run->scope_at, run->scope_len);
+        for (uint32_t index = run->first; index != 0; index = otlp->entries[index - 1u].next) {
+            const tna_otlp_entry *entry = &otlp->entries[index - 1u];
+            tna_put_bytes(&view, otlp->spans.data + entry->at, entry->len);
+        }
+    }
     otlp->turn_spans += otlp->spans.len;
-    otlp->spans.len = 0; /* reset: its capacity serves the next turn (tna_otlp_end_turn) */
+    /* Reset: the capacities serve the next turn (tna_otlp_end_turn). */
+    otlp->spans.len = 0;
     otlp->span_count = 0;
+    otlp->entry_count = 0;
+    otlp->run_count = 0;
+    otlp->scopes.len = 0;
+    otlp->scope_spans = 0;
+    if (otlp->run_index_capacity != 0) {
+        memset(otlp->run_index, 0, (size_t)otlp->run_index_capacity * sizeof *otlp->run_index);
+    }
     return view.len;
 }
 
@@ -1907,6 +2194,17 @@ static size_t tna_typical_use(size_t typical, size_t used) {
 
 void tna_otlp_end_turn(tna_otlp *otlp) {
     tna_buf_settle(&otlp->spans, otlp->typical_spans);
+    if (otlp->spans.data == NULL && otlp->entry_count == 0) {
+        /* The entries, runs and scopes of a burst go with its spans. */
+        ta_allocator allocator = otlp->config.allocator;
+        tna_array_free(allocator, (void **)&otlp->entries, &otlp->entry_capacity, sizeof *otlp->entries,
+                       _Alignof(tna_otlp_entry));
+        tna_array_free(allocator, (void **)&otlp->runs, &otlp->run_capacity, sizeof *otlp->runs,
+                       _Alignof(tna_otlp_run));
+        tna_array_free(allocator, (void **)&otlp->run_index, &otlp->run_index_capacity, sizeof *otlp->run_index,
+                       _Alignof(uint32_t));
+        tna_buf_free(&otlp->scopes);
+    }
     tna_buf_settle(&otlp->logs, otlp->typical_logs);
     otlp->typical_spans = tna_typical_use(otlp->typical_spans, otlp->turn_spans);
     otlp->typical_logs = tna_typical_use(otlp->typical_logs, otlp->turn_logs);
@@ -1948,6 +2246,12 @@ void tna_otlp_destroy(tna_otlp *otlp) {
     tna_buf_free(&otlp->names);
     tna_buf_free(&otlp->resource);
     tna_buf_free(&otlp->spans);
+    tna_array_free(allocator, (void **)&otlp->entries, &otlp->entry_capacity, sizeof *otlp->entries,
+                   _Alignof(tna_otlp_entry));
+    tna_array_free(allocator, (void **)&otlp->runs, &otlp->run_capacity, sizeof *otlp->runs, _Alignof(tna_otlp_run));
+    tna_array_free(allocator, (void **)&otlp->run_index, &otlp->run_index_capacity, sizeof *otlp->run_index,
+                   _Alignof(uint32_t));
+    tna_buf_free(&otlp->scopes);
     tna_buf_free(&otlp->scratch);
     tna_buf_free(&otlp->label);
     tna_buf_free(&otlp->text);

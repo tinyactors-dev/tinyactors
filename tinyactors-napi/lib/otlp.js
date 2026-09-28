@@ -271,8 +271,10 @@ function span(reader, resource, scope) {
  * (milliseconds since the epoch), startTimeUnixNano, endTimeUnixNano
  * (bigints), attributes, events: [{ name, time, timeUnixNano, attributes }],
  * links: [{ traceID, spanID, attributes }], status: { code, message? },
- * resource: { attributes }, scope: { name, version } }. IDs are lowercase
- * hex. Spans sharing a resource or scope share that object.
+ * resource: { attributes }, scope: { name, version, attributes } }. IDs
+ * are lowercase hex. Spans sharing a resource or scope share that object;
+ * the addon writes one scope per definition, whose attributes name it
+ * (napi ADR 0028).
  */
 function decodeTraces(bytes) {
   if (!(bytes instanceof Uint8Array)) {
@@ -303,7 +305,7 @@ function decodeTraces(bytes) {
       }
     }
     for (const scopeSpans of scopes) {
-      const scope = { name: '', version: '' };
+      const scope = { name: '', version: '', attributes: {} };
       const bodies = [];
       while (!scopeSpans.done) {
         const [number, ssWire] = scopeSpans.tag();
@@ -314,6 +316,7 @@ function decodeTraces(bytes) {
             const [item, itemWire] = reader.tag();
             if (item === 1) { expect(itemWire, 2, 'scope.name'); scope.name = reader.string(); }
             else if (item === 2) { expect(itemWire, 2, 'scope.version'); scope.version = reader.string(); }
+            else if (item === 3) { expect(itemWire, 2, 'scope.attributes'); keyValue(reader.body(), scope.attributes); }
             else reader.skip(itemWire);
           }
         } else if (number === 2) {
