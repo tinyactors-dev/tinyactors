@@ -10,10 +10,11 @@
 require 'pathname'
 require 'shellwords'
 require 'cache'
+require 'toolchain'
 
 ROOT = Cache::ROOT
 OBJECTS = ROOT.join('build/objects')
-COMMAND = [*Shellwords.split(ENV.fetch('CC', 'cc')), *Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic')), '-Iinclude'].freeze
+COMMAND = [*Toolchain::Target.host.compile_command, *Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic')), '-Iinclude'].freeze
 
 compiled = 0
 reused = 0

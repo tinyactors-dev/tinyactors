@@ -13,7 +13,7 @@
 
 require 'json'
 require 'pathname'
-require 'shellwords'
+require 'toolchain'
 require 'cache'
 require_relative '../../../tinyactors-core/mise/lib/api'
 
@@ -24,7 +24,7 @@ Cache.gate('api',
                                '../tinyactors-core/include/tinyactors.api.schema.json',
                                '../tinyactors-core/mise/lib/api.rb', '../tinyactors-core/mise/lib/api/*.rb'),
            outputs: [Cache::ROOT.join('include/ta_scxml.api.json')],
-           extra: [Cache.tool_id(Shellwords.split(ENV.fetch('CLANG', 'clang')))])
+           extra: [Toolchain::Tool[:clang].identity])
 
 ROOT = Pathname.new(__dir__).join('../..').expand_path
 HEADER = ROOT.join('include/ta_scxml.h')

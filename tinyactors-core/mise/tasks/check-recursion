@@ -15,11 +15,14 @@
 require 'open3'
 require 'pathname'
 require 'set'
+require 'toolchain'
 
 root = Pathname.new(__dir__).join('../..').expand_path
 source = root.join('include/tinyactors.c')
-cc = ENV.fetch('CC', 'cc')
-ir, error, status = Open3.capture3(cc, '-std=c11', '-O0', '-S', '-emit-llvm', '-o', '-', source.to_s)
+# Compiled for the check target (the pinned clang, freestanding x86_64
+# Linux), so the call graph is the same on every host.
+command = Toolchain::Target.check.compile_command('-std=c11', '-O0', '-S', '-emit-llvm', '-o', '-', source)
+ir, error, status = Open3.capture3(*command)
 unless status.success?
   warn error
   abort 'check-recursion: could not compile the amalgamation to LLVM IR'

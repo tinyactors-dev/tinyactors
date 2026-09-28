@@ -1,11 +1,9 @@
 # frozen_string_literal: true
 
-require 'English'
 require 'digest'
 require 'fileutils'
 require 'json'
 require 'pathname'
-require 'shellwords'
 require 'cache'
 require 'toolchain'
 
@@ -30,13 +28,13 @@ require 'toolchain'
 # - The flags are fixed here, per profile; $CFLAGS is never read. A dist
 #   artifact must be a function of this definition, not of whoever runs it:
 #   `CFLAGS=-O2 mise run dist` would otherwise publish an archive a later
-#   plain run silently replaces. $CC and $AR are honoured: which compiler
-#   binary is a toolchain choice; which flags is what the object code means.
+#   plain run silently replaces. $CC is honoured (Toolchain::Target.host):
+#   which compiler binary is a toolchain choice; which flags is what the
+#   object code means.
 # - The manifest is a pure function of content: no timestamps, commit, paths
 #   or counters, so an unchanged library never churns a consumer's build.
-# - `ar` embeds member mtimes, uids and gids unless told not to:
-#   ZERO_AR_DATE=1 (cctools) and a deterministic archive make it a function
-#   of the object's bytes.
+# - The archive is llvm-ar's deterministic one (Toolchain::Target#archive),
+#   a function of the object's bytes on every host.
 # - Every published file is written only when its bytes differ, so an
 #   unchanged artifact keeps its mtime and a consumer using mise's mtime-based
 #   `sources` sees no reason to rebuild.
@@ -75,7 +73,7 @@ module CRelease
 
   # Builds lib<name>.a from the amalgamation into `out`, and answers `out`.
   # `target` nil is the host with $CC and a dist profile's flags; a
-  # Toolchain target name builds with `zig cc` and the toolchain's fixed
+  # release target's name builds with `zig cc` and the toolchain's fixed
   # flags (the release adds compiler-rt and checks symbols; ADR 0001
   # decision 16).
   def archive(project, out:, target: nil, profile: DEFAULT_PROFILE)
@@ -87,14 +85,12 @@ module CRelease
       object = project.root.join("build/dist/#{profile}/#{project.name}.o")
       outcome, output = Cache.compile(host_compile_command(profile, project), project.amalgamation, object)
       fail!("include/#{project.name}.c does not compile:\n#{output}") if outcome == :failed
-      ar_output = IO.popen({ 'ZERO_AR_DATE' => '1' }, [*host_ar, 'rcs', temp.to_s, object.to_s],
-                          err: %i[child out], &:read)
-      fail!("#{host_ar.join(' ')} failed:\n#{ar_output}") unless $CHILD_STATUS.success?
+      Toolchain::Target.host.archive([object], into: temp)
     else
-      toolchain_target = Toolchain.target(target)
-      object = project.root.join("build/release/#{target}/#{project.name}.o")
-      Toolchain.compile(toolchain_target, project.amalgamation, object, includes: [project.header.dirname, *project.includes])
-      Toolchain.archive(toolchain_target, [object], temp)
+      release = Toolchain::Target.release(target)
+      object = release.compile(project.amalgamation, into: project.root.join("build/release/#{target}/#{project.name}.o"),
+                                                     includes: [project.header.dirname, *project.includes])
+      release.archive([object], into: temp)
     end
     replace_if_changed(temp, out)
     out
@@ -102,11 +98,8 @@ module CRelease
 
   # The host compile command of a dist profile: $CC, never $CFLAGS.
   def host_compile_command(profile, project)
-    [*Shellwords.split(ENV.fetch('CC', 'cc')), *PROFILES.fetch(profile), '-Iinclude',
-     *project.includes.map { |dir| "-I#{dir}" }]
+    Toolchain::Target.host.compile_command(*PROFILES.fetch(profile), '-Iinclude', *project.includes.map { |dir| "-I#{dir}" })
   end
-
-  def host_ar = Shellwords.split(ENV.fetch('AR', 'ar'))
 
   # `mise run dist [profile]` for `project`: the archive for the profile, the
   # header, amalgamation and API description, and the manifest listing every
@@ -129,7 +122,8 @@ module CRelease
                                    "include/#{project.name}.api.json", 'mise/tasks/dist'),
                outputs: [*published.values, archive_path],
                extra: [profile, PROFILES.fetch(profile).join(' '), command.join(' '),
-                       Cache.tool_id(command.first(1)), host_ar.join(' '), Digest::SHA256.file(__FILE__).hexdigest])
+                       Cache.tool_id(command.first(1)), Toolchain::Tool[:llvm_ar].identity,
+                       Digest::SHA256.file(__FILE__).hexdigest])
 
     archive(project, out: archive_path, profile: profile)
     published.each { |source, path| write_if_changed(path, File.binread(source)) }

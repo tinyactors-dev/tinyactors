@@ -27,13 +27,13 @@ module PlatformFiles
 
   def portable?(path) = platform(path).nil?
 
-  # The suffixes a target builds: its OS, its architecture and the pair. A
-  # target is a Toolchain::Target (anything with `os` and `arch`); nil is
-  # the host's portable build, which takes no platform file.
+  # The suffixes a target builds: of its OS, its architecture and the pair
+  # (Toolchain::Target#platform_suffixes), those in SUFFIXES. nil is the
+  # portable build, which takes no platform file.
   def suffixes_for(target)
     return [] if target.nil?
 
-    [target.os.to_s, target.arch.to_s, "#{target.os}_#{target.arch}"] & SUFFIXES
+    target.platform_suffixes & SUFFIXES
   end
 
   # The files of `paths` to build for `target`: the portable ones, and the

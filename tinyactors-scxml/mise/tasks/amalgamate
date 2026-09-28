@@ -14,12 +14,11 @@
 #   mise run amalgamate           write include/ta_scxml.c
 #   mise run amalgamate --check   fail if the checked-in file is out of date
 
-require 'open3'
 require 'pathname'
-require 'shellwords'
 require 'tmpdir'
 require 'cache'
 require 'platform_files'
+require 'toolchain'
 
 Cache.gate('amalgamate',
            inputs: Cache.files('src/*.c', 'include/ta_scxml.h', 'mise/tasks/amalgamate', '../mise/lib/platform_files.rb'),
@@ -53,26 +52,18 @@ if check
 end
 
 # The proof: the unit compiles, and its global functions are exactly the
-# header's TA_API functions. It is compiled for a pinned ELF target, as the
-# API extractor does, so the symbol names do not depend on the host (Mach-O
-# puts an underscore before each one).
-declared = ROOT.join('include/ta_scxml.h').read.scan(/^TA_API\s[^;(]*?\b(\w+)\s*\(/).flatten.sort
-compiler = Shellwords.split(ENV.fetch('CC', 'cc'))
-includes = ["-I#{ROOT.join('include')}", "-I#{ROOT.join('../tinyactors-core/include')}",
-            "-I#{ROOT.join('../tinyxml/include')}"]
-exported = Dir.mktmpdir('ta_scxml-amalgamate') do |dir|
+# header's TA_API functions. It is compiled for the check target
+# (Toolchain::Target.check), so the answer is the same on every host.
+declared = ROOT.join('include/ta_scxml.h').read.scan(/^TA_API\s[^;(]*?\b(\w+)\s*\(/).flatten
+includes = [ROOT.join('include'), ROOT.join('../tinyactors-core/include'), ROOT.join('../tinyxml/include')]
+Dir.mktmpdir('ta_scxml-amalgamate') do |dir|
   unit = File.join(dir, 'ta_scxml.c')
-  object = File.join(dir, 'ta_scxml.o')
   File.write(unit, text)
-  output, status = Open3.capture2e(*compiler, '-std=c11', '-Wall', '-Wextra', '-Werror', '-pedantic', '-ffreestanding',
-                                   '--target=x86_64-unknown-linux-gnu', *includes, '-c', unit, '-o', object)
-  abort "amalgamate: the amalgamation does not compile:\n#{output}" unless status.success?
-  symbols, status = Open3.capture2e('llvm-nm', '-g', '--defined-only', object)
-  abort "amalgamate: nm failed:\n#{symbols}" unless status.success?
-  symbols.lines.filter_map { |line| line.split[2] if line.split[1] == 'T' }.sort
-end
-unless exported == declared
-  abort "amalgamate: the unit exports #{exported.inspect}, the header declares #{declared.inspect} with TA_API"
+  Toolchain::Target.check.compile(unit, into: File.join(dir, 'ta_scxml.o'), includes: includes,
+                                        flags: %w[-std=c11 -Wall -Wextra -Werror -pedantic])
+                   .must_export_exactly!(declared)
+rescue Toolchain::Error => e
+  abort "amalgamate: #{e.message}"
 end
 
 if current

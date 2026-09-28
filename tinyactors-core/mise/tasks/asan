@@ -16,12 +16,13 @@
 require 'etc'
 require 'fileutils'
 require 'pathname'
+require 'toolchain'
 
 root = Pathname.new(__dir__).join('../..').expand_path
 build = root.join('build/asan')
 FileUtils.mkdir_p(build)
 
-cc = ENV.fetch('CC', 'cc')
+cc = Toolchain::Target.host.compile_command
 flags = %W[-I#{root.join("include")} -std=c11 -Wall -Wextra -Werror -pedantic -g -O1 -fno-omit-frame-pointer
            -fsanitize=address,undefined -fno-sanitize-recover=all]
 
@@ -44,7 +45,7 @@ end
 # The amalgamation is compiled once and linked into every test that needs it.
 runtime = build.join('tinyactors.o')
 if stale.call(runtime, []) &&
-   !system(cc, *flags, '-c', root.join('include/tinyactors.c').to_s, '-o', runtime.to_s, chdir: root.to_s)
+   !system(*cc, *flags, '-c', root.join('include/tinyactors.c').to_s, '-o', runtime.to_s, chdir: root.to_s)
   abort 'asan: the amalgamation does not compile'
 end
 queue = Queue.new
@@ -57,7 +58,7 @@ workers = Array.new(Etc.nprocessors) do
       sources = [root.join("tests/#{test}.c").to_s]
       sources << runtime.to_s if WITH_RUNTIME.include?(test)
       binary = build.join(test)
-      if stale.call(binary, sources) && !system(cc, *flags, *sources, '-o', binary.to_s, chdir: root.to_s)
+      if stale.call(binary, sources) && !system(*cc, *flags, *sources, '-o', binary.to_s, chdir: root.to_s)
         failed << "#{test} (build)"
         next
       end

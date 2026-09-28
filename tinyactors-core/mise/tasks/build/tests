@@ -15,10 +15,11 @@
 require 'pathname'
 require 'shellwords'
 require 'cache'
+require 'toolchain'
 
 ROOT = Cache::ROOT
 OBJECTS = ROOT.join('build/objects')
-COMMAND = [*Shellwords.split(ENV.fetch('CC', 'cc')), *Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic')), '-Iinclude'].freeze
+COMMAND = [*Toolchain::Target.host.compile_command, *Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic')), '-Iinclude'].freeze
 
 # Kept in sync with build/_default's TESTS_WITH_RUNTIME + STANDALONE_TESTS by
 # hand, the same way the old build task's link calls were hand-maintained; a

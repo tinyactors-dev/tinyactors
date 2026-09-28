@@ -12,14 +12,15 @@ require_relative '../lib/compile'
 #
 # Without --target: the addon for this machine, build/tinyactors_napi.node,
 # which development and the test suites load. With --target: the addon for
-# that release target, built with the pinned zig (mise/lib/toolchain.rb).
+# that release target, built with the pinned zig (mise/lib/toolchain/).
 target_name = ENV['usage_target'].to_s
 target_name = ARGV[ARGV.index('--target') + 1] if target_name.empty? && ARGV.include?('--target')
 if target_name.nil? || target_name.empty?
   NapiCompile.link(NapiCompile.addon_objects, NapiCompile::BUILD.join('tinyactors_napi.node'),
-                   flags: NapiCompile.addon_link_flags)
+                   flags: Toolchain::Target.host.plugin_flags)
 else
-  target = Toolchain.target(target_name)
-  abort "tinyactors-napi: #{target.name} has no Node-API addon" if target.wasm?
+  target = Toolchain::Target.native_releases.find { |each| each.name == target_name } or
+    abort "tinyactors-napi: no Node-API addon for #{target_name}; " \
+          "one of #{Toolchain::Target.native_releases.map(&:name).join(', ')}"
   NapiCompile.link_target(target)
 end

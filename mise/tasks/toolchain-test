@@ -1,4 +1,9 @@
 #!/usr/bin/env ruby
-#MISE description="Check the release toolchain (zig cc) on every release target: objects, archives, shared libraries and the wasm module, and the platform-file rule"
+#MISE description="Check the toolchain on every target from this host: pinned tools, objects, archives, shared libraries and the wasm module read as C names; the check and host targets; the platform-file rule"
+#MISE sources=["mise/lib/toolchain.rb", "mise/lib/toolchain/**/*.rb", "mise/lib/platform_files.rb", "mise/tasks/toolchain-test", "mise.toml"]
+#MISE outputs={auto=true}
+# vim:ft=ruby
 
-require 'toolchain_test'
+require 'toolchain/selftest'
+
+Toolchain::Selftest.run

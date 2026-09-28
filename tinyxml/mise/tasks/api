@@ -10,9 +10,9 @@
 # `--check` fails when the checked-in description is out of date.
 
 require 'pathname'
-require 'shellwords'
 require_relative '../lib/api'
 require 'cache'
+require 'toolchain'
 
 # Fresh when the header, the amalgamation whose exports decide "implemented", the
 # schema, the extractor, clang's identity and the checked-in description still
@@ -20,10 +20,10 @@ require 'cache'
 Cache.gate('api',
            inputs: Cache.files('include/txml.h', 'include/txml.api.schema.json', 'mise/lib/api.rb', 'mise/lib/api/*.rb', 'mise/tasks/api'),
            outputs: [Cache::ROOT.join('include/txml.api.json')],
-           extra: [Cache.tool_id(Shellwords.split(ENV.fetch('CLANG', 'clang'))),
+           extra: [Toolchain::Tool[:clang].identity,
                    # The description reads the amalgamation only for which functions it exports, so
                    # a comment or layout edit that leaves the preprocessed unit alone changes nothing.
-                   Cache.preprocessed_digest(['cc', '-std=c11', '-Iinclude'], 'include/txml.c').to_s])
+                   Cache.preprocessed_digest(Toolchain::Target.host.compile_command('-std=c11', '-Iinclude'), 'include/txml.c').to_s])
 
 ROOT = Pathname.new(__dir__).join('../..').expand_path
 HEADER = ROOT.join('include/txml.h')

@@ -1,9 +1,8 @@
 # frozen_string_literal: true
 
 require 'json'
-require 'open3'
-require 'shellwords'
 require 'tmpdir'
+require 'toolchain'
 
 module API
   # Runs clang on the public header and answers questions about its AST.
@@ -18,16 +17,12 @@ module API
 
     module_function
 
-    def compiler
-      Shellwords.split(ENV.fetch('CLANG', 'clang'))
-    end
-
     def flags(target)
       ["--target=#{target}", '-ffreestanding', '-std=c11', '-xc', *DEFINES]
     end
 
     def run(*arguments, input: nil)
-      output, errors, status = Open3.capture3(*compiler, *arguments, stdin_data: input)
+      output, errors, status = Toolchain::Tool[:clang].capture(*arguments, stdin: input)
       raise Error, "clang #{arguments.join(' ')} failed:\n#{errors}" unless status.success?
 
       output
@@ -54,12 +49,7 @@ module API
       Dir.mktmpdir('txml-api') do |directory|
         object = File.join(directory, 'library.o')
         run(*flags(target), "-I#{File.dirname(source)}", '-c', source.to_s, '-o', object)
-        # GNU nm does not read wasm objects; llvm-nm reads every format.
-        nm = ENV.fetch('NM') { target.start_with?('wasm') ? 'llvm-nm' : 'nm' }
-        output, errors, status = Open3.capture3(*Shellwords.split(nm), '-P', '-g', object)
-        raise Error, "nm failed:\n#{errors}" unless status.success?
-
-        output.lines.filter_map { |line| line.split[0] if line.split[1] == 'T' }
+        Toolchain::Binary.new(object).exports.to_a
       end
     end
 
@@ -98,8 +88,8 @@ module API
     # Compiles C source against the header for one target; returns the
     # diagnostics, empty when it compiles cleanly.
     def check(header, source, target:)
-      _output, errors, status = Open3.capture3(*compiler, *flags(target), "-I#{File.dirname(header)}", '-Wall', '-Wextra',
-                                               '-Werror', '-pedantic', '-fsyntax-only', '-', stdin_data: source)
+      _output, errors, status = Toolchain::Tool[:clang].capture(*flags(target), "-I#{File.dirname(header)}", '-Wall', '-Wextra',
+                                               '-Werror', '-pedantic', '-fsyntax-only', '-', stdin: source)
       status.success? ? '' : errors
     end
 

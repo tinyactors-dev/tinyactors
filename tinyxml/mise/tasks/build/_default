@@ -23,12 +23,13 @@ require 'pathname'
 require 'shellwords'
 require 'cache'
 require 'platform_files'
+require 'toolchain'
 
 ROOT = Cache::ROOT
 BUILD = ROOT.join('build')
 OBJECTS = BUILD.join('objects')
 
-COMPILER = Shellwords.split(ENV.fetch('CC', 'cc'))
+COMPILER = Toolchain::Target.host.compile_command
 FLAGS = Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic'))
 
 # Links today: it calls no library function.

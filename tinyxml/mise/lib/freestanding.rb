@@ -1,12 +1,10 @@
 # frozen_string_literal: true
 
-require 'English'
 require 'fileutils'
 require 'pathname'
-require 'shellwords'
-require 'tmpdir'
 require 'cache'
 require 'platform_files'
+require 'toolchain'
 
 # The freestanding check (AGENTS.md hard constraint 1). The tasks under
 # mise/tasks/freestanding/ call this; mise schedules them (depends, --jobs) and
@@ -19,44 +17,28 @@ require 'platform_files'
 #    back (zero-initialising or copying a large struct, or turning a byte loop
 #    into a call), and only the object files show it. For one optimisation
 #    level and target (src/*.c, or the amalgamation include/txml.c), the
-#    sources are compiled with `-ffreestanding -fno-builtin -fno-stack-protector`,
-#    combined with `ld -r`, and `nm -u` on the result must list nothing. Each
+#    sources are compiled for the check target (Toolchain::Target.check: the
+#    pinned clang, x86_64 Linux ELF, so every host checks the same code) with
+#    `-ffreestanding -fno-builtin -fno-stack-protector`, combined into one
+#    relocatable object, and it must leave no symbol undefined. Each
 #    (target, level) is its own mise task so mise can run them in parallel.
 #
 # Caching (mise/lib/cache.rb). Each source is compiled to its own object under
 # build/freestanding/<target>/<level>/ and reused while its contents and those
-# of the headers it included are unchanged; the `ld -r` and `nm` step reruns only
+# of the headers it included are unchanged; the combine-and-read step reruns only
 # when the bytes of some object changed, so a touch or a comment edit costs a few
 # hash computations. Every (target, level) writes a one-line record under
 # build/freestanding/results/, which `freestanding:full` prints as its report.
 # `TXML_FORCE=1` (or `rm -rf build`) redoes everything.
 #
 # `-fno-stack-protector` removes __stack_chk_fail, which is the distribution's
-# default flags rather than the code. GCC can still recognise a byte loop as
-# memset at -O2/-O3 (-ftree-loop-distribute-patterns); the check therefore also
-# passes `-fno-tree-loop-distribute-patterns` when the compiler accepts it.
+# default flags rather than the code.
 module Freestanding
   ALLOWED_HEADERS = %w[stdint.h stddef.h stdbool.h].freeze
   BASE = %w[-std=c11 -ffreestanding -fno-builtin -fno-stack-protector -Wall -Wextra -Werror -pedantic].freeze
 
   # A set of translation units built and checked together.
   Target = Struct.new(:name, :sources, :headers, :include_dirs)
-
-  def self.compiler = Shellwords.split(ENV.fetch('CC', 'cc'))
-
-  def self.run(*command)
-    output = IO.popen(command, err: %i[child out], &:read)
-    [$CHILD_STATUS.success?, output]
-  end
-
-  def self.accepted?(flag)
-    Dir.mktmpdir('txml-flag') do |directory|
-      source = File.join(directory, 'probe.c')
-      File.write(source, "int probe(void) { return 0; }\n")
-      ok, output = run(*compiler, flag, '-Werror', '-c', source, '-o', File.join(directory, 'probe.o'))
-      ok && !output.include?('unknown') && !output.include?('unrecognized')
-    end
-  end
 
   def self.targets(root)
     sources = PlatformFiles.sources(root.join('src')).map { |path| Pathname.new(path) }
@@ -112,20 +94,19 @@ module Freestanding
     label = "freestanding:#{target_name}:#{short}"
     # clang lowers every aggregate copy and compound-literal initialiser through
     # memcpy/memset when it is not optimising, and there is no flag that turns
-    # that off; GCC does not for this code. Unoptimised clang therefore needs
-    # the toolchain's mem* functions, the same contract both compilers document
-    # for -ffreestanding, and only optimised clang builds are held to the rule.
-    if level == '-O0' && Cache.tool_id(compiler.first(1)).include?('clang')
+    # that off. Unoptimised clang therefore needs the toolchain's mem*
+    # functions, the contract clang documents for -ffreestanding, and only
+    # optimised builds are held to the rule.
+    if level == '-O0'
       puts "#{label}: skipped with clang (it lowers struct copies through memcpy when not optimising)"
       record(root, "#{target_name}.#{short}", 'skipped', now - started, 'clang lowers struct copies through memcpy at -O0')
       return
     end
 
-    flags = BASE.dup
-    flags << '-fno-tree-loop-distribute-patterns' if accepted?('-fno-tree-loop-distribute-patterns')
     target = targets(root).find { |candidate| candidate.name == target_name }
     directory = root.join('build/freestanding', target.name, short)
-    command = [*compiler, *flags, level, *target.include_dirs.flat_map { |dir| ['-I', dir.relative_path_from(root).to_s] }]
+    command = Toolchain::Target.check.compile_command(*BASE, level,
+                                                     *target.include_dirs.flat_map { |dir| ['-I', dir.relative_path_from(root).to_s] })
 
     compiled = 0
     reused = 0
@@ -144,36 +125,29 @@ module Freestanding
 
     # The undefined-symbol check depends on the bytes of the objects, so an
     # object that a comment edit recompiled to the same bytes costs nothing here.
-    key = Cache.digest(level, target_name, Cache.tool_id(['ld']), Cache.tool_id(['nm']), objects, root.join('mise/lib/freestanding.rb'))
+    key = Cache.digest(level, target_name, Toolchain::Tool[:zig].identity, Toolchain::Tool[:llvm_nm].identity, objects,
+                       root.join('mise/lib/freestanding.rb'))
     symbols = Cache.cached("freestanding-#{target_name}-#{short}", key) do
       finish(undefined_symbols(target, level, objects), label, '')
     end
-    detail = "#{objects.size} objects: #{compiled} compiled, #{reused} reused; ld -r and nm #{symbols == :cached ? 'reused' : 'ran'}"
+    detail = "#{objects.size} objects: #{compiled} compiled, #{reused} reused; symbol check #{symbols == :cached ? 'reused' : 'ran'}"
     seconds = now - started
     record(root, "#{target_name}.#{short}", compiled.zero? && symbols == :cached ? 'cached' : 'ran', seconds, detail)
     puts "#{label}: #{level}, no undefined symbols (#{detail}) #{format('%.1f', seconds)}s"
   end
 
-  # ld -r one target's objects together and require zero undefined symbols.
+  # Combines one target's objects and requires zero undefined symbols.
   def self.undefined_symbols(target, level, objects)
-    combined = objects.first.dirname.join('library.o')
-    ok, output = run('ld', '-r', *objects.map(&:to_s), '-o', combined.to_s)
-    return ["#{target.name} #{level}: ld -r failed:\n#{output}"] unless ok
-
-    ok, output = run('nm', '--undefined-only', '--format=posix', combined.to_s)
-    return ["#{target.name} #{level}: nm failed:\n#{output}"] unless ok
-
-    undefined = output.lines.map { |line| line.split.first }.compact.uniq
+    undefined = Toolchain::Target.check.combine(objects, into: objects.first.dirname.join('library.o')).undefined
     return [] if undefined.empty?
 
     culprits = undefined.map do |symbol|
-      users = objects.select do |object|
-        _ok, listing = run('nm', '--undefined-only', '--format=posix', object.to_s)
-        listing.lines.any? { |line| line.split.first == symbol }
-      end
+      users = objects.select { |object| Toolchain::Binary.new(object).undefined.include?(symbol) }
       "#{symbol} (from #{users.map { |object| object.basename('.o') }.join(', ')})"
     end
     ["#{target.name} #{level}: the library references symbols it does not define: #{culprits.join(', ')}"]
+  rescue Toolchain::Error => e
+    ["#{target.name} #{level}: #{e.message}"]
   end
 
   def self.finish(failures, name, summary)

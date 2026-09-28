@@ -27,6 +27,7 @@ require 'fileutils'
 require 'pathname'
 require 'shellwords'
 require 'cache'
+require 'toolchain'
 
 ROOT = Pathname.new(__dir__).join('../..').expand_path
 WORKSPACE = ROOT.parent
@@ -104,19 +105,15 @@ unless libqjs.file? && quickjs_header.file?
   FileUtils.mkdir_p(QUICKJS_BUILD)
   FileUtils.mkdir_p(libqjs.dirname)
   FileUtils.mkdir_p(quickjs_header.dirname)
-  quickjs_compiler = Shellwords.split(ENV.fetch('CC', 'cc'))
   quickjs_flags = %w[
     -std=gnu11 -O2 -funsigned-char -D_GNU_SOURCE -DQUICKJS_NG_BUILD
     -Wno-implicit-fallthrough -Wno-sign-compare -Wno-unused-parameter
   ]
   objects = %w[dtoa libregexp libunicode quickjs].map do |name|
-    object = QUICKJS_BUILD.join("#{name}.o")
-    run(*quickjs_compiler, *quickjs_flags, "-I#{QUICKJS_SOURCE}", '-c',
-        QUICKJS_SOURCE.join("#{name}.c").to_s, '-o', object.to_s)
-    object
+    Toolchain::Target.host.compile(QUICKJS_SOURCE.join("#{name}.c"), into: QUICKJS_BUILD.join("#{name}.o"),
+                                                                    includes: [QUICKJS_SOURCE], flags: quickjs_flags)
   end
-  FileUtils.rm_f(libqjs)
-  run('ar', 'rcs', libqjs.to_s, *objects.map(&:to_s))
+  Toolchain::Target.host.archive(objects, into: libqjs)
   FileUtils.cp(QUICKJS_SOURCE.join('quickjs.h'), quickjs_header)
 end
 
@@ -134,7 +131,7 @@ run('mise', 'run', 'dist', chdir: XML)
 generated = %w[ta_rpc.c ta_rpc.h].map { |name| BUILD.join('gen', name) }
 run('mise', 'run', *(generated.all?(&:file?) ? [] : ['--force']), 'bindings', chdir: ROOT)
 
-compiler = Shellwords.split(ENV.fetch('CC', 'cc'))
+compiler = Toolchain::Target.host.compile_command
 flags = Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic -O2'))
 compiler_id = Cache.tool_id(compiler.first(1))
 

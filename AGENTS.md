@@ -17,7 +17,8 @@
 ## Tests: what to run
 
 - **`mise run test` before every commit.** It is what "a commit passes"
-  means. It checks acronyms and builds, then runs the `test` task of each
+  means. It checks acronyms, runs the toolchain self-test, and builds,
+  then runs the `test` task of each
   project whose sources changed since that task last passed, and ends with
   the time of each step, marking the projects it skipped as up to date.
   mise decides what changed: each project's `test` task lists its sources
@@ -156,6 +157,32 @@ JSON, XML, SCXML, API, SDK, ...); add to it when you introduce a new one.
 `mise run check-acronyms -- --fix` rewrites what it finds. Names we do not
 own (an SDK's `traceId`, REXML's `CData`) go in `acronyms-allow.txt` with a
 reason. ADRs and research notes are not checked: they are a record.
+
+## Build scripts work the same on every host
+
+The build runs on Linux and macOS, and a script must give the same answer
+on both. Everything that differs between hosts lives in
+`mise/lib/toolchain/` (see `mise/lib/toolchain.rb`):
+
+- **`Toolchain::Tool[:name]`** runs a program pinned in the root
+  `mise.toml`: zig, clang, LLVM's binutils (`llvm-nm`, `llvm-readobj`,
+  ...), GNU tar and gzip. Never run `nm`, `readelf`, `otool`, `ar`, `tar`
+  or a compiler found on `PATH`; pin a new tool in `mise.toml` and in
+  `Tool::PINNED`.
+- **`Toolchain::Target`** compiles and links: `Target.release(name)` for
+  what is shipped, `Target.check` (the pinned clang, x86_64 Linux ELF) for
+  a check that reads objects, `Target.host` (`$CC`) for programs that run
+  here. Only it reads `$CC`.
+- **`Toolchain::Binary`** reads an object's symbols as C names (no Mach-O
+  underscore) and checks itself: `must_export_exactly!`,
+  `must_leave_undefined_only!`, `must_load_only!`, `must_be_for!`.
+- **`Toolchain::ObjectFormat`** holds what differs between ELF, Mach-O and
+  wasm, and **`Toolchain::Host`** what differs between machines. Call a
+  method on them; do not branch on `macos?`, `linux?`, `wasm?` or
+  `RUBY_PLATFORM`.
+
+`mise run toolchain-test` builds and reads every target's objects from
+the host it runs on, as part of `mise run test`.
 
 ## Desired API files
 

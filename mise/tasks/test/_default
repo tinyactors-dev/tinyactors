@@ -22,6 +22,8 @@ full_flag = full ? ['--full'] : []
 steps = [
   ['acronyms', %w[mise run check-acronyms-test], root],
   ['acronyms', %w[mise run check-acronyms], root],
+  # The toolchain builds and reads every target's objects from this host.
+  ['toolchain', ['mise', 'run', *(all ? ['--force'] : []), 'toolchain-test'], root],
   ['build', %w[mise run build], root],
   ['core', ['mise', 'run', *flags.call], root.join('tinyactors-core')],
   ['tinyxml', ['mise', 'run', *flags.call], root.join('tinyxml')],

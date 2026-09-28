@@ -13,11 +13,12 @@ require 'pathname'
 require 'shellwords'
 require 'cache'
 require 'platform_files'
+require 'toolchain'
 
 ROOT = Cache::ROOT
 OBJECTS = ROOT.join('build/objects')
 BINARY = ROOT.join('build/txml')
-COMPILER = Shellwords.split(ENV.fetch('CC', 'cc'))
+COMPILER = Toolchain::Target.host.compile_command
 FLAGS = Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic'))
 
 source = Pathname.new('cli/txml.c')

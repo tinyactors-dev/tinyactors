@@ -5,8 +5,8 @@ require 'fileutils'
 require 'json'
 require 'open3'
 require 'pathname'
-require 'shellwords'
 require 'toolchain'
+require 'platform_files'
 require 'release'
 
 # The C libraries' release (docs/adr/0001-packaging-and-releases.md,
@@ -28,22 +28,6 @@ module CRelease
   # zig 0.16's compiler-rt memset is scalar; this one replaces it in every
   # native release object (decision 16: 24% of core's time before, 4% after).
   MEMSET_SOURCE = Pathname.new(__dir__).join('memset.c')
-  # What a macOS library may leave undefined: libSystem, which every macOS
-  # process has. The first two come from compiler-rt; Darwin's clang lowers
-  # zeroing to bzero whatever the flags (-fno-builtin-bzero does not stop
-  # it), and compiler-rt does not define it.
-  MACOS_UNDEFINED = %w[__availability_version_check _bzero _sys_icache_invalidate].freeze
-  MACOS_DYLIB_UNDEFINED = (MACOS_UNDEFINED + %w[dyld_stub_binder]).freeze
-  # Symbols ld64 defines in every dylib.
-  MACOS_SYNTHESIZED = %w[___dso_handle __mh_dylib_header].freeze
-  # Tools the release needs beyond the pinned zig. llvm's tools read every
-  # object format the targets produce; GNU tar packs deterministically.
-  TOOLS = %w[llvm-ar llvm-nm llvm-objcopy llvm-objdump llvm-readobj tar gzip cc docker].freeze
-  # llvm-readobj --file-headers: ELF's Machine and Mach-O's CpuType.
-  ARCHITECTURES = {
-    x86_64: /EM_X86_64|CpuType: X86-64/,
-    aarch64: /EM_AARCH64|CpuType: Arm64/
-  }.freeze
 
   module_function
 
@@ -60,23 +44,26 @@ module CRelease
     out
   end
 
-  def require_tools!(tools = TOOLS)
-    missing = tools.reject { |tool| system('sh', '-c', "command -v #{tool.shellescape}", out: File::NULL) }
-    release_fail!("missing tools: #{missing.join(', ')} (llvm's binutils, GNU tar and gzip)") unless missing.empty?
-    return if capture!('tar', '--version').include?('GNU tar')
+  # The pinned tools (Toolchain::Tool), resolved before anything is built,
+  # and docker for the container smoke tests.
+  def require_tools!(containers:)
+    Toolchain::Tool.each(&:path)
+    return if !containers || system('sh', '-c', 'command -v docker', out: File::NULL)
 
-    release_fail!('tar is not GNU tar, which the release needs for --sort, --mtime and --owner')
+    release_fail!('docker is missing; it runs the Linux smoke tests (or pass --skip-containers)')
   end
 
-  # The functions a binary built for `platform` exports: every public,
-  # implemented, non-inline function of the API description, and those
-  # of the platform's own (a `platform` field, decision 9). `project` may
-  # be an API description's path instead (a dependency's).
-  def api_functions(project, platform: nil)
+  # The functions a binary built for `target` exports: every public,
+  # implemented, non-inline function of the API description, and those of
+  # the target's platform (a `platform` field, decision 9); nil is a
+  # native target's. `project` may be an API description's path instead
+  # (a dependency's).
+  def api_functions(project, target: nil)
     path = project.respond_to?(:api) ? project.api : Pathname.new(project)
+    platforms = target ? PlatformFiles.suffixes_for(target) : []
     JSON.parse(path.read).fetch('functions').select do |function|
       function['public'] && !function['static_inline'] && function['implemented'] &&
-        (function['platform'].nil? || function['platform'] == platform)
+        (function['platform'].nil? || platforms.include?(function['platform']))
     end.map { |function| function['name'] }.sort
   end
 
@@ -145,7 +132,7 @@ module CRelease
       actual = Digest::SHA256.file(dir.join(file)).hexdigest
       release_fail!("#{tag}: #{file} does not match SHA256SUMS") unless actual == expected
     end
-    wanted.select { |file| file.end_with?('.tar.gz') }.each { |file| capture!('tar', '-xzf', dir.join(file), '-C', dir) }
+    wanted.select { |file| file.end_with?('.tar.gz') }.each { |file| Toolchain::Tool[:tar].run('-xzf', dir.join(file), '-C', dir) }
     published = dir.join("#{base}-src")
     dependency.sources.each do |source|
       next if published.join(source.basename).file? && published.join(source.basename).binread == source.binread
@@ -163,7 +150,7 @@ module CRelease
   def dependency_libraries(dependencies, target)
     dependencies.map do |dependency|
       dir = dependency[:targets].fetch(target.name)
-      shared = Dir[dir.join('lib', target.macos? ? 'lib*.*.dylib' : 'lib*.so.*').to_s].first or
+      shared = Dir[dir.join('lib', target.format.shared_library_glob).to_s].first or
         release_fail!("#{dir.basename} has no shared library")
       { include: dir.join('include'), archive: dir.join('lib', "lib#{dependency[:name]}.a"), shared: Pathname.new(shared) }
     end
@@ -183,9 +170,9 @@ module CRelease
     FileUtils.mkdir_p(work)
     stub = work.join('stub.c')
     stub.write("int release_compiler_rt_stub;\n")
-    capture!(Toolchain.zig, 'build-lib', '-target', target.triple, '-OReleaseFast',
-             *(target.wasm? ? [] : ['-fPIC']), '-fcompiler-rt', stub, "-femit-bin=#{work.join('bundle.a')}", chdir: work)
-    capture!('llvm-ar', 'x', work.join('bundle.a'), chdir: work)
+    Toolchain::Tool[:zig].run('build-lib', '-target', target.triple, '-OReleaseFast', *target.format.position_independent,
+                              '-fcompiler-rt', stub, "-femit-bin=#{work.join('bundle.a')}", chdir: work)
+    Toolchain::Tool[:llvm_ar].run('x', work.join('bundle.a'), chdir: work)
     member = Dir[work.join('**/compiler_rt.o').to_s].first or release_fail!("no compiler_rt.o for #{target.name}")
     FileUtils.chmod(0o644, member)
     FileUtils.mv(member, out)
@@ -193,40 +180,28 @@ module CRelease
     out
   end
 
-  # The symbol names `names` take in `target`'s object format.
-  def mangle(target, names) = target.macos? ? names.map { |name| "_#{name}" } : names
-
   # The library's one release object for `target`: the amalgamation
   # compiled with the API at default visibility, joined with compiler-rt,
   # stripped of debug info, and with only the API left global.
   def release_object(project, target, dir)
     FileUtils.mkdir_p(dir)
-    api = api_functions(project, platform: target.wasm? ? 'wasm' : nil)
-    compiled = dir.join("#{project.name}-amalgamation.o")
-    Toolchain.compile(target, project.amalgamation, compiled,
-                      includes: [project.header.dirname, *project.includes],
-                      defines: ["#{project.api_macro}=__attribute__((visibility(\"default\")))"],
-                      flags: %w[-g0 -ffunction-sections -fdata-sections])
-    joined = dir.join("#{project.name}-joined.o")
-    runtime = compiler_rt(project, target)
+    api = api_functions(project, target: target)
+    flags = %w[-g0 -ffunction-sections -fdata-sections]
+    compiled = target.compile(project.amalgamation, into: dir.join("#{project.name}-amalgamation.o"),
+                                                    includes: [project.header.dirname, *project.includes],
+                                                    defines: ["#{project.api_macro}=__attribute__((visibility(\"default\")))"],
+                                                    flags: flags)
     # The vectorized memset takes the place of compiler-rt's weak, scalar one
     # (MEMSET_SOURCE; decision 16).
-    memset = dir.join('memset.o')
-    Toolchain.compile(target, MEMSET_SOURCE, memset, flags: %w[-g0 -ffunction-sections -fdata-sections])
-    if target.macos?
-      # zig has no ld64.lld to garbage-collect a relocatable link; the
-      # dylib's -dead_strip drops what the API does not reach.
-      capture!(Toolchain.zig, 'cc', '-target', target.triple, '-r', compiled, memset, runtime, '-o', joined)
-    else
-      # Rooted at the API: only the compiler-rt functions the library calls
-      # stay.
-      capture!(Toolchain.zig, 'ld.lld', '-r', '--gc-sections', *api.flat_map { |name| ['-u', name] },
-               compiled, memset, runtime, '-o', joined)
-    end
+    memset = target.compile(MEMSET_SOURCE, into: dir.join('memset.o'), flags: flags)
+    # Rooted at the API: only the compiler-rt functions the library calls
+    # stay, where the format's linker collects garbage.
+    joined = target.combine([compiled, memset, compiler_rt(project, target)], into: dir.join("#{project.name}-joined.o"),
+                                                                             keep: api)
     exports = dir.join('exports.txt')
-    exports.write(mangle(target, api).map { |name| "#{name}\n" }.join)
+    exports.write(api.map { |name| "#{target.format.symbol(name)}\n" }.join)
     object = dir.join("#{project.name}.o")
-    capture!('llvm-objcopy', '--strip-debug', "--keep-global-symbols=#{exports}", joined, object)
+    Toolchain::Tool[:llvm_objcopy].run('--strip-debug', "--keep-global-symbols=#{exports}", joined, object)
     [object, exports]
   end
 
@@ -240,34 +215,21 @@ module CRelease
   # @rpath install names on macOS) and a program that links it needs
   # nothing else to find them.
   def build_native(project, target_name, version, out, dependencies: [])
-    target = Toolchain.target(target_name)
+    target = Toolchain::Target.release(target_name)
     needed = dependency_libraries(dependencies, target).map { |other| other[:shared] }
     dir = out.join(target_name)
     FileUtils.rm_rf(dir)
     object, exports = release_object(project, target, dir.join('work'))
     lib = dir.join('lib')
-    FileUtils.mkdir_p(lib)
-    archive = Toolchain.archive(target, [object], lib.join("lib#{project.name}.a"))
+    archive = target.archive([object], into: lib.join("lib#{project.name}.a"))
     major, minor, = version.split('.')
-    if target.macos?
-      name = "lib#{project.name}.#{major}.#{minor}.dylib"
-      Toolchain.shared(target, [object, *needed], lib.join(name), name: name, libc: true,
-                                                                   flags: ['-Wl,-dead_strip', "-Wl,-exported_symbols_list,#{exports}"])
-    else
-      name = "lib#{project.name}.so.#{major}.#{minor}"
-      Toolchain.shared(target, [object, *needed], lib.join(name), name: name, flags: %w[-Wl,--gc-sections -Wl,-S])
-      File.symlink(name, lib.join("lib#{project.name}.so"))
-    end
+    shared = target.shared_library([object, *needed], library: project.name, version: "#{major}.#{minor}", dir: lib,
+                                                      exports: exports)
     FileUtils.mkdir_p(dir.join('include'))
     FileUtils.cp(project.header, dir.join('include'))
-    { target: target, dir: dir, object: object, archive: archive, shared: lib.join(name), shared_name: name,
-      needed: needed.map { |path| path.basename.to_s },
-      cflags: Toolchain.cflags(target) + %w[-g0 -ffunction-sections -fdata-sections] }
-  end
-
-  def symbols(file, *flags)
-    capture!('llvm-nm', *flags, '--format=just-symbols', file).lines.map(&:strip)
-                                                          .reject { |line| line.empty? || line.end_with?(':') }.uniq.sort
+    { target: target, dir: dir, object: object, archive: archive.path, shared: shared.path,
+      shared_name: shared.basename.to_s, needed: needed.map { |path| path.basename.to_s },
+      cflags: target.cflags + %w[-g0 -ffunction-sections -fdata-sections] }
   end
 
   def expect_equal!(what, actual, expected)
@@ -276,70 +238,29 @@ module CRelease
     release_fail!("#{what}:\n  unexpected: #{(actual - expected).join(' ')}\n  missing:    #{(expected - actual).join(' ')}")
   end
 
-  def expect_subset!(what, actual, allowed)
-    extra = actual - allowed
-    release_fail!("#{what}: #{extra.join(' ')} (allowed: #{allowed.empty? ? 'none' : allowed.join(' ')})") unless extra.empty?
-  end
-
-  def expect_architecture!(file, target)
-    headers = capture!('llvm-readobj', '--file-headers', file)
-    wanted = ARCHITECTURES.fetch(target.arch)
-    other = ARCHITECTURES.reject { |arch, _| arch == target.arch }.values
-    return if headers.match?(wanted) && other.none? { |pattern| headers.match?(pattern) }
-
-    release_fail!("#{file} is not #{target.arch}:\n#{headers}")
-  end
-
   # The symbol checks of decision 16 for one target's libraries. `external`
   # are the dependencies' API functions, which a dependent's libraries
-  # leave undefined and nothing else may.
+  # leave undefined and nothing else may. What the platform's runtime adds
+  # (libSystem, ld64's symbols) is the object format's to allow.
   def verify_native!(project, build, external: [])
     target = build[:target]
-    expected = mangle(target, api_functions(project))
-    external = mangle(target, external)
-    archive = build[:archive]
-    shared = build[:shared]
-    expect_equal!("#{target.name}: libraries export exactly the API; #{archive.basename}",
-                  symbols(archive, '-g', '--defined-only'), expected)
-    expect_subset!("#{target.name}: #{archive.basename} leaves undefined", symbols(archive, '-u'),
-                   (target.macos? ? MACOS_UNDEFINED : []) + external)
-    global_memory = symbols(archive, '-g') & mangle(target, MEMORY)
-    release_fail!("#{archive.basename}: #{global_memory.join(' ')} must be local") unless global_memory.empty?
-    if target.macos?
-      expect_equal!("#{shared.basename} exports", symbols(shared, '-g', '--defined-only') - MACOS_SYNTHESIZED, expected)
-      expect_subset!("#{shared.basename} leaves undefined", symbols(shared, '-u'), MACOS_DYLIB_UNDEFINED + external)
-      used = capture!('llvm-objdump', '--macho', '--dylibs-used', shared).lines.drop(1)
-                                                                          .map { |line| line.strip.split(' (').first }
-      # The list starts with the dylib's own install name.
-      expect_equal!("#{shared.basename} loads", (used - ['/usr/lib/libSystem.B.dylib', "@rpath/#{build[:shared_name]}"]).sort,
-                    build[:needed].map { |each| "@rpath/#{each}" }.sort)
-      id = capture!('llvm-objdump', '--macho', '--dylib-id', shared)
-      release_fail!("#{shared.basename}: install name is not @rpath/#{build[:shared_name]}") unless id.include?("@rpath/#{build[:shared_name]}")
-    else
-      expect_equal!("#{shared.basename} exports", symbols(shared, '-D', '--defined-only'), expected)
-      expect_subset!("#{shared.basename} leaves undefined", symbols(shared, '-D', '-u'), external)
-      dynamic = capture!('llvm-readobj', '--dynamic-table', shared)
-      # It names no C library; a dependent names exactly its dependencies.
-      needed = dynamic.scan(/NEEDED\s+Shared library: \[([^\]]+)\]/).flatten.sort
-      expect_equal!("#{shared.basename} needs", needed, build[:needed].sort)
-      release_fail!("#{shared.basename}: soname is not #{build[:shared_name]}") unless dynamic.include?("[#{build[:shared_name]}]")
-    end
+    expected = api_functions(project, target: target)
+    Toolchain::Binary.new(build[:archive]).must_export_exactly!(expected).must_leave_undefined_only!(external)
+                     .must_keep_local!(MEMORY)
+    Toolchain::Binary.new(build[:shared]).must_export_exactly!(expected).must_leave_undefined_only!(external)
+                     .must_load_only!(build[:needed]).must_be_named!(build[:shared_name]).must_be_for!(target)
     # The archive holds exactly the release object, which is checked.
-    [build[:object], shared].each { |file| expect_architecture!(file, target) }
+    Toolchain::Binary.new(build[:object]).must_be_for!(target)
     puts "release: #{target.name}: exports are the #{expected.size} API functions, undefined symbols allowed" \
          "#{external.empty? ? '' : " (the dependencies' #{external.size} API functions among them)"}, memory functions local, " \
          'architecture right'
   end
 
-  def host_linux_x86_64? = RUBY_PLATFORM.start_with?('x86_64-linux')
-
   # Links each [label, object, arguments] test against the packed static and
   # shared library of the host's target, with the host's C compiler, and
   # runs it from the project root.
   def host_tests!(project, build, tests, dependencies: [])
-    unless host_linux_x86_64? && build[:target].name == 'x86_64-linux'
-      release_fail!('the host tests need an x86_64 Linux host')
-    end
+    Toolchain::Host.current.must_run!(build[:target], 'the host tests')
     dir = build[:dir].join('host-tests')
     FileUtils.mkdir_p(dir)
     lib = build[:archive].dirname
@@ -350,8 +271,7 @@ module CRelease
                    *others.flat_map { |other| ["-L#{other[:shared].dirname}", "-l:#{other[:shared].basename}",
                                                "-Wl,-rpath,#{other[:shared].dirname}"] }] }.each do |kind, library|
       tests.each do |label, object, arguments|
-        binary = dir.join("#{label}-#{kind}")
-        capture!('cc', object, *library, '-o', binary)
+        binary = Toolchain::Target.host.program([object, *library], into: dir.join("#{label}-#{kind}"))
         # A dependent's shared library names its dependencies; the loader
         # finds them on the library path, as it would installed ones.
         paths = [lib, *others.map { |other| other[:shared].dirname }].join(':')
@@ -364,7 +284,7 @@ module CRelease
     end
     release_fail!("tests failed against the packed library: #{failed.join(', ')}") unless failed.empty?
     with = dependencies.empty? ? '' : " with #{dependencies.map { |d| "#{d[:name]} #{d[:version]}" }.join(' and ')}'s released ones"
-    puts "release: #{tests.size} tests passed against the packed x86_64-linux static and shared library#{with}"
+    puts "release: #{tests.size} tests passed against the packed #{build[:target]} static and shared library#{with}"
   end
 
   # Builds `smoke` (one C file using the public API) for `build`'s Linux
@@ -378,16 +298,15 @@ module CRelease
     include = build[:dir].join('include')
     others = dependency_libraries(dependencies, target)
     includes = [include, *others.map { |other| other[:include] }].map { |path| "-I#{path}" }
-    capture!(Toolchain.zig, 'cc', '-target', target.triple, '-O2', '-static', *includes, smoke, build[:archive],
-             *others.map { |other| other[:archive] }, '-o', dir.join('smoke-static'))
+    target.program([smoke, build[:archive], *others.map { |other| other[:archive] }], into: dir.join('smoke-static'),
+                                                                                       flags: ['-O2', '-static', *includes])
     # The dependencies' shared libraries go beside the program, which finds
     # them through $ORIGIN inside the container.
     others.each { |other| FileUtils.cp(other[:shared], dir) }
     # zig's linker has no -l:<file>; the path records the soname all the same.
-    capture!(Toolchain.zig, 'cc', '-target', target.triple, '-O2', *includes, smoke, build[:shared],
-             *others.map { |other| dir.join(other[:shared].basename) },
-             '-Wl,-rpath,$ORIGIN/../lib', '-Wl,-rpath,$ORIGIN', '-o', dir.join('smoke-shared'))
-    platform = { aarch64: 'linux/arm64', x86_64: 'linux/amd64' }.fetch(target.arch)
+    target.program([smoke, build[:shared], *others.map { |other| dir.join(other[:shared].basename) }],
+                   into: dir.join('smoke-shared'), flags: ['-O2', *includes, '-Wl,-rpath,$ORIGIN/../lib', '-Wl,-rpath,$ORIGIN'])
+    platform = target.container_platform
     out = capture!('docker', 'run', '--rm', '--platform', platform, '-v', "#{build[:dir]}:/r:ro", 'alpine:3',
                    'sh', '-c', '/r/smoke/smoke-static && LD_LIBRARY_PATH=/r/lib:/r/smoke /r/smoke/smoke-shared')
     puts "release: #{target.name} in a #{platform} container, static and shared: #{out.lines.map(&:strip).uniq.join('; ')}"
@@ -405,22 +324,21 @@ module CRelease
   # nothing. zig's default wasm CPU has bulk memory, so copies need no
   # memcpy (decision 16).
   def build_wasm(project, out)
-    target = Toolchain.target(WASM)
+    target = Toolchain::Target.release(WASM)
     dir = out.join(target.name)
     FileUtils.rm_rf(dir)
     work = dir.join('work')
     platform = project.root.join("include/#{project.name}_wasm.c")
     release_fail!("#{platform.basename} is missing: run mise run amalgamate") unless platform.file?
     objects = [project.amalgamation, platform].map do |source|
-      Toolchain.compile(target, source, work.join("#{source.basename('.c')}.o"),
-                        includes: [project.header.dirname],
-                        defines: ["#{project.api_macro}=__attribute__((visibility(\"default\")))"], flags: %w[-g0])
+      target.compile(source, into: work.join("#{source.basename('.c')}.o"), includes: [project.header.dirname],
+                             defines: ["#{project.api_macro}=__attribute__((visibility(\"default\")))"], flags: %w[-g0])
     end
-    wasm = Toolchain.wasm_module(target, objects, dir.join("#{project.name}.wasm"),
-                                 exports: api_functions(project, platform: 'wasm'))
+    wasm = target.wasm_module(objects, into: dir.join("#{project.name}.wasm"),
+                                       exports: api_functions(project, target: target)).path
     FileUtils.mkdir_p(dir.join('include'))
     FileUtils.cp(project.header, dir.join('include'))
-    { target: target, dir: dir, wasm: wasm, extra: [wasm], asset: 'wasm32', cflags: Toolchain.cflags(target) + %w[-g0] }
+    { target: target, dir: dir, wasm: wasm, extra: [wasm], asset: 'wasm32', cflags: target.cflags + %w[-g0] }
   end
 
   # The imports and exports of a wasm module, as [[module, name, kind]] and
@@ -486,7 +404,7 @@ module CRelease
   def verify_wasm!(project, build, test: nil)
     imports, exports = wasm_interface(build[:wasm])
     release_fail!("#{build[:wasm].basename} imports #{imports.map { |i| i.first(2).join('.') }.join(', ')}") unless imports.empty?
-    expected = api_functions(project, platform: 'wasm').map { |name| [name, 'function'] } + [%w[memory memory]]
+    expected = api_functions(project, target: build[:target]).map { |name| [name, 'function'] } + [%w[memory memory]]
     expect_equal!("#{build[:wasm].basename} exports", exports.sort, expected.sort)
     puts "release: #{build[:wasm].basename}: imports nothing, exports the #{expected.size - 1} functions and memory"
     capture!(*test.call(build[:wasm])).lines.each { |line| puts "release: #{line.strip}" } if test
@@ -498,17 +416,9 @@ module CRelease
   # A deterministic .tar.gz of `dirname` under `parent`: sorted entries,
   # one mtime, owner and group 0, no timestamp or name in the gzip header.
   def tarball(parent, dirname, out, epoch)
-    tar = capture_binary!('tar', '--sort=name', "--mtime=@#{epoch}", '--owner=0', '--group=0', '--numeric-owner',
-                          '--mode=u=rwX,go=rX', '--format=gnu', '-C', parent, '-cf', '-', dirname)
-    gzip, status = Open3.capture2('gzip', '-n', '-9', stdin_data: tar, binmode: true)
-    release_fail!('gzip failed') unless status.success?
-    out.binwrite(gzip)
-    out
-  end
-
-  def capture_binary!(*command)
-    out, err, status = Open3.capture3(*command.map(&:to_s), binmode: true)
-    release_fail!("#{command.join(' ')} failed:\n#{err}") unless status.success?
+    tar = Toolchain::Tool[:tar].run('--sort=name', "--mtime=@#{epoch}", '--owner=0', '--group=0', '--numeric-owner',
+                                    '--mode=u=rwX,go=rX', '--format=gnu', '-C', parent, '-cf', '-', dirname, binary: true)
+    out.binwrite(Toolchain::Tool[:gzip].run('-n', '-9', stdin: tar, binary: true))
     out
   end
 
@@ -556,7 +466,7 @@ module CRelease
       'version' => version,
       'commit' => commit,
       'source_date_epoch' => epoch.to_i,
-      'zig' => capture!(Toolchain.zig, 'version').strip,
+      'zig' => Toolchain::Tool[:zig].identity,
       'api' => Digest::SHA256.file(project.api).hexdigest,
       **(dependencies.empty? ? {} : { 'dependencies' => dependencies.to_h { |d| [d[:name], d[:version]] } }),
       'targets' => manifest_targets,
@@ -600,7 +510,7 @@ module CRelease
     release_fail!("usage: mise run release -- <version> [--publish] [--skip-containers]") unless argv.size == 1
     version = argv.first
     prefix = "#{directory}/"
-    require_tools!
+    require_tools!(containers: containers)
 
     # 1. Check.
     Release.check_tree!(scope: [directory, 'mise'])
@@ -649,7 +559,7 @@ module CRelease
       natives.each { |build| verify_native!(project, build, external: external) }
       host_tests!(project, natives.find { |build| build[:target].name == 'x86_64-linux' }, tests, dependencies: fetched)
       if containers
-        natives.select { |build| build[:target].linux? }.each { |build| container_smoke!(build, smoke, dependencies: fetched) }
+        natives.select { |build| build[:target].container_platform }.each { |build| container_smoke!(build, smoke, dependencies: fetched) }
       else
         puts 'release: --skip-containers: no Linux container smoke test ran'
       end
@@ -688,5 +598,7 @@ module CRelease
         changed.each { |path| Release.git('checkout', '--', path) }
       end
     end
+  rescue Toolchain::Error => e
+    release_fail!(e.message)
   end
 end

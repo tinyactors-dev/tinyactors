@@ -30,6 +30,7 @@ require 'pathname'
 require 'shellwords'
 require 'cache'
 require 'platform_files'
+require 'toolchain'
 
 ROOT = Cache::ROOT
 OBJECTS = ROOT.join('build/objects')
@@ -46,7 +47,7 @@ run('mise', 'run', 'amalgamate', '--check')
 run('mise', 'run', 'api')
 run('mise', 'run', 'api', '--check')
 
-COMPILER = Shellwords.split(ENV.fetch('CC', 'cc'))
+COMPILER = Toolchain::Target.host.compile_command
 FLAGS = Shellwords.split(ENV.fetch('CFLAGS', '-std=c11 -Wall -Wextra -Werror -pedantic'))
 
 compiled = 0

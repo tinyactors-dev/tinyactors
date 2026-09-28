@@ -9,15 +9,21 @@ ruby = "4"
 # major releases (clang 22 dropped the ElaboratedType wrapper around a
 # typedef's tag). Pin the line the description in include/ was generated with.
 clang = "22"
-# llvm-nm, which the API extractor uses to list what a wasm object exports
-# (GNU and Apple nm do not read wasm). The clang package does not ship it.
+# LLVM's binutils (llvm-nm, llvm-readobj, llvm-objcopy, ...), which read
+# ELF, Mach-O and wasm alike on any host; the clang package does not ship
+# them. The build reads every object through them (mise/lib/toolchain/),
+# never through the host's nm, readelf or otool.
 "conda:llvm-tools" = "22"
+# GNU tar and gzip, so a release tarball is the same bytes on every host
+# (macOS ships bsdtar and another gzip).
+"conda:tar" = "1.35"
+"conda:gzip" = "1.14"
 # The JavaScript runtimes napi pins (tinyactors-napi/mise.toml), so `mise exec`
 # from the root runs the same Node as the package, not whatever is on PATH.
 node = "22"
 bun = "1"
 # Every release binary is built with `zig cc` (docs/adr/0001): one compiler,
-# linker and compiler-rt for every target, from any host (mise/lib/toolchain.rb).
+# linker and compiler-rt for every target, from any host (mise/lib/toolchain/).
 zig = "0.16.0"
 
 [env]
