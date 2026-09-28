@@ -1,5 +1,6 @@
 #include "napi_datamodel.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -438,31 +439,48 @@ bool tna_expression_make(tna_js_datamodel *dm, napi_value value, tna_expr_kind k
     return true;
 }
 
-/* A literal's value as the JSON text lib renders for it; TA_ERR_INVALID for
- * anything else, which the codec reports as unrepresentable. */
+static const char *const tna_expr_kind_names[] = { "function", "literal", "location" };
+
+/*
+ * A host expression as source text (napi ADR 0031): lib's print(kind,
+ * value) answers the text, or an object whose `message` says why not,
+ * which is kept in the printer and reported as the codec's
+ * `unrepresentable`. A literal's value is the one its box holds.
+ */
 static ta_result tna_print_expression(void *self, const ta_expression_host *host, ta_arena *arena, ta_str *out) {
-    tna_js_datamodel *dm = self;
-    if (host->v != &tna_expr_vtable || ((const tna_expr_record *)host->value)->kind != TNA_EXPR_LITERAL) {
+    tna_printer *printer = self;
+    napi_env env = printer->dm->env;
+    if (host->v != &tna_expr_vtable) {
+        snprintf(printer->message, sizeof printer->message, "not a JavaScript expression");
         return TA_ERR_INVALID;
     }
     const tna_expr_record *record = host->value;
-    napi_env env = dm->env;
-    tna_env *data = tna_env_get(env);
-    napi_value box = NULL;
-    napi_value value = NULL;
-    napi_value print = NULL;
+    napi_value argv[2] = { NULL, NULL };
     napi_value global = NULL;
     napi_value text = NULL;
     napi_valuetype type = napi_undefined;
     size_t length = 0;
-    if (data == NULL || data->literal_text == NULL || napi_get_reference_value(env, record->ref, &box) != napi_ok ||
-        napi_get_named_property(env, box, "value", &value) != napi_ok ||
-        napi_get_reference_value(env, data->literal_text, &print) != napi_ok || napi_get_global(env, &global) != napi_ok ||
-        napi_call_function(env, global, print, 1, &value, &text) != napi_ok || napi_typeof(env, text, &type) != napi_ok ||
-        type != napi_string || napi_get_value_string_utf8(env, text, NULL, 0, &length) != napi_ok ||
-        length > UINT32_MAX - 1u) {
+    bool ok = napi_create_string_utf8(env, tna_expr_kind_names[record->kind], NAPI_AUTO_LENGTH, &argv[0]) == napi_ok &&
+              napi_get_reference_value(env, record->ref, &argv[1]) == napi_ok &&
+              (record->kind != TNA_EXPR_LITERAL || napi_get_named_property(env, argv[1], "value", &argv[1]) == napi_ok) &&
+              napi_get_global(env, &global) == napi_ok &&
+              napi_call_function(env, global, printer->print, 2, argv, &text) == napi_ok &&
+              napi_typeof(env, text, &type) == napi_ok;
+    if (!ok) {
         napi_value error = NULL;
         napi_get_and_clear_last_exception(env, &error);
+        snprintf(printer->message, sizeof printer->message, "the expression could not be printed");
+        return TA_ERR_INVALID;
+    }
+    if (type != napi_string) {
+        napi_value message = NULL;
+        if (type != napi_object || napi_get_named_property(env, text, "message", &message) != napi_ok ||
+            napi_get_value_string_utf8(env, message, printer->message, sizeof printer->message, &length) != napi_ok) {
+            snprintf(printer->message, sizeof printer->message, "the expression could not be printed");
+        }
+        return TA_ERR_INVALID;
+    }
+    if (napi_get_value_string_utf8(env, text, NULL, 0, &length) != napi_ok || length > UINT32_MAX - 1u) {
         return TA_ERR_INVALID;
     }
     char *bytes = ta_arena_alloc(arena, length + 1u, 1);
@@ -478,8 +496,9 @@ static ta_result tna_print_expression(void *self, const ta_expression_host *host
 
 static const ta_chart_expression_printer_vtable tna_printer_vtable = { tna_print_expression };
 
-ta_chart_expression_printer tna_js_datamodel_printer(tna_js_datamodel *dm) {
-    return (ta_chart_expression_printer){ .self = dm, .v = &tna_printer_vtable };
+ta_chart_expression_printer tna_printer_adapter(tna_printer *printer) {
+    printer->message[0] = '\0';
+    return (ta_chart_expression_printer){ .self = printer, .v = &tna_printer_vtable };
 }
 
 void tna_expression_release(ta_expression *expression) {
@@ -966,14 +985,21 @@ static ta_result tna_bind_builtin(tna_js_datamodel *dm, const ta_datamodel_prepa
             continue;
         }
         napi_value run = NULL;
+        bool literal = false;
         if (kind == TNA_SOURCE_JSON) {
             run = tna_parsed_literal(dm, argument);
-            if (run == NULL) {
+            literal = run != NULL;
+            if (run == NULL && argument.ptr[0] != '[' && argument.ptr[0] != '{') {
                 tna_reject(params, index, tna_source_refused, sizeof tna_source_refused - 1u);
                 result = TA_ERR_INVALID;
                 continue;
             }
-        } else if (kind == TNA_SOURCE_NEW) {
+        }
+        if (run != NULL) {
+            /* JSON, parsed once into a literal. */
+        } else if (kind == TNA_SOURCE_NEW || kind == TNA_SOURCE_JSON) {
+            /* An array or object with `new Name(...)` inside builds as
+             * `new Name(...)` does (napi ADR 0031). */
             run = tna_construction(dm, argument);
             if (run == NULL) {
                 if (dm->rejection[0] != '\0') {
@@ -1000,8 +1026,7 @@ static ta_result tna_bind_builtin(tna_js_datamodel *dm, const ta_datamodel_prepa
                 compiled[at] = (ta_expression){ .kind = TA_EXPRESSION_NONE };
             }
         }
-        if (!tna_expression_make(dm, run, kind == TNA_SOURCE_JSON ? TNA_EXPR_LITERAL : TNA_EXPR_FUNCTION,
-                                 &compiled[index])) {
+        if (!tna_expression_make(dm, run, literal ? TNA_EXPR_LITERAL : TNA_EXPR_FUNCTION, &compiled[index])) {
             result = TA_ERR_NOMEM;
         }
     }

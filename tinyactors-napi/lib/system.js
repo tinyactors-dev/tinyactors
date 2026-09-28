@@ -9,14 +9,14 @@ const v8 = require('node:v8');
 const native = require('./native');
 const { TinyactorsError } = require('./errors');
 const { Definition, ENCODE, EncodedChart, identityOf, readState, findState, readContent } = require('./definition');
-const { Codecs, SCXML, decodeCall, encodeCall } = require('./codecs');
+const { Codecs, SCXML, ChartCodecError, decodeCall, encodeCall } = require('./codecs');
 const { DefinitionBuilder } = require('./statechart');
 const { ActorID } = require('./actor');
 const { EventNames } = require('./events');
 const { SessionImage, handleOf } = require('./image');
 const { traceConfig, TRACE_KINDS } = require('./tracing');
 const { buildSnapshot } = require('./metrics');
-const { STANDARD_CLASSES } = require('./values');
+const { STANDARD_CLASSES, printBuiltin, printCall, printedSpec } = require('./values');
 
 const NO_STATE = 4294967295;
 
@@ -211,6 +211,8 @@ class System {
   // native tables have them, for a registered data model's compile scope.
   #functions = Object.create(null);
   #classes = Object.create(null);
+  // registerDatamodel()'s data models by name, for their print (napi ADR 0031).
+  #datamodels = new Map();
   #effectContext;
 
   static {
@@ -863,14 +865,29 @@ class System {
     return this.#codecs.list();
   }
 
-  registerDatamodel(name, { compile } = {}) {
+  registerDatamodel(name, datamodel) {
+    const compile = datamodel?.compile;
     if (typeof name !== 'string' || name === '') {
       throw new TinyactorsError('registerDatamodel(): expected a data model name', 'invalid');
     }
     if (typeof compile !== 'function') {
       throw new TinyactorsError('registerDatamodel(): expected { compile(source, role) }', 'invalid');
     }
+    if (datamodel.print !== undefined && typeof datamodel.print !== 'function') {
+      throw new TinyactorsError('registerDatamodel(): print must be a function', 'invalid');
+    }
     this.#native.registerDatamodel(name, (source, role) => normalizeCompiled(compile(source, role), role));
+    this.#datamodels.set(name, datamodel);
+  }
+
+  // The print(expression) of the data model `name` (napi ADR 0031): the
+  // built-in one's, a registered one's, or undefined when it has none.
+  #printOf(name) {
+    if (name === 'javascript') {
+      return printBuiltin;
+    }
+    const datamodel = this.#datamodels.get(name);
+    return datamodel?.print === undefined ? undefined : (expression) => datamodel.print(expression);
   }
 
   /**
@@ -1035,14 +1052,49 @@ class System {
     throw new TinyactorsError(`chart refused${where}: ${result.message}`, result.code, refusalDetail(result, format));
   }
 
-  // Definition.encode(format) (napi ADR 0027).
-  [ENCODE](id, format, definition) {
+  // Definition.encode(format, options) (napi ADRs 0027 and 0031): host
+  // expressions are printed by the data model the chart is written for.
+  [ENCODE](id, format, definition, options) {
     const codec = this.#codecs.find(format, 'encode()');
     if (codec.encode === undefined) {
       throw new TinyactorsError(`encode(): the codec ${codec.name} only reads charts`, 'unsupported');
     }
-    const js = codec.builtin ? undefined : { name: codec.name, encode: encodeCall(codec, { definition }) };
-    const result = this.#native.encodeDefinition(id, js);
+    const datamodel = options?.datamodel;
+    if (datamodel !== undefined && typeof datamodel !== 'string') {
+      throw new TinyactorsError('encode(): options.datamodel is a data model name', 'invalid');
+    }
+    let print;
+    if (datamodel !== undefined) {
+      print = this.#printOf(datamodel);
+      if (print === undefined) {
+        throw new TinyactorsError(`encode(): the data model ${JSON.stringify(datamodel)} cannot print; ` +
+          'register one with print() or use "javascript"', 'unsupported');
+      }
+    } else {
+      // The chart's own data model. One that cannot print still writes a
+      // chart of source text alone, as an imported one is.
+      print = this.#printOf(core.definition_inspect(this.#native, id).datamodel) ?? (() => {
+        throw new ChartCodecError('unrepresentable', 'the chart\'s data model cannot print');
+      });
+    }
+    const call = printCall(print);
+    // A JavaScript codec gets the chart printed for a data model it names;
+    // without one, it gets the chart's values, as ADR 0027 hands them.
+    const target = datamodel === undefined || codec.builtin ? codec : {
+      name: codec.name,
+      encode: (spec, context) => codec.encode(printedSpec(spec, (expression) => {
+        const printed = print(expression);
+        if (typeof printed !== 'string') {
+          throw new ChartCodecError('unrepresentable', 'print() must answer a string');
+        }
+        return printed;
+      }, datamodel), context),
+    };
+    const js = codec.builtin ? undefined : { name: codec.name, encode: encodeCall(target, { definition }) };
+    const result = this.#native.encodeDefinition(id, js, call, datamodel);
+    if (call.thrown !== undefined) {
+      throw call.thrown.error;
+    }
     if (result.bytes === undefined) {
       throw new TinyactorsError(`encode(): the codec ${codec.name} cannot write the chart: ${result.message}`,
         result.code, refusalDetail(result, codec.name, false));

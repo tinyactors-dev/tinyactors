@@ -106,10 +106,15 @@ function textIsACopy() {
   assert.deepEqual(other.define(encoded.bytes, { format: 'scxml', identity: encoded.identity }).identity,
     definition.identity);
   other.close();
-  // A value JSON cannot say exactly has no text.
+  // A Date is written as new Date(...) (napi ADR 0031); a class instance
+  // that does not describe itself has no text.
   const dated = system.define(statechart({ family: 'dated', revision: '1' }).data('at', new Date(0)).state('a'));
-  assert.throws(() => dated.encode('scxml'),
-    (error) => error instanceof TinyactorsError && error.code === 'invalid' && error.detail.code === 'unrepresentable');
+  assert.match(new TextDecoder().decode(dated.encode('scxml').bytes), /expr="new Date\(0\)"/);
+  class Opaque {}
+  const opaque = system.define(statechart({ family: 'opaque', revision: '1' }).data('it', new Opaque()).state('a'));
+  assert.throws(() => opaque.encode('scxml'),
+    (error) => error instanceof TinyactorsError && error.code === 'invalid' && error.detail.code === 'unrepresentable' &&
+      /Opaque has no text/.test(error.message));
   system.close();
 }
 

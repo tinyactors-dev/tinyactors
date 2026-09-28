@@ -772,7 +772,6 @@ export interface DatamodelCompiler {
    * text must serve as a value, a condition and a script alike. Without
    * print, charts cannot be encoded for this data model.
    */
-  // status: unimplemented
   print?(expression: PrintableExpression): string;
 }
 
@@ -902,9 +901,11 @@ export interface Definition<Data extends object = Record<string, unknown>> {
    * identity throws `definition-mismatch`; another system defines it under
    * that identity. Text written for another data model is another chart.
    * `options.datamodel` must name the built-in data model or a registered
-   * one that has print(); otherwise encode() throws `unsupported`.
+   * one that has print(); otherwise encode() throws `unsupported`. With it,
+   * a JavaScript codec gets the chart printed for that data model (every
+   * expression source text, `datamodel` set); without it, the chart's
+   * values, functions included, as export() gives them.
    */
-  // status: partial: options.datamodel, data models' print, new Name(...)
   encode(format: string, options?: { datamodel?: string }): EncodedChart;
 
   /**

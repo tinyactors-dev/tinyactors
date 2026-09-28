@@ -6,7 +6,7 @@
 // a chart's values.
 
 const assert = require('node:assert/strict');
-const { createSystem, serialize, TinyactorsError } = require('..');
+const { createSystem, statechart, named, serialize, ChartCodecError, TinyactorsError } = require('..');
 
 function assertCode(fn, code, pattern) {
   assert.throws(fn, (error) => {
@@ -148,10 +148,149 @@ function constructionRefusals() {
   system.close();
 }
 
+const text = (encoded) => new TextDecoder().decode(encoded.bytes);
+
+function assertUnrepresentable(fn, pattern) {
+  assert.throws(fn, (error) => {
+    assert.ok(error instanceof TinyactorsError, `expected TinyactorsError, got ${error}`);
+    assert.equal(error.code, 'invalid', error.message);
+    assert.equal(error.detail.code, 'unrepresentable');
+    assert.match(error.message, pattern);
+    return true;
+  });
+}
+
+// The built-in data model prints what it reads: a chart of values encodes
+// to SCXML and another system that registers the classes reads it back.
+async function printing() {
+  const system = createSystem();
+  system.registerClass('Money', Money);
+  const values = {
+    price: new Money(12, 'EUR'),
+    table: new Map([['k', new Money(2, 'USD')], ['n', [1, { x: null }]]]),
+    when: new Date(1700000000000),
+    bytes: new Uint8Array([1, 2, 3]),
+    tags: new Set(['a', 'b']),
+    pattern: /a+/g,
+    list: [new Date(1), 'x'],
+    plain: { amount: new Money(3, 'CHF'), note: 'n' },
+    count: 0,
+  };
+  let builder = statechart({ family: 'priced', revision: '1' });
+  for (const [name, value] of Object.entries(values)) {
+    builder = builder.data(name, value);
+  }
+  const definition = system.define(builder.state('a'));
+  const encoded = definition.encode('scxml');
+  const written = text(encoded);
+  assert.match(written, /expr="new Money\(12, &quot;EUR&quot;\)"/);
+  assert.match(written, /expr="new Date\(1700000000000\)"/);
+  assert.match(written, /expr="\[new Date\(1\), &quot;x&quot;\]"/);
+  assert.doesNotMatch(written, /datamodel=/);
+  // Explicitly for the built-in data model, the same text.
+  assert.equal(text(definition.encode('scxml', { datamodel: 'javascript' })).includes('new Money'), true);
+
+  const other = createSystem();
+  other.registerClass('Money', Money);
+  const read = other.define(encoded.bytes, { format: 'scxml', identity: encoded.identity });
+  assert.deepEqual(read.identity, definition.identity);
+  const actor = other.spawn(read);
+  await actor.send('noop');
+  const data = actor.data();
+  for (const [name, value] of Object.entries(values)) {
+    assert.deepEqual(data[name], value, name);
+  }
+  assert.ok(data.price instanceof Money && data.table.get('k') instanceof Money && data.plain.amount instanceof Money);
+  assert.notEqual(data.price, values.price, 'text is a copy');
+  other.close();
+
+  // Without the class registered, the text is refused where it is read.
+  const bare = createSystem();
+  assert.throws(() => bare.define(encoded.bytes, { format: 'scxml', identity: encoded.identity }), /no class is registered/);
+  bare.close();
+  system.close();
+}
+
+// What the built-in printer refuses, with why.
+function printingRefusals() {
+  const system = createSystem();
+  const refused = (value, pattern) => {
+    const family = `refused${(refused.count = (refused.count ?? 0) + 1)}`;
+    const definition = system.define(statechart({ family, revision: '1' }).data('it', value).state('a'));
+    assertUnrepresentable(() => definition.encode('scxml'), pattern);
+  };
+  refused(NaN, /NaN has no text/);
+  refused(-0, /-0 has no text/);
+  refused(1n, /a BigInt has no text/);
+  refused({ missing: undefined }, /undefined has no text/);
+  const cyclic = {};
+  cyclic.self = cyclic;
+  refused(cyclic, /a cycle/);
+  refused(new (class Opaque {})(), /Opaque has no text; give it \[serialize\]\(\)/);
+  refused(new Float64Array([NaN]), /NaN has no text/);
+  refused({ [serialize]() { return { name: 'not a name', arguments: [] }; } }, /must answer \{ name, arguments \}/);
+  // A function is written as a named function.
+  const guarded = system.define(statechart({ family: 'guarded', revision: '1' })
+    .state('a', (state) => state.on('go', (t) => t.when(function () { return true; }).target('a'))));
+  assertUnrepresentable(() => guarded.encode('scxml'), /register it and call named\(\)/);
+  system.close();
+}
+
+// encode(format, { datamodel }): the chart written for another data model,
+// printed by that data model.
+function otherDatamodels() {
+  const system = createSystem();
+  system.registerFunction('ready', () => true);
+  const printed = [];
+  system.registerDatamodel('custom', {
+    compile: () => () => true,
+    print(expression) {
+      printed.push(expression.kind);
+      if (expression.kind === 'literal' && expression.value === 'refuse') {
+        throw new ChartCodecError('unrepresentable', 'custom cannot say this');
+      }
+      if (expression.kind === 'literal' && expression.value === 'crash') {
+        throw new RangeError('custom crashed');
+      }
+      if (expression.kind === 'literal' && expression.value === 'wrong') {
+        return 42;
+      }
+      return expression.kind === 'function' ? 'fn()' : `lit(${JSON.stringify(expression.value)})`;
+    },
+  });
+  system.registerDatamodel('reader', { compile: () => () => true });
+  const chart = (value) => system.define(statechart({ family: `c${JSON.stringify(value)}`, revision: '1' })
+    .data('it', value)
+    .state('a', (state) => state.on('go', (t) => t.when(named('ready')).script(function () {}).target('a'))));
+  const written = text(chart(5).encode('scxml', { datamodel: 'custom' }));
+  assert.match(written, /datamodel="custom"/);
+  assert.match(written, /expr="lit\(5\)"/);
+  assert.deepEqual(printed.sort(), ['function', 'literal']);
+  assertUnrepresentable(() => chart('refuse').encode('scxml', { datamodel: 'custom' }), /custom cannot say this/);
+  assert.throws(() => chart('crash').encode('scxml', { datamodel: 'custom' }), RangeError);
+  assertUnrepresentable(() => chart('wrong').encode('scxml', { datamodel: 'custom' }), /must answer a string/);
+  // A JavaScript codec gets the spec as the other data model's, printed.
+  system.registerCodec({
+    name: 'application/vnd.test.peek',
+    encode: (spec) => JSON.stringify([spec.datamodel ?? null, spec.data?.[0]?.initializer?.expr ?? null]),
+  });
+  assert.equal(text(chart(6).encode('application/vnd.test.peek', { datamodel: 'custom' })), '["custom","lit(6)"]');
+  // A data model without print, or none of that name, cannot be written to.
+  assertCode(() => chart(1).encode('scxml', { datamodel: 'reader' }), 'unsupported', /cannot print/);
+  assertCode(() => chart(1).encode('scxml', { datamodel: 'nope' }), 'unsupported', /cannot print/);
+  assertCode(() => chart(1).encode('scxml', { datamodel: 'null' }), 'unsupported', /cannot print/);
+  assertCode(() => chart(1).encode('scxml', { datamodel: 7 }), 'invalid', /data model name/);
+  assertCode(() => system.registerDatamodel('broken', { compile: () => 0, print: 1 }), 'invalid', /print must be a function/);
+  system.close();
+}
+
 (async () => {
   registration();
   await construction();
   constructionRefusals();
+  await printing();
+  printingRefusals();
+  otherDatamodels();
 })().catch((error) => {
   console.error(error);
   process.exit(1);

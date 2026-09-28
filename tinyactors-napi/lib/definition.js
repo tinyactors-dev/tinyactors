@@ -310,11 +310,13 @@ class Definition {
    * (napi ADR 0027): { bytes, identity?, placeOf(kind, id) }. Defining the
    * bytes with { format, identity } answers a definition with this one's
    * revision. `unsupported` when the codec only reads; `invalid` with the
-   * codec's code as `detail.code` when it cannot write the chart (SCXML
-   * cannot write a function: `unrepresentable`).
+   * codec's code as `detail.code` when it cannot write the chart. Host
+   * expressions are printed by the data model the chart is written for
+   * (napi ADR 0031): its own, or `options.datamodel`, which the text then
+   * names; the built-in one refuses a function (`unrepresentable`).
    */
-  encode(format) {
-    return this.system[ENCODE](this.id, format, this);
+  encode(format, options) {
+    return this.system[ENCODE](this.id, format, this, options);
   }
 
   /** State `id` as { id, name, parent, kind }, or undefined out of range. */

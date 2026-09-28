@@ -225,11 +225,16 @@ ta_result tna_js_datamodel_select(tna_js_datamodel *dm, ta_str name);
  */
 bool tna_expression_make(tna_js_datamodel *dm, napi_value value, tna_expr_kind kind, ta_expression *out);
 /*
- * Writes this system's host expressions as source text for an encode: a
- * literal() whose value JSON says exactly, as that JSON (napi ADR 0030).
- * It refuses a function and a location, which have no faithful text.
+ * Prints host expressions for an encode (napi ADR 0031) with `print`, lib's
+ * (kind, value) => text or { message }. After a refusal, `message` says
+ * why. The caller keeps the printer for the encode.
  */
-ta_chart_expression_printer tna_js_datamodel_printer(tna_js_datamodel *dm);
+typedef struct {
+    tna_js_datamodel *dm;
+    napi_value print;
+    char message[256];
+} tna_printer;
+ta_chart_expression_printer tna_printer_adapter(tna_printer *printer);
 void tna_expression_release(ta_expression *expression);
 /*
  * The JavaScript value of a host expression this module made (the function,

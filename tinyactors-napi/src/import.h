@@ -86,8 +86,12 @@ typedef struct {
     ta_source_map *spans;
     /* The definition's explicit identity, or null when it was fingerprinted. */
     const ta_definition_identity **identity;
-    /* Writes a host expression as source text: a literal() as JSON (ADR 0030). */
+    /* Writes a host expression as source text, in the language of the data
+     * model the chart is written for (napi ADR 0031). */
     ta_chart_expression_printer expressions;
+    /* The data model the written chart names, in place of its own; empty
+     * for its own (napi ADR 0031). */
+    ta_str datamodel;
     /* Filled when the result is TA_ERR_INVALID. */
     tna_import_failure *failure;
 } tna_encode_params;

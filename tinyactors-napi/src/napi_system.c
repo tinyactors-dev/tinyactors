@@ -922,8 +922,11 @@ static napi_status tna_encoded_spans(napi_env env, napi_value into, const char *
 }
 
 /*
- * encodeDefinition(id, codec?): the definition written with the SCXML codec,
- * or with `codec`, a JavaScript codec (napi ADR 0027), as { bytes, identity?,
+ * encodeDefinition(id, codec, print, datamodel?): the definition written
+ * with the SCXML codec (`codec` undefined), or with `codec`, a JavaScript
+ * codec (napi ADR 0027); its host expressions printed by `print`, lib's
+ * (kind, value) => text or { message }, and naming `datamodel` in place of
+ * its own when that is a string (napi ADR 0031); as { bytes, identity?,
  * spans: { state, transition, action, expression } }: the bytes, its
  * explicit identity ({ family: { name }, revision }), and where each element
  * landed (core ADR 0085), each kind an array by ID. Throws `not-found` for
@@ -932,8 +935,8 @@ static napi_status tna_encoded_spans(napi_env env, napi_value into, const char *
  * importDefinition's.
  */
 static napi_value tna_encode_definition_method(napi_env env, napi_callback_info info) {
-    size_t argc = 2;
-    napi_value argv[2] = { NULL, NULL };
+    size_t argc = 4;
+    napi_value argv[4] = { NULL, NULL, NULL, NULL };
     napi_value self = NULL;
     if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok) {
         return NULL;
@@ -960,6 +963,21 @@ static napi_value tna_encode_definition_method(napi_env env, napi_callback_info 
     if (!tna_codec_argument(&call, argc >= 2 ? argv[1] : NULL, &codec)) {
         return tna_call_end(&call, NULL);
     }
+    napi_valuetype print_type = napi_undefined;
+    napi_valuetype datamodel_type = napi_undefined;
+    char datamodel[TNA_DM_NAME_MAX];
+    size_t datamodel_length = 0;
+    if (argc < 3 || napi_typeof(env, argv[2], &print_type) != napi_ok || print_type != napi_function ||
+        (argc >= 4 && napi_typeof(env, argv[3], &datamodel_type) != napi_ok)) {
+        return tna_call_end(&call, tna_throw(env, "invalid", "encodeDefinition: expected a print function"));
+    }
+    if (datamodel_type == napi_string &&
+        (napi_get_value_string_utf8(env, argv[3], datamodel, sizeof datamodel, &datamodel_length) != napi_ok ||
+         datamodel_length >= sizeof datamodel - 1u)) {
+        return tna_call_end(&call, tna_throw(env, "invalid", "encodeDefinition: the data model name is too long"));
+    }
+    tna_printer printer = { .dm = &wrapper->dm, .print = argv[2] };
+    ta_chart_expression_printer expressions = tna_printer_adapter(&printer);
     ta_arena arena;
     if (tna_encode_arena(system, &arena) != TA_OK) {
         return tna_call_end(&call, tna_throw(env, "out-of-memory", "encodeDefinition: no memory for the encode"));
@@ -973,7 +991,8 @@ static napi_value tna_encode_definition_method(napi_env env, napi_callback_info 
     ta_result result = tna_encode(system, &(tna_encode_params){
                                               .definition = definition,
                                               .codec = codec.adapter,
-                                              .expressions = tna_js_datamodel_printer(&wrapper->dm),
+                                              .expressions = expressions,
+                                              .datamodel = { datamodel, (uint32_t)datamodel_length },
                                               .arena = &arena,
                                               .out = &text,
                                               .spans = &map,
@@ -1014,6 +1033,9 @@ static napi_value tna_encode_definition_method(napi_env env, napi_callback_info 
         if (result == TA_ERR_UNSUPPORTED) {
             failure = (tna_import_failure){ .stage = TA_IMPORT_STAGE_DECODE };
             snprintf(failure.message, sizeof failure.message, "the codec cannot encode");
+        } else if (printer.message[0] != '\0') {
+            /* The data model's reason, not the codec's phrase (napi ADR 0031). */
+            snprintf(failure.message, sizeof failure.message, "%s", printer.message);
         }
         out = tna_import_refusal(env, result, &failure);
     } else {

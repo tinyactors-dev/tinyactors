@@ -25,49 +25,7 @@ function isDefinition(value) {
 
 const literalBrand = Symbol('tinyactors.literal');
 
-// Whether JSON says `value` exactly: finite numbers other than -0, strings,
-// booleans, null, and arrays (without holes) and plain objects of those,
-// without cycles, accessors or symbol keys.
-function jsonExact(value, seen) {
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') {
-    return true;
-  }
-  if (typeof value === 'number') {
-    return Number.isFinite(value) && !Object.is(value, -0);
-  }
-  if (typeof value !== 'object' || seen.has(value)) {
-    return false;
-  }
-  const prototype = Object.getPrototypeOf(value);
-  const array = Array.isArray(value);
-  if (!array && prototype !== Object.prototype && prototype !== null) {
-    return false;
-  }
-  if (Object.getOwnPropertySymbols(value).length !== 0) {
-    return false;
-  }
-  seen.add(value);
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  const keys = Object.keys(descriptors).filter((key) => !(array && key === 'length'));
-  if (array && keys.length !== value.length) {
-    return false;
-  }
-  const exact = keys.every((key) => {
-    const descriptor = descriptors[key];
-    return descriptor.enumerable && 'value' in descriptor && key !== '__proto__' && jsonExact(descriptor.value, seen);
-  });
-  seen.delete(value);
-  return exact;
-}
-
-// How an encode writes a literal()'s value as source text (napi ADR 0030):
-// JSON, when JSON says the value exactly; otherwise the codec refuses it as
-// unrepresentable. The chart itself keeps the value.
-function literalText(value) {
-  return jsonExact(value, new Set()) ? JSON.stringify(value) : undefined;
-}
-
-native.setupLiteral(literalBrand, literalText, construction);
+native.setupLiteral(literalBrand, construction);
 
 /** Force a callable JavaScript value to be data rather than an expression. */
 function literal(value) {

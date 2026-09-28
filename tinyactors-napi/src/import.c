@@ -109,11 +109,38 @@ ta_result tna_encode_arena(tna_system *system, ta_arena *arena) {
     return ta_arena_init(arena, tna_allocator_for(&system->allocator, TNA_MEMORY_CORE), TNA_IMPORT_ARENA_BLOCK);
 }
 
+/*
+ * A codec that writes a chart as another data model's (napi ADR 0031): it
+ * hands the codec it wraps a copy of the spec that names `datamodel`.
+ */
+typedef struct {
+    ta_chart_codec inner;
+    ta_str datamodel;
+} tna_datamodel_codec;
+
+static ta_result tna_datamodel_encode(void *self, const ta_chart_encode_params *params) {
+    const tna_datamodel_codec *codec = self;
+    ta_scxml_spec spec = *params->spec;
+    spec.datamodel = codec->datamodel;
+    ta_chart_encode_params inner = *params;
+    inner.spec = &spec;
+    return codec->inner.v->encode(codec->inner.self, &inner);
+}
+
 ta_result tna_encode(tna_system *system, const tna_encode_params *params) {
     ta_chart_error error = { 0 };
+    ta_chart_codec codec = params->codec;
+    tna_datamodel_codec renamed = { .inner = params->codec, .datamodel = params->datamodel };
+    ta_chart_codec_vtable renamed_vtable;
+    if (params->datamodel.len != 0 && params->codec.v != NULL && params->codec.v->encode != NULL) {
+        renamed_vtable = *params->codec.v;
+        renamed_vtable.decode = NULL;
+        renamed_vtable.encode = tna_datamodel_encode;
+        codec = (ta_chart_codec){ .self = &renamed, .v = &renamed_vtable };
+    }
     ta_result result = ta_definition_encode(system->core, &(ta_definition_encode_params){
                                                               .definition = params->definition,
-                                                              .codec = params->codec,
+                                                              .codec = codec,
                                                               .arena = params->arena,
                                                               .out = params->out,
                                                               .spans = params->spans,
