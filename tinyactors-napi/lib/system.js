@@ -38,6 +38,15 @@ function microstepLimitOption(options, where) {
   return limit;
 }
 
+// define()'s `resolve`: a function of src, or undefined.
+function resolveOption(options) {
+  const resolve = options?.resolve;
+  if (resolve !== undefined && typeof resolve !== 'function') {
+    throw new TinyactorsError('define(): resolve must be a function of src', 'invalid');
+  }
+  return resolve;
+}
+
 function compile(system, spec) {
   try {
     return core.definition_compile_spec(system, spec);
@@ -808,8 +817,12 @@ class System {
   /**
    * Compile and register a chart: a statechart() builder, or a spec in the
    * generated shape (the shape core's definition export returns). It
-   * compiles against the JavaScript data model ("javascript", ADR 0011); a
-   * plain spec opts into core's null data model with `datamodel: "null"`.
+   * compiles against the data model its `datamodel` names (napi ADR 0027):
+   * "javascript" (ADR 0011) when absent, core's null data model for "null",
+   * or one registerDatamodel() registered, as an import chooses it. Its
+   * inline SCXML children are compiled and nested as an imported
+   * document's are (ADR 0024), and `options.resolve` is used and kept as
+   * there.
    *
    * `options.microstepLimit` overrides the system's
    * `scheduling.microstepLimit` for this definition's actors (core ADR
@@ -844,10 +857,7 @@ class System {
       if (format !== 'scxml') {
         throw new TinyactorsError(`define(): unknown format ${JSON.stringify(format)}; expected "scxml"`, 'invalid');
       }
-      const resolve = options?.resolve;
-      if (resolve !== undefined && typeof resolve !== 'function') {
-        throw new TinyactorsError('define(): resolve must be a function of src', 'invalid');
-      }
+      const resolve = resolveOption(options);
       const name = options?.name;
       if (name !== undefined && typeof name !== 'string') {
         throw new TinyactorsError('define(): name must be a string, such as the document\'s path', 'invalid');
@@ -860,9 +870,29 @@ class System {
     } else if (source === null || typeof source !== 'object') {
       throw new TinyactorsError('define(): expected a statechart() builder or a spec object', 'invalid');
     }
-    this.#native.selectDatamodel(spec.datamodel === 'null' ? 'null' : 'javascript');
-    const compiled = compile(this.#native, spec);
-    return this.#registered(core.system_register_definition(this.#native, compiled.out), limit);
+    const resolve = resolveOption(options);
+    const datamodel = spec.datamodel ?? 'javascript';
+    if (typeof datamodel !== 'string') {
+      throw new TinyactorsError('define(): a spec\'s datamodel is a data model name', 'invalid');
+    }
+    try {
+      this.#native.selectDatamodel(datamodel);
+    } catch (error) {
+      if (error instanceof TinyactorsError && error.code === 'invalid') {
+        throw new TinyactorsError(`define(): no data model is named ${JSON.stringify(datamodel)}; `
+          + 'register it with registerDatamodel()', 'invalid');
+      }
+      throw error;
+    }
+    let compiled;
+    try {
+      compiled = compile(this.#native, spec);
+    } finally {
+      // A spec refused before core read the selection must not pass it on.
+      this.#native.selectDatamodel('null');
+    }
+    const id = core.system_register_definition(this.#native, compiled.out);
+    return this.#registered(this.#refused(this.#native.adoptDefinition(id, resolve)), limit);
   }
 
   // A registered definition's facade, with its microstep limit when one is
@@ -884,7 +914,12 @@ class System {
     } else if (!(source instanceof Uint8Array)) {
       throw new TinyactorsError('define(): an SCXML document is a string or a Uint8Array', 'invalid');
     }
-    const result = this.#native.importDefinition(bytes, name, resolve);
+    return this.#refused(this.#native.importDefinition(bytes, name, resolve));
+  }
+
+  // The ID a define() method answered, or its refusal thrown with where it
+  // is (ADR 0058): `detail` has `stage`, `line`, `column` and `offset`.
+  #refused(result) {
     if (typeof result === 'bigint') {
       return result;
     }

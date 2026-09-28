@@ -1,6 +1,6 @@
 # ADR 0024: A child chart is a nested definition
 
-**Status:** Accepted and implemented (2026-09-26); see the implementation notes. Applies core ADR 0077. Supersedes ADR 0023 and ADR 0021 point 3. Point 5's resolver sweep is replaced by core ADR 0079: a kept `resolve` is released when core tells napi its definition was freed.
+**Status:** Accepted and implemented (2026-09-26); see the implementation notes. Applies core ADR 0077. Supersedes ADR 0023 and ADR 0021 point 3. Point 5's resolver sweep is replaced by core ADR 0079: a kept `resolve` is released when core tells napi its definition was freed. Refined by ADR 0027 (2026-09-28): `define(spec)` walks a spec's inline SCXML children as an import does, so a builder chart's literal SCXML `content()` is now compiled when it is defined; a child given as a Definition is not walked.
 **Date:** 2026-09-26
 
 ## Context

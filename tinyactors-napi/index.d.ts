@@ -202,10 +202,11 @@ export interface System {
    * A spec's SCXML `<invoke>`s with a literal `<content>`, or a literal
    * `src` when `options.resolve` is given, are compiled and nested as an
    * imported document's are (napi ADR 0027), so `define(d.export())`
-   * keeps d's children. `resolve` is kept for children compiled at invoke
-   * time, as the other overload's is.
+   * keeps d's children. A child that cannot be compiled refuses the spec,
+   * with ImportRefusal as `detail`. `resolve` is kept for children compiled
+   * at invoke time, as the other overload's is. A spec's `datamodel` may
+   * name a data model registerDatamodel() registered.
    */
-  // status: partial: options.resolve, and walking a spec's inline children
   define<Data extends object = Record<string, unknown>>(
     source: DefinitionSpec | DefinitionBuilder<Data>,
     options?: { microstepLimit?: number; resolve?: (src: string) => string | Uint8Array | undefined },
@@ -267,9 +268,11 @@ export interface System {
   ): Definition<Data>;
 
   /**
-   * Register a data model for imported documents (ADR 0019): `compile`
-   * turns each source expression into what a builder chart would pass, and
-   * the built-in data model runs it. `javascript` and `null` are reserved.
+   * Register a data model (ADR 0019): `compile` turns each source
+   * expression into what a builder chart would pass, and the built-in data
+   * model runs it. An imported document chooses it by its `datamodel`
+   * attribute, and a spec by its `datamodel` member (napi ADR 0027).
+   * `javascript` and `null` are reserved.
    */
   registerDatamodel(name: string, datamodel: DatamodelCompiler): void;
 
@@ -1646,7 +1649,6 @@ export interface DefinitionSpec {
    * name is a data model registerDatamodel() registered, chosen as an
    * imported document chooses it (napi ADR 0027).
    */
-  // status: partial: define() compiles every name but "null" as "javascript"
   readonly datamodel?: string;
   readonly identity?: {
     readonly family: { readonly name: string };

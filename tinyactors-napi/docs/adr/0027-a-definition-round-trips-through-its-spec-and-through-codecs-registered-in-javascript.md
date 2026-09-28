@@ -1,6 +1,6 @@
 # ADR 0027: A definition round-trips through its spec, and through codecs registered in JavaScript
 
-**Status:** Accepted (2026-09-28). Points 1 and 3 implemented (2026-09-28), see the implementation notes; points 2, 4 and 5 not yet. The target API is in `index.d.ts`, marked `// status: unimplemented` or `// status: partial`. Applies core ADR 0042 (export), ADR 0053 (codecs), ADR 0071 (lookups by ID), ADR 0077 (identity) and ADR 0085 (spans) to the addon. Refines ADR 0019 (`define()` options, data models by name) and ADR 0024 (which charts are walked for inline children). Refined by ADR 0029: a function called by name is source text, so "a chart without functions" in point 1 means a chart without anonymous functions.
+**Status:** Accepted (2026-09-28). Points 1, 2 and 3 implemented (2026-09-28), see the implementation notes; points 4 and 5 not yet. The target API is in `index.d.ts`, marked `// status: unimplemented` or `// status: partial`. Applies core ADR 0042 (export), ADR 0053 (codecs), ADR 0071 (lookups by ID), ADR 0077 (identity) and ADR 0085 (spans) to the addon. Refines ADR 0019 (`define()` options, data models by name) and ADR 0024 (which charts are walked for inline children). Refined by ADR 0029: a function called by name is source text, so "a chart without functions" in point 1 means a chart without anonymous functions.
 **Date:** 2026-09-28
 
 ## Context
@@ -268,3 +268,35 @@ states the round-trip contract of point 1 on `export()`.
   definition throws `not-found` from every lookup and the export. Not
   done: the round trip over every chart the other suites define.
 
+### Point 2 (2026-09-28)
+
+- **Where:** `src/napi_datamodel.{c,h}` (`tna_js_datamodel_select`: the
+  compile's data model by name, from the same choices an import takes; it
+  replaces the `select_javascript` flag), `src/napi_system.c`
+  (`selectDatamodel` takes any of those names; `tna_adopt`, shared by
+  `importDefinition` and the new `adoptDefinition`, nests the inline
+  children with `tna_children_nest` and keeps `resolve`),
+  `lib/system.js` (`define(spec)` selects `spec.datamodel`, takes
+  `resolve`, adopts the registered definition, and throws a refusal as an
+  import does).
+- **Order.** `define(spec)` compiles and registers, then walks, as an
+  import does: a spec that core answers with a live definition (core ADR
+  0077) finds its children nested already and nests nothing.
+- **A refusal is an import's.** A broken child refuses the spec with
+  `invalid` and the `ImportRefusal` detail an import gives (`stage`,
+  `message`), and the parent is retired, which frees what it nested.
+  A name no data model has throws `invalid` before anything compiles.
+- **Keeping `resolve` can fail for lack of memory.** Before, an import
+  that could not keep it threw `out-of-memory` and left the definition
+  registered with no `Definition` to retire it; both forms now retire it
+  first.
+- **The selection is cleared after every spec compile,** refused or not,
+  so a spec refused before core reads it cannot pass its data model on to
+  the next compile.
+- **Tests:** `test/definition.js`: an imported chart on a registered data
+  model defines again from its export in its own system (the same
+  definition) and in another that registers the name (an equal export,
+  and its source expressions run); a spec naming an unregistered data
+  model is refused; another system defining a parent's export nests its
+  inline child, and its `src` child only when given `resolve`; a spec
+  with a broken inline child is refused and leaves no definition behind.

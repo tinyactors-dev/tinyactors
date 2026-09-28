@@ -521,8 +521,9 @@ static napi_value tna_mailbox_method(napi_env env, napi_callback_info info) {
 
 /*
  * selectDatamodel(name): the data model the next compile uses, "null" (core's
- * null data model, the default) or "javascript". System.define() calls it
- * just before compiling; the compile resets it to the default.
+ * null data model, the default), "javascript", or a registered one (napi ADR
+ * 0027). System.define() calls it just before compiling; the compile resets
+ * it to the default. Any other name throws `invalid`.
  */
 static napi_value tna_select_datamodel_method(napi_env env, napi_callback_info info) {
     size_t argc = 1;
@@ -534,13 +535,14 @@ static napi_value tna_select_datamodel_method(napi_env env, napi_callback_info i
     if (wrapper == NULL) {
         return NULL;
     }
-    char name[16];
+    /* One byte more than any data model's name, so a longer one is never
+     * cut down to match. */
+    char name[TNA_DM_NAME_MAX + 1u];
     size_t length = 0;
     if (argc < 1 || napi_get_value_string_utf8(env, argv[0], name, sizeof name, &length) != napi_ok ||
-        (strcmp(name, "javascript") != 0 && strcmp(name, "null") != 0)) {
-        return tna_throw(env, "invalid", "selectDatamodel: expected \"javascript\" or \"null\"");
+        length >= TNA_DM_NAME_MAX || tna_js_datamodel_select(&wrapper->dm, (ta_str){ name, (uint32_t)length }) != TA_OK) {
+        return tna_throw(env, "invalid", "selectDatamodel: expected \"javascript\", \"null\" or a registered data model");
     }
-    wrapper->dm.select_javascript = strcmp(name, "javascript") == 0;
     napi_value undefined = NULL;
     napi_get_undefined(env, &undefined);
     return undefined;
@@ -610,6 +612,51 @@ static napi_value tna_import_refusal(napi_env env, ta_result result, const tna_i
 
 
 /*
+ * After a definition is registered by either define() form: its inline
+ * child charts are compiled now and nested (napi ADR 0024), and it keeps
+ * `resolve` for the children it compiles at invoke time from srcexpr. A
+ * refused child retires the definition, which frees what it nested.
+ */
+static ta_result tna_adopt(tna_napi_system *wrapper, ta_definition_id id, napi_value resolve,
+                           tna_import_failure *failure) {
+    tna_system *system = wrapper->system;
+    /* resolve(src) and the compilers run inside this core call (ADR 0019). */
+    system->inside_core = true;
+    ta_result result = tna_children_nest(wrapper, id, resolve, failure);
+    if (result != TA_OK) {
+        /* Retiring drops the hold, which frees the chart and what it nested. */
+        (void)ta_system_retire_definition(system->core, id);
+    }
+    system->inside_core = false;
+    tna_scratch_reset_call(&system->scratch);
+    if (result == TA_OK && resolve != NULL && tna_children_keep_resolver(wrapper, id, resolve) != TA_OK) {
+        (void)ta_system_retire_definition(system->core, id);
+        result = TA_ERR_NOMEM;
+    }
+    return result;
+}
+
+/* What a define() method answers: the ID, a refusal object, or a throw. */
+static napi_value tna_define_result(napi_env env, ta_result result, const tna_import_failure *failure,
+                                    ta_definition_id id, const char *method) {
+    bool pending = false;
+    if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
+        return NULL;
+    }
+    if (result == TA_ERR_INVALID || result == TA_ERR_UNSUPPORTED) {
+        return tna_import_refusal(env, result, failure);
+    }
+    char message[96];
+    if (result != TA_OK) {
+        snprintf(message, sizeof message, "%s: the definition failed", method);
+        return tna_throw(env, result == TA_ERR_NOMEM ? "out-of-memory" : "invalid", message);
+    }
+    napi_value value = NULL;
+    napi_create_bigint_uint64(env, id, &value);
+    return value;
+}
+
+/*
  * importDefinition(bytes, name?, resolve?): decodes an SCXML document,
  * compiles it against the data model it names, and registers it (ADR 0019,
  * core ADR 0076); `name` is what the document is called, the source its
@@ -668,36 +715,48 @@ static napi_value tna_import_definition_method(napi_env env, napi_callback_info 
                                                     .failure = &failure,
                                                     .resolver = tna_src_resolver_adapter(&fetcher),
                                                 });
-    /* Its inline child charts are compiled now, and nested (napi ADR 0024). */
-    if (result == TA_OK) {
-        result = tna_children_nest(wrapper, id, fetcher.resolve, &failure);
-        if (result != TA_OK) {
-            /* Retiring drops the hold, which frees the chart and what it nested. */
-            (void)ta_system_retire_definition(system->core, id);
-        }
-    }
     system->inside_core = false;
     tna_scratch_reset_call(&system->scratch);
-    bool pending = false;
-    if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
-        return NULL;
+    if (result == TA_OK) {
+        result = tna_adopt(wrapper, id, fetcher.resolve, &failure);
     }
-    if (result == TA_ERR_INVALID || result == TA_ERR_UNSUPPORTED) {
-        return tna_import_refusal(env, result, &failure);
-    }
-    if (result != TA_OK) {
-        return tna_throw(env, result == TA_ERR_NOMEM ? "out-of-memory" : "invalid", "importDefinition: the import failed");
-    }
-    /* The definition keeps resolve(src) for the child charts it compiles at
-     * invoke time from srcexpr (napi ADR 0024). */
-    if (fetcher.resolve != NULL && tna_children_keep_resolver(wrapper, id, fetcher.resolve) != TA_OK) {
-        return tna_throw(env, "out-of-memory", "importDefinition: cannot keep resolve(src)");
-    }
-    napi_value value = NULL;
-    napi_create_bigint_uint64(env, id, &value);
-    return value;
+    return tna_define_result(env, result, &failure, id, "importDefinition");
 }
 
+/*
+ * adoptDefinition(id, resolve?): what define(spec) does after registering
+ * (napi ADR 0027), as importDefinition does after its import: nests the
+ * definition's inline SCXML children and keeps `resolve`. The ID back as a
+ * bigint, or a refusal object as importDefinition's; a refused definition
+ * is retired.
+ */
+static napi_value tna_adopt_definition_method(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2] = { NULL, NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    if (wrapper->system->inside_core) {
+        return tna_throw(env, "reentrant", "define: not from inside a core call (ADR 0013)");
+    }
+    uint64_t id = 0;
+    bool lossless = false;
+    if (argc < 1 || napi_get_value_bigint_uint64(env, argv[0], &id, &lossless) != napi_ok || !lossless) {
+        return tna_throw(env, "invalid", "adoptDefinition: expected a definition ID");
+    }
+    napi_value resolve = NULL;
+    napi_valuetype resolve_type = napi_undefined;
+    if (argc >= 2 && napi_typeof(env, argv[1], &resolve_type) == napi_ok && resolve_type == napi_function) {
+        resolve = argv[1];
+    }
+    tna_import_failure failure;
+    ta_result result = tna_adopt(wrapper, (ta_definition_id)id, resolve, &failure);
+    return tna_define_result(env, result, &failure, (ta_definition_id)id, "adoptDefinition");
+}
 /* One kind's spans as an array by ID: { line, column, endLine, endColumn },
  * or null where the encode wrote nothing for the element. */
 static napi_status tna_encoded_spans(napi_env env, napi_value into, const char *kind, const ta_source_span *spans,
@@ -1518,6 +1577,7 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "selectDatamodel", NULL, tna_select_datamodel_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "registerDatamodel", NULL, tna_register_datamodel_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "importDefinition", NULL, tna_import_definition_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "adoptDefinition", NULL, tna_adopt_definition_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "encodeDefinition", NULL, tna_encode_definition_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "internEvent", NULL, tna_intern_event_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "post", NULL, tna_post_method, NULL, NULL, NULL, napi_default_method, NULL },

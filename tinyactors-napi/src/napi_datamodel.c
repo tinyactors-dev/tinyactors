@@ -1244,6 +1244,19 @@ uint32_t tna_js_datamodel_choices(tna_js_datamodel *dm, ta_datamodel *out) {
     return count;
 }
 
+ta_result tna_js_datamodel_select(tna_js_datamodel *dm, ta_str name) {
+    ta_datamodel choices[2u + TNA_DM_REGISTERED_MAX];
+    uint32_t count = tna_js_datamodel_choices(dm, choices);
+    for (uint32_t index = 0; index < count; index += 1) {
+        ta_str candidate = choices[index].v->name;
+        if (candidate.len == name.len && memcmp(candidate.ptr, name.ptr, name.len) == 0) {
+            dm->selected = choices[index];
+            return TA_OK;
+        }
+    }
+    return TA_ERR_NOT_FOUND;
+}
+
 /* ------------------------------------------------------------------------
  * The evaluation context
  */

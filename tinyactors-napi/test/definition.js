@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const { createSystem, statechart, literal, TinyactorsError } = require('..');
 const { core } = require('../lib/native');
 const { nativeOf } = require('../lib/system');
+const { ecmascript } = require('../tools/ecmascript-datamodel');
 
 function assertCode(fn, code, pattern) {
   assert.throws(fn, (error) => {
@@ -436,6 +437,93 @@ function freed() {
   system.close();
 }
 
+// A spec names any data model (napi ADR 0027): an imported chart on a
+// registered data model defines again from its export, in its own system
+// and in another that registers the same name; a name nothing registered
+// is refused.
+async function specOnRegisteredDatamodel() {
+  const text = `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="tally" datamodel="ecmascript" initial="counting">
+    <datamodel><data id="count" expr="1"/></datamodel>
+    <state id="counting">
+      <transition event="add" cond="count &lt; 3" target="counting"><assign location="count" expr="count + 1"/></transition>
+      <transition event="add" cond="count >= 3" target="full"/>
+    </state>
+    <final id="full"/>
+  </scxml>`;
+  const withEcmascript = () => {
+    const system = createSystem();
+    system.registerDatamodel('ecmascript', ecmascript);
+    return system;
+  };
+  const first = withEcmascript();
+  const tally = first.define(text, { format: 'scxml' });
+  const spec = tally.export();
+  assert.equal(spec.datamodel, 'ecmascript');
+  assert.equal(first.define(spec).id, tally.id, 'the same system answers the same definition');
+  assert.equal(tally.inspect().datamodel, 'ecmascript');
+
+  const second = withEcmascript();
+  const copy = second.define(spec);
+  assert.equal(copy.inspect().datamodel, 'ecmascript');
+  assert.deepStrictEqual(copy.export(), spec);
+  const actor = second.spawn(copy);
+  await actor.send('add');
+  await actor.send('add');
+  assert.deepEqual(actor.inspect().activeStates, ['counting'], 'count < 3 held twice');
+  await actor.send('add');
+  assertCode(() => actor.inspect(), 'not-found', undefined, 'count >= 3 finished it, and it was reclaimed');
+
+  const bare = createSystem();
+  assertCode(() => bare.define(spec), 'invalid', /no data model is named "ecmascript"/);
+  // The refusal leaves the system usable: the next spec compiles as its own.
+  assert.equal(bare.define({ name: 'plain', states: [{ kind: 'atomic', id: 'a' }] }).inspect().datamodel, 'javascript');
+  for (const system of [first, second, bare]) {
+    system.close();
+  }
+}
+
+const KID = '<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="kid" datamodel="null"><final id="f"/></scxml>';
+const PARENT = `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="parent" datamodel="null">
+  <state id="a">
+    <invoke type="scxml" src="kid.scxml"/>
+    <invoke type="scxml"><content><scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="inline" datamodel="null"><final id="f"/></scxml></content></invoke>
+  </state>
+</scxml>`;
+
+const familiesOf = (system, ids) => ids.map((id) => [...system.definitions()].find((view) => view.id === id).identity.family);
+
+// define(spec) walks inline SCXML children as an import does (napi ADR
+// 0027, ADR 0024): another system defining a parent's export nests its
+// children, a literal src only when `resolve` is given, and a broken child
+// refuses the parent at define time and leaves nothing behind.
+function specChildren() {
+  const source = createSystem();
+  const parent = source.define(PARENT, { format: 'scxml', resolve: () => KID });
+  const spec = parent.export();
+  assert.deepEqual(familiesOf(source, parent.inspect().nested), ['kid', 'inline']);
+
+  const resolved = createSystem();
+  const withResolve = resolved.define(spec, { resolve: (src) => (src === 'kid.scxml' ? KID : undefined) });
+  assert.deepEqual(familiesOf(resolved, withResolve.inspect().nested), ['kid', 'inline']);
+
+  const unresolved = createSystem();
+  const withoutResolve = unresolved.define(spec);
+  assert.deepEqual(familiesOf(unresolved, withoutResolve.inspect().nested), ['inline'],
+    'a literal src without resolve is fetched at invoke time, as for an import');
+
+  const broken = structuredClone(spec);
+  broken.identity = undefined;
+  broken.name = 'broken';
+  broken.states[0].invokes[1].data.content.bytes = new TextEncoder().encode('<scxml name="bad"><state');
+  const refusing = createSystem();
+  assertCode(() => refusing.define(broken), 'invalid', /child chart of <invoke> 1/);
+  assert.deepEqual([...refusing.definitions()], [], 'the refused parent and its children are freed');
+  assertCode(() => refusing.define(spec, { resolve: 'kid.scxml' }), 'invalid', /resolve must be a function/);
+  for (const system of [source, resolved, unresolved, refusing]) {
+    system.close();
+  }
+}
+
 definitions();
 builder();
 refusals();
@@ -444,3 +532,8 @@ sourceSpans();
 exportedDocument();
 exportedBuilder();
 freed();
+specChildren();
+specOnRegisteredDatamodel().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

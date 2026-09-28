@@ -577,16 +577,16 @@ bool tna_inject_ta_allocator(tna_call *call, ta_allocator *out) {
 }
 
 /*
- * Core's null data model, or the JavaScript data model (ADR 0011) when
- * System.define() selected it for this compile (selectDatamodel).
+ * The data model System.define() selected for this compile (selectDatamodel,
+ * napi ADR 0027), or core's null data model.
  */
 bool tna_inject_ta_datamodel(tna_call *call, ta_datamodel *out) {
     if (call->owner == NULL) {
         return tna_invalid(call, "a call that runs against a system");
     }
     tna_js_datamodel *dm = &call->owner->dm;
-    *out = dm->select_javascript ? tna_js_datamodel_adapter(dm) : ta_null_datamodel();
-    dm->select_javascript = false;
+    *out = dm->selected.v != NULL ? dm->selected : ta_null_datamodel();
+    dm->selected = (ta_datamodel){ 0 };
     return true;
 }
 

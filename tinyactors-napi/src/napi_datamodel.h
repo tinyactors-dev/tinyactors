@@ -86,11 +86,11 @@ struct tna_js_datamodel {
     /* False while close runs from a finalizer, where no JavaScript may run. */
     bool js_usable;
     /*
-     * The next compile uses this data model instead of core's null data
-     * model; the compile resets it. The generated layer alone compiles
-     * against the null data model.
+     * The data model the next compile uses (tna_js_datamodel_select); the
+     * compile resets it. Absent (`v` null) is core's null data model, which
+     * the generated layer alone compiles against.
      */
-    bool select_javascript;
+    ta_datamodel selected;
     tna_dm_adapter builtin;
     tna_dm_adapter registered[TNA_DM_REGISTERED_MAX];
     uint32_t registered_count;
@@ -154,6 +154,13 @@ ta_result tna_js_datamodel_register(tna_js_datamodel *dm, ta_str name, napi_valu
  * for 2 + TNA_DM_REGISTERED_MAX.
  */
 uint32_t tna_js_datamodel_choices(tna_js_datamodel *dm, ta_datamodel *out);
+
+/*
+ * Selects the data model named `name` for the next compile (napi ADR 0027):
+ * "javascript", "null", or a registered one, as an import chooses it (core
+ * ADR 0076). TA_ERR_NOT_FOUND for any other name.
+ */
+ta_result tna_js_datamodel_select(tna_js_datamodel *dm, ta_str name);
 
 /*
  * A host expression for `value` of `kind`, with one reference the caller
