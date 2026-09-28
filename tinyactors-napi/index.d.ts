@@ -292,10 +292,17 @@ export interface System {
    * Register a class that charts construct by name (napi ADR 0031): source
    * text `new Name(arguments)`, with JSON arguments in which
    * `new Name(...)` may appear again. The built-in data model reads it
-   * without evaluating anything, and an evaluating data model has it in
-   * scope. A value whose `[serialize]()` names the class is printed so.
-   * Functions and classes share one name space; `Date`, `Map`, `Set`,
-   * `RegExp` and the typed arrays are registered in every system.
+   * without evaluating anything, as a value or a condition: the arguments
+   * are parsed when a chart is defined (an unregistered name refuses the
+   * chart), and the constructor runs, with fresh arguments, each time the
+   * expression is evaluated. An evaluating data model gets the class in
+   * its compile scope (DatamodelScope). A value whose `[serialize]()`
+   * names the class is printed so.
+   *
+   * `name` is an identifier other than `In`. Functions and classes share
+   * one name space, and a name is registered once, whichever it names:
+   * registering it again throws `invalid`. `Date`, `Map`, `Set`, `RegExp`
+   * and the typed arrays are registered in every system.
    */
   // status: unimplemented
   registerClass(name: string, constructor: new (...args: any[]) => unknown): void;
@@ -741,21 +748,41 @@ export type ExpressionRole = "value" | "condition" | "location" | "script";
  * the data and one argument, the context; for "location", a data name or
  * `{ get(context), set(value, context) }`. Throwing refuses the chart; an
  * error with numeric `offset` and `length` points into `source`.
+ *
+ * `scope` holds the functions and classes the system registered when the
+ * chart is defined (napi ADR 0031), for a data model that puts them in its
+ * expressions' scope. A registered function is meant to be called with
+ * `this` = the data and the context as its argument, as the built-in data
+ * model calls `name()`.
  */
 export interface DatamodelCompiler {
+  // status: partial: scope
   compile(
     source: string,
     role: ExpressionRole,
+    scope: DatamodelScope,
   ): ((this: any, context: any) => unknown) | string | { get(this: any, context: any): unknown; set(this: any, value: unknown, context: any): void };
   /**
    * The inverse of compile (napi ADR 0031): a chart's host expression as
    * source text in this data model's language, for Definition.encode().
-   * Throw a ChartCodecError with code `unrepresentable` to refuse one. A
-   * value with `[serialize]()` describes itself; print its name and
-   * arguments. Without print, charts cannot be encoded for this data model.
+   * Throw a ChartCodecError with code `unrepresentable` to refuse one; any
+   * other exception propagates from encode(). A value with `[serialize]()`
+   * describes itself: print its name and arguments. A function is an
+   * expression: print text that calls it with `this` = the data and the
+   * context. It gets no role (core's printer does not know it), so the
+   * text must serve as a value, a condition and a script alike. Without
+   * print, charts cannot be encoded for this data model.
    */
   // status: unimplemented
-  print?(expression: PrintableExpression, role: ExpressionRole): string;
+  print?(expression: PrintableExpression): string;
+}
+
+/** What DatamodelCompiler.compile() gets as its scope (napi ADR 0031). */
+export interface DatamodelScope {
+  /** System.registerFunction()'s functions, by name. */
+  readonly functions: Readonly<Record<string, (this: any, context: any) => unknown>>;
+  /** System.registerClass()'s classes by name, the standard ones included. */
+  readonly classes: Readonly<Record<string, new (...args: any[]) => unknown>>;
 }
 
 /** A host expression as DatamodelCompiler.print() receives it. */
@@ -774,7 +801,11 @@ export type PrintableExpression =
 // status: unimplemented
 export declare const serialize: unique symbol;
 
-/** What `value[serialize]()` returns. */
+/**
+ * What `value[serialize]()` returns: `name`, the identifier its
+ * constructor is registered under where the text will be read, and the
+ * arguments that rebuild it, each printable in turn.
+ */
 export interface SerializedValue {
   readonly name: string;
   readonly arguments: readonly unknown[];
@@ -872,6 +903,8 @@ export interface Definition<Data extends object = Record<string, unknown>> {
    * value, so defining it while the original is registered under the same
    * identity throws `definition-mismatch`; another system defines it under
    * that identity. Text written for another data model is another chart.
+   * `options.datamodel` must name the built-in data model or a registered
+   * one that has print(); otherwise encode() throws `unsupported`.
    */
   // status: partial: options.datamodel, data models' print, new Name(...)
   encode(format: string, options?: { datamodel?: string }): EncodedChart;
