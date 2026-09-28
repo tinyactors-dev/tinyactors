@@ -162,7 +162,9 @@ reason. ADRs and research notes are not checked: they are a record.
 
 The build runs on Linux and macOS, and a script must give the same answer
 on both. Everything that differs between hosts lives in
-`mise/lib/toolchain/` (see `mise/lib/toolchain.rb`):
+`mise/lib/toolchain/` (see `mise/lib/toolchain.rb`). How the build works,
+its design constraints, and guides for changing it are in
+[`docs/build/`](docs/build/README.md):
 
 - **`Toolchain::Tool[:name]`** runs a program pinned in the root
   `mise.toml`: zig, clang, LLVM's binutils (`llvm-nm`, `llvm-readobj`,
