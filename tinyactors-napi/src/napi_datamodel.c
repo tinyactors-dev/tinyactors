@@ -2044,6 +2044,7 @@ bool tna_js_datamodel_init(tna_js_datamodel *dm, tna_napi_system *wrapper, napi_
     tna_adapter_init(&dm->builtin, dm, (ta_str){ "javascript", 10 });
     napi_value context = NULL;
     napi_value functions = NULL;
+    napi_value classes = NULL;
     napi_property_descriptor properties[] = {
         { "data", NULL, NULL, tna_get_data, NULL, NULL, napi_enumerable, dm },
         { "event", NULL, NULL, tna_get_event, NULL, NULL, napi_enumerable, dm },
@@ -2057,24 +2058,35 @@ bool tna_js_datamodel_init(tna_js_datamodel *dm, tna_napi_system *wrapper, napi_
            napi_object_freeze(env, context) == napi_ok && napi_create_reference(env, context, 1, &dm->context) == napi_ok &&
            tna_global_function(env, "JSON", "parse", &dm->json_parse) &&
            tna_global_function(env, "Array", "from", &dm->array_from) && napi_create_object(env, &functions) == napi_ok &&
-           napi_create_reference(env, functions, 1, &dm->functions) == napi_ok;
+           napi_create_reference(env, functions, 1, &dm->functions) == napi_ok &&
+           napi_create_object(env, &classes) == napi_ok && napi_create_reference(env, classes, 1, &dm->classes) == napi_ok;
 }
 
-ta_result tna_js_datamodel_register_function(tna_js_datamodel *dm, ta_str name, napi_value run) {
+/* Whether `table` (a registered-name table) has `key` as an own property. */
+static bool tna_table_has(napi_env env, napi_ref table_ref, napi_value key, bool *has) {
+    napi_value table = NULL;
+    *has = false;
+    return table_ref != NULL && napi_get_reference_value(env, table_ref, &table) == napi_ok && table != NULL &&
+           napi_has_own_property(env, table, key, has) == napi_ok;
+}
+
+ta_result tna_js_datamodel_register_name(tna_js_datamodel *dm, const tna_register_name_params *params) {
     napi_env env = dm->env;
     napi_value table = NULL;
     napi_value key = NULL;
-    bool has = false;
-    if (dm->functions == NULL || napi_get_reference_value(env, dm->functions, &table) != napi_ok || table == NULL ||
-        napi_create_string_utf8(env, name.ptr, name.len, &key) != napi_ok ||
-        napi_has_own_property(env, table, key, &has) != napi_ok) {
+    bool function_has = false;
+    bool class_has = false;
+    napi_ref target = params->constructor ? dm->classes : dm->functions;
+    if (target == NULL || napi_get_reference_value(env, target, &table) != napi_ok || table == NULL ||
+        napi_create_string_utf8(env, params->name.ptr, params->name.len, &key) != napi_ok ||
+        !tna_table_has(env, dm->functions, key, &function_has) || !tna_table_has(env, dm->classes, key, &class_has)) {
         return TA_ERR_NOMEM;
     }
-    if (has) {
+    if (function_has || class_has) {
         return TA_ERR_INVALID;
     }
     /* Defined, not set: a name such as `__proto__` is an own property too. */
-    napi_property_descriptor property = { NULL, key, NULL, NULL, NULL, run, napi_enumerable, NULL };
+    napi_property_descriptor property = { NULL, key, NULL, NULL, NULL, params->value, napi_enumerable, NULL };
     return napi_define_properties(env, table, 1, &property) == napi_ok ? TA_OK : TA_ERR_NOMEM;
 }
 
@@ -2094,7 +2106,7 @@ void tna_js_datamodel_after_core(tna_js_datamodel *dm) {
 
 void tna_js_datamodel_close(tna_js_datamodel *dm, bool refs_usable) {
     tna_js_datamodel_after_core(dm);
-    napi_ref *refs[] = { &dm->context, &dm->json_parse, &dm->array_from, &dm->functions, &dm->serialize, &dm->deserialize,
+    napi_ref *refs[] = { &dm->context, &dm->json_parse, &dm->array_from, &dm->functions, &dm->classes, &dm->serialize, &dm->deserialize,
                          &dm->objects };
     for (size_t at = 0; at < sizeof refs / sizeof refs[0]; at += 1) {
         if (*refs[at] != NULL && refs_usable) {

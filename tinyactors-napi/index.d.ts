@@ -304,7 +304,6 @@ export interface System {
    * registering it again throws `invalid`. `Date`, `Map`, `Set`, `RegExp`
    * and the typed arrays are registered in every system.
    */
-  // status: unimplemented
   registerClass(name: string, constructor: new (...args: any[]) => unknown): void;
 
   /**
@@ -798,7 +797,6 @@ export type PrintableExpression =
  * that rebuild it. Being a registered symbol, a class can implement it
  * without depending on this package.
  */
-// status: unimplemented
 export declare const serialize: unique symbol;
 
 /**

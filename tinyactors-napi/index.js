@@ -7,6 +7,7 @@ const { statechart, literal, content, named } = require('./lib/statechart');
 const { TRACE_KINDS, parseTraceparent, formatTraceparent, stepSpanID } = require('./lib/tracing');
 const { decodeTraces } = require('./lib/otlp');
 const { ChartCodecError } = require('./lib/codecs');
+const { serialize } = require('./lib/values');
 const { metricsToOTLP } = require('./lib/metrics');
 const { createDebugSession, DAPReader, encodeDAPMessage } = require('./lib/debug');
 
@@ -18,6 +19,8 @@ module.exports = {
   content,
   // A call of a function the system registered (napi ADR 0029).
   named,
+  // What a value implements to describe itself in text (napi ADR 0031).
+  serialize,
   TinyactorsError,
   // Chart codecs (napi ADR 0027): a codec's refusal.
   ChartCodecError,

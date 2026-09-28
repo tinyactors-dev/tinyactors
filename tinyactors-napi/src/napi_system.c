@@ -587,35 +587,48 @@ static napi_value tna_register_datamodel_method(napi_env env, napi_callback_info
 }
 
 /*
- * registerFunction(name, run): the function source text `name()` calls
- * (napi ADR 0029). lib/ checks that `name` is an identifier other than In.
+ * registerFunction(name, run) and registerClass(name, constructor): what
+ * source text `name()` calls (napi ADR 0029) and `new Name(...)` builds
+ * (napi ADR 0031), in one name space. The method's data says which. lib/
+ * checks that `name` is an identifier other than In.
  */
-static napi_value tna_register_function_method(napi_env env, napi_callback_info info) {
+static napi_value tna_register_name_method(napi_env env, napi_callback_info info) {
     size_t argc = 2;
     napi_value argv[2] = { NULL, NULL };
-    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+    void *data = NULL;
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, &data) != napi_ok) {
         return NULL;
     }
+    bool constructor = data != NULL;
+    const char *method = constructor ? "registerClass" : "registerFunction";
     tna_napi_system *wrapper = tna_open_this(env, info);
     if (wrapper == NULL) {
         return NULL;
     }
+    char message[128];
     if (wrapper->system->inside_core) {
-        return tna_throw(env, "reentrant", "registerFunction: not from inside a core call (ADR 0013)");
+        snprintf(message, sizeof message, "%s: not from inside a core call (ADR 0013)", method);
+        return tna_throw(env, "reentrant", message);
     }
     char name[256];
     size_t length = 0;
     napi_valuetype type = napi_undefined;
     if (argc < 2 || napi_get_value_string_utf8(env, argv[0], name, sizeof name, &length) != napi_ok ||
         length == 0 || length >= sizeof name - 1u || napi_typeof(env, argv[1], &type) != napi_ok || type != napi_function) {
-        return tna_throw(env, "invalid", "registerFunction: expected a name of at most 254 bytes and a function");
+        snprintf(message, sizeof message, "%s: expected a name of at most 254 bytes and a %s", method,
+                 constructor ? "constructor" : "function");
+        return tna_throw(env, "invalid", message);
     }
-    ta_result result = tna_js_datamodel_register_function(&wrapper->dm, (ta_str){ name, (uint32_t)length }, argv[1]);
+    ta_result result = tna_js_datamodel_register_name(
+        &wrapper->dm,
+        &(tna_register_name_params){ .name = { name, (uint32_t)length }, .value = argv[1], .constructor = constructor });
     if (result == TA_ERR_INVALID) {
-        return tna_throw(env, "invalid", "registerFunction: a function is already registered under this name");
+        snprintf(message, sizeof message, "%s: a function or class is already registered under this name", method);
+        return tna_throw(env, "invalid", message);
     }
     if (result != TA_OK) {
-        return tna_throw(env, "out-of-memory", "registerFunction: could not keep the function");
+        snprintf(message, sizeof message, "%s: could not keep it", method);
+        return tna_throw(env, "out-of-memory", message);
     }
     napi_value undefined = NULL;
     napi_get_undefined(env, &undefined);
@@ -1735,7 +1748,8 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "mailbox", NULL, tna_mailbox_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "selectDatamodel", NULL, tna_select_datamodel_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "registerDatamodel", NULL, tna_register_datamodel_method, NULL, NULL, NULL, napi_default_method, NULL },
-        { "registerFunction", NULL, tna_register_function_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "registerFunction", NULL, tna_register_name_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "registerClass", NULL, tna_register_name_method, NULL, NULL, NULL, napi_default_method, (void *)"class" },
         { "importDefinition", NULL, tna_import_definition_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "adoptDefinition", NULL, tna_adopt_definition_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "encodeDefinition", NULL, tna_encode_definition_method, NULL, NULL, NULL, napi_default_method, NULL },

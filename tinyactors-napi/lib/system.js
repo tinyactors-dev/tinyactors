@@ -16,6 +16,7 @@ const { EventNames } = require('./events');
 const { SessionImage, handleOf } = require('./image');
 const { traceConfig, TRACE_KINDS } = require('./tracing');
 const { buildSnapshot } = require('./metrics');
+const { STANDARD_CLASSES } = require('./values');
 
 const NO_STATE = 4294967295;
 
@@ -206,6 +207,10 @@ class System {
   #lifetime = new AbortController();
   // The chart codecs define() and Definition.encode() choose by format (napi ADR 0027).
   #codecs = new Codecs();
+  // registerFunction()'s and registerClass()'s names (napi ADR 0031), as the
+  // native tables have them, for a registered data model's compile scope.
+  #functions = Object.create(null);
+  #classes = Object.create(null);
   #effectContext;
 
   static {
@@ -249,6 +254,9 @@ class System {
       throw new TinyactorsError('createSystem(): unloadValues must be "serialize" or "handles"', 'invalid');
     }
     this.#native.setOffloadValues(v8.serialize, v8.deserialize, unloadValues === 'handles');
+    for (const [name, constructor] of Object.entries(STANDARD_CLASSES)) {
+      this.registerClass(name, constructor);
+    }
     const { io, invokers, log } = options ?? {};
     for (const [type, processor] of Object.entries(servicesOf(io, 'createSystem(): io'))) {
       this.registerIO(type, processor, { location: processor?.location, origin: processor?.origin });
@@ -880,6 +888,25 @@ class System {
       throw new TinyactorsError('registerFunction(): expected a function', 'invalid');
     }
     this.#native.registerFunction(name, run);
+    this.#functions[name] = run;
+  }
+
+  /**
+   * Register `constructor` under `name`, which charts build as the source
+   * text `new Name(arguments)` (napi ADR 0031), and which a value's
+   * `[serialize]()` names. Functions and classes share one name space, so
+   * a name is registered once; `In` is reserved, and the standard classes
+   * (Date, Map, Set, RegExp, the typed arrays) are registered already.
+   */
+  registerClass(name, constructor) {
+    if (typeof name !== 'string' || !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name) || name === 'In') {
+      throw new TinyactorsError('registerClass(): expected an identifier other than In', 'invalid');
+    }
+    if (typeof constructor !== 'function') {
+      throw new TinyactorsError('registerClass(): expected a constructor', 'invalid');
+    }
+    this.#native.registerClass(name, constructor);
+    this.#classes[name] = constructor;
   }
 
   /**

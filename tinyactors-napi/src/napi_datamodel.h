@@ -96,6 +96,7 @@ struct tna_js_datamodel {
     napi_ref json_parse;  /* JSON.parse, for literal content */
     napi_ref array_from;  /* Array.from, for <foreach> snapshots */
     napi_ref functions;   /* registerFunction()'s table: name -> function (napi ADR 0029) */
+    napi_ref classes;     /* registerClass()'s table: name -> constructor (napi ADR 0031) */
     /* The call in progress: set around each callback, NULL between them. */
     const ta_dm_host *host;
     void *instance;
@@ -186,7 +187,18 @@ ta_result tna_js_datamodel_register(tna_js_datamodel *dm, ta_str name, napi_valu
  * 0029). TA_ERR_INVALID for a name already registered; lib/ checks that
  * `name` is an identifier other than `In`.
  */
-ta_result tna_js_datamodel_register_function(tna_js_datamodel *dm, ta_str name, napi_value run);
+/*
+ * Registers `value` under `name`: a function source text `name()` calls
+ * (napi ADR 0029), or with `constructor` a class `new Name(...)` builds
+ * (napi ADR 0031). Functions and classes share one name space, so
+ * TA_ERR_INVALID when either table has the name already.
+ */
+typedef struct {
+    ta_str name;
+    napi_value value;
+    bool constructor;
+} tna_register_name_params;
+ta_result tna_js_datamodel_register_name(tna_js_datamodel *dm, const tna_register_name_params *params);
 /*
  * The data models an imported document may choose from, in the order
  * ta_definition_import takes them: "javascript" first (a document with no
