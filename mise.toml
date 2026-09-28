@@ -9,6 +9,9 @@ ruby = "4"
 # major releases (clang 22 dropped the ElaboratedType wrapper around a
 # typedef's tag). Pin the line the description in include/ was generated with.
 clang = "22"
+# llvm-nm, which the API extractor uses to list what a wasm object exports
+# (GNU and Apple nm do not read wasm). The clang package does not ship it.
+"conda:llvm-tools" = "22"
 # The JavaScript runtimes napi pins (tinyactors-napi/mise.toml), so `mise exec`
 # from the root runs the same Node as the package, not whatever is on PATH.
 node = "22"

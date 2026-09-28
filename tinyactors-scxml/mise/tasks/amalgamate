@@ -53,7 +53,9 @@ if check
 end
 
 # The proof: the unit compiles, and its global functions are exactly the
-# header's TA_API functions.
+# header's TA_API functions. It is compiled for a pinned ELF target, as the
+# API extractor does, so the symbol names do not depend on the host (Mach-O
+# puts an underscore before each one).
 declared = ROOT.join('include/ta_scxml.h').read.scan(/^TA_API\s[^;(]*?\b(\w+)\s*\(/).flatten.sort
 compiler = Shellwords.split(ENV.fetch('CC', 'cc'))
 includes = ["-I#{ROOT.join('include')}", "-I#{ROOT.join('../tinyactors-core/include')}",
@@ -63,9 +65,9 @@ exported = Dir.mktmpdir('ta_scxml-amalgamate') do |dir|
   object = File.join(dir, 'ta_scxml.o')
   File.write(unit, text)
   output, status = Open3.capture2e(*compiler, '-std=c11', '-Wall', '-Wextra', '-Werror', '-pedantic', '-ffreestanding',
-                                   *includes, '-c', unit, '-o', object)
+                                   '--target=x86_64-unknown-linux-gnu', *includes, '-c', unit, '-o', object)
   abort "amalgamate: the amalgamation does not compile:\n#{output}" unless status.success?
-  symbols, status = Open3.capture2e('nm', '-g', '--defined-only', object)
+  symbols, status = Open3.capture2e('llvm-nm', '-g', '--defined-only', object)
   abort "amalgamate: nm failed:\n#{symbols}" unless status.success?
   symbols.lines.filter_map { |line| line.split[2] if line.split[1] == 'T' }.sort
 end
