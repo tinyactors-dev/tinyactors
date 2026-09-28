@@ -477,7 +477,12 @@ static ta_result ta_compiler_expression(ta_compiler *compiler, const ta_compiler
                                        &copy.as.source);
             break;
         case TA_EXPRESSION_HOST:
-            /* The fingerprint cannot see into a host expression (ADR 0077). */
+            /*
+             * The fingerprint cannot see into a host expression, only where
+             * one is (ADR 0087): a length no source text can have marks it,
+             * and registration compares the handles themselves.
+             */
+            ta_compiler_hash_u32(compiler, UINT32_MAX);
             compiler->definition->host_expressions = true;
             if (expression->as.host.v == NULL || expression->as.host.v->retain == NULL) {
                 return ta_compiler_fail(compiler, TA_COMPILE_ERROR_MALFORMED_SPEC, (ta_str){0},

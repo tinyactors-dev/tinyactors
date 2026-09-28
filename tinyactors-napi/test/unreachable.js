@@ -12,7 +12,8 @@ const { createSystem, statechart } = require('..');
 // and keeps what error.communication said.
 function sender(system, family, target, delay) {
   return system.define(
-    statechart({ family, revision: 'v1' })
+    // Each target and delay is another chart, so another revision (core ADR 0087).
+    statechart({ family, revision: `v1 ${target} ${delay}` })
       .data('failure', null)
       .data('failures', 0)
       .state('idle', (s) => {

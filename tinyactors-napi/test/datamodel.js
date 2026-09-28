@@ -198,7 +198,8 @@ async function foreachNames() {
   const system = createSystem();
   for (const [item, index] of [["'continue'", undefined], ['item', 'not a name']]) {
     const definition = system.define(
-      statechart({ family: 'names', revision: 'v1' })
+      // Each variant is another chart, so another revision (core ADR 0087).
+      statechart({ family: 'names', revision: `v1 ${item} ${index}` })
         .data('runs', 0)
         .data('errors', 0)
         .state('run', (s) => {

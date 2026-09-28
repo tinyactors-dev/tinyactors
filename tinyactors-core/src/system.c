@@ -227,6 +227,66 @@ static ta_definition *ta_system_live_definition(const ta_system *system, const t
     return best;
 }
 
+/*
+ * Whether two definitions of the same content hold the same handles
+ * (ADR 0087): every host expression's (v, self, value), the value being
+ * what `retain` returned, is equal as pointers. Equal content hashes mean
+ * the host expressions sit in the same places, so the tables line up.
+ */
+static bool ta_definition_same_handles(const ta_definition *left, const ta_definition *right) {
+    if (left->expression_count != right->expression_count) {
+        return false;
+    }
+    for (uint32_t index = 0; index < left->expression_count; index += 1u) {
+        const ta_expression *a = &left->expressions[index];
+        const ta_expression *b = &right->expressions[index];
+        if (a->kind != b->kind) {
+            return false;
+        }
+        if (a->kind == TA_EXPRESSION_HOST &&
+            (a->as.host.v != b->as.host.v || a->as.host.self != b->as.host.self || a->as.host.value != b->as.host.value)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/*
+ * The live definition that answers `definition`'s registration, or NULL to
+ * register it beside the others (ADR 0077, ADR 0087). Every live
+ * definition with its identity is looked at: other content under it is
+ * TA_ERR_DEFINITION_MISMATCH, whatever the data-model adapter; a match has
+ * the same adapter and the same handles, and the newest match answers.
+ */
+static ta_result ta_system_match_definition(const ta_system *system, const ta_definition *definition,
+                                            ta_definition **out) {
+    ta_definition *best = NULL;
+    for (uint32_t slot = 0; slot < system->definitions.count; slot += 1u) {
+        const ta_definition_slot *entry = ta_vec_at(&system->definitions, slot);
+        ta_definition *live = entry->definition;
+        if (live == NULL || live->retired || !ta_str_equal(live->identity.family.name, definition->identity.family.name) ||
+            !ta_bytes_same(live->identity.revision, definition->identity.revision)) {
+            continue;
+        }
+        if (live->content_hash != definition->content_hash) {
+            return TA_ERR_DEFINITION_MISMATCH;
+        }
+        /* The same chart compiled against another data-model adapter is
+         * another definition: it runs differently, so it registers beside. */
+        if (live->datamodel.self != definition->datamodel.self || live->datamodel.v != definition->datamodel.v) {
+            continue;
+        }
+        if (live->host_expressions && !ta_definition_same_handles(live, definition)) {
+            continue;
+        }
+        if (best == NULL || live->registration_serial > best->registration_serial) {
+            best = live;
+        }
+    }
+    *out = best;
+    return TA_OK;
+}
+
 ta_result ta_system_register_definition(ta_system *system, ta_definition *definition, ta_definition_id *out) {
     if (system == NULL || definition == NULL || out == NULL || definition->system != system ||
         definition->registered) {
@@ -234,22 +294,16 @@ ta_result ta_system_register_definition(ta_system *system, ta_definition *defini
     }
     /*
      * Idempotent by identity (ADR 0077): a live definition with this
-     * identity is the one registered, and it gains a hold. The same explicit
-     * revision for other content is refused rather than silently answered
-     * with the old chart.
+     * identity, the same content and the same handles is the one registered,
+     * and it gains a hold. The same identity for other content is refused
+     * rather than silently answered with the old chart.
      */
-    ta_definition *live = definition->host_expressions ? NULL
-                                                       : ta_system_live_definition(system, &definition->identity);
-    if (live != NULL && live->host_expressions) {
-        live = NULL;
+    ta_definition *live = NULL;
+    ta_result result = ta_system_match_definition(system, definition, &live);
+    if (result != TA_OK) {
+        return result;
     }
-    if (live != NULL && live->content_hash != definition->content_hash) {
-        return TA_ERR_DEFINITION_MISMATCH;
-    }
-    /* The same chart compiled against another data-model adapter is another
-     * definition: it runs differently, so it registers beside the first. */
-    if (live != NULL && live->datamodel.self == definition->datamodel.self &&
-        live->datamodel.v == definition->datamodel.v) {
+    if (live != NULL) {
         /* Where the chart is written now (ADR 0085): the spans of the
          * registration that asked, when it brought any. */
         ta_definition_take_spans(live, definition);
@@ -261,7 +315,7 @@ ta_result ta_system_register_definition(ta_system *system, ta_definition *defini
     uint32_t slot = system->free_definition_slot;
     if (slot == UINT32_MAX) {
         ta_definition_slot fresh = { .generation = 1, .next_free = UINT32_MAX };
-        ta_result result = ta_vec_push(&system->definitions, &fresh);
+        result = ta_vec_push(&system->definitions, &fresh);
         if (result != TA_OK) {
             return result;
         }

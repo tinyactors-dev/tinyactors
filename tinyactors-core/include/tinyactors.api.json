@@ -9209,7 +9209,7 @@
     },
     "ta_expression": {
       "kind": "struct",
-      "doc": "A frontend expression retained by a compiled definition. Source expressions are copied by the definition compiler. Host expressions are retained and released through their adapter; for example, a Node-API adapter retains a napi_ref rather than a callback-scoped napi_value.",
+      "doc": "A frontend expression retained by a compiled definition. Source expressions are copied by the definition compiler. Host expressions are retained and released through their adapter; for example, a Node-API adapter retains a napi_ref rather than a callback-scoped napi_value.\n\nTwo host expressions with equal `v`, `self` and `value` are the same handle (ADR 0087). Registration compares the values `retain` returned: a live definition with the same identity and content answers only when every host expression's handle is equal. A host that wants its charts answered by identity gives the same value for the same host object and returns it from `retain`; a host whose `retain` returns a new value each time never matches, and its charts register beside each other.",
       "fields": [
         {
           "name": "kind",
@@ -19811,7 +19811,7 @@
     },
     {
       "name": "ta_system_register_definition",
-      "doc": "Registers a compiled definition and takes a hold on it (ADR 0077). Registration is idempotent by identity: when a registered, non-retired definition has the same identity and was compiled against the same data-model adapter, that one is the answer, it gains a hold, and `definition` is destroyed. The same identity with different content (an explicit revision reused for a changed chart) is refused with TA_ERR_DEFINITION_MISMATCH. A chart with a host expression (TA_EXPRESSION_HOST) is exempt from both: its content cannot be seen whole, so it registers beside any match. Registration takes ownership of `definition` only when it returns TA_OK.",
+      "doc": "Registers a compiled definition and takes a hold on it (ADR 0077). Registration is idempotent by identity: when a registered, non-retired definition has the same identity and was compiled against the same data-model adapter, that one is the answer, it gains a hold, and `definition` is destroyed. The same identity with different content (an explicit revision reused for a changed chart) is refused with TA_ERR_DEFINITION_MISMATCH. A chart with a host expression (TA_EXPRESSION_HOST) is answered only by a definition whose host expressions are the same handles, in order (ADR 0087); with other handles it registers beside. Registration takes ownership of `definition` only when it returns TA_OK.",
       "public": true,
       "static_inline": false,
       "implemented": true,

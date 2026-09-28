@@ -1,6 +1,6 @@
 # ADR 0087: Host expressions are compared by handle
 
-**Status:** Accepted (2026-09-28); not implemented. Amends ADR 0077 section 1 (the exemption of charts with host expressions). Makes napi ADR 0029's JSON workaround unnecessary; napi ADR 0030 applies this decision to the addon.
+**Status:** Accepted and implemented (2026-09-28); see the implementation notes. Amends ADR 0077 section 1 (the exemption of charts with host expressions). Makes napi ADR 0029's JSON workaround unnecessary; napi ADR 0030 applies this decision to the addon.
 **Date:** 2026-09-28
 
 ## Context
@@ -102,17 +102,38 @@ needed to compare them.
 
 ## Implementation notes
 
-- **Where:** `src/builder.c` (the marker in `ta_compiler_expression`),
-  `src/system.c` (`ta_system_register_definition`, looking at every live
-  definition with the identity), `src/definition.h` (`host_expressions`,
-  if nothing else reads it), `include/tinyactors.h` (the contract on
-  `ta_expression_host`), then `mise run amalgamate` and `mise run api`.
-- **Tests:** a chart with host expressions registered twice with the same
-  handles answers one definition and takes a second hold; with another
-  handle for one expression it registers beside; the same identity with a
-  different structure is `TA_ERR_DEFINITION_MISMATCH`; a host whose
-  retain returns new values never matches; two definitions registered
-  beside, then a third with the handles of the second, is answered by the
-  second; retiring and freeing keep working with several live definitions
-  of one identity (ADR 0077 section 2, ADR 0079); an out-of-memory sweep
-  over registration if the lookup can allocate.
+- **Where:** `src/builder.c` (`ta_compiler_expression` hashes the marker),
+  `src/system.c` (`ta_system_match_definition` and
+  `ta_definition_same_handles`, called by `ta_system_register_definition`),
+  `src/definition.h` (the flag's comment), `include/tinyactors.h` (the
+  contract on `ta_expression` and on `ta_system_register_definition`).
+- **The marker** is a length no source text can have: the compiler hashes
+  `UINT32_MAX` where a source expression hashes its length and bytes. So
+  the fingerprints of charts without host expressions did not change.
+- **`host_expressions` stays** (point 5 allowed it): registration reads it
+  to compare handles only for charts that have host expressions. Equal
+  content hashes put host expressions in the same places, so the handle
+  comparison walks both expression tables in step and needs no marker of
+  its own.
+- **The content check looks at every live definition of the identity,
+  whatever its data-model adapter,** as before this ADR (ADR 0077 refused
+  other content under an identity before it looked at the adapter). Only
+  the answer requires the same adapter and the same handles; the newest
+  match answers, as `ta_system_find_definition()` prefers the newest.
+- **No allocation:** the match is one pass over the definition slots, so
+  registration gained no failure path and needs no out-of-memory sweep.
+- **Tests:** `tests/retirement_test.c` (`test_handles`): the same handles
+  answer and take a hold, and the answered compile releases its handle;
+  another handle registers beside, and a third with it is answered by the
+  second; another structure, and source text in place of a host
+  expression, under the same identity are `TA_ERR_DEFINITION_MISMATCH`;
+  `ta_system_find_definition()` answers the newest, and retiring it leaves
+  the first; a host whose `retain` returns new values never matches;
+  fingerprints mark where a host expression is, not what it holds; nothing
+  leaks and every handle is released. `tests/inspection_test.c`'s host
+  expression check needed no change.
+- **Callers:** two napi suites defined different charts under one live
+  revision, which is now refused: `test/datamodel.js` (`foreachNames`)
+  and `test/unreachable.js` (`sender`) give each variant its own revision.
+  napi's generated bindings (`src/gen/ta_napi.{c,h}`) were regenerated,
+  since they carry the header's comments. The test host needed nothing.

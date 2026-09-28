@@ -5,6 +5,7 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "../include/tinyactors.h"
 
@@ -465,6 +466,183 @@ static void test_register_is_idempotent(void) {
     ta_system_destroy(f.system);
     CHECK(f.model.destroyed == f.model.prepared);
     CHECK(f.counts.live_blocks == 0 && f.counts.live_bytes == 0);
+}
+
+/* ------------------------------------------------------------------------
+ * Host expressions compared by handle (ADR 0087)
+ */
+
+/* An interning host: retain returns the value it was given, and counts. */
+static int handle_a;
+static int handle_b;
+static uint32_t interned_holds;
+
+static ta_result interned_retain(void *self, void *value, ta_allocator unused, void **out) {
+    (void)self;
+    (void)unused;
+    interned_holds += 1u;
+    *out = value;
+    return TA_OK;
+}
+
+static void interned_release(void *self, void *value, ta_allocator unused) {
+    (void)self;
+    (void)value;
+    (void)unused;
+    interned_holds -= 1u;
+}
+
+static const ta_expression_host_vtable interned_vtable = { .retain = interned_retain, .release = interned_release };
+
+/* A host whose retain returns a new value each time. */
+static int fresh_values[8];
+static uint32_t fresh_next;
+
+static ta_result fresh_retain(void *self, void *value, ta_allocator unused, void **out) {
+    (void)self;
+    (void)value;
+    (void)unused;
+    *out = &fresh_values[fresh_next++ % 8u];
+    return TA_OK;
+}
+
+static void fresh_release(void *self, void *value, ta_allocator unused) {
+    (void)self;
+    (void)value;
+    (void)unused;
+}
+
+static const ta_expression_host_vtable fresh_vtable = { .retain = fresh_retain, .release = fresh_release };
+
+typedef struct {
+    const char *revision;       /* NULL: fingerprinted */
+    ta_expression condition;
+    bool second_transition;     /* another structure */
+} hosted_chart;
+
+/* Compiles a chart guarded by `chart->condition` and registers it. */
+static ta_result register_hosted(fixture *f, const hosted_chart *chart, ta_definition_id *id) {
+    const ta_scxml_transition_spec one[] = {
+        { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = STR("go"), .condition = chart->condition,
+          .targets = (const ta_str[]){ STR("idle"), {0} } },
+        {0},
+    };
+    const ta_scxml_transition_spec two[] = {
+        { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = STR("go"), .condition = chart->condition,
+          .targets = (const ta_str[]){ STR("idle"), {0} } },
+        { .kind = TA_SCXML_TRANSITION_EXTERNAL, .event = STR("stop"), .targets = (const ta_str[]){ STR("idle"), {0} } },
+        {0},
+    };
+    const ta_scxml_state_spec states[] = {
+        { .kind = TA_SCXML_STATE_ATOMIC, .id = STR("idle"), .transitions = chart->second_transition ? two : one },
+        {0},
+    };
+    uint32_t length = 0;
+    while (chart->revision != NULL && chart->revision[length] != '\0') {
+        length += 1;
+    }
+    ta_definition_identity identity = { .family = { STR("hosted") },
+                                        .revision = { .ptr = (const uint8_t *)chart->revision, .len = length } };
+    ta_definition *definition = NULL;
+    CHECK(ta_definition_compile_spec(f->system,
+                                     &(ta_definition_compile_params){
+                                         .spec = &(ta_scxml_spec){ .name = STR("hosted"),
+                                                                   .identity = chart->revision != NULL ? &identity : NULL,
+                                                                   .states = states },
+                                         .datamodel = { .self = &f->model, .v = &counting_vtable },
+                                         .allocator = f->allocator,
+                                         .out = &definition,
+                                     }) == TA_OK);
+    ta_result result = ta_system_register_definition(f->system, definition, id);
+    if (result != TA_OK) {
+        ta_definition_destroy(definition);
+    }
+    return result;
+}
+
+static ta_expression host(const ta_expression_host_vtable *v, void *value) {
+    return (ta_expression){ .kind = TA_EXPRESSION_HOST, .as.host = { .v = v, .value = value } };
+}
+
+static void test_handles(void) {
+    fixture f;
+    fixture_init(&f);
+    ta_definition_id first = 0;
+    ta_definition_id again = 0;
+    ta_definition_id second = 0;
+    ta_definition_id third = 0;
+
+    /* The same handles answer the live definition, which gains a hold. */
+    CHECK(register_hosted(&f, &(hosted_chart){ "v1", host(&interned_vtable, &handle_a), false }, &first) == TA_OK);
+    long blocks = f.counts.live_blocks;
+    CHECK(register_hosted(&f, &(hosted_chart){ "v1", host(&interned_vtable, &handle_a), false }, &again) == TA_OK);
+    CHECK(again == first && holds_of(&f, first) == 2);
+    CHECK(f.counts.live_blocks == blocks);
+    CHECK(interned_holds == 1u); /* the answered compile released its handle */
+
+    /* Another handle registers beside; a third with its handle is answered by it. */
+    CHECK(register_hosted(&f, &(hosted_chart){ "v1", host(&interned_vtable, &handle_b), false }, &second) == TA_OK);
+    CHECK(second != first && holds_of(&f, second) == 1);
+    CHECK(register_hosted(&f, &(hosted_chart){ "v1", host(&interned_vtable, &handle_b), false }, &third) == TA_OK);
+    CHECK(third == second && holds_of(&f, second) == 2 && holds_of(&f, first) == 2);
+
+    /* Another structure under the same identity is refused, host expressions or not. */
+    ta_definition_id refused = 0;
+    CHECK(register_hosted(&f, &(hosted_chart){ "v1", host(&interned_vtable, &handle_a), true }, &refused) ==
+          TA_ERR_DEFINITION_MISMATCH);
+    CHECK(register_hosted(&f, &(hosted_chart){ "v1", { .kind = TA_EXPRESSION_SOURCE, .as.source = STR("ready") },
+                                               false },
+                          &refused) == TA_ERR_DEFINITION_MISMATCH);
+    CHECK(interned_holds == 2u);
+
+    /* The newest match answers find(); retiring it leaves the other to answer. */
+    ta_definition_identity identity = { .family = { STR("hosted") }, .revision = { (const uint8_t *)"v1", 2 } };
+    ta_definition_id found = 0;
+    CHECK(ta_system_find_definition(f.system, &identity, &found) == TA_OK && found == second);
+    CHECK(ta_system_retire_definition(f.system, second) == TA_OK);
+    check_gone(&f, second);
+    CHECK(ta_system_find_definition(f.system, &identity, &found) == TA_OK && found == first);
+    /* With the handle of the retired one, a new definition registers beside the first. */
+    ta_definition_id fourth = 0;
+    CHECK(register_hosted(&f, &(hosted_chart){ "v1", host(&interned_vtable, &handle_b), false }, &fourth) == TA_OK);
+    CHECK(fourth != first && fourth != second);
+    CHECK(ta_system_retire_definition(f.system, fourth) == TA_OK);
+    CHECK(ta_system_retire_definition(f.system, first) == TA_OK);
+    check_gone(&f, first);
+    CHECK(interned_holds == 0u);
+
+    /* A host whose retain returns new values never matches. */
+    ta_definition_id fresh_first = 0;
+    ta_definition_id fresh_again = 0;
+    CHECK(register_hosted(&f, &(hosted_chart){ "v2", host(&fresh_vtable, &handle_a), false }, &fresh_first) == TA_OK);
+    CHECK(register_hosted(&f, &(hosted_chart){ "v2", host(&fresh_vtable, &handle_a), false }, &fresh_again) == TA_OK);
+    CHECK(fresh_again != fresh_first);
+
+    /* The fingerprint marks where a host expression is, not what it holds. */
+    ta_definition_id printed_a = 0;
+    ta_definition_id printed_b = 0;
+    ta_definition_id printed_source = 0;
+    CHECK(register_hosted(&f, &(hosted_chart){ NULL, host(&interned_vtable, &handle_a), false }, &printed_a) == TA_OK);
+    CHECK(register_hosted(&f, &(hosted_chart){ NULL, host(&interned_vtable, &handle_b), false }, &printed_b) == TA_OK);
+    CHECK(register_hosted(&f, &(hosted_chart){ NULL, { .kind = TA_EXPRESSION_SOURCE, .as.source = STR("ready") },
+                                               false },
+                          &printed_source) == TA_OK);
+    ta_definition_inspection a;
+    ta_definition_inspection b;
+    ta_definition_inspection source;
+    CHECK(ta_definition_inspect(f.system, printed_a, &a) == TA_OK);
+    CHECK(ta_definition_inspect(f.system, printed_b, &b) == TA_OK);
+    CHECK(ta_definition_inspect(f.system, printed_source, &source) == TA_OK);
+    CHECK(printed_a != printed_b);
+    CHECK(a.identity.revision.len == b.identity.revision.len &&
+          memcmp(a.identity.revision.ptr, b.identity.revision.ptr, a.identity.revision.len) == 0);
+    CHECK(a.identity.revision.len != source.identity.revision.len ||
+          memcmp(a.identity.revision.ptr, source.identity.revision.ptr, a.identity.revision.len) != 0);
+
+    ta_system_destroy(f.system);
+    CHECK(f.model.destroyed == f.model.prepared);
+    CHECK(f.counts.live_blocks == 0 && f.counts.live_bytes == 0);
+    CHECK(interned_holds == 0u);
 }
 
 /* ADR 0077: a parent holds the definitions it nests, and frees them with it. */
@@ -946,6 +1124,7 @@ int main(void) {
     test_retire_with_actors();
     test_find_after_retire();
     test_register_is_idempotent();
+    test_handles();
     test_release();
     test_nesting();
     test_walk();

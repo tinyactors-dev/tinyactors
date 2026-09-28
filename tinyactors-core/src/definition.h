@@ -447,9 +447,9 @@ struct ta_definition {
     /* The compiler's content hash, whatever the revision (ADR 0077). */
     uint64_t content_hash;
     /*
-     * The chart has a host expression, which the content hash cannot see
-     * into: registration never answers it with another definition by
-     * identity, nor refuses it for one (ADR 0077).
+     * The chart has a host expression, which the content hash marks but
+     * cannot see into: registration answers it only with a definition that
+     * holds the same handles (ADR 0087).
      */
     bool host_expressions;
     /*

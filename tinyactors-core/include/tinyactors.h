@@ -554,6 +554,14 @@ typedef struct {
  * are copied by the definition compiler. Host expressions are retained and
  * released through their adapter; for example, a Node-API adapter retains a
  * napi_ref rather than a callback-scoped napi_value.
+ *
+ * Two host expressions with equal `v`, `self` and `value` are the same
+ * handle (ADR 0087). Registration compares the values `retain` returned: a
+ * live definition with the same identity and content answers only when
+ * every host expression's handle is equal. A host that wants its charts
+ * answered by identity gives the same value for the same host object and
+ * returns it from `retain`; a host whose `retain` returns a new value each
+ * time never matches, and its charts register beside each other.
  */
 typedef struct {
     ta_expression_kind kind;
@@ -3439,8 +3447,9 @@ TA_API ta_result ta_system_set_external_event_router(ta_system *system,
  * `definition` is destroyed. The same identity with different
  * content (an explicit revision reused for a changed chart) is refused
  * with TA_ERR_DEFINITION_MISMATCH. A chart with a host expression
- * (TA_EXPRESSION_HOST) is exempt from both: its content cannot be seen
- * whole, so it registers beside any match. Registration takes ownership of
+ * (TA_EXPRESSION_HOST) is answered only by a definition whose host
+ * expressions are the same handles, in order (ADR 0087); with other
+ * handles it registers beside. Registration takes ownership of
  * `definition` only when it returns TA_OK.
  */
 TA_API ta_result ta_system_register_definition(ta_system *system,
