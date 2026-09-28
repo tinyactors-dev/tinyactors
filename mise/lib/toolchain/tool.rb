@@ -12,7 +12,8 @@ module Toolchain
   #   Toolchain::Tool[:llvm_nm].run('-g', object)   # => stdout, or raises Failed
   #
   # A program that behaves the same everywhere (git, mise, gh, docker, sh)
-  # is run directly.
+  # is run directly; `mise run check-portability` rejects a script that
+  # names one of the others (mise/ast-grep/rules/unpinned-tool.yml).
   class Tool
     Missing = Class.new(Error)
     Failed = Class.new(Error)
@@ -29,7 +30,8 @@ module Toolchain
       llvm_readobj: %w[llvm-readobj conda:llvm-tools],
       tar: %w[tar conda:tar],
       gzip: %w[gzip conda:gzip],
-      node: %w[node node]
+      node: %w[node node],
+      ast_grep: %w[ast-grep ast-grep]
     }.freeze
 
     # The argument that prints a tool's version; `--version` unless listed.

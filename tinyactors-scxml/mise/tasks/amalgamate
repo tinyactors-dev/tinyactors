@@ -16,6 +16,7 @@
 
 require 'pathname'
 require 'tmpdir'
+require 'c_header'
 require 'cache'
 require 'platform_files'
 require 'toolchain'
@@ -54,7 +55,7 @@ end
 # The proof: the unit compiles, and its global functions are exactly the
 # header's TA_API functions. It is compiled for the check target
 # (Toolchain::Target.check), so the answer is the same on every host.
-declared = ROOT.join('include/ta_scxml.h').read.scan(/^TA_API\s[^;(]*?\b(\w+)\s*\(/).flatten
+declared = CHeader.new(ROOT.join('include/ta_scxml.h')).functions_declared_with('TA_API')
 includes = [ROOT.join('include'), ROOT.join('../tinyactors-core/include'), ROOT.join('../tinyxml/include')]
 Dir.mktmpdir('ta_scxml-amalgamate') do |dir|
   unit = File.join(dir, 'ta_scxml.c')

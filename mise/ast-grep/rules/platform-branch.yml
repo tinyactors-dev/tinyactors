@@ -1,0 +1,22 @@
+id: platform-branch
+language: ruby
+severity: error
+message: Call a method on the target, its format or the host instead of branching on the platform.
+note: |
+  What differs between macOS, Linux and wasm is a method of
+  Toolchain::ObjectFormat, Target or Host (mise/lib/toolchain/). A branch
+  on macos?, linux?, wasm? or darwin? outside it is a second place that
+  must know every platform, and the first one to forget one.
+ignores:
+  - mise/lib/toolchain.rb
+  - mise/lib/toolchain/**
+rule:
+  any:
+    - kind: call
+      has:
+        field: method
+        regex: ^(macos|linux|wasm|darwin|windows)\?$
+    - kind: identifier
+      regex: ^(macos|linux|wasm|darwin|windows)\?$
+    - kind: simple_symbol
+      regex: ^:(macos|linux|wasm|darwin|windows)\?$

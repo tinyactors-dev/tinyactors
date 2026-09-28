@@ -6,7 +6,8 @@ require 'rbconfig'
 module Toolchain
   # The machine the build runs on. Host.current is chosen once, here, from
   # RbConfig; a build script asks it to do what differs between machines
-  # instead of reading RUBY_PLATFORM itself.
+  # instead of reading RUBY_PLATFORM itself
+  # (mise/ast-grep/rules/host-detection.yml).
   class Host
     def self.current
       @current ||= begin

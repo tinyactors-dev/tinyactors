@@ -1,0 +1,10 @@
+id: platform-branch
+valid:
+  - "target.format.shared_library_glob"
+  - "Toolchain::Target.native_releases"
+  - "def linker_defined = []"
+invalid:
+  - "flags = target.macos? ? %w[-a] : %w[-b]"
+  - "natives.select { |build| build[:target].linux? }"
+  - "Toolchain::Target.releases.reject(&:wasm?)"
+  - "return {} unless darwin?"

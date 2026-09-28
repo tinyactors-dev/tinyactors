@@ -163,7 +163,8 @@ module Toolchain
     end
 
     # The platform predicates are for mise/lib/toolchain/ alone; a build
-    # script calls a method instead of branching on them.
+    # script calls a method instead of branching on them
+    # (mise/ast-grep/rules/platform-branch.yml).
     def wasm? = @os == :wasm
     def macos? = @os == :macos
     def linux? = @os == :linux

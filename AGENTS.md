@@ -17,8 +17,8 @@
 ## Tests: what to run
 
 - **`mise run test` before every commit.** It is what "a commit passes"
-  means. It checks acronyms, runs the toolchain self-test, and builds,
-  then runs the `test` task of each
+  means. It checks acronyms and the build scripts' portability, runs the
+  toolchain self-test, and builds, then runs the `test` task of each
   project whose sources changed since that task last passed, and ends with
   the time of each step, marking the projects it skipped as up to date.
   mise decides what changed: each project's `test` task lists its sources
@@ -181,8 +181,12 @@ on both. Everything that differs between hosts lives in
   method on them; do not branch on `macos?`, `linux?`, `wasm?` or
   `RUBY_PLATFORM`.
 
-`mise run toolchain-test` builds and reads every target's objects from
-the host it runs on, as part of `mise run test`.
+`mise run check-portability` enforces this with ast-grep (`sgconfig.yml`,
+rules in `mise/ast-grep/rules/`, their tests in `mise/ast-grep/tests/`),
+and `mise run toolchain-test` builds and reads every target's objects from
+the host it runs on. Both run in `mise run test`. Write new static checks
+of the build scripts as ast-grep rules, with a test, not as `grep` or a
+regular expression.
 
 ## Desired API files
 

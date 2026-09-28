@@ -1,0 +1,11 @@
+id: host-toolchain-environment
+valid:
+  - "Toolchain::Target.host.compile_command('-std=c11')"
+  - "ENV.fetch('CFLAGS', '-O2')"
+  - "ENV['usage_target']"
+invalid:
+  - "COMPILER = Shellwords.split(ENV.fetch('CC', 'cc'))"
+  - "cc = ENV.fetch('CC', 'cc')"
+  - "nm = ENV.fetch('NM') { 'llvm-nm' }"
+  - "ar = ENV['AR'] || 'ar'"
+  - "Shellwords.split(ENV.fetch(\"CLANG\", 'clang'))"

@@ -1,0 +1,71 @@
+id: unpinned-tool
+language: ruby
+severity: error
+message: Run this program through Toolchain::Tool, a Target or a Binary instead of by name.
+note: |
+  A compiler, linker, binutil, archiver or system probe found on PATH is a
+  different program on Linux and macOS (GNU nm and Apple's nm, GNU tar and
+  bsdtar, readelf and no readelf). Toolchain::Tool[:name] runs the one
+  pinned in the root mise.toml; Target compiles and links; Binary reads
+  symbols as C names; Host describes the machine. git, mise, gh, docker,
+  sh and curl behave alike everywhere and are run directly.
+ignores:
+  - mise/lib/toolchain.rb
+  - mise/lib/toolchain/**
+utils:
+  tool-string:
+    kind: string
+    regex: ^['"](nm|ld|ar|cc|c\+\+|gcc|g\+\+|clang|clang\+\+|zig|ld\.lld|tar|gtar|bsdtar|gzip|file|readelf|objdump|objcopy|otool|strip|ranlib|lipo|install_name_tool|llvm-[a-z0-9-]+|sysctl|nproc|uname|sw_vers|pmset|ldd|sha256sum|shasum|md5sum|stat|readlink|realpath|sed|awk|grep|find|xargs|which)['"]$
+  # A call that runs a process: Open3's, system, spawn, IO.popen, and the
+  # scripts' own run/capture helpers.
+  runs-a-process:
+    kind: argument_list
+    inside:
+      kind: call
+      has:
+        field: method
+        regex: ^(system|spawn|exec|popen\w*|capture\w*!?|run\w*!?|pipeline\w*|sh)$
+rule:
+  any:
+    # run('nm', ...), Open3.capture2e('ar', ...)
+    - matches: tool-string
+      nthChild: 1
+      inside:
+        matches: runs-a-process
+    # Open3.capture2({ 'VAR' => '1' }, 'tar', ...)
+    - matches: tool-string
+      nthChild: 2
+      follows:
+        kind: hash
+        nthChild: 1
+        stopBy: end
+      inside:
+        matches: runs-a-process
+    # IO.popen(['ar', 'rcs', out]), with or without an environment hash
+    - matches: tool-string
+      nthChild: 1
+      inside:
+        kind: array
+        inside:
+          matches: runs-a-process
+    # A command kept in an array: ['cc', '-std=c11', ...]
+    - matches: tool-string
+      nthChild: 1
+      inside:
+        kind: array
+      precedes:
+        kind: string
+        regex: ^['"]-
+        nthChild: 2
+        stopBy: end
+    # %w[nm -g ...]
+    - kind: bare_string
+      regex: ^(nm|ld|ar|cc|gcc|clang|zig|tar|gzip|file|readelf|objdump|objcopy|otool|strip|ranlib|llvm-[a-z0-9-]+|sysctl|nproc|uname|sed|awk|grep|find|xargs|which)$
+      nthChild: 1
+      inside:
+        kind: string_array
+      precedes:
+        kind: bare_string
+        regex: ^-
+        nthChild: 2
+        stopBy: end

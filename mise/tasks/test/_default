@@ -22,7 +22,9 @@ full_flag = full ? ['--full'] : []
 steps = [
   ['acronyms', %w[mise run check-acronyms-test], root],
   ['acronyms', %w[mise run check-acronyms], root],
-  # The toolchain builds and reads every target's objects from this host.
+  # The build scripts leave what differs between hosts to mise/lib/toolchain/,
+  # and the toolchain builds and reads every target's objects from this host.
+  ['portability', ['mise', 'run', *(all ? ['--force'] : []), 'check-portability'], root],
   ['toolchain', ['mise', 'run', *(all ? ['--force'] : []), 'toolchain-test'], root],
   ['build', %w[mise run build], root],
   ['core', ['mise', 'run', *flags.call], root.join('tinyactors-core')],

@@ -1,0 +1,9 @@
+# ast-grep's configuration for the static analysis of the build scripts
+# (mise run check-portability): the rules in mise/ast-grep/rules/, their
+# tests in mise/ast-grep/tests/. mise's file tasks have no extension, and
+# ast-grep picks a language by file name, so the task scans a copy of the
+# scripts with `.rb` names (mise/lib/build_scripts.rb).
+ruleDirs:
+  - mise/ast-grep/rules
+testConfigs:
+  - testDir: mise/ast-grep/tests

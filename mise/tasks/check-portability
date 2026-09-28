@@ -1,0 +1,27 @@
+#!/usr/bin/env ruby
+#MISE description="Static analysis of the build scripts (ast-grep): only mise/lib/toolchain/ may depend on the host, so every script answers the same on Linux and macOS"
+#MISE sources=["sgconfig.yml", "mise/ast-grep/**/*", "mise/lib/**/*", "mise/tasks/**/*", "*/mise/lib/**/*", "*/mise/tasks/**/*"]
+#MISE outputs={auto=true}
+# vim:ft=ruby
+
+# The rules are in mise/ast-grep/rules/, each with the reason and what to
+# do instead; their tests in mise/ast-grep/tests/. See mise/lib/toolchain.rb
+# for the objects a script uses instead, and mise/lib/build_scripts.rb for
+# how the extensionless task files are scanned as Ruby.
+
+require 'build_scripts'
+
+passed, output = BuildScripts.test_rules
+unless passed
+  warn output
+  abort 'check-portability: the rules fail their own tests (mise/ast-grep/tests/)'
+end
+
+findings = BuildScripts.scan
+findings.each { |finding| puts "check-portability: #{finding}" }
+if findings.empty?
+  puts "check-portability: #{BuildScripts.paths.size} build scripts leave what differs between hosts to mise/lib/toolchain/"
+else
+  puts "check-portability: #{findings.size} finding(s); see the rule's note in mise/ast-grep/rules/<rule>.yml"
+  exit 1
+end

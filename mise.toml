@@ -18,6 +18,8 @@ clang = "22"
 # (macOS ships bsdtar and another gzip).
 "conda:tar" = "1.35"
 "conda:gzip" = "1.14"
+# The static analysis of the build scripts (mise run check-portability).
+ast-grep = "0.45.3"
 # The JavaScript runtimes napi pins (tinyactors-napi/mise.toml), so `mise exec`
 # from the root runs the same Node as the package, not whatever is on PATH.
 node = "22"

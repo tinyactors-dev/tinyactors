@@ -17,9 +17,10 @@ require 'pathname'
 #   Toolchain::Host          the machine the build runs on.
 #
 # Only mise/lib/toolchain/ runs a host-dependent tool by name, reads $CC,
-# RUBY_PLATFORM or RbConfig's host, or branches on macos?, linux? or wasm?.
-# `mise run toolchain-test` builds and checks every target's objects on
-# whatever host runs it.
+# RUBY_PLATFORM or RbConfig's host, or branches on macos?, linux? or wasm?;
+# `mise run check-portability` rejects any other script that does
+# (mise/ast-grep/rules/). `mise run toolchain-test` builds and checks every
+# target's objects on whatever host runs it.
 module Toolchain
   ROOT = Pathname.new(__dir__).join('../..').expand_path
 

@@ -1,0 +1,9 @@
+id: host-detection
+valid:
+  - "Toolchain::Host.current.must_run!(target, 'integration')"
+  - "system(RbConfig.ruby, script)"
+invalid:
+  - "abort 'Linux only' unless RUBY_PLATFORM.start_with?('x86_64-linux')"
+  - "case RbConfig::CONFIG['host_os'] when /darwin/ then 1 end"
+  - "RbConfig::CONFIG.fetch('host_cpu')"
+  - "Etc.uname[:sysname]"

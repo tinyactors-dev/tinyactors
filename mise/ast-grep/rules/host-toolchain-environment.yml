@@ -1,0 +1,26 @@
+id: host-toolchain-environment
+language: ruby
+severity: error
+message: Compile through Toolchain::Target (host, check or release) instead of reading the CC variable or another tool variable.
+note: |
+  Target.host is this machine's compiler ($CC), Target.check the pinned
+  clang for checks that must answer the same everywhere, and
+  Target.release('<name>') zig for what is shipped. Only
+  mise/lib/toolchain/target.rb reads $CC; a pinned tool is
+  Toolchain::Tool[:name], never $AR, $NM or $CLANG.
+ignores:
+  - mise/lib/toolchain.rb
+  - mise/lib/toolchain/**
+utils:
+  tool-variable:
+    kind: string
+    regex: ^['"](CC|CXX|AR|NM|LD|CLANG|OBJCOPY|OBJDUMP|READELF|RANLIB|STRIP)['"]$
+rule:
+  any:
+    - pattern: ENV.fetch($NAME, $$$REST)
+    - pattern: ENV.fetch($NAME)
+    - pattern: ENV[$NAME]
+    - pattern: ENV.key?($NAME)
+constraints:
+  NAME:
+    matches: tool-variable

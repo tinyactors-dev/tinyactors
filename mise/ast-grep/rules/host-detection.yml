@@ -1,0 +1,18 @@
+id: host-detection
+language: ruby
+severity: error
+message: Ask Toolchain::Host.current instead of reading the platform yourself.
+note: |
+  What differs between machines lives in mise/lib/toolchain/host.rb: the
+  release target that runs here (Host#target, Host#must_run!), the machine
+  description (Host#hardware). A script that reads RUBY_PLATFORM or
+  RbConfig's host behaves differently on Linux and macOS without saying so.
+ignores:
+  - mise/lib/toolchain.rb
+  - mise/lib/toolchain/**
+rule:
+  any:
+    - pattern: RUBY_PLATFORM
+    - pattern: RbConfig::CONFIG
+    - pattern: Etc.uname
+    - pattern: Gem::Platform
