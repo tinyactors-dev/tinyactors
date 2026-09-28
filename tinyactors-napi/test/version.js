@@ -18,6 +18,7 @@ assert.deepEqual(Object.keys(addon).sort(), [
   'formatTraceparent',
   'literal',
   'metricsToOTLP',
+  'named',
   'parseTraceparent',
   'statechart',
   'stepSpanID',

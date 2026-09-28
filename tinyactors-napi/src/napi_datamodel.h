@@ -9,10 +9,16 @@
  * - literal(value) is a constant (docs/design.md: a function in a value
  *   position is an expression, literal() stores one as data);
  * - an object with `get` and `set` functions is a location;
- * - source text is accepted in two forms only, so plain and exported specs
- *   stay readable: `In(state)` as a condition, and a data name (an
- *   identifier) as a value or a location. Anything else is refused when the
- *   chart is defined, naming the expression (core ADR 0058).
+ * - source text is accepted in four forms only, so plain and exported
+ *   specs stay readable: `In(state)` as a condition, a data name (an
+ *   identifier) as a value or a location, and `name()`, a call of a
+ *   function registered with registerFunction() (napi ADR 0029), as a
+ *   condition, a value or a script. A call is bound to its function when
+ *   the chart is defined. A JSON value (a number, a string, true, false,
+ *   null, an array or an object) is a value, parsed once then into a
+ *   literal: the builder writes plain data so. Anything else, and a call of
+ *   a name nothing is registered under, is refused then, naming the
+ *   expression (core ADR 0058).
  *
  * Each JavaScript expression is a host expression (TA_EXPRESSION_HOST) whose
  * value is an expression record: one strong napi_ref and a count, retained
@@ -73,6 +79,7 @@ struct tna_js_datamodel {
     napi_ref context;     /* the evaluation context object */
     napi_ref json_parse;  /* JSON.parse, for literal content */
     napi_ref array_from;  /* Array.from, for <foreach> snapshots */
+    napi_ref functions;   /* registerFunction()'s table: name -> function (napi ADR 0029) */
     /* The call in progress: set around each callback, NULL between them. */
     const ta_dm_host *host;
     void *instance;
@@ -146,6 +153,12 @@ ta_datamodel tna_js_datamodel_adapter(tna_js_datamodel *dm);
  * a name longer than TNA_DM_NAME_MAX - 1, or a full table.
  */
 ta_result tna_js_datamodel_register(tna_js_datamodel *dm, ta_str name, napi_value compile);
+/*
+ * Registers `run` as the function source text `name()` calls (napi ADR
+ * 0029). TA_ERR_INVALID for a name already registered; lib/ checks that
+ * `name` is an identifier other than `In`.
+ */
+ta_result tna_js_datamodel_register_function(tna_js_datamodel *dm, ta_str name, napi_value run);
 /*
  * The data models an imported document may choose from, in the order
  * ta_definition_import takes them: "javascript" first (a document with no

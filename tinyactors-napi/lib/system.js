@@ -866,6 +866,23 @@ class System {
   }
 
   /**
+   * Register `run` under `name`, which charts call as the source text
+   * `name()` (named(name) writes it; napi ADR 0029). It is called as a
+   * builder function is: `this` is the actor's data, the argument the
+   * evaluation context. A call is bound when a chart is defined, so a name
+   * is registered once; `In` is reserved.
+   */
+  registerFunction(name, run) {
+    if (typeof name !== 'string' || !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name) || name === 'In') {
+      throw new TinyactorsError('registerFunction(): expected an identifier other than In', 'invalid');
+    }
+    if (typeof run !== 'function') {
+      throw new TinyactorsError('registerFunction(): expected a function', 'invalid');
+    }
+    this.#native.registerFunction(name, run);
+  }
+
+  /**
    * Compile and register a chart: a statechart() builder, or a spec in the
    * generated shape (the shape core's definition export returns). It
    * compiles against the data model its `datamodel` names (napi ADR 0027):

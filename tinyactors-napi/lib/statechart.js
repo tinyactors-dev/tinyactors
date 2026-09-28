@@ -10,8 +10,9 @@
 // data and one argument, the evaluation context. A value that is not a
 // function is data, and literal() makes a function data too. A location is
 // a declared data name, or an object with `get` and `set`. Source text is
-// accepted only as `In(state)` conditions and data names. Every builder
-// chart compiles against the JavaScript data model.
+// accepted only as `In(state)` conditions, data names, and `name()`, a call
+// of a function the system registered (napi ADR 0029), which named() writes.
+// Every builder chart compiles against the JavaScript data model.
 
 const native = require('./native');
 const { TinyactorsError } = require('./errors');
@@ -56,6 +57,69 @@ function content(body, options = {}) {
                                                : { [contentBrand]: true, bytes, mediaType });
 }
 
+const namedBrand = Symbol('tinyactors.named');
+const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+/**
+ * A call of the function registered under `name` (System.registerFunction,
+ * napi ADR 0029). The spec holds it as the source text `name()`, which core
+ * fingerprints, so a chart whose functions are all named is content core
+ * sees whole: it is answered by identity, exports and encodes as text.
+ */
+function named(name) {
+  if (typeof name !== 'string' || !IDENTIFIER.test(name) || name === 'In') {
+    throw invalid('named(): expected an identifier other than In');
+  }
+  return Object.freeze({ [namedBrand]: true, name });
+}
+
+function isNamed(value) {
+  return value !== null && typeof value === 'object' && value[namedBrand] === true;
+}
+
+// The source text a named function is called by.
+const call = (value) => `${value.name}()`;
+
+// Whether JSON says `value` exactly: finite numbers other than -0, strings,
+// booleans, null, and arrays (without holes) and plain objects of those,
+// without cycles, accessors or symbol keys.
+function jsonExact(value, seen) {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') {
+    return true;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && !Object.is(value, -0);
+  }
+  if (typeof value !== 'object' || seen.has(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  const array = Array.isArray(value);
+  if (!array && prototype !== Object.prototype && prototype !== null) {
+    return false;
+  }
+  if (Object.getOwnPropertySymbols(value).length !== 0) {
+    return false;
+  }
+  seen.add(value);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const keys = Object.keys(descriptors).filter((key) => !(array && key === 'length'));
+  if (array && keys.length !== value.length) {
+    return false;
+  }
+  const exact = keys.every((key) => {
+    const descriptor = descriptors[key];
+    return descriptor.enumerable && 'value' in descriptor && key !== '__proto__' && jsonExact(descriptor.value, seen);
+  });
+  seen.delete(value);
+  return exact;
+}
+
+// `value` as JSON text when JSON says it exactly, otherwise undefined.
+function jsonText(value) {
+  return jsonExact(value, new Set()) ? JSON.stringify(value) : undefined;
+}
+
 function isContent(value) {
   return value !== null && typeof value === 'object' && value[contentBrand] === true;
 }
@@ -76,11 +140,14 @@ function text(value, what) {
   return value;
 }
 
-// An expression: a function, a literal(), or source text (In(state) or a
-// data name).
+// An expression: a function, a literal(), named(), or source text
+// (In(state), a data name, or name()).
 function expression(value, what) {
   if (typeof value === 'function' || isLiteral(value)) {
     return value;
+  }
+  if (isNamed(value)) {
+    return call(value);
   }
   return text(value, what);
 }
@@ -103,7 +170,14 @@ function valueSpec(value) {
   if (typeof value === 'function' || isLiteral(value)) {
     return { kind: 'expr', expr: value };
   }
-  return { kind: 'expr', expr: literal(value) };
+  if (isNamed(value)) {
+    return { kind: 'expr', expr: call(value) };
+  }
+  // Plain data is written as JSON text, which the data model parses once
+  // when the chart is defined, so core sees it whole (napi ADR 0029); what
+  // JSON cannot say exactly stays a literal().
+  const json = jsonText(value);
+  return { kind: 'expr', expr: json ?? literal(value) };
 }
 
 function targets(value, what) {
@@ -118,6 +192,9 @@ function targets(value, what) {
 function stringSpec(value, what) {
   if (typeof value === 'function') {
     return { kind: 'expr', expr: value };
+  }
+  if (isNamed(value)) {
+    return { kind: 'expr', expr: call(value) };
   }
   return { kind: 'literal', literal: text(value, what) };
 }
@@ -134,6 +211,11 @@ function delaySpec(value, what) {
       throw invalid(`${what}: expected a non-negative number of milliseconds`);
     }
     return { kind: 'literal', literal: `${value}ms` };
+  }
+  // A named function's result is the delay as it is, an SCXML duration, as
+  // a delayexpr's is: nothing here can wrap it without a function.
+  if (isNamed(value)) {
+    return { kind: 'expr', expr: call(value) };
   }
   if (typeof value === 'function') {
     const delay = value;
@@ -264,7 +346,9 @@ class ActionSequenceBuilder {
   send(event, build) {
     this.#root.check();
     const send = {
-      event: typeof event === 'function' ? { kind: 'expr', expr: event } : { kind: 'name', name: text(event, 'send event') },
+      event: typeof event === 'function' ? { kind: 'expr', expr: event }
+        : isNamed(event) ? { kind: 'expr', expr: call(event) }
+          : { kind: 'name', name: text(event, 'send event') },
     };
     if (build !== undefined) {
       if (typeof build !== 'function') {
@@ -317,10 +401,7 @@ class ActionSequenceBuilder {
 
   /** Run a synchronous function with `this` bound to the actor's data. */
   script(run) {
-    if (typeof run !== 'function') {
-      throw invalid('script(): expected a function');
-    }
-    return this.#push({ kind: 'script', script: { script: run } });
+    return this.#push({ kind: 'script', script: { script: scriptSpec(run) } });
   }
 
   /**
@@ -479,15 +560,31 @@ class InvokeBuilder {
 }
 
 // data(name, value): the value is data even when it is a function.
+// data()'s initial value is data even when it is a function or a named():
+// those are forced into a literal(); valueSpec() writes the rest.
 function literalOf(value) {
-  return isLiteral(value) || isContent(value) ? value : literal(value);
+  return typeof value === 'function' || isNamed(value) ? literal(value) : value;
 }
 
 function functionSpec(value, what) {
+  if (isNamed(value)) {
+    return { kind: 'expr', expr: call(value) };
+  }
   if (typeof value !== 'function') {
-    throw invalid(`${what}: expected a function`);
+    throw invalid(`${what}: expected a function or named()`);
   }
   return { kind: 'expr', expr: value };
+}
+
+// A script: a function, or named() as its call.
+function scriptSpec(run) {
+  if (isNamed(run)) {
+    return call(run);
+  }
+  if (typeof run !== 'function') {
+    throw invalid('script(): expected a function or named()');
+  }
+  return run;
 }
 
 function dataSpec(name, initializer) {
@@ -732,10 +829,7 @@ class DefinitionBuilder extends StateContainerBuilder {
   /** A script run once at initialization, after early-bound data (SCXML 3.2.2). */
   script(run) {
     this.#root.check();
-    if (typeof run !== 'function') {
-      throw invalid('script(): expected a function');
-    }
-    this.#spec.script = run;
+    this.#spec.script = scriptSpec(run);
     const span = this.#root.span();
     if (span !== undefined) {
       this.#spec.script_span = span;
@@ -765,4 +859,4 @@ function statechart(options) {
   return new DefinitionBuilder(options);
 }
 
-module.exports = { statechart, literal, content, isLiteral, DefinitionBuilder, literalBrand };
+module.exports = { statechart, literal, content, named, isLiteral, DefinitionBuilder, literalBrand };

@@ -585,6 +585,42 @@ static napi_value tna_register_datamodel_method(napi_env env, napi_callback_info
     return undefined;
 }
 
+/*
+ * registerFunction(name, run): the function source text `name()` calls
+ * (napi ADR 0029). lib/ checks that `name` is an identifier other than In.
+ */
+static napi_value tna_register_function_method(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2] = { NULL, NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    if (wrapper->system->inside_core) {
+        return tna_throw(env, "reentrant", "registerFunction: not from inside a core call (ADR 0013)");
+    }
+    char name[256];
+    size_t length = 0;
+    napi_valuetype type = napi_undefined;
+    if (argc < 2 || napi_get_value_string_utf8(env, argv[0], name, sizeof name, &length) != napi_ok ||
+        length == 0 || length >= sizeof name - 1u || napi_typeof(env, argv[1], &type) != napi_ok || type != napi_function) {
+        return tna_throw(env, "invalid", "registerFunction: expected a name of at most 254 bytes and a function");
+    }
+    ta_result result = tna_js_datamodel_register_function(&wrapper->dm, (ta_str){ name, (uint32_t)length }, argv[1]);
+    if (result == TA_ERR_INVALID) {
+        return tna_throw(env, "invalid", "registerFunction: a function is already registered under this name");
+    }
+    if (result != TA_OK) {
+        return tna_throw(env, "out-of-memory", "registerFunction: could not keep the function");
+    }
+    napi_value undefined = NULL;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+}
+
 static napi_status tna_set_uint(napi_env env, napi_value object, const char *name, double value) {
     napi_value number = NULL;
     napi_status status = napi_create_double(env, value, &number);
@@ -1695,6 +1731,7 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "mailbox", NULL, tna_mailbox_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "selectDatamodel", NULL, tna_select_datamodel_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "registerDatamodel", NULL, tna_register_datamodel_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "registerFunction", NULL, tna_register_function_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "importDefinition", NULL, tna_import_definition_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "adoptDefinition", NULL, tna_adopt_definition_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "encodeDefinition", NULL, tna_encode_definition_method, NULL, NULL, NULL, napi_default_method, NULL },

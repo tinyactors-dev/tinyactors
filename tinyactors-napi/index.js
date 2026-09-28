@@ -3,7 +3,7 @@
 const native = require('./lib/native');
 const { TinyactorsError } = require('./lib/errors');
 const { createSystem } = require('./lib/system');
-const { statechart, literal, content } = require('./lib/statechart');
+const { statechart, literal, content, named } = require('./lib/statechart');
 const { TRACE_KINDS, parseTraceparent, formatTraceparent, stepSpanID } = require('./lib/tracing');
 const { decodeTraces } = require('./lib/otlp');
 const { ChartCodecError } = require('./lib/codecs');
@@ -16,6 +16,8 @@ module.exports = {
   statechart,
   literal,
   content,
+  // A call of a function the system registered (napi ADR 0029).
+  named,
   TinyactorsError,
   // Chart codecs (napi ADR 0027): a codec's refusal.
   ChartCodecError,

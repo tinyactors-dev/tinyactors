@@ -284,7 +284,6 @@ export interface System {
    * functions are all named round-trips through export() and codecs, and
    * defining it again answers the same definition.
    */
-  // status: unimplemented
   registerFunction(name: string, run: (this: any, context: EvaluationContext<any>) => unknown): void;
 
   /**
@@ -1083,7 +1082,6 @@ export interface NamedFunction {
  * it is part of the chart's content: its fingerprint, its export, and what
  * a codec writes.
  */
-// status: unimplemented
 export declare function named(name: string): NamedFunction;
 
 declare const contentValueBrand: unique symbol;
@@ -1107,7 +1105,6 @@ export declare function content(
   options?: { readonly mediaType?: string },
 ): ContentValue;
 
-// status: partial: named()
 export type ValueInput<Data extends object, Value = unknown> =
   | (Value extends (...arguments_: never[]) => unknown ? never : Value)
   | LiteralValue<Value>
@@ -1119,14 +1116,12 @@ export interface DefinitionBuilder<Data extends object>
   extends StateContainerBuilder<Data, DefinitionBuilder<Data>> {
   /** `initial` is data even when it is a function; content() is parsed (see content()). */
   data<Key extends keyof Data & string>(name: Key, initial: Data[Key] | ContentValue): this;
-  // status: partial: named()
   dataExpression<Key extends keyof Data & string>(
     name: Key,
     initial: Expression<Data, Data[Key]> | NamedFunction,
   ): this;
   initial(target: Target, actions?: ActionBlock<Data>): this;
   /** A script run once at initialization, after early-bound data (SCXML 3.2.2). */
-  // status: partial: named()
   script(run: Script<Data> | NamedFunction): this;
   build(): DefinitionSpec;
 }
@@ -1162,7 +1157,6 @@ export interface StateBuilder<Data extends object>
 
   /** `initial` is data even when it is a function; content() is parsed (see content()). */
   data<Key extends keyof Data & string>(name: Key, initial: Data[Key] | ContentValue): this;
-  // status: partial: named()
   dataExpression<Key extends keyof Data & string>(
     name: Key,
     initial: Expression<Data, Data[Key]> | NamedFunction,
@@ -1187,7 +1181,6 @@ export type TransitionBlock<Data extends object> = (
 export interface TransitionBuilder<Data extends object>
   extends ActionSequenceBuilder<Data, TransitionBuilder<Data>> {
   /** A function, named(), or source text: "In('s')", a data name, or "name()". */
-  // status: partial: named()
   when(condition: Condition<Data> | NamedFunction | string): this;
   target(target: Target): this;
   internal(): this;
@@ -1214,19 +1207,15 @@ export interface ActionSequenceBuilder<Data extends object, Self> {
     value: ValueInput<Data, Value>,
   ): Self;
 
-  // status: partial: named()
   script(run: Script<Data> | NamedFunction): Self;
-  // status: partial: named()
   log(label?: string, value?: Expression<Data> | NamedFunction | string): Self;
 
-  // status: partial: named()
   choose(
     condition: Condition<Data> | NamedFunction | string,
     then: ActionBlock<Data>,
     otherwise?: ActionBlock<Data>,
   ): Self;
 
-  // status: partial: named()
   forEach<Item>(
     array: Expression<Data, readonly Item[]> | NamedFunction | (keyof Data & string) | LiteralValue<readonly Item[]>,
     item: keyof Data & string,
@@ -1551,7 +1540,6 @@ export interface Location<Data extends object, Value = unknown> {
   set(this: Data, value: Value, context: EvaluationContext<Data>): void;
 }
 
-// status: partial: named()
 export type StringSpec<Data extends object> = string | NamedFunction | Expression<Data, string>;
 
 /**
@@ -1559,9 +1547,10 @@ export type StringSpec<Data extends object> = string | NamedFunction | Expressio
  * an SCXML duration: a non-negative decimal without an exponent, so a
  * number JavaScript prints with one (1e21, 1e-7) is refused at define(). A
  * function's result is checked only when the send runs; a negative or NaN
- * delay then raises `error.execution`.
+ * delay then raises `error.execution`. A named() function's result is the
+ * delay as it is, so it returns an SCXML duration ("500ms"), as a delayexpr
+ * does.
  */
-// status: partial: named()
 export type DelaySpec<Data extends object> =
   | number
   | `${number}ms`
@@ -1594,7 +1583,11 @@ export interface ActorEvent<Data = unknown> {
  *
  * An expression is a JavaScript function (a condition, value or script,
  * called with `this` bound to the actor's data), a literal() value, or source
- * text: `In(state)`, or a data name, which reads that property (ADR 0011). A
+ * text: `In(state)`; a data name, which reads that property (ADR 0011);
+ * `name()`, a call of a function registered with registerFunction(); or a
+ * JSON value, parsed once when the chart is defined (napi ADR 0029). The
+ * builder writes plain data as JSON, and named() as `name()`: unlike a
+ * function or a literal(), both are content core fingerprints. A
  * location is a data name or a { get, set } object. A spec compiles against
  * the JavaScript data model ("javascript") unless it opts into core's null
  * data model with `datamodel: "null"`. A script, unlike other expressions,
@@ -1602,8 +1595,9 @@ export interface ActorEvent<Data = unknown> {
  * -------------------------------------------------------------------------- */
 
 /**
- * A function, a literal(), or source text: In(state), a data name, or
- * `name()`, a call of a registered function (napi ADR 0029). Source text
+ * A function, a literal(), or source text: In(state), a data name,
+ * `name()` (a call of a registered function), or a JSON value (napi ADR
+ * 0029). Source text
  * that knows where it was written is `{ source, span }`, `span` an index
  * into the spec's `spans` from 1 (core ADR 0085); an imported chart's
  * export() writes it so, and define() keeps the span.
@@ -1618,7 +1612,6 @@ export type ExpressionSpec =
  * registered function (napi ADR 0029). Other source text and literal()
  * compile, but running them fails with an internal `error.execution`.
  */
-// status: partial: the source text name()
 export type ScriptSpec = ((this: any, context: EvaluationContext<any>) => void) | string;
 /** A data name, or a { get, set } location. */
 export type LocationSpec = string | Location<any, unknown>;

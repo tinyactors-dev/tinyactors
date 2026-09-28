@@ -1,6 +1,6 @@
 # ADR 0029: A chart calls a host function by name
 
-**Status:** Accepted (2026-09-28); not implemented. The target API is in `index.d.ts`, marked `// status: unimplemented` or `// status: partial`. Refines ADR 0011 (the JavaScript data model's source text) and ADR 0027 (what round-trips). Leaves core ADR 0077's exemption for anonymous functions as it is.
+**Status:** Accepted and implemented (2026-09-28); see the implementation notes, which add a fourth source form (JSON values) that point 5 needs. Refines ADR 0011 (the JavaScript data model's source text) and ADR 0027 (what round-trips). Leaves core ADR 0077's exemption for anonymous functions as it is.
 **Date:** 2026-09-28
 
 ## Context
@@ -109,17 +109,62 @@ functions are the answer there.
 
 ## Implementation notes
 
-- **Where:** `src/napi_datamodel.c` (the `name()` form in `tna_source`,
-  binding at `prepare_definition` into the shared compiled table, and
-  calling in `tna_evaluate` and the script path), the system's function
-  table beside the registered data models (`src/napi_system.c`,
-  `registerFunction`), `lib/statechart.js` (`named()`, and the builder
-  methods accepting it), `lib/system.js`.
-- **Tests:** a condition, a value, a script and a log calling a named
-  function, with `this` and the context as a builder function gets them;
-  an unknown name refuses the chart at the expression; registering a name
-  twice, and `In`, throws; a builder chart with only named functions
-  defined twice answers one definition, and the same identity with a
-  different call is `definition-mismatch`; export, then encode to SCXML,
-  then define, answers the same definition; a chart with one anonymous
-  function still registers beside itself.
+- **Where:** `src/napi_datamodel.{c,h}` (the `name()` and JSON forms in
+  `tna_source`; `tna_bind_builtin`, which binds each call and parses each
+  JSON value into the shared compiled table while core prepares the
+  definition; the function table, `registerFunction`'s
+  `tna_js_datamodel_register_function`), `src/napi_system.c` (the native
+  `registerFunction`), `lib/statechart.js` (`named()`, the builder methods
+  accepting it, plain data as JSON), `lib/system.js`
+  (`registerFunction()`), `index.js`. Evaluation needed no change: a bound
+  call is a host expression in the compiled table, run as a builder
+  function is, and a parsed JSON value is one run as a `literal()` is.
+- **Plain data is JSON text (not in the decision).** Point 5 was not true
+  as written: the builder wrote every data value (`data('count', 0)`, an
+  `assign` of a constant, a `raise`'s data) as a `literal()`, which is a
+  host expression too, so a chart whose functions were all named was
+  still exempt from core ADR 0077. The builder now writes a value JSON
+  says exactly (finite numbers other than -0, strings, booleans, null,
+  and arrays and plain objects of those, without holes, cycles, accessors
+  or symbol keys) as JSON text, and the built-in data model reads source
+  text that starts as a JSON value does (a digit, `-`, `"`, `[`, `{`, or
+  `true`, `false`, `null`) as one, parsed once when the chart is defined
+  into the same literal record a `literal()` gives. What JSON cannot say
+  (a `Date`, `NaN`, `undefined`, a function in `data()`, a class
+  instance) stays a `literal()`, and an explicit `literal()` stays one.
+  An actor's value is the same object for every actor of the definition,
+  as a `literal()`'s was. JSON text that does not parse, or used as a
+  location or a script, refuses the chart.
+- **Consequence of that:** a builder chart with plain data and no
+  anonymous function is now answered by identity, so defining a different
+  chart of that kind under an explicit revision already registered throws
+  `definition-mismatch` where it used to register beside. No test relied
+  on the old behaviour.
+- **A named delay returns a duration.** The builder wraps a delay function
+  so a number of milliseconds becomes an SCXML duration; nothing can wrap a
+  named function without a function, so its result is the delay as it
+  is, as a `delayexpr`'s is (`"500ms"`).
+- **The refusal of other source text** now reads "expected a function, or
+  source text: In(state), a data name, name() or JSON"; core cuts a
+  compile error's message at about 90 bytes, which the longer wording
+  passed.
+- **Names:** an identifier of at most 254 bytes, other than `In`. The
+  table is a plain object whose functions are defined, not set, as own
+  properties, so `__proto__` is a name like any other and nothing on the
+  prototype can be called.
+- **Tests:** `test/functions.js`: a condition, a script, a value, a
+  foreach array, a log value and a send event calling named functions,
+  with `this` and the context; an unknown name refused at the expression
+  (`states[0](a).transitions[0].condition`); a condition string
+  `"ready()"`; a call as a location refused; registering a name twice,
+  `In`, a non-identifier and a non-function refused, and after close;
+  `__proto__`; a chart of named functions and plain data defined twice,
+  and from its export, answers one definition, and a different call under
+  the same identity is `definition-mismatch`; SCXML encode then define
+  answers the same definition, and another system that registers the same
+  names defines the same revision from the text; a chart with one
+  anonymous function registers beside itself; plain data exported as JSON
+  text, exotic values kept as literals, JSON refused as a script or when
+  it does not parse; a registered data model gets `name()` as its own
+  source text. `test/types/usage.ts` uses `registerFunction` and
+  `named()`.

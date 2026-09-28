@@ -57,6 +57,12 @@ actor's data, and functions in a chart run with `this` bound to that data.
 A chart's `family` and `revision` name it, so a new revision can replace a
 running actor's chart later.
 
+A function can also be registered once and called by name:
+`system.registerFunction('full', fn)`, then `t.when(named('full'))`. A chart
+whose functions are all named is content tinyactors sees whole: defining
+it again answers the same definition, and it exports and writes to SCXML
+(`cond="full()"`) and back.
+
 ## Charts from SCXML
 
 Charts can also be SCXML documents. `<scxml name>` becomes the family:
@@ -88,7 +94,8 @@ main();
 
 tinyactors ships no expression language: running expression text means
 running code with your process's rights. Without one, expressions in a
-document may be `In(state)` and data names. `system.registerDatamodel(name,
+document may be `In(state)`, data names, JSON values, and `name()`, a call
+of a function registered with `registerFunction()`. `system.registerDatamodel(name,
 { compile(source, role) })` plugs in a compiler of your choice, and
 documents that name it in their `datamodel` attribute use it.
 

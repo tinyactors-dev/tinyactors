@@ -138,7 +138,7 @@ function refusals() {
     .state('a', (a) => a.on('e', (t) => t.when('x > 1').target('a')))
     .build();
   assertCode(() => system.define(expression), 'invalid',
-    /condition: the JavaScript data model takes functions; source text is only In\(state\) or a data name "x > 1"/);
+    /condition: expected a function, or source text: In\(state\), a data name, name\(\) or JSON "x > 1"/);
   assert.throws(() => system.define({ ...expression, datamodel: 'null' }), (error) => {
     assert.ok(error instanceof TinyactorsError);
     assert.equal(error.code, 'invalid');

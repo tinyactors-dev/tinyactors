@@ -1,15 +1,19 @@
 // A consumer's view of index.d.ts, type-checked by `mise run check-types`
 // against Node's types and ES2022 only: no DOM. It is compiled, never run.
 
-import { createSystem, statechart } from '@tinyactors/node';
+import { createSystem, named, statechart } from '@tinyactors/node';
 
 export async function usage(): Promise<void> {
   // A system is disposable (explicit resource management).
   using system = createSystem();
+  // A function charts call by name, so the chart is content core sees whole.
+  system.registerFunction('full', function (this: { count: number }) { return this.count >= 10; });
   const counter = system.define(
     statechart<{ count: number }>({ family: 'counter', revision: '1' })
       .data('count', 0)
-      .state('counting', (state) => state.on('add', (t) => t.assign('count', function () { return this.count + 1; }))),
+      .state('counting', (state) => state
+        .on('add', (t) => t.assign('count', function () { return this.count + 1; }))
+        .on('check', (t) => t.when(named('full')).target('counting'))),
   );
   using actor = system.spawn(counter);
 

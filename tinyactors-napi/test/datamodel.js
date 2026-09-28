@@ -113,7 +113,7 @@ async function context() {
   assertCode(
     () => system.define(statechart({ family: 'src', revision: 'v1' }).data('x', 1).state('a', (s) => s.on('e', (t) => t.when('x > 1')))),
     'invalid',
-    /condition: the JavaScript data model takes functions/,
+    /condition: expected a function, or source text/,
   );
   system.close();
 }
