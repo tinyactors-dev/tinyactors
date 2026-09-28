@@ -18,6 +18,37 @@ The document's `datamodel` attribute picks the data model:
 - `null`: core's null data model, which keeps no data and runs `In()` and
   nothing else. A document gets it only by naming it.
 
+## Guards and actions as named functions
+
+The preferred way to give a document behaviour needs no expression
+compiler: register functions and call them by name (napi ADRs 0029 and
+0030). A call `name()` works as a condition, a value and a script:
+
+```js
+const door = `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="door" initial="closed">
+  <datamodel><data id="opened" expr="0"/></datamodel>
+  <state id="closed">
+    <transition event="open" cond="unlocked()" target="opened">
+      <script>countOpening()</script>
+    </transition>
+  </state>
+  <state id="opened">
+    <transition event="close" target="closed"/>
+  </state>
+</scxml>`;
+
+const system = createSystem();
+system.registerFunction('unlocked', function ({ event }) { return event.data?.key === 'k1'; });
+system.registerFunction('countOpening', function () { this.opened += 1; });
+const front = system.spawn(system.define(door, { format: 'scxml', name: 'door.scxml' }));
+```
+
+Each function runs with `this` bound to the actor's data and gets the
+context. A name nothing is registered under refuses the document when it
+is defined. The same functions serve builder charts through `named()`, and
+a builder chart written that way encodes to exactly this kind of document.
+
 ## A data model for expression text
 
 tinyactors ships no expression compiler, because running expression text

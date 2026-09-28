@@ -33,15 +33,17 @@ silicon and Intel, and Linux on x64 and arm64, with glibc or musl
 ## Quick start
 
 ```js
-const { createSystem, statechart } = require('@tinyactors/node');
+const { createSystem, statechart, named } = require('@tinyactors/node');
 
 const light = statechart({ family: 'light', revision: 'v1' })
   .data('switches', 0)
-  .state('off', (s) => s.on('toggle', (t) => t.target('on').assign('switches', function () { return this.switches + 1; })))
+  .state('off', (s) => s.on('toggle', (t) => t.when(named('belowLimit')).target('on').assign('switches', named('counted'))))
   .state('on', (s) => s.on('toggle', (t) => t.target('off')));
 
 async function main() {
   const system = createSystem();
+  system.registerFunction('belowLimit', function () { return this.switches < 3; });
+  system.registerFunction('counted', function () { return this.switches + 1; });
   const lamp = system.spawn(system.define(light), { name: 'lamp' });
   const result = await lamp.send('toggle'); // resolves once the step it started has ended
   console.log(result.status, lamp.inspect().activeStates, lamp.data().switches); // stable [ 'on' ] 1
@@ -52,16 +54,29 @@ main();
 ```
 
 A **system** runs actors. `define()` compiles a chart once; `spawn()` starts
-an actor of it. The first state is the initial one, `data()` declares the
-actor's data, and functions in a chart run with `this` bound to that data.
-A chart's `family` and `revision` name it, so a new revision can replace a
-running actor's chart later.
+an actor of it. The first state is the initial one, and `data()` declares
+the actor's data. A chart's `family` and `revision` name it, so a new
+revision can replace a running actor's chart later.
 
-A function can also be registered once and called by name:
-`system.registerFunction('full', fn)`, then `t.when(named('full'))`. A chart
-whose functions are all named is content tinyactors sees whole: defining
-it again answers the same definition, and it exports and writes to SCXML
-(`cond="full()"`) and back.
+**Write guards and actions as named functions.** Register a function once
+with `system.registerFunction(name, fn)` and call it from a chart with
+`named(name)`: a guard is `t.when(named('belowLimit'))`, an action
+`t.script(named('audit'))`, a computed value `assign('switches',
+named('counted'))`. The function runs with `this` bound to the actor's
+data and gets the context (the event, `In()`, the system) as its argument.
+Named functions are the preferred way to write a chart:
+
+- the chart can be written as SCXML (`cond="belowLimit()"`) or another
+  syntax and read back, in this process or another that registers the same
+  names;
+- a misspelled name is reported when the chart is defined, not when it
+  runs;
+- the same chart built twice is one definition;
+- the functions live with the system, where they can be tested and reused.
+
+A function written inline, `t.when(function () { return this.switches < 3; })`,
+works too and is quickest for a one-off. Such a chart cannot be written as
+text, and building it again with new closures makes another definition.
 
 ## Charts from SCXML
 

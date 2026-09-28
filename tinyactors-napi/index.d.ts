@@ -282,7 +282,9 @@ export interface System {
    * when a chart is defined; a name nothing is registered under refuses
    * the chart. A name is registered once; `In` is reserved. A chart whose
    * functions are all named round-trips through export() and codecs, and
-   * defining it again answers the same definition.
+   * defining it again answers the same definition. This is the preferred
+   * way to write guards (`when(named(...))`) and actions
+   * (`script(named(...))`, and computed values); see statechart().
    */
   registerFunction(name: string, run: (this: any, context: EvaluationContext<any>) => unknown): void;
 
@@ -1053,6 +1055,20 @@ export interface StatechartOptions extends DefinitionIdentity {
 /**
  * Begin an ordered JavaScript-authored statechart definition. The builder is
  * mutable until build() or System.define() consumes it.
+ *
+ * Write guards and actions as named functions (napi ADR 0030): register each
+ * once with System.registerFunction() and call it with named():
+ *
+ *     system.registerFunction('belowLimit', function () { return this.switches < 3; });
+ *     statechart({ family: 'light', revision: 'v1' })
+ *       .data('switches', 0)
+ *       .state('off', (s) => s.on('toggle', (t) => t.when(named('belowLimit')).target('on')));
+ *
+ * Such a chart can be written as SCXML or another syntax and read back, a
+ * misspelled name is reported by define(), and the same chart built twice
+ * is one definition. An inline function also works; a chart with one
+ * cannot be written as text, and building it again with new closures makes
+ * another definition.
  */
 export declare function statechart<Data extends object>(
   options: StatechartOptions,
