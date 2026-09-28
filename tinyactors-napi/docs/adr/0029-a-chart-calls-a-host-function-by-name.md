@@ -1,6 +1,6 @@
 # ADR 0029: A chart calls a host function by name
 
-**Status:** Accepted and implemented (2026-09-28); see the implementation notes, which add a fourth source form (JSON values) that point 5 needs. Refines ADR 0011 (the JavaScript data model's source text) and ADR 0027 (what round-trips). Leaves core ADR 0077's exemption for anonymous functions as it is. The implementation notes' "plain data is JSON text" is superseded by ADR 0030 (core ADR 0087 compares host expressions by handle, so builder values stay literals).
+**Status:** Accepted and implemented (2026-09-28); see the implementation notes, which add a fourth source form (JSON values) that point 5 needs. Refines ADR 0011 (the JavaScript data model's source text) and ADR 0027 (what round-trips). Leaves core ADR 0077's exemption for anonymous functions as it is. The implementation notes' "plain data is JSON text" is superseded by ADR 0030 (core ADR 0087 compares host expressions by handle, so builder values stay literals). Refined by ADR 0031: the built-in data model also reads `new Name(arguments)`, a registered class; functions and classes share one name space.
 **Date:** 2026-09-28
 
 ## Context

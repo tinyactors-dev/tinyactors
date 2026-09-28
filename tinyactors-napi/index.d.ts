@@ -289,6 +289,18 @@ export interface System {
   registerFunction(name: string, run: (this: any, context: EvaluationContext<any>) => unknown): void;
 
   /**
+   * Register a class that charts construct by name (napi ADR 0031): source
+   * text `new Name(arguments)`, with JSON arguments in which
+   * `new Name(...)` may appear again. The built-in data model reads it
+   * without evaluating anything, and an evaluating data model has it in
+   * scope. A value whose `[serialize]()` names the class is printed so.
+   * Functions and classes share one name space; `Date`, `Map`, `Set`,
+   * `RegExp` and the typed arrays are registered in every system.
+   */
+  // status: unimplemented
+  registerClass(name: string, constructor: new (...args: any[]) => unknown): void;
+
+  /**
    * Register a chart syntax (napi ADR 0027): define(text, { format }) then
    * decodes with it, and Definition.encode(format) writes with it. The
    * codec is written in JavaScript and runs synchronously inside those
@@ -735,6 +747,41 @@ export interface DatamodelCompiler {
     source: string,
     role: ExpressionRole,
   ): ((this: any, context: any) => unknown) | string | { get(this: any, context: any): unknown; set(this: any, value: unknown, context: any): void };
+  /**
+   * The inverse of compile (napi ADR 0031): a chart's host expression as
+   * source text in this data model's language, for Definition.encode().
+   * Throw a ChartCodecError with code `unrepresentable` to refuse one. A
+   * value with `[serialize]()` describes itself; print its name and
+   * arguments. Without print, charts cannot be encoded for this data model.
+   */
+  // status: unimplemented
+  print?(expression: PrintableExpression, role: ExpressionRole): string;
+}
+
+/** A host expression as DatamodelCompiler.print() receives it. */
+export type PrintableExpression =
+  | { readonly kind: "function"; readonly function: (this: any, context: any) => unknown }
+  | { readonly kind: "literal"; readonly value: unknown }
+  | { readonly kind: "location"; readonly location: Location<any, unknown> };
+
+/**
+ * `Symbol.for('tinyactors.serialize')` (napi ADR 0031). A value that
+ * implements it describes itself for data models to print: the name its
+ * constructor is registered under (System.registerClass) and the arguments
+ * that rebuild it. Being a registered symbol, a class can implement it
+ * without depending on this package.
+ */
+// status: unimplemented
+export declare const serialize: unique symbol;
+
+/** What `value[serialize]()` returns. */
+export interface SerializedValue {
+  readonly name: string;
+  readonly arguments: readonly unknown[];
+}
+
+export interface Serializable {
+  [serialize](): SerializedValue;
 }
 
 /** Why define(text, { format }) refused a document, as `detail`. */
@@ -816,13 +863,18 @@ export interface Definition<Data extends object = Record<string, unknown>> {
    * a definition with this one's revision. Throws `unsupported` when the
    * codec only decodes, and `invalid` with the codec's ChartErrorCode as
    * `detail.code` when it cannot write the chart: SCXML cannot write a
-   * function (`unrepresentable`). A literal() is written as JSON text when
-   * JSON says its value exactly (napi ADR 0030), and refused otherwise.
-   * The text holds a copy of the value, not the value, so defining it while
-   * the original is registered under the same identity throws
-   * `definition-mismatch`; another system defines it under that identity.
+   * function (`unrepresentable`). Host expressions are printed by the data
+   * model (napi ADR 0031): the chart's own, or `options.datamodel`, which
+   * the written chart then names. The built-in data model prints JSON
+   * values, and `new Name(arguments)` for Date, Map, Set, RegExp, typed
+   * arrays and values with `[serialize]()`; it refuses functions (name
+   * them) and anything else. The text holds a copy of each value, not the
+   * value, so defining it while the original is registered under the same
+   * identity throws `definition-mismatch`; another system defines it under
+   * that identity. Text written for another data model is another chart.
    */
-  encode(format: string): EncodedChart;
+  // status: partial: options.datamodel, data models' print, new Name(...)
+  encode(format: string, options?: { datamodel?: string }): EncodedChart;
 
   /**
    * Core's lookups by ID (core ADR 0071), read on each call. IDs count from

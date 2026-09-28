@@ -1,6 +1,6 @@
 # ADR 0030: A JavaScript value is one host expression, and charts call named functions
 
-**Status:** Accepted and implemented (2026-09-28); see the implementation notes, which add an expression printer for encoding (point 5 of the notes) and record one open question. Applies core ADR 0087. Supersedes the "plain data is JSON text" part of ADR 0029's implementation notes; keeps the JSON source-text form it added, for document text. Refines ADR 0011 (how builder expressions reach core) and ADR 0027 point 1 (what round-trips within a process).
+**Status:** Accepted and implemented (2026-09-28); see the implementation notes, which add an expression printer for encoding (point 5 of the notes) and record one open question. Applies core ADR 0087. Supersedes the "plain data is JSON text" part of ADR 0029's implementation notes; keeps the JSON source-text form it added, for document text. Refines ADR 0011 (how builder expressions reach core) and ADR 0027 point 1 (what round-trips within a process). Refined by ADR 0031: a data model prints host expressions, and the built-in one also writes `new Name(arguments)` for Date, Map, Set, RegExp, typed arrays and values with `[serialize]()`.
 **Date:** 2026-09-28
 
 ## Context

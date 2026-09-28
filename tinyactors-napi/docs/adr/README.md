@@ -40,3 +40,4 @@ particular on core ADRs 0011, 0029, 0040, 0047, 0050, 0053–0059, 0061,
 | [0028](0028-a-trace-request-names-each-spans-definition-in-its-scope.md) | [A trace request names each span's definition in its scope](0028-a-trace-request-names-each-spans-definition-in-its-scope.md) |
 | [0029](0029-a-chart-calls-a-host-function-by-name.md) | [A chart calls a host function by name](0029-a-chart-calls-a-host-function-by-name.md) |
 | [0030](0030-a-javascript-value-is-one-host-expression-and-charts-call-named-functions.md) | [A JavaScript value is one host expression, and charts call named functions](0030-a-javascript-value-is-one-host-expression-and-charts-call-named-functions.md) |
+| [0031](0031-values-describe-themselves-and-data-models-print-them.md) | [Values describe themselves, and data models print them](0031-values-describe-themselves-and-data-models-print-them.md) |
