@@ -11,9 +11,15 @@ const definition = system.define(xmlText, { format: 'scxml' }); // a string or a
 
 The document's `datamodel` attribute picks the data model:
 
-- no attribute, or `javascript`: napi's own data model, whose source text
-  is only `In(state)`, bare data names, JSON values, and `name()`, a call of
-  a function registered with `registerFunction()` (napi ADR 0029);
+- no attribute, or `javascript`: napi's own data model, which evaluates no
+  text and works with named references only. Its source text is
+  `In(state)`, bare data names, JSON values, `name()`, a call of a function
+  registered with `registerFunction()` (napi ADR 0029), and
+  `new Name(arguments)`, an instance of a class registered with
+  `registerClass()`, with JSON arguments in which `new Name(...)` may nest
+  (napi ADR 0031). `Date`, `Map`, `Set`, `RegExp` and the typed arrays are
+  registered in every system; a constructor runs each time its expression
+  is evaluated;
 - any other name: a data model registered with `registerDatamodel()`;
 - `null`: core's null data model, which keeps no data and runs `In()` and
   nothing else. A document gets it only by naming it.
@@ -64,7 +70,11 @@ system.registerDatamodel('ecmascript', {
 });
 ```
 
-`compile` runs once per expression when the document is defined. What it
+`compile` runs once per expression when the document is defined. Its third
+argument is the system's registered names, `{ functions, classes }`, for a
+data model that puts them in scope as the example one does (napi ADR
+0031). An optional `print(expression)` is compile's inverse, used when a
+chart is written for this data model (below). What it
 returns runs on napi's built-in data model, exactly as a builder chart's
 functions do, so data, `<foreach>`, `<param>`, `<content>` and `_event.data`
 behave the same. The context is the one builder functions get: `event`,
@@ -175,9 +185,22 @@ codec's `code` (`syntax`, `unknown-attribute`, ...) and the `construct` and
 `definition.encode('scxml')` writes a definition as SCXML: `{ bytes,
 identity?, placeOf(kind, id) }`, where `placeOf` says where each state,
 transition, action and expression landed. Defining the bytes again, with
-`{ format: 'scxml', identity }`, answers the same definition for a chart
-without JavaScript functions; SCXML cannot write a function, and refuses it
-as `unrepresentable` (napi ADR 0027).
+`{ format: 'scxml', identity }`, gives a definition with the same revision
+in another system (napi ADR 0027).
+
+A builder chart's functions and values are printed by the data model the
+chart is written for (napi ADR 0031): its own, or the one
+`encode('scxml', { datamodel })` names, which the document then names too.
+The built-in data model writes JSON, and `new Name(arguments)` for values
+with `[serialize]()` and the standard classes; it refuses a function (name
+it with `registerFunction()`), `NaN`, `-0`, `undefined`, a `BigInt`, a class
+instance that does not describe itself, and a cycle, as `unrepresentable`.
+The example ECMAScript data model (`{ datamodel: 'ecmascript' }`) also
+writes JavaScript literals and functions, as their source called with
+`this` and the context: faithful only for a function that uses nothing
+else, since its source does not carry what it closes over. Text makes new
+values, so defining it beside the live original under the same identity is
+`definition-mismatch`.
 
 SCXML is the built-in codec (`application/scxml+xml`, extension `scxml`).
 To read or write another syntax, register a codec written in JavaScript:

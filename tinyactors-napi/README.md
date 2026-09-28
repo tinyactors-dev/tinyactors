@@ -75,8 +75,29 @@ Named functions are the preferred way to write a chart:
 - the functions live with the system, where they can be tested and reused.
 
 A function written inline, `t.when(function () { return this.switches < 3; })`,
-works too and is quickest for a one-off. Such a chart cannot be written as
-text, and building it again with new closures makes another definition.
+works too and is quickest for a one-off. Building such a chart again with
+new closures makes another definition, and the built-in data model cannot
+write it as text. An evaluating data model can: the example ECMAScript one
+(`tools/ecmascript-datamodel.js`) writes it with
+`encode('scxml', { datamodel: 'ecmascript' })`, which is faithful only when
+the function uses nothing but `this` and its argument.
+
+**Values stay yours, and can be written as text.** A value in a chart is
+the object you passed. When the chart is written as text, the built-in data
+model writes JSON, and `new Name(arguments)` for `Date`, `Map`, `Set`,
+`RegExp`, typed arrays, and your own classes when they describe themselves:
+
+```js
+const { serialize } = require('@tinyactors/node');
+
+class Money {
+  constructor(amount, currency) { this.amount = amount; this.currency = currency; }
+  [serialize]() { return { name: 'Money', arguments: [this.amount, this.currency] }; }
+}
+system.registerClass('Money', Money); // wherever the text is read
+```
+
+The text makes new values when it runs; it is a copy, not the object.
 
 ## Charts from SCXML
 
@@ -109,8 +130,9 @@ main();
 
 tinyactors ships no expression language: running expression text means
 running code with your process's rights. Without one, expressions in a
-document may be `In(state)`, data names, JSON values, and `name()`, a call
-of a function registered with `registerFunction()`. `system.registerDatamodel(name,
+document may be `In(state)`, data names, JSON values, `name()`, a call
+of a function registered with `registerFunction()`, and `new Name(...)`, a
+class registered with `registerClass()`. `system.registerDatamodel(name,
 { compile(source, role) })` plugs in a compiler of your choice, and
 documents that name it in their `datamodel` attribute use it.
 

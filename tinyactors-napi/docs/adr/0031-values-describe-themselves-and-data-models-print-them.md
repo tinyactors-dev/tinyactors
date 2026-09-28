@@ -1,6 +1,6 @@
 # ADR 0031: Values describe themselves, and data models print them
 
-**Status:** Accepted (2026-09-28); not implemented. The target API is in `index.d.ts`, marked `// status: unimplemented` or `// status: partial`. Refines ADR 0019 (a registered data model also prints), ADR 0027 (`encode()` can write a chart for another data model), ADR 0029 (the built-in data model resolves names only) and ADR 0030 (how an encode writes a `literal()`).
+**Status:** Accepted and implemented (2026-09-28); see the implementation notes for where the code differs from the text. Refines ADR 0019 (a registered data model also prints), ADR 0027 (`encode()` can write a chart for another data model), ADR 0029 (the built-in data model resolves names only) and ADR 0030 (how an encode writes a `literal()`).
 **Date:** 2026-09-28
 
 ## Context
@@ -125,25 +125,89 @@ does not record the arguments that built it.
 
 ## Implementation notes
 
-- **Where:** `lib/system.js` (`registerClass`, the shared name space, the
-  standard constructors), `index.js` (`serialize`), `src/napi_datamodel.c`
-  (reading `new Name(arguments)`: parsing at define time, constructing at
-  evaluation), napi's encode printer (`src/import.c` or wherever the last
-  change put it: delegating to the chosen data model's `print`, and the
-  built-in printer of point 4), `lib/codecs.js` or `lib/definition.js`
-  (`encode()`'s `datamodel` option), `tools/ecmascript-datamodel.js`
-  (`print`, and registered names in scope). Writing another data model's
-  name into the document may need the export to be encoded by napi
-  rather than through `ta_definition_encode` (core ADR 0053 lets an
-  embedder call a codec itself); if it needs a core change, that is a
-  core ADR of its own.
-- **Tests:** a class with `serialize` round-trips through SCXML on the
-  built-in data model and on the example ECMAScript one; `Date`, `Map`,
-  `Set` and a typed array round-trip on both; an unregistered class name
-  refuses the chart at the expression; a class name already taken by a
-  function, and a standard name, are refused by `registerClass`;
-  `new Name(...)` constructs a new value at each evaluation; a
-  self-contained inline function round-trips through the ECMAScript data
-  model and is refused by the built-in one; `NaN`, a `BigInt` and a cycle
-  are refused by the built-in printer; a data model without `print` cannot
-  be encoded to.
+- **Where:** `lib/values.js` (the `serialize` symbol, the standard classes,
+  the `new Name(...)` parser and builder, the built-in printer, the print
+  wrapper, and the printed spec a JavaScript codec gets), `lib/system.js`
+  (`registerClass`, the names kept for the compile scope, the data models
+  kept for their `print`, choosing the printer in `encode()`),
+  `src/napi_datamodel.{c,h}` (one registered-name table per kind, checked
+  together; `new Name(...)` in `tna_source` and its binding when a chart is
+  defined; the per-encode printer), `src/import.{c,h}` (the codec wrapper
+  that renames the data model), `src/napi_system.c` (`registerClass`,
+  `encodeDefinition`'s print and data model), `src/addon.c`
+  (`setupLiteral(brand, construct)`), `tools/ecmascript-datamodel.js`.
+  Commits: `06f5157`, `484cef7`, `a2c36b7`, `e4f146e`, `b87baea`, and the
+  one that adds these notes.
+- **`print` gets no role (point 4 said `print(expression, role)`).** Core's
+  expression printer (`ta_chart_expression_printer`) is handed a host
+  expression only, so napi cannot pass one. A printed function therefore
+  has to serve as a value, a condition and a script; the example
+  ECMAScript printer writes `(source).call(this, __context)`, which does.
+- **`compile` gets a third argument (implied by point 5, not declared
+  there):** `scope`, `{ functions, classes }`, the names registered when
+  the chart is defined, frozen and cached until the next registration.
+  Point 5's "puts the system's registered functions and classes in scope"
+  needs it: a data model has no other way to see them.
+- **Writing another data model's name needed no core change.** napi wraps
+  the codec for one encode: the wrapper's `encode` hands the codec it wraps
+  a copy of the spec whose `datamodel` is the name asked for. Core ADR 0053
+  lets a codec be any adapter, so this goes through
+  `ta_definition_encode()` unchanged, source map included.
+- **A JavaScript codec gets a printed chart only when `encode()` names a
+  data model.** The printer runs inside a native codec's encode; a
+  JavaScript codec gets the export as values instead (ADR 0027). With
+  `{ datamodel }`, lib replaces every host expression in that spec with
+  the data model's text and sets `datamodel`; without it, the codec gets
+  the chart's values as before.
+- **Encoding for the chart's own data model** uses its `print` when it has
+  one. A registered data model without `print` still encodes a chart of
+  source text alone (every imported chart, whose expressions are text), so
+  the IRP round trip is unchanged; only naming such a data model
+  explicitly throws `unsupported`.
+- **The built-in data model also reads an array or object with
+  `new Name(...)` inside** (`[new Date(1), "x"]`), which its printer writes
+  for such a value. Source text that starts as JSON does and does not
+  parse as JSON goes to the same parser as `new Name(...)`. Pure JSON is
+  still parsed once into a literal; text with a construction in it becomes
+  a function that builds its value at each evaluation.
+- **Printed forms.** A `Date` is `new Date(<milliseconds>)`; an invalid one
+  is refused by the built-in printer and written `new Date(NaN)` by the
+  ECMAScript one. Only exact instances of the standard classes print as
+  them: a subclass needs `[serialize]()`. The ECMAScript printer writes
+  object keys as computed keys (`{["__proto__"]: 1}`), so `__proto__`
+  stays an own property, and ends a function's source with a newline
+  before `).call(...)`, so a trailing line comment cannot swallow the call
+  (SCXML writes it as `&#10;`).
+- **The data model's reason reaches the caller.** A printer's refusal
+  replaces the codec's phrase in the `encode()` error, with code
+  `unrepresentable`; an exception other than a `ChartCodecError` from a
+  data model's `print` propagates from `encode()` as it is.
+- **The built-in printer moved from `lib/statechart.js` to
+  `lib/values.js`,** and the addon no longer holds a literal-text function:
+  `setupLiteral` takes the literal brand and the construction parser.
+- **Shared names are checked in C.** `registerFunction` and
+  `registerClass` go through one native method; each table is a plain
+  object whose properties are defined, not set, and a name in either table
+  refuses the other. The refusal now reads "a function or class is already
+  registered under this name".
+- **Refusal messages** fit core's compile-error bound (about 90 bytes):
+  the built-in data model's refusal of other source text now reads
+  "expected a function or source text: In(), a data name, name(), new
+  Name() or JSON".
+- **Tests:** `test/values.js`: registration (one name space, the standard
+  classes, `In`, `__proto__`, per system, after close); `new Name(...)`
+  read as values and a condition, nested in maps, arrays and objects, with
+  a new value per actor and per action; refusals at the expression
+  (unknown class, a function name, other text, deep nesting, as a script);
+  a builder chart of described values, standard classes and an array with
+  a construction written as SCXML and read back by another system that
+  registers the class, and refused by one that does not; the built-in
+  printer's refusals with their reasons; `encode()` for a registered data
+  model with `print` (its text, its refusal, an exception it throws, a
+  non-string), a JavaScript codec getting the printed spec, and
+  `unsupported` for a data model without `print`; the ECMAScript data
+  model writing inline functions, literals and named calls, and another
+  system reading them back and running them, and refusing a method and a
+  native function. `test/handles.js`: a `Date` now has text; a class
+  instance without `[serialize]()` has none. W3C IRP 176/176 on Node and
+  Bun.
