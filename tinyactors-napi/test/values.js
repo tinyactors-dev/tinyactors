@@ -6,7 +6,8 @@
 // a chart's values.
 
 const assert = require('node:assert/strict');
-const { createSystem, statechart, named, serialize, ChartCodecError, TinyactorsError } = require('..');
+const { createSystem, statechart, named, literal, serialize, ChartCodecError, TinyactorsError } = require('..');
+const { ecmascript } = require('../tools/ecmascript-datamodel');
 
 function assertCode(fn, code, pattern) {
   assert.throws(fn, (error) => {
@@ -284,6 +285,74 @@ function otherDatamodels() {
   system.close();
 }
 
+// The example ECMAScript data model gets the registered names as its
+// compile scope and prints: a builder chart, inline functions included,
+// written for it and read back by another system.
+async function ecmascriptPrinting() {
+  const setup = (system) => {
+    system.registerDatamodel('ecmascript', ecmascript);
+    system.registerClass('Money', Money);
+    system.registerFunction('bumped', function (context) { return this.count + (context.event.data ?? 1); });
+    return system;
+  };
+  const system = setup(createSystem());
+  const values = {
+    count: 0,
+    price: new Money(12, 'EUR'),
+    when: new Date(1700000000000),
+    table: new Map([['k', new Money(2, 'USD')]]),
+    odd: [NaN, -0, undefined, 10n],
+    seen: null,
+  };
+  let builder = statechart({ family: 'shop', revision: '1' });
+  for (const [name, value] of Object.entries(values)) {
+    builder = builder.data(name, literal(value));
+  }
+  const definition = system.define(builder
+    .state('open', (state) => state
+      .on('buy', (t) => t.when(function () { return this.count < 2; }).assign('count', named('bumped')))
+      .on('look', (t) => t.assign('seen', (context) => context.event.name))
+      .on('close', (t) => t.when(named('bumped')).target('closed')))
+    .state('closed'));
+  const encoded = definition.encode('scxml', { datamodel: 'ecmascript' });
+  const written = text(encoded);
+  assert.match(written, /datamodel="ecmascript"/);
+  // The function's source as the engine gives it (Bun reformats it), called.
+  assert.match(written, /cond="\(function ?\(\)[^"]*this\.count &lt; 2;[^"]*\)\.call\(this, __context\)"/);
+  assert.match(written, /expr="new Money\(12, &quot;EUR&quot;\)"/);
+  assert.match(written, /expr="\[NaN, -0, undefined, 10n\]"/);
+  assert.match(written, /expr="bumped\(\)"/);
+
+  const other = setup(createSystem());
+  const read = other.define(encoded.bytes, { format: 'scxml', identity: encoded.identity });
+  assert.deepEqual(read.inspect().datamodel, 'ecmascript');
+  const actor = other.spawn(read);
+  await actor.send('buy');
+  await actor.send('buy', 5);
+  await actor.send('buy');
+  await actor.send('look');
+  const data = actor.data();
+  assert.equal(data.count, 6, 'the named function ran twice, then the inline guard held');
+  assert.equal(data.seen, 'look', 'an arrow function gets the context');
+  assert.ok(data.price instanceof Money);
+  assert.deepEqual(data.price, values.price);
+  assert.deepEqual(data.when, values.when);
+  assert.deepEqual(data.table, values.table);
+  assert.deepEqual(data.odd, values.odd);
+  await actor.send('close');
+  assert.deepEqual(actor.inspect().activeStates, ['closed']);
+  other.close();
+
+  // A function whose source is not an expression is refused.
+  const method = system.define(statechart({ family: 'method', revision: '1' })
+    .state('a', (state) => state.on('go', (t) => t.when({ check() { return true; } }.check).target('a'))));
+  assertUnrepresentable(() => method.encode('scxml', { datamodel: 'ecmascript' }), /not an expression/);
+  const native = system.define(statechart({ family: 'native', revision: '1' })
+    .state('a', (state) => state.on('go', (t) => t.when(Boolean).target('a'))));
+  assertUnrepresentable(() => native.encode('scxml', { datamodel: 'ecmascript' }), /no source text/);
+  system.close();
+}
+
 (async () => {
   registration();
   await construction();
@@ -291,6 +360,7 @@ function otherDatamodels() {
   await printing();
   printingRefusals();
   otherDatamodels();
+  await ecmascriptPrinting();
 })().catch((error) => {
   console.error(error);
   process.exit(1);

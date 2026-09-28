@@ -755,7 +755,6 @@ export type ExpressionRole = "value" | "condition" | "location" | "script";
  * model calls `name()`.
  */
 export interface DatamodelCompiler {
-  // status: partial: scope
   compile(
     source: string,
     role: ExpressionRole,

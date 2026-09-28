@@ -213,6 +213,8 @@ class System {
   #classes = Object.create(null);
   // registerDatamodel()'s data models by name, for their print (napi ADR 0031).
   #datamodels = new Map();
+  // #scope()'s answer until the next registration.
+  #compileScope;
   #effectContext;
 
   static {
@@ -876,8 +878,18 @@ class System {
     if (datamodel.print !== undefined && typeof datamodel.print !== 'function') {
       throw new TinyactorsError('registerDatamodel(): print must be a function', 'invalid');
     }
-    this.#native.registerDatamodel(name, (source, role) => normalizeCompiled(compile(source, role), role));
+    this.#native.registerDatamodel(name, (source, role) => normalizeCompiled(compile(source, role, this.#scope()), role));
     this.#datamodels.set(name, datamodel);
+  }
+
+  // What a registered data model's compile gets as its scope (napi ADR
+  // 0031): the functions and classes registered now.
+  #scope() {
+    this.#compileScope ??= Object.freeze({
+      functions: Object.freeze(Object.assign(Object.create(null), this.#functions)),
+      classes: Object.freeze(Object.assign(Object.create(null), this.#classes)),
+    });
+    return this.#compileScope;
   }
 
   // The print(expression) of the data model `name` (napi ADR 0031): the
@@ -906,6 +918,7 @@ class System {
     }
     this.#native.registerFunction(name, run);
     this.#functions[name] = run;
+    this.#compileScope = undefined;
   }
 
   /**
@@ -924,6 +937,7 @@ class System {
     }
     this.#native.registerClass(name, constructor);
     this.#classes[name] = constructor;
+    this.#compileScope = undefined;
   }
 
   /**
