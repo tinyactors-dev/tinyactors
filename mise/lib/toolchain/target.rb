@@ -1,12 +1,14 @@
 # frozen_string_literal: true
 
 require 'fileutils'
-require 'open3'
 require 'shellwords'
 
 module Toolchain
-  # What the build compiles for. There are three kinds, and which one a
-  # script asks for says what the result is for:
+  # What the build compiles for. The toolchain is LLVM 22, pinned in the
+  # root mise.toml (clang and llvm-tools); zig cc builds what is shipped,
+  # because it brings every target's C library and SDK with it. There are
+  # three kinds of target, and which one a script asks for says what the
+  # result is for:
   #
   #   Target.release('x86_64-linux')  what is shipped: the pinned `zig cc`,
   #                                   a pinned triple, fixed flags, from any
@@ -14,7 +16,9 @@ module Toolchain
   #   Target.check                    what a check reads: the pinned clang
   #                                   for x86_64 Linux ELF, freestanding, so
   #                                   a check answers the same on every host.
-  #   Target.host                     what runs here: $CC, for the test
+  #   Target.host                     what runs here: the pinned clang for
+  #                                   this machine, against its C library
+  #                                   (glibc, or the macOS SDK), for the test
   #                                   programs and the development builds.
   #
   # A script tells a target to compile, archive or link, and gets a Binary
@@ -66,12 +70,12 @@ module Toolchain
 
     def self.check
       @check ||= new(name: 'check', triple: 'x86_64-unknown-linux-gnu', os: :linux, arch: :x86_64,
-                     format: ObjectFormat::ELF, compiler: Check.new)
+                     format: ObjectFormat::ELF, compiler: Clang.new(cross: true, flags: %w[-ffreestanding]))
     end
 
-    # This machine, compiling with $CC (the root mise.toml sets the pinned
-    # clang); Host knows its format and architecture.
-    def self.host = @host ||= Host.current.development_target(Hosted.new)
+    # This machine, compiling with the pinned clang; Host knows its format
+    # and architecture, and that its C library is there.
+    def self.host = @host ||= Host.current.development_target(Clang.new(cross: false, flags: []))
 
     # --- compiling ------------------------------------------------------
 
@@ -130,8 +134,12 @@ module Toolchain
       Binary.new(into)
     end
 
-    # How $CC links a plugin for this machine (Target.host).
+    # How clang links a plugin for this machine (Target.host).
     def plugin_flags = @format.host_plugin_flags
+
+    # The environment an autotools `configure` reads to build with this
+    # target's toolchain instead of what it finds on PATH.
+    def configure_environment = @compiler.environment(self)
 
     # A standalone wasm module of `objects`: no entry point, exporting
     # `exports` and its memory. zig links its compiler-rt, for the 128-bit
@@ -195,30 +203,32 @@ module Toolchain
 
       # llvm's ar with `D` writes no timestamps, owners or modes.
       def archive(target, objects, out) = Tool[:zig].run('ar', *target.format.archive_flags, 'rcsD', out, *objects)
+
+      def environment(target) = { 'CC' => command(target).shelljoin }
     end
 
-    # The pinned clang for the check target.
-    class Check
-      def command(target) = Tool[:clang].command("--target=#{target.triple}")
-      def flags(_target) = %w[-ffreestanding]
-      def run(target, *arguments) = Tool[:clang].run("--target=#{target.triple}", *arguments)
-      def archive(*) = raise(Error, 'the check target builds no archive')
-    end
-
-    # $CC for this machine; only this class reads it. Archives are
-    # llvm-ar's, deterministic, in the host's format.
-    class Hosted
-      def command(_target) = Shellwords.split(ENV.fetch('CC', 'cc'))
-      def flags(_target) = []
-
-      def run(target, *arguments)
-        out, status = Open3.capture2e(*command(target), *arguments.map(&:to_s))
-        raise Error, "#{[*command(target), *arguments].join(' ')} failed:\n#{out}" unless status.success?
-
-        out
+    # The pinned clang: `cross` for the check target, with its triple; for
+    # this machine, without one. Archives are llvm-ar's, deterministic, in the
+    # target's format.
+    class Clang
+      def initialize(cross:, flags:)
+        @cross = cross
+        @flags = flags
       end
 
+      def command(target) = Tool[:clang].command(*target_flag(target))
+      def flags(_target) = @flags
+      def run(target, *arguments) = Tool[:clang].run(*target_flag(target), *arguments)
       def archive(target, objects, out) = Tool[:llvm_ar].run(*target.format.archive_flags, 'rcsD', out, *objects)
+
+      def environment(target)
+        { 'CC' => command(target).shelljoin, 'AR' => Tool[:llvm_ar].path, 'RANLIB' => Tool[:llvm_ranlib].path,
+          'NM' => Tool[:llvm_nm].path }
+      end
+
+      private
+
+      def target_flag(target) = @cross ? ["--target=#{target.triple}"] : []
     end
   end
 end

@@ -18,7 +18,7 @@
 #      against it instead of the modules and run. doc_test includes private
 #      headers and stays against src/.
 #
-# CC and CFLAGS select the compiler and flags as in mise run build. The binaries
+# The pinned clang and CFLAGS compile them as in mise run build. The binaries
 # land in build/amalgamated/. The test objects are the ones `build` already
 # compiled (a test does not depend on which library it links), so only
 # include/txml.c is compiled here, and only when its contents or its headers'

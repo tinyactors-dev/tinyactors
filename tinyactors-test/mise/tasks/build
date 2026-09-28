@@ -18,7 +18,7 @@
 # not a rebuild, when core did not really change), and `link` below keys on
 # the bytes of whatever it produces, so an unchanged archive still relinks
 # nothing while a changed one propagates immediately.
-# Changing CC/CFLAGS already changes `link`'s cache key (the command is part
+# Changing clang or CFLAGS already changes `link`'s cache key (the command is part
 # of it), so it relinks on its own; there is no mtime gate to force past.
 # `TA_FORCE=1 mise run build` (or `rm -rf build`) ignores every stamp for a
 # from-scratch run instead.
@@ -53,9 +53,9 @@ JQ_BUILD = BUILD.join('jq')
 QUICKJS_BUILD = BUILD.join('quickjs-ng')
 PREFIX = BUILD.join('prefix')
 
-def run(*command, chdir: ROOT)
+def run(*command, chdir: ROOT, env: {})
   puts command.shelljoin
-  pid = Process.spawn(*command, chdir: chdir.to_s)
+  pid = Process.spawn(env, *command, chdir: chdir.to_s)
   _pid, status = Process.wait2(pid)
   exit(status.exitstatus || 1) unless status.success?
 end
@@ -76,7 +76,8 @@ unless libjq.file? && libonig.file?
       '--disable-docs',
       '--with-oniguruma=builtin',
       "--prefix=#{PREFIX}",
-      chdir: JQ_BUILD
+      # The pinned LLVM, not the cc, ar and ranlib configure finds on PATH.
+      chdir: JQ_BUILD, env: Toolchain::Target.host.configure_environment
     )
   end
   # The vendored release ships its generated autotools files, and nothing

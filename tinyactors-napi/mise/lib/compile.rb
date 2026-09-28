@@ -57,7 +57,7 @@ module NapiCompile
     ]
   end
 
-  # The compile command: for the host with $CC and $CFLAGS, as development
+  # The compile command: for the host with the pinned clang and $CFLAGS, as development
   # and the tests build; for a release target (mise/lib/toolchain/) with
   # the pinned `zig cc` and that target's fixed flags. A Linux target
   # compiles against musl's headers (ADR 0001 decision 10).

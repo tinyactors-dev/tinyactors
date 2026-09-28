@@ -21,10 +21,10 @@
 # relink of anything downstream. smoke.c and public_smoke.c are compile-only
 # checks in the same sense: smoke.c that the private module surface stays
 # internally consistent, public_smoke.c that the public header alone (no
-# src/ access) is enough to name every public type. CC and CFLAGS select the
-# compiler and flags; changing either changes the compile command, which is
-# part of every object's cache key, so it recompiles everything this task
-# touches.
+# src/ access) is enough to name every public type. The compiler is the
+# pinned clang (Toolchain::Target.host) and CFLAGS selects the flags;
+# changing either changes the compile command, which is part of every
+# object's cache key, so it recompiles everything this task touches.
 
 require 'pathname'
 require 'shellwords'

@@ -27,6 +27,7 @@ module Toolchain
       llvm_objcopy: %w[llvm-objcopy conda:llvm-tools],
       llvm_objdump: %w[llvm-objdump conda:llvm-tools],
       llvm_otool: %w[llvm-otool conda:llvm-tools],
+      llvm_ranlib: %w[llvm-ranlib conda:llvm-tools],
       llvm_readobj: %w[llvm-readobj conda:llvm-tools],
       tar: %w[tar conda:tar],
       gzip: %w[gzip conda:gzip],
@@ -87,10 +88,17 @@ module Toolchain
       Open3.capture3(env, *command(*arguments), **options)
     end
 
-    # The first line of the tool's version, for cache keys and manifests.
+    # The line of the tool's version output that names its version, for
+    # cache keys and manifests (LLVM's tools print it on the third).
     def identity
-      @identity ||= run(VERSION_ARGUMENT.fetch(@name, '--version')).lines.first.to_s.strip
+      @identity ||= begin
+        lines = run(VERSION_ARGUMENT.fetch(@name, '--version')).lines.map(&:strip)
+        lines.find { |line| line.match?(/\d+\.\d+/) } || lines.first.to_s
+      end
     end
+
+    # The major version, e.g. 22 for clang 22.1.8.
+    def major_version = identity[/(\d+)\.\d+/, 1].to_i
 
     # The mise.toml that pins the tool, as mise reports it.
     def pinned_in

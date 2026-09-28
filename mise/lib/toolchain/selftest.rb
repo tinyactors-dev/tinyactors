@@ -11,10 +11,14 @@
 #   archive, byte-identical when built twice; and a shared library that
 #   exports the same names, loads nothing beyond the platform's runtime and
 #   names itself (a wasm module that imports nothing, on wasm).
-# - The check target and this host's target read their objects as C names.
+# - clang and LLVM's tools are one LLVM release.
+# - The check target and this host's target read their objects as C names,
+#   and a program against this machine's C library links and runs.
 # - Platform files are chosen by name (docs/adr/0001, decision 9).
 
+require 'fileutils'
 require 'json'
+require 'open3'
 require 'tmpdir'
 require 'toolchain'
 require 'platform_files'
@@ -48,6 +52,13 @@ module Toolchain
         end
       end
 
+      # clang and LLVM's tools are one toolchain: one LLVM release.
+      check.call('LLVM') do
+        llvm = Tool.each.select { |tool| tool.package == Tool[:clang].package || tool.program.start_with?('llvm-') }
+        majors = llvm.to_h { |tool| [tool.program, tool.major_version] }
+        raise Error, "clang and LLVM's tools are different releases: #{majors}" unless majors.values.uniq.size == 1
+      end
+
       Dir.mktmpdir('toolchain-test') do |dir|
         dir = Pathname.new(dir)
         source = dir.join('seven.c')
@@ -58,6 +69,7 @@ module Toolchain
             target.compile(source, into: dir.join(target.name, 'seven.o')).must_be_for!(target).must_export_exactly!(EXPORTS)
           end
         end
+        check.call('host program') { host_program(dir.join('hello')) }
       end
 
       check.call('host') do
@@ -90,6 +102,16 @@ module Toolchain
 
       minos = library.minimum_os
       raise Error, "minos is #{minos.inspect}, not #{Target::MACOS_MIN}" unless minos == Target::MACOS_MIN
+    end
+
+    # A program against this machine's C library links and runs.
+    def host_program(dir)
+      source = dir.join('hello.c')
+      FileUtils.mkdir_p(dir)
+      source.write(%(#include <stdio.h>\nint main(void) { puts("hello"); return 0; }\n))
+      program = Target.host.program([source], into: dir.join('hello')).must_be_for!(Target.host)
+      out, status = Open3.capture2e(program.to_s)
+      raise Error, "the host program printed #{out.inspect}" unless status.success? && out == "hello\n"
     end
 
     # Its imports and exports, as the WebAssembly API reads them.

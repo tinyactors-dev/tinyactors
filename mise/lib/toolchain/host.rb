@@ -43,8 +43,10 @@ module Toolchain
       raise Error, "#{why}: only on an #{target.name} host; this one is #{self.target.name}"
     end
 
-    # Target.host: this machine, compiling with `compiler`.
+    # Target.host: this machine, compiling with `compiler` against its C
+    # library.
     def development_target(compiler)
+      must_have_c_library!
       Target.new(name: 'host', triple: target.triple, os: os, arch: @arch, format: target.format, compiler: compiler)
     end
 
@@ -59,6 +61,9 @@ module Toolchain
     def conditions = raise(NotImplementedError)
 
     private
+
+    # The pinned clang builds this machine's programs against its C library.
+    def must_have_c_library! = self
 
     def run(*command)
       output, status = Open3.capture2e(*command)
@@ -96,6 +101,13 @@ module Toolchain
       end
 
       private
+
+      # The pinned clang reads the macOS SDK of the Command Line Tools.
+      def must_have_c_library!
+        return self if run('xcrun', '--sdk', 'macosx', '--show-sdk-path')&.then { |path| File.directory?(path) }
+
+        raise Error, 'the pinned clang builds against the macOS SDK, which is missing: run `xcode-select --install`'
+      end
 
       def sysctl(name) = run('sysctl', '-n', name)
     end

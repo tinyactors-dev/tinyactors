@@ -3,11 +3,12 @@ language: ruby
 severity: error
 message: Compile through Toolchain::Target (host, check or release) instead of reading the CC variable or another tool variable.
 note: |
-  Target.host is this machine's compiler ($CC), Target.check the pinned
-  clang for checks that must answer the same everywhere, and
-  Target.release('<name>') zig for what is shipped. Only
-  mise/lib/toolchain/target.rb reads $CC; a pinned tool is
-  Toolchain::Tool[:name], never $AR, $NM or $CLANG.
+  The toolchain is the LLVM 22 pinned in mise.toml, whatever the
+  environment says: Target.host is the pinned clang for this machine,
+  Target.check the pinned clang for checks that must answer the same
+  everywhere, and Target.release('<name>') zig for what is shipped. A
+  pinned tool is Toolchain::Tool[:name], never the CC, AR, NM or CLANG
+  variables.
 ignores:
   - mise/lib/toolchain.rb
   - mise/lib/toolchain/**

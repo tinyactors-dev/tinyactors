@@ -9,7 +9,7 @@
 # that do depend on `generated`, which fails if one is out of date.
 #
 # A test whose modules do not exist yet is reported as pending rather than made
-# to pass; nothing here weakens a test. Changing CC/CFLAGS changes the compile
+# to pass; nothing here weakens a test. Changing clang or CFLAGS changes the compile
 # and link commands, which are part of every cache key, so it rebuilds.
 #
 # Linking is by content too (mise/lib/cache.rb): a test binary is relinked only

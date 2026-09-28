@@ -28,9 +28,9 @@ require 'toolchain'
 # - The flags are fixed here, per profile; $CFLAGS is never read. A dist
 #   artifact must be a function of this definition, not of whoever runs it:
 #   `CFLAGS=-O2 mise run dist` would otherwise publish an archive a later
-#   plain run silently replaces. $CC is honoured (Toolchain::Target.host):
-#   which compiler binary is a toolchain choice; which flags is what the
-#   object code means.
+#   plain run silently replaces. The compiler is the pinned clang
+#   (Toolchain::Target.host), so the archive is a function of the pinned
+#   toolchain and this definition.
 # - The manifest is a pure function of content: no timestamps, commit, paths
 #   or counters, so an unchanged library never churns a consumer's build.
 # - The archive is llvm-ar's deterministic one (Toolchain::Target#archive),
@@ -72,7 +72,7 @@ module CRelease
   module_function
 
   # Builds lib<name>.a from the amalgamation into `out`, and answers `out`.
-  # `target` nil is the host with $CC and a dist profile's flags; a
+  # `target` nil is the host with the pinned clang and a dist profile's flags; a
   # release target's name builds with `zig cc` and the toolchain's fixed
   # flags (the release adds compiler-rt and checks symbols; ADR 0001
   # decision 16).
@@ -96,7 +96,7 @@ module CRelease
     out
   end
 
-  # The host compile command of a dist profile: $CC, never $CFLAGS.
+  # The host compile command of a dist profile: the pinned clang, never $CFLAGS.
   def host_compile_command(profile, project)
     Toolchain::Target.host.compile_command(*PROFILES.fetch(profile), '-Iinclude', *project.includes.map { |dir| "-I#{dir}" })
   end

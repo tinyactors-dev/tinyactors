@@ -10,15 +10,19 @@ require 'pathname'
 #                            mise; never whatever is on PATH.
 #   Toolchain::Target        what the build compiles for: a release target
 #                            (zig cc, docs/adr/0001), the check target (the
-#                            pinned clang, x86_64 Linux ELF), or the host ($CC).
+#                            pinned clang, x86_64 Linux ELF), or the host (the
+#                            pinned clang against this machine's C library).
 #   Toolchain::ObjectFormat  what differs between ELF, Mach-O and wasm.
 #   Toolchain::Binary        an object, archive or library on disk that reads
 #                            its own symbols as C names and checks itself.
 #   Toolchain::Host          the machine the build runs on.
 #
-# Only mise/lib/toolchain/ runs a host-dependent tool by name, reads $CC,
-# RUBY_PLATFORM or RbConfig's host, or branches on macos?, linux? or wasm?;
-# `mise run check-portability` rejects any other script that does
+# The toolchain is LLVM 22 (clang and llvm-tools), and zig cc for releases,
+# all pinned in the root mise.toml; nothing reads $CC.
+#
+# Only mise/lib/toolchain/ runs a host-dependent tool by name, reads a tool
+# variable, RUBY_PLATFORM or RbConfig's host, or branches on macos?, linux?
+# or wasm?; `mise run check-portability` rejects any other script that does
 # (mise/ast-grep/rules/). `mise run toolchain-test` builds and checks every
 # target's objects on whatever host runs it.
 module Toolchain

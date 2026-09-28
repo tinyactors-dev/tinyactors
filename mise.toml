@@ -5,14 +5,17 @@ config_roots = ["tinyactors-core", "tinyactors-napi", "tinyactors-scxml", "tinya
 
 [tools]
 ruby = "4"
-# The API extractor reads clang's JSON AST, whose shape changes between
-# major releases (clang 22 dropped the ElaboratedType wrapper around a
-# typedef's tag). Pin the line the description in include/ was generated with.
+# The toolchain is LLVM 22, and nothing else: clang compiles every program
+# that runs here (Toolchain::Target.host), every check (Target.check), the
+# sanitizer builds and the API extractor; LLVM's binutils (llvm-nm,
+# llvm-readobj, llvm-ar, ...) read and archive every object, ELF, Mach-O
+# and wasm alike. Nothing uses the host's cc, nm, ar, readelf or otool, and
+# $CC is not read (mise/lib/toolchain/). Move both pins together;
+# `mise run toolchain-test` fails when they are different releases. The
+# API extractor reads clang's JSON AST, whose shape changes between major
+# releases (clang 22 dropped the ElaboratedType wrapper around a typedef's
+# tag), so a new major regenerates the descriptions in include/.
 clang = "22"
-# LLVM's binutils (llvm-nm, llvm-readobj, llvm-objcopy, ...), which read
-# ELF, Mach-O and wasm alike on any host; the clang package does not ship
-# them. The build reads every object through them (mise/lib/toolchain/),
-# never through the host's nm, readelf or otool.
 "conda:llvm-tools" = "22"
 # GNU tar and gzip, so a release tarball is the same bytes on every host
 # (macOS ships bsdtar and another gzip).
@@ -25,7 +28,9 @@ ast-grep = "0.45.3"
 node = "22"
 bun = "1"
 # Every release binary is built with `zig cc` (docs/adr/0001): one compiler,
-# linker and compiler-rt for every target, from any host (mise/lib/toolchain/).
+# linker, compiler-rt and C library for every target, from any host
+# (Toolchain::Target.release). It is LLVM too (21 in zig 0.16), and LLVM
+# 22's tools read what it builds.
 zig = "0.16.0"
 
 [env]
@@ -42,4 +47,3 @@ zig = "0.16.0"
 # another task script as a child Ruby process (e.g. tinyxml/mise/tasks/generated)
 # still works, since the child inherits RUBYLIB from the parent's environment.
 RUBYLIB = "{{config_root}}/mise/lib"
-CC = "clang"

@@ -169,10 +169,14 @@ on both. Everything that differs between hosts lives in
   ...), GNU tar and gzip. Never run `nm`, `readelf`, `otool`, `ar`, `tar`
   or a compiler found on `PATH`; pin a new tool in `mise.toml` and in
   `Tool::PINNED`.
-- **`Toolchain::Target`** compiles and links: `Target.release(name)` for
-  what is shipped, `Target.check` (the pinned clang, x86_64 Linux ELF) for
-  a check that reads objects, `Target.host` (`$CC`) for programs that run
-  here. Only it reads `$CC`.
+- **The toolchain is LLVM 22** (`clang` and `conda:llvm-tools` in the root
+  `mise.toml`), with `zig cc` for releases. Nothing reads `$CC`; move the
+  two LLVM pins together (`mise run toolchain-test` checks they match).
+- **`Toolchain::Target`** compiles and links: `Target.release(name)` (zig)
+  for what is shipped, `Target.check` (the pinned clang, x86_64 Linux ELF)
+  for a check that reads objects, `Target.host` (the pinned clang against
+  this machine's C library) for programs that run here, and its
+  `configure_environment` for an autotools build.
 - **`Toolchain::Binary`** reads an object's symbols as C names (no Mach-O
   underscore) and checks itself: `must_export_exactly!`,
   `must_leave_undefined_only!`, `must_load_only!`, `must_be_for!`.

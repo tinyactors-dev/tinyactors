@@ -7,8 +7,9 @@
 # while its contents and those of the headers it includes are unchanged
 # (mise/lib/cache.rb), so touching a file, or editing a comment, costs a hash
 # and a comment edit that leaves the object's bytes unchanged invalidates
-# nothing downstream. CC and CFLAGS select the compiler and flags; changing them
-# changes the compile command and so recompiles everything.
+# nothing downstream. The compiler is the pinned clang (Toolchain::Target.host)
+# and CFLAGS selects the flags; changing either changes the compile command
+# and so recompiles everything.
 
 require 'pathname'
 require 'shellwords'

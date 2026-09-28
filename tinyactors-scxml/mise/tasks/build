@@ -8,7 +8,8 @@
 # content: `mise run dist` in each producer is content-gated, Cache.compile
 # keys objects on their sources and headers, and the link keys on its inputs'
 # bytes. The codec itself compiles with -ffreestanding: it uses no C library.
-# $CC selects the compiler (default `cc`), as in the rest of the workspace.
+# The compiler is the pinned clang (Toolchain::Target.host), as in the rest
+# of the workspace.
 
 require 'pathname'
 require 'cache'
