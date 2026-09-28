@@ -8,9 +8,24 @@
 #pragma once
 
 #include <node_api.h>
+#include <stdbool.h>
+
+#include "runtime.h"
+#include "tinyactors.h"
 
 /*
  * Defines exports.core: one function per bound core function, named
  * without the ta_ prefix. The module is internal (ADR 0013 point 7).
  */
 napi_status tna_gen_define(napi_env env, napi_value exports);
+
+/*
+ * The generated codecs of the records hand-written code also carries
+ * across (napi ADR 0027): a chart codec written in JavaScript hands
+ * its spec over, and gets the export back, in the shape define()
+ * takes. Decoding throws with the path of what it refused.
+ */
+bool tna_gen_decode_spec(tna_call *c, napi_value v, ta_scxml_spec *out);
+napi_value tna_gen_encode_spec(tna_call *c, const ta_scxml_spec *in);
+bool tna_gen_decode_identity(tna_call *c, napi_value v, ta_definition_identity *out);
+napi_value tna_gen_encode_identity(tna_call *c, const ta_definition_identity *in);

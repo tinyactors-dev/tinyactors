@@ -151,7 +151,7 @@ async function refusals() {
   assert.throws(() => system.registerDatamodel('javascript', { compile() {} }), /registerDatamodel/);
   assert.throws(() => system.registerDatamodel('null', { compile() {} }), /registerDatamodel/);
   assert.throws(() => system.registerDatamodel('ecmascript', { compile() {} }), /registerDatamodel/);
-  assert.throws(() => system.define('<scxml/>', { format: 'yaml' }), /unknown format/);
+  assert.throws(() => system.define('<scxml/>', { format: 'yaml' }), /no codec is named "yaml"/);
   system.close();
 }
 

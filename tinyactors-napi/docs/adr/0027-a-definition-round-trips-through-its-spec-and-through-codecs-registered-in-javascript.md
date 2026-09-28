@@ -1,6 +1,6 @@
 # ADR 0027: A definition round-trips through its spec, and through codecs registered in JavaScript
 
-**Status:** Accepted (2026-09-28). Points 1, 2 and 3 implemented (2026-09-28), see the implementation notes; points 4 and 5 not yet. The target API is in `index.d.ts`, marked `// status: unimplemented` or `// status: partial`. Applies core ADR 0042 (export), ADR 0053 (codecs), ADR 0071 (lookups by ID), ADR 0077 (identity) and ADR 0085 (spans) to the addon. Refines ADR 0019 (`define()` options, data models by name) and ADR 0024 (which charts are walked for inline children). Refined by ADR 0029: a function called by name is source text, so "a chart without functions" in point 1 means a chart without anonymous functions.
+**Status:** Accepted (2026-09-28). Implemented (2026-09-28): points 1 to 5, see the implementation notes for where the code differs from the text. Applies core ADR 0042 (export), ADR 0053 (codecs), ADR 0071 (lookups by ID), ADR 0077 (identity) and ADR 0085 (spans) to the addon. Refines ADR 0019 (`define()` options, data models by name) and ADR 0024 (which charts are walked for inline children). Refined by ADR 0029: a function called by name is source text, so "a chart without functions" in point 1 means a chart without anonymous functions.
 **Date:** 2026-09-28
 
 ## Context
@@ -300,3 +300,60 @@ states the round-trip contract of point 1 on `export()`.
   model is refused; another system defining a parent's export nests its
   inline child, and its `src` child only when given `resolve`; a spec
   with a broken inline child is refused and leaves no definition behind.
+
+### Points 4 and 5 (2026-09-28)
+
+- **Where:** `lib/codecs.js` (the registry, `ChartCodecError`, and the
+  functions napi's adapter calls), `lib/system.js` (`registerCodec`,
+  `codecs`, `define()`'s `format` and `identity`, the refusal's new
+  fields, and the system side of `Definition.encode()`),
+  `lib/definition.js` (`encode`, `EncodedChart`), `src/napi_codecs.{c,h}`
+  (the `ta_chart_codec` adapter over a JavaScript codec, and the chart
+  error names), `src/import.{c,h}` (one import and one encode for any
+  codec: `tna_import`, `tna_encode`; `tna_import_scxml` stays for the
+  children compiled at invoke time), `src/napi_system.c`
+  (`importDefinition` and `encodeDefinition` take a codec and an
+  identity), `mise/lib/napi/emit.rb` (the generated layer exports its
+  spec and identity codecs: `tna_gen_decode_spec`, `tna_gen_encode_spec`,
+  `tna_gen_decode_identity`, `tna_gen_encode_identity`),
+  `lib/debug/sources.js` (the virtual SCXML source is
+  `Definition.encode('scxml')` and `placeOf`).
+- **The registry lives in lib/, not in C.** The text put it in
+  `src/codecs.{c,h}`. A codec's functions are needed only during one
+  define() or encode(), so lib/ passes the chosen one to the native
+  method, which wraps it as a core codec for that call alone. C keeps no
+  references and has no registry to tear down.
+- **A codec's refusal crosses as data.** lib/ wraps `decode` and `encode`
+  in functions that answer `{ spec }`, `{ bytes, spans }` or `{ refused }`
+  and let every other exception propagate, so the C adapter reads plain
+  objects and never inspects an exception. A thrown `RangeError` reaches
+  the caller of define() or encode() as it was.
+- **The spec lives in the call's arena, not the decode's.** The adapter
+  converts the codec's spec under a `tna_call` that spans the whole
+  import, so what the generated layer retains (functions, interned names)
+  and allocates lives until core has compiled it; the call ends after.
+- **An encode's refusal** is `invalid` with `detail` { message, format,
+  code, construct?, attribute?, line?, column?, offset? }, and no
+  `stage`. The message is formatted as a decode's: "no in <state>".
+- **`ChartCodecError` owns its place.** On Bun, JavaScriptCore gives every
+  `Error` a `line` and `column` of where it was thrown; the constructor
+  always sets its own, `undefined` when the codec gave none, so a
+  placeless refusal is not placed at the throw.
+- **A decode refusal without a line is unlocated.** Core says a decode
+  error always has a position; a JavaScript codec may give none, and a
+  zero line then leaves `line`, `column` and `offset` out of the detail.
+- **Formats share one name space.** A codec's name and its extensions are
+  all names `format` may give, so a name that is another codec's
+  extension is taken too.
+- **Tests:** `test/codecs.js`: a JSON chart syntax decodes with spans
+  naming define()'s `name`, encodes with a source map (`placeOf`),
+  round-trips to the same definition, and carries an explicit identity;
+  refusals with and without a place, with a construct and an attribute;
+  a spec the generated layer refuses; core's compile error from a codec's
+  spec; exceptions propagate from decode and encode; a codec calling back
+  into the system is `reentrant`; names and extensions registered twice;
+  the built-in codec cannot be replaced; decode-only and encode-only
+  codecs; SCXML by extension and by name, with identity; a builder chart
+  with a function is `unrepresentable`; a freed definition is
+  `not-found`. `test/irp/run.js` encodes every W3C IRP chart as SCXML and
+  defines it again: all 176 answer the same definition, on Node and Bun.

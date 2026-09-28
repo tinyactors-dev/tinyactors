@@ -8526,6 +8526,22 @@ fail:
     return tna_call_end(c, NULL);
 }
 
+bool tna_gen_decode_spec(tna_call *c, napi_value v, ta_scxml_spec *out) {
+    return tna_dec_ta_scxml_spec(c, v, out);
+}
+
+napi_value tna_gen_encode_spec(tna_call *c, const ta_scxml_spec *in) {
+    return tna_enc_ta_scxml_spec(c, in);
+}
+
+bool tna_gen_decode_identity(tna_call *c, napi_value v, ta_definition_identity *out) {
+    return tna_dec_ta_definition_identity(c, v, out);
+}
+
+napi_value tna_gen_encode_identity(tna_call *c, const ta_definition_identity *in) {
+    return tna_enc_ta_definition_identity(c, in);
+}
+
 napi_status tna_gen_define(napi_env env, napi_value exports) {
     static const napi_property_descriptor functions[] = {
         { "version", NULL, tna_fn_version, NULL, NULL, NULL, napi_default_jsproperty, NULL },

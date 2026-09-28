@@ -4,7 +4,6 @@
 #include <string.h>
 
 #include "allocator.h"
-#include "ta_scxml.h"
 
 /* Block size of the import's arena; a large document grows it on demand. */
 #define TNA_IMPORT_ARENA_BLOCK ((size_t)16384)
@@ -17,8 +16,19 @@ static void tna_import_text(tna_import_failure *failure, ta_str text) {
     failure->message[length] = '\0';
 }
 
+static void tna_import_copy(char *into, size_t size, ta_str text) {
+    size_t length = text.ptr == NULL ? 0 : (text.len < size - 1u ? text.len : size - 1u);
+    if (length != 0) {
+        memcpy(into, text.ptr, length);
+    }
+    into[length] = '\0';
+}
+
 /* A decode error: the codec's phrase, and the element and attribute it is about. */
 static void tna_import_decode(tna_import_failure *failure, const ta_chart_error *error) {
+    failure->code = error->code;
+    tna_import_copy(failure->construct, sizeof failure->construct, error->construct);
+    tna_import_copy(failure->attribute, sizeof failure->attribute, error->attribute);
     snprintf(failure->message, sizeof failure->message, "%.*s%s%.*s%s%.*s", (int)error->message.len,
              error->message.ptr != NULL ? error->message.ptr : "", error->construct.len != 0 ? " in <" : "",
              (int)error->construct.len, error->construct.ptr != NULL ? error->construct.ptr : "",
@@ -34,6 +44,10 @@ static void tna_import_describe(tna_import_failure *failure, const ta_import_err
         .column = error->at.column,
         .offset = error->at.offset,
     };
+    /* A codec that gave no place for its refusal leaves the position zero. */
+    if (error->stage == TA_IMPORT_STAGE_DECODE && error->at.line == 0) {
+        failure->located = false;
+    }
     if (error->stage == TA_IMPORT_STAGE_DECODE) {
         tna_import_decode(failure, &error->as.decode);
         return;
@@ -48,21 +62,31 @@ static void tna_import_describe(tna_import_failure *failure, const ta_import_err
     tna_import_text(failure, (ta_str){ "the document was refused", 24 });
 }
 
+ta_result tna_scxml_codec(ta_scxml_codec *codec, ta_chart_codec *out) {
+    ta_result result = ta_scxml_codec_init(codec, &(ta_scxml_codec_params){ 0 });
+    if (result == TA_OK) {
+        *out = ta_scxml_codec_adapter(codec);
+    }
+    return result;
+}
+
 ta_result tna_import_scxml(tna_system *system, const tna_import_params *params) {
     ta_scxml_codec codec;
-    ta_result result = ta_scxml_codec_init(&codec, &(ta_scxml_codec_params){ 0 });
-    if (result != TA_OK) {
-        return result;
-    }
+    tna_import_params scxml = *params;
+    ta_result result = tna_scxml_codec(&codec, &scxml.codec);
+    return result == TA_OK ? tna_import(system, &scxml) : result;
+}
+
+ta_result tna_import(tna_system *system, const tna_import_params *params) {
     ta_allocator allocator = tna_allocator_for(&system->allocator, TNA_MEMORY_CORE);
     ta_arena arena;
-    result = ta_arena_init(&arena, allocator, TNA_IMPORT_ARENA_BLOCK);
+    ta_result result = ta_arena_init(&arena, allocator, TNA_IMPORT_ARENA_BLOCK);
     if (result != TA_OK) {
         return result;
     }
     ta_import_error error = { 0 };
     result = ta_definition_import(system->core, &(ta_definition_import_params){
-                                                    .codec = ta_scxml_codec_adapter(&codec),
+                                                    .codec = params->codec,
                                                     .input = params->input,
                                                     .name = params->name,
                                                     .arena = &arena,
@@ -85,23 +109,23 @@ ta_result tna_encode_arena(tna_system *system, ta_arena *arena) {
     return ta_arena_init(arena, tna_allocator_for(&system->allocator, TNA_MEMORY_CORE), TNA_IMPORT_ARENA_BLOCK);
 }
 
-ta_result tna_encode_scxml(tna_system *system, const tna_encode_params *params) {
-    ta_scxml_codec codec;
-    ta_result result = ta_scxml_codec_init(&codec, &(ta_scxml_codec_params){ 0 });
-    if (result != TA_OK) {
-        return result;
-    }
+ta_result tna_encode(tna_system *system, const tna_encode_params *params) {
     ta_chart_error error = { 0 };
-    result = ta_definition_encode(system->core, &(ta_definition_encode_params){
-                                                    .definition = params->definition,
-                                                    .codec = ta_scxml_codec_adapter(&codec),
-                                                    .arena = params->arena,
-                                                    .out = params->out,
-                                                    .spans = params->spans,
-                                                    .error = &error,
-                                                });
+    ta_result result = ta_definition_encode(system->core, &(ta_definition_encode_params){
+                                                              .definition = params->definition,
+                                                              .codec = params->codec,
+                                                              .arena = params->arena,
+                                                              .out = params->out,
+                                                              .spans = params->spans,
+                                                              .identity = params->identity,
+                                                              .error = &error,
+                                                          });
     if (result == TA_ERR_INVALID && params->failure != NULL) {
-        *params->failure = (tna_import_failure){ .stage = TA_IMPORT_STAGE_DECODE };
+        *params->failure = (tna_import_failure){ .stage = TA_IMPORT_STAGE_DECODE,
+                                                 .located = error.at.line != 0,
+                                                 .line = error.at.line,
+                                                 .column = error.at.column,
+                                                 .offset = error.at.offset };
         tna_import_decode(params->failure, &error);
     }
     return result;

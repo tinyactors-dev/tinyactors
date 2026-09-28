@@ -8,7 +8,9 @@
 
 #include "enumerate.h"
 #include "events.h"
+#include "gen/ta_napi.h"
 #include "import.h"
+#include "napi_codecs.h"
 #include "napi_services.h"
 #include "napi_loads.h"
 #include "napi_trace.h"
@@ -607,7 +609,21 @@ static napi_value tna_import_refusal(napi_env env, ta_result result, const tna_i
         if (status == napi_ok) status = tna_set_uint(env, refusal, "column", failure->column);
         if (status == napi_ok) status = tna_set_uint(env, refusal, "offset", (double)failure->offset);
     }
-    return status == napi_ok ? refusal : tna_throw(env, "out-of-memory", "importDefinition: cannot describe the refusal");
+    /* A codec's refusal (napi ADR 0027): its code, and what it is about. */
+    const char *chart = failure->stage == TA_IMPORT_STAGE_DECODE ? tna_chart_error_name(failure->code) : NULL;
+    if (status == napi_ok && chart != NULL) {
+        status = napi_create_string_utf8(env, chart, NAPI_AUTO_LENGTH, &text);
+        if (status == napi_ok) status = napi_set_named_property(env, refusal, "chart", text);
+        if (status == napi_ok && failure->construct[0] != '\0') {
+            status = napi_create_string_utf8(env, failure->construct, NAPI_AUTO_LENGTH, &text);
+            if (status == napi_ok) status = napi_set_named_property(env, refusal, "construct", text);
+        }
+        if (status == napi_ok && failure->attribute[0] != '\0') {
+            status = napi_create_string_utf8(env, failure->attribute, NAPI_AUTO_LENGTH, &text);
+            if (status == napi_ok) status = napi_set_named_property(env, refusal, "attribute", text);
+        }
+    }
+    return status == napi_ok ? refusal : tna_throw(env, "out-of-memory", "define: cannot describe the refusal");
 }
 
 
@@ -657,17 +673,68 @@ static napi_value tna_define_result(napi_env env, ta_result result, const tna_im
 }
 
 /*
- * importDefinition(bytes, name?, resolve?): decodes an SCXML document,
- * compiles it against the data model it names, and registers it (ADR 0019,
- * core ADR 0076); `name` is what the document is called, the source its
- * spans name (core ADR 0085), and `resolve(src)` fetches <data src> and
- * <script src>. The definition ID as a bigint, or a refusal object { code,
- * stage, message, line, column, offset }.
+ * The codec a define() or an encode() uses (napi ADR 0027): the SCXML codec
+ * when `value` is undefined, or a JavaScript codec { name, decode?, encode? }
+ * whose functions lib/ wrapped (lib/system.js, #codecCall). False with an
+ * exception pending when `value` is neither.
+ */
+typedef struct {
+    ta_scxml_codec scxml;
+    tna_js_codec js;
+    ta_chart_codec adapter;
+} tna_codec_choice;
+
+static bool tna_codec_argument(tna_call *call, napi_value value, tna_codec_choice *choice) {
+    napi_env env = call->env;
+    napi_valuetype type = napi_undefined;
+    if (value == NULL || (napi_typeof(env, value, &type) == napi_ok && type == napi_undefined)) {
+        if (tna_scxml_codec(&choice->scxml, &choice->adapter) != TA_OK) {
+            tna_throw(env, "out-of-memory", "define: no memory for the SCXML codec");
+            return false;
+        }
+        return true;
+    }
+    napi_value functions[2] = { NULL, NULL };
+    static const char *const names[2] = { "decode", "encode" };
+    for (uint32_t index = 0; index < 2u; index += 1u) {
+        napi_valuetype kind = napi_undefined;
+        if (napi_get_named_property(env, value, names[index], &functions[index]) != napi_ok ||
+            napi_typeof(env, functions[index], &kind) != napi_ok) {
+            return false;
+        }
+        if (kind != napi_function) {
+            functions[index] = NULL;
+        }
+    }
+    char name[TNA_CODEC_NAME_MAX];
+    size_t length = 0;
+    napi_value text = NULL;
+    if (napi_get_named_property(env, value, "name", &text) != napi_ok ||
+        napi_get_value_string_utf8(env, text, name, sizeof name, &length) != napi_ok ||
+        tna_js_codec_init(&choice->js, call, (ta_str){ name, (uint32_t)length }, functions[0], functions[1],
+                          &choice->adapter) != TA_OK) {
+        tna_throw(env, "invalid", "define: expected a codec { name, decode?, encode? }");
+        return false;
+    }
+    return true;
+}
+
+/*
+ * importDefinition(bytes, name?, resolve?, identity?, codec?): decodes a
+ * document with the SCXML codec, or with `codec`, a JavaScript codec (napi
+ * ADR 0027); compiles it against the data model it names; and registers it
+ * (ADR 0019, core ADR 0076). `name` is what the document is called, the
+ * source its spans name (core ADR 0085); `resolve(src)` fetches <data src>
+ * and <script src>; `identity` ({ family: { name }, revision }) is the
+ * identity to register it under, which no chart syntax carries. The
+ * definition ID as a bigint, or a refusal object { code, stage, message,
+ * line, column, offset, chart, construct, attribute }.
  */
 static napi_value tna_import_definition_method(napi_env env, napi_callback_info info) {
-    size_t argc = 3;
-    napi_value argv[3] = { NULL, NULL, NULL };
-    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+    size_t argc = 5;
+    napi_value argv[5] = { NULL, NULL, NULL, NULL, NULL };
+    napi_value self = NULL;
+    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok) {
         return NULL;
     }
     tna_napi_system *wrapper = tna_open_this(env, info);
@@ -687,40 +754,60 @@ static napi_value tna_import_definition_method(napi_env env, napi_callback_info 
         kind != napi_uint8_array || length > UINT32_MAX) {
         return tna_throw(env, "invalid", "importDefinition: expected the document as a Uint8Array");
     }
+    /* The call carries a JavaScript codec's spec, and what it retains, until
+     * core has compiled it. */
+    tna_call call;
+    tna_call_begin(&call, env, "define");
+    if (!tna_call_receiver(&call, self)) {
+        return tna_call_end(&call, NULL);
+    }
     ta_str name = { 0 };
     napi_valuetype name_type = napi_undefined;
     if (argc >= 2 && napi_typeof(env, argv[1], &name_type) == napi_ok && name_type != napi_undefined &&
         !tna_text_argument(env, system, argv[1], &name)) {
-        tna_scratch_reset_call(&system->scratch);
-        return tna_throw(env, "invalid", "importDefinition: expected the name as a string");
+        return tna_call_end(&call, tna_throw(env, "invalid", "importDefinition: expected the name as a string"));
     }
     tna_src_resolver fetcher = { .env = env, .resolve = NULL };
     napi_valuetype resolve_type = napi_undefined;
     if (argc >= 3 && napi_typeof(env, argv[2], &resolve_type) == napi_ok && resolve_type == napi_function) {
         fetcher.resolve = argv[2];
     }
+    ta_definition_identity *identity = NULL;
+    napi_valuetype identity_type = napi_undefined;
+    if (argc >= 4 && napi_typeof(env, argv[3], &identity_type) == napi_ok && identity_type != napi_undefined) {
+        identity = tna_call_alloc(&call, sizeof *identity, _Alignof(ta_definition_identity));
+        if (identity == NULL || !tna_gen_decode_identity(&call, argv[3], identity)) {
+            return tna_call_end(&call, NULL);
+        }
+    }
+    tna_codec_choice codec;
+    if (!tna_codec_argument(&call, argc >= 5 ? argv[4] : NULL, &codec)) {
+        return tna_call_end(&call, NULL);
+    }
     ta_datamodel choices[2u + TNA_DM_REGISTERED_MAX];
     uint32_t count = tna_js_datamodel_choices(&wrapper->dm, choices);
     ta_definition_id id = 0;
     tna_import_failure failure;
-    /* The compilers run inside this core call: one that calls back into the
-     * system gets `reentrant` (ADR 0019 section 3). */
+    /* The codec and the compilers run inside this core call: one that calls
+     * back into the system gets `reentrant` (ADR 0019 section 3). */
     system->inside_core = true;
-    ta_result result = tna_import_scxml(system, &(tna_import_params){
-                                                    .input = { .ptr = data, .len = (uint32_t)length },
-                                                    .name = name,
-                                                    .datamodels = choices,
-                                                    .datamodel_count = count,
-                                                    .out = &id,
-                                                    .failure = &failure,
-                                                    .resolver = tna_src_resolver_adapter(&fetcher),
-                                                });
+    ta_result result = tna_import(system, &(tna_import_params){
+                                              .codec = codec.adapter,
+                                              .input = { .ptr = data, .len = (uint32_t)length },
+                                              .name = name,
+                                              .datamodels = choices,
+                                              .datamodel_count = count,
+                                              .out = &id,
+                                              .failure = &failure,
+                                              .resolver = tna_src_resolver_adapter(&fetcher),
+                                              .identity = identity,
+                                          });
     system->inside_core = false;
     tna_scratch_reset_call(&system->scratch);
     if (result == TA_OK) {
         result = tna_adopt(wrapper, id, fetcher.resolve, &failure);
     }
-    return tna_define_result(env, result, &failure, id, "importDefinition");
+    return tna_call_end(&call, tna_define_result(env, result, &failure, id, "importDefinition"));
 }
 
 /*
@@ -757,8 +844,8 @@ static napi_value tna_adopt_definition_method(napi_env env, napi_callback_info i
     ta_result result = tna_adopt(wrapper, (ta_definition_id)id, resolve, &failure);
     return tna_define_result(env, result, &failure, (ta_definition_id)id, "adoptDefinition");
 }
-/* One kind's spans as an array by ID: { line, column, endLine, endColumn },
- * or null where the encode wrote nothing for the element. */
+/* One kind's spans as an array by ID: { line, column, endLine, endColumn,
+ * offset, length }, or null where the encode wrote nothing for the element. */
 static napi_status tna_encoded_spans(napi_env env, napi_value into, const char *kind, const ta_source_span *spans,
                                      uint32_t count) {
     napi_value list = NULL;
@@ -774,6 +861,8 @@ static napi_status tna_encoded_spans(napi_env env, napi_value into, const char *
             if (status == napi_ok) status = tna_set_uint(env, entry, "column", span->column);
             if (status == napi_ok) status = tna_set_uint(env, entry, "endLine", span->end_line);
             if (status == napi_ok) status = tna_set_uint(env, entry, "endColumn", span->end_column);
+            if (status == napi_ok) status = tna_set_uint(env, entry, "offset", (double)span->offset);
+            if (status == napi_ok) status = tna_set_uint(env, entry, "length", span->length);
         }
         if (status == napi_ok) status = napi_set_element(env, list, id, entry);
     }
@@ -781,18 +870,20 @@ static napi_status tna_encoded_spans(napi_env env, napi_value into, const char *
 }
 
 /*
- * encodeDefinition(id): the definition written as an SCXML document, and
- * where each state, transition and action landed in it (napi ADR 0026,
- * core ADR 0085), as { text, spans: { state, transition, action } } with
- * each kind an array by ID. The debugger serves it as a virtual source for
- * a chart whose spans name no file. Throws `not-found` for no such
- * definition, and `unsupported` when SCXML cannot express the chart, such
- * as a builder chart whose expressions are JavaScript functions.
+ * encodeDefinition(id, codec?): the definition written with the SCXML codec,
+ * or with `codec`, a JavaScript codec (napi ADR 0027), as { bytes, identity?,
+ * spans: { state, transition, action, expression } }: the bytes, its
+ * explicit identity ({ family: { name }, revision }), and where each element
+ * landed (core ADR 0085), each kind an array by ID. Throws `not-found` for
+ * no such definition; a codec that cannot write the chart (SCXML and a
+ * JavaScript function) or only decodes answers a refusal object, as
+ * importDefinition's.
  */
 static napi_value tna_encode_definition_method(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value argv[1] = { NULL };
-    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+    size_t argc = 2;
+    napi_value argv[2] = { NULL, NULL };
+    napi_value self = NULL;
+    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok) {
         return NULL;
     }
     tna_napi_system *wrapper = tna_open_this(env, info);
@@ -808,31 +899,58 @@ static napi_value tna_encode_definition_method(napi_env env, napi_callback_info 
     if (argc < 1 || napi_get_value_bigint_uint64(env, argv[0], &definition, &lossless) != napi_ok || !lossless) {
         return tna_throw(env, "invalid", "encodeDefinition: expected a definition ID as a bigint");
     }
+    tna_call call;
+    tna_call_begin(&call, env, "encode");
+    if (!tna_call_receiver(&call, self)) {
+        return tna_call_end(&call, NULL);
+    }
+    tna_codec_choice codec;
+    if (!tna_codec_argument(&call, argc >= 2 ? argv[1] : NULL, &codec)) {
+        return tna_call_end(&call, NULL);
+    }
     ta_arena arena;
     if (tna_encode_arena(system, &arena) != TA_OK) {
-        return tna_throw(env, "out-of-memory", "encodeDefinition: no memory for the encode");
+        return tna_call_end(&call, tna_throw(env, "out-of-memory", "encodeDefinition: no memory for the encode"));
     }
     ta_bytes text = { 0 };
     ta_source_map map = { 0 };
+    const ta_definition_identity *identity = NULL;
     tna_import_failure failure;
-    ta_result result = tna_encode_scxml(system, &(tna_encode_params){
-                                                    .definition = definition,
-                                                    .arena = &arena,
-                                                    .out = &text,
-                                                    .spans = &map,
-                                                    .failure = &failure,
-                                                });
+    /* A JavaScript codec runs inside this core call. */
+    system->inside_core = true;
+    ta_result result = tna_encode(system, &(tna_encode_params){
+                                              .definition = definition,
+                                              .codec = codec.adapter,
+                                              .arena = &arena,
+                                              .out = &text,
+                                              .spans = &map,
+                                              .identity = &identity,
+                                              .failure = &failure,
+                                          });
+    system->inside_core = false;
     napi_value out = NULL;
-    if (result == TA_OK) {
+    bool pending = false;
+    if (napi_is_exception_pending(env, &pending) == napi_ok && pending) {
+        out = NULL;
+    } else if (result == TA_OK) {
         napi_value spans = NULL;
-        napi_value content = NULL;
+        napi_value value = NULL;
+        void *data = NULL;
+        napi_value buffer = NULL;
         napi_status status = napi_create_object(env, &out);
-        if (status == napi_ok) status = napi_create_string_utf8(env, (const char *)text.ptr, text.len, &content);
-        if (status == napi_ok) status = napi_set_named_property(env, out, "text", content);
+        if (status == napi_ok) status = napi_create_arraybuffer(env, text.len, &data, &buffer);
+        if (status == napi_ok && text.len != 0) memcpy(data, text.ptr, text.len);
+        if (status == napi_ok) status = napi_create_typedarray(env, napi_uint8_array, text.len, buffer, 0, &value);
+        if (status == napi_ok) status = napi_set_named_property(env, out, "bytes", value);
+        if (status == napi_ok && identity != NULL) {
+            value = tna_gen_encode_identity(&call, identity);
+            status = value != NULL ? napi_set_named_property(env, out, "identity", value) : napi_generic_failure;
+        }
         if (status == napi_ok) status = napi_create_object(env, &spans);
         if (status == napi_ok) status = tna_encoded_spans(env, spans, "state", map.states, map.state_count);
         if (status == napi_ok) status = tna_encoded_spans(env, spans, "transition", map.transitions, map.transition_count);
         if (status == napi_ok) status = tna_encoded_spans(env, spans, "action", map.actions, map.action_count);
+        if (status == napi_ok) status = tna_encoded_spans(env, spans, "expression", map.expressions, map.expression_count);
         if (status == napi_ok) status = napi_set_named_property(env, out, "spans", spans);
         if (status != napi_ok) {
             out = tna_throw(env, "out-of-memory", "encodeDefinition: cannot build the result");
@@ -840,15 +958,16 @@ static napi_value tna_encode_definition_method(napi_env env, napi_callback_info 
     } else if (result == TA_ERR_NOT_FOUND) {
         out = tna_throw(env, "not-found", "encodeDefinition: no such definition");
     } else if (result == TA_ERR_INVALID || result == TA_ERR_UNSUPPORTED) {
-        char message[sizeof failure.message + 64];
-        snprintf(message, sizeof message, "encodeDefinition: SCXML cannot express the chart: %s",
-                 result == TA_ERR_INVALID ? failure.message : "the codec cannot encode");
-        out = tna_throw(env, "unsupported", message);
+        if (result == TA_ERR_UNSUPPORTED) {
+            failure = (tna_import_failure){ .stage = TA_IMPORT_STAGE_DECODE };
+            snprintf(failure.message, sizeof failure.message, "the codec cannot encode");
+        }
+        out = tna_import_refusal(env, result, &failure);
     } else {
         out = tna_throw(env, "out-of-memory", "encodeDefinition: the encode failed");
     }
     ta_arena_destroy(&arena);
-    return out;
+    return tna_call_end(&call, out);
 }
 
 /* scheduling(slot, generation): the actor's scheduling state, for tests and inspection. */

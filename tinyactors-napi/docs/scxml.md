@@ -128,12 +128,32 @@ quarantine is reported once, to the direct parent only:
 data model nobody registered) whose `detail` says where:
 
 ```js
-{ stage: 'compile', message: 'states[0].transitions[0].condition: ...', line: 4, column: 32, offset: 118 }
+{ stage: 'compile', message: 'states[0].transitions[0].condition: ...', line: 4, column: 32, offset: 118,
+  format: 'application/scxml+xml' }
 ```
 
 `stage` is `decode` when the document is not SCXML the codec reads, and
-`compile` when core refused the chart. A `compile` that throws an error
-with numeric `offset` and `length` points the position into the expression.
+`compile` when core refused the chart. A `decode` refusal also has the
+codec's `code` (`syntax`, `unknown-attribute`, ...) and the `construct` and
+`attribute` it is about. A `compile` that throws an error with numeric
+`offset` and `length` points the position into the expression.
+
+## Writing a chart back, and other syntaxes
+
+`definition.encode('scxml')` writes a definition as SCXML: `{ bytes,
+identity?, placeOf(kind, id) }`, where `placeOf` says where each state,
+transition, action and expression landed. Defining the bytes again, with
+`{ format: 'scxml', identity }`, answers the same definition for a chart
+without JavaScript functions; SCXML cannot write a function, and refuses it
+as `unrepresentable` (napi ADR 0027).
+
+SCXML is the built-in codec (`application/scxml+xml`, extension `scxml`).
+To read or write another syntax, register a codec written in JavaScript:
+`system.registerCodec({ name, extensions, decode(bytes, { name, resolve }),
+encode(spec, { definition }) })`, then `define(text, { format })` and
+`definition.encode(format)`. A codec refuses by throwing a
+`ChartCodecError(code, message, { line, column, offset, construct,
+attribute })`; `index.d.ts` has the details.
 
 ## Conformance
 

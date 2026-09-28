@@ -6,6 +6,7 @@ const { createSystem } = require('./lib/system');
 const { statechart, literal, content } = require('./lib/statechart');
 const { TRACE_KINDS, parseTraceparent, formatTraceparent, stepSpanID } = require('./lib/tracing');
 const { decodeTraces } = require('./lib/otlp');
+const { ChartCodecError } = require('./lib/codecs');
 const { metricsToOTLP } = require('./lib/metrics');
 const { createDebugSession, DAPReader, encodeDAPMessage } = require('./lib/debug');
 
@@ -16,6 +17,8 @@ module.exports = {
   literal,
   content,
   TinyactorsError,
+  // Chart codecs (napi ADR 0027): a codec's refusal.
+  ChartCodecError,
   // Tracing (core ADR 0067, napi ADR 0016): OTLP bytes, and a decoder; no
   // telemetry dependency.
   TRACE_KINDS,

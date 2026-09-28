@@ -229,7 +229,6 @@ export interface System {
    * model to compile others. A refused document throws `invalid` or
    * `unsupported` with ImportRefusal as `detail`, which says where.
    */
-  // status: partial: only format "scxml"; no identity option
   define<Data extends object = Record<string, unknown>>(
     source: string | Uint8Array,
     options: {
@@ -295,10 +294,8 @@ export interface System {
    * calls. A name or extension already registered throws `invalid`;
    * "application/scxml+xml" and "scxml" are the built-in SCXML codec's.
    */
-  // status: unimplemented
   registerCodec(codec: ChartCodec): void;
   /** The registered codecs, the built-in SCXML codec first. */
-  // status: unimplemented
   codecs(): ChartCodecInfo[];
 
   /**
@@ -744,15 +741,11 @@ export interface ImportRefusal {
   readonly stage: "decode" | "compile";
   readonly message: string;
   /** The codec's name, such as "application/scxml+xml". */
-  // status: unimplemented
   readonly format: string;
   /** The codec's refusal, when `stage` is "decode". */
-  // status: unimplemented
   readonly code?: ChartErrorCode;
   /** The element or production, and the attribute, the refusal is about. */
-  // status: unimplemented
   readonly construct?: string;
-  // status: unimplemented
   readonly attribute?: string;
   /** Where in the document, 1-based, when the refusal names a place. */
   readonly line?: number;
@@ -825,7 +818,6 @@ export interface Definition<Data extends object = Record<string, unknown>> {
    * `detail.code` when it cannot write the chart: SCXML cannot write a
    * function (`unrepresentable`).
    */
-  // status: unimplemented
   encode(format: string): EncodedChart;
 
   /**
@@ -992,7 +984,6 @@ export interface ChartEncodeContext {
 }
 
 /** A codec's refusal. */
-// status: unimplemented
 export declare class ChartCodecError extends Error {
   constructor(code: ChartErrorCode, message: string, options?: {
     line?: number; column?: number; offset?: number; construct?: string; attribute?: string;

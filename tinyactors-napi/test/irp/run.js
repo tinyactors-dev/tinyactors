@@ -63,6 +63,13 @@ async function run(test) {
     for (const chart of test.charts) {
       const resolve = (src) => chart.files?.[src] ?? siblings[src];
       const definition = system.define(chart.source, { format: 'scxml', resolve });
+      // The SCXML codec is faithful (napi ADR 0027): the chart it writes
+      // defines as this same definition.
+      const encoded = definition.encode('scxml');
+      const again = system.define(encoded.bytes, { format: 'scxml', identity: encoded.identity, resolve });
+      if (again.id !== definition.id) {
+        throw new Error(`${chart.name}: its SCXML encoding defines another definition`);
+      }
       if (chart.start) {
         start = definition;
       }

@@ -36,13 +36,48 @@ module NapiGen
         #pragma once
 
         #include <node_api.h>
+        #include <stdbool.h>
+
+        #include "runtime.h"
+        #include "tinyactors.h"
 
         /*
          * Defines exports.core: one function per bound core function, named
          * without the ta_ prefix. The module is internal (ADR 0013 point 7).
          */
         napi_status tna_gen_define(napi_env env, napi_value exports);
+
+        /*
+         * The generated codecs of the records hand-written code also carries
+         * across (napi ADR 0027): a chart codec written in JavaScript hands
+         * its spec over, and gets the export back, in the shape define()
+         * takes. Decoding throws with the path of what it refused.
+         */
+        #{EXPORTED.map { |name, stem| exported_prototypes(name, stem) }.join("\n")}
       C
+    end
+
+    # Records whose generated codecs hand-written code calls, by the stem of
+    # their public names.
+    EXPORTED = { 'ta_scxml_spec' => 'spec', 'ta_definition_identity' => 'identity' }.freeze
+
+    def exported_prototypes(name, stem)
+      "bool tna_gen_decode_#{stem}(tna_call *c, napi_value v, #{name} *out);\n" \
+        "napi_value tna_gen_encode_#{stem}(tna_call *c, const #{name} *in);"
+    end
+
+    def exported
+      EXPORTED.map do |name, stem|
+        <<~C
+          bool tna_gen_decode_#{stem}(tna_call *c, napi_value v, #{name} *out) {
+              return tna_dec_#{name}(c, v, out);
+          }
+
+          napi_value tna_gen_encode_#{stem}(tna_call *c, const #{name} *in) {
+              return tna_enc_#{name}(c, in);
+          }
+        C
+      end.join("\n")
     end
 
     def source
@@ -68,6 +103,7 @@ module NapiGen
       @plan.array_encoders.each { |id, (codec, _count)| out << array_encoder(id, codec) }
       @plan.list_encoders.each { |id, (codec, terminator)| out << list_encoder(id, codec, terminator) }
       @plan.functions.each { |function| out << function_source(function) }
+      out << exported
       out << define
       "#{out.map { |part| part.end_with?("\n") ? part : "#{part}\n" }.join("\n").rstrip}\n"
     end

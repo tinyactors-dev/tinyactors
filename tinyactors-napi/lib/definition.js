@@ -148,6 +148,44 @@ function exportSpec(native, definition) {
   return core.definition_export(native, definition);
 }
 
+// System's method behind Definition.encode(): the system holds the codecs.
+const ENCODE = Symbol('tinyactors.encode');
+
+/**
+ * What Definition.encode() wrote (napi ADR 0027): the bytes, the explicit
+ * identity to pass back to define(), and where each element landed.
+ */
+class EncodedChart {
+  #spans;
+
+  constructor(bytes, identity, spans) {
+    this.bytes = bytes;
+    if (identity !== undefined) {
+      this.identity = identity;
+    }
+    this.#spans = spans;
+  }
+
+  /** Where the codec wrote element `id` of `kind` in `bytes`, as sourceOf() answers, or undefined. */
+  placeOf(kind, id) {
+    const span = this.#spans[kind]?.[id];
+    if (span === undefined || span === null) {
+      return undefined;
+    }
+    const place = { source: '', line: span.line };
+    if (span.column !== 0) place.column = span.column;
+    if (span.endLine !== 0) {
+      place.endLine = span.endLine;
+      if (span.endColumn !== 0) place.endColumn = span.endColumn;
+    }
+    if (span.length !== 0) {
+      place.offset = span.offset;
+      place.length = span.length;
+    }
+    return place;
+  }
+}
+
 class Definition {
   #native;
 
@@ -267,6 +305,18 @@ class Definition {
     return exportSpec(this.#native, this.id);
   }
 
+  /**
+   * The chart in a registered codec's syntax, by its name or an extension
+   * (napi ADR 0027): { bytes, identity?, placeOf(kind, id) }. Defining the
+   * bytes with { format, identity } answers a definition with this one's
+   * revision. `unsupported` when the codec only reads; `invalid` with the
+   * codec's code as `detail.code` when it cannot write the chart (SCXML
+   * cannot write a function: `unrepresentable`).
+   */
+  encode(format) {
+    return this.system[ENCODE](this.id, format, this);
+  }
+
   /** State `id` as { id, name, parent, kind }, or undefined out of range. */
   state(id) {
     return readState(this.#native, this.id, id);
@@ -312,6 +362,6 @@ class Definition {
 }
 
 module.exports = {
-  Definition, identityOf, NONE,
+  Definition, EncodedChart, ENCODE, identityOf, NONE,
   readState, findState, readTransition, readAction, readExpression, readContent, readInvoke, exportSpec,
 };

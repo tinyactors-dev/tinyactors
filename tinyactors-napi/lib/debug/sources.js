@@ -23,7 +23,6 @@ const { core } = require('../native');
 const { Definition } = require('../definition');
 const { TinyactorsError } = require('../errors');
 
-const KINDS = ['state', 'transition', 'action'];
 const SCXML = 'application/scxml+xml';
 
 // A span's source as a path a client can open, or undefined: a `file:`
@@ -188,11 +187,13 @@ class Sources {
   #virtual(definition) {
     const key = String(definition);
     if (this.#virtuals.has(key)) return this.#virtuals.get(key);
+    const facade = new Definition(this.#system, this.#native, BigInt(definition));
     let encoded;
     try {
-      encoded = this.#native.encodeDefinition(BigInt(definition));
+      encoded = facade.encode(SCXML);
     } catch (error) {
-      if (!(error instanceof TinyactorsError && (error.code === 'unsupported' || error.code === 'not-found'))) throw error;
+      // `invalid`: SCXML cannot write the chart, such as a function (unrepresentable).
+      if (!(error instanceof TinyactorsError && ['invalid', 'unsupported', 'not-found'].includes(error.code))) throw error;
       this.#virtuals.set(key, null);
       return null;
     }
@@ -204,12 +205,13 @@ class Sources {
     const family = core.definition_inspect(this.#native, definition).identity.family.name;
     const name = `${family}.scxml`;
     const elements = [];
-    for (const kind of KINDS) {
-      encoded.spans[kind].forEach((span, id) => {
-        if (span !== null) elements.push({ kind, id, reference, name, line: span.line, column: span.column });
-      });
+    for (const [kind, count] of this.#counts(definition)) {
+      for (let id = 0; id < count; id += 1) {
+        const place = encoded.placeOf(kind, id);
+        if (place !== undefined) elements.push({ kind, id, reference, name, line: place.line, column: place.column });
+      }
     }
-    const virtual = { reference, name, text: encoded.text, elements };
+    const virtual = { reference, name, text: new TextDecoder().decode(encoded.bytes), elements };
     this.#virtuals.set(key, virtual);
     return virtual;
   }

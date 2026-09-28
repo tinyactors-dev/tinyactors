@@ -8,7 +8,8 @@ const v8 = require('node:v8');
 
 const native = require('./native');
 const { TinyactorsError } = require('./errors');
-const { Definition, identityOf, readState, findState, readContent } = require('./definition');
+const { Definition, ENCODE, EncodedChart, identityOf, readState, findState, readContent } = require('./definition');
+const { Codecs, SCXML, decodeCall, encodeCall } = require('./codecs');
 const { DefinitionBuilder } = require('./statechart');
 const { ActorID } = require('./actor');
 const { EventNames } = require('./events');
@@ -38,6 +39,17 @@ function microstepLimitOption(options, where) {
   return limit;
 }
 
+// define()'s `identity`, in the generated shape, or undefined.
+function identityOption(options) {
+  const identity = options?.identity;
+  if (identity === undefined) return undefined;
+  if (identity === null || typeof identity !== 'object' || typeof identity.family !== 'string' || identity.family === ''
+      || !(typeof identity.revision === 'string' || identity.revision instanceof Uint8Array)) {
+    throw new TinyactorsError('define(): identity is { family, revision }, a revision a string or a Uint8Array', 'invalid');
+  }
+  return { family: { name: identity.family }, revision: identity.revision };
+}
+
 // define()'s `resolve`: a function of src, or undefined.
 function resolveOption(options) {
   const resolve = options?.resolve;
@@ -45,6 +57,20 @@ function resolveOption(options) {
     throw new TinyactorsError('define(): resolve must be a function of src', 'invalid');
   }
   return resolve;
+}
+
+// An ImportRefusal from a native refusal object; an encode's has no stage.
+function refusalDetail(result, format, staged = true) {
+  const detail = staged ? { stage: result.stage } : {};
+  detail.message = result.message;
+  detail.format = format;
+  for (const key of ['line', 'column', 'offset']) {
+    if (result[key] !== undefined) detail[key] = result[key];
+  }
+  if (result.chart !== undefined) detail.code = result.chart;
+  if (result.construct !== undefined) detail.construct = result.construct;
+  if (result.attribute !== undefined) detail.attribute = result.attribute;
+  return detail;
 }
 
 function compile(system, spec) {
@@ -178,6 +204,8 @@ class System {
   #metricsName = String((systemCount += 1));
   // Aborted on close(): the signal every EffectContext carries.
   #lifetime = new AbortController();
+  // The chart codecs define() and Definition.encode() choose by format (napi ADR 0027).
+  #codecs = new Codecs();
   #effectContext;
 
   static {
@@ -804,6 +832,29 @@ class System {
    * expression text is the caller's choice (tools/ecmascript-datamodel.js is
    * an example).
    */
+  /**
+   * Register a chart syntax (napi ADR 0027): `codec` is { name, extensions?,
+   * description?, decode?, encode? }. define(text, { format }) decodes with
+   * it, and Definition.encode(format) writes with it, where `format` is its
+   * name or one of its extensions. `decode(bytes, { name, resolve })`
+   * answers a spec; `encode(spec, { definition })` answers bytes, a string,
+   * or { bytes, spans } with spans parallel to `spec.spans`. Both run
+   * synchronously inside those calls and refuse by throwing a
+   * ChartCodecError. A name or extension already registered throws
+   * `invalid`; the built-in SCXML codec is "application/scxml+xml", "scxml".
+   */
+  registerCodec(codec) {
+    if (this.closed) {
+      throw new TinyactorsError('registerCodec(): the system is closed', 'closed');
+    }
+    this.#codecs.register(codec);
+  }
+
+  /** The registered codecs (ChartCodecInfo), the built-in SCXML codec first. */
+  codecs() {
+    return this.#codecs.list();
+  }
+
   registerDatamodel(name, { compile } = {}) {
     if (typeof name !== 'string' || name === '') {
       throw new TinyactorsError('registerDatamodel(): expected a data model name', 'invalid');
@@ -829,8 +880,16 @@ class System {
    * 0075): the microsteps one macrostep may run before its actor is
    * quarantined as a runaway; 0 for no limit.
    *
-   * With `{ format: 'scxml' }`, `source` is an SCXML document (a string or
-   * a Uint8Array of UTF-8). Its `datamodel` attribute picks the data model:
+   * With `{ format }`, `source` is a document (a string, as UTF-8, or a
+   * Uint8Array) that the codec `format` names decodes (napi ADR 0027):
+   * "scxml" or "application/scxml+xml" for the built-in SCXML codec, or a
+   * name or extension given to registerCodec(). `options.identity` ({
+   * family, revision }) is the identity to register it under, which no
+   * chart syntax carries; without it the codec's rule applies. A codec's
+   * refusal says, in `detail`, the codec (`format`), its `code`, and the
+   * `construct` and `attribute` it is about.
+   *
+   * An SCXML document's `datamodel` attribute picks the data model:
    * `javascript` (also for a document without one), one registerDatamodel()
    * registered, or `null`, which a document opts into by naming it. A refusal says where in the document (ADR
    * 0058): `detail` has `stage`, `line`, `column` and `offset`.
@@ -854,15 +913,14 @@ class System {
     const limit = microstepLimitOption(options, 'define()');
     const format = options?.format;
     if (format !== undefined) {
-      if (format !== 'scxml') {
-        throw new TinyactorsError(`define(): unknown format ${JSON.stringify(format)}; expected "scxml"`, 'invalid');
-      }
+      const codec = this.#codecs.find(format, 'define()');
       const resolve = resolveOption(options);
       const name = options?.name;
       if (name !== undefined && typeof name !== 'string') {
         throw new TinyactorsError('define(): name must be a string, such as the document\'s path', 'invalid');
       }
-      return this.#registered(this.#importSCXML(source, name, resolve), limit);
+      const identity = identityOption(options);
+      return this.#registered(this.#import(codec, source, { name, resolve, identity }), limit);
     }
     let spec = source;
     if (source instanceof DefinitionBuilder) {
@@ -892,7 +950,7 @@ class System {
       this.#native.selectDatamodel('null');
     }
     const id = core.system_register_definition(this.#native, compiled.out);
-    return this.#registered(this.#refused(this.#native.adoptDefinition(id, resolve)), limit);
+    return this.#registered(this.#refused(this.#native.adoptDefinition(id, resolve), SCXML.name), limit);
   }
 
   // A registered definition's facade, with its microstep limit when one is
@@ -905,32 +963,48 @@ class System {
     return new Definition(this, this.#native, id);
   }
 
-  // Decodes, compiles and registers an SCXML document; a refusal throws with
-  // its position (core ADRs 0058 and 0076).
-  #importSCXML(source, name, resolve) {
+  // Decodes a document with `codec`, compiles and registers it; a refusal
+  // throws with its position (core ADRs 0058 and 0076).
+  #import(codec, source, { name, resolve, identity }) {
     let bytes = source;
     if (typeof source === 'string') {
       bytes = new TextEncoder().encode(source);
     } else if (!(source instanceof Uint8Array)) {
-      throw new TinyactorsError('define(): an SCXML document is a string or a Uint8Array', 'invalid');
+      throw new TinyactorsError('define(): a document is a string or a Uint8Array', 'invalid');
     }
-    return this.#refused(this.#native.importDefinition(bytes, name, resolve));
+    if (codec.decode === undefined) {
+      throw new TinyactorsError(`define(): the codec ${codec.name} only writes charts`, 'unsupported');
+    }
+    const context = resolve === undefined ? { name } : { name, resolve };
+    const js = codec.builtin ? undefined : { name: codec.name, decode: decodeCall(codec, context) };
+    return this.#refused(this.#native.importDefinition(bytes, name, resolve, identity, js), codec.name);
   }
 
   // The ID a define() method answered, or its refusal thrown with where it
-  // is (ADR 0058): `detail` has `stage`, `line`, `column` and `offset`.
-  #refused(result) {
+  // is (ADR 0058): `detail` is an ImportRefusal, with `stage`, the place,
+  // and a codec's `code`, `construct` and `attribute` (napi ADR 0027).
+  #refused(result, format) {
     if (typeof result === 'bigint') {
       return result;
     }
     const where = result.line === undefined ? '' : ` at line ${result.line}, column ${result.column}`;
-    throw new TinyactorsError(`chart refused${where}: ${result.message}`, result.code, {
-      stage: result.stage,
-      message: result.message,
-      line: result.line,
-      column: result.column,
-      offset: result.offset,
-    });
+    throw new TinyactorsError(`chart refused${where}: ${result.message}`, result.code, refusalDetail(result, format));
+  }
+
+  // Definition.encode(format) (napi ADR 0027).
+  [ENCODE](id, format, definition) {
+    const codec = this.#codecs.find(format, 'encode()');
+    if (codec.encode === undefined) {
+      throw new TinyactorsError(`encode(): the codec ${codec.name} only reads charts`, 'unsupported');
+    }
+    const js = codec.builtin ? undefined : { name: codec.name, encode: encodeCall(codec, { definition }) };
+    const result = this.#native.encodeDefinition(id, js);
+    if (result.bytes === undefined) {
+      throw new TinyactorsError(`encode(): the codec ${codec.name} cannot write the chart: ${result.message}`,
+        result.code, refusalDetail(result, codec.name, false));
+    }
+    return new EncodedChart(result.bytes, result.identity === undefined ? undefined : identityOf(result.identity),
+      result.spans);
   }
 
   /**
