@@ -115,21 +115,25 @@ static napi_value tna_setup_effects(napi_env env, napi_callback_info info) {
 }
 
 /*
- * setupLiteral(brand, text): the symbol that marks literal() objects, and
- * (value) => JSON text or undefined, which renders one for an encode
- * (lib/statechart.js).
+ * setupLiteral(brand, text, construct): the symbol that marks literal()
+ * objects, (value) => JSON text or undefined, which renders one for an
+ * encode (lib/statechart.js), and (text, classes) => builder, which reads
+ * `new Name(arguments)` for the built-in data model (lib/values.js, napi
+ * ADR 0031).
  */
 static napi_value tna_setup_literal(napi_env env, napi_callback_info info) {
-    size_t argc = 2;
-    napi_value argv[2] = { NULL, NULL };
+    size_t argc = 3;
+    napi_value argv[3] = { NULL, NULL, NULL };
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
         return NULL;
     }
     napi_valuetype type = napi_undefined;
     napi_valuetype text_type = napi_undefined;
-    if (argc < 2 || napi_typeof(env, argv[0], &type) != napi_ok || type != napi_symbol ||
-        napi_typeof(env, argv[1], &text_type) != napi_ok || text_type != napi_function) {
-        return tna_throw(env, "invalid", "setupLiteral expects the literal brand symbol and a text function");
+    napi_valuetype construct_type = napi_undefined;
+    if (argc < 3 || napi_typeof(env, argv[0], &type) != napi_ok || type != napi_symbol ||
+        napi_typeof(env, argv[1], &text_type) != napi_ok || text_type != napi_function ||
+        napi_typeof(env, argv[2], &construct_type) != napi_ok || construct_type != napi_function) {
+        return tna_throw(env, "invalid", "setupLiteral expects the literal brand symbol, a text and a construct function");
     }
     tna_env *data = tna_env_get(env);
     if (data == NULL) {
@@ -143,8 +147,13 @@ static napi_value tna_setup_literal(napi_env env, napi_callback_info info) {
         napi_delete_reference(env, data->literal_text);
         data->literal_text = NULL;
     }
+    if (data->construct != NULL) {
+        napi_delete_reference(env, data->construct);
+        data->construct = NULL;
+    }
     if (napi_create_reference(env, argv[0], 1, &data->literal_brand) != napi_ok ||
-        napi_create_reference(env, argv[1], 1, &data->literal_text) != napi_ok) {
+        napi_create_reference(env, argv[1], 1, &data->literal_text) != napi_ok ||
+        napi_create_reference(env, argv[2], 1, &data->construct) != napi_ok) {
         return tna_throw(env, "out-of-memory", "cannot keep the literal brand");
     }
     napi_value undefined = NULL;

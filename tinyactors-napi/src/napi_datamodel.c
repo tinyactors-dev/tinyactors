@@ -521,7 +521,14 @@ static tna_js_datamodel *tna_dm_of(void *self) {
  * Source text: `In(state)`, data names, and calls of registered functions.
  */
 
-typedef enum { TNA_SOURCE_OTHER = 0, TNA_SOURCE_IN, TNA_SOURCE_NAME, TNA_SOURCE_CALL, TNA_SOURCE_JSON } tna_source_kind;
+typedef enum {
+    TNA_SOURCE_OTHER = 0,
+    TNA_SOURCE_IN,
+    TNA_SOURCE_NAME,
+    TNA_SOURCE_CALL,
+    TNA_SOURCE_JSON,
+    TNA_SOURCE_NEW
+} tna_source_kind;
 
 static bool tna_space(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
@@ -584,15 +591,27 @@ static ta_str tna_call_name(ta_str text) {
     return tna_identifier(name) ? name : (ta_str){ NULL, 0 };
 }
 
+/* Whether source text reads as `new Name(...)`: `new`, a space, and a
+ * closing parenthesis at the end (napi ADR 0031); lib/values.js parses the
+ * rest when the chart is defined. */
+static bool tna_new_start(ta_str text) {
+    return text.len > 5 && memcmp(text.ptr, "new", 3) == 0 && tna_space(text.ptr[3]) && text.ptr[text.len - 1u] == ')';
+}
+
 /*
  * Classifies source text; for In(state), `argument` is the state ID, for a
- * data name the name, and for a call the function's name.
+ * data name the name, for a call the function's name, and for JSON and
+ * `new Name(...)` the whole text.
  */
 static tna_source_kind tna_source(ta_str source, ta_str *argument) {
     ta_str text = tna_trim(source);
     if (tna_json_start(text)) {
         *argument = text;
         return TNA_SOURCE_JSON;
+    }
+    if (tna_new_start(text)) {
+        *argument = text;
+        return TNA_SOURCE_NEW;
     }
     if (tna_identifier(text)) {
         *argument = text;
@@ -638,10 +657,11 @@ typedef struct {
 } tna_dm_instance;
 
 static const char tna_source_refused[] =
-    "expected a function, or source text: In(state), a data name, name() or JSON";
+    "expected a function or source text: In(), a data name, name(), new Name() or JSON";
 static const char tna_call_unknown[] = "no function is registered under this name; register it with registerFunction()";
 static const char tna_call_location[] = "a location cannot be a call; use a data name or { get, set }";
 static const char tna_json_role[] = "a JSON value is a value; it cannot be a location or a script";
+static const char tna_new_role[] = "new Name() is a value; it cannot be a location or a script";
 
 static const char *const tna_role_names[] = { "value", "condition", "location", "script" };
 
@@ -853,6 +873,38 @@ static napi_value tna_parsed_literal(tna_js_datamodel *dm, ta_str text) {
 }
 
 /*
+ * `new Name(...)` as a function that builds its value at each evaluation
+ * (lib/values.js, napi ADR 0031), or NULL with the refusal's message in
+ * `dm->rejection` (the exception is cleared).
+ */
+static napi_value tna_construction(tna_js_datamodel *dm, ta_str text) {
+    napi_env env = dm->env;
+    tna_env *data = tna_env_get(env);
+    napi_value construct = NULL;
+    napi_value global = NULL;
+    napi_value argv[2] = { NULL, NULL };
+    napi_value run = NULL;
+    dm->rejection[0] = '\0';
+    if (data == NULL || data->construct == NULL || napi_get_reference_value(env, data->construct, &construct) != napi_ok ||
+        napi_get_global(env, &global) != napi_ok || napi_create_string_utf8(env, text.ptr, text.len, &argv[0]) != napi_ok ||
+        dm->classes == NULL || napi_get_reference_value(env, dm->classes, &argv[1]) != napi_ok) {
+        return NULL;
+    }
+    if (napi_call_function(env, global, construct, 2, argv, &run) == napi_ok) {
+        return run;
+    }
+    napi_value error = NULL;
+    napi_value message = NULL;
+    size_t length = 0;
+    if (napi_get_and_clear_last_exception(env, &error) == napi_ok && error != NULL &&
+        napi_get_named_property(env, error, "message", &message) == napi_ok &&
+        napi_get_value_string_utf8(env, message, dm->rejection, sizeof dm->rejection, &length) != napi_ok) {
+        dm->rejection[0] = '\0';
+    }
+    return NULL;
+}
+
+/*
  * The built-in model's check of a definition's expressions: source text in
  * its forms and its own host expressions. Each call `name()` is bound here
  * to the function registered under the name, and each JSON value parsed
@@ -885,7 +937,7 @@ static ta_result tna_bind_builtin(tna_js_datamodel *dm, const ta_datamodel_prepa
             result = TA_ERR_INVALID;
             continue;
         }
-        if (kind != TNA_SOURCE_CALL && kind != TNA_SOURCE_JSON) {
+        if (kind != TNA_SOURCE_CALL && kind != TNA_SOURCE_JSON && kind != TNA_SOURCE_NEW) {
             continue;
         }
         ta_expr_role role = params->roles != NULL ? params->roles[index] : TA_EXPR_ROLE_VALUE;
@@ -896,6 +948,11 @@ static ta_result tna_bind_builtin(tna_js_datamodel *dm, const ta_datamodel_prepa
         }
         if (kind == TNA_SOURCE_JSON && (role == TA_EXPR_ROLE_LOCATION || role == TA_EXPR_ROLE_SCRIPT)) {
             tna_reject(params, index, tna_json_role, sizeof tna_json_role - 1u);
+            result = TA_ERR_INVALID;
+            continue;
+        }
+        if (kind == TNA_SOURCE_NEW && (role == TA_EXPR_ROLE_LOCATION || role == TA_EXPR_ROLE_SCRIPT)) {
+            tna_reject(params, index, tna_new_role, sizeof tna_new_role - 1u);
             result = TA_ERR_INVALID;
             continue;
         }
@@ -914,6 +971,17 @@ static ta_result tna_bind_builtin(tna_js_datamodel *dm, const ta_datamodel_prepa
             if (run == NULL) {
                 tna_reject(params, index, tna_source_refused, sizeof tna_source_refused - 1u);
                 result = TA_ERR_INVALID;
+                continue;
+            }
+        } else if (kind == TNA_SOURCE_NEW) {
+            run = tna_construction(dm, argument);
+            if (run == NULL) {
+                if (dm->rejection[0] != '\0') {
+                    tna_reject(params, index, dm->rejection, strlen(dm->rejection));
+                    result = TA_ERR_INVALID;
+                } else {
+                    result = TA_ERR_NOMEM;
+                }
                 continue;
             }
         } else if ((run = tna_registered_function(dm, argument)) == NULL) {

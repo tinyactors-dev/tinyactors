@@ -218,7 +218,7 @@ async function data() {
     name: 'sum',
     states: [{ kind: 'atomic', id: 'a' }],
     data: [{ name: 'x', initializer: { kind: 'expr', expr: '1 + 2' } }],
-  }), 'invalid', /expected a function, or source text/);
+  }), 'invalid', /expected a function or source text/);
   system.close();
 }
 

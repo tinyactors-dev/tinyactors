@@ -17,6 +17,7 @@
 const native = require('./native');
 const { TinyactorsError } = require('./errors');
 const { Definition } = require('./definition');
+const { construction } = require('./values');
 
 function isDefinition(value) {
   return value instanceof Definition;
@@ -66,7 +67,7 @@ function literalText(value) {
   return jsonExact(value, new Set()) ? JSON.stringify(value) : undefined;
 }
 
-native.setupLiteral(literalBrand, literalText);
+native.setupLiteral(literalBrand, literalText, construction);
 
 /** Force a callable JavaScript value to be data rather than an expression. */
 function literal(value) {

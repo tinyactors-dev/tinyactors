@@ -9,16 +9,20 @@
  * - literal(value) is a constant (docs/design.md: a function in a value
  *   position is an expression, literal() stores one as data);
  * - an object with `get` and `set` functions is a location;
- * - source text is accepted in four forms only, so plain and exported
+ * - source text is accepted in these forms only, so plain and exported
  *   specs stay readable: `In(state)` as a condition, a data name (an
  *   identifier) as a value or a location, and `name()`, a call of a
  *   function registered with registerFunction() (napi ADR 0029), as a
  *   condition, a value or a script. A call is bound to its function when
  *   the chart is defined. A JSON value (a number, a string, true, false,
  *   null, an array or an object) is a value, parsed once then into a
- *   literal, so a document can write `<data expr="0"/>`. Anything else, and a call of
- *   a name nothing is registered under, is refused then, naming the
- *   expression (core ADR 0058).
+ *   literal, so a document can write `<data expr="0"/>`. `new Name(arguments)`
+ *   (napi ADR 0031), with JSON arguments in which it may nest, builds an
+ *   instance of the class registered under the name, as a value or a
+ *   condition: lib/values.js parses it when the chart is defined, and the
+ *   constructor runs at each evaluation. Anything else, and a call or a
+ *   class of a name nothing is registered under, is refused then, naming
+ *   the expression (core ADR 0058).
  *
  * Each JavaScript expression is a host expression (TA_EXPRESSION_HOST) whose
  * value is an expression record: one strong napi_ref and a count, retained

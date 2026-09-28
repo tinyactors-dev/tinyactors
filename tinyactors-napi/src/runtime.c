@@ -32,6 +32,7 @@ static void tna_env_cleanup(void *arg) {
     data->actor_class = NULL;
     data->literal_brand = NULL;
     data->literal_text = NULL;
+    data->construct = NULL;
     data->effects_handler = NULL;
     tna_env_free_if_unused(data);
 }
