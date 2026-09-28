@@ -1,3 +1,4 @@
+/// <reference types="node" />
 /**
  * @file The desired public API of tinyactors: the design target, not a
  * description of what is built.

@@ -68,6 +68,14 @@ lists what is outstanding, and `mise run check-api-status` (part of
 `mise run test`) fails when a marker is stale or a missing declaration is
 unmarked, for the exports and for the objects it can probe at runtime.
 
+`index.d.ts` needs only Node's types, which it brings in itself with
+`/// <reference types="node" />`; `package.json` names `@types/node` as an
+optional peer dependency, so TypeScript users install it and JavaScript
+users need not. It must not need the DOM: `mise run check-types` (also
+part of `mise run test`) compiles it strictly against ES2022 and Node's
+types alone, with `test/types/usage.ts`, a consumer file that is compiled
+and never run.
+
 ## Benchmarks
 
 `mise run bench [population ...]` runs the tracing bench on Node and Bun and

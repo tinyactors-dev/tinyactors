@@ -32,6 +32,14 @@
   "engines": {
     "node": ">=22.14"
   },
+  "peerDependencies": {
+    "@types/node": ">=22"
+  },
+  "peerDependenciesMeta": {
+    "@types/node": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@opentelemetry/api": "1.9.1",
     "@opentelemetry/core": "2.11.0",
@@ -39,6 +47,8 @@
     "@opentelemetry/resources": "2.11.0",
     "@opentelemetry/sdk-metrics": "2.11.0",
     "@opentelemetry/sdk-trace-base": "2.11.0",
+    "@types/node": "22.20.4",
+    "typescript": "7.0.2",
     "xstate": "^5.33.2"
   }
 }
