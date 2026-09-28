@@ -197,13 +197,27 @@ export interface System {
    * chart throws `invalid` or `unsupported`, with core's compile error as
    * `detail` (ChartRefusal). `options.microstepLimit` overrides the system's
    * `scheduling.microstepLimit` for this definition; 0 for no limit.
+   *
+   * A spec's SCXML `<invoke>`s with a literal `<content>`, or a literal
+   * `src` when `options.resolve` is given, are compiled and nested as an
+   * imported document's are (napi ADR 0027), so `define(d.export())`
+   * keeps d's children. `resolve` is kept for children compiled at invoke
+   * time, as the other overload's is.
    */
+  // status: partial: options.resolve, and walking a spec's inline children
   define<Data extends object = Record<string, unknown>>(
     source: DefinitionSpec | DefinitionBuilder<Data>,
-    options?: { microstepLimit?: number },
+    options?: { microstepLimit?: number; resolve?: (src: string) => string | Uint8Array | undefined },
   ): Definition<Data>;
   /**
-   * Import an SCXML document (napi ADR 0019). Its `<scxml name>` is the
+   * Decode a chart with a registered codec and define it (napi ADR 0027).
+   * `format` names the codec by its name or one of its extensions; the
+   * built-in SCXML codec is "application/scxml+xml", extension "scxml".
+   * To read another syntax, register a codec written in JavaScript with
+   * registerCodec(). A refusal throws `invalid` or `unsupported` with
+   * ImportRefusal as `detail`, which names the codec and says where.
+   *
+   * With the SCXML codec (napi ADR 0019), `<scxml name>` is the
    * definition's family and is required; the revision is a hash of the
    * document. Its `datamodel` attribute picks `javascript` (also for a
    * document without one) or a data model registerDatamodel() registered;
@@ -213,10 +227,19 @@ export interface System {
    * model to compile others. A refused document throws `invalid` or
    * `unsupported` with ImportRefusal as `detail`, which says where.
    */
+  // status: partial: only format "scxml"; no identity option
   define<Data extends object = Record<string, unknown>>(
     source: string | Uint8Array,
     options: {
-      format: "scxml";
+      /** A registered codec's name or extension, such as "scxml". */
+      format: string;
+      /**
+       * The identity to register the chart under. No chart syntax carries
+       * one (core ADR 0053), so a round trip that keeps an explicit
+       * identity passes EncodedChart.identity here. Without it, the codec's
+       * rule applies: for SCXML, `<scxml name>` and a fingerprint.
+       */
+      identity?: DefinitionIdentity;
       /**
        * Fetches `<data src>` and `<script src>` while the document is
        * defined: the content as a string or a Uint8Array, or undefined for a
@@ -228,7 +251,8 @@ export interface System {
        */
       resolve?: (src: string) => string | Uint8Array | undefined;
       /**
-       * What the document is called, such as its path or a file:// URL: the
+       * What the document is called (a codec other than SCXML gets it as
+       * ChartDecodeContext.name), such as its path or a file:// URL: the
        * source its spans name (core ADR 0085), which sourceOf() answers and
        * a debugger opens (napi ADR 0026). Without it the spans name no
        * source, and a debug session shows the chart as SCXML it writes from
@@ -249,9 +273,24 @@ export interface System {
   registerDatamodel(name: string, datamodel: DatamodelCompiler): void;
 
   /**
+   * Register a chart syntax (napi ADR 0027): define(text, { format }) then
+   * decodes with it, and Definition.encode(format) writes with it. The
+   * codec is written in JavaScript and runs synchronously inside those
+   * calls. A name or extension already registered throws `invalid`;
+   * "application/scxml+xml" and "scxml" are the built-in SCXML codec's.
+   */
+  // status: unimplemented
+  registerCodec(codec: ChartCodec): void;
+  /** The registered codecs, the built-in SCXML codec first. */
+  // status: unimplemented
+  codecs(): ChartCodecInfo[];
+
+  /**
    * The unretired definition with this identity. define() of an identity
    * already registered returns that definition and takes another hold;
-   * different content under it throws `definition-mismatch`.
+   * different content under it throws `definition-mismatch`. A chart with
+   * functions is exempt (core ADR 0077): core cannot compare functions, so
+   * it registers beside the other, and this finds one of them.
    */
   findDefinition(identity: DefinitionIdentity): Definition | undefined;
 
@@ -388,7 +427,10 @@ export interface System {
    * turn, one Uint8Array holding one ExportTraceServiceRequest with the
    * spans that ended. Post it to an OTLP/HTTP `/v1/traces` endpoint as it
    * is, or read it with decodeTraces(). Without a sink core builds no record.
+   * Each definition's spans share one scope, whose attributes name the
+   * definition by family, revision and source (napi ADR 0028).
    */
+  // status: partial: one scope per definition, with its attributes
   setTraceSink(sink?: (traces: Uint8Array, logs?: Uint8Array) => void, options?: TraceSinkOptions): void;
   /** Changes `detail`, `kinds` and `sample` of the installed sink in place; open spans are kept. */
   configureTraces(options: TraceConfiguration): void;
@@ -639,6 +681,18 @@ export interface SendResult {
 
 /* --------------------------------------------------------------------------
  * Definitions
+ *
+ * A definition is inspectable down to every element, and round-trips
+ * (napi ADR 0027):
+ *
+ * - To render a chart, read Definition.export(): the spec it was compiled
+ *   from, with where each element was written (`spans`, `sources`).
+ * - To resolve the IDs a trace or an inspection names (`scxml.state.id`,
+ *   `scxml.transition.id`, `scxml.action.id`, TracePosition), use
+ *   Definition.state(), transition(), action() and expression().
+ * - To read or write a syntax other than SCXML, register a codec written
+ *   in JavaScript with System.registerCodec(), then define(text, { format })
+ *   and Definition.encode(format).
  * -------------------------------------------------------------------------- */
 
 /**
@@ -667,11 +721,22 @@ export interface DatamodelCompiler {
   ): ((this: any, context: any) => unknown) | string | { get(this: any, context: any): unknown; set(this: any, value: unknown, context: any): void };
 }
 
-/** Why define(xml, { format: "scxml" }) refused a document, as `detail`. */
+/** Why define(text, { format }) refused a document, as `detail`. */
 export interface ImportRefusal {
-  /** "decode": the document is not SCXML the codec reads; "compile": core refused the chart. */
+  /** "decode": the codec refused the document; "compile": core refused the chart. */
   readonly stage: "decode" | "compile";
   readonly message: string;
+  /** The codec's name, such as "application/scxml+xml". */
+  // status: unimplemented
+  readonly format: string;
+  /** The codec's refusal, when `stage` is "decode". */
+  // status: unimplemented
+  readonly code?: ChartErrorCode;
+  /** The element or production, and the attribute, the refusal is about. */
+  // status: unimplemented
+  readonly construct?: string;
+  // status: unimplemented
+  readonly attribute?: string;
   /** Where in the document, 1-based, when the refusal names a place. */
   readonly line?: number;
   readonly column?: number;
@@ -716,8 +781,214 @@ export interface Definition<Data extends object = Record<string, unknown>> {
    */
   sourceOf(kind: ElementKind, id: number): SourcePlace | undefined;
 
+  /**
+   * The spec this definition was compiled from (core ADR 0042), in the
+   * shape define() takes, with its spans and sources. `identity` is present
+   * when the definition has an explicit one and absent when it was
+   * fingerprinted. Expressions are as authored: source text, the same
+   * functions, the same literal() values; a builder chart's child is its
+   * DefinitionID.
+   *
+   * The round trip (napi ADR 0027): `system.define(d.export())` answers a
+   * definition whose export() is equal to d's, functions compared by
+   * identity. For a chart without functions (every imported chart) it
+   * answers d itself; a builder chart registers beside d (core ADR 0077).
+   * `microstepLimit` and `resolve` are the host's settings, not the
+   * chart's: pass them to define() again. Throws `not-found` once freed.
+   */
+  // status: unimplemented
+  export(): DefinitionSpec;
+
+  /**
+   * The chart in a registered codec's syntax, by its name or extension
+   * (napi ADR 0027). Defining `bytes` with `{ format, identity }` answers
+   * a definition with this one's revision. Throws `unsupported` when the
+   * codec only decodes, and `invalid` with the codec's ChartErrorCode as
+   * `detail.code` when it cannot write the chart: SCXML cannot write a
+   * function (`unrepresentable`).
+   */
+  // status: unimplemented
+  encode(format: string): EncodedChart;
+
+  /**
+   * Core's lookups by ID (core ADR 0071), read on each call. IDs count from
+   * 0 up to the DefinitionInspection counts; an ID out of range answers
+   * undefined, and a freed definition throws `not-found`.
+   */
+  // status: unimplemented
+  state(id: number): ChartState | undefined;
+  /** The state whose author ID is `name`. */
+  // status: unimplemented
+  findState(name: string): ChartState | undefined;
+  // status: unimplemented
+  transition(id: number): ChartTransition | undefined;
+  // status: unimplemented
+  action(id: number): ChartAction | undefined;
+  /** In the export's own form: source text, a function, or a literal(). */
+  // status: unimplemented
+  expression(id: number): ExpressionSpec | undefined;
+  /** A literal <content> body or send target, as the chart holds it. */
+  // status: unimplemented
+  content(id: number): { readonly bytes: Uint8Array; readonly mediaType?: string } | undefined;
+  /** An <invoke> by declaration index. */
+  // status: unimplemented
+  invoke(index: number): ChartInvoke | undefined;
+
   /** Prevent new actors from using this definition. Existing actors continue. */
   retire(): void;
+}
+
+/** A state as core numbers it: IDs in document order. */
+export interface ChartState {
+  readonly id: number;
+  /** The author's state ID. */
+  readonly name: string;
+  /** The parent state's ID; null for a top-level state. */
+  readonly parent: number | null;
+  readonly kind: StateKind;
+}
+
+/**
+ * A transition. The <transition> elements come first, in document order;
+ * then one initial transition per compound state, and the document's,
+ * which the bootstrap takes.
+ */
+export interface ChartTransition {
+  readonly id: number;
+  readonly origin: "authored" | "initial" | "bootstrap";
+  /** The state it leaves; null for the bootstrap. */
+  readonly source: number | null;
+  readonly type: "external" | "internal";
+  /** The event descriptor as authored; absent for an eventless or initial one. */
+  readonly event?: string;
+  readonly targets: readonly number[];
+  /** True when the targets are SCXML's default, the first child state. */
+  readonly defaultTargets: boolean;
+  /** The guard's expression ID; null when unguarded. */
+  readonly condition: number | null;
+  readonly actionCount: number;
+  /** Its place among the <transition> elements; 0 for an initial one. */
+  readonly documentOrder: number;
+}
+
+/** An action, and the block of executable content it sits in. */
+export interface ChartAction {
+  readonly id: number;
+  readonly kind: "raise" | "send" | "cancel" | "assign" | "script" | "log" | "if" | "foreach";
+  readonly block: "onentry" | "onexit" | "transition" | "then" | "else" | "foreach" | "finalize" | "script";
+  /**
+   * A state (onentry, onexit, finalize), a transition, or an action (then,
+   * else, foreach); null for the document's script.
+   */
+  readonly owner: number | null;
+  /** Which of the owner's blocks of that kind, from 0. */
+  readonly blockIndex: number;
+  /** Its place in the block, from 0. */
+  readonly index: number;
+}
+
+export interface ChartInvoke {
+  readonly index: number;
+  /** The literal type, normalized; null when the type is computed. */
+  readonly type: string | null;
+  /** Literal content and src, as content() IDs; null when absent. */
+  readonly content: number | null;
+  readonly src: number | null;
+  /** The child definition nested for it; null when none is. */
+  readonly nested: DefinitionID | null;
+}
+
+/** What Definition.encode() wrote. */
+export interface EncodedChart {
+  readonly bytes: Uint8Array;
+  /** The explicit identity, to pass back to define(); absent when fingerprinted. */
+  readonly identity?: DefinitionIdentity;
+  /** Where the codec wrote element `id` of `kind` in `bytes`, as sourceOf() answers. */
+  placeOf(kind: ElementKind, id: number): SourcePlace | undefined;
+}
+
+/* --------------------------------------------------------------------------
+ * Chart codecs (napi ADR 0027, core ADR 0053)
+ *
+ * A codec turns a chart syntax into a DefinitionSpec and back. To read or
+ * write a syntax other than SCXML, write one in JavaScript and register it
+ * with System.registerCodec():
+ *
+ *     system.registerCodec({
+ *       name: "application/vnd.example.chart+json",
+ *       extensions: ["chart.json"],
+ *       decode(input, { name }) { return toSpec(JSON.parse(utf8(input)), name); },
+ *       encode(spec) { return JSON.stringify(fromSpec(spec)); },
+ *     });
+ *     const order = system.define(text, { format: "chart.json", name: "orders.chart.json" });
+ *     const { bytes, identity } = order.encode("chart.json");
+ *
+ * A codec is faithful when defining what it encoded answers a definition
+ * with the same revision. It runs synchronously, inside define() and
+ * encode(), and refuses by throwing a ChartCodecError.
+ * -------------------------------------------------------------------------- */
+
+/** Core's chart error codes (TA_CHART_ERROR_*), lowercase with dashes. */
+export type ChartErrorCode =
+  | "syntax" | "not-chart" | "unknown-construct" | "misplaced-construct"
+  | "unknown-attribute" | "missing-attribute" | "conflicting-attribute"
+  | "bad-value" | "foreign-content" | "src-unresolved" | "limit" | "unrepresentable";
+
+export interface ChartCodecInfo {
+  /** A registered media type where one exists, otherwise a stable identifier. */
+  readonly name: string;
+  /** File extensions without the dot; `format` may name the codec by one. */
+  readonly extensions?: readonly string[];
+  /** One line, for a tool's --help. */
+  readonly description?: string;
+  readonly decodes: boolean;
+  readonly encodes: boolean;
+}
+
+export interface ChartCodec {
+  readonly name: string;
+  readonly extensions?: readonly string[];
+  readonly description?: string;
+  /**
+   * The chart in `input` as a spec. Fill `spans` and `sources`, with
+   * `context.name` as the first source, when you know where each element
+   * was read (core ADR 0085). Absent when the codec only writes.
+   */
+  decode?(input: Uint8Array, context: ChartDecodeContext): DefinitionSpec;
+  /**
+   * `spec` (a Definition.export()) in this syntax. `spans`, parallel to
+   * `spec.spans`, says where each element was written. A function has no
+   * faithful source form: throw `unrepresentable`, or document that the
+   * output does not round-trip. Absent when the codec only reads.
+   */
+  encode?(spec: DefinitionSpec, context: ChartEncodeContext):
+    Uint8Array | string | { bytes: Uint8Array | string; spans?: readonly (SpanSpec | undefined)[] };
+}
+
+export interface ChartDecodeContext {
+  /** define()'s `name`: the source the spans should name. */
+  readonly name?: string;
+  /** define()'s `resolve`, for `src` references; absent when none was given. */
+  resolve?(src: string): string | Uint8Array | undefined;
+}
+
+export interface ChartEncodeContext {
+  /** The definition being written, for exporting a nested child to write inline. */
+  readonly definition: Definition;
+}
+
+/** A codec's refusal. */
+// status: unimplemented
+export declare class ChartCodecError extends Error {
+  constructor(code: ChartErrorCode, message: string, options?: {
+    line?: number; column?: number; offset?: number; construct?: string; attribute?: string;
+  });
+  readonly code: ChartErrorCode;
+  readonly line?: number;
+  readonly column?: number;
+  readonly offset?: number;
+  readonly construct?: string;
+  readonly attribute?: string;
 }
 
 /** The kinds of compiled element core numbers, as trace records name them. */
@@ -757,6 +1028,17 @@ export interface DefinitionInspection {
   readonly holds: number;
   /** How many definitions nest this one as an inline child. */
   readonly nestedBy: number;
+  /** The upper bounds of the lookups' IDs (napi ADR 0027). */
+  // status: unimplemented
+  readonly transitionCount: number;
+  // status: unimplemented
+  readonly actionCount: number;
+  // status: unimplemented
+  readonly expressionCount: number;
+  // status: unimplemented
+  readonly contentCount: number;
+  // status: unimplemented
+  readonly invokeCount: number;
   /** The children this chart's <invoke>s nest, when it has any (core ADR 0078). */
   readonly nested?: readonly DefinitionID[];
 }
@@ -1316,11 +1598,12 @@ export interface DefinitionSpec {
   readonly name?: string;
   /**
    * "javascript" when absent. "null" opts into core's null data model: no
-   * data, no functions, and content that cannot become a value. define()
-   * compiles every other name as "javascript", which core then refuses: a
-   * data model registerDatamodel() registered is only for imported SCXML.
+   * data, no functions, and content that cannot become a value. Any other
+   * name is a data model registerDatamodel() registered, chosen as an
+   * imported document chooses it (napi ADR 0027).
    */
-  readonly datamodel?: "null" | "javascript";
+  // status: partial: define() compiles every name but "null" as "javascript"
+  readonly datamodel?: string;
   readonly identity?: {
     readonly family: { readonly name: string };
     readonly revision: string | Uint8Array;
@@ -1735,7 +2018,14 @@ export interface DecodedSpan {
   status: { code: 'unset' | 'ok' | 'error'; message?: string };
   /** Shared by the spans of one resource. */
   resource: { attributes: Record<string, unknown> };
-  scope: { name: string; version: string };
+  /**
+   * The addon writes one scope per definition (napi ADR 0028), whose
+   * attributes name it: `tinyactors.definition.family`, `.revision`,
+   * `.id`, and `.name` and `.source` when it has them. Shared by the spans
+   * of one scope.
+   */
+  // status: partial: attributes
+  scope: { name: string; version: string; attributes: Record<string, unknown> };
 }
 
 /** Reads OTLP protobuf trace bytes; throws on a malformed message. */

@@ -36,3 +36,5 @@ particular on core ADRs 0011, 0029, 0040, 0047, 0050, 0053–0059, 0061,
 | [0024](0024-a-child-chart-is-a-nested-definition.md) | [A child chart is a nested definition](0024-a-child-chart-is-a-nested-definition.md) |
 | [0025](0025-a-quarantined-child-tells-its-parent.md) | [A quarantined child tells its parent](0025-a-quarantined-child-tells-its-parent.md) |
 | [0026](0026-a-debugger-watches-and-pokes-one-live-actor.md) | [A debugger watches and pokes one live actor](0026-a-debugger-watches-and-pokes-one-live-actor.md) |
+| [0027](0027-a-definition-round-trips-through-its-spec-and-through-codecs-registered-in-javascript.md) | [A definition round-trips through its spec, and through codecs registered in JavaScript](0027-a-definition-round-trips-through-its-spec-and-through-codecs-registered-in-javascript.md) |
+| [0028](0028-a-trace-request-names-each-spans-definition-in-its-scope.md) | [A trace request names each span's definition in its scope](0028-a-trace-request-names-each-spans-definition-in-its-scope.md) |
