@@ -35,6 +35,7 @@ const { core } = require('./native');
 const { TinyactorsError } = require('./errors');
 const { ActorID } = require('./actor');
 const { nativeOf, observe } = require('./system');
+const { exportSpec } = require('./definition');
 const { Labels } = require('./debug/labels');
 const { Macrosteps, summarize } = require('./debug/macrosteps');
 const { Breakpoints, EXCEPTION_FILTERS } = require('./debug/breakpoints');
@@ -1347,7 +1348,7 @@ class DebugSession {
           throw refuse(args.source?.path !== undefined && this.#files.has(args.source.path)
             ? `${args.source.path} is a file the client reads itself` : 'no such source');
         }
-        const spec = core.definition_export(nativeOf(this.#system), entry.definition);
+        const spec = exportSpec(nativeOf(this.#system), entry.definition);
         return { body: { content: exportText(spec), mimeType: 'application/json' } };
       },
     };

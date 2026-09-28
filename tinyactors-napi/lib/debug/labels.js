@@ -1,15 +1,14 @@
 'use strict';
 
-// Names for the compiled IDs a debugger shows, read with core's lookups by
-// ID (core ADRs 0042 and 0071) and cached: a definition never changes while
-// it is registered. Core supplies facts and the host builds labels
+// Names for the compiled IDs a debugger shows, read with the definition
+// lookups everyone uses (core ADRs 0042 and 0071, napi ADR 0027) and
+// cached: a definition never changes while it is registered. Core supplies facts and the host builds labels
 // (core ADR 0071 section 3): `active → past_due on payment.failed` for a
 // transition, `assign 2` for the second action of its block.
 
 const { core } = require('../native');
 const { TinyactorsError } = require('../errors');
-
-const NONE = 4294967295;
+const { NONE, readState, readTransition, readAction, readExpression } = require('../definition');
 
 class Labels {
   #native;
@@ -41,15 +40,10 @@ class Labels {
     return value;
   }
 
-  /** { id, parent, kind } of a state by compiled ID, or undefined. */
-  stateInfo(definition, id) {
-    if (Labels.none(id)) return undefined;
-    return this.#lookup(definition, 'state', id, () => core.definition_state(this.#native, definition, id));
-  }
-
   /** A state's author ID, or undefined. */
   state(definition, id) {
-    return this.stateInfo(definition, id)?.id;
+    if (Labels.none(id)) return undefined;
+    return this.#lookup(definition, 'state', id, () => readState(this.#native, definition, id))?.name;
   }
 
   /** Every state of the definition as { id, name, parent, kind }, in document order. */
@@ -58,8 +52,7 @@ class Labels {
       const count = core.definition_inspect(this.#native, definition).state_count;
       const out = [];
       for (let id = 0; id < count; id += 1) {
-        const info = core.definition_state(this.#native, definition, id);
-        out.push({ id, name: info.id, parent: info.parent === NONE ? null : info.parent, kind: info.kind });
+        out.push(readState(this.#native, definition, id));
       }
       return out;
     });
@@ -84,19 +77,19 @@ class Labels {
 
   /** `source → targets on event`: the label the trace encoder writes too. */
   transition(definition, id) {
-    const info = this.#lookup(definition, 'transition', id, () => core.definition_transition(this.#native, definition, id));
+    const info = this.#lookup(definition, 'transition', id, () => readTransition(this.#native, definition, id));
     if (info === undefined) return `transition ${id}`;
     const source = this.state(definition, info.source) ?? 'the document';
     const targets = info.targets.map((target) => this.state(definition, target));
     let text = targets.length === 0 ? source : `${source} → ${targets.join(' ')}`;
-    if (info.event !== undefined && info.event !== '') text += ` on ${info.event}`;
+    if (info.event !== undefined) text += ` on ${info.event}`;
     return info.type === 'internal' ? `${text} (internal)` : text;
   }
 
-  /** { kind, block, owner, block_index, index } of an action, or undefined. */
+  /** An action as Definition.action() answers it, or undefined. */
   actionInfo(definition, id) {
     if (Labels.none(id)) return undefined;
-    return this.#lookup(definition, 'action', id, () => core.definition_action(this.#native, definition, id));
+    return this.#lookup(definition, 'action', id, () => readAction(this.#native, definition, id));
   }
 
   /** `assign 2`: the element and its place in its block, from 1. */
@@ -119,7 +112,7 @@ class Labels {
   /** An expression's source text, or undefined for a JavaScript function. */
   expression(definition, id) {
     if (Labels.none(id)) return undefined;
-    const text = this.#lookup(definition, 'expression', id, () => core.definition_expression(this.#native, definition, id));
+    const text = this.#lookup(definition, 'expression', id, () => readExpression(this.#native, definition, id));
     return typeof text === 'string' ? text : undefined;
   }
 
@@ -129,7 +122,7 @@ class Labels {
       const count = core.definition_inspect(this.#native, definition).transition_count;
       const names = new Set();
       for (let id = 0; id < count; id += 1) {
-        const event = core.definition_transition(this.#native, definition, id).event;
+        const event = readTransition(this.#native, definition, id)?.event;
         for (const name of (event ?? '').split(/\s+/)) {
           if (name !== '') names.add(name);
         }

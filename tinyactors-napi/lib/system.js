@@ -8,7 +8,7 @@ const v8 = require('node:v8');
 
 const native = require('./native');
 const { TinyactorsError } = require('./errors');
-const { Definition, identityOf } = require('./definition');
+const { Definition, identityOf, readState, findState, readContent } = require('./definition');
 const { DefinitionBuilder } = require('./statechart');
 const { ActorID } = require('./actor');
 const { EventNames } = require('./events');
@@ -963,7 +963,7 @@ class System {
   inspect(actor) {
     const { slot, generation } = actorOf(this, actor);
     const view = core.actor_inspect(this.#native, slot, generation);
-    const stateName = (state) => core.definition_state(this.#native, view.definition_id, state).id;
+    const stateName = (state) => readState(this.#native, view.definition_id, state).name;
     const idOrNull = (id) => (id === NO_STATE ? null : id);
     const inspection = {
       actor: new ActorID(this, view.actor.slot, view.actor.generation),
@@ -1086,7 +1086,7 @@ class System {
       ioType: core.system_atom_text(this.#native, send.io_type),
       destination: isOwner(view, send.destination) ? 'self' : this.#destination(send.destination),
       target: send.has_target_text
-        ? new TextDecoder().decode(core.definition_content(this.#native, definitionID, send.target_text).bytes)
+        ? new TextDecoder().decode(readContent(this.#native, definitionID, send.target_text).bytes)
         : send.target,
       data: send.data,
       submitted: send.submitted,
@@ -1398,14 +1398,11 @@ class System {
     }
     const definition = core.actor_inspect(this.#native, actor.slot, actor.generation).definition_id;
     const state = (name) => {
-      try {
-        return core.definition_find_state(this.#native, definition, name);
-      } catch (error) {
-        if (error instanceof TinyactorsError && error.code === 'not-found') {
-          throw new TinyactorsError(`${what}: "${name}" is not a state of the actor's chart`, 'invalid');
-        }
-        throw error;
+      const found = findState(this.#native, definition, name);
+      if (found === undefined) {
+        throw new TinyactorsError(`${what}: "${name}" is not a state of the actor's chart`, 'invalid');
       }
+      return found.id;
     };
     return {
       definition,
@@ -1868,7 +1865,7 @@ class System {
     const definition = messages.some((message) => message.transition !== undefined)
       ? core.actor_inspect(this.#native, slot, generation).definition_id
       : undefined;
-    const stateName = (state) => (state === NO_STATE ? null : core.definition_state(this.#native, definition, state).id);
+    const stateName = (state) => (state === NO_STATE ? null : readState(this.#native, definition, state).name);
     return messages.map((message) => (message.transition === undefined ? message : {
       ...message,
       transition: { source: stateName(message.transition.source), targets: message.transition.targets.map(stateName) },
@@ -1963,7 +1960,7 @@ class System {
       const occupancy = [];
       core.definition_occupancy(native, id).forEach((actors, state) => {
         if (actors !== 0) {
-          occupancy.push({ state: core.definition_state(native, id, state).id, actors });
+          occupancy.push({ state: readState(native, id, state).name, actors });
         }
       });
       definitions.push({

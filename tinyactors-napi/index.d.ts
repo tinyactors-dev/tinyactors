@@ -812,7 +812,6 @@ export interface Definition<Data extends object = Record<string, unknown>> {
    * `microstepLimit` and `resolve` are the host's settings, not the
    * chart's: pass them to define() again. Throws `not-found` once freed.
    */
-  // status: unimplemented
   export(): DefinitionSpec;
 
   /**
@@ -831,23 +830,19 @@ export interface Definition<Data extends object = Record<string, unknown>> {
    * 0 up to the DefinitionInspection counts; an ID out of range answers
    * undefined, and a freed definition throws `not-found`.
    */
-  // status: unimplemented
   state(id: number): ChartState | undefined;
   /** The state whose author ID is `name`. */
-  // status: unimplemented
   findState(name: string): ChartState | undefined;
-  // status: unimplemented
   transition(id: number): ChartTransition | undefined;
-  // status: unimplemented
   action(id: number): ChartAction | undefined;
-  /** In the export's own form: source text, a function, or a literal(). */
-  // status: unimplemented
-  expression(id: number): ExpressionSpec | undefined;
+  /**
+   * In the export's own form: source text, a function, a literal(), or a
+   * `{ get, set }` location object.
+   */
+  expression(id: number): ExpressionSpec | LocationSpec | undefined;
   /** A literal <content> body or send target, as the chart holds it. */
-  // status: unimplemented
   content(id: number): { readonly bytes: Uint8Array; readonly mediaType?: string } | undefined;
   /** An <invoke> by declaration index. */
-  // status: unimplemented
   invoke(index: number): ChartInvoke | undefined;
 
   /** Prevent new actors from using this definition. Existing actors continue. */
@@ -1045,15 +1040,10 @@ export interface DefinitionInspection {
   /** How many definitions nest this one as an inline child. */
   readonly nestedBy: number;
   /** The upper bounds of the lookups' IDs (napi ADR 0027). */
-  // status: unimplemented
   readonly transitionCount: number;
-  // status: unimplemented
   readonly actionCount: number;
-  // status: unimplemented
   readonly expressionCount: number;
-  // status: unimplemented
   readonly contentCount: number;
-  // status: unimplemented
   readonly invokeCount: number;
   /** The children this chart's <invoke>s nest, when it has any (core ADR 0078). */
   readonly nested?: readonly DefinitionID[];
@@ -1619,10 +1609,14 @@ export interface ActorEvent<Data = unknown> {
 
 /**
  * A function, a literal(), or source text: In(state), a data name, or
- * `name()`, a call of a registered function (napi ADR 0029).
+ * `name()`, a call of a registered function (napi ADR 0029). Source text
+ * that knows where it was written is `{ source, span }`, `span` an index
+ * into the spec's `spans` from 1 (core ADR 0085); an imported chart's
+ * export() writes it so, and define() keeps the span.
  */
 export type ExpressionSpec =
   | string
+  | { readonly source: string; readonly span?: number }
   | ((this: any, context: EvaluationContext<any>) => unknown)
   | LiteralValue<unknown>;
 /**

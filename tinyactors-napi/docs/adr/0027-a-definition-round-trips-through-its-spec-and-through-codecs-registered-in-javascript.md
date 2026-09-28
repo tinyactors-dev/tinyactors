@@ -1,6 +1,6 @@
 # ADR 0027: A definition round-trips through its spec, and through codecs registered in JavaScript
 
-**Status:** Accepted (2026-09-28); not implemented. The target API is in `index.d.ts`, marked `// status: unimplemented` or `// status: partial`. Applies core ADR 0042 (export), ADR 0053 (codecs), ADR 0071 (lookups by ID), ADR 0077 (identity) and ADR 0085 (spans) to the addon. Refines ADR 0019 (`define()` options, data models by name) and ADR 0024 (which charts are walked for inline children). Refined by ADR 0029: a function called by name is source text, so "a chart without functions" in point 1 means a chart without anonymous functions.
+**Status:** Accepted (2026-09-28). Points 1 and 3 implemented (2026-09-28), see the implementation notes; points 2, 4 and 5 not yet. The target API is in `index.d.ts`, marked `// status: unimplemented` or `// status: partial`. Applies core ADR 0042 (export), ADR 0053 (codecs), ADR 0071 (lookups by ID), ADR 0077 (identity) and ADR 0085 (spans) to the addon. Refines ADR 0019 (`define()` options, data models by name) and ADR 0024 (which charts are walked for inline children). Refined by ADR 0029: a function called by name is source text, so "a chart without functions" in point 1 means a chart without anonymous functions.
 **Date:** 2026-09-28
 
 ## Context
@@ -224,3 +224,47 @@ states the round-trip contract of point 1 on `export()`.
   tests) decodes with spans, encodes with a source map, refuses with a
   place, and round-trips; a codec name or extension registered twice; the
   lookups agree with the export for every ID up to each count.
+
+### Points 1 and 3 (2026-09-28)
+
+- **Where:** `lib/definition.js` holds one reader per lookup
+  (`readState`, `findState`, `readTransition`, `readAction`,
+  `readExpression`, `readContent`, `readInvoke`, `exportSpec`), in the
+  public shapes. The `Definition` methods call them, and so do
+  `lib/debug/labels.js`, `lib/debug.js` (the JSON source view) and
+  `lib/system.js` (state names in inspection, the mailbox and metrics, a
+  send's literal target, operator transitions). No other file reads a
+  definition's elements through the private `core.definition_*` calls.
+  `lib/debug/sources.js` still reads counts with `definition_inspect`.
+- **Out of range and freed.** Core answers `not-found` for both. A reader
+  that gets it asks `definition_inspect`, which throws `not-found` only
+  when the definition is freed; otherwise the answer is `undefined`. An ID
+  that is not an integer in range answers `undefined` without asking.
+- **`expression(id)` can also answer a `{ get, set }` location,** the
+  host value an assignment's location was built with. `index.d.ts` types
+  it `ExpressionSpec | LocationSpec`; the text above says only
+  `ExpressionSpec`.
+- **Source text carries its span.** Found while testing: defining an
+  imported chart's export answered the same definition but dropped its
+  expression spans, because the export wrote each expression as a bare
+  string and a registration that brings other spans replaces them (core
+  ADR 0077). `src/runtime_codecs.c` now writes source text that has a span
+  as `{ source, span }`, and reads that form back; `ExpressionSpec` gains
+  it. A lookup (`expression(id)`) still answers the text, since the copies
+  a definition keeps carry no span (core ADR 0085).
+- **The export is core's, as it is.** Members core leaves empty read
+  `undefined`, `binding` reads `"default"` for early binding, a literal()
+  is the chart's own `LiteralValue`, a location the chart's own object.
+  `define()` takes all of it. No normalization was needed for the round
+  trip.
+- **Tests:** `test/definition.js`: an imported chart's export answers the
+  same definition and exports equal, sources and expression spans
+  included; a builder chart's export registers beside it with an equal
+  export, its functions, literal() values and locations the chart's own;
+  every lookup agrees with the export up to each count (states by
+  document order and parent, each `<transition>` with its source, event,
+  targets and condition, each action at the place its block names, the
+  nested children); out-of-range IDs answer `undefined`; a freed
+  definition throws `not-found` from every lookup and the export. Not
+  done: the round trip over every chart the other suites define.
+

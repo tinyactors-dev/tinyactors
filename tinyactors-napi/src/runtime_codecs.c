@@ -227,8 +227,37 @@ napi_value tna_enc_ta_value(tna_call *call, const ta_value *in) {
 /* ------------------------------------------------------------------------
  * Expressions (ADR 0011): source text is a string; a function, a literal()
  * object and a { get, set } location object are host expressions of the
- * JavaScript data model, held by the call until core retains them.
+ * JavaScript data model, held by the call until core retains them. Source
+ * text that knows where it was written crosses as { source, span }, span
+ * an index into the spec's `spans` from 1 (core ADR 0085), so a spec's
+ * export defines again with the same spans (napi ADR 0027).
  */
+
+/* { source: string, span?: number }: source text with its span. */
+static bool tna_dec_spanned_source(tna_call *call, napi_value value, ta_expression *out) {
+    *out = (ta_expression){ .kind = TA_EXPRESSION_SOURCE };
+    if (!tna_member(call, value, "source") || !tna_dec_ta_str(call, tna_member_value(call), &out->as.source)) {
+        return false;
+    }
+    tna_pop(call);
+    if (!tna_member(call, value, "span")) {
+        return false;
+    }
+    napi_value span = tna_member_value(call);
+    if (!tna_absent(call, span) && !tna_dec_uint32_t(call, span, &out->span)) {
+        return false;
+    }
+    tna_pop(call);
+    return true;
+}
+
+/* Whether `value` has a string `source`: the spanned form of source text. */
+static bool tna_spanned_source(tna_call *call, napi_value value) {
+    napi_value source = NULL;
+    napi_valuetype type = napi_undefined;
+    return napi_get_named_property(call->env, value, "source", &source) == napi_ok &&
+           napi_typeof(call->env, source, &type) == napi_ok && type == napi_string;
+}
 
 /* An object whose `get` and `set` are functions. */
 static bool tna_location_object(tna_call *call, napi_value value) {
@@ -257,6 +286,10 @@ bool tna_dec_ta_expression(tna_call *call, napi_value value, ta_expression *out)
         *out = (ta_expression){ .kind = TA_EXPRESSION_SOURCE };
         return tna_dec_ta_str(call, value, &out->as.source);
     }
+    if (type == napi_object && !tna_expression_is_literal(call->env, value) && !tna_location_object(call, value) &&
+        tna_spanned_source(call, value)) {
+        return tna_dec_spanned_source(call, value, out);
+    }
     tna_expr_kind kind = TNA_EXPR_FUNCTION;
     if (type == napi_function) {
         kind = TNA_EXPR_FUNCTION;
@@ -265,7 +298,7 @@ bool tna_dec_ta_expression(tna_call *call, napi_value value, ta_expression *out)
     } else if (type == napi_object && tna_location_object(call, value)) {
         kind = TNA_EXPR_LOCATION;
     } else {
-        return tna_invalid(call, "source text, a function, a literal() value or a { get, set } location");
+        return tna_invalid(call, "source text, { source, span }, a function, a literal() value or a { get, set } location");
     }
     if (call->owner == NULL) {
         /*
@@ -288,8 +321,19 @@ napi_value tna_enc_ta_expression(tna_call *call, const ta_expression *in) {
     switch (in->kind) {
     case TA_EXPRESSION_NONE:
         return tna_undefined(call);
-    case TA_EXPRESSION_SOURCE:
-        return tna_enc_ta_str(call, &in->as.source);
+    case TA_EXPRESSION_SOURCE: {
+        napi_value text = tna_enc_ta_str(call, &in->as.source);
+        if (text == NULL || in->span == 0) {
+            return text;
+        }
+        napi_value object = tna_object(call);
+        napi_value span = tna_number(call, (double)in->span);
+        if (object == NULL || span == NULL || !tna_ok(call, napi_set_named_property(call->env, object, "source", text)) ||
+            !tna_ok(call, napi_set_named_property(call->env, object, "span", span))) {
+            return NULL;
+        }
+        return object;
+    }
     default: {
         napi_value value = tna_expression_value(call->env, in);
         if (value == NULL) {

@@ -3,7 +3,7 @@
 // Step 4: defining charts (ROADMAP step 4, ADRs 0001 and 0013).
 
 const assert = require('node:assert/strict');
-const { createSystem, statechart, TinyactorsError } = require('..');
+const { createSystem, statechart, literal, TinyactorsError } = require('..');
 const { core } = require('../lib/native');
 const { nativeOf } = require('../lib/system');
 
@@ -241,8 +241,206 @@ function sourceSpans() {
   system.close();
 }
 
+// The states of a spec in document order, which is how core numbers them,
+// with each one's parent's index.
+function specStates(spec) {
+  const out = [];
+  const walk = (states, parent) => {
+    for (const state of states ?? []) {
+      const index = out.length;
+      out.push({ state, parent });
+      walk(state.states, index);
+    }
+  };
+  walk(spec.states, null);
+  return out;
+}
+
+// Every lookup agrees with the export (napi ADR 0027 point 1): states by
+// document order, <transition>s with their source, each action at the
+// place its block says, conditions and content as the spec holds them.
+function assertLookupsAgree(definition) {
+  const spec = definition.export();
+  const view = definition.inspect();
+  const states = specStates(spec);
+  assert.equal(view.stateCount, states.length);
+  states.forEach(({ state, parent }, id) => {
+    assert.deepEqual(definition.state(id), { id, name: state.id, parent, kind: state.kind });
+    assert.equal(definition.findState(state.id).id, id);
+  });
+  const authored = states.flatMap(({ state }, source) => (state.transitions ?? []).map((transition) => ({ transition, source })));
+  for (let id = 0; id < view.transitionCount; id += 1) {
+    const found = definition.transition(id);
+    assert.equal(found.id, id);
+    if (found.origin !== 'authored') {
+      continue;
+    }
+    const { transition, source } = authored[found.documentOrder];
+    assert.equal(found.source, source);
+    assert.equal(found.event, transition.event);
+    assert.deepEqual(found.targets.map((target) => definition.state(target).name), transition.targets ?? []);
+    assert.equal(found.actionCount, (transition.actions ?? []).length);
+    if (transition.condition === undefined) {
+      assert.equal(found.condition, null);
+    } else {
+      // The export's source text carries its span ({ source, span }); a
+      // lookup gives the text, as the definition keeps it.
+      const condition = transition.condition;
+      assert.equal(definition.expression(found.condition), typeof condition?.source === 'string' ? condition.source : condition);
+    }
+  }
+  const actionsOf = (action) => {
+    const found = definition.action(action);
+    switch (found.block) {
+      case 'onentry': return states[found.owner].state.onentry[found.blockIndex].actions;
+      case 'onexit': return states[found.owner].state.onexit[found.blockIndex].actions;
+      case 'finalize': return states[found.owner].state.invokes[found.blockIndex].finalize;
+      case 'script': return [{ kind: 'script' }];
+      case 'transition': {
+        const transition = definition.transition(found.owner);
+        if (transition.origin === 'authored') return authored[transition.documentOrder].transition.actions;
+        if (transition.origin === 'bootstrap') return spec.initial.actions;
+        return states[transition.source].state.initial.actions;
+      }
+      default: {
+        const owner = actionsOf(found.owner)[definition.action(found.owner).index];
+        if (found.block === 'then') return owner.conditional.then_actions;
+        if (found.block === 'else') return owner.conditional.else_actions;
+        return owner.foreach.body;
+      }
+    }
+  };
+  for (let id = 0; id < view.actionCount; id += 1) {
+    const found = definition.action(id);
+    assert.equal(found.id, id);
+    assert.equal(actionsOf(id)[found.index].kind, found.kind, `action ${id}`);
+  }
+  for (let id = 0; id < view.expressionCount; id += 1) {
+    assert.notEqual(definition.expression(id), undefined, `expression ${id}`);
+  }
+  for (let id = 0; id < view.contentCount; id += 1) {
+    assert.ok(definition.content(id).bytes instanceof Uint8Array);
+  }
+  const nested = [];
+  for (let index = 0; index < view.invokeCount; index += 1) {
+    const found = definition.invoke(index);
+    assert.equal(found.index, index);
+    if (found.nested !== null) nested.push(found.nested);
+  }
+  assert.deepEqual(nested, view.nested ?? []);
+  // Out of range is a question, not an error.
+  assert.equal(definition.state(view.stateCount), undefined);
+  assert.equal(definition.state(-1), undefined);
+  assert.equal(definition.state(0.5), undefined);
+  assert.equal(definition.transition(view.transitionCount), undefined);
+  assert.equal(definition.action(view.actionCount), undefined);
+  assert.equal(definition.expression(view.expressionCount), undefined);
+  assert.equal(definition.content(view.contentCount), undefined);
+  assert.equal(definition.invoke(view.invokeCount), undefined);
+  assert.equal(definition.findState('no such state'), undefined);
+}
+
+const ORDER = `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="order" initial="open" datamodel="null">
+  <state id="open">
+    <onentry><log label="opened"/><if cond="In('open')"><raise event="checked"/><else/><raise event="odd"/></if></onentry>
+    <transition event="pay" cond="In('open')" target="paid"><send event="receipt" target="#_parent"><content>thanks</content></send></transition>
+    <invoke type="scxml"><content><scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="clerk" datamodel="null"><final id="done"/></scxml></content>
+      <finalize><log label="clerk done"/></finalize></invoke>
+  </state>
+  <state id="paid" initial="packing">
+    <state id="packing"><transition event="packed" target="shipped"/></state>
+    <final id="shipped"/>
+  </state>
+</scxml>`;
+
+// An imported chart has no functions: defining its export answers it
+// (core ADR 0077), and the lookups agree with the export.
+function exportedDocument() {
+  const system = createSystem();
+  const order = system.define(ORDER, { format: 'scxml', name: 'file:///charts/order.scxml' });
+  const spec = order.export();
+  assert.equal(spec.identity, undefined, 'an imported chart is fingerprinted');
+  assert.deepEqual(spec.sources, [{ name: 'file:///charts/order.scxml' }]);
+  const again = system.define(spec);
+  assert.equal(again.id, order.id);
+  assert.deepStrictEqual(again.export(), spec);
+  assertLookupsAgree(order);
+  const view = order.inspect();
+  assert.equal(view.invokeCount, 1);
+  assert.deepEqual(order.transition(0), {
+    id: 0, origin: 'authored', source: 0, type: 'external', event: 'pay', targets: [1],
+    defaultTargets: false, condition: order.transition(0).condition, actionCount: 1, documentOrder: 0,
+  });
+  assert.equal(order.expression(order.transition(0).condition), "In('open')");
+  const pay = spec.states[0].transitions[0].condition;
+  assert.equal(pay.source, "In('open')");
+  assert.equal(typeof pay.span, 'number', 'source text keeps its span through the export');
+  const bootstrap = order.transition(view.transitionCount - 1);
+  assert.equal(bootstrap.origin, 'bootstrap');
+  assert.equal(bootstrap.source, null);
+  assert.equal(bootstrap.event, undefined);
+  const receipt = [...Array(view.contentCount).keys()].map((id) => order.content(id))
+    .find((content) => new TextDecoder().decode(content.bytes) === 'thanks');
+  assert.equal(receipt.mediaType, 'application/scxml+xml');
+  const invoke = order.invoke(0);
+  assert.equal(invoke.type, 'http://www.w3.org/TR/scxml/');
+  assert.equal(invoke.src, null);
+  assert.match(new TextDecoder().decode(order.content(invoke.content).bytes), /name="clerk"/);
+  const clerk = [...system.definitions()].find((definition) => definition.id === invoke.nested);
+  assert.equal(clerk.identity.family, 'clerk');
+  system.close();
+}
+
+// A builder chart's functions cannot be compared, so defining its export
+// registers beside it (core ADR 0077), with an equal export: the same
+// functions, literal() values and locations, the same spans.
+function exportedBuilder() {
+  const system = createSystem();
+  const whenPositive = function () { return this.count > 0; };
+  const location = { get() { return this.count; }, set(value) { this.count = value; } };
+  const counter = system.define(statechart({ family: 'counter', revision: 'v1' })
+    .data('count', 0)
+    .initial('idle')
+    .state('idle', (state) => state
+      .on('add', (t) => t.assign('count', function () { return this.count + 1; }))
+      .on('go', (t) => t.when(whenPositive).target('busy').assignAt(location, literal(5))))
+    .state('busy'));
+  const spec = counter.export();
+  assert.deepEqual(spec.identity.family, { name: 'counter' });
+  const again = system.define(spec);
+  assert.notEqual(again.id, counter.id);
+  assert.deepStrictEqual(again.export(), spec);
+  assertLookupsAgree(counter);
+  const go = [0, 1].map((id) => counter.transition(id)).find((transition) => transition.event === 'go');
+  assert.equal(counter.expression(go.condition), whenPositive);
+  const expressions = [...Array(counter.inspect().expressionCount).keys()].map((id) => counter.expression(id));
+  assert.ok(expressions.includes(location), 'a location is the object the chart was built with');
+  assert.ok(expressions.some((expression) => expression?.value === 5), 'a literal() keeps its value');
+  system.close();
+}
+
+// A freed definition throws `not-found` from every lookup and the export.
+function freed() {
+  const system = createSystem();
+  const definition = system.define({
+    identity: { family: { name: 'gone' }, revision: 'v1' },
+    states: [{ kind: 'atomic', id: 'a' }],
+  });
+  assert.equal(definition.state(0).name, 'a');
+  definition.retire();
+  for (const read of [() => definition.export(), () => definition.state(0), () => definition.state(5),
+    () => definition.findState('a'), () => definition.transition(0), () => definition.action(0),
+    () => definition.expression(0), () => definition.content(0), () => definition.invoke(0)]) {
+    assertCode(read, 'not-found');
+  }
+  system.close();
+}
+
 definitions();
 builder();
 refusals();
 nothingStored();
 sourceSpans();
+exportedDocument();
+exportedBuilder();
+freed();
