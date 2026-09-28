@@ -19,6 +19,17 @@ module DAP
     # most specific: an action, then a transition, then a state.
     PREFERENCE = { action: 0, transition: 1, state: 2 }.freeze
 
+    # A file's path as the file system resolves it, so two spellings of one
+    # file compare equal: a client may name a chart through a symlink (on
+    # macOS the temporary directory, /var, is /private/var) while the DSL
+    # records where Ruby loaded it from. Paths are compared this way and
+    # reported as they were given.
+    def self.canonical(path)
+      File.realpath(path)
+    rescue SystemCallError
+      File.expand_path(path)
+    end
+
     def initialize(labels)
       @labels = labels
       @elements = {}
@@ -32,7 +43,7 @@ module DAP
       @elements[definition] ||= PREFERENCE.keys.flat_map do |kind|
         (0...@labels.count(definition, kind)).filter_map do |id|
           where = @labels.span(definition, kind, id)
-          where && Element.new(kind: kind, id: id, path: where[:source], line: where[:line])
+          where && Element.new(kind: kind, id: id, path: SourceMap.canonical(where[:source]), line: where[:line])
         end
       end
     end
@@ -42,6 +53,7 @@ module DAP
     # with an element, a following one on a tie. nil when the definition
     # has nothing in that file.
     def resolve(definition, path, line)
+      path = SourceMap.canonical(path)
       candidates = elements(definition).select { |element| element.path == path }
       return nil if candidates.empty?
 
@@ -51,6 +63,7 @@ module DAP
 
     # The lines of `path` between `from` and `to` that hold an element.
     def lines(definition, path, from, to)
+      path = SourceMap.canonical(path)
       elements(definition).select { |element| element.path == path && element.line.between?(from, to) }
                           .map(&:line).uniq.sort
     end
@@ -59,6 +72,7 @@ module DAP
     # there, else the state an action or a transition written there belongs
     # to. Empty when nothing of this chart is on that line.
     def states_at(definition, path, line)
+      path = SourceMap.canonical(path)
       here = elements(definition).select { |element| element.path == path && element.line == line }
       states = here.select { |element| element.kind == :state }.map(&:id)
       return states unless states.empty?

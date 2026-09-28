@@ -78,10 +78,12 @@ module DAP
     def definition_of(source)
       reference = source['sourceReference'].to_i
       entry = @entries.each_value.find do |candidate|
-        reference.positive? ? candidate.reference == reference : (source['path'] && candidate.path == source['path'] && !candidate.retired)
+        reference.positive? ? candidate.reference == reference : same_file?(candidate.path, source['path']) && !candidate.retired
       end
       entry&.definition
     end
+
+    def same_file?(one, other) = !one.nil? && !other.nil? && SourceMap.canonical(one) == SourceMap.canonical(other)
 
     # The definitions that are not retired.
     def live = @entries.values.reject(&:retired).map(&:definition)
