@@ -1,6 +1,6 @@
 # ADR 0033: The input log is a write-ahead log the application stores without reading
 
-**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Refines napi ADR 0032 sections 6 to 8: the batch shape, the loader's `{ replay }` answer, `requeue`, and eviction. It replaces the dispatch horizon (core ADR 0089 section 2) with a record per fired timer, for the reasons below.
+**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Refines napi ADR 0032 sections 6 to 8: the batch shape, the loader's `{ replay }` answer, `requeue`, and eviction. It replaces the dispatch horizon (core ADR 0089 section 2) with a record per fired timer, for the reasons below. Refined by napi ADR 0034: entries carry bytes in core's layout instead of records, core writes and replays them, and checkpoints are added.
 **Date:** 2026-09-29
 
 ## Context

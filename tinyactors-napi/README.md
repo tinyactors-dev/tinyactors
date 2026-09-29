@@ -255,13 +255,13 @@ it again with `{ binding, pendingSends }`.
 
 A named actor can live on as the log of its inputs: record what it took,
 evict it, and rebuild it from the log when it is needed again (core ADRs
-0088 and 0089, napi ADRs 0032 and 0033). `system.setInputLog()` installs a
+0088 to 0091, napi ADRs 0032 to 0034). `system.setInputLog()` installs a
 write-ahead log: each turn your sink gets a batch, and nothing the turn
-caused leaves the process until you have stored it. The records are the
-log's own vocabulary, what tinyactors needs to rebuild an actor; you store
-them per address and hand them back, without reading them. Storage and
-encoding are yours: two tables are enough, a log per address and a wake per
-address.
+caused leaves the process until you have stored it. Core writes the records
+as bytes in a portable layout; you append them to the address's log without
+parsing them, and hand the log back when tinyactors asks for the actor.
+Storage is yours: two tables are enough, a log of bytes per address and a
+wake per address.
 
 ```js
 const { createSystem, statechart } = require('@tinyactors/node');
@@ -271,7 +271,7 @@ const counter = statechart({ family: 'counter', revision: 'v1' })
   .state('s', (s) => s.on('inc', (t) => t.assign('n', ({ data }) => data.n + 1)));
 
 // Your store: two database tables in real life.
-const logs = new Map();  // address -> its records, in order
+const logs = new Map();  // address -> its log: byte chunks, appended in order
 const wakes = new Map(); // address -> when tinyactors needs the actor back
 const key = ({ family, name }) => `${family}/${name}`;
 
@@ -282,12 +282,12 @@ async function main() {
   // Store each batch in one transaction. A turn's effects wait for commit().
   system.setInputLog({
     commit({ entries, wakes: changed }) {
-      for (const { address, record } of entries) logs.set(key(address), [...(logs.get(key(address)) ?? []), record]);
+      for (const { address, bytes } of entries) logs.set(key(address), [...(logs.get(key(address)) ?? []), bytes]);
       for (const { address, at } of changed) at === null ? wakes.delete(key(address)) : wakes.set(key(address), { address, at });
     },
   }, { families: ['counter'] });
 
-  // The whole loader: an address's records, handed back.
+  // The whole loader: an address's log, handed back as it was stored.
   system.setLoader('counter', (address) => ({ replay: { spawn: definition, inputs: logs.get(key(address)) ?? [] } }));
 
   // After a restart: bring back every actor that has a timer due or mail it owes.
@@ -310,15 +310,31 @@ A replay crosses no border: it sends nothing, starts no service and writes
 no log. Delayed sends that fired in the run it replays are dropped, and the
 ones still pending fire once, late if their time has passed; an evicted
 actor's wake brings it back when its next timer is due. Messages queued for
-it and never delivered before a crash are delivered after its replay. The
-`inputs` a loader returns may be an async iterable, such as a database
-cursor: a replay reads it in windows, never holding the log whole. Under a
-new revision the same history is read again, which is how an upgrade works:
-`system.prepare(v2, { incumbent, spawned: log[0] })`, `prepared.replay(log)`,
-then `system.publish(prepared)`. Effects that leave the process are at most
-once across a crash; mail between persisted actors is exactly once.
-Expressions should read `context.time` rather than the wall clock, so a
-replay computes what the live run did.
+it and never delivered before a crash are delivered after its replay.
+
+**Memory stays bounded.** The `inputs` a loader returns may be an async
+iterable of byte chunks cut anywhere, such as a database cursor: a replay
+holds one record and one chunk, never the log. Values stream through in
+pieces, in the built-in data model's durable text (JSON, and
+`new Name(arguments)` for dates, maps, sets and classes that describe
+themselves); an input carrying a value with no durable form, such as a
+function or a cycle, is refused with `unsupported`.
+
+**Checkpoints bound the time a replay takes.**
+`system.checkpoint(actor, (chunk) => ...)` writes the actor's state in the
+same layout. A log that starts with a checkpoint replays from it, so a store
+may replace the records before it with the checkpoint once it is durable.
+The trade-off is upgrades: a checkpoint loads only under its own revision,
+so a store that compacts upgrades by migrating the state, while one that
+keeps the log from `spawned` upgrades by replaying it:
+`system.prepare(v2, { incumbent, log: firstChunk })`,
+`await prepared.replay(restOfTheChunks)`, then `system.publish(prepared)`.
+
+`readInputLog(chunks)` decodes a log into plain records, one at a time, for
+an audit trail. Effects that leave the process are at most once across a
+crash; mail between persisted actors is exactly once. Expressions should
+read `context.time` rather than the wall clock, so a replay computes what
+the live run did.
 
 ## Invoking child charts
 
