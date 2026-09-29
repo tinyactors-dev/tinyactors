@@ -214,9 +214,11 @@ type InputRecord = { readonly time: number; readonly address: ActorAddress } & (
 
 ### 7. Replay
 
+Replay works on one actor, the prepared replaying actor it is called on;
+there is no replay of a system:
+
 ```ts
-system.replay<Data>(prepared: PreparedActor<Data>,
-                    inputs: Iterable<InputRecord> | AsyncIterable<InputRecord>): Promise<ReplayReport>;
+prepared.replay(inputs: Iterable<InputRecord> | AsyncIterable<InputRecord>): Promise<ReplayReport>;
 
 interface ReplayReport {
   readonly inputs: number;
@@ -235,8 +237,8 @@ history does not block the event loop. For each record, it calls
 
 It then runs the actor until it is idle. `spawned` and `evicted` records
 only move the clock, and `queued` records are skipped: a queued message
-reaches the actor as its `event` record. Nothing the replaying actor does crosses the border
-(core ADR 0089 section 3), and nothing it does is recorded in the input
+reaches the actor as its `event` record. Nothing the replaying actor does
+crosses the border (core ADR 0089 section 3), and nothing it does is recorded in the input
 log.
 
 **A loader can answer with a replay:**

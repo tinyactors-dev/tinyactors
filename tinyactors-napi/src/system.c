@@ -50,6 +50,7 @@ ta_result tna_system_create(uint64_t incarnation, tna_system **out) {
     tna_vec_init(&system->quarantine_reports, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER),
                  TNA_LAYOUT(tna_quarantine_report));
     tna_host_metrics_init(&system->metrics);
+    tna_inputs_init(&system->inputs, tna_allocator_for(&system->allocator, TNA_MEMORY_OTHER));
     ta_result result = tna_scratch_init(&system->scratch, &system->allocator);
     if (result != TA_OK) {
         free(system);
@@ -103,6 +104,9 @@ void tna_system_close(tna_system *system) {
     /* Waiting effects hold values and addresses; what core's teardown asks
      * of a service from here on is dropped (the adapters in adapters/). */
     tna_effects_close(&system->effects);
+    /* Records hold values; the log goes while core is alive. */
+    system->sched.observer = (tna_sched_observer){ 0 };
+    tna_inputs_destroy(&system->inputs);
     if (system->tracing) {
         tna_otlp_destroy(&system->otlp);
         system->tracing = false;
@@ -161,7 +165,7 @@ static bool tna_system_due_now(const tna_system *system) {
 }
 
 bool tna_system_quiet(const tna_system *system) {
-    return tna_sched_quiet(&system->sched) && system->effects.count == 0 &&
+    return tna_sched_quiet(&system->sched) && system->effects.count == 0 && system->inputs.count == 0 &&
            system->quarantine_reports.count == 0 &&
            tna_loads_pending_requests(&system->loads) == 0 &&
            (!system->tracing || system->otlp.span_count == 0) &&
@@ -487,6 +491,15 @@ void tna_system_turn(tna_system *system) {
                                                    });
         system->dispatching_due = false;
         system->inside_core = false;
+        system->inputs.dispatched += dispatched;
+    }
+    if (system->inputs.enabled) {
+        /* Every send due by the horizon has been dispatched (core ADR 0089
+         * section 2): a budget that left some due holds it before them. */
+        ta_time now = ta_system_time(system->core);
+        ta_time next = 0;
+        system->inputs.horizon =
+            ta_system_next_deadline(system->core, &next) == TA_OK && next <= now ? (next == 0 ? 0 : next - 1u) : now;
     }
 }
 

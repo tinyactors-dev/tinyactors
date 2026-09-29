@@ -504,6 +504,43 @@ export interface System {
    */
   publish<Data extends object>(prepared: PreparedActor<Data>, options?: { readonly at?: number }): Actor<Data>;
 
+  /**
+   * Record every input core accepts for the named actors of `families` and
+   * hand them to `sink.commit(batch)` once per turn (napi ADR 0032 section
+   * 6). Values are the values core holds: the sink encodes and stores them
+   * as it likes, since napi chooses no storage and no encoding. While a
+   * sink is installed, a turn's services (I/O processor sends, invoker
+   * starts, cancels and forwards, log records) wait until its batch's
+   * commit returns or the promise it returns resolves; batches commit one
+   * at a time, in turn order, while later turns run. A commit that throws
+   * or rejects stops the system's services and quarantines every actor
+   * with inputs in that batch, with a fault whose operation and code are
+   * "input-log". `null` removes the sink; what it held runs once the
+   * commits before it are done.
+   */
+  setInputLog(sink: InputLog | null, options?: { readonly families: readonly string[] }): void;
+
+  /**
+   * Put messages the input log recorded as `queued`, and never delivered,
+   * back in their addresses' mailboxes, in order: after a crash, the
+   * `queued` records a sink committed with no `event` of the same `seq`.
+   * Each keeps its event, data, origin and send ID (a literal send ID this
+   * system has never seen is dropped), and is recorded as queued again with
+   * a new `seq`. `invalid` for a record of another kind.
+   */
+  requeue(records: readonly Extract<InputRecord, { readonly kind: "queued" }>[]): void;
+
+  /**
+   * Remove a stable named actor so that its input log becomes its only
+   * state (napi ADR 0032 section 8): dispatch the system's due sends,
+   * record `evicted` at `system.time`, destroy the actor and remove its
+   * directory entry, so mail for its address goes to its family's loader.
+   * Returns the eviction time. `busy` while it has mail waiting, is inside a
+   * macrostep, or is quarantined.
+   */
+  // status: unimplemented
+  evict(actor: ActorID): number;
+
   registerIO(type: string, processor: IOProcessor, options?: IOProcessorOptions): void;
   /** Open a scope that stores `uri` once, for a connection or a session (core ADR 0068). */
   openScope(type: string, uri: string): IOScope;
@@ -1499,7 +1536,96 @@ export interface PreparedActor<Data extends object> extends Actor<Data> {
    * `invalid` for an actor that is not replaying, `busy` inside a macrostep.
    */
   setTime(time: number): void;
+  /**
+   * Replay this replaying actor's own input records, in order (napi ADR 0032
+   * section 7): for each, move its clock to the record's time, perform the
+   * input (deliver an event with its origin, take a report, or repeat a
+   * host operation), and run the actor until it is idle, through the pump
+   * and within its budgets. `spawned` and `evicted` records only move the
+   * clock; `queued` records are skipped. Nothing it does crosses the border
+   * or is recorded in the input log. Replay works on one actor: there is no
+   * replay of a system.
+   */
+  // status: unimplemented
+  replay(inputs: Iterable<InputRecord> | AsyncIterable<InputRecord>): Promise<ReplayReport>;
 }
+
+/** What PreparedActor.replay() did (napi ADR 0032 section 7). */
+export interface ReplayReport {
+  readonly inputs: number;
+  /** The events the actor's revision did not use (SendResult.consumed false). */
+  readonly ignored: readonly InputRecord[];
+  readonly lastTime?: number;
+}
+
+/** Where System.setInputLog() hands each turn's inputs (napi ADR 0032 section 6). */
+export interface InputLog {
+  /**
+   * Once per turn that recorded inputs or dispatched delayed sends, in turn
+   * order, one at a time. The turn's services wait until it returns, or the
+   * promise it returns resolves.
+   */
+  commit(batch: InputBatch): void | Promise<void>;
+}
+
+export interface InputBatch {
+  readonly turn: number;
+  /**
+   * Every delayed send due by this logical time has been dispatched: the
+   * moment the system's actors stopped, when it is the last one committed
+   * before a crash (core ADR 0089 section 2).
+   */
+  readonly horizon: number;
+  /** In the order core accepted them. */
+  readonly inputs: readonly InputRecord[];
+}
+
+/**
+ * One input core accepted for a named actor of a logged family (napi ADR
+ * 0032 section 6), at logical time `time`. `queued` is a message accepted
+ * into the actor's mailbox, or waiting for its family's loader; its `event`
+ * record carries the same `seq` when it is delivered. `data` and `binding`
+ * are the values core holds; a spawn's binding is a structured clone taken
+ * at the spawn when it can be cloned.
+ */
+export type InputRecord = { readonly time: number; readonly address: ActorAddress } & (
+  | { readonly kind: "spawned"; readonly revision?: string; readonly binding?: unknown }
+  | {
+      readonly kind: "queued";
+      readonly seq: number;
+      readonly name: EventName;
+      readonly type: "external" | "platform";
+      readonly data?: unknown;
+      readonly sendID?: string;
+      readonly origin?: string;
+      readonly originType?: string;
+      readonly invokeID?: string;
+    }
+  | {
+      readonly kind: "event";
+      readonly seq?: number;
+      readonly name: EventName;
+      readonly type: "external" | "platform";
+      readonly data?: unknown;
+      readonly sendID?: string;
+      readonly origin?: string;
+      readonly originType?: string;
+      readonly invokeID?: string;
+    }
+  | {
+      readonly kind: "report";
+      readonly invokeID: string;
+      readonly reason: string;
+      readonly data?: unknown;
+      readonly ends: boolean;
+    }
+  | { readonly kind: "withdrawn"; readonly sendID: string }
+  | { readonly kind: "abandoned" }
+  /** A quarantined actor released: a runaway then runs without its microstep limit. */
+  | { readonly kind: "released" }
+  | { readonly kind: "evicted" }
+  | { readonly kind: "finished" }
+);
 
 export type PrepareOptions<Data extends object> = {
   /** Defaults to the incumbent actor's current data-model root. */

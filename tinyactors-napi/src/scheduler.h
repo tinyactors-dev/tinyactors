@@ -78,7 +78,12 @@ enum {
     TNA_SCHED_FINISHED = 1u << 1, /* reached a top-level final state */
     /* quarantined as a runaway (core ADR 0075): once released, it runs with
      * no microstep limit until its macrostep ends */
-    TNA_SCHED_UNLIMITED = 1u << 2
+    TNA_SCHED_UNLIMITED = 1u << 2,
+    /* The input log (napi ADR 0032 section 6) asked about this actor, and
+     * whether it is a named actor of a logged family: a cache, so core is
+     * asked once per actor, and cleared when the logged families change. */
+    TNA_SCHED_LOG_KNOWN = 1u << 3,
+    TNA_SCHED_LOGGED = 1u << 4
 };
 
 typedef struct {
@@ -265,6 +270,33 @@ typedef struct tna_turn_record {
     struct tna_turn_record *next;
 } tna_turn_record;
 
+/*
+ * What the input log hears from the scheduler (napi ADR 0032 section 6):
+ * a message accepted into an actor's mailbox or into the waiting mailbox of
+ * an address, a message or report core accepted, and an actor that
+ * finished. `message` is the envelope, borrowed for the call. The observer
+ * must not call back into the scheduler.
+ */
+typedef enum {
+    TNA_NOTE_QUEUED,    /* `actor`, or `address` for mail that waits for a load */
+    TNA_NOTE_DELIVERED, /* ta_actor_deliver() took `message` */
+    TNA_NOTE_REPORTED,  /* ta_actor_report_invoke() took the report `message` */
+    TNA_NOTE_FINISHED   /* `actor` reached a top-level final state */
+} tna_note_kind;
+
+typedef struct {
+    tna_note_kind kind;
+    ta_actor_id actor;
+    ta_address *address;
+    uint32_t envelope;
+    const tna_envelope *message;
+} tna_sched_note;
+
+typedef struct {
+    void *self; /* NULL: no observer, and the scheduler notes nothing */
+    void (*note)(void *self, const tna_sched_note *note);
+} tna_sched_observer;
+
 typedef struct {
     ta_allocator allocator; /* the scheduling category */
     tna_vec pages;          /* tna_sched_entry *, one per page */
@@ -302,6 +334,8 @@ typedef struct {
     tna_turn_record *records;
     tna_turn_record *last_record;
     uint32_t record_count;
+    /* The input log's observer (napi ADR 0032 section 6), or none. */
+    tna_sched_observer observer;
 } tna_sched;
 
 typedef struct {
@@ -412,6 +446,15 @@ void tna_sched_bury_waiting(tna_sched *sched, tna_mailbox *box, tna_dead_reason 
 bool tna_sched_withdraw_waiting(tna_sched *sched, tna_mailbox *box, uint32_t index);
 /* The envelope at `index` (for tests and the router), or NULL. */
 tna_envelope *tna_sched_envelope(const tna_sched *sched, uint32_t index);
+/*
+ * Takes `actor` out of scheduling as a fault does (ADR 0008), for a fault
+ * the host found outside a core call: the input log's commit failed (napi
+ * ADR 0032 section 6). True when it was not quarantined before; release()
+ * puts it back.
+ */
+bool tna_sched_quarantine(tna_sched *sched, ta_actor_id actor);
+/* Clears every entry's input-log cache (TNA_SCHED_LOG_KNOWN, TNA_SCHED_LOGGED). */
+void tna_sched_forget_logging(tna_sched *sched);
 /* Messages waiting in `actor`'s mailbox. */
 uint32_t tna_sched_mailbox_count(const tna_sched *sched, ta_actor_id actor);
 /*

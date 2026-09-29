@@ -216,6 +216,15 @@ class System {
   // #scope()'s answer until the next registration.
   #compileScope;
   #effectContext;
+  // The input log (napi ADR 0032 section 6): the application's sink, the
+  // services held since the last batch, the batches waiting to commit (one
+  // commits at a time, in turn order), and the first commit that failed.
+  #inputLog;
+  #faultHook;
+  #held = [];
+  #commits = [];
+  #committing = false;
+  #inputFailure;
 
   static {
     nativeOf = (system) => system.#native;
@@ -253,6 +262,7 @@ class System {
     const nativeOptions = deadLetter !== undefined && typeof deadLetter !== 'function' ? { ...options, incarnation }
       : { ...options, incarnation, deadLetter: (letter) => self.deref()?.#deadLetter(letter, deadLetter) };
     this.#native = new native.System(this, nativeOptions);
+    this.#faultHook = typeof options?.fault === 'function' ? options.fault : undefined;
     this.#events = new EventNames(this.#native);
     const unloadValues = options?.unloadValues ?? 'serialize';
     if (unloadValues !== 'serialize' && unloadValues !== 'handles') {
@@ -358,6 +368,78 @@ class System {
     const canonical = SCXML_ALIASES.has(type) ? SCXML_INVOKER : type;
     this.#native.registerInvoker(canonical);
     this.#invokers.set(canonical, invoker);
+  }
+
+  /**
+   * Record every input core accepts for the named actors of `families`, and
+   * hand them to `sink.commit(batch)` once per turn (napi ADR 0032 section
+   * 6). A batch is { turn, horizon, inputs }: the records in the order core
+   * accepted them, and the time up to which every due delayed send has been
+   * dispatched. Values are the values core holds; the sink encodes and
+   * stores them as it likes, since napi chooses no storage and no encoding.
+   *
+   * While a sink is installed, a turn's services (I/O processor sends,
+   * invoker starts, cancels and forwards, log records) wait until its
+   * batch's commit returns, or the promise it returns resolves. Batches
+   * commit one at a time, in turn order; later turns run meanwhile. A
+   * commit that throws or rejects stops the system's services and
+   * quarantines every actor with inputs in that batch, with a fault whose
+   * operation and code are "input-log". `null` removes the sink.
+   */
+  setInputLog(sink, options = {}) {
+    if (sink === null) {
+      this.#native.setInputLog(null);
+      this.#inputLog = undefined;
+      if (this.#commits.length === 0 && !this.#committing && this.#held.length > 0) {
+        const held = this.#held;
+        this.#held = [];
+        this.#release(held);
+      }
+      return;
+    }
+    if (typeof sink !== 'object' || typeof sink.commit !== 'function') {
+      throw new TinyactorsError('setInputLog(): expected a sink with a commit(batch) method, or null', 'invalid');
+    }
+    const families = options?.families;
+    if (!Array.isArray(families) || families.length === 0 ||
+        families.some((family) => typeof family !== 'string' || family === '')) {
+      throw new TinyactorsError('setInputLog(): options.families must be a non-empty array of family names', 'invalid');
+    }
+    this.#native.setInputLog(families);
+    this.#inputLog = sink;
+  }
+
+  /**
+   * Put messages the input log recorded as `queued`, and never delivered,
+   * back in their addresses' mailboxes, in the order given (napi ADR 0032
+   * section 6): after a crash, the records a sink committed with no
+   * `event` of the same `seq`. Each keeps its event, data, origin and send
+   * ID, and is recorded as queued again, with a new `seq`.
+   */
+  requeue(records) {
+    if (!Array.isArray(records)) {
+      throw new TinyactorsError('requeue(): expected an array of queued records', 'invalid');
+    }
+    for (const record of records) {
+      if (record === null || typeof record !== 'object' || record.kind !== 'queued') {
+        throw new TinyactorsError('requeue(): expected records of kind "queued"', 'invalid');
+      }
+      const { family, name } = addressOf(record.address, 'requeue()');
+      let origin;
+      if (typeof record.origin === 'string' && typeof record.originType === 'string') {
+        origin = record.originType === 'http://www.w3.org/TR/scxml/#SCXMLEventProcessor' ? { actor: record.origin }
+          : { type: record.originType, uri: record.origin };
+      }
+      this.#native.requeue(family, name, this.#events.id(record.name), record.data, origin,
+        typeof record.sendID === 'string' ? record.sendID : undefined, record.type === 'platform');
+    }
+  }
+
+  // A host operation the input log records for a logged actor (napi ADR 0032 section 6).
+  #recordHost(kind, actor, value, text) {
+    if (this.#inputLog !== undefined) {
+      this.#native.inputHost(kind, actor.slot, actor.generation, value, text);
+    }
   }
 
   /**
@@ -601,8 +683,11 @@ class System {
         }
         return;
       case 'log':
-        this.#logSink?.(payload);
-        this.#notify('log', payload);
+      case 'io':
+      case 'invoke-start':
+      case 'invoke-cancel':
+      case 'invoke-forward':
+        this.#service(kind, payload);
         return;
       case 'trace':
         this.#traceSink?.(payload.traces, payload.logs);
@@ -610,6 +695,34 @@ class System {
         return;
       case 'runaway':
         this.#notify('runaway', payload);
+        return;
+      case 'inputs':
+        this.#commitInputs(payload);
+        return;
+      default:
+        return;
+    }
+  }
+
+  // A service core asked for (a log record, a send to an I/O processor, an
+  // invocation's start, cancel or forward). While an input log is installed
+  // it waits for the turn's batch to commit (napi ADR 0032 section 6).
+  #service(kind, payload) {
+    if (this.#inputFailure !== undefined) {
+      return; // a commit failed: the system's effects stop
+    }
+    if (this.#inputLog !== undefined || this.#committing || this.#commits.length > 0) {
+      this.#held.push([kind, payload]);
+      return;
+    }
+    this.#runService(kind, payload);
+  }
+
+  #runService(kind, payload) {
+    switch (kind) {
+      case 'log':
+        this.#logSink?.(payload);
+        this.#notify('log', payload);
         return;
       case 'io':
         this.#runIO(payload);
@@ -625,6 +738,97 @@ class System {
         return;
       default:
         return;
+    }
+  }
+
+  // The turn's input records: they seal the services held since the last
+  // batch, which run once the batch is committed.
+  #commitInputs(batch) {
+    const held = this.#held;
+    this.#held = [];
+    const actors = [];
+    const inputs = batch.inputs.map((record) => {
+      const { slot, generation, ...input } = record;
+      if (slot !== undefined) {
+        actors.push([slot, generation]);
+      }
+      return Object.freeze(input);
+    });
+    const sink = this.#inputLog;
+    const commit = sink !== undefined && (inputs.length > 0 || batch.dispatched > 0)
+      ? Object.freeze({ turn: batch.turn, horizon: batch.horizon, inputs: Object.freeze(inputs) })
+      : undefined;
+    if (commit === undefined && held.length === 0) {
+      return;
+    }
+    this.#commits.push({ sink, commit, held, actors });
+    if (!this.#committing) {
+      this.#drainCommits();
+    }
+  }
+
+  // Commits the waiting batches one at a time; a synchronous commit runs its
+  // services at once, a promise runs them when it resolves.
+  #drainCommits() {
+    while (this.#commits.length > 0 && this.#inputFailure === undefined) {
+      const { sink, commit, held, actors } = this.#commits.shift();
+      let outcome;
+      if (commit !== undefined) {
+        try {
+          outcome = sink.commit(commit);
+        } catch (error) {
+          this.#commitFailed(error, actors);
+          return;
+        }
+      }
+      if (outcome !== null && typeof outcome === 'object' && typeof outcome.then === 'function') {
+        this.#committing = true;
+        outcome.then(() => {
+          this.#committing = false;
+          this.#release(held);
+          this.#drainCommits();
+        }, (error) => {
+          this.#committing = false;
+          this.#commitFailed(error, actors);
+        });
+        return;
+      }
+      this.#release(held);
+    }
+  }
+
+  #release(held) {
+    if (this.closed || this.#inputFailure !== undefined) {
+      return;
+    }
+    for (const [kind, payload] of held) {
+      this.#runService(kind, payload);
+    }
+  }
+
+  // A commit failed: nothing it held or anything after it runs, and every
+  // actor with inputs in the batch is quarantined as a fault (ADR 0008).
+  #commitFailed(error, actors) {
+    this.#inputFailure = error;
+    this.#commits = [];
+    this.#held = [];
+    if (this.closed) {
+      return;
+    }
+    const message = `the input log's commit failed: ${error instanceof Error ? error.message : String(error)}`;
+    const seen = new Set();
+    for (const [slot, generation] of actors) {
+      const key = `${slot}:${generation}`;
+      if (seen.has(key) || !this.#native.quarantine(slot, generation)) {
+        continue;
+      }
+      seen.add(key);
+      const actor = new ActorID(this, slot, generation);
+      try {
+        this.#faultHook?.({ actor, operation: 'input-log', code: 'input-log', message });
+      } catch {
+        // A hook that throws changes nothing here.
+      }
     }
   }
 
@@ -1159,7 +1363,29 @@ class System {
     const trace = this.#native.spawnTrace(options.traceparent, watched);
     const pending = options.pendingSends === undefined ? undefined : this.#pendingSends(options.pendingSends);
     const id = core.actor_spawn(this.#native, definition.id, address, options.binding, undefined, trace, pending);
-    return new ActorID(this, id.slot, id.generation);
+    const actor = new ActorID(this, id.slot, id.generation);
+    if (address !== undefined) {
+      this.#recordSpawn(actor, definition, options.binding);
+    }
+    return actor;
+  }
+
+  // The binding as it was at the spawn: the actor's data root changes it
+  // from its bootstrap on, and the batch is handed over after the turn.
+  #recordSpawn(actor, definition, binding) {
+    if (this.#inputLog === undefined) {
+      return;
+    }
+    let copy = binding;
+    if (binding !== undefined) {
+      try {
+        copy = structuredClone(binding);
+      } catch {
+        copy = binding; // functions or class instances: the sink gets the live value
+      }
+    }
+    const { revision } = definition.identity;
+    this.#recordHost('spawned', actor, copy, typeof revision === 'string' ? revision : undefined);
   }
 
   /**
@@ -2013,7 +2239,9 @@ class System {
     const pending = pendingSends === undefined ? undefined : this.#pendingSends(pendingSends);
     const id = core.actor_spawn(this.#native, definition.id, { family: { name: address.family }, name: address.name },
       binding, undefined, this.#native.loadTrace(index, generation), pending);
-    return new ActorID(this, id.slot, id.generation);
+    const actor = new ActorID(this, id.slot, id.generation);
+    this.#recordSpawn(actor, definition, binding);
+    return actor;
   }
 
   // True when the directory keeps `address` as unloaded.
@@ -2178,6 +2406,7 @@ class System {
   release(actor) {
     const { slot, generation } = actorOf(this, actor);
     this.#native.release(slot, generation);
+    this.#recordHost('released', { slot, generation });
   }
 
   /*
@@ -2222,6 +2451,7 @@ class System {
   abandon(actor) {
     const { slot, generation } = actorOf(this, actor);
     core.actor_abandon(this.#native, slot, generation);
+    this.#recordHost('abandoned', { slot, generation });
   }
 
   /**
@@ -2247,6 +2477,7 @@ class System {
     }
     try {
       core.actor_withdraw_send(this.#native, slot, generation, id);
+      this.#recordHost('withdrawn', { slot, generation }, undefined, sendID);
     } catch (error) {
       if (error instanceof TinyactorsError && error.code === 'not-found') {
         throw new TinyactorsError(`withdrawSend(): the actor has no pending send ${sendID}`, 'not-found');

@@ -55,6 +55,7 @@
 #include "allocator.h"
 #include "directory.h"
 #include "effects.h"
+#include "inputs.h"
 #include "loads.h"
 #include "offloads.h"
 #include "adapters/trace.h"
@@ -224,6 +225,8 @@ struct tna_system {
     /* Set while core dispatches due delayed sends: what the router is handed
      * then is a timer firing, and its lateness is recorded. */
     bool dispatching_due;
+    /* The input log (inputs.h, napi ADR 0032 section 6). */
+    tna_inputs inputs;
 };
 
 /* TA_ERR_NOMEM when the record or core cannot be allocated. */

@@ -209,6 +209,26 @@ tna_sched_entry *tna_sched_lookup(const tna_sched *sched, ta_actor_id actor) {
     return entry;
 }
 
+/* Tells the input log's observer, when there is one (napi ADR 0032 section 6). */
+static void tna_sched_note_to(const tna_sched *sched, tna_sched_note note) {
+    if (sched->observer.self != NULL) {
+        note.message = note.envelope != 0 ? tna_sched_envelope(sched, note.envelope) : NULL;
+        sched->observer.note(sched->observer.self, &note);
+    }
+}
+
+void tna_sched_forget_logging(tna_sched *sched) {
+    for (uint32_t page = 0; page < sched->pages.count; page += 1u) {
+        tna_sched_entry **entries = tna_vec_at(&sched->pages, page);
+        if (*entries == NULL) {
+            continue;
+        }
+        for (uint32_t at = 0; at < TNA_SCHED_PAGE_ENTRIES; at += 1u) {
+            (*entries)[at].flags &= (uint8_t)~(TNA_SCHED_LOG_KNOWN | TNA_SCHED_LOGGED);
+        }
+    }
+}
+
 /* The entry of `slot`, allocating its page (and the directory up to it). */
 static tna_sched_entry *tna_sched_entry_make(tna_sched *sched, uint32_t slot) {
     uint32_t page = slot >> TNA_SCHED_PAGE_BITS;
@@ -566,6 +586,18 @@ ta_result tna_sched_release(tna_sched *sched, ta_actor_id actor) {
     return TA_OK;
 }
 
+bool tna_sched_quarantine(tna_sched *sched, ta_actor_id actor) {
+    tna_sched_entry *entry = tna_sched_lookup(sched, actor);
+    if (entry == NULL || entry->state == TNA_SCHED_QUARANTINED) {
+        return false;
+    }
+    entry->state = TNA_SCHED_QUARANTINED;
+    entry->flags &= (uint8_t)~TNA_SCHED_BACKOFF;
+    sched->quarantined += 1u;
+    sched->faults[0] += 1u;
+    return true;
+}
+
 ta_result tna_sched_abandoned(tna_sched *sched, ta_actor_id actor) {
     tna_sched_entry *entry = tna_sched_lookup(sched, actor);
     if (entry == NULL) {
@@ -724,6 +756,7 @@ ta_result tna_sched_post(tna_sched *sched, const tna_message *message) {
     if (entry->state == TNA_SCHED_IDLE) {
         entry->state = TNA_SCHED_READY;
     }
+    tna_sched_note_to(sched, (tna_sched_note){ .kind = TNA_NOTE_QUEUED, .actor = target, .envelope = index });
     return TA_OK;
 }
 
@@ -756,6 +789,7 @@ ta_result tna_sched_post_waiting(tna_sched *sched, const tna_waiting_post *post)
     }
     box->last = index;
     box->count += 1u;
+    tna_sched_note_to(sched, (tna_sched_note){ .kind = TNA_NOTE_QUEUED, .address = post->address, .envelope = index });
     return TA_OK;
 }
 
@@ -891,6 +925,7 @@ static void tna_sched_resume_one(tna_sched *sched, const tna_turn_params *params
         if ((entry->flags & TNA_SCHED_FINISHED) == 0) {
             entry->flags |= TNA_SCHED_FINISHED;
             tna_sched_record(sched, params, (tna_turn_record){ .kind = TNA_RECORD_DONE, .actor = actor });
+            tna_sched_note_to(sched, (tna_sched_note){ .kind = TNA_NOTE_FINISHED, .actor = actor });
         }
         return;
     case TA_RUN_STABLE:
@@ -978,6 +1013,9 @@ static void tna_sched_report_one(tna_sched *sched, const tna_turn_params *params
     if (entry->first == 0) {
         entry->last = 0;
     }
+    if (result == TA_OK) {
+        tna_sched_note_to(sched, (tna_sched_note){ .kind = TNA_NOTE_REPORTED, .actor = actor, .envelope = head });
+    }
     tna_envelope_give(sched, head);
     if (result == TA_OK) {
         entry->state = TNA_SCHED_RUNNABLE;
@@ -1046,6 +1084,7 @@ static void tna_sched_deliver_one(tna_sched *sched, const tna_turn_params *param
                                         (tna_settlement){ .kind = TNA_SETTLE_FAULT, .code = TA_ERR_NOMEM, .actor = actor });
             }
         }
+        tna_sched_note_to(sched, (tna_sched_note){ .kind = TNA_NOTE_DELIVERED, .actor = actor, .envelope = head });
         tna_envelope_give(sched, head);
         sched->delivered += 1u;
         entry->state = TNA_SCHED_RUNNABLE;

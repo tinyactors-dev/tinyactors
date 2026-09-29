@@ -11,6 +11,7 @@
 #include "gen/ta_napi.h"
 #include "import.h"
 #include "napi_codecs.h"
+#include "napi_inputs.h"
 #include "napi_services.h"
 #include "napi_loads.h"
 #include "napi_trace.h"
@@ -408,6 +409,28 @@ static napi_value tna_time_getter(napi_env env, napi_callback_info info) {
 }
 
 /* release(slot, generation): puts a quarantined actor back into scheduling (ADR 0008). */
+/* quarantine(slot, generation): true when the actor was not quarantined before (napi ADR 0032 section 6). */
+static napi_value tna_quarantine_method(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2] = { NULL, NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    uint32_t slot = 0;
+    uint32_t generation = 0;
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    if (napi_get_value_uint32(env, argv[0], &slot) != napi_ok ||
+        napi_get_value_uint32(env, argv[1], &generation) != napi_ok) {
+        return tna_throw(env, "invalid", "quarantine: expected (slot, generation)");
+    }
+    napi_value out = NULL;
+    napi_get_boolean(env, tna_sched_quarantine(&wrapper->system->sched, ta_actor_id_make(slot, generation)), &out);
+    return out;
+}
+
 static napi_value tna_release_method(napi_env env, napi_callback_info info) {
     size_t argc = 2;
     napi_value argv[2] = { NULL, NULL };
@@ -1503,6 +1526,91 @@ static napi_value tna_post_named_common(napi_env env, napi_callback_info info, b
     return tna_accept_done(env, wrapper, &accepting);
 }
 
+/*
+ * requeue(family, name, event, data?, origin?, sendID?, platform?): puts a
+ * message the input log recorded as queued back in its address's mailbox
+ * (napi ADR 0032 section 6). `origin` is { actor: <URI> } for an SCXML
+ * origin, which core parses back into a reference, or { type, uri } for an
+ * I/O processor's; `sendID` is its text, dropped when this system cannot
+ * name it; `platform` makes the event a platform event.
+ */
+static napi_value tna_requeue_method(napi_env env, napi_callback_info info) {
+    size_t argc = 7;
+    napi_value argv[7] = { NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    tna_system *system = wrapper->system;
+    if (system->inside_core) {
+        return tna_throw(env, "reentrant", "requeue: cannot be called from inside a core call (ADR 0013)");
+    }
+    ta_actor_address text = { 0 };
+    uint32_t name = 0;
+    bool ok = argc >= 3 && tna_text_argument(env, system, argv[0], &text.family.name) &&
+              tna_text_argument(env, system, argv[1], &text.name) && napi_get_value_uint32(env, argv[2], &name) == napi_ok;
+    ta_address *address = NULL;
+    ta_result result = ok ? ta_address_intern(system->core, &text, &address) : TA_ERR_INVALID;
+    tna_scratch_reset_call(&system->scratch);
+    if (result != TA_OK) {
+        return tna_throw(env, result == TA_ERR_INVALID ? "invalid" : tna_result_code(result),
+                         "requeue: expected (family, name, event) with non-empty text");
+    }
+    ta_event event;
+    if (!tna_post_event(env, wrapper, name, argv[3], &event)) {
+        ta_address_release(address);
+        return NULL;
+    }
+    napi_valuetype type = napi_undefined;
+    if (argc >= 7 && argv[6] != NULL && napi_typeof(env, argv[6], &type) == napi_ok && type == napi_boolean) {
+        bool platform = false;
+        napi_get_value_bool(env, argv[6], &platform);
+        event.type = platform ? TA_EVENT_PLATFORM : TA_EVENT_EXTERNAL;
+    }
+    napi_value actor = NULL;
+    bool has_actor = false;
+    if (argc >= 5 && argv[4] != NULL && napi_typeof(env, argv[4], &type) == napi_ok && type == napi_object &&
+        napi_has_named_property(env, argv[4], "actor", &has_actor) == napi_ok && has_actor &&
+        napi_get_named_property(env, argv[4], "actor", &actor) == napi_ok) {
+        ta_str uri = { 0 };
+        ta_scxml_target target = { 0 };
+        if (tna_text_argument(env, system, actor, &uri) &&
+            ta_scxml_target_parse(system->core, uri, &target) == TA_OK) {
+            if (target.kind == TA_SCXML_TARGET_ACTOR) {
+                event.origin = (ta_origin){ .kind = TA_ORIGIN_ACTOR, .as.actor = target.as.actor };
+            } else {
+                ta_scxml_target_release(&target);
+            }
+        }
+        tna_scratch_reset_call(&system->scratch);
+    } else if (!tna_origin_argument(env, system, argc >= 5 ? argv[4] : NULL, &event.origin)) {
+        ta_address_release(address);
+        ta_event_release(&event);
+        return NULL;
+    }
+    if (argc >= 6 && argv[5] != NULL && napi_typeof(env, argv[5], &type) == napi_ok && type == napi_string) {
+        ta_str send = { 0 };
+        ta_send_id id = 0;
+        if (tna_text_argument(env, system, argv[5], &send) && ta_send_id_parse(system->core, send, &id) == TA_OK) {
+            event.send_id = id;
+        }
+        tna_scratch_reset_call(&system->scratch);
+    }
+    ta_trace_parent trace = { 0 };
+    result = tna_router_post_named(system, address, &(tna_message){ .event = &event, .trace = &trace });
+    ta_address_release(address);
+    if (result != TA_OK) {
+        ta_event_release(&event);
+        return tna_throw(env, result == TA_ERR_BUSY ? "queue-full" : tna_result_code(result),
+                         "requeue: the message was not accepted");
+    }
+    tna_system_want_turn(system);
+    return NULL;
+}
+
 static napi_value tna_post_named_method(napi_env env, napi_callback_info info) {
     return tna_post_named_common(env, info, false);
 }
@@ -1785,6 +1893,7 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "clock", NULL, NULL, tna_clock_getter, NULL, NULL, napi_default_jsproperty, NULL },
         { "time", NULL, NULL, tna_time_getter, NULL, NULL, napi_default_jsproperty, NULL },
         { "release", NULL, tna_release_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "quarantine", NULL, tna_quarantine_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "scheduling", NULL, tna_scheduling_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "mailbox", NULL, tna_mailbox_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "selectDatamodel", NULL, tna_select_datamodel_method, NULL, NULL, NULL, napi_default_method, NULL },
@@ -1823,6 +1932,9 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "setTraceWatch", NULL, tna_set_trace_watch_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "traceWatchSizes", NULL, tna_trace_watch_sizes_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "reportInvoke", NULL, tna_report_invoke_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "setInputLog", NULL, tna_set_input_log_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "inputHost", NULL, tna_input_host_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "requeue", NULL, tna_requeue_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "closed", NULL, NULL, tna_closed_getter, NULL, NULL, napi_default_jsproperty, NULL },
     };
     napi_value constructor = NULL;
