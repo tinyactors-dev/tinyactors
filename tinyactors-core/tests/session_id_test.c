@@ -107,9 +107,10 @@ typedef struct {
     one_directory dir;
 } fixture;
 
-static void start(fixture *f) {
+static void start_in(fixture *f, uint64_t incarnation) {
     *f = (fixture){0};
-    CHECK(ta_system_create(&(ta_system_config){ .allocator = test_allocator }, &f->system) == TA_OK);
+    CHECK(ta_system_create(&(ta_system_config){ .allocator = test_allocator, .incarnation = incarnation },
+                           &f->system) == TA_OK);
     CHECK(ta_system_set_actor_directory(f->system, (ta_actor_directory){ .self = &f->dir, .v = &dir_vtable }) ==
           TA_OK);
     ta_definition_identity identity = {
@@ -126,6 +127,10 @@ static void start(fixture *f) {
                              .out = &definition,
                          }) == TA_OK);
     CHECK(ta_system_register_definition(f->system, definition, &f->definition) == TA_OK);
+}
+
+static void start(fixture *f) {
+    start_in(f, 0);
 }
 
 static const ta_actor_address the_address = { .family = { STR("idle") }, .name = STR("one") };
@@ -350,7 +355,78 @@ static void test_the_table_grows_without_copying(void) {
     CHECK(live_blocks == 0);
 }
 
+static const char *uri_of(fixture *f, ta_actor_ref ref, char *buffer, uint32_t capacity) {
+    uint32_t needed = 0;
+    ta_scxml_target target = { .kind = TA_SCXML_TARGET_ACTOR, .as.actor = ref };
+    if (ta_scxml_target_format(f->system, &(ta_scxml_target_format_params){ .target = target, .buffer = buffer,
+                                                                          .capacity = capacity,
+                                                                          .needed = &needed }) != TA_OK) {
+        buffer[0] = '\0';
+    }
+    return buffer;
+}
+
+/*
+ * An unnamed session's URI names its system's incarnation and its family
+ * (ADR 0088), and still does once the actor is gone: a reply to it can
+ * reach the family.
+ */
+static void test_an_unnamed_session_names_its_family(void) {
+    fixture f;
+    start_in(&f, 7);
+    CHECK(ta_system_incarnation(f.system) == 7);
+    ta_atom idle = 0;
+    ta_atom other = 0;
+    CHECK(ta_system_intern_atom(f.system, (ta_str)STR("idle"), &idle) == TA_OK && idle != 0);
+    CHECK(ta_system_intern_atom(f.system, (ta_str)STR("other"), &other) == TA_OK && other != idle);
+
+    ta_actor_id actor = spawn(&f, NULL);
+    ta_actor_inspection view;
+    CHECK(ta_actor_inspect(f.system, actor, &view) == TA_OK);
+    CHECK(view.self.kind == TA_ACTOR_REF_RUNTIME && view.self.family == idle && view.self.as.runtime == actor);
+    ta_actor_ref self = view.self;
+
+    char expected[64];
+    snprintf(expected, sizeof expected, "#_scxml_7.%llu.idle", (unsigned long long)actor);
+    char buffer[64];
+    CHECK(strcmp(uri_of(&f, self, buffer, sizeof buffer), expected) == 0);
+    uint32_t needed = 0;
+    CHECK(ta_session_id_format(f.system, &(ta_session_id_format_params){ .session = actor, .family = (ta_str)STR("idle"),
+                                                                        .buffer = buffer,
+                                                                        .capacity = sizeof buffer,
+                                                                        .needed = &needed }) == TA_OK &&
+          strcmp(buffer, expected + strlen("#_scxml_")) == 0 && needed == strlen(buffer) + 1u);
+
+    /* Another family's actor never takes mail for this session. */
+    bool named = true;
+    ta_actor_ref routed;
+    CHECK(!ta_session_route(f.system, &self, &routed) && routed.as.runtime == actor && routed.family == idle);
+    ta_actor_ref wrong = { .kind = TA_ACTOR_REF_RUNTIME, .family = other, .as.runtime = actor };
+    CHECK(!ta_session_route(f.system, &wrong, &routed) && routed.as.runtime == 0 && routed.family == other);
+    ta_actor_ref bare = route(&f, actor, &named);
+    CHECK(!named && bare.as.runtime == actor);
+
+    /* Gone, the reference still writes its session with its family, and the
+     * text parses back to the same session and family. */
+    CHECK(ta_actor_destroy(f.system, actor) == TA_OK);
+    CHECK(strcmp(uri_of(&f, self, buffer, sizeof buffer), expected) == 0);
+    ta_scxml_target parsed = { 0 };
+    CHECK(ta_scxml_target_parse(f.system, (ta_str){ .ptr = expected, .len = (uint32_t)strlen(expected) }, &parsed) ==
+              TA_OK &&
+          parsed.kind == TA_SCXML_TARGET_ACTOR && parsed.as.actor.kind == TA_ACTOR_REF_RUNTIME &&
+          parsed.as.actor.as.runtime == actor && parsed.as.actor.family == idle);
+
+    /* Another incarnation's session is none here, but keeps its family. */
+    char foreign[64];
+    snprintf(foreign, sizeof foreign, "#_scxml_8.%llu.idle", (unsigned long long)actor);
+    CHECK(ta_scxml_target_parse(f.system, (ta_str){ .ptr = foreign, .len = (uint32_t)strlen(foreign) }, &parsed) ==
+              TA_OK &&
+          parsed.as.actor.as.runtime == 0 && parsed.as.actor.family == idle);
+    finish(&f);
+}
+
 int main(void) {
+    test_an_unnamed_session_names_its_family();
     test_load_keeps_the_session();
     test_load_runs_under_its_trace_parent();
     test_session_ids_are_unique();

@@ -102,6 +102,47 @@ int main(void) {
               inaccessible[index]);
     }
 
+    /*
+     * A session ID's text is <incarnation>.<session>.<family> (ADR 0088). This
+     * system's incarnation is 0: its sessions parse to themselves, with the
+     * family named; another incarnation's to no session, keeping the family.
+     * The family comes last, so it may hold '.' and '/'.
+     */
+    ta_atom shop = 0;
+    check(ta_system_intern_atom(system, str("shop.cart/invoke"), &shop) == TA_OK && shop != 0, "a family atom");
+    check(ta_scxml_target_parse(system, str("#_scxml_0.42.shop.cart/invoke"), &target) == TA_OK &&
+              target.as.actor.kind == TA_ACTOR_REF_RUNTIME && target.as.actor.as.runtime == 42 &&
+              target.as.actor.family == shop,
+          "#_scxml_0.42.<family>");
+    check(ta_scxml_target_parse(system, str("#_scxml_9.42.shop.cart/invoke"), &target) == TA_OK &&
+              target.as.actor.as.runtime == 0 && target.as.actor.family == shop,
+          "another incarnation's session");
+    check(ta_scxml_target_parse(system, str("#_scxml_42"), &target) == TA_OK && target.as.actor.family == 0,
+          "a bare session ID names no family");
+    const char *not_text[] = { "#_scxml_0.42.", "#_scxml_0.42", "#_scxml_x.42.door", "#_scxml_0..door" };
+    for (size_t index = 0; index < sizeof(not_text) / sizeof(not_text[0]); index += 1) {
+        check(ta_scxml_target_parse(system, str(not_text[index]), &target) == TA_OK &&
+                  target.as.actor.as.runtime == 0 && target.as.actor.family == 0,
+              not_text[index]);
+    }
+    char text[64];
+    uint32_t text_needed = 0;
+    check(ta_session_id_format(system, &(ta_session_id_format_params){ .session = 42, .family = str("door"),
+                                                                      .buffer = text, .capacity = sizeof(text),
+                                                                      .needed = &text_needed }) == TA_OK &&
+              strcmp(text, "0.42.door") == 0 && text_needed == 10,
+          "ta_session_id_format");
+    check(ta_session_id_format(system, &(ta_session_id_format_params){ .session = 0, .family = str("door"),
+                                                                      .buffer = text, .capacity = sizeof(text),
+                                                                      .needed = &text_needed }) ==
+              TA_ERR_INVALID,
+          "session 0 has no text");
+    check(ta_session_id_format(system, &(ta_session_id_format_params){ .session = 42, .family = str(""),
+                                                                      .buffer = text, .capacity = sizeof(text),
+                                                                      .needed = &text_needed }) ==
+              TA_ERR_INVALID,
+          "an empty family has no text");
+
     /* Anything else is an invalid target (SCXML 6.2, IRP test194). */
     const char *invalid[] = { "elsewhere", "", "#_", "#_actor_", "#_actor_door", "#_actor_/front",
                               "#_actor_door/", "#_actor_a/b/c" };
@@ -113,7 +154,8 @@ int main(void) {
     /* Format is the inverse of parse, which is what makes a reply to
      * $_event.origin reach its sender. */
     char buffer[128];
-    const char *round_trip[] = { "#_internal", "#_parent", "#_scxml_42", "#_actor_door/front", "#_worker" };
+    const char *round_trip[] = { "#_internal", "#_parent", "#_scxml_42", "#_scxml_0.42.shop.cart/invoke",
+                                 "#_actor_door/front", "#_worker" };
     for (size_t index = 0; index < sizeof(round_trip) / sizeof(round_trip[0]); index += 1) {
         check(ta_scxml_target_parse(system, str(round_trip[index]), &target) == TA_OK,
               round_trip[index]);

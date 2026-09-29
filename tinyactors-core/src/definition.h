@@ -325,7 +325,9 @@ struct ta_definition {
     ta_state_id *children;
     uint32_t child_count;
     ta_definition_id id;
-    ta_atom name;
+    /* identity.family as a system atom: what a runtime reference to one of
+     * its actors names (ADR 0088). */
+    ta_atom family;
     ta_definition_identity identity;
     /* The <scxml name> attribute, exposed as _name; TA_ATOM_NONE when absent. */
     ta_atom document_name;

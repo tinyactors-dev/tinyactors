@@ -1954,7 +1954,7 @@ static ta_result ta_compiler_identity(ta_compiler *compiler) {
     definition->identity.revision = (ta_bytes){ .ptr = (const uint8_t *)revision_copy.ptr,
                                                 .len = revision_copy.len };
     if (result == TA_OK) {
-        result = ta_atom_intern(ta_compiler_atoms(compiler), family, &definition->name);
+        result = ta_atom_intern(ta_compiler_atoms(compiler), family, &definition->family);
     }
     definition->document_name = TA_ATOM_NONE;
     if (result == TA_OK && spec->name.ptr != NULL && spec->name.len != 0) {

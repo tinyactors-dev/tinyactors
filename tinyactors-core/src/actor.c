@@ -486,7 +486,7 @@ ta_result ta_actor_new(ta_system *system, ta_definition *definition, ta_actor **
     actor->record = (ta_actor_record){
         .id = id,
         .definition = definition->id,
-        .self = { .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = id },
+        .self = { .kind = TA_ACTOR_REF_RUNTIME, .family = definition->family, .as.runtime = id },
         .residency = TA_ACTOR_RUNNING,
     };
     /* A new session is named by the runtime ID it starts with (ADR 0066). */
@@ -514,7 +514,9 @@ static ta_result ta_actor_rearm_sends(ta_system *system, ta_actor *actor, const 
         const ta_delayed_send_info *info = &params->pending_sends[index];
         if (!ta_event_name_valid(&system->event_names, info->event) ||
             (info->has_content && info->content >= definition->content_count) ||
-            (info->has_target_text && info->target_text >= definition->content_count)) {
+            (info->has_target_text && info->target_text >= definition->content_count) ||
+            (info->destination.kind == TA_ACTOR_REF_RUNTIME &&
+             !ta_atom_valid(&system->atoms, info->destination.family))) {
             return TA_ERR_INVALID;
         }
     }
@@ -547,6 +549,7 @@ static ta_result ta_actor_rearm_sends(ta_system *system, ta_actor *actor, const 
         if (send.destination.kind == TA_ACTOR_REF_RUNTIME && send.destination.as.runtime == 0 &&
             ta_system_is_scxml_io(system, send.io_type)) {
             send.destination.as.runtime = actor->record.id;
+            send.destination.family = definition->family;
         }
         ta_actor_ref_retain(&send.destination);
         ta_value_retain(&send.target);
@@ -927,6 +930,18 @@ ta_result ta_actor_withdraw_send(ta_system *system, ta_actor_id id, ta_send_id s
     return TA_OK;
 }
 
+/* The family fills the padding after `kind` (ADR 0088). */
+_Static_assert(sizeof(ta_actor_ref) == 16, "ta_actor_ref must stay 16 bytes");
+
+ta_atom ta_actor_family_of(const ta_system *system, ta_actor_id id) {
+    const ta_actor *actor = ta_actor_lookup(system, id);
+    return actor != NULL ? actor->definition->family : 0;
+}
+
+ta_actor_ref ta_actor_runtime_ref(const ta_system *system, ta_actor_id id) {
+    return (ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME, .family = ta_actor_family_of(system, id), .as.runtime = id };
+}
+
 ta_result ta_actor_destroy(ta_system *system, ta_actor_id id) {
     ta_actor *actor = ta_actor_lookup(system, id);
     if (actor == NULL) {
@@ -934,7 +949,7 @@ ta_result ta_actor_destroy(ta_system *system, ta_actor_id id) {
     }
     ta_actor_sparse_state *sparse = actor->sparse;
     if (sparse != NULL && sparse->completion_pending && sparse->has_parent) {
-        ta_actor_ref parent = { .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = sparse->parent.actor };
+        ta_actor_ref parent = ta_actor_runtime_ref(system, sparse->parent.actor);
         if (ta_invoke_parent_accepts(system, actor, &parent)) {
             return TA_ERR_BUSY;
         }

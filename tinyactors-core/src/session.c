@@ -175,9 +175,22 @@ uint64_t ta_session_id_of(const ta_system *system, ta_actor_id runtime) {
     return actor != NULL ? actor->session_id : runtime;
 }
 
+/* Whether `actor` is of the family `ref` names; a reference naming none matches any (ADR 0088). */
+static bool ta_session_family_matches(const ta_actor_ref *ref, const ta_actor *actor) {
+    return ref->family == 0 || actor->definition->family == ref->family;
+}
+
 bool ta_session_route(const ta_system *system, const ta_actor_ref *ref, ta_actor_ref *out) {
     *out = *ref;
-    if (ref->kind != TA_ACTOR_REF_RUNTIME || ta_actor_lookup(system, ref->as.runtime) != NULL) {
+    if (ref->kind != TA_ACTOR_REF_RUNTIME) {
+        return false;
+    }
+    const ta_actor *resident = ta_actor_lookup(system, ref->as.runtime);
+    if (resident != NULL) {
+        /* Another family's actor holds the ID: the session named is gone. */
+        if (!ta_session_family_matches(ref, resident)) {
+            out->as.runtime = 0;
+        }
         return false;
     }
     const ta_session_node *node = ta_session_find(&system->sessions, ref->as.runtime);
@@ -185,7 +198,9 @@ bool ta_session_route(const ta_system *system, const ta_actor_ref *ref, ta_actor
         return false;
     }
     if (node->actor != NULL) {
-        *out = (ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = node->actor->record.id };
+        *out = (ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME,
+                               .family = ref->family,
+                               .as.runtime = ta_session_family_matches(ref, node->actor) ? node->actor->record.id : 0 };
         return false;
     }
     ta_address_retain(node->address);

@@ -185,8 +185,20 @@ typedef struct { ta_definition_family family; ta_str name; } ta_actor_address;
  */
 typedef struct ta_address ta_address TA_HANDLE;
 typedef enum { TA_ACTOR_REF_RUNTIME = 0, TA_ACTOR_REF_NAMED = 1 } ta_actor_ref_kind TA_SYMBOLS("TA_ACTOR_REF_");
+/*
+ * `family` is the family atom of the actor a runtime reference names (ADR
+ * 0088), set on every runtime reference core makes for an actor: its self
+ * and the origins it writes. It outlives the actor, so a session URI can
+ * still be written, and a router can still find the family, once the actor
+ * is gone. 0 (the empty text, which no family is) means unknown: a
+ * reference a host built from a bare ID. A router delivers to a runtime
+ * destination only when a resident actor of that family holds the ID; core
+ * gives a destination whose ID is held by another family's actor ID 0.
+ * Ignored for named references, whose address names the family.
+ */
 typedef struct {
     ta_actor_ref_kind kind;
+    ta_atom family;
     union {
         TA_WHEN(TA_ACTOR_REF_RUNTIME) ta_actor_id runtime;
         TA_WHEN(TA_ACTOR_REF_NAMED) ta_address *named;
@@ -719,6 +731,24 @@ typedef struct {
 /* The URI of a target. TA_ERR_NOT_FOUND when its kind has no URI. */
 TA_API ta_result ta_scxml_target_format(const ta_system *system,
                                         TA_IN const ta_scxml_target_format_params *params);
+
+/*
+ * A session ID as text (ADR 0088): `<incarnation>.<session>.<family>`, the
+ * system's incarnation and the numeric session ID in decimal, then the
+ * session's definition family. It is `_sessionid`, and after `#_scxml_` the
+ * session URI of an actor without a name. Hosts render every session ID they
+ * show with it. TA_ERR_INVALID for session 0 or an empty family.
+ */
+typedef struct {
+    uint64_t session;
+    ta_str family;
+    TA_BUFFER(capacity, needed) TA_OPTIONAL char *buffer;
+    uint32_t capacity;
+    TA_OUT TA_ALWAYS uint32_t *needed;
+} ta_session_id_format_params;
+TA_API ta_result ta_session_id_format(const ta_system *system, TA_IN const ta_session_id_format_params *params);
+/* The incarnation the system was created with (ADR 0088). */
+TA_API uint64_t ta_system_incarnation(const ta_system *system);
 
 /*
  * Send IDs as text (ADR 0048). A literal `<send id>` is the author's text; a
@@ -3414,7 +3444,13 @@ TA_API void ta_session_image_destroy(TA_DESTROYS ta_session_image *image);
  */
 
 
-typedef struct { ta_allocator allocator; ta_time initial_time; } ta_system_config;
+/*
+ * `incarnation` (ADR 0088) tells this system's session IDs from those of the
+ * systems and processes before it: a host chooses a distinct value for each
+ * system, from random bytes or a restart counter; tests use 0. It is the
+ * first part of every session ID's text.
+ */
+typedef struct { ta_allocator allocator; ta_time initial_time; uint64_t incarnation; } ta_system_config;
 typedef struct {
     ta_event_name_id name;
     TA_BUFFER(capacity, needed) TA_OPTIONAL char *buffer;

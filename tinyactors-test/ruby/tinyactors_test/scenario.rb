@@ -127,6 +127,11 @@ module TinyactorsTest
       @address = address
     end
 
+    # Its session ID's text, and the session URI an unnamed actor's origin
+    # and location are (core ADR 0088).
+    def session_text = @context.session_text(inspect_actor)
+    def session_uri = "#_scxml_#{session_text}"
+
     # The active configuration as state ID symbols, ancestors included.
     def active
       count = inspect_actor.fetch(:active_state_count)
@@ -1308,6 +1313,16 @@ module TinyactorsTest
       return nil if %w[err_not_found err_invalid].include?(response[:result])
 
       core('ta_send_id_parse', response).fetch(:out)
+    end
+
+    # A session ID's text (core ADR 0088), <incarnation>.<session>.<family>,
+    # from an inspection view, by ta_session_id_format; the test host's
+    # systems have incarnation 0.
+    def session_text(view)
+      family = view.dig(:definition, :family, :name).to_s
+      response = ta.session.id_format(system: system_handle, session: view.fetch(:session_id), family: family,
+                                      capacity: 256)
+      core('ta_session_id_format', response).fetch(:buffer).to_s
     end
 
     # The text of an invocation's ID (ADR 0049): the author's `<invoke id>`,

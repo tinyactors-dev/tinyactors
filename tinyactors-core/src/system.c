@@ -22,6 +22,7 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
         return TA_ERR_NOMEM;
     }
     *system = (ta_system){ .allocator = config->allocator,
+                           .incarnation = config->incarnation,
                            .block_cache_limit = TA_EVENT_BLOCK_CACHE_DEFAULT,
                            .trace = ta_null_trace_sink(),
                            .definition_sink = ta_null_definition_sink() };
@@ -677,6 +678,10 @@ ta_result ta_system_set_time(ta_system *system, ta_time now) {
 
 ta_time ta_system_time(const ta_system *system) {
     return system == NULL ? 0 : ta_clock_now(&system->clock);
+}
+
+uint64_t ta_system_incarnation(const ta_system *system) {
+    return system == NULL ? 0 : system->incarnation;
 }
 
 ta_atom ta_system_scxml_io_type(const ta_system *system) {

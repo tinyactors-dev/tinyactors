@@ -107,8 +107,8 @@ TinyactorsTest.scenarios 'io origins' do
       session = actor.inspect_actor.fetch(:session_id)
       processors = actor.data(chart.datamodel == 'ecmascript' ? '.processors' : '.processors')
       locations = processors.to_h { |type, entry| [type.to_s, entry[:location]] }
-      assert_equal({ 'scxml' => "#_scxml_#{session}",
-                     IOOrigins::SCXML => "#_scxml_#{session}",
+      assert_equal({ 'scxml' => actor.session_uri,
+                     IOOrigins::SCXML => actor.session_uri,
                      IOOrigins::PEER => "peer://here/session/#{session}",
                      IOOrigins::CONNECTION => "ws://here/session/#{session}",
                      IOOrigins::BASIC_HTTP => "http://here/session/#{session}" }, locations,

@@ -209,7 +209,7 @@ router_group = TinyactorsTest.scenarios 'router' do
     directory.put(family: 'messenger', name: 'm2', kind: :resident, actor: receiver.handle)
 
     sender.deliver 'greet'
-    assert_equal [{ event: 'hello', from: "#_scxml_#{sender.handle}" }], receiver.data('.inbox')
+    assert_equal [{ event: 'hello', from: sender.session_uri }], receiver.data('.inbox')
     # The router resolves through the directory's own operation, so the
     # directory journals it, rather than reading its entries behind its back.
     assert_equal [['messenger', 'm2', 'ok']],

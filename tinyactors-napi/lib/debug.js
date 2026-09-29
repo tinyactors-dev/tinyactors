@@ -34,7 +34,7 @@
 const { core } = require('./native');
 const { TinyactorsError } = require('./errors');
 const { ActorID } = require('./actor');
-const { nativeOf, observe } = require('./system');
+const { nativeOf, observe, sessionText } = require('./system');
 const { exportSpec } = require('./definition');
 const { Labels } = require('./debug/labels');
 const { Macrosteps, summarize } = require('./debug/macrosteps');
@@ -780,7 +780,7 @@ class DebugSession {
     return {
       data: view.data,
       event: this.#eventOf(thread, view),
-      sessionID: String(view.sessionID),
+      sessionID: sessionText(this.#system, view),
       name: this.#documentName(view),
       activeStates: view.activeStates,
     };

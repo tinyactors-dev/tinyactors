@@ -11,7 +11,9 @@
  *
  *   #_internal                 the sender's own internal queue
  *   #_parent                   the invoking parent session
- *   #_scxml_<session>          a session by its session ID (ADR 0066)
+ *   #_scxml_<session>          a session by its session ID (ADR 0066), whose
+ *                              text is <incarnation>.<n>.<family> (ADR 0088),
+ *                              or a bare <n> a document may write
  *   #_actor_<family>/<name>    a named actor by its logical address
  *   #_<invokeid>               an invocation of the sending session
  *
@@ -63,6 +65,71 @@ static bool ta_uri_address(ta_str text, ta_actor_address *out) {
 }
 
 /* Decimal digits only, at least one, no overflow. */
+static bool ta_uri_number(ta_str text, uint64_t *out);
+
+/* The digits of `text` up to the first '.', as a number; false without one. */
+static bool ta_uri_number_part(ta_str *text, uint64_t *out) {
+    uint32_t dot = 0;
+    while (dot < text->len && text->ptr[dot] != '.') {
+        dot += 1;
+    }
+    if (dot == text->len || !ta_uri_number((ta_str){ .ptr = text->ptr, .len = dot }, out)) {
+        return false;
+    }
+    text->ptr += dot + 1u;
+    text->len -= dot + 1u;
+    return true;
+}
+
+bool ta_session_text_parse(ta_str text, ta_session_text *out) {
+    ta_session_text parsed = {0};
+    if (!ta_uri_number_part(&text, &parsed.incarnation) || !ta_uri_number_part(&text, &parsed.session) ||
+        text.len == 0) {
+        return false;
+    }
+    parsed.family = text;
+    *out = parsed;
+    return true;
+}
+
+void ta_session_text_write(const ta_system *system, ta_text_writer *writer, uint64_t session, ta_str family) {
+    ta_text_put_u64(writer, system->incarnation);
+    ta_text_put(writer, (ta_str){ .ptr = ".", .len = 1 });
+    ta_text_put_u64(writer, session);
+    ta_text_put(writer, (ta_str){ .ptr = ".", .len = 1 });
+    ta_text_put(writer, family);
+}
+
+void ta_session_ref_write(const ta_system *system, ta_text_writer *writer, const ta_actor_ref *ref) {
+    ta_actor_id runtime = ref->as.runtime;
+    uint64_t session = ta_session_id_of(system, runtime);
+    ta_str family = { 0 };
+    if (ref->family != 0) {
+        family = ta_atom_text(&system->atoms, ref->family);
+    } else {
+        const ta_actor *actor = ta_actor_lookup(system, runtime);
+        if (actor != NULL) {
+            family = actor->definition->identity.family.name;
+        }
+    }
+    if (family.len == 0) {
+        /* A bare ID a host or a document supplied, naming no live actor. */
+        ta_text_put_u64(writer, session);
+        return;
+    }
+    ta_session_text_write(system, writer, session, family);
+}
+
+ta_result ta_session_id_format(const ta_system *system, const ta_session_id_format_params *params) {
+    if (system == NULL || params == NULL || params->needed == NULL || params->session == 0 ||
+        params->family.len == 0 || params->family.ptr == NULL) {
+        return TA_ERR_INVALID;
+    }
+    ta_text_writer writer = { .buffer = params->buffer, .capacity = params->capacity };
+    ta_session_text_write(system, &writer, params->session, params->family);
+    return ta_text_finish(&writer, params->needed);
+}
+
 static bool ta_uri_number(ta_str text, uint64_t *out) {
     if (text.len == 0) {
         return false;
@@ -113,12 +180,23 @@ ta_result ta_scxml_target_parse(ta_system *system, ta_str text, ta_scxml_target 
     rest = text;
     if (ta_uri_prefix(&rest, TA_URI_SESSION)) {
         uint64_t session = 0;
-        /* A session URI naming no session is inaccessible, not invalid. */
-        if (!ta_uri_number(rest, &session)) {
+        ta_atom family = 0;
+        ta_session_text parsed;
+        if (ta_session_text_parse(rest, &parsed)) {
+            /* The family is interned as an address's would be (ADR 0065). */
+            ta_result result = ta_atom_intern(&system->atoms, parsed.family, &family);
+            if (result != TA_OK) {
+                return result;
+            }
+            /* Another system's session is none here; its family still routes it. */
+            session = parsed.incarnation == system->incarnation ? parsed.session : 0;
+        } else if (!ta_uri_number(rest, &session)) {
+            /* A session URI naming no session is inaccessible, not invalid. */
             session = 0;
         }
         *out = (ta_scxml_target){ .kind = TA_SCXML_TARGET_ACTOR,
-                                  .as.actor = { .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = session } };
+                                  .as.actor = { .kind = TA_ACTOR_REF_RUNTIME, .family = family,
+                                                .as.runtime = session } };
         return TA_OK;
     }
     rest = text;
@@ -156,9 +234,9 @@ bool ta_scxml_uri_write(const ta_system *system, ta_text_writer *writer, const t
                 ta_text_put(writer, view.name);
                 return true;
             }
-            /* A resident actor is written as its session (ADR 0066). */
+            /* A runtime reference is written as its session (ADR 0066, ADR 0088). */
             ta_text_put(writer, ta_str_from_cstr(TA_URI_SESSION));
-            ta_text_put_u64(writer, ta_session_id_of(system, target->as.actor.as.runtime));
+            ta_session_ref_write(system, writer, &target->as.actor);
             return true;
         default:
             /* SELF is the absent target, which has no URI of its own. */

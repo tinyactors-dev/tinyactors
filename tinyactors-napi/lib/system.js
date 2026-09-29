@@ -2396,4 +2396,12 @@ function discardLoad(result) {
   }
 }
 
-module.exports = { System, createSystem, nativeOf, observe, ActorID, PreparedActor, SessionImage };
+/**
+ * A session ID as text, <incarnation>.<session>.<family> (core ADR 0088),
+ * from an inspection: what the chart reads as _sessionid.
+ */
+function sessionText(system, view) {
+  return core.session_id_format(nativeOf(system), view.sessionID, view.definition.family);
+}
+
+module.exports = { System, createSystem, nativeOf, observe, sessionText, ActorID, PreparedActor, SessionImage };

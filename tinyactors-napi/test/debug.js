@@ -682,7 +682,7 @@ async function state() {
                    [['name', '"basic"'], ['seats', '2']]);
   assert.deepEqual((await read('Configuration')).map((variable) => variable.name), ['active']);
   const system_ = Object.fromEntries((await read('System')).map((variable) => [variable.name, variable.value]));
-  assert.equal(system_._sessionid, JSON.stringify(String(actor.inspect().sessionID)));
+  assert.equal(system_._sessionid, JSON.stringify(`0.${actor.inspect().sessionID}.subscription`), "_sessionid as the chart reads it (core ADR 0088)");
   assert.equal(system_.scheduling, '"idle"');
   await client.refused('setVariable', { variablesReference: scopes[6].variablesReference, name: 'now', value: '1' },
                        /only the Data model/);

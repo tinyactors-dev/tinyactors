@@ -1694,19 +1694,25 @@ static bool ta_send_destination(ta_interpreter *it, const ta_scxml_target *targe
              * the session table (ta_session_route). What a receiver replies
              * to is the origin, which for a named actor is the address.
              */
-            *out = (ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = it->actor->session_id };
+            *out = (ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME,
+                                   .family = it->definition->family,
+                                   .as.runtime = it->actor->session_id };
             return true;
         case TA_SCXML_TARGET_PARENT:
             if (it->actor->sparse == NULL || !it->actor->sparse->has_parent) {
                 return false;
             }
-            *out = (ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = it->actor->sparse->parent.actor };
+            *out = ta_actor_runtime_ref(it->system, it->actor->sparse->parent.actor);
             return true;
         case TA_SCXML_TARGET_ACTOR:
             *out = target->as.actor;
             return true;
         case TA_SCXML_TARGET_INVOKE:
-            return ta_invoke_destination(it->actor, target->as.invoke, out);
+            if (!ta_invoke_destination(it->actor, target->as.invoke, out)) {
+                return false;
+            }
+            out->family = ta_actor_family_of(it->system, out->as.runtime);
+            return true;
         default:
             return false;
     }

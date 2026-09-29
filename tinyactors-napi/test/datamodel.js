@@ -100,7 +100,8 @@ async function context() {
   assert.deepEqual(seen.event, { name: 'look', type: 'external', data: { payload: 1 } });
   assert.equal(seen.inIdle, true);
   assert.equal(seen.inMissing, false, 'In() of a state the chart does not have is false');
-  assert.equal(seen.sessionID, String(actor.inspect().sessionID));
+  // A session ID's text is <incarnation>.<session>.<family> (core ADR 0088).
+  assert.equal(seen.sessionID, `0.${actor.inspect().sessionID}.context`);
   assert.equal(seen.name, 'ctx');
   assert.ok(seen.processors.includes('scxml'));
   assertCode(() => kept.data, 'invalid', /only while its expression runs/);

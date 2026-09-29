@@ -556,6 +556,21 @@ ta_result ta_fault_to_internal_event(ta_system *system,
 /* Writes the URI of `target`; false when its kind has no URI (SELF, INVALID). */
 TA_PRIVATE bool ta_scxml_uri_write(const ta_system *system, ta_text_writer *writer, const ta_scxml_target *target);
 
+/* A session ID's text, <incarnation>.<session>.<family> (ADR 0088). */
+typedef struct {
+    uint64_t incarnation;
+    uint64_t session;
+    ta_str family; /* borrowed from the parsed text */
+} ta_session_text;
+
+/* False when `text` is not in that form (a bare number is not). */
+TA_PRIVATE bool ta_session_text_parse(ta_str text, ta_session_text *out);
+/* Writes a session of this system as text. */
+TA_PRIVATE void ta_session_text_write(const ta_system *system, ta_text_writer *writer, uint64_t session, ta_str family);
+/* Writes a runtime reference's session: as text when its family is known,
+ * from the reference or its live actor, otherwise as a bare number. */
+TA_PRIVATE void ta_session_ref_write(const ta_system *system, ta_text_writer *writer, const ta_actor_ref *ref);
+
 
 
 /* External delivery and the router boundary are fully public. */
@@ -1335,7 +1350,9 @@ struct ta_definition {
     ta_state_id *children;
     uint32_t child_count;
     ta_definition_id id;
-    ta_atom name;
+    /* identity.family as a system atom: what a runtime reference to one of
+     * its actors names (ADR 0088). */
+    ta_atom family;
     ta_definition_identity identity;
     /* The <scxml name> attribute, exposed as _name; TA_ATOM_NONE when absent. */
     ta_atom document_name;
@@ -1760,6 +1777,10 @@ TA_PRIVATE void ta_actor_table_destroy(ta_actor_table *table, ta_allocator alloc
 TA_PRIVATE void ta_actor_layout(ta_definition *definition);
 
 TA_PRIVATE ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id);
+/* The family atom of the resident actor `id`, or 0 when there is none (ADR 0088). */
+TA_PRIVATE ta_atom ta_actor_family_of(const ta_system *system, ta_actor_id id);
+/* A runtime reference to `id` that names its family (ADR 0088). */
+TA_PRIVATE ta_actor_ref ta_actor_runtime_ref(const ta_system *system, ta_actor_id id);
 TA_PRIVATE bool ta_actor_state_active(const ta_actor *actor, ta_state_id state);
 /* Runs an invoked child's exitInterpreter path with isolated scratch storage. */
 TA_PRIVATE void ta_actor_exit_invoked(ta_system *system, ta_actor_id id);
@@ -1840,6 +1861,8 @@ typedef struct {
 struct ta_system {
     ta_allocator allocator;
     ta_clock clock;
+    /* The first part of every session ID's text (ADR 0088). */
+    uint64_t incarnation;
     ta_atom_table atoms;
     /* Interned named addresses (ADR 0065). */
     ta_address_table addresses;
@@ -2735,6 +2758,12 @@ TA_PRIVATE ta_result ta_atom_table_init(ta_atom_table *table, ta_allocator alloc
     if (result == TA_OK) {
         result = ta_atom_rehash(table, 64);
     }
+    /* Atom 0 is the empty text, which no family is, so a zeroed family
+     * atom names none (ADR 0088). */
+    ta_atom empty = TA_ATOM_NONE;
+    if (result == TA_OK) {
+        result = ta_atom_intern(table, (ta_str){ .ptr = "", .len = 0 }, &empty);
+    }
     if (result != TA_OK) {
         ta_atom_table_destroy(table);
     }
@@ -3411,9 +3440,22 @@ TA_PRIVATE uint64_t ta_session_id_of(const ta_system *system, ta_actor_id runtim
     return actor != NULL ? actor->session_id : runtime;
 }
 
+/* Whether `actor` is of the family `ref` names; a reference naming none matches any (ADR 0088). */
+static bool ta_session_family_matches(const ta_actor_ref *ref, const ta_actor *actor) {
+    return ref->family == 0 || actor->definition->family == ref->family;
+}
+
 TA_PRIVATE bool ta_session_route(const ta_system *system, const ta_actor_ref *ref, ta_actor_ref *out) {
     *out = *ref;
-    if (ref->kind != TA_ACTOR_REF_RUNTIME || ta_actor_lookup(system, ref->as.runtime) != NULL) {
+    if (ref->kind != TA_ACTOR_REF_RUNTIME) {
+        return false;
+    }
+    const ta_actor *resident = ta_actor_lookup(system, ref->as.runtime);
+    if (resident != NULL) {
+        /* Another family's actor holds the ID: the session named is gone. */
+        if (!ta_session_family_matches(ref, resident)) {
+            out->as.runtime = 0;
+        }
         return false;
     }
     const ta_session_node *node = ta_session_find(&system->sessions, ref->as.runtime);
@@ -3421,7 +3463,9 @@ TA_PRIVATE bool ta_session_route(const ta_system *system, const ta_actor_ref *re
         return false;
     }
     if (node->actor != NULL) {
-        *out = (ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = node->actor->record.id };
+        *out = (ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME,
+                               .family = ref->family,
+                               .as.runtime = ta_session_family_matches(ref, node->actor) ? node->actor->record.id : 0 };
         return false;
     }
     ta_address_retain(node->address);
@@ -4072,7 +4116,9 @@ TA_API ta_trace_context ta_system_new_trace(ta_system *system) {
  *
  *   #_internal                 the sender's own internal queue
  *   #_parent                   the invoking parent session
- *   #_scxml_<session>          a session by its session ID (ADR 0066)
+ *   #_scxml_<session>          a session by its session ID (ADR 0066), whose
+ *                              text is <incarnation>.<n>.<family> (ADR 0088),
+ *                              or a bare <n> a document may write
  *   #_actor_<family>/<name>    a named actor by its logical address
  *   #_<invokeid>               an invocation of the sending session
  *
@@ -4124,6 +4170,71 @@ static bool ta_uri_address(ta_str text, ta_actor_address *out) {
 }
 
 /* Decimal digits only, at least one, no overflow. */
+static bool ta_uri_number(ta_str text, uint64_t *out);
+
+/* The digits of `text` up to the first '.', as a number; false without one. */
+static bool ta_uri_number_part(ta_str *text, uint64_t *out) {
+    uint32_t dot = 0;
+    while (dot < text->len && text->ptr[dot] != '.') {
+        dot += 1;
+    }
+    if (dot == text->len || !ta_uri_number((ta_str){ .ptr = text->ptr, .len = dot }, out)) {
+        return false;
+    }
+    text->ptr += dot + 1u;
+    text->len -= dot + 1u;
+    return true;
+}
+
+TA_PRIVATE bool ta_session_text_parse(ta_str text, ta_session_text *out) {
+    ta_session_text parsed = {0};
+    if (!ta_uri_number_part(&text, &parsed.incarnation) || !ta_uri_number_part(&text, &parsed.session) ||
+        text.len == 0) {
+        return false;
+    }
+    parsed.family = text;
+    *out = parsed;
+    return true;
+}
+
+TA_PRIVATE void ta_session_text_write(const ta_system *system, ta_text_writer *writer, uint64_t session, ta_str family) {
+    ta_text_put_u64(writer, system->incarnation);
+    ta_text_put(writer, (ta_str){ .ptr = ".", .len = 1 });
+    ta_text_put_u64(writer, session);
+    ta_text_put(writer, (ta_str){ .ptr = ".", .len = 1 });
+    ta_text_put(writer, family);
+}
+
+TA_PRIVATE void ta_session_ref_write(const ta_system *system, ta_text_writer *writer, const ta_actor_ref *ref) {
+    ta_actor_id runtime = ref->as.runtime;
+    uint64_t session = ta_session_id_of(system, runtime);
+    ta_str family = { 0 };
+    if (ref->family != 0) {
+        family = ta_atom_text(&system->atoms, ref->family);
+    } else {
+        const ta_actor *actor = ta_actor_lookup(system, runtime);
+        if (actor != NULL) {
+            family = actor->definition->identity.family.name;
+        }
+    }
+    if (family.len == 0) {
+        /* A bare ID a host or a document supplied, naming no live actor. */
+        ta_text_put_u64(writer, session);
+        return;
+    }
+    ta_session_text_write(system, writer, session, family);
+}
+
+TA_API ta_result ta_session_id_format(const ta_system *system, const ta_session_id_format_params *params) {
+    if (system == NULL || params == NULL || params->needed == NULL || params->session == 0 ||
+        params->family.len == 0 || params->family.ptr == NULL) {
+        return TA_ERR_INVALID;
+    }
+    ta_text_writer writer = { .buffer = params->buffer, .capacity = params->capacity };
+    ta_session_text_write(system, &writer, params->session, params->family);
+    return ta_text_finish(&writer, params->needed);
+}
+
 static bool ta_uri_number(ta_str text, uint64_t *out) {
     if (text.len == 0) {
         return false;
@@ -4174,12 +4285,23 @@ TA_API ta_result ta_scxml_target_parse(ta_system *system, ta_str text, ta_scxml_
     rest = text;
     if (ta_uri_prefix(&rest, TA_URI_SESSION)) {
         uint64_t session = 0;
-        /* A session URI naming no session is inaccessible, not invalid. */
-        if (!ta_uri_number(rest, &session)) {
+        ta_atom family = 0;
+        ta_session_text parsed;
+        if (ta_session_text_parse(rest, &parsed)) {
+            /* The family is interned as an address's would be (ADR 0065). */
+            ta_result result = ta_atom_intern(&system->atoms, parsed.family, &family);
+            if (result != TA_OK) {
+                return result;
+            }
+            /* Another system's session is none here; its family still routes it. */
+            session = parsed.incarnation == system->incarnation ? parsed.session : 0;
+        } else if (!ta_uri_number(rest, &session)) {
+            /* A session URI naming no session is inaccessible, not invalid. */
             session = 0;
         }
         *out = (ta_scxml_target){ .kind = TA_SCXML_TARGET_ACTOR,
-                                  .as.actor = { .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = session } };
+                                  .as.actor = { .kind = TA_ACTOR_REF_RUNTIME, .family = family,
+                                                .as.runtime = session } };
         return TA_OK;
     }
     rest = text;
@@ -4217,9 +4339,9 @@ TA_PRIVATE bool ta_scxml_uri_write(const ta_system *system, ta_text_writer *writ
                 ta_text_put(writer, view.name);
                 return true;
             }
-            /* A resident actor is written as its session (ADR 0066). */
+            /* A runtime reference is written as its session (ADR 0066, ADR 0088). */
             ta_text_put(writer, ta_str_from_cstr(TA_URI_SESSION));
-            ta_text_put_u64(writer, ta_session_id_of(system, target->as.actor.as.runtime));
+            ta_session_ref_write(system, writer, &target->as.actor);
             return true;
         default:
             /* SELF is the absent target, which has no URI of its own. */
@@ -4931,7 +5053,7 @@ static bool ta_dm_write_field(const void *context, ta_text_writer *writer) {
     const ta_system *system = field->host->impl->system;
     const ta_actor *actor = field->host->impl->actor;
     if (field->kind == TA_DM_TEXT_SESSION_ID) {
-        ta_text_put_u64(writer, actor->session_id);
+        ta_session_text_write(system, writer, actor->session_id, actor->definition->identity.family.name);
         return true;
     }
     if (field->kind == TA_DM_TEXT_IO_LOCATION) {
@@ -6336,8 +6458,8 @@ static ta_result ta_invoke_forward(ta_interpreter *it, uint32_t index, const ta_
         ta_event copy = *event;
         ta_result result = ta_invoke_submit(it->system, &(ta_invoke_delivery){
                                                             .sender = it->actor,
-                                                            .destination = { .kind = TA_ACTOR_REF_RUNTIME,
-                                                                             .as.runtime = meta.child },
+                                                            .destination = ta_actor_runtime_ref(it->system,
+                                                                                                meta.child),
                                                             .event = copy,
                                                             .trace = ta_interpreter_trace_here(it),
                                                         });
@@ -6430,8 +6552,7 @@ static ta_result ta_invoke_publish(ta_system *system, ta_actor *actor, ta_trace_
     };
     return ta_invoke_submit(system, &(ta_invoke_delivery){
                                         .sender = actor,
-                                        .destination = { .kind = TA_ACTOR_REF_RUNTIME,
-                                                         .as.runtime = sparse->parent.actor },
+                                        .destination = ta_actor_runtime_ref(system, sparse->parent.actor),
                                         .event = event,
                                         .trace = trace,
                                     });
@@ -9127,7 +9248,7 @@ static ta_result ta_compiler_identity(ta_compiler *compiler) {
     definition->identity.revision = (ta_bytes){ .ptr = (const uint8_t *)revision_copy.ptr,
                                                 .len = revision_copy.len };
     if (result == TA_OK) {
-        result = ta_atom_intern(ta_compiler_atoms(compiler), family, &definition->name);
+        result = ta_atom_intern(ta_compiler_atoms(compiler), family, &definition->family);
     }
     definition->document_name = TA_ATOM_NONE;
     if (result == TA_OK && spec->name.ptr != NULL && spec->name.len != 0) {
@@ -11462,7 +11583,7 @@ TA_PRIVATE ta_result ta_actor_new(ta_system *system, ta_definition *definition, 
     actor->record = (ta_actor_record){
         .id = id,
         .definition = definition->id,
-        .self = { .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = id },
+        .self = { .kind = TA_ACTOR_REF_RUNTIME, .family = definition->family, .as.runtime = id },
         .residency = TA_ACTOR_RUNNING,
     };
     /* A new session is named by the runtime ID it starts with (ADR 0066). */
@@ -11490,7 +11611,9 @@ static ta_result ta_actor_rearm_sends(ta_system *system, ta_actor *actor, const 
         const ta_delayed_send_info *info = &params->pending_sends[index];
         if (!ta_event_name_valid(&system->event_names, info->event) ||
             (info->has_content && info->content >= definition->content_count) ||
-            (info->has_target_text && info->target_text >= definition->content_count)) {
+            (info->has_target_text && info->target_text >= definition->content_count) ||
+            (info->destination.kind == TA_ACTOR_REF_RUNTIME &&
+             !ta_atom_valid(&system->atoms, info->destination.family))) {
             return TA_ERR_INVALID;
         }
     }
@@ -11523,6 +11646,7 @@ static ta_result ta_actor_rearm_sends(ta_system *system, ta_actor *actor, const 
         if (send.destination.kind == TA_ACTOR_REF_RUNTIME && send.destination.as.runtime == 0 &&
             ta_system_is_scxml_io(system, send.io_type)) {
             send.destination.as.runtime = actor->record.id;
+            send.destination.family = definition->family;
         }
         ta_actor_ref_retain(&send.destination);
         ta_value_retain(&send.target);
@@ -11903,6 +12027,18 @@ TA_API ta_result ta_actor_withdraw_send(ta_system *system, ta_actor_id id, ta_se
     return TA_OK;
 }
 
+/* The family fills the padding after `kind` (ADR 0088). */
+_Static_assert(sizeof(ta_actor_ref) == 16, "ta_actor_ref must stay 16 bytes");
+
+TA_PRIVATE ta_atom ta_actor_family_of(const ta_system *system, ta_actor_id id) {
+    const ta_actor *actor = ta_actor_lookup(system, id);
+    return actor != NULL ? actor->definition->family : 0;
+}
+
+TA_PRIVATE ta_actor_ref ta_actor_runtime_ref(const ta_system *system, ta_actor_id id) {
+    return (ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME, .family = ta_actor_family_of(system, id), .as.runtime = id };
+}
+
 TA_API ta_result ta_actor_destroy(ta_system *system, ta_actor_id id) {
     ta_actor *actor = ta_actor_lookup(system, id);
     if (actor == NULL) {
@@ -11910,7 +12046,7 @@ TA_API ta_result ta_actor_destroy(ta_system *system, ta_actor_id id) {
     }
     ta_actor_sparse_state *sparse = actor->sparse;
     if (sparse != NULL && sparse->completion_pending && sparse->has_parent) {
-        ta_actor_ref parent = { .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = sparse->parent.actor };
+        ta_actor_ref parent = ta_actor_runtime_ref(system, sparse->parent.actor);
         if (ta_invoke_parent_accepts(system, actor, &parent)) {
             return TA_ERR_BUSY;
         }
@@ -13718,6 +13854,7 @@ TA_API ta_result ta_system_create(const ta_system_config *config, ta_system **ou
         return TA_ERR_NOMEM;
     }
     *system = (ta_system){ .allocator = config->allocator,
+                           .incarnation = config->incarnation,
                            .block_cache_limit = TA_EVENT_BLOCK_CACHE_DEFAULT,
                            .trace = ta_null_trace_sink(),
                            .definition_sink = ta_null_definition_sink() };
@@ -14373,6 +14510,10 @@ TA_API ta_result ta_system_set_time(ta_system *system, ta_time now) {
 
 TA_API ta_time ta_system_time(const ta_system *system) {
     return system == NULL ? 0 : ta_clock_now(&system->clock);
+}
+
+TA_API uint64_t ta_system_incarnation(const ta_system *system) {
+    return system == NULL ? 0 : system->incarnation;
 }
 
 TA_API ta_atom ta_system_scxml_io_type(const ta_system *system) {
@@ -16193,19 +16334,25 @@ static bool ta_send_destination(ta_interpreter *it, const ta_scxml_target *targe
              * the session table (ta_session_route). What a receiver replies
              * to is the origin, which for a named actor is the address.
              */
-            *out = (ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = it->actor->session_id };
+            *out = (ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME,
+                                   .family = it->definition->family,
+                                   .as.runtime = it->actor->session_id };
             return true;
         case TA_SCXML_TARGET_PARENT:
             if (it->actor->sparse == NULL || !it->actor->sparse->has_parent) {
                 return false;
             }
-            *out = (ta_actor_ref){ .kind = TA_ACTOR_REF_RUNTIME, .as.runtime = it->actor->sparse->parent.actor };
+            *out = ta_actor_runtime_ref(it->system, it->actor->sparse->parent.actor);
             return true;
         case TA_SCXML_TARGET_ACTOR:
             *out = target->as.actor;
             return true;
         case TA_SCXML_TARGET_INVOKE:
-            return ta_invoke_destination(it->actor, target->as.invoke, out);
+            if (!ta_invoke_destination(it->actor, target->as.invoke, out)) {
+                return false;
+            }
+            out->family = ta_actor_family_of(it->system, out->as.runtime);
+            return true;
         default:
             return false;
     }

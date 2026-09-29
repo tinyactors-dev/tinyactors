@@ -50,9 +50,9 @@ TinyactorsTest.scenarios 'named actors', chart: :traffic_light do
     sender.deliver 'greet'
     # The sender is anonymous here, so its origin is its session URI; the
     # receiver replies to that.
-    assert_equal [{ event: 'hello', from: "#_scxml_#{sender.handle}" }], receiver.data('.inbox'),
+    assert_equal [{ event: 'hello', from: sender.session_uri }], receiver.data('.inbox'),
                  'the named target is resolved and delivered'
-    assert_equal [{ event: 'ack', from: "#_scxml_#{receiver.handle}" }], sender.data('.inbox')
+    assert_equal [{ event: 'ack', from: receiver.session_uri }], sender.data('.inbox')
     # The hello goes to the address, which the router resolves; the reply
     # goes to the sender's session URI, which needs no resolution.
     assert_equal [[{ kind: 'named', family: { name: 'messenger' }, name: 'm2' },

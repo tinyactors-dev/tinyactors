@@ -2098,11 +2098,18 @@
     },
     "ta_actor_ref": {
       "kind": "struct",
+      "doc": "`family` is the family atom of the actor a runtime reference names (ADR 0088), set on every runtime reference core makes for an actor: its self and the origins it writes. It outlives the actor, so a session URI can still be written, and a router can still find the family, once the actor is gone. 0 (the empty text, which no family is) means unknown: a reference a host built from a bare ID. A router delivers to a runtime destination only when a resident actor of that family holds the ID; core gives a destination whose ID is held by another family's actor ID 0. Ignored for named references, whose address names the family.",
       "fields": [
         {
           "name": "kind",
           "type": {
             "type": "ta_actor_ref_kind"
+          }
+        },
+        {
+          "name": "family",
+          "type": {
+            "type": "ta_atom"
           }
         },
         {
@@ -2149,6 +2156,7 @@
           "align": 8,
           "offsets": {
             "kind": 0,
+            "family": 4,
             "as": 8,
             "as.runtime": 8,
             "as.named": 8
@@ -2159,6 +2167,7 @@
           "align": 8,
           "offsets": {
             "kind": 0,
+            "family": 4,
             "as": 8,
             "as.runtime": 8,
             "as.named": 8
@@ -14186,6 +14195,81 @@
         }
       }
     },
+    "ta_session_id_format_params": {
+      "kind": "struct",
+      "doc": "A session ID as text (ADR 0088): ` <incarnation >. <session >. <family >`, the system's incarnation and the numeric session ID in decimal, then the session's definition family. It is `_sessionid`, and after `#_scxml_` the session URI of an actor without a name. Hosts render every session ID they show with it. TA_ERR_INVALID for session 0 or an empty family.",
+      "fields": [
+        {
+          "name": "session",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "family",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "buffer",
+          "type": {
+            "pointer": {
+              "builtin": "char"
+            }
+          },
+          "capacity": "capacity",
+          "needed": "needed",
+          "shape": "buffer",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success"
+        },
+        {
+          "name": "capacity",
+          "type": {
+            "builtin": "uint32_t"
+          },
+          "capacity_of": "buffer"
+        },
+        {
+          "name": "needed",
+          "type": {
+            "pointer": {
+              "builtin": "uint32_t"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "always",
+          "needed_of": "buffer"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "session": 0,
+            "family": 8,
+            "buffer": 24,
+            "capacity": 32,
+            "needed": 40
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "session": 0,
+            "family": 8,
+            "buffer": 16,
+            "capacity": 20,
+            "needed": 24
+          }
+        }
+      }
+    },
     "ta_session_image": {
       "kind": "handle",
       "handle": "session_image",
@@ -14972,7 +15056,7 @@
     },
     "ta_system_config": {
       "kind": "struct",
-      "doc": "======================================================================== Systems",
+      "doc": "`incarnation` (ADR 0088) tells this system's session IDs from those of the systems and processes before it: a host chooses a distinct value for each system, from random bytes or a restart counter; tests use 0. It is the first part of every session ID's text.",
       "fields": [
         {
           "name": "allocator",
@@ -14985,23 +15069,31 @@
           "type": {
             "type": "ta_time"
           }
+        },
+        {
+          "name": "incarnation",
+          "type": {
+            "builtin": "uint64_t"
+          }
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "allocator": 0,
+            "initial_time": 16,
+            "incarnation": 24
+          }
+        },
+        "wasm32-unknown-unknown": {
           "size": 24,
           "align": 8,
           "offsets": {
             "allocator": 0,
-            "initial_time": 16
-          }
-        },
-        "wasm32-unknown-unknown": {
-          "size": 16,
-          "align": 8,
-          "offsets": {
-            "allocator": 0,
-            "initial_time": 8
+            "initial_time": 8,
+            "incarnation": 16
           }
         }
       }
@@ -17336,6 +17428,67 @@
             }
           },
           "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_session_id_format",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_session_id_format_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_system_incarnation",
+      "doc": "The incarnation the system was created with (ADR 0088).",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "uint64_t"
+        }
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system",
+              "const": true
+            }
+          },
+          "shape": "handle",
           "direction": "in"
         }
       ]

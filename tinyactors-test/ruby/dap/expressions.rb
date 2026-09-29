@@ -101,13 +101,14 @@ module DAP
       return '' if view.nil?
 
       session_id = view[:session_id].to_s
+      session_text = thread.context.session_text(view)
       name = view.dig(:definition, :family, :name).to_s
       states = active_names(thread, view)
-      processors = { 'scxml' => { location: "#_scxml_#{session_id}" },
-                     SCXML_PROCESSOR => { location: "#_scxml_#{session_id}" } }
+      processors = { 'scxml' => { location: "#_scxml_#{session_text}" },
+                     SCXML_PROCESSOR => { location: "#_scxml_#{session_text}" } }
       @processors.each { |type, template| processors[type] = { location: format(template, session_id) } }
       "def In($s): any(#{JSON.generate(states)}[]; . == $s); " \
-        "#{JSON.generate(scxml_event(event, thread.context))} as $_event | #{JSON.generate(session_id)} as $_sessionid | " \
+        "#{JSON.generate(scxml_event(event, thread.context))} as $_event | #{JSON.generate(session_text)} as $_sessionid | " \
         "#{JSON.generate(name)} as $_name | #{JSON.generate(processors)} as $_ioprocessors | "
     end
 

@@ -735,8 +735,8 @@ static ta_result ta_invoke_forward(ta_interpreter *it, uint32_t index, const ta_
         ta_event copy = *event;
         ta_result result = ta_invoke_submit(it->system, &(ta_invoke_delivery){
                                                             .sender = it->actor,
-                                                            .destination = { .kind = TA_ACTOR_REF_RUNTIME,
-                                                                             .as.runtime = meta.child },
+                                                            .destination = ta_actor_runtime_ref(it->system,
+                                                                                                meta.child),
                                                             .event = copy,
                                                             .trace = ta_interpreter_trace_here(it),
                                                         });
@@ -829,8 +829,7 @@ static ta_result ta_invoke_publish(ta_system *system, ta_actor *actor, ta_trace_
     };
     return ta_invoke_submit(system, &(ta_invoke_delivery){
                                         .sender = actor,
-                                        .destination = { .kind = TA_ACTOR_REF_RUNTIME,
-                                                         .as.runtime = sparse->parent.actor },
+                                        .destination = ta_actor_runtime_ref(system, sparse->parent.actor),
                                         .event = event,
                                         .trace = trace,
                                     });

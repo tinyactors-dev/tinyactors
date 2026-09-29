@@ -29,6 +29,8 @@ typedef struct {
 struct ta_system {
     ta_allocator allocator;
     ta_clock clock;
+    /* The first part of every session ID's text (ADR 0088). */
+    uint64_t incarnation;
     ta_atom_table atoms;
     /* Interned named addresses (ADR 0065). */
     ta_address_table addresses;

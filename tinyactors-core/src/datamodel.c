@@ -45,7 +45,7 @@ static bool ta_dm_write_field(const void *context, ta_text_writer *writer) {
     const ta_system *system = field->host->impl->system;
     const ta_actor *actor = field->host->impl->actor;
     if (field->kind == TA_DM_TEXT_SESSION_ID) {
-        ta_text_put_u64(writer, actor->session_id);
+        ta_session_text_write(system, writer, actor->session_id, actor->definition->identity.family.name);
         return true;
     }
     if (field->kind == TA_DM_TEXT_IO_LOCATION) {

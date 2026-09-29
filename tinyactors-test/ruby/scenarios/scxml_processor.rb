@@ -94,7 +94,7 @@ TinyactorsTest.scenarios 'scxml processor' do
     end
 
     actor = spawn(reader)
-    location = { location: "#_scxml_#{actor.handle}" }
+    location = { location: actor.session_uri }
     assert_equal({ SCXMLProcessor::URI.to_sym => location, SCXMLProcessor::SHORT.to_sym => location },
                  actor.data('.seen'))
   end

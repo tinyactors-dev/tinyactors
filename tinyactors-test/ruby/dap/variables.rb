@@ -338,7 +338,7 @@ module DAP
 
     def system(thread, view)
       handle = Integer(thread.handle)
-      [['_sessionid', view[:session_id].to_s],
+      [['_sessionid', thread.context.session_text(view)],
        ['_name', view.dig(:definition, :family, :name)],
        ['_ioprocessors', @expressions.value(thread, '$_ioprocessors')],
        ['now', thread.context.now],

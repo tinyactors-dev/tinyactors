@@ -124,7 +124,7 @@ TinyactorsTest.scenarios 'target URIs' do
     actor = spawn(chart)
 
     location = actor.data('.location')
-    assert_equal "#_scxml_#{actor.handle}", location, 'the session URI of this actor'
+    assert_equal actor.session_uri, location, 'the session URI of this actor'
     assert_equal ['ok', { kind: 'actor', actor: { kind: 'runtime', runtime: actor.handle } }],
                  parse_target(location), 'and it parses back to this session'
   end

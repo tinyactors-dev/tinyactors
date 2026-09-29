@@ -40,6 +40,12 @@ ta_result ta_atom_table_init(ta_atom_table *table, ta_allocator allocator) {
     if (result == TA_OK) {
         result = ta_atom_rehash(table, 64);
     }
+    /* Atom 0 is the empty text, which no family is, so a zeroed family
+     * atom names none (ADR 0088). */
+    ta_atom empty = TA_ATOM_NONE;
+    if (result == TA_OK) {
+        result = ta_atom_intern(table, (ta_str){ .ptr = "", .len = 0 }, &empty);
+    }
     if (result != TA_OK) {
         ta_atom_table_destroy(table);
     }

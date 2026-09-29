@@ -219,6 +219,10 @@ void ta_actor_table_destroy(ta_actor_table *table, ta_allocator allocator);
 void ta_actor_layout(ta_definition *definition);
 
 ta_actor *ta_actor_lookup(const ta_system *system, ta_actor_id id);
+/* The family atom of the resident actor `id`, or 0 when there is none (ADR 0088). */
+ta_atom ta_actor_family_of(const ta_system *system, ta_actor_id id);
+/* A runtime reference to `id` that names its family (ADR 0088). */
+ta_actor_ref ta_actor_runtime_ref(const ta_system *system, ta_actor_id id);
 bool ta_actor_state_active(const ta_actor *actor, ta_state_id state);
 /* Runs an invoked child's exitInterpreter path with isolated scratch storage. */
 void ta_actor_exit_invoked(ta_system *system, ta_actor_id id);

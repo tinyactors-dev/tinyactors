@@ -759,7 +759,7 @@ TinyactorsTest.scenarios 'virtual actor paging, sends to self', chart: :self_pag
     actor = spawn :self_pager, name: 'a'
     actor.deliver 'remember'
     before = actor.data('.sid').to_s
-    assert_equal actor.handle.to_s, before
+    assert_equal actor.session_text, before
     cycle_residency(actor)
     actor.deliver 'remember'
     assert_equal before, actor.data('.sid').to_s, 'after a reload _sessionid is unchanged'
