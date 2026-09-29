@@ -89,6 +89,43 @@ TinyactorsTest.scenarios 'input log' do
     assert_equal 0, replay.delayed_sends, 'nothing fires twice'
   end
 
+  # Catches: a checkpoint that does not hold the actor's state, or a log
+  # compacted to it that loses what came after.
+  scenario 'a log compacted to its checkpoint rebuilds the actor' do
+    recording_log
+    recording_inputs :replay_timer
+    live = spawn :replay_timer, name: 'k'
+    set_time 1000
+    live.deliver 'e1' # waiting, the timeout due at 6000
+    set_time 2000
+    assert_equal 'ok', checkpoint(live)
+    assert_equal %w[spawned event checkpoint], input_kinds
+    compact_inputs 2 # the store lets go of what the checkpoint covers
+    advance_time 4000 # the timeout fires at 6000 and is delivered
+    assert_active live, :timedout
+    evict live
+
+    set_time 6000 + (7 * 24 * 3600 * 1000) # a week later
+    replay = replay_log :replay_timer, address: live.address, piece: 7
+    assert_active replay, :timedout
+    assert_equal 1, logs.size, 'the replay wrote no log'
+    assert_equal 'ok', publish(replay)
+    assert_equal 1, replay.data('.seen'), 'the data came from the checkpoint'
+    assert_equal 0, replay.delayed_sends, 'nothing fires twice'
+  end
+
+  # Catches: a checkpoint taken while the actor is not idle.
+  scenario 'a checkpoint needs an idle, logged, named actor' do
+    recording_inputs :replay_timer
+    live = spawn :replay_timer, name: 'b'
+    assert_equal 'ok', live.post('e1')
+    assert_equal 'err_busy', checkpoint(live)
+    run_system('take e1')
+    assert_equal 'ok', checkpoint(live)
+    anonymous = spawn :replay_timer
+    assert_equal 'err_invalid', checkpoint(anonymous)
+  end
+
   # Catches: an input taken although its record was refused.
   scenario 'an input whose record the sink refuses changes nothing' do
     inputs = recording_inputs :replay_timer

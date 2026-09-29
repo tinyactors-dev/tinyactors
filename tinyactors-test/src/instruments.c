@@ -2023,7 +2023,9 @@ static jv tat_control_endpoint(tat_instrument *instrument, const char *command, 
  * record_seq, time, bytes}. "fail" arms op "begin" or "write" (answered
  * TA_OP_NOMEM, so core refuses the input). "truncate" {"records": n} keeps
  * the first n records, as a crash after the n-th commit would, and
- * rewinds. input.log is a byte source over the same bytes, config
+ * rewinds. "compact" {"records": n} drops the first n units, as a store that
+ * kept a checkpoint and let go of the records it covers does (core ADR
+ * 0091), and rewinds. input.log is a byte source over the same bytes, config
  * {"name": <the input.recording's name>, "piece"?: n (default 4096)}:
  * "rewind" {"piece"?: n} reads it again from the start, "remaining" says
  * how many bytes are left.
@@ -2032,6 +2034,7 @@ static jv tat_control_endpoint(tat_instrument *instrument, const char *command, 
 static const char *const TAT_RECORD_KINDS[] = {
     "none",     "spawned",   "event",    "jump",      "report", "fired",   "withdrawn",
     "abandoned", "released", "finished", "destroyed", "queued", "dropped", "evicted",
+    "checkpoint", "checkpoint_history", "checkpoint_send", "checkpoint_invoke",
 };
 
 static uint64_t tat_input_le(const uint8_t *bytes, uint32_t count) {
@@ -2188,12 +2191,29 @@ static jv tat_control_input(tat_instrument *instrument, const char *command, jv 
         instrument->input.read_at = 0;
         return jv_object_set(jv_object(), jv_string("bytes"), tat_u64(instrument->input.len));
     }
+    if (strcmp(command, "compact") == 0) {
+        jv records = jv_object_get(jv_copy(args), jv_string("records"));
+        size_t drop = jv_get_kind(records) == JV_KIND_NUMBER ? (size_t)jv_number_value(records) : 0;
+        jv_free(records);
+        if (drop > instrument->input.end_count) {
+            return tat_invalid(error_code, jv_string("compact: fewer records than that were kept"));
+        }
+        size_t cut = drop == 0 ? 0 : instrument->input.ends[drop - 1];
+        memmove(instrument->input.bytes, instrument->input.bytes + cut, instrument->input.len - cut);
+        instrument->input.len -= cut;
+        for (size_t index = drop; index < instrument->input.end_count; index += 1) {
+            instrument->input.ends[index - drop] = instrument->input.ends[index] - cut;
+        }
+        instrument->input.end_count -= drop;
+        instrument->input.read_at = 0;
+        return jv_object_set(jv_object(), jv_string("bytes"), tat_u64(instrument->input.len));
+    }
     if (strcmp(command, "remaining") == 0) {
         return jv_object_set(jv_object(), jv_string("bytes"),
                              tat_u64(instrument->input.len - instrument->input.read_at));
     }
     return tat_invalid(error_code, jv_string("input.recording commands: fail {op: begin | write}, rewind {piece?}, "
-                                             "truncate {records, piece?}, remaining"));
+                                             "truncate {records, piece?}, compact {records}, remaining"));
 }
 
 /* {"name", "command", "args"?}: steers one instrument between steps. */

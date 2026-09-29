@@ -1266,6 +1266,19 @@ module TinyactorsTest
       actor.destroy
     end
 
+    # Writes a checkpoint of `actor` into the recorded log, as one unit
+    # (core ADR 0091), and answers core's result.
+    def checkpoint(actor)
+      ta.actor.checkpoint(system: system_handle, actor: actor.handle,
+                          sink: @instruments.fetch('inputs').adapter)[:result]
+    end
+
+    # Drops the first `records` units of the recorded log, as a store that
+    # kept a checkpoint and let go of the records it covers does.
+    def compact_inputs(records)
+      @instruments.fetch('inputs').control('compact', records: records)
+    end
+
     # Prepares a replaying actor at `address` from the recorded log and
     # applies every record, `piece` bytes at a time, running the system
     # whenever core asks. The actor is left unpublished.
