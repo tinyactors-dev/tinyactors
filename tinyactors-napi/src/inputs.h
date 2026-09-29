@@ -57,6 +57,7 @@ typedef enum {
     TNA_INPUT_FIRED,   /* a delayed send was dispatched (ADR 0033 section 3) */
     TNA_INPUT_DROPPED, /* a queued message will not be delivered */
     TNA_INPUT_JUMP,    /* an operator transition (core ADR 0082) */
+    TNA_INPUT_DESTROYED, /* the host destroyed the actor: its address is free */
     TNA_INPUT_KINDS
 } tna_input_kind;
 
@@ -150,7 +151,7 @@ bool tna_inputs_logged(tna_system *system, ta_actor_id actor, ta_actor_address *
 
 /* What the host did, for tna_inputs_host(). */
 typedef struct {
-    tna_input_kind kind; /* SPAWNED, WITHDRAWN, ABANDONED, RELEASED, EVICTED */
+    tna_input_kind kind; /* SPAWNED, WITHDRAWN, ABANDONED, RELEASED, EVICTED, DESTROYED */
     ta_actor_id actor;   /* resident when the record is made */
     const ta_value *value; /* SPAWNED: the binding, or NULL */
     ta_str text;           /* SPAWNED: the revision; WITHDRAWN: the send ID */

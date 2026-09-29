@@ -1741,9 +1741,21 @@ class System {
     }
   }
 
-  /** Terminate `actor`. Throws `not-found` for an actor that is gone. */
+  /**
+   * Terminate `actor`. Throws `not-found` for an actor that is gone. With an
+   * input log, a named actor of a logged family is recorded `destroyed`: its
+   * address is free, its wake goes (napi ADR 0033), and a replay of its log
+   * starts after that record.
+   */
   destroy(actor) {
     const { slot, generation } = actorOf(this, actor);
+    if (this.#inputLog !== undefined) {
+      const self = this.#destination(core.actor_inspect(this.#native, slot, generation).self);
+      if (self !== null && !(self instanceof ActorID)) {
+        this.#recordHost('destroyed', { slot, generation });
+        this.#native.cancelWake(self.family, self.name);
+      }
+    }
     core.actor_destroy(this.#native, slot, generation);
   }
 
@@ -2261,34 +2273,71 @@ class System {
       throw new TinyactorsError('{ replay } needs `inputs`, an iterable or async iterable of input records', 'invalid');
     }
     const iterator = open.call(inputs);
-    const first = await iterator.next();
+    let first = await iterator.next();
+    // A `destroyed` record ends a life: its address was freed, and what
+    // follows, if anything, is a new actor there. Each earlier life is
+    // replayed into a prepared actor that is then dropped, so the log is
+    // still read once, in order, and never held whole.
+    let lifeEnded = false;
+    let prepared;
+    let report;
+    let owed;
+    while (!first.done && first.value?.kind === 'destroyed') {
+      first = await iterator.next();
+    }
     if (first.done) {
       return this.#spawnAt({ spawn: definition }, load);
     }
-    const head = first.value;
-    if (head === null || typeof head !== 'object' || typeof head.time !== 'number' || !Number.isFinite(head.time) ||
-        head.time < 0) {
-      throw new TinyactorsError('{ replay }: an input record is { time, kind, ... }', 'invalid');
-    }
-    const prepared = head.kind === 'spawned'
-      ? this.prepare(definition, { address, spawned: head })
-      : this.prepare(definition, { address, at: head.time });
     try {
-      let pending = first;
-      const rest = {
-        [Symbol.asyncIterator]: () => ({
-          next: async () => {
-            if (pending !== undefined) {
-              const taken = pending;
-              pending = undefined;
-              return taken;
-            }
-            return iterator.next();
-          },
-          return: async (value) => (typeof iterator.return === 'function' ? iterator.return(value) : { done: true, value }),
-        }),
-      };
-      const { report, owed } = await this[REPLAY](prepared, rest);
+      for (;;) {
+        const head = first.value;
+        if (head === null || typeof head !== 'object' || typeof head.time !== 'number' ||
+            !Number.isFinite(head.time) || head.time < 0) {
+          throw new TinyactorsError('{ replay }: an input record is { time, kind, ... }', 'invalid');
+        }
+        prepared = head.kind === 'spawned'
+          ? this.prepare(definition, { address, spawned: head })
+          : this.prepare(definition, { address, at: head.time });
+        let pending = first;
+        lifeEnded = false;
+        const life = {
+          [Symbol.asyncIterator]: () => ({
+            next: async () => {
+              if (pending !== undefined) {
+                const taken = pending;
+                pending = undefined;
+                return taken;
+              }
+              if (lifeEnded) {
+                return { done: true, value: undefined };
+              }
+              const next = await iterator.next();
+              if (!next.done && next.value?.kind === 'destroyed') {
+                lifeEnded = true;
+                return { done: true, value: undefined };
+              }
+              return next;
+            },
+          }),
+        };
+        ({ report, owed } = await this[REPLAY](prepared, life));
+        if (!lifeEnded) {
+          break;
+        }
+        // That actor was destroyed live: drop it, unrecorded, and read on.
+        if (this.#native.scheduling(prepared.slot, prepared.generation) !== 'none') {
+          core.actor_destroy(this.#native, prepared.slot, prepared.generation);
+        }
+        prepared = undefined;
+        first = await iterator.next();
+        while (!first.done && first.value?.kind === 'destroyed') {
+          first = await iterator.next();
+        }
+        if (first.done) {
+          onReport?.(report);
+          return this.#spawnAt({ spawn: definition }, load);
+        }
+      }
       onReport?.(report);
       if (report.finished) {
         if (this.#native.scheduling(prepared.slot, prepared.generation) !== 'none') {
@@ -2311,7 +2360,7 @@ class System {
       this.#redeliver(actor, owed);
       return actor;
     } catch (error) {
-      if (!this.closed) {
+      if (!this.closed && prepared !== undefined) {
         try {
           core.actor_destroy(this.#native, prepared.slot, prepared.generation);
         } catch {

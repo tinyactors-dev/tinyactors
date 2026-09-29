@@ -363,6 +363,62 @@ async function finishedIsDone() {
   second.close();
 }
 
+// destroy() of a logged actor records `destroyed`: its wake goes, from the
+// store and from the process, so its old timeout never brings it back, and
+// the next mail for its name starts a fresh actor, since the log's replay
+// begins after the last `destroyed`.
+async function destroyedFreesTheAddress() {
+  const store = memoryStore();
+  const system = createSystem({ clock: 'manual', incarnation: 1 });
+  system.setInputLog(store.sink, { families: ['timer'] });
+  const definitions = { timer: system.define(timer()) };
+  system.setLoader('timer', store.loader(definitions));
+  const address = { family: 'timer', name: 't' };
+  const live = system.spawn(definitions.timer, { name: 't' });
+  await system.flush();
+  await system.advanceTo(1000);
+  await live.send('e1'); // the timeout is due at 6000
+  await system.advanceTo(2000);
+  system.evict(live); // arms a wake at 6000 in the process
+  await system.flush();
+  await system.advanceTo(3000);
+  system.post(address, 'nudge'); // brings it back early; the wake stays armed
+  await settle(system);
+  const back = system.findActor(address);
+  assert.ok(back !== undefined);
+  await system.advanceTo(4000);
+  system.destroy(back);
+  await system.flush();
+  assert.equal(store.wakes.has('timer/t'), false, 'the stored wake went');
+  assert.equal(store.read(address).at(-1).kind, 'destroyed');
+  await system.advanceTo(6000);
+  await settle(system);
+  assert.equal(system.findActor(address), undefined, 'its old timeout did not bring it back');
+
+  await system.advanceTo(7000);
+  system.post(address, 'e1');
+  await settle(system);
+  const fresh = system.findActor(address);
+  assert.ok(fresh !== undefined, 'the next mail started an actor');
+  const view = fresh.inspect();
+  assert.deepEqual(view.activeStates, ['waiting'], 'a fresh one: only the new e1 moved it');
+  assert.deepEqual(view.delayedSends.map((send) => send.due), [12000]);
+  assert.ok(store.read(address).findIndex((record) => record.kind === 'destroyed') < store.read(address).length - 1,
+    'the new life is logged after `destroyed`');
+  system.close();
+
+  // After a restart nothing wakes the old actor, and its log replays to the new one.
+  const second = createSystem({ clock: 'manual', incarnation: 2, initialTime: 7000 });
+  second.setInputLog(store.sink, { families: ['timer'] });
+  second.setLoader('timer', store.loader({ timer: second.define(timer()) }));
+  store.wakeAll(second);
+  await second.advanceTo(12000);
+  await settle(second);
+  assert.deepEqual(second.findActor(address).inspect().activeStates, ['timedout'],
+    'the fresh actor\'s own timeout, replayed from the records after `destroyed`');
+  second.close();
+}
+
 // Outward effects are at most once across a crash: a send released only
 // after its batch committed is lost if the process dies in between, and a
 // replay does not repeat it, since its cause is committed.
@@ -552,6 +608,7 @@ async function refusals() {
   await droppedAndLiteralSendIDs();
   await jumpReplayed();
   await finishedIsDone();
+  await destroyedFreesTheAddress();
   await effectsAreAtMostOnce();
   await upgrade();
   await reportsAndOperations();

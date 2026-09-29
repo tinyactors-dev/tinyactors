@@ -209,7 +209,7 @@ static bool tna_input_kind_from(const char *name, tna_input_kind *out) {
         tna_input_kind kind;
     } kinds[] = {
         { "spawned", TNA_INPUT_SPAWNED },     { "withdrawn", TNA_INPUT_WITHDRAWN }, { "abandoned", TNA_INPUT_ABANDONED },
-        { "released", TNA_INPUT_RELEASED },   { "evicted", TNA_INPUT_EVICTED },
+        { "released", TNA_INPUT_RELEASED },   { "evicted", TNA_INPUT_EVICTED },     { "destroyed", TNA_INPUT_DESTROYED },
     };
     for (size_t at = 0; at < sizeof kinds / sizeof kinds[0]; at += 1u) {
         if (strcmp(kinds[at].name, name) == 0) {

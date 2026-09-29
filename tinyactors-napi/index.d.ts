@@ -385,7 +385,10 @@ export interface System {
   inspect<Data extends object>(actor: ActorID): ActorInspection<Data>;
   /** True while a resident actor has this ID. */
   exists(actor: ActorID): boolean;
-  /** Terminate `actor`. Throws `not-found` once it is gone. */
+  /**
+   * Terminate `actor`. Throws `not-found` once it is gone. With an input log,
+   * a named actor of a logged family is recorded `destroyed` (napi ADR 0033).
+   */
   destroy(actor: ActorID): void;
   /** Put an actor that faulted back into scheduling (ADR 0008). */
   release(actor: ActorID): void;
@@ -1668,6 +1671,13 @@ export type InputRecord = { readonly time: number } & (
   | { readonly kind: "finished" }
   | { readonly kind: "fired"; readonly sendID?: string }
   | { readonly kind: "dropped"; readonly seq: string }
+  /**
+   * System.destroy() ended the actor: its address is free and its wake goes.
+   * A loader's replay starts after the last one; a history that ends in one
+   * spawns a fresh actor. PreparedActor.replay() takes one life: the records
+   * after the last `destroyed`.
+   */
+  | { readonly kind: "destroyed" }
 );
 
 export type PrepareOptions<Data extends object> = {

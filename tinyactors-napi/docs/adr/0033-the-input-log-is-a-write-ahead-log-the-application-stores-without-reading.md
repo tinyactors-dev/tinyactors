@@ -338,3 +338,35 @@ held in memory whole.
     - a report and a runaway's operations;
     - a 50,000-record stream;
     - refusals.
+- **Addendum (2026-09-29): `destroyed`.** The gap above is closed.
+  - **When it is written:** `System.destroy()` (and `Actor.destroy()`) of a
+    named actor of a logged family records `destroyed`. The same batch sets
+    that address's wake to `null`, and any wake armed in the process for it
+    is cancelled, so its old timeout never brings it back.
+  - **When it is not written:** the destroys that are not a decision to
+    end the actor:
+    - `evict()` (it writes `evicted`);
+    - `publish()` with an incumbent, since the address lives on in the new
+      actor;
+    - dropping a prepared actor;
+    - reclaiming a finished actor (`finished: "destroy"`; `finished` is
+      already written);
+    - `close()`.
+  - **Replaying it: a fresh actor, not `done`.** A destroy frees the
+    address, and live, the next mail for the name goes to the family's
+    loader and starts a new actor. `done` would make the name unusable
+    forever, which live behaviour never did.
+    - A loader's `{ replay }` begins after the last `destroyed`. Each
+      earlier life is replayed into a prepared actor that is then dropped,
+      so the log is still read once, in order, and never held whole.
+    - A history that ends in `destroyed` spawns a fresh actor.
+    - The records after it (the new life's `queued` mail, and its own
+      records) are that actor's.
+  - **`PreparedActor.replay()` takes one life:** the records after the last
+    `destroyed`. It refuses a `destroyed` record as `invalid`.
+  - **Test:** `test/replay.js` (`destroyedFreesTheAddress`), on Node and
+    Bun. It checks:
+    - the stored wake goes, and the in-process wake does not revive the
+      actor at its old due time;
+    - the next mail starts a fresh actor;
+    - a restart replays the new life only.

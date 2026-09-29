@@ -11,7 +11,7 @@
 
 static const char *const tna_input_kinds[TNA_INPUT_KINDS] = {
     "spawned", "queued",   "event", "report", "withdrawn", "abandoned",
-    "released", "evicted", "finished", "fired", "dropped", "jump",
+    "released", "evicted", "finished", "fired", "dropped", "jump", "destroyed",
 };
 
 const char *tna_input_kind_name(tna_input_kind kind) {
@@ -545,6 +545,8 @@ void tna_inputs_host(tna_system *system, const tna_input_host *host) {
     tna_input *input = tna_inputs_add(system, host->kind, handle);
     if (host->kind == TNA_INPUT_EVICTED) {
         tna_inputs_touch(inputs, handle, true, host->has_wake, host->wake);
+    } else if (host->kind == TNA_INPUT_DESTROYED) {
+        tna_inputs_touch(inputs, handle, true, false, 0); /* nothing will need it back */
     }
     if (input == NULL) {
         return;
