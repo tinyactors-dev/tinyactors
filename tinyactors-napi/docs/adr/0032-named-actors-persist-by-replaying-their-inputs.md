@@ -1,6 +1,6 @@
 # ADR 0032: Named actors persist by replaying their inputs
 
-**Status:** Accepted; sections 1 to 6 implemented (2026-09-29), see the implementation notes; sections 7 and 8 not yet. Applies core ADR 0088 (a session ID names its family) and core ADR 0089 (an actor is rebuilt by replaying its inputs before it is published). Would amend:
+**Status:** Accepted and implemented (2026-09-29); see the implementation notes. Applies core ADR 0088 (a session ID names its family) and core ADR 0089 (an actor is rebuilt by replaying its inputs before it is published). Would amend:
 - ADR 0020: a loader is also asked for a session that has gone, and can answer with a replay;
 - ADR 0022: mail to a gone session of a family with a loader goes to that loader;
 - the replacement API (`prepareReplacement`, `activate`), which becomes `prepare` and `publish`.
@@ -313,6 +313,100 @@ or is quarantined. Mail for the address then goes to the family's loader.
   in the same batch as the input of the sender that sent it.
 
 ## Implementation notes
+
+### Sections 7 and 8 (2026-09-29)
+
+- **Where:** `lib/system.js` (`PreparedActor.replay()`, the driver behind
+  it, `#settleWindow`, `#replayed`, `#untilIdle`, a loader's `{ replay }`
+  in `#applyLoad` and `#replayAt`, `System.evict()`, `loggedOrigin`, and
+  `prepare()`'s binding for a replay), `src/napi_system.c` (`replaySend`;
+  `tna_logged_origin` and `tna_logged_send_id`, now shared with
+  `requeue`; `dispatchDue`), `src/scheduler.{c,h}` (a report envelope
+  follows its macrostep with a waiter; `replay_times`, a replayed message's
+  time; `tna_sched_replay_time`), `src/inputs.c` (an unpublished actor is
+  never logged), `src/system.{c,h}` (`tna_system_dispatch_due`, the turn's
+  dispatch, which `evict()` also calls), `index.d.ts`, `README.md`
+  ("Persistence by replay"), `test/replay.js`, `test/types/usage.ts`.
+  Commits `1c9c78a`, `fa23f94`, `464625c` and the one that adds these
+  notes.
+- **A replay starts from the binding it is given (not in section 5).**
+  `prepare()` with an incumbent and `at` does not default the binding to
+  the incumbent's data root, as a replacement does: the replay rebuilds the
+  data from its history, so it starts from the `spawned` record's binding.
+  Without that, an upgrade by replay counted the history twice.
+- **Records are queued with their times.** An `event` or `report` record
+  goes into the replaying actor's mailbox with a waiter, as a `send()`
+  does, and its time goes into the scheduler's `replay_times` map, keyed by
+  the envelope. Just before the actor takes the message, the scheduler
+  calls `ta_actor_set_time()`, between macrosteps. So the driver queues up
+  to 256 records (`REPLAY_WINDOW`) and waits for them together, instead of
+  one pump turn per record. The map is empty, and never read, without a
+  replay; a live message costs one count check at delivery. A time core
+  refuses (before the actor's clock) dead-letters the message as `refused`
+  and faults the actor, as a refused delivery does. The first driver moved
+  the clock from JavaScript before each record and took 51 µs per event
+  on Node.
+- **Host operations settle the window first.** `withdrawn`, `released`,
+  `spawned`, `evicted` and `finished` wait for the queued records, then
+  the actor to be idle (a poll on `setImmediate`, since a bootstrap and a
+  released macrostep have no settlement), then move the clock and act.
+  `abandoned` abandons first and moves the clock after, since a runaway's
+  macrostep is still open and the clock moves only between macrosteps.
+- **Faults.** A replayed macrostep that faults (a runaway) resolves its
+  record with the error. The next record must be `abandoned` or `released`,
+  as the operator's action left it in the live run; anything else rejects
+  the replay with the fault. A fault with records still queued behind it
+  rejects too: the log has nothing that resolves it.
+- **Matching invocations.** `replaySend` looks up the replaying actor's
+  active invocation whose ID reads the record's `invokeID` (inspection and
+  `ta_system_invoke_id_text`, natively), so `<finalize>` runs. An event
+  whose invocation is not active is delivered without one; a report whose
+  invocation is not active rejects the replay with `not-found`.
+- **The loader's `{ replay }`** peeks at the first record for the clock's
+  start, prepares at the address, replays, publishes at `stoppedAt` (a
+  `stoppedAt` before the last record's time fails the load), drops bytes
+  `unload()` kept for the address, and completes the load as `loaded`, so
+  metrics count it as a load and the waiting mail follows. The loader's
+  `timeout` covers the loader's answer, not the replay. A failure destroys
+  the prepared actor and ends the waiting mail as `load-failed`. A pending
+  send already past due fires at the next dispatch, behind the waiting
+  mail.
+- **`evict()`** dispatches due sends with `tna_system_dispatch_due`, the
+  code a turn runs after its deliveries, then refuses with `busy` if that
+  put mail in the actor's mailbox (a timer to itself) or left one of its
+  sends due (a dispatch budget or a full queue), besides the section's
+  cases; `invalid` for an actor without a name. It records `evicted` with
+  the address, so the record survives the destroy.
+- **Replay cost** (Apple M4 Max; one actor, a counter taking `inc`; the
+  same actor's live run with the input log installed for comparison):
+
+  | Events | Node replay | Node live | Bun replay | Bun live |
+  |---|---|---|---|---|
+  | 10,000 | 22.2 µs/event | 24.9 µs/event | 5.8 µs/event | 8.0 µs/event |
+  | 100,000 | 37.0 µs/event | 63.6 µs/event | 21.6 µs/event | 47.5 µs/event |
+
+  One actor takes one message per pump turn, live or replayed (ADR 0005),
+  so a replay costs about what the actor's own live run did, not the many-
+  actor figures of `docs/scale.md`. A long history is replayed over many
+  turns, within the budgets, and other actors keep running.
+- **Tests:** `test/replay.js` (Node and Bun):
+  - end to end: live orders and a ledger, with a timeout to itself, a
+    ping to the other persisted actor, a JavaScript invocation whose
+    `<finalize>` takes its result, and an operator's withdrawal; the log
+    committed; the order evicted and summoned by mail through `{ replay }`
+    with its configuration, data and pending sends (ids and due times)
+    unchanged; no ping, log or service start from the replay, nothing but
+    the new mail logged; the waiting mail delivered after; the reminder
+    firing at its time after publish;
+  - an upgrade by replay into a revision that ignores `bump`, reported as
+    ignored;
+  - the four timelines of core ADR 0089 section 2: a timeout to itself; a
+    ping that fired before the actor stopped, not sent again; one pending
+    when it stopped, firing once, late; a crash between commits, in a new
+    system of another incarnation, with the queued hello requeued and the
+    ledger taking the hello and the lost ping once each;
+  - a report and a runaway's abandon and release replayed;
+  - refusals of `replay()` and `evict()`.
 
 ### Section 6 (2026-09-29)
 
