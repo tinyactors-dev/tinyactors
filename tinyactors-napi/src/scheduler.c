@@ -238,6 +238,12 @@ static tna_sched_entry *tna_sched_entry_make(tna_sched *sched, uint32_t slot) {
 /* Appends one taken envelope to the dead list. */
 static void tna_sched_dead_append(tna_sched *sched, uint32_t index, tna_dead_reason reason) {
     tna_envelope *envelope = tna_sched_envelope(sched, index);
+    if (envelope->report != TNA_REPORT_NONE) {
+        /* A report about an invocation whose parent is gone tells nobody
+         * anything: it is not mail, so it is no dead letter either. */
+        tna_envelope_give(sched, index);
+        return;
+    }
     envelope->reason = (uint8_t)reason;
     envelope->next = 0;
     if (sched->dead_last != 0) {
@@ -657,6 +663,7 @@ static void tna_sched_fill(tna_sched *sched, uint32_t index, const tna_message *
     envelope->target = message->target;
     envelope->bytes = message->bytes;
     envelope->waiter = message->waiter;
+    envelope->report = message->report;
     sched->queued += 1u;
     sched->retained += message->bytes;
     tna_waiter *waiter = tna_sched_waiter(sched, message->waiter);
@@ -840,12 +847,14 @@ static void tna_sched_resume_one(tna_sched *sched, const tna_turn_params *params
         return;
     }
     ta_run_status status = TA_RUN_STABLE;
+    bool ignored = false;
     ta_actor_resume_params resume = {
         .actor = actor,
         .budget = params->budgets.microsteps,
         .status = &status,
         .action_budget = params->budgets.actions,
         .no_microstep_limit = (entry->flags & TNA_SCHED_UNLIMITED) != 0,
+        .ignored = &ignored,
     };
     *params->inside_core = true;
     ta_result result = ta_actor_resume(params->core, &resume);
@@ -876,7 +885,7 @@ static void tna_sched_resume_one(tna_sched *sched, const tna_turn_params *params
         return;
     case TA_RUN_DONE:
         entry->flags &= (uint8_t)~TNA_SCHED_UNLIMITED;
-        tna_sched_complete(sched, actor, (tna_settlement){ .kind = TNA_SETTLE_DONE });
+        tna_sched_complete(sched, actor, (tna_settlement){ .kind = TNA_SETTLE_DONE, .ignored = ignored });
         entry->state = TNA_SCHED_IDLE;
         tna_sched_bury(sched, entry, TNA_DEAD_DONE);
         if ((entry->flags & TNA_SCHED_FINISHED) == 0) {
@@ -887,7 +896,7 @@ static void tna_sched_resume_one(tna_sched *sched, const tna_turn_params *params
     case TA_RUN_STABLE:
     default:
         entry->flags &= (uint8_t)~TNA_SCHED_UNLIMITED;
-        tna_sched_complete(sched, actor, (tna_settlement){ .kind = TNA_SETTLE_STABLE });
+        tna_sched_complete(sched, actor, (tna_settlement){ .kind = TNA_SETTLE_STABLE, .ignored = ignored });
         tna_sched_settle(sched, params, entry, actor);
         return;
     }
@@ -924,6 +933,60 @@ static void tna_sched_refuse_jump(tna_sched *sched, const tna_turn_params *param
     tna_sched_settle(sched, params, entry, actor);
 }
 
+/* The core reason token of a report envelope (core ADR 0081). */
+static ta_str tna_report_reason(uint8_t kind) {
+    switch (kind) {
+    case TNA_REPORT_QUARANTINED: return (ta_str){ .ptr = "quarantined", .len = 11 };
+    case TNA_REPORT_FAILED: return (ta_str){ .ptr = "failed", .len = 6 };
+    default: return (ta_str){ .ptr = "unavailable", .len = 11 };
+    }
+}
+
+/*
+ * Offers the head envelope, an error report, to its idle parent (napi ADR
+ * 0032 section 3). Taken, it starts a macrostep; a report core has no
+ * invocation for any more (it ended, or the parent went) is dropped, and
+ * the next mail follows; out of memory, or busy, it stays at the head.
+ */
+static void tna_sched_report_one(tna_sched *sched, const tna_turn_params *params, tna_sched_entry *entry,
+                                 ta_actor_id actor, uint32_t head) {
+    tna_envelope *envelope = tna_sched_envelope(sched, head);
+    ta_trace_parent trace = envelope->trace != NULL ? *envelope->trace : (ta_trace_parent){0};
+    bool has_data = envelope->event.data.v != NULL;
+    ta_invoke_error error = {
+        .reason = tna_report_reason(envelope->report),
+        .data = has_data ? &envelope->event.data : NULL,
+        .ends = envelope->report != TNA_REPORT_QUARANTINED,
+    };
+    *params->inside_core = true;
+    ta_result result = ta_actor_report_invoke(params->core, &(ta_invoke_report_params){
+                                                                .actor = actor,
+                                                                .invoke_id = envelope->event.invoke_id,
+                                                                .kind = TA_INVOKE_REPORT_ERROR,
+                                                                .trace = trace,
+                                                                .as.error = &error,
+                                                            });
+    *params->inside_core = false;
+    if (result == TA_ERR_NOMEM || result == TA_ERR_BUSY) {
+        if (result == TA_ERR_NOMEM) {
+            entry->flags |= TNA_SCHED_BACKOFF; /* retryable (ADR 0008): try again next turn */
+        }
+        tna_sched_requeue(sched, params, &sched->ready, actor);
+        return;
+    }
+    entry->first = envelope->next;
+    if (entry->first == 0) {
+        entry->last = 0;
+    }
+    tna_envelope_give(sched, head);
+    if (result == TA_OK) {
+        entry->state = TNA_SCHED_RUNNABLE;
+        tna_sched_requeue(sched, params, &sched->runnable, actor);
+        return;
+    }
+    tna_sched_settle(sched, params, entry, actor);
+}
+
 /* Delivers the head envelope of a ready actor (ADR 0005 point 6). */
 static void tna_sched_deliver_one(tna_sched *sched, const tna_turn_params *params, ta_actor_id actor) {
     tna_sched_entry *entry = tna_sched_lookup(sched, actor);
@@ -941,6 +1004,10 @@ static void tna_sched_deliver_one(tna_sched *sched, const tna_turn_params *param
     }
     uint32_t head = entry->first;
     tna_envelope *envelope = tna_sched_envelope(sched, head);
+    if (envelope->report != TNA_REPORT_NONE) {
+        tna_sched_report_one(sched, params, entry, actor, head);
+        return;
+    }
     ta_trace_parent trace = envelope->trace != NULL ? *envelope->trace : (ta_trace_parent){0};
     tna_trace_watch_mark(params->watch, params->core, actor, &trace);
     ta_operator_transition jump;

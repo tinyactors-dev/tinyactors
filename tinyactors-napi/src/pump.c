@@ -611,7 +611,8 @@ static napi_value tna_settlement_error(napi_env env, const tna_settlement *settl
     return tna_error(env, code, message);
 }
 
-/* { actor, status, completion }: the macrostep ended with the actor stable or done. */
+/* { actor, status, consumed, completion }: the macrostep ended with the actor
+ * stable or done; `consumed` is false when the message enabled no transition. */
 static napi_value tna_settlement_result(napi_env env, tna_napi_system *wrapper, const tna_settlement *settlement) {
     napi_value result = NULL;
     napi_value status = NULL;
@@ -620,6 +621,11 @@ static napi_value tna_settlement_result(napi_env env, tna_napi_system *wrapper, 
         napi_create_string_utf8(env, done ? "done" : "stable", NAPI_AUTO_LENGTH, &status) != napi_ok ||
         tna_set(env, result, "actor", tna_actor_view(env, wrapper, settlement->actor)) != napi_ok ||
         tna_set(env, result, "status", status) != napi_ok) {
+        return NULL;
+    }
+    napi_value consumed = NULL;
+    if (napi_get_boolean(env, settlement->ignored == 0, &consumed) != napi_ok ||
+        tna_set(env, result, "consumed", consumed) != napi_ok) {
         return NULL;
     }
     if (done) {

@@ -29,6 +29,13 @@ static bool ta_dm_host_valid(const ta_dm_host *host) {
     return host != NULL && host->impl != NULL && host->impl->actor != NULL && host->impl->system != NULL;
 }
 
+ta_time ta_dm_host_time(const ta_dm_host *host) {
+    if (!ta_dm_host_valid(host)) {
+        return 0;
+    }
+    return ta_interpreter_macrostep_time(host->impl->system, host->impl->actor);
+}
+
 /* The scratch arena of the interpreter run that is calling the data model (ADR 0068). */
 static ta_allocator ta_dm_arena(const ta_dm_host *host) {
     return ta_arena_allocator(&host->impl->system->scratch);

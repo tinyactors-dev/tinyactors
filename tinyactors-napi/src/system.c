@@ -381,43 +381,23 @@ void tna_system_want_turn(tna_system *system) {
 }
 
 /*
- * Hands one report to core and schedules the parent (napi ADR 0025). True
- * when it is finished with: taken and the parent scheduled, or dropped
- * because the parent or its invocation is gone. False when it must wait
- * for a later turn because memory ran out.
+ * Queues one report in the parent's mailbox (napi ADR 0025), where it waits
+ * for the parent to be between macrosteps (napi ADR 0032 section 3). True
+ * when it is finished with: queued, or dropped because the parent is gone
+ * (the scheduler drops a report for a gone target). False when it must
+ * wait for a later turn: memory ran out, or the mailbox is full.
  */
 static bool tna_quarantine_report_try(tna_system *system, tna_quarantine_report *report) {
-    if (!report->reported) {
-        ta_value data = { 0 };
-        bool has_data = system->quarantine_data != NULL;
-        if (has_data && !system->quarantine_data(system->quarantine_context, report, &data)) {
-            return false;
-        }
-        static const char reason[] = "quarantined";
-        ta_invoke_error error = {
-            .reason = { .ptr = reason, .len = sizeof reason - 1u },
-            .data = has_data ? &data : NULL,
-            .ends = false,
-        };
-        system->inside_core = true;
-        ta_result result = ta_actor_report_invoke(system->core, &(ta_invoke_report_params){
-                                                                    .actor = report->parent,
-                                                                    .invoke_id = report->invoke_id,
-                                                                    .kind = TA_INVOKE_REPORT_ERROR,
-                                                                    .trace = report->trace,
-                                                                    .as.error = &error,
-                                                                });
-        system->inside_core = false;
-        ta_value_release(&data);
-        if (result == TA_ERR_NOMEM) {
-            return false;
-        }
-        if (result != TA_OK) {
-            return true; /* TA_ERR_NOT_FOUND: the parent or its invocation is gone */
-        }
-        report->reported = true;
+    ta_event event = { .type = TA_EVENT_PLATFORM, .invoke_id = report->invoke_id };
+    if (system->quarantine_data != NULL &&
+        !system->quarantine_data(system->quarantine_context, report, &event.data)) {
+        return false;
     }
-    if (tna_sched_wake(&system->sched, report->parent) == TA_ERR_NOMEM) {
+    ta_result result = tna_sched_post(&system->sched, &(tna_message){ .target = report->parent, .event = &event,
+                                                                      .trace = &report->trace,
+                                                                      .report = TNA_REPORT_QUARANTINED });
+    if (result != TA_OK) {
+        ta_value_release(&event.data);
         return false;
     }
     tna_system_want_turn(system);

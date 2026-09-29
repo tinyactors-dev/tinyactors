@@ -89,9 +89,8 @@ struct ta_system {
     ta_atom scxml_io_type;
     /* The short form "scxml" also selects the built-in processor. */
     ta_atom scxml_io_alias;
-    /* Invoke: the canonical SCXML invoker type and the generated-ID counter. */
+    /* Invoke: the canonical SCXML invoker type. */
     ta_atom scxml_invoke_type;
-    uint64_t next_invoke_serial;
     ta_arena scratch;
     /* Empty event blocks, lent to the next actor that needs one (ADR 0064),
      * newest first, linked through `next_cached`; at most `block_cache_limit`

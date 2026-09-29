@@ -82,6 +82,13 @@ typedef struct {
     uint8_t bound;        /* ta_event_binding */
     uint8_t bound_before; /* what `bound` was before the last take, for a retry (ADR 0047) */
     bool has_kept;
+    /* The external event enabled no transition (ADR 0089 section 8); read
+     * when its macrostep ends, cleared with the event. Fills padding. */
+    bool external_ignored;
+    /* `time` holds the running macrostep's logical time (ADR 0089 section
+     * 9), taken by the first ta_actor_resume() of the macrostep. */
+    bool timed;
+    ta_time time;
     /* The external event of the running macrostep. Inspection reports it
      * while the macrostep runs (ADR 0047). */
     ta_event external_event;

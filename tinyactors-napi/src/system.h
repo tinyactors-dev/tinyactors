@@ -126,9 +126,9 @@ typedef struct {
 
 /*
  * A quarantined invoked child's report to its parent (napi ADR 0025):
- * error.communication.invoke.<id>.quarantined, kept until core takes it and
- * the parent is scheduled, so running out of memory delays it but never
- * loses it.
+ * error.communication.invoke.<id>.quarantined, kept until it is queued in
+ * the parent's mailbox (napi ADR 0032 section 3), so running out of memory
+ * or a full mailbox delays it but never loses it.
  */
 typedef struct {
     ta_actor_id parent;
@@ -138,8 +138,6 @@ typedef struct {
     /* The fault, as the fault hook sees it: core's result and the call. */
     ta_result code;
     const char *operation;
-    /* Core took the report; making the parent runnable is what is left. */
-    bool reported;
 } tna_quarantine_report;
 
 struct tna_system {
@@ -212,6 +210,10 @@ struct tna_system {
      * Without the callback the event has no data.
      */
     bool (*quarantine_data)(void *context, const tna_quarantine_report *report, ta_value *out);
+    /* The data of an invocation's `failed` report: { code, message } (napi
+     * ADR 0032 section 3); NULL leaves it without data. */
+    bool (*fault_data)(void *context, int32_t code, ta_str message, ta_value *out);
+    void *fault_context;
     void *quarantine_context;
     /* Reports to parents that core has not taken yet (tna_quarantine_report). */
     tna_vec quarantine_reports;

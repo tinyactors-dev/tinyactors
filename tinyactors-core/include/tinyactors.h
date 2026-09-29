@@ -874,6 +874,13 @@ TA_API ta_result ta_dm_host_find_state(const ta_dm_host *host,
                                        TA_OUT ta_state_id *out);
 TA_API const ta_event *ta_dm_host_event(const ta_dm_host *host) TA_OPTIONAL TA_LIFETIME(call);
 TA_API ta_actor_id ta_dm_host_actor(const ta_dm_host *host);
+/*
+ * The logical time of the running macrostep (ADR 0089 section 9): the
+ * system's time when its first ta_actor_resume() began, fixed while the
+ * macrostep spans several resumes. Outside a macrostep, the system's time.
+ * A data model gives expressions this as their deterministic clock.
+ */
+TA_API ta_time ta_dm_host_time(const ta_dm_host *host);
 
 /*
  * The SCXML Null data model (SCXML B.1, ADR 0057), named "null". Its only
@@ -1372,10 +1379,13 @@ typedef enum {
  * so its service's later events are ignored (SCXML 6.4.3); a lost service is
  * reason "unavailable" with `ends`. Without `ends` the invocation stays
  * active: its events, done.invoke.<id>, autoforwarding and cancellation
- * behave as if no report was made. The event joins the internal queue
- * whether the session is idle or inside a macrostep (paused by a budget, or
- * holding a delivered event), so the report never answers TA_ERR_BUSY; an
- * idle session starts a macrostep under the report's `trace`.
+ * behave as if no report was made. Like every input, a report reaches the
+ * session only between macrosteps (ADR 0089 section 4): inside one (paused
+ * by a budget, or holding a delivered event) every kind answers
+ * TA_ERR_BUSY and changes nothing, and the host keeps the report and
+ * offers it again, as it keeps mail ta_actor_deliver() refused. The idle
+ * session takes the event on its internal queue and starts a macrostep
+ * under the report's `trace`.
  */
 typedef struct {
     ta_str reason;
@@ -1402,7 +1412,17 @@ typedef struct {
 } ta_invoke_report_params TA_TAGGED(kind, as);
 
 typedef struct ta_invoker_vtable {
-    /* start must not report reentrantly through ta_actor_report_invoke(). */
+    /*
+     * start arranges for the service to start and answers TA_OP_OK, or
+     * TA_OP_NOMEM when it could not even arrange that (core starts the
+     * invocation again later, ADR 0070). A service that then fails to start
+     * is reported with an ERROR report (ADR 0089 section 4), which reaches
+     * the session between macrosteps like any input. A start that still
+     * answers TA_OP_ERROR raises error.execution in the invoking macrostep,
+     * as before ADR 0089; that failure is in no host's log, so a replay of
+     * that session is not exact. start must not report reentrantly through
+     * ta_actor_report_invoke().
+     */
     ta_op_status (*start)(void *self, TA_IN const ta_invoker_start_params *params);
     ta_op_status (*cancel)(void *self,
                            uint64_t service_handle,
@@ -2703,6 +2723,15 @@ typedef struct {
     bool no_microstep_limit;
     /* Pauses before the first unit of every microstep it begins (ADR 0086). */
     bool pause_at_microstep_start;
+    /*
+     * Set when this call ends a macrostep (TA_RUN_STABLE or TA_RUN_DONE):
+     * true when that macrostep's external event enabled no transition, the
+     * event events_ignored counts (ADR 0089 section 8). False for a
+     * bootstrap, an operator transition, a macrostep with no external event
+     * and an event that enabled a transition. Untouched when the call pauses
+     * or ends no macrostep.
+     */
+    TA_OUT TA_OPTIONAL bool *ignored;
 } ta_actor_resume_params;
 typedef struct {
     ta_actor_id actor;

@@ -1640,6 +1640,13 @@ typedef struct {
     uint8_t bound;        /* ta_event_binding */
     uint8_t bound_before; /* what `bound` was before the last take, for a retry (ADR 0047) */
     bool has_kept;
+    /* The external event enabled no transition (ADR 0089 section 8); read
+     * when its macrostep ends, cleared with the event. Fills padding. */
+    bool external_ignored;
+    /* `time` holds the running macrostep's logical time (ADR 0089 section
+     * 9), taken by the first ta_actor_resume() of the macrostep. */
+    bool timed;
+    ta_time time;
     /* The external event of the running macrostep. Inspection reports it
      * while the macrostep runs (ADR 0047). */
     ta_event external_event;
@@ -1921,9 +1928,8 @@ struct ta_system {
     ta_atom scxml_io_type;
     /* The short form "scxml" also selects the built-in processor. */
     ta_atom scxml_io_alias;
-    /* Invoke: the canonical SCXML invoker type and the generated-ID counter. */
+    /* Invoke: the canonical SCXML invoker type. */
     ta_atom scxml_invoke_type;
-    uint64_t next_invoke_serial;
     ta_arena scratch;
     /* Empty event blocks, lent to the next actor that needs one (ADR 0064),
      * newest first, linked through `next_cached`; at most `block_cache_limit`
@@ -2065,7 +2071,12 @@ typedef struct {
     uint32_t condition_capacity;
     /* Microsteps the running macrostep may run (ADR 0075); 0 for no limit. */
     uint32_t microstep_limit;
+    /* The macrostep this call ended took an external event that enabled no
+     * transition (ADR 0089 section 8). */
+    bool ended_ignored;
 } ta_interpreter;
+
+TA_PRIVATE ta_time ta_interpreter_macrostep_time(const ta_system *system, const ta_actor *actor);
 
 TA_PRIVATE ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_actor_resume_params *params);
 /*
@@ -5037,6 +5048,13 @@ static bool ta_dm_host_valid(const ta_dm_host *host) {
     return host != NULL && host->impl != NULL && host->impl->actor != NULL && host->impl->system != NULL;
 }
 
+TA_API ta_time ta_dm_host_time(const ta_dm_host *host) {
+    if (!ta_dm_host_valid(host)) {
+        return 0;
+    }
+    return ta_interpreter_macrostep_time(host->impl->system, host->impl->actor);
+}
+
 /* The scratch arena of the interpreter run that is calling the data model (ADR 0068). */
 static ta_allocator ta_dm_arena(const ta_dm_host *host) {
     return ta_arena_allocator(&host->impl->system->scratch);
@@ -6033,8 +6051,10 @@ static ta_result ta_invoke_core(ta_result result) {
 
 /*
  * The invoke's ID: the author's, or `<stateid>.<platformid>`, also stored
- * through idlocation. A generated ID takes the system's next serial, which
- * moves only once the invocation has an outcome (ta_invoke_start), so an
+ * through idlocation. A generated ID takes the session's next generated-ID
+ * serial, the counter generated send IDs use (ADR 0089 section 5), so a
+ * replay of the session numbers its invocations as the original run did.
+ * It moves only once the invocation has an outcome (ta_invoke_start), so an
  * invocation that runs out of memory and starts again stores the same ID
  * (ADR 0070).
  */
@@ -6048,7 +6068,7 @@ static ta_result ta_invoke_resolve_id(ta_interpreter *it, const ta_invoke_decl *
     ta_str state = ta_atom_text(&system->atoms, it->definition->states[decl->owner].name);
     char digits[20];
     uint32_t digit_count = 0;
-    for (uint64_t serial = system->next_invoke_serial + 1u; serial != 0 || digit_count == 0; serial /= 10u) {
+    for (uint64_t serial = it->actor->next_send_id + 1u; serial != 0 || digit_count == 0; serial /= 10u) {
         digits[digit_count++] = (char)('0' + serial % 10u);
     }
     uint32_t length = state.len + 1u + digit_count;
@@ -6298,7 +6318,7 @@ static ta_result ta_invoke_start(ta_interpreter *it, ta_invoke_decl_id decl_id) 
         }
         ta_interpreter_trace_raised(it, mark);
         if (decl->id.kind != TA_ID_SOURCE_LITERAL) {
-            system->next_invoke_serial += 1u;
+            it->actor->next_send_id += 1u;
         }
     }
     return result;
@@ -6688,6 +6708,12 @@ static ta_result ta_invoke_report_error(ta_system *system, ta_actor *actor, uint
     const ta_invoke_error *error = params->as.error;
     if (error == NULL || !ta_invoke_reason_valid(error->reason)) {
         return TA_ERR_INVALID;
+    }
+    /* An input reaches a session only between macrosteps (ADR 0089
+     * section 4), so the host keeps the report, as it keeps mail that
+     * ta_actor_deliver() refused, and a log can say where it fell. */
+    if (actor->macrostep || ta_actor_external_event(actor) != NULL) {
+        return TA_ERR_BUSY;
     }
     ta_result result = ta_invoke_raise(system, actor, params->invoke_id, error->reason, error->data, &params->trace);
     if (result != TA_OK) {
@@ -15429,8 +15455,7 @@ static ta_result ta_queue_room(ta_system *system, ta_actor *actor) {
 static void ta_block_settle(ta_system *system, ta_actor *actor) {
     ta_event_block *block = actor->event_block;
     if (block == NULL || block->count != 0 || block->slots.external != TA_EXTERNAL_NONE || block->slots.has_kept ||
-        (actor->sparse != NULL && actor->sparse->paused != NULL) ||
-        (actor->macrostep && !ta_trace_parent_empty(&block->slots.trace))) {
+        (actor->sparse != NULL && actor->sparse->paused != NULL) || actor->macrostep) {
         return;
     }
     actor->event_block = NULL;
@@ -15549,12 +15574,47 @@ static void ta_jump_free(ta_system *system, ta_event_slots *slots) {
     }
 }
 
+/* Notes, as its macrostep ends, whether the external event it took enabled
+ * nothing, for ta_actor_resume_params.ignored (ADR 0089 section 8). */
+static void ta_note_ignored(ta_interpreter *it) {
+    ta_event_block *block = it->actor->event_block;
+    it->ended_ignored = block != NULL && block->slots.external_ignored;
+    if (block != NULL) {
+        block->slots.timed = false;
+    }
+}
+
+/*
+ * The logical time of the actor's macrostep (ADR 0089 section 9): the one
+ * its first resume took, so it does not move while a macrostep spans
+ * several resumes; the system's time when no macrostep has one.
+ */
+TA_PRIVATE ta_time ta_interpreter_macrostep_time(const ta_system *system, const ta_actor *actor) {
+    const ta_event_block *block = actor->event_block;
+    if (actor->macrostep && block != NULL && block->slots.timed) {
+        return block->slots.time;
+    }
+    return ta_clock_now(&system->clock);
+}
+
+/* The first resume of a macrostep takes its time, in a block the actor then
+ * holds until the macrostep ends (ta_block_settle). */
+static ta_result ta_take_macrostep_time(ta_system *system, ta_actor *actor) {
+    ta_result result = ta_interpreter_hold_block(system, actor);
+    if (result == TA_OK && !actor->event_block->slots.timed) {
+        actor->event_block->slots.time = ta_clock_now(&system->clock);
+        actor->event_block->slots.timed = true;
+    }
+    return result;
+}
+
 /* Releases the external event, and the operator transition it came with. */
 static void ta_release_external(ta_system *system, ta_event_slots *slots) {
     if (slots->external != TA_EXTERNAL_NONE) {
         ta_event_release(&slots->external_event);
         slots->external = TA_EXTERNAL_NONE;
     }
+    slots->external_ignored = false;
     ta_jump_free(system, slots);
 }
 
@@ -18039,6 +18099,7 @@ static void ta_after_selection(ta_interpreter *it, uint32_t mark) {
     }
     /* The event is consumed and enabled nothing (ADR 0072). */
     if (external) {
+        actor->event_block->slots.external_ignored = true;
         TA_COUNT(it->system, actor->definition, events_ignored);
     } else {
         TA_COUNT(it->system, actor->definition, internal_ignored);
@@ -18207,6 +18268,7 @@ static ta_result ta_run_finish(ta_interpreter *it) {
     }
     /* Sends the router already refused once stay queued: they were sent before termination. */
     ta_timer_cancel_unsubmitted(&it->system->timers, ta_actor_timers(it->actor));
+    ta_note_ignored(it);
     ta_release_events(it->system, it->actor);
     /* Invoke: cancel this session's invocations and report done.invoke to its parent. */
     ta_result result = ta_invoke_finished(it);
@@ -18347,6 +18409,7 @@ static ta_result ta_next_step(ta_interpreter *it, bool *stable) {
     }
     ta_compact_sparse(it);
     ta_trace_end(it);
+    ta_note_ignored(it);
     ta_end_macrostep_events(it->system, actor);
     actor->macrostep = false;
     actor->record.residency = TA_ACTOR_IDLE;
@@ -18689,6 +18752,9 @@ TA_PRIVATE ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, c
     ta_interpreter *it = &interpreter;
     ta_result result = ta_reserve_stop(system, actor);
     if (result == TA_OK) {
+        result = ta_take_macrostep_time(system, actor);
+    }
+    if (result == TA_OK) {
         result = ta_interpreter_init(it, system, actor);
     }
     if (result != TA_OK) {
@@ -18712,6 +18778,9 @@ TA_PRIVATE ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, c
         ta_microstep_pass_start(it);
     }
     result = ta_run(it, params->budget, status);
+    if (params->ignored != NULL && (*status == TA_RUN_STABLE || *status == TA_RUN_DONE)) {
+        *params->ignored = it->ended_ignored;
+    }
     /* The live set lives in scratch memory; between calls In() derives from the configuration. */
     actor->live_active = NULL;
     if (it->resumed != NULL) {
@@ -18882,8 +18951,10 @@ TA_PRIVATE bool ta_interpreter_internal_pending(const ta_actor *actor) {
 
 TA_PRIVATE void ta_interpreter_release_actor_state(ta_system *system, ta_actor *actor) {
     ta_release_events(system, actor);
+    /* The actor goes: its block goes too, whatever it ran under, and even
+     * mid-macrostep, which otherwise keeps it (ta_block_settle). */
+    actor->macrostep = false;
     if (actor->event_block != NULL) {
-        /* The actor goes: its block goes too, whatever it ran under. */
         actor->event_block->slots.trace = (ta_trace_parent){0};
     }
     if (actor->sparse == NULL) {

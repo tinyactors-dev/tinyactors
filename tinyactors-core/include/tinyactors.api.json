@@ -2314,11 +2314,24 @@
             "builtin": "bool"
           },
           "doc": "Pauses before the first unit of every microstep it begins (ADR 0086)."
+        },
+        {
+          "name": "ignored",
+          "type": {
+            "pointer": {
+              "builtin": "bool"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success",
+          "doc": "Set when this call ends a macrostep (TA_RUN_STABLE or TA_RUN_DONE): true when that macrostep's external event enabled no transition, the event events_ignored counts (ADR 0089 section 8). False for a bootstrap, an operator transition, a macrostep with no external event and an event that enabled a transition. Untouched when the call pauses or ends no macrostep."
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 32,
+          "size": 40,
           "align": 8,
           "offsets": {
             "actor": 0,
@@ -2326,11 +2339,12 @@
             "status": 16,
             "action_budget": 24,
             "no_microstep_limit": 28,
-            "pause_at_microstep_start": 29
+            "pause_at_microstep_start": 29,
+            "ignored": 32
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 24,
+          "size": 32,
           "align": 8,
           "offsets": {
             "actor": 0,
@@ -2338,7 +2352,8 @@
             "status": 12,
             "action_budget": 16,
             "no_microstep_limit": 20,
-            "pause_at_microstep_start": 21
+            "pause_at_microstep_start": 21,
+            "ignored": 24
           }
         }
       }
@@ -10020,7 +10035,7 @@
     },
     "ta_invoke_error": {
       "kind": "struct",
-      "doc": "An ERROR report (ADR 0081). `reason` is the event name's last token, one token of the host's choosing: not empty, with no '.' and no white space, or the report answers TA_ERR_INVALID and changes nothing. `data`, when set, is retained as the event's data. `ends` also retires the invocation, so its service's later events are ignored (SCXML 6.4.3); a lost service is reason \"unavailable\" with `ends`. Without `ends` the invocation stays active: its events, done.invoke. <id >, autoforwarding and cancellation behave as if no report was made. The event joins the internal queue whether the session is idle or inside a macrostep (paused by a budget, or holding a delivered event), so the report never answers TA_ERR_BUSY; an idle session starts a macrostep under the report's `trace`.",
+      "doc": "An ERROR report (ADR 0081). `reason` is the event name's last token, one token of the host's choosing: not empty, with no '.' and no white space, or the report answers TA_ERR_INVALID and changes nothing. `data`, when set, is retained as the event's data. `ends` also retires the invocation, so its service's later events are ignored (SCXML 6.4.3); a lost service is reason \"unavailable\" with `ends`. Without `ends` the invocation stays active: its events, done.invoke. <id >, autoforwarding and cancellation behave as if no report was made. Like every input, a report reaches the session only between macrosteps (ADR 0089 section 4): inside one (paused by a budget, or holding a delivered event) every kind answers TA_ERR_BUSY and changes nothing, and the host keeps the report and offers it again, as it keeps mail ta_actor_deliver() refused. The idle session takes the event on its internal queue and starts a macrostep under the report's `trace`.",
       "fields": [
         {
           "name": "reason",
@@ -10657,7 +10672,7 @@
           },
           "shape": "callback",
           "direction": "in",
-          "doc": "start must not report reentrantly through ta_actor_report_invoke()."
+          "doc": "start arranges for the service to start and answers TA_OP_OK, or TA_OP_NOMEM when it could not even arrange that (core starts the invocation again later, ADR 0070). A service that then fails to start is reported with an ERROR report (ADR 0089 section 4), which reaches the session between macrosteps like any input. A start that still answers TA_OP_ERROR raises error.execution in the invoking macrostep, as before ADR 0089; that failure is in no host's log, so a replay of that session is not exact. start must not report reentrantly through ta_actor_report_invoke()."
         },
         {
           "name": "cancel",
@@ -17685,6 +17700,31 @@
       "returns": {
         "type": {
           "type": "ta_actor_id"
+        }
+      },
+      "params": [
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_dm_host",
+              "const": true
+            }
+          },
+          "shape": "view",
+          "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_dm_host_time",
+      "doc": "The logical time of the running macrostep (ADR 0089 section 9): the system's time when its first ta_actor_resume() began, fixed while the macrostep spans several resumes. Outside a macrostep, the system's time. A data model gives expressions this as their deterministic clock.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_time"
         }
       },
       "params": [

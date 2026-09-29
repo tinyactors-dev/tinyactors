@@ -138,11 +138,18 @@ SCXML says. Its chart is an ordinary definition (core ADR 0077):
 A child with no `name` gets the family `<parent's family>/invoke`, which is
 what inspection and traces show. The child picks its data model with its
 own `datamodel` attribute, and keeps the parent's `resolve` for its own
-`src`s and `<data src>`. Without `resolve`, a `src` raises
-`error.execution` in the parent when the invoke starts. Only the
-`<param>` and `namelist` names the child declares as top-level `<data>`
-enter its data (SCXML 6.4). A child chart that cannot be compiled at invoke
-time raises `error.execution` in the parent, whose data is the reason.
+`src`s and `<data src>`. Only the `<param>` and `namelist` names the child
+declares as top-level `<data>` enter its data (SCXML 6.4).
+
+A child that cannot start is reported to the parent, like any service that
+fails (napi ADR 0032, core ADR 0089): a `src` without `resolve`, a child
+chart that cannot be compiled at invoke time, or a child that cannot be
+spawned ends the invocation with
+`error.communication.invoke.<id>.failed`, whose data is `{ code, message }`.
+It waits in the parent's mailbox and arrives between macrosteps, in a later
+macrostep than the one that invoked. An error in `<invoke>`'s own
+attributes, such as a `srcexpr` that fails, is still `error.execution` in
+the invoking macrostep.
 
 Children are reachable only through their parent (`#_<invokeid>`) or their
 session ID; they have no name in the directory. Leaving the invoking state,

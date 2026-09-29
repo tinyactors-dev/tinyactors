@@ -359,24 +359,30 @@ async function params() {
 }
 
 // Chart text at invoke time that cannot be compiled, or a src with no
-// resolver, raises error.execution in the parent (SCXML 6.4).
+// resolver, is reported to the parent (napi ADR 0032 section 3, core ADR
+// 0089 section 4): error.communication.invoke.<id>.failed, with data
+// { code, message }, in a later macrostep than the one that invoked.
 async function refusals() {
   const { system, logs } = setup();
   const parent = system.define(`<scxml ${NS} name="refuser" initial="s0">
     ${MAKER}
     <state id="s0">
-      <invoke type="scxml"><content expr="'&lt;scxml'"/></invoke>
-      <transition event="error.execution" target="s1"><log label="refused"/></transition>
+      <invoke type="scxml" id="bad"><content expr="'&lt;scxml'"/></invoke>
+      <transition event="error.communication.invoke.bad.failed" target="s1">
+        <log label="refused" expr="typeof _event.data.code + ' ' + typeof _event.data.message"/>
+      </transition>
     </state>
     <state id="s1">
-      <invoke type="scxml" src="file:missing.scxml"/>
-      <transition event="error.execution" target="s2"><log label="no resolver"/></transition>
+      <invoke type="scxml" id="missing" src="file:missing.scxml"/>
+      <transition event="error.communication.invoke.missing.failed" target="s2"><log label="no resolver"/></transition>
     </state>
     <state id="s2"/>
   </scxml>`, { format: 'scxml' });
-  system.spawn(parent);
+  const actor = system.spawn(parent);
   await system.flush();
-  assert.deepEqual(logs, ['refused', 'no resolver']);
+  assert.deepEqual(logs, ['refused=string string', 'no resolver']);
+  assert.deepEqual(actor.inspect().activeStates, ['s2']);
+  assert.deepEqual(actor.inspect().invocations, [], 'both invocations ended');
   system.close();
 }
 

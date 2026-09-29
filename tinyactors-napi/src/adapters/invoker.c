@@ -36,7 +36,8 @@ static ta_op_status tna_js_start(void *self, const ta_invoker_start_params *para
     ta_value_retain(&effect.target);
     ta_value_retain(&effect.params);
     if (!tna_system_effect(system, &effect)) {
-        return TNA_FAULT(params->fault, TA_ERR_NOMEM, "the invoker could not queue the start");
+        /* Nothing was queued: core starts the invocation again (core ADR 0070). */
+        return TA_OP_NOMEM;
     }
     system->next_service = service;
     *params->service_handle = service;
@@ -75,7 +76,7 @@ ta_invoker tna_js_invoker_adapter(tna_system *system) {
  * The in-system SCXML invoker
  */
 
-static ta_op_status tna_scxml_start(void *self, const ta_invoker_start_params *params) {
+static ta_op_status tna_scxml_try_start(void *self, const ta_invoker_start_params *params) {
     tna_system *system = self;
     const ta_invoke_request *request = params->request;
     if (system->effects.closed) {
@@ -123,9 +124,49 @@ static ta_op_status tna_scxml_start(void *self, const ta_invoker_start_params *p
     return TA_OP_OK;
 }
 
+/*
+ * Starts the child; a child that cannot be compiled or spawned is reported
+ * to the parent, not answered (core ADR 0089 section 4, napi ADR 0032
+ * section 3): start answers OK with no service, and
+ * error.communication.invoke.<id>.failed, with data { code, message }, waits
+ * in the parent's mailbox for the parent to be between macrosteps. Out of
+ * memory is still answered, and core starts the invocation again.
+ */
+static ta_op_status tna_scxml_start(void *self, const ta_invoker_start_params *params) {
+    tna_system *system = self;
+    ta_op_status status = tna_scxml_try_start(self, params);
+    if (status != TA_OP_ERROR) {
+        return status;
+    }
+    ta_fault *fault = params->fault;
+    ta_event event = { .type = TA_EVENT_PLATFORM, .invoke_id = params->request->invoke_id };
+    bool made = system->fault_data == NULL ||
+                system->fault_data(system->fault_context, fault->code, fault->message, &event.data);
+    ta_value_release(&fault->data);
+    *fault = (ta_fault){ 0 };
+    if (!made) {
+        return TA_OP_NOMEM;
+    }
+    ta_trace_parent trace = params->request->trace;
+    ta_result result = tna_sched_post(&system->sched, &(tna_message){ .target = params->request->parent,
+                                                                      .event = &event,
+                                                                      .trace = &trace,
+                                                                      .report = TNA_REPORT_FAILED });
+    if (result != TA_OK) {
+        ta_value_release(&event.data);
+        return TA_OP_NOMEM; /* no room for the report: core starts the invocation again */
+    }
+    tna_system_want_turn(system);
+    *params->service_handle = 0;
+    return TA_OP_OK;
+}
+
 static ta_op_status tna_scxml_cancel(void *self, uint64_t service, ta_fault *fault) {
     (void)fault;
     tna_system *system = self;
+    if (service == 0) {
+        return TA_OP_OK; /* a child that never started: its failure is reported */
+    }
     ta_result result = ta_actor_destroy(system->core, service);
     if (result == TA_OK || result == TA_ERR_NOT_FOUND) {
         tna_sched_remove(&system->sched, service, TNA_DEAD_DESTROYED);
@@ -136,6 +177,9 @@ static ta_op_status tna_scxml_cancel(void *self, uint64_t service, ta_fault *fau
 
 static ta_op_status tna_scxml_forward(void *self, const ta_invoker_forward_params *params) {
     tna_system *system = self;
+    if (params->service_handle == 0) {
+        return TA_OP_OK; /* a child that never started has nobody to forward to */
+    }
     ta_event event;
     ta_event_retain(params->event, &event);
     ta_result result = tna_sched_post(&system->sched, &(tna_message){ .target = params->service_handle, .event = &event });

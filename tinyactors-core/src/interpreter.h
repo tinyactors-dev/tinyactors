@@ -94,7 +94,12 @@ typedef struct {
     uint32_t condition_capacity;
     /* Microsteps the running macrostep may run (ADR 0075); 0 for no limit. */
     uint32_t microstep_limit;
+    /* The macrostep this call ended took an external event that enabled no
+     * transition (ADR 0089 section 8). */
+    bool ended_ignored;
 } ta_interpreter;
+
+ta_time ta_interpreter_macrostep_time(const ta_system *system, const ta_actor *actor);
 
 ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_actor_resume_params *params);
 /*

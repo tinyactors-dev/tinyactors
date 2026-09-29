@@ -310,8 +310,10 @@ static ta_result ta_invoke_core(ta_result result) {
 
 /*
  * The invoke's ID: the author's, or `<stateid>.<platformid>`, also stored
- * through idlocation. A generated ID takes the system's next serial, which
- * moves only once the invocation has an outcome (ta_invoke_start), so an
+ * through idlocation. A generated ID takes the session's next generated-ID
+ * serial, the counter generated send IDs use (ADR 0089 section 5), so a
+ * replay of the session numbers its invocations as the original run did.
+ * It moves only once the invocation has an outcome (ta_invoke_start), so an
  * invocation that runs out of memory and starts again stores the same ID
  * (ADR 0070).
  */
@@ -325,7 +327,7 @@ static ta_result ta_invoke_resolve_id(ta_interpreter *it, const ta_invoke_decl *
     ta_str state = ta_atom_text(&system->atoms, it->definition->states[decl->owner].name);
     char digits[20];
     uint32_t digit_count = 0;
-    for (uint64_t serial = system->next_invoke_serial + 1u; serial != 0 || digit_count == 0; serial /= 10u) {
+    for (uint64_t serial = it->actor->next_send_id + 1u; serial != 0 || digit_count == 0; serial /= 10u) {
         digits[digit_count++] = (char)('0' + serial % 10u);
     }
     uint32_t length = state.len + 1u + digit_count;
@@ -575,7 +577,7 @@ static ta_result ta_invoke_start(ta_interpreter *it, ta_invoke_decl_id decl_id) 
         }
         ta_interpreter_trace_raised(it, mark);
         if (decl->id.kind != TA_ID_SOURCE_LITERAL) {
-            system->next_invoke_serial += 1u;
+            it->actor->next_send_id += 1u;
         }
     }
     return result;
@@ -965,6 +967,12 @@ static ta_result ta_invoke_report_error(ta_system *system, ta_actor *actor, uint
     const ta_invoke_error *error = params->as.error;
     if (error == NULL || !ta_invoke_reason_valid(error->reason)) {
         return TA_ERR_INVALID;
+    }
+    /* An input reaches a session only between macrosteps (ADR 0089
+     * section 4), so the host keeps the report, as it keeps mail that
+     * ta_actor_deliver() refused, and a log can say where it fell. */
+    if (actor->macrostep || ta_actor_external_event(actor) != NULL) {
+        return TA_ERR_BUSY;
     }
     ta_result result = ta_invoke_raise(system, actor, params->invoke_id, error->reason, error->data, &params->trace);
     if (result != TA_OK) {

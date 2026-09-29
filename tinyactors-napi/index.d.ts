@@ -709,6 +709,11 @@ export interface SendResult {
   /** The actor that ran the macrostep; for "accepted", the target when it was an ActorID. */
   readonly actor?: Actor;
   readonly status: "accepted" | "stable" | "done";
+  /**
+   * "stable" and "done": false when the message enabled no transition, so
+   * the chart ignored it (core ADR 0089 section 8, napi ADR 0032 section 4).
+   */
+  readonly consumed?: boolean;
   /** "done": the actor's done data. */
   readonly completion?: unknown;
 }
@@ -1621,6 +1626,13 @@ export interface EvaluationContext<Data extends object> {
   readonly event?: ActorEvent;
   readonly sessionID: string;
   readonly name?: string;
+  /**
+   * The logical time of the running macrostep, in milliseconds (core ADR
+   * 0089 section 9): fixed for the macrostep, however many turns it spans.
+   * Read this, not Date.now(), so a chart gives the same answers when its
+   * inputs are replayed (napi ADR 0032).
+   */
+  readonly time: number;
   readonly ioProcessors: Readonly<Record<string, { readonly location: string }>>;
   inState(state: string): boolean;
 }
@@ -1955,9 +1967,12 @@ export interface InvokedService {
 /**
  * Reports from an invocation to its parent. event() and done() arrive as
  * external events (done as done.invoke.<id>); unavailable() retires the
- * invocation and the parent gets error.communication. Each returns true
- * when the report was taken, and false once the invocation has ended (done,
- * unavailable, cancelled, closed) or its parent is gone.
+ * invocation and the parent gets error.communication. Every report waits in
+ * the parent's mailbox, behind the mail before it, and reaches the parent
+ * between macrosteps (napi ADR 0032 section 3). Each returns true when the
+ * report was queued, and false once the invocation has ended (done,
+ * unavailable, cancelled, closed) or its parent is gone; a queued report for
+ * an invocation that ends before it is taken is dropped.
  *
  * A report that could not be taken throws and changes nothing: event() and
  * done() throw `queue-full` when the parent's mailbox is at

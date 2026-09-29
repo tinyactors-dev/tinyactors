@@ -34,11 +34,17 @@ static ta_op_status tna_io_send(void *self, const ta_send *send, ta_fault *fault
     }
     ta_value_retain(&effect.value);
     ta_value_retain(&effect.target);
+    bool closing = system->effects.closed;
     if (!tna_system_effect(system, &effect)) {
-        static const char message[] = "the I/O processor could not queue the send";
-        *fault = (ta_fault){ .code = TA_ERR_NOMEM, .message = { .ptr = message, .len = sizeof message - 1u } };
         tna_system_wake_sender(system, &send->source);
-        return TA_OP_ERROR;
+        if (closing) {
+            static const char message[] = "the system is closing";
+            *fault = (ta_fault){ .code = TA_ERR_INVALID, .message = { .ptr = message, .len = sizeof message - 1u } };
+            return TA_OP_ERROR;
+        }
+        /* Nothing was queued, which is running out of memory, not a failed
+         * send: core keeps the send and offers it again (core ADR 0070). */
+        return TA_OP_NOMEM;
     }
     if (system->dispatching_due) {
         tna_system_record_lateness(system, send->due, &send->trace); /* a timer to a processor fired */

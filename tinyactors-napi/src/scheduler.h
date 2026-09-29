@@ -119,6 +119,20 @@ typedef struct {
 } tna_mailbox;
 
 /*
+ * An invocation's error report that waits in its parent's mailbox (napi ADR
+ * 0032 section 3, core ADR 0089 section 4): core takes a report only
+ * between macrosteps, so it queues behind the mail before it and reaches
+ * ta_actor_report_invoke() in turn. Its envelope's event carries the
+ * invocation (`invoke_id`) and the report's data.
+ */
+typedef enum {
+    TNA_REPORT_NONE = 0,
+    TNA_REPORT_UNAVAILABLE, /* the service is lost; ends the invocation */
+    TNA_REPORT_QUARANTINED, /* an invoked child faulted; the invocation stays (ADR 0025) */
+    TNA_REPORT_FAILED       /* the service could not start; ends the invocation */
+} tna_report_kind;
+
+/*
  * An operator transition a message carries (core ADR 0082), in one
  * allocation: the definition its state IDs belong to, and the transition.
  */
@@ -153,6 +167,7 @@ typedef struct {
     uint8_t reason;  /* tna_dead_reason, while on the dead list */
     uint8_t live;    /* taken from the store */
     uint8_t has_jump; /* `jump`, not `address` */
+    uint8_t report;   /* tna_report_kind: an error report, not a message */
 } tna_envelope;
 
 /* An operator transition to accept with a message (core ADR 0082). */
@@ -171,6 +186,10 @@ typedef struct {
     /* An operator transition, or NULL; only for a target named by ID. The
      * scheduler copies it. */
     const tna_message_jump *jump;
+    /* An error report instead of a message (tna_report_kind); `event`
+     * carries its invocation and data. A report for a gone target is
+     * dropped, never a dead letter. */
+    uint8_t report;
 } tna_message;
 
 typedef enum {
@@ -201,6 +220,9 @@ typedef struct {
     uint32_t waiter;
     uint8_t kind;    /* tna_settle_kind */
     uint8_t reason;  /* DEAD: tna_dead_reason */
+    /* STABLE, DONE: the message enabled no transition (core ADR 0089
+     * section 8), SendResult.consumed false (napi ADR 0032 section 4). */
+    uint8_t ignored;
     ta_result code;  /* FAULT: core's result */
     ta_actor_id actor;
 } tna_settlement;

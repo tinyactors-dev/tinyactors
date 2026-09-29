@@ -2053,6 +2053,17 @@ static napi_value tna_get_session_id(napi_env env, napi_callback_info info) {
     return dm != NULL && tna_host_text(env, dm, TA_DM_TEXT_SESSION_ID, &text) ? text : NULL;
 }
 
+/* The logical time of the running macrostep, in milliseconds (core ADR 0089
+ * section 9, napi ADR 0032 section 4): the clock expressions read. */
+static napi_value tna_get_time(napi_env env, napi_callback_info info) {
+    tna_js_datamodel *dm = tna_context_dm(env, info, NULL, NULL);
+    napi_value time = NULL;
+    if (dm == NULL || dm->host == NULL || napi_create_double(env, (double)ta_dm_host_time(dm->host), &time) != napi_ok) {
+        return NULL;
+    }
+    return time;
+}
+
 static napi_value tna_get_name(napi_env env, napi_callback_info info) {
     tna_js_datamodel *dm = tna_context_dm(env, info, NULL, NULL);
     napi_value text = NULL;
@@ -2143,6 +2154,7 @@ bool tna_js_datamodel_init(tna_js_datamodel *dm, tna_napi_system *wrapper, napi_
         { "event", NULL, NULL, tna_get_event, NULL, NULL, napi_enumerable, dm },
         { "sessionID", NULL, NULL, tna_get_session_id, NULL, NULL, napi_enumerable, dm },
         { "name", NULL, NULL, tna_get_name, NULL, NULL, napi_enumerable, dm },
+        { "time", NULL, NULL, tna_get_time, NULL, NULL, napi_enumerable, dm },
         { "ioProcessors", NULL, NULL, tna_get_io_processors, NULL, NULL, napi_enumerable, dm },
         { "inState", NULL, tna_in_state_method, NULL, NULL, NULL, napi_enumerable, dm },
     };
