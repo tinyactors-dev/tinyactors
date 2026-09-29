@@ -1237,6 +1237,59 @@ module TinyactorsTest
       result
     end
 
+    # Installs an input.recording instrument as the system's input sink and
+    # logs the named actors of `families` (core ADR 0090).
+    def recording_inputs(*families)
+      sink = @instruments['inputs'] || begin
+        created = instrument('inputs', 'input.recording')
+        ta.system.set_input_sink(system: system_handle, sink: created.adapter)
+        created
+      end
+      families.each do |family|
+        core('ta_system_log_family',
+             ta.system.log_family(system: system_handle, family: family.to_s, logged: true))
+      end
+      sink
+    end
+
+    # The kinds of the records core kept, oldest first.
+    def input_kinds
+      @instruments.fetch('inputs').entries('record').map { |entry| entry[:kind] }
+    end
+
+    # Records that the host evicts `actor`, then destroys it: its log is its
+    # only state from here (core ADR 0090 section 6).
+    def evict(actor)
+      core('ta_system_write_host_record',
+           ta.system.write_host_record(system: system_handle, address: actor.address, kind: 'evicted',
+                                       actor: actor.handle))
+      actor.destroy
+    end
+
+    # Prepares a replaying actor at `address` from the recorded log and
+    # applies every record, `piece` bytes at a time, running the system
+    # whenever core asks. The actor is left unpublished.
+    def replay_log(chart_name, address:, piece: 4096)
+      sink = @instruments.fetch('inputs')
+      sink.control('rewind', piece: piece)
+      source = { '$adapter' => 'input.log', 'config' => { 'name' => sink.name } }
+      definition = definition_id(chart_name.to_sym)
+      id = core('ta_actor_prepare', ta.actor.prepare(system: system_handle, definition: definition,
+                                                     address: address, log: source)).fetch(:out)
+      actor = Actor.new(self, id, chart_name.to_sym, definition, address: address)
+      @actor_labels[id] ||= "#{chart_name}.replay"
+      run_system("prepare #{chart_name} from its log")
+      while sink.control('remaining')[:bytes].to_i.positive?
+        out = core('ta_actor_replay', ta.actor.replay(system: system_handle, actor: id, source: source))
+        case out[:step]
+        when 'run' then run_system("replay #{chart_name}")
+        when 'finished' then break
+        when 'ended', 'release' then raise ScenarioError, "replay_log: step #{out[:step]} is not handled here"
+        end
+      end
+      actor
+    end
+
     # Moves a replaying actor's clock (core ADR 0089 section 2); returns the result.
     def set_actor_time(actor, time)
       ta.actor.set_time(system: system_handle, actor: actor.handle, now: time)[:result]

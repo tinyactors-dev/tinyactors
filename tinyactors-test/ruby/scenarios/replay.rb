@@ -64,3 +64,41 @@ TinyactorsTest.scenarios 'replay' do
     assert_active replay, :timedout
   end
 end
+
+TinyactorsTest.scenarios 'input log' do
+  # Catches: a log core wrote that does not rebuild the actor, or a replay
+  # that sends, logs or fires what the live run already did.
+  scenario "core logs a named actor's inputs, and replaying the log rebuilds it" do
+    recording_log
+    recording_inputs :replay_timer
+    live = spawn :replay_timer, name: 'r'
+    set_time 1000
+    live.deliver 'e1'
+    advance_time 5000 # the timeout fires at 6000 and is delivered
+    assert_active live, :timedout
+    assert_equal %w[spawned event fired event], input_kinds
+    evict live # at 6000
+
+    set_time 6000 + (7 * 24 * 3600 * 1000) # a week later
+    replay = replay_log :replay_timer, address: live.address, piece: 7
+    assert_active replay, :timedout
+    assert_equal 1, logs.size, 'the replay wrote no log'
+    assert_equal %w[spawned event fired event evicted], input_kinds, 'a replaying actor writes no record'
+    assert_equal 'ok', publish(replay)
+    assert_equal 1, replay.data('.seen')
+    assert_equal 0, replay.delayed_sends, 'nothing fires twice'
+  end
+
+  # Catches: an input taken although its record was refused.
+  scenario 'an input whose record the sink refuses changes nothing' do
+    inputs = recording_inputs :replay_timer
+    live = spawn :replay_timer, name: 'q'
+    inputs.arm_fault(:begin)
+    assert_equal 'err_nomem', live.post('e1')
+    assert_active live, :idle
+    assert_equal %w[spawned], input_kinds
+    live.deliver 'e1'
+    assert_active live, :waiting
+    assert_equal %w[spawned event], input_kinds
+  end
+end

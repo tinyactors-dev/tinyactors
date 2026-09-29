@@ -28,6 +28,8 @@ bool tat_make_recording_log(tat_bind *bind, jv config, void *out);
 bool tat_make_recording_trace(tat_bind *bind, jv config, void *out);
 bool tat_make_recording_definition(tat_bind *bind, jv config, void *out);
 bool tat_make_recording_inspector(tat_bind *bind, jv config, void *out);
+bool tat_make_input_recording(tat_bind *bind, jv config, void *out);
+bool tat_make_input_log(tat_bind *bind, jv config, void *out);
 
 /* instrument.list, instrument.journal, instrument.control. */
 jv tat_instrument_list_method(tat_bind *bind, jv params, int *error_code);
