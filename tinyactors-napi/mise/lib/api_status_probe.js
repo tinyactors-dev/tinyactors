@@ -49,7 +49,7 @@ async function instances() {
   found.Actor = actor;
   found.ActorID = actor;
   found.SessionImage = system.capture(actor);
-  found.PreparedActor = system.prepareReplacement(actor, definition);
+  found.PreparedActor = system.prepare(definition, { incumbent: actor });
   found.TinyactorsError = new TinyactorsError('probe', 'invalid');
   await system.flush();
   // Records the runtime returns: only their required fields are judged.

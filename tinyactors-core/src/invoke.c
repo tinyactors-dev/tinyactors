@@ -137,7 +137,7 @@ static ta_invoke_taken ta_invoke_take_index(ta_actor_sparse_state *sparse, uint3
 }
 
 void ta_invoke_cancel_service(const ta_invoke_taken *taken) {
-    if (taken->meta.invoker.v != NULL && taken->meta.invoker.v->cancel != NULL) {
+    if (!taken->meta.replayed && taken->meta.invoker.v != NULL && taken->meta.invoker.v->cancel != NULL) {
         ta_fault fault = {0};
         (void)taken->meta.invoker.v->cancel(taken->meta.invoker.self, taken->active.service_handle, &fault);
         ta_value_release(&fault.data);
@@ -506,6 +506,13 @@ static ta_result ta_invoke_launch(ta_interpreter *it, const ta_invoke_launch_par
     }
     uint64_t service = 0;
     const ta_invoker *invoker = params->invoker;
+    if (ta_actor_replaying(it->actor)) {
+        /* A replay crosses no border (ADR 0089 section 3): the invocation is
+         * active in core, under the ID the run being replayed gave it, and
+         * no invoker hears of it. */
+        sparse->invoke_meta[index].replayed = true;
+        return TA_OK;
+    }
     ta_op_status status = invoker->v->start(invoker->self, &(ta_invoker_start_params){
                                                                .request = &request, .service_handle = &service,
                                                                .fault = &values->fault });
@@ -594,7 +601,7 @@ ta_result ta_invoke_start_pending(ta_interpreter *it, uint32_t *state, uint32_t 
     }
     /* A prepared replacement materializes its bootstrap off-route. Starting
      * an invocation is externally visible, so activation releases it. */
-    if (!it->actor->published) {
+    if (!it->actor->published && !ta_actor_replaying(it->actor)) {
         return TA_OK;
     }
     const ta_definition *definition = it->definition;
@@ -690,6 +697,10 @@ static ta_result ta_invoke_submit(ta_system *system, const ta_invoke_delivery *d
     return result;
 }
 
+bool ta_invoke_is_active(const ta_actor *actor, ta_invoke_id invoke) {
+    return ta_invoke_find(actor, invoke) >= 0;
+}
+
 bool ta_invoke_destination(const ta_actor *actor, ta_invoke_id invoke, ta_actor_ref *out) {
     int64_t index = ta_invoke_find(actor, invoke);
     if (index < 0 || !actor->sparse->invoke_meta[index].has_child) {
@@ -731,6 +742,9 @@ void ta_invoke_attach_child(ta_system *system, const ta_actor_parent *parent, ta
 static ta_result ta_invoke_forward(ta_interpreter *it, uint32_t index, const ta_event *event) {
     ta_actor_sparse_state *sparse = it->actor->sparse;
     ta_invoke_meta meta = sparse->invoke_meta[index];
+    if (meta.replayed) {
+        return TA_OK; /* nothing runs behind it to forward to */
+    }
     if (meta.has_child) {
         /* Autoforwarding is an exact envelope copy, including the invoke ID
          * that identifies the child which originally sent the event. */
@@ -954,6 +968,38 @@ static ta_result ta_invoke_raise(ta_system *system, ta_actor *actor, ta_invoke_i
  */
 ta_result ta_invoke_report_lost(ta_system *system, ta_actor *actor, ta_invoke_id invoke) {
     return ta_invoke_raise(system, actor, invoke, (ta_str){ .ptr = "unavailable", .len = 11 }, NULL, NULL);
+}
+
+ta_result ta_invoke_prepare_retire(ta_system *system, ta_actor *actor) {
+    ta_actor_sparse_state *sparse = actor->sparse;
+    uint32_t count = sparse == NULL ? 0 : sparse->invoke_count;
+    if (count == 0) {
+        return TA_OK;
+    }
+    /* Interning is idempotent, so naming each event now leaves the queue
+     * work alone as what can fail later. */
+    for (uint32_t index = 0; index < count; index += 1u) {
+        ta_event_name_id name = 0;
+        ta_result result = ta_invoke_error_name(system, sparse->invokes[index].id,
+                                                (ta_str){ .ptr = "unavailable", .len = 11 }, &name);
+        if (result != TA_OK) {
+            return result;
+        }
+    }
+    return ta_interpreter_queue_reserve(system, actor, count);
+}
+
+bool ta_invoke_retire_all(ta_system *system, ta_actor *actor) {
+    ta_actor_sparse_state *sparse = actor->sparse;
+    uint32_t count = sparse == NULL ? 0 : sparse->invoke_count;
+    for (uint32_t index = 0; index < count; index += 1u) {
+        /* Named and reserved by ta_invoke_prepare_retire(), so this cannot fail. */
+        (void)ta_invoke_report_lost(system, actor, sparse->invokes[index].id);
+    }
+    if (sparse != NULL) {
+        sparse->invoke_count = 0;
+    }
+    return count != 0;
 }
 
 /*

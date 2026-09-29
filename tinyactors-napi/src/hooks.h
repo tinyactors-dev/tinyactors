@@ -6,7 +6,7 @@
  * result.
  *
  * - tna_hook_actor_created: after ta_actor_spawn, ta_actor_load,
- *   ta_actor_reconstruct and ta_actor_prepare_replacement. It fills the
+ *   ta_actor_reconstruct and ta_actor_prepare. It fills the
  *   actor's scheduling entry and puts it on the runnable queue for bootstrap
  *   (ADR 0005). If that cannot be allocated, it destroys the new actor
  *   again and answers TA_ERR_NOMEM, so no actor exists that the scheduler
@@ -18,10 +18,11 @@
  *   letters' reason `unloaded`. The JavaScript API refuses to unload an
  *   actor that has mail waiting, so this only happens through the raw
  *   generated layer (ROADMAP step 14).
- * - tna_hook_actor_activated: after ta_actor_activate_replacement. The mail
- *   still waiting for the incumbent moves to the front of the replacement's
+ * - tna_hook_actor_published: after ta_actor_publish. With an incumbent, the
+ *   mail still waiting for it moves to the front of the published actor's
  *   mailbox, so nothing accepted for the address is lost when the incumbent
- *   is destroyed (ROADMAP step 14).
+ *   is destroyed (ROADMAP step 14). The actor is woken: publishing a replay
+ *   can leave it a macrostep to run (core ADR 0089).
  *
  * - tna_hook_actor_abandoned: after ta_actor_abandon. The send() that
  *   followed the abandoned macrostep rejects with `abandoned`, and a runnable
@@ -36,5 +37,5 @@
 ta_result tna_hook_actor_created(tna_system *system, ta_actor_id actor);
 ta_result tna_hook_actor_removed(tna_system *system, ta_actor_id actor);
 ta_result tna_hook_actor_unloaded(tna_system *system, ta_actor_id actor);
-ta_result tna_hook_actor_activated(tna_system *system, const ta_actor_activate_replacement_params *params);
+ta_result tna_hook_actor_published(tna_system *system, const ta_actor_publish_params *params);
 ta_result tna_hook_actor_abandoned(tna_system *system, ta_actor_id actor);

@@ -1209,26 +1209,37 @@ module TinyactorsTest
       ta.actor.remove_unloaded(system: system_handle, address: address)[:result]
     end
 
-    # Prepares an unpublished replacement for a named incumbent under another
-    # chart's definition; returns it as an Actor at the incumbent's address.
-    def prepare_replacement(incumbent, chart_name, binding: nil)
+    # Prepares an unpublished actor under a chart's definition (core ADR
+    # 0089): to replace a named `incumbent`, or to take `address`. With `at`
+    # it is a replaying actor on its own clock. Returns it as an Actor at its
+    # address, bootstrapped.
+    def prepare(chart_name, incumbent: nil, address: nil, binding: nil, at: nil)
       definition = definition_id(chart_name.to_sym)
-      params = { system: system_handle, incumbent: incumbent.handle, definition: definition }
+      params = { system: system_handle, definition: definition }
+      params[:incumbent] = incumbent.handle unless incumbent.nil?
+      params[:address] = address unless address.nil?
       params[:datamodel_binding] = binding unless binding.nil?
-      id = core('ta_actor_prepare_replacement', ta.actor.prepare_replacement(**params)).fetch(:out)
-      replacement = Actor.new(self, id, chart_name.to_sym, definition, address: incumbent.address)
-      @actor_labels[id] ||= "#{chart_name}.replacement"
-      run_system("prepare replacement #{chart_name}")
-      replacement
+      params[:at] = at unless at.nil?
+      id = core('ta_actor_prepare', ta.actor.prepare(**params)).fetch(:out)
+      prepared = Actor.new(self, id, chart_name.to_sym, definition, address: incumbent&.address || address)
+      @actor_labels[id] ||= "#{chart_name}.#{at.nil? ? 'replacement' : 'replay'}"
+      run_system("prepare #{chart_name}")
+      prepared
     end
 
-    # Activates a prepared replacement; returns the result. On "ok" the
-    # replacement is checked by invariants from now on.
-    def activate_replacement(incumbent, replacement)
-      result = ta.actor.activate_replacement(system: system_handle, incumbent: incumbent.handle,
-                                             replacement: replacement.handle)[:result]
-      @actors << replacement if result == 'ok' && !@actors.include?(replacement)
+    # Publishes a prepared actor; returns the result. On "ok" it is checked
+    # by invariants from now on.
+    def publish(prepared, incumbent: nil)
+      params = { system: system_handle, actor: prepared.handle }
+      params[:incumbent] = incumbent.handle unless incumbent.nil?
+      result = ta.actor.publish(**params)[:result]
+      @actors << prepared if result == 'ok' && !@actors.include?(prepared)
       result
+    end
+
+    # Moves a replaying actor's clock (core ADR 0089 section 2); returns the result.
+    def set_actor_time(actor, time)
+      ta.actor.set_time(system: system_handle, actor: actor.handle, now: time)[:result]
     end
 
     # Capture, unload, and load a named actor with its current data root as

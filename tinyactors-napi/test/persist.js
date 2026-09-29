@@ -175,16 +175,16 @@ async function replacementLosesNothing() {
   await system.flush();
   assert.equal(incumbent.inspect().data.seen, 1);
 
-  const prepared = incumbent.prepareReplacement(v2);
+  const prepared = system.prepare(v2, { incumbent });
   await system.flush(); // the replacement bootstraps unpublished
   assert.equal(prepared.published, false);
   assert.ok(system.findActor(address).equals(incumbent), 'the address stays with the incumbent');
 
-  // Accepted for the address before activation: they wait in the incumbent's mailbox.
+  // Accepted for the address before publishing: they wait in the incumbent's mailbox.
   system.post(address, 'job');
   system.post(address, 'job');
   const inflight = system.send(address, 'job');
-  const replacement = prepared.activate();
+  const replacement = system.publish(prepared);
   system.post(address, 'job');
 
   assert.equal(incumbent.destroyed, true);
@@ -200,8 +200,8 @@ async function replacementLosesNothing() {
   system.close();
 }
 
-// activate() waits for an incumbent that is inside a macrostep.
-async function activateWhileBusy() {
+// publish() waits for an incumbent that is inside a macrostep.
+async function publishWhileBusy() {
   const system = createSystem({ scheduling: { actionBudget: 1 } });
   // a --go--> b, whose entry handler is ten actions: with an action budget of
   // 1 its macrostep spans several turns.
@@ -210,15 +210,15 @@ async function activateWhileBusy() {
     .state('b', (s) => s.entry((x) => { for (let i = 0; i < 10; i += 1) x.log(`step${i}`); }));
   const incumbent = system.spawn(system.define(chart('v1')), { name: 's' });
   await system.flush();
-  const prepared = incumbent.prepareReplacement(system.define(chart('v2')));
+  const prepared = system.prepare(system.define(chart('v2')), { incumbent });
   await system.flush();
   incumbent.post('go');
   await new Promise((resolve) => setImmediate(resolve)); // one pump turn: go is delivered
   assert.equal(incumbent.inspect().scheduling, 'runnable');
-  assertCode(() => prepared.activate(), 'busy');
+  assertCode(() => system.publish(prepared), 'busy');
   assert.ok(system.findActor({ family: 'slow', name: 's' }).equals(incumbent), 'nothing changed');
   await system.flush();
-  const replacement = prepared.activate();
+  const replacement = system.publish(prepared);
   assert.equal(replacement.inspect().published, true);
   system.close();
 }
@@ -282,7 +282,7 @@ async function main() {
   await dataTravels();
   await sessionTargetAcrossUnload();
   await replacementLosesNothing();
-  await activateWhileBusy();
+  await publishWhileBusy();
   await invocationsAcrossLoad();
   await closeWithImages();
   if (typeof globalThis.gc === 'function') {

@@ -20,6 +20,9 @@ typedef struct {
     ta_invoker invoker;
     ta_actor_id child;
     bool has_child;
+    /* Started while its actor replayed (ADR 0089): no invoker was called, so
+     * none is cancelled or forwarded to, and nothing runs behind it. */
+    bool replayed;
 } ta_invoke_meta;
 
 /* The send ID of a child's queued done.invoke completion record. */
@@ -30,6 +33,16 @@ typedef struct {
  * queues its error.communication.invoke.<id>.unavailable event.
  */
 ta_result ta_invoke_report_lost(ta_system *system, ta_actor *actor, ta_invoke_id invoke);
+/*
+ * Publishing a replaying actor retires its active invocations (ADR 0089
+ * section 6). The first makes room for their unavailable events, and
+ * changes nothing visible when it fails; the second then queues them and
+ * forgets the invocations, and cannot fail. It answers whether it queued one.
+ */
+/* Whether `invoke` is one of the actor's active invocations. */
+bool ta_invoke_is_active(const ta_actor *actor, ta_invoke_id invoke);
+ta_result ta_invoke_prepare_retire(ta_system *system, ta_actor *actor);
+bool ta_invoke_retire_all(ta_system *system, ta_actor *actor);
 
 /* The origin of an event from `invoke`: its ID and its invoker's registry index (ADR 0068). */
 ta_origin ta_invoke_origin_of(const ta_system *system, const ta_active_invoke *invoke);

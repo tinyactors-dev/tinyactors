@@ -2783,25 +2783,81 @@ typedef struct {
     TA_IN TA_OPTIONAL const ta_value *datamodel_binding;
     TA_OUT ta_actor_id *out;
 } ta_actor_reconstruct_params;
+/*
+ * An unpublished actor (ADR 0037, ADR 0089): one the directory does not
+ * know. With `incumbent`, a resident named actor of the definition's family,
+ * it will replace that actor; with `incumbent` 0 it will take `address`, in
+ * the definition's family, which must then have no resident actor when it is
+ * published. `trace` is what its bootstrap runs under (ADR 0067).
+ *
+ * `at`, when non-null, makes a replaying actor (ADR 0089): its bootstrap and
+ * every later macrostep run on its own clock, which starts at `*at` (no
+ * later than ta_system_time()) and moves only with ta_actor_set_time(), and
+ * it crosses no border until it is published: its immediate sends and logs
+ * are dropped, its delayed sends are held, and its invocations become
+ * active without calling an invoker. Without `at`, its visible bootstrap
+ * effects are held and released by ta_actor_publish(), as for a replacement.
+ */
 typedef struct {
     ta_actor_id incumbent;
+    TA_IN TA_OPTIONAL const ta_actor_address *address;
     ta_definition_id definition;
     TA_IN TA_OPTIONAL const ta_value *datamodel_binding;
+    TA_IN TA_OPTIONAL const ta_time *at;
+    ta_trace_parent trace;
     TA_OUT ta_actor_id *out;
-} ta_actor_prepare_replacement_params;
-typedef struct { ta_actor_id incumbent; ta_actor_id replacement; } ta_actor_activate_replacement_params;
+} ta_actor_prepare_params;
+typedef struct {
+    ta_actor_id actor;
+    /* The incumbent given to ta_actor_prepare(), or 0 for none. */
+    ta_actor_id incumbent;
+} ta_actor_publish_params;
 /* Release data with ta_value_release() when has_data is true. */
 typedef struct { bool has_data; TA_RELEASE_IF(ta_value_release, has_data) ta_value data; } ta_actor_completion;
 
 TA_API ta_result ta_actor_spawn(ta_system *system, TA_IN const ta_actor_spawn_params *params)
     TA_VALUE_MODEL(definition, params.definition);
-/* Creates an unpublished actor and holds bootstrap effects until activation. */
-TA_API ta_result ta_actor_prepare_replacement(ta_system *system,
-                                              TA_IN const ta_actor_prepare_replacement_params *params)
+/*
+ * Creates an unpublished actor (see ta_actor_prepare_params).
+ * - TA_ERR_NOT_FOUND: no such definition, it is retired, or no resident
+ *   actor has the incumbent's ID.
+ * - TA_ERR_INVALID: the incumbent is unpublished or has no name, or is of
+ *   another family; with no incumbent, `address` is missing, empty, or of
+ *   another family; `at` is later than ta_system_time().
+ * - TA_ERR_UNSUPPORTED: with no incumbent, the system has no directory.
+ * - TA_ERR_NOMEM: nothing was created.
+ */
+TA_API ta_result ta_actor_prepare(ta_system *system, TA_IN const ta_actor_prepare_params *params)
     TA_VALUE_MODEL(definition, params.definition);
-/* Atomically replaces the route, then releases held effects in SCXML order. */
-TA_API ta_result ta_actor_activate_replacement(ta_system *system,
-                                               TA_IN const ta_actor_activate_replacement_params *params);
+/*
+ * Publishes a prepared actor: one atomic directory call puts it on the
+ * route, replacing the incumbent's RESIDENT entry, or, with no incumbent,
+ * claiming an address with no entry or replacing an UNLOADED one (whose
+ * unloaded session ends). Then an actor prepared without `at` releases its
+ * held effects in SCXML order and starts its pending invocations; a
+ * replaying actor schedules its held delayed sends under their due times
+ * (one already due fires at the next ta_system_dispatch_due()) and retires
+ * each active invocation with error.communication.invoke.<id>.unavailable,
+ * as a load does (ADR 0038), which leaves it a macrostep to run.
+ * - TA_ERR_DONE: it reached a top-level final state before it was published.
+ * - TA_ERR_BUSY: it is inside a macrostep; or, with no incumbent, another
+ *   actor is resident at the address.
+ * - TA_ERR_STALE: the directory no longer holds the incumbent's entry.
+ * - TA_ERR_INVALID: it is published, or was not prepared for `incumbent`.
+ * - TA_ERR_NOT_FOUND: no resident actor has either ID.
+ * - TA_ERR_NOMEM: nothing changed.
+ */
+TA_API ta_result ta_actor_publish(ta_system *system, TA_IN const ta_actor_publish_params *params);
+/*
+ * Moves a replaying actor's clock to `now` (ADR 0089 section 2): not earlier
+ * than its clock, and not later than ta_system_time(). Every held delayed
+ * send due at or before `now` is dropped: time reached it in the run being
+ * replayed, so it fired then.
+ * - TA_ERR_INVALID: the actor is not replaying, or `now` breaks that rule.
+ * - TA_ERR_BUSY: the actor is inside a macrostep.
+ * - TA_ERR_NOT_FOUND: no resident actor has this ID.
+ */
+TA_API ta_result ta_actor_set_time(ta_system *system, ta_actor_id actor, ta_time now);
 TA_API ta_result ta_actor_find(ta_system *system, TA_IN const ta_actor_find_params *params);
 /*
  * An operator transition (ADR 0082): a transition core builds when the
@@ -2922,7 +2978,8 @@ TA_API ta_result ta_actor_destroy(ta_system *system, ta_actor_id actor);
  * `delayed_sends` reports; ta_send_id_parse() turns the text a chart sees
  * into one. Only the actor's own sends can be named (ADR 0012). It may be
  * called between macrosteps or while one is paused, allocates nothing, and
- * writes a WITHDRAWN trace record outside any macrostep.
+ * writes a WITHDRAWN trace record outside any macrostep. It also removes a
+ * replaying actor's held sends with that ID (ADR 0089 section 7).
  *
  * - TA_ERR_INVALID: `send` is 0, which names no send.
  * - TA_ERR_NOT_FOUND: no resident actor has that ID, or it holds no pending
@@ -3550,7 +3607,7 @@ typedef struct {
 TA_API ta_result ta_system_definitions(const ta_system *system, TA_IN const ta_system_definitions_params *params);
 /*
  * Ends a definition's availability (ADR 0043). ta_actor_spawn() and
- * ta_actor_prepare_replacement() naming it fail with TA_ERR_NOT_FOUND, and
+ * ta_actor_prepare() naming it fail with TA_ERR_NOT_FOUND, and
  * ta_system_find_definition() skips it. Resident actors that use it keep
  * running, and ta_definition_inspect(), ta_definition_state(), and
  * ta_definition_export() keep working. The system frees the definition (its

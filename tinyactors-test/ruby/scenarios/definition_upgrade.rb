@@ -102,8 +102,8 @@ TinyactorsTest.scenarios 'subscription upgrade', chart: :subscription_v1 do
     # The host compiles and registers the new revision, then swaps the
     # interpreter under the same address, bound to the same data.
     v2 = definition(:subscription_v2)
-    replacement = prepare_replacement(subscription, :subscription_v2, binding: subscription.data)
-    assert_equal 'ok', activate_replacement(subscription, replacement)
+    replacement = prepare(:subscription_v2, incumbent: subscription, binding: subscription.data)
+    assert_equal 'ok', publish(replacement, incumbent: subscription)
     assert_equal ['ok', replacement.handle], find(subscription.address), 'the address names the new interpreter'
     assert_equal 1, replacement.data('.failures'), 'the upgrade keeps what the old revision collected'
 

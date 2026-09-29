@@ -1993,46 +1993,82 @@ class System {
   }
 
   /**
-   * Create a fresh, unpublished actor of `definition` to replace the named
-   * actor `incumbent` in place (core ADR 0043; docs/design.md). It
-   * bootstraps like a spawned actor, and core holds its visible bootstrap
-   * effects until activate(). `binding` defaults to the incumbent's live
-   * data root when the new definition uses the JavaScript data model.
+   * Create a fresh, unpublished actor of `definition` (core ADR 0089, napi
+   * ADR 0032): to replace the named actor `incumbent` in place, or to take
+   * `address`, which must have no resident actor when it is published. It
+   * bootstraps like a spawned actor. `binding` defaults to the incumbent's
+   * live data root when the new definition uses the JavaScript data model.
+   * With `at`, it is a replaying actor: its clock starts at `at` and moves
+   * only with setTime(), and it crosses no border until it is published.
+   * Without, core holds its visible bootstrap effects until publish().
    */
-  prepareReplacement(incumbent, definition, options = {}) {
-    const { slot, generation } = actorOf(this, incumbent);
+  prepare(definition, options = {}) {
     if (!(definition instanceof Definition) || definition.system !== this) {
-      throw new TinyactorsError('prepareReplacement(): expected a Definition of this system', 'invalid');
+      throw new TinyactorsError('prepare(): expected a Definition of this system', 'invalid');
+    }
+    if (options === null || typeof options !== 'object') {
+      throw new TinyactorsError('prepare(): expected options { incumbent } or { address }', 'invalid');
+    }
+    const { incumbent, address, at } = options;
+    if ((incumbent === undefined) === (address === undefined)) {
+      throw new TinyactorsError('prepare(): expected exactly one of { incumbent } and { address }', 'invalid');
+    }
+    if (at !== undefined && (typeof at !== 'number' || !Number.isFinite(at) || at < 0)) {
+      throw new TinyactorsError('prepare(): `at` must be a non-negative number of milliseconds', 'invalid');
     }
     let binding = options.binding;
-    if (binding === undefined && this.#usesJavaScript(definition.id)) {
-      const view = core.actor_inspect(this.#native, slot, generation);
-      binding = this.#dataRoot(view.definition_id, slot, generation);
+    let slot = 0;
+    let generation = 0;
+    let target;
+    if (incumbent !== undefined) {
+      ({ slot, generation } = actorOf(this, incumbent));
+      if (binding === undefined && this.#usesJavaScript(definition.id)) {
+        const view = core.actor_inspect(this.#native, slot, generation);
+        binding = this.#dataRoot(view.definition_id, slot, generation);
+      }
+    } else {
+      if (address === null || typeof address !== 'object' || typeof address.family !== 'string' ||
+          typeof address.name !== 'string') {
+        throw new TinyactorsError('prepare(): `address` must be { family, name }', 'invalid');
+      }
+      target = { family: { name: address.family }, name: address.name };
     }
-    const id = core.actor_prepare_replacement(this.#native, slot, generation, definition.id, binding);
-    return new PreparedActor(this, id.slot, id.generation, incumbent);
+    const id = core.actor_prepare(this.#native, slot, generation, target, definition.id, binding,
+      at === undefined ? undefined : Math.floor(at));
+    return new PreparedActor(this, id.slot, id.generation, incumbent, at !== undefined);
   }
 
   /**
-   * Publish `prepared` at its incumbent's address, then destroy the
-   * incumbent (docs/design.md). Mail still waiting for the incumbent moves,
-   * in order, to the front of the replacement's mailbox, so nothing accepted
-   * for the address is lost; the incumbent's delayed sends are discarded.
-   * Throws `busy` while the incumbent is inside a macrostep. If activation
-   * fails, the incumbent keeps the address and the prepared actor is left
-   * for the caller to destroy.
+   * Publish `prepared` (core ADR 0089). With an incumbent, it takes the
+   * incumbent's address, mail still waiting for the incumbent moves, in
+   * order, to the front of its mailbox, so nothing accepted for the address
+   * is lost, and the incumbent is destroyed; its delayed sends are
+   * discarded. Throws `busy` while the incumbent is inside a macrostep. If
+   * publishing fails, the incumbent keeps the address and the prepared actor
+   * is left for the caller to destroy. Without an incumbent, it claims its
+   * address, or replaces an unloaded actor there; `busy` when another actor
+   * is resident. `at` moves a replaying actor's clock one last time, to the
+   * moment the run it replays stopped (ADR 0089 section 2).
    */
-  activate(prepared) {
+  publish(prepared, options = {}) {
     if (!(prepared instanceof PreparedActor) || prepared.system !== this) {
-      throw new TinyactorsError('activate(): expected a prepared actor of this system', 'invalid');
+      throw new TinyactorsError('publish(): expected a prepared actor of this system', 'invalid');
+    }
+    if (options === null || typeof options !== 'object') {
+      throw new TinyactorsError('publish(): expected options { at }', 'invalid');
     }
     const { incumbent } = prepared;
-    if (this.#native.scheduling(incumbent.slot, incumbent.generation) === 'runnable') {
-      throw new TinyactorsError('activate(): the incumbent is inside a macrostep; activate once it is idle', 'busy');
+    if (incumbent !== undefined && this.#native.scheduling(incumbent.slot, incumbent.generation) === 'runnable') {
+      throw new TinyactorsError('publish(): the incumbent is inside a macrostep; publish once it is idle', 'busy');
     }
-    core.actor_activate_replacement(this.#native, incumbent.slot, incumbent.generation,
-      prepared.slot, prepared.generation);
-    core.actor_destroy(this.#native, incumbent.slot, incumbent.generation);
+    if (options.at !== undefined) {
+      prepared.setTime(options.at);
+    }
+    core.actor_publish(this.#native, prepared.slot, prepared.generation,
+      incumbent?.slot ?? 0, incumbent?.generation ?? 0);
+    if (incumbent !== undefined) {
+      core.actor_destroy(this.#native, incumbent.slot, incumbent.generation);
+    }
     return new ActorID(this, prepared.slot, prepared.generation);
   }
 
@@ -2360,21 +2396,30 @@ function servicesOf(value, what) {
 
 native.setupEffects(effectHandler);
 
-// A fresh unpublished actor that replaces `incumbent` once activated (step 14).
+// A fresh unpublished actor (step 14, core ADR 0089): it replaces
+// `incumbent`, or takes its address, once System.publish() publishes it.
 class PreparedActor extends ActorID {
-  constructor(system, slot, generation, incumbent) {
+  constructor(system, slot, generation, incumbent, replaying) {
     super(system, slot, generation);
     this.incumbent = incumbent;
+    this.replaying = replaying;
   }
 
-  /** False until activate() publishes it at the incumbent's address. */
+  /** False until System.publish() publishes it. */
   get published() {
     return this.system.inspect(this).published;
   }
 
-  /** Publish at the incumbent's address and destroy the incumbent (System.activate). */
-  activate() {
-    return this.system.activate(this);
+  /**
+   * Move a replaying actor's clock forward to `time` (core ADR 0089): not
+   * before its clock, not after the system's time, and only between
+   * macrosteps. Its held delayed sends due by then are dropped.
+   */
+  setTime(time) {
+    if (typeof time !== 'number' || !Number.isFinite(time) || time < 0) {
+      throw new TinyactorsError('setTime(): expected a non-negative number of milliseconds', 'invalid');
+    }
+    core.actor_set_time(nativeOf(this.system), this.slot, this.generation, Math.floor(time));
   }
 }
 

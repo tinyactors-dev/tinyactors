@@ -440,15 +440,36 @@ export interface System {
    */
   wakeAt(address: ActorAddress, time: number): void;
 
-  /** Create an unpublished replacement for the named actor `incumbent` (Actor.prepareReplacement). */
-  prepareReplacement<Data extends object>(
-    incumbent: ActorID,
-    definition: Definition<Data>,
-    options?: ReplacementOptions<Data>,
-  ): PreparedActor<Data>;
+  /**
+   * Create an unpublished actor of `definition` (core ADR 0089, napi ADR
+   * 0032): to replace the resident named actor `incumbent` in place, or to
+   * take `address`, which must have no resident actor when it is published.
+   * It bootstraps like a spawned actor. `binding` defaults to the
+   * incumbent's live data root when `definition` uses the JavaScript data
+   * model. With `at`, it is a replaying actor: its clock starts at `at` and
+   * moves only with PreparedActor.setTime(), and it crosses no border (no
+   * sends, logs or invoker starts leave it) until it is published. Without
+   * `at`, core holds its visible bootstrap effects until publish().
+   */
+  prepare<Data extends object>(definition: Definition<Data>, options: PrepareOptions<Data>): PreparedActor<Data>;
 
-  /** Publish a prepared actor and destroy its incumbent (PreparedActor.activate). */
-  activate<Data extends object>(prepared: PreparedActor<Data>): Actor<Data>;
+  /**
+   * Publish a prepared actor. With an incumbent: it takes the incumbent's
+   * address, mail still waiting for the incumbent, and the send()s it
+   * carries, move in order to the front of its mailbox, and the incumbent is
+   * destroyed; its delayed sends are discarded. Throws `busy` while the
+   * incumbent is inside a macrostep; if publishing fails, the incumbent
+   * keeps the address and the prepared actor is left for the caller to
+   * destroy. Without an incumbent: it claims its address, or replaces an
+   * unloaded actor there, and throws `busy` when another actor is resident.
+   * `done` when it finished before it was published. A replaying actor's
+   * held delayed sends are scheduled (one already due fires at the next
+   * dispatch), and its active invocations are reported
+   * `error.communication.invoke.<id>.unavailable`. `at` moves a replaying
+   * actor's clock one last time first: to the moment the run it replays
+   * stopped (core ADR 0089 section 2).
+   */
+  publish<Data extends object>(prepared: PreparedActor<Data>, options?: { readonly at?: number }): Actor<Data>;
 
   registerIO(type: string, processor: IOProcessor, options?: IOProcessorOptions): void;
   /** Open a scope that stores `uri` once, for a connection or a session (core ADR 0068). */
@@ -1422,17 +1443,6 @@ export interface Actor<Data extends object = Record<string, unknown>> extends Ac
   unload(): void;
 
   /**
-   * Prepare a fresh unpublished actor of `definition` to replace this named
-   * actor in place. It bootstraps like a spawned actor, and core holds its
-   * visible bootstrap effects until activation. `binding` defaults to this
-   * actor's live data root when `definition` uses the JavaScript data model.
-   */
-  prepareReplacement(
-    definition: Definition<Data>,
-    options?: ReplacementOptions<Data>,
-  ): PreparedActor<Data>;
-
-  /**
    * Terminate this interpreter. Its active invocations are cancelled: an
    * in-system SCXML child is destroyed with it, and a JavaScript invoker's
    * service gets cancel().
@@ -1442,26 +1452,27 @@ export interface Actor<Data extends object = Record<string, unknown>> extends Ac
 }
 
 export interface PreparedActor<Data extends object> extends Actor<Data> {
-  /** False until activate() publishes it. */
+  /** False until System.publish() publishes it. */
   readonly published: boolean;
-  readonly incumbent: ActorID;
-
+  /** The actor it replaces, when it was prepared with one. */
+  readonly incumbent?: ActorID;
+  /** True when it was prepared with `at` (core ADR 0089). */
+  readonly replaying: boolean;
   /**
-   * Publish this actor at the incumbent's address, then destroy the
-   * incumbent. Mail still waiting for the incumbent, and the send()s it
-   * carries, move in order to the front of this actor's mailbox, so nothing
-   * accepted for the address is lost; the incumbent's delayed sends are
-   * discarded. Throws `busy` while the incumbent is inside a macrostep. If
-   * activation fails, the incumbent keeps the address and this actor is left
-   * for the caller to destroy.
+   * Move a replaying actor's clock forward to `time`: not before its clock,
+   * not after the system's time, and only between macrosteps. Held delayed
+   * sends due by then are dropped: they fired in the run being replayed.
+   * `invalid` for an actor that is not replaying, `busy` inside a macrostep.
    */
-  activate(): Actor<Data>;
+  setTime(time: number): void;
 }
 
-export interface ReplacementOptions<Data extends object> {
+export type PrepareOptions<Data extends object> = {
   /** Defaults to the incumbent actor's current data-model root. */
   readonly binding?: Partial<Data> | Data;
-}
+  /** A replaying actor, whose clock starts here: no later than the system's time. */
+  readonly at?: number;
+} & ({ readonly incumbent: ActorID; readonly address?: never } | { readonly address: ActorAddress; readonly incumbent?: never });
 
 /**
  * Core's residency: "idle" between macrosteps, "running" inside one, "done"

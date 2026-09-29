@@ -4,7 +4,7 @@ module Workbench
   # The live system: one host process, one ta_system, and one named actor per
   # declaration in the workbench directory. Neither the host nor the system is
   # ever torn down. A chart edit is applied with the core replacement protocol
-  # (ta_actor_prepare_replacement / ta_actor_activate_replacement), which is
+  # (ta_actor_prepare / ta_actor_publish), which is
   # why every top-level actor is a named actor: only a published named actor
   # can be replaced, and only the directory entry makes the swap atomic.
   class Session
@@ -105,14 +105,14 @@ module Workbench
       was_active = active_states(incumbent)
       dropped = Array(inspect_actor(incumbent.handle)&.dig(:delayed_sends)).size
 
-      replacement = @context.prepare_replacement(incumbent, spec.chart, binding: carried)
-      result = @context.activate_replacement(incumbent, replacement)
+      replacement = @context.prepare(spec.chart, incumbent: incumbent, binding: carried)
+      result = @context.publish(replacement, incumbent: incumbent)
       unless result == 'ok'
         # The replacement was never published, so the incumbent still owns the
         # address and keeps running; drop the prepared session.
         destroy_tree(replacement.handle)
         @context.forget(replacement)
-        @journal.error("#{name}: activate_replacement answered #{result}; kept the running actor")
+        @journal.error("#{name}: publish answered #{result}; kept the running actor")
         return false
       end
 

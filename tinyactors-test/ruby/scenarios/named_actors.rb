@@ -12,7 +12,7 @@
 # sessions, so a named actor is routable, replies by address, and can be
 # imaged. It does not implement the residency protocol itself yet: every
 # scenario that changes residency stops at ta_actor_unload with RPC -32001,
-# and replacement stops at ta_actor_prepare_replacement. The code after the
+# and replacement stops at ta_actor_prepare. The code after the
 # first such call has not run against a real core; runner_selftest.rb checks
 # the helpers it uses.
 module NamedActorScenarios
@@ -293,14 +293,14 @@ TinyactorsTest.scenarios 'replacement', chart: :counter_v1 do
     incumbent.deliver 'tick'
     assert_equal 2, incumbent.data('.count')
 
-    replacement = prepare_replacement(incumbent, :counter_v2, binding: incumbent.data)
+    replacement = prepare(:counter_v2, incumbent: incumbent, binding: incumbent.data)
     run_system('prepare the replacement')
     assert_equal false, replacement.inspect_actor[:published]
     assert_equal 'err_busy', ta.actor.capture(system: system_handle, actor: replacement.handle)[:result]
     assert_equal ['ok', incumbent.handle], find(incumbent.address), 'the incumbent keeps the route'
     assert_equal [], router.entries('submit'), 'the bootstrap `hello` is held until activation'
 
-    assert_equal 'ok', activate_replacement(incumbent, replacement)
+    assert_equal 'ok', publish(replacement, incumbent: incumbent)
     run_system('activate the replacement')
     assert_equal ['ok', replacement.handle], find(incumbent.address)
     assert_equal({ count: 2, greeted: true }, replacement.data)
@@ -319,16 +319,16 @@ TinyactorsTest.scenarios 'replacement', chart: :counter_v1 do
   scenario 'a refused activation leaves the incumbent routed and is retryable' do
     router = recording_router
     incumbent = spawn name: 'c1'
-    replacement = prepare_replacement(incumbent, :counter_v2, binding: incumbent.data)
+    replacement = prepare(:counter_v2, incumbent: incumbent, binding: incumbent.data)
     directory = instruments.fetch('directory')
 
     directory.arm_fault(:replace, result: 'err_stale')
-    assert_equal 'err_stale', activate_replacement(incumbent, replacement)
+    assert_equal 'err_stale', publish(replacement, incumbent: incumbent)
     assert_equal ['ok', incumbent.handle], find(incumbent.address)
     assert_equal false, replacement.inspect_actor[:published]
     assert_equal [], router.entries('submit'), 'a refused swap releases no held send'
 
-    assert_equal 'ok', activate_replacement(incumbent, replacement)
+    assert_equal 'ok', publish(replacement, incumbent: incumbent)
     run_system('retry replacement activation')
     assert_equal ['ok', replacement.handle], find(incumbent.address)
     assert_equal({ count: 0, greeted: true }, replacement.data)
@@ -338,13 +338,13 @@ TinyactorsTest.scenarios 'replacement', chart: :counter_v1 do
     log_sink = recording_log
     service = scripted_invoker('urn:tinyactors:test:replacement')
     incumbent = spawn name: 'c1'
-    replacement = prepare_replacement(incumbent, :counter_effects_v2)
+    replacement = prepare(:counter_effects_v2, incumbent: incumbent)
 
     assert_equal [], log_sink.logged
     assert_equal [], service.started
     assert_equal 'err_not_found', ta.system.next_deadline(system: system_handle)[:result]
 
-    assert_equal 'ok', activate_replacement(incumbent, replacement)
+    assert_equal 'ok', publish(replacement, incumbent: incumbent)
     assert_equal [['revision', 'v2']], log_sink.logged
     assert_equal 1000, next_deadline
     assert_equal [], service.started, 'the invocation remains queued until the activated actor runs'

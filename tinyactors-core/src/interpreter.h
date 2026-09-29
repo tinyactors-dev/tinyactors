@@ -167,6 +167,8 @@ ta_result ta_interpreter_execution_error(ta_interpreter *it, ta_fault *fault);
 /* Makes sure the actor's queue has room for one more internal event, so
  * queueing it cannot fail (ADR 0070). */
 ta_result ta_interpreter_queue_room(ta_system *system, ta_actor *actor);
+/* Room for `count` more internal events, so that queueing them cannot fail. */
+ta_result ta_interpreter_queue_reserve(ta_system *system, ta_actor *actor, uint32_t count);
 /* How many events the actor's queue holds, a taken head included: a mark
  * a step's RAISED records start from. */
 uint32_t ta_interpreter_queue_mark(const ta_actor *actor);

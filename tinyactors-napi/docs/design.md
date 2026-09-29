@@ -178,15 +178,14 @@ function replace<Data extends object>(
   definition: Definition<Data>,
 ): Actor<Data> {
   // The incumbent's live data-model root is the default binding.
-  const prepared = incumbent.prepareReplacement(definition);
+  const prepared = system.prepare(definition, { incumbent });
 
   try {
-    // Atomically changes the named route and releases held bootstrap effects.
-    const replacement = prepared.activate();
-    incumbent.destroy();
-    return replacement;
+    // Atomically changes the named route, releases held bootstrap effects,
+    // and destroys the incumbent.
+    return system.publish(prepared);
   } catch (error) {
-    // A failed activation leaves the incumbent published at the address.
+    // A failed publish leaves the incumbent published at the address.
     prepared.destroy();
     throw error;
   }
@@ -202,11 +201,12 @@ await system.flush();
 ```
 
 Preparing a replacement creates and bootstraps a fresh, unpublished
-interpreter. Core holds its externally visible bootstrap effects until
-activation. Activation atomically changes that actor's named route, but it does
-not destroy the incumbent; the binding must do so after a successful swap. If
-activation fails, the incumbent still owns the route and the binding destroys
-the unpublished prepared actor.
+interpreter. Core holds its externally visible bootstrap effects until it is
+published. Publishing atomically changes that actor's named route, then
+destroys the incumbent. If publishing fails, the incumbent still owns the
+route and the caller destroys the unpublished prepared actor. A replacement
+prepared with `at` replays the incumbent's logged inputs into the new
+revision instead (core ADR 0089, napi ADR 0032).
 
 Replacement preserves the logical address and, by default, the exact live
 JavaScript data root. It does not translate the active state configuration.
@@ -216,14 +216,14 @@ runtime-only service handles do not move to the replacement and need the
 host's normal cancellation or cleanup policy.
 
 Because the same data object is used during preparation, initialization may
-mutate it before activation. The system's single-threaded execution discipline
+mutate it before it is published. The system's single-threaded execution discipline
 prevents concurrent interpreter access, but applications that need rollback of
 data mutations must prepare against a copy and explicitly choose when to make
 that copy authoritative.
 
 Route replacement is atomic for one actor, not for a group. A multi-actor
 rollout may temporarily contain both revisions. When replacing related actors
-in one in-process system, perform the synchronous prepare/activate calls in one
+in one in-process system, perform the synchronous prepare/publish calls in one
 JavaScript turn so the scheduler pump cannot interleave queued traffic between
 them. Distributed or durable deployments require a higher-level rollout and
 fencing protocol.
@@ -234,10 +234,10 @@ different routing boundary. The old definition can be retired after the
 rollout; retirement prevents new spawns but does not stop any actors that were
 intentionally left on the old revision.
 
-The low-level prepare/activate methods remain public for staged rollout,
+The low-level prepare/publish methods remain public for staged rollout,
 fencing, logging, and custom child cleanup. A later convenience method such as
-`actor.replaceWith(definition)` may wrap preparation, activation, failure
-cleanup, and incumbent destruction without changing those semantics.
+`actor.replaceWith(definition)` may wrap preparation, publishing and failure
+cleanup without changing those semantics.
 
 ## JavaScript value lifetime
 

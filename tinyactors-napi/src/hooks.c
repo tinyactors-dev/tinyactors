@@ -24,11 +24,21 @@ ta_result tna_hook_actor_unloaded(tna_system *system, ta_actor_id actor) {
     return TA_OK;
 }
 
-ta_result tna_hook_actor_activated(tna_system *system, const ta_actor_activate_replacement_params *params) {
-    ta_result result = tna_sched_transfer(&system->sched, &(tna_sched_transfer_params){
-                                                              .from = params->incumbent,
-                                                              .to = params->replacement,
-                                                          });
+ta_result tna_hook_actor_published(tna_system *system, const ta_actor_publish_params *params) {
+    ta_result result = TA_OK;
+    if (params->incumbent != 0) {
+        result = tna_sched_transfer(&system->sched, &(tna_sched_transfer_params){
+                                                        .from = params->incumbent,
+                                                        .to = params->actor,
+                                                    });
+    }
+    /* A replay's invocations were retired as unavailable (core ADR 0089),
+     * which leaves the actor a macrostep to run. */
+    ta_actor_inspection view;
+    if (result == TA_OK && ta_actor_inspect(system->core, params->actor, &view) == TA_OK &&
+        view.macrostep_in_progress) {
+        result = tna_sched_wake(&system->sched, params->actor);
+    }
     if (result == TA_OK) {
         tna_system_want_turn(system);
     }

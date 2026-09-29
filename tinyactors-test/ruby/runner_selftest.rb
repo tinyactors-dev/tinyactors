@@ -144,14 +144,14 @@ class ResidencyFakeHost < FakeHost
   def call(method, params = nil)
     case method
     when 'ta.system.set_actor_directory', 'ta.actor.unload', 'ta.actor.destroy', 'ta.actor.remove_unloaded',
-         'ta.actor.activate_replacement'
+         'ta.actor.publish'
       record(method, params)
       ok
     when 'ta.definition.inspect' then record(method, params) && ok(out: { identity: { family: { name: 'traffic_light' } } })
     when 'ta.actor.capture' then record(method, params) && ok(out: { '$handle': 'session_image:7' })
     when 'ta.actor.load' then record(method, params) && ok(out: 6)
     when 'ta.actor.find' then record(method, params) && ok(out: 6)
-    when 'ta.actor.prepare_replacement' then record(method, params) && ok(out: 9)
+    when 'ta.actor.prepare' then record(method, params) && ok(out: 9)
     when 'ta.session.image_next_deadline' then record(method, params) && @deadlines.shift
     when 'ta.session.image_destroy' then record(method, params) && {}
     else super
@@ -188,11 +188,11 @@ context.instance_exec do
   check(image_deadline(image) == 30_000 && image_deadline(image).nil?, 'image_deadline reads the deadline or nil')
   check(find(address) == ['ok', 6], 'find returns the result and the runtime ID')
   check(remove_unloaded(address) == 'ok', 'remove_unloaded returns the result')
-  replacement = prepare_replacement(light, :traffic_light, binding: { cycles: 1 })
+  replacement = prepare(:traffic_light, incumbent: light, binding: { cycles: 1 })
   check(replacement.handle == 9 && replacement.address == address, 'a replacement shares the incumbent address')
   check(!actors.include?(replacement), 'an unpublished replacement is not checked by invariants')
-  check(activate_replacement(light, replacement) == 'ok' && actors.include?(replacement),
-        'an activated replacement is checked by invariants')
+  check(publish(replacement, incumbent: light) == 'ok' && actors.include?(replacement),
+        'a published replacement is checked by invariants')
 end
 calls = residency.calls
 spawn_call = calls.find { |method, _| method == 'ta.actor.spawn' }.last

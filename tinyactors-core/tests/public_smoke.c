@@ -13,8 +13,8 @@ static void use_public_types(void) {
     ta_actor_directory_entry directory_entry = {
         .kind = TA_ACTOR_DIRECTORY_UNLOADED,
     };
-    ta_actor_prepare_replacement_params prepare = {0};
-    ta_actor_activate_replacement_params activate = {0};
+    ta_actor_prepare_params prepare = {0};
+    ta_actor_publish_params activate = {0};
     ta_actor_completion completion = {0};
     ta_due_dispatch_params due = {0};
     ta_external_event_router router = {0};

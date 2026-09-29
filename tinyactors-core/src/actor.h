@@ -33,6 +33,10 @@ typedef struct {
 
 typedef struct ta_activation_effects {
     ta_vec entries; /* ta_activation_effect, in authored order */
+    /* A replaying actor (ADR 0089): it crosses no border until published,
+     * and `clock` is its own logical time, moved by ta_actor_set_time(). */
+    bool replaying;
+    ta_time clock;
 } ta_activation_effects;
 
 /* Where an actor's external event is (ADR 0069). */
@@ -266,6 +270,12 @@ ta_result ta_actor_schedule_send(ta_system *system, ta_actor *actor, const ta_de
 ta_result ta_actor_reserve_send(ta_system *system, ta_actor *actor);
 /* The list a send owned by `owner` belongs in: the actor's, or the orphans when it is gone. */
 ta_result ta_actor_timer_home(ta_system *system, ta_actor_id owner, ta_timer_list **out);
+
+/* True for a replaying actor (ADR 0089): prepared with `at`, not yet published. */
+bool ta_actor_replaying(const ta_actor *actor);
+/* The time the actor lives at: a replaying actor's own clock, otherwise the
+ * system's (ADR 0089 section 2). */
+ta_time ta_actor_now(const ta_system *system, const ta_actor *actor);
 
 /* Materialized effects of an unpublished replacement's bootstrap. */
 ta_result ta_actor_hold_send(ta_system *system, ta_actor *actor, const ta_activation_send *send);

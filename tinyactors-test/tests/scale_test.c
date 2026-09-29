@@ -548,11 +548,11 @@ static round_cost measure(size_t population) {
     /* Upgrading every one of them to v2 under its own address (ADR 0043). */
     for (size_t index = 0; index < population; index += 1) {
         ta_actor_id replacement = 0;
-        require(ta_actor_prepare_replacement(system, &(ta_actor_prepare_replacement_params){
-                                                         .incumbent = actors[index],
-                                                         .definition = v2,
-                                                         .out = &replacement,
-                                                     }) == TA_OK,
+        require(ta_actor_prepare(system, &(ta_actor_prepare_params){
+                                             .incumbent = actors[index],
+                                             .definition = v2,
+                                             .out = &replacement,
+                                         }) == TA_OK,
                 "preparing a replacement");
         ta_run_status status = TA_RUN_ERROR;
         require(ta_actor_resume(system, &(ta_actor_resume_params){
@@ -562,11 +562,11 @@ static round_cost measure(size_t population) {
                                         }) == TA_OK &&
                     status == TA_RUN_STABLE,
                 "bootstrapping a replacement");
-        require(ta_actor_activate_replacement(system, &(ta_actor_activate_replacement_params){
-                                                          .incumbent = actors[index],
-                                                          .replacement = replacement,
-                                                      }) == TA_OK,
-                "activating a replacement");
+        require(ta_actor_publish(system, &(ta_actor_publish_params){
+                                             .actor = replacement,
+                                             .incumbent = actors[index],
+                                         }) == TA_OK,
+                "publishing a replacement");
         require(ta_actor_destroy(system, actors[index]) == TA_OK, "destroying an incumbent");
         actors[index] = replacement;
     }

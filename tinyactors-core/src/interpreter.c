@@ -379,7 +379,7 @@ static ta_trace_record ta_trace_record_now(const ta_interpreter *it, ta_trace_ki
     record.context = it->trace_context;
     record.actor = it->actor->record.id;
     record.definition = it->definition->id;
-    record.now = ta_clock_now(&it->system->clock);
+    record.now = ta_actor_now(it->system, it->actor);
     return record;
 }
 
@@ -928,7 +928,7 @@ ta_time ta_interpreter_macrostep_time(const ta_system *system, const ta_actor *a
     if (actor->macrostep && block != NULL && block->slots.timed) {
         return block->slots.time;
     }
-    return ta_clock_now(&system->clock);
+    return ta_actor_now(system, actor);
 }
 
 /* The first resume of a macrostep takes its time, in a block the actor then
@@ -936,7 +936,7 @@ ta_time ta_interpreter_macrostep_time(const ta_system *system, const ta_actor *a
 static ta_result ta_take_macrostep_time(ta_system *system, ta_actor *actor) {
     ta_result result = ta_interpreter_hold_block(system, actor);
     if (result == TA_OK && !actor->event_block->slots.timed) {
-        actor->event_block->slots.time = ta_clock_now(&system->clock);
+        actor->event_block->slots.time = ta_actor_now(system, actor);
         actor->event_block->slots.timed = true;
     }
     return result;
@@ -1424,7 +1424,7 @@ void ta_interpreter_raised_outside(ta_system *system, ta_actor *actor, ta_event_
     record.key = (ta_step_key){ .session = actor->session_id };
     record.actor = actor->record.id;
     record.definition = actor->definition->id;
-    record.now = ta_clock_now(&system->clock);
+    record.now = ta_actor_now(system, actor);
     record.event = &queue->events[queue->count - 1u].event;
     if (parent != NULL) {
         record.context = parent->context;
@@ -1752,6 +1752,21 @@ static bool ta_send_destination(ta_interpreter *it, const ta_scxml_target *targe
     }
 }
 
+/*
+ * A replaying actor's invocations run nothing, so `#_<invokeid>` names no
+ * child (ADR 0089 section 3). While the invocation is active the target is
+ * still one the run being replayed could reach: it resolves to no session,
+ * which the held send carries until it is published or dropped.
+ */
+static bool ta_send_replayed_invoke(ta_interpreter *it, const ta_scxml_target *target, ta_actor_ref *out) {
+    ta_actor_ref none = { .kind = TA_ACTOR_REF_RUNTIME };
+    if (target->kind != TA_SCXML_TARGET_INVOKE || !ta_invoke_is_active(it->actor, target->as.invoke)) {
+        return false;
+    }
+    *out = none;
+    return true;
+}
+
 /* Resolves `type` / `typeexpr`; an unknown processor is an execution error. */
 static ta_result ta_send_io_type(ta_interpreter *it, const ta_send_action *send, ta_send_state *state,
                                  ta_fault *fault) {
@@ -1962,11 +1977,19 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
         ta_actor_ref_retain(&event.origin.as.actor);
         return ta_interpreter_enqueue_internal(system, actor, &event);
     }
+    bool replaying = ta_actor_replaying(actor);
+    if (replaying && state->delay == 0) {
+        /* A replay crosses no border (ADR 0089 section 3): the run being
+         * replayed sent this, so it counts as sent, and goes nowhere. */
+        ta_send_state_release(state);
+        state->sent = true;
+        return TA_OK;
+    }
 
     ta_delayed_send record = {
         .owner = actor->record.id,
         .send_id = state->send_id,
-        .due = ta_clock_now(&system->clock) + state->delay,
+        .due = ta_actor_now(system, actor) + state->delay,
         .event = state->event,
         .io_type = state->io_type,
         .target = state->target,
@@ -1978,7 +2001,8 @@ static ta_result ta_send_commit(ta_interpreter *it, ta_send_state *state) {
         .trace = ta_interpreter_trace_here(it),
     };
     /* A named target's reference passes to the send record (ADR 0065). */
-    if (state->scxml_io && !ta_send_destination(it, &state->scxml, &record.destination)) {
+    if (state->scxml_io && !ta_send_destination(it, &state->scxml, &record.destination) &&
+        !(replaying && ta_send_replayed_invoke(it, &state->scxml, &record.destination))) {
         ta_send_state_release(state);
         return ta_communication_error(system, actor, &(ta_error_params){ .send_id = state->send_id });
     }
@@ -2294,6 +2318,8 @@ static ta_result ta_exec_action(ta_interpreter *it, const ta_action_def *action)
             if (status == TA_OP_OK && it->system->log_sink.v != NULL) {
                 if (it->actor->published) {
                     it->system->log_sink.v->write(it->system->log_sink.self, &record);
+                } else if (ta_actor_replaying(it->actor)) {
+                    /* The run being replayed wrote it (ADR 0089 section 3). */
                 } else {
                     ta_result result = ta_actor_hold_log(it->system, it->actor, &record);
                     if (result != TA_OK) {
@@ -3723,7 +3749,7 @@ static ta_result ta_next_step(ta_interpreter *it, bool *stable) {
             ta_bind_event(actor, TA_BOUND_INTERNAL);
             return ta_select_taken(it);
         }
-        if (actor->published && ta_invoke_has_pending(actor)) {
+        if ((actor->published || ta_actor_replaying(actor)) && ta_invoke_has_pending(actor)) {
             it->at = (ta_micro_position){ .phase = TA_PHASE_INVOKES };
             return TA_OK;
         }
@@ -4273,6 +4299,27 @@ ta_result ta_interpreter_execution_error(ta_interpreter *it, ta_fault *fault) {
 
 ta_result ta_interpreter_queue_room(ta_system *system, ta_actor *actor) {
     return ta_queue_room(system, actor);
+}
+
+ta_result ta_interpreter_queue_reserve(ta_system *system, ta_actor *actor, uint32_t count) {
+    ta_result result = ta_queue_room(system, actor);
+    while (result == TA_OK && actor->event_block->capacity - actor->event_block->count < count) {
+        ta_event_block *block = actor->event_block;
+        if (block->capacity > UINT32_MAX / 2u) {
+            return TA_ERR_NOMEM;
+        }
+        uint32_t capacity = block->capacity * 2u;
+        ta_event_block *grown = ta_mem_alloc(system->allocator, ta_event_block_bytes(capacity),
+                                             _Alignof(ta_event_block));
+        if (grown == NULL) {
+            return TA_ERR_NOMEM;
+        }
+        ta_mem_copy(grown, block, ta_event_block_bytes(block->count));
+        grown->capacity = capacity;
+        ta_block_free(system, block);
+        actor->event_block = grown;
+    }
+    return result;
 }
 
 uint32_t ta_interpreter_queue_mark(const ta_actor *actor) {

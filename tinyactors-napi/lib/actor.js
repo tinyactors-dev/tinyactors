@@ -63,11 +63,6 @@ class ActorID {
     this.system.unload(this);
   }
 
-  /** Prepare a fresh unpublished actor of `definition` to replace this one (System.prepareReplacement). */
-  prepareReplacement(definition, options) {
-    return this.system.prepareReplacement(this, definition, options);
-  }
-
   /** Terminate this actor. Invoked children are not destroyed implicitly. */
   destroy() {
     this.system.destroy(this);

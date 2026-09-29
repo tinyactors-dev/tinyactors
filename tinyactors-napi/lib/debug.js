@@ -983,14 +983,14 @@ class DebugSession {
     if (view.macrostepInProgress) throw refuse(`${attached.label} is inside a macrostep: \`abandon\` it first`);
     this.#audited({ type: 'mutation', operation: 'replace', revision });
     const dropped = view.delayedSends.filter((send) => !send.submitted).map((send) => send.id ?? send.event);
-    const prepared = system.prepareReplacement(attached.actor, definition);
+    const prepared = system.prepare(definition, { incumbent: attached.actor });
     let replacement;
     try {
-      // The replacement bootstraps in a pump turn before it can be activated.
+      // The replacement bootstraps in a pump turn before it can be published.
       for (let tries = 0; tries < MOST_TURNS && system.inspect(prepared).scheduling === 'runnable'; tries += 1) {
         await nextTurn();
       }
-      replacement = system.activate(prepared);
+      replacement = system.publish(prepared);
     } catch (error) {
       if (!system.closed && system.exists(prepared)) system.destroy(prepared);
       throw error;

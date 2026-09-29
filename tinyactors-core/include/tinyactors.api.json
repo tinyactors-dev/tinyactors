@@ -522,41 +522,6 @@
         }
       }
     },
-    "ta_actor_activate_replacement_params": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "incumbent",
-          "type": {
-            "type": "ta_actor_id"
-          }
-        },
-        {
-          "name": "replacement",
-          "type": {
-            "type": "ta_actor_id"
-          }
-        }
-      ],
-      "layout": {
-        "x86_64-unknown-linux-gnu": {
-          "size": 16,
-          "align": 8,
-          "offsets": {
-            "incumbent": 0,
-            "replacement": 8
-          }
-        },
-        "wasm32-unknown-unknown": {
-          "size": 16,
-          "align": 8,
-          "offsets": {
-            "incumbent": 0,
-            "replacement": 8
-          }
-        }
-      }
-    },
     "ta_actor_active_states_params": {
       "kind": "struct",
       "doc": "The active configuration: every active state, ancestors included, in document order. Resolve IDs with ta_definition_state().",
@@ -1975,14 +1940,27 @@
         }
       }
     },
-    "ta_actor_prepare_replacement_params": {
+    "ta_actor_prepare_params": {
       "kind": "struct",
+      "doc": "An unpublished actor (ADR 0037, ADR 0089): one the directory does not know. With `incumbent`, a resident named actor of the definition's family, it will replace that actor; with `incumbent` 0 it will take `address`, in the definition's family, which must then have no resident actor when it is published. `trace` is what its bootstrap runs under (ADR 0067).\n\n`at`, when non-null, makes a replaying actor (ADR 0089): its bootstrap and every later macrostep run on its own clock, which starts at `*at` (no later than ta_system_time()) and moves only with ta_actor_set_time(), and it crosses no border until it is published: its immediate sends and logs are dropped, its delayed sends are held, and its invocations become active without calling an invoker. Without `at`, its visible bootstrap effects are held and released by ta_actor_publish(), as for a replacement.",
       "fields": [
         {
           "name": "incumbent",
           "type": {
             "type": "ta_actor_id"
           }
+        },
+        {
+          "name": "address",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_address",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in",
+          "optional": true
         },
         {
           "name": "definition",
@@ -2003,6 +1981,24 @@
           "optional": true
         },
         {
+          "name": "at",
+          "type": {
+            "pointer": {
+              "type": "ta_time",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in",
+          "optional": true
+        },
+        {
+          "name": "trace",
+          "type": {
+            "type": "ta_trace_parent"
+          }
+        },
+        {
           "name": "out",
           "type": {
             "pointer": {
@@ -2016,23 +2012,65 @@
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 32,
+          "size": 96,
           "align": 8,
           "offsets": {
             "incumbent": 0,
-            "definition": 8,
-            "datamodel_binding": 16,
-            "out": 24
+            "address": 8,
+            "definition": 16,
+            "datamodel_binding": 24,
+            "at": 32,
+            "trace": 40,
+            "out": 88
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 24,
+          "size": 88,
           "align": 8,
           "offsets": {
             "incumbent": 0,
-            "definition": 8,
-            "datamodel_binding": 16,
-            "out": 20
+            "address": 8,
+            "definition": 16,
+            "datamodel_binding": 24,
+            "at": 28,
+            "trace": 32,
+            "out": 80
+          }
+        }
+      }
+    },
+    "ta_actor_publish_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          }
+        },
+        {
+          "name": "incumbent",
+          "type": {
+            "type": "ta_actor_id"
+          },
+          "doc": "The incumbent given to ta_actor_prepare(), or 0 for none."
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "actor": 0,
+            "incumbent": 8
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "actor": 0,
+            "incumbent": 8
           }
         }
       }
@@ -18563,8 +18601,8 @@
       }
     },
     {
-      "name": "ta_actor_prepare_replacement",
-      "doc": "Creates an unpublished actor and holds bootstrap effects until activation.",
+      "name": "ta_actor_prepare",
+      "doc": "Creates an unpublished actor (see ta_actor_prepare_params). - TA_ERR_NOT_FOUND: no such definition, it is retired, or no resident actor has the incumbent's ID. - TA_ERR_INVALID: the incumbent is unpublished or has no name, or is of another family; with no incumbent, `address` is missing, empty, or of another family; `at` is later than ta_system_time(). - TA_ERR_UNSUPPORTED: with no incumbent, the system has no directory. - TA_ERR_NOMEM: nothing was created.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -18589,7 +18627,7 @@
           "name": "params",
           "type": {
             "pointer": {
-              "type": "ta_actor_prepare_replacement_params",
+              "type": "ta_actor_prepare_params",
               "const": true
             }
           },
@@ -18606,8 +18644,8 @@
       }
     },
     {
-      "name": "ta_actor_activate_replacement",
-      "doc": "Atomically replaces the route, then releases held effects in SCXML order.",
+      "name": "ta_actor_publish",
+      "doc": "Publishes a prepared actor: one atomic directory call puts it on the route, replacing the incumbent's RESIDENT entry, or, with no incumbent, claiming an address with no entry or replacing an UNLOADED one (whose unloaded session ends). Then an actor prepared without `at` releases its held effects in SCXML order and starts its pending invocations; a replaying actor schedules its held delayed sends under their due times (one already due fires at the next ta_system_dispatch_due()) and retires each active invocation with error.communication.invoke. <id >.unavailable, as a load does (ADR 0038), which leaves it a macrostep to run. - TA_ERR_DONE: it reached a top-level final state before it was published. - TA_ERR_BUSY: it is inside a macrostep; or, with no incumbent, another actor is resident at the address. - TA_ERR_STALE: the directory no longer holds the incumbent's entry. - TA_ERR_INVALID: it is published, or was not prepared for `incumbent`. - TA_ERR_NOT_FOUND: no resident actor has either ID. - TA_ERR_NOMEM: nothing changed.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -18632,12 +18670,49 @@
           "name": "params",
           "type": {
             "pointer": {
-              "type": "ta_actor_activate_replacement_params",
+              "type": "ta_actor_publish_params",
               "const": true
             }
           },
           "shape": "single",
           "direction": "in"
+        }
+      ]
+    },
+    {
+      "name": "ta_actor_set_time",
+      "doc": "Moves a replaying actor's clock to `now` (ADR 0089 section 2): not earlier than its clock, and not later than ta_system_time(). Every held delayed send due at or before `now` is dropped: time reached it in the run being replayed, so it fired then. - TA_ERR_INVALID: the actor is not replaying, or `now` breaks that rule. - TA_ERR_BUSY: the actor is inside a macrostep. - TA_ERR_NOT_FOUND: no resident actor has this ID.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          }
+        },
+        {
+          "name": "now",
+          "type": {
+            "type": "ta_time"
+          }
         }
       ]
     },
@@ -19047,7 +19122,7 @@
     },
     {
       "name": "ta_actor_withdraw_send",
-      "doc": "Withdraws a pending delayed send of `actor` from outside the chart (ADR 0084), as a <cancel > of `send` in that actor would: every pending send of the actor with that ID that the router has not yet been offered is removed and released. `send` is the `send_id` that inspection's `delayed_sends` reports; ta_send_id_parse() turns the text a chart sees into one. Only the actor's own sends can be named (ADR 0012). It may be called between macrosteps or while one is paused, allocates nothing, and writes a WITHDRAWN trace record outside any macrostep.\n\n- TA_ERR_INVALID: `send` is 0, which names no send. - TA_ERR_NOT_FOUND: no resident actor has that ID, or it holds no pending send with that ID: never made, already dispatched, cancelled or withdrawn. - TA_ERR_DONE: its only sends with that ID are submitted: the router refused them once and they wait to be offered again. A submitted send has been sent and belongs to its receiver (ADR 0054), so it is not withdrawn.",
+      "doc": "Withdraws a pending delayed send of `actor` from outside the chart (ADR 0084), as a <cancel > of `send` in that actor would: every pending send of the actor with that ID that the router has not yet been offered is removed and released. `send` is the `send_id` that inspection's `delayed_sends` reports; ta_send_id_parse() turns the text a chart sees into one. Only the actor's own sends can be named (ADR 0012). It may be called between macrosteps or while one is paused, allocates nothing, and writes a WITHDRAWN trace record outside any macrostep. It also removes a replaying actor's held sends with that ID (ADR 0089 section 7).\n\n- TA_ERR_INVALID: `send` is 0, which names no send. - TA_ERR_NOT_FOUND: no resident actor has that ID, or it holds no pending send with that ID: never made, already dispatched, cancelled or withdrawn. - TA_ERR_DONE: its only sends with that ID are submitted: the router refused them once and they wait to be offered again. A submitted send has been sent and belongs to its receiver (ADR 0054), so it is not withdrawn.",
       "public": true,
       "static_inline": false,
       "implemented": true,
@@ -20135,7 +20210,7 @@
     },
     {
       "name": "ta_system_retire_definition",
-      "doc": "Ends a definition's availability (ADR 0043). ta_actor_spawn() and ta_actor_prepare_replacement() naming it fail with TA_ERR_NOT_FOUND, and ta_system_find_definition() skips it. Resident actors that use it keep running, and ta_definition_inspect(), ta_definition_state(), and ta_definition_export() keep working. The system frees the definition (its data-model state, its storage, and its ID) when no resident actor uses it and no definition nests it: here if none does, otherwise when the last one goes. Retiring drops every hold registration took (ADR 0077). Idempotent: retiring a retired definition, even one already freed, returns TA_OK. TA_ERR_NOT_FOUND when the ID was never issued.",
+      "doc": "Ends a definition's availability (ADR 0043). ta_actor_spawn() and ta_actor_prepare() naming it fail with TA_ERR_NOT_FOUND, and ta_system_find_definition() skips it. Resident actors that use it keep running, and ta_definition_inspect(), ta_definition_state(), and ta_definition_export() keep working. The system frees the definition (its data-model state, its storage, and its ID) when no resident actor uses it and no definition nests it: here if none does, otherwise when the last one goes. Retiring drops every hold registration took (ADR 0077). Idempotent: retiring a retired definition, even one already freed, returns TA_OK. TA_ERR_NOT_FOUND when the ID was never issued.",
       "public": true,
       "static_inline": false,
       "implemented": true,

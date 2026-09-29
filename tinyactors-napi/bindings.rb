@@ -32,13 +32,13 @@ module TinyactorsNapiBindings
                          reason: 'puts the loaded actor on the runnable queue (step 14)' },
     'ta_actor_reconstruct' => { hook: 'created', actor: 'params.out',
                                 reason: 'puts the reconstructed actor on the runnable queue (step 14)' },
-    'ta_actor_prepare_replacement' => { hook: 'created', actor: 'params.out',
-                                        reason: 'puts the prepared actor on the runnable queue (step 14)' },
+    'ta_actor_prepare' => { hook: 'created', actor: 'params.out',
+                            reason: 'puts the prepared actor on the runnable queue (step 14, core ADR 0089)' },
     'ta_actor_destroy' => { hook: 'removed', actor: 'actor', reason: "drops the actor's mailbox (step 5)" },
     'ta_actor_unload' => { hook: 'unloaded', actor: 'params.actor',
                            reason: "dead-letters the actor's mailbox as unloaded (step 14)" },
-    'ta_actor_activate_replacement' => { hook: 'activated', actor: 'params',
-                                         reason: "moves the incumbent's waiting mail to the replacement (step 14)" },
+    'ta_actor_publish' => { hook: 'published', actor: 'params',
+                            reason: "moves the incumbent's waiting mail to the published actor, and wakes it (step 14, core ADR 0089)" },
     'ta_actor_abandon' => { hook: 'abandoned', actor: 'actor',
                             reason: "settles the send() of the abandoned macrostep and the actor's scheduling (ADR 0026)" }
   }.freeze

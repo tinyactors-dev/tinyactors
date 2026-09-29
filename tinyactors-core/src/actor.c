@@ -149,21 +149,14 @@ static void ta_actor_discard_activation_effects(ta_actor *actor) {
     sparse->activation_effects = NULL;
 }
 
+static ta_activation_effects *ta_actor_activation(ta_system *system, ta_actor *actor);
+
 static ta_result ta_actor_hold_effect(ta_system *system, ta_actor *actor, const ta_activation_effect *effect) {
-    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
-    if (sparse == NULL) {
+    ta_activation_effects *effects = ta_actor_activation(system, actor);
+    if (effects == NULL) {
         return TA_ERR_NOMEM;
     }
-    if (sparse->activation_effects == NULL) {
-        sparse->activation_effects = ta_mem_alloc(system->allocator, sizeof(ta_activation_effects),
-                                                  _Alignof(ta_activation_effects));
-        if (sparse->activation_effects == NULL) {
-            return TA_ERR_NOMEM;
-        }
-        *sparse->activation_effects = (ta_activation_effects){0};
-        ta_vec_init(&sparse->activation_effects->entries, system->allocator, TA_VEC_LAYOUT(ta_activation_effect));
-    }
-    return ta_vec_push(&sparse->activation_effects->entries, effect);
+    return ta_vec_push(&effects->entries, effect);
 }
 
 ta_result ta_actor_hold_send(ta_system *system, ta_actor *actor, const ta_activation_send *send) {
@@ -649,30 +642,108 @@ ta_result ta_actor_spawn(ta_system *system, const ta_actor_spawn_params *params)
     return TA_OK;
 }
 
-ta_result ta_actor_prepare_replacement(ta_system *system, const ta_actor_prepare_replacement_params *params) {
+bool ta_actor_replaying(const ta_actor *actor) {
+    return !actor->published && actor->sparse != NULL && actor->sparse->activation_effects != NULL &&
+           actor->sparse->activation_effects->replaying;
+}
+
+ta_time ta_actor_now(const ta_system *system, const ta_actor *actor) {
+    return actor != NULL && ta_actor_replaying(actor) ? actor->sparse->activation_effects->clock
+                                                      : ta_clock_now(&system->clock);
+}
+
+/* The held-effects record a prepared actor keeps; a replaying one needs it
+ * from the start, for its clock. */
+static ta_activation_effects *ta_actor_activation(ta_system *system, ta_actor *actor) {
+    ta_actor_sparse_state *sparse = ta_interpreter_sparse(system, actor);
+    if (sparse == NULL) {
+        return NULL;
+    }
+    if (sparse->activation_effects == NULL) {
+        sparse->activation_effects = ta_mem_alloc(system->allocator, sizeof(ta_activation_effects),
+                                                  _Alignof(ta_activation_effects));
+        if (sparse->activation_effects == NULL) {
+            return NULL;
+        }
+        *sparse->activation_effects = (ta_activation_effects){0};
+        ta_vec_init(&sparse->activation_effects->entries, system->allocator, TA_VEC_LAYOUT(ta_activation_effect));
+    }
+    return sparse->activation_effects;
+}
+
+/* The named self of a prepared actor: the incumbent's, or `address` interned. */
+static ta_result ta_actor_prepared_self(ta_system *system,
+                                        const ta_actor_prepare_params *params,
+                                        const ta_definition *definition,
+                                        ta_actor_ref *out) {
+    if (params->incumbent != 0) {
+        ta_actor *incumbent = ta_actor_lookup(system, params->incumbent);
+        if (incumbent == NULL) {
+            return TA_ERR_NOT_FOUND;
+        }
+        if (!incumbent->published || incumbent->record.self.kind != TA_ACTOR_REF_NAMED ||
+            !ta_str_equal(ta_address_view(incumbent->record.self.as.named).family.name,
+                          definition->identity.family.name)) {
+            return TA_ERR_INVALID;
+        }
+        *out = incumbent->record.self;
+        ta_actor_ref_retain(out);
+        return TA_OK;
+    }
+    const ta_actor_address *address = params->address;
+    if (address == NULL || address->name.ptr == NULL || address->name.len == 0 ||
+        !ta_str_equal(address->family.name, definition->identity.family.name)) {
+        return TA_ERR_INVALID;
+    }
+    if (system->directory.v == NULL || system->directory.v->claim == NULL || system->directory.v->replace == NULL) {
+        return TA_ERR_UNSUPPORTED;
+    }
+    *out = (ta_actor_ref){ .kind = TA_ACTOR_REF_NAMED };
+    return ta_address_intern(system, address, &out->as.named);
+}
+
+ta_result ta_actor_prepare(ta_system *system, const ta_actor_prepare_params *params) {
     if (system == NULL || params == NULL || params->out == NULL) {
         return TA_ERR_INVALID;
     }
-    ta_actor *incumbent = ta_actor_lookup(system, params->incumbent);
     ta_definition *definition = ta_system_definition(system, params->definition);
-    if (incumbent == NULL || definition == NULL || definition->retired) {
+    if (definition == NULL || definition->retired) {
         return TA_ERR_NOT_FOUND;
     }
-    if (!incumbent->published || incumbent->record.self.kind != TA_ACTOR_REF_NAMED ||
-        !ta_str_equal(ta_address_view(incumbent->record.self.as.named).family.name,
-                      definition->identity.family.name)) {
+    if (params->at != NULL && *params->at > ta_clock_now(&system->clock)) {
         return TA_ERR_INVALID;
     }
-    ta_actor *actor = NULL;
-    ta_result result = ta_actor_new(system, definition, &actor);
+    ta_actor_ref self = {0};
+    ta_result result = ta_actor_prepared_self(system, params, definition, &self);
     if (result != TA_OK) {
+        return result;
+    }
+    ta_actor *actor = NULL;
+    result = ta_actor_new(system, definition, &actor);
+    if (result != TA_OK) {
+        ta_actor_ref_release(&self);
         return result;
     }
     ta_actor_id id = actor->record.id;
     actor->published = false;
-    actor->replacement_of = incumbent->record.id;
-    actor->record.self = incumbent->record.self;
-    ta_actor_ref_retain(&actor->record.self);
+    actor->replacement_of = params->incumbent;
+    actor->record.self = self;
+    if (params->at != NULL) {
+        ta_activation_effects *effects = ta_actor_activation(system, actor);
+        if (effects == NULL) {
+            result = TA_ERR_NOMEM;
+        } else {
+            effects->replaying = true;
+            effects->clock = *params->at;
+        }
+    }
+    /* A traced bootstrap's parent waits in an event block (ADR 0067). */
+    if (result == TA_OK && !ta_trace_parent_empty(&params->trace)) {
+        result = ta_interpreter_hold_block(system, actor);
+        if (result == TA_OK) {
+            actor->event_block->slots.trace = params->trace;
+        }
+    }
     if (result == TA_OK) {
         result = definition->datamodel.v->init_instance(
             definition->datamodel.self,
@@ -707,6 +778,22 @@ static uint32_t ta_actor_activation_send_count(const ta_actor *actor) {
     return count;
 }
 
+static void ta_actor_free_activation(ta_actor_sparse_state *sparse) {
+    ta_activation_effects *effects = sparse->activation_effects;
+    ta_allocator allocator = effects->entries.allocator;
+    ta_vec_destroy(&effects->entries);
+    ta_mem_free(allocator, effects,
+                &(ta_allocator_free_params){ .size = sizeof(ta_activation_effects),
+                                             .alignment = _Alignof(ta_activation_effects) });
+    sparse->activation_effects = NULL;
+}
+
+/*
+ * Releases what an actor prepared without `at` held: logs to the sink,
+ * immediate sends dispatched, delayed sends scheduled. A replaying actor
+ * holds only delayed sends, and they are scheduled: it dropped everything
+ * else as it ran (ADR 0089 section 3).
+ */
 static void ta_actor_release_activation_effects(ta_system *system, ta_actor *actor) {
     ta_actor_sparse_state *sparse = actor->sparse;
     if (sparse == NULL || sparse->activation_effects == NULL) {
@@ -730,56 +817,132 @@ static void ta_actor_release_activation_effects(ta_system *system, ta_actor *act
             }
             /* Dispatch marked it submitted and took its origin and invoke ID. */
         }
-        /* Reserved by ta_actor_activate_replacement(), so this cannot fail. */
+        /* Reserved by ta_actor_publish(), so this cannot fail. */
         (void)ta_timer_schedule(&system->timers, &sparse->timers, send);
     }
-    ta_allocator allocator = effects->entries.allocator;
-    ta_vec_destroy(&effects->entries);
-    ta_mem_free(allocator, effects,
-                &(ta_allocator_free_params){ .size = sizeof(ta_activation_effects),
-                                             .alignment = _Alignof(ta_activation_effects) });
-    sparse->activation_effects = NULL;
+    ta_actor_free_activation(sparse);
 }
 
-ta_result ta_actor_activate_replacement(ta_system *system, const ta_actor_activate_replacement_params *params) {
+/*
+ * Puts a prepared actor on the route, as one directory call. With no
+ * incumbent, an address with no entry is claimed and an UNLOADED one is
+ * replaced, and the unloaded session ends with it (ADR 0066); a resident
+ * one is BUSY.
+ */
+static ta_result ta_actor_publish_route(ta_system *system, ta_actor *actor, ta_actor_id incumbent) {
+    ta_address *address = actor->record.self.as.named;
+    ta_actor_directory_entry resident = { .kind = TA_ACTOR_DIRECTORY_RESIDENT, .actor = actor->record.id };
+    if (incumbent != 0) {
+        return ta_actor_directory_swap(
+            system, &(ta_actor_directory_replace_params){
+                        .address = address,
+                        .expected = { .kind = TA_ACTOR_DIRECTORY_RESIDENT, .actor = incumbent },
+                        .replacement = resident,
+                    });
+    }
+    ta_result result = system->directory.v->claim(
+        system->directory.self, &(ta_actor_directory_claim_params){ .address = address, .entry = resident });
+    if (result != TA_ERR_STALE) {
+        return result;
+    }
+    result = ta_actor_directory_swap(system, &(ta_actor_directory_replace_params){
+                                                 .address = address,
+                                                 .expected = { .kind = TA_ACTOR_DIRECTORY_UNLOADED },
+                                                 .replacement = resident,
+                                             });
+    if (result == TA_ERR_STALE) {
+        return TA_ERR_BUSY;
+    }
+    if (result == TA_OK && address->unloaded != NULL) {
+        ta_session_node *parked = address->unloaded;
+        ta_session_remove(&system->sessions, parked);
+        ta_session_node_free(&system->sessions, parked);
+    }
+    return result;
+}
+
+ta_result ta_actor_publish(ta_system *system, const ta_actor_publish_params *params) {
     if (system == NULL || params == NULL) {
         return TA_ERR_INVALID;
     }
-    ta_actor *incumbent = ta_actor_lookup(system, params->incumbent);
-    ta_actor *replacement = ta_actor_lookup(system, params->replacement);
-    if (incumbent == NULL || replacement == NULL) {
+    ta_actor *actor = ta_actor_lookup(system, params->actor);
+    ta_actor *incumbent = params->incumbent == 0 ? NULL : ta_actor_lookup(system, params->incumbent);
+    if (actor == NULL || (params->incumbent != 0 && incumbent == NULL)) {
         return TA_ERR_NOT_FOUND;
     }
-    if (!incumbent->published || replacement->published || replacement->replacement_of != incumbent->record.id ||
-        incumbent->record.self.kind != TA_ACTOR_REF_NAMED || replacement->record.self.kind != TA_ACTOR_REF_NAMED) {
+    if (actor->published || actor->replacement_of != params->incumbent ||
+        actor->record.self.kind != TA_ACTOR_REF_NAMED ||
+        (incumbent != NULL && (!incumbent->published || incumbent->record.self.kind != TA_ACTOR_REF_NAMED))) {
         return TA_ERR_INVALID;
     }
-    if (replacement->macrostep || replacement->record.residency != TA_ACTOR_IDLE) {
+    if (actor->finished) {
+        return TA_ERR_DONE;
+    }
+    if (actor->macrostep || actor->record.residency != TA_ACTOR_IDLE) {
         return TA_ERR_BUSY;
     }
-    uint32_t sends = ta_actor_activation_send_count(replacement);
-    ta_result result = sends == 0 ? TA_OK : ta_timer_reserve(&system->timers, &replacement->sparse->timers, sends);
+    bool replaying = ta_actor_replaying(actor);
+    /* Everything that can fail comes first, so a refusal changes nothing. */
+    uint32_t sends = ta_actor_activation_send_count(actor);
+    ta_result result = sends == 0 ? TA_OK : ta_timer_reserve(&system->timers, &actor->sparse->timers, sends);
+    if (result == TA_OK && replaying) {
+        result = ta_invoke_prepare_retire(system, actor);
+    }
+    if (result == TA_OK) {
+        result = ta_actor_publish_route(system, actor, params->incumbent);
+    }
     if (result != TA_OK) {
         return result;
     }
-    result = ta_actor_directory_swap(
-        system,
-        &(ta_actor_directory_replace_params){
-            .address = replacement->record.self.as.named,
-            .expected = { .kind = TA_ACTOR_DIRECTORY_RESIDENT, .actor = incumbent->record.id },
-            .replacement = { .kind = TA_ACTOR_DIRECTORY_RESIDENT, .actor = replacement->record.id },
-        });
-    if (result != TA_OK) {
-        return result;
+    actor->published = true;
+    actor->replacement_of = 0;
+    ta_actor_touch(actor);
+    ta_actor_release_activation_effects(system, actor);
+    if (replaying) {
+        /* Its services never started, and the world moved on while it was
+         * away: each active invocation is reported lost, as after a load. */
+        if (ta_invoke_retire_all(system, actor)) {
+            ta_interpreter_start_macrostep(actor, NULL);
+        }
+    } else if (actor->sparse != NULL && actor->sparse->pending_invokes.count != 0) {
+        actor->macrostep = true;
+        actor->record.residency = TA_ACTOR_RUNNING;
     }
-    replacement->published = true;
-    replacement->replacement_of = 0;
-    ta_actor_touch(replacement);
-    ta_actor_release_activation_effects(system, replacement);
-    if (replacement->sparse != NULL && replacement->sparse->pending_invokes.count != 0) {
-        replacement->macrostep = true;
-        replacement->record.residency = TA_ACTOR_RUNNING;
+    return TA_OK;
+}
+
+ta_result ta_actor_set_time(ta_system *system, ta_actor_id id, ta_time now) {
+    ta_actor *actor = ta_actor_lookup(system, id);
+    if (actor == NULL) {
+        return TA_ERR_NOT_FOUND;
     }
+    if (!ta_actor_replaying(actor)) {
+        return TA_ERR_INVALID;
+    }
+    ta_activation_effects *effects = actor->sparse->activation_effects;
+    if (now < effects->clock || now > ta_clock_now(&system->clock)) {
+        return TA_ERR_INVALID;
+    }
+    if (actor->macrostep || ta_actor_external_event(actor) != NULL) {
+        return TA_ERR_BUSY;
+    }
+    /* Time reached these sends in the run being replayed, so they fired. */
+    ta_vec *entries = &effects->entries;
+    uint32_t kept = 0;
+    for (uint32_t index = 0; index < entries->count; index += 1u) {
+        ta_activation_effect *effect = ta_vec_at(entries, index);
+        if (effect->kind == TA_ACTIVATION_SEND && effect->as.send.send.due <= now) {
+            ta_activation_effect_release(effect);
+            continue;
+        }
+        *(ta_activation_effect *)ta_vec_at(entries, kept) = *effect;
+        kept += 1u;
+    }
+    if (kept != entries->count) {
+        entries->count = kept;
+        ta_actor_touch(actor);
+    }
+    effects->clock = now;
     return TA_OK;
 }
 
@@ -906,7 +1069,9 @@ ta_result ta_actor_withdraw_send(ta_system *system, ta_actor_id id, ta_send_id s
     if (list == NULL) {
         return TA_ERR_NOT_FOUND;
     }
-    if (ta_timer_cancel(&system->timers, list, send) != TA_OK) {
+    /* A replaying actor's delayed sends are held, not pending (ADR 0089). */
+    bool held = ta_actor_replaying(actor) && ta_actor_cancel_held_send(actor, send);
+    if (ta_timer_cancel(&system->timers, list, send) != TA_OK && !held) {
         for (uint32_t index = 0; index < list->count; index += 1u) {
             if (list->sends[index].send_id == send) {
                 return TA_ERR_DONE; /* only submitted ones are left */
@@ -923,7 +1088,7 @@ ta_result ta_actor_withdraw_send(ta_system *system, ta_actor_id id, ta_send_id s
         record.key = key;
         record.actor = actor->record.id;
         record.definition = actor->definition->id;
-        record.now = ta_clock_now(&system->clock);
+        record.now = ta_actor_now(system, actor);
         record.send = send;
         ta_trace_write(&system->trace, &record);
     }

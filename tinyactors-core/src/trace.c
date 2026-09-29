@@ -94,7 +94,7 @@ void ta_trace_lifecycle(ta_system *system, ta_actor *actor, ta_trace_kind kind,
     record.key = key;
     record.actor = actor->record.id;
     record.definition = actor->definition->id;
-    record.now = ta_clock_now(&system->clock);
+    record.now = ta_actor_now(system, actor);
     if (parent != NULL) {
         record.context = parent->context;
         record.cause = parent->cause;
