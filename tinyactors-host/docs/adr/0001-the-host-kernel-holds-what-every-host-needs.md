@@ -248,3 +248,97 @@ without a JavaScript runtime.
   (+9.7% and +8.7% on traced variants); Bun's RSS varies by that much
   between identical runs (napi ADR 0035's notes), and native memory did not
   change, so it is noise.
+
+### Step 2b: the rest of napi's portable C moves (2026-09-30)
+
+- **What moved** (commit `cd14e2b`), renamed `tna_` to `tah_`: `system`,
+  `hooks`, `enumerate`, `router`, `loads`, `offloads`, `otlp`, `inputs`,
+  `params`, and the four adapters, flattened to `adapter_io`,
+  `adapter_invoker`, `adapter_log` and `adapter_trace` because the kernel's
+  and napi's builds take `src/*.c` without recursing. Every native test
+  napi had moved with them: `clock`, `debugging`, `directory`,
+  `enumerate`, `events`, `loads`, `mailbox`, `offloads`, `otlp`,
+  `quarantine`, `router`, `scheduler`, `send` and `system`. The kernel now
+  has 19 test programs, all passing natively and under ASan and UBSan, and
+  it still builds for `wasm32-freestanding` with no C library and no
+  recursion (443 functions).
+- **The pump did not need splitting after all.** Its turn logic (budgets,
+  turn order, quiet detection, deadlines, due sends) was already in
+  `system.c` (`tah_system_turn`, `tah_system_end_turn`, `tah_system_quiet`,
+  `tah_system_timer_fired`), which moved. What stays in napi's `pump.c` is
+  Node-API: setImmediate and setTimeout, the hooks' JavaScript records, and
+  flush promises. That is napi's pump driver.
+- **`napi_replay.c` stays for step 4.** Its logic is interleaved with
+  Node-API (feeds are JavaScript objects, records become JavaScript
+  values). Step 4 replaces it with the kernel's replay driver (kernel ADR
+  0002), so separating it now would be work thrown away.
+- **The platform interface** (`include/tinyactors_host/platform.h`)
+  replaces the libc calls the moved code made. It is one adapter the binding
+  gives every system, in `tah_system_create_params.platform`:
+  - `allocator`: the system record and the counting allocator's backing
+    store (it replaces `malloc` and `free`, and step 2a's separate backing
+    allocator argument);
+  - `monotonic_ns`: `clock_gettime(CLOCK_MONOTONIC)` before; the realtime
+    clock, load timeouts and turn durations read it through
+    `tah_system_monotonic_ns()`;
+  - `wall_ns`: `timespec_get` before, for exemplar and telemetry timestamps
+    (`tah_system_wall_ns()`);
+  - `random_seed`: `getrandom` or `arc4random_buf` before, to seed core's
+    trace-ID generator (`tah_system_random_seed()`).
+
+  The pump driver and the language hooks stay what they were: callbacks on
+  the system (`wake`, `arm`, and the per-system callbacks in `system.h`),
+  set by the binding after it creates a system. Step 1's outline of them as
+  separate adapters (`tah_pump_driver`, `tah_hooks`, `tah_host`) is removed,
+  since nothing used it. napi implements the platform in `src/platform.c`;
+  the kernel's tests in `tests/check.h`, with a fixed random seed.
+- **Other libc replaced by the kernel's own helpers** (`src/memory.h`):
+  `memchr` (`tah_mem_find`), `strlen` (`tah_str_length`), and the one
+  `snprintf` (the router's text for a session this system cannot name) by
+  `tah_format_u64`. `memcmp` was only ever compared with 0, so it became
+  `tah_mem_equal`. The router's temporary text comes from the system's
+  counting allocator instead of `malloc`.
+- **napi sees only the public headers** (commit `aafa919`). The kernel's
+  module headers moved to `include/tinyactors_host/`, and
+  `tinyactors_host.h` includes them all, with the platform in its own
+  header so `system.h` can include it without a cycle. napi includes
+  `tinyactors_host.h` and has no path into the kernel's `src/`, which keeps
+  only `memory.h`, private. The kernel's own sources include their public
+  headers as `tinyactors_host/<name>.h`, which also keeps them from
+  colliding with a binding's headers of the same name (the test host has
+  its own `allocator.h`). These headers are the kernel's API: a binding
+  reads the system's plumbing (the scheduling table, mailboxes, effects,
+  loads) directly, as napi did before the move.
+- **Parameters split** (commit `aafa919`). The kernel's `params.h` keeps
+  what concerns hosting: the turn budgets, mailbox limits, `valueBytes` and
+  `traceStagingBytes`. The data-model registry's two limits
+  (`registeredDatamodels`, `datamodelNameBytes`) are napi's, since the
+  registry is, and went back to napi as `src/napi_params.{c,h}`.
+  `tah_system_create_params.hosting` carries the kernel's.
+  `parameterInfo()` reports core's, the kernel's and napi's, and labels the
+  kernel's as napi's: napi embeds the kernel, so to napi's users they are
+  napi's (the `owner` field stays `"core" | "napi"`).
+- **napi's native test tasks and its Node-API guard are removed**
+  (`test-native`, `test-native-asan`, `NODE_API_SOURCES`, and the unused
+  sanitize build mode). No native test was left in napi, and the C left
+  outside the Node-API files is napi's own: `platform.c` (libc by design)
+  and `import.c` (the codec wrapper for `define()`), which napi's
+  JavaScript suites exercise.
+- **Copy, fill and compare use the compiler's builtins** (commit
+  `b664b40`). The first benchmark of step 2b, with 2 runs, flagged Node's
+  traced variants at +6 to +7% ns/event: the byte loops that replaced
+  `memcpy` and friends in step 1 had moved into the OTLP encoder's hot
+  path. `tah_mem_copy`, `tah_mem_set` and `tah_mem_equal` are now inline
+  wrappers around `__builtin_memcpy`, `__builtin_memset` and
+  `__builtin_memcmp`, which the compiler inlines when small and otherwise
+  turns into calls to the symbols `check-freestanding` already allows. The
+  kernel still links no C library: a release resolves them with zig's
+  compiler-rt, a browser build with its own.
+- **Benchmark** (`bench-compare 3a1eaa1`, 100,000 actors, 4 alternating
+  runs, after `b664b40`): Node (a99e44a37e2e), nothing outside 5%
+  (untraced 477 → 483 ns/event, every record 1,618 → 1,620). Bun
+  (c989bd79a51f), ns/event within 5% on every variant (untraced 407 → 410),
+  and one RSS row flagged (every record in 100 charts, +9.5%). Bun's RSS
+  varies that much between identical runs (napi ADR 0035's notes), and
+  native bytes per actor did not change. Allocations per event stay 0.01
+  everywhere.

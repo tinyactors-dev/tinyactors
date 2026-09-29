@@ -49,7 +49,8 @@ are in [`docs/proposals/`](docs/proposals/README.md).
      ASan and UBSan, `check-recursion`, its `#MISE sources`, and its row in
      AGENTS.md's table of what reruns. An empty library that builds and
      tests.
-  2. **Move napi's Node-API-free C into the kernel,** renamed from `tna_` to
+  2. **Done:** [kernel ADR 0001, steps 2a and 2b](tinyactors-host/docs/adr/0001-the-host-kernel-holds-what-every-host-needs.md#step-2b-the-rest-of-napis-portable-c-moves-2026-09-30).
+     **Move napi's Node-API-free C into the kernel,** renamed from `tna_` to
      `tah_`, with its native tests: scheduler, router, directory, events,
      enumerate, effects, system, allocator, containers, hooks, adapters,
      loads, offloads, the OTLP encoder, and the host-generic parameters.
