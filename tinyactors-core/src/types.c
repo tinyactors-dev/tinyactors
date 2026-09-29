@@ -130,8 +130,9 @@ void *ta_vec_at(const ta_vec *vec, uint32_t index) {
 
 void ta_text_put(ta_text_writer *writer, ta_str text) {
     for (uint32_t index = 0; index < text.len; index += 1) {
-        if (writer->buffer != NULL && writer->length < writer->capacity) {
-            writer->buffer[writer->length] = text.ptr[index];
+        if (writer->buffer != NULL && writer->length >= writer->skip &&
+            writer->length - writer->skip < writer->capacity) {
+            writer->buffer[writer->length - writer->skip] = text.ptr[index];
         }
         writer->length += 1;
     }

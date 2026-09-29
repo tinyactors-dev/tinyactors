@@ -1,6 +1,7 @@
 #include "system.h"
 #include "trace.h"
 #include "interpreter.h"
+#include "input_log.h"
 
 #define TA_SCXML_IO_URI "http://www.w3.org/TR/scxml/#SCXMLEventProcessor"
 
@@ -34,6 +35,7 @@ ta_result ta_system_create(const ta_system_config *config, ta_system **out) {
     system->free_definition_slot = UINT32_MAX;
     ta_vec_init(&system->io_processors, config->allocator, TA_VEC_LAYOUT(ta_io_registration));
     ta_vec_init(&system->invokers, config->allocator, TA_VEC_LAYOUT(ta_invoker_registration));
+    ta_vec_init(&system->logged_families, config->allocator, TA_VEC_LAYOUT(ta_atom));
     ta_address_table_init(&system->addresses, config->allocator);
     ta_io_origin_table_init(&system->io_scopes, config->allocator, true);
     ta_io_origin_table_init(&system->io_messages, config->allocator, false);
@@ -105,6 +107,7 @@ void ta_system_destroy(ta_system *system) {
     ta_io_origin_table_destroy(&system->io_messages);
     ta_vec_destroy(&system->io_processors);
     ta_vec_destroy(&system->invokers);
+    ta_vec_destroy(&system->logged_families);
     ta_arena_destroy(&system->scratch);
     system->block_cache_limit = 0;
     ta_interpreter_block_cache_trim(system);
@@ -348,6 +351,7 @@ ta_result ta_system_register_definition(ta_system *system, ta_definition *defini
     definition->unregistered_next = NULL;
     definition->id = ((ta_definition_id)entry->generation << 32) | slot;
     definition->registered = true;
+    definition->input_logged = ta_input_family_logged(system, definition->family);
     definition->holds = 1u;
     definition->registration_serial = system->next_definition_serial++;
     *out = definition->id;
@@ -695,6 +699,17 @@ ta_result ta_system_next_deadline(const ta_system *system, ta_time *out) {
     return ta_timer_next_due(&system->timers, out) ? TA_OK : TA_ERR_NOT_FOUND;
 }
 
+/* FIRED, for a send leaving a logged owner the first time it is offered. */
+static ta_result ta_system_log_fired(ta_system *system, ta_actor *owner, const ta_delayed_send *send) {
+    if (owner == NULL || send->submitted || !ta_input_logged(system, owner)) {
+        return TA_OK;
+    }
+    ta_record_desc record = { .kind = TA_RECORD_FIRED, .time = ta_actor_now(system, owner) };
+    ta_record_event_texts texts = { .system = system };
+    ta_input_send_field(&texts, send->send_id, &record);
+    return ta_input_write(system, owner, &record);
+}
+
 ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch_params *params) {
     if (system == NULL || params == NULL || params->budget == 0 || params->dispatched == NULL ||
         params->more_due == NULL) {
@@ -720,7 +735,12 @@ ta_result ta_system_dispatch_due(ta_system *system, const ta_due_dispatch_params
             ta_actor_touch(owner);
         }
         const ta_definition *owner_definition = owner != NULL ? owner->definition : NULL;
-        ta_external_event_submit_status fired = ta_interpreter_dispatch_delayed(system, &send, false);
+        /* A logged owner's FIRED is written before the send leaves it; a
+         * record that cannot be written leaves the send due (ADR 0090). */
+        ta_external_event_submit_status fired = TA_EXTERNAL_EVENT_RETRY;
+        if (ta_system_log_fired(system, owner, &send) == TA_OK) {
+            fired = ta_interpreter_dispatch_delayed(system, &send, false);
+        }
         if (fired != TA_EXTERNAL_EVENT_RETRY) {
             if (owner_definition != NULL) {
                 TA_COUNT(system, owner_definition, delayed_fired);

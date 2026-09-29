@@ -46,6 +46,8 @@ module NapiGen
     #   :record  an anonymous struct inside a tagged union (fields)
     #   :output  an `out` member, only meaningful in a flattened params struct
     #   :derived a count, capacity or needed member of another member
+    #   :absent  an optional pointer to a type the bindings skip: JavaScript
+    #            never sets it, so it stays null
     Field = Struct.new(:name, :form, :codec, :optional, :handle, :terminator, :count, :fields, :slot, :element_ctype,
                        keyword_init: true)
 
@@ -196,6 +198,10 @@ module NapiGen
       declared = @api.resolve(type)['pointer']
       case slot['shape']
       when 'single'
+        if slot['optional'] == true && declared['type'] && @policy.skip_type(declared['type'])
+          return Field.new(name: name, form: :absent, slot: slot)
+        end
+
         codec = value_codec(path, declared, problems) or return nil
         Field.new(name: name, form: :pointer, codec: codec, optional: slot['optional'] == true, slot: slot)
       when 'handle'
@@ -354,7 +360,7 @@ module NapiGen
 
         member = "#{param['name']}.#{field.name}"
         case field.form
-        when :derived then next
+        when :derived, :absent then next
         when :output then output(plan, "#{path}.#{field.name}", field.slot, member, struct) or return nil
         else input(plan, "#{path}.#{field.name}", field, member) or return nil
         end

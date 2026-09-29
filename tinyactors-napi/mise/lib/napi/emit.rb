@@ -257,7 +257,7 @@ module NapiGen
     def decode_member(body, field, key, object, target, depth)
       i = pad(depth)
       case field.form
-      when :output, :derived then return
+      when :output, :derived, :absent then return
       when :inject
         body << "#{i}if (!tna_inject_#{field.codec.id}(c, &#{target})) {" << "#{i}    return false;" << "#{i}}"
         return
@@ -367,7 +367,7 @@ module NapiGen
 
     def encode_member(body, field, key, object, source, depth)
       i = pad(depth)
-      return if %i[output derived arena].include?(field.form)
+      return if %i[output derived arena absent].include?(field.form)
 
       value = "x#{depth}"
       body << "#{i}{"

@@ -195,6 +195,13 @@
       "value": 4294967295
     },
     {
+      "name": "TA_RECORD_VERSION",
+      "type": {
+        "builtin": "uint16_t"
+      },
+      "value": 1
+    },
+    {
       "name": "TA_SPEC_INDEX_NONE",
       "type": {
         "builtin": "uint32_t"
@@ -746,27 +753,36 @@
           "direction": "in",
           "optional": true,
           "doc": "When present, the event is taken by this transition instead of by transition selection: no chart transition sees it, and neither <finalize > nor autoforwarding runs for it (ADR 0082)."
+        },
+        {
+          "name": "host_seq",
+          "type": {
+            "builtin": "uint64_t"
+          },
+          "doc": "The host's number for a message it logged as `queued` (ADR 0090 section 6), which the actor's `event` record carries; 0 for none."
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 72,
+          "size": 80,
           "align": 8,
           "offsets": {
             "actor": 0,
             "event": 8,
             "trace": 16,
-            "transition": 64
+            "transition": 64,
+            "host_seq": 72
           }
         },
         "wasm32-unknown-unknown": {
-          "size": 72,
+          "size": 80,
           "align": 8,
           "offsets": {
             "actor": 0,
             "event": 8,
             "trace": 16,
-            "transition": 64
+            "transition": 64,
+            "host_seq": 72
           }
         }
       }
@@ -2008,11 +2024,24 @@
           "shape": "single",
           "direction": "out",
           "valid_on": "success"
+        },
+        {
+          "name": "log",
+          "type": {
+            "pointer": {
+              "type": "ta_byte_source",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in",
+          "optional": true,
+          "doc": "A log to prepare from (ADR 0090 section 7): the source is read up to the end of its first record, a `spawned` one, which makes a replaying actor whose clock starts at the record's time and whose data is bound to its binding. `datamodel_binding` and `at` must then be null."
         }
       ],
       "layout": {
         "x86_64-unknown-linux-gnu": {
-          "size": 96,
+          "size": 104,
           "align": 8,
           "offsets": {
             "incumbent": 0,
@@ -2021,7 +2050,8 @@
             "datamodel_binding": 24,
             "at": 32,
             "trace": 40,
-            "out": 88
+            "out": 88,
+            "log": 96
           }
         },
         "wasm32-unknown-unknown": {
@@ -2034,7 +2064,8 @@
             "datamodel_binding": 24,
             "at": 28,
             "trace": 32,
-            "out": 80
+            "out": 80,
+            "log": 84
           }
         }
       }
@@ -2266,6 +2297,69 @@
           "align": 4,
           "offsets": {
             "address": 0
+          }
+        }
+      }
+    },
+    "ta_actor_replay_params": {
+      "kind": "struct",
+      "doc": "Applies one record of a log to a replaying actor (ADR 0090 section 7): reads exactly one record from `source`, moves the actor's clock to its time and applies it. An actor stopped as a runaway (TA_ERR_RUNAWAY from its resume) takes only ABANDONED or RELEASED. - TA_ERR_INVALID: the actor is not replaying, or the record is SPAWNED (prepare from it instead) or goes back in time. - TA_ERR_BUSY: the actor is inside a macrostep. - TA_ERR_CORRUPT: the bytes are not a record this build reads. - TA_ERR_NOT_FOUND: the record names a state or an invocation the actor does not have. - TA_ERR_UNSUPPORTED: the data model cannot read a value. - and what the input's own function answers. After an error the source is at no defined position.",
+      "fields": [
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          }
+        },
+        {
+          "name": "source",
+          "type": {
+            "type": "ta_byte_source"
+          }
+        },
+        {
+          "name": "step",
+          "type": {
+            "pointer": {
+              "type": "ta_replay_step"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "valid_on": "success"
+        },
+        {
+          "name": "host",
+          "type": {
+            "pointer": {
+              "type": "ta_host_record"
+            }
+          },
+          "shape": "single",
+          "direction": "out",
+          "optional": true,
+          "valid_on": "success"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "actor": 0,
+            "source": 8,
+            "step": 24,
+            "host": 32
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "actor": 0,
+            "source": 8,
+            "step": 16,
+            "host": 20
           }
         }
       }
@@ -10267,6 +10361,141 @@
         }
       }
     },
+    "ta_host_record": {
+      "kind": "struct",
+      "doc": "What a replay hands back of the host's records: for QUEUED its number and its message, owned (release it with ta_event_release()); for DROPPED its number; for an EVENT or JUMP that carried a host number, that number (the queued message it delivered).",
+      "fields": [
+        {
+          "name": "kind",
+          "type": {
+            "type": "ta_record_kind"
+          }
+        },
+        {
+          "name": "host_seq",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "has_event",
+          "type": {
+            "builtin": "bool"
+          }
+        },
+        {
+          "name": "event",
+          "type": {
+            "type": "ta_event"
+          },
+          "release_if": {
+            "function": "ta_event_release",
+            "flag": "has_event"
+          }
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 88,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "host_seq": 8,
+            "has_event": 16,
+            "event": 24
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "host_seq": 8,
+            "has_event": 16,
+            "event": 24
+          }
+        }
+      }
+    },
+    "ta_host_record_params": {
+      "kind": "struct",
+      "doc": "A record of the host's mailbox (ADR 0090 section 6): QUEUED when it accepts a message for a named actor of a logged family, DROPPED when a queued message will never be delivered, EVICTED before it destroys an actor whose log is to be its only state. `actor` is the resident actor at `address`, whose next record number the record takes, or 0 (the record's seq is then 0). `definition` writes a QUEUED message's data when no actor is given. Nothing is written when no sink is installed or the family is not logged.",
+      "fields": [
+        {
+          "name": "address",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_address",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        },
+        {
+          "name": "kind",
+          "type": {
+            "type": "ta_record_kind"
+          }
+        },
+        {
+          "name": "host_seq",
+          "type": {
+            "builtin": "uint64_t"
+          }
+        },
+        {
+          "name": "actor",
+          "type": {
+            "type": "ta_actor_id"
+          }
+        },
+        {
+          "name": "definition",
+          "type": {
+            "type": "ta_definition_id"
+          }
+        },
+        {
+          "name": "event",
+          "type": {
+            "pointer": {
+              "type": "ta_event",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in",
+          "optional": true
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "address": 0,
+            "kind": 8,
+            "host_seq": 16,
+            "actor": 24,
+            "definition": 32,
+            "event": 40
+          }
+        },
+        "wasm32-unknown-unknown": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "address": 0,
+            "kind": 4,
+            "host_seq": 8,
+            "actor": 16,
+            "definition": 24,
+            "event": 32
+          }
+        }
+      }
+    },
     "ta_import_error": {
       "kind": "struct",
       "fields": [
@@ -12329,6 +12558,137 @@
             "event": 0,
             "flags": 56
           }
+        }
+      }
+    },
+    "ta_record_kind": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_RECORD_SPAWNED",
+          "value": 1,
+          "symbol": "spawned"
+        },
+        {
+          "name": "TA_RECORD_EVENT",
+          "value": 2,
+          "symbol": "event"
+        },
+        {
+          "name": "TA_RECORD_JUMP",
+          "value": 3,
+          "symbol": "jump"
+        },
+        {
+          "name": "TA_RECORD_REPORT",
+          "value": 4,
+          "symbol": "report"
+        },
+        {
+          "name": "TA_RECORD_FIRED",
+          "value": 5,
+          "symbol": "fired"
+        },
+        {
+          "name": "TA_RECORD_WITHDRAWN",
+          "value": 6,
+          "symbol": "withdrawn"
+        },
+        {
+          "name": "TA_RECORD_ABANDONED",
+          "value": 7,
+          "symbol": "abandoned"
+        },
+        {
+          "name": "TA_RECORD_RELEASED",
+          "value": 8,
+          "symbol": "released"
+        },
+        {
+          "name": "TA_RECORD_FINISHED",
+          "value": 9,
+          "symbol": "finished"
+        },
+        {
+          "name": "TA_RECORD_DESTROYED",
+          "value": 10,
+          "symbol": "destroyed"
+        },
+        {
+          "name": "TA_RECORD_QUEUED",
+          "value": 11,
+          "symbol": "queued"
+        },
+        {
+          "name": "TA_RECORD_DROPPED",
+          "value": 12,
+          "symbol": "dropped"
+        },
+        {
+          "name": "TA_RECORD_EVICTED",
+          "value": 13,
+          "symbol": "evicted"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
+        }
+      }
+    },
+    "ta_replay_step": {
+      "kind": "enum",
+      "constants": [
+        {
+          "name": "TA_REPLAY_NEXT",
+          "value": 0,
+          "symbol": "next",
+          "doc": "applied; read the next record"
+        },
+        {
+          "name": "TA_REPLAY_RUN",
+          "value": 1,
+          "symbol": "run",
+          "doc": "applied; resume the actor until idle, then read the next"
+        },
+        {
+          "name": "TA_REPLAY_RELEASE",
+          "value": 2,
+          "symbol": "release",
+          "doc": "resume the actor with no_microstep_limit until idle"
+        },
+        {
+          "name": "TA_REPLAY_HOST",
+          "value": 3,
+          "symbol": "host",
+          "doc": "a host record, in `host`"
+        },
+        {
+          "name": "TA_REPLAY_FINISHED",
+          "value": 4,
+          "symbol": "finished",
+          "doc": "the actor finished; stop"
+        },
+        {
+          "name": "TA_REPLAY_ENDED",
+          "value": 5,
+          "symbol": "ended",
+          "doc": "DESTROYED: this life ended; prepare again from the next record"
+        }
+      ],
+      "layout": {
+        "x86_64-unknown-linux-gnu": {
+          "size": 4,
+          "align": 4
+        },
+        "wasm32-unknown-unknown": {
+          "size": 4,
+          "align": 4
         }
       }
     },
@@ -20144,6 +20504,146 @@
           "direction": "out",
           "valid_on": "success",
           "lifetime": "definition"
+        }
+      ]
+    },
+    {
+      "name": "ta_system_set_input_sink",
+      "doc": "Where core writes the records of the logged families' named actors, as it accepts each input (ADR 0090 section 5); a sink with a null `v` installs none. Each record is one unit, begin ... end(keep): a record that cannot be written whole refuses its input, which changes nothing (TA_ERR_NOMEM when the sink refused, TA_ERR_UNSUPPORTED when a value has no durable form). An unpublished actor writes nothing.",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "builtin": "void"
+        }
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "sink",
+          "type": {
+            "type": "ta_byte_sink"
+          }
+        }
+      ]
+    },
+    {
+      "name": "ta_system_log_family",
+      "doc": "Logs the named actors of `family` (or stops logging them).",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "family",
+          "type": {
+            "type": "ta_str"
+          }
+        },
+        {
+          "name": "logged",
+          "type": {
+            "builtin": "bool"
+          }
+        }
+      ]
+    },
+    {
+      "name": "ta_system_write_host_record",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_host_record_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
+        }
+      ],
+      "value_model": {
+        "kind": "any"
+      }
+    },
+    {
+      "name": "ta_actor_replay",
+      "public": true,
+      "static_inline": false,
+      "implemented": true,
+      "returns": {
+        "type": {
+          "type": "ta_result"
+        },
+        "success": "TA_OK"
+      },
+      "params": [
+        {
+          "name": "system",
+          "type": {
+            "pointer": {
+              "type": "ta_system"
+            }
+          },
+          "shape": "handle",
+          "direction": "in"
+        },
+        {
+          "name": "params",
+          "type": {
+            "pointer": {
+              "type": "ta_actor_replay_params",
+              "const": true
+            }
+          },
+          "shape": "single",
+          "direction": "in"
         }
       ]
     },

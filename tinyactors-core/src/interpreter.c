@@ -1,4 +1,5 @@
 #include "interpreter.h"
+#include "input_log.h"
 
 /*
  * SCXML execution following the W3C algorithm (Appendix D). The actor's
@@ -1460,6 +1461,9 @@ static ta_result ta_communication_error(ta_system *system, ta_actor *actor, cons
 void ta_interpreter_start_macrostep(ta_actor *actor, const ta_trace_parent *trace) {
     if (actor->macrostep) {
         return;
+    }
+    if (actor->sparse != NULL) {
+        actor->sparse->log_released = false;
     }
     actor->macrostep = true;
     actor->record.residency = TA_ACTOR_RUNNING;
@@ -3349,7 +3353,8 @@ static void ta_compact_sparse(ta_interpreter *it) {
     ta_actor_sparse_state *sparse = it->actor->sparse;
     if (sparse == NULL || sparse->paused != NULL || sparse->invoke_count != 0 ||
         sparse->pending_invokes.count != 0 || sparse->activation_effects != NULL || sparse->has_parent ||
-        sparse->completion_pending || sparse->completion.has_data) {
+        sparse->completion_pending || sparse->completion.has_data || sparse->log_seq != 0) {
+        /* A logged actor keeps its record number (ADR 0090). */
         return;
     }
     ta_invoke_release(it->system, it->actor);
@@ -4100,17 +4105,26 @@ static ta_result ta_run(ta_interpreter *it, uint32_t budget, ta_run_status *stat
 ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_actor_resume_params *params) {
     ta_run_status *status = params->status;
     if (actor->finished && (actor->sparse == NULL || actor->sparse->paused == NULL)) {
-        *status = TA_RUN_DONE;
-        return TA_OK;
+        /* A logged actor's FINISHED that could not be written is written
+         * now (ADR 0090). */
+        ta_result logged = ta_input_finished(system, actor);
+        *status = logged == TA_OK ? TA_RUN_DONE : TA_RUN_ERROR;
+        return logged;
     }
     if (!actor->macrostep) {
         /* Idle: its last macrostep ended stable, and nothing waits. */
         *status = TA_RUN_STABLE;
         return TA_OK;
     }
+    /* Resuming a stopped runaway without its limit is an input (ADR 0090). */
+    ta_result result = ta_input_released(system, actor, params->no_microstep_limit);
+    if (result != TA_OK) {
+        *status = TA_RUN_ERROR;
+        return result;
+    }
     ta_interpreter interpreter;
     ta_interpreter *it = &interpreter;
-    ta_result result = ta_reserve_stop(system, actor);
+    result = ta_reserve_stop(system, actor);
     if (result == TA_OK) {
         result = ta_take_macrostep_time(system, actor);
     }
@@ -4148,6 +4162,10 @@ ta_result ta_interpreter_resume(ta_system *system, ta_actor *actor, const ta_act
     }
     /* An empty queue goes back; queued events or a stopped run keep it. */
     ta_block_settle(system, actor);
+    if (result == TA_OK && *status == TA_RUN_DONE) {
+        result = ta_input_finished(system, actor);
+        *status = result == TA_OK ? TA_RUN_DONE : TA_RUN_ERROR;
+    }
     return result;
 }
 

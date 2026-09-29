@@ -73,6 +73,10 @@ typedef struct {
     char *buffer;
     uint32_t capacity;
     uint32_t length;
+    /* Bytes of the text before the window `buffer` holds: a writer with
+     * skip s stores text bytes s to s + capacity - 1, so a long text is
+     * rendered through a small buffer a window at a time (ADR 0090). */
+    uint32_t skip;
 } ta_text_writer;
 
 void ta_text_put(ta_text_writer *writer, ta_str text);

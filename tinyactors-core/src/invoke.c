@@ -1,5 +1,6 @@
 #include "invoke.h"
 #include "interpreter.h"
+#include "input_log.h"
 
 /*
  * SCXML <invoke>: starting services at the end of a macrostep, cancelling
@@ -1046,6 +1047,34 @@ bool ta_invoke_origin_for(const ta_system *system, const ta_actor *actor, ta_inv
     return true;
 }
 
+/* An ERROR report, whose REPORT record a logged actor keeps only if the
+ * report is taken (ADR 0090). */
+static ta_result ta_invoke_logged_error(ta_system *system, ta_actor *actor, const ta_invoke_report_params *params) {
+    uint32_t index = (uint32_t)ta_invoke_find(actor, params->invoke_id);
+    bool logged = ta_input_logged(system, actor) && params->as.error != NULL;
+    if (logged) {
+        const ta_invoke_error *error = params->as.error;
+        ta_record_desc record = { .kind = TA_RECORD_REPORT,
+                                  .time = ta_actor_now(system, actor),
+                                  .field_count = 4,
+                                  .value = error->data,
+                                  .definition = actor->definition };
+        record.fields[0] = ta_record_number((uint64_t)TA_INVOKE_REPORT_ERROR);
+        record.fields[1] = ta_record_number(error->ends ? 1u : 0u);
+        record.fields[2] = ta_record_text_field(true, ta_invoke_id_text(system, params->invoke_id));
+        record.fields[3] = ta_record_text_field(true, error->reason);
+        ta_result result = ta_input_open(system, actor, &record);
+        if (result != TA_OK) {
+            return result;
+        }
+    }
+    ta_result result = ta_invoke_report_error(system, actor, index, params);
+    if (logged) {
+        ta_input_close(system, result == TA_OK);
+    }
+    return result;
+}
+
 ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_report_params *params) {
     if (system == NULL || params == NULL) {
         return TA_ERR_INVALID;
@@ -1084,7 +1113,7 @@ ta_result ta_actor_report_invoke(ta_system *system, const ta_invoke_report_param
                                                                   .trace = params->trace });
         }
         case TA_INVOKE_REPORT_ERROR:
-            return ta_invoke_report_error(system, actor, (uint32_t)index, params);
+            return ta_invoke_logged_error(system, actor, params);
         default:
             return TA_ERR_INVALID;
     }

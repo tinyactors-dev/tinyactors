@@ -19,6 +19,10 @@
  * ta_system_set_event_block_cache() changes it (ADR 0069). */
 #define TA_EVENT_BLOCK_CACHE_DEFAULT 4u
 
+/* The input log's staging buffer (ADR 0090 section 5): header, fields,
+ * chunk frames and windows of rendered text pass through it. */
+#define TA_INPUT_SCRATCH_BYTES 256u
+
 typedef struct {
     ta_definition *definition;
     uint32_t generation;
@@ -106,6 +110,20 @@ struct ta_system {
      */
     ta_continuation *spare_continuation;
     ta_actor_sparse_state *spare_sparse;
+    /*
+     * The input log (ADR 0090): where records go, the families whose named
+     * actors are logged, and the one record being written, staged through
+     * a fixed scratch buffer so writing a record allocates nothing.
+     */
+    ta_byte_sink input_sink;
+    ta_vec logged_families; /* ta_atom */
+    bool input_open;
+    ta_op_status input_status;
+    uint32_t input_used;
+    /* The actor whose next record number the open record takes, or null. */
+    ta_actor *input_actor;
+    uint64_t input_seq;
+    uint8_t input_scratch[TA_INPUT_SCRATCH_BYTES];
 };
 
 /*

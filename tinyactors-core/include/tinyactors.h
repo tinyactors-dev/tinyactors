@@ -2852,6 +2852,13 @@ typedef struct {
     TA_IN TA_OPTIONAL const ta_time *at;
     ta_trace_parent trace;
     TA_OUT ta_actor_id *out;
+    /*
+     * A log to prepare from (ADR 0090 section 7): the source is read up to
+     * the end of its first record, a `spawned` one, which makes a replaying
+     * actor whose clock starts at the record's time and whose data is bound
+     * to its binding. `datamodel_binding` and `at` must then be null.
+     */
+    TA_IN TA_OPTIONAL const ta_byte_source *log;
 } ta_actor_prepare_params;
 typedef struct {
     ta_actor_id actor;
@@ -2931,6 +2938,9 @@ typedef struct {
      * transition selection: no chart transition sees it, and neither
      * <finalize> nor autoforwarding runs for it (ADR 0082). */
     TA_IN TA_OPTIONAL const ta_operator_transition *transition;
+    /* The host's number for a message it logged as `queued` (ADR 0090
+     * section 6), which the actor's `event` record carries; 0 for none. */
+    uint64_t host_seq;
 } ta_actor_deliver_params;
 /*
  * Offers an external event to a resident actor: the admission test
@@ -3517,6 +3527,135 @@ TA_API ta_result ta_definition_inspect(const ta_system *system,
                                        ta_definition_id definition,
                                        TA_OUT TA_LIFETIME(definition) ta_definition_inspection *out);
 
+
+/* ========================================================================
+ * The input log (ADR 0090)
+ *
+ * A log is one named actor's inputs, in order, as records in a portable
+ * byte layout: little-endian and 8-byte aligned, in three parts.
+ *
+ *   fixed part   u16 version (TA_RECORD_VERSION), u16 kind (ta_record_kind),
+ *                u32 fixed_bytes (a multiple of 8, header included),
+ *                u64 seq (the actor's record number, from 1; 0 for a host
+ *                record written while no actor was resident), u64 time
+ *                (logical milliseconds), u32 text_bytes, u16 value_count,
+ *                u16 flags (0), then the kind's fields, 8 bytes each: a u64
+ *                number, or a text reference (u32 offset from the start of
+ *                the text part, u32 length; offset UINT32_MAX is absent)
+ *   text part    text_bytes of UTF-8, padded with zeros to 8
+ *   values       value_count value streams, each chunks of (u32 length,
+ *                bytes, zeros to 8), ended by a chunk of length 0
+ *
+ * The kinds' fields, in order (`text` a reference, `u64` a number):
+ *   SPAWNED     family, name, revision                     value: binding
+ *   EVENT       u64 type, u64 host_seq, name, send ID, origin, origin
+ *               type, invoke ID                            value: data
+ *   JUMP        EVENT's fields, source state ID, u64 target count, then
+ *               one text per target state ID               value: data
+ *   REPORT      u64 report kind (ERROR), u64 ends, invoke ID, reason
+ *                                                          value: data
+ *   FIRED       send ID          WITHDRAWN   send ID
+ *   FINISHED    final state ID   DROPPED     u64 host_seq
+ *   QUEUED      EVENT's fields                             value: data
+ *   ABANDONED, RELEASED, DESTROYED, EVICTED: none
+ * A value stream is present only when the value is (value_count).
+ * Readers skip fields past the ones they know (fixed_bytes), and refuse a
+ * version or a kind they do not know.
+ */
+#define TA_RECORD_VERSION ((uint16_t)1)
+typedef enum {
+    TA_RECORD_SPAWNED = 1,
+    TA_RECORD_EVENT = 2,
+    TA_RECORD_JUMP = 3,
+    TA_RECORD_REPORT = 4,
+    TA_RECORD_FIRED = 5,
+    TA_RECORD_WITHDRAWN = 6,
+    TA_RECORD_ABANDONED = 7,
+    TA_RECORD_RELEASED = 8,
+    TA_RECORD_FINISHED = 9,
+    TA_RECORD_DESTROYED = 10,
+    TA_RECORD_QUEUED = 11,
+    TA_RECORD_DROPPED = 12,
+    TA_RECORD_EVICTED = 13
+} ta_record_kind TA_SYMBOLS("TA_RECORD_");
+
+/*
+ * Where core writes the records of the logged families' named actors, as
+ * it accepts each input (ADR 0090 section 5); a sink with a null `v`
+ * installs none. Each record is one unit, begin ... end(keep): a record
+ * that cannot be written whole refuses its input, which changes nothing
+ * (TA_ERR_NOMEM when the sink refused, TA_ERR_UNSUPPORTED when a value has
+ * no durable form). An unpublished actor writes nothing.
+ */
+TA_API void ta_system_set_input_sink(ta_system *system, ta_byte_sink sink);
+/* Logs the named actors of `family` (or stops logging them). */
+TA_API ta_result ta_system_log_family(ta_system *system, ta_str family, bool logged);
+
+/*
+ * A record of the host's mailbox (ADR 0090 section 6): QUEUED when it
+ * accepts a message for a named actor of a logged family, DROPPED when a
+ * queued message will never be delivered, EVICTED before it destroys an
+ * actor whose log is to be its only state. `actor` is the resident actor
+ * at `address`, whose next record number the record takes, or 0 (the
+ * record's seq is then 0). `definition` writes a QUEUED message's data
+ * when no actor is given. Nothing is written when no sink is installed or
+ * the family is not logged.
+ */
+typedef struct {
+    TA_IN const ta_actor_address *address;
+    ta_record_kind kind;
+    uint64_t host_seq;
+    ta_actor_id actor;
+    ta_definition_id definition;
+    TA_IN TA_OPTIONAL const ta_event *event;
+} ta_host_record_params;
+TA_API ta_result ta_system_write_host_record(ta_system *system, TA_IN const ta_host_record_params *params)
+    TA_ANY_VALUE_MODEL;
+
+typedef enum {
+    TA_REPLAY_NEXT = 0,     /* applied; read the next record */
+    TA_REPLAY_RUN = 1,      /* applied; resume the actor until idle, then read the next */
+    TA_REPLAY_RELEASE = 2,  /* resume the actor with no_microstep_limit until idle */
+    TA_REPLAY_HOST = 3,     /* a host record, in `host` */
+    TA_REPLAY_FINISHED = 4, /* the actor finished; stop */
+    TA_REPLAY_ENDED = 5     /* DESTROYED: this life ended; prepare again from the next record */
+} ta_replay_step TA_SYMBOLS("TA_REPLAY_");
+
+/*
+ * What a replay hands back of the host's records: for QUEUED its number
+ * and its message, owned (release it with ta_event_release()); for
+ * DROPPED its number; for an EVENT or JUMP that carried a host number,
+ * that number (the queued message it delivered).
+ */
+typedef struct {
+    ta_record_kind kind;
+    uint64_t host_seq;
+    bool has_event;
+    TA_RELEASE_IF(ta_event_release, has_event) ta_event event;
+} ta_host_record;
+
+/*
+ * Applies one record of a log to a replaying actor (ADR 0090 section 7):
+ * reads exactly one record from `source`, moves the actor's clock to its
+ * time and applies it. An actor stopped as a runaway (TA_ERR_RUNAWAY from
+ * its resume) takes only ABANDONED or RELEASED.
+ * - TA_ERR_INVALID: the actor is not replaying, or the record is SPAWNED
+ *   (prepare from it instead) or goes back in time.
+ * - TA_ERR_BUSY: the actor is inside a macrostep.
+ * - TA_ERR_CORRUPT: the bytes are not a record this build reads.
+ * - TA_ERR_NOT_FOUND: the record names a state or an invocation the actor
+ *   does not have.
+ * - TA_ERR_UNSUPPORTED: the data model cannot read a value.
+ * - and what the input's own function answers.
+ * After an error the source is at no defined position.
+ */
+typedef struct {
+    ta_actor_id actor;
+    ta_byte_source source;
+    TA_OUT ta_replay_step *step;
+    TA_OUT TA_OPTIONAL ta_host_record *host;
+} ta_actor_replay_params;
+TA_API ta_result ta_actor_replay(ta_system *system, TA_IN const ta_actor_replay_params *params);
 
 /* ========================================================================
  * Session images
