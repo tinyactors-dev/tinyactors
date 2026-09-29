@@ -292,6 +292,7 @@ void tna_system_want_turn(tna_system *system);
  * asks for the next turn when work remains.
  */
 void tna_system_turn(tna_system *system);
+bool tna_system_dispatch_due(tna_system *system);
 /*
  * Cancels the send() waiter at `index` (ADR 0005 point 11). A message still
  * waiting for a load is withdrawn from the load's mailbox (napi ADR 0020),

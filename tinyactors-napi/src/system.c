@@ -451,6 +451,35 @@ static void tna_quarantine_reports_make(tna_system *system) {
     }
 }
 
+/*
+ * Dispatches the sends due now, up to the due budget. Due sends go through
+ * the router into mailboxes (ADR 0006), so what they deliver runs in a
+ * later turn. A refusal (a full queue) or TA_ERR_NOMEM leaves the rest due,
+ * so the system is not quiet and the next turn tries again. Returns true
+ * when sends are still due. The turn calls it after its deliveries, and
+ * evict() before it removes an actor (napi ADR 0032 section 8).
+ */
+bool tna_system_dispatch_due(tna_system *system) {
+    ta_time core_deadline = 0;
+    if (ta_system_next_deadline(system->core, &core_deadline) != TA_OK ||
+        core_deadline > ta_system_time(system->core)) {
+        return false;
+    }
+    uint32_t dispatched = 0;
+    bool more_due = false;
+    system->inside_core = true;
+    system->dispatching_due = true;
+    (void)ta_system_dispatch_due(system->core, &(ta_due_dispatch_params){
+                                                   .budget = system->due_budget,
+                                                   .dispatched = &dispatched,
+                                                   .more_due = &more_due,
+                                               });
+    system->dispatching_due = false;
+    system->inside_core = false;
+    system->inputs.dispatched += dispatched;
+    return more_due;
+}
+
 void tna_system_turn(tna_system *system) {
     system->turn_pending = false;
     if (system->closed) {
@@ -471,28 +500,7 @@ void tna_system_turn(tna_system *system) {
     tna_loads_fire_wakes(&system->loads, &(tna_wake_fire){ .directory = &system->directory,
                                                            .now = ta_system_time(system->core),
                                                            .now_ns = tna_monotonic_ns(NULL) });
-    ta_time core_deadline = 0;
-    if (ta_system_next_deadline(system->core, &core_deadline) == TA_OK &&
-        core_deadline <= ta_system_time(system->core)) {
-        /*
-         * Due sends go through the router into mailboxes (ADR 0006), so what
-         * they deliver runs in a later turn. A refusal (a full queue) or
-         * TA_ERR_NOMEM leaves the rest due, so the system is not quiet and
-         * the next turn tries again.
-         */
-        uint32_t dispatched = 0;
-        bool more_due = false;
-        system->inside_core = true;
-        system->dispatching_due = true;
-        (void)ta_system_dispatch_due(system->core, &(ta_due_dispatch_params){
-                                                       .budget = system->due_budget,
-                                                       .dispatched = &dispatched,
-                                                       .more_due = &more_due,
-                                                   });
-        system->dispatching_due = false;
-        system->inside_core = false;
-        system->inputs.dispatched += dispatched;
-    }
+    tna_system_dispatch_due(system);
     if (system->inputs.enabled) {
         /* Every send due by the horizon has been dispatched (core ADR 0089
          * section 2): a budget that left some due holds it before them. */

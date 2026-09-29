@@ -110,6 +110,11 @@ bool tna_inputs_logged(tna_system *system, ta_actor_id actor, ta_actor_address *
     if (ta_actor_inspect(system->core, actor, &view) != TA_OK) {
         return false;
     }
+    /* An unpublished actor, a replay's above all, is logged by nothing it
+     * does (napi ADR 0032 section 7). Not cached: once published it is. */
+    if (!view.published) {
+        return false;
+    }
     bool logged = view.self.kind == TA_ACTOR_REF_NAMED &&
                   tna_inputs_family_listed(&system->inputs, view.definition.family.name);
     if (entry != NULL) {

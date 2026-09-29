@@ -1016,6 +1016,23 @@ static void tna_sched_report_one(tna_sched *sched, const tna_turn_params *params
     if (result == TA_OK) {
         tna_sched_note_to(sched, (tna_sched_note){ .kind = TNA_NOTE_REPORTED, .actor = actor, .envelope = head });
     }
+    if (envelope->waiter != 0) {
+        /* A replayed report (napi ADR 0032 section 7) follows the macrostep
+         * it starts, as a delivered message's send() does. */
+        tna_waiter *waiter = tna_sched_waiter(sched, envelope->waiter);
+        if (result == TA_OK && tna_map_put(&sched->inflight, actor, envelope->waiter) == TA_OK) {
+            waiter->state = TNA_WAITER_INFLIGHT;
+            waiter->actor = actor;
+            waiter->envelope = 0;
+        } else {
+            tna_sched_settle_waiter(sched, envelope->waiter,
+                                    result == TA_OK
+                                        ? (tna_settlement){ .kind = TNA_SETTLE_FAULT, .code = TA_ERR_NOMEM, .actor = actor }
+                                        : (tna_settlement){ .kind = TNA_SETTLE_DEAD, .reason = TNA_DEAD_NOT_FOUND,
+                                                            .actor = actor });
+        }
+        envelope->waiter = 0;
+    }
     tna_envelope_give(sched, head);
     if (result == TA_OK) {
         entry->state = TNA_SCHED_RUNNABLE;

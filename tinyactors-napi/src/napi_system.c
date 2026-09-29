@@ -1534,6 +1534,49 @@ static napi_value tna_post_named_common(napi_env env, napi_callback_info info, b
  * I/O processor's; `sendID` is its text, dropped when this system cannot
  * name it; `platform` makes the event a platform event.
  */
+/*
+ * The origin of a message the input log recorded (napi ADR 0032 sections 6
+ * and 7): `{ actor: <URI> }`, parsed back by core, for the SCXML processor,
+ * or an I/O origin as post() takes one. A URI core cannot parse leaves the
+ * message without an origin. Throws and returns false for a malformed I/O
+ * origin.
+ */
+static bool tna_logged_origin(napi_env env, tna_system *system, napi_value value, ta_origin *out) {
+    napi_valuetype type = napi_undefined;
+    napi_value actor = NULL;
+    bool has_actor = false;
+    if (value != NULL && napi_typeof(env, value, &type) == napi_ok && type == napi_object &&
+        napi_has_named_property(env, value, "actor", &has_actor) == napi_ok && has_actor &&
+        napi_get_named_property(env, value, "actor", &actor) == napi_ok) {
+        ta_str uri = { 0 };
+        ta_scxml_target target = { 0 };
+        if (tna_text_argument(env, system, actor, &uri) && ta_scxml_target_parse(system->core, uri, &target) == TA_OK) {
+            if (target.kind == TA_SCXML_TARGET_ACTOR) {
+                *out = (ta_origin){ .kind = TA_ORIGIN_ACTOR, .as.actor = target.as.actor };
+            } else {
+                ta_scxml_target_release(&target);
+            }
+        }
+        tna_scratch_reset_call(&system->scratch);
+        return true;
+    }
+    return tna_origin_argument(env, system, value, out);
+}
+
+/* A logged send ID, when this system can parse it; 0 otherwise (napi ADR 0032 section 6). */
+static ta_send_id tna_logged_send_id(napi_env env, tna_system *system, napi_value value) {
+    napi_valuetype type = napi_undefined;
+    ta_send_id id = 0;
+    if (value != NULL && napi_typeof(env, value, &type) == napi_ok && type == napi_string) {
+        ta_str send = { 0 };
+        if (!tna_text_argument(env, system, value, &send) || ta_send_id_parse(system->core, send, &id) != TA_OK) {
+            id = 0;
+        }
+        tna_scratch_reset_call(&system->scratch);
+    }
+    return id;
+}
+
 static napi_value tna_requeue_method(napi_env env, napi_callback_info info) {
     size_t argc = 7;
     napi_value argv[7] = { NULL, NULL, NULL, NULL, NULL, NULL, NULL };
@@ -1570,35 +1613,12 @@ static napi_value tna_requeue_method(napi_env env, napi_callback_info info) {
         napi_get_value_bool(env, argv[6], &platform);
         event.type = platform ? TA_EVENT_PLATFORM : TA_EVENT_EXTERNAL;
     }
-    napi_value actor = NULL;
-    bool has_actor = false;
-    if (argc >= 5 && argv[4] != NULL && napi_typeof(env, argv[4], &type) == napi_ok && type == napi_object &&
-        napi_has_named_property(env, argv[4], "actor", &has_actor) == napi_ok && has_actor &&
-        napi_get_named_property(env, argv[4], "actor", &actor) == napi_ok) {
-        ta_str uri = { 0 };
-        ta_scxml_target target = { 0 };
-        if (tna_text_argument(env, system, actor, &uri) &&
-            ta_scxml_target_parse(system->core, uri, &target) == TA_OK) {
-            if (target.kind == TA_SCXML_TARGET_ACTOR) {
-                event.origin = (ta_origin){ .kind = TA_ORIGIN_ACTOR, .as.actor = target.as.actor };
-            } else {
-                ta_scxml_target_release(&target);
-            }
-        }
-        tna_scratch_reset_call(&system->scratch);
-    } else if (!tna_origin_argument(env, system, argc >= 5 ? argv[4] : NULL, &event.origin)) {
+    if (!tna_logged_origin(env, system, argc >= 5 ? argv[4] : NULL, &event.origin)) {
         ta_address_release(address);
         ta_event_release(&event);
         return NULL;
     }
-    if (argc >= 6 && argv[5] != NULL && napi_typeof(env, argv[5], &type) == napi_ok && type == napi_string) {
-        ta_str send = { 0 };
-        ta_send_id id = 0;
-        if (tna_text_argument(env, system, argv[5], &send) && ta_send_id_parse(system->core, send, &id) == TA_OK) {
-            event.send_id = id;
-        }
-        tna_scratch_reset_call(&system->scratch);
-    }
+    event.send_id = tna_logged_send_id(env, system, argc >= 6 ? argv[5] : NULL);
     ta_trace_parent trace = { 0 };
     result = tna_router_post_named(system, address, &(tna_message){ .event = &event, .trace = &trace });
     ta_address_release(address);
@@ -1609,6 +1629,127 @@ static napi_value tna_requeue_method(napi_env env, napi_callback_info info) {
     }
     tna_system_want_turn(system);
     return NULL;
+}
+
+/* The replaying actor's active invocation whose ID reads `text`; TA_INVOKE_ID_NONE when it has none. */
+static ta_invoke_id tna_replay_invocation(tna_system *system, ta_actor_id actor, ta_str text) {
+    ta_actor_inspection view;
+    if (text.len == 0 || ta_actor_inspect(system->core, actor, &view) != TA_OK) {
+        return TA_INVOKE_ID_NONE;
+    }
+    for (uint32_t index = 0; index < view.invoke_count; index += 1u) {
+        ta_str id = { 0 };
+        if (view.invokes[index].active && ta_system_invoke_id_text(system->core, view.invokes[index].id, &id) == TA_OK &&
+            id.len == text.len && memcmp(id.ptr, text.ptr, text.len) == 0) {
+            return view.invokes[index].id;
+        }
+    }
+    return TA_INVOKE_ID_NONE;
+}
+
+/*
+ * replaySend(slot, generation, name, data, origin, sendID, platform, invokeID, report):
+ * one input record a replay gives a replaying actor (napi ADR 0032 section
+ * 7), queued in its mailbox like a send(), whose promise settles when the
+ * macrostep it starts ends. An `event` record carries its name, data,
+ * origin (as requeue() parses it), send ID, platform flag and the text of
+ * the invocation it came from, matched to the actor's active invocation. A
+ * `report` record (`report` 1: unavailable, 2: quarantined, 3: failed)
+ * carries the invocation and its data; core takes it as
+ * ta_actor_report_invoke() when the actor is idle.
+ */
+static napi_value tna_replay_send_method(napi_env env, napi_callback_info info) {
+    size_t argc = 9;
+    napi_value argv[9] = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) {
+        return NULL;
+    }
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    tna_system *system = wrapper->system;
+    if (system->inside_core) {
+        return tna_throw(env, "reentrant", "replay: cannot be called from inside a core call (ADR 0013)");
+    }
+    uint32_t slot = 0;
+    uint32_t generation = 0;
+    uint32_t name = 0;
+    uint32_t report = 0;
+    if (argc < 9 || napi_get_value_uint32(env, argv[0], &slot) != napi_ok ||
+        napi_get_value_uint32(env, argv[1], &generation) != napi_ok ||
+        napi_get_value_uint32(env, argv[2], &name) != napi_ok || napi_get_value_uint32(env, argv[8], &report) != napi_ok ||
+        report > TNA_REPORT_FAILED) {
+        return tna_throw(env, "invalid", "replaySend: expected (slot, generation, name, data, origin, sendID, platform, "
+                                         "invokeID, report)");
+    }
+    ta_actor_id actor = ta_actor_id_make(slot, generation);
+    ta_event event;
+    if (!tna_post_event(env, wrapper, name, argv[3], &event)) {
+        return NULL;
+    }
+    bool platform = false;
+    napi_valuetype type = napi_undefined;
+    if (napi_typeof(env, argv[6], &type) == napi_ok && type == napi_boolean) {
+        napi_get_value_bool(env, argv[6], &platform);
+    }
+    event.type = platform ? TA_EVENT_PLATFORM : TA_EVENT_EXTERNAL;
+    if (report == TNA_REPORT_NONE && !tna_logged_origin(env, system, argv[4], &event.origin)) {
+        ta_event_release(&event);
+        return NULL;
+    }
+    event.send_id = report == TNA_REPORT_NONE ? tna_logged_send_id(env, system, argv[5]) : 0;
+    if (napi_typeof(env, argv[7], &type) == napi_ok && type == napi_string) {
+        ta_str text = { 0 };
+        if (tna_text_argument(env, system, argv[7], &text)) {
+            event.invoke_id = tna_replay_invocation(system, actor, text);
+        }
+        tna_scratch_reset_call(&system->scratch);
+    }
+    if (report != TNA_REPORT_NONE && event.invoke_id == TA_INVOKE_ID_NONE) {
+        ta_event_release(&event);
+        return tna_throw(env, "not-found", "replay: the replaying actor has no active invocation the report names");
+    }
+    tna_accepting accepting = { .send = true };
+    if (!tna_accept_begin(env, wrapper, &accepting)) {
+        ta_event_release(&event);
+        return NULL;
+    }
+    ta_trace_parent trace = { 0 };
+    ta_result result = accepting.waiter == 0
+                           ? TA_ERR_NOMEM
+                           : tna_system_post(system, &(tna_message){ .target = actor,
+                                                                     .event = &event,
+                                                                     .waiter = accepting.waiter,
+                                                                     .trace = &trace,
+                                                                     .report = (uint8_t)report });
+    if (result != TA_OK) {
+        ta_event_release(&event);
+        return tna_accept_failed(env, wrapper, &accepting, result);
+    }
+    return tna_accept_done(env, wrapper, &accepting);
+}
+
+/*
+ * dispatchDue(): dispatches the sends due now, as a turn does after its
+ * deliveries; true when some are still due (a budget or a full queue left
+ * them). evict() calls it before it removes an actor (napi ADR 0032
+ * section 8).
+ */
+static napi_value tna_dispatch_due_method(napi_env env, napi_callback_info info) {
+    tna_napi_system *wrapper = tna_open_this(env, info);
+    if (wrapper == NULL) {
+        return NULL;
+    }
+    tna_system *system = wrapper->system;
+    if (system->inside_core) {
+        return tna_throw(env, "reentrant", "dispatchDue: cannot be called from inside a core call (ADR 0013)");
+    }
+    bool more_due = tna_system_dispatch_due(system);
+    tna_system_want_turn(system);
+    napi_value result = NULL;
+    napi_get_boolean(env, more_due, &result);
+    return result;
 }
 
 static napi_value tna_post_named_method(napi_env env, napi_callback_info info) {
@@ -1935,6 +2076,8 @@ napi_status tna_napi_system_define(napi_env env, napi_value exports) {
         { "setInputLog", NULL, tna_set_input_log_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "inputHost", NULL, tna_input_host_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "requeue", NULL, tna_requeue_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "replaySend", NULL, tna_replay_send_method, NULL, NULL, NULL, napi_default_method, NULL },
+        { "dispatchDue", NULL, tna_dispatch_due_method, NULL, NULL, NULL, napi_default_method, NULL },
         { "closed", NULL, NULL, tna_closed_getter, NULL, NULL, napi_default_jsproperty, NULL },
     };
     napi_value constructor = NULL;

@@ -157,7 +157,26 @@ export type LoadResult<Data extends object = object> =
     }
   | "not-found"
   | "reject"
-  | { readonly reject: unknown };
+  | { readonly reject: unknown }
+  | {
+      /**
+       * Rebuild the actor from its input log (napi ADR 0032 section 7): a
+       * replaying actor of `spawn` at the address, from `binding` (the
+       * `spawned` record's), with its clock starting at the first record's
+       * time; `inputs` replayed into it; published at `stoppedAt`, the moment
+       * it stopped (its `evicted` record's time, or the last committed
+       * horizon after a crash); then the waiting mail is delivered, in
+       * order. `onReport` gets what the replay did. Any failure is
+       * `load-failed`. For a named address only.
+       */
+      readonly replay: {
+        readonly spawn: Definition<Data>;
+        readonly binding?: Partial<Data> | Data;
+        readonly inputs: Iterable<InputRecord> | AsyncIterable<InputRecord>;
+        readonly stoppedAt: number;
+        readonly onReport?: (report: ReplayReport) => void;
+      };
+    };
 
 export interface LoaderOptions {
   /** Milliseconds the loader may take; after that its mail is `load-timeout` (default 5000). */
@@ -535,10 +554,11 @@ export interface System {
    * state (napi ADR 0032 section 8): dispatch the system's due sends,
    * record `evicted` at `system.time`, destroy the actor and remove its
    * directory entry, so mail for its address goes to its family's loader.
-   * Returns the eviction time. `busy` while it has mail waiting, is inside a
-   * macrostep, or is quarantined.
+   * Returns the eviction time: the moment the actor stopped, which a
+   * loader's { replay } passes as `stoppedAt`. `busy` while it has mail
+   * waiting (a timer that fell due included), a send still due, is inside a
+   * macrostep, or is quarantined; `invalid` for an actor without a name.
    */
-  // status: unimplemented
   evict(actor: ActorID): number;
 
   registerIO(type: string, processor: IOProcessor, options?: IOProcessorOptions): void;
@@ -1544,9 +1564,14 @@ export interface PreparedActor<Data extends object> extends Actor<Data> {
    * and within its budgets. `spawned` and `evicted` records only move the
    * clock; `queued` records are skipped. Nothing it does crosses the border
    * or is recorded in the input log. Replay works on one actor: there is no
-   * replay of a system.
+   * replay of a system. An event record's `invokeID` is matched to this
+   * actor's active invocation of that ID, so its <finalize> runs. A
+   * macrostep that faults (a runaway) is followed by the `abandoned` or
+   * `released` record the operator's action left; without one the promise
+   * rejects with the fault. Rejects `invalid` for an actor that is not
+   * replaying or a malformed record, `not-found` for a report whose
+   * invocation is not active.
    */
-  // status: unimplemented
   replay(inputs: Iterable<InputRecord> | AsyncIterable<InputRecord>): Promise<ReplayReport>;
 }
 
@@ -1628,7 +1653,11 @@ export type InputRecord = { readonly time: number; readonly address: ActorAddres
 );
 
 export type PrepareOptions<Data extends object> = {
-  /** Defaults to the incumbent actor's current data-model root. */
+  /**
+   * Defaults to the incumbent actor's current data-model root, unless `at`
+   * is given: a replay starts from the binding it is given (the `spawned`
+   * record's) and rebuilds the data from its history.
+   */
   readonly binding?: Partial<Data> | Data;
   /** A replaying actor, whose clock starts here: no later than the system's time. */
   readonly at?: number;

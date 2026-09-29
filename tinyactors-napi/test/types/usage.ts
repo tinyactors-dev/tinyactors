@@ -2,6 +2,7 @@
 // against Node's types and ES2022 only: no DOM. It is compiled, never run.
 
 import { createSystem, named, serialize, statechart } from '@tinyactors/node';
+import type { InputRecord, ReplayReport } from '@tinyactors/node';
 
 class Money {
   constructor(readonly amount: number, readonly currency: string) {}
@@ -34,4 +35,17 @@ export async function usage(): Promise<void> {
   actor.post('add', undefined, { signal: controller.signal });
   await actor.send('add', undefined, { signal: controller.signal });
   controller.abort();
+
+  // Persistence by replay (napi ADR 0032): an input log, a loader that
+  // answers { replay }, eviction, and a replay by hand.
+  const records: InputRecord[] = [];
+  system.setInputLog({ commit(batch) { records.push(...batch.inputs); } }, { families: ['counter'] });
+  system.setLoader('counter', (target) => ('name' in target
+    ? { replay: { spawn: counter, inputs: records, stoppedAt: system.time, onReport: (report) => void report.ignored } }
+    : 'not-found'));
+  const stoppedAt: number = system.evict(actor);
+  const prepared = system.prepare(counter, { address: { family: 'counter', name: 'again' }, at: 0 });
+  const report: ReplayReport = await prepared.replay(records);
+  system.publish(prepared, { at: stoppedAt });
+  void report.inputs;
 }
