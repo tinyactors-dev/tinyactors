@@ -9,11 +9,13 @@
 //   per open container, so no piece and no frame holds the whole encoding,
 //   and deep values need no JavaScript stack. A long string is escaped in
 //   slices. A value the built-in printer refuses throws ChartCodecError.
-// - durableReader(classes) parses the text as pieces arrive, with an
-//   explicit stack too, building the value as it goes; end() answers it.
+// - durableReader(classes) scans the text as pieces arrive (strings, or
+//   UTF-8 bytes cut anywhere), each piece once, with an explicit stack too,
+//   building the value as it goes; end() answers it.
 //
 // The pieces never hold the whole text; what stays is the value itself, and
-// while a long string is read, its escaped text until its closing quote.
+// while a long string is read, its decoded runs until its closing quote,
+// joined once there.
 
 const { serialize, STANDARD_CLASSES, standardName, described, refuse } = require('./values');
 
@@ -204,126 +206,426 @@ function* durableChunks(value) {
 
 
 // ---------------------------------------------------------------------------
-// Reading. The parser keeps the text it has not consumed yet, a stack of the
-// containers it is building, and what it expects next.
+// Reading: a scanner that consumes each piece once. It keeps no text it has
+// read: only the token in progress (a number's or a word's few characters,
+// or an open string's decoded segments), a stack of the containers it is
+// building, and what the grammar expects next. A string's segments are
+// gathered in runs of about PIECE characters and joined once, at its closing
+// quote. Pieces may be strings or UTF-8 bytes, cut anywhere: bytes go
+// through one streaming decoder, so a character split across pieces is
+// whole when it is scanned.
 
-const NUMBER = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/y;
-const NUMBER_TAIL = /^[0-9.eE+-]*$/;
-const NAME = /[A-Za-z_$][A-Za-z0-9_$]*/y;
-const SPACE = /[ \t\n\r]*/y;
+const NUMBER = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/;
+const NUMBER_CHARS = /[0-9eE+\-.]*/y;
+const WORD_CHARS = /[A-Za-z0-9_$]*/y;
+const STRING_STOP = /["\\\u0000-\u001f]/g;
 const NOT_TEXT = 'the bytes are not a value in the built-in data model\'s text';
+const TOKEN_MAX = 1024;   // the longest number or word the text can hold, and then some
+const SHORT_RUN = 32;     // a run of a string this short is copied as code units
+const UNITS = 8192;       // code units buffered before they become a string
+
+const LEX_NONE = 0;
+const LEX_STRING = 1;
+const LEX_NUMBER = 2;
+const LEX_WORD = 3;
+
+// The character after a backslash, as the code unit it stands for.
+const ESCAPES = { 0x22: 0x22, 0x5c: 0x5c, 0x2f: 0x2f, 0x62: 0x08, 0x66: 0x0c, 0x6e: 0x0a, 0x72: 0x0d, 0x74: 0x09 };
+
+function hexDigit(c) {
+  if (c >= 0x30 && c <= 0x39) return c - 0x30;
+  if (c >= 0x61 && c <= 0x66) return c - 0x57;
+  if (c >= 0x41 && c <= 0x46) return c - 0x37;
+  return -1;
+}
+
+function isSpace(c) {
+  return c === 0x20 || c === 0x0a || c === 0x0d || c === 0x09;
+}
+
+function startsWord(c) {
+  return (c >= 0x61 && c <= 0x7a) || (c >= 0x41 && c <= 0x5a) || c === 0x5f || c === 0x24;
+}
 
 class DurableReader {
   constructor(classes) {
     this.classes = classes;
-    this.text = '';
-    this.at = 0;
     this.stack = [];
     this.expect = 'value';   // value | first (after [ or ( ) | key | keyFirst | colon | after | name | paren | end
     this.root = undefined;
     this.done = false;
-    this.string = -1;        // while a string is open: where its scan stopped
-    this.escaped = false;
+    this.lex = LEX_NONE;
+    this.parts = null;       // an open string: its runs so far
+    this.run = '';           // and the run being gathered
+    this.escape = 0;         // 0: none; 1: after a backslash; 2 to 5: that many less 2 hex digits of \u read
+    this.hex = 0;
+    this.units = null;       // an open string's short runs and escapes, as code units
+    this.count = 0;
+    this.token = '';         // an open number's or word's characters
+    this.tokenAt = 0;        // and where it began
+    this.offset = 0;         // characters scanned before the current piece
+    this.at = 0;             // where the scan stands in the current piece
+    this.decoder = null;
   }
 
-  fail(message = NOT_TEXT) {
-    throw new Error(message);
+  fail(message) {
+    throw new Error(message ?? `${NOT_TEXT} (at character ${this.offset + this.at})`);
   }
 
   push(piece) {
-    this.text = this.text.slice(this.at) + piece;
-    if (this.string >= 0) {
-      this.string -= this.at;
+    if (typeof piece !== 'string') {
+      if (this.decoder === null) {
+        this.decoder = new TextDecoder('utf-8', { fatal: true });
+      }
+      try {
+        piece = this.decoder.decode(piece, { stream: true });
+      } catch {
+        this.fail(`${NOT_TEXT} (malformed UTF-8 after character ${this.offset})`);
+      }
     }
-    this.at = 0;
-    this.run(false);
+    this.scan(piece);
   }
 
   end() {
-    this.run(true);
-    SPACE.lastIndex = this.at;
-    SPACE.exec(this.text);
-    if (!this.done || SPACE.lastIndex !== this.text.length) {
-      this.fail();
+    if (this.decoder !== null) {
+      let rest;
+      try {
+        rest = this.decoder.decode();
+      } catch {
+        this.fail(`${NOT_TEXT} (malformed UTF-8 at the end)`);
+      }
+      this.scan(rest);
+    }
+    if (this.lex === LEX_NUMBER) {
+      this.number();
+    } else if (this.lex === LEX_WORD) {
+      this.word();
+    } else if (this.lex === LEX_STRING) {
+      this.fail(`${NOT_TEXT} (a string is not closed)`);
+    }
+    if (!this.done) {
+      this.fail(`${NOT_TEXT} (it ends before its value does)`);
     }
     return this.root;
   }
 
-  // Consumes every whole token; stops at one that may continue in a later piece.
-  run(final) {
-    for (;;) {
-      SPACE.lastIndex = this.at;
-      SPACE.exec(this.text);
-      this.at = SPACE.lastIndex;
-      if (this.at === this.text.length) {
-        return;
+  // Scans one piece, to its end; a token that may go on stays open.
+  scan(text) {
+    const length = text.length;
+    this.at = 0;
+    while (this.at < length) {
+      if (this.lex === LEX_STRING) {
+        this.scanString(text);
+        continue;
+      }
+      if (this.lex === LEX_NUMBER) {
+        if (this.scanToken(text, NUMBER_CHARS)) {
+          this.number();
+        }
+        continue;
+      }
+      if (this.lex === LEX_WORD) {
+        if (this.scanToken(text, WORD_CHARS)) {
+          this.word();
+        }
+        continue;
+      }
+      const c = text.charCodeAt(this.at);
+      if (isSpace(c)) {
+        this.at += 1;
+        continue;
       }
       if (this.done) {
         this.fail();
       }
-      const token = this.token(final);
-      if (token === undefined) {
-        return;
-      }
-      this.step(token);
-    }
-  }
-
-  // The next token, or undefined when it may run on into the next piece.
-  token(final) {
-    const c = this.text[this.at];
-    if ('[]{}(),:'.includes(c)) {
-      this.at += 1;
-      return { punct: c };
-    }
-    if (c === '"') {
-      return this.stringToken(final);
-    }
-    if (c === '-' || (c >= '0' && c <= '9')) {
-      NUMBER.lastIndex = this.at;
-      const found = NUMBER.exec(this.text);
-      if (found === null) {
+      if (c === 0x22) {
+        this.at += 1;
+        this.lex = LEX_STRING;
+        this.parts = [];
+        this.run = '';
+      } else if (c === 0x2d || (c >= 0x30 && c <= 0x39)) {
+        this.lex = LEX_NUMBER;
+        this.token = '';
+        this.tokenAt = this.offset + this.at;
+      } else if (startsWord(c)) {
+        this.lex = LEX_WORD;
+        this.token = '';
+        this.tokenAt = this.offset + this.at;
+      } else if (c === 0x5b || c === 0x5d || c === 0x7b || c === 0x7d || c === 0x28 || c === 0x29 ||
+                 c === 0x2c || c === 0x3a) {
+        this.punct(c);
+        this.at += 1;
+      } else {
         this.fail();
       }
-      // "1." or "1e" may still become a longer number in the next piece.
-      if (!final && NUMBER_TAIL.test(this.text.slice(NUMBER.lastIndex))) {
-        return undefined;
-      }
-      this.at = NUMBER.lastIndex;
-      return { value: JSON.parse(found[0]) };
     }
-    NAME.lastIndex = this.at;
-    const found = NAME.exec(this.text);
-    if (found === null) {
-      this.fail();
-    }
-    if (NAME.lastIndex === this.text.length && !final) {
-      return undefined;
-    }
-    this.at = NAME.lastIndex;
-    return { word: found[0] };
+    this.offset += length;
   }
 
-  stringToken(final) {
-    let scan = this.string >= 0 ? this.string : this.at + 1;
-    for (; scan < this.text.length; scan += 1) {
-      const c = this.text.charCodeAt(scan);
-      if (this.escaped) {
-        this.escaped = false;
-      } else if (c === 0x5c) {
-        this.escaped = true;
-      } else if (c === 0x22) {
-        const raw = this.text.slice(this.at, scan + 1);
-        this.at = scan + 1;
-        this.string = -1;
-        return { value: JSON.parse(raw) };
+  // Adds a number's or a word's characters; true when the token ended in this piece.
+  scanToken(text, chars) {
+    chars.lastIndex = this.at;
+    chars.exec(text);
+    const end = chars.lastIndex;
+    if (end > this.at) {
+      this.token += text.slice(this.at, end);
+      if (this.token.length > TOKEN_MAX) {
+        this.failToken();
       }
     }
-    if (final) {
-      this.fail();
+    this.at = end;
+    return end < text.length;
+  }
+
+  scanString(text) {
+    const length = text.length;
+    while (this.at < length) {
+      if (this.escape !== 0) {
+        const c = text.charCodeAt(this.at);
+        if (this.escape === 1) {
+          if (c === 0x75) {
+            this.escape = 2;
+            this.hex = 0;
+          } else {
+            const stands = ESCAPES[c];
+            if (stands === undefined) {
+              this.fail();
+            }
+            this.unit(stands);
+            this.escape = 0;
+          }
+          this.at += 1;
+          continue;
+        }
+        const digit = hexDigit(c);
+        if (digit < 0) {
+          this.fail();
+        }
+        this.hex = this.hex * 16 + digit;
+        this.at += 1;
+        this.escape += 1;
+        if (this.escape === 6) {
+          this.unit(this.hex);
+          this.escape = 0;
+        }
+        continue;
+      }
+      // Up to the next quote, backslash or control character. Short runs,
+      // common where escapes come close together, are copied as code units
+      // while they are looked at; a long run is found with the regular
+      // expression and taken as one slice.
+      let stop = this.at;
+      const near = Math.min(length, this.at + SHORT_RUN);
+      while (stop < near) {
+        const c = text.charCodeAt(stop);
+        if (c === 0x22 || c === 0x5c || c < 0x20) {
+          break;
+        }
+        stop += 1;
+      }
+      if (stop === near && near < length) {
+        STRING_STOP.lastIndex = near;
+        const found = STRING_STOP.exec(text);
+        stop = found === null ? length : found.index;
+      }
+      // A string that closes here with nothing gathered yet, most keys and
+      // short values, is one slice.
+      if (stop < length && this.count === 0 && this.run.length === 0 && this.parts.length === 0 &&
+          text.charCodeAt(stop) === 0x22) {
+        const value = text.slice(this.at, stop);
+        this.at = stop + 1;
+        this.parts = null;
+        this.lex = LEX_NONE;
+        this.value(value, true);
+        return;
+      }
+      if (stop - this.at <= SHORT_RUN) {
+        for (let at = this.at; at < stop; at += 1) {
+          this.unit(text.charCodeAt(at));
+        }
+      } else {
+        this.append(text.slice(this.at, stop));
+      }
+      this.at = stop;
+      if (stop === length) {
+        return;
+      }
+      const c = text.charCodeAt(stop);
+      this.at += 1;
+      if (c === 0x5c) {
+        this.escape = 1;
+      } else if (c === 0x22) {
+        this.flushUnits();
+        this.parts.push(this.run);
+        const value = this.parts.length === 1 ? this.parts[0] : this.parts.join('');
+        this.parts = null;
+        this.run = '';
+        this.lex = LEX_NONE;
+        this.value(value, true);
+        return;
+      } else {
+        this.at -= 1;
+        this.fail();   // a raw control character inside a string
+      }
     }
-    this.string = scan;
-    return undefined;
+  }
+
+  // One UTF-16 code unit of an open string, into the unit buffer.
+  unit(code) {
+    if (this.units === null) {
+      this.units = new Uint16Array(UNITS);
+    }
+    this.units[this.count] = code;
+    this.count += 1;
+    if (this.count === UNITS) {
+      this.flushUnits();
+    }
+  }
+
+  flushUnits() {
+    if (this.count === 0) {
+      return;
+    }
+    const text = String.fromCharCode.apply(null, this.units.subarray(0, this.count));
+    this.count = 0;
+    this.appendRun(text);
+  }
+
+  // Adds a long slice of an open string: the buffered units go first.
+  append(text) {
+    this.flushUnits();
+    this.appendRun(text);
+  }
+
+  // Adds decoded text to an open string, in runs of about PIECE characters.
+  appendRun(text) {
+    if (this.run.length === 0 && text.length >= PIECE) {
+      this.parts.push(text);
+      return;
+    }
+    this.run += text;
+    if (this.run.length >= PIECE) {
+      this.parts.push(this.run);
+      this.run = '';
+    }
+  }
+
+  // A number or a word that is not text: refused where it began.
+  failToken() {
+    this.fail(`${NOT_TEXT} (at character ${this.tokenAt})`);
+  }
+
+  number() {
+    const text = this.token;
+    this.lex = LEX_NONE;
+    this.token = '';
+    // Not text, or not where a value may stand: refused where it began.
+    if (!NUMBER.test(text) || (this.expect !== 'first' && this.expect !== 'value')) {
+      this.failToken();
+    }
+    this.value(Number(text), false);
+  }
+
+  word() {
+    const text = this.token;
+    this.lex = LEX_NONE;
+    this.token = '';
+    switch (this.expect) {
+      case 'first':
+      case 'value':
+        this.expect = 'value';
+        if (text === 'true' || text === 'false') {
+          this.complete(text === 'true');
+        } else if (text === 'null') {
+          this.complete(null);
+        } else if (text === 'new') {
+          this.expect = 'name';
+        } else {
+          this.failToken();
+        }
+        return;
+      case 'name':
+        if (!Object.prototype.hasOwnProperty.call(this.classes, text)) {
+          this.fail(`no class is registered under ${text}; register it with registerClass()`);
+        }
+        this.stack.push({ kind: 'new', constructor: this.classes[text], items: [] });
+        this.expect = 'paren';
+        return;
+      default:
+        this.failToken();
+    }
+  }
+
+  // A number or a string.
+  value(value, string) {
+    switch (this.expect) {
+      case 'first':
+      case 'value':
+        this.complete(value);
+        return;
+      case 'keyFirst':
+      case 'key':
+        if (!string) {
+          this.fail();
+        }
+        this.stack[this.stack.length - 1].key = value;
+        this.expect = 'colon';
+        return;
+      default:
+        this.fail();
+    }
+  }
+
+  punct(c) {
+    switch (this.expect) {
+      case 'first':
+        if (c === 0x5d || c === 0x29) {
+          this.close(c);
+          return;
+        }
+        this.expect = 'value';
+        this.punct(c);
+        return;
+      case 'value':
+        if (c === 0x5b) {
+          this.stack.push({ kind: 'array', items: [] });
+          this.expect = 'first';
+        } else if (c === 0x7b) {
+          this.stack.push({ kind: 'object', object: {}, key: undefined });
+          this.expect = 'keyFirst';
+        } else {
+          this.fail();
+        }
+        return;
+      case 'paren':
+        if (c !== 0x28) {
+          this.fail();
+        }
+        this.expect = 'first';
+        return;
+      case 'keyFirst':
+        if (c === 0x7d) {
+          this.close(c);
+          return;
+        }
+        this.fail();
+        return;
+      case 'colon':
+        if (c !== 0x3a) {
+          this.fail();
+        }
+        this.expect = 'value';
+        return;
+      case 'after':
+        if (c === 0x2c) {
+          this.expect = this.stack[this.stack.length - 1].kind === 'object' ? 'key' : 'value';
+          return;
+        }
+        this.close(c);
+        return;
+      default:
+        this.fail();
+    }
   }
 
   // A finished value: into the container on top, or the root.
@@ -344,10 +646,10 @@ class DurableReader {
     this.expect = 'after';
   }
 
-  close(punct) {
+  close(c) {
     const top = this.stack.pop();
-    if (top === undefined || (top.kind === 'array' && punct !== ']') || (top.kind === 'object' && punct !== '}') ||
-        (top.kind === 'new' && punct !== ')')) {
+    if (top === undefined || (top.kind === 'array' && c !== 0x5d) || (top.kind === 'object' && c !== 0x7d) ||
+        (top.kind === 'new' && c !== 0x29)) {
       this.fail();
     }
     if (top.kind === 'array') {
@@ -356,83 +658,6 @@ class DurableReader {
       this.complete(top.object);
     } else {
       this.complete(Reflect.construct(top.constructor, top.items));
-    }
-  }
-
-  step(token) {
-    const { punct } = token;
-    switch (this.expect) {
-      case 'first':
-        if (punct === ']' || punct === ')') {
-          this.close(punct);
-          return;
-        }
-        this.expect = 'value';
-        this.step(token);
-        return;
-      case 'value':
-        if ('value' in token) {
-          this.complete(token.value);
-        } else if (punct === '[') {
-          this.stack.push({ kind: 'array', items: [] });
-          this.expect = 'first';
-        } else if (punct === '{') {
-          this.stack.push({ kind: 'object', object: {}, key: undefined });
-          this.expect = 'keyFirst';
-        } else if (token.word === 'true' || token.word === 'false' || token.word === 'null') {
-          this.complete(token.word === 'null' ? null : token.word === 'true');
-        } else if (token.word === 'new') {
-          this.expect = 'name';
-        } else {
-          this.fail();
-        }
-        return;
-      case 'name': {
-        if (token.word === undefined || !Object.prototype.hasOwnProperty.call(this.classes, token.word)) {
-          this.fail(`no class is registered under ${token.word ?? 'this name'}; register it with registerClass()`);
-        }
-        this.stack.push({ kind: 'new', constructor: this.classes[token.word], items: [] });
-        this.expect = 'paren';
-        return;
-      }
-      case 'paren':
-        if (punct !== '(') {
-          this.fail();
-        }
-        this.expect = 'first';
-        return;
-      case 'keyFirst':
-        if (punct === '}') {
-          this.close(punct);
-          return;
-        }
-        this.expect = 'key';
-        this.step(token);
-        return;
-      case 'key':
-        if (typeof token.value !== 'string') {
-          this.fail();
-        }
-        this.stack[this.stack.length - 1].key = token.value;
-        this.expect = 'colon';
-        return;
-      case 'colon':
-        if (punct !== ':') {
-          this.fail();
-        }
-        this.expect = 'value';
-        return;
-      case 'after': {
-        const top = this.stack[this.stack.length - 1];
-        if (punct === ',') {
-          this.expect = top.kind === 'object' ? 'key' : 'value';
-          return;
-        }
-        this.close(punct);
-        return;
-      }
-      default:
-        this.fail();
     }
   }
 }

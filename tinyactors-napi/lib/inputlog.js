@@ -147,10 +147,10 @@ function decode(bytes, at, classes, utf8) {
         valueAt += 8;
         break;
       }
-      reader.push(utf8.decode(bytes.subarray(valueAt + 4, valueAt + 4 + chunk), { stream: true }));
+      // Bytes, cut anywhere: the reader decodes them as it scans.
+      reader.push(bytes.subarray(valueAt + 4, valueAt + 4 + chunk));
       valueAt += pad8(4 + chunk);
     }
-    reader.push(utf8.decode());
     record[shape.values[index] ?? `value${index}`] = reader.end();
   }
   // Friendlier forms of the numbers an audit reads.

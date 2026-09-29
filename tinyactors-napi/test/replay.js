@@ -689,11 +689,17 @@ async function aLargeValue() {
     }
   };
   const before = heap();
+  const rssBefore = process.memoryUsage().rss;
   const again = system.prepare(definition, { address: { family: 'box', name: 'c' }, log: pieces().next().value });
   // (The first piece holds `spawned`; replaying the rest into another address.)
   const rest = pieces();
   rest.next();
   const report = await again.replay(rest);
+  // The durable reader scans each piece once (napi ADR 0034's notes): the
+  // process grows by about the value, not by copies of it. Before, Bun kept
+  // 339 MB and Node peaked at 200 MB.
+  const rssGrew = process.memoryUsage().rss - rssBefore;
+  assert.ok(rssGrew < 120 * 1024 * 1024, `replaying a 10 MB value grew RSS by ${Math.round(rssGrew / 1048576)} MB`);
   const grew = heap() - before;
   assert.equal(again.inspect().data.size, value.length);
   assert.ok(report.inputs >= 2);
