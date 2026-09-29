@@ -1,6 +1,6 @@
 # ADR 0032: Named actors persist by replaying their inputs
 
-**Status:** Proposed (2026-09-29). Applies core ADR 0088 (a session ID names its family) and core ADR 0089 (an actor is rebuilt by replaying its inputs before it is published). Would amend:
+**Status:** Accepted; sections 3 and 4 implemented (2026-09-29), see the implementation notes; the rest not yet. Applies core ADR 0088 (a session ID names its family) and core ADR 0089 (an actor is rebuilt by replaying its inputs before it is published). Would amend:
 - ADR 0020: a loader is also asked for a session that has gone, and can answer with a replay;
 - ADR 0022: mail to a gone session of a family with a loader goes to that loader;
 - the replacement API (`prepareReplacement`, `activate`), which becomes `prepare` and `publish`.
@@ -312,4 +312,30 @@ or is quarantined. Mail for the address then goes to the family's loader.
 
 ## Implementation notes
 
-None yet.
+### Sections 3 and 4 (2026-09-29, with core ADR 0089's sections 4, 5, 8 and 9)
+
+- **Where:** `src/scheduler.{c,h}` (`tna_report_kind`, a report envelope's
+  `report`, `tna_sched_report_one`, reports dropped instead of dead-lettered,
+  `tna_settlement.ignored`), `src/napi_services.c` (`unavailable()` queues;
+  `tna_fault_data`), `src/system.{c,h}` (quarantine reports queue;
+  `fault_data`; `tna_quarantine_report.reported` removed),
+  `src/adapters/invoker.c` (`tna_scxml_start` reports; service 0 is
+  cancelled and forwarded to as nothing), `src/adapters/io.c` and the
+  JavaScript invoker (out of memory is `TA_OP_NOMEM`), `src/pump.c`
+  (`consumed`), `src/napi_datamodel.c` (`time`), `index.d.ts`,
+  `docs/scxml.md`. Commit `1c0991b`.
+- **`unavailable()` returns true once the report is queued,** as `done()`
+  already did, and false once the invocation has ended. A queued report
+  whose invocation ends before the parent takes it is dropped at delivery
+  (core answers `TA_ERR_NOT_FOUND`), and a report for a gone parent is
+  dropped, never a dead letter.
+- **An SCXML child that cannot start** answers start with `TA_OP_OK` and
+  service 0, and queues `failed` with `{ code, message }` from the child's
+  fault. A report that cannot be queued answers `TA_OP_NOMEM`, so core starts
+  the invocation again.
+- **"Could not queue" is `TA_OP_NOMEM`,** except while the system closes, when
+  the I/O processor still answers `TA_OP_ERROR` ("the system is closing"),
+  so a closing system does not retry sends forever.
+- **Tests:** `test/session-inputs.js` (`consumed`, `time`, a queued
+  `unavailable()`), `test/invoke.js` (`refusals` now expects `failed`
+  reports and both invocations ended).

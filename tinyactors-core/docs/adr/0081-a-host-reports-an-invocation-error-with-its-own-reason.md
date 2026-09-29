@@ -1,6 +1,6 @@
 # ADR 0081: A host reports an invocation error with its own reason
 
-**Status:** Accepted and implemented; see the implementation notes. Replaces `TA_INVOKE_REPORT_UNAVAILABLE` (ADR 0038's report of a lost service) with a general error report. Motivated by napi ADR 0025.
+**Status:** Accepted and implemented; see the implementation notes. Replaces `TA_INVOKE_REPORT_UNAVAILABLE` (ADR 0038's report of a lost service) with a general error report. Motivated by napi ADR 0025. Amended by ADR 0089 section 4: a report inside a macrostep now answers `TA_ERR_BUSY`, and the host offers it again once the session is idle.
 **Date:** 2026-09-26
 
 ## Context

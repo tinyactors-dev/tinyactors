@@ -1,6 +1,6 @@
 # ADR 0089: An actor is rebuilt by replaying its inputs before it is published
 
-**Status:** Proposed (2026-09-29). Depends on ADR 0088. Would amend:
+**Status:** Accepted; sections 4, 5, 8 and 9 implemented (2026-09-29), see the implementation notes; sections 1, 2, 3, 6 and 7 not yet. Depends on ADR 0088. Amends:
 - ADR 0037: a prepared actor needs no incumbent, and core supports replay without owning a log or a replay mode;
 - ADR 0012: a replaying actor has its own clock;
 - ADR 0081: an invoker's error report waits for the macrostep to end;
@@ -435,4 +435,61 @@ sends) when:
 
 ## Implementation notes
 
-None yet.
+### Sections 4, 5, 8 and 9 (2026-09-29)
+
+- **Where:** `src/invoke.c` (the generated ID's serial, the BUSY check on
+  an ERROR report), `src/system.h` (`next_invoke_serial` removed),
+  `src/actor.h` (`ta_event_slots.external_ignored`, `timed`, `time`),
+  `src/interpreter.{c,h}` (`ta_note_ignored`, `ta_take_macrostep_time`,
+  `ta_interpreter_macrostep_time`, `ta_block_settle`), `src/datamodel.c`
+  (`ta_dm_host_time`), `include/tinyactors.h` (the start contract, the
+  report's BUSY, `ta_actor_resume_params.ignored`, `ta_dm_host_time`).
+  Commit `1c0991b`.
+- **A start that still answers `TA_OP_ERROR`** (section 4 left the choice to
+  the implementation) raises `error.execution` in the invoking macrostep,
+  as before. It is the simplest safe behaviour: a host that has not moved
+  its failures to reports keeps working, and only loses replay exactness
+  for that failure, which the header says. The test host's SCXML invoker
+  (`tinyactors-test/src/adapters.c`) still answers `TA_OP_ERROR`: it does
+  not replay, and its scenarios keep their `error.execution`. napi reports.
+- **BUSY covers every report kind,** ERROR newly: EVENT and DONE already went
+  through `ta_actor_deliver()`, which answered BUSY. "Inside a macrostep" is
+  `ta_actor_deliver()`'s test: the macrostep flag, or a delivered event not
+  yet taken.
+- **`ignored`** is a flag in the event block's slots, set where
+  `events_ignored` is counted and read when the macrostep ends, stable or
+  finished; it is cleared with the external event. A macrostep that takes
+  an external event keeps its block until it ends, so the flag survives any
+  number of resumes. A call that ends no macrostep (the actor was idle or
+  already finished) leaves `*ignored` as it was.
+- **The macrostep's time is taken by its first resume,** not when the event
+  is delivered: a macrostep can start without a delivery (a bootstrap, an
+  error report, a load), and every one is run by resumes. It is kept in the
+  event block, which an actor now holds until its macrostep ends
+  (`ta_block_settle` keeps a block while the macrostep flag is set, where it
+  kept one only while a trace parent waited). Freeing an actor releases the
+  block even mid-macrostep. Section 2 substitutes the replaying actor's
+  clock at `ta_take_macrostep_time`. Delayed-send due times and trace
+  records' `now` still read the system clock; section 2 moves them to the
+  macrostep's time for replaying actors.
+- **Costs:** `ta_event_slots` grew from 192 to 200 bytes (the time; the two
+  flags fill padding), so an event block is 8 bytes larger. Blocks exist
+  only while an actor holds an event or runs a macrostep, and come from the
+  system's cache. `ta_actor` stays 232 bytes, and the system is 8 bytes
+  smaller. A macrostep without a delivery or a traced spawn (an untraced
+  bootstrap, for one) now takes a block at its first resume: a cache hit
+  after warm-up. `scale_test` measured 332 bytes per actor, flat from 50,000
+  to 4,000,000 actors; napi's `scale.js` is unchanged at 328 native bytes
+  per actor.
+- **Tests:** `tinyactors-test/ruby/scenarios/session_inputs.rb` (a resume
+  says whether its event was ignored, and leaves `ignored` alone when it
+  ends no macrostep; two sessions number their invocations alike, after
+  their generated send IDs, which failed with the system counter);
+  `invoke_errors.rb` (a report into a paused macrostep answers `err_busy`,
+  changes nothing, and is taken once the session is idle);
+  `tinyactors-napi/test/session-inputs.js` (`consumed`, `context.time` on
+  the manual clock, and an `unavailable()` report taken after the mail
+  queued before it). The time staying fixed across the resumes of one
+  macrostep has no test of its own: napi's pump cannot move the manual
+  clock mid-macrostep. `mise run test:full` passed, the test host's 527
+  scenarios included (its fast pass runs 427); IRP 176/176 on Node and Bun.
